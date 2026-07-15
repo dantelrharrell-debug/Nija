@@ -8,7 +8,7 @@ import threading
 from typing import Optional
 
 logger = logging.getLogger("nija.source_runtime_guard_bootstrap")
-_MARKER = "20260715g"
+_MARKER = "20260715h"
 _TRUTHY = {"1", "true", "yes", "on", "enabled", "y"}
 _LOCK = threading.RLock()
 _INSTALLED = False
@@ -70,6 +70,7 @@ def _set_status(value: str) -> None:
         "NIJA_KRAKEN_VERIFIED_COST_BASIS_RECOVERY_INSTALLED",
         "NIJA_DAILY_GAIN_PROFIT_HARVEST_INSTALLED",
         "NIJA_KRAKEN_TPE_MIN_NOTIONAL_ALLOCATION_INSTALLED",
+        "NIJA_RUNTIME_GUARD_AUDIT_INSTALLED",
         "NIJA_THREE_VENUE_STAGE_VERIFIER_INSTALLED",
         "NIJA_SOURCE_WRITER_AUTHORITY_INSTALLED",
         "NIJA_RENDER_READINESS_BRIDGE_INSTALLED",
@@ -129,8 +130,9 @@ def install() -> bool:
             if not scan_ready:
                 raise RuntimeError(f"scan_wrapper_depth_incomplete:{scan_details}")
 
-            _INSTALLED = True
             _set_status("1")
+            _install_required("bot.runtime_guard_audit_patch")
+            _INSTALLED = True
             message = (
                 f"SOURCE_RUNTIME_GUARDS_READY marker={_MARKER} commit={_deployment_commit()} "
                 "writer_authority=installed module_identity=verified convergence_quiescence=verified "
@@ -143,7 +145,7 @@ def install() -> bool:
                 "broker_local_readiness_contract=installed account_exit_management_recovery=installed "
                 "account_exit_recovery_bootstrap=installed kraken_verified_cost_basis=installed "
                 "daily_gain_profit_harvest=installed kraken_tpe_min_notional_allocation=installed "
-                "three_venue_stage_verifier=installed render_readiness_bridge=installed "
+                "runtime_guard_audit=installed three_venue_stage_verifier=installed render_readiness_bridge=installed "
                 "scan_owner_okx_auth_convergence=installed source=main_pre_bot"
             )
             logger.warning(message)
@@ -159,6 +161,7 @@ def install() -> bool:
                 "NIJA_KRAKEN_VERIFIED_COST_BASIS_RECOVERY_INSTALLED",
                 "NIJA_DAILY_GAIN_PROFIT_HARVEST_INSTALLED",
                 "NIJA_KRAKEN_TPE_MIN_NOTIONAL_ALLOCATION_INSTALLED",
+                "NIJA_RUNTIME_GUARD_AUDIT_INSTALLED",
             ):
                 os.environ[name] = "0"
             message = f"{type(exc).__name__}:{exc}"
