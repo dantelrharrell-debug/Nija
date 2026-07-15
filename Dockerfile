@@ -44,6 +44,11 @@ RUN python -m py_compile \
         /app/bot/activation_pending_commit_monitor_patch.py \
         /app/bot/writer_lock_release_guard.py \
         /app/bot/global_runtime_startup_guards.py \
+        /app/bot/scan_wrapper_hard_clamp_patch.py \
+        /app/bot/kraken_verified_cost_basis_recovery_patch.py \
+        /app/bot/daily_gain_profit_harvest_patch.py \
+        /app/bot/kraken_tpe_min_notional_allocation_patch.py \
+        /app/bot/runtime_guard_audit_patch.py \
         /app/import_hook_recursion_shield_patch.py \
         /app/disconnected_broker_execution_guard_patch.py \
         /app/scripts/three_venue_config_check.py
