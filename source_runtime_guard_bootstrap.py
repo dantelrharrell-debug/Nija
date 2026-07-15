@@ -8,7 +8,7 @@ import threading
 from typing import Optional
 
 logger = logging.getLogger("nija.source_runtime_guard_bootstrap")
-_MARKER = "20260715f"
+_MARKER = "20260715g"
 _TRUTHY = {"1", "true", "yes", "on", "enabled", "y"}
 _LOCK = threading.RLock()
 _INSTALLED = False
@@ -48,6 +48,7 @@ def _set_status(value: str) -> None:
         "NIJA_RUNTIME_MODULE_IDENTITY_GUARD_INSTALLED",
         "NIJA_RUNTIME_CONVERGENCE_QUIESCENCE_INSTALLED",
         "NIJA_SCAN_WRAPPER_DEPTH_GUARD_INSTALLED",
+        "NIJA_SCAN_WRAPPER_HARD_CLAMP_INSTALLED",
         "NIJA_ZERO_SIGNAL_STREAK_STATE_REPAIR_INSTALLED",
         "NIJA_EMPTY_POSITION_SYNC_PATCH_INSTALLED",
         "NIJA_SECONDARY_CREDENTIAL_QUARANTINE_INSTALLED",
@@ -66,6 +67,7 @@ def _set_status(value: str) -> None:
         "NIJA_BROKER_LOCAL_READINESS_CONTRACT_INSTALLED",
         "NIJA_ACCOUNT_EXIT_MANAGEMENT_RECOVERY_INSTALLED",
         "NIJA_ACCOUNT_EXIT_RECOVERY_BOOTSTRAP_INSTALLED",
+        "NIJA_KRAKEN_VERIFIED_COST_BASIS_RECOVERY_INSTALLED",
         "NIJA_DAILY_GAIN_PROFIT_HARVEST_INSTALLED",
         "NIJA_KRAKEN_TPE_MIN_NOTIONAL_ALLOCATION_INSTALLED",
         "NIJA_THREE_VENUE_STAGE_VERIFIER_INSTALLED",
@@ -97,12 +99,14 @@ def install() -> bool:
             _install_required("runtime_auth_recursion_endpoint_repair_patch")
             _install_required("final_runtime_convergence_patch")
             _install_required("scan_wrapper_convergence_repair_patch")
+            _install_required("bot.scan_wrapper_hard_clamp_patch")
             _install_required("venue_readiness_execution_repair_patch")
             _install_required("secondary_venue_activation_patch")
             _install_required("secondary_venue_strict_readiness_patch")
             _install_required("broker_local_readiness_contract_patch")
             _install_required("account_exit_management_recovery_patch")
             _install_required("account_exit_recovery_bootstrap_patch")
+            _install_required("bot.kraken_verified_cost_basis_recovery_patch")
             _install_required("bot.daily_gain_profit_harvest_patch")
             _install_required("bot.kraken_tpe_min_notional_allocation_patch")
             _install_required("three_venue_execution_readiness")
@@ -130,16 +134,17 @@ def install() -> bool:
             message = (
                 f"SOURCE_RUNTIME_GUARDS_READY marker={_MARKER} commit={_deployment_commit()} "
                 "writer_authority=installed module_identity=verified convergence_quiescence=verified "
-                "scan_wrapper_depth=verified zero_signal_state_repair=armed empty_position_sync=armed "
-                "secondary_credential_quarantine=armed writer_generation_scope=installed "
+                "scan_wrapper_depth=verified scan_wrapper_hard_clamp=installed zero_signal_state_repair=armed "
+                "empty_position_sync=armed secondary_credential_quarantine=armed writer_generation_scope=installed "
                 "authority_heartbeat_generation_scope=installed final_worker_position_coinbase_repair=installed "
                 "broker_auth_recovery=installed runtime_convergence_hardening=installed runtime_convergence_v2=installed "
                 "runtime_auth_endpoint_repair=installed final_runtime_convergence=installed scan_wrapper_convergence=installed "
                 "venue_repair=installed secondary_venue_activation=installed secondary_venue_strict_readiness=installed "
                 "broker_local_readiness_contract=installed account_exit_management_recovery=installed "
-                "account_exit_recovery_bootstrap=installed daily_gain_profit_harvest=installed "
-                "kraken_tpe_min_notional_allocation=installed three_venue_stage_verifier=installed "
-                "render_readiness_bridge=installed scan_owner_okx_auth_convergence=installed source=main_pre_bot"
+                "account_exit_recovery_bootstrap=installed kraken_verified_cost_basis=installed "
+                "daily_gain_profit_harvest=installed kraken_tpe_min_notional_allocation=installed "
+                "three_venue_stage_verifier=installed render_readiness_bridge=installed "
+                "scan_owner_okx_auth_convergence=installed source=main_pre_bot"
             )
             logger.warning(message)
             print(f"[NIJA-PRINT] {message}", flush=True)
@@ -149,8 +154,10 @@ def install() -> bool:
             for name in (
                 "NIJA_THREE_VENUE_EXECUTION_READY", "NIJA_RUNTIME_MODULE_IDENTITY_READY",
                 "NIJA_RUNTIME_CONVERGENCE_QUIESCENCE_READY", "NIJA_SCAN_WRAPPER_DEPTH_READY",
-                "NIJA_ZERO_SIGNAL_STREAK_STATE_READY", "NIJA_EMPTY_POSITION_SYNC_READY",
-                "NIJA_SECONDARY_CREDENTIAL_QUARANTINE_READY", "NIJA_DAILY_GAIN_PROFIT_HARVEST_INSTALLED",
+                "NIJA_SCAN_WRAPPER_HARD_CLAMP_INSTALLED", "NIJA_ZERO_SIGNAL_STREAK_STATE_READY",
+                "NIJA_EMPTY_POSITION_SYNC_READY", "NIJA_SECONDARY_CREDENTIAL_QUARANTINE_READY",
+                "NIJA_KRAKEN_VERIFIED_COST_BASIS_RECOVERY_INSTALLED",
+                "NIJA_DAILY_GAIN_PROFIT_HARVEST_INSTALLED",
                 "NIJA_KRAKEN_TPE_MIN_NOTIONAL_ALLOCATION_INSTALLED",
             ):
                 os.environ[name] = "0"
