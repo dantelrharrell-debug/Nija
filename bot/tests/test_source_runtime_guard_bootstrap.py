@@ -19,6 +19,8 @@ def _reset_source_bootstrap(monkeypatch) -> None:
         "NIJA_RUNTIME_MODULE_IDENTITY_READY",
         "NIJA_RUNTIME_CONVERGENCE_QUIESCENCE_INSTALLED",
         "NIJA_RUNTIME_CONVERGENCE_QUIESCENCE_READY",
+        "NIJA_SCAN_WRAPPER_DEPTH_GUARD_INSTALLED",
+        "NIJA_SCAN_WRAPPER_DEPTH_READY",
         "NIJA_ZERO_SIGNAL_STREAK_STATE_REPAIR_INSTALLED",
         "NIJA_ZERO_SIGNAL_STREAK_STATE_READY",
         "NIJA_BROKER_AUTH_RECOVERY_INSTALLED",
@@ -43,12 +45,13 @@ def _reset_source_bootstrap(monkeypatch) -> None:
         monkeypatch.delenv(name, raising=False)
 
 
-def test_source_bootstrap_installs_quiescence_after_legacy_convergence(monkeypatch):
+def test_source_bootstrap_installs_scan_depth_before_legacy_convergence(monkeypatch):
     _reset_source_bootstrap(monkeypatch)
     calls: list[str] = []
     names = (
         ("prebot_writer_authority_fail_closed", "writer", "install"),
         ("runtime_module_identity_convergence_patch", "module_identity", "install"),
+        ("scan_wrapper_depth_convergence_patch", "scan_depth", "install"),
         ("writer_generation_scope_repair_patch", "generation_scope", "install"),
         ("authority_heartbeat_generation_scope_patch", "heartbeat_scope", "install"),
         ("final_worker_position_coinbase_repair_patch", "worker_position", "install"),
@@ -78,14 +81,12 @@ def test_source_bootstrap_installs_quiescence_after_legacy_convergence(monkeypat
             module.audit = lambda: (True, {"identity": "ready"})
         if module_name == "runtime_convergence_quiescence_patch":
             module.audit = lambda: (True, {"quiescence": "ready"})
+        if module_name == "scan_wrapper_depth_convergence_patch":
+            module.audit = lambda: (True, {"scan_chain": "depth=2"})
         modules[module_name] = module
 
     real_import = source_bootstrap.importlib.import_module
-    monkeypatch.setattr(
-        source_bootstrap.importlib,
-        "import_module",
-        lambda name: modules.get(name) or real_import(name),
-    )
+    monkeypatch.setattr(source_bootstrap.importlib, "import_module", lambda name: modules.get(name) or real_import(name))
     monkeypatch.setenv("RENDER_GIT_COMMIT", "abc123")
     monkeypatch.setenv("LIVE_CAPITAL_VERIFIED", "true")
     monkeypatch.setenv("DRY_RUN_MODE", "false")
@@ -94,15 +95,16 @@ def test_source_bootstrap_installs_quiescence_after_legacy_convergence(monkeypat
     assert source_bootstrap.install() is True
     assert source_bootstrap.install() is True
     assert calls == [
-        "writer", "module_identity", "generation_scope", "heartbeat_scope",
-        "worker_position", "auth", "convergence", "zero_signal_state",
-        "convergence_v2", "auth_endpoint", "final_convergence", "scan_wrapper",
-        "venue", "activator", "strict", "broker_local_contract",
-        "exit_recovery", "exit_bootstrap", "stage", "bridge", "scan_owner",
-        "quiescence",
+        "writer", "module_identity", "scan_depth", "generation_scope", "heartbeat_scope",
+        "worker_position", "auth", "convergence", "zero_signal_state", "convergence_v2",
+        "auth_endpoint", "final_convergence", "scan_wrapper", "venue", "activator", "strict",
+        "broker_local_contract", "exit_recovery", "exit_bootstrap", "stage", "bridge",
+        "scan_owner", "quiescence",
     ]
+    assert calls.index("scan_depth") < calls.index("convergence")
     assert calls.index("quiescence") > calls.index("scan_owner")
-    assert source_bootstrap.installed_marker() == "20260715b"
+    assert source_bootstrap.installed_marker() == "20260715c"
+    assert source_bootstrap.os.environ["NIJA_SCAN_WRAPPER_DEPTH_GUARD_INSTALLED"] == "1"
     assert source_bootstrap.os.environ["NIJA_RUNTIME_CONVERGENCE_QUIESCENCE_INSTALLED"] == "1"
     assert source_bootstrap.os.environ["NIJA_SOURCE_WRITER_AUTHORITY_INSTALLED"] == "1"
 
@@ -112,11 +114,7 @@ def test_source_bootstrap_live_failure_raises_system_exit(monkeypatch):
     monkeypatch.setenv("LIVE_CAPITAL_VERIFIED", "true")
     monkeypatch.setenv("DRY_RUN_MODE", "false")
     monkeypatch.setenv("PAPER_MODE", "false")
-    monkeypatch.setattr(
-        source_bootstrap.importlib,
-        "import_module",
-        lambda _name: (_ for _ in ()).throw(ImportError("repair missing")),
-    )
+    monkeypatch.setattr(source_bootstrap.importlib, "import_module", lambda _name: (_ for _ in ()).throw(ImportError("repair missing")))
 
     with pytest.raises(SystemExit) as exc_info:
         source_bootstrap.install()
@@ -124,6 +122,7 @@ def test_source_bootstrap_live_failure_raises_system_exit(monkeypatch):
     assert exc_info.value.code == 78
     assert source_bootstrap.os.environ["NIJA_RUNTIME_MODULE_IDENTITY_READY"] == "0"
     assert source_bootstrap.os.environ["NIJA_RUNTIME_CONVERGENCE_QUIESCENCE_READY"] == "0"
+    assert source_bootstrap.os.environ["NIJA_SCAN_WRAPPER_DEPTH_READY"] == "0"
     assert source_bootstrap.os.environ["NIJA_SOURCE_WRITER_AUTHORITY_INSTALLED"] == "0"
 
 
@@ -139,11 +138,7 @@ def test_global_startup_guards_install_source_repair_before_other_guards(monkeyp
     fake_source = ModuleType("source_runtime_guard_bootstrap")
     fake_source.install = lambda: order.append("source") or True
     real_import = module.importlib.import_module
-    monkeypatch.setattr(
-        module.importlib,
-        "import_module",
-        lambda name: fake_source if name == "source_runtime_guard_bootstrap" else real_import(name),
-    )
+    monkeypatch.setattr(module.importlib, "import_module", lambda name: fake_source if name == "source_runtime_guard_bootstrap" else real_import(name))
     monkeypatch.setattr(module, "_set_defaults", lambda: order.append("defaults"))
     monkeypatch.setattr(module, "_install_kraken_patch_log_dedupe", lambda: order.append("dedupe"))
     monkeypatch.setattr(module, "_install_module", lambda module_name, marker: order.append(module_name) or True)
