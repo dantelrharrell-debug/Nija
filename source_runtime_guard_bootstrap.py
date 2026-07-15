@@ -8,7 +8,7 @@ import threading
 from typing import Optional
 
 logger = logging.getLogger("nija.source_runtime_guard_bootstrap")
-_MARKER = "20260715c"
+_MARKER = "20260715d"
 _TRUTHY = {"1", "true", "yes", "on", "enabled", "y"}
 _LOCK = threading.RLock()
 _INSTALLED = False
@@ -42,25 +42,6 @@ def _install_required(module_name: str) -> None:
     installer()
 
 
-def _critical_identity_invariants(details: dict[str, str]) -> tuple[bool, str]:
-    risk = str(details.get("downstream_risk_module", ""))
-    pipeline = str(details.get("execution_pipeline_chain", ""))
-    streak = str(details.get("zero_signal_streak_chain", ""))
-    duplicates = [f"{k}={v}" for k, v in details.items() if "duplicate=true" in str(v).lower()]
-    checks = {
-        "risk_identity": "same=True" in risk and "marker=20260714-downstream-risk-v2" in risk,
-        "pipeline_v2": "v2=True" in pipeline,
-        "pipeline_no_legacy": "legacy=False" in pipeline,
-        "pipeline_no_cycle": "cycle=False" in pipeline,
-        "streak_cap": "cap_guard=True" in streak,
-        "streak_state": "state_repair=True" in streak,
-        "streak_no_cycle": "cycle=False" in streak,
-        "no_reported_duplicates": not duplicates,
-    }
-    failed = [name for name, ok in checks.items() if not ok]
-    return not failed, ";".join(failed or ["all_critical_invariants_ready"])
-
-
 def _set_status(value: str) -> None:
     for name in (
         "NIJA_VENUE_READINESS_SOURCE_BOOTSTRAP",
@@ -68,6 +49,8 @@ def _set_status(value: str) -> None:
         "NIJA_RUNTIME_CONVERGENCE_QUIESCENCE_INSTALLED",
         "NIJA_SCAN_WRAPPER_DEPTH_GUARD_INSTALLED",
         "NIJA_ZERO_SIGNAL_STREAK_STATE_REPAIR_INSTALLED",
+        "NIJA_EMPTY_POSITION_SYNC_PATCH_INSTALLED",
+        "NIJA_SECONDARY_CREDENTIAL_QUARANTINE_INSTALLED",
         "NIJA_BROKER_AUTH_RECOVERY_INSTALLED",
         "NIJA_RUNTIME_CONVERGENCE_HARDENING_INSTALLED",
         "NIJA_RUNTIME_CONVERGENCE_V2_INSTALLED",
@@ -104,8 +87,10 @@ def install() -> bool:
             _install_required("authority_heartbeat_generation_scope_patch")
             _install_required("final_worker_position_coinbase_repair_patch")
             _install_required("broker_auth_recovery_patch")
+            _install_required("bot.secondary_credential_quarantine_patch")
             _install_required("runtime_convergence_hardening_patch")
             _install_required("bot.zero_signal_streak_state_repair_patch")
+            _install_required("bot.empty_position_sync_success_patch")
             _install_required("runtime_convergence_v2_patch")
             _install_required("runtime_auth_recursion_endpoint_repair_patch")
             _install_required("final_runtime_convergence_patch")
@@ -122,19 +107,9 @@ def install() -> bool:
             _install_required("runtime_convergence_quiescence_patch")
 
             identity = importlib.import_module("runtime_module_identity_convergence_patch")
-            ready, details = identity.audit()
-            if not ready:
-                critical_ready, reason = _critical_identity_invariants(details)
-                if not critical_ready:
-                    raise RuntimeError(f"runtime_module_identity_critical_failure:{reason}:{details}")
-                previous = os.environ.get("NIJA_DUPLICATE_PATCH_MODULE_DETECTED", "")
-                os.environ["NIJA_DUPLICATE_PATCH_MODULE_DETECTED"] = "0"
-                ready, second_details = identity.audit()
-                if not ready:
-                    os.environ["NIJA_DUPLICATE_PATCH_MODULE_DETECTED"] = previous
-                    raise RuntimeError(f"runtime_module_identity_recheck_failed:{second_details}")
-                os.environ["NIJA_RUNTIME_MODULE_IDENTITY_READY"] = "1"
-                logger.warning("RUNTIME_MODULE_IDENTITY_STALE_LATCH_CLEARED marker=%s previous=%s reason=%s", _MARKER, previous or "unset", reason)
+            identity_ready, identity_details = identity.audit()
+            if not identity_ready:
+                raise RuntimeError(f"runtime_module_identity_incomplete:{identity_details}")
 
             quiescence = importlib.import_module("runtime_convergence_quiescence_patch")
             quiescence_ready, quiescence_details = quiescence.audit()
@@ -151,31 +126,39 @@ def install() -> bool:
             message = (
                 f"SOURCE_RUNTIME_GUARDS_READY marker={_MARKER} commit={_deployment_commit()} "
                 "writer_authority=installed module_identity=verified convergence_quiescence=verified "
-                "scan_wrapper_depth=verified zero_signal_state_repair=armed "
-                "writer_generation_scope=installed authority_heartbeat_generation_scope=installed "
-                "final_worker_position_coinbase_repair=installed broker_auth_recovery=installed "
-                "runtime_convergence_hardening=installed runtime_convergence_v2=installed "
-                "runtime_auth_endpoint_repair=installed final_runtime_convergence=installed "
-                "scan_wrapper_convergence=installed venue_repair=installed secondary_venue_activation=installed "
-                "secondary_venue_strict_readiness=installed broker_local_readiness_contract=installed "
-                "account_exit_management_recovery=installed account_exit_recovery_bootstrap=installed "
-                "three_venue_stage_verifier=installed render_readiness_bridge=installed "
-                "scan_owner_okx_auth_convergence=installed source=main_pre_bot"
+                "scan_wrapper_depth=verified zero_signal_state_repair=armed empty_position_sync=armed "
+                "secondary_credential_quarantine=armed writer_generation_scope=installed "
+                "authority_heartbeat_generation_scope=installed final_worker_position_coinbase_repair=installed "
+                "broker_auth_recovery=installed runtime_convergence_hardening=installed runtime_convergence_v2=installed "
+                "runtime_auth_endpoint_repair=installed final_runtime_convergence=installed scan_wrapper_convergence=installed "
+                "venue_repair=installed secondary_venue_activation=installed secondary_venue_strict_readiness=installed "
+                "broker_local_readiness_contract=installed account_exit_management_recovery=installed "
+                "account_exit_recovery_bootstrap=installed three_venue_stage_verifier=installed "
+                "render_readiness_bridge=installed scan_owner_okx_auth_convergence=installed source=main_pre_bot"
             )
             logger.warning(message)
             print(f"[NIJA-PRINT] {message}", flush=True)
             return True
         except Exception as exc:
             _set_status("0")
-            os.environ["NIJA_THREE_VENUE_EXECUTION_READY"] = "0"
-            os.environ["NIJA_RUNTIME_MODULE_IDENTITY_READY"] = "0"
-            os.environ["NIJA_RUNTIME_CONVERGENCE_QUIESCENCE_READY"] = "0"
-            os.environ["NIJA_SCAN_WRAPPER_DEPTH_READY"] = "0"
-            os.environ["NIJA_ZERO_SIGNAL_STREAK_STATE_READY"] = "0"
+            for name in (
+                "NIJA_THREE_VENUE_EXECUTION_READY", "NIJA_RUNTIME_MODULE_IDENTITY_READY",
+                "NIJA_RUNTIME_CONVERGENCE_QUIESCENCE_READY", "NIJA_SCAN_WRAPPER_DEPTH_READY",
+                "NIJA_ZERO_SIGNAL_STREAK_STATE_READY", "NIJA_EMPTY_POSITION_SYNC_READY",
+                "NIJA_SECONDARY_CREDENTIAL_QUARANTINE_READY",
+            ):
+                os.environ[name] = "0"
             message = f"{type(exc).__name__}:{exc}"
             live = _is_live_runtime()
-            logger.critical("SOURCE_RUNTIME_GUARDS_FAILED marker=%s commit=%s error=%s live=%s", _MARKER, _deployment_commit(), message, live, exc_info=True)
-            print(f"[NIJA-PRINT] SOURCE_RUNTIME_GUARDS_FAILED marker={_MARKER} commit={_deployment_commit()} error={message[:240]} live={str(live).lower()}", flush=True)
+            logger.critical(
+                "SOURCE_RUNTIME_GUARDS_FAILED marker=%s commit=%s error=%s live=%s",
+                _MARKER, _deployment_commit(), message, live, exc_info=True,
+            )
+            print(
+                f"[NIJA-PRINT] SOURCE_RUNTIME_GUARDS_FAILED marker={_MARKER} "
+                f"commit={_deployment_commit()} error={message[:240]} live={str(live).lower()}",
+                flush=True,
+            )
             if live:
                 raise SystemExit(78) from exc
             return False
@@ -185,4 +168,4 @@ def installed_marker() -> Optional[str]:
     return _MARKER if _INSTALLED else None
 
 
-__all__ = ["install", "installed_marker", "_critical_identity_invariants"]
+__all__ = ["install", "installed_marker"]
