@@ -1,8 +1,8 @@
 """Recover broker-verified cost basis for held Kraken positions.
 
-Kraken balance snapshots expose quantities but not acquisition cost.  The exit
+Kraken balance snapshots expose quantities but not acquisition cost. The exit
 supervisor therefore receives adoption/display prices that the final safety guard
-correctly refuses to trust.  This module reconstructs the outstanding weighted
+correctly refuses to trust. This module reconstructs the outstanding weighted
 average cost from the exact account's private TradesHistory and annotates each
 held position with explicit provenance before profit-taking is evaluated.
 """
@@ -16,7 +16,7 @@ from functools import wraps
 from typing import Any, Iterable, Mapping, MutableMapping
 
 logger = logging.getLogger("nija.kraken_verified_cost_basis")
-_MARKER = "20260715-kraken-cost-basis-v1"
+_MARKER = "20260715-kraken-cost-basis-v2"
 _LOCK = threading.RLock()
 _INSTALLED = False
 _CACHE: dict[int, tuple[float, dict[str, tuple[float, float]]]] = {}
@@ -36,8 +36,11 @@ def _base_from_pair(pair: Any) -> str:
         if text.endswith(quote) and len(text) > len(quote):
             text = text[: -len(quote)]
             break
-    aliases = {"XXBT": "XBT", "BTC": "XBT", "XETH": "ETH"}
-    return aliases.get(text, text.lstrip("XZ"))
+    aliases = {
+        "XXBT": "XBT", "BTC": "XBT", "XETH": "ETH", "XXRP": "XRP",
+        "XXLM": "XLM", "XLTC": "LTC", "XXMR": "XMR", "XETC": "ETC",
+    }
+    return aliases.get(text, text)
 
 
 def _position_base(runtime: Any, position: Mapping[str, Any]) -> str:
@@ -46,21 +49,49 @@ def _position_base(runtime: Any, position: Mapping[str, Any]) -> str:
     return _base_from_pair(base)
 
 
-def _private_trades(broker: Any) -> Mapping[str, Any]:
+def _private_call(broker: Any, params: dict[str, Any]) -> Mapping[str, Any]:
     caller = getattr(broker, "_kraken_api_call", None)
     if callable(caller):
-        payload = caller("TradesHistory", {"type": "all", "trades": True})
+        payload = caller("TradesHistory", params)
     else:
         api = getattr(broker, "api", None)
         query_private = getattr(api, "query_private", None)
         if not callable(query_private):
             return {}
-        payload = query_private("TradesHistory", {"type": "all", "trades": True})
-    if not isinstance(payload, Mapping) or payload.get("error"):
-        return {}
-    result = payload.get("result")
-    trades = result.get("trades") if isinstance(result, Mapping) else None
-    return trades if isinstance(trades, Mapping) else {}
+        payload = query_private("TradesHistory", params)
+    return payload if isinstance(payload, Mapping) else {}
+
+
+def _private_trades(broker: Any) -> Mapping[str, Any]:
+    page_size = max(25, int(_f(os.environ.get("NIJA_KRAKEN_TRADES_HISTORY_PAGE_SIZE"), 50)))
+    max_pages = max(1, min(100, int(_f(os.environ.get("NIJA_KRAKEN_TRADES_HISTORY_MAX_PAGES"), 40))))
+    all_trades: dict[str, Any] = {}
+    expected = None
+    for page in range(max_pages):
+        offset = page * page_size
+        payload = _private_call(broker, {"type": "all", "trades": True, "ofs": offset})
+        if payload.get("error"):
+            logger.warning(
+                "KRAKEN_COST_BASIS_HISTORY_PAGE_FAILED marker=%s offset=%d error=%s",
+                _MARKER, offset, payload.get("error"),
+            )
+            break
+        result = payload.get("result")
+        if not isinstance(result, Mapping):
+            break
+        trades = result.get("trades")
+        if not isinstance(trades, Mapping) or not trades:
+            break
+        all_trades.update(trades)
+        if expected is None:
+            expected = int(_f(result.get("count"), len(trades)))
+        if len(all_trades) >= expected or len(trades) < page_size:
+            break
+    logger.info(
+        "KRAKEN_COST_BASIS_HISTORY_LOADED marker=%s trades=%d expected=%s",
+        _MARKER, len(all_trades), expected,
+    )
+    return all_trades
 
 
 def _reconstruct(trades: Mapping[str, Any]) -> dict[str, tuple[float, float]]:
@@ -94,7 +125,7 @@ def _reconstruct(trades: Mapping[str, Any]) -> dict[str, tuple[float, float]]:
 
 
 def _basis_map(broker: Any, *, force: bool = False) -> dict[str, tuple[float, float]]:
-    ttl = max(15.0, _f(os.environ.get("NIJA_KRAKEN_COST_BASIS_CACHE_TTL_S"), 60.0))
+    ttl = max(15.0, _f(os.environ.get("NIJA_KRAKEN_COST_BASIS_CACHE_TTL_S"), 300.0))
     now = time.time()
     cached = _CACHE.get(id(broker))
     if not force and cached and now - cached[0] < ttl:
@@ -110,8 +141,8 @@ def _already_verified(position: Mapping[str, Any]) -> bool:
 
 def _patch_runtime(runtime: Any) -> bool:
     current = getattr(runtime, "_position_rows", None)
-    if not callable(current) or getattr(current, "_nija_kraken_verified_basis_v1", False):
-        return bool(getattr(current, "_nija_kraken_verified_basis_v1", False))
+    if not callable(current) or getattr(current, "_nija_kraken_verified_basis_v2", False):
+        return bool(getattr(current, "_nija_kraken_verified_basis_v2", False))
 
     @wraps(current)
     def position_rows(broker: Any) -> Iterable[MutableMapping[str, Any]]:
@@ -150,7 +181,7 @@ def _patch_runtime(runtime: Any) -> bool:
                 )
             yield position
 
-    position_rows._nija_kraken_verified_basis_v1 = True  # type: ignore[attr-defined]
+    position_rows._nija_kraken_verified_basis_v2 = True  # type: ignore[attr-defined]
     position_rows.__wrapped__ = current  # type: ignore[attr-defined]
     runtime._position_rows = position_rows
     return True
@@ -173,10 +204,10 @@ def install() -> bool:
         os.environ["NIJA_KRAKEN_VERIFIED_COST_BASIS_RECOVERY_INSTALLED"] = "1"
         _INSTALLED = True
         logger.critical(
-            "KRAKEN_VERIFIED_COST_BASIS_RECOVERY_INSTALLED marker=%s source=private_trades_history fail_closed=true",
+            "KRAKEN_VERIFIED_COST_BASIS_RECOVERY_INSTALLED marker=%s source=paginated_private_trades_history fail_closed=true",
             _MARKER,
         )
         return True
 
 
-__all__ = ["install", "_reconstruct", "_basis_map", "_patch_runtime", "_base_from_pair"]
+__all__ = ["install", "_reconstruct", "_basis_map", "_patch_runtime", "_base_from_pair", "_private_trades"]
