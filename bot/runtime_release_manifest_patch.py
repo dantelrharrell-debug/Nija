@@ -9,13 +9,14 @@ import time
 from typing import Callable
 
 logger = logging.getLogger("nija.runtime_release_manifest")
-RELEASE_ID = "20260715-runtime-convergence-v11"
+RELEASE_ID = "20260715-runtime-convergence-v12"
 _INSTALLED = False
 _LOCK = threading.RLock()
 _TRUE = {"1", "true", "yes", "on", "enabled", "y"}
 
 _INSTALLERS = (
     ("runtime_module_identity_convergence_patch", "install_import_hook"),
+    ("scan_wrapper_depth_convergence_patch", "install_import_hook"),
     ("scan_wrapper_convergence_repair_patch", "install"),
     ("bot.scan_reentrant_delegate_repair_patch", "install_import_hook"),
     ("broker_local_readiness_contract_patch", "install_import_hook"),
@@ -45,6 +46,8 @@ _REQUIRED_FLAGS = {
     "module_identity_ready": "NIJA_RUNTIME_MODULE_IDENTITY_READY",
     "convergence_quiescence_installed": "NIJA_RUNTIME_CONVERGENCE_QUIESCENCE_INSTALLED",
     "convergence_quiescence_ready": "NIJA_RUNTIME_CONVERGENCE_QUIESCENCE_READY",
+    "scan_wrapper_depth_guard": "NIJA_SCAN_WRAPPER_DEPTH_GUARD_INSTALLED",
+    "scan_wrapper_depth_ready": "NIJA_SCAN_WRAPPER_DEPTH_READY",
     "core_loop_limits": "NIJA_CORE_LOOP_PROGRESS_LIMITS_NORMALIZED",
     "zero_signal_state_repair": "NIJA_ZERO_SIGNAL_STREAK_STATE_REPAIR_INSTALLED",
     "zero_signal_state_ready": "NIJA_ZERO_SIGNAL_STREAK_STATE_READY",
@@ -65,10 +68,7 @@ def _truthy(value: str | None) -> bool:
 
 
 def _deployment_sha() -> str:
-    for name in (
-        "RAILWAY_GIT_COMMIT_SHA", "GIT_COMMIT_SHA", "SOURCE_VERSION",
-        "RENDER_GIT_COMMIT", "HEROKU_SLUG_COMMIT",
-    ):
+    for name in ("RAILWAY_GIT_COMMIT_SHA", "GIT_COMMIT_SHA", "SOURCE_VERSION", "RENDER_GIT_COMMIT", "HEROKU_SLUG_COMMIT"):
         value = str(os.environ.get(name, "") or "").strip()
         if value:
             return value
@@ -103,9 +103,7 @@ def _readiness_contract_consistent() -> tuple[bool, str]:
     policy = str(os.environ.get("NIJA_SECONDARY_VENUE_POLICY", "") or "").strip().lower()
     missing = str(os.environ.get("NIJA_REQUIRED_VENUES_MISSING", "") or "").strip().strip(",")
     required_ready = _truthy(os.environ.get("NIJA_REQUIRED_VENUES_READY"))
-    global_ready = _truthy(
-        os.environ.get("NIJA_GLOBAL_TRADING_READY", os.environ.get("NIJA_MULTI_BROKER_TRADING_READY", "0"))
-    )
+    global_ready = _truthy(os.environ.get("NIJA_GLOBAL_TRADING_READY", os.environ.get("NIJA_MULTI_BROKER_TRADING_READY", "0")))
     active = str(os.environ.get("NIJA_ACTIVE_LIVE_VENUES", "") or "").strip().strip(",")
     if policy not in {"broker_local", "global_all_required", "optional"}:
         return False, f"invalid_policy:{policy or 'missing'}"
@@ -113,10 +111,7 @@ def _readiness_contract_consistent() -> tuple[bool, str]:
         return False, f"contradiction:missing={missing};required_ready=1"
     if global_ready and not active:
         return False, "contradiction:global_ready=1;active_live_venues=missing"
-    return True, (
-        f"policy={policy};required_ready={int(required_ready)};missing={missing or 'none'};"
-        f"global_ready={int(global_ready)};active={active or 'none'}"
-    )
+    return True, f"policy={policy};required_ready={int(required_ready)};missing={missing or 'none'};global_ready={int(global_ready)};active={active or 'none'}"
 
 
 def _runtime_limits_consistent() -> tuple[bool, str]:
@@ -127,10 +122,7 @@ def _runtime_limits_consistent() -> tuple[bool, str]:
     except Exception as exc:
         return False, f"parse_error:{exc}"
     ok = 2 <= streak <= 12 and stale > streak and stall >= 120.0
-    return ok, (
-        f"zero_signal_streak_cap={streak};stale_threshold={stale};"
-        f"run_cycle_stall_warn_s={stall:.1f}"
-    )
+    return ok, f"zero_signal_streak_cap={streak};stale_threshold={stale};run_cycle_stall_warn_s={stall:.1f}"
 
 
 def _audit() -> tuple[bool, dict[str, str]]:
@@ -141,23 +133,19 @@ def _audit() -> tuple[bool, dict[str, str]]:
         results[module_name] = reason
         ready = ready and ok
 
-    try:
-        identity = importlib.import_module("runtime_module_identity_convergence_patch")
-        identity_ready, identity_details = identity.audit()
-        results["module_identity_audit"] = str(identity_details)
-        ready = ready and bool(identity_ready)
-    except Exception as exc:
-        results["module_identity_audit"] = f"{type(exc).__name__}:{exc}"
-        ready = False
-
-    try:
-        convergence = importlib.import_module("runtime_convergence_quiescence_patch")
-        convergence_ready, convergence_details = convergence.audit()
-        results["convergence_quiescence_audit"] = str(convergence_details)
-        ready = ready and bool(convergence_ready)
-    except Exception as exc:
-        results["convergence_quiescence_audit"] = f"{type(exc).__name__}:{exc}"
-        ready = False
+    for module_name, key in (
+        ("runtime_module_identity_convergence_patch", "module_identity_audit"),
+        ("runtime_convergence_quiescence_patch", "convergence_quiescence_audit"),
+        ("scan_wrapper_depth_convergence_patch", "scan_wrapper_depth_audit"),
+    ):
+        try:
+            module = importlib.import_module(module_name)
+            module_ready, module_details = module.audit()
+            results[key] = str(module_details)
+            ready = ready and bool(module_ready)
+        except Exception as exc:
+            results[key] = f"{type(exc).__name__}:{exc}"
+            ready = False
 
     scan_release = str(os.environ.get("NIJA_SCAN_WRAPPER_RELEASE", "") or "").strip()
     expected_scan_release = _expected_scan_wrapper_release()
@@ -178,7 +166,6 @@ def _audit() -> tuple[bool, dict[str, str]]:
     limits_ok, limits_reason = _runtime_limits_consistent()
     results["core_loop_runtime_limits"] = limits_reason
     ready = ready and limits_ok
-
     contract_ok, contract_reason = _readiness_contract_consistent()
     results["readiness_contract"] = contract_reason
     ready = ready and contract_ok
@@ -188,15 +175,9 @@ def _audit() -> tuple[bool, dict[str, str]]:
 def _publish(ready: bool, details: dict[str, str]) -> None:
     os.environ["NIJA_RUNTIME_RELEASE_ID"] = RELEASE_ID
     os.environ["NIJA_RUNTIME_RELEASE_READY"] = "1" if ready else "0"
-    logger.critical(
-        "NIJA_RUNTIME_RELEASE_MANIFEST release=%s deployment_sha=%s ready=%s python_pid=%s details=%s",
-        RELEASE_ID, _deployment_sha(), str(ready).lower(), os.getpid(), details,
-    )
+    logger.critical("NIJA_RUNTIME_RELEASE_MANIFEST release=%s deployment_sha=%s ready=%s python_pid=%s details=%s", RELEASE_ID, _deployment_sha(), str(ready).lower(), os.getpid(), details)
     if not ready:
-        logger.critical(
-            "RUNTIME_RELEASE_INCOMPLETE_EXECUTION_UNSAFE release=%s action=keep_broker_order_gates_fail_closed",
-            RELEASE_ID,
-        )
+        logger.critical("RUNTIME_RELEASE_INCOMPLETE_EXECUTION_UNSAFE release=%s action=keep_broker_order_gates_fail_closed", RELEASE_ID)
 
 
 def _watchdog() -> None:
@@ -224,8 +205,4 @@ def install_import_hook() -> None:
     logger.critical("NIJA_RUNTIME_RELEASE_MANIFEST_INSTALLED release=%s", RELEASE_ID)
 
 
-__all__ = [
-    "RELEASE_ID", "install_import_hook", "_audit", "_deployment_sha",
-    "_expected_scan_wrapper_release", "_scan_release_compatible",
-    "_readiness_contract_consistent", "_runtime_limits_consistent",
-]
+__all__ = ["RELEASE_ID", "install_import_hook", "_audit", "_deployment_sha", "_expected_scan_wrapper_release", "_scan_release_compatible", "_readiness_contract_consistent", "_runtime_limits_consistent"]
