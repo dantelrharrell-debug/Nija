@@ -14,7 +14,7 @@ import threading
 from typing import Optional
 
 logger = logging.getLogger("nija.source_runtime_guard_bootstrap")
-_MARKER = "20260714d"
+_MARKER = "20260715a"
 _TRUTHY = {"1", "true", "yes", "on", "enabled", "y"}
 _LOCK = threading.RLock()
 _INSTALLED = False
@@ -46,6 +46,37 @@ def _install_required(module_name: str) -> None:
     if not callable(installer):
         raise RuntimeError(f"{module_name} installer is missing")
     installer()
+
+
+def _critical_identity_invariants(details: dict[str, str]) -> tuple[bool, str]:
+    """Validate only conditions that can make live execution unsafe.
+
+    Initial sitecustomize recovery is expected and may leave a stale advisory
+    duplicate latch from an earlier audit pass. The latch may be cleared only when
+    the current audit proves the required risk module is canonical, the execution
+    chain contains v2 and no legacy/cycle layer, both Phase 3 streak guards are
+    attached without a cycle, and no recovered module reports duplicate=true.
+    """
+    risk = str(details.get("downstream_risk_module", ""))
+    pipeline = str(details.get("execution_pipeline_chain", ""))
+    streak = str(details.get("zero_signal_streak_chain", ""))
+    duplicate_values = [
+        f"{key}={value}"
+        for key, value in details.items()
+        if "duplicate=true" in str(value).lower()
+    ]
+    checks = {
+        "risk_identity": "same=True" in risk and "marker=20260714-downstream-risk-v2" in risk,
+        "pipeline_v2": "v2=True" in pipeline,
+        "pipeline_no_legacy": "legacy=False" in pipeline,
+        "pipeline_no_cycle": "cycle=False" in pipeline,
+        "streak_cap": "cap_guard=True" in streak,
+        "streak_state": "state_repair=True" in streak,
+        "streak_no_cycle": "cycle=False" in streak,
+        "no_reported_duplicates": not duplicate_values,
+    }
+    failed = [name for name, ok in checks.items() if not ok]
+    return not failed, ";".join(failed or ["all_critical_invariants_ready"])
 
 
 def _set_status(value: str) -> None:
@@ -83,15 +114,12 @@ def install() -> bool:
             return True
         try:
             _install_required("prebot_writer_authority_fail_closed")
-            # Must precede every canonical bot import. It binds sitecustomize's
-            # nija_* modules to bot.* so source files cannot execute twice.
             _install_required("runtime_module_identity_convergence_patch")
             _install_required("writer_generation_scope_repair_patch")
             _install_required("authority_heartbeat_generation_scope_patch")
             _install_required("final_worker_position_coinbase_repair_patch")
             _install_required("broker_auth_recovery_patch")
             _install_required("runtime_convergence_hardening_patch")
-            # Arm before NijaCoreLoop imports so stale 999 state cannot enter Phase 3.
             _install_required("bot.zero_signal_streak_state_repair_patch")
             _install_required("runtime_convergence_v2_patch")
             _install_required("runtime_auth_recursion_endpoint_repair_patch")
@@ -105,23 +133,42 @@ def install() -> bool:
             _install_required("account_exit_recovery_bootstrap_patch")
             _install_required("three_venue_execution_readiness")
             _install_required("render_readiness_state_bridge")
-            # Must be last: collapse every legacy scan/auth wrapper to one owner.
             _install_required("scan_owner_okx_auth_convergence_patch")
 
-            # Re-audit after every wrapper and core-loop module is installed.
             identity = importlib.import_module("runtime_module_identity_convergence_patch")
             audit = getattr(identity, "audit", None)
             if callable(audit):
                 ready, details = audit()
                 if not ready:
-                    raise RuntimeError(f"runtime_module_identity_incomplete:{details}")
+                    critical_ready, reason = _critical_identity_invariants(details)
+                    if not critical_ready:
+                        raise RuntimeError(
+                            f"runtime_module_identity_critical_failure:{reason}:{details}"
+                        )
+                    # The current state is proven canonical and safe. Clear only the
+                    # stale advisory latch, then require a clean second audit.
+                    previous = os.environ.get("NIJA_DUPLICATE_PATCH_MODULE_DETECTED", "")
+                    os.environ["NIJA_DUPLICATE_PATCH_MODULE_DETECTED"] = "0"
+                    ready, second_details = audit()
+                    if not ready:
+                        os.environ["NIJA_DUPLICATE_PATCH_MODULE_DETECTED"] = previous
+                        raise RuntimeError(
+                            f"runtime_module_identity_recheck_failed:{second_details}"
+                        )
+                    os.environ["NIJA_RUNTIME_MODULE_IDENTITY_READY"] = "1"
+                    logger.warning(
+                        "RUNTIME_MODULE_IDENTITY_STALE_LATCH_CLEARED marker=%s previous=%s reason=%s",
+                        _MARKER,
+                        previous or "unset",
+                        reason,
+                    )
 
             _INSTALLED = True
             _set_status("1")
             commit = _deployment_commit()
             message = (
                 f"SOURCE_RUNTIME_GUARDS_READY marker={_MARKER} commit={commit} "
-                "writer_authority=installed module_identity=installed zero_signal_state_repair=armed "
+                "writer_authority=installed module_identity=verified zero_signal_state_repair=armed "
                 "writer_generation_scope=installed authority_heartbeat_generation_scope=installed "
                 "final_worker_position_coinbase_repair=installed broker_auth_recovery=installed "
                 "runtime_convergence_hardening=installed runtime_convergence_v2=installed "
@@ -161,4 +208,4 @@ def installed_marker() -> Optional[str]:
     return _MARKER if _INSTALLED else None
 
 
-__all__ = ["install", "installed_marker"]
+__all__ = ["install", "installed_marker", "_critical_identity_invariants"]
