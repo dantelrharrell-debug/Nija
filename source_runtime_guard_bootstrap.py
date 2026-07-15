@@ -8,7 +8,7 @@ import threading
 from typing import Optional
 
 logger = logging.getLogger("nija.source_runtime_guard_bootstrap")
-_MARKER = "20260715h"
+_MARKER = "20260715i"
 _TRUTHY = {"1", "true", "yes", "on", "enabled", "y"}
 _LOCK = threading.RLock()
 _INSTALLED = False
@@ -53,6 +53,7 @@ def _set_status(value: str) -> None:
         "NIJA_EMPTY_POSITION_SYNC_PATCH_INSTALLED",
         "NIJA_SECONDARY_CREDENTIAL_QUARANTINE_INSTALLED",
         "NIJA_BROKER_AUTH_RECOVERY_INSTALLED",
+        "NIJA_COINBASE_FUNDING_READINESS_REPAIR_INSTALLED",
         "NIJA_RUNTIME_CONVERGENCE_HARDENING_INSTALLED",
         "NIJA_RUNTIME_CONVERGENCE_V2_INSTALLED",
         "NIJA_RUNTIME_AUTH_ENDPOINT_REPAIR_INSTALLED",
@@ -92,6 +93,7 @@ def install() -> bool:
             _install_required("authority_heartbeat_generation_scope_patch")
             _install_required("final_worker_position_coinbase_repair_patch")
             _install_required("broker_auth_recovery_patch")
+            _install_required("bot.coinbase_funding_readiness_repair_patch")
             _install_required("bot.secondary_credential_quarantine_patch")
             _install_required("runtime_convergence_hardening_patch")
             _install_required("bot.zero_signal_streak_state_repair_patch")
@@ -114,6 +116,7 @@ def install() -> bool:
             _install_required("render_readiness_state_bridge")
             _install_required("scan_owner_okx_auth_convergence_patch")
             _install_required("runtime_convergence_quiescence_patch")
+            _install_required("bot.runtime_guard_audit_patch")
 
             identity = importlib.import_module("runtime_module_identity_convergence_patch")
             identity_ready, identity_details = identity.audit()
@@ -130,16 +133,16 @@ def install() -> bool:
             if not scan_ready:
                 raise RuntimeError(f"scan_wrapper_depth_incomplete:{scan_details}")
 
-            _set_status("1")
-            _install_required("bot.runtime_guard_audit_patch")
             _INSTALLED = True
+            _set_status("1")
             message = (
                 f"SOURCE_RUNTIME_GUARDS_READY marker={_MARKER} commit={_deployment_commit()} "
                 "writer_authority=installed module_identity=verified convergence_quiescence=verified "
                 "scan_wrapper_depth=verified scan_wrapper_hard_clamp=installed zero_signal_state_repair=armed "
                 "empty_position_sync=armed secondary_credential_quarantine=armed writer_generation_scope=installed "
                 "authority_heartbeat_generation_scope=installed final_worker_position_coinbase_repair=installed "
-                "broker_auth_recovery=installed runtime_convergence_hardening=installed runtime_convergence_v2=installed "
+                "broker_auth_recovery=installed coinbase_funding_readiness=installed "
+                "runtime_convergence_hardening=installed runtime_convergence_v2=installed "
                 "runtime_auth_endpoint_repair=installed final_runtime_convergence=installed scan_wrapper_convergence=installed "
                 "venue_repair=installed secondary_venue_activation=installed secondary_venue_strict_readiness=installed "
                 "broker_local_readiness_contract=installed account_exit_management_recovery=installed "
@@ -158,6 +161,7 @@ def install() -> bool:
                 "NIJA_RUNTIME_CONVERGENCE_QUIESCENCE_READY", "NIJA_SCAN_WRAPPER_DEPTH_READY",
                 "NIJA_SCAN_WRAPPER_HARD_CLAMP_INSTALLED", "NIJA_ZERO_SIGNAL_STREAK_STATE_READY",
                 "NIJA_EMPTY_POSITION_SYNC_READY", "NIJA_SECONDARY_CREDENTIAL_QUARANTINE_READY",
+                "NIJA_COINBASE_FUNDING_READINESS_REPAIR_INSTALLED",
                 "NIJA_KRAKEN_VERIFIED_COST_BASIS_RECOVERY_INSTALLED",
                 "NIJA_DAILY_GAIN_PROFIT_HARVEST_INSTALLED",
                 "NIJA_KRAKEN_TPE_MIN_NOTIONAL_ALLOCATION_INSTALLED",
