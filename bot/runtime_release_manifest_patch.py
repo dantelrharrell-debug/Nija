@@ -9,7 +9,7 @@ import time
 from typing import Callable
 
 logger = logging.getLogger("nija.runtime_release_manifest")
-RELEASE_ID = "20260714-runtime-convergence-v10"
+RELEASE_ID = "20260715-runtime-convergence-v11"
 _INSTALLED = False
 _LOCK = threading.RLock()
 _TRUE = {"1", "true", "yes", "on", "enabled", "y"}
@@ -22,6 +22,7 @@ _INSTALLERS = (
     ("bot.downstream_risk_governor_equity_repair_patch", "install_import_hook"),
     ("runtime_convergence_hardening_patch", "install"),
     ("bot.zero_signal_streak_state_repair_patch", "install_import_hook"),
+    ("runtime_convergence_quiescence_patch", "install_import_hook"),
     ("bot.position_cost_basis_legacy_repair_patch", "install_import_hook"),
     ("bot.position_sync_runtime_repair_patch", "install_import_hook"),
     ("bot.kraken_equity_metadata_guard_patch", "install_import_hook"),
@@ -42,6 +43,8 @@ _INSTALLERS = (
 _REQUIRED_FLAGS = {
     "module_identity_guard": "NIJA_RUNTIME_MODULE_IDENTITY_GUARD_INSTALLED",
     "module_identity_ready": "NIJA_RUNTIME_MODULE_IDENTITY_READY",
+    "convergence_quiescence_installed": "NIJA_RUNTIME_CONVERGENCE_QUIESCENCE_INSTALLED",
+    "convergence_quiescence_ready": "NIJA_RUNTIME_CONVERGENCE_QUIESCENCE_READY",
     "core_loop_limits": "NIJA_CORE_LOOP_PROGRESS_LIMITS_NORMALIZED",
     "zero_signal_state_repair": "NIJA_ZERO_SIGNAL_STREAK_STATE_REPAIR_INSTALLED",
     "zero_signal_state_ready": "NIJA_ZERO_SIGNAL_STREAK_STATE_READY",
@@ -147,6 +150,15 @@ def _audit() -> tuple[bool, dict[str, str]]:
         results["module_identity_audit"] = f"{type(exc).__name__}:{exc}"
         ready = False
 
+    try:
+        convergence = importlib.import_module("runtime_convergence_quiescence_patch")
+        convergence_ready, convergence_details = convergence.audit()
+        results["convergence_quiescence_audit"] = str(convergence_details)
+        ready = ready and bool(convergence_ready)
+    except Exception as exc:
+        results["convergence_quiescence_audit"] = f"{type(exc).__name__}:{exc}"
+        ready = False
+
     scan_release = str(os.environ.get("NIJA_SCAN_WRAPPER_RELEASE", "") or "").strip()
     expected_scan_release = _expected_scan_wrapper_release()
     if not _scan_release_compatible(scan_release, expected_scan_release):
@@ -188,10 +200,14 @@ def _publish(ready: bool, details: dict[str, str]) -> None:
 
 
 def _watchdog() -> None:
+    last_signature = ""
     while True:
         try:
             ready, details = _audit()
-            _publish(ready, details)
+            signature = f"{ready}:{details}"
+            if signature != last_signature:
+                last_signature = signature
+                _publish(ready, details)
         except Exception as exc:
             logger.critical("RUNTIME_RELEASE_AUDIT_FAILED release=%s error=%s", RELEASE_ID, exc)
         time.sleep(max(30.0, float(os.environ.get("NIJA_RUNTIME_RELEASE_AUDIT_INTERVAL_S", "120") or 120)))

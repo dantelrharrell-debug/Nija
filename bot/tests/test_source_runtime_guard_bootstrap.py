@@ -17,6 +17,8 @@ def _reset_source_bootstrap(monkeypatch) -> None:
         "NIJA_VENUE_READINESS_SOURCE_MARKER",
         "NIJA_RUNTIME_MODULE_IDENTITY_GUARD_INSTALLED",
         "NIJA_RUNTIME_MODULE_IDENTITY_READY",
+        "NIJA_RUNTIME_CONVERGENCE_QUIESCENCE_INSTALLED",
+        "NIJA_RUNTIME_CONVERGENCE_QUIESCENCE_READY",
         "NIJA_ZERO_SIGNAL_STREAK_STATE_REPAIR_INSTALLED",
         "NIJA_ZERO_SIGNAL_STREAK_STATE_READY",
         "NIJA_BROKER_AUTH_RECOVERY_INSTALLED",
@@ -41,7 +43,7 @@ def _reset_source_bootstrap(monkeypatch) -> None:
         monkeypatch.delenv(name, raising=False)
 
 
-def test_source_bootstrap_installs_module_identity_and_streak_repair_before_core_runtime(monkeypatch):
+def test_source_bootstrap_installs_quiescence_after_legacy_convergence(monkeypatch):
     _reset_source_bootstrap(monkeypatch)
     calls: list[str] = []
     names = (
@@ -66,6 +68,7 @@ def test_source_bootstrap_installs_module_identity_and_streak_repair_before_core
         ("three_venue_execution_readiness", "stage", "install"),
         ("render_readiness_state_bridge", "bridge", "install"),
         ("scan_owner_okx_auth_convergence_patch", "scan_owner", "install"),
+        ("runtime_convergence_quiescence_patch", "quiescence", "install"),
     )
     modules = {}
     for module_name, label, installer_name in names:
@@ -73,6 +76,8 @@ def test_source_bootstrap_installs_module_identity_and_streak_repair_before_core
         setattr(module, installer_name, lambda label=label: calls.append(label))
         if module_name == "runtime_module_identity_convergence_patch":
             module.audit = lambda: (True, {"identity": "ready"})
+        if module_name == "runtime_convergence_quiescence_patch":
+            module.audit = lambda: (True, {"quiescence": "ready"})
         modules[module_name] = module
 
     real_import = source_bootstrap.importlib.import_module
@@ -94,15 +99,11 @@ def test_source_bootstrap_installs_module_identity_and_streak_repair_before_core
         "convergence_v2", "auth_endpoint", "final_convergence", "scan_wrapper",
         "venue", "activator", "strict", "broker_local_contract",
         "exit_recovery", "exit_bootstrap", "stage", "bridge", "scan_owner",
+        "quiescence",
     ]
-    assert calls.index("module_identity") < calls.index("convergence")
-    assert calls.index("zero_signal_state") < calls.index("convergence_v2")
-    assert calls.index("broker_local_contract") < calls.index("bridge")
-    assert source_bootstrap.installed_marker() == "20260714d"
-    assert source_bootstrap.os.environ["NIJA_RUNTIME_MODULE_IDENTITY_GUARD_INSTALLED"] == "1"
-    assert source_bootstrap.os.environ["NIJA_ZERO_SIGNAL_STREAK_STATE_REPAIR_INSTALLED"] == "1"
-    assert source_bootstrap.os.environ["NIJA_WRITER_GENERATION_SCOPE_REPAIR_INSTALLED"] == "1"
-    assert source_bootstrap.os.environ["NIJA_SCAN_WRAPPER_CONVERGENCE_REPAIR_INSTALLED"] == "1"
+    assert calls.index("quiescence") > calls.index("scan_owner")
+    assert source_bootstrap.installed_marker() == "20260715b"
+    assert source_bootstrap.os.environ["NIJA_RUNTIME_CONVERGENCE_QUIESCENCE_INSTALLED"] == "1"
     assert source_bootstrap.os.environ["NIJA_SOURCE_WRITER_AUTHORITY_INSTALLED"] == "1"
 
 
@@ -121,11 +122,8 @@ def test_source_bootstrap_live_failure_raises_system_exit(monkeypatch):
         source_bootstrap.install()
 
     assert exc_info.value.code == 78
-    assert source_bootstrap.os.environ["NIJA_RUNTIME_MODULE_IDENTITY_GUARD_INSTALLED"] == "0"
     assert source_bootstrap.os.environ["NIJA_RUNTIME_MODULE_IDENTITY_READY"] == "0"
-    assert source_bootstrap.os.environ["NIJA_ZERO_SIGNAL_STREAK_STATE_REPAIR_INSTALLED"] == "0"
-    assert source_bootstrap.os.environ["NIJA_ZERO_SIGNAL_STREAK_STATE_READY"] == "0"
-    assert source_bootstrap.os.environ["NIJA_WRITER_GENERATION_SCOPE_REPAIR_INSTALLED"] == "0"
+    assert source_bootstrap.os.environ["NIJA_RUNTIME_CONVERGENCE_QUIESCENCE_READY"] == "0"
     assert source_bootstrap.os.environ["NIJA_SOURCE_WRITER_AUTHORITY_INSTALLED"] == "0"
 
 

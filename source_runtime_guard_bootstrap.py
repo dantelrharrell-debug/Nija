@@ -14,7 +14,7 @@ import threading
 from typing import Optional
 
 logger = logging.getLogger("nija.source_runtime_guard_bootstrap")
-_MARKER = "20260715a"
+_MARKER = "20260715b"
 _TRUTHY = {"1", "true", "yes", "on", "enabled", "y"}
 _LOCK = threading.RLock()
 _INSTALLED = False
@@ -49,14 +49,6 @@ def _install_required(module_name: str) -> None:
 
 
 def _critical_identity_invariants(details: dict[str, str]) -> tuple[bool, str]:
-    """Validate only conditions that can make live execution unsafe.
-
-    Initial sitecustomize recovery is expected and may leave a stale advisory
-    duplicate latch from an earlier audit pass. The latch may be cleared only when
-    the current audit proves the required risk module is canonical, the execution
-    chain contains v2 and no legacy/cycle layer, both Phase 3 streak guards are
-    attached without a cycle, and no recovered module reports duplicate=true.
-    """
     risk = str(details.get("downstream_risk_module", ""))
     pipeline = str(details.get("execution_pipeline_chain", ""))
     streak = str(details.get("zero_signal_streak_chain", ""))
@@ -83,6 +75,7 @@ def _set_status(value: str) -> None:
     for name in (
         "NIJA_VENUE_READINESS_SOURCE_BOOTSTRAP",
         "NIJA_RUNTIME_MODULE_IDENTITY_GUARD_INSTALLED",
+        "NIJA_RUNTIME_CONVERGENCE_QUIESCENCE_INSTALLED",
         "NIJA_ZERO_SIGNAL_STREAK_STATE_REPAIR_INSTALLED",
         "NIJA_BROKER_AUTH_RECOVERY_INSTALLED",
         "NIJA_RUNTIME_CONVERGENCE_HARDENING_INSTALLED",
@@ -134,6 +127,9 @@ def install() -> bool:
             _install_required("three_venue_execution_readiness")
             _install_required("render_readiness_state_bridge")
             _install_required("scan_owner_okx_auth_convergence_patch")
+            # Install after all legacy convergence modules so their active watchdogs
+            # are converted to chain-aware, change-only behavior before final audit.
+            _install_required("runtime_convergence_quiescence_patch")
 
             identity = importlib.import_module("runtime_module_identity_convergence_patch")
             audit = getattr(identity, "audit", None)
@@ -145,8 +141,6 @@ def install() -> bool:
                         raise RuntimeError(
                             f"runtime_module_identity_critical_failure:{reason}:{details}"
                         )
-                    # The current state is proven canonical and safe. Clear only the
-                    # stale advisory latch, then require a clean second audit.
                     previous = os.environ.get("NIJA_DUPLICATE_PATCH_MODULE_DETECTED", "")
                     os.environ["NIJA_DUPLICATE_PATCH_MODULE_DETECTED"] = "0"
                     ready, second_details = audit()
@@ -163,22 +157,28 @@ def install() -> bool:
                         reason,
                     )
 
+            quiescence = importlib.import_module("runtime_convergence_quiescence_patch")
+            quiescence_ready, quiescence_details = quiescence.audit()
+            if not quiescence_ready:
+                raise RuntimeError(
+                    f"runtime_convergence_quiescence_incomplete:{quiescence_details}"
+                )
+
             _INSTALLED = True
             _set_status("1")
             commit = _deployment_commit()
             message = (
                 f"SOURCE_RUNTIME_GUARDS_READY marker={_MARKER} commit={commit} "
-                "writer_authority=installed module_identity=verified zero_signal_state_repair=armed "
-                "writer_generation_scope=installed authority_heartbeat_generation_scope=installed "
-                "final_worker_position_coinbase_repair=installed broker_auth_recovery=installed "
-                "runtime_convergence_hardening=installed runtime_convergence_v2=installed "
-                "runtime_auth_endpoint_repair=installed final_runtime_convergence=installed "
-                "scan_wrapper_convergence=installed venue_repair=installed "
+                "writer_authority=installed module_identity=verified convergence_quiescence=verified "
+                "zero_signal_state_repair=armed writer_generation_scope=installed "
+                "authority_heartbeat_generation_scope=installed final_worker_position_coinbase_repair=installed "
+                "broker_auth_recovery=installed runtime_convergence_hardening=installed "
+                "runtime_convergence_v2=installed runtime_auth_endpoint_repair=installed "
+                "final_runtime_convergence=installed scan_wrapper_convergence=installed venue_repair=installed "
                 "secondary_venue_activation=installed secondary_venue_strict_readiness=installed "
-                "broker_local_readiness_contract=installed "
-                "account_exit_management_recovery=installed account_exit_recovery_bootstrap=installed "
-                "three_venue_stage_verifier=installed render_readiness_bridge=installed "
-                "scan_owner_okx_auth_convergence=installed source=main_pre_bot"
+                "broker_local_readiness_contract=installed account_exit_management_recovery=installed "
+                "account_exit_recovery_bootstrap=installed three_venue_stage_verifier=installed "
+                "render_readiness_bridge=installed scan_owner_okx_auth_convergence=installed source=main_pre_bot"
             )
             logger.warning(message)
             print(f"[NIJA-PRINT] {message}", flush=True)
@@ -187,6 +187,7 @@ def install() -> bool:
             _set_status("0")
             os.environ["NIJA_THREE_VENUE_EXECUTION_READY"] = "0"
             os.environ["NIJA_RUNTIME_MODULE_IDENTITY_READY"] = "0"
+            os.environ["NIJA_RUNTIME_CONVERGENCE_QUIESCENCE_READY"] = "0"
             os.environ["NIJA_ZERO_SIGNAL_STREAK_STATE_READY"] = "0"
             message = f"{type(exc).__name__}:{exc}"
             live = _is_live_runtime()
