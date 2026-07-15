@@ -8,7 +8,7 @@ import threading
 from typing import Optional
 
 logger = logging.getLogger("nija.source_runtime_guard_bootstrap")
-_MARKER = "20260715e"
+_MARKER = "20260715f"
 _TRUTHY = {"1", "true", "yes", "on", "enabled", "y"}
 _LOCK = threading.RLock()
 _INSTALLED = False
@@ -67,6 +67,7 @@ def _set_status(value: str) -> None:
         "NIJA_ACCOUNT_EXIT_MANAGEMENT_RECOVERY_INSTALLED",
         "NIJA_ACCOUNT_EXIT_RECOVERY_BOOTSTRAP_INSTALLED",
         "NIJA_DAILY_GAIN_PROFIT_HARVEST_INSTALLED",
+        "NIJA_KRAKEN_TPE_MIN_NOTIONAL_ALLOCATION_INSTALLED",
         "NIJA_THREE_VENUE_STAGE_VERIFIER_INSTALLED",
         "NIJA_SOURCE_WRITER_AUTHORITY_INSTALLED",
         "NIJA_RENDER_READINESS_BRIDGE_INSTALLED",
@@ -103,6 +104,7 @@ def install() -> bool:
             _install_required("account_exit_management_recovery_patch")
             _install_required("account_exit_recovery_bootstrap_patch")
             _install_required("bot.daily_gain_profit_harvest_patch")
+            _install_required("bot.kraken_tpe_min_notional_allocation_patch")
             _install_required("three_venue_execution_readiness")
             _install_required("render_readiness_state_bridge")
             _install_required("scan_owner_okx_auth_convergence_patch")
@@ -136,8 +138,8 @@ def install() -> bool:
                 "venue_repair=installed secondary_venue_activation=installed secondary_venue_strict_readiness=installed "
                 "broker_local_readiness_contract=installed account_exit_management_recovery=installed "
                 "account_exit_recovery_bootstrap=installed daily_gain_profit_harvest=installed "
-                "three_venue_stage_verifier=installed render_readiness_bridge=installed "
-                "scan_owner_okx_auth_convergence=installed source=main_pre_bot"
+                "kraken_tpe_min_notional_allocation=installed three_venue_stage_verifier=installed "
+                "render_readiness_bridge=installed scan_owner_okx_auth_convergence=installed source=main_pre_bot"
             )
             logger.warning(message)
             print(f"[NIJA-PRINT] {message}", flush=True)
@@ -149,6 +151,7 @@ def install() -> bool:
                 "NIJA_RUNTIME_CONVERGENCE_QUIESCENCE_READY", "NIJA_SCAN_WRAPPER_DEPTH_READY",
                 "NIJA_ZERO_SIGNAL_STREAK_STATE_READY", "NIJA_EMPTY_POSITION_SYNC_READY",
                 "NIJA_SECONDARY_CREDENTIAL_QUARANTINE_READY", "NIJA_DAILY_GAIN_PROFIT_HARVEST_INSTALLED",
+                "NIJA_KRAKEN_TPE_MIN_NOTIONAL_ALLOCATION_INSTALLED",
             ):
                 os.environ[name] = "0"
             message = f"{type(exc).__name__}:{exc}"
