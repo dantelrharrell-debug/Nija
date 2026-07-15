@@ -5,11 +5,12 @@ import importlib
 import logging
 import os
 import re
+import sys
 import threading
 from typing import Optional
 
 logger = logging.getLogger("nija.source_runtime_guard_bootstrap")
-_MARKER = "20260715j"
+_MARKER = "20260715k"
 _TRUTHY = {"1", "true", "yes", "on", "enabled", "y"}
 _LOCK = threading.RLock()
 _INSTALLED = False
@@ -43,16 +44,36 @@ def _install_required(module_name: str) -> None:
     installer()
 
 
-def _scan_chain_structurally_safe(details: object) -> bool:
-    """Accept a bounded acyclic chain when wrappers copied one release marker.
+def _install_canonical_downstream_risk() -> None:
+    """Install and publish one canonical downstream-risk module identity.
 
-    ``functools.wraps`` updates the wrapper ``__dict__``. That can copy the
-    canonical release attribute onto several outer diagnostic/safety wrappers,
-    making the depth guard report multiple canonical layers even though the chain
-    contains one release identity. The hard-clamp and single-owner guards remain
-    authoritative for ownership; this fallback only accepts a chain that is
-    acyclic and no deeper than its configured maximum.
+    The identity audit historically expected both the canonical ``bot.`` name and
+    the legacy ``nija_`` alias to point at the same module. Import ordering could
+    leave only the canonical module registered when the first audit ran, causing a
+    false identity mismatch before the risk wrapper was installed.
     """
+    canonical_name = "bot.downstream_risk_governor_equity_repair_patch"
+    alias_name = "nija_downstream_risk_governor_equity_repair_patch"
+    module = importlib.import_module(canonical_name)
+    installer = getattr(module, "install", None) or getattr(module, "install_import_hook", None)
+    if not callable(installer):
+        raise RuntimeError(f"{canonical_name} installer is missing")
+    installer()
+    sys.modules[canonical_name] = module
+    sys.modules[alias_name] = module
+    marker = str(getattr(module, "_MARKER", "") or "")
+    if marker != "20260714-downstream-risk-v2":
+        raise RuntimeError(f"downstream_risk_marker_mismatch:{marker or 'missing'}")
+    logger.warning(
+        "DOWNSTREAM_RISK_MODULE_IDENTITY_CANONICALIZED marker=%s canonical=%s alias=%s same=true",
+        _MARKER,
+        canonical_name,
+        alias_name,
+    )
+
+
+def _scan_chain_structurally_safe(details: object) -> bool:
+    """Accept a bounded acyclic chain when wrappers copied one release marker."""
     text = str(details or "")
     match = re.search(r"depth=(\d+);max=(\d+);.*?cycle=(True|False|true|false)", text)
     if not match:
@@ -108,7 +129,6 @@ def install() -> bool:
             return True
         try:
             _install_required("prebot_writer_authority_fail_closed")
-            _install_required("runtime_module_identity_convergence_patch")
             _install_required("scan_wrapper_depth_convergence_patch")
             _install_required("writer_generation_scope_repair_patch")
             _install_required("authority_heartbeat_generation_scope_patch")
@@ -136,6 +156,11 @@ def install() -> bool:
             _install_required("three_venue_execution_readiness")
             _install_required("render_readiness_state_bridge")
             _install_required("scan_owner_okx_auth_convergence_patch")
+
+            # Identity and quiescence are final-state audits. Install every wrapper
+            # they inspect first, then canonicalize the downstream-risk alias.
+            _install_canonical_downstream_risk()
+            _install_required("runtime_module_identity_convergence_patch")
             _install_required("runtime_convergence_quiescence_patch")
             _install_required("bot.runtime_guard_audit_patch")
 
@@ -167,13 +192,14 @@ def install() -> bool:
             message = (
                 f"SOURCE_RUNTIME_GUARDS_READY marker={_MARKER} commit={_deployment_commit()} "
                 "writer_authority=installed module_identity=verified convergence_quiescence=verified "
-                "scan_wrapper_depth=verified scan_wrapper_hard_clamp=installed zero_signal_state_repair=armed "
-                "empty_position_sync=armed secondary_credential_quarantine=armed writer_generation_scope=installed "
-                "authority_heartbeat_generation_scope=installed final_worker_position_coinbase_repair=installed "
-                "broker_auth_recovery=installed coinbase_funding_readiness=installed "
-                "runtime_convergence_hardening=installed runtime_convergence_v2=installed "
-                "runtime_auth_endpoint_repair=installed final_runtime_convergence=installed scan_wrapper_convergence=installed "
-                "venue_repair=installed secondary_venue_activation=installed secondary_venue_strict_readiness=installed "
+                "downstream_risk_identity=canonical scan_wrapper_depth=verified scan_wrapper_hard_clamp=installed "
+                "zero_signal_state_repair=armed empty_position_sync=armed secondary_credential_quarantine=armed "
+                "writer_generation_scope=installed authority_heartbeat_generation_scope=installed "
+                "final_worker_position_coinbase_repair=installed broker_auth_recovery=installed "
+                "coinbase_funding_readiness=installed runtime_convergence_hardening=installed "
+                "runtime_convergence_v2=installed runtime_auth_endpoint_repair=installed "
+                "final_runtime_convergence=installed scan_wrapper_convergence=installed venue_repair=installed "
+                "secondary_venue_activation=installed secondary_venue_strict_readiness=installed "
                 "broker_local_readiness_contract=installed account_exit_management_recovery=installed "
                 "account_exit_recovery_bootstrap=installed kraken_verified_cost_basis=installed "
                 "daily_gain_profit_harvest=installed kraken_tpe_min_notional_allocation=installed "
@@ -217,4 +243,7 @@ def installed_marker() -> Optional[str]:
     return _MARKER if _INSTALLED else None
 
 
-__all__ = ["install", "installed_marker", "_scan_chain_structurally_safe"]
+__all__ = [
+    "install", "installed_marker", "_scan_chain_structurally_safe",
+    "_install_canonical_downstream_risk",
+]
