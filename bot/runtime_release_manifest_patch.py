@@ -9,7 +9,7 @@ import time
 from typing import Callable
 
 logger = logging.getLogger("nija.runtime_release_manifest")
-RELEASE_ID = "20260715-runtime-convergence-v12"
+RELEASE_ID = "20260715-runtime-convergence-v13"
 _INSTALLED = False
 _LOCK = threading.RLock()
 _TRUE = {"1", "true", "yes", "on", "enabled", "y"}
@@ -21,8 +21,10 @@ _INSTALLERS = (
     ("bot.scan_reentrant_delegate_repair_patch", "install_import_hook"),
     ("broker_local_readiness_contract_patch", "install_import_hook"),
     ("bot.downstream_risk_governor_equity_repair_patch", "install_import_hook"),
+    ("bot.secondary_credential_quarantine_patch", "install_import_hook"),
     ("runtime_convergence_hardening_patch", "install"),
     ("bot.zero_signal_streak_state_repair_patch", "install_import_hook"),
+    ("bot.empty_position_sync_success_patch", "install_import_hook"),
     ("runtime_convergence_quiescence_patch", "install_import_hook"),
     ("bot.position_cost_basis_legacy_repair_patch", "install_import_hook"),
     ("bot.position_sync_runtime_repair_patch", "install_import_hook"),
@@ -51,6 +53,9 @@ _REQUIRED_FLAGS = {
     "core_loop_limits": "NIJA_CORE_LOOP_PROGRESS_LIMITS_NORMALIZED",
     "zero_signal_state_repair": "NIJA_ZERO_SIGNAL_STREAK_STATE_REPAIR_INSTALLED",
     "zero_signal_state_ready": "NIJA_ZERO_SIGNAL_STREAK_STATE_READY",
+    "empty_position_sync_patch": "NIJA_EMPTY_POSITION_SYNC_PATCH_INSTALLED",
+    "empty_position_sync_ready": "NIJA_EMPTY_POSITION_SYNC_READY",
+    "secondary_credential_quarantine": "NIJA_SECONDARY_CREDENTIAL_QUARANTINE_INSTALLED",
     "scan_reentrant_delegate_guard": "NIJA_SCAN_REENTRANT_DELEGATE_REPAIR_INSTALLED",
     "broker_local_readiness_contract": "NIJA_BROKER_LOCAL_READINESS_CONTRACT_INSTALLED",
     "downstream_risk_v2_installed": "NIJA_DOWNSTREAM_RISK_GOVERNOR_V2_INSTALLED",
@@ -175,9 +180,15 @@ def _audit() -> tuple[bool, dict[str, str]]:
 def _publish(ready: bool, details: dict[str, str]) -> None:
     os.environ["NIJA_RUNTIME_RELEASE_ID"] = RELEASE_ID
     os.environ["NIJA_RUNTIME_RELEASE_READY"] = "1" if ready else "0"
-    logger.critical("NIJA_RUNTIME_RELEASE_MANIFEST release=%s deployment_sha=%s ready=%s python_pid=%s details=%s", RELEASE_ID, _deployment_sha(), str(ready).lower(), os.getpid(), details)
+    logger.critical(
+        "NIJA_RUNTIME_RELEASE_MANIFEST release=%s deployment_sha=%s ready=%s python_pid=%s details=%s",
+        RELEASE_ID, _deployment_sha(), str(ready).lower(), os.getpid(), details,
+    )
     if not ready:
-        logger.critical("RUNTIME_RELEASE_INCOMPLETE_EXECUTION_UNSAFE release=%s action=keep_broker_order_gates_fail_closed", RELEASE_ID)
+        logger.critical(
+            "RUNTIME_RELEASE_INCOMPLETE_EXECUTION_UNSAFE release=%s action=keep_broker_order_gates_fail_closed",
+            RELEASE_ID,
+        )
 
 
 def _watchdog() -> None:
@@ -205,4 +216,8 @@ def install_import_hook() -> None:
     logger.critical("NIJA_RUNTIME_RELEASE_MANIFEST_INSTALLED release=%s", RELEASE_ID)
 
 
-__all__ = ["RELEASE_ID", "install_import_hook", "_audit", "_deployment_sha", "_expected_scan_wrapper_release", "_scan_release_compatible", "_readiness_contract_consistent", "_runtime_limits_consistent"]
+__all__ = [
+    "RELEASE_ID", "install_import_hook", "_audit", "_deployment_sha",
+    "_expected_scan_wrapper_release", "_scan_release_compatible",
+    "_readiness_contract_consistent", "_runtime_limits_consistent",
+]
