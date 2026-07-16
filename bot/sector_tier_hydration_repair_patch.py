@@ -13,6 +13,23 @@ _ORIGINAL_IMPORT: Optional[Callable[..., Any]] = None
 _TARGETS = {"bot.tier_config", "tier_config", "bot.crypto_sector_taxonomy", "crypto_sector_taxonomy"}
 
 
+def _install_broker_health_exit_continuity() -> None:
+    try:
+        try:
+            from bot.broker_health_exit_continuity_patch import install_import_hook
+        except ImportError:
+            from broker_health_exit_continuity_patch import install_import_hook  # type: ignore[import]
+        install_import_hook()
+        logger.critical(
+            "BROKER_HEALTH_EXIT_CONTINUITY_CHAINED marker=20260716-broker-health-exit-v1"
+        )
+    except Exception as exc:
+        logger.critical(
+            "BROKER_HEALTH_EXIT_CONTINUITY_CHAIN_FAILED marker=20260716-broker-health-exit-v1 error=%s",
+            exc,
+        )
+
+
 def _install_position_adoption_exit_integrity() -> None:
     try:
         try:
@@ -166,6 +183,7 @@ def _try_patch_loaded() -> None:
 
 def install_import_hook() -> None:
     global _ORIGINAL_IMPORT
+    _install_broker_health_exit_continuity()
     _install_position_adoption_exit_integrity()
     _try_patch_loaded()
     if getattr(builtins, "_NIJA_SECTOR_TIER_HYDRATION_REPAIR_HOOK", False):
