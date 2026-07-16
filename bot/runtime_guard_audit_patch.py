@@ -8,7 +8,7 @@ import time
 from typing import Mapping
 
 logger = logging.getLogger("nija.runtime_guard_audit")
-_MARKER = "20260715-runtime-guard-audit-v2"
+_MARKER = "20260716-runtime-guard-audit-v3"
 _LOCK = threading.RLock()
 _STARTED = False
 _TRUE = {"1", "true", "yes", "on", "enabled", "y"}
@@ -18,6 +18,7 @@ _REQUIRED = (
     "NIJA_DAILY_GAIN_PROFIT_HARVEST_INSTALLED",
     "NIJA_KRAKEN_TPE_MIN_NOTIONAL_ALLOCATION_INSTALLED",
     "NIJA_OKX_FUNDING_WALLET_READINESS_INSTALLED",
+    "NIJA_RUNTIME_POST_IMPORT_CONVERGENCE_INSTALLED",
 )
 
 
@@ -32,8 +33,9 @@ def _emit() -> bool:
     commit = next((str(os.environ.get(name, "") or "").strip() for name in ("RENDER_GIT_COMMIT", "GIT_COMMIT", "SOURCE_VERSION") if str(os.environ.get(name, "") or "").strip()), "unknown")
     logger.critical(
         "RUNTIME_GUARD_AUDIT marker=%s ready=%s commit=%s scan_hard_clamp=%s verified_cost_basis=%s "
-        "daily_gain_harvest=%s kraken_min_notional=%s okx_dual_wallet=%s okx_balance_observed=%s "
-        "okx_funding_status=%s okx_trading_spendable=%s okx_funding_spendable=%s missing=%s",
+        "daily_gain_harvest=%s kraken_min_notional=%s okx_dual_wallet=%s post_import_convergence=%s "
+        "authority_policy=%s authority_min_brokers=%s okx_balance_observed=%s okx_funding_status=%s "
+        "okx_trading_spendable=%s okx_funding_spendable=%s missing=%s",
         _MARKER,
         str(ready).lower(),
         commit,
@@ -42,6 +44,9 @@ def _emit() -> bool:
         os.environ.get(_REQUIRED[2], "0"),
         os.environ.get(_REQUIRED[3], "0"),
         os.environ.get(_REQUIRED[4], "0"),
+        os.environ.get(_REQUIRED[5], "0"),
+        os.environ.get("NIJA_RUNTIME_AUTHORITY_BROKER_POLICY", "unknown"),
+        os.environ.get("NIJA_RUNTIME_AUTHORITY_CONVERGENCE_MIN_BROKERS", "unknown"),
         os.environ.get("NIJA_OKX_BALANCE_OBSERVED", "0"),
         os.environ.get("NIJA_OKX_FUNDING_STATUS", "unobserved"),
         os.environ.get("NIJA_OKX_TRADING_SPENDABLE_QUOTE", "unknown"),
