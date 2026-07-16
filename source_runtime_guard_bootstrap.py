@@ -10,7 +10,7 @@ import threading
 from typing import Optional
 
 logger = logging.getLogger("nija.source_runtime_guard_bootstrap")
-_MARKER = "20260715l"
+_MARKER = "20260716m"
 _TRUTHY = {"1", "true", "yes", "on", "enabled", "y"}
 _LOCK = threading.RLock()
 _INSTALLED = False
@@ -83,6 +83,7 @@ def _set_status(value: str) -> None:
         "NIJA_VENUE_READINESS_SOURCE_BOOTSTRAP",
         "NIJA_RUNTIME_MODULE_IDENTITY_GUARD_INSTALLED",
         "NIJA_RUNTIME_CONVERGENCE_QUIESCENCE_INSTALLED",
+        "NIJA_RUNTIME_POST_IMPORT_CONVERGENCE_INSTALLED",
         "NIJA_SCAN_WRAPPER_DEPTH_GUARD_INSTALLED",
         "NIJA_SCAN_WRAPPER_HARD_CLAMP_INSTALLED",
         "NIJA_ZERO_SIGNAL_STREAK_STATE_REPAIR_INSTALLED",
@@ -156,6 +157,7 @@ def install() -> bool:
             _install_canonical_downstream_risk()
             _install_required("runtime_module_identity_convergence_patch")
             _install_required("runtime_convergence_quiescence_patch")
+            _install_required("bot.runtime_post_import_convergence_patch")
             _install_required("bot.runtime_guard_audit_patch")
 
             identity = importlib.import_module("runtime_module_identity_convergence_patch")
@@ -186,7 +188,8 @@ def install() -> bool:
             message = (
                 f"SOURCE_RUNTIME_GUARDS_READY marker={_MARKER} commit={_deployment_commit()} "
                 "writer_authority=installed module_identity=verified convergence_quiescence=verified "
-                "downstream_risk_identity=canonical scan_wrapper_depth=verified scan_wrapper_hard_clamp=installed "
+                "post_import_convergence=installed downstream_risk_identity=canonical "
+                "scan_wrapper_depth=verified scan_wrapper_hard_clamp=installed "
                 "zero_signal_state_repair=armed empty_position_sync=armed secondary_credential_quarantine=armed "
                 "writer_generation_scope=installed authority_heartbeat_generation_scope=installed "
                 "final_worker_position_coinbase_repair=installed broker_auth_recovery=installed "
@@ -209,6 +212,7 @@ def install() -> bool:
             for name in (
                 "NIJA_THREE_VENUE_EXECUTION_READY", "NIJA_RUNTIME_MODULE_IDENTITY_READY",
                 "NIJA_RUNTIME_CONVERGENCE_QUIESCENCE_READY", "NIJA_SCAN_WRAPPER_DEPTH_READY",
+                "NIJA_RUNTIME_POST_IMPORT_CONVERGENCE_INSTALLED",
                 "NIJA_SCAN_WRAPPER_HARD_CLAMP_INSTALLED", "NIJA_ZERO_SIGNAL_STREAK_STATE_READY",
                 "NIJA_EMPTY_POSITION_SYNC_READY", "NIJA_SECONDARY_CREDENTIAL_QUARANTINE_READY",
                 "NIJA_COINBASE_FUNDING_READINESS_REPAIR_INSTALLED",
