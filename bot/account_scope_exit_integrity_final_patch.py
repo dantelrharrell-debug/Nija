@@ -1,6 +1,6 @@
 """Final account isolation and exit-integrity guard for every NIJA broker/account.
 
-This guard is deliberately installed before bot startup.  It closes three defects:
+This guard is deliberately installed before bot startup. It closes three defects:
 1. shared CapitalAuthority totals leaking into independent user cycles;
 2. broker snapshots being treated as additive fills;
 3. exits being raised to an entry minimum instead of closing the held position.
@@ -14,7 +14,7 @@ import threading
 from typing import Any
 
 logger = logging.getLogger("nija.account_scope_exit_integrity_final")
-_MARKER = "20260716-account-scope-exit-integrity-v2"
+_MARKER = "20260716-account-scope-exit-integrity-v3"
 _LOCK = threading.RLock()
 _PATCHED = False
 
@@ -90,39 +90,34 @@ def _patch_trading_strategy() -> bool:
             )
             return int(_f(os.getenv("NIJA_ACCOUNT_SCOPE_RETRY_S", "10"), 10.0))
 
-        try:
-            from bot.capital_authority import get_capital_authority
-            ca = get_capital_authority()
-        except Exception:
-            ca = None
-
-        saved: dict[str, Any] = {}
-        attrs = ("total_capital", "real_capital", "usable_capital", "risk_capital", "available_capital")
-        if ca is not None and scoped > 0:
-            for name in attrs:
-                if hasattr(ca, name):
-                    saved[name] = getattr(ca, name)
-            reserve = max(0.0, min(_f(getattr(ca, "reserve_pct", 0.02), 0.02), 0.50))
-            usable = scoped * (1.0 - reserve)
-            for name, value in (
-                ("total_capital", scoped), ("real_capital", scoped),
-                ("usable_capital", usable), ("risk_capital", usable),
-                ("available_capital", usable),
-            ):
-                if hasattr(ca, name):
-                    setattr(ca, name, value)
-
+        # CapitalAuthority exposes computed read-only properties. Never overwrite
+        # those properties for an account-local cycle; doing so raises
+        # AttributeError and aborts position management and exits. Account scope
+        # is carried only on the strategy/core/broker objects and the existing
+        # per-cycle environment bridge.
         old_force = os.environ.get("NIJA_FORCE_TRADE_BALANCE")
+        old_strategy_balance = getattr(self, "_nija_account_scoped_balance", None)
+        old_strategy_active = getattr(self, "_nija_account_scope_active", None)
+        core = getattr(self, "nija_core_loop", None)
+        old_core_balance = getattr(core, "_nija_account_scoped_balance", None) if core is not None else None
+        old_core_active = getattr(core, "_nija_account_scope_active", None) if core is not None else None
+        old_core_public_balance = getattr(core, "balance", None) if core is not None else None
+        old_broker_cycle_balance = getattr(selected, "_nija_cycle_balance_usd", None) if selected is not None else None
+
         if scoped > 0:
             os.environ["NIJA_FORCE_TRADE_BALANCE"] = f"{scoped:.12f}"
             setattr(self, "_nija_account_scoped_balance", scoped)
-            core = getattr(self, "nija_core_loop", None)
+            setattr(self, "_nija_account_scope_active", True)
+            if selected is not None:
+                setattr(selected, "_nija_cycle_balance_usd", scoped)
             if core is not None:
                 setattr(core, "_nija_account_scoped_balance", scoped)
+                setattr(core, "_nija_account_scope_active", True)
                 setattr(core, "balance", scoped)
+
         logger.critical(
-            "ACCOUNT_SCOPE_CAPITAL_LOCKED marker=%s account=%s balance=$%.2f shared_ca_overridden=%s",
-            _MARKER, _account_label(selected), scoped, ca is not None,
+            "ACCOUNT_SCOPE_CAPITAL_LOCKED marker=%s account=%s balance=$%.2f shared_ca_overridden=false",
+            _MARKER, _account_label(selected), scoped,
         )
         try:
             return original(self, *args, broker=selected, user_mode=user_mode, **kwargs)
@@ -131,12 +126,48 @@ def _patch_trading_strategy() -> bool:
                 os.environ.pop("NIJA_FORCE_TRADE_BALANCE", None)
             else:
                 os.environ["NIJA_FORCE_TRADE_BALANCE"] = old_force
-            if ca is not None:
-                for name, value in saved.items():
+
+            if old_strategy_balance is None:
+                try:
+                    delattr(self, "_nija_account_scoped_balance")
+                except AttributeError:
+                    pass
+            else:
+                setattr(self, "_nija_account_scoped_balance", old_strategy_balance)
+            if old_strategy_active is None:
+                try:
+                    delattr(self, "_nija_account_scope_active")
+                except AttributeError:
+                    pass
+            else:
+                setattr(self, "_nija_account_scope_active", old_strategy_active)
+
+            if selected is not None:
+                if old_broker_cycle_balance is None:
                     try:
-                        setattr(ca, name, value)
-                    except Exception:
+                        delattr(selected, "_nija_cycle_balance_usd")
+                    except AttributeError:
                         pass
+                else:
+                    setattr(selected, "_nija_cycle_balance_usd", old_broker_cycle_balance)
+
+            if core is not None:
+                if old_core_balance is None:
+                    try:
+                        delattr(core, "_nija_account_scoped_balance")
+                    except AttributeError:
+                        pass
+                else:
+                    setattr(core, "_nija_account_scoped_balance", old_core_balance)
+                if old_core_active is None:
+                    try:
+                        delattr(core, "_nija_account_scope_active")
+                    except AttributeError:
+                        pass
+                else:
+                    setattr(core, "_nija_account_scope_active", old_core_active)
+                if old_core_public_balance is not None:
+                    setattr(core, "balance", old_core_public_balance)
 
     run_cycle._nija_account_scope_final = True  # type: ignore[attr-defined]
     run_cycle._nija_original = original  # type: ignore[attr-defined]
