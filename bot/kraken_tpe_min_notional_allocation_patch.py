@@ -1,13 +1,10 @@
-"""Align approved Kraken TPE allocations with the executable broker minimum.
+"""Fail-closed guard for Kraken TPE allocations below the broker minimum.
 
-TradePermissionEngine historically defaulted approved trades to five percent of
-account balance.  For small Kraken accounts this produced an EXECUTE decision
-with a non-executable allocation (for example $11.71 against a $23.10 minimum),
-forcing Phase 3 into its deliberately disabled fallback-entry path.
-
-This patch changes only the approved allocation.  It never turns a blocked trade
-into an executable trade and never bypasses downstream risk, writer authority,
-position caps, broker validation, or exchange minimum checks.
+A prior runtime repair lifted approved allocations to Kraken's executable minimum.
+That could contradict an upstream strategy decision that had already logged SKIP
+because its risk-sized position was smaller than the broker minimum. This version
+never increases entry risk. It converts such contradictory EXECUTE decisions to
+SKIP unless an operator explicitly enables the legacy lift behavior.
 """
 from __future__ import annotations
 
@@ -17,8 +14,8 @@ from functools import wraps
 from typing import Any
 
 logger = logging.getLogger("nija.kraken_tpe_min_notional_allocation")
-_MARKER = "20260715-kraken-tpe-min-notional-v1"
-_PATCH_ATTR = "_nija_kraken_tpe_min_notional_v1"
+_MARKER = "20260716-kraken-tpe-min-notional-v2"
+_PATCH_ATTR = "_nija_kraken_tpe_min_notional_v2"
 _TRUE = {"1", "true", "yes", "on", "enabled", "y"}
 
 
@@ -30,7 +27,7 @@ def _f(value: Any, default: float = 0.0) -> float:
         return default
 
 
-def _truthy(name: str, default: str = "true") -> bool:
+def _truthy(name: str, default: str = "false") -> bool:
     return str(os.environ.get(name, default) or "").strip().lower() in _TRUE
 
 
@@ -54,22 +51,21 @@ def _target_notional() -> float:
     return max(23.10, *(_f(value, 0.0) for value in values))
 
 
-def _max_position_pct() -> float:
-    values = (
-        os.environ.get("NIJA_MAX_POSITION_SIZE_PCT"),
-        os.environ.get("MAX_POSITION_PCT"),
-        os.environ.get("MAX_POSITION_SIZE_PCT"),
-    )
-    parsed = [value for value in (_f(raw, 0.0) for raw in values) if value > 0.0]
-    pct = min(parsed) if parsed else 0.50
-    if pct > 1.0:
-        pct /= 100.0
-    return max(0.01, min(pct, 0.50))
-
-
-def _lift_allowed(balance: float, target: float) -> tuple[bool, float]:
-    cap = max(0.0, balance) * _max_position_pct()
-    return balance >= target and target <= cap + 1e-9, cap
+def _set_skip(decision: Any, reason: str) -> Any:
+    for attr, value in (
+        ("final_decision", "SKIP"),
+        ("decision", "SKIP"),
+        ("risk_allowed", False),
+        ("passed_gate", False),
+        ("reason_blocked", reason),
+        ("reason", reason),
+        ("capital_allocated", 0.0),
+    ):
+        try:
+            setattr(decision, attr, value)
+        except Exception:
+            pass
+    return decision
 
 
 def patch_trade_permission_engine(module: Any) -> bool:
@@ -83,55 +79,41 @@ def patch_trade_permission_engine(module: Any) -> bool:
     @wraps(original)
     def evaluate(self: Any, *args: Any, **kwargs: Any):
         decision = original(self, *args, **kwargs)
-        if not _truthy("NIJA_KRAKEN_TPE_MIN_NOTIONAL_LIFT_ENABLED", "true"):
-            return decision
-
         broker = kwargs.get("broker", getattr(decision, "broker", ""))
         side = kwargs.get("side", getattr(decision, "side", "long"))
-        final = str(getattr(decision, "final_decision", "") or "").upper()
+        final = str(getattr(decision, "final_decision", getattr(decision, "decision", "")) or "").upper()
         risk_allowed = bool(getattr(decision, "risk_allowed", final == "EXECUTE"))
-        balance = _f(kwargs.get("balance", getattr(decision, "capital_balance", 0.0)), 0.0)
         allocated = _f(getattr(decision, "capital_allocated", 0.0), 0.0)
         target = _target_notional()
+        symbol = getattr(decision, "symbol", kwargs.get("symbol", "UNKNOWN"))
 
         if final != "EXECUTE" or not risk_allowed or not _is_kraken(broker) or not _entry_side(side):
             return decision
         if allocated + 1e-9 >= target:
             return decision
 
-        allowed, risk_cap = _lift_allowed(balance, target)
-        if not allowed:
-            logger.warning(
-                "KRAKEN_TPE_MIN_NOTIONAL_LIFT_BLOCKED marker=%s symbol=%s balance=$%.2f allocated=$%.2f target=$%.2f risk_cap=$%.2f",
-                _MARKER,
-                getattr(decision, "symbol", kwargs.get("symbol", "UNKNOWN")),
-                balance,
-                allocated,
-                target,
-                risk_cap,
+        if _truthy("NIJA_KRAKEN_TPE_MIN_NOTIONAL_LIFT_ENABLED", "false"):
+            logger.critical(
+                "KRAKEN_TPE_MIN_NOTIONAL_LEGACY_LIFT_ALLOWED marker=%s symbol=%s old_allocation=$%.2f target=$%.2f operator_override=true",
+                _MARKER, symbol, allocated, target,
             )
+            try:
+                decision.capital_allocated = target
+            except Exception:
+                pass
             return decision
 
-        decision.capital_allocated = target
-        try:
-            decision.risk_allowed = True
-        except Exception:
-            pass
+        reason = f"kraken_risk_sized_allocation_below_minimum:allocated={allocated:.2f}:required={target:.2f}"
         logger.critical(
-            "KRAKEN_TPE_MIN_NOTIONAL_LIFT_APPLIED marker=%s symbol=%s balance=$%.2f old_allocation=$%.2f final_allocation=$%.2f risk_cap=$%.2f downstream_risk_recheck=true",
-            _MARKER,
-            getattr(decision, "symbol", kwargs.get("symbol", "UNKNOWN")),
-            balance,
-            allocated,
-            target,
-            risk_cap,
+            "KRAKEN_TPE_MIN_NOTIONAL_FAIL_CLOSED marker=%s symbol=%s allocated=$%.2f required=$%.2f action=skip",
+            _MARKER, symbol, allocated, target,
         )
-        return decision
+        return _set_skip(decision, reason)
 
     setattr(evaluate, _PATCH_ATTR, True)
     setattr(evaluate, "__wrapped__", original)
     cls.evaluate = evaluate
-    logger.warning("KRAKEN_TPE_MIN_NOTIONAL_ALLOCATION_PATCHED marker=%s target=$%.2f", _MARKER, _target_notional())
+    logger.warning("KRAKEN_TPE_MIN_NOTIONAL_FAIL_CLOSED_PATCHED marker=%s target=$%.2f", _MARKER, _target_notional())
     return True
 
 
@@ -140,7 +122,7 @@ def install() -> bool:
         from bot import trade_permission_engine as module
     except Exception:
         import trade_permission_engine as module  # type: ignore
-    os.environ.setdefault("NIJA_KRAKEN_TPE_MIN_NOTIONAL_LIFT_ENABLED", "true")
+    os.environ.setdefault("NIJA_KRAKEN_TPE_MIN_NOTIONAL_LIFT_ENABLED", "false")
     result = patch_trade_permission_engine(module)
     os.environ["NIJA_KRAKEN_TPE_MIN_NOTIONAL_ALLOCATION_INSTALLED"] = "1" if result else "0"
     return result
@@ -148,4 +130,4 @@ def install() -> bool:
 
 install()
 
-__all__ = ["install", "patch_trade_permission_engine", "_target_notional", "_max_position_pct"]
+__all__ = ["install", "patch_trade_permission_engine", "_target_notional"]
