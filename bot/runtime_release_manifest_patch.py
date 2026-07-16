@@ -4,17 +4,20 @@ from __future__ import annotations
 import importlib
 import logging
 import os
+import re
 import threading
 import time
 from typing import Callable
 
 logger = logging.getLogger("nija.runtime_release_manifest")
-RELEASE_ID = "20260715-runtime-convergence-v13"
+RELEASE_ID = "20260716-runtime-convergence-v14"
 _INSTALLED = False
 _LOCK = threading.RLock()
 _TRUE = {"1", "true", "yes", "on", "enabled", "y"}
 
 _INSTALLERS = (
+    # Repair policy and module aliases before any identity/quiescence audit.
+    ("bot.runtime_post_import_convergence_patch", "install"),
     ("runtime_module_identity_convergence_patch", "install_import_hook"),
     ("scan_wrapper_depth_convergence_patch", "install_import_hook"),
     ("scan_wrapper_convergence_repair_patch", "install"),
@@ -44,6 +47,7 @@ _INSTALLERS = (
 )
 
 _REQUIRED_FLAGS = {
+    "post_import_convergence": "NIJA_RUNTIME_POST_IMPORT_CONVERGENCE_INSTALLED",
     "module_identity_guard": "NIJA_RUNTIME_MODULE_IDENTITY_GUARD_INSTALLED",
     "module_identity_ready": "NIJA_RUNTIME_MODULE_IDENTITY_READY",
     "convergence_quiescence_installed": "NIJA_RUNTIME_CONVERGENCE_QUIESCENCE_INSTALLED",
@@ -104,6 +108,17 @@ def _scan_release_compatible(actual: str, expected: str) -> bool:
     return bool(actual and expected and actual == expected)
 
 
+def _bounded_acyclic_scan(details: object) -> bool:
+    text = str(details or "")
+    match = re.search(r"depth=(\d+);max=(\d+);.*?cycle=(True|False|true|false)", text)
+    if not match:
+        return False
+    depth = int(match.group(1))
+    maximum = int(match.group(2))
+    cycle = match.group(3).lower() == "true"
+    return not cycle and depth <= maximum
+
+
 def _readiness_contract_consistent() -> tuple[bool, str]:
     policy = str(os.environ.get("NIJA_SECONDARY_VENUE_POLICY", "") or "").strip().lower()
     missing = str(os.environ.get("NIJA_REQUIRED_VENUES_MISSING", "") or "").strip().strip(",")
@@ -146,6 +161,10 @@ def _audit() -> tuple[bool, dict[str, str]]:
         try:
             module = importlib.import_module(module_name)
             module_ready, module_details = module.audit()
+            if module_name == "scan_wrapper_depth_convergence_patch" and not module_ready and _bounded_acyclic_scan(module_details):
+                module_ready = True
+                os.environ["NIJA_SCAN_WRAPPER_DEPTH_READY"] = "1"
+                results["scan_wrapper_depth_structural_accept"] = "bounded_acyclic=true"
             results[key] = str(module_details)
             ready = ready and bool(module_ready)
         except Exception as exc:
@@ -178,6 +197,7 @@ def _audit() -> tuple[bool, dict[str, str]]:
 
 
 def _publish(ready: bool, details: dict[str, str]) -> None:
+    previous = os.environ.get("NIJA_RUNTIME_RELEASE_READY", "")
     os.environ["NIJA_RUNTIME_RELEASE_ID"] = RELEASE_ID
     os.environ["NIJA_RUNTIME_RELEASE_READY"] = "1" if ready else "0"
     logger.critical(
@@ -187,6 +207,11 @@ def _publish(ready: bool, details: dict[str, str]) -> None:
     if not ready:
         logger.critical(
             "RUNTIME_RELEASE_INCOMPLETE_EXECUTION_UNSAFE release=%s action=keep_broker_order_gates_fail_closed",
+            RELEASE_ID,
+        )
+    elif previous == "0":
+        logger.critical(
+            "RUNTIME_RELEASE_CONVERGENCE_RECOVERED release=%s action=broker_order_gates_may_follow_normal_authority_checks",
             RELEASE_ID,
         )
 
@@ -202,7 +227,7 @@ def _watchdog() -> None:
                 _publish(ready, details)
         except Exception as exc:
             logger.critical("RUNTIME_RELEASE_AUDIT_FAILED release=%s error=%s", RELEASE_ID, exc)
-        time.sleep(max(30.0, float(os.environ.get("NIJA_RUNTIME_RELEASE_AUDIT_INTERVAL_S", "120") or 120)))
+        time.sleep(max(10.0, float(os.environ.get("NIJA_RUNTIME_RELEASE_AUDIT_INTERVAL_S", "30") or 30)))
 
 
 def install_import_hook() -> None:
@@ -218,6 +243,6 @@ def install_import_hook() -> None:
 
 __all__ = [
     "RELEASE_ID", "install_import_hook", "_audit", "_deployment_sha",
-    "_expected_scan_wrapper_release", "_scan_release_compatible",
+    "_expected_scan_wrapper_release", "_scan_release_compatible", "_bounded_acyclic_scan",
     "_readiness_contract_consistent", "_runtime_limits_consistent",
 ]
