@@ -10,7 +10,7 @@ import threading
 from typing import Optional
 
 logger = logging.getLogger("nija.source_runtime_guard_bootstrap")
-_MARKER = "20260716m"
+_MARKER = "20260716n"
 _TRUTHY = {"1", "true", "yes", "on", "enabled", "y"}
 _LOCK = threading.RLock()
 _INSTALLED = False
@@ -45,7 +45,6 @@ def _install_required(module_name: str) -> None:
 
 
 def _install_canonical_downstream_risk() -> None:
-    """Install and publish one canonical downstream-risk module identity."""
     canonical_name = "bot.downstream_risk_governor_equity_repair_patch"
     alias_name = "nija_downstream_risk_governor_equity_repair_patch"
     module = importlib.import_module(canonical_name)
@@ -60,14 +59,11 @@ def _install_canonical_downstream_risk() -> None:
         raise RuntimeError(f"downstream_risk_marker_mismatch:{marker or 'missing'}")
     logger.warning(
         "DOWNSTREAM_RISK_MODULE_IDENTITY_CANONICALIZED marker=%s canonical=%s alias=%s same=true",
-        _MARKER,
-        canonical_name,
-        alias_name,
+        _MARKER, canonical_name, alias_name,
     )
 
 
 def _scan_chain_structurally_safe(details: object) -> bool:
-    """Accept a bounded acyclic chain when wrappers copied one release marker."""
     text = str(details or "")
     match = re.search(r"depth=(\d+);max=(\d+);.*?cycle=(True|False|true|false)", text)
     if not match:
@@ -113,6 +109,7 @@ def _set_status(value: str) -> None:
         "NIJA_THREE_VENUE_STAGE_VERIFIER_INSTALLED",
         "NIJA_SOURCE_WRITER_AUTHORITY_INSTALLED",
         "NIJA_RENDER_READINESS_BRIDGE_INSTALLED",
+        "NIJA_ACCOUNT_SCOPE_EXIT_INTEGRITY_INSTALLED",
     ):
         os.environ[name] = value
     os.environ["NIJA_VENUE_READINESS_SOURCE_MARKER"] = _MARKER
@@ -150,6 +147,7 @@ def install() -> bool:
             _install_required("bot.kraken_verified_cost_basis_recovery_patch")
             _install_required("bot.daily_gain_profit_harvest_patch")
             _install_required("bot.kraken_tpe_min_notional_allocation_patch")
+            _install_required("bot.account_scope_exit_integrity_final_patch")
             _install_required("three_venue_execution_readiness")
             _install_required("render_readiness_state_bridge")
             _install_required("scan_owner_okx_auth_convergence_patch")
@@ -177,11 +175,14 @@ def install() -> bool:
                 os.environ["NIJA_SCAN_WRAPPER_DEPTH_READY"] = "1"
                 logger.warning(
                     "SCAN_WRAPPER_DEPTH_COPIED_MARKER_FALSE_POSITIVE_ACCEPTED marker=%s details=%s",
-                    _MARKER,
-                    scan_details,
+                    _MARKER, scan_details,
                 )
             if not scan_ready:
                 raise RuntimeError(f"scan_wrapper_depth_incomplete:{scan_details}")
+
+            guard = importlib.import_module("bot.account_scope_exit_integrity_final_patch")
+            if not getattr(guard, "installed_marker", lambda: None)():
+                raise RuntimeError("account_scope_exit_integrity_marker_missing")
 
             _INSTALLED = True
             _set_status("1")
@@ -200,9 +201,9 @@ def install() -> bool:
                 "secondary_venue_strict_readiness=installed broker_local_readiness_contract=installed "
                 "account_exit_management_recovery=installed account_exit_recovery_bootstrap=installed "
                 "kraken_verified_cost_basis=installed daily_gain_profit_harvest=installed "
-                "kraken_tpe_min_notional_allocation=installed runtime_guard_audit=installed "
-                "three_venue_stage_verifier=installed render_readiness_bridge=installed "
-                "scan_owner_okx_auth_convergence=installed source=main_pre_bot"
+                "kraken_tpe_min_notional_allocation=installed account_scope_exit_integrity=installed "
+                "runtime_guard_audit=installed three_venue_stage_verifier=installed "
+                "render_readiness_bridge=installed scan_owner_okx_auth_convergence=installed source=main_pre_bot"
             )
             logger.warning(message)
             print(f"[NIJA-PRINT] {message}", flush=True)
@@ -220,6 +221,7 @@ def install() -> bool:
                 "NIJA_KRAKEN_VERIFIED_COST_BASIS_RECOVERY_INSTALLED",
                 "NIJA_DAILY_GAIN_PROFIT_HARVEST_INSTALLED",
                 "NIJA_KRAKEN_TPE_MIN_NOTIONAL_ALLOCATION_INSTALLED",
+                "NIJA_ACCOUNT_SCOPE_EXIT_INTEGRITY_INSTALLED",
                 "NIJA_RUNTIME_GUARD_AUDIT_INSTALLED",
             ):
                 os.environ[name] = "0"
