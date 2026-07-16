@@ -13,6 +13,23 @@ _ORIGINAL_IMPORT: Optional[Callable[..., Any]] = None
 _TARGETS = {"bot.tier_config", "tier_config", "bot.crypto_sector_taxonomy", "crypto_sector_taxonomy"}
 
 
+def _install_position_adoption_exit_integrity() -> None:
+    try:
+        try:
+            from bot.position_adoption_exit_integrity_patch import install_import_hook
+        except ImportError:
+            from position_adoption_exit_integrity_patch import install_import_hook  # type: ignore[import]
+        install_import_hook()
+        logger.critical(
+            "POSITION_ADOPTION_EXIT_INTEGRITY_CHAINED marker=20260716-position-adoption-exit-integrity-v1"
+        )
+    except Exception as exc:
+        logger.critical(
+            "POSITION_ADOPTION_EXIT_INTEGRITY_CHAIN_FAILED marker=20260716-position-adoption-exit-integrity-v1 error=%s",
+            exc,
+        )
+
+
 def _norm_symbol(value: Any) -> str:
     text = str(value or "").strip().upper().replace("/", "-").replace("_", "-")
     while "--" in text:
@@ -149,6 +166,7 @@ def _try_patch_loaded() -> None:
 
 def install_import_hook() -> None:
     global _ORIGINAL_IMPORT
+    _install_position_adoption_exit_integrity()
     _try_patch_loaded()
     if getattr(builtins, "_NIJA_SECTOR_TIER_HYDRATION_REPAIR_HOOK", False):
         return
