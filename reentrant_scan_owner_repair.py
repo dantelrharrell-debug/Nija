@@ -1,30 +1,28 @@
-"""Disable the scan-owner wrapper that suppresses legitimate live scans.
+"""Disable the obsolete scan-owner wrapper without a background watchdog.
 
-The convergence wrapper can misclassify NIJA's normal same-thread scan delegation
-as recursion and return an empty blocked result before any symbol is scored. This
-repair removes only that wrapper, preserves its underlying scan pipeline, and
-permanently guards the convergence patch from reinstalling it.
+The repair is applied once during startup. Canonical scan ownership is now
+managed by the reviewed convergence owner, so a permanent mutation thread is
+both unnecessary and unsafe.
 """
 from __future__ import annotations
 
+import builtins
 import logging
 import sys
 import threading
-import time
 from types import ModuleType
 from typing import Any, Callable
 
 logger = logging.getLogger("nija.reentrant_scan_owner_repair")
-_MARKER = "20260713e"
+_MARKER = "20260717a"
 _PATCH_ATTR = "_nija_scan_owner_result_reuse_20260713b"
 _REPAIR_ATTR = "_nija_reentrant_scan_owner_repair_20260713c"
 _GUARD_ATTR = "_nija_reentrant_scan_owner_guard_20260713e"
-_STARTED = False
+_INSTALLED = False
 _LOCK = threading.RLock()
 
 
 def _wrapper_chain_has_attr(func: Callable[..., Any], attr: str) -> bool:
-    """Return True when any callable in ``func.__wrapped__`` chain has ``attr``."""
     current: Any = func
     seen: set[int] = set()
     for _ in range(128):
@@ -61,19 +59,9 @@ def _repair_module(module: ModuleType) -> bool:
     if not callable(current):
         return False
 
-    # A legitimate outer wrapper (for example venue readiness) may sit above the
-    # repaired canonical method. Promote the repair marker to that outer wrapper
-    # instead of treating it as an unprotected method. This prevents the
-    # convergence watchdog from reinstalling its owner wrapper every few seconds.
     if _wrapper_chain_has_attr(current, _REPAIR_ATTR):
         if not getattr(current, _REPAIR_ATTR, False):
             setattr(current, _REPAIR_ATTR, True)
-            logger.info(
-                "REENTRANT_SCAN_OWNER_REPAIR_MARKER_PROPAGATED marker=%s module=%s wrapper=%s",
-                _MARKER,
-                getattr(module, "__name__", "unknown"),
-                getattr(current, "__qualname__", "unknown"),
-            )
         return True
 
     if not getattr(current, _PATCH_ATTR, False):
@@ -96,7 +84,6 @@ def _repair_module(module: ModuleType) -> bool:
 
 
 def _install_convergence_guard() -> bool:
-    """Make the convergence watchdog respect repaired canonical scan methods."""
     try:
         import scan_owner_okx_auth_convergence_patch as convergence
     except Exception as exc:
@@ -118,15 +105,10 @@ def _install_convergence_guard() -> bool:
     def guarded_patch_core(module: ModuleType) -> bool:
         cls = getattr(module, "NijaCoreLoop", None)
         method = getattr(cls, "run_scan_phase", None) if isinstance(cls, type) else None
-
-        # Inspect the full wrapper chain. Venue-readiness and other legitimate
-        # wrappers may be above the repaired canonical method. Checking only the
-        # outer function caused the patch/remove loop seen in live logs.
         if callable(method) and _wrapper_chain_has_attr(method, _REPAIR_ATTR):
             if not getattr(method, _REPAIR_ATTR, False):
                 setattr(method, _REPAIR_ATTR, True)
             return True
-
         result = original_patch_core(module)
         _repair_module(module)
         return result
@@ -147,24 +129,18 @@ def _repair_loaded() -> bool:
     return changed
 
 
-def _watchdog() -> None:
-    while True:
-        try:
-            _repair_loaded()
-        except Exception as exc:
-            logger.warning("REENTRANT_SCAN_OWNER_REPAIR_RETRY marker=%s error=%s", _MARKER, exc)
-        time.sleep(0.5)
-
-
 def install() -> None:
-    global _STARTED
+    global _INSTALLED
     with _LOCK:
-        _repair_loaded()
-        if _STARTED:
+        if _INSTALLED:
             return
-        _STARTED = True
-        threading.Thread(target=_watchdog, name="ReentrantScanOwnerRepair", daemon=True).start()
-        logger.warning("REENTRANT_SCAN_OWNER_REPAIR_INSTALLED marker=%s", _MARKER)
+        _repair_loaded()
+        _INSTALLED = True
+        setattr(builtins, "_NIJA_REENTRANT_SCAN_OWNER_REPAIR_ONE_SHOT", True)
+        logger.warning(
+            "REENTRANT_SCAN_OWNER_REPAIR_INSTALLED marker=%s mode=one_shot thread_started=false",
+            _MARKER,
+        )
 
 
 install()
