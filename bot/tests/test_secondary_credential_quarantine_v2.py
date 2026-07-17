@@ -6,6 +6,7 @@ from types import ModuleType
 
 
 quarantine = importlib.import_module("bot.secondary_credential_quarantine_patch")
+auth = importlib.import_module("broker_auth_recovery_patch")
 
 
 def test_fatal_okx_code_sets_process_global_quarantine(monkeypatch):
@@ -74,3 +75,12 @@ def test_private_okx_request_is_short_circuited_after_global_quarantine(monkeypa
     assert result["quarantined"] is True
     assert result["code"] == "50111"
     assert calls == []
+
+
+def test_auth_recovery_does_not_flip_endpoint_after_quarantine(monkeypatch):
+    monkeypatch.setenv("NIJA_OKX_CREDENTIALS_QUARANTINED", "1")
+    monkeypatch.setenv("OKX_BASE_URL", "https://us.okx.com")
+
+    assert auth._okx_quarantined() is True
+    assert auth._alternate_okx_url("https://us.okx.com") == ""
+    assert auth.normalize_okx_environment() is False
