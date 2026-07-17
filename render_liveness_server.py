@@ -119,15 +119,23 @@ def _environment_snapshot() -> dict[str, Any]:
         "coinbase_trading_ready": os.environ.get(
             "NIJA_COINBASE_TRADING_READY", "0"
         ),
+        "coinbase_balance_observed": os.environ.get(
+            "NIJA_COINBASE_BALANCE_OBSERVED", "0"
+        ),
+        "coinbase_funding_status": os.environ.get(
+            "NIJA_COINBASE_FUNDING_STATUS", "unobserved"
+        ),
         "coinbase_spendable_quote": os.environ.get(
-            "NIJA_COINBASE_SPENDABLE_QUOTE", "0"
+            "NIJA_COINBASE_SPENDABLE_QUOTE", "unobserved"
         ),
         "okx_activation_state": os.environ.get(
             "NIJA_OKX_ACTIVATION_STATE", "unknown"
         ),
         "okx_connected": os.environ.get("NIJA_OKX_CONNECTED", "0"),
         "okx_trading_ready": os.environ.get("NIJA_OKX_TRADING_READY", "0"),
-        "okx_spendable_quote": os.environ.get("NIJA_OKX_SPENDABLE_QUOTE", "0"),
+        "okx_balance_observed": os.environ.get("NIJA_OKX_BALANCE_OBSERVED", "0"),
+        "okx_funding_status": os.environ.get("NIJA_OKX_FUNDING_STATUS", "unobserved"),
+        "okx_spendable_quote": os.environ.get("NIJA_OKX_SPENDABLE_QUOTE", "unobserved"),
         "commit": os.environ.get("GIT_COMMIT_SHORT", "unknown"),
     }
 
@@ -147,15 +155,19 @@ def _safe_render_startup_snapshot() -> dict[str, Any]:
         "required_venues": required,
         "required_venues_missing": required,
         "active_live_venues": "",
-        "degraded_live_venues": required,
-        "coinbase_activation_state": "unknown",
+        "degraded_live_venues": "",
+        "coinbase_activation_state": "unobserved",
         "coinbase_connected": "0",
         "coinbase_trading_ready": "0",
-        "coinbase_spendable_quote": "0",
-        "okx_activation_state": "unknown",
+        "coinbase_balance_observed": "0",
+        "coinbase_funding_status": "unobserved",
+        "coinbase_spendable_quote": "unobserved",
+        "okx_activation_state": "unobserved",
         "okx_connected": "0",
         "okx_trading_ready": "0",
-        "okx_spendable_quote": "0",
+        "okx_balance_observed": "0",
+        "okx_funding_status": "unobserved",
+        "okx_spendable_quote": "unobserved",
         "commit": os.environ.get("GIT_COMMIT_SHORT", "unknown"),
     }
 
@@ -227,11 +239,15 @@ def _readiness() -> tuple[bool, dict[str, object]]:
         ),
         "coinbase_connected": snapshot.get("coinbase_connected", "0"),
         "coinbase_trading_ready": snapshot.get("coinbase_trading_ready", "0"),
-        "coinbase_spendable_quote": snapshot.get("coinbase_spendable_quote", "0"),
+        "coinbase_balance_observed": snapshot.get("coinbase_balance_observed", "0"),
+        "coinbase_funding_status": snapshot.get("coinbase_funding_status", "unobserved"),
+        "coinbase_spendable_quote": snapshot.get("coinbase_spendable_quote", "unobserved"),
         "okx_activation_state": snapshot.get("okx_activation_state", "unknown"),
         "okx_connected": snapshot.get("okx_connected", "0"),
         "okx_trading_ready": snapshot.get("okx_trading_ready", "0"),
-        "okx_spendable_quote": snapshot.get("okx_spendable_quote", "0"),
+        "okx_balance_observed": snapshot.get("okx_balance_observed", "0"),
+        "okx_funding_status": snapshot.get("okx_funding_status", "unobserved"),
+        "okx_spendable_quote": snapshot.get("okx_spendable_quote", "unobserved"),
         "readiness_source": source,
         "shared_state_status": shared_status,
         "shared_state_age_seconds": round(age, 3) if age is not None else None,
