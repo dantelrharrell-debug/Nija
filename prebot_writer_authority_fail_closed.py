@@ -9,14 +9,17 @@ acquires the exact same canonical writer authority before any ``bot.*`` import.
 
 from __future__ import annotations
 
+import builtins
 import logging
 import os
+import sys
+from types import ModuleType
 from typing import Any
 
 import prebot_writer_authority_bootstrap as bootstrap
 
 logger = logging.getLogger("nija.prebot_writer_authority_fail_closed")
-_MARKER = "20260710ab"
+_MARKER = "20260717a"
 _DEFER_MARKER = "20260711a"
 
 
@@ -25,6 +28,39 @@ def _publish_fail_closed_state() -> None:
     os.environ["NIJA_RUNTIME_TRADING_STATE"] = "OFF"
     os.environ["NIJA_WRITER_LEASE_ACQUIRED"] = "0"
     os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"] = "0"
+
+
+def _bridge_canonical_runtime(runtime: Any) -> None:
+    """Force every authority import alias to reuse the pre-bot singleton.
+
+    A second copy of ``entrypoint_writer_authority`` previously created a new
+    singleton and waited forever on the Redis lease already held by this process.
+    The bridge is process-local and never adopts another process's lock.
+    """
+    if runtime is None:
+        return
+    canonical = sys.modules.get("bot.entrypoint_writer_authority")
+    alias = sys.modules.get("entrypoint_writer_authority")
+    module = canonical if isinstance(canonical, ModuleType) else alias
+    if not isinstance(module, ModuleType):
+        raise RuntimeError("canonical writer authority module missing after prebot acquisition")
+
+    def get_existing_runtime() -> Any:
+        return runtime
+
+    module._SINGLETON = runtime
+    module.get_entrypoint_writer_authority = get_existing_runtime
+    sys.modules["bot.entrypoint_writer_authority"] = module
+    sys.modules["entrypoint_writer_authority"] = module
+    setattr(builtins, "_NIJA_PREBOT_WRITER_AUTHORITY_RUNTIME", runtime)
+    setattr(builtins, "_NIJA_ENTRYPOINT_WRITER_AUTHORITY_MODULE", module)
+    os.environ["NIJA_WRITER_AUTHORITY_SINGLETON_BRIDGED"] = "1"
+    logger.critical(
+        "PREBOT_WRITER_SINGLETON_BRIDGED marker=%s runtime_id=%s module_id=%s aliases_same=true",
+        _MARKER,
+        id(runtime),
+        id(module),
+    )
 
 
 def install(*, defer_if_render: bool = False) -> Any:
@@ -58,13 +94,12 @@ def install(*, defer_if_render: bool = False) -> Any:
     try:
         runtime = bootstrap.install()
         if runtime is not None:
+            _bridge_canonical_runtime(runtime)
             os.environ["NIJA_PREBOT_WRITER_AUTHORITY_DEFERRED"] = "0"
             import venue_readiness_execution_repair_patch as venue_repair
 
             venue_repair.install()
-            logger.warning(
-                "PREBOT_VENUE_READINESS_REPAIR_READY marker=20260710ae"
-            )
+            logger.warning("PREBOT_VENUE_READINESS_REPAIR_READY marker=20260710ae")
         return runtime
     except BaseException as exc:
         # Python's site module reports and swallows exceptions raised by a .pth
@@ -90,4 +125,4 @@ def install(*, defer_if_render: bool = False) -> Any:
         os._exit(78)
 
 
-__all__ = ["install"]
+__all__ = ["install", "_bridge_canonical_runtime"]
