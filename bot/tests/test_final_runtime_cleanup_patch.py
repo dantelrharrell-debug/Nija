@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 import logging
 import os
+import sys
 import threading
 from dataclasses import dataclass
 from types import ModuleType, SimpleNamespace
@@ -150,4 +151,36 @@ def test_unobserved_okx_entry_is_rejected_before_original_execute(monkeypatch):
     result = ExecutionPipeline().execute(request)
     assert result.success is False
     assert result.error.startswith("okx_entry_isolated:")
+    assert calls == []
+
+
+def test_prebot_runtime_is_bridged_across_both_import_aliases(monkeypatch):
+    bridge = importlib.import_module("prebot_writer_authority_fail_closed")
+    runtime = object()
+    canonical = ModuleType("bot.entrypoint_writer_authority")
+    duplicate = ModuleType("entrypoint_writer_authority")
+
+    monkeypatch.setitem(sys.modules, "bot.entrypoint_writer_authority", canonical)
+    monkeypatch.setitem(sys.modules, "entrypoint_writer_authority", duplicate)
+    monkeypatch.delenv("NIJA_WRITER_AUTHORITY_SINGLETON_BRIDGED", raising=False)
+
+    bridge._bridge_canonical_runtime(runtime)
+
+    assert sys.modules["bot.entrypoint_writer_authority"] is canonical
+    assert sys.modules["entrypoint_writer_authority"] is canonical
+    assert canonical.get_entrypoint_writer_authority() is runtime
+    assert canonical._SINGLETON is runtime
+    assert os.environ["NIJA_WRITER_AUTHORITY_SINGLETON_BRIDGED"] == "1"
+
+
+def test_reentrant_repair_does_not_start_background_thread(monkeypatch):
+    repair = importlib.import_module("reentrant_scan_owner_repair")
+    calls: list[str] = []
+
+    monkeypatch.setattr(repair, "_INSTALLED", False)
+    monkeypatch.setattr(repair, "_repair_loaded", lambda: True)
+    monkeypatch.setattr(threading.Thread, "start", lambda self: calls.append(self.name))
+
+    repair.install()
+
     assert calls == []
