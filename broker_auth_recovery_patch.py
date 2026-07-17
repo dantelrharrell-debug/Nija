@@ -1,14 +1,9 @@
 """Recover valid Coinbase/OKX credentials from deployment formatting and region drift.
 
-This guard does not create credentials or bypass authentication.  It only:
-* extracts Coinbase CDP key material from common JSON/escaped/base64 deployment forms;
-* preserves complete PEM framing and normalizes escaped newlines;
-* accepts documented environment aliases without exposing secret contents; and
-* retries OKX authentication once against the alternate US/global production host
-  when the configured host rejects an otherwise complete credential tuple.
-
-A broker is considered connected only when its original connect() implementation
-successfully completes the authenticated account/balance probe.
+This guard normalizes credential formatting and retries OKX once against the
+alternate production host. A definitive OKX credential rejection is process-wide:
+after quarantine, no reconnect or endpoint fallback is attempted until restart
+with replacement credentials.
 """
 from __future__ import annotations
 
@@ -24,10 +19,11 @@ from types import ModuleType
 from typing import Any, Callable, Optional
 
 logger = logging.getLogger("nija.broker_auth_recovery")
-_MARKER = "20260711n"
+_MARKER = "20260717-okx-quarantine-aware-auth-v2"
 _LOCK = threading.RLock()
 _ORIGINAL_IMPORT: Optional[Callable[..., Any]] = None
 _PATCHED = False
+_TRUE = {"1", "true", "yes", "on", "enabled", "y"}
 
 
 def _clean(value: Any) -> str:
@@ -36,6 +32,14 @@ def _clean(value: Any) -> str:
         if len(text) >= 2 and text[0] == text[-1] and text[0] in {"'", '"'}:
             text = text[1:-1].strip()
     return text
+
+
+def _truthy(name: str) -> bool:
+    return _clean(os.environ.get(name)).lower() in _TRUE
+
+
+def _okx_quarantined() -> bool:
+    return _truthy("NIJA_OKX_CREDENTIALS_QUARANTINED") or _truthy("NIJA_OKX_RECONNECT_DISABLED")
 
 
 def _json_value(text: str, keys: tuple[str, ...]) -> str:
@@ -75,7 +79,6 @@ def _normalize_pem(value: str) -> str:
     text = text.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\r\n", "\n").strip()
     text = _decode_possible_base64(text)
     text = text.replace("\\n", "\n").strip()
-
     match = re.search(
         r"-----BEGIN (?P<label>(?:EC )?PRIVATE KEY)-----\s*(?P<body>.*?)\s*-----END (?P=label)-----",
         text,
@@ -114,8 +117,7 @@ def normalize_coinbase_environment() -> bool:
     )
     if raw_key:
         extracted_key = _json_value(raw_key, ("name", "apiKeyName", "api_key_name", "apiKey", "api_key"))
-        normalized_key = extracted_key or raw_key
-        os.environ["COINBASE_API_KEY"] = normalized_key.strip()
+        os.environ["COINBASE_API_KEY"] = (extracted_key or raw_key).strip()
     if raw_secret:
         normalized_secret = _normalize_pem(raw_secret)
         os.environ["COINBASE_API_SECRET"] = normalized_secret
@@ -160,27 +162,44 @@ def normalize_okx_environment() -> bool:
     elif region in {"us", "usa", "united_states"}:
         explicit = "https://us.okx.com"
     if not explicit:
-        explicit = "https://us.okx.com" if _clean(os.environ.get("OKX_US_REGION")).lower() in {"1", "true", "yes", "on"} else "https://www.okx.com"
+        explicit = "https://us.okx.com" if _truthy("OKX_US_REGION") else "https://www.okx.com"
     os.environ["OKX_BASE_URL"] = explicit
     complete = all(_clean(os.environ.get(k)) for k in ("OKX_API_KEY", "OKX_API_SECRET", "OKX_PASSPHRASE"))
     logger.warning(
-        "OKX_AUTH_NORMALIZED marker=%s credentials_complete=%s base_url=%s region_hint=%s simulated=%s",
+        "OKX_AUTH_NORMALIZED marker=%s credentials_complete=%s base_url=%s region_hint=%s simulated=%s quarantined=%s",
         _MARKER,
         complete,
         explicit,
         region or "unset",
         _clean(os.environ.get("OKX_SIMULATED_TRADING") or "false").lower(),
+        _okx_quarantined(),
     )
-    return complete
+    return complete and not _okx_quarantined()
 
 
 def _alternate_okx_url(url: str) -> str:
+    if _okx_quarantined():
+        return ""
     normalized = _clean(url).rstrip("/")
     if normalized == "https://us.okx.com":
         return "https://www.okx.com"
     if normalized in {"https://www.okx.com", "https://openapi.okx.com"}:
         return "https://us.okx.com"
     return ""
+
+
+def _disable_okx_instance(instance: Any) -> None:
+    for attr, value in (
+        ("connected", False),
+        ("_is_available", False),
+        ("trading_ready", False),
+        ("_auth_failed", True),
+        ("_nija_credentials_quarantined", True),
+    ):
+        try:
+            setattr(instance, attr, value)
+        except Exception:
+            pass
 
 
 def _patch_module(module: ModuleType) -> bool:
@@ -204,19 +223,33 @@ def _patch_module(module: ModuleType) -> bool:
         original_okx = getattr(okx_cls, "connect", None)
         if callable(original_okx) and not getattr(original_okx, "_nija_auth_recovery_20260711n", False):
             def okx_connect(self: Any, *args: Any, __original: Callable[..., Any] = original_okx, **kwargs: Any) -> Any:
-                normalize_okx_environment()
+                if _okx_quarantined():
+                    _disable_okx_instance(self)
+                    logger.warning(
+                        "OKX_AUTH_RETRY_SUPPRESSED marker=%s reason=credentials_quarantined",
+                        _MARKER,
+                    )
+                    return False
+                if not normalize_okx_environment():
+                    _disable_okx_instance(self)
+                    return False
                 primary = _clean(os.environ.get("OKX_BASE_URL")).rstrip("/")
                 result = __original(self, *args, **kwargs)
-                if result:
+                if result or _okx_quarantined():
+                    if _okx_quarantined():
+                        _disable_okx_instance(self)
+                        return False
                     return result
-                if _clean(os.environ.get("OKX_DISABLE_ENDPOINT_FALLBACK")).lower() in {"1", "true", "yes", "on"}:
+                if _truthy("OKX_DISABLE_ENDPOINT_FALLBACK"):
                     return result
                 alternate = _alternate_okx_url(primary)
                 if not alternate:
                     return result
                 logger.warning(
                     "OKX_AUTH_ENDPOINT_FALLBACK marker=%s primary=%s alternate=%s reason=primary_auth_failed",
-                    _MARKER, primary, alternate,
+                    _MARKER,
+                    primary,
+                    alternate,
                 )
                 os.environ["OKX_BASE_URL"] = alternate
                 for attr, value in (("connected", False), ("client", None), ("_auth_failed", False), ("_is_available", True)):
@@ -225,6 +258,9 @@ def _patch_module(module: ModuleType) -> bool:
                     except Exception:
                         pass
                 second = __original(self, *args, **kwargs)
+                if _okx_quarantined():
+                    _disable_okx_instance(self)
+                    return False
                 if second:
                     logger.warning("OKX_AUTH_ENDPOINT_RECOVERED marker=%s base_url=%s", _MARKER, alternate)
                     return second
@@ -257,24 +293,21 @@ def install() -> None:
         if _ORIGINAL_IMPORT is not None:
             return
         _ORIGINAL_IMPORT = importlib.import_module
+
         def wrapped(name: str, package: str | None = None):
-            module = _ORIGINAL_IMPORT(name, package)  # type: ignore[misc]
+            module = _ORIGINAL_IMPORT(name, package)
             if name in {"bot.broker_manager", "broker_manager"}:
-                _patch_module(module)
+                _try_loaded()
             return module
+
         importlib.import_module = wrapped  # type: ignore[assignment]
-        logger.warning("BROKER_AUTH_RECOVERY_INSTALL_REQUESTED marker=%s", _MARKER)
-
-
-def installed() -> bool:
-    return _PATCHED
+        logger.warning("BROKER_AUTH_RECOVERY_IMPORT_HOOK_INSTALLED marker=%s", _MARKER)
 
 
 __all__ = [
     "install",
-    "installed",
     "normalize_coinbase_environment",
     "normalize_okx_environment",
-    "_normalize_pem",
     "_alternate_okx_url",
+    "_okx_quarantined",
 ]
