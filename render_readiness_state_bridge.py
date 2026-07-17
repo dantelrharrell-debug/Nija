@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger("nija.render_readiness_bridge")
-_MARKER = "20260714c"
+_MARKER = "20260717a"
 _LOCK = threading.RLock()
 _INSTALLED = False
 _THREAD: threading.Thread | None = None
@@ -63,9 +63,29 @@ def _global_ready() -> str:
     return "1" if active else "0"
 
 
+def _observed_balance_fields(prefix: str) -> tuple[str, str, str]:
+    observed = "1" if _truthy(os.environ.get(f"NIJA_{prefix}_BALANCE_OBSERVED", "0")) else "0"
+    funding_status = str(
+        os.environ.get(f"NIJA_{prefix}_FUNDING_STATUS", "unobserved") or "unobserved"
+    ).strip().lower()
+    spendable = str(os.environ.get(f"NIJA_{prefix}_SPENDABLE_QUOTE", "") or "").strip()
+    if observed != "1":
+        # Do not publish a synthetic zero before the broker has authenticated and
+        # completed a real balance probe. Zero is a valid observed balance and must
+        # remain distinguishable from an unknown startup state.
+        spendable = "unobserved"
+        if funding_status in {"", "unknown", "observed_zero", "funded"}:
+            funding_status = "unobserved"
+    elif not spendable:
+        spendable = "0"
+    return observed, funding_status, spendable
+
+
 def _payload() -> dict[str, Any]:
     missing = _required_missing()
     global_ready = _global_ready()
+    cb_observed, cb_funding, cb_spendable = _observed_balance_fields("COINBASE")
+    okx_observed, okx_funding, okx_spendable = _observed_balance_fields("OKX")
     return {
         "timestamp": time.time(),
         "pid": os.getpid(),
@@ -91,15 +111,17 @@ def _payload() -> dict[str, Any]:
         "coinbase_trading_ready": os.environ.get(
             "NIJA_COINBASE_TRADING_READY", "0"
         ),
-        "coinbase_spendable_quote": os.environ.get(
-            "NIJA_COINBASE_SPENDABLE_QUOTE", "0"
-        ),
+        "coinbase_balance_observed": cb_observed,
+        "coinbase_funding_status": cb_funding,
+        "coinbase_spendable_quote": cb_spendable,
         "okx_activation_state": os.environ.get(
             "NIJA_OKX_ACTIVATION_STATE", "unknown"
         ),
         "okx_connected": os.environ.get("NIJA_OKX_CONNECTED", "0"),
         "okx_trading_ready": os.environ.get("NIJA_OKX_TRADING_READY", "0"),
-        "okx_spendable_quote": os.environ.get("NIJA_OKX_SPENDABLE_QUOTE", "0"),
+        "okx_balance_observed": okx_observed,
+        "okx_funding_status": okx_funding,
+        "okx_spendable_quote": okx_spendable,
         "commit": os.environ.get(
             "GIT_COMMIT_SHORT",
             os.environ.get("RENDER_GIT_COMMIT", "unknown")[:12],
@@ -176,4 +198,4 @@ def install() -> None:
         )
 
 
-__all__ = ["install", "publish_once", "_payload"]
+__all__ = ["install", "publish_once", "_payload", "_observed_balance_fields"]
