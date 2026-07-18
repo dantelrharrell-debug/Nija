@@ -10,7 +10,7 @@ import threading
 from typing import Optional
 
 logger = logging.getLogger("nija.source_runtime_guard_bootstrap")
-_MARKER = "20260716n"
+_MARKER = "20260718-live-state-bootstrap-v1"
 _TRUTHY = {"1", "true", "yes", "on", "enabled", "y"}
 _LOCK = threading.RLock()
 _INSTALLED = False
@@ -100,6 +100,7 @@ def _set_status(value: str) -> None:
         "NIJA_SECONDARY_VENUE_ACTIVATOR_INSTALLED",
         "NIJA_SECONDARY_VENUE_STRICT_GUARD_INSTALLED",
         "NIJA_BROKER_LOCAL_READINESS_CONTRACT_INSTALLED",
+        "NIJA_LIVE_BROKER_STATE_CONVERGENCE_INSTALLED",
         "NIJA_ACCOUNT_EXIT_MANAGEMENT_RECOVERY_INSTALLED",
         "NIJA_ACCOUNT_EXIT_RECOVERY_BOOTSTRAP_INSTALLED",
         "NIJA_KRAKEN_VERIFIED_COST_BASIS_RECOVERY_INSTALLED",
@@ -142,6 +143,7 @@ def install() -> bool:
             _install_required("secondary_venue_activation_patch")
             _install_required("secondary_venue_strict_readiness_patch")
             _install_required("broker_local_readiness_contract_patch")
+            _install_required("runtime_live_broker_state_convergence_patch")
             _install_required("account_exit_management_recovery_patch")
             _install_required("account_exit_recovery_bootstrap_patch")
             _install_required("bot.kraken_verified_cost_basis_recovery_patch")
@@ -199,11 +201,12 @@ def install() -> bool:
                 "runtime_auth_endpoint_repair=installed final_runtime_convergence=installed "
                 "scan_wrapper_convergence=installed venue_repair=installed secondary_venue_activation=installed "
                 "secondary_venue_strict_readiness=installed broker_local_readiness_contract=installed "
-                "account_exit_management_recovery=installed account_exit_recovery_bootstrap=installed "
-                "kraken_verified_cost_basis=installed daily_gain_profit_harvest=installed "
-                "kraken_tpe_min_notional_allocation=installed account_scope_exit_integrity=installed "
-                "runtime_guard_audit=installed three_venue_stage_verifier=installed "
-                "render_readiness_bridge=installed scan_owner_okx_auth_convergence=installed source=main_pre_bot"
+                "live_broker_state_convergence=installed account_exit_management_recovery=installed "
+                "account_exit_recovery_bootstrap=installed kraken_verified_cost_basis=installed "
+                "daily_gain_profit_harvest=installed kraken_tpe_min_notional_allocation=installed "
+                "account_scope_exit_integrity=installed runtime_guard_audit=installed "
+                "three_venue_stage_verifier=installed render_readiness_bridge=installed "
+                "scan_owner_okx_auth_convergence=installed source=main_pre_bot"
             )
             logger.warning(message)
             print(f"[NIJA-PRINT] {message}", flush=True)
@@ -223,6 +226,7 @@ def install() -> bool:
                 "NIJA_KRAKEN_TPE_MIN_NOTIONAL_ALLOCATION_INSTALLED",
                 "NIJA_ACCOUNT_SCOPE_EXIT_INTEGRITY_INSTALLED",
                 "NIJA_RUNTIME_GUARD_AUDIT_INSTALLED",
+                "NIJA_LIVE_BROKER_STATE_CONVERGENCE_INSTALLED",
             ):
                 os.environ[name] = "0"
             message = f"{type(exc).__name__}:{exc}"
