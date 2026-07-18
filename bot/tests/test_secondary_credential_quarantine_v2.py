@@ -19,9 +19,9 @@ def test_fatal_okx_code_sets_process_global_quarantine(monkeypatch):
         "NIJA_OKX_ENTRY_ISOLATED",
         "OKX_DISABLE_ENDPOINT_FALLBACK",
         "NIJA_OKX_RECONNECT_DISABLED",
+        "NIJA_OKX_QUARANTINE_LOGGED",
     ):
         monkeypatch.delenv(key, raising=False)
-    monkeypatch.setattr(quarantine, "_LOGGED", False)
 
     quarantine._publish_quarantine("50111", "/api/v5/account/balance")
 
@@ -31,6 +31,14 @@ def test_fatal_okx_code_sets_process_global_quarantine(monkeypatch):
     assert os.environ["NIJA_OKX_ENTRY_ISOLATED"] == "1"
     assert os.environ["OKX_DISABLE_ENDPOINT_FALLBACK"] == "true"
     assert os.environ["NIJA_OKX_RECONNECT_DISABLED"] == "1"
+    assert os.environ["NIJA_OKX_QUARANTINE_LOGGED"] == "1"
+
+
+def test_quarantine_log_sentinel_is_shared_across_aliases(monkeypatch):
+    monkeypatch.delenv("NIJA_OKX_QUARANTINE_LOGGED", raising=False)
+    quarantine._publish_quarantine("50111", "first")
+    quarantine._publish_quarantine("50111", "second")
+    assert os.environ["NIJA_OKX_QUARANTINE_LOGGED"] == "1"
 
 
 def test_new_okx_broker_instance_does_not_retry_after_global_quarantine(monkeypatch):
