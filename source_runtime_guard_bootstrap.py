@@ -10,7 +10,7 @@ import threading
 from typing import Optional
 
 logger = logging.getLogger("nija.source_runtime_guard_bootstrap")
-_MARKER = "20260718-live-state-bootstrap-v1"
+_MARKER = "20260718-live-state-bootstrap-v2"
 _TRUTHY = {"1", "true", "yes", "on", "enabled", "y"}
 _LOCK = threading.RLock()
 _INSTALLED = False
@@ -82,11 +82,13 @@ def _set_status(value: str) -> None:
         "NIJA_RUNTIME_POST_IMPORT_CONVERGENCE_INSTALLED",
         "NIJA_SCAN_WRAPPER_DEPTH_GUARD_INSTALLED",
         "NIJA_SCAN_WRAPPER_HARD_CLAMP_INSTALLED",
+        "NIJA_SCAN_REENTRANT_DELEGATE_REPAIR_INSTALLED",
         "NIJA_ZERO_SIGNAL_STREAK_STATE_REPAIR_INSTALLED",
         "NIJA_EMPTY_POSITION_SYNC_PATCH_INSTALLED",
         "NIJA_SECONDARY_CREDENTIAL_QUARANTINE_INSTALLED",
         "NIJA_BROKER_AUTH_RECOVERY_INSTALLED",
         "NIJA_COINBASE_FUNDING_READINESS_REPAIR_INSTALLED",
+        "NIJA_OKX_REGIONAL_ENDPOINT_INSTALLED",
         "NIJA_OKX_FUNDING_WALLET_READINESS_INSTALLED",
         "NIJA_RUNTIME_CONVERGENCE_HARDENING_INSTALLED",
         "NIJA_RUNTIME_CONVERGENCE_V2_INSTALLED",
@@ -127,10 +129,15 @@ def install() -> bool:
             _install_required("writer_generation_scope_repair_patch")
             _install_required("authority_heartbeat_generation_scope_patch")
             _install_required("final_worker_position_coinbase_repair_patch")
+
+            # Select and validate the OKX regional host before any auth normalizer,
+            # private client, balance probe, quarantine decision, or market load.
+            _install_required("bot.okx_regional_endpoint_isolation_patch")
             _install_required("broker_auth_recovery_patch")
             _install_required("bot.coinbase_funding_readiness_repair_patch")
             _install_required("bot.okx_funding_wallet_readiness_patch")
             _install_required("bot.secondary_credential_quarantine_patch")
+
             _install_required("runtime_convergence_hardening_patch")
             _install_required("bot.zero_signal_streak_state_repair_patch")
             _install_required("bot.empty_position_sync_success_patch")
@@ -138,7 +145,13 @@ def install() -> bool:
             _install_required("runtime_auth_recursion_endpoint_repair_patch")
             _install_required("final_runtime_convergence_patch")
             _install_required("scan_wrapper_convergence_repair_patch")
+
+            # Repair captured legacy delegates immediately after the canonical scan
+            # owner exists and before hard-clamp/watchdog modules can preserve a
+            # stale wrapper chain.
+            _install_required("bot.scan_reentrant_delegate_repair_patch")
             _install_required("bot.scan_wrapper_hard_clamp_patch")
+
             _install_required("venue_readiness_execution_repair_patch")
             _install_required("secondary_venue_activation_patch")
             _install_required("secondary_venue_strict_readiness_patch")
@@ -186,20 +199,26 @@ def install() -> bool:
             if not getattr(guard, "installed_marker", lambda: None)():
                 raise RuntimeError("account_scope_exit_integrity_marker_missing")
 
+            endpoint = importlib.import_module("bot.okx_regional_endpoint_isolation_patch")
+            selected_endpoint = str(getattr(endpoint, "resolve_okx_base_url")() or "")
+            if selected_endpoint != "https://us.okx.com":
+                raise RuntimeError(f"okx_endpoint_not_us:{selected_endpoint or 'missing'}")
+
             _INSTALLED = True
             _set_status("1")
             message = (
                 f"SOURCE_RUNTIME_GUARDS_READY marker={_MARKER} commit={_deployment_commit()} "
                 "writer_authority=installed module_identity=verified convergence_quiescence=verified "
                 "post_import_convergence=installed downstream_risk_identity=canonical "
-                "scan_wrapper_depth=verified scan_wrapper_hard_clamp=installed "
+                "scan_wrapper_depth=verified scan_reentrant_delegate=v2 scan_wrapper_hard_clamp=installed "
                 "zero_signal_state_repair=armed empty_position_sync=armed secondary_credential_quarantine=armed "
                 "writer_generation_scope=installed authority_heartbeat_generation_scope=installed "
                 "final_worker_position_coinbase_repair=installed broker_auth_recovery=installed "
-                "coinbase_funding_readiness=installed okx_funding_wallet_readiness=installed "
-                "runtime_convergence_hardening=installed runtime_convergence_v2=installed "
-                "runtime_auth_endpoint_repair=installed final_runtime_convergence=installed "
-                "scan_wrapper_convergence=installed venue_repair=installed secondary_venue_activation=installed "
+                "coinbase_funding_readiness=installed okx_endpoint=https://us.okx.com "
+                "okx_funding_wallet_readiness=installed runtime_convergence_hardening=installed "
+                "runtime_convergence_v2=installed runtime_auth_endpoint_repair=installed "
+                "final_runtime_convergence=installed scan_wrapper_convergence=installed "
+                "venue_repair=installed secondary_venue_activation=installed "
                 "secondary_venue_strict_readiness=installed broker_local_readiness_contract=installed "
                 "live_broker_state_convergence=installed account_exit_management_recovery=installed "
                 "account_exit_recovery_bootstrap=installed kraken_verified_cost_basis=installed "
@@ -220,6 +239,7 @@ def install() -> bool:
                 "NIJA_SCAN_WRAPPER_HARD_CLAMP_INSTALLED", "NIJA_ZERO_SIGNAL_STREAK_STATE_READY",
                 "NIJA_EMPTY_POSITION_SYNC_READY", "NIJA_SECONDARY_CREDENTIAL_QUARANTINE_READY",
                 "NIJA_COINBASE_FUNDING_READINESS_REPAIR_INSTALLED",
+                "NIJA_OKX_REGIONAL_ENDPOINT_READY",
                 "NIJA_OKX_FUNDING_WALLET_READINESS_INSTALLED",
                 "NIJA_KRAKEN_VERIFIED_COST_BASIS_RECOVERY_INSTALLED",
                 "NIJA_DAILY_GAIN_PROFIT_HARVEST_INSTALLED",
