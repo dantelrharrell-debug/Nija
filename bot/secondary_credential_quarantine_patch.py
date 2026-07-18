@@ -1,8 +1,8 @@
-"""Quarantine secondary venues after definitive credential rejection.
+"""Quarantine OKX after definitive credential rejection.
 
-Fatal OKX credential responses are process-global facts. Once observed, all
-private requests and connection attempts are blocked until a new deployment
-starts with replacement credentials. Healthy brokers continue independently.
+The quarantine is venue-local. It never changes Coinbase/Kraken connection,
+readiness, execution authority, or trading state. Regional endpoint selection
+is installed before OKX private requests are patched.
 """
 from __future__ import annotations
 
@@ -15,8 +15,8 @@ from types import ModuleType
 from typing import Any
 
 logger = logging.getLogger("nija.secondary_credential_quarantine")
-_MARKER = "20260718-secondary-credential-quarantine-v3"
-_ATTR = "_nija_secondary_credential_quarantine_v3"
+_MARKER = "20260718-secondary-credential-quarantine-v4"
+_ATTR = "_nija_secondary_credential_quarantine_v4"
 _LOCK = threading.RLock()
 _STARTED = False
 _FATAL_CODES = {"50100", "50101", "50111", "50112", "50113", "50119"}
@@ -39,23 +39,24 @@ def _is_quarantined() -> bool:
 
 
 def _publish_quarantine(code: str, path: str) -> None:
-    os.environ["NIJA_OKX_CREDENTIALS_QUARANTINED"] = "1"
-    os.environ["NIJA_OKX_CREDENTIAL_QUARANTINE_CODE"] = str(code or "50111")
-    os.environ["NIJA_OKX_ACTIVATION_STATE"] = "credential_quarantined"
-    os.environ["NIJA_OKX_CONNECTED"] = "0"
-    os.environ["NIJA_OKX_TRADING_READY"] = "0"
-    os.environ["NIJA_OKX_BALANCE_OBSERVED"] = "0"
-    os.environ["NIJA_OKX_ENTRY_ISOLATED"] = "1"
-    os.environ["OKX_DISABLE_ENDPOINT_FALLBACK"] = "true"
-    os.environ["NIJA_OKX_RECONNECT_DISABLED"] = "1"
-
-    # Environment state is shared even when this file is imported under both
-    # package and top-level aliases. This prevents duplicate CRITICAL records.
+    # OKX-only state. Do not mutate global execution authority or other venues.
+    values = {
+        "NIJA_OKX_CREDENTIALS_QUARANTINED": "1",
+        "NIJA_OKX_CREDENTIAL_QUARANTINE_CODE": str(code or "50111"),
+        "NIJA_OKX_ACTIVATION_STATE": "credential_quarantined",
+        "NIJA_OKX_CONNECTED": "0",
+        "NIJA_OKX_TRADING_READY": "0",
+        "NIJA_OKX_BALANCE_OBSERVED": "0",
+        "NIJA_OKX_ENTRY_ISOLATED": "1",
+        "OKX_DISABLE_ENDPOINT_FALLBACK": "true",
+        "NIJA_OKX_RECONNECT_DISABLED": "1",
+    }
+    os.environ.update(values)
     if not _truthy("NIJA_OKX_QUARANTINE_LOGGED"):
         os.environ["NIJA_OKX_QUARANTINE_LOGGED"] = "1"
         logger.critical(
             "SECONDARY_CREDENTIALS_QUARANTINED marker=%s venue=okx code=%s path=%s "
-            "action=isolate_until_credentials_replaced retries_disabled=true endpoint_fallback_disabled=true",
+            "scope=okx_only coinbase_affected=false kraken_affected=false retries_disabled=true",
             _MARKER, code, path,
         )
 
@@ -66,6 +67,7 @@ def _quarantined_payload() -> dict[str, Any]:
         "msg": "credentials_quarantined",
         "data": [],
         "quarantined": True,
+        "venue": "okx",
     }
 
 
@@ -122,21 +124,13 @@ def _patch_broker(module: ModuleType) -> bool:
             _disable_broker(self)
             return False
         clients = [getattr(self, name, None) for name in ("account_api", "market_api", "rest_client", "_rest")]
-        quarantined = next(
-            (client for client in clients if client is not None and bool(getattr(client, "_nija_credentials_quarantined", False))),
-            None,
-        )
-        if quarantined is not None:
-            _publish_quarantine(str(getattr(quarantined, "_nija_credentials_quarantine_code", "50111")), "connect_precheck")
+        bad = next((c for c in clients if c is not None and bool(getattr(c, "_nija_credentials_quarantined", False))), None)
+        if bad is not None:
+            _publish_quarantine(str(getattr(bad, "_nija_credentials_quarantine_code", "50111")), "connect_precheck")
             _disable_broker(self)
             return False
         result = bool(current(self, *args, **kwargs))
         if _is_quarantined():
-            _disable_broker(self)
-            return False
-        clients = [getattr(self, name, None) for name in ("account_api", "market_api", "rest_client", "_rest")]
-        if any(bool(getattr(client, "_nija_credentials_quarantined", False)) for client in clients if client is not None):
-            _publish_quarantine("50111", "connect_postcheck")
             _disable_broker(self)
             return False
         return result
@@ -171,16 +165,17 @@ def _watchdog() -> None:
 def install_import_hook() -> None:
     global _STARTED
     with _LOCK:
+        # Endpoint choice must be resolved before any authenticated OKX call.
+        from bot.okx_regional_endpoint_isolation_patch import install as install_endpoint
+        install_endpoint()
         _patch_loaded()
-        # Environment sentinel also covers duplicate module aliases.
-        if not _truthy("NIJA_SECONDARY_CREDENTIAL_QUARANTINE_WATCHDOG_STARTED"):
+        if not _STARTED:
             _STARTED = True
-            os.environ["NIJA_SECONDARY_CREDENTIAL_QUARANTINE_WATCHDOG_STARTED"] = "1"
             threading.Thread(target=_watchdog, name="SecondaryCredentialQuarantine", daemon=True).start()
         os.environ["NIJA_SECONDARY_CREDENTIAL_QUARANTINE_INSTALLED"] = "1"
         if not _truthy("NIJA_SECONDARY_CREDENTIAL_QUARANTINE_INSTALL_LOGGED"):
             os.environ["NIJA_SECONDARY_CREDENTIAL_QUARANTINE_INSTALL_LOGGED"] = "1"
-            logger.critical("SECONDARY_CREDENTIAL_QUARANTINE_INSTALLED marker=%s process_global=true", _MARKER)
+            logger.critical("SECONDARY_CREDENTIAL_QUARANTINE_INSTALLED marker=%s scope=okx_only", _MARKER)
 
 
 def install() -> None:
