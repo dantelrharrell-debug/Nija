@@ -2,10 +2,12 @@
 
 Selects exactly one OKX REST host before any private request. The patch is
 strictly OKX-local: it never mutates Coinbase, Kraken, global writer authority,
-or global trading state.
+or global trading state. Once broker classes are available it also installs the
+late broker convergence repairs that require those concrete classes.
 """
 from __future__ import annotations
 
+import importlib
 import logging
 import os
 import sys
@@ -14,14 +16,11 @@ from types import ModuleType
 from urllib.parse import urlparse
 
 logger = logging.getLogger("nija.okx_regional_endpoint")
-_MARKER = "20260718-okx-regional-endpoint-v2"
+_MARKER = "20260718-okx-regional-endpoint-v3"
 _LOCK = threading.RLock()
 _STARTED = False
-_ALLOWED = {
-    "www.okx.com",
-    "us.okx.com",
-    "eea.okx.com",
-}
+_CONVERGENCE_INSTALLED = False
+_ALLOWED = {"www.okx.com", "us.okx.com", "eea.okx.com"}
 _REGION_DEFAULTS = {
     "US": "https://us.okx.com",
     "USA": "https://us.okx.com",
@@ -38,46 +37,22 @@ def _clean(value: object) -> str:
 
 
 def resolve_okx_base_url() -> str:
-    """Resolve the OKX host with account region taking precedence.
-
-    NIJA's production account is U.S.-scoped, so an omitted region defaults to
-    the U.S. endpoint. A stale OKX_BASE_URL cannot override an explicit region.
-    """
-    region = _clean(
-        os.getenv("OKX_ACCOUNT_REGION") or os.getenv("OKX_REGION") or "US"
-    ).upper().replace("-", "_").replace(" ", "_")
+    """Resolve the OKX host with account region taking precedence."""
+    region = _clean(os.getenv("OKX_ACCOUNT_REGION") or os.getenv("OKX_REGION") or "US").upper().replace("-", "_").replace(" ", "_")
     explicit = _clean(os.getenv("OKX_BASE_URL"))
-
     if region not in _REGION_DEFAULTS:
-        raise RuntimeError(
-            f"unsupported OKX account region {region!r}; use US, EEA, or GLOBAL"
-        )
-
+        raise RuntimeError(f"unsupported OKX account region {region!r}; use US, EEA, or GLOBAL")
     regional_endpoint = _REGION_DEFAULTS[region]
-    selected = regional_endpoint
-
     if explicit:
         parsed_explicit = urlparse(explicit.rstrip("/"))
-        if (
-            parsed_explicit.scheme != "https"
-            or parsed_explicit.hostname not in _ALLOWED
-            or parsed_explicit.path not in ("", "/")
-        ):
-            raise RuntimeError(
-                "invalid OKX endpoint; use exactly https://us.okx.com, "
-                "https://eea.okx.com, or https://www.okx.com"
-            )
+        if parsed_explicit.scheme != "https" or parsed_explicit.hostname not in _ALLOWED or parsed_explicit.path not in ("", "/"):
+            raise RuntimeError("invalid OKX endpoint; use exactly https://us.okx.com, https://eea.okx.com, or https://www.okx.com")
         if explicit.rstrip("/") != regional_endpoint:
             logger.warning(
-                "OKX_ENDPOINT_REGION_MISMATCH_REPAIRED marker=%s region=%s "
-                "configured=%s selected=%s broker_scope=okx_only",
-                _MARKER,
-                region,
-                explicit.rstrip("/"),
-                regional_endpoint,
+                "OKX_ENDPOINT_REGION_MISMATCH_REPAIRED marker=%s region=%s configured=%s selected=%s broker_scope=okx_only",
+                _MARKER, region, explicit.rstrip("/"), regional_endpoint,
             )
-
-    return selected
+    return regional_endpoint
 
 
 def _patch_module(module: ModuleType) -> bool:
@@ -92,8 +67,7 @@ def _patch_module(module: ModuleType) -> bool:
     os.environ["NIJA_OKX_ENDPOINT_ISOLATED"] = "1"
     logger.critical(
         "OKX_REGIONAL_ENDPOINT_SELECTED marker=%s endpoint=%s broker_scope=okx_only fallback=false",
-        _MARKER,
-        endpoint,
+        _MARKER, endpoint,
     )
     return True
 
@@ -107,15 +81,40 @@ def _patch_loaded() -> bool:
     return ready
 
 
+def _install_convergence_repairs() -> bool:
+    """Install repairs that need concrete broker classes, exactly once."""
+    global _CONVERGENCE_INSTALLED
+    if _CONVERGENCE_INSTALLED:
+        return True
+    for name in (
+        "bot.coinbase_balance_auth_convergence_patch",
+        "bot.okx_order_wrapper_stability_patch",
+    ):
+        module = importlib.import_module(name)
+        installer = getattr(module, "install", None) or getattr(module, "install_import_hook", None)
+        if not callable(installer):
+            raise RuntimeError(f"{name} installer missing")
+        installer()
+    _CONVERGENCE_INSTALLED = True
+    os.environ["NIJA_LATE_BROKER_CONVERGENCE_INSTALLED"] = "1"
+    logger.critical(
+        "LATE_BROKER_CONVERGENCE_INSTALLED marker=%s coinbase_balance_auth=true okx_wrapper_stability=true",
+        _MARKER,
+    )
+    return True
+
+
 def _watchdog() -> None:
-    for _ in range(300):
+    for _ in range(600):
         try:
             if _patch_loaded():
+                _install_convergence_repairs()
                 os.environ["NIJA_OKX_REGIONAL_ENDPOINT_READY"] = "1"
                 return
         except Exception:
             logger.exception("OKX_REGIONAL_ENDPOINT_RETRY marker=%s", _MARKER)
         threading.Event().wait(0.2)
+    logger.critical("OKX_REGIONAL_ENDPOINT_WATCHDOG_EXHAUSTED marker=%s", _MARKER)
 
 
 def install() -> None:
@@ -126,14 +125,12 @@ def install() -> None:
             os.environ["OKX_ACCOUNT_REGION"] = "US"
         os.environ["OKX_BASE_URL"] = endpoint
         os.environ["NIJA_OKX_ENDPOINT_ISOLATED"] = "1"
-        _patch_loaded()
+        loaded = _patch_loaded()
+        if loaded:
+            _install_convergence_repairs()
         if not _STARTED:
             _STARTED = True
-            threading.Thread(
-                target=_watchdog,
-                name="OKXRegionalEndpoint",
-                daemon=True,
-            ).start()
+            threading.Thread(target=_watchdog, name="OKXRegionalEndpoint", daemon=True).start()
         os.environ["NIJA_OKX_REGIONAL_ENDPOINT_INSTALLED"] = "1"
 
 
