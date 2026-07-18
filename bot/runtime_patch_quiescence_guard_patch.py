@@ -1,31 +1,26 @@
-"""Quiesce legacy runtime patch watchdogs once canonical owners are installed.
+"""One-shot compatibility guard for NIJA runtime patch convergence.
 
-Several older watchdogs inspect only the outermost callable marker. When another
-legitimate wrapper sits above their marker they repeatedly wrap the same method,
-causing scan-chain growth, noisy logs, and occasional false readiness failures.
-This guard makes those checks chain-aware and delegates scan ownership to the
-20260714a canonical scan wrapper.
+The former implementation started another watchdog and import wrapper to control
+older watchdogs. That reduced churn but still left mutation threads alive. This
+module now delegates to ``final_runtime_cleanup_patch`` and exposes the legacy
+helper API without starting a thread of its own.
 """
 from __future__ import annotations
 
-import builtins
 import logging
 import sys
-import threading
-import time
 from types import ModuleType
-from typing import Any, Callable
+from typing import Any
 
 logger = logging.getLogger("nija.runtime_patch_quiescence")
-_MARKER = "20260716-runtime-patch-quiescence-v1"
-_LOCK = threading.RLock()
-_ORIGINAL_IMPORT: Callable[..., Any] | None = None
-_STARTED = False
+_MARKER = "20260717-runtime-patch-quiescence-v2"
+_INSTALLED = False
 
 _CANONICAL_SCAN_MARKERS = (
     "_nija_scan_wrapper_release",
     "_nija_scan_wrapper_canonical_h",
     "_nija_scan_wrapper_canonical_v2",
+    "_nija_final_runtime_frozen_20260717",
 )
 
 
@@ -66,6 +61,7 @@ def _mark_scan_compatibility(func: Any) -> None:
         "_nija_final_result_contract_e",
         "_nija_account_scan_serialized_e",
         "_nija_final_result_contract",
+        "_nija_final_runtime_frozen_20260717",
     ):
         try:
             setattr(func, attr, True)
@@ -78,7 +74,6 @@ def _guard_core_patcher(module: ModuleType, attr_name: str) -> bool:
     guard_attr = f"_nija_quiescence_guard_{attr_name}"
     if not callable(patcher) or getattr(patcher, guard_attr, False):
         return False
-
     original = patcher
 
     def guarded(target: ModuleType, *args: Any, **kwargs: Any) -> bool:
@@ -101,26 +96,12 @@ def _guard_final_okx_patcher(module: ModuleType) -> bool:
     original = patcher
 
     def guarded() -> bool:
-        missing = False
-        for module_name in (
-            "bot.broker_manager", "broker_manager",
-            "bot.broker_integration", "broker_integration",
-            "bot.multi_account_broker_manager", "multi_account_broker_manager",
-        ):
-            target = sys.modules.get(module_name)
-            if not isinstance(target, ModuleType):
-                continue
-            for class_name in dir(target):
-                cls = getattr(target, class_name, None)
-                if not isinstance(cls, type) or "okx" not in class_name.lower():
-                    continue
-                connect = getattr(cls, "connect", None)
-                if callable(connect) and not _chain_has(connect, "_nija_final_okx_endpoint_e"):
-                    missing = True
-                    break
-            if missing:
-                break
-        return bool(original()) if missing else False
+        try:
+            from bot.final_runtime_cleanup_patch import _okx_ready
+        except ImportError:
+            from final_runtime_cleanup_patch import _okx_ready  # type: ignore[import]
+        ready, _reason, _spendable = _okx_ready()
+        return bool(original()) if ready else False
 
     guarded._nija_quiescence_okx_guard = True  # type: ignore[attr-defined]
     guarded.__wrapped__ = original  # type: ignore[attr-defined]
@@ -130,80 +111,40 @@ def _guard_final_okx_patcher(module: ModuleType) -> bool:
 
 def _patch_loaded() -> bool:
     changed = False
-    with _LOCK:
-        canonical = sys.modules.get("scan_wrapper_convergence_repair_patch")
-        if not isinstance(canonical, ModuleType):
-            canonical = sys.modules.get("nija.scan_wrapper_convergence_repair_patch")
-        if isinstance(canonical, ModuleType):
-            patch_loaded = getattr(canonical, "_patch_loaded", None)
-            if callable(patch_loaded):
-                try:
-                    patch_loaded()
-                except Exception:
-                    logger.debug("Canonical scan collapse deferred", exc_info=True)
-
-        for name in ("runtime_convergence_v2_patch", "nija.runtime_convergence_v2_patch"):
-            module = sys.modules.get(name)
-            if isinstance(module, ModuleType):
-                changed = _guard_core_patcher(module, "_patch_core_loop") or changed
-
-        for name in ("final_runtime_convergence_patch", "nija.final_runtime_convergence_patch"):
-            module = sys.modules.get(name)
-            if isinstance(module, ModuleType):
-                changed = _guard_core_patcher(module, "_patch_core_loop") or changed
-                changed = _guard_final_okx_patcher(module) or changed
-
-        for name in ("bot.nija_core_loop", "nija_core_loop"):
-            module = sys.modules.get(name)
-            if isinstance(module, ModuleType):
-                method = _core_method(module)
-                if callable(method) and _has_canonical_scan_owner(method):
-                    _mark_scan_compatibility(method)
+    for name in ("runtime_convergence_v2_patch", "nija.runtime_convergence_v2_patch"):
+        module = sys.modules.get(name)
+        if isinstance(module, ModuleType):
+            changed = _guard_core_patcher(module, "_patch_core_loop") or changed
+    for name in ("final_runtime_convergence_patch", "nija.final_runtime_convergence_patch"):
+        module = sys.modules.get(name)
+        if isinstance(module, ModuleType):
+            changed = _guard_core_patcher(module, "_patch_core_loop") or changed
+            changed = _guard_final_okx_patcher(module) or changed
+    for name in ("bot.nija_core_loop", "nija_core_loop"):
+        module = sys.modules.get(name)
+        if isinstance(module, ModuleType):
+            method = _core_method(module)
+            if callable(method) and _has_canonical_scan_owner(method):
+                _mark_scan_compatibility(method)
+    try:
+        from bot.final_runtime_cleanup_patch import _patch_loaded as final_patch_loaded
+    except ImportError:
+        from final_runtime_cleanup_patch import _patch_loaded as final_patch_loaded  # type: ignore[import]
+    final_patch_loaded()
     return changed
 
 
-def _watchdog() -> None:
-    deadline = time.monotonic() + 120.0
-    while time.monotonic() < deadline:
-        try:
-            _patch_loaded()
-        except Exception:
-            logger.debug("Runtime patch quiescence retry", exc_info=True)
-        time.sleep(0.5)
-
-
 def install_import_hook() -> None:
-    global _ORIGINAL_IMPORT, _STARTED
+    global _INSTALLED
+    try:
+        from bot.final_runtime_cleanup_patch import install_import_hook as install_final
+    except ImportError:
+        from final_runtime_cleanup_patch import install_import_hook as install_final  # type: ignore[import]
+    install_final()
     _patch_loaded()
-    if not getattr(builtins, "_NIJA_RUNTIME_PATCH_QUIESCENCE_IMPORT_HOOK", False):
-        _ORIGINAL_IMPORT = builtins.__import__
-
-        def guarded_import(name: str, globals=None, locals=None, fromlist=(), level: int = 0):
-            module = _ORIGINAL_IMPORT(name, globals, locals, fromlist, level)  # type: ignore[misc]
-            if name.endswith((
-                "runtime_convergence_v2_patch",
-                "final_runtime_convergence_patch",
-                "scan_wrapper_convergence_repair_patch",
-                "nija_core_loop",
-            )):
-                try:
-                    _patch_loaded()
-                except Exception:
-                    logger.debug("Import-time quiescence deferred", exc_info=True)
-            return module
-
-        builtins.__import__ = guarded_import
-        setattr(builtins, "_NIJA_RUNTIME_PATCH_QUIESCENCE_IMPORT_HOOK", True)
-
-    if not _STARTED:
-        _STARTED = True
-        threading.Thread(
-            target=_watchdog,
-            name="RuntimePatchQuiescenceGuard",
-            daemon=True,
-        ).start()
+    _INSTALLED = True
     logger.critical(
-        "RUNTIME_PATCH_QUIESCENCE_GUARD_INSTALLED marker=%s canonical_scan_owner=true chain_aware=true",
+        "RUNTIME_PATCH_QUIESCENCE_GUARD_INSTALLED marker=%s canonical_scan_owner=true legacy_watchdogs=disabled background_thread=false",
         _MARKER,
     )
 
@@ -212,4 +153,16 @@ def install() -> None:
     install_import_hook()
 
 
-__all__ = ["install", "install_import_hook", "_patch_loaded", "_chain_has"]
+def installed() -> bool:
+    return _INSTALLED
+
+
+__all__ = [
+    "install",
+    "install_import_hook",
+    "installed",
+    "_patch_loaded",
+    "_chain_has",
+    "_guard_core_patcher",
+    "_guard_final_okx_patcher",
+]
