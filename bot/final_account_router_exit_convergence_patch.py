@@ -7,22 +7,20 @@ broker authentication, or relax risk controls. It repairs four runtime contracts
 * Exactly one exit-only worker may own an account/broker identity per process.
 * Independent user accounts retain ``user_mode=True``; copy-trading being disabled
   must not convert a user account into platform mode.
-* Held-position adoption performs exchange synchronization before exit management,
-  so unverified zero-entry snapshots cannot immediately drive automated exits.
+* Held-position adoption performs exchange synchronization and cost-basis verification
+  before any automated exit cycle can run.
 """
 from __future__ import annotations
 
 import importlib
 import logging
 import os
-import sys
 import threading
 from functools import wraps
-from types import ModuleType
-from typing import Any, Callable
+from typing import Any
 
 logger = logging.getLogger("nija.final_account_router_exit_convergence")
-_MARKER = "20260718-final-account-router-exit-v1"
+_MARKER = "20260718-final-account-router-exit-v2"
 _LOCK = threading.RLock()
 _INSTALLED = False
 _EXIT_REGISTRY_LOCK = threading.RLock()
@@ -47,15 +45,17 @@ def _patch_okx_router() -> bool:
 def _patch_venue_readiness() -> bool:
     module = importlib.import_module("venue_readiness_execution_repair_patch")
     current = getattr(module, "_bind_okx_bridge_once", None)
-    if not callable(current) or getattr(current, "_nija_require_okx_router_v1", False):
-        return bool(current)
+    if not callable(current):
+        return False
+    if getattr(current, "_nija_require_okx_router_v2", False):
+        return _patch_okx_router()
 
     @wraps(current)
     def bind() -> bool:
         current()
         return _patch_okx_router()
 
-    bind._nija_require_okx_router_v1 = True  # type: ignore[attr-defined]
+    bind._nija_require_okx_router_v2 = True  # type: ignore[attr-defined]
     bind.__wrapped__ = current  # type: ignore[attr-defined]
     module._bind_okx_bridge_once = bind
     return bind()
@@ -68,8 +68,10 @@ def _thread_alive(thread: Any) -> bool:
 def _patch_exit_worker_ownership() -> bool:
     module = importlib.import_module("account_exit_management_recovery_patch")
     current = getattr(module, "_ensure_exit_thread", None)
-    if not callable(current) or getattr(current, "_nija_global_exit_owner_v1", False):
-        return bool(current)
+    if not callable(current):
+        return False
+    if getattr(current, "_nija_global_exit_owner_v2", False):
+        return True
 
     @wraps(current)
     def ensure(trader: Any, identity: str, scope: str, user_id: Any, broker_type: Any, broker: Any) -> bool:
@@ -90,7 +92,7 @@ def _patch_exit_worker_ownership() -> bool:
                 logger.critical("ACCOUNT_EXIT_WORKER_SINGLETON_ACQUIRED marker=%s account=%s thread=%s", _MARKER, identity, thread.ident)
             return created
 
-    ensure._nija_global_exit_owner_v1 = True  # type: ignore[attr-defined]
+    ensure._nija_global_exit_owner_v2 = True  # type: ignore[attr-defined]
     ensure.__wrapped__ = current  # type: ignore[attr-defined]
     module._ensure_exit_thread = ensure
     return True
@@ -99,19 +101,20 @@ def _patch_exit_worker_ownership() -> bool:
 def _patch_user_mode() -> bool:
     module = importlib.import_module("bot.trade_cycle_convergence_repair_patch")
     current = getattr(module, "_truthy", None)
-    if not callable(current) or getattr(current, "_nija_user_mode_truth_v1", False):
-        return bool(current)
+    if not callable(current):
+        return False
+    if getattr(current, "_nija_user_mode_truth_v2", False):
+        return True
 
     @wraps(current)
     def truthy(name: str, default: bool = False) -> bool:
-        # The only use of this value in cycle convergence is an inverted legacy
-        # branch that demotes user_mode when independent user trading is enabled.
-        # Return False here so that branch cannot convert a user account to platform.
+        # Prevent the inverted legacy branch in cycle convergence from demoting
+        # an independent user account to platform mode.
         if name == "NIJA_INDEPENDENT_USER_TRADING":
             return False
         return bool(current(name, default))
 
-    truthy._nija_user_mode_truth_v1 = True  # type: ignore[attr-defined]
+    truthy._nija_user_mode_truth_v2 = True  # type: ignore[attr-defined]
     truthy.__wrapped__ = current  # type: ignore[attr-defined]
     module._truthy = truthy
     os.environ["NIJA_USER_MODE_CONVERGENCE_INSTALLED"] = "1"
@@ -122,36 +125,65 @@ def _patch_user_mode() -> bool:
 def _patch_adoption_sync() -> bool:
     module = importlib.import_module("account_exit_management_recovery_patch")
     current = getattr(module, "_adopt_and_manage", None)
-    if not callable(current) or getattr(current, "_nija_verified_adoption_sync_v1", False):
-        return bool(current)
+    if not callable(current):
+        return False
+    if getattr(current, "_nija_verified_adoption_sync_v2", False):
+        return True
 
     @wraps(current)
     def adopt_and_manage(trader: Any, identity: str, broker: Any):
         strategy = getattr(trader, "trading_strategy", None)
-        if strategy is not None:
+        if strategy is None:
+            return current(trader, identity, broker)
+
+        try:
+            setattr(strategy, "broker", broker)
+            sync = importlib.import_module("bot.startup_position_sync")
+            sync_fn = getattr(sync, "sync_exchange_positions_on_startup", None)
+            if callable(sync_fn):
+                sync_fn(strategy)
+        except Exception as exc:
+            logger.warning("PRE_ADOPTION_POSITION_SYNC_FAILED marker=%s account=%s error=%s", _MARKER, identity, exc)
+
+        original_run_cycle = getattr(strategy, "run_cycle", None)
+        deferred_calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+
+        def defer_cycle(*args: Any, **kwargs: Any) -> int:
+            deferred_calls.append((args, kwargs))
+            logger.info("POSITION_EXIT_CYCLE_DEFERRED marker=%s account=%s reason=awaiting_cost_basis_verification", _MARKER, identity)
+            return 0
+
+        if callable(original_run_cycle):
+            strategy.run_cycle = defer_cycle
+        try:
+            result = current(trader, identity, broker)
+        finally:
+            if callable(original_run_cycle):
+                strategy.run_cycle = original_run_cycle
+
+        verifier = getattr(strategy, "verify_position_adoption_status", None)
+        verified = False
+        if callable(verifier):
             try:
-                setattr(strategy, "broker", broker)
-                sync = importlib.import_module("bot.startup_position_sync")
-                sync_fn = getattr(sync, "sync_exchange_positions_on_startup", None)
-                if callable(sync_fn):
-                    sync_fn(strategy)
+                verified = bool(verifier(
+                    broker=broker,
+                    broker_name=identity,
+                    account_id=identity.upper().replace(':', '_'),
+                ))
             except Exception as exc:
-                logger.warning("PRE_ADOPTION_POSITION_SYNC_FAILED marker=%s account=%s error=%s", _MARKER, identity, exc)
-        result = current(trader, identity, broker)
-        if strategy is not None:
-            verifier = getattr(strategy, "verify_position_adoption_status", None)
-            if callable(verifier):
-                try:
-                    verified = bool(verifier(broker=broker, broker_name=identity, account_id=identity.upper().replace(':', '_')))
-                except Exception:
-                    verified = False
-                if not verified:
-                    logger.error("UNVERIFIED_POSITION_EXIT_CYCLE_BLOCKED marker=%s account=%s", _MARKER, identity)
-                    return result
-                logger.critical("POSITION_COST_BASIS_VERIFIED_BEFORE_EXIT marker=%s account=%s", _MARKER, identity)
+                logger.warning("POSITION_COST_BASIS_VERIFY_FAILED marker=%s account=%s error=%s", _MARKER, identity, exc)
+
+        if not verified:
+            logger.error("UNVERIFIED_POSITION_EXIT_CYCLE_BLOCKED marker=%s account=%s deferred_cycles=%d", _MARKER, identity, len(deferred_calls))
+            return result
+
+        logger.critical("POSITION_COST_BASIS_VERIFIED_BEFORE_EXIT marker=%s account=%s deferred_cycles=%d", _MARKER, identity, len(deferred_calls))
+        if callable(original_run_cycle):
+            for args, kwargs in deferred_calls[:1]:
+                original_run_cycle(*args, **kwargs)
         return result
 
-    adopt_and_manage._nija_verified_adoption_sync_v1 = True  # type: ignore[attr-defined]
+    adopt_and_manage._nija_verified_adoption_sync_v2 = True  # type: ignore[attr-defined]
     adopt_and_manage.__wrapped__ = current  # type: ignore[attr-defined]
     module._adopt_and_manage = adopt_and_manage
     return True
