@@ -121,6 +121,175 @@ Rules:
 
 ---
 
+## Connect Coinbase Correctly
+
+NIJA connects to the Coinbase **Advanced Trade API** using a Coinbase Developer Platform secret API key. The Advanced Trade base endpoint is:
+
+```text
+https://api.coinbase.com/api/v3/brokerage
+```
+
+### 1. Create the correct Coinbase key
+
+1. Sign in to the Coinbase Developer Platform.
+2. Open **API Keys** and choose **Secret API Keys**.
+3. Create a new key specifically for NIJA.
+4. Under advanced settings, select **ECDSA / ES256** as the signature algorithm.
+5. Enable these permissions:
+   - **View** — required for balances, products, orders, fills, and permission checks.
+   - **Trade** — required for buy, sell, cancel, and close orders.
+6. Leave **Transfer** disabled. NIJA does not need withdrawal or external-transfer authority to trade.
+7. Restrict the key to the Coinbase portfolio NIJA should trade, when applicable.
+8. Save both values shown during creation:
+   - API key name, formatted like `organizations/{organization_id}/apiKeys/{key_id}`.
+   - EC private key, including the `BEGIN` and `END` lines.
+
+Do not select an Ed25519 key for this Coinbase App / Advanced Trade connection. Coinbase requires ECDSA for this authentication path.
+
+### 2. Set the production variables
+
+Add these variables to the backend service in Railway or Render. Never place them in the mobile application or commit them to GitHub.
+
+```bash
+COINBASE_API_KEY=organizations/ORG_ID/apiKeys/KEY_ID
+COINBASE_API_SECRET="-----BEGIN EC PRIVATE KEY-----
+YOUR_PRIVATE_KEY_BODY
+-----END EC PRIVATE KEY-----"
+```
+
+NIJA also accepts these aliases, but the canonical variables above should be used for the platform account:
+
+```text
+COINBASE_PLATFORM_API_KEY
+COINBASE_PLATFORM_API_SECRET
+COINBASE_CDP_API_KEY
+COINBASE_CDP_API_SECRET
+CDP_API_KEY_NAME
+CDP_API_KEY_PRIVATE_KEY
+```
+
+Do not set conflicting values under multiple aliases. A stale `COINBASE_API_SECRET` takes precedence over later aliases and can keep Coinbase disconnected even when another alias contains a valid key.
+
+### 3. Preserve the PEM private key
+
+The secret must retain this structure:
+
+```text
+-----BEGIN EC PRIVATE KEY-----
+base64-key-material
+-----END EC PRIVATE KEY-----
+```
+
+Preferred deployment method:
+
+- Paste the secret as a multi-line value with real line breaks.
+- Do not add spaces before the `BEGIN` or `END` lines.
+- Do not remove either boundary line.
+- Do not paste the entire downloaded JSON file into `COINBASE_API_SECRET` unless the runtime normalization layer is intentionally being used.
+- Do not wrap the value in extra quote characters in the deployment dashboard.
+
+NIJA's authentication normalizer can repair escaped `\n` sequences and supported Coinbase JSON key payloads, but correctly formatted multi-line PEM is the safest production configuration.
+
+### 4. Configure an IP allowlist carefully
+
+Coinbase supports IP allowlisting. Only enable it after confirming the backend has a stable outbound IP.
+
+- A normal Railway or Render deployment may use changing outbound addresses unless static egress is configured.
+- Adding the wrong address can cause authentication failures even when the key and secret are correct.
+- Never add a phone, home Wi-Fi, or mobile-app IP as the backend trading server address.
+
+### 5. Redeploy cleanly
+
+After changing Coinbase credentials:
+
+1. Remove obsolete Coinbase credential variables.
+2. Confirm only one key name and one matching private key are active.
+3. Save the variables.
+4. Redeploy the NIJA backend.
+5. Do not expose or print the full private key in logs.
+
+### 6. Verify permissions and connectivity
+
+Run the repository credential checks from a secure backend shell:
+
+```bash
+python validate_broker_credentials.py
+python validate_broker_credentials.py --test-connections
+python scripts/auth_sanity.py
+```
+
+A valid key must report at least:
+
+```text
+can_view=true
+can_trade=true
+```
+
+`can_transfer` is not required and should normally remain false.
+
+The authenticated permission endpoint used by Coinbase is:
+
+```text
+GET /api/v3/brokerage/key_permissions
+```
+
+### 7. Expected NIJA startup evidence
+
+Healthy startup should show Coinbase credential normalization followed by a successful account or balance response. Useful markers include:
+
+```text
+COINBASE_AUTH_NORMALIZED
+pem_ok=True
+COINBASE_CONNECTION_SUCCESS
+```
+
+The exact success wording can vary by broker adapter. The required operational result is:
+
+```text
+Coinbase connected
+balance observed
+can_view=true
+can_trade=true
+trading_ready=true
+```
+
+Never treat `COINBASE_AUTH_NORMALIZED` by itself as proof of a live connection. It only confirms that NIJA found and formatted the credential variables.
+
+### Coinbase troubleshooting
+
+#### `401 Unauthorized`
+
+Check all of the following:
+
+- The API key name begins with `organizations/` and contains `/apiKeys/`.
+- The private key belongs to that exact key name.
+- The key was created with ECDSA / ES256.
+- The PEM includes real boundary lines and valid key material.
+- No old `COINBASE_API_SECRET` is overriding a valid alias.
+- The server clock is accurate because Coinbase JWTs are time-limited.
+- The IP allowlist includes the backend's actual stable outbound IP, or the allowlist is removed while diagnosing.
+
+If the private key was lost or copied incorrectly, delete the Coinbase key and create a new one. Coinbase does not provide the private key again after creation.
+
+#### Connected but no orders can be placed
+
+- Verify `can_trade=true` through `/api/v3/brokerage/key_permissions`.
+- Confirm the key is attached to the funded portfolio.
+- Confirm the available quote-currency balance meets NIJA and Coinbase minimums.
+- Confirm NIJA is not in paper, dry-run, paused, quarantine, or exit-only mode.
+
+#### Balance is missing or belongs to the wrong portfolio
+
+Set the intended portfolio when NIJA's deployment uses portfolio routing:
+
+```bash
+COINBASE_RETAIL_PORTFOLIO_ID=YOUR_PORTFOLIO_UUID
+```
+
+Then redeploy and verify that the observed balance belongs to that portfolio before enabling execution.
+
+---
+
 ## Apple And Google Readiness
 
 NIJA is being structured for future release on:
