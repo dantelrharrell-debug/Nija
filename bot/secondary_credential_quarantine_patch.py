@@ -1,9 +1,8 @@
 """Quarantine secondary venues after definitive credential rejection.
 
-Fatal OKX credential responses are process-global facts, not per-client state.
-Once observed, all private requests and connection attempts are blocked until a
-new deployment starts with replacement credentials. Healthy brokers continue
-independently.
+Fatal OKX credential responses are process-global facts. Once observed, all
+private requests and connection attempts are blocked until a new deployment
+starts with replacement credentials. Healthy brokers continue independently.
 """
 from __future__ import annotations
 
@@ -16,11 +15,10 @@ from types import ModuleType
 from typing import Any
 
 logger = logging.getLogger("nija.secondary_credential_quarantine")
-_MARKER = "20260717-secondary-credential-quarantine-v2"
-_ATTR = "_nija_secondary_credential_quarantine_v2"
+_MARKER = "20260718-secondary-credential-quarantine-v3"
+_ATTR = "_nija_secondary_credential_quarantine_v3"
 _LOCK = threading.RLock()
 _STARTED = False
-_LOGGED = False
 _FATAL_CODES = {"50100", "50101", "50111", "50112", "50113", "50119"}
 _TRUE = {"1", "true", "yes", "on", "enabled", "y"}
 
@@ -41,7 +39,6 @@ def _is_quarantined() -> bool:
 
 
 def _publish_quarantine(code: str, path: str) -> None:
-    global _LOGGED
     os.environ["NIJA_OKX_CREDENTIALS_QUARANTINED"] = "1"
     os.environ["NIJA_OKX_CREDENTIAL_QUARANTINE_CODE"] = str(code or "50111")
     os.environ["NIJA_OKX_ACTIVATION_STATE"] = "credential_quarantined"
@@ -51,14 +48,15 @@ def _publish_quarantine(code: str, path: str) -> None:
     os.environ["NIJA_OKX_ENTRY_ISOLATED"] = "1"
     os.environ["OKX_DISABLE_ENDPOINT_FALLBACK"] = "true"
     os.environ["NIJA_OKX_RECONNECT_DISABLED"] = "1"
-    if not _LOGGED:
-        _LOGGED = True
+
+    # Environment state is shared even when this file is imported under both
+    # package and top-level aliases. This prevents duplicate CRITICAL records.
+    if not _truthy("NIJA_OKX_QUARANTINE_LOGGED"):
+        os.environ["NIJA_OKX_QUARANTINE_LOGGED"] = "1"
         logger.critical(
             "SECONDARY_CREDENTIALS_QUARANTINED marker=%s venue=okx code=%s path=%s "
             "action=isolate_until_credentials_replaced retries_disabled=true endpoint_fallback_disabled=true",
-            _MARKER,
-            code,
-            path,
+            _MARKER, code, path,
         )
 
 
@@ -101,11 +99,8 @@ def _patch_rest(module: ModuleType) -> bool:
 
 def _disable_broker(self: Any) -> None:
     for attr, value in (
-        ("connected", False),
-        ("_is_available", False),
-        ("trading_ready", False),
-        ("_auth_failed", True),
-        ("_nija_credentials_quarantined", True),
+        ("connected", False), ("_is_available", False), ("trading_ready", False),
+        ("_auth_failed", True), ("_nija_credentials_quarantined", True),
     ):
         try:
             setattr(self, attr, value)
@@ -127,11 +122,12 @@ def _patch_broker(module: ModuleType) -> bool:
             _disable_broker(self)
             return False
         clients = [getattr(self, name, None) for name in ("account_api", "market_api", "rest_client", "_rest")]
-        if any(bool(getattr(client, "_nija_credentials_quarantined", False)) for client in clients if client is not None):
-            _publish_quarantine(
-                str(next((getattr(client, "_nija_credentials_quarantine_code", "50111") for client in clients if client is not None), "50111")),
-                "connect_precheck",
-            )
+        quarantined = next(
+            (client for client in clients if client is not None and bool(getattr(client, "_nija_credentials_quarantined", False))),
+            None,
+        )
+        if quarantined is not None:
+            _publish_quarantine(str(getattr(quarantined, "_nija_credentials_quarantine_code", "50111")), "connect_precheck")
             _disable_broker(self)
             return False
         result = bool(current(self, *args, **kwargs))
@@ -176,11 +172,15 @@ def install_import_hook() -> None:
     global _STARTED
     with _LOCK:
         _patch_loaded()
-        if not _STARTED:
+        # Environment sentinel also covers duplicate module aliases.
+        if not _truthy("NIJA_SECONDARY_CREDENTIAL_QUARANTINE_WATCHDOG_STARTED"):
             _STARTED = True
+            os.environ["NIJA_SECONDARY_CREDENTIAL_QUARANTINE_WATCHDOG_STARTED"] = "1"
             threading.Thread(target=_watchdog, name="SecondaryCredentialQuarantine", daemon=True).start()
         os.environ["NIJA_SECONDARY_CREDENTIAL_QUARANTINE_INSTALLED"] = "1"
-        logger.critical("SECONDARY_CREDENTIAL_QUARANTINE_INSTALLED marker=%s process_global=true", _MARKER)
+        if not _truthy("NIJA_SECONDARY_CREDENTIAL_QUARANTINE_INSTALL_LOGGED"):
+            os.environ["NIJA_SECONDARY_CREDENTIAL_QUARANTINE_INSTALL_LOGGED"] = "1"
+            logger.critical("SECONDARY_CREDENTIAL_QUARANTINE_INSTALLED marker=%s process_global=true", _MARKER)
 
 
 def install() -> None:
@@ -188,11 +188,6 @@ def install() -> None:
 
 
 __all__ = [
-    "install",
-    "install_import_hook",
-    "_fatal_code",
-    "_patch_rest",
-    "_patch_broker",
-    "_is_quarantined",
-    "_publish_quarantine",
+    "install", "install_import_hook", "_fatal_code", "_patch_rest", "_patch_broker",
+    "_is_quarantined", "_publish_quarantine", "_quarantined_payload",
 ]
