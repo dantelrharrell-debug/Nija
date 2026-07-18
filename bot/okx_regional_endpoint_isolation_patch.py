@@ -16,7 +16,7 @@ from types import ModuleType
 from urllib.parse import urlparse
 
 logger = logging.getLogger("nija.okx_regional_endpoint")
-_MARKER = "20260718-okx-regional-endpoint-v4"
+_MARKER = "20260718-okx-regional-endpoint-v5"
 _LOCK = threading.RLock()
 _STARTED = False
 _CONVERGENCE_INSTALLED = False
@@ -37,7 +37,6 @@ def _clean(value: object) -> str:
 
 
 def resolve_okx_base_url() -> str:
-    """Resolve the OKX host with account region taking precedence."""
     region = _clean(os.getenv("OKX_ACCOUNT_REGION") or os.getenv("OKX_REGION") or "US").upper().replace("-", "_").replace(" ", "_")
     explicit = _clean(os.getenv("OKX_BASE_URL"))
     if region not in _REGION_DEFAULTS:
@@ -65,10 +64,7 @@ def _patch_module(module: ModuleType) -> bool:
     os.environ["OKX_BASE_URL"] = endpoint
     os.environ["NIJA_OKX_ENDPOINT_SELECTED"] = endpoint
     os.environ["NIJA_OKX_ENDPOINT_ISOLATED"] = "1"
-    logger.critical(
-        "OKX_REGIONAL_ENDPOINT_SELECTED marker=%s endpoint=%s broker_scope=okx_only fallback=false",
-        _MARKER, endpoint,
-    )
+    logger.critical("OKX_REGIONAL_ENDPOINT_SELECTED marker=%s endpoint=%s broker_scope=okx_only fallback=false", _MARKER, endpoint)
     return True
 
 
@@ -82,7 +78,6 @@ def _patch_loaded() -> bool:
 
 
 def _install_convergence_repairs() -> bool:
-    """Install repairs that need concrete broker/router classes, exactly once."""
     global _CONVERGENCE_INSTALLED
     if _CONVERGENCE_INSTALLED:
         return True
@@ -91,6 +86,7 @@ def _install_convergence_repairs() -> bool:
         "bot.coinbase_balance_auth_convergence_patch",
         "bot.okx_order_wrapper_stability_patch",
         "bot.final_account_router_exit_convergence_patch",
+        "bot.platform_recovery_and_coinbase_balance_convergence_patch",
     ):
         module = importlib.import_module(name)
         installer = getattr(module, "install", None) or getattr(module, "install_import_hook", None)
@@ -101,9 +97,8 @@ def _install_convergence_repairs() -> bool:
     _CONVERGENCE_INSTALLED = True
     os.environ["NIJA_LATE_BROKER_CONVERGENCE_INSTALLED"] = "1"
     logger.critical(
-        "LATE_BROKER_CONVERGENCE_INSTALLED marker=%s coinbase_balance_auth=true okx_wrapper_stability=true final_account_router_exit=true modules=%s",
-        _MARKER,
-        ",".join(installed),
+        "LATE_BROKER_CONVERGENCE_INSTALLED marker=%s coinbase_balance_auth=true okx_wrapper_stability=true final_account_router_exit=true platform_recovery_coinbase_balance=true modules=%s",
+        _MARKER, ",".join(installed),
     )
     return True
 
