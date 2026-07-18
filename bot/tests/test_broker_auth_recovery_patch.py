@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import importlib
 import importlib.util
 import os
 from pathlib import Path
@@ -31,9 +32,16 @@ def clean_broker_env(monkeypatch):
         "OKX_BASE_URL", "OKX_API_BASE_URL", "OKX_ENDPOINT",
         "OKX_REGION", "OKX_ACCOUNT_REGION", "OKX_US_REGION",
         "OKX_SIMULATED_TRADING", "OKX_DISABLE_ENDPOINT_FALLBACK",
+        "NIJA_OKX_CREDENTIALS_QUARANTINED", "NIJA_OKX_RECONNECT_DISABLED",
+        "NIJA_BROKER_AUTH_RECOVERY_INSTALLED",
     )
     for name in names:
         monkeypatch.delenv(name, raising=False)
+
+    state = patch._state()
+    state.normalized_signatures.clear()
+    state.suppressed_logged = False
+    state.fallback_attempted.clear()
 
 
 def test_coinbase_extracts_json_escaped_private_key(monkeypatch):
@@ -68,9 +76,6 @@ def test_coinbase_stale_primary_secret_can_fall_back_to_valid_alias(monkeypatch)
         "-----BEGIN EC PRIVATE KEY-----\\nQUJDRA==\\n-----END EC PRIVATE KEY-----",
     )
 
-    # Current precedence intentionally retains the first non-empty secret. This
-    # test documents fail-closed behavior: malformed primary values are not
-    # silently replaced unless operators remove them.
     assert patch.normalize_coinbase_environment() is False
 
 
@@ -98,7 +103,48 @@ def test_okx_explicit_api_base_url_wins(monkeypatch):
     assert os.environ["OKX_BASE_URL"] == "https://www.okx.com"
 
 
-def test_okx_endpoint_fallback_is_bounded():
+def test_okx_endpoint_fallback_is_bounded(monkeypatch):
     assert patch._alternate_okx_url("https://us.okx.com") == "https://www.okx.com"
     assert patch._alternate_okx_url("https://www.okx.com") == "https://us.okx.com"
     assert patch._alternate_okx_url("https://example.invalid") == ""
+
+    monkeypatch.setenv("OKX_DISABLE_ENDPOINT_FALLBACK", "true")
+    assert patch._alternate_okx_url("https://www.okx.com") == ""
+
+
+def test_okx_quarantine_is_terminal_before_normalization(monkeypatch):
+    monkeypatch.setenv("OKX_API_KEY", "key")
+    monkeypatch.setenv("OKX_API_SECRET", "secret")
+    monkeypatch.setenv("OKX_PASSPHRASE", "passphrase")
+    monkeypatch.setenv("OKX_BASE_URL", "https://www.okx.com")
+    monkeypatch.setenv("NIJA_OKX_CREDENTIALS_QUARANTINED", "1")
+
+    assert patch.normalize_okx_environment() is False
+    assert patch._alternate_okx_url("https://www.okx.com") == ""
+
+
+def test_process_state_is_shared_across_module_aliases():
+    spec = importlib.util.spec_from_file_location(
+        "broker_auth_recovery_patch_second_alias",
+        ROOT / "broker_auth_recovery_patch.py",
+    )
+    assert spec and spec.loader
+    second = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(second)
+
+    assert second._state() is patch._state()
+
+
+def test_install_is_process_global(monkeypatch):
+    original = importlib.import_module
+    try:
+        patch.install()
+        first_wrapper = importlib.import_module
+        patch.install()
+        assert importlib.import_module is first_wrapper
+        assert os.environ["NIJA_BROKER_AUTH_RECOVERY_INSTALLED"] == "1"
+    finally:
+        state = patch._state()
+        importlib.import_module = state.original_import or original
+        state.import_hook_installed = False
+        state.original_import = None
