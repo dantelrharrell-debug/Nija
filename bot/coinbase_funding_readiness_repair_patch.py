@@ -1,9 +1,8 @@
 """Canonical Coinbase credential, connection, and funding readiness.
 
-The guard keeps Coinbase broker-local and fail-closed. It normalizes CDP credentials
-from nested JSON, escaped PEM, and padded/unpadded base64 forms; patches every
-Coinbase broker surface NIJA loads; and publishes spendable USD/USDC only after an
-authenticated connection and balance probe succeed.
+The guard keeps Coinbase broker-local and fail-closed. It normalizes CDP credentials,
+patches Coinbase broker surfaces, publishes spendable quote after authenticated probes,
+and emits state-change telemetry instead of recursive duplicate log bursts.
 """
 from __future__ import annotations
 
@@ -20,11 +19,13 @@ from types import ModuleType
 from typing import Any, Mapping
 
 logger = logging.getLogger("nija.coinbase_funding_readiness_repair")
-_MARKER = "20260716-coinbase-connection-v2"
+_MARKER = "20260718-coinbase-connection-v3"
 _LOCK = threading.RLock()
 _INSTALLED = False
 _ORIGINAL_IMPORT = None
-_PATCH_ATTR = "_nija_coinbase_connection_funding_v2"
+_PATCH_ATTR = "_nija_coinbase_connection_funding_v3"
+_LAST_CREDENTIAL_SIGNATURE: tuple[Any, ...] | None = None
+_LAST_CONNECTION_SIGNATURE: tuple[Any, ...] | None = None
 
 
 def _clean(value: Any) -> str:
@@ -89,17 +90,23 @@ def _normalise_private_key(value: Any) -> str:
     return f"-----BEGIN {match.group('label')}-----\n{wrapped}\n-----END {match.group('label')}-----\n"
 
 
+def _publish_ready(spendable: float) -> None:
+    os.environ["NIJA_COINBASE_CONNECTED"] = "1"
+    os.environ["NIJA_COINBASE_BALANCE_OBSERVED"] = "1"
+    os.environ["NIJA_COINBASE_SPENDABLE_QUOTE"] = f"{max(0.0, spendable):.8f}"
+    os.environ["NIJA_COINBASE_FUNDING_STATUS"] = "funded" if spendable > 0 else "observed_zero"
+    os.environ["NIJA_COINBASE_TRADING_READY"] = "1" if spendable > 0 else "0"
+    os.environ["NIJA_COINBASE_ACTIVATED"] = "1" if spendable > 0 else "0"
+    os.environ["NIJA_COINBASE_ACTIVATION_STATE"] = "ready" if spendable > 0 else "observed_zero"
+
+
 def recover_coinbase_environment() -> bool:
+    global _LAST_CREDENTIAL_SIGNATURE
     payload: dict[str, Any] = {}
     payload_source = "none"
     for name in (
-        "COINBASE_CDP_CREDENTIALS",
-        "COINBASE_CREDENTIALS_JSON",
-        "COINBASE_API_CREDENTIALS",
-        "COINBASE_API_KEY",
-        "COINBASE_API_SECRET",
-        "COINBASE_PEM_CONTENT",
-        "CDP_API_KEY_PRIVATE_KEY",
+        "COINBASE_CDP_CREDENTIALS", "COINBASE_CREDENTIALS_JSON", "COINBASE_API_CREDENTIALS",
+        "COINBASE_API_KEY", "COINBASE_API_SECRET", "COINBASE_PEM_CONTENT", "CDP_API_KEY_PRIVATE_KEY",
     ):
         candidate = _json_dict(os.environ.get(name))
         if candidate:
@@ -109,7 +116,6 @@ def recover_coinbase_environment() -> bool:
 
     key = _first_nested(payload, ("name", "apiKeyName", "api_key_name", "apiKey", "api_key", "key_name"))
     secret = _first_nested(payload, ("privateKey", "private_key", "apiSecret", "api_secret", "secret", "pem", "pem_content"))
-
     if not key:
         for name in ("COINBASE_API_KEY", "COINBASE_PLATFORM_API_KEY", "COINBASE_CDP_API_KEY", "CDP_API_KEY_NAME"):
             value = _clean(os.environ.get(name))
@@ -118,11 +124,8 @@ def recover_coinbase_environment() -> bool:
                 break
     if not secret:
         for name in (
-            "COINBASE_API_SECRET",
-            "COINBASE_PEM_CONTENT",
-            "COINBASE_PLATFORM_API_SECRET",
-            "COINBASE_CDP_API_SECRET",
-            "CDP_API_KEY_PRIVATE_KEY",
+            "COINBASE_API_SECRET", "COINBASE_PEM_CONTENT", "COINBASE_PLATFORM_API_SECRET",
+            "COINBASE_CDP_API_SECRET", "CDP_API_KEY_PRIVATE_KEY",
         ):
             value = _clean(os.environ.get(name))
             if value and not _json_dict(value):
@@ -131,32 +134,26 @@ def recover_coinbase_environment() -> bool:
 
     secret = _normalise_private_key(secret)
     if key:
-        for name in ("COINBASE_API_KEY", "COINBASE_PLATFORM_API_KEY"):
-            os.environ[name] = key
+        os.environ["COINBASE_API_KEY"] = key
+        os.environ["COINBASE_PLATFORM_API_KEY"] = key
     if secret:
         for name in ("COINBASE_API_SECRET", "COINBASE_PLATFORM_API_SECRET", "COINBASE_PEM_CONTENT"):
             os.environ[name] = secret
 
-    pem_ok = bool(
-        secret.startswith("-----BEGIN ")
-        and "PRIVATE KEY-----" in secret
-        and "-----END " in secret
-        and len(secret.splitlines()) >= 3
-    )
+    pem_ok = bool(secret.startswith("-----BEGIN ") and "PRIVATE KEY-----" in secret and "-----END " in secret and len(secret.splitlines()) >= 3)
     ready = bool(key) and pem_ok
     os.environ["NIJA_COINBASE_CREDENTIALS_NORMALIZED"] = "1" if ready else "0"
     os.environ.setdefault("NIJA_COINBASE_BALANCE_OBSERVED", "0")
     os.environ.setdefault("NIJA_COINBASE_FUNDING_STATUS", "unobserved")
-    logger.warning(
-        "COINBASE_CREDENTIAL_RECOVERY marker=%s payload_source=%s key_present=%s key_shape=%s pem_ok=%s pem_lines=%d funding_status=%s",
-        _MARKER,
-        payload_source,
-        bool(key),
-        "cdp" if key.startswith("organizations/") else "other",
-        pem_ok,
-        len(secret.splitlines()),
-        os.environ.get("NIJA_COINBASE_FUNDING_STATUS", "unobserved"),
-    )
+    signature = (payload_source, bool(key), key.startswith("organizations/"), pem_ok, len(secret.splitlines()), os.environ.get("NIJA_COINBASE_FUNDING_STATUS", "unobserved"))
+    with _LOCK:
+        if signature != _LAST_CREDENTIAL_SIGNATURE:
+            _LAST_CREDENTIAL_SIGNATURE = signature
+            logger.warning(
+                "COINBASE_CREDENTIAL_RECOVERY marker=%s payload_source=%s key_present=%s key_shape=%s pem_ok=%s pem_lines=%d funding_status=%s",
+                _MARKER, payload_source, bool(key), "cdp" if key.startswith("organizations/") else "other",
+                pem_ok, len(secret.splitlines()), os.environ.get("NIJA_COINBASE_FUNDING_STATUS", "unobserved"),
+            )
     return ready
 
 
@@ -173,7 +170,7 @@ def _spendable_from_payload(payload: Any) -> float:
     total = 0.0
     for key, value in payload.items():
         name = str(key).lower()
-        if name in {"usd", "usdc", "cash", "available_usd", "available_usdc", "spendable", "available", "available_balance"}:
+        if name in {"usd", "usdc", "cash", "available_usd", "available_usdc", "spendable", "available", "available_balance", "trading_balance"}:
             if isinstance(value, Mapping):
                 total += _number(value.get("value") or value.get("amount") or value.get("balance"))
             else:
@@ -214,6 +211,7 @@ def _measure_spendable(broker: Any) -> float:
 def _connect_wrapper(cls: type, current):
     @wraps(current)
     def connect(self: Any, *args: Any, **kwargs: Any):
+        global _LAST_CONNECTION_SIGNATURE
         if not recover_coinbase_environment():
             try:
                 self.connected = False
@@ -234,28 +232,19 @@ def _connect_wrapper(cls: type, current):
             os.environ["NIJA_COINBASE_CONNECTED"] = "0"
             os.environ["NIJA_COINBASE_BALANCE_OBSERVED"] = "0"
             os.environ["NIJA_COINBASE_FUNDING_STATUS"] = "auth_unavailable"
-            logger.error(
-                "COINBASE_CONNECTION_AUTH_FAILED marker=%s class=%s error_type=%s error=%s",
-                _MARKER,
-                cls.__name__,
-                type(exc).__name__,
-                str(exc)[:240],
-            )
+            logger.error("COINBASE_CONNECTION_AUTH_FAILED marker=%s class=%s error_type=%s error=%s", _MARKER, cls.__name__, type(exc).__name__, str(exc)[:240])
             return False
         connected = bool(result) or bool(getattr(self, "connected", False))
-        os.environ["NIJA_COINBASE_CONNECTED"] = "1" if connected else "0"
         if connected:
             spendable = _measure_spendable(self)
-            os.environ["NIJA_COINBASE_BALANCE_OBSERVED"] = "1"
-            os.environ["NIJA_COINBASE_SPENDABLE_QUOTE"] = f"{spendable:.8f}"
-            os.environ["NIJA_COINBASE_FUNDING_STATUS"] = "funded" if spendable > 0 else "observed_zero"
-            logger.critical(
-                "COINBASE_CONNECTION_RECOVERED marker=%s class=%s connected=true spendable_quote=$%.2f",
-                _MARKER,
-                cls.__name__,
-                spendable,
-            )
+            _publish_ready(spendable)
+            signature = (cls.__name__, True, round(spendable, 8))
+            with _LOCK:
+                if signature != _LAST_CONNECTION_SIGNATURE:
+                    _LAST_CONNECTION_SIGNATURE = signature
+                    logger.critical("COINBASE_CONNECTION_RECOVERED marker=%s class=%s connected=true spendable_quote=$%.2f readiness_published=%s", _MARKER, cls.__name__, spendable, spendable > 0)
         else:
+            os.environ["NIJA_COINBASE_CONNECTED"] = "0"
             os.environ["NIJA_COINBASE_BALANCE_OBSERVED"] = "0"
             os.environ["NIJA_COINBASE_FUNDING_STATUS"] = "auth_unavailable"
             logger.error("COINBASE_CONNECTION_PROBE_FAILED marker=%s class=%s", _MARKER, cls.__name__)
@@ -316,10 +305,4 @@ def install() -> bool:
         return True
 
 
-__all__ = [
-    "install",
-    "recover_coinbase_environment",
-    "_normalise_private_key",
-    "_spendable_from_payload",
-    "_measure_spendable",
-]
+__all__ = ["install", "recover_coinbase_environment", "_normalise_private_key", "_spendable_from_payload", "_measure_spendable", "_publish_ready"]
