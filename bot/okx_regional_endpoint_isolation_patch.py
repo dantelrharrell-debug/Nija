@@ -16,7 +16,7 @@ from types import ModuleType
 from urllib.parse import urlparse
 
 logger = logging.getLogger("nija.okx_regional_endpoint")
-_MARKER = "20260718-okx-regional-endpoint-v5"
+_MARKER = "20260719-okx-regional-endpoint-v6"
 _LOCK = threading.RLock()
 _STARTED = False
 _CONVERGENCE_INSTALLED = False
@@ -87,6 +87,7 @@ def _install_convergence_repairs() -> bool:
         "bot.okx_order_wrapper_stability_patch",
         "bot.final_account_router_exit_convergence_patch",
         "bot.platform_recovery_and_coinbase_balance_convergence_patch",
+        "bot.final_execution_state_router_convergence_patch",
     ):
         module = importlib.import_module(name)
         installer = getattr(module, "install", None) or getattr(module, "install_import_hook", None)
@@ -97,7 +98,7 @@ def _install_convergence_repairs() -> bool:
     _CONVERGENCE_INSTALLED = True
     os.environ["NIJA_LATE_BROKER_CONVERGENCE_INSTALLED"] = "1"
     logger.critical(
-        "LATE_BROKER_CONVERGENCE_INSTALLED marker=%s coinbase_balance_auth=true okx_wrapper_stability=true final_account_router_exit=true platform_recovery_coinbase_balance=true modules=%s",
+        "LATE_BROKER_CONVERGENCE_INSTALLED marker=%s coinbase_balance_auth=true okx_wrapper_stability=true final_account_router_exit=true platform_recovery_coinbase_balance=true final_execution_state_router=true modules=%s",
         _MARKER, ",".join(installed),
     )
     return True
