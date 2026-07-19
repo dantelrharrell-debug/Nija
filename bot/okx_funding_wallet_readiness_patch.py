@@ -1,13 +1,10 @@
 """Observe OKX Trading and Funding wallets without conflating them.
 
-OKX spot orders spend from the Trading account, while deposits can remain in the
-Funding account.  A zero Trading balance is therefore not proof that the OKX
-account is underfunded.  This patch publishes both wallet balances, returns only
-Trading equity to order-sizing code, and reports ``funded_needs_transfer`` when
-capital exists in Funding but is not yet spendable by the trading engine.
-
-No internal transfer is submitted automatically. Moving funds between OKX
-wallets remains an explicit account action.
+The Trading account is authoritative for order sizing.  Funding-wallet probing
+is only needed when Trading does not already contain executable quote capital.
+This repair also recognizes USDG, which OKX US can return as the spendable
+stable balance, and avoids the unauthenticated raw-client fallback that dropped
+OK-ACCESS headers on /api/v5/asset/balances.
 """
 from __future__ import annotations
 
@@ -21,11 +18,11 @@ from types import ModuleType
 from typing import Any
 
 logger = logging.getLogger("nija.okx_funding_wallet_readiness")
-_MARKER = "20260715-okx-funding-wallet-v1"
+_MARKER = "20260719-okx-funding-wallet-v2"
 _LOCK = threading.RLock()
 _STARTED = False
-_PATCH_ATTR = "_nija_okx_funding_wallet_readiness_v1"
-_STABLES = {"USD", "USDT", "USDC"}
+_PATCH_ATTR = "_nija_okx_funding_wallet_readiness_v2"
+_STABLES = {"USD", "USDG", "USDT", "USDC"}
 
 
 def _float(value: Any) -> float:
@@ -44,7 +41,6 @@ def _minimum_trade() -> float:
 
 
 def _stable_sum(rows: Any, *, funding: bool) -> tuple[float, float]:
-    """Return (spendable stable quote, total stable quote)."""
     spendable = 0.0
     total = 0.0
     if not isinstance(rows, (list, tuple)):
@@ -86,41 +82,29 @@ def _trading_wallet(broker: Any) -> tuple[bool, float, float, str]:
 def _funding_payload_from_client(client: Any) -> Any:
     if client is None:
         return None
-    for method_name in ("get_balances", "get_balance"):
-        method = getattr(client, method_name, None)
-        if callable(method) and method_name == "get_balances":
+    # Only use documented authenticated SDK methods.  Calling a generic _request
+    # method on the wrong client produced a Content-Type-only request and 50103.
+    method = getattr(client, "get_balances", None)
+    if callable(method):
+        try:
+            return method(ccy="USD,USDG,USDT,USDC")
+        except TypeError:
             try:
-                return method(ccy="USD,USDT,USDC")
-            except TypeError:
-                try:
-                    return method()
-                except Exception:
-                    pass
+                return method()
             except Exception:
-                pass
-    request = getattr(client, "_request", None)
-    if callable(request):
-        for kwargs in (
-            {"params": {"ccy": "USD,USDT,USDC"}},
-            {"params": None},
-            {},
-        ):
-            try:
-                return request("GET", "/api/v5/asset/balances", **kwargs)
-            except TypeError:
-                continue
-            except Exception:
-                break
+                return None
+        except Exception:
+            return None
     return None
 
 
 def _funding_wallet(broker: Any) -> tuple[bool, float, float, str]:
     clients: list[Any] = []
-    for name in ("asset_api", "funding_api", "rest_client", "_rest", "account_api"):
+    for name in ("asset_api", "funding_api"):
         client = getattr(broker, name, None)
         if client is not None and all(client is not seen for seen in clients):
             clients.append(client)
-    last_reason = "funding_client_unavailable"
+    last_reason = "authenticated_funding_client_unavailable"
     for client in clients:
         try:
             payload = _funding_payload_from_client(client)
@@ -140,9 +124,16 @@ def _funding_wallet(broker: Any) -> tuple[bool, float, float, str]:
 
 def _publish(broker: Any) -> None:
     trading_ok, trading_spendable, trading_total, trading_reason = _trading_wallet(broker)
-    funding_ok, funding_spendable, funding_total, funding_reason = _funding_wallet(broker)
-    observed = trading_ok or funding_ok
     minimum = _minimum_trade()
+
+    # A funded Trading wallet is sufficient for execution.  Do not issue an
+    # unnecessary Funding request, which previously caused a false auth error.
+    if trading_ok and trading_spendable >= minimum:
+        funding_ok, funding_spendable, funding_total, funding_reason = False, 0.0, 0.0, "not_required"
+    else:
+        funding_ok, funding_spendable, funding_total, funding_reason = _funding_wallet(broker)
+
+    observed = trading_ok or funding_ok
     total_observed = trading_total + funding_total
 
     if trading_ok and trading_spendable >= minimum:
@@ -173,13 +164,14 @@ def _publish(broker: Any) -> None:
     setattr(broker, "_okx_trading_spendable_quote", trading_spendable if trading_ok else None)
     setattr(broker, "_okx_funding_spendable_quote", funding_spendable if funding_ok else None)
     setattr(broker, "_okx_funding_status", status)
+    setattr(broker, "trading_ready", ready)
+    setattr(broker, "ready", ready)
 
     if observed:
         logger.critical(
-            "OKX_DUAL_WALLET_BALANCE_OBSERVED marker=%s trading_spendable=$%.2f trading_total=$%.2f "
-            "funding_spendable=$%.2f funding_total=$%.2f total_observed=$%.2f status=%s minimum=$%.2f auto_transfer=false",
+            "OKX_DUAL_WALLET_BALANCE_OBSERVED marker=%s trading_spendable=$%.2f trading_total=$%.2f funding_spendable=$%.2f funding_total=$%.2f total_observed=$%.2f status=%s minimum=$%.2f funding_probe=%s",
             _MARKER, trading_spendable, trading_total, funding_spendable, funding_total,
-            total_observed, status, minimum,
+            total_observed, status, minimum, funding_reason,
         )
     else:
         logger.warning(
@@ -200,8 +192,6 @@ def _patch_class(cls: type) -> bool:
             _publish(self)
         except Exception:
             logger.exception("OKX_DUAL_WALLET_PUBLISH_FAILED marker=%s", _MARKER)
-        # Only Trading-account equity is returned to sizing/execution code. Funding
-        # capital is visible but cannot be spent until explicitly transferred.
         return float(result or 0.0)
 
     setattr(get_account_balance, _PATCH_ATTR, True)
@@ -243,7 +233,7 @@ def install() -> bool:
         os.environ["NIJA_OKX_FUNDING_WALLET_READINESS_INSTALLED"] = "1"
         os.environ.setdefault("NIJA_OKX_BALANCE_OBSERVED", "0")
         os.environ.setdefault("NIJA_OKX_FUNDING_STATUS", "unobserved")
-        logger.critical("OKX_FUNDING_WALLET_READINESS_INSTALLED marker=%s auto_transfer=false", _MARKER)
+        logger.critical("OKX_FUNDING_WALLET_READINESS_INSTALLED marker=%s auto_transfer=false authenticated_funding_only=true", _MARKER)
         return True
 
 
