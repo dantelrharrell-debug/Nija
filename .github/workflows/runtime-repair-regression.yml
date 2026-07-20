@@ -3,6 +3,9 @@ name: Runtime repair regression tests
 on:
   pull_request:
     paths:
+      - "Dockerfile"
+      - "critical_runtime_repairs_v10.py"
+      - "bot/tests/test_critical_runtime_repairs_v10.py"
       - "bot/bot.py"
       - "bot/strategy_runtime_integrity_patch.py"
       - "bot/disconnected_coinbase_balance_guard_patch.py"
@@ -14,6 +17,9 @@ on:
   push:
     branches: [main]
     paths:
+      - "Dockerfile"
+      - "critical_runtime_repairs_v10.py"
+      - "bot/tests/test_critical_runtime_repairs_v10.py"
       - "bot/bot.py"
       - "bot/strategy_runtime_integrity_patch.py"
       - "bot/disconnected_coinbase_balance_guard_patch.py"
@@ -44,6 +50,7 @@ jobs:
       - name: Compile repaired runtime modules
         run: |
           python -m py_compile \
+            critical_runtime_repairs_v10.py \
             bot/strategy_runtime_integrity_patch.py \
             bot/disconnected_coinbase_balance_guard_patch.py \
             bot/okx_patch_churn_guard_patch.py \
@@ -52,6 +59,7 @@ jobs:
       - name: Run focused regression suite
         run: |
           python -m pytest -q \
+            bot/tests/test_critical_runtime_repairs_v10.py \
             bot/tests/test_strategy_runtime_integrity_patch.py \
             bot/tests/test_disconnected_coinbase_balance_guard_patch.py \
             bot/tests/test_okx_patch_churn_guard_patch.py
