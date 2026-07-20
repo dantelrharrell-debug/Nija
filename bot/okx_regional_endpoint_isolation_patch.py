@@ -1,9 +1,9 @@
 """OKX regional endpoint and credential-scope isolation.
 
-Selects exactly one OKX REST host before any private request. The patch is
-strictly OKX-local: it never mutates Coinbase, Kraken, global writer authority,
-or global trading state. Once broker classes are available it also installs the
-late broker convergence repairs that require those concrete classes.
+Selects exactly one OKX REST host before any private request. Region selection is
+explicit and credential-safe: NIJA never infers the OKX account region from the
+server/user location. When no region is configured, the historical global OKX
+endpoint is retained.
 """
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from types import ModuleType
 from urllib.parse import urlparse
 
 logger = logging.getLogger("nija.okx_regional_endpoint")
-_MARKER = "20260719-okx-regional-endpoint-v8"
+_MARKER = "20260720-okx-regional-endpoint-v9"
 _LOCK = threading.RLock()
 _STARTED = False
 _CONVERGENCE_INSTALLED = False
@@ -29,6 +29,8 @@ _REGION_DEFAULTS = {
     "EU": "https://eea.okx.com",
     "GLOBAL": "https://www.okx.com",
     "INTL": "https://www.okx.com",
+    "INTERNATIONAL": "https://www.okx.com",
+    "WWW": "https://www.okx.com",
 }
 
 
@@ -36,22 +38,60 @@ def _clean(value: object) -> str:
     return str(value or "").strip().strip('"').strip("'")
 
 
+def _validated_explicit_endpoint(value: str) -> str:
+    explicit = _clean(value).rstrip("/")
+    if not explicit:
+        return ""
+    parsed = urlparse(explicit)
+    if parsed.scheme != "https" or parsed.hostname not in _ALLOWED or parsed.path not in ("", "/"):
+        raise RuntimeError(
+            "invalid OKX endpoint; use exactly https://us.okx.com, "
+            "https://eea.okx.com, or https://www.okx.com"
+        )
+    return explicit
+
+
 def resolve_okx_base_url() -> str:
-    region = _clean(os.getenv("OKX_ACCOUNT_REGION") or os.getenv("OKX_REGION") or "US").upper().replace("-", "_").replace(" ", "_")
-    explicit = _clean(os.getenv("OKX_BASE_URL"))
-    if region not in _REGION_DEFAULTS:
-        raise RuntimeError(f"unsupported OKX account region {region!r}; use US, EEA, or GLOBAL")
-    regional_endpoint = _REGION_DEFAULTS[region]
-    if explicit:
-        parsed_explicit = urlparse(explicit.rstrip("/"))
-        if parsed_explicit.scheme != "https" or parsed_explicit.hostname not in _ALLOWED or parsed_explicit.path not in ("", "/"):
-            raise RuntimeError("invalid OKX endpoint; use exactly https://us.okx.com, https://eea.okx.com, or https://www.okx.com")
-        if explicit.rstrip("/") != regional_endpoint:
+    """Resolve the endpoint without guessing the account's legal region.
+
+    Precedence:
+      1. Explicit OKX_ACCOUNT_REGION / OKX_REGION.
+      2. Explicit OKX_BASE_URL / OKX_API_BASE_URL / OKX_ENDPOINT.
+      3. Historical NIJA default: global OKX (www.okx.com).
+
+    A user's physical location is not evidence that an API key belongs to OKX US.
+    """
+    raw_region = _clean(os.getenv("OKX_ACCOUNT_REGION") or os.getenv("OKX_REGION"))
+    region = raw_region.upper().replace("-", "_").replace(" ", "_")
+    explicit = _validated_explicit_endpoint(
+        os.getenv("OKX_BASE_URL") or os.getenv("OKX_API_BASE_URL") or os.getenv("OKX_ENDPOINT") or ""
+    )
+
+    if region:
+        if region not in _REGION_DEFAULTS:
+            raise RuntimeError(
+                f"unsupported OKX account region {region!r}; use US, EEA, or GLOBAL"
+            )
+        selected = _REGION_DEFAULTS[region]
+        if explicit and explicit != selected:
             logger.warning(
                 "OKX_ENDPOINT_REGION_MISMATCH_REPAIRED marker=%s region=%s configured=%s selected=%s broker_scope=okx_only",
-                _MARKER, region, explicit.rstrip("/"), regional_endpoint,
+                _MARKER, region, explicit, selected,
             )
-    return regional_endpoint
+        source = "region"
+    elif explicit:
+        selected = explicit
+        source = "explicit_endpoint"
+    else:
+        selected = "https://www.okx.com"
+        source = "safe_global_default"
+        logger.warning(
+            "OKX_REGION_UNSET_GLOBAL_DEFAULT marker=%s selected=%s action=set_OKX_ACCOUNT_REGION_explicitly_if_key_is_us_or_eea",
+            _MARKER, selected,
+        )
+
+    os.environ["NIJA_OKX_ENDPOINT_SOURCE"] = source
+    return selected
 
 
 def _patch_module(module: ModuleType) -> bool:
@@ -60,11 +100,13 @@ def _patch_module(module: ModuleType) -> bool:
         return False
     endpoint = resolve_okx_base_url()
     cls.BASE_URL = endpoint
-    os.environ["OKX_ACCOUNT_REGION"] = "US" if endpoint == "https://us.okx.com" else os.environ.get("OKX_ACCOUNT_REGION", "")
     os.environ["OKX_BASE_URL"] = endpoint
     os.environ["NIJA_OKX_ENDPOINT_SELECTED"] = endpoint
     os.environ["NIJA_OKX_ENDPOINT_ISOLATED"] = "1"
-    logger.critical("OKX_REGIONAL_ENDPOINT_SELECTED marker=%s endpoint=%s broker_scope=okx_only fallback=false", _MARKER, endpoint)
+    logger.critical(
+        "OKX_REGIONAL_ENDPOINT_SELECTED marker=%s endpoint=%s source=%s broker_scope=okx_only fallback=false",
+        _MARKER, endpoint, os.environ.get("NIJA_OKX_ENDPOINT_SOURCE", "unknown"),
+    )
     return True
 
 
@@ -123,8 +165,6 @@ def install() -> None:
     global _STARTED
     with _LOCK:
         endpoint = resolve_okx_base_url()
-        if endpoint == "https://us.okx.com":
-            os.environ["OKX_ACCOUNT_REGION"] = "US"
         os.environ["OKX_BASE_URL"] = endpoint
         os.environ["NIJA_OKX_ENDPOINT_ISOLATED"] = "1"
         loaded = _patch_loaded()
