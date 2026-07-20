@@ -8,7 +8,7 @@ import time
 from typing import Any
 
 logger = logging.getLogger("nija.secondary_venue_runtime_diagnostics")
-_MARKER = "20260720-secondary-runtime-diagnostics-v2"
+_MARKER = "20260720-secondary-runtime-diagnostics-v3"
 _INSTALLED = False
 _LOCK = threading.RLock()
 _LAST_LOG: dict[str, float] = {}
@@ -40,8 +40,6 @@ def _validate_coinbase_key(secret: str) -> tuple[bool, str]:
         if curve not in {"secp256r1", "prime256v1"}:
             return False, f"unsupported_curve:{curve}"
     except Exception as exc:
-        # A successful private API connection is stronger evidence than a stale
-        # parser result from a differently wrapped SDK key representation.
         if os.environ.get("NIJA_COINBASE_CONNECTED") == "1" and os.environ.get("NIJA_COINBASE_TRADING_READY") == "1":
             return True, "authenticated_connection"
         return False, f"{type(exc).__name__}:{str(exc)[:120]}"
@@ -124,6 +122,11 @@ def install() -> None:
             return
         _INSTALLED = True
         _normalize_coinbase_env()
+        try:
+            import coinbase_authenticated_connect_recovery_patch as auth_recovery
+            auth_recovery.install()
+        except Exception:
+            logger.exception("COINBASE_AUTHENTICATED_CONNECT_RECOVERY_IMPORT_FAILED marker=%s", _MARKER)
         try:
             import coinbase_capital_consistency_patch as consistency
             consistency.install()
