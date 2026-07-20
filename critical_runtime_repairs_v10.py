@@ -22,6 +22,8 @@ _MARKER = "20260720-critical-runtime-repairs-v10"
 _LOCK = threading.RLock()
 _LOCAL = threading.local()
 _STARTED = False
+_LAST_RELEASE_AUDIT = 0.0
+_LAST_RELEASE_READY = False
 
 _COINBASE_OWNER_ATTR = "_nija_coinbase_terminal_owner_v10"
 _OKX_OWNER_ATTR = "_nija_okx_terminal_owner_v10"
@@ -97,6 +99,7 @@ def _normalise_coinbase() -> bool:
 
 
 def _coinbase_probe(broker: Any) -> tuple[bool, str]:
+    details: list[str] = []
     for module_name, function_name in (
         ("coinbase_connect_recursion_terminal_guard", "_private_probe"),
         ("coinbase_authenticated_connect_recovery_patch", "_authenticated_probe"),
@@ -107,10 +110,13 @@ def _coinbase_probe(broker: Any) -> tuple[bool, str]:
             if callable(function):
                 result = function(broker)
                 if isinstance(result, tuple) and len(result) >= 2:
-                    return bool(result[0]), str(result[1])
-        except Exception:
-            continue
-    return False, "private_account_probe_unavailable"
+                    ok, detail = bool(result[0]), str(result[1])
+                    if ok:
+                        return True, detail
+                    details.append(detail)
+        except Exception as exc:
+            details.append(f"{module_name}.{function_name}:{type(exc).__name__}")
+    return False, ";".join(details[-3:]) or "private_account_probe_unavailable"
 
 
 def _publish_coinbase_failure(detail: str) -> None:
@@ -358,7 +364,13 @@ def _repair_zero_signal_state() -> bool:
     return repaired
 
 
-def _republish_release_if_ready() -> bool:
+def _republish_release_if_ready(*, force: bool = False) -> bool:
+    global _LAST_RELEASE_AUDIT, _LAST_RELEASE_READY
+    now = time.monotonic()
+    interval = max(10.0, float(os.environ.get("NIJA_CRITICAL_V10_RELEASE_AUDIT_S", "30") or 30))
+    if not force and now - _LAST_RELEASE_AUDIT < interval:
+        return _LAST_RELEASE_READY
+    _LAST_RELEASE_AUDIT = now
     try:
         identity = importlib.import_module("runtime_module_identity_convergence_patch")
         quiescence = importlib.import_module("runtime_convergence_quiescence_patch")
@@ -368,16 +380,18 @@ def _republish_release_if_ready() -> bool:
         ready, details = manifest._audit()
         final_ready = bool(identity_ready and quiescence_ready and ready)
         manifest._publish(final_ready, details)
+        _LAST_RELEASE_READY = final_ready
         return final_ready
     except Exception:
         logger.debug("RUNTIME_RELEASE_V10_REPUBLISH_DEFERRED marker=%s", _MARKER, exc_info=True)
+        _LAST_RELEASE_READY = False
         return False
 
 
-def _apply() -> tuple[bool, bool, bool]:
+def _apply(*, force_release: bool = False) -> tuple[bool, bool, bool]:
     brokers = _patch_broker_modules()
     zero_signal = _repair_zero_signal_state()
-    release = _republish_release_if_ready()
+    release = _republish_release_if_ready(force=force_release)
     return brokers, zero_signal, release
 
 
@@ -407,7 +421,7 @@ def install() -> bool:
         prior_install = getattr(prior, "install", None)
         if not callable(prior_install) or not prior_install():
             raise RuntimeError("critical_runtime_repairs_v9_not_ready")
-        _apply()
+        _apply(force_release=True)
         if not _STARTED:
             _STARTED = True
             threading.Thread(target=_monitor, name="CriticalRuntimeRepairsV10", daemon=True).start()
