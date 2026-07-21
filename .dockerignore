@@ -108,6 +108,7 @@ scripts/*
 !scripts/production_bootstrap.sh
 !scripts/three_venue_config_check.py
 !scripts/render_entrypoint.sh
+!scripts/apply_startup_handoff_fix.py
 check_*.py
 verify_*.py
 validate_*.py
