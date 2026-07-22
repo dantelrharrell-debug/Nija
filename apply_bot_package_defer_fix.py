@@ -1,13 +1,13 @@
 """Make ``bot`` package imports honor the startup runtime-hook defer flag.
 
 ``start.sh`` runs a few Python preflight helpers that import ``bot.*`` modules.
-Importing a submodule executes ``bot/__init__.py`` first.  Historically that
+Importing a submodule executes ``bot/__init__.py`` first. Historically that
 package initializer imported ``sitecustomize`` and installed dozens of runtime
 patch hooks unconditionally, bypassing the Docker ``.pth`` defer guard.
 
 This build-time patch keeps harmless environment normalization available during
 preflight while skipping sitecustomize and the package patch-hook loop whenever
-``NIJA_DEFER_RUNTIME_SITE_HOOKS=1``.  The canonical ``main.py`` process starts
+``NIJA_DEFER_RUNTIME_SITE_HOOKS=1``. The canonical ``main.py`` process starts
 after the flag is removed, so the complete runtime hook stack still installs.
 """
 from __future__ import annotations
@@ -21,6 +21,7 @@ if not BOT_INIT_PATH.exists():
 
 DEFER_NAME = "_NIJA_BOT_PACKAGE_RUNTIME_HOOKS_DEFERRED"
 MARKER = "NIJA_BOT_PACKAGE_RUNTIME_HOOKS_DEFERRED"
+MARKER_LOG_LITERAL = f'"{MARKER} runtime_site_hooks=deferred"'
 
 _SITE_ANCHOR = (
     'try:\n'
@@ -45,10 +46,10 @@ _HOOKS_REPLACEMENT = f"_PATCH_HOOKS = () if {DEFER_NAME} else (\n"
 def _validate(text: str) -> None:
     if text.count(f"{DEFER_NAME} =") != 1:
         raise RuntimeError("bot package defer assignment count invalid")
-    if text.count(MARKER) != 1:
-        raise RuntimeError("bot package defer marker count invalid")
-    if _HOOKS_REPLACEMENT not in text:
-        raise RuntimeError("bot package patch-hook defer guard missing")
+    if text.count(MARKER_LOG_LITERAL) != 1:
+        raise RuntimeError("bot package defer log marker count invalid")
+    if text.count(_HOOKS_REPLACEMENT) != 1:
+        raise RuntimeError("bot package patch-hook defer guard count invalid")
     if text.index(f"{DEFER_NAME} =") > text.index(_HOOKS_REPLACEMENT):
         raise RuntimeError("bot package defer guard ordering invalid")
 
