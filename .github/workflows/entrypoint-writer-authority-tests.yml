@@ -90,7 +90,6 @@ jobs:
     timeout-minutes: 15
     env:
       PYTHONPATH: .
-      NIJA_DEFER_RUNTIME_SITE_HOOKS: '1'
 
     steps:
       - name: Checkout
