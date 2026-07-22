@@ -6,6 +6,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 PATCHER = ROOT / "scripts" / "apply_startup_handoff_fix.py"
+START_SCRIPT = ROOT / "start.sh"
 
 
 def _load_patcher():
@@ -45,6 +46,22 @@ def test_patcher_defers_hooks_before_every_python_preflight() -> None:
     assert "STARTUP_HANDOFF_REDIS_VALIDATION_COMPLETE" in patched
     assert "STARTUP_HANDOFF_RUNTIME_BEGIN" in patched
     assert "STARTUP_HANDOFF_RUNTIME_EXIT" in patched
+
+
+def test_repository_start_script_gets_early_defer() -> None:
+    module = _load_patcher()
+    source = START_SCRIPT.read_text(encoding="utf-8")
+    patched = module.patch_text(source)
+
+    export_pos = patched.index("export NIJA_DEFER_RUNTIME_SITE_HOOKS=1")
+    first_python_candidates = [
+        position
+        for token in ("$PY ", '"${PY}" ', "${PY} ", "python3 ", "python ")
+        if (position := patched.find(token)) >= 0
+    ]
+    assert first_python_candidates
+    assert export_pos < min(first_python_candidates)
+    assert patched.index("unset NIJA_DEFER_RUNTIME_SITE_HOOKS") < patched.index("$PY -u main.py")
 
 
 def test_patcher_is_idempotent() -> None:
