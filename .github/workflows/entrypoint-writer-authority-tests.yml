@@ -7,7 +7,9 @@ on:
       - 'Dockerfile'
       - '.dockerignore'
       - 'render.yaml'
+      - 'start.sh'
       - 'scripts/production_bootstrap.sh'
+      - 'scripts/apply_startup_handoff_fix.py'
       - 'scripts/three_venue_config_check.py'
       - 'render_liveness_server.py'
       - 'render_readiness_state_bridge.py'
@@ -22,6 +24,7 @@ on:
       - 'bot/writer_lock_release_guard.py'
       - 'bot/entrypoint_writer_authority.py'
       - 'bot/bot_main.py'
+      - 'bot/tests/test_startup_handoff_all_fixes.py'
       - 'bot/tests/test_three_venue_execution_readiness.py'
       - 'bot/tests/test_import_hook_chain_compactor.py'
       - 'bot/tests/test_activation_pending_startup_order.py'
@@ -43,7 +46,9 @@ on:
       - 'Dockerfile'
       - '.dockerignore'
       - 'render.yaml'
+      - 'start.sh'
       - 'scripts/production_bootstrap.sh'
+      - 'scripts/apply_startup_handoff_fix.py'
       - 'scripts/three_venue_config_check.py'
       - 'render_liveness_server.py'
       - 'render_readiness_state_bridge.py'
@@ -58,6 +63,7 @@ on:
       - 'bot/writer_lock_release_guard.py'
       - 'bot/entrypoint_writer_authority.py'
       - 'bot/bot_main.py'
+      - 'bot/tests/test_startup_handoff_all_fixes.py'
       - 'bot/tests/test_three_venue_execution_readiness.py'
       - 'bot/tests/test_import_hook_chain_compactor.py'
       - 'bot/tests/test_activation_pending_startup_order.py'
@@ -82,15 +88,18 @@ jobs:
     name: render-handoff-writer-and-readiness
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      PYTHONPATH: .
+      NIJA_DEFER_RUNTIME_SITE_HOOKS: '1'
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Set up production Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: '3.11'
 
       - name: Install focused test dependencies
         run: |
@@ -99,6 +108,7 @@ jobs:
 
       - name: Validate Render bootstrap contract
         run: |
+          bash -n start.sh
           bash -n scripts/production_bootstrap.sh
           grep -Fq 'dockerCommand: bash scripts/production_bootstrap.sh' render.yaml
           grep -Fq 'healthCheckPath: /healthz' render.yaml
@@ -110,10 +120,12 @@ jobs:
           ! grep -A3 'HEALTHCHECK' Dockerfile | grep -Fq 'import requests'
           grep -Fq 'python3 -S - "$1"' scripts/production_bootstrap.sh
           grep -Fq 'python3 -S - "$@"' scripts/production_bootstrap.sh
+          grep -Fq 'apply_startup_handoff_fix.py' Dockerfile
 
       - name: Compile deployment entrypoints
         run: |
           python -m py_compile \
+            scripts/apply_startup_handoff_fix.py \
             render_liveness_server.py \
             render_readiness_state_bridge.py \
             prebot_writer_authority_bootstrap.py \
@@ -129,6 +141,8 @@ jobs:
             bot/bot_main.py \
             scripts/three_venue_config_check.py
 
+      - name: Test startup handoff ordering
+        run: python -m pytest -q bot/tests/test_startup_handoff_all_fixes.py
       - name: Test three-venue readiness
         run: python -m pytest -q bot/tests/test_three_venue_execution_readiness.py
       - name: Test import-hook compactor
