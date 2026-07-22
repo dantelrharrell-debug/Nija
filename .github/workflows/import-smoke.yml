@@ -2,27 +2,47 @@ name: CI — imports smoke test
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   pull_request:
-    branches: [ main ]
+    branches: [main]
+
+permissions:
+  contents: read
 
 jobs:
   imports-smoke:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PYTHONPATH: .
+      NIJA_DEFER_RUNTIME_SITE_HOOKS: '1'
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v4
+      - name: Setup production Python
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: '3.11'
+          cache: pip
 
-      - name: Install deps (if requirements.txt exists)
+      - name: Install focused smoke dependencies
+        shell: bash
         run: |
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-          pip install pytest
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if python -m pip install --disable-pip-version-check --retries 5 --timeout 30 pytest==8.2.2 numpy==1.26.3; then
+              exit 0
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              sleep $((attempt * 5))
+            fi
+          done
+          exit 1
+
+      - name: Apply production package defer guard
+        run: python -S apply_bot_package_defer_fix.py
 
       - name: Run import smoke test
-        run: |
-          pytest -q tests/imports_smoke_test.py || true
+        run: python -m pytest -q tests/imports_smoke_test.py
