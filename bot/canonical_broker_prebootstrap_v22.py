@@ -6,24 +6,30 @@ SelfHealingStartup itself delegates broker connection to that manager, creating 
 circular dependency that can leave the writer process in LIVE_PENDING_CONFIRMATION
 with no manager, no capital snapshot, and no scan cycles.
 
-This module is called synchronously by bot_main only after distributed writer
-authority has been acquired and verified. It initializes the existing canonical
-manager singleton, repairs only that singleton's missing capital-FSM latch when an
-earlier InitRegistry claimant left it unwired, and requires at least one connected
-platform broker before startup may continue.
+This module patches the canonical bot_main writer-acquisition function. After
+Redis writer authority is acquired and synchronously verified, the existing
+canonical manager singleton is initialized on the main bootstrap thread before
+SelfHealingStartup runs. A failed prebootstrap releases only this process's own
+lease and returns startup failure; no order, authority, or state gate is bypassed.
 """
 from __future__ import annotations
 
 import importlib
 import logging
+import os
 import threading
-from typing import Any
+from functools import wraps
+from types import ModuleType
+from typing import Any, Callable
 
 logger = logging.getLogger("nija.canonical_broker_prebootstrap")
 
 _MARKER = "20260723-canonical-broker-prebootstrap-v22"
 _LOCK = threading.RLock()
 _READY = False
+_INSTALLED = False
+_ACQUIRE_WRAP_ATTR = "_nija_canonical_broker_prebootstrap_acquire_v22"
+_MAIN_WRAP_ATTR = "_nija_canonical_broker_prebootstrap_main_v22"
 
 
 def _canonical_manager() -> Any:
@@ -92,6 +98,10 @@ def _initialize_manager(manager: Any) -> None:
     try:
         initialize()
     except Exception as first_exc:
+        # Retry only the confirmed stale InitRegistry/FSM-latch case. Broker,
+        # credential, balance, and network failures must remain fail-closed.
+        if bool(getattr(manager, "_fsm_initialized", False)):
+            raise
         if not _repair_capital_fsm_latch(manager, first_exc):
             raise
         logger.warning(
@@ -163,6 +173,7 @@ def prepare_canonical_broker_runtime() -> Any:
             )
 
         _READY = True
+        os.environ["NIJA_CANONICAL_BROKER_PREBOOTSTRAP_V22_READY"] = "1"
         logger.critical(
             "CANONICAL_BROKER_PREBOOTSTRAP_V22_READY marker=%s fsm_initialized=true registered=%d connected=%d brokers=%s",
             _MARKER,
@@ -173,10 +184,129 @@ def prepare_canonical_broker_runtime() -> Any:
         return manager
 
 
+def _unwrap(current: Callable[..., Any]) -> Callable[..., Any]:
+    seen: set[int] = set()
+    base = current
+    while callable(getattr(base, "__wrapped__", None)) and id(base) not in seen:
+        seen.add(id(base))
+        candidate = getattr(base, "__wrapped__")
+        if not callable(candidate):
+            break
+        base = candidate
+    return base
+
+
+def _patch_writer_acquire(module: ModuleType) -> bool:
+    current = getattr(module, "_acquire_writer_authority_before_nonce", None)
+    if not callable(current):
+        return False
+    if bool(getattr(current, _ACQUIRE_WRAP_ATTR, False)):
+        return True
+
+    base = _unwrap(current)
+
+    @wraps(base)
+    def guarded_acquire(*args: Any, **kwargs: Any) -> bool:
+        acquired = bool(base(*args, **kwargs))
+        if not acquired:
+            return False
+        try:
+            prepare_canonical_broker_runtime()
+            return True
+        except Exception as exc:
+            os.environ["NIJA_CANONICAL_BROKER_PREBOOTSTRAP_V22_READY"] = "0"
+            logger.critical(
+                "CANONICAL_BROKER_PREBOOTSTRAP_V22_FAILED marker=%s err=%s:%s trading_remains_fail_closed=true",
+                _MARKER,
+                type(exc).__name__,
+                exc,
+                exc_info=True,
+            )
+            release = getattr(module, "_release_writer_authority", None)
+            if callable(release):
+                try:
+                    release()
+                except Exception as release_exc:
+                    logger.critical(
+                        "CANONICAL_BROKER_PREBOOTSTRAP_V22_RELEASE_FAILED marker=%s err=%s:%s",
+                        _MARKER,
+                        type(release_exc).__name__,
+                        release_exc,
+                        exc_info=True,
+                    )
+            return False
+
+    setattr(guarded_acquire, _ACQUIRE_WRAP_ATTR, True)
+    setattr(guarded_acquire, "__wrapped__", base)
+    setattr(module, "_acquire_writer_authority_before_nonce", guarded_acquire)
+    logger.critical(
+        "CANONICAL_BROKER_PREBOOTSTRAP_V22_ACQUIRE_PATCHED marker=%s module=%s legacy_layers_unwrapped=%s",
+        _MARKER,
+        module.__name__,
+        base is not current,
+    )
+    return True
+
+
+def _patch_main(module: ModuleType) -> bool:
+    current = getattr(module, "main", None)
+    if not callable(current):
+        return False
+    if bool(getattr(current, _MAIN_WRAP_ATTR, False)):
+        return True
+
+    @wraps(current)
+    def guarded_main(*args: Any, **kwargs: Any):
+        if not _patch_writer_acquire(module):
+            logger.critical(
+                "CANONICAL_BROKER_PREBOOTSTRAP_V22_REPATCH_FAILED marker=%s trading_remains_fail_closed=true",
+                _MARKER,
+            )
+            return 1
+        return current(*args, **kwargs)
+
+    setattr(guarded_main, _MAIN_WRAP_ATTR, True)
+    setattr(guarded_main, "__wrapped__", current)
+    setattr(module, "main", guarded_main)
+    logger.critical(
+        "CANONICAL_BROKER_PREBOOTSTRAP_V22_MAIN_PATCHED marker=%s module=%s",
+        _MARKER,
+        module.__name__,
+    )
+    return True
+
+
+def install_import_hook() -> bool:
+    global _INSTALLED
+    with _LOCK:
+        module = importlib.import_module("bot.bot_main")
+        acquire_patched = _patch_writer_acquire(module)
+        main_patched = _patch_main(module)
+        _INSTALLED = bool(acquire_patched and main_patched)
+        os.environ["NIJA_CANONICAL_BROKER_PREBOOTSTRAP_V22_INSTALLED"] = (
+            "1" if _INSTALLED else "0"
+        )
+        logger.critical(
+            "CANONICAL_BROKER_PREBOOTSTRAP_V22_INSTALLED marker=%s acquire_patched=%s main_patched=%s",
+            _MARKER,
+            acquire_patched,
+            main_patched,
+        )
+        return _INSTALLED
+
+
+def install() -> bool:
+    return install_import_hook()
+
+
 __all__ = [
+    "install",
+    "install_import_hook",
     "prepare_canonical_broker_runtime",
     "_canonical_manager",
     "_manager_contract",
     "_initialize_manager",
     "_platform_counts",
+    "_patch_writer_acquire",
+    "_patch_main",
 ]
