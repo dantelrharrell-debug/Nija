@@ -156,6 +156,30 @@ def test_late_okx_method_replacement_is_healed_without_chain_growth(monkeypatch)
     assert target.OKXBroker.place_market_order is same
 
 
+def test_rest_client_role_requires_instid_but_not_final_submit():
+    class OKXRestClient:
+        def place_order(self, symbol, side, quantity):
+            return symbol, side, quantity
+
+    method = OKXRestClient.place_order
+    setattr(method, stability._INSTID_ATTR, True)
+
+    ready, details = stability._class_state(
+        OKXRestClient,
+        require_instid=True,
+        require_final=False,
+    )
+    assert ready is True
+    assert "require_final=False" in details["place_order"]
+
+    missing_final, _ = stability._class_state(
+        OKXRestClient,
+        require_instid=True,
+        require_final=True,
+    )
+    assert missing_final is False
+
+
 def test_pretrade_risk_is_imported_patched_and_alias_bound_once(monkeypatch):
     pretrade = ModuleType(stability._PRETRADE_CANONICAL)
     pretrade.PreTradeRiskEngine = type("PreTradeRiskEngine", (), {"assess": lambda self, **kwargs: None})
