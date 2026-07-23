@@ -1,15 +1,14 @@
 """Fail-closed attestation for the canonical NIJA production entrypoint.
 
 This script intentionally uses only the Python standard library and never imports the
-``bot`` package.  It is safe to run with ``python -S`` while runtime site hooks are
-deferred.  The goal is to prove that the deployed image contains the canonical path
+``bot`` package. It is safe to run with ``python -S`` while runtime site hooks are
+deferred. The goal is to prove that the deployed image contains the canonical path
 and the current broker-prebootstrap safeguards before the live Python process starts.
 """
 from __future__ import annotations
 
 import hashlib
 import os
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 
