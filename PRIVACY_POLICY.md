@@ -231,4 +231,4 @@ This Privacy Policy does not constitute financial advice. NIJA is a tool for ind
 
 **Privacy Policy Version 1.0**  
 **Effective Date: February 3, 2026**  
-**NIJA Trading Systems**
+**NIJA AI Trading LLC**
