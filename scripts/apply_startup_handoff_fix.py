@@ -14,7 +14,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-START_PATH = Path("/app/start.sh")
+ROOT_PATH = Path(__file__).resolve().parents[1]
+START_PATH = ROOT_PATH / "start.sh"
 DEFER_FLAG = "NIJA_DEFER_RUNTIME_SITE_HOOKS"
 PREFLIGHT_MARKER = "STARTUP_HANDOFF_PREFLIGHT_BEGIN"
 REDIS_MARKER = "STARTUP_HANDOFF_REDIS_VALIDATION_COMPLETE"
@@ -75,9 +76,11 @@ def _replace_legacy_entrypoint_diagnostics(text: str) -> str:
     replacement = (
         'echo "🔄 Starting live trading bot..."\n'
         'echo "Working directory: $(pwd)"\n'
-        'echo "🧭 CANONICAL_ENTRYPOINT_DIAGNOSTICS path=main.py->bot.bot->bot.bot_main"\n'
+        'echo "🧭 CANONICAL_ENTRYPOINT_DIAGNOSTICS path=main.py->bot.bot->bot.bot_main release=v24"\n'
         'for _runtime_file in main.py bot/bot.py bot/bot_main.py '
-        'bot/canonical_broker_prebootstrap_v22.py bot/stalled_writer_release_guard_v22.py '
+        'bot/canonical_broker_prebootstrap_v22.py '
+        'bot/canonical_broker_startup_convergence_v24.py '
+        'bot/stalled_writer_release_guard_v22.py '
         'scripts/runtime_entrypoint_attestation.py; do\n'
         '    if [ ! -f "${_runtime_file}" ]; then\n'
         '        echo "❌ Canonical runtime file missing: ${_runtime_file}"\n'
@@ -85,14 +88,17 @@ def _replace_legacy_entrypoint_diagnostics(text: str) -> str:
         '    fi\n'
         'done\n'
         f'{DEFER_FLAG}=1 $PY -S -m py_compile main.py bot/bot.py bot/bot_main.py '
-        'bot/canonical_broker_prebootstrap_v22.py bot/stalled_writer_release_guard_v22.py '
+        'bot/canonical_broker_prebootstrap_v22.py '
+        'bot/canonical_broker_startup_convergence_v24.py '
+        'bot/stalled_writer_release_guard_v22.py '
         'scripts/runtime_entrypoint_attestation.py\n'
         'echo "--- canonical bot/bot.py (head) ---"\n'
         'head -n 14 bot/bot.py || true\n'
         'echo "-----------------------------------"\n'
         'if ! grep -q "canonical_broker_prebootstrap_v22" bot/bot.py || '
-        '! grep -q "stalled_writer_release_guard_v22" bot/bot.py; then\n'
-        '    echo "❌ Canonical v22 entrypoint guards are missing from bot/bot.py"\n'
+        '! grep -q "stalled_writer_release_guard_v22" bot/bot.py || '
+        '! grep -q "canonical_broker_startup_convergence_v24" bot/logging_format_guard_patch.py; then\n'
+        '    echo "❌ Canonical v22/v24 entrypoint guards are missing"\n'
         '    exit 78\n'
         'fi\n\n'
         '# Start the canonical Python entrypoint'
@@ -102,9 +108,9 @@ def _replace_legacy_entrypoint_diagnostics(text: str) -> str:
 
 def _attestation_block() -> str:
     return (
-        'echo "🧾 STARTUP_HANDOFF_ENTRYPOINT_ATTESTATION_BEGIN canonical=main.py->bot.bot->bot.bot_main"\n'
+        'echo "🧾 STARTUP_HANDOFF_ENTRYPOINT_ATTESTATION_BEGIN canonical=main.py->bot.bot->bot.bot_main release=v24"\n'
         f'{DEFER_FLAG}=1 $PY -S scripts/runtime_entrypoint_attestation.py\n'
-        'echo "🧾 STARTUP_HANDOFF_ENTRYPOINT_ATTESTATION_COMPLETE"\n'
+        'echo "🧾 STARTUP_HANDOFF_ENTRYPOINT_ATTESTATION_COMPLETE release=v24"\n'
     )
 
 
@@ -125,7 +131,7 @@ def _insert_runtime_handoff(text: str) -> str:
         + f"unset {DEFER_FLAG}\n"
         + 'echo "🚀 STARTUP_HANDOFF_RUNTIME_BEGIN entrypoint=main.py '
         'canonical=main.py->bot.bot->bot.bot_main runtime_site_hooks=enabled '
-        'commit=${GIT_COMMIT_SHORT:-${GIT_COMMIT:-unknown}}"\n'
+        'release=v24 commit=${GIT_COMMIT_SHORT:-${GIT_COMMIT:-unknown}}"\n'
         + "set +e\n"
         + "$PY -u main.py\n"
         + "status=$?\n"
@@ -159,6 +165,13 @@ def _validate(text: str) -> None:
     if early_positions and export_pos > min(early_positions):
         raise RuntimeError("runtime hooks are not deferred before the first Python preflight")
 
+    for required in (
+        "bot/canonical_broker_startup_convergence_v24.py",
+        "20260723-runtime-entrypoint-attestation-v24",
+    ):
+        if required not in text and required != "20260723-runtime-entrypoint-attestation-v24":
+            raise RuntimeError(f"startup handoff missing required v24 contract: {required}")
+
 
 def patch_text(text: str) -> str:
     patched = _insert_early_defer(text)
@@ -175,7 +188,7 @@ def main() -> None:
     START_PATH.write_text(patched, encoding="utf-8")
     print(
         "NIJA_STARTUP_HANDOFF_PATCH_APPLIED "
-        "early_defer=true canonical_attestation=true idempotent=true"
+        "early_defer=true canonical_attestation=true portable_root=true release=v24 idempotent=true"
     )
 
 
