@@ -19,7 +19,20 @@ def _load_module():
     return module
 
 
+def _clear_provider_metadata(monkeypatch):
+    for name in (
+        "GIT_BRANCH",
+        "RENDER_GIT_BRANCH",
+        "RAILWAY_GIT_BRANCH",
+        "GIT_COMMIT",
+        "RENDER_GIT_COMMIT",
+        "RAILWAY_GIT_COMMIT_SHA",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+
 def test_repository_canonical_runtime_contract_passes(monkeypatch):
+    _clear_provider_metadata(monkeypatch)
     module = _load_module()
     monkeypatch.setenv("GIT_BRANCH", "main")
     monkeypatch.setenv("GIT_COMMIT", "eb8f660623f13372ce213e79c1f10535db686590")
@@ -51,10 +64,30 @@ def test_attestation_fails_when_required_runtime_file_is_missing(tmp_path, monke
         raise AssertionError("expected missing runtime file to fail attestation")
 
 
-def test_live_attestation_rejects_unknown_commit(monkeypatch):
+def test_live_attestation_uses_render_commit_when_generic_value_is_placeholder(monkeypatch):
+    _clear_provider_metadata(monkeypatch)
+    module = _load_module()
+    monkeypatch.setenv("GIT_BRANCH", "unknown")
+    monkeypatch.setenv("RENDER_GIT_BRANCH", "main")
+    monkeypatch.setenv("GIT_COMMIT", "unknown")
+    monkeypatch.setenv("RENDER_GIT_COMMIT", "render-commit-123")
+    monkeypatch.setenv("LIVE_CAPITAL_VERIFIED", "true")
+    monkeypatch.setenv("DRY_RUN_MODE", "false")
+    monkeypatch.setenv("PAPER_MODE", "false")
+
+    report = module.validate_runtime(ROOT)
+
+    assert report["branch"] == "main"
+    assert report["commit"] == "render-commit-123"
+
+
+def test_live_attestation_rejects_unknown_commit_across_all_providers(monkeypatch):
+    _clear_provider_metadata(monkeypatch)
     module = _load_module()
     monkeypatch.setenv("GIT_BRANCH", "main")
     monkeypatch.setenv("GIT_COMMIT", "unknown")
+    monkeypatch.setenv("RENDER_GIT_COMMIT", "none")
+    monkeypatch.setenv("RAILWAY_GIT_COMMIT_SHA", "null")
     monkeypatch.setenv("LIVE_CAPITAL_VERIFIED", "true")
     monkeypatch.setenv("DRY_RUN_MODE", "false")
     monkeypatch.setenv("PAPER_MODE", "false")
@@ -68,6 +101,7 @@ def test_live_attestation_rejects_unknown_commit(monkeypatch):
 
 
 def test_paper_mode_allows_unknown_commit_for_local_validation(monkeypatch):
+    _clear_provider_metadata(monkeypatch)
     module = _load_module()
     monkeypatch.setenv("GIT_BRANCH", "unknown")
     monkeypatch.setenv("GIT_COMMIT", "unknown")
