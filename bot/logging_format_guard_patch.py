@@ -22,21 +22,28 @@ def _truthy(name: str) -> bool:
     return str(os.environ.get(name, "") or "").strip().lower() in _TRUE
 
 
+def _live_intent() -> bool:
+    if _truthy("DRY_RUN_MODE") or _truthy("PAPER_MODE"):
+        return False
+    state = str(os.environ.get("NIJA_RUNTIME_TRADING_STATE", "") or "").strip().upper()
+    return bool(
+        _truthy("LIVE_TRADING")
+        or _truthy("LIVE_CAPITAL_VERIFIED")
+        or _truthy("NIJA_EXECUTION_ACTIVE")
+        or state.startswith("LIVE_")
+    )
+
+
 def _acquire_writer_authority_before_runtime_repairs() -> None:
     """Acquire the reviewed canonical lease before sitecustomize starts monitors.
 
-    The Docker ``.pth`` hook remains defense in depth.  This source-level path
+    The Docker ``.pth`` hook remains defense in depth. This source-level path
     also works when a platform starts directly from repository source or omits
-    image-installed ``.pth`` files.  The delegated guard remains fail-closed and
+    image-installed ``.pth`` files. The delegated guard remains fail-closed and
     reuses the same singleton later consumed by ``bot_main``.
     """
 
-    live = (
-        _truthy("LIVE_CAPITAL_VERIFIED")
-        and not _truthy("DRY_RUN_MODE")
-        and not _truthy("PAPER_MODE")
-    )
-    if not live:
+    if not _live_intent():
         return
 
     previous_force = os.environ.get("NIJA_PREBOT_WRITER_AUTHORITY_FORCE")
@@ -99,11 +106,7 @@ def _install_canonical_broker_startup_convergence() -> None:
             exc,
             exc_info=True,
         )
-        if (
-            _truthy("LIVE_CAPITAL_VERIFIED")
-            and not _truthy("DRY_RUN_MODE")
-            and not _truthy("PAPER_MODE")
-        ):
+        if _live_intent():
             raise
 
 
