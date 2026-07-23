@@ -78,7 +78,7 @@ def test_invalid_cdp_secret_is_quarantined_without_blocking_other_venues(monkeyp
     assert os.environ["NIJA_DISABLE_COINBASE"] == "true"
     assert os.environ["ENABLE_COINBASE_TRADING"] == "false"
     assert os.environ["COINBASE_LIVE_TRADING_ENABLED"] == "false"
-    assert os.environ["NIJA_COINBASE_PEM_INVALID_REASON"]
+    assert os.environ["NIJA_COINBASE_PEM_INVALID_REASON"] == "validation_failed"
 
 
 def test_later_valid_alias_wins_over_stale_primary_alias(monkeypatch):
@@ -121,6 +121,7 @@ def test_non_cdp_legacy_secret_is_not_falsely_quarantined(monkeypatch):
 def test_quarantine_state_is_restored_after_generic_activation_skip(monkeypatch):
     module = importlib.import_module("secondary_venue_runtime_diagnostics")
     monkeypatch.setenv("NIJA_COINBASE_PEM_QUARANTINED", "1")
+    monkeypatch.setenv("NIJA_COINBASE_PEM_STATE", "valid")
     monkeypatch.setenv("NIJA_COINBASE_ACTIVATION_STATE", "disabled")
     monkeypatch.setenv("NIJA_COINBASE_CONNECTED", "1")
     monkeypatch.setenv("NIJA_COINBASE_TRADING_READY", "1")
@@ -130,6 +131,7 @@ def test_quarantine_state_is_restored_after_generic_activation_skip(monkeypatch)
 
     module._restore_coinbase_quarantine_state()
 
+    assert os.environ["NIJA_COINBASE_PEM_STATE"] == "invalid"
     assert os.environ["NIJA_COINBASE_PEM_VALID"] == "0"
     assert os.environ["NIJA_COINBASE_ACTIVATION_STATE"] == "quarantined_invalid_pem"
     assert os.environ["NIJA_COINBASE_CONNECTED"] == "0"
