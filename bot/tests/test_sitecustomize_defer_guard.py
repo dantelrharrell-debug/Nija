@@ -37,7 +37,7 @@ def test_deferred_python_does_not_execute_real_sitecustomize(tmp_path: Path) -> 
 
     if os.name == "nt":
         python = venv / "Scripts" / "python.exe"
-        site_packages = next((venv / "Lib" / "site-packages",), None)
+        site_packages = venv / "Lib" / "site-packages"
     else:
         python = venv / "bin" / "python"
         site_packages = next((venv / "lib").glob("python*/site-packages"))
@@ -52,24 +52,46 @@ def test_deferred_python_does_not_execute_real_sitecustomize(tmp_path: Path) -> 
     )
     module.install(site_packages=site_packages, app_root=str(app_root))
 
+    # Use -S and explicitly process only the test venv's site-packages. This
+    # avoids Ubuntu's distribution-level /usr/lib/.../sitecustomize.py from
+    # changing which module wins the normal-mode import in CI.
     env = os.environ.copy()
+    env.pop("PYTHONPATH", None)
     env["NIJA_DEFER_RUNTIME_SITE_HOOKS"] = "1"
+    deferred_code = (
+        "import site,sys; "
+        f"site.addsitedir({str(site_packages)!r}); "
+        "mod=sys.modules.get('sitecustomize'); "
+        "print('stub=' + ('1' if mod is not None and not getattr(mod, '__file__', None) else '0'))"
+    )
     result = subprocess.run(
-        [python, "-c", "import sitecustomize; print(sitecustomize.__name__)"],
+        [python, "-S", "-c", deferred_code],
         env=env,
+        cwd=tmp_path,
         check=True,
         capture_output=True,
         text=True,
     )
-    assert result.stdout.strip() == "sitecustomize"
+    assert result.stdout.strip() == "stub=1"
     assert not marker.exists()
 
+    # With the defer flag absent, processing the same .pth file must not insert
+    # the stub. The real application sitecustomize remains importable and runs.
     env.pop("NIJA_DEFER_RUNTIME_SITE_HOOKS", None)
-    subprocess.run(
-        [python, "-c", "import sitecustomize"],
+    normal_code = (
+        "import importlib,site,sys; "
+        f"site.addsitedir({str(site_packages)!r}); "
+        "print('stub_before=' + ('1' if 'sitecustomize' in sys.modules else '0')); "
+        f"sys.path.insert(0, {str(app_root)!r}); "
+        "importlib.import_module('sitecustomize')"
+    )
+    result = subprocess.run(
+        [python, "-S", "-c", normal_code],
         env=env,
+        cwd=tmp_path,
         check=True,
         capture_output=True,
         text=True,
     )
+    assert result.stdout.strip() == "stub_before=0"
     assert marker.read_text(encoding="utf-8") == "ran"
