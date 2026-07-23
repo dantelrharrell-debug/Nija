@@ -7,7 +7,8 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY scripts/ scripts/
 COPY . .
-RUN python -S /app/apply_bot_package_defer_fix.py && \
+RUN python -S /app/scripts/install_sitecustomize_defer_guard.py && \
+    python -S /app/apply_bot_package_defer_fix.py && \
     python -S /app/scripts/apply_startup_handoff_fix.py && \
     bash -n /app/start.sh && \
     bash -n /app/scripts/production_bootstrap.sh
@@ -15,6 +16,7 @@ RUN python -m py_compile \
         /app/main.py \
         /app/bot.py \
         /app/apply_bot_package_defer_fix.py \
+        /app/scripts/install_sitecustomize_defer_guard.py \
         /app/render_liveness_server.py \
         /app/render_readiness_state_bridge.py \
         /app/prebot_writer_authority_bootstrap.py \

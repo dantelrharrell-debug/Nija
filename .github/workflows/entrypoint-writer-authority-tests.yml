@@ -11,6 +11,7 @@ on:
       - 'apply_bot_package_defer_fix.py'
       - 'scripts/production_bootstrap.sh'
       - 'scripts/apply_startup_handoff_fix.py'
+      - 'scripts/install_sitecustomize_defer_guard.py'
       - 'scripts/three_venue_config_check.py'
       - 'render_liveness_server.py'
       - 'render_readiness_state_bridge.py'
@@ -27,6 +28,7 @@ on:
       - 'bot/bot_main.py'
       - 'bot/tests/test_bot_package_defer_fix.py'
       - 'bot/tests/test_startup_handoff_all_fixes.py'
+      - 'bot/tests/test_sitecustomize_defer_guard.py'
       - 'bot/tests/test_three_venue_execution_readiness.py'
       - 'bot/tests/test_import_hook_chain_compactor.py'
       - 'bot/tests/test_activation_pending_startup_order.py'
@@ -52,6 +54,7 @@ on:
       - 'apply_bot_package_defer_fix.py'
       - 'scripts/production_bootstrap.sh'
       - 'scripts/apply_startup_handoff_fix.py'
+      - 'scripts/install_sitecustomize_defer_guard.py'
       - 'scripts/three_venue_config_check.py'
       - 'render_liveness_server.py'
       - 'render_readiness_state_bridge.py'
@@ -68,6 +71,7 @@ on:
       - 'bot/bot_main.py'
       - 'bot/tests/test_bot_package_defer_fix.py'
       - 'bot/tests/test_startup_handoff_all_fixes.py'
+      - 'bot/tests/test_sitecustomize_defer_guard.py'
       - 'bot/tests/test_three_venue_execution_readiness.py'
       - 'bot/tests/test_import_hook_chain_compactor.py'
       - 'bot/tests/test_activation_pending_startup_order.py'
@@ -136,6 +140,7 @@ jobs:
           ! grep -A3 'HEALTHCHECK' Dockerfile | grep -Fq 'import requests'
           grep -Fq 'python3 -S - "$1"' scripts/production_bootstrap.sh
           grep -Fq 'python3 -S - "$@"' scripts/production_bootstrap.sh
+          grep -Fq 'install_sitecustomize_defer_guard.py' Dockerfile
           grep -Fq 'apply_bot_package_defer_fix.py' Dockerfile
           grep -Fq 'apply_startup_handoff_fix.py' Dockerfile
 
@@ -143,6 +148,7 @@ jobs:
         run: |
           python -m py_compile \
             apply_bot_package_defer_fix.py \
+            scripts/install_sitecustomize_defer_guard.py \
             scripts/apply_startup_handoff_fix.py \
             render_liveness_server.py \
             render_readiness_state_bridge.py \
@@ -161,6 +167,8 @@ jobs:
 
       - name: Test bot package runtime defer
         run: python -m pytest -q bot/tests/test_bot_package_defer_fix.py
+      - name: Test sitecustomize runtime defer
+        run: python -m pytest -q bot/tests/test_sitecustomize_defer_guard.py
       - name: Test startup handoff ordering
         run: python -m pytest -q bot/tests/test_startup_handoff_all_fixes.py
       - name: Test three-venue readiness
