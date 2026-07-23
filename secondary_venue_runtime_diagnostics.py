@@ -1,8 +1,11 @@
 """Normalize secondary-venue credentials and expose fail-closed diagnostics."""
 from __future__ import annotations
 
+import base64
+import json
 import logging
 import os
+import re
 import threading
 import time
 from typing import Any
@@ -12,6 +15,19 @@ _MARKER = "20260720-secondary-runtime-diagnostics-v3"
 _INSTALLED = False
 _LOCK = threading.RLock()
 _LAST_LOG: dict[str, float] = {}
+_COINBASE_SECRET_ALIASES = (
+    "COINBASE_API_SECRET",
+    "COINBASE_PLATFORM_API_SECRET",
+    "COINBASE_ADVANCED_API_SECRET",
+    "COINBASE_PEM_CONTENT",
+    "COINBASE_API_PRIVATE_KEY",
+    "COINBASE_PRIVATE_KEY",
+)
+_COINBASE_KEY_ALIASES = (
+    "COINBASE_API_KEY",
+    "COINBASE_PLATFORM_API_KEY",
+    "COINBASE_ADVANCED_API_KEY",
+)
 
 
 def _strip_outer_quotes(value: str) -> str:
@@ -21,10 +37,57 @@ def _strip_outer_quotes(value: str) -> str:
     return value
 
 
+def _extract_json_secret(value: str) -> str:
+    try:
+        payload = json.loads(value)
+    except Exception:
+        return value
+    if not isinstance(payload, dict):
+        return value
+    lowered = {str(key).lower(): item for key, item in payload.items()}
+    for key in (
+        "privatekey",
+        "private_key",
+        "apisecret",
+        "api_secret",
+        "secret",
+        "pem",
+        "pem_content",
+    ):
+        candidate = lowered.get(key)
+        if candidate:
+            return str(candidate)
+    return value
+
+
+def _decode_possible_base64(value: str) -> str:
+    candidate = re.sub(r"\s+", "", value)
+    if len(candidate) < 80 or len(candidate) % 4:
+        return value
+    try:
+        decoded = base64.b64decode(candidate, validate=True).decode("utf-8").strip()
+    except Exception:
+        return value
+    return decoded if "PRIVATE KEY" in decoded else value
+
+
 def normalize_coinbase_private_key(value: str) -> str:
     value = _strip_outer_quotes(str(value or ""))
+    value = _extract_json_secret(value)
+    value = _strip_outer_quotes(value)
     value = value.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\r\n", "\n").replace("\r", "\n")
-    value = value.strip()
+    value = _decode_possible_base64(value).replace("\\n", "\n").strip()
+    match = re.search(
+        r"-----BEGIN (?P<label>(?:EC )?PRIVATE KEY)-----\s*(?P<body>.*?)\s*-----END (?P=label)-----",
+        value,
+        flags=re.DOTALL,
+    )
+    if match:
+        label = match.group("label")
+        body = re.sub(r"\s+", "", match.group("body"))
+        if body:
+            wrapped = "\n".join(body[index : index + 64] for index in range(0, len(body), 64))
+            return f"-----BEGIN {label}-----\n{wrapped}\n-----END {label}-----\n"
     return value + ("\n" if value else "")
 
 
@@ -45,6 +108,13 @@ def _validate_coinbase_key(secret: str) -> tuple[bool, str]:
             return True, "authenticated_connection"
         return False, f"{type(exc).__name__}:{str(exc)[:120]}"
     return True, "valid_es256"
+
+
+def _coinbase_pem_expected(candidates: list[tuple[str, str]]) -> bool:
+    key_text = " ".join(str(os.environ.get(name, "") or "") for name in _COINBASE_KEY_ALIASES).lower()
+    if "organizations/" in key_text or "/apikeys/" in key_text:
+        return True
+    return any("PRIVATE KEY" in raw.upper() or "PRIVATEKEY" in raw.upper() for _, raw in candidates)
 
 
 def _quarantine_coinbase(reason: str) -> None:
@@ -80,45 +150,67 @@ def _restore_coinbase_quarantine_state() -> None:
 
 
 def _normalize_coinbase_env() -> None:
-    aliases = (
-        "COINBASE_API_SECRET",
-        "COINBASE_PLATFORM_API_SECRET",
-        "COINBASE_ADVANCED_API_SECRET",
-        "COINBASE_PEM_CONTENT",
-    )
-    source = next((name for name in aliases if os.environ.get(name, "").strip()), "")
-    if not source:
+    candidates = [
+        (name, str(os.environ.get(name, "") or "").strip())
+        for name in _COINBASE_SECRET_ALIASES
+        if str(os.environ.get(name, "") or "").strip()
+    ]
+    if not candidates:
         os.environ["NIJA_COINBASE_PEM_STATE"] = "missing"
         os.environ["NIJA_COINBASE_CONNECTED"] = "0"
         os.environ["NIJA_COINBASE_TRADING_READY"] = "0"
         logger.error("COINBASE_PEM_INVALID marker=%s reason=missing_secret", _MARKER)
         return
 
-    normalized = normalize_coinbase_private_key(os.environ[source])
-    for name in aliases:
-        if name == source or not os.environ.get(name, "").strip():
-            os.environ[name] = normalized
+    failures: list[str] = []
+    selected_source = ""
+    selected_secret = ""
+    selected_reason = ""
+    for source, raw in candidates:
+        normalized = normalize_coinbase_private_key(raw)
+        valid, reason = _validate_coinbase_key(normalized)
+        if valid:
+            selected_source = source
+            selected_secret = normalized
+            selected_reason = reason
+            break
+        failures.append(f"{source}:{reason}")
 
-    valid, reason = _validate_coinbase_key(normalized)
-    os.environ["NIJA_COINBASE_PEM_STATE"] = "valid" if valid else "invalid"
-    if valid:
+    if selected_secret:
+        for name in _COINBASE_SECRET_ALIASES:
+            os.environ[name] = selected_secret
+        os.environ["NIJA_COINBASE_PEM_STATE"] = "valid"
         os.environ["NIJA_COINBASE_PEM_QUARANTINED"] = "0"
         os.environ.pop("NIJA_COINBASE_PEM_INVALID_REASON", None)
         logger.warning(
-            "COINBASE_PEM_NORMALIZED marker=%s source=%s newline_count=%d reason=%s",
+            "COINBASE_PEM_NORMALIZED marker=%s source=%s newline_count=%d reason=%s candidates=%d",
             _MARKER,
-            source,
-            normalized.count("\n"),
+            selected_source,
+            selected_secret.count("\n"),
+            selected_reason,
+            len(candidates),
+        )
+        return
+
+    reason = ";".join(failures)[:200] or "no_valid_candidate"
+    if not _coinbase_pem_expected(candidates):
+        os.environ["NIJA_COINBASE_PEM_STATE"] = "legacy_unverified"
+        logger.warning(
+            "COINBASE_PEM_NOT_REQUIRED marker=%s candidates=%d reason=%s",
+            _MARKER,
+            len(candidates),
             reason,
         )
-    else:
-        logger.error(
-            "COINBASE_PEM_INVALID marker=%s source=%s reason=%s",
-            _MARKER,
-            source,
-            reason,
-        )
-        _quarantine_coinbase(reason)
+        return
+
+    os.environ["NIJA_COINBASE_PEM_STATE"] = "invalid"
+    logger.error(
+        "COINBASE_PEM_INVALID marker=%s candidates=%d reason=%s",
+        _MARKER,
+        len(candidates),
+        reason,
+    )
+    _quarantine_coinbase(reason)
 
 
 def _log_state(venue: str, *, force: bool = False) -> None:
