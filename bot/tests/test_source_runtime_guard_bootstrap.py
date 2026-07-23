@@ -88,6 +88,7 @@ def test_source_bootstrap_installs_current_guard_chain_in_order(monkeypatch):
     _reset_source_bootstrap(monkeypatch)
     calls: list[str] = []
     modules, expected = _fake_runtime_modules(calls)
+    expected.insert(expected.index("downstream_risk"), "zero_signal_state")
 
     real_import = source_bootstrap.importlib.import_module
     monkeypatch.setattr(
@@ -103,6 +104,7 @@ def test_source_bootstrap_installs_current_guard_chain_in_order(monkeypatch):
     assert source_bootstrap.install() is True
     assert source_bootstrap.install() is True
     assert calls == expected
+    assert calls.count("zero_signal_state") == 2
     assert calls.index("scan_depth") < calls.index("convergence")
     assert calls.index("scan_delegate") < calls.index("scan_clamp")
     assert calls.index("scan_owner") < calls.index("downstream_risk")
