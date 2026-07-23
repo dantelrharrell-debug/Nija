@@ -65,6 +65,31 @@ def _install_logging_format_guard() -> None:
         logger.warning("LOGGING_FORMAT_GUARD_INSTALL_FAILED err=%s", exc)
 
 
+def _install_live_broker_profit_exit_v25() -> None:
+    """Install fill-confirmed, fee-aware broker and engine exits."""
+
+    try:
+        repair = importlib.import_module("bot.live_broker_profit_exit_convergence_v25")
+        installer = getattr(repair, "install_import_hook", None) or getattr(repair, "install", None)
+        if not callable(installer) or not bool(installer()):
+            raise RuntimeError("broker v25 installer unavailable or returned false")
+        engine_repair = importlib.import_module("bot.live_engine_profit_exit_convergence_v25")
+        engine_installer = getattr(engine_repair, "install_import_hook", None) or getattr(engine_repair, "install", None)
+        if not callable(engine_installer) or not bool(engine_installer()):
+            raise RuntimeError("engine v25 installer unavailable or returned false")
+        print("LIVE_BROKER_PROFIT_EXIT_V25_INSTALL_REQUESTED", flush=True)
+        logger.critical("LIVE_BROKER_PROFIT_EXIT_V25_INSTALL_REQUESTED broker_and_engine=true")
+    except Exception as exc:
+        logger.critical("LIVE_BROKER_PROFIT_EXIT_V25_INSTALL_FAILED err=%s", exc, exc_info=True)
+        live = (
+            str(os.environ.get("LIVE_TRADING", "")).lower() in {"1", "true", "yes", "on"}
+            or str(os.environ.get("LIVE_CAPITAL_VERIFIED", "")).lower() in {"1", "true", "yes", "on"}
+            or str(os.environ.get("NIJA_EXECUTION_ACTIVE", "")).lower() in {"1", "true", "yes", "on"}
+        ) and str(os.environ.get("DRY_RUN_MODE", "")).lower() not in {"1", "true", "yes", "on"} and str(os.environ.get("PAPER_MODE", "")).lower() not in {"1", "true", "yes", "on"}
+        if live:
+            raise
+
+
 def _run_pre_startup_sanitization() -> None:
     """Sanitize live Redis bypass flags before startup safety initializes."""
 
@@ -236,6 +261,7 @@ def _install_live_entry_completion_repair() -> None:
 
 _install_global_runtime_startup_guards()
 _install_logging_format_guard()
+_install_live_broker_profit_exit_v25()
 _run_pre_startup_sanitization()
 _install_strategy_publication()
 _install_authority_readiness_repair()

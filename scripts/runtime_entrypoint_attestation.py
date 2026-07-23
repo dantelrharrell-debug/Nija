@@ -3,7 +3,8 @@
 This script intentionally uses only the Python standard library and never imports the
 ``bot`` package. It is safe to run with ``python -S`` while runtime site hooks are
 deferred. The goal is to prove that the deployed image contains the canonical path
-and the current broker-prebootstrap safeguards before the live Python process starts.
+and the current broker-prebootstrap and fill-confirmed exit safeguards before the
+live Python process starts.
 """
 from __future__ import annotations
 
@@ -13,7 +14,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-_MARKER = "20260723-runtime-entrypoint-attestation-v24"
+_MARKER = "20260723-runtime-entrypoint-attestation-v25"
 _CANONICAL_PATH = "main.py->bot.bot->bot.bot_main"
 _PLACEHOLDERS = {"", "unknown", "none", "null", "unset", "n/a", "na"}
 _PROVIDER_LITERAL = re.compile(
@@ -31,7 +32,11 @@ class FileContract:
 _CONTRACTS = (
     FileContract(
         "main.py",
-        ('runpy.run_module("bot.bot", run_name="__main__")',),
+        (
+            'runpy.run_module("bot.bot", run_name="__main__")',
+            "_install_live_broker_profit_exit_v25",
+            "LIVE_BROKER_PROFIT_EXIT_V25_INSTALL_REQUESTED",
+        ),
     ),
     FileContract(
         "bot/bot.py",
@@ -62,6 +67,26 @@ _CONTRACTS = (
             "20260723-canonical-broker-startup-convergence-v24",
             "CANONICAL_BROKER_STARTUP_CONVERGENCE_V24_READY",
             "_patch_self_healing_module",
+        ),
+    ),
+    FileContract(
+        "bot/live_broker_profit_exit_convergence_v25.py",
+        (
+            "20260723-live-broker-profit-exit-v25",
+            "LIVE_BROKER_EXIT_FILL_CONFIRMED",
+            "LIVE_EXIT_PROFIT_FLOOR_WAIT",
+            "LIVE_BROKER_CONNECTIVITY_SNAPSHOT",
+            "NIJA_LIVE_BROKER_PROFIT_EXIT_V25_INSTALLED",
+        ),
+    ),
+    FileContract(
+        "bot/live_engine_profit_exit_convergence_v25.py",
+        (
+            "20260723-live-engine-profit-exit-v25",
+            "LIVE_ENGINE_EXIT_FILL_CONFIRMED",
+            "LIVE_ENGINE_PROFIT_EXIT_CLASS_PATCHED",
+            "LIVE_ENGINE_PROFIT_EXIT_V25_INSTALLED",
+            "future_import_safe=true",
         ),
     ),
     FileContract(
