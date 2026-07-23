@@ -35,6 +35,7 @@ def _validate_coinbase_key(secret: str) -> tuple[bool, str]:
         return False, "missing_pem_header"
     try:
         from cryptography.hazmat.primitives import serialization
+
         key = serialization.load_pem_private_key(secret.encode("utf-8"), password=None)
         curve = getattr(getattr(key, "curve", None), "name", "unknown")
         if curve not in {"secp256r1", "prime256v1"}:
@@ -46,23 +47,65 @@ def _validate_coinbase_key(secret: str) -> tuple[bool, str]:
     return True, "valid_es256"
 
 
+def _quarantine_coinbase(reason: str) -> None:
+    """Isolate an invalid optional Coinbase venue before connection attempts."""
+
+    os.environ["NIJA_COINBASE_PEM_QUARANTINED"] = "1"
+    os.environ["NIJA_COINBASE_PEM_INVALID_REASON"] = str(reason or "invalid")[:200]
+    os.environ["NIJA_COINBASE_ACTIVATION_STATE"] = "quarantined_invalid_pem"
+    os.environ["NIJA_COINBASE_CONNECTED"] = "0"
+    os.environ["NIJA_COINBASE_TRADING_READY"] = "0"
+    os.environ["NIJA_DISABLE_COINBASE"] = "true"
+    os.environ["ENABLE_COINBASE_TRADING"] = "false"
+    os.environ["COINBASE_LIVE_TRADING_ENABLED"] = "false"
+    logger.critical(
+        "COINBASE_PEM_QUARANTINED marker=%s reason=%s "
+        "kraken_and_okx_remain_independent=true",
+        _MARKER,
+        reason,
+    )
+
+
 def _normalize_coinbase_env() -> None:
-    aliases = ("COINBASE_API_SECRET", "COINBASE_PLATFORM_API_SECRET", "COINBASE_ADVANCED_API_SECRET", "COINBASE_PEM_CONTENT")
+    aliases = (
+        "COINBASE_API_SECRET",
+        "COINBASE_PLATFORM_API_SECRET",
+        "COINBASE_ADVANCED_API_SECRET",
+        "COINBASE_PEM_CONTENT",
+    )
     source = next((name for name in aliases if os.environ.get(name, "").strip()), "")
     if not source:
         os.environ["NIJA_COINBASE_PEM_STATE"] = "missing"
+        os.environ["NIJA_COINBASE_CONNECTED"] = "0"
+        os.environ["NIJA_COINBASE_TRADING_READY"] = "0"
         logger.error("COINBASE_PEM_INVALID marker=%s reason=missing_secret", _MARKER)
         return
+
     normalized = normalize_coinbase_private_key(os.environ[source])
     for name in aliases:
         if name == source or not os.environ.get(name, "").strip():
             os.environ[name] = normalized
+
     valid, reason = _validate_coinbase_key(normalized)
     os.environ["NIJA_COINBASE_PEM_STATE"] = "valid" if valid else "invalid"
     if valid:
-        logger.warning("COINBASE_PEM_NORMALIZED marker=%s source=%s newline_count=%d reason=%s", _MARKER, source, normalized.count("\n"), reason)
+        os.environ["NIJA_COINBASE_PEM_QUARANTINED"] = "0"
+        os.environ.pop("NIJA_COINBASE_PEM_INVALID_REASON", None)
+        logger.warning(
+            "COINBASE_PEM_NORMALIZED marker=%s source=%s newline_count=%d reason=%s",
+            _MARKER,
+            source,
+            normalized.count("\n"),
+            reason,
+        )
     else:
-        logger.error("COINBASE_PEM_INVALID marker=%s source=%s reason=%s", _MARKER, source, reason)
+        logger.error(
+            "COINBASE_PEM_INVALID marker=%s source=%s reason=%s",
+            _MARKER,
+            source,
+            reason,
+        )
+        _quarantine_coinbase(reason)
 
 
 def _log_state(venue: str, *, force: bool = False) -> None:
@@ -77,10 +120,14 @@ def _log_state(venue: str, *, force: bool = False) -> None:
         os.environ["NIJA_COINBASE_PEM_STATE"] = "valid"
     logger.warning(
         "SECONDARY_VENUE_RUNTIME_STATE marker=%s venue=%s activation=%s connected=%s ready=%s spendable=%s base_url=%s pem=%s",
-        _MARKER, venue, os.environ.get(f"NIJA_{upper}_ACTIVATION_STATE", "unknown"),
-        os.environ.get(f"NIJA_{upper}_CONNECTED", "0"), os.environ.get(f"NIJA_{upper}_TRADING_READY", "0"),
+        _MARKER,
+        venue,
+        os.environ.get(f"NIJA_{upper}_ACTIVATION_STATE", "unknown"),
+        os.environ.get(f"NIJA_{upper}_CONNECTED", "0"),
+        os.environ.get(f"NIJA_{upper}_TRADING_READY", "0"),
         os.environ.get(f"NIJA_{upper}_SPENDABLE_QUOTE", "unknown"),
-        os.environ.get("OKX_BASE_URL", "default") if venue == "okx" else "api.coinbase.com", pem,
+        os.environ.get("OKX_BASE_URL", "default") if venue == "okx" else "api.coinbase.com",
+        pem,
     )
 
 
@@ -88,11 +135,16 @@ def _install_activation_observer() -> None:
     try:
         import secondary_venue_activation_patch as patch
     except Exception as exc:
-        logger.warning("SECONDARY_VENUE_DIAGNOSTIC_IMPORT_PENDING marker=%s error=%s", _MARKER, type(exc).__name__)
+        logger.warning(
+            "SECONDARY_VENUE_DIAGNOSTIC_IMPORT_PENDING marker=%s error=%s",
+            _MARKER,
+            type(exc).__name__,
+        )
         return
     original = getattr(patch, "activate_once", None)
     if not callable(original) or getattr(original, "_nija_runtime_diag_v20260720", False):
         return
+
     def wrapped(venue: Any, *args: Any, **kwargs: Any) -> str:
         name = str(getattr(venue, "name", "unknown"))
         try:
@@ -102,6 +154,7 @@ def _install_activation_observer() -> None:
             raise
         _log_state(name, force=True)
         return result
+
     wrapped._nija_runtime_diag_v20260720 = True  # type: ignore[attr-defined]
     wrapped.__wrapped__ = original  # type: ignore[attr-defined]
     patch.activate_once = wrapped
@@ -110,9 +163,14 @@ def _install_activation_observer() -> None:
 def _install_scan_owner_repair() -> None:
     try:
         import reentrant_scan_owner_repair as repair
+
         repair.install()
     except Exception as exc:
-        logger.warning("REENTRANT_SCAN_OWNER_REPAIR_IMPORT_PENDING marker=%s error=%s", _MARKER, type(exc).__name__)
+        logger.warning(
+            "REENTRANT_SCAN_OWNER_REPAIR_IMPORT_PENDING marker=%s error=%s",
+            _MARKER,
+            type(exc).__name__,
+        )
 
 
 def install() -> None:
@@ -124,14 +182,22 @@ def install() -> None:
         _normalize_coinbase_env()
         try:
             import coinbase_authenticated_connect_recovery_patch as auth_recovery
+
             auth_recovery.install()
         except Exception:
-            logger.exception("COINBASE_AUTHENTICATED_CONNECT_RECOVERY_IMPORT_FAILED marker=%s", _MARKER)
+            logger.exception(
+                "COINBASE_AUTHENTICATED_CONNECT_RECOVERY_IMPORT_FAILED marker=%s",
+                _MARKER,
+            )
         try:
             import coinbase_capital_consistency_patch as consistency
+
             consistency.install()
         except Exception:
-            logger.exception("COINBASE_CAPITAL_CONSISTENCY_IMPORT_FAILED marker=%s", _MARKER)
+            logger.exception(
+                "COINBASE_CAPITAL_CONSISTENCY_IMPORT_FAILED marker=%s",
+                _MARKER,
+            )
         _install_activation_observer()
         _install_scan_owner_repair()
         logger.warning("SECONDARY_VENUE_RUNTIME_DIAGNOSTICS_INSTALLED marker=%s", _MARKER)
@@ -139,4 +205,9 @@ def install() -> None:
 
 install()
 
-__all__ = ["install", "normalize_coinbase_private_key"]
+__all__ = [
+    "install",
+    "normalize_coinbase_private_key",
+    "_normalize_coinbase_env",
+    "_quarantine_coinbase",
+]
