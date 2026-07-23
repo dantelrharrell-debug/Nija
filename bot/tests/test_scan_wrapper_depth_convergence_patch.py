@@ -65,9 +65,10 @@ def test_inspect_chain_ignores_markers_copied_by_wraps():
     outer.__wrapped__ = canonical
     status = patch.inspect_chain(outer)
 
-    # wraps copied both ownership marker attributes onto outer, but outer's code
-    # was not defined by either owner module.
-    assert status["raw_broker_markers"] == 2
+    # wraps copies the direct wrapped function's marker dictionary. The outer
+    # function therefore repeats the canonical marker, while the deeper broker
+    # marker remains present only on the broker wrapper that actually owns it.
+    assert status["raw_broker_markers"] == 1
     assert status["raw_canonical_markers"] == 2
     assert status["broker_layers"] == 1
     assert status["canonical_layers"] == 1
