@@ -48,3 +48,15 @@ def test_docker_validates_module_presence_without_starting_runtime_hooks() -> No
     assert "NIJA_BUILD_MODULE_PRESENCE_OK" in dockerfile
     assert "pathlib.Path('/app/apply_bot_package_defer_fix.py')" in dockerfile
     assert "pathlib.Path('/app/exit_protection_assurance_patch.py')" in dockerfile
+
+
+def test_all_post_guard_build_python_is_site_isolated() -> None:
+    dockerfile = _dockerfile()
+
+    assert "RUN NIJA_DEFER_RUNTIME_SITE_HOOKS=1 python -S -m py_compile" in dockerfile
+    assert (
+        "RUN NIJA_DEFER_RUNTIME_SITE_HOOKS=1 python -S -c "
+        "\"import pathlib, sysconfig; root = pathlib.Path(sysconfig.get_paths()['purelib'])"
+    ) in dockerfile
+    assert "RUN python -m py_compile" not in dockerfile
+    assert "RUN python -c \"import pathlib, site;" not in dockerfile
