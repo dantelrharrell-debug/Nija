@@ -15,12 +15,16 @@ on:
       - "bot/live_active_dispatch_bridge_patch.py"
       - "bot/runtime_patch_churn_safety_patch.py"
       - "bot/generation_sync_timing_patch.py"
+      - "bot/canonical_broker_main_entry_guard_v20.py"
+      - "bot/stalled_writer_release_guard_v21.py"
       - "bot/tests/test_strategy_runtime_integrity_patch.py"
       - "bot/tests/test_disconnected_coinbase_balance_guard_patch.py"
       - "bot/tests/test_okx_patch_churn_guard_patch.py"
       - "bot/tests/test_okx_order_wrapper_stability_v2.py"
       - "bot/tests/test_live_active_dispatch_bridge_recovery.py"
       - "bot/tests/test_runtime_patch_churn_safety_patch.py"
+      - "bot/tests/test_canonical_broker_main_entry_guard_v20.py"
+      - "bot/tests/test_stalled_writer_release_guard_v21.py"
       - "scripts/install_sitecustomize_defer_guard.py"
       - ".github/workflows/runtime-repair-regression.yml"
   push:
@@ -38,12 +42,16 @@ on:
       - "bot/live_active_dispatch_bridge_patch.py"
       - "bot/runtime_patch_churn_safety_patch.py"
       - "bot/generation_sync_timing_patch.py"
+      - "bot/canonical_broker_main_entry_guard_v20.py"
+      - "bot/stalled_writer_release_guard_v21.py"
       - "bot/tests/test_strategy_runtime_integrity_patch.py"
       - "bot/tests/test_disconnected_coinbase_balance_guard_patch.py"
       - "bot/tests/test_okx_patch_churn_guard_patch.py"
       - "bot/tests/test_okx_order_wrapper_stability_v2.py"
       - "bot/tests/test_live_active_dispatch_bridge_recovery.py"
       - "bot/tests/test_runtime_patch_churn_safety_patch.py"
+      - "bot/tests/test_canonical_broker_main_entry_guard_v20.py"
+      - "bot/tests/test_stalled_writer_release_guard_v21.py"
       - "scripts/install_sitecustomize_defer_guard.py"
       - ".github/workflows/runtime-repair-regression.yml"
 
@@ -84,6 +92,8 @@ jobs:
             bot/live_active_dispatch_bridge_patch.py \
             bot/runtime_patch_churn_safety_patch.py \
             bot/generation_sync_timing_patch.py \
+            bot/canonical_broker_main_entry_guard_v20.py \
+            bot/stalled_writer_release_guard_v21.py \
             bot/bot.py
 
       - name: Run focused regression suite
@@ -95,4 +105,6 @@ jobs:
             bot/tests/test_okx_patch_churn_guard_patch.py \
             bot/tests/test_okx_order_wrapper_stability_v2.py \
             bot/tests/test_live_active_dispatch_bridge_recovery.py \
-            bot/tests/test_runtime_patch_churn_safety_patch.py
+            bot/tests/test_runtime_patch_churn_safety_patch.py \
+            bot/tests/test_canonical_broker_main_entry_guard_v20.py \
+            bot/tests/test_stalled_writer_release_guard_v21.py
