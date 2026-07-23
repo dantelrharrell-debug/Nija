@@ -80,6 +80,16 @@ _CONTRACTS = (
         ),
     ),
     FileContract(
+        "bot/live_engine_profit_exit_convergence_v25.py",
+        (
+            "20260723-live-engine-profit-exit-v25",
+            "LIVE_ENGINE_EXIT_FILL_CONFIRMED",
+            "LIVE_ENGINE_PROFIT_EXIT_CLASS_PATCHED",
+            "LIVE_ENGINE_PROFIT_EXIT_V25_INSTALLED",
+            "future_import_safe=true",
+        ),
+    ),
+    FileContract(
         "bot/logging_format_guard_patch.py",
         (
             "CANONICAL_BROKER_STARTUP_CONVERGENCE_V24_INSTALL_REQUESTED",
