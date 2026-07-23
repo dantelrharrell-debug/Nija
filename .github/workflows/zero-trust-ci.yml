@@ -154,7 +154,7 @@ jobs:
           exit-code: '0'
 
   test:
-    name: Test (Isolated Environment) (${{ matrix.test-group }})
+    name: Test (Isolated Environment) (${{ matrix.test_group }})
     runs-on: ubuntu-latest
     needs: build
     permissions:
@@ -167,15 +167,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - test-group: unit
-            test-paths: >-
+          - test_group: unit
+            test_paths: >-
               bot/tests/test_okx_order_wrapper_stability_v2.py
               bot/tests/test_scan_wrapper_depth_convergence_patch.py
               bot/tests/test_zero_signal_streak_state_repair_patch.py
               bot/tests/test_runtime_patch_churn_safety_patch.py
               bot/tests/test_entrypoint_writer_authority.py
-          - test-group: integration
-            test-paths: >-
+          - test_group: integration
+            test_paths: >-
               tests/imports_smoke_test.py
               bot/tests/test_source_runtime_guard_bootstrap.py
               bot/tests/test_render_prebot_writer_handoff.py
@@ -225,10 +225,10 @@ jobs:
       - name: Apply production package defer guard
         run: python -S apply_bot_package_defer_fix.py
 
-      - name: Run ${{ matrix.test-group }} Tests (Sandboxed)
+      - name: Run ${{ matrix.test_group }} Tests (Sandboxed)
         env:
-          TEST_PATHS: ${{ matrix.test-paths }}
-          PYTEST_DISABLE_NETWORK: ${{ matrix.test-group == 'unit' && 'true' || 'false' }}
+          TEST_PATHS: ${{ matrix.test_paths }}
+          PYTEST_DISABLE_NETWORK: ${{ matrix.test_group == 'unit' && 'true' || 'false' }}
         run: |
           set -euo pipefail
           timeout 600 python -m pytest -q \
