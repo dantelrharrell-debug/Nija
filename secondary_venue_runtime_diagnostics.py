@@ -94,13 +94,17 @@ def normalize_coinbase_private_key(value: str) -> str:
         label = match.group("label")
         body = re.sub(r"\s+", "", match.group("body"))
         if body:
-            wrapped = "\n".join(body[index : index + 64] for index in range(0, len(body), 64))
+            wrapped = "\n".join(
+                body[index : index + 64] for index in range(0, len(body), 64)
+            )
             return f"-----BEGIN {label}-----\n{wrapped}\n-----END {label}-----\n"
     lines = [line.strip() for line in text.split("\n") if line.strip()]
     return "\n".join(lines) + ("\n" if lines else "")
 
 
 def _validate_coinbase_key(secret: str) -> tuple[bool, str]:
+    """Validate key material and return a non-sensitive category."""
+
     if not secret:
         return False, "missing"
     if "-----BEGIN" not in secret or "PRIVATE KEY-----" not in secret:
@@ -111,14 +115,14 @@ def _validate_coinbase_key(secret: str) -> tuple[bool, str]:
         key = serialization.load_pem_private_key(secret.encode("utf-8"), password=None)
         curve = getattr(getattr(key, "curve", None), "name", "unknown")
         if curve not in {"secp256r1", "prime256v1"}:
-            return False, f"unsupported_curve:{curve}"
-    except Exception as exc:
+            return False, "unsupported_curve"
+    except Exception:
         if (
             os.environ.get("NIJA_COINBASE_CONNECTED") == "1"
             and os.environ.get("NIJA_COINBASE_TRADING_READY") == "1"
         ):
             return True, "authenticated_connection"
-        return False, f"{type(exc).__name__}:{str(exc)[:120]}"
+        return False, "parse_failed"
     return True, "valid_es256"
 
 
@@ -134,12 +138,12 @@ def _coinbase_pem_expected(candidates: list[tuple[str, str]]) -> bool:
     )
 
 
-def _quarantine_coinbase(reason: str) -> None:
-    """Isolate an invalid optional Coinbase venue before connection attempts."""
+def _quarantine_coinbase() -> None:
+    """Isolate an invalid optional Coinbase venue without retaining secret details."""
 
     os.environ["NIJA_COINBASE_PEM_VALID"] = "0"
     os.environ["NIJA_COINBASE_PEM_QUARANTINED"] = "1"
-    os.environ["NIJA_COINBASE_PEM_INVALID_REASON"] = str(reason or "invalid")[:200]
+    os.environ["NIJA_COINBASE_PEM_INVALID_REASON"] = "validation_failed"
     os.environ["NIJA_COINBASE_ACTIVATION_STATE"] = "quarantined_invalid_pem"
     os.environ["NIJA_COINBASE_CONNECTED"] = "0"
     os.environ["NIJA_COINBASE_TRADING_READY"] = "0"
@@ -147,15 +151,14 @@ def _quarantine_coinbase(reason: str) -> None:
     os.environ["ENABLE_COINBASE_TRADING"] = "false"
     os.environ["COINBASE_LIVE_TRADING_ENABLED"] = "false"
     logger.critical(
-        "COINBASE_PEM_QUARANTINED marker=%s reason=%s "
-        "kraken_and_okx_remain_independent=true",
+        "COINBASE_PEM_QUARANTINED marker=%s "
+        "reason=validation_failed kraken_and_okx_remain_independent=true",
         _MARKER,
-        reason,
     )
 
 
 def _restore_coinbase_quarantine_state() -> None:
-    """Keep the explicit quarantine reason visible after generic activation skips."""
+    """Keep the explicit quarantine state visible after generic activation skips."""
 
     if os.environ.get("NIJA_COINBASE_PEM_QUARANTINED") != "1":
         return
@@ -182,19 +185,15 @@ def _normalize_coinbase_env() -> None:
         logger.error("COINBASE_PEM_INVALID marker=%s reason=missing_secret", _MARKER)
         return
 
-    failures: list[str] = []
     selected_source = ""
     selected_secret = ""
-    selected_reason = ""
     for source, raw in candidates:
         normalized = normalize_coinbase_private_key(raw)
-        valid, reason = _validate_coinbase_key(normalized)
+        valid, _category = _validate_coinbase_key(normalized)
         if valid:
             selected_source = source
             selected_secret = normalized
-            selected_reason = reason
             break
-        failures.append(f"{source}:{reason}")
 
     if selected_secret:
         for name in _COINBASE_SECRET_ALIASES:
@@ -204,38 +203,32 @@ def _normalize_coinbase_env() -> None:
         os.environ["NIJA_COINBASE_PEM_QUARANTINED"] = "0"
         os.environ.pop("NIJA_COINBASE_PEM_INVALID_REASON", None)
         logger.warning(
-            "COINBASE_PEM_CANONICALIZED marker=%s source=%s newline_count=%d "
-            "reason=%s candidates=%d",
+            "COINBASE_PEM_CANONICALIZED marker=%s source=%s candidates=%d",
             _MARKER,
             selected_source,
-            selected_secret.count("\n"),
-            selected_reason,
             len(candidates),
         )
         return
 
-    reason = ";".join(failures)[:200] or "no_valid_candidate"
     if not _coinbase_pem_expected(candidates):
         os.environ["NIJA_COINBASE_PEM_STATE"] = "legacy_unverified"
         os.environ["NIJA_COINBASE_PEM_VALID"] = "0"
         logger.warning(
-            "COINBASE_PEM_NOT_REQUIRED marker=%s candidates=%d reason=%s",
+            "COINBASE_PEM_NOT_REQUIRED marker=%s candidates=%d",
             _MARKER,
             len(candidates),
-            reason,
         )
         return
 
     os.environ["NIJA_COINBASE_PEM_STATE"] = "invalid"
     os.environ["NIJA_COINBASE_PEM_VALID"] = "0"
     logger.error(
-        "COINBASE_PEM_INVALID marker=%s candidates=%d reason=%s "
-        "action=quarantine_coinbase_only",
+        "COINBASE_PEM_INVALID marker=%s candidates=%d "
+        "reason=validation_failed action=quarantine_coinbase_only",
         _MARKER,
         len(candidates),
-        reason,
     )
-    _quarantine_coinbase(reason)
+    _quarantine_coinbase()
 
 
 def _log_state(venue: str, *, force: bool = False) -> None:
@@ -284,7 +277,9 @@ def _install_activation_observer() -> None:
         )
         return
     original = getattr(patch, "activate_once", None)
-    if not callable(original) or getattr(original, "_nija_runtime_diag_v20260723", False):
+    if not callable(original) or getattr(
+        original, "_nija_runtime_diag_v20260723", False
+    ):
         return
 
     def wrapped(venue: Any, *args: Any, **kwargs: Any) -> str:
