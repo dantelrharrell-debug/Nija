@@ -1,163 +1,200 @@
 # NIJA AI Trading Group — Current Success State
 
-**Status date:** July 2026
+**Status date:** July 23, 2026
 
-NIJA has reached a new success point: mobile-app readiness work is now connected to the live-execution protection stack and dashboard sizing workflow.
+This README is the current recovery anchor for NIJA. It documents the active production broker contract, startup order, independent trade-entry path, automatic take-profit/stop-loss protection, and mobile-app direction.
 
-This README is the current recovery anchor for NIJA.
-
----
-
-## Current Success Point
-
-NIJA now includes:
-
-- Broker venue cash guard.
-- Position close with realized P&L calculation.
-- Stop-loss and take-profit auto-exit.
-- Trailing stop-loss.
-- Breakeven stop-loss.
-- Combo breakeven-to-trailing protection.
-- Trailing take-profit.
-- Combined trailing take-profit plus trailing stop-loss manager.
-- Combined trailing position-size calculator.
-- Dashboard trade execution panel with one-click fill.
-- Mobile app blueprint for iPhone and Android development.
+NIJA does not guarantee trades or profits. A connected brokerage may enter a trade only when writer authority, capital, signal, risk, exchange-minimum, and order-admission checks all pass.
 
 ---
 
-## Mobile App Blueprint Added
+## Current Live Broker Contract
 
-The NIJA mobile app blueprint has been added to this success state.
+NIJA's active live cryptocurrency execution system supports exactly three platform venues:
 
-The mobile app direction is:
+| Brokerage | Runtime role | Live entries | Automatic exits | Required status |
+|---|---|---:|---:|---|
+| **Kraken** | Required primary platform broker | Yes | Yes | Connected, funded, nonce-ready |
+| **Coinbase Advanced Trade** | Optional isolated secondary venue | Yes | Yes | Valid ECDSA key, connected, funded |
+| **OKX US** | Optional isolated secondary venue | Yes | Yes | Key/secret/passphrase, connected, funded |
 
-- Education-first user experience.
-- Demo / Education Mode as the default starting point.
-- Live Mode locked behind user consent and broker readiness.
-- No profit guarantees.
-- No investment-advice claims.
-- No live trading by default.
-- Broker secrets handled server-side only.
-- Every user account trades independently.
-- Clear risk disclosures.
-- Emergency pause / kill switch required.
-- Apple and Google review path defined.
+Additional repository adapters:
 
----
+- **Alpaca** is retained for user and paper-trading workflows. It is not part of the active live crypto entry priority.
+- **Binance** is a legacy/future venue label. The active production `MultiAccountBrokerManager` does not construct a Binance platform broker, so Binance must not be selected as `PRIMARY_EXECUTION_VENUE`.
 
-## Mobile App Screens
+The canonical live routing defaults are:
 
-The app structure is planned around five bottom tabs:
+```bash
+NIJA_ALLOWED_EXECUTION_BROKERS=okx,coinbase,kraken
+NIJA_ENTRY_BROKER_PRIORITY=okx,coinbase,kraken
+NIJA_BROKER_PRIORITY=okx,coinbase,kraken
+PRIMARY_EXECUTION_VENUE=auto
+```
 
-1. **Home** — account status, broker status, system status, open positions, risk state, and emergency pause.
-2. **Signals** — market signal cards explaining confidence, ADX, volume, spread, fee impact, broker readiness, and why trades were approved or skipped.
-3. **Trades** — completed, failed, skipped, and simulated trade history, clearly separating Education Mode and Live Mode.
-4. **Risk** — daily loss limit, weekly hard stop, max position size, max leverage, minimum balance checks, disclosure history, and consent history.
-5. **Profile** — user account, connected brokers, disclosures, support, privacy policy, terms, and delete account.
+`PRIMARY_EXECUTION_VENUE` may force only `kraken`, `coinbase`, or `okx`. Use `auto`, `best`, `all`, or an empty value for independent multi-venue routing.
 
 ---
 
-## Education Mode
+## Brokerage Independence
 
-Education Mode is the default experience.
+Every platform and user brokerage trades independently.
 
-It should include:
+- NIJA does not merge one brokerage's available cash into another brokerage.
+- A low or disconnected Kraken account does not block a ready Coinbase or OKX account.
+- A Coinbase or OKX authentication failure is isolated and does not disable Kraken.
+- Each account has its own balance, position count, order minimum, risk state, entries, exits, and audit trail.
+- Copy trading is disabled. User accounts are not mirrors of the platform account.
 
-- Simulated signals.
-- Simulated trades.
-- Signal explanations.
-- Trade pass/fail reasons.
-- AI confidence score.
-- Trend strength.
-- Volume check.
-- ADX check.
-- Spread check.
-- Fee impact check.
-- Beginner lesson cards.
+The three-venue readiness flag means **at least one** venue is fully ready, not that every configured venue must be healthy:
 
-Education Mode lets users understand NIJA before using live capital.
+```text
+NIJA_THREE_VENUE_EXECUTION_READY=1
+```
+
+A degraded optional venue is excluded until it recovers.
 
 ---
 
-## Live Mode Requirements
+## Production Startup Order
 
-Live Mode must stay locked until:
+The active Render startup path is:
 
-- User account is created.
-- Risk disclosure is accepted.
-- No-financial-advice disclosure is accepted.
-- Broker is connected.
-- Broker balance is verified.
-- Execution permissions are confirmed.
-- Live trading consent is signed.
-- Audit log is created.
-- Emergency pause is enabled.
+```text
+scripts/production_bootstrap.sh
+    -> start.sh
+    -> main.py
+    -> bot.bot
+    -> bot.bot_main
+```
 
-Live Mode should never activate automatically.
+Safety-critical order:
 
-Required user confirmation:
+1. Start the isolated Render liveness server.
+2. Acquire the Redis single-writer lease and fencing generation.
+3. Start writer and authority heartbeats.
+4. Initialize Kraken nonce protection.
+5. Run SelfHealingStartup and connect the primary broker.
+6. Initialize the canonical `MultiAccountBrokerManager`.
+7. Connect configured Coinbase and OKX platform brokers.
+8. Connect configured user broker accounts.
+9. Hydrate real broker balances into `CapitalAuthority`.
+10. Publish per-venue execution readiness.
+11. Commit `LIVE_ACTIVE` only through the normal state machine.
+12. Start independent broker-scoped scanning and execution.
+13. Keep automatic position exits running for every registered live broker instance.
 
-> I understand trading involves risk and I can lose money.
-
----
-
-## Broker And Security Rules
-
-Initial broker placeholders:
-
-- Kraken.
-- Coinbase.
-
-Rules:
-
-- Broker API keys are never stored in the mobile frontend.
-- Broker secrets are handled server-side only.
-- Mobile app only talks to secure backend APIs.
-- Read-only balance sync should happen before execution permissions.
-- Execution requires explicit user consent.
-- All live actions must create audit logs.
-- Users must be able to disconnect brokers and delete their account.
+No deployment variable may pre-grant writer authority or `LIVE_ACTIVE`.
 
 ---
 
-## Connect Coinbase Correctly
+## Writer Authority Handoff
 
-NIJA connects to the Coinbase **Advanced Trade API** using a Coinbase Developer Platform secret API key. The Advanced Trade base endpoint is:
+During a Render rolling deployment, the new instance may report:
+
+```text
+ENTRYPOINT_WRITER_AUTHORITY_STANDBY
+error=active_writer_lock_held
+```
+
+This is safe behavior. The new instance must not steal or delete an active writer's lease. It continues only after the previous holder releases the lock or its lease expires.
+
+Render's `Your service is live` message proves that the HTTP liveness port is available. It does not prove that NIJA has trading authority.
+
+Required authority proof:
+
+```text
+PREBOT_WRITER_AUTHORITY_READY
+ENTRYPOINT_WRITER_AUTHORITY_READY
+ENTRYPOINT_WRITER_AUTHORITY_VERIFIED
+```
+
+---
+
+## Connect Kraken
+
+Canonical platform variables:
+
+```bash
+KRAKEN_PLATFORM_API_KEY=YOUR_KEY
+KRAKEN_PLATFORM_API_SECRET=YOUR_SECRET
+```
+
+Accepted platform aliases include:
+
+```text
+KRAKEN_API_KEY
+KRAKEN_API_SECRET
+KRAKEN_MASTER_API_KEY
+KRAKEN_MASTER_API_SECRET
+```
+
+Recommended Kraken API permissions:
+
+- Query funds.
+- Query open and closed orders.
+- Query ledger and trade history.
+- Create and modify orders.
+- Cancel and close orders.
+- **Do not enable withdrawals.**
+
+Kraken live readiness requires:
+
+```text
+writer lease ready
+nonce authority ready
+Kraken connected
+positive spendable quote balance
+balance payload hydrated
+order adapter available
+venue eligible for execution
+```
+
+Expected evidence includes:
+
+```text
+ENTRYPOINT_WRITER_AUTHORITY_READY
+KRAKEN_CONNECTION_SUCCESS
+CAPITAL_READY
+THREE_VENUE_EXECUTION_STAGE venue=kraken
+```
+
+Kraken's configured effective order floor must be respected. Current defaults include additional headroom for fees and exchange minimums.
+
+---
+
+## Connect Coinbase Advanced Trade Correctly
+
+NIJA connects to Coinbase Advanced Trade at:
 
 ```text
 https://api.coinbase.com/api/v3/brokerage
 ```
 
-### 1. Create the correct Coinbase key
+### Create the correct Coinbase key
 
-1. Sign in to the Coinbase Developer Platform.
+1. Sign in to Coinbase Developer Platform.
 2. Open **API Keys** and choose **Secret API Keys**.
-3. Create a new key specifically for NIJA.
-4. Under advanced settings, select **ECDSA / ES256** as the signature algorithm.
-5. Enable these permissions:
-   - **View** — required for balances, products, orders, fills, and permission checks.
-   - **Trade** — required for buy, sell, cancel, and close orders.
-6. Leave **Transfer** disabled. NIJA does not need withdrawal or external-transfer authority to trade.
-7. Restrict the key to the Coinbase portfolio NIJA should trade, when applicable.
-8. Save both values shown during creation:
-   - API key name, formatted like `organizations/{organization_id}/apiKeys/{key_id}`.
-   - EC private key, including the `BEGIN` and `END` lines.
+3. Create a key for NIJA.
+4. Select **ECDSA / ES256**.
+5. Enable **View** and **Trade**.
+6. Keep **Transfer** disabled.
+7. Restrict the key to the intended funded portfolio when applicable.
+8. Save the complete API key name and EC private key.
 
-Do not select an Ed25519 key for this Coinbase App / Advanced Trade connection. Coinbase requires ECDSA for this authentication path.
-
-### 2. Set the production variables
-
-Add these variables to the backend service in Railway or Render. Never place them in the mobile application or commit them to GitHub.
+Canonical variables:
 
 ```bash
 COINBASE_API_KEY=organizations/ORG_ID/apiKeys/KEY_ID
 COINBASE_API_SECRET="-----BEGIN EC PRIVATE KEY-----
 YOUR_PRIVATE_KEY_BODY
 -----END EC PRIVATE KEY-----"
+ENABLE_COINBASE=true
+ENABLE_COINBASE_TRADING=true
+NIJA_DISABLE_COINBASE=false
 ```
 
-NIJA also accepts these aliases, but the canonical variables above should be used for the platform account:
+Accepted aliases include:
 
 ```text
 COINBASE_PLATFORM_API_KEY
@@ -168,11 +205,17 @@ CDP_API_KEY_NAME
 CDP_API_KEY_PRIVATE_KEY
 ```
 
-Do not set conflicting values under multiple aliases. A stale `COINBASE_API_SECRET` takes precedence over later aliases and can keep Coinbase disconnected even when another alias contains a valid key.
+Do not keep conflicting Coinbase credential aliases. A stale canonical `COINBASE_API_SECRET` can override a valid alias.
 
-### 3. Preserve the PEM private key
+### Coinbase PEM failure
 
-The secret must retain this structure:
+This marker means Coinbase cannot authenticate:
+
+```text
+COINBASE_PEM_INVALID
+```
+
+It is a credential-format problem, not a trading-strategy problem. Correct it by replacing `COINBASE_API_SECRET` with the matching multi-line EC private key:
 
 ```text
 -----BEGIN EC PRIVATE KEY-----
@@ -180,37 +223,16 @@ base64-key-material
 -----END EC PRIVATE KEY-----
 ```
 
-Preferred deployment method:
+Rules:
 
-- Paste the secret as a multi-line value with real line breaks.
-- Do not add spaces before the `BEGIN` or `END` lines.
-- Do not remove either boundary line.
-- Do not paste the entire downloaded JSON file into `COINBASE_API_SECRET` unless the runtime normalization layer is intentionally being used.
-- Do not wrap the value in extra quote characters in the deployment dashboard.
+- Preserve real line breaks.
+- Preserve both boundary lines.
+- Do not add leading spaces.
+- Do not wrap the entire value in extra quote characters in Render.
+- Do not paste an unrelated JSON payload or Ed25519 key.
+- The private key must belong to the exact `organizations/.../apiKeys/...` name.
 
-NIJA's authentication normalizer can repair escaped `\n` sequences and supported Coinbase JSON key payloads, but correctly formatted multi-line PEM is the safest production configuration.
-
-### 4. Configure an IP allowlist carefully
-
-Coinbase supports IP allowlisting. Only enable it after confirming the backend has a stable outbound IP.
-
-- A normal Railway or Render deployment may use changing outbound addresses unless static egress is configured.
-- Adding the wrong address can cause authentication failures even when the key and secret are correct.
-- Never add a phone, home Wi-Fi, or mobile-app IP as the backend trading server address.
-
-### 5. Redeploy cleanly
-
-After changing Coinbase credentials:
-
-1. Remove obsolete Coinbase credential variables.
-2. Confirm only one key name and one matching private key are active.
-3. Save the variables.
-4. Redeploy the NIJA backend.
-5. Do not expose or print the full private key in logs.
-
-### 6. Verify permissions and connectivity
-
-Run the repository credential checks from a secure backend shell:
+Validation commands from a secure backend shell:
 
 ```bash
 python validate_broker_credentials.py
@@ -218,172 +240,263 @@ python validate_broker_credentials.py --test-connections
 python scripts/auth_sanity.py
 ```
 
-A valid key must report at least:
+Required permissions:
 
 ```text
 can_view=true
 can_trade=true
 ```
 
-`can_transfer` is not required and should normally remain false.
-
-The authenticated permission endpoint used by Coinbase is:
-
-```text
-GET /api/v3/brokerage/key_permissions
-```
-
-### 7. Expected NIJA startup evidence
-
-Healthy startup should show Coinbase credential normalization followed by a successful account or balance response. Useful markers include:
+Healthy Coinbase evidence:
 
 ```text
 COINBASE_AUTH_NORMALIZED
 pem_ok=True
 COINBASE_CONNECTION_SUCCESS
+NIJA_COINBASE_ACTIVATION_STATE=ready
+NIJA_COINBASE_TRADING_READY=1
 ```
 
-The exact success wording can vary by broker adapter. The required operational result is:
-
-```text
-Coinbase connected
-balance observed
-can_view=true
-can_trade=true
-trading_ready=true
-```
-
-Never treat `COINBASE_AUTH_NORMALIZED` by itself as proof of a live connection. It only confirms that NIJA found and formatted the credential variables.
-
-### Coinbase troubleshooting
-
-#### `401 Unauthorized`
-
-Check all of the following:
-
-- The API key name begins with `organizations/` and contains `/apiKeys/`.
-- The private key belongs to that exact key name.
-- The key was created with ECDSA / ES256.
-- The PEM includes real boundary lines and valid key material.
-- No old `COINBASE_API_SECRET` is overriding a valid alias.
-- The server clock is accurate because Coinbase JWTs are time-limited.
-- The IP allowlist includes the backend's actual stable outbound IP, or the allowlist is removed while diagnosing.
-
-If the private key was lost or copied incorrectly, delete the Coinbase key and create a new one. Coinbase does not provide the private key again after creation.
-
-#### Connected but no orders can be placed
-
-- Verify `can_trade=true` through `/api/v3/brokerage/key_permissions`.
-- Confirm the key is attached to the funded portfolio.
-- Confirm the available quote-currency balance meets NIJA and Coinbase minimums.
-- Confirm NIJA is not in paper, dry-run, paused, quarantine, or exit-only mode.
-
-#### Balance is missing or belongs to the wrong portfolio
-
-Set the intended portfolio when NIJA's deployment uses portfolio routing:
-
-```bash
-COINBASE_RETAIL_PORTFOLIO_ID=YOUR_PORTFOLIO_UUID
-```
-
-Then redeploy and verify that the observed balance belongs to that portfolio before enabling execution.
+Credential normalization alone is not proof of a live connection.
 
 ---
 
-## Apple And Google Readiness
+## Connect OKX US Correctly
 
-NIJA is being structured for future release on:
+Canonical variables:
 
-- Apple App Store.
-- Google Play Store.
+```bash
+OKX_API_KEY=YOUR_KEY
+OKX_API_SECRET=YOUR_SECRET
+OKX_PASSPHRASE=YOUR_PASSPHRASE
+ENABLE_OKX_TRADING=true
+OKX_LIVE_TRADING_ENABLED=true
+NIJA_OKX_EXECUTION_ENABLED=true
+NIJA_OKX_LIVE_TRADING_ENABLED=true
+NIJA_DISABLE_OKX=false
+```
 
-Best launch path:
+Accepted aliases include:
 
-1. Phase 1 — Education app.
-2. Phase 2 — Broker dashboard.
-3. Phase 3 — Controlled live trading after compliance review.
-4. Phase 4 — App Store and Google Play public release.
+```text
+OKX_PLATFORM_API_KEY
+OKX_PLATFORM_API_SECRET
+OKX_PLATFORM_PASSPHRASE
+OKX_API_PASSPHRASE
+```
 
-Public release is not declared complete until iOS/Android builds, store assets, privacy policy, terms, support URL, demo credentials, and financial declarations are finished and verified.
+The active endpoint contract is:
+
+```text
+https://us.okx.com
+```
+
+The three credentials must belong to the same OKX API key. Enable read and trade permissions, but do not enable withdrawals.
+
+Healthy OKX evidence:
+
+```text
+OKX_CONNECTION_SUCCESS
+NIJA_OKX_ACTIVATION_STATE=ready
+NIJA_OKX_TRADING_READY=1
+OKX_ROUTER_IDENTITY_CONVERGED
+THREE_VENUE_EXECUTION_STAGE venue=okx
+```
+
+If credentials are absent, OKX is reported as `missing_credentials` and remains isolated.
+
+---
+
+## Independent Trade Entry Contract
+
+NIJA's independent broker router scans every connected and eligible live venue separately.
+
+For each brokerage, NIJA uses that brokerage's own:
+
+- Spendable quote balance.
+- Open-position count.
+- Market metadata.
+- Exchange minimum and fee buffer.
+- Signal score and confidence.
+- Risk and position limits.
+- Order adapter.
+
+Expected entry-routing evidence:
+
+```text
+BROKER_INDEPENDENT_LIVE_EXECUTION_PATCHED
+BROKER_EXECUTION_DISCONNECTED_GUARD_PATCHED
+BROKER_INDEPENDENT_SCAN_START brokers=okx,coinbase,kraken
+BROKER_INDEPENDENT_SCAN_BROKER_START broker=<venue>
+BROKER_INDEPENDENT_SCAN_BROKER_END broker=<venue>
+BROKER_INDEPENDENT_SCAN_END
+```
+
+A disconnected broker must show a skip marker rather than receive an order attempt:
+
+```text
+BROKER_EXECUTION_DISCONNECTED_SKIPPED
+```
+
+A connected brokerage still will not enter a trade unless all normal conditions pass. Do not use `FORCE_TRADE`, forced activation, or writer-lock bypasses to manufacture an entry.
+
+---
+
+## Automatic Take-Profit And Stop-Loss Contract
+
+NIJA has two complementary exit layers.
+
+### Execution-engine exit monitor
+
+Every `ExecutionEngine` instance is registered with the process-wide automatic exit monitor. It evaluates:
+
+- Stored stop-loss.
+- Synthesized loss-cap stop when a stored stop is absent.
+- Take-profit 1, 2, and 3.
+- Trailing profit lock.
+- Trailing stop-loss.
+- Breakeven stop-loss.
+- Combined breakeven-to-trailing logic.
+- Combined trailing take-profit and trailing stop-loss.
+
+### Universal broker-native exit supervisor
+
+Every connected Kraken, Coinbase, and OKX broker instance is registered directly, including platform and user accounts. This protects broker-native positions even when one execution engine does not own or mirror the position.
+
+The supervisor uses verified entry price and quantity, broker-native market data, and a fee-aware minimum net-profit target before submitting a closing order.
+
+Expected protection evidence:
+
+```text
+AUTO_EXIT_SL_TP_IMPORT_HOOK_INSTALLED
+AUTO_EXIT_SL_TP_MONITOR_STARTED
+UNIVERSAL_BROKER_EXIT_SUPERVISOR_INSTALLED
+UNIVERSAL_BROKER_EXIT_SUPERVISOR_STARTED venues=kraken,coinbase,okx
+UNIVERSAL_BROKER_EXIT_REGISTERED venue=<venue> account=<account>
+```
+
+Expected exit evidence when a valid trigger occurs:
+
+```text
+AUTO_EXIT_TRIGGERED
+AUTO_EXIT_CLOSED
+```
+
+or:
+
+```text
+UNIVERSAL_BROKER_EXIT_TRIGGER
+UNIVERSAL_BROKER_EXIT_CONFIRMED
+```
+
+The exit system must not invent entry prices or quantities. A position with unverified cost basis remains blocked until recovery supplies trustworthy data.
+
+Default protection settings include:
+
+```bash
+NIJA_AUTO_EXIT_SL_TP_ENABLED=true
+NIJA_AUTO_EXIT_POLL_SECONDS=5
+NIJA_UNIVERSAL_BROKER_EXIT_ENABLED=true
+NIJA_UNIVERSAL_EXIT_POLL_SECONDS=3
+NIJA_MAX_POSITION_LOSS_USD=2.00
+NIJA_HARD_STOP_LOSS_PCT=0.015
+NIJA_PROFIT_LOCK_ACTIVATION_PCT=0.008
+NIJA_PROFIT_LOCK_CALLBACK_PCT=0.0035
+NIJA_COMBINED_TRAILING_TP_SL_ENABLED=true
+```
+
+---
+
+## Canonical Readiness Proof
+
+A healthy deployment should progress through these groups.
+
+### Authority
+
+```text
+PREBOT_WRITER_AUTHORITY_READY
+ENTRYPOINT_WRITER_AUTHORITY_READY
+```
+
+### Broker and capital bootstrap
+
+```text
+CANONICAL_BROKER_BOOTSTRAP_HANDOFF_INSTALLED
+CANONICAL_BROKER_BOOTSTRAP_INITIALIZING
+CANONICAL_BROKER_BOOTSTRAP_READY hydrated=True capital=<positive> valid_brokers>=1
+CAPITAL_READY
+```
+
+### Per-venue readiness
+
+```text
+SECONDARY_VENUE_ACTIVATION_INSTALLED venues=coinbase,okx
+THREE_VENUE_EXECUTION_READINESS_INSTALLED
+THREE_VENUE_EXECUTION_STAGE venue=kraken
+THREE_VENUE_EXECUTION_STAGE venue=coinbase
+THREE_VENUE_EXECUTION_STAGE venue=okx
+```
+
+### Runtime activation
+
+```text
+PREACTIVATION_READINESS_V16_RECONSTRUCTED
+ACTIVATION_COMMITTED
+NIJA_RUNTIME_TRADING_STATE=LIVE_ACTIVE
+NIJA_RUNTIME_EXECUTION_AUTHORITY=1
+```
+
+### Trading and exits
+
+```text
+BROKER_INDEPENDENT_SCAN_START
+BROKER_INDEPENDENT_SCAN_BROKER_START
+AUTO_EXIT_SL_TP_MONITOR_STARTED
+UNIVERSAL_BROKER_EXIT_SUPERVISOR_STARTED
+```
+
+`LIVE_ACTIVE` proves runtime readiness. It does not prove that a qualifying signal exists or that an order has been filled.
+
+---
+
+## Mobile App Blueprint
+
+The NIJA mobile app remains education-first.
+
+Five planned tabs:
+
+1. **Home** — account, broker, system, positions, risk, and emergency pause.
+2. **Signals** — confidence, ADX, volume, spread, fees, readiness, and pass/skip reasons.
+3. **Trades** — completed, failed, skipped, and simulated activity.
+4. **Risk** — loss limits, position size, leverage, balance checks, disclosures, and consent.
+5. **Profile** — account, connected brokers, privacy, terms, support, and deletion.
+
+Live Mode must remain locked until disclosures, consent, broker permissions, verified balance, execution readiness, audit logging, and emergency pause are complete.
+
+Broker secrets remain server-side only.
 
 ---
 
 ## Protection Stack Modules
 
-Key modules:
+Key live modules include:
 
 ```text
+bot/broker_independent_live_execution_patch.py
+disconnected_broker_execution_guard_patch.py
+secondary_venue_activation_patch.py
+three_venue_execution_readiness.py
 bot/broker_venue_cash_guard_patch.py
 bot/position_close_pnl_runtime_patch.py
 bot/auto_exit_sl_tp_runtime_patch.py
+bot/universal_broker_exit_supervisor_patch.py
 bot/trailing_stop_loss_runtime_patch.py
 bot/breakeven_stop_loss_runtime_patch.py
 bot/combo_breakeven_trailing_runtime_patch.py
 bot/trailing_take_profit_runtime_patch.py
 bot/combined_trailing_tp_sl_runtime_patch.py
 bot/combined_trailing_position_size_calculator.py
-frontend/static/js/app.js
 ```
-
-Combined trailing defaults:
-
-```bash
-NIJA_COMBINED_TRAILING_TP_SL_ENABLED=true
-NIJA_COMBINED_TRAILING_POLL_SECONDS=5
-NIJA_COMBINED_TRAILING_SL_ACTIVATION_PCT=0.003
-NIJA_COMBINED_TRAILING_SL_DISTANCE_PCT=0.006
-NIJA_COMBINED_TRAILING_TP_ACTIVATION_PCT=0.008
-NIJA_COMBINED_TRAILING_TP_CALLBACK_PCT=0.003
-NIJA_COMBINED_SIZE_RISK_PCT=0.005
-```
-
----
-
-## Dashboard One-Click Fill
-
-The dashboard trade execution panel now supports:
-
-- Calculate Size.
-- One-Click Fill.
-- Calculated notional.
-- Calculated quantity.
-- Protection stop price.
-- Risk budget.
-- Full sizing preview.
-
-Browser console signal:
-
-```text
-COMBINED_TRAILING_PANEL_ONE_CLICK_FILL
-```
-
----
-
-## Deployment Verification Logs
-
-After redeploy, confirm:
-
-```text
-BROKER_VENUE_CASH_GUARD_IMPORT_HOOK_INSTALLED
-POSITION_CLOSE_PNL_IMPORT_HOOK_INSTALLED
-AUTO_EXIT_SL_TP_IMPORT_HOOK_INSTALLED
-TRAILING_STOP_BRIDGE_INSTALLED
-BREAKEVEN_STOP_BRIDGE_INSTALLED
-COMBO_BE_TRAILING_BRIDGE_INSTALLED
-TRAILING_TP_BRIDGE_INSTALLED
-COMBINED_TRAILING_BRIDGE_INSTALLED
-COMBINED_TRAILING_SIZE_ENGINE_PATCHED
-AUTO_EXIT_SL_TP_MONITOR_STARTED
-COMBINED_TRAILING_MONITOR_STARTED
-```
-
----
-
-## Final Product Vision
-
-NIJA AI Trading is being built to become a trusted mobile AI trading system that helps users understand the market, control risk, and make informed trading decisions before using live capital.
-
-NIJA is education-first, user-controlled, broker-direct, and risk-transparent.
 
 ---
 
@@ -391,4 +504,4 @@ NIJA is education-first, user-controlled, broker-direct, and risk-transparent.
 
 NIJA AI Trading is not financial advice.
 
-Trading involves risk and may result in financial loss. Users are responsible for their own trading decisions. NIJA AI Trading does not guarantee profits, returns, income, or trading success.
+Trading involves risk and may result in financial loss. Users are responsible for their trading decisions. NIJA does not guarantee profits, returns, income, trade frequency, order fills, or trading success.
