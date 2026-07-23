@@ -14,6 +14,7 @@ from pathlib import Path
 
 _MARKER = "20260723-runtime-entrypoint-attestation-v23"
 _CANONICAL_PATH = "main.py->bot.bot->bot.bot_main"
+_PLACEHOLDERS = {"", "unknown", "none", "null", "unset", "n/a", "na"}
 
 
 @dataclass(frozen=True)
@@ -64,6 +65,16 @@ def _truthy(value: str | None) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on", "enabled"}
 
 
+def _first_provenance(names: tuple[str, ...]) -> str:
+    """Return the first meaningful provider value, skipping placeholders."""
+
+    for name in names:
+        value = str(os.environ.get(name, "") or "").strip()
+        if value.lower() not in _PLACEHOLDERS:
+            return value
+    return "unknown"
+
+
 def _short_hash(path: Path) -> str:
     digest = hashlib.sha256(path.read_bytes()).hexdigest()
     return digest[:12]
@@ -95,19 +106,13 @@ def validate_runtime(root: Path) -> dict[str, str]:
             )
         hashes.append(f"{contract.relative_path}:{_short_hash(path)}")
 
-    commit = str(
-        os.environ.get("GIT_COMMIT")
-        or os.environ.get("RENDER_GIT_COMMIT")
-        or os.environ.get("RAILWAY_GIT_COMMIT_SHA")
-        or "unknown"
-    ).strip()
-    branch = str(
-        os.environ.get("GIT_BRANCH")
-        or os.environ.get("RENDER_GIT_BRANCH")
-        or os.environ.get("RAILWAY_GIT_BRANCH")
-        or "unknown"
-    ).strip()
-    if _live_intent() and commit.lower() in {"", "unknown", "none", "null"}:
+    commit = _first_provenance(
+        ("GIT_COMMIT", "RENDER_GIT_COMMIT", "RAILWAY_GIT_COMMIT_SHA")
+    )
+    branch = _first_provenance(
+        ("GIT_BRANCH", "RENDER_GIT_BRANCH", "RAILWAY_GIT_BRANCH")
+    )
+    if _live_intent() and commit.lower() in _PLACEHOLDERS:
         raise RuntimeError("live runtime commit provenance is unknown")
 
     return {
