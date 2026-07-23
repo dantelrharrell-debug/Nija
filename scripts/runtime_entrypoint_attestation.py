@@ -9,12 +9,17 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
 _MARKER = "20260723-runtime-entrypoint-attestation-v23"
 _CANONICAL_PATH = "main.py->bot.bot->bot.bot_main"
 _PLACEHOLDERS = {"", "unknown", "none", "null", "unset", "n/a", "na"}
+_PROVIDER_LITERAL = re.compile(
+    r"^(?:\$(?:RENDER|RAILWAY)_[A-Z0-9_]+|\$\{(?:RENDER|RAILWAY)_[A-Z0-9_]+\}|\$\{\{.*\}\})$",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -65,12 +70,17 @@ def _truthy(value: str | None) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on", "enabled"}
 
 
+def _is_placeholder(value: str | None) -> bool:
+    text = str(value or "").strip()
+    return text.lower() in _PLACEHOLDERS or bool(_PROVIDER_LITERAL.fullmatch(text))
+
+
 def _first_provenance(names: tuple[str, ...]) -> str:
     """Return the first meaningful provider value, skipping placeholders."""
 
     for name in names:
         value = str(os.environ.get(name, "") or "").strip()
-        if value.lower() not in _PLACEHOLDERS:
+        if not _is_placeholder(value):
             return value
     return "unknown"
 
@@ -83,12 +93,13 @@ def _short_hash(path: Path) -> str:
 def _live_intent() -> bool:
     if _truthy(os.environ.get("DRY_RUN_MODE")) or _truthy(os.environ.get("PAPER_MODE")):
         return False
-    return _truthy(os.environ.get("LIVE_CAPITAL_VERIFIED")) or _truthy(
-        os.environ.get("NIJA_EXECUTION_ACTIVE")
-    ) or str(os.environ.get("NIJA_RUNTIME_TRADING_STATE", "")).strip().upper() in {
-        "LIVE_PENDING_CONFIRMATION",
-        "LIVE_ACTIVE",
-    }
+    return (
+        _truthy(os.environ.get("LIVE_TRADING"))
+        or _truthy(os.environ.get("LIVE_CAPITAL_VERIFIED"))
+        or _truthy(os.environ.get("NIJA_EXECUTION_ACTIVE"))
+        or str(os.environ.get("NIJA_RUNTIME_TRADING_STATE", "")).strip().upper()
+        in {"LIVE_PENDING_CONFIRMATION", "LIVE_ACTIVE"}
+    )
 
 
 def validate_runtime(root: Path) -> dict[str, str]:
@@ -112,7 +123,7 @@ def validate_runtime(root: Path) -> dict[str, str]:
     branch = _first_provenance(
         ("GIT_BRANCH", "RENDER_GIT_BRANCH", "RAILWAY_GIT_BRANCH")
     )
-    if _live_intent() and commit.lower() in _PLACEHOLDERS:
+    if _live_intent() and _is_placeholder(commit):
         raise RuntimeError("live runtime commit provenance is unknown")
 
     return {
