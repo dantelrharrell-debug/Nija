@@ -122,7 +122,10 @@ jobs:
             bot/bot.py
 
       - name: Run focused regression suite
+        id: focused_tests
+        continue-on-error: true
         run: |
+          TEST_LOG="${RUNNER_TEMP}/nija-focused-runtime-tests.log"
           python -m pytest -q \
             bot/tests/test_critical_runtime_repairs_v10.py \
             bot/tests/test_strategy_runtime_integrity_patch.py \
@@ -137,4 +140,34 @@ jobs:
             bot/tests/test_stalled_writer_release_guard_v22.py \
             bot/tests/test_secondary_venue_runtime_diagnostics.py \
             bot/tests/test_startup_handoff_all_fixes.py \
-            bot/tests/test_runtime_entrypoint_attestation_v23.py
+            bot/tests/test_runtime_entrypoint_attestation_v23.py \
+            >"${TEST_LOG}" 2>&1
+          status=$?
+          echo "status=${status}" >> "${GITHUB_OUTPUT}"
+          if [ "${status}" -ne 0 ]; then
+            echo "::group::Focused runtime test failure tail"
+            tail -n 240 "${TEST_LOG}" || true
+            echo "::endgroup::"
+          else
+            tail -n 40 "${TEST_LOG}" || true
+          fi
+          exit "${status}"
+
+      - name: Upload focused test diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: focused-runtime-test-diagnostics
+          path: ${{ runner.temp }}/nija-focused-runtime-tests.log
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Enforce focused test success
+        if: always()
+        run: |
+          status="${{ steps.focused_tests.outputs.status }}"
+          if [ -z "${status}" ]; then
+            echo "Focused test status output is missing"
+            exit 1
+          fi
+          exit "${status}"
