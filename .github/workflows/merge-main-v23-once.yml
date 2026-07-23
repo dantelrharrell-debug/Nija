@@ -1,0 +1,31 @@
+name: Merge current main into v23 once
+
+on:
+  push:
+    branches:
+      - fix/runtime-entrypoint-attestation-v23
+    paths:
+      - .github/workflows/merge-main-v23-once.yml
+
+permissions:
+  contents: write
+
+jobs:
+  merge-main:
+    if: github.event.head_commit.message == 'chore: merge current main into v23'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repair branch
+        uses: actions/checkout@v4
+        with:
+          ref: fix/runtime-entrypoint-attestation-v23
+          fetch-depth: 0
+
+      - name: Merge current main preserving reviewed conflict resolutions
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git merge --no-edit -X ours origin/main
+          git push origin HEAD:fix/runtime-entrypoint-attestation-v23
