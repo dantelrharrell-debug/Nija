@@ -1,8 +1,14 @@
 from __future__ import annotations
 
+from functools import wraps
 from types import ModuleType
 
 import scan_wrapper_depth_convergence_patch as patch
+
+
+def _set_origin(func, filename: str):
+    func.__code__ = func.__code__.replace(co_filename=filename)
+    return func
 
 
 def _broker_wrapper(base):
@@ -10,7 +16,7 @@ def _broker_wrapper(base):
         return base(self, *args, **kwargs)
     setattr(wrapper, patch._BROKER_ATTR, True)
     wrapper.__wrapped__ = base
-    return wrapper
+    return _set_origin(wrapper, f"/app/bot/{patch._BROKER_OWNER_FILE}")
 
 
 def _canonical_wrapper(base):
@@ -18,7 +24,7 @@ def _canonical_wrapper(base):
         return base(self, *args, **kwargs)
     setattr(wrapper, patch._CANONICAL_RELEASE_ATTR, "20260714a")
     wrapper.__wrapped__ = base
-    return wrapper
+    return _set_origin(wrapper, f"/app/{patch._CANONICAL_OWNER_FILE}")
 
 
 def test_inspect_chain_counts_single_broker_and_canonical_layers():
@@ -31,6 +37,8 @@ def test_inspect_chain_counts_single_broker_and_canonical_layers():
     assert status["depth"] == 2
     assert status["broker_layers"] == 1
     assert status["canonical_layers"] == 1
+    assert status["raw_broker_markers"] == 1
+    assert status["raw_canonical_markers"] == 1
     assert status["cycle"] is False
 
 
@@ -44,6 +52,27 @@ def test_inspect_chain_detects_duplicate_broker_layers():
     assert status["broker_layers"] == 2
 
 
+def test_inspect_chain_ignores_markers_copied_by_wraps():
+    def leaf(self, *args, **kwargs):
+        return "ok"
+
+    canonical = _canonical_wrapper(_broker_wrapper(leaf))
+
+    @wraps(canonical)
+    def outer(self, *args, **kwargs):
+        return canonical(self, *args, **kwargs)
+
+    outer.__wrapped__ = canonical
+    status = patch.inspect_chain(outer)
+
+    # wraps copied both ownership marker attributes onto outer, but outer's code
+    # was not defined by either owner module.
+    assert status["raw_broker_markers"] == 2
+    assert status["raw_canonical_markers"] == 2
+    assert status["broker_layers"] == 1
+    assert status["canonical_layers"] == 1
+
+
 def test_inspect_chain_follows_legacy_closure_original():
     def leaf(self, *args, **kwargs):
         return "ok"
@@ -54,6 +83,7 @@ def test_inspect_chain_follows_legacy_closure_original():
         return original(self, *args, **kwargs)
 
     setattr(legacy, patch._BROKER_ATTR, True)
+    _set_origin(legacy, f"/app/bot/{patch._BROKER_OWNER_FILE}")
     status = patch.inspect_chain(legacy)
 
     assert status["depth"] == 1
@@ -107,6 +137,7 @@ def test_guarded_installer_repairs_wrapped_link_on_new_layer():
             return previous(self, *args, **kwargs)
 
         setattr(broker, patch._BROKER_ATTR, True)
+        _set_origin(broker, f"/app/bot/{patch._BROKER_OWNER_FILE}")
         core_module.NijaCoreLoop.run_scan_phase = broker
         return True
 
