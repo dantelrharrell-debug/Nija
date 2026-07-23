@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import logging
 import os
 import re
@@ -10,10 +11,23 @@ import time
 from typing import Any
 
 logger = logging.getLogger("nija.secondary_venue_runtime_diagnostics")
-_MARKER = "20260723-secondary-runtime-diagnostics-v4"
+_MARKER = "20260723-secondary-runtime-diagnostics-v5"
 _INSTALLED = False
 _LOCK = threading.RLock()
 _LAST_LOG: dict[str, float] = {}
+_COINBASE_SECRET_ALIASES = (
+    "COINBASE_API_SECRET",
+    "COINBASE_PLATFORM_API_SECRET",
+    "COINBASE_ADVANCED_API_SECRET",
+    "COINBASE_PEM_CONTENT",
+    "COINBASE_API_PRIVATE_KEY",
+    "COINBASE_PRIVATE_KEY",
+)
+_COINBASE_KEY_ALIASES = (
+    "COINBASE_API_KEY",
+    "COINBASE_PLATFORM_API_KEY",
+    "COINBASE_ADVANCED_API_KEY",
+)
 
 
 def _strip_outer_quotes(value: str) -> str:
@@ -23,14 +37,46 @@ def _strip_outer_quotes(value: str) -> str:
     return value
 
 
-def normalize_coinbase_private_key(value: str) -> str:
-    """Return a canonical PEM from common secret-manager encodings.
+def _extract_json_secret(value: str) -> str:
+    try:
+        payload = json.loads(value)
+    except Exception:
+        return value
+    if not isinstance(payload, dict):
+        return value
+    lowered = {str(key).lower(): item for key, item in payload.items()}
+    for key in (
+        "privatekey",
+        "private_key",
+        "apisecret",
+        "api_secret",
+        "secret",
+        "pem",
+        "pem_content",
+    ):
+        candidate = lowered.get(key)
+        if candidate:
+            return str(candidate)
+    return value
 
-    Render values may contain literal escaped newlines, outer quotes, a base64
-    encoded complete PEM, or a PEM whose body was collapsed onto one line.
-    Normalization never invents key material; invalid content remains invalid.
-    """
+
+def _decode_possible_base64(value: str) -> str:
+    candidate = re.sub(r"\s+", "", value)
+    if len(candidate) < 80 or len(candidate) % 4:
+        return value
+    try:
+        decoded = base64.b64decode(candidate, validate=True).decode("utf-8").strip()
+    except Exception:
+        return value
+    return decoded if "PRIVATE KEY" in decoded else value
+
+
+def normalize_coinbase_private_key(value: str) -> str:
+    """Return a canonical PEM from supported secret-manager encodings."""
+
     text = _strip_outer_quotes(str(value or ""))
+    text = _extract_json_secret(text)
+    text = _strip_outer_quotes(text)
     text = (
         text.replace("\\r\\n", "\n")
         .replace("\\n", "\n")
@@ -38,31 +84,18 @@ def normalize_coinbase_private_key(value: str) -> str:
         .replace("\r", "\n")
         .strip()
     )
-
-    if "BEGIN" not in text and text:
-        try:
-            decoded = base64.b64decode(text, validate=True).decode("utf-8").strip()
-            if "-----BEGIN" in decoded and "PRIVATE KEY-----" in decoded:
-                text = decoded
-        except Exception:
-            pass
-
+    text = _decode_possible_base64(text).replace("\\n", "\n").strip()
     match = re.search(
-        r"-----BEGIN ([A-Z0-9 ]*PRIVATE KEY)-----(.*?)-----END \1-----",
+        r"-----BEGIN (?P<label>(?:EC )?PRIVATE KEY)-----\s*(?P<body>.*?)\s*-----END (?P=label)-----",
         text,
-        re.S,
+        flags=re.DOTALL,
     )
     if match:
-        label = match.group(1)
-        body = re.sub(r"\s+", "", match.group(2))
+        label = match.group("label")
+        body = re.sub(r"\s+", "", match.group("body"))
         if body:
-            wrapped = [body[index : index + 64] for index in range(0, len(body), 64)]
-            return (
-                f"-----BEGIN {label}-----\n"
-                + "\n".join(wrapped)
-                + f"\n-----END {label}-----\n"
-            )
-
+            wrapped = "\n".join(body[index : index + 64] for index in range(0, len(body), 64))
+            return f"-----BEGIN {label}-----\n{wrapped}\n-----END {label}-----\n"
     lines = [line.strip() for line in text.split("\n") if line.strip()]
     return "\n".join(lines) + ("\n" if lines else "")
 
@@ -89,46 +122,120 @@ def _validate_coinbase_key(secret: str) -> tuple[bool, str]:
     return True, "valid_es256"
 
 
-def _normalize_coinbase_env() -> None:
-    aliases = (
-        "COINBASE_API_SECRET",
-        "COINBASE_PLATFORM_API_SECRET",
-        "COINBASE_ADVANCED_API_SECRET",
-        "COINBASE_API_PRIVATE_KEY",
-        "COINBASE_PRIVATE_KEY",
-        "COINBASE_PEM_CONTENT",
+def _coinbase_pem_expected(candidates: list[tuple[str, str]]) -> bool:
+    key_text = " ".join(
+        str(os.environ.get(name, "") or "") for name in _COINBASE_KEY_ALIASES
+    ).lower()
+    if "organizations/" in key_text or "/apikeys/" in key_text:
+        return True
+    return any(
+        "PRIVATE KEY" in raw.upper() or "PRIVATEKEY" in raw.upper()
+        for _, raw in candidates
     )
-    source = next((name for name in aliases if os.environ.get(name, "").strip()), "")
-    if not source:
+
+
+def _quarantine_coinbase(reason: str) -> None:
+    """Isolate an invalid optional Coinbase venue before connection attempts."""
+
+    os.environ["NIJA_COINBASE_PEM_VALID"] = "0"
+    os.environ["NIJA_COINBASE_PEM_QUARANTINED"] = "1"
+    os.environ["NIJA_COINBASE_PEM_INVALID_REASON"] = str(reason or "invalid")[:200]
+    os.environ["NIJA_COINBASE_ACTIVATION_STATE"] = "quarantined_invalid_pem"
+    os.environ["NIJA_COINBASE_CONNECTED"] = "0"
+    os.environ["NIJA_COINBASE_TRADING_READY"] = "0"
+    os.environ["NIJA_DISABLE_COINBASE"] = "true"
+    os.environ["ENABLE_COINBASE_TRADING"] = "false"
+    os.environ["COINBASE_LIVE_TRADING_ENABLED"] = "false"
+    logger.critical(
+        "COINBASE_PEM_QUARANTINED marker=%s reason=%s "
+        "kraken_and_okx_remain_independent=true",
+        _MARKER,
+        reason,
+    )
+
+
+def _restore_coinbase_quarantine_state() -> None:
+    """Keep the explicit quarantine reason visible after generic activation skips."""
+
+    if os.environ.get("NIJA_COINBASE_PEM_QUARANTINED") != "1":
+        return
+    os.environ["NIJA_COINBASE_PEM_VALID"] = "0"
+    os.environ["NIJA_COINBASE_ACTIVATION_STATE"] = "quarantined_invalid_pem"
+    os.environ["NIJA_COINBASE_CONNECTED"] = "0"
+    os.environ["NIJA_COINBASE_TRADING_READY"] = "0"
+    os.environ["NIJA_DISABLE_COINBASE"] = "true"
+    os.environ["ENABLE_COINBASE_TRADING"] = "false"
+    os.environ["COINBASE_LIVE_TRADING_ENABLED"] = "false"
+
+
+def _normalize_coinbase_env() -> None:
+    candidates = [
+        (name, str(os.environ.get(name, "") or "").strip())
+        for name in _COINBASE_SECRET_ALIASES
+        if str(os.environ.get(name, "") or "").strip()
+    ]
+    if not candidates:
         os.environ["NIJA_COINBASE_PEM_STATE"] = "missing"
+        os.environ["NIJA_COINBASE_PEM_VALID"] = "0"
+        os.environ["NIJA_COINBASE_CONNECTED"] = "0"
+        os.environ["NIJA_COINBASE_TRADING_READY"] = "0"
         logger.error("COINBASE_PEM_INVALID marker=%s reason=missing_secret", _MARKER)
         return
 
-    normalized = normalize_coinbase_private_key(os.environ[source])
-    valid, reason = _validate_coinbase_key(normalized)
-    os.environ["NIJA_COINBASE_PEM_STATE"] = "valid" if valid else "invalid"
+    failures: list[str] = []
+    selected_source = ""
+    selected_secret = ""
+    selected_reason = ""
+    for source, raw in candidates:
+        normalized = normalize_coinbase_private_key(raw)
+        valid, reason = _validate_coinbase_key(normalized)
+        if valid:
+            selected_source = source
+            selected_secret = normalized
+            selected_reason = reason
+            break
+        failures.append(f"{source}:{reason}")
 
-    if valid:
-        # Synchronize every alias so later broker constructors cannot capture a
-        # stale, truncated, or differently encoded copy of the same private key.
-        for name in aliases:
-            os.environ[name] = normalized
+    if selected_secret:
+        for name in _COINBASE_SECRET_ALIASES:
+            os.environ[name] = selected_secret
+        os.environ["NIJA_COINBASE_PEM_STATE"] = "valid"
         os.environ["NIJA_COINBASE_PEM_VALID"] = "1"
+        os.environ["NIJA_COINBASE_PEM_QUARANTINED"] = "0"
+        os.environ.pop("NIJA_COINBASE_PEM_INVALID_REASON", None)
         logger.warning(
-            "COINBASE_PEM_CANONICALIZED marker=%s source=%s newline_count=%d reason=%s",
+            "COINBASE_PEM_CANONICALIZED marker=%s source=%s newline_count=%d "
+            "reason=%s candidates=%d",
             _MARKER,
-            source,
-            normalized.count("\n"),
-            reason,
+            selected_source,
+            selected_secret.count("\n"),
+            selected_reason,
+            len(candidates),
         )
-    else:
+        return
+
+    reason = ";".join(failures)[:200] or "no_valid_candidate"
+    if not _coinbase_pem_expected(candidates):
+        os.environ["NIJA_COINBASE_PEM_STATE"] = "legacy_unverified"
         os.environ["NIJA_COINBASE_PEM_VALID"] = "0"
-        logger.error(
-            "COINBASE_PEM_INVALID marker=%s source=%s reason=%s action=quarantine_coinbase_only",
+        logger.warning(
+            "COINBASE_PEM_NOT_REQUIRED marker=%s candidates=%d reason=%s",
             _MARKER,
-            source,
+            len(candidates),
             reason,
         )
+        return
+
+    os.environ["NIJA_COINBASE_PEM_STATE"] = "invalid"
+    os.environ["NIJA_COINBASE_PEM_VALID"] = "0"
+    logger.error(
+        "COINBASE_PEM_INVALID marker=%s candidates=%d reason=%s "
+        "action=quarantine_coinbase_only",
+        _MARKER,
+        len(candidates),
+        reason,
+    )
+    _quarantine_coinbase(reason)
 
 
 def _log_state(venue: str, *, force: bool = False) -> None:
@@ -137,7 +244,11 @@ def _log_state(venue: str, *, force: bool = False) -> None:
         return
     _LAST_LOG[venue] = now
     upper = venue.upper()
-    pem = os.environ.get("NIJA_COINBASE_PEM_STATE", "n/a") if venue == "coinbase" else "n/a"
+    pem = (
+        os.environ.get("NIJA_COINBASE_PEM_STATE", "n/a")
+        if venue == "coinbase"
+        else "n/a"
+    )
     if (
         venue == "coinbase"
         and os.environ.get("NIJA_COINBASE_CONNECTED") == "1"
@@ -145,15 +256,19 @@ def _log_state(venue: str, *, force: bool = False) -> None:
     ):
         pem = "valid"
         os.environ["NIJA_COINBASE_PEM_STATE"] = "valid"
+        os.environ["NIJA_COINBASE_PEM_VALID"] = "1"
     logger.warning(
-        "SECONDARY_VENUE_RUNTIME_STATE marker=%s venue=%s activation=%s connected=%s ready=%s spendable=%s base_url=%s pem=%s",
+        "SECONDARY_VENUE_RUNTIME_STATE marker=%s venue=%s activation=%s "
+        "connected=%s ready=%s spendable=%s base_url=%s pem=%s",
         _MARKER,
         venue,
         os.environ.get(f"NIJA_{upper}_ACTIVATION_STATE", "unknown"),
         os.environ.get(f"NIJA_{upper}_CONNECTED", "0"),
         os.environ.get(f"NIJA_{upper}_TRADING_READY", "0"),
         os.environ.get(f"NIJA_{upper}_SPENDABLE_QUOTE", "unknown"),
-        os.environ.get("OKX_BASE_URL", "default") if venue == "okx" else "api.coinbase.com",
+        os.environ.get("OKX_BASE_URL", "default")
+        if venue == "okx"
+        else "api.coinbase.com",
         pem,
     )
 
@@ -177,8 +292,12 @@ def _install_activation_observer() -> None:
         try:
             result = original(venue, *args, **kwargs)
         except Exception:
+            if name.lower() == "coinbase":
+                _restore_coinbase_quarantine_state()
             _log_state(name, force=True)
             raise
+        if name.lower() == "coinbase":
+            _restore_coinbase_quarantine_state()
         _log_state(name, force=True)
         return result
 
@@ -222,11 +341,14 @@ def install() -> None:
             consistency.install()
         except Exception:
             logger.exception(
-                "COINBASE_CAPITAL_CONSISTENCY_IMPORT_FAILED marker=%s", _MARKER
+                "COINBASE_CAPITAL_CONSISTENCY_IMPORT_FAILED marker=%s",
+                _MARKER,
             )
         _install_activation_observer()
         _install_scan_owner_repair()
-        logger.warning("SECONDARY_VENUE_RUNTIME_DIAGNOSTICS_INSTALLED marker=%s", _MARKER)
+        logger.warning(
+            "SECONDARY_VENUE_RUNTIME_DIAGNOSTICS_INSTALLED marker=%s", _MARKER
+        )
 
 
 install()
@@ -234,6 +356,7 @@ install()
 __all__ = [
     "install",
     "normalize_coinbase_private_key",
-    "_validate_coinbase_key",
     "_normalize_coinbase_env",
+    "_quarantine_coinbase",
+    "_restore_coinbase_quarantine_state",
 ]
