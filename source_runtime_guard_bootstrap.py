@@ -130,8 +130,6 @@ def install() -> bool:
             _install_required("authority_heartbeat_generation_scope_patch")
             _install_required("final_worker_position_coinbase_repair_patch")
 
-            # Select and validate the OKX regional host before any auth normalizer,
-            # private client, balance probe, quarantine decision, or market load.
             _install_required("bot.okx_regional_endpoint_isolation_patch")
             _install_required("broker_auth_recovery_patch")
             _install_required("bot.coinbase_funding_readiness_repair_patch")
@@ -146,9 +144,6 @@ def install() -> bool:
             _install_required("final_runtime_convergence_patch")
             _install_required("scan_wrapper_convergence_repair_patch")
 
-            # Repair captured legacy delegates immediately after the canonical scan
-            # owner exists and before hard-clamp/watchdog modules can preserve a
-            # stale wrapper chain.
             _install_required("bot.scan_reentrant_delegate_repair_patch")
             _install_required("bot.scan_wrapper_hard_clamp_patch")
 
@@ -166,6 +161,11 @@ def install() -> bool:
             _install_required("three_venue_execution_readiness")
             _install_required("render_readiness_state_bridge")
             _install_required("scan_owner_okx_auth_convergence_patch")
+
+            # Late Phase 3 installers above may replace the method after the first
+            # zero-signal installation. Re-run it synchronously before identity and
+            # release audits; its process-lifetime monitor handles later changes.
+            _install_required("bot.zero_signal_streak_state_repair_patch")
 
             _install_canonical_downstream_risk()
             _install_required("runtime_module_identity_convergence_patch")
