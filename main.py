@@ -66,15 +66,19 @@ def _install_logging_format_guard() -> None:
 
 
 def _install_live_broker_profit_exit_v25() -> None:
-    """Install fill-confirmed, fee-aware exits after bot startup hooks exist."""
+    """Install fill-confirmed, fee-aware broker and engine exits."""
 
     try:
         repair = importlib.import_module("bot.live_broker_profit_exit_convergence_v25")
         installer = getattr(repair, "install_import_hook", None) or getattr(repair, "install", None)
         if not callable(installer) or not bool(installer()):
-            raise RuntimeError("v25 installer unavailable or returned false")
+            raise RuntimeError("broker v25 installer unavailable or returned false")
+        engine_repair = importlib.import_module("bot.live_engine_profit_exit_convergence_v25")
+        engine_installer = getattr(engine_repair, "install_import_hook", None) or getattr(engine_repair, "install", None)
+        if not callable(engine_installer) or not bool(engine_installer()):
+            raise RuntimeError("engine v25 installer unavailable or returned false")
         print("LIVE_BROKER_PROFIT_EXIT_V25_INSTALL_REQUESTED", flush=True)
-        logger.critical("LIVE_BROKER_PROFIT_EXIT_V25_INSTALL_REQUESTED")
+        logger.critical("LIVE_BROKER_PROFIT_EXIT_V25_INSTALL_REQUESTED broker_and_engine=true")
     except Exception as exc:
         logger.critical("LIVE_BROKER_PROFIT_EXIT_V25_INSTALL_FAILED err=%s", exc, exc_info=True)
         live = (
