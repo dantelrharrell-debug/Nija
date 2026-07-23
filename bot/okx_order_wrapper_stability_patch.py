@@ -25,7 +25,7 @@ import threading
 import time
 from functools import wraps
 from types import ModuleType
-from typing import Any, Callable
+from typing import Any
 
 logger = logging.getLogger("nija.okx_order_wrapper_stability")
 _MARKER = "20260723-okx-wrapper-stability-v2"
@@ -33,6 +33,8 @@ _CLEANUP_MARKER = "20260723-runtime-error-cleanup-v1"
 _LOCK = threading.RLock()
 _INSTALLED = False
 _MONITOR_STARTED = False
+_PATCH_INSTALLERS_READY = False
+_RISK_INSTALLER_READY = False
 _LAST_STATE = ""
 
 _INSTID_CANONICAL = "bot.okx_order_instid_payload_repair_patch"
@@ -224,12 +226,15 @@ def _install_patch_module(module: ModuleType) -> None:
 
 
 def _ensure_okx_wrappers() -> tuple[bool, dict[str, str]]:
+    global _PATCH_INSTALLERS_READY
     instid, final = _load_patch_modules()
 
-    # Install final-call validation first, then put instId normalization around it.
-    # The chain-aware guards keep both layers present on subsequent import-hook runs.
-    _install_patch_module(final)
-    _install_patch_module(instid)
+    # Import hooks are activated once. Healing passes patch loaded class surfaces
+    # directly, which avoids repeated INSTALL_COMPLETE log messages.
+    if not _PATCH_INSTALLERS_READY:
+        _install_patch_module(final)
+        _install_patch_module(instid)
+        _PATCH_INSTALLERS_READY = True
 
     targets = _loaded_target_modules()
     for target in targets:
@@ -262,15 +267,18 @@ def _ensure_okx_wrappers() -> tuple[bool, dict[str, str]]:
 
 
 def _ensure_pretrade_risk() -> tuple[bool, str]:
+    global _RISK_INSTALLER_READY
     pretrade = _bind_alias(_PRETRADE_CANONICAL, _PRETRADE_ALIAS)
     risk = _bind_alias(_RISK_CANONICAL, _RISK_ALIAS)
     installer = getattr(risk, "_install_on_pre_trade_risk_engine", None)
     if not callable(installer):
         return False, "pretrade_installer_missing"
     ready = bool(installer(pretrade))
-    full_install = getattr(risk, "install_import_hook", None) or getattr(risk, "install", None)
-    if callable(full_install):
-        full_install()
+    if not _RISK_INSTALLER_READY:
+        full_install = getattr(risk, "install_import_hook", None) or getattr(risk, "install", None)
+        if callable(full_install):
+            full_install()
+        _RISK_INSTALLER_READY = True
     state = getattr(risk, "_STATE", {})
     ready = ready and bool(state.get("pretrade", False))
     os.environ["NIJA_DOWNSTREAM_RISK_GOVERNOR_V2_READY"] = (
