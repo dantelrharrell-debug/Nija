@@ -10,7 +10,7 @@ MODULE_PATH = ROOT / "scripts" / "runtime_entrypoint_attestation.py"
 
 
 def _load_module():
-    name = "runtime_entrypoint_attestation_v23_test"
+    name = "runtime_entrypoint_attestation_v25_test"
     spec = importlib.util.spec_from_file_location(name, MODULE_PATH)
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
@@ -41,16 +41,19 @@ def test_repository_canonical_runtime_contract_passes(monkeypatch):
     _clear_provider_metadata(monkeypatch)
     module = _load_module()
     monkeypatch.setenv("GIT_BRANCH", "main")
-    monkeypatch.setenv("GIT_COMMIT", "eb8f660623f13372ce213e79c1f10535db686590")
+    monkeypatch.setenv("GIT_COMMIT", "91570b0a41dc96a7e3924b14075369c9bbe45e87")
     monkeypatch.setenv("LIVE_CAPITAL_VERIFIED", "true")
     monkeypatch.setenv("DRY_RUN_MODE", "false")
     monkeypatch.setenv("PAPER_MODE", "false")
 
     report = module.validate_runtime(ROOT)
 
+    assert report["marker"] == "20260723-runtime-entrypoint-attestation-v25"
     assert report["canonical"] == "main.py->bot.bot->bot.bot_main"
-    assert report["commit"].startswith("eb8f660")
+    assert report["commit"].startswith("91570b0")
     assert "bot/canonical_broker_prebootstrap_v22.py:" in report["hashes"]
+    assert "bot/canonical_broker_startup_convergence_v24.py:" in report["hashes"]
+    assert "bot/live_broker_profit_exit_convergence_v25.py:" in report["hashes"]
     assert "bot/stalled_writer_release_guard_v22.py:" in report["hashes"]
 
 
