@@ -51,6 +51,26 @@ def test_invalid_coinbase_secret_is_quarantined_without_blocking_other_venues(mo
     assert os.environ["NIJA_COINBASE_PEM_INVALID_REASON"]
 
 
+def test_quarantine_state_is_restored_after_generic_activation_skip(monkeypatch):
+    monkeypatch.setenv("NIJA_COINBASE_PEM_QUARANTINED", "1")
+    monkeypatch.setenv("NIJA_COINBASE_ACTIVATION_STATE", "disabled")
+    monkeypatch.setenv("NIJA_COINBASE_CONNECTED", "1")
+    monkeypatch.setenv("NIJA_COINBASE_TRADING_READY", "1")
+    monkeypatch.setenv("NIJA_DISABLE_COINBASE", "false")
+    monkeypatch.setenv("ENABLE_COINBASE_TRADING", "true")
+    monkeypatch.setenv("COINBASE_LIVE_TRADING_ENABLED", "true")
+    module = _module()
+
+    module._restore_coinbase_quarantine_state()
+
+    assert os.environ["NIJA_COINBASE_ACTIVATION_STATE"] == "quarantined_invalid_pem"
+    assert os.environ["NIJA_COINBASE_CONNECTED"] == "0"
+    assert os.environ["NIJA_COINBASE_TRADING_READY"] == "0"
+    assert os.environ["NIJA_DISABLE_COINBASE"] == "true"
+    assert os.environ["ENABLE_COINBASE_TRADING"] == "false"
+    assert os.environ["COINBASE_LIVE_TRADING_ENABLED"] == "false"
+
+
 def test_valid_coinbase_secret_does_not_override_operator_disable_state(monkeypatch):
     monkeypatch.setenv(
         "COINBASE_API_SECRET",
