@@ -91,6 +91,13 @@ def _prepare_okx_runtime(monkeypatch):
         stability._INSTID_CANONICAL: instid,
         stability._FINAL_CANONICAL: final,
     }
+    for name in (
+        stability._INSTID_CANONICAL,
+        stability._INSTID_ALIAS,
+        stability._FINAL_CANONICAL,
+        stability._FINAL_ALIAS,
+    ):
+        monkeypatch.delitem(sys.modules, name, raising=False)
     real_import = stability.importlib.import_module
     monkeypatch.setattr(
         stability.importlib,
@@ -200,6 +207,13 @@ def test_pretrade_risk_is_imported_patched_and_alias_bound_once(monkeypatch):
         stability._PRETRADE_CANONICAL: pretrade,
         stability._RISK_CANONICAL: risk,
     }
+    for name in (
+        stability._PRETRADE_CANONICAL,
+        stability._PRETRADE_ALIAS,
+        stability._RISK_CANONICAL,
+        stability._RISK_ALIAS,
+    ):
+        monkeypatch.delitem(sys.modules, name, raising=False)
     real_import = stability.importlib.import_module
     monkeypatch.setattr(
         stability.importlib,
