@@ -1,0 +1,61 @@
+name: Live broker profit exit v25
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'main.py'
+      - 'Dockerfile'
+      - 'scripts/runtime_entrypoint_attestation.py'
+      - 'bot/live_broker_profit_exit_convergence_v25.py'
+      - 'bot/tests/test_live_broker_profit_exit_convergence_v25.py'
+      - 'bot/tests/test_runtime_entrypoint_attestation_v23.py'
+      - '.github/workflows/live-broker-profit-exit-v25.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'main.py'
+      - 'Dockerfile'
+      - 'scripts/runtime_entrypoint_attestation.py'
+      - 'bot/live_broker_profit_exit_convergence_v25.py'
+      - 'bot/tests/test_live_broker_profit_exit_convergence_v25.py'
+      - 'bot/tests/test_runtime_entrypoint_attestation_v23.py'
+      - '.github/workflows/live-broker-profit-exit-v25.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  v25-profit-exit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PYTHONPATH: .
+      NIJA_DEFER_RUNTIME_SITE_HOOKS: '1'
+      DRY_RUN_MODE: 'true'
+      PAPER_MODE: 'false'
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install focused dependencies
+        run: python -P -m pip install --disable-pip-version-check pytest redis requests
+      - name: Compile v25 runtime contract
+        run: |
+          python -m py_compile \
+            main.py \
+            scripts/runtime_entrypoint_attestation.py \
+            bot/live_broker_profit_exit_convergence_v25.py \
+            bot/auto_exit_sl_tp_runtime_patch.py \
+            bot/universal_broker_exit_supervisor_patch.py
+      - name: Verify Docker v25 inclusion
+        run: |
+          grep -Fq 'bot/live_broker_profit_exit_convergence_v25.py' Dockerfile
+          grep -Fq '20260723-runtime-entrypoint-attestation-v25' scripts/runtime_entrypoint_attestation.py
+          grep -Fq '_install_live_broker_profit_exit_v25' main.py
+      - name: Test fill-confirmed fee-aware exits
+        run: python -m pytest -q bot/tests/test_live_broker_profit_exit_convergence_v25.py
+      - name: Test runtime attestation
+        run: python -m pytest -q bot/tests/test_runtime_entrypoint_attestation_v23.py
