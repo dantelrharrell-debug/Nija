@@ -1,14 +1,16 @@
 """Normalize secondary-venue credentials and expose fail-closed diagnostics."""
 from __future__ import annotations
 
+import base64
 import logging
 import os
+import re
 import threading
 import time
 from typing import Any
 
 logger = logging.getLogger("nija.secondary_venue_runtime_diagnostics")
-_MARKER = "20260720-secondary-runtime-diagnostics-v3"
+_MARKER = "20260723-secondary-runtime-diagnostics-v4"
 _INSTALLED = False
 _LOCK = threading.RLock()
 _LAST_LOG: dict[str, float] = {}
@@ -22,10 +24,47 @@ def _strip_outer_quotes(value: str) -> str:
 
 
 def normalize_coinbase_private_key(value: str) -> str:
-    value = _strip_outer_quotes(str(value or ""))
-    value = value.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\r\n", "\n").replace("\r", "\n")
-    value = value.strip()
-    return value + ("\n" if value else "")
+    """Return a canonical PEM from common secret-manager encodings.
+
+    Render values may contain literal escaped newlines, outer quotes, a base64
+    encoded complete PEM, or a PEM whose body was collapsed onto one line.
+    Normalization never invents key material; invalid content remains invalid.
+    """
+    text = _strip_outer_quotes(str(value or ""))
+    text = (
+        text.replace("\\r\\n", "\n")
+        .replace("\\n", "\n")
+        .replace("\r\n", "\n")
+        .replace("\r", "\n")
+        .strip()
+    )
+
+    if "BEGIN" not in text and text:
+        try:
+            decoded = base64.b64decode(text, validate=True).decode("utf-8").strip()
+            if "-----BEGIN" in decoded and "PRIVATE KEY-----" in decoded:
+                text = decoded
+        except Exception:
+            pass
+
+    match = re.search(
+        r"-----BEGIN ([A-Z0-9 ]*PRIVATE KEY)-----(.*?)-----END \1-----",
+        text,
+        re.S,
+    )
+    if match:
+        label = match.group(1)
+        body = re.sub(r"\s+", "", match.group(2))
+        if body:
+            wrapped = [body[index : index + 64] for index in range(0, len(body), 64)]
+            return (
+                f"-----BEGIN {label}-----\n"
+                + "\n".join(wrapped)
+                + f"\n-----END {label}-----\n"
+            )
+
+    lines = [line.strip() for line in text.split("\n") if line.strip()]
+    return "\n".join(lines) + ("\n" if lines else "")
 
 
 def _validate_coinbase_key(secret: str) -> tuple[bool, str]:
@@ -35,34 +74,61 @@ def _validate_coinbase_key(secret: str) -> tuple[bool, str]:
         return False, "missing_pem_header"
     try:
         from cryptography.hazmat.primitives import serialization
+
         key = serialization.load_pem_private_key(secret.encode("utf-8"), password=None)
         curve = getattr(getattr(key, "curve", None), "name", "unknown")
         if curve not in {"secp256r1", "prime256v1"}:
             return False, f"unsupported_curve:{curve}"
     except Exception as exc:
-        if os.environ.get("NIJA_COINBASE_CONNECTED") == "1" and os.environ.get("NIJA_COINBASE_TRADING_READY") == "1":
+        if (
+            os.environ.get("NIJA_COINBASE_CONNECTED") == "1"
+            and os.environ.get("NIJA_COINBASE_TRADING_READY") == "1"
+        ):
             return True, "authenticated_connection"
         return False, f"{type(exc).__name__}:{str(exc)[:120]}"
     return True, "valid_es256"
 
 
 def _normalize_coinbase_env() -> None:
-    aliases = ("COINBASE_API_SECRET", "COINBASE_PLATFORM_API_SECRET", "COINBASE_ADVANCED_API_SECRET", "COINBASE_PEM_CONTENT")
+    aliases = (
+        "COINBASE_API_SECRET",
+        "COINBASE_PLATFORM_API_SECRET",
+        "COINBASE_ADVANCED_API_SECRET",
+        "COINBASE_API_PRIVATE_KEY",
+        "COINBASE_PRIVATE_KEY",
+        "COINBASE_PEM_CONTENT",
+    )
     source = next((name for name in aliases if os.environ.get(name, "").strip()), "")
     if not source:
         os.environ["NIJA_COINBASE_PEM_STATE"] = "missing"
         logger.error("COINBASE_PEM_INVALID marker=%s reason=missing_secret", _MARKER)
         return
+
     normalized = normalize_coinbase_private_key(os.environ[source])
-    for name in aliases:
-        if name == source or not os.environ.get(name, "").strip():
-            os.environ[name] = normalized
     valid, reason = _validate_coinbase_key(normalized)
     os.environ["NIJA_COINBASE_PEM_STATE"] = "valid" if valid else "invalid"
+
     if valid:
-        logger.warning("COINBASE_PEM_NORMALIZED marker=%s source=%s newline_count=%d reason=%s", _MARKER, source, normalized.count("\n"), reason)
+        # Synchronize every alias so later broker constructors cannot capture a
+        # stale, truncated, or differently encoded copy of the same private key.
+        for name in aliases:
+            os.environ[name] = normalized
+        os.environ["NIJA_COINBASE_PEM_VALID"] = "1"
+        logger.warning(
+            "COINBASE_PEM_CANONICALIZED marker=%s source=%s newline_count=%d reason=%s",
+            _MARKER,
+            source,
+            normalized.count("\n"),
+            reason,
+        )
     else:
-        logger.error("COINBASE_PEM_INVALID marker=%s source=%s reason=%s", _MARKER, source, reason)
+        os.environ["NIJA_COINBASE_PEM_VALID"] = "0"
+        logger.error(
+            "COINBASE_PEM_INVALID marker=%s source=%s reason=%s action=quarantine_coinbase_only",
+            _MARKER,
+            source,
+            reason,
+        )
 
 
 def _log_state(venue: str, *, force: bool = False) -> None:
@@ -72,15 +138,23 @@ def _log_state(venue: str, *, force: bool = False) -> None:
     _LAST_LOG[venue] = now
     upper = venue.upper()
     pem = os.environ.get("NIJA_COINBASE_PEM_STATE", "n/a") if venue == "coinbase" else "n/a"
-    if venue == "coinbase" and os.environ.get("NIJA_COINBASE_CONNECTED") == "1" and os.environ.get("NIJA_COINBASE_TRADING_READY") == "1":
+    if (
+        venue == "coinbase"
+        and os.environ.get("NIJA_COINBASE_CONNECTED") == "1"
+        and os.environ.get("NIJA_COINBASE_TRADING_READY") == "1"
+    ):
         pem = "valid"
         os.environ["NIJA_COINBASE_PEM_STATE"] = "valid"
     logger.warning(
         "SECONDARY_VENUE_RUNTIME_STATE marker=%s venue=%s activation=%s connected=%s ready=%s spendable=%s base_url=%s pem=%s",
-        _MARKER, venue, os.environ.get(f"NIJA_{upper}_ACTIVATION_STATE", "unknown"),
-        os.environ.get(f"NIJA_{upper}_CONNECTED", "0"), os.environ.get(f"NIJA_{upper}_TRADING_READY", "0"),
+        _MARKER,
+        venue,
+        os.environ.get(f"NIJA_{upper}_ACTIVATION_STATE", "unknown"),
+        os.environ.get(f"NIJA_{upper}_CONNECTED", "0"),
+        os.environ.get(f"NIJA_{upper}_TRADING_READY", "0"),
         os.environ.get(f"NIJA_{upper}_SPENDABLE_QUOTE", "unknown"),
-        os.environ.get("OKX_BASE_URL", "default") if venue == "okx" else "api.coinbase.com", pem,
+        os.environ.get("OKX_BASE_URL", "default") if venue == "okx" else "api.coinbase.com",
+        pem,
     )
 
 
@@ -88,11 +162,16 @@ def _install_activation_observer() -> None:
     try:
         import secondary_venue_activation_patch as patch
     except Exception as exc:
-        logger.warning("SECONDARY_VENUE_DIAGNOSTIC_IMPORT_PENDING marker=%s error=%s", _MARKER, type(exc).__name__)
+        logger.warning(
+            "SECONDARY_VENUE_DIAGNOSTIC_IMPORT_PENDING marker=%s error=%s",
+            _MARKER,
+            type(exc).__name__,
+        )
         return
     original = getattr(patch, "activate_once", None)
-    if not callable(original) or getattr(original, "_nija_runtime_diag_v20260720", False):
+    if not callable(original) or getattr(original, "_nija_runtime_diag_v20260723", False):
         return
+
     def wrapped(venue: Any, *args: Any, **kwargs: Any) -> str:
         name = str(getattr(venue, "name", "unknown"))
         try:
@@ -102,7 +181,8 @@ def _install_activation_observer() -> None:
             raise
         _log_state(name, force=True)
         return result
-    wrapped._nija_runtime_diag_v20260720 = True  # type: ignore[attr-defined]
+
+    wrapped._nija_runtime_diag_v20260723 = True  # type: ignore[attr-defined]
     wrapped.__wrapped__ = original  # type: ignore[attr-defined]
     patch.activate_once = wrapped
 
@@ -110,9 +190,14 @@ def _install_activation_observer() -> None:
 def _install_scan_owner_repair() -> None:
     try:
         import reentrant_scan_owner_repair as repair
+
         repair.install()
     except Exception as exc:
-        logger.warning("REENTRANT_SCAN_OWNER_REPAIR_IMPORT_PENDING marker=%s error=%s", _MARKER, type(exc).__name__)
+        logger.warning(
+            "REENTRANT_SCAN_OWNER_REPAIR_IMPORT_PENDING marker=%s error=%s",
+            _MARKER,
+            type(exc).__name__,
+        )
 
 
 def install() -> None:
@@ -124,14 +209,21 @@ def install() -> None:
         _normalize_coinbase_env()
         try:
             import coinbase_authenticated_connect_recovery_patch as auth_recovery
+
             auth_recovery.install()
         except Exception:
-            logger.exception("COINBASE_AUTHENTICATED_CONNECT_RECOVERY_IMPORT_FAILED marker=%s", _MARKER)
+            logger.exception(
+                "COINBASE_AUTHENTICATED_CONNECT_RECOVERY_IMPORT_FAILED marker=%s",
+                _MARKER,
+            )
         try:
             import coinbase_capital_consistency_patch as consistency
+
             consistency.install()
         except Exception:
-            logger.exception("COINBASE_CAPITAL_CONSISTENCY_IMPORT_FAILED marker=%s", _MARKER)
+            logger.exception(
+                "COINBASE_CAPITAL_CONSISTENCY_IMPORT_FAILED marker=%s", _MARKER
+            )
         _install_activation_observer()
         _install_scan_owner_repair()
         logger.warning("SECONDARY_VENUE_RUNTIME_DIAGNOSTICS_INSTALLED marker=%s", _MARKER)
@@ -139,4 +231,9 @@ def install() -> None:
 
 install()
 
-__all__ = ["install", "normalize_coinbase_private_key"]
+__all__ = [
+    "install",
+    "normalize_coinbase_private_key",
+    "_validate_coinbase_key",
+    "_normalize_coinbase_env",
+]
