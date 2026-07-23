@@ -13,7 +13,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-_MARKER = "20260723-runtime-entrypoint-attestation-v23"
+_MARKER = "20260723-runtime-entrypoint-attestation-v24"
 _CANONICAL_PATH = "main.py->bot.bot->bot.bot_main"
 _PLACEHOLDERS = {"", "unknown", "none", "null", "unset", "n/a", "na"}
 _PROVIDER_LITERAL = re.compile(
@@ -54,6 +54,21 @@ _CONTRACTS = (
         (
             "20260723-canonical-broker-prebootstrap-v22",
             "prepare_canonical_broker_runtime",
+        ),
+    ),
+    FileContract(
+        "bot/canonical_broker_startup_convergence_v24.py",
+        (
+            "20260723-canonical-broker-startup-convergence-v24",
+            "CANONICAL_BROKER_STARTUP_CONVERGENCE_V24_READY",
+            "_patch_self_healing_module",
+        ),
+    ),
+    FileContract(
+        "bot/logging_format_guard_patch.py",
+        (
+            "CANONICAL_BROKER_STARTUP_CONVERGENCE_V24_INSTALL_REQUESTED",
+            "canonical_broker_startup_convergence_v24.py",
         ),
     ),
     FileContract(

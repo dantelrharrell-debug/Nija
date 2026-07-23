@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 # Render-specific front door for NIJA production startup.
-# Promotes common dashboard secret aliases to the canonical names consumed by
-# start.sh, without logging or persisting any credential values.
+# Promotes common dashboard secret aliases and applies the canonical startup
+# handoff to source-based services before the production bootstrap begins.
 
 set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "${ROOT_DIR}"
 
 _promote_secret_alias() {
     local canonical="$1"
@@ -38,5 +41,23 @@ _promote_secret_alias KRAKEN_PLATFORM_API_SECRET \
     KRAKEN_MASTER_API_SECRET \
     KRAKEN_MASTER_SECRET \
     KRAKEN_PLATFORM_SECRET
+
+# Docker builds already apply this patch. Running it again is intentionally
+# idempotent and closes the source-runtime gap for an existing Render service
+# that executes repository files without rebuilding the Docker layer.
+export NIJA_DEFER_RUNTIME_SITE_HOOKS=1
+python3 -S scripts/apply_startup_handoff_fix.py
+bash -n start.sh
+python3 -S -m py_compile \
+    main.py \
+    bot/bot.py \
+    bot/bot_main.py \
+    bot/canonical_broker_prebootstrap_v22.py \
+    bot/canonical_broker_startup_convergence_v24.py \
+    bot/stalled_writer_release_guard_v22.py \
+    scripts/runtime_entrypoint_attestation.py
+
+echo "🧭 RENDER_ENTRYPOINT_CANONICAL_HANDOFF_READY marker=20260723-render-entrypoint-v24"
+unset NIJA_DEFER_RUNTIME_SITE_HOOKS
 
 exec bash scripts/production_bootstrap.sh "$@"

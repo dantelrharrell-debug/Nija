@@ -10,7 +10,9 @@ on:
       - 'start.sh'
       - 'apply_bot_package_defer_fix.py'
       - 'scripts/production_bootstrap.sh'
+      - 'scripts/render_entrypoint.sh'
       - 'scripts/apply_startup_handoff_fix.py'
+      - 'scripts/runtime_entrypoint_attestation.py'
       - 'scripts/install_sitecustomize_defer_guard.py'
       - 'scripts/three_venue_config_check.py'
       - 'render_liveness_server.py'
@@ -24,6 +26,8 @@ on:
       - 'secondary_venue_activation_patch.py'
       - 'secondary_venue_strict_readiness_patch.py'
       - 'bot/activation_pending_commit_monitor_patch.py'
+      - 'bot/canonical_broker_startup_convergence_v24.py'
+      - 'bot/logging_format_guard_patch.py'
       - 'bot/zero_signal_streak_state_repair_patch.py'
       - 'bot/okx_order_wrapper_stability_patch.py'
       - 'bot/downstream_risk_governor_equity_repair_patch.py'
@@ -32,6 +36,9 @@ on:
       - 'bot/bot_main.py'
       - 'bot/tests/test_bot_package_defer_fix.py'
       - 'bot/tests/test_startup_handoff_all_fixes.py'
+      - 'bot/tests/test_runtime_entrypoint_attestation_v23.py'
+      - 'bot/tests/test_canonical_broker_startup_convergence_v24.py'
+      - 'bot/tests/test_render_canonical_startup_v24.py'
       - 'bot/tests/test_sitecustomize_defer_guard.py'
       - 'bot/tests/test_scan_wrapper_depth_convergence_patch.py'
       - 'bot/tests/test_zero_signal_streak_state_repair_patch.py'
@@ -60,7 +67,9 @@ on:
       - 'start.sh'
       - 'apply_bot_package_defer_fix.py'
       - 'scripts/production_bootstrap.sh'
+      - 'scripts/render_entrypoint.sh'
       - 'scripts/apply_startup_handoff_fix.py'
+      - 'scripts/runtime_entrypoint_attestation.py'
       - 'scripts/install_sitecustomize_defer_guard.py'
       - 'scripts/three_venue_config_check.py'
       - 'render_liveness_server.py'
@@ -74,6 +83,8 @@ on:
       - 'secondary_venue_activation_patch.py'
       - 'secondary_venue_strict_readiness_patch.py'
       - 'bot/activation_pending_commit_monitor_patch.py'
+      - 'bot/canonical_broker_startup_convergence_v24.py'
+      - 'bot/logging_format_guard_patch.py'
       - 'bot/zero_signal_streak_state_repair_patch.py'
       - 'bot/okx_order_wrapper_stability_patch.py'
       - 'bot/downstream_risk_governor_equity_repair_patch.py'
@@ -82,6 +93,9 @@ on:
       - 'bot/bot_main.py'
       - 'bot/tests/test_bot_package_defer_fix.py'
       - 'bot/tests/test_startup_handoff_all_fixes.py'
+      - 'bot/tests/test_runtime_entrypoint_attestation_v23.py'
+      - 'bot/tests/test_canonical_broker_startup_convergence_v24.py'
+      - 'bot/tests/test_render_canonical_startup_v24.py'
       - 'bot/tests/test_sitecustomize_defer_guard.py'
       - 'bot/tests/test_scan_wrapper_depth_convergence_patch.py'
       - 'bot/tests/test_zero_signal_streak_state_repair_patch.py'
@@ -147,7 +161,8 @@ jobs:
         run: |
           bash -n start.sh
           bash -n scripts/production_bootstrap.sh
-          grep -Fq 'dockerCommand: bash scripts/production_bootstrap.sh' render.yaml
+          bash -n scripts/render_entrypoint.sh
+          grep -Fq 'dockerCommand: bash scripts/render_entrypoint.sh' render.yaml
           grep -Fq 'healthCheckPath: /healthz' render.yaml
           grep -Fq 'PORT' render.yaml
           grep -Fq 'value: "5000"' render.yaml
@@ -157,9 +172,13 @@ jobs:
           ! grep -A3 'HEALTHCHECK' Dockerfile | grep -Fq 'import requests'
           grep -Fq 'python3 -S - "$1"' scripts/production_bootstrap.sh
           grep -Fq 'python3 -S - "$@"' scripts/production_bootstrap.sh
+          grep -Fq 'python3 -S scripts/apply_startup_handoff_fix.py' scripts/render_entrypoint.sh
+          grep -Fq 'RENDER_ENTRYPOINT_CANONICAL_HANDOFF_READY' scripts/render_entrypoint.sh
           grep -Fq 'install_sitecustomize_defer_guard.py' Dockerfile
           grep -Fq 'apply_bot_package_defer_fix.py' Dockerfile
           grep -Fq 'apply_startup_handoff_fix.py' Dockerfile
+          grep -Fq 'canonical_broker_startup_convergence_v24.py' Dockerfile
+          grep -Fq 'CMD ["bash", "scripts/render_entrypoint.sh"]' Dockerfile
 
       - name: Compile deployment entrypoints
         run: |
@@ -167,6 +186,9 @@ jobs:
             apply_bot_package_defer_fix.py \
             scripts/install_sitecustomize_defer_guard.py \
             scripts/apply_startup_handoff_fix.py \
+            scripts/runtime_entrypoint_attestation.py \
+            bot/canonical_broker_startup_convergence_v24.py \
+            bot/logging_format_guard_patch.py \
             render_liveness_server.py \
             render_readiness_state_bridge.py \
             prebot_writer_authority_bootstrap.py \
@@ -197,6 +219,12 @@ jobs:
           python -m pytest -q bot/tests/test_okx_order_wrapper_stability_v2.py
       - name: Test startup handoff ordering
         run: python -m pytest -q bot/tests/test_startup_handoff_all_fixes.py
+      - name: Test runtime entrypoint attestation
+        run: python -m pytest -q bot/tests/test_runtime_entrypoint_attestation_v23.py
+      - name: Test canonical broker startup convergence v24
+        run: python -m pytest -q bot/tests/test_canonical_broker_startup_convergence_v24.py
+      - name: Test Render canonical startup v24
+        run: python -m pytest -q bot/tests/test_render_canonical_startup_v24.py
       - name: Test three-venue readiness
         run: python -m pytest -q bot/tests/test_three_venue_execution_readiness.py
       - name: Test import-hook compactor
