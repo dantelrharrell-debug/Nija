@@ -19,9 +19,19 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
         run: |
-          docker build --no-cache \
+          set -o pipefail
+          BUILD_LOG="${RUNNER_TEMP}/nija-docker-build.log"
+          if ! docker build --no-cache \
             --build-arg GH_TOKEN="${GH_TOKEN}" \
             --build-arg GIT_BRANCH="${GITHUB_REF_NAME}" \
             --build-arg GIT_COMMIT="${GITHUB_SHA}" \
             --build-arg BUILD_TIMESTAMP="$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
-            -t nija:latest .
+            -t nija:latest . >"${BUILD_LOG}" 2>&1; then
+            echo "::group::Docker build failure tail"
+            tail -n 240 "${BUILD_LOG}" || true
+            echo "::endgroup::"
+            exit 1
+          fi
+          echo "::group::Docker build completion tail"
+          tail -n 80 "${BUILD_LOG}" || true
+          echo "::endgroup::"
