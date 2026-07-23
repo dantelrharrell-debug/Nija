@@ -214,7 +214,13 @@ jobs:
         run: |
           set -euo pipefail
           env -u PYTHONPATH python -P -m pip install --disable-pip-version-check --upgrade pip
-          env -u PYTHONPATH python -P -m pip install pytest==8.2.2 pytest-cov pytest-timeout
+          env -u PYTHONPATH python -P -m pip install \
+            pytest==8.2.2 \
+            pytest-cov \
+            pytest-timeout \
+            numpy==1.26.3 \
+            redis \
+            requests
 
       - name: Apply production package defer guard
         run: python -S apply_bot_package_defer_fix.py
