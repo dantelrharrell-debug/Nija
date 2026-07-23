@@ -13,6 +13,15 @@ _SECRET_ALIASES = (
     "COINBASE_PEM_CONTENT",
     "COINBASE_API_PRIVATE_KEY",
     "COINBASE_PRIVATE_KEY",
+    "COINBASE_CDP_API_SECRET",
+    "CDP_API_KEY_PRIVATE_KEY",
+)
+_KEY_ALIASES = (
+    "COINBASE_API_KEY",
+    "COINBASE_PLATFORM_API_KEY",
+    "COINBASE_ADVANCED_API_KEY",
+    "COINBASE_CDP_API_KEY",
+    "CDP_API_KEY_NAME",
 )
 
 
@@ -21,10 +30,11 @@ def _module():
 
 
 def _clear_coinbase_aliases(monkeypatch):
-    for name in _SECRET_ALIASES + (
-        "COINBASE_API_KEY",
-        "COINBASE_PLATFORM_API_KEY",
-        "COINBASE_ADVANCED_API_KEY",
+    for name in _SECRET_ALIASES + _KEY_ALIASES + (
+        "NIJA_COINBASE_PEM_STATE",
+        "NIJA_COINBASE_PEM_VALID",
+        "NIJA_COINBASE_PEM_QUARANTINED",
+        "NIJA_COINBASE_PEM_INVALID_REASON",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -79,6 +89,49 @@ def test_invalid_cdp_secret_is_quarantined_without_blocking_other_venues(monkeyp
     assert os.environ["ENABLE_COINBASE_TRADING"] == "false"
     assert os.environ["COINBASE_LIVE_TRADING_ENABLED"] == "false"
     assert os.environ["NIJA_COINBASE_PEM_INVALID_REASON"] == "validation_failed"
+
+
+def test_existing_cdp_aliases_are_normalized_and_synchronized(monkeypatch):
+    _clear_coinbase_aliases(monkeypatch)
+    monkeypatch.setenv("CDP_API_KEY_NAME", "organizations/example/apiKeys/example")
+    monkeypatch.setenv(
+        "CDP_API_KEY_PRIVATE_KEY",
+        "-----BEGIN EC PRIVATE KEY-----\\nVALIDCDP\\n-----END EC PRIVATE KEY-----",
+    )
+    module = _module()
+    monkeypatch.setattr(
+        module,
+        "_validate_coinbase_key",
+        lambda secret: ("VALIDCDP" in secret, "valid_es256"),
+    )
+
+    module._normalize_coinbase_env()
+
+    assert os.environ["NIJA_COINBASE_PEM_STATE"] == "valid"
+    assert os.environ["NIJA_COINBASE_PEM_VALID"] == "1"
+    assert "VALIDCDP" in os.environ["COINBASE_API_SECRET"]
+    assert all(os.environ[name] == os.environ["COINBASE_API_SECRET"] for name in _SECRET_ALIASES)
+
+
+def test_malformed_base64_wrapped_pem_is_not_misclassified_as_legacy(monkeypatch):
+    _clear_coinbase_aliases(monkeypatch)
+    malformed_pem = (
+        "-----BEGIN EC PRIVATE KEY-----\n"
+        + ("NOTVALID" * 20)
+        + "\n-----END EC PRIVATE KEY-----\n"
+    )
+    monkeypatch.setenv("COINBASE_API_KEY", "legacy-shaped-key")
+    monkeypatch.setenv(
+        "COINBASE_API_SECRET",
+        base64.b64encode(malformed_pem.encode("utf-8")).decode("ascii"),
+    )
+    module = _module()
+
+    module._normalize_coinbase_env()
+
+    assert os.environ["NIJA_COINBASE_PEM_STATE"] == "invalid"
+    assert os.environ["NIJA_COINBASE_PEM_QUARANTINED"] == "1"
+    assert os.environ["NIJA_DISABLE_COINBASE"] == "true"
 
 
 def test_later_valid_alias_wins_over_stale_primary_alias(monkeypatch):
