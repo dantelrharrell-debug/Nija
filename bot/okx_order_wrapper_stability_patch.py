@@ -192,7 +192,12 @@ def _candidate_classes(module: ModuleType, targets: list[ModuleType]) -> list[ty
     return classes
 
 
-def _class_state(cls: type) -> tuple[bool, dict[str, str]]:
+def _class_state(
+    cls: type,
+    *,
+    require_instid: bool = True,
+    require_final: bool = True,
+) -> tuple[bool, dict[str, str]]:
     details: dict[str, str] = {}
     ready = True
     observed = False
@@ -204,15 +209,22 @@ def _class_state(cls: type) -> tuple[bool, dict[str, str]]:
         instid, instid_cycle, instid_depth = _chain_has_attr(method, _INSTID_ATTR)
         final, final_cycle, final_depth = _chain_has_attr(method, _FINAL_ATTR)
         cycle = instid_cycle or final_cycle
-        method_ready = instid and final and not cycle
+        method_ready = (
+            (instid or not require_instid)
+            and (final or not require_final)
+            and not cycle
+        )
         details[method_name] = (
             f"instid={instid};final={final};cycle={cycle};"
+            f"require_instid={require_instid};require_final={require_final};"
             f"depth={max(instid_depth, final_depth)}"
         )
         ready = ready and method_ready
         if method_ready:
-            _propagate_chain_marker(method, _INSTID_ATTR)
-            _propagate_chain_marker(method, _FINAL_ATTR)
+            if require_instid:
+                _propagate_chain_marker(method, _INSTID_ATTR)
+            if require_final:
+                _propagate_chain_marker(method, _FINAL_ATTR)
     if observed and ready:
         setattr(cls, _CLASS_MARKER, True)
     return observed and ready, details
@@ -245,22 +257,27 @@ def _ensure_okx_wrappers() -> tuple[bool, dict[str, str]]:
         if callable(patch_instid):
             patch_instid(target)
 
-    classes: list[type] = []
-    seen: set[int] = set()
-    for module in (final, instid):
-        for cls in _candidate_classes(module, targets):
-            if id(cls) not in seen:
-                seen.add(id(cls))
-                classes.append(cls)
+    final_classes = _candidate_classes(final, targets)
+    instid_classes = _candidate_classes(instid, targets)
+    roles: dict[int, tuple[type, bool, bool]] = {}
+    for cls in instid_classes:
+        roles[id(cls)] = (cls, True, False)
+    for cls in final_classes:
+        previous = roles.get(id(cls))
+        roles[id(cls)] = (cls, bool(previous and previous[1]), True)
 
     details: dict[str, str] = {}
-    ready = bool(classes)
-    for cls in classes:
-        class_ready, class_details = _class_state(cls)
+    ready = bool(roles)
+    for cls, require_instid, require_final in roles.values():
+        class_ready, class_details = _class_state(
+            cls,
+            require_instid=require_instid,
+            require_final=require_final,
+        )
         ready = ready and class_ready
         label = f"{getattr(cls, '__module__', '')}.{getattr(cls, '__name__', '')}"
         details[label] = str(class_details)
-    if not classes:
+    if not roles:
         details["classes"] = "not_loaded"
     os.environ["NIJA_OKX_ORDER_WRAPPER_STABILITY_READY"] = "1" if ready else "0"
     return ready, details
