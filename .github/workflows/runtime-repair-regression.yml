@@ -10,9 +10,11 @@ on:
       - "bot/strategy_runtime_integrity_patch.py"
       - "bot/disconnected_coinbase_balance_guard_patch.py"
       - "bot/okx_patch_churn_guard_patch.py"
+      - "bot/live_active_dispatch_bridge_patch.py"
       - "bot/tests/test_strategy_runtime_integrity_patch.py"
       - "bot/tests/test_disconnected_coinbase_balance_guard_patch.py"
       - "bot/tests/test_okx_patch_churn_guard_patch.py"
+      - "bot/tests/test_live_active_dispatch_bridge_recovery.py"
       - ".github/workflows/runtime-repair-regression.yml"
   push:
     branches: [main]
@@ -24,9 +26,11 @@ on:
       - "bot/strategy_runtime_integrity_patch.py"
       - "bot/disconnected_coinbase_balance_guard_patch.py"
       - "bot/okx_patch_churn_guard_patch.py"
+      - "bot/live_active_dispatch_bridge_patch.py"
       - "bot/tests/test_strategy_runtime_integrity_patch.py"
       - "bot/tests/test_disconnected_coinbase_balance_guard_patch.py"
       - "bot/tests/test_okx_patch_churn_guard_patch.py"
+      - "bot/tests/test_live_active_dispatch_bridge_recovery.py"
       - ".github/workflows/runtime-repair-regression.yml"
 
 permissions:
@@ -35,17 +39,21 @@ permissions:
 jobs:
   focused-runtime-tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PYTHONPATH: .
+      NIJA_DEFER_RUNTIME_SITE_HOOKS: "1"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Set up production Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.11"
 
       - name: Install pytest
-        run: python -m pip install --disable-pip-version-check pytest
+        run: python -m pip install --disable-pip-version-check --retries 5 --timeout 30 pytest==8.2.2
 
       - name: Compile repaired runtime modules
         run: |
@@ -54,6 +62,7 @@ jobs:
             bot/strategy_runtime_integrity_patch.py \
             bot/disconnected_coinbase_balance_guard_patch.py \
             bot/okx_patch_churn_guard_patch.py \
+            bot/live_active_dispatch_bridge_patch.py \
             bot/bot.py
 
       - name: Run focused regression suite
@@ -62,4 +71,5 @@ jobs:
             bot/tests/test_critical_runtime_repairs_v10.py \
             bot/tests/test_strategy_runtime_integrity_patch.py \
             bot/tests/test_disconnected_coinbase_balance_guard_patch.py \
-            bot/tests/test_okx_patch_churn_guard_patch.py
+            bot/tests/test_okx_patch_churn_guard_patch.py \
+            bot/tests/test_live_active_dispatch_bridge_recovery.py
