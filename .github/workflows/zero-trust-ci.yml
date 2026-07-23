@@ -122,8 +122,12 @@ jobs:
           allowed-endpoints: >
             api.github.com:443
             github.com:443
+            github-releases.githubusercontent.com:443
+            release-assets.githubusercontent.com:443
             objects.githubusercontent.com:443
+            pkg-containers.githubusercontent.com:443
             ghcr.io:443
+            get.trivy.dev:443
 
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -144,14 +148,36 @@ jobs:
           sha256sum -c build-artifacts.sha256
           echo "::notice::Artifact signatures verified"
 
-      - name: Run Security Scan in Sandbox
-        uses: aquasecurity/trivy-action@master
+      - name: Install pinned Trivy
+        uses: aquasecurity/setup-trivy@3fb12ec12f41e471780db15c232d5dd185dcb514
         with:
-          scan-type: 'fs'
-          scan-ref: '.'
-          format: 'table'
-          severity: 'CRITICAL,HIGH'
-          exit-code: '0'
+          version: v0.70.0
+          cache: false
+
+      - name: Run Security Scan in Sandbox
+        run: |
+          SCAN_LOG="${RUNNER_TEMP}/nija-trivy-scan.log"
+          trivy fs \
+            --db-repository ghcr.io/aquasecurity/trivy-db:2 \
+            --checks-bundle-repository ghcr.io/aquasecurity/trivy-checks:2 \
+            --scanners vuln,secret,misconfig \
+            --severity CRITICAL,HIGH \
+            --exit-code 0 \
+            --format table \
+            --timeout 10m \
+            . >"${SCAN_LOG}" 2>&1
+          echo "::group::Trivy scan completion tail"
+          tail -n 80 "${SCAN_LOG}" || true
+          echo "::endgroup::"
+
+      - name: Upload Trivy diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4.4.3
+        with:
+          name: trivy-scan-diagnostics
+          path: ${{ runner.temp }}/nija-trivy-scan.log
+          if-no-files-found: error
+          retention-days: 7
 
   # Underscore keys keep matrix expressions unambiguous to GitHub's parser.
   test:

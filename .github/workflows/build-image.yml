@@ -16,12 +16,47 @@ jobs:
         uses: docker/setup-qemu-action@v3
 
       - name: Build Docker image (using GH_TOKEN)
+        id: docker_build
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
         run: |
+          set -o pipefail
+          BUILD_LOG="${RUNNER_TEMP}/nija-docker-build.log"
           docker build --no-cache \
             --build-arg GH_TOKEN="${GH_TOKEN}" \
             --build-arg GIT_BRANCH="${GITHUB_REF_NAME}" \
             --build-arg GIT_COMMIT="${GITHUB_SHA}" \
             --build-arg BUILD_TIMESTAMP="$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
-            -t nija:latest .
+            -t nija:latest . >"${BUILD_LOG}" 2>&1
+          status=$?
+          echo "status=${status}" >> "${GITHUB_OUTPUT}"
+          if [ "${status}" -ne 0 ]; then
+            echo "::group::Docker build failure tail"
+            tail -n 240 "${BUILD_LOG}" || true
+            echo "::endgroup::"
+          else
+            echo "::group::Docker build completion tail"
+            tail -n 80 "${BUILD_LOG}" || true
+            echo "::endgroup::"
+          fi
+          exit "${status}"
+
+      - name: Upload Docker build diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-build-diagnostics
+          path: ${{ runner.temp }}/nija-docker-build.log
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Enforce Docker build success
+        if: always()
+        run: |
+          status="${{ steps.docker_build.outputs.status }}"
+          if [ -z "${status}" ]; then
+            echo "Docker build status output is missing"
+            exit 1
+          fi
+          exit "${status}"

@@ -37,18 +37,21 @@ def test_patcher_defers_hooks_before_every_python_preflight() -> None:
 
     export_pos = patched.index("export NIJA_DEFER_RUNTIME_SITE_HOOKS=1")
     first_python_pos = patched.index("$PY --version")
+    attestation_pos = patched.index("STARTUP_HANDOFF_ENTRYPOINT_ATTESTATION_COMPLETE")
     unset_pos = patched.index("unset NIJA_DEFER_RUNTIME_SITE_HOOKS")
     main_pos = patched.index("$PY -u main.py")
 
     assert export_pos < first_python_pos
-    assert export_pos < unset_pos < main_pos
+    assert export_pos < attestation_pos < unset_pos < main_pos
     assert "STARTUP_HANDOFF_PREFLIGHT_BEGIN" in patched
     assert "STARTUP_HANDOFF_REDIS_VALIDATION_COMPLETE" in patched
+    assert "runtime_entrypoint_attestation.py" in patched
     assert "STARTUP_HANDOFF_RUNTIME_BEGIN" in patched
+    assert "canonical=main.py->bot.bot->bot.bot_main" in patched
     assert "STARTUP_HANDOFF_RUNTIME_EXIT" in patched
 
 
-def test_repository_start_script_gets_early_defer() -> None:
+def test_repository_start_script_uses_canonical_entrypoint_diagnostics() -> None:
     module = _load_patcher()
     source = START_SCRIPT.read_text(encoding="utf-8")
     patched = module.patch_text(source)
@@ -61,7 +64,18 @@ def test_repository_start_script_gets_early_defer() -> None:
     ]
     assert first_python_candidates
     assert export_pos < min(first_python_candidates)
-    assert patched.index("unset NIJA_DEFER_RUNTIME_SITE_HOOKS") < patched.index("$PY -u main.py")
+    assert patched.index("STARTUP_HANDOFF_ENTRYPOINT_ATTESTATION_COMPLETE") < patched.index(
+        "unset NIJA_DEFER_RUNTIME_SITE_HOOKS"
+    )
+    assert patched.index("unset NIJA_DEFER_RUNTIME_SITE_HOOKS") < patched.index(
+        "$PY -u main.py"
+    )
+    assert "CANONICAL_ENTRYPOINT_DIAGNOSTICS" in patched
+    assert "bot/canonical_broker_prebootstrap_v22.py" in patched
+    assert "bot/stalled_writer_release_guard_v22.py" in patched
+    assert "--- canonical bot/bot.py (head) ---" in patched
+    assert "--- bot.py (head) ---" not in patched
+    assert "py_compile ./main.py ./bot.py" not in patched
 
 
 def test_patcher_is_idempotent() -> None:
@@ -71,6 +85,7 @@ def test_patcher_is_idempotent() -> None:
 
     assert second == first
     assert second.count("STARTUP_HANDOFF_PREFLIGHT_BEGIN") == 1
+    assert second.count("STARTUP_HANDOFF_ENTRYPOINT_ATTESTATION_COMPLETE") == 1
     assert second.count("STARTUP_HANDOFF_RUNTIME_BEGIN") == 1
 
 
