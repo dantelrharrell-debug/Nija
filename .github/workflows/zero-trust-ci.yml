@@ -147,16 +147,55 @@ jobs:
           sha256sum -c build-artifacts.sha256
           echo "::notice::Artifact signatures verified"
 
-      - name: Run Security Scan in Sandbox
-        # v0.36.0 verified immutable release; pin the full commit to prevent tag drift.
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
+      - name: Install pinned Trivy
+        uses: aquasecurity/setup-trivy@3fb12ec12f41e471780db15c232d5dd185dcb514
         with:
-          scan-type: 'fs'
-          scan-ref: '.'
-          format: 'table'
-          severity: 'CRITICAL,HIGH'
-          exit-code: '0'
-          cache: 'false'
+          version: v0.70.0
+          cache: false
+
+      - name: Run Security Scan in Sandbox
+        id: trivy_scan
+        continue-on-error: true
+        run: |
+          SCAN_LOG="${RUNNER_TEMP}/nija-trivy-scan.log"
+          trivy fs \
+            --scanners vuln,secret,misconfig \
+            --severity CRITICAL,HIGH \
+            --exit-code 0 \
+            --format table \
+            --timeout 10m \
+            . >"${SCAN_LOG}" 2>&1
+          status=$?
+          echo "status=${status}" >> "${GITHUB_OUTPUT}"
+          if [ "${status}" -ne 0 ]; then
+            echo "::group::Trivy failure tail"
+            tail -n 240 "${SCAN_LOG}" || true
+            echo "::endgroup::"
+          else
+            echo "::group::Trivy scan completion tail"
+            tail -n 80 "${SCAN_LOG}" || true
+            echo "::endgroup::"
+          fi
+          exit "${status}"
+
+      - name: Upload Trivy diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4.4.3
+        with:
+          name: trivy-scan-diagnostics
+          path: ${{ runner.temp }}/nija-trivy-scan.log
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Enforce Trivy scan success
+        if: always()
+        run: |
+          status="${{ steps.trivy_scan.outputs.status }}"
+          if [ -z "${status}" ]; then
+            echo "Trivy scan status output is missing"
+            exit 1
+          fi
+          exit "${status}"
 
   # Underscore keys keep matrix expressions unambiguous to GitHub's parser.
   test:
