@@ -112,6 +112,13 @@ try:
 except Exception as exc:
     logger.warning("CANONICAL_BROKER_MAIN_GUARD_INSTALL_FAILED source=bot_entrypoint err=%s", exc)
 
+try:
+    from bot.stalled_writer_release_guard_v21 import install_import_hook as _install_stalled_writer_release_guard
+    _install_stalled_writer_release_guard()
+    logger.warning("STALLED_WRITER_RELEASE_GUARD_INSTALL_REQUESTED source=bot_entrypoint")
+except Exception as exc:
+    logger.warning("STALLED_WRITER_RELEASE_GUARD_INSTALL_FAILED source=bot_entrypoint err=%s", exc)
+
 from bot.bot_main import main
 
 if __name__ == "__main__":
