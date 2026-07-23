@@ -2,18 +2,18 @@
 
 Render has historically launched NIJA through more than one command: the reviewed
 ``main.py -> bot.bot -> bot.bot_main`` path, the legacy root ``bot.py`` path, and
-source-only services that do not contain Docker-installed ``.pth`` hooks.  The
+source-only services that do not contain Docker-installed ``.pth`` hooks. The
 v22 canonical prebootstrap correctly initializes the MultiAccountBrokerManager,
-but only after its installer has been imported.  A legacy path can therefore
+but only after its installer has been imported. A legacy path can therefore
 reach SelfHealingStartup with a writer lease while the manager FSM is still
 uninitialized, leaving capital at zero and the runtime fail-closed forever.
 
-This release installs lightweight import hooks only.  It does not initialize a
-broker during Python site startup.  Instead it wraps SelfHealingStartup.run and
-the canonical bot_main functions as those modules are imported.  In live mode,
+This release installs lightweight import hooks only. It does not initialize a
+broker during Python site startup. Instead it wraps SelfHealingStartup.run and
+the canonical bot_main functions as those modules are imported. In live mode,
 SelfHealingStartup may proceed only after verified writer lineage exists and the
-v22 canonical manager preparation succeeds.  Non-live execution remains
-unchanged.  Coinbase diagnostics v5 are also loaded early so malformed Coinbase
+v22 canonical manager preparation succeeds. Non-live execution remains
+unchanged. Coinbase diagnostics v5 are also loaded early so malformed Coinbase
 credentials are quarantined without blocking healthy independent venues.
 """
 from __future__ import annotations
@@ -21,6 +21,7 @@ from __future__ import annotations
 import importlib
 import importlib.abc
 import importlib.machinery
+import importlib.util
 import logging
 import os
 import sys
@@ -28,7 +29,7 @@ import threading
 from functools import wraps
 from pathlib import Path
 from types import ModuleType
-from typing import Any, Callable
+from typing import Any
 
 logger = logging.getLogger("nija.canonical_broker_startup_convergence")
 
@@ -101,13 +102,14 @@ def _install_secondary_diagnostics_v5() -> bool:
         if callable(installer):
             installer()
         logger.warning(
-            "CANONICAL_STARTUP_SECONDARY_DIAGNOSTICS_READY marker=%s release=20260723-secondary-runtime-diagnostics-v5",
+            "CANONICAL_STARTUP_SECONDARY_DIAGNOSTICS_READY marker=%s "
+            "release=20260723-secondary-runtime-diagnostics-v5",
             _MARKER,
         )
         return True
     except Exception as exc:
-        # Coinbase remains fail-closed.  A diagnostics import failure must not
-        # create false readiness or block the installation of broker-manager
+        # Coinbase remains fail-closed. A diagnostics import failure must not
+        # create false readiness or block installation of broker-manager
         # convergence for Kraken/OKX.
         logger.exception(
             "CANONICAL_STARTUP_SECONDARY_DIAGNOSTICS_FAILED marker=%s err=%s:%s",
@@ -160,7 +162,8 @@ def _patch_self_healing_module(module: ModuleType) -> bool:
                     "NIJA_CANONICAL_BROKER_STARTUP_CONVERGENCE_V24_READY"
                 ] = "0"
                 logger.critical(
-                    "CANONICAL_BROKER_STARTUP_CONVERGENCE_V24_BLOCKED marker=%s reason=%s trading_remains_fail_closed=true",
+                    "CANONICAL_BROKER_STARTUP_CONVERGENCE_V24_BLOCKED "
+                    "marker=%s reason=%s trading_remains_fail_closed=true",
                     _MARKER,
                     lineage_reason,
                 )
@@ -175,7 +178,8 @@ def _patch_self_healing_module(module: ModuleType) -> bool:
                     "NIJA_CANONICAL_BROKER_STARTUP_CONVERGENCE_V24_READY"
                 ] = "0"
                 logger.critical(
-                    "CANONICAL_BROKER_STARTUP_CONVERGENCE_V24_FAILED marker=%s err=%s:%s trading_remains_fail_closed=true",
+                    "CANONICAL_BROKER_STARTUP_CONVERGENCE_V24_FAILED "
+                    "marker=%s err=%s:%s trading_remains_fail_closed=true",
                     _MARKER,
                     type(exc).__name__,
                     exc,
@@ -188,7 +192,8 @@ def _patch_self_healing_module(module: ModuleType) -> bool:
     setattr(guarded_run, "__wrapped__", current)
     setattr(cls, "run", guarded_run)
     logger.critical(
-        "CANONICAL_BROKER_STARTUP_CONVERGENCE_V24_SELF_HEALING_PATCHED marker=%s module=%s",
+        "CANONICAL_BROKER_STARTUP_CONVERGENCE_V24_SELF_HEALING_PATCHED "
+        "marker=%s module=%s",
         _MARKER,
         module.__name__,
     )
@@ -208,7 +213,8 @@ def _patch_bot_main_module(module: ModuleType) -> bool:
     ready = acquire_ok and main_ok
     setattr(module, _BOT_MAIN_PATCH_ATTR, ready)
     logger.critical(
-        "CANONICAL_BROKER_STARTUP_CONVERGENCE_V24_BOT_MAIN_PATCHED marker=%s acquire=%s main=%s",
+        "CANONICAL_BROKER_STARTUP_CONVERGENCE_V24_BOT_MAIN_PATCHED "
+        "marker=%s acquire=%s main=%s",
         _MARKER,
         acquire_ok,
         main_ok,
@@ -261,7 +267,8 @@ def _patch_loaded_modules() -> None:
                 _patch_module(module)
             except Exception:
                 logger.exception(
-                    "CANONICAL_BROKER_STARTUP_CONVERGENCE_V24_LOADED_PATCH_FAILED marker=%s module=%s",
+                    "CANONICAL_BROKER_STARTUP_CONVERGENCE_V24_LOADED_PATCH_FAILED "
+                    "marker=%s module=%s",
                     _MARKER,
                     name,
                 )
@@ -279,7 +286,8 @@ def install_import_hook() -> bool:
         _INSTALLED = True
         os.environ["NIJA_CANONICAL_BROKER_STARTUP_CONVERGENCE_V24_INSTALLED"] = "1"
         logger.critical(
-            "CANONICAL_BROKER_STARTUP_CONVERGENCE_V24_INSTALLED marker=%s import_hook=true",
+            "CANONICAL_BROKER_STARTUP_CONVERGENCE_V24_INSTALLED "
+            "marker=%s import_hook=true",
             _MARKER,
         )
         print(
