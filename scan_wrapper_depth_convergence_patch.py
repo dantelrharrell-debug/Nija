@@ -10,17 +10,23 @@ This guard makes that installer chain-aware, repairs the next installed wrapper
 to expose its base, and audits the live scan chain. A release is unsafe when the
 chain cycles, exceeds the configured depth, or contains duplicate canonical or
 broker-independent owners.
+
+``functools.wraps`` copies the wrapped function's ``__dict__``. A later wrapper
+can therefore carry NIJA ownership marker attributes even though its code was
+defined by a different patch. Ownership counts use the function code filename,
+while raw marker counts remain diagnostic. This distinguishes real duplicate
+owners from copied metadata.
 """
 from __future__ import annotations
 
 import importlib
-import inspect
 import logging
 import os
 import sys
 import threading
 import time
 from functools import wraps
+from pathlib import Path
 from types import ModuleType
 from typing import Any, Callable
 
@@ -29,6 +35,8 @@ _MARKER = "20260715-scan-depth-v1"
 _GUARD_ATTR = "_nija_scan_depth_guard_v1"
 _BROKER_ATTR = "_nija_broker_independent_live_execution_v20260705a"
 _CANONICAL_RELEASE_ATTR = "_nija_scan_wrapper_release"
+_BROKER_OWNER_FILE = "broker_independent_live_execution_patch.py"
+_CANONICAL_OWNER_FILE = "scan_wrapper_convergence_repair_patch.py"
 _LOCK = threading.RLock()
 _STARTED = False
 _LAST_SIGNATURE = ""
@@ -65,12 +73,29 @@ def _next_link(func: Callable[..., Any]) -> Callable[..., Any] | None:
     return _closure_link(func)
 
 
+def _code_filename(func: Any) -> str:
+    try:
+        code = getattr(func, "__code__", None)
+        return str(getattr(code, "co_filename", "") or "").replace("\\", "/")
+    except Exception:
+        return ""
+
+
+def _owns_marker(func: Any, attr: str, owner_file: str) -> bool:
+    if not bool(getattr(func, attr, False)):
+        return False
+    filename = _code_filename(func)
+    return bool(filename and Path(filename).name == owner_file)
+
+
 def inspect_chain(func: Any, *, limit: int = 4096) -> dict[str, Any]:
     current = func
     seen: set[int] = set()
     depth = 0
     broker_layers = 0
     canonical_layers = 0
+    raw_broker_markers = 0
+    raw_canonical_markers = 0
     cycle = False
     names: list[str] = []
     while callable(current):
@@ -80,8 +105,12 @@ def inspect_chain(func: Any, *, limit: int = 4096) -> dict[str, Any]:
             break
         seen.add(ident)
         names.append(getattr(current, "__qualname__", getattr(current, "__name__", type(current).__name__)))
-        broker_layers += int(bool(getattr(current, _BROKER_ATTR, False)))
-        canonical_layers += int(bool(getattr(current, _CANONICAL_RELEASE_ATTR, "")))
+        raw_broker_markers += int(bool(getattr(current, _BROKER_ATTR, False)))
+        raw_canonical_markers += int(bool(getattr(current, _CANONICAL_RELEASE_ATTR, "")))
+        broker_layers += int(_owns_marker(current, _BROKER_ATTR, _BROKER_OWNER_FILE))
+        canonical_layers += int(
+            _owns_marker(current, _CANONICAL_RELEASE_ATTR, _CANONICAL_OWNER_FILE)
+        )
         nxt = _next_link(current)
         if not callable(nxt):
             break
@@ -94,6 +123,8 @@ def inspect_chain(func: Any, *, limit: int = 4096) -> dict[str, Any]:
         "depth": depth,
         "broker_layers": broker_layers,
         "canonical_layers": canonical_layers,
+        "raw_broker_markers": raw_broker_markers,
+        "raw_canonical_markers": raw_canonical_markers,
         "cycle": cycle,
         "head": names[0] if names else "missing",
         "tail": names[-1] if names else "missing",
@@ -128,7 +159,6 @@ def _guard_broker_module(module: ModuleType) -> bool:
         cls = getattr(core_module, "NijaCoreLoop", None)
         current = getattr(cls, "run_scan_phase", None) if isinstance(cls, type) else None
         if callable(current) and _chain_has_broker_layer(current):
-            # Keep the module's own state coherent so its monitor exits.
             try:
                 setattr(module, "_PATCHED", True)
             except Exception:
@@ -204,7 +234,8 @@ def audit() -> tuple[bool, dict[str, str]]:
     details = {
         "scan_chain": (
             f"depth={status['depth']};max={max_depth};broker_layers={status['broker_layers']};"
-            f"canonical_layers={status['canonical_layers']};cycle={status['cycle']};"
+            f"canonical_layers={status['canonical_layers']};raw_broker_markers={status['raw_broker_markers']};"
+            f"raw_canonical_markers={status['raw_canonical_markers']};cycle={status['cycle']};"
             f"head={status['head']};tail={status['tail']}"
         )
     }
@@ -241,7 +272,7 @@ def install() -> None:
             _STARTED = True
             threading.Thread(target=_watchdog, name="ScanWrapperDepthGuard", daemon=True).start()
         logger.critical(
-            "SCAN_WRAPPER_DEPTH_GUARD_INSTALLED marker=%s max_depth=%s",
+            "SCAN_WRAPPER_DEPTH_GUARD_INSTALLED marker=%s max_depth=%s ownership=code_origin",
             _MARKER,
             os.environ.get("NIJA_MAX_SCAN_WRAPPER_DEPTH", "24"),
         )
@@ -258,4 +289,6 @@ __all__ = [
     "inspect_chain",
     "_guard_broker_module",
     "_chain_has_broker_layer",
+    "_code_filename",
+    "_owns_marker",
 ]
