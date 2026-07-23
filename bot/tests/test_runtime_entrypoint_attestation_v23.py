@@ -27,6 +27,12 @@ def _clear_provider_metadata(monkeypatch):
         "GIT_COMMIT",
         "RENDER_GIT_COMMIT",
         "RAILWAY_GIT_COMMIT_SHA",
+        "LIVE_TRADING",
+        "LIVE_CAPITAL_VERIFIED",
+        "NIJA_EXECUTION_ACTIVE",
+        "NIJA_RUNTIME_TRADING_STATE",
+        "DRY_RUN_MODE",
+        "PAPER_MODE",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -81,6 +87,39 @@ def test_live_attestation_uses_render_commit_when_generic_value_is_placeholder(m
     assert report["commit"] == "render-commit-123"
 
 
+def test_literal_provider_placeholder_falls_through_to_valid_railway_commit(monkeypatch):
+    _clear_provider_metadata(monkeypatch)
+    module = _load_module()
+    monkeypatch.setenv("GIT_COMMIT", "$RENDER_GIT_COMMIT")
+    monkeypatch.setenv("RENDER_GIT_COMMIT", "${RAILWAY_GIT_COMMIT_SHA}")
+    monkeypatch.setenv("RAILWAY_GIT_COMMIT_SHA", "railway-commit-456")
+    monkeypatch.setenv("GIT_BRANCH", "${{ github.ref_name }}")
+    monkeypatch.setenv("RAILWAY_GIT_BRANCH", "main")
+    monkeypatch.setenv("LIVE_TRADING", "true")
+
+    report = module.validate_runtime(ROOT)
+
+    assert report["commit"] == "railway-commit-456"
+    assert report["branch"] == "main"
+
+
+def test_live_trading_alias_rejects_unknown_commit(monkeypatch):
+    _clear_provider_metadata(monkeypatch)
+    module = _load_module()
+    monkeypatch.setenv("GIT_BRANCH", "main")
+    monkeypatch.setenv("GIT_COMMIT", "unknown")
+    monkeypatch.setenv("LIVE_TRADING", "true")
+    monkeypatch.setenv("DRY_RUN_MODE", "false")
+    monkeypatch.setenv("PAPER_MODE", "false")
+
+    try:
+        module.validate_runtime(ROOT)
+    except RuntimeError as exc:
+        assert "commit provenance is unknown" in str(exc)
+    else:
+        raise AssertionError("expected LIVE_TRADING with unknown provenance to fail")
+
+
 def test_live_attestation_rejects_unknown_commit_across_all_providers(monkeypatch):
     _clear_provider_metadata(monkeypatch)
     module = _load_module()
@@ -105,6 +144,7 @@ def test_paper_mode_allows_unknown_commit_for_local_validation(monkeypatch):
     module = _load_module()
     monkeypatch.setenv("GIT_BRANCH", "unknown")
     monkeypatch.setenv("GIT_COMMIT", "unknown")
+    monkeypatch.setenv("LIVE_TRADING", "true")
     monkeypatch.setenv("LIVE_CAPITAL_VERIFIED", "false")
     monkeypatch.setenv("DRY_RUN_MODE", "false")
     monkeypatch.setenv("PAPER_MODE", "true")
