@@ -5,6 +5,7 @@ on:
     paths:
       - "Dockerfile"
       - "critical_runtime_repairs_v10.py"
+      - "secondary_venue_runtime_diagnostics.py"
       - "bot/tests/test_critical_runtime_repairs_v10.py"
       - "bot/bot.py"
       - "bot/strategy_runtime_integrity_patch.py"
@@ -29,6 +30,11 @@ on:
       - "bot/tests/test_stalled_writer_release_guard_v21.py"
       - "bot/tests/test_canonical_broker_prebootstrap_v22.py"
       - "bot/tests/test_stalled_writer_release_guard_v22.py"
+      - "bot/tests/test_secondary_venue_runtime_diagnostics.py"
+      - "bot/tests/test_startup_handoff_all_fixes.py"
+      - "bot/tests/test_runtime_entrypoint_attestation_v23.py"
+      - "scripts/apply_startup_handoff_fix.py"
+      - "scripts/runtime_entrypoint_attestation.py"
       - "scripts/install_sitecustomize_defer_guard.py"
       - ".github/workflows/runtime-repair-regression.yml"
   push:
@@ -36,6 +42,7 @@ on:
     paths:
       - "Dockerfile"
       - "critical_runtime_repairs_v10.py"
+      - "secondary_venue_runtime_diagnostics.py"
       - "bot/tests/test_critical_runtime_repairs_v10.py"
       - "bot/bot.py"
       - "bot/strategy_runtime_integrity_patch.py"
@@ -60,6 +67,11 @@ on:
       - "bot/tests/test_stalled_writer_release_guard_v21.py"
       - "bot/tests/test_canonical_broker_prebootstrap_v22.py"
       - "bot/tests/test_stalled_writer_release_guard_v22.py"
+      - "bot/tests/test_secondary_venue_runtime_diagnostics.py"
+      - "bot/tests/test_startup_handoff_all_fixes.py"
+      - "bot/tests/test_runtime_entrypoint_attestation_v23.py"
+      - "scripts/apply_startup_handoff_fix.py"
+      - "scripts/runtime_entrypoint_attestation.py"
       - "scripts/install_sitecustomize_defer_guard.py"
       - ".github/workflows/runtime-repair-regression.yml"
 
@@ -92,6 +104,7 @@ jobs:
         run: |
           python -m py_compile \
             critical_runtime_repairs_v10.py \
+            secondary_venue_runtime_diagnostics.py \
             bot/strategy_runtime_integrity_patch.py \
             bot/disconnected_coinbase_balance_guard_patch.py \
             bot/okx_patch_churn_guard_patch.py \
@@ -104,6 +117,8 @@ jobs:
             bot/stalled_writer_release_guard_v21.py \
             bot/canonical_broker_prebootstrap_v22.py \
             bot/stalled_writer_release_guard_v22.py \
+            scripts/apply_startup_handoff_fix.py \
+            scripts/runtime_entrypoint_attestation.py \
             bot/bot.py
 
       - name: Run focused regression suite
@@ -119,4 +134,7 @@ jobs:
             bot/tests/test_canonical_broker_main_entry_guard_v20.py \
             bot/tests/test_stalled_writer_release_guard_v21.py \
             bot/tests/test_canonical_broker_prebootstrap_v22.py \
-            bot/tests/test_stalled_writer_release_guard_v22.py
+            bot/tests/test_stalled_writer_release_guard_v22.py \
+            bot/tests/test_secondary_venue_runtime_diagnostics.py \
+            bot/tests/test_startup_handoff_all_fixes.py \
+            bot/tests/test_runtime_entrypoint_attestation_v23.py
