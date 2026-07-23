@@ -1,4 +1,4 @@
-# NIJA AI Trading Group — Current Success State
+# NIJA AI Trading LLC — Current Success State
 
 **Status date:** July 23, 2026
 

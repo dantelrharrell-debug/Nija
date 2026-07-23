@@ -278,7 +278,7 @@ You may not assign these Terms. NIJA may assign them to any successor entity.
 ### 14.5 Contact
 For questions about these Terms, contact us at:
 - Email: legal@nija.trading
-- Mailing Address: NIJA Trading Systems LLC, 1209 Orange Street, Wilmington, Delaware 19801, United States (c/o Registered Agent).
+- Mailing Address: NIJA AI Trading LLC, 1209 Orange Street, Wilmington, Delaware 19801, United States (c/o Registered Agent).
 
 ## 15. Acknowledgment
 
@@ -302,7 +302,7 @@ BY CLICKING "I ACCEPT" OR USING THE SERVICE, YOU ACKNOWLEDGE THAT:
 
 ---
 
-© 2026 NIJA Trading Systems. All rights reserved.
+© 2026 NIJA AI Trading LLC. All rights reserved.
 **Last Updated**: January 31, 2026  
 **Effective Date**: January 31, 2026
 
@@ -861,7 +861,7 @@ Billing Questions: billing@nija-trading.com
 For comprehensive support options and response times, see our [Customer Support](SUPPORT.md) page.
 
 **Mailing Address**:  
-[Company Legal Name]  
+NIJA AI Trading LLC  
 [Street Address]  
 [City, State, ZIP]  
 [Country]
@@ -886,4 +886,3 @@ For comprehensive support options and response times, see our [Customer Support]
 
 **Last Updated**: January 31, 2026  
 **Version**: 1.0
-

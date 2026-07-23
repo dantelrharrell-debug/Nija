@@ -890,7 +890,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
 <p style="color:var(--muted)">No trade history yet.</p>
 {% endif %}
 
-<footer>NIJA Trading Systems · Phase 5 Live Performance Dashboard v1.0</footer>
+<footer>NIJA AI Trading LLC · Phase 5 Live Performance Dashboard v1.0</footer>
 
 <script>
 (function() {

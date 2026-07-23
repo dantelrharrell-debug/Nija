@@ -182,7 +182,7 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
   <p style="color:var(--muted)">No compounding events recorded yet.</p>
 {% endif %}
 
-<footer>NIJA Trading Systems · Profit Compounding Dashboard v1.0</footer>
+<footer>NIJA AI Trading LLC · Profit Compounding Dashboard v1.0</footer>
 </body>
 </html>"""
 
