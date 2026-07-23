@@ -90,6 +90,35 @@ def test_legacy_watchdogs_recognize_canonical_wrapper():
     assert cycle is False
 
 
+def test_patch_core_loop_does_not_add_second_canonical_owner_under_outer_wrapper():
+    module = _reload()
+
+    def base(self):
+        return "ok"
+
+    def canonical(self):
+        return base(self)
+
+    canonical._nija_scan_wrapper_release = module._MARKER
+    canonical._nija_scan_wrapper_canonical_h = True
+    canonical.__wrapped__ = base
+
+    def outer(self):
+        return canonical(self)
+
+    outer.__wrapped__ = canonical
+
+    class NijaCoreLoop:
+        run_scan_phase = outer
+
+    fake = types.ModuleType("bot.nija_core_loop")
+    fake.NijaCoreLoop = NijaCoreLoop
+
+    assert module._patch_core_loop(fake) is False
+    assert NijaCoreLoop.run_scan_phase is outer
+    assert module._chain_has_current_owner(outer) is True
+
+
 def test_bootstrap_installs_canonical_repair_after_legacy_scan_patches(monkeypatch):
     bootstrap = importlib.import_module("source_runtime_guard_bootstrap")
     bootstrap = importlib.reload(bootstrap)

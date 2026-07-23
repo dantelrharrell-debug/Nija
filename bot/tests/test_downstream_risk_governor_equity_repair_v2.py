@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 from types import ModuleType, SimpleNamespace
 
 import bot.downstream_risk_governor_equity_repair_patch as patch
@@ -163,3 +164,41 @@ def test_entry_is_clipped_to_verified_headroom(monkeypatch):
     assert pipeline.execute(_request(size_usd=25.0)) == "executed"
     assert len(calls) == 1
     assert 19.8 <= calls[0] < 20.0
+
+
+def test_try_patch_loaded_imports_pretrade_module_when_not_loaded(monkeypatch):
+    imported = []
+    pretrade = ModuleType("bot.pre_trade_risk_engine")
+
+    class Decision:
+        def __init__(self, approved=True, reason="", details=None):
+            self.approved = approved
+            self.reason = reason
+            self.details = details or {}
+
+    class Engine:
+        def assess(self, **kwargs):
+            return Decision()
+
+    pretrade.PreTradeRiskEngine = Engine
+    pretrade.PreTradeRiskDecision = Decision
+
+    monkeypatch.delitem(patch.sys.modules, "bot.pre_trade_risk_engine", raising=False)
+    monkeypatch.delitem(patch.sys.modules, "pre_trade_risk_engine", raising=False)
+
+    real_import = importlib.import_module
+
+    def fake_import(name, package=None):
+        imported.append(name)
+        if name == "bot.pre_trade_risk_engine":
+            patch.sys.modules[name] = pretrade
+            return pretrade
+        return real_import(name, package)
+
+    monkeypatch.setattr(patch.importlib, "import_module", fake_import)
+    monkeypatch.setitem(patch._STATE, "pretrade", False)
+
+    assert patch._try_patch_loaded() is True
+    assert imported[0] == "bot.pre_trade_risk_engine"
+    assert patch._STATE["pretrade"] is True
+    assert getattr(pretrade.PreTradeRiskEngine.assess, patch._PRETRADE_ATTR) is True
