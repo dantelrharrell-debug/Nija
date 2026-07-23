@@ -115,6 +115,7 @@ def test_non_cdp_legacy_secret_is_not_falsely_quarantined(monkeypatch):
 
 
 def test_quarantine_state_is_restored_after_generic_activation_skip(monkeypatch):
+    module = importlib.import_module("secondary_venue_runtime_diagnostics")
     monkeypatch.setenv("NIJA_COINBASE_PEM_QUARANTINED", "1")
     monkeypatch.setenv("NIJA_COINBASE_ACTIVATION_STATE", "disabled")
     monkeypatch.setenv("NIJA_COINBASE_CONNECTED", "1")
@@ -122,7 +123,6 @@ def test_quarantine_state_is_restored_after_generic_activation_skip(monkeypatch)
     monkeypatch.setenv("NIJA_DISABLE_COINBASE", "false")
     monkeypatch.setenv("ENABLE_COINBASE_TRADING", "true")
     monkeypatch.setenv("COINBASE_LIVE_TRADING_ENABLED", "true")
-    module = _module()
 
     module._restore_coinbase_quarantine_state()
 
