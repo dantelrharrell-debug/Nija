@@ -80,11 +80,18 @@ class ExecutionVenueConfigTests(unittest.TestCase):
             with self.subTest(env=env):
                 self.assertEqual(should_initialize_coinbase_platform(env), expected)
 
-    def test_preferred_execution_venue_forces_single_broker(self):
-        for venue in ("coinbase", "kraken", "okx", "binance", "alpaca"):
+    def test_preferred_execution_venue_forces_only_live_brokers(self):
+        for venue in ("coinbase", "kraken", "okx"):
             with self.subTest(venue=venue):
                 env = {"PRIMARY_EXECUTION_VENUE": venue}
                 self.assertEqual(get_preferred_execution_venue(env), venue)
+
+    def test_non_live_or_legacy_venue_cannot_be_forced(self):
+        for venue in ("binance", "alpaca"):
+            with self.subTest(venue=venue):
+                self.assertIsNone(
+                    get_preferred_execution_venue({"PRIMARY_EXECUTION_VENUE": venue})
+                )
 
     def test_okx_platform_allowed_with_credentials_by_default(self):
         self.assertTrue(should_initialize_okx_platform({}, credentials_configured=True))
