@@ -7,8 +7,11 @@ monitor can observe or mutate live execution state.
 
 from __future__ import annotations
 
+import importlib.util
 import logging
 import os
+import sys
+from pathlib import Path
 
 _ORIGINAL_GET_MESSAGE = None
 _INSTALLED = False
@@ -63,6 +66,45 @@ def _acquire_writer_authority_before_runtime_repairs() -> None:
 # Module execution occurs before sitecustomize invokes install_import_hook().
 # Therefore no downstream startup monitor can start without fencing lineage.
 _acquire_writer_authority_before_runtime_repairs()
+
+
+def _install_canonical_broker_startup_convergence() -> None:
+    """Install the universal broker-manager handoff without importing bot.__init__."""
+
+    try:
+        module_name = "nija_canonical_broker_startup_convergence_v24"
+        module = sys.modules.get(module_name)
+        if module is None:
+            patch_path = Path(__file__).resolve().with_name(
+                "canonical_broker_startup_convergence_v24.py"
+            )
+            spec = importlib.util.spec_from_file_location(module_name, patch_path)
+            if spec is None or spec.loader is None:
+                raise RuntimeError(f"could not load spec for {patch_path}")
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[module_name] = module
+            spec.loader.exec_module(module)
+        installer = getattr(module, "install_import_hook", None) or getattr(
+            module, "install", None
+        )
+        if not callable(installer) or not bool(installer()):
+            raise RuntimeError("canonical startup convergence installer returned false")
+        logging.getLogger("nija.logging_format_guard").critical(
+            "CANONICAL_BROKER_STARTUP_CONVERGENCE_V24_INSTALL_REQUESTED "
+            "marker=20260723-canonical-broker-startup-convergence-v24 source=logging_guard"
+        )
+    except Exception as exc:
+        logging.getLogger("nija.logging_format_guard").critical(
+            "CANONICAL_BROKER_STARTUP_CONVERGENCE_V24_INSTALL_FAILED err=%s",
+            exc,
+            exc_info=True,
+        )
+        if (
+            _truthy("LIVE_CAPITAL_VERIFIED")
+            and not _truthy("DRY_RUN_MODE")
+            and not _truthy("PAPER_MODE")
+        ):
+            raise
 
 
 def _install_sector_tier_hydration_repair() -> None:
@@ -236,6 +278,7 @@ def _install_live_capital_and_route_guards() -> None:
 def install() -> None:
     global _ORIGINAL_GET_MESSAGE, _INSTALLED
     if _INSTALLED:
+        _install_canonical_broker_startup_convergence()
         _install_ohlc_direct_rest_guard()
         _install_seak_stale_halt_recovery()
         _install_filesystem_emergency_stop_replay_recovery()
@@ -259,6 +302,7 @@ def install() -> None:
     logging.LogRecord.getMessage = _safe_get_message  # type: ignore[assignment]
     _INSTALLED = True
     logging.getLogger("nija.logging_format_guard").warning("LOGGING_FORMAT_GUARD_INSTALLED")
+    _install_canonical_broker_startup_convergence()
     _install_ohlc_direct_rest_guard()
     _install_seak_stale_halt_recovery()
     _install_filesystem_emergency_stop_replay_recovery()
