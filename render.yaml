@@ -4,7 +4,7 @@ services:
     runtime: docker
     region: oregon
     dockerfilePath: ./Dockerfile
-    dockerCommand: bash scripts/production_bootstrap.sh
+    dockerCommand: bash scripts/render_entrypoint.sh
     autoDeployTrigger: checksPass
     numInstances: 1
     healthCheckPath: /healthz
@@ -80,11 +80,11 @@ services:
       - key: NIJA_BROKER_SCOPED_POSITION_CAP
         value: "true"
 
-      # Strict production contract: no new live entries are admitted until both
-      # Coinbase and OKX are connected, funded, market-ready, and activated.
-      # Exit/reduce/liquidation orders remain allowed while a venue recovers.
+      # Broker-local readiness: an unavailable or quarantined secondary venue
+      # blocks only orders routed to that venue. It cannot globally block a
+      # healthy Kraken or OKX account. Required venue names remain telemetry.
       - key: NIJA_REQUIRE_SECONDARY_VENUES_READY
-        value: "true"
+        value: "false"
       - key: NIJA_REQUIRED_LIVE_VENUES
         value: "coinbase,okx"
       - key: NIJA_SECONDARY_VENUE_STRICT_RECHECK_S
@@ -126,8 +126,8 @@ services:
       - key: OKX_US_REGION
         value: "true"
 
-      # Render cold-start convergence. Kraken remains the startup anchor, while
-      # the strict entry gate waits for Coinbase and OKX before new exposure.
+      # Render cold-start convergence. Kraken remains the startup anchor and one
+      # fresh authoritative broker is sufficient to initialize the manager.
       - key: NIJA_RUNTIME_AUTHORITY_CONVERGENCE_MIN_BROKERS
         value: "1"
       - key: NIJA_RENDER_STARTUP_RECOVERY_ENABLED
