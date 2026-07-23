@@ -25,6 +25,8 @@ on:
       - 'secondary_venue_strict_readiness_patch.py'
       - 'bot/activation_pending_commit_monitor_patch.py'
       - 'bot/zero_signal_streak_state_repair_patch.py'
+      - 'bot/okx_order_wrapper_stability_patch.py'
+      - 'bot/downstream_risk_governor_equity_repair_patch.py'
       - 'bot/writer_lock_release_guard.py'
       - 'bot/entrypoint_writer_authority.py'
       - 'bot/bot_main.py'
@@ -33,6 +35,7 @@ on:
       - 'bot/tests/test_sitecustomize_defer_guard.py'
       - 'bot/tests/test_scan_wrapper_depth_convergence_patch.py'
       - 'bot/tests/test_zero_signal_streak_state_repair_patch.py'
+      - 'bot/tests/test_okx_order_wrapper_stability_v2.py'
       - 'bot/tests/test_three_venue_execution_readiness.py'
       - 'bot/tests/test_import_hook_chain_compactor.py'
       - 'bot/tests/test_activation_pending_startup_order.py'
@@ -72,6 +75,8 @@ on:
       - 'secondary_venue_strict_readiness_patch.py'
       - 'bot/activation_pending_commit_monitor_patch.py'
       - 'bot/zero_signal_streak_state_repair_patch.py'
+      - 'bot/okx_order_wrapper_stability_patch.py'
+      - 'bot/downstream_risk_governor_equity_repair_patch.py'
       - 'bot/writer_lock_release_guard.py'
       - 'bot/entrypoint_writer_authority.py'
       - 'bot/bot_main.py'
@@ -80,6 +85,7 @@ on:
       - 'bot/tests/test_sitecustomize_defer_guard.py'
       - 'bot/tests/test_scan_wrapper_depth_convergence_patch.py'
       - 'bot/tests/test_zero_signal_streak_state_repair_patch.py'
+      - 'bot/tests/test_okx_order_wrapper_stability_v2.py'
       - 'bot/tests/test_three_venue_execution_readiness.py'
       - 'bot/tests/test_import_hook_chain_compactor.py'
       - 'bot/tests/test_activation_pending_startup_order.py'
@@ -168,6 +174,8 @@ jobs:
             source_runtime_guard_bootstrap.py \
             scan_wrapper_depth_convergence_patch.py \
             bot/zero_signal_streak_state_repair_patch.py \
+            bot/okx_order_wrapper_stability_patch.py \
+            bot/downstream_risk_governor_equity_repair_patch.py \
             three_venue_execution_readiness.py \
             import_hook_recursion_shield_patch.py \
             secondary_venue_activation_patch.py \
@@ -186,6 +194,7 @@ jobs:
         run: |
           python -m pytest -q bot/tests/test_scan_wrapper_depth_convergence_patch.py
           python -m pytest -q bot/tests/test_zero_signal_streak_state_repair_patch.py
+          python -m pytest -q bot/tests/test_okx_order_wrapper_stability_v2.py
       - name: Test startup handoff ordering
         run: python -m pytest -q bot/tests/test_startup_handoff_all_fixes.py
       - name: Test three-venue readiness

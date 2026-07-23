@@ -6,253 +6,250 @@ on:
   pull_request:
     branches: [ main ]
 
-# Strict permissions (least privilege)
 permissions:
   contents: read
 
 jobs:
-  # Ephemeral runner setup
   setup-runner:
     name: Setup Isolated Runner
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write  # For OIDC authentication
-
+      id-token: write
     outputs:
       runner-id: ${{ steps.runner.outputs.id }}
-
     steps:
-    - name: Generate Runner Token
-      id: runner
-      run: |
-        RUNNER_ID=$(uuidgen)
-        echo "id=${RUNNER_ID}" >> $GITHUB_OUTPUT
-        echo "::notice::Created ephemeral runner: ${RUNNER_ID}"
+      - name: Generate Runner Token
+        id: runner
+        run: |
+          RUNNER_ID=$(uuidgen)
+          echo "id=${RUNNER_ID}" >> $GITHUB_OUTPUT
+          echo "::notice::Created ephemeral runner: ${RUNNER_ID}"
 
-  # Isolated build job
   build:
     name: Build with Zero-Trust Isolation
     runs-on: ubuntu-latest
     needs: setup-runner
-
-    # Strict permissions
     permissions:
       contents: read
       packages: write
       id-token: write
-
-    # Network isolation
     env:
-      # Disable network access to internal services
       NO_PROXY: ""
       HTTP_PROXY: ""
       HTTPS_PROXY: ""
-
+      PYTHONPATH: .
+      NIJA_DEFER_RUNTIME_SITE_HOOKS: "1"
     steps:
-    - name: Harden Runner (Network Egress Control)
-      uses: step-security/harden-runner@v2
-      with:
-        egress-policy: block
-        allowed-endpoints: >
-          api.github.com:443
-          github.com:443
-          objects.githubusercontent.com:443
-          registry.npmjs.org:443
-          pypi.org:443
-          files.pythonhosted.org:443
+      - name: Harden Runner (Network Egress Control)
+        uses: step-security/harden-runner@v2
+        with:
+          egress-policy: block
+          allowed-endpoints: >
+            api.github.com:443
+            github.com:443
+            objects.githubusercontent.com:443
+            registry.npmjs.org:443
+            pypi.org:443
+            files.pythonhosted.org:443
 
-    - name: Checkout repository
-      uses: actions/checkout@v4
-      with:
-        persist-credentials: false  # Don't persist credentials
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
-    - name: Set up Python (Isolated)
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.11'
+      - name: Set up Python (Isolated)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
 
-    # Verify dependencies before install
-    - name: Verify Dependencies Hash
-      run: |
-        sha256sum requirements.txt > requirements.txt.sha256
-        echo "Dependency hash: $(cat requirements.txt.sha256)"
+      - name: Install CI sitecustomize defer guard
+        run: python -S scripts/install_sitecustomize_defer_guard.py
 
-    - name: Install Dependencies (Isolated)
-      run: |
-        python -m pip install --upgrade pip
-        # Install in isolated environment
-        pip install --no-cache-dir --require-hashes -r requirements.txt || \
-        pip install --no-cache-dir -r requirements.txt
+      - name: Verify Dependencies Hash
+        run: |
+          sha256sum requirements.txt > requirements.txt.sha256
+          echo "Dependency hash: $(cat requirements.txt.sha256)"
 
-    # Build in isolated environment
-    - name: Build Application (Sandboxed)
-      run: |
-        # Run build in restricted environment
-        python -c "import sys; print(f'Python: {sys.version}')"
-        python -m compileall bot/
-      env:
-        PYTHONDONTWRITEBYTECODE: 1
+      - name: Install Dependencies (Isolated)
+        run: |
+          set -euo pipefail
+          env -u PYTHONPATH python -P -m pip install --disable-pip-version-check --upgrade pip
+          env -u PYTHONPATH python -P -m pip install --no-cache-dir --require-hashes -r requirements.txt || \
+            env -u PYTHONPATH python -P -m pip install --no-cache-dir -r requirements.txt
 
-    # Generate the integrity manifest for both push and pull_request events.
-    # The verification job always consumes this file, so conditionally skipping
-    # signing on PRs made every pull-request run fail before security scanning.
-    - name: Sign Build Artifacts
-      run: |
-        set -euo pipefail
-        find bot/ -name "*.pyc" -type f -print0 \
-          | sort -z \
-          | xargs -0 -r sha256sum > build-artifacts.sha256
-        test -s build-artifacts.sha256
-        echo "::notice::Build artifacts signed"
+      - name: Apply production package defer guard
+        run: python -S apply_bot_package_defer_fix.py
 
-    - name: Upload Build Artifacts
-      uses: actions/upload-artifact@v4.4.3
-      with:
-        name: build-artifacts-${{ github.sha }}
-        path: |
-          bot/
-          build-artifacts.sha256
-        retention-days: 7
+      - name: Build Application (Sandboxed)
+        run: |
+          python -S -c "import sys; print(f'Python: {sys.version}')"
+          python -S -m compileall -q bot/
+        env:
+          PYTHONDONTWRITEBYTECODE: 0
 
-  # Isolated security scan
+      - name: Sign Build Artifacts
+        run: |
+          set -euo pipefail
+          find bot/ -name "*.pyc" -type f -print0 \
+            | sort -z \
+            | xargs -0 -r sha256sum > build-artifacts.sha256
+          test -s build-artifacts.sha256
+          echo "::notice::Build artifacts signed"
+
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@v4.4.3
+        with:
+          name: build-artifacts-${{ github.sha }}
+          path: |
+            bot/
+            build-artifacts.sha256
+          retention-days: 7
+
   security-scan:
     name: Security Scan (Isolated)
     runs-on: ubuntu-latest
     needs: build
-
     permissions:
       contents: read
       security-events: write
       id-token: write
-
     steps:
-    - name: Harden Runner
-      uses: step-security/harden-runner@v2
-      with:
-        egress-policy: block
-        allowed-endpoints: >
-          api.github.com:443
-          github.com:443
-          objects.githubusercontent.com:443
-          ghcr.io:443
+      - name: Harden Runner
+        uses: step-security/harden-runner@v2
+        with:
+          egress-policy: block
+          allowed-endpoints: >
+            api.github.com:443
+            github.com:443
+            objects.githubusercontent.com:443
+            ghcr.io:443
 
-    - name: Checkout repository
-      uses: actions/checkout@v4
-      with:
-        persist-credentials: false
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
-    - name: Download Build Artifacts
-      uses: actions/download-artifact@v4.1.3
-      with:
-        name: build-artifacts-${{ github.sha }}
-        path: build/
+      - name: Download Build Artifacts
+        uses: actions/download-artifact@v4.1.3
+        with:
+          name: build-artifacts-${{ github.sha }}
+          path: build/
 
-    # Verify artifact signatures
-    - name: Verify Artifact Signatures
-      run: |
-        set -euo pipefail
-        cd build
-        test -s build-artifacts.sha256
-        sha256sum -c build-artifacts.sha256
-        echo "::notice::Artifact signatures verified"
+      - name: Verify Artifact Signatures
+        run: |
+          set -euo pipefail
+          cd build
+          test -s build-artifacts.sha256
+          sha256sum -c build-artifacts.sha256
+          echo "::notice::Artifact signatures verified"
 
-    - name: Run Security Scan in Sandbox
-      uses: aquasecurity/trivy-action@master
-      with:
-        scan-type: 'fs'
-        scan-ref: '.'
-        format: 'table'
-        severity: 'CRITICAL,HIGH'
-        exit-code: '0'
+      - name: Run Security Scan in Sandbox
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'table'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '0'
 
-  # Isolated test execution
   test:
-    name: Test (Isolated Environment)
+    name: Test (Isolated Environment) (${{ matrix.test-group }})
     runs-on: ubuntu-latest
     needs: build
-    # Integration tests can require broker/network services that are deliberately
-    # unavailable under zero-trust egress blocking. Keep their result visible,
-    # but do not let that expected environmental limitation block checksPass.
-    continue-on-error: ${{ matrix.allow-failure }}
-
     permissions:
       contents: read
       id-token: write
-
-    # Test matrix for isolation
+    env:
+      PYTHONPATH: .
+      NIJA_DEFER_RUNTIME_SITE_HOOKS: "1"
     strategy:
       fail-fast: false
       matrix:
         include:
           - test-group: unit
-            allow-failure: false
+            test-paths: >-
+              bot/tests/test_okx_order_wrapper_stability_v2.py
+              bot/tests/test_scan_wrapper_depth_convergence_patch.py
+              bot/tests/test_zero_signal_streak_state_repair_patch.py
+              bot/tests/test_runtime_patch_churn_safety_patch.py
+              bot/tests/test_entrypoint_writer_authority.py
           - test-group: integration
-            allow-failure: true
-
+            test-paths: >-
+              tests/imports_smoke_test.py
+              bot/tests/test_source_runtime_guard_bootstrap.py
+              bot/tests/test_render_prebot_writer_handoff.py
     steps:
-    - name: Harden Runner
-      uses: step-security/harden-runner@v2
-      with:
-        egress-policy: block
-        allowed-endpoints: >
-          api.github.com:443
-          github.com:443
-          objects.githubusercontent.com:443
-          pypi.org:443
-          files.pythonhosted.org:443
+      - name: Harden Runner
+        uses: step-security/harden-runner@v2
+        with:
+          egress-policy: block
+          allowed-endpoints: >
+            api.github.com:443
+            github.com:443
+            objects.githubusercontent.com:443
+            pypi.org:443
+            files.pythonhosted.org:443
 
-    - name: Checkout repository
-      uses: actions/checkout@v4
-      with:
-        persist-credentials: false
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.11'
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
 
-    - name: Download Build Artifacts
-      uses: actions/download-artifact@v4.1.3
-      with:
-        name: build-artifacts-${{ github.sha }}
-        path: build/
+      - name: Install CI sitecustomize defer guard
+        run: python -S scripts/install_sitecustomize_defer_guard.py
 
-    - name: Install Test Dependencies (Isolated)
-      run: |
-        python -m pip install --upgrade pip
-        pip install pytest pytest-cov pytest-timeout
+      - name: Download Build Artifacts
+        uses: actions/download-artifact@v4.1.3
+        with:
+          name: build-artifacts-${{ github.sha }}
+          path: build/
 
-    # Run tests in isolated environment
-    - name: Run ${{ matrix.test-group }} Tests (Sandboxed)
-      run: |
-        # Run tests with timeout and resource limits
-        timeout 600 pytest -v \
-          --timeout=60 \
-          --cov=bot \
-          --cov-report=xml \
-          -k "${{ matrix.test-group }}"
-      env:
-        # Disable network for unit tests
-        PYTEST_DISABLE_NETWORK: ${{ matrix.test-group == 'unit' && 'true' || 'false' }}
+      - name: Install Test Dependencies (Isolated)
+        run: |
+          set -euo pipefail
+          env -u PYTHONPATH python -P -m pip install --disable-pip-version-check --upgrade pip
+          env -u PYTHONPATH python -P -m pip install \
+            pytest==8.2.2 \
+            pytest-cov \
+            pytest-timeout \
+            numpy==1.26.3 \
+            redis \
+            requests
 
-  # Cleanup ephemeral resources
+      - name: Apply production package defer guard
+        run: python -S apply_bot_package_defer_fix.py
+
+      - name: Run ${{ matrix.test-group }} Tests (Sandboxed)
+        env:
+          TEST_PATHS: ${{ matrix.test-paths }}
+          PYTEST_DISABLE_NETWORK: ${{ matrix.test-group == 'unit' && 'true' || 'false' }}
+        run: |
+          set -euo pipefail
+          timeout 600 python -m pytest -q \
+            --timeout=60 \
+            --cov=bot \
+            --cov-report=xml \
+            $TEST_PATHS
+
   cleanup:
     name: Cleanup Isolated Resources
     runs-on: ubuntu-latest
     needs: [build, security-scan, test]
     if: always()
-
     permissions:
       contents: read
-
     steps:
-    - name: Cleanup Artifacts
-      uses: geekyeggo/delete-artifact@v2
-      with:
-        name: build-artifacts-${{ github.sha }}
-        failOnError: false
+      - name: Cleanup Artifacts
+        uses: geekyeggo/delete-artifact@v2
+        with:
+          name: build-artifacts-${{ github.sha }}
+          failOnError: false
 
-    - name: Cleanup Complete
-      run: |
-        echo "::notice::Ephemeral resources cleaned up"
+      - name: Cleanup Complete
+        run: echo "::notice::Ephemeral resources cleaned up"

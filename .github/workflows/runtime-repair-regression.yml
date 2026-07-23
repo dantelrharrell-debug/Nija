@@ -10,14 +10,18 @@ on:
       - "bot/strategy_runtime_integrity_patch.py"
       - "bot/disconnected_coinbase_balance_guard_patch.py"
       - "bot/okx_patch_churn_guard_patch.py"
+      - "bot/okx_order_wrapper_stability_patch.py"
+      - "bot/downstream_risk_governor_equity_repair_patch.py"
       - "bot/live_active_dispatch_bridge_patch.py"
       - "bot/runtime_patch_churn_safety_patch.py"
       - "bot/generation_sync_timing_patch.py"
       - "bot/tests/test_strategy_runtime_integrity_patch.py"
       - "bot/tests/test_disconnected_coinbase_balance_guard_patch.py"
       - "bot/tests/test_okx_patch_churn_guard_patch.py"
+      - "bot/tests/test_okx_order_wrapper_stability_v2.py"
       - "bot/tests/test_live_active_dispatch_bridge_recovery.py"
       - "bot/tests/test_runtime_patch_churn_safety_patch.py"
+      - "scripts/install_sitecustomize_defer_guard.py"
       - ".github/workflows/runtime-repair-regression.yml"
   push:
     branches: [main]
@@ -29,14 +33,18 @@ on:
       - "bot/strategy_runtime_integrity_patch.py"
       - "bot/disconnected_coinbase_balance_guard_patch.py"
       - "bot/okx_patch_churn_guard_patch.py"
+      - "bot/okx_order_wrapper_stability_patch.py"
+      - "bot/downstream_risk_governor_equity_repair_patch.py"
       - "bot/live_active_dispatch_bridge_patch.py"
       - "bot/runtime_patch_churn_safety_patch.py"
       - "bot/generation_sync_timing_patch.py"
       - "bot/tests/test_strategy_runtime_integrity_patch.py"
       - "bot/tests/test_disconnected_coinbase_balance_guard_patch.py"
       - "bot/tests/test_okx_patch_churn_guard_patch.py"
+      - "bot/tests/test_okx_order_wrapper_stability_v2.py"
       - "bot/tests/test_live_active_dispatch_bridge_recovery.py"
       - "bot/tests/test_runtime_patch_churn_safety_patch.py"
+      - "scripts/install_sitecustomize_defer_guard.py"
       - ".github/workflows/runtime-repair-regression.yml"
 
 permissions:
@@ -58,8 +66,11 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Install CI sitecustomize defer guard
+        run: python -S scripts/install_sitecustomize_defer_guard.py
+
       - name: Install pytest
-        run: python -m pip install --disable-pip-version-check --retries 5 --timeout 30 pytest==8.2.2
+        run: env -u PYTHONPATH python -P -m pip install --disable-pip-version-check --retries 5 --timeout 30 pytest==8.2.2
 
       - name: Compile repaired runtime modules
         run: |
@@ -68,6 +79,8 @@ jobs:
             bot/strategy_runtime_integrity_patch.py \
             bot/disconnected_coinbase_balance_guard_patch.py \
             bot/okx_patch_churn_guard_patch.py \
+            bot/okx_order_wrapper_stability_patch.py \
+            bot/downstream_risk_governor_equity_repair_patch.py \
             bot/live_active_dispatch_bridge_patch.py \
             bot/runtime_patch_churn_safety_patch.py \
             bot/generation_sync_timing_patch.py \
@@ -80,5 +93,6 @@ jobs:
             bot/tests/test_strategy_runtime_integrity_patch.py \
             bot/tests/test_disconnected_coinbase_balance_guard_patch.py \
             bot/tests/test_okx_patch_churn_guard_patch.py \
+            bot/tests/test_okx_order_wrapper_stability_v2.py \
             bot/tests/test_live_active_dispatch_bridge_recovery.py \
             bot/tests/test_runtime_patch_churn_safety_patch.py
