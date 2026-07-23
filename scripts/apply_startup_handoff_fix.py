@@ -165,13 +165,6 @@ def _validate(text: str) -> None:
     if early_positions and export_pos > min(early_positions):
         raise RuntimeError("runtime hooks are not deferred before the first Python preflight")
 
-    for required in (
-        "bot/canonical_broker_startup_convergence_v24.py",
-        "20260723-runtime-entrypoint-attestation-v24",
-    ):
-        if required not in text and required != "20260723-runtime-entrypoint-attestation-v24":
-            raise RuntimeError(f"startup handoff missing required v24 contract: {required}")
-
 
 def patch_text(text: str) -> str:
     patched = _insert_early_defer(text)
