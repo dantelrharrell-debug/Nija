@@ -18,17 +18,21 @@ on:
       - 'prebot_writer_authority_bootstrap.py'
       - 'prebot_writer_authority_fail_closed.py'
       - 'source_runtime_guard_bootstrap.py'
+      - 'scan_wrapper_depth_convergence_patch.py'
       - 'three_venue_execution_readiness.py'
       - 'import_hook_recursion_shield_patch.py'
       - 'secondary_venue_activation_patch.py'
       - 'secondary_venue_strict_readiness_patch.py'
       - 'bot/activation_pending_commit_monitor_patch.py'
+      - 'bot/zero_signal_streak_state_repair_patch.py'
       - 'bot/writer_lock_release_guard.py'
       - 'bot/entrypoint_writer_authority.py'
       - 'bot/bot_main.py'
       - 'bot/tests/test_bot_package_defer_fix.py'
       - 'bot/tests/test_startup_handoff_all_fixes.py'
       - 'bot/tests/test_sitecustomize_defer_guard.py'
+      - 'bot/tests/test_scan_wrapper_depth_convergence_patch.py'
+      - 'bot/tests/test_zero_signal_streak_state_repair_patch.py'
       - 'bot/tests/test_three_venue_execution_readiness.py'
       - 'bot/tests/test_import_hook_chain_compactor.py'
       - 'bot/tests/test_activation_pending_startup_order.py'
@@ -61,17 +65,21 @@ on:
       - 'prebot_writer_authority_bootstrap.py'
       - 'prebot_writer_authority_fail_closed.py'
       - 'source_runtime_guard_bootstrap.py'
+      - 'scan_wrapper_depth_convergence_patch.py'
       - 'three_venue_execution_readiness.py'
       - 'import_hook_recursion_shield_patch.py'
       - 'secondary_venue_activation_patch.py'
       - 'secondary_venue_strict_readiness_patch.py'
       - 'bot/activation_pending_commit_monitor_patch.py'
+      - 'bot/zero_signal_streak_state_repair_patch.py'
       - 'bot/writer_lock_release_guard.py'
       - 'bot/entrypoint_writer_authority.py'
       - 'bot/bot_main.py'
       - 'bot/tests/test_bot_package_defer_fix.py'
       - 'bot/tests/test_startup_handoff_all_fixes.py'
       - 'bot/tests/test_sitecustomize_defer_guard.py'
+      - 'bot/tests/test_scan_wrapper_depth_convergence_patch.py'
+      - 'bot/tests/test_zero_signal_streak_state_repair_patch.py'
       - 'bot/tests/test_three_venue_execution_readiness.py'
       - 'bot/tests/test_import_hook_chain_compactor.py'
       - 'bot/tests/test_activation_pending_startup_order.py'
@@ -109,12 +117,15 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Install CI sitecustomize defer guard
+        run: python -S scripts/install_sitecustomize_defer_guard.py
+
       - name: Install focused test dependencies
         shell: bash
         run: |
           set -euo pipefail
           for attempt in 1 2 3; do
-            if python -m pip install --disable-pip-version-check --retries 5 --timeout 30 pytest redis requests; then
+            if env -u PYTHONPATH python -P -m pip install --disable-pip-version-check --retries 5 --timeout 30 pytest redis requests; then
               exit 0
             fi
             if [ "$attempt" -lt 3 ]; then
@@ -155,6 +166,8 @@ jobs:
             prebot_writer_authority_bootstrap.py \
             prebot_writer_authority_fail_closed.py \
             source_runtime_guard_bootstrap.py \
+            scan_wrapper_depth_convergence_patch.py \
+            bot/zero_signal_streak_state_repair_patch.py \
             three_venue_execution_readiness.py \
             import_hook_recursion_shield_patch.py \
             secondary_venue_activation_patch.py \
@@ -169,6 +182,10 @@ jobs:
         run: python -m pytest -q bot/tests/test_bot_package_defer_fix.py
       - name: Test sitecustomize runtime defer
         run: python -m pytest -q bot/tests/test_sitecustomize_defer_guard.py
+      - name: Test runtime release convergence repairs
+        run: |
+          python -m pytest -q bot/tests/test_scan_wrapper_depth_convergence_patch.py
+          python -m pytest -q bot/tests/test_zero_signal_streak_state_repair_patch.py
       - name: Test startup handoff ordering
         run: python -m pytest -q bot/tests/test_startup_handoff_all_fixes.py
       - name: Test three-venue readiness

@@ -26,12 +26,15 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Install CI sitecustomize defer guard
+        run: python -S scripts/install_sitecustomize_defer_guard.py
+
       - name: Install focused smoke dependencies
         shell: bash
         run: |
           set -euo pipefail
           for attempt in 1 2 3; do
-            if python -m pip install --disable-pip-version-check --retries 5 --timeout 30 pytest==8.2.2 numpy==1.26.3; then
+            if env -u PYTHONPATH python -P -m pip install --disable-pip-version-check --retries 5 --timeout 30 pytest==8.2.2 numpy==1.26.3; then
               exit 0
             fi
             if [ "$attempt" -lt 3 ]; then

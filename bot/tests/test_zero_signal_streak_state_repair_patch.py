@@ -21,7 +21,6 @@ def _module(observed):
             zero_signal_streak=0,
         ):
             observed.append((self._zero_signal_streak, zero_signal_streak))
-            # Mirror the production post-scan no-entry update source behavior.
             self._zero_signal_streak += 1
             return 0, 0, 1, {}
 
@@ -89,3 +88,41 @@ def test_install_is_chain_aware(monkeypatch):
     first = module.NijaCoreLoop._phase3_scan_and_enter
     assert patch._install_on_core_loop(module) is True
     assert module.NijaCoreLoop._phase3_scan_and_enter is first
+
+
+def test_try_loaded_reattaches_after_late_phase3_replacement(monkeypatch):
+    observed = []
+    module = _module(observed)
+    monkeypatch.setitem(patch.sys.modules, "bot.nija_core_loop", module)
+    monkeypatch.delitem(patch.sys.modules, "nija_core_loop", raising=False)
+
+    assert patch._try_loaded() is True
+    first = module.NijaCoreLoop._phase3_scan_and_enter
+    found, cycle, _ = patch._chain_contains(first)
+    assert found is True
+    assert cycle is False
+
+    def late_replacement(
+        self,
+        broker,
+        snapshot,
+        symbols,
+        available_slots,
+        zero_signal_streak=0,
+    ):
+        observed.append((self._zero_signal_streak, zero_signal_streak))
+        return 0, 0, 0, {}
+
+    module.NijaCoreLoop._phase3_scan_and_enter = late_replacement
+    found, cycle, _ = patch._chain_contains(module.NijaCoreLoop._phase3_scan_and_enter)
+    assert found is False
+    assert cycle is False
+
+    assert patch._try_loaded() is True
+    repaired = module.NijaCoreLoop._phase3_scan_and_enter
+    found, cycle, _ = patch._chain_contains(repaired)
+    assert repaired is not late_replacement
+    assert found is True
+    assert cycle is False
+    assert repaired.__wrapped__ is late_replacement
+    assert patch.os.environ["NIJA_ZERO_SIGNAL_STREAK_STATE_READY"] == "1"

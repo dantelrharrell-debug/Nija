@@ -4,6 +4,11 @@ The core loop passes ``self._zero_signal_streak`` into Phase 3 and increments th
 instance field after every no-entry cycle. A stale sentinel such as 999 therefore
 becomes 1000, 1001, ... forever. Parameter-only clamping does not repair the source
 state and leaves dead-zone bypass permanently active.
+
+Phase 3 is intentionally wrapped by several late runtime repairs. Those repairs
+can replace ``_phase3_scan_and_enter`` after this module first attaches. The
+monitor therefore remains active for the process lifetime and reattaches this
+required state repair whenever a later replacement removes it.
 """
 from __future__ import annotations
 
@@ -134,7 +139,7 @@ def _install_on_core_loop(module: ModuleType) -> bool:
     cls._phase3_scan_and_enter = phase3
     os.environ["NIJA_ZERO_SIGNAL_STREAK_STATE_READY"] = "1"
     logger.critical(
-        "ZERO_SIGNAL_STREAK_STATE_REPAIR_INSTALLED marker=%s module=%s cap_env=%s stale_threshold_env=%s",
+        "ZERO_SIGNAL_STREAK_STATE_REPAIR_INSTALLED marker=%s module=%s cap_env=%s stale_threshold_env=%s persistent=true",
         _MARKER,
         module.__name__,
         os.environ.get("NIJA_ZERO_SIGNAL_STREAK_CAP", "12"),
@@ -145,33 +150,50 @@ def _install_on_core_loop(module: ModuleType) -> bool:
 
 def _try_loaded() -> bool:
     patched = False
+    seen: set[int] = set()
     for name in ("bot.nija_core_loop", "nija_core_loop"):
         module = sys.modules.get(name)
-        if isinstance(module, ModuleType):
+        if isinstance(module, ModuleType) and id(module) not in seen:
+            seen.add(id(module))
             patched = _install_on_core_loop(module) or patched
     return patched
 
 
+def _monitor_interval() -> float:
+    try:
+        return max(
+            0.25,
+            float(os.environ.get("NIJA_ZERO_SIGNAL_STATE_MONITOR_S", "1.0") or 1.0),
+        )
+    except Exception:
+        return 1.0
+
+
 def _watchdog() -> None:
-    deadline = time.monotonic() + max(
-        60.0,
-        float(os.environ.get("NIJA_PATCH_MONITOR_SECONDS", "600") or 600),
-    )
-    while time.monotonic() < deadline:
+    last_ready: bool | None = None
+    while True:
         try:
-            if _try_loaded():
-                return
+            ready = _try_loaded()
+            os.environ["NIJA_ZERO_SIGNAL_STREAK_STATE_READY"] = "1" if ready else "0"
+            if ready != last_ready:
+                logger.log(
+                    logging.INFO if ready else logging.WARNING,
+                    "ZERO_SIGNAL_STREAK_STATE_MONITOR marker=%s ready=%s persistent=true",
+                    _MARKER,
+                    str(ready).lower(),
+                )
+                last_ready = ready
         except Exception:
+            os.environ["NIJA_ZERO_SIGNAL_STREAK_STATE_READY"] = "0"
             logger.exception("ZERO_SIGNAL_STREAK_STATE_REPAIR_RETRY marker=%s", _MARKER)
-        time.sleep(0.10)
-    os.environ["NIJA_ZERO_SIGNAL_STREAK_STATE_READY"] = "0"
-    logger.critical("ZERO_SIGNAL_STREAK_STATE_REPAIR_EXPIRED marker=%s", _MARKER)
+        time.sleep(_monitor_interval())
 
 
 def install_import_hook() -> None:
     global _STARTED
     with _LOCK:
-        _try_loaded()
+        ready = _try_loaded()
+        os.environ["NIJA_ZERO_SIGNAL_STREAK_STATE_READY"] = "1" if ready else "0"
         if not _STARTED:
             _STARTED = True
             threading.Thread(
@@ -192,4 +214,6 @@ __all__ = [
     "_install_on_core_loop",
     "_repair_value",
     "_chain_contains",
+    "_try_loaded",
+    "_monitor_interval",
 ]
