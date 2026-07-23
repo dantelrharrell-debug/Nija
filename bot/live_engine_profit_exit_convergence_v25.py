@@ -1,12 +1,15 @@
 """Converge ExecutionEngine exits onto fill-confirmed v25 semantics.
 
-The broker-native supervisor is the primary held-position exit path.  This module
+The broker-native supervisor is the primary held-position exit path. This module
 hardens the parallel ExecutionEngine monitor so an exchange acknowledgement can
-never be recorded as a completed close before a real fill is observed.
+never be recorded as a completed close before a real fill is observed. It also
+wraps the existing auto-exit class patcher, ensuring ExecutionEngine classes
+imported later receive the same v25 scanner.
 """
 from __future__ import annotations
 
 import logging
+import os
 import sys
 import time
 from typing import Any
@@ -18,6 +21,8 @@ logger = logging.getLogger("nija.live_engine_profit_exit_convergence")
 _MARKER = "20260723-live-engine-profit-exit-v25"
 _INSTALLED = False
 _PENDING: dict[str, broker_v25.PendingExit] = {}
+_ORIGINAL_PATCH_ENGINE = auto_exit._patch_engine
+_PATCHED_CLASS_ATTR = "__nija_live_engine_profit_exit_v25__"
 
 
 def _key(engine: Any, pos: dict[str, Any]) -> str:
@@ -221,7 +226,7 @@ def _scan_engine(engine: Any) -> int:
             reason=reason,
             market=market,
             created_at=now,
-            deadline=now + max(5.0, broker_v25._f(broker_v25.os.environ.get("NIJA_EXIT_FILL_CONFIRM_TIMEOUT_S"), 30.0)),
+            deadline=now + max(5.0, broker_v25._f(os.environ.get("NIJA_EXIT_FILL_CONFIRM_TIMEOUT_S"), 30.0)),
         )
         if _mark_engine_closed(engine, pending_exit, order):
             closed += 1
@@ -251,23 +256,39 @@ def _scan_engine(engine: Any) -> int:
     return closed
 
 
+def _patch_engine(module: Any) -> bool:
+    original_result = bool(_ORIGINAL_PATCH_ENGINE(module))
+    cls = getattr(module, "ExecutionEngine", None)
+    if not isinstance(cls, type):
+        return original_result
+    cls.scan_stop_loss_take_profit_once = _scan_engine
+    cls.start_stop_loss_take_profit_monitor = auto_exit._register_engine
+    setattr(cls, _PATCHED_CLASS_ATTR, True)
+    logger.warning(
+        "LIVE_ENGINE_PROFIT_EXIT_CLASS_PATCHED marker=%s class=%s future_import_safe=true",
+        _MARKER,
+        cls.__name__,
+    )
+    return True
+
+
 def _patch_loaded_execution_engines() -> None:
     for module_name in ("bot.execution_engine", "execution_engine"):
         module = sys.modules.get(module_name)
-        cls = getattr(module, "ExecutionEngine", None) if module is not None else None
-        if isinstance(cls, type):
-            cls.scan_stop_loss_take_profit_once = _scan_engine
+        if module is not None:
+            _patch_engine(module)
 
 
 def install_import_hook() -> bool:
     global _INSTALLED
     auto_exit._scan_once = _scan_engine
+    auto_exit._patch_engine = _patch_engine
     _patch_loaded_execution_engines()
     if _INSTALLED:
         return True
     _INSTALLED = True
     logger.critical(
-        "LIVE_ENGINE_PROFIT_EXIT_V25_INSTALLED marker=%s fill_confirmed=true fee_aware=true",
+        "LIVE_ENGINE_PROFIT_EXIT_V25_INSTALLED marker=%s fill_confirmed=true fee_aware=true future_import_safe=true",
         _MARKER,
     )
     return True
@@ -277,4 +298,10 @@ def install() -> bool:
     return install_import_hook()
 
 
-__all__ = ["install", "install_import_hook", "_scan_engine", "_mark_engine_closed"]
+__all__ = [
+    "install",
+    "install_import_hook",
+    "_scan_engine",
+    "_mark_engine_closed",
+    "_patch_engine",
+]
