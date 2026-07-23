@@ -11,10 +11,13 @@ on:
       - "bot/disconnected_coinbase_balance_guard_patch.py"
       - "bot/okx_patch_churn_guard_patch.py"
       - "bot/live_active_dispatch_bridge_patch.py"
+      - "bot/runtime_patch_churn_safety_patch.py"
+      - "bot/generation_sync_timing_patch.py"
       - "bot/tests/test_strategy_runtime_integrity_patch.py"
       - "bot/tests/test_disconnected_coinbase_balance_guard_patch.py"
       - "bot/tests/test_okx_patch_churn_guard_patch.py"
       - "bot/tests/test_live_active_dispatch_bridge_recovery.py"
+      - "bot/tests/test_runtime_patch_churn_safety_patch.py"
       - ".github/workflows/runtime-repair-regression.yml"
   push:
     branches: [main]
@@ -27,10 +30,13 @@ on:
       - "bot/disconnected_coinbase_balance_guard_patch.py"
       - "bot/okx_patch_churn_guard_patch.py"
       - "bot/live_active_dispatch_bridge_patch.py"
+      - "bot/runtime_patch_churn_safety_patch.py"
+      - "bot/generation_sync_timing_patch.py"
       - "bot/tests/test_strategy_runtime_integrity_patch.py"
       - "bot/tests/test_disconnected_coinbase_balance_guard_patch.py"
       - "bot/tests/test_okx_patch_churn_guard_patch.py"
       - "bot/tests/test_live_active_dispatch_bridge_recovery.py"
+      - "bot/tests/test_runtime_patch_churn_safety_patch.py"
       - ".github/workflows/runtime-repair-regression.yml"
 
 permissions:
@@ -63,6 +69,8 @@ jobs:
             bot/disconnected_coinbase_balance_guard_patch.py \
             bot/okx_patch_churn_guard_patch.py \
             bot/live_active_dispatch_bridge_patch.py \
+            bot/runtime_patch_churn_safety_patch.py \
+            bot/generation_sync_timing_patch.py \
             bot/bot.py
 
       - name: Run focused regression suite
@@ -72,4 +80,5 @@ jobs:
             bot/tests/test_strategy_runtime_integrity_patch.py \
             bot/tests/test_disconnected_coinbase_balance_guard_patch.py \
             bot/tests/test_okx_patch_churn_guard_patch.py \
-            bot/tests/test_live_active_dispatch_bridge_recovery.py
+            bot/tests/test_live_active_dispatch_bridge_recovery.py \
+            bot/tests/test_runtime_patch_churn_safety_patch.py
