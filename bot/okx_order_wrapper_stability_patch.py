@@ -263,8 +263,10 @@ def _ensure_okx_wrappers() -> tuple[bool, dict[str, str]]:
     for cls in instid_classes:
         roles[id(cls)] = (cls, True, False)
     for cls in final_classes:
-        previous = roles.get(id(cls))
-        roles[id(cls)] = (cls, bool(previous and previous[1]), True)
+        # Any broker/adapter surface that owns final-submit validation must also
+        # retain instId normalization.  Only low-level REST-only classes are
+        # permitted to require instId without the final-submit layer.
+        roles[id(cls)] = (cls, True, True)
 
     details: dict[str, str] = {}
     ready = bool(roles)
@@ -352,8 +354,9 @@ def _monitor_interval() -> float:
 def _monitor() -> None:
     while True:
         try:
-            ready, details = _apply()
-            _publish_state(ready, details)
+            with _LOCK:
+                ready, details = _apply()
+                _publish_state(ready, details)
         except Exception as exc:
             os.environ["NIJA_RUNTIME_ERROR_CLEANUP_V1_READY"] = "0"
             logger.warning(
@@ -363,6 +366,8 @@ def _monitor() -> None:
                 f"{type(exc).__name__}:{exc}",
                 exc_info=True,
             )
+        # Keep the sleep outside the convergence lock so explicit installer calls
+        # are never delayed by the monitor interval.
         time.sleep(_monitor_interval())
 
 
