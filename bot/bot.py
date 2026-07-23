@@ -106,11 +106,11 @@ except Exception as exc:
     logger.warning("OKX_FINAL_ORDER_SUBMISSION_BRIDGE_INSTALL_FAILED source=bot_entrypoint err=%s", exc)
 
 try:
-    from bot.canonical_broker_bootstrap_handoff_patch import install_import_hook as _install_canonical_broker_handoff
-    _install_canonical_broker_handoff()
-    logger.warning("CANONICAL_BROKER_BOOTSTRAP_HANDOFF_INSTALL_REQUESTED source=bot_entrypoint")
+    from bot.canonical_broker_main_entry_guard_v20 import install_import_hook as _install_canonical_broker_main_guard
+    _install_canonical_broker_main_guard()
+    logger.warning("CANONICAL_BROKER_MAIN_GUARD_INSTALL_REQUESTED source=bot_entrypoint")
 except Exception as exc:
-    logger.warning("CANONICAL_BROKER_BOOTSTRAP_HANDOFF_INSTALL_FAILED source=bot_entrypoint err=%s", exc)
+    logger.warning("CANONICAL_BROKER_MAIN_GUARD_INSTALL_FAILED source=bot_entrypoint err=%s", exc)
 
 from bot.bot_main import main
 
