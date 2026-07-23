@@ -141,6 +141,7 @@ def _coinbase_pem_expected(candidates: list[tuple[str, str]]) -> bool:
 def _quarantine_coinbase() -> None:
     """Isolate an invalid optional Coinbase venue without retaining secret details."""
 
+    os.environ["NIJA_COINBASE_PEM_STATE"] = "invalid"
     os.environ["NIJA_COINBASE_PEM_VALID"] = "0"
     os.environ["NIJA_COINBASE_PEM_QUARANTINED"] = "1"
     os.environ["NIJA_COINBASE_PEM_INVALID_REASON"] = "validation_failed"
@@ -162,6 +163,7 @@ def _restore_coinbase_quarantine_state() -> None:
 
     if os.environ.get("NIJA_COINBASE_PEM_QUARANTINED") != "1":
         return
+    os.environ["NIJA_COINBASE_PEM_STATE"] = "invalid"
     os.environ["NIJA_COINBASE_PEM_VALID"] = "0"
     os.environ["NIJA_COINBASE_ACTIVATION_STATE"] = "quarantined_invalid_pem"
     os.environ["NIJA_COINBASE_CONNECTED"] = "0"
@@ -185,13 +187,11 @@ def _normalize_coinbase_env() -> None:
         logger.error("COINBASE_PEM_INVALID marker=%s reason=missing_secret", _MARKER)
         return
 
-    selected_source = ""
     selected_secret = ""
-    for source, raw in candidates:
+    for _source, raw in candidates:
         normalized = normalize_coinbase_private_key(raw)
         valid, _category = _validate_coinbase_key(normalized)
         if valid:
-            selected_source = source
             selected_secret = normalized
             break
 
@@ -203,10 +203,8 @@ def _normalize_coinbase_env() -> None:
         os.environ["NIJA_COINBASE_PEM_QUARANTINED"] = "0"
         os.environ.pop("NIJA_COINBASE_PEM_INVALID_REASON", None)
         logger.warning(
-            "COINBASE_PEM_CANONICALIZED marker=%s source=%s candidates=%d",
+            "COINBASE_PEM_CANONICALIZED marker=%s validation=es256",
             _MARKER,
-            selected_source,
-            len(candidates),
         )
         return
 
@@ -214,19 +212,17 @@ def _normalize_coinbase_env() -> None:
         os.environ["NIJA_COINBASE_PEM_STATE"] = "legacy_unverified"
         os.environ["NIJA_COINBASE_PEM_VALID"] = "0"
         logger.warning(
-            "COINBASE_PEM_NOT_REQUIRED marker=%s candidates=%d",
+            "COINBASE_PEM_NOT_REQUIRED marker=%s credential_mode=legacy",
             _MARKER,
-            len(candidates),
         )
         return
 
     os.environ["NIJA_COINBASE_PEM_STATE"] = "invalid"
     os.environ["NIJA_COINBASE_PEM_VALID"] = "0"
     logger.error(
-        "COINBASE_PEM_INVALID marker=%s candidates=%d "
-        "reason=validation_failed action=quarantine_coinbase_only",
+        "COINBASE_PEM_INVALID marker=%s reason=validation_failed "
+        "action=quarantine_coinbase_only",
         _MARKER,
-        len(candidates),
     )
     _quarantine_coinbase()
 
