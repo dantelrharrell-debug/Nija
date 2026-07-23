@@ -66,6 +66,19 @@ def _quarantine_coinbase(reason: str) -> None:
     )
 
 
+def _restore_coinbase_quarantine_state() -> None:
+    """Keep the explicit quarantine reason visible after generic activation skips."""
+
+    if os.environ.get("NIJA_COINBASE_PEM_QUARANTINED") != "1":
+        return
+    os.environ["NIJA_COINBASE_ACTIVATION_STATE"] = "quarantined_invalid_pem"
+    os.environ["NIJA_COINBASE_CONNECTED"] = "0"
+    os.environ["NIJA_COINBASE_TRADING_READY"] = "0"
+    os.environ["NIJA_DISABLE_COINBASE"] = "true"
+    os.environ["ENABLE_COINBASE_TRADING"] = "false"
+    os.environ["COINBASE_LIVE_TRADING_ENABLED"] = "false"
+
+
 def _normalize_coinbase_env() -> None:
     aliases = (
         "COINBASE_API_SECRET",
@@ -150,8 +163,12 @@ def _install_activation_observer() -> None:
         try:
             result = original(venue, *args, **kwargs)
         except Exception:
+            if name.lower() == "coinbase":
+                _restore_coinbase_quarantine_state()
             _log_state(name, force=True)
             raise
+        if name.lower() == "coinbase":
+            _restore_coinbase_quarantine_state()
         _log_state(name, force=True)
         return result
 
@@ -210,4 +227,5 @@ __all__ = [
     "normalize_coinbase_private_key",
     "_normalize_coinbase_env",
     "_quarantine_coinbase",
+    "_restore_coinbase_quarantine_state",
 ]
