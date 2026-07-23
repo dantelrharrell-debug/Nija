@@ -284,11 +284,14 @@ def install_import_hook() -> bool:
     auto_exit._scan_once = _scan_engine
     auto_exit._patch_engine = _patch_engine
     _patch_loaded_execution_engines()
+    from bot import live_exit_reconciliation_safety_v25 as reconciliation_safety
+
+    reconciliation_safety.install_import_hook()
     if _INSTALLED:
         return True
     _INSTALLED = True
     logger.critical(
-        "LIVE_ENGINE_PROFIT_EXIT_V25_INSTALLED marker=%s fill_confirmed=true fee_aware=true future_import_safe=true",
+        "LIVE_ENGINE_PROFIT_EXIT_V25_INSTALLED marker=%s fill_confirmed=true fee_aware=true future_import_safe=true full_fill_reconciliation=true",
         _MARKER,
     )
     return True
