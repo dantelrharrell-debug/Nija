@@ -8,7 +8,9 @@ on:
       - 'Dockerfile'
       - 'scripts/runtime_entrypoint_attestation.py'
       - 'bot/live_broker_profit_exit_convergence_v25.py'
+      - 'bot/live_engine_profit_exit_convergence_v25.py'
       - 'bot/tests/test_live_broker_profit_exit_convergence_v25.py'
+      - 'bot/tests/test_live_engine_profit_exit_convergence_v25.py'
       - 'bot/tests/test_runtime_entrypoint_attestation_v23.py'
       - '.github/workflows/live-broker-profit-exit-v25.yml'
   push:
@@ -18,7 +20,9 @@ on:
       - 'Dockerfile'
       - 'scripts/runtime_entrypoint_attestation.py'
       - 'bot/live_broker_profit_exit_convergence_v25.py'
+      - 'bot/live_engine_profit_exit_convergence_v25.py'
       - 'bot/tests/test_live_broker_profit_exit_convergence_v25.py'
+      - 'bot/tests/test_live_engine_profit_exit_convergence_v25.py'
       - 'bot/tests/test_runtime_entrypoint_attestation_v23.py'
       - '.github/workflows/live-broker-profit-exit-v25.yml'
 
@@ -48,14 +52,18 @@ jobs:
             main.py \
             scripts/runtime_entrypoint_attestation.py \
             bot/live_broker_profit_exit_convergence_v25.py \
+            bot/live_engine_profit_exit_convergence_v25.py \
             bot/auto_exit_sl_tp_runtime_patch.py \
             bot/universal_broker_exit_supervisor_patch.py
       - name: Verify Docker v25 inclusion
         run: |
           grep -Fq 'bot/live_broker_profit_exit_convergence_v25.py' Dockerfile
+          grep -Fq 'bot/live_engine_profit_exit_convergence_v25.py' Dockerfile
           grep -Fq '20260723-runtime-entrypoint-attestation-v25' scripts/runtime_entrypoint_attestation.py
           grep -Fq '_install_live_broker_profit_exit_v25' main.py
-      - name: Test fill-confirmed fee-aware exits
+      - name: Test broker fill-confirmed fee-aware exits
         run: python -m pytest -q bot/tests/test_live_broker_profit_exit_convergence_v25.py
+      - name: Test engine fill-confirmed fee-aware exits
+        run: python -m pytest -q bot/tests/test_live_engine_profit_exit_convergence_v25.py
       - name: Test runtime attestation
         run: python -m pytest -q bot/tests/test_runtime_entrypoint_attestation_v23.py
