@@ -22,11 +22,15 @@ _COINBASE_SECRET_ALIASES = (
     "COINBASE_PEM_CONTENT",
     "COINBASE_API_PRIVATE_KEY",
     "COINBASE_PRIVATE_KEY",
+    "COINBASE_CDP_API_SECRET",
+    "CDP_API_KEY_PRIVATE_KEY",
 )
 _COINBASE_KEY_ALIASES = (
     "COINBASE_API_KEY",
     "COINBASE_PLATFORM_API_KEY",
     "COINBASE_ADVANCED_API_KEY",
+    "COINBASE_CDP_API_KEY",
+    "CDP_API_KEY_NAME",
 )
 
 
@@ -132,10 +136,11 @@ def _coinbase_pem_expected(candidates: list[tuple[str, str]]) -> bool:
     ).lower()
     if "organizations/" in key_text or "/apikeys/" in key_text:
         return True
-    return any(
-        "PRIVATE KEY" in raw.upper() or "PRIVATEKEY" in raw.upper()
-        for _, raw in candidates
-    )
+    for _source, raw in candidates:
+        normalized = normalize_coinbase_private_key(raw).upper()
+        if "PRIVATE KEY" in normalized or "PRIVATEKEY" in normalized:
+            return True
+    return False
 
 
 def _quarantine_coinbase() -> None:
