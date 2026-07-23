@@ -1,4 +1,10 @@
-"""Execution venue environment helpers for broker initialization and routing."""
+"""Execution venue environment helpers for broker initialization and routing.
+
+The production live-crypto contract is intentionally limited to Kraken,
+Coinbase, and OKX. Alpaca remains available to user/paper workflows elsewhere
+in the repository, and Binance is a legacy/future label without a canonical
+live broker adapter in the active MultiAccountBrokerManager.
+"""
 
 from __future__ import annotations
 
@@ -6,7 +12,7 @@ import os
 from typing import List, Mapping, Optional
 
 _FALSEY = {"0", "false", "no", "off"}
-_SUPPORTED_VENUES = {"kraken", "coinbase", "okx", "binance", "alpaca"}
+_LIVE_EXECUTION_VENUES = {"kraken", "coinbase", "okx"}
 _MULTI_VENUE_MARKERS = {"", "auto", "best", "multi", "multi-venue", "multi_venue", "all"}
 
 
@@ -71,11 +77,17 @@ def should_initialize_okx_platform(
 
 
 def get_preferred_execution_venue(env: Optional[Mapping[str, str]] = None) -> Optional[str]:
-    """Return a forced single venue, or None when multi-venue routing should decide."""
+    """Return a forced live venue, or ``None`` for automatic multi-venue routing.
+
+    Only venues with a canonical production connection, entry, and broker-native
+    exit path may be forced here. Unsupported/legacy labels fail closed to the
+    normal multi-venue selector instead of steering an order toward an adapter
+    that the active runtime cannot initialize.
+    """
     source = _env(env)
     raw = str(source.get("PRIMARY_EXECUTION_VENUE", "") or "").strip().lower()
     if raw in _MULTI_VENUE_MARKERS:
         return None
-    if raw in _SUPPORTED_VENUES:
+    if raw in _LIVE_EXECUTION_VENUES:
         return raw
     return None
