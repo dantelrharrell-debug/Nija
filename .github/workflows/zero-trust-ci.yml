@@ -122,7 +122,9 @@ jobs:
           allowed-endpoints: >
             api.github.com:443
             github.com:443
+            github-releases.githubusercontent.com:443
             objects.githubusercontent.com:443
+            pkg-containers.githubusercontent.com:443
             ghcr.io:443
 
       - name: Checkout repository
@@ -145,13 +147,15 @@ jobs:
           echo "::notice::Artifact signatures verified"
 
       - name: Run Security Scan in Sandbox
-        uses: aquasecurity/trivy-action@master
+        # v0.36.0 verified immutable release; pin the full commit to prevent tag drift.
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
         with:
           scan-type: 'fs'
           scan-ref: '.'
           format: 'table'
           severity: 'CRITICAL,HIGH'
           exit-code: '0'
+          cache: 'false'
 
   # Underscore keys keep matrix expressions unambiguous to GitHub's parser.
   test:
