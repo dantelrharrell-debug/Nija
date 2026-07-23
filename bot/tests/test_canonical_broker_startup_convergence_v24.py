@@ -10,6 +10,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 MODULE_PATH = ROOT / "bot" / "canonical_broker_startup_convergence_v24.py"
+LOGGING_GUARD_PATH = ROOT / "bot" / "logging_format_guard_patch.py"
 
 
 def _load_module():
@@ -38,6 +39,25 @@ def _clear_runtime(monkeypatch):
         "NIJA_CANONICAL_BROKER_STARTUP_CONVERGENCE_V24_READY",
     ):
         monkeypatch.delenv(name, raising=False)
+
+
+def _load_logging_guard(monkeypatch):
+    _clear_runtime(monkeypatch)
+    name = "logging_format_guard_v24_test"
+    sys.modules.pop(name, None)
+    spec = importlib.util.spec_from_file_location(name, LOGGING_GUARD_PATH)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_loader_imports_importlib_util_explicitly():
+    source = MODULE_PATH.read_text(encoding="utf-8")
+    assert "import importlib.util" in source
+    module = _load_module()
+    assert module.importlib.util is importlib.util
 
 
 def test_writer_lineage_requires_token_generation_and_lease(monkeypatch):
@@ -144,3 +164,40 @@ def test_bot_main_patch_delegates_to_v22_guards(monkeypatch):
     assert calls == ["acquire", "main"]
     assert module._patch_bot_main_module(fake) is True
     assert calls == ["acquire", "main"]
+
+
+def test_logging_guard_live_intent_accepts_supported_aliases(monkeypatch):
+    guard = _load_logging_guard(monkeypatch)
+
+    monkeypatch.setenv("LIVE_TRADING", "true")
+    assert guard._live_intent() is True
+    monkeypatch.delenv("LIVE_TRADING")
+    monkeypatch.setenv("NIJA_EXECUTION_ACTIVE", "1")
+    assert guard._live_intent() is True
+    monkeypatch.setenv("PAPER_MODE", "true")
+    assert guard._live_intent() is False
+
+
+def test_live_trading_installer_failure_is_not_swallowed(monkeypatch):
+    guard = _load_logging_guard(monkeypatch)
+    monkeypatch.setenv("LIVE_TRADING", "true")
+    monkeypatch.setenv("DRY_RUN_MODE", "false")
+    monkeypatch.setenv("PAPER_MODE", "false")
+    monkeypatch.setattr(
+        guard.importlib.util, "spec_from_file_location", lambda *args, **kwargs: None
+    )
+    guard.sys.modules.pop("nija_canonical_broker_startup_convergence_v24", None)
+
+    with pytest.raises(RuntimeError, match="could not load spec"):
+        guard._install_canonical_broker_startup_convergence()
+
+
+def test_non_live_installer_failure_remains_diagnostic_only(monkeypatch):
+    guard = _load_logging_guard(monkeypatch)
+    monkeypatch.setenv("DRY_RUN_MODE", "true")
+    monkeypatch.setattr(
+        guard.importlib.util, "spec_from_file_location", lambda *args, **kwargs: None
+    )
+    guard.sys.modules.pop("nija_canonical_broker_startup_convergence_v24", None)
+
+    guard._install_canonical_broker_startup_convergence()
