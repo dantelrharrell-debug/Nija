@@ -9,8 +9,10 @@ on:
       - 'scripts/runtime_entrypoint_attestation.py'
       - 'bot/live_broker_profit_exit_convergence_v25.py'
       - 'bot/live_engine_profit_exit_convergence_v25.py'
+      - 'bot/live_exit_reconciliation_safety_v25.py'
       - 'bot/tests/test_live_broker_profit_exit_convergence_v25.py'
       - 'bot/tests/test_live_engine_profit_exit_convergence_v25.py'
+      - 'bot/tests/test_live_exit_reconciliation_safety_v25.py'
       - 'bot/tests/test_runtime_entrypoint_attestation_v23.py'
       - '.github/workflows/live-broker-profit-exit-v25.yml'
   push:
@@ -21,8 +23,10 @@ on:
       - 'scripts/runtime_entrypoint_attestation.py'
       - 'bot/live_broker_profit_exit_convergence_v25.py'
       - 'bot/live_engine_profit_exit_convergence_v25.py'
+      - 'bot/live_exit_reconciliation_safety_v25.py'
       - 'bot/tests/test_live_broker_profit_exit_convergence_v25.py'
       - 'bot/tests/test_live_engine_profit_exit_convergence_v25.py'
+      - 'bot/tests/test_live_exit_reconciliation_safety_v25.py'
       - 'bot/tests/test_runtime_entrypoint_attestation_v23.py'
       - '.github/workflows/live-broker-profit-exit-v25.yml'
 
@@ -53,6 +57,7 @@ jobs:
             scripts/runtime_entrypoint_attestation.py \
             bot/live_broker_profit_exit_convergence_v25.py \
             bot/live_engine_profit_exit_convergence_v25.py \
+            bot/live_exit_reconciliation_safety_v25.py \
             bot/auto_exit_sl_tp_runtime_patch.py \
             bot/universal_broker_exit_supervisor_patch.py
       - name: Verify Docker v25 inclusion
@@ -65,5 +70,7 @@ jobs:
         run: python -m pytest -q bot/tests/test_live_broker_profit_exit_convergence_v25.py
       - name: Test engine fill-confirmed fee-aware exits
         run: python -m pytest -q bot/tests/test_live_engine_profit_exit_convergence_v25.py
+      - name: Test full-fill reconciliation safety
+        run: python -m pytest -q bot/tests/test_live_exit_reconciliation_safety_v25.py
       - name: Test runtime attestation
         run: python -m pytest -q bot/tests/test_runtime_entrypoint_attestation_v23.py
