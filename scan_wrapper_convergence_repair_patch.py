@@ -194,7 +194,7 @@ def _chain_has_current_owner(func: Callable[..., Any]) -> bool:
         seen.add(id(current))
         if getattr(current, "_nija_scan_wrapper_release", "") == _MARKER:
             return True
-        current = getattr(current, "__wrapped__", None)
+        current = _next_wrapped(current)
     return False
 
 
@@ -244,7 +244,7 @@ def _patch_core_loop(module: ModuleType) -> bool:
     current = getattr(cls, "run_scan_phase", None)
     if not callable(current):
         return False
-    if getattr(current, "_nija_scan_wrapper_release", "") == _MARKER:
+    if _chain_has_current_owner(current):
         return False
 
     base, depth, cycle = _unwrap_known(current)

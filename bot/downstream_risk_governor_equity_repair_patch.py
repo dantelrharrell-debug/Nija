@@ -12,6 +12,7 @@ sizing layer unchanged.
 """
 from __future__ import annotations
 
+import importlib
 import logging
 import os
 import sys
@@ -434,10 +435,23 @@ def _try_patch_loaded() -> bool:
         (("bot.execution_engine", "execution_engine"), _install_on_execution_engine),
     )
     for names, installer in targets:
+        loaded_module: ModuleType | None = None
         for name in names:
             module = sys.modules.get(name)
             if isinstance(module, ModuleType):
-                changed = installer(module) or changed
+                loaded_module = module
+                break
+        if loaded_module is None and installer is _install_on_pre_trade_risk_engine:
+            for name in names:
+                try:
+                    module = importlib.import_module(name)
+                except Exception:
+                    continue
+                if isinstance(module, ModuleType):
+                    loaded_module = module
+                    break
+        if isinstance(loaded_module, ModuleType):
+            changed = installer(loaded_module) or changed
     return changed
 
 
