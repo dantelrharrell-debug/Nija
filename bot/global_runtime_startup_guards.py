@@ -135,6 +135,15 @@ def _install_module(module_name: str, marker: str) -> bool:
         installer = getattr(module, "install_import_hook", None) or getattr(module, "install", None)
         if callable(installer):
             installer()
+            if module_name == "preactivation_readiness_convergence_v16_patch":
+                original_mark = getattr(module, "_mark_proven_readiness", None)
+                if callable(original_mark) and not getattr(original_mark, "_nija_publish_once", False):
+                    def _mark_once(proofs, _original=original_mark):
+                        if os.environ.get("NIJA_PREACTIVATION_READINESS_V16_READY", "").strip() == "1":
+                            return True, []
+                        return _original(proofs)
+                    setattr(_mark_once, "_nija_publish_once", True)
+                    setattr(module, "_mark_proven_readiness", _mark_once)
             logger.warning("%s marker=20260706b", marker)
             return True
         logger.warning("%s_SKIPPED marker=20260706b reason=installer_missing", marker)
