@@ -7,27 +7,65 @@ before SelfHealingStartup, capital hydration, or trading can proceed.
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 BOT_MAIN = ROOT / "bot" / "bot_main.py"
 MARKER = "DIRECT_CANONICAL_BROKER_PREBOOTSTRAP_V27"
+STEP1_PATTERN = re.compile(
+    r'(?m)^(?P<indent>[ \t]*)logger\.info\(\s*["\']\\n\[STEP 1\] Self-Healing Bootstrap["\']\s*\)\s*$'
+)
 
-ANCHOR = '''    try:\n        logger.info("\\n[STEP 1] Self-Healing Bootstrap")\n'''
+BLOCK_TEMPLATE = '''{indent}logger.info("\\n[STEP 0.5] Canonical Broker Prebootstrap")
+{indent}try:
+{indent}    from bot.canonical_broker_prebootstrap_v22 import (
+{indent}        prepare_canonical_broker_runtime,
+{indent}    )
 
-BLOCK = '''    try:\n        logger.info("\\n[STEP 0.5] Canonical Broker Prebootstrap")\n        try:\n            from bot.canonical_broker_prebootstrap_v22 import (\n                prepare_canonical_broker_runtime,\n            )\n\n            manager = prepare_canonical_broker_runtime()\n            if not bool(getattr(manager, "_fsm_initialized", False)):\n                raise RuntimeError("canonical broker manager FSM is not initialized")\n            logger.critical(\n                "DIRECT_CANONICAL_BROKER_PREBOOTSTRAP_V27_READY "\n                "fsm_initialized=true thread=%s",\n                threading.current_thread().name,\n            )\n            os.environ["NIJA_DIRECT_CANONICAL_BROKER_PREBOOTSTRAP_V27_READY"] = "1"\n        except Exception as broker_exc:\n            os.environ["NIJA_DIRECT_CANONICAL_BROKER_PREBOOTSTRAP_V27_READY"] = "0"\n            logger.critical(\n                "DIRECT_CANONICAL_BROKER_PREBOOTSTRAP_V27_FAILED err=%s:%s "\n                "trading_remains_fail_closed=true",\n                type(broker_exc).__name__,\n                broker_exc,\n                exc_info=True,\n            )\n            return 1\n\n        logger.info("\\n[STEP 1] Self-Healing Bootstrap")\n'''
+{indent}    manager = prepare_canonical_broker_runtime()
+{indent}    if not bool(getattr(manager, "_fsm_initialized", False)):
+{indent}        raise RuntimeError("canonical broker manager FSM is not initialized")
+{indent}    logger.critical(
+{indent}        "DIRECT_CANONICAL_BROKER_PREBOOTSTRAP_V27_READY "
+{indent}        "fsm_initialized=true thread=%s",
+{indent}        threading.current_thread().name,
+{indent}    )
+{indent}    os.environ["NIJA_DIRECT_CANONICAL_BROKER_PREBOOTSTRAP_V27_READY"] = "1"
+{indent}except Exception as broker_exc:
+{indent}    os.environ["NIJA_DIRECT_CANONICAL_BROKER_PREBOOTSTRAP_V27_READY"] = "0"
+{indent}    logger.critical(
+{indent}        "DIRECT_CANONICAL_BROKER_PREBOOTSTRAP_V27_FAILED err=%s:%s "
+{indent}        "trading_remains_fail_closed=true",
+{indent}        type(broker_exc).__name__,
+{indent}        broker_exc,
+{indent}        exc_info=True,
+{indent}    )
+{indent}    return 1
+
+{indent}logger.info("\\n[STEP 1] Self-Healing Bootstrap")'''
 
 
 def patch_text(text: str) -> str:
     if MARKER in text:
-        if text.count(MARKER) < 2:
+        if "DIRECT_CANONICAL_BROKER_PREBOOTSTRAP_V27_READY" not in text:
             raise RuntimeError("v27 direct prebootstrap marker is incomplete")
         return text
-    if ANCHOR not in text:
-        raise RuntimeError("bot_main startup anchor not found")
-    patched = text.replace(ANCHOR, BLOCK, 1)
+
+    matches = list(STEP1_PATTERN.finditer(text))
+    if len(matches) != 1:
+        raise RuntimeError(
+            f"bot_main STEP 1 structural anchor count invalid: {len(matches)}"
+        )
+
+    match = matches[0]
+    block = BLOCK_TEMPLATE.format(indent=match.group("indent"))
+    patched = text[: match.start()] + block + text[match.end() :]
+
     if MARKER not in patched:
         raise RuntimeError("v27 direct prebootstrap patch was not installed")
+    if patched.count("[STEP 0.5] Canonical Broker Prebootstrap") != 1:
+        raise RuntimeError("v27 direct prebootstrap insertion count invalid")
     return patched
 
 
@@ -37,7 +75,7 @@ def main() -> None:
     BOT_MAIN.write_text(patched, encoding="utf-8")
     print(
         "DIRECT_CANONICAL_BROKER_PREBOOTSTRAP_V27_PATCH_APPLIED "
-        "main_thread=true fail_closed=true idempotent=true"
+        "main_thread=true fail_closed=true structural_anchor=true idempotent=true"
     )
 
 
