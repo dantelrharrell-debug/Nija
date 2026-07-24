@@ -1,0 +1,1 @@
+The canonical startup fix is ready for review and CI validation.

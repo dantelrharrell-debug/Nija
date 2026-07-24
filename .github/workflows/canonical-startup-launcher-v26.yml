@@ -1,0 +1,46 @@
+name: Canonical startup launcher v26
+
+on:
+  pull_request:
+    paths:
+      - "scripts/canonical_runtime_launcher_v26.py"
+      - "scripts/apply_canonical_launcher_v26.py"
+      - "scripts/render_entrypoint.sh"
+      - "bot/canonical_broker_startup_convergence_v24.py"
+      - "bot/canonical_broker_prebootstrap_v22.py"
+      - "bot/tests/test_canonical_runtime_launcher_v26.py"
+      - ".github/workflows/canonical-startup-launcher-v26.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compile startup contract
+        run: |
+          python -S -m py_compile \
+            scripts/canonical_runtime_launcher_v26.py \
+            scripts/apply_canonical_launcher_v26.py \
+            bot/canonical_broker_startup_convergence_v24.py \
+            bot/canonical_broker_prebootstrap_v22.py
+          bash -n scripts/render_entrypoint.sh
+      - name: Verify source-runtime rewrite
+        run: |
+          cp start.sh /tmp/start.sh.original
+          python -S scripts/apply_startup_handoff_fix.py
+          python -S scripts/apply_canonical_launcher_v26.py
+          grep -Fq '$PY -u scripts/canonical_runtime_launcher_v26.py' start.sh
+          ! grep -Fq '$PY -u main.py' start.sh
+          mv /tmp/start.sh.original start.sh
+      - name: Run focused regression tests
+        run: |
+          python -m pip install --disable-pip-version-check pytest
+          pytest -q bot/tests/test_canonical_runtime_launcher_v26.py
