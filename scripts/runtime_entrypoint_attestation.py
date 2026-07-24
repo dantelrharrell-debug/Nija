@@ -90,6 +90,16 @@ _CONTRACTS = (
         ),
     ),
     FileContract(
+        "bot/live_exit_reconciliation_safety_v25.py",
+        (
+            "20260723-live-exit-reconciliation-safety-v25",
+            "LIVE_EXIT_RECONCILIATION_SAFETY_V25_INSTALLED",
+            "full_fill_required=true",
+            "partial_fill_stays_open=true",
+            "duplicate_exit_retry_blocked=true",
+        ),
+    ),
+    FileContract(
         "bot/logging_format_guard_patch.py",
         (
             "CANONICAL_BROKER_STARTUP_CONVERGENCE_V24_INSTALL_REQUESTED",

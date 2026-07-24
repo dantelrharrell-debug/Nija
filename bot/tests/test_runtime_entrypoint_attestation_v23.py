@@ -54,6 +54,7 @@ def test_repository_canonical_runtime_contract_passes(monkeypatch):
     assert "bot/canonical_broker_prebootstrap_v22.py:" in report["hashes"]
     assert "bot/canonical_broker_startup_convergence_v24.py:" in report["hashes"]
     assert "bot/live_broker_profit_exit_convergence_v25.py:" in report["hashes"]
+    assert "bot/live_exit_reconciliation_safety_v25.py:" in report["hashes"]
     assert "bot/stalled_writer_release_guard_v22.py:" in report["hashes"]
 
 
