@@ -28,6 +28,8 @@ RUN NIJA_DEFER_RUNTIME_SITE_HOOKS=1 python -S -m py_compile \
         /app/apply_bot_package_defer_fix.py \
         /app/scripts/install_sitecustomize_defer_guard.py \
         /app/scripts/apply_startup_handoff_fix.py \
+        /app/scripts/apply_canonical_launcher_v26.py \
+        /app/scripts/canonical_runtime_launcher_v26.py \
         /app/scripts/runtime_entrypoint_attestation.py \
         /app/render_liveness_server.py \
         /app/render_readiness_state_bridge.py \
@@ -79,6 +81,8 @@ RUN test -f /app/scripts/redis_connectivity_check.sh && \
     test -f /app/scripts/production_bootstrap.sh && \
     test -f /app/scripts/three_venue_config_check.py && \
     test -f /app/scripts/render_entrypoint.sh && \
+    test -f /app/scripts/apply_canonical_launcher_v26.py && \
+    test -f /app/scripts/canonical_runtime_launcher_v26.py && \
     chmod +x /app/scripts/redis_connectivity_check.sh \
              /app/scripts/production_bootstrap.sh \
              /app/scripts/render_entrypoint.sh && \
