@@ -42,12 +42,12 @@ _promote_secret_alias KRAKEN_PLATFORM_API_SECRET \
     KRAKEN_MASTER_SECRET \
     KRAKEN_PLATFORM_SECRET
 
-# Docker builds already apply the legacy handoff patch. Running it again is
-# intentionally idempotent and closes the source-runtime gap for an existing
-# Render service that executes repository files without rebuilding the layer.
+# Apply every startup-order repair before any normal Python interpreter can load
+# NIJA runtime hooks. All patchers are idempotent and fail closed.
 export NIJA_DEFER_RUNTIME_SITE_HOOKS=1
 python3 -S scripts/apply_startup_handoff_fix.py
 python3 -S scripts/apply_canonical_launcher_v26.py
+python3 -S scripts/apply_direct_broker_prebootstrap_v27.py
 bash -n start.sh
 python3 -S -m py_compile \
     main.py \
@@ -61,6 +61,7 @@ python3 -S -m py_compile \
     bot/stalled_writer_release_guard_v22.py \
     scripts/canonical_runtime_launcher_v26.py \
     scripts/apply_canonical_launcher_v26.py \
+    scripts/apply_direct_broker_prebootstrap_v27.py \
     scripts/runtime_entrypoint_attestation.py
 
 grep -Fq '$PY -u scripts/canonical_runtime_launcher_v26.py' start.sh
@@ -68,8 +69,9 @@ if grep -Fq '$PY -u main.py' start.sh; then
     echo "❌ Legacy direct main.py launch remains after v26 patch"
     exit 78
 fi
+grep -Fq 'DIRECT_CANONICAL_BROKER_PREBOOTSTRAP_V27_READY' bot/bot_main.py
 
-echo "🧭 RENDER_ENTRYPOINT_CANONICAL_HANDOFF_READY marker=20260724-render-entrypoint-v26 launcher=canonical_runtime_launcher_v26"
+echo "🧭 RENDER_ENTRYPOINT_CANONICAL_HANDOFF_READY marker=20260724-render-entrypoint-v27 launcher=canonical_runtime_launcher_v26 direct_broker_prebootstrap=v27"
 unset NIJA_DEFER_RUNTIME_SITE_HOOKS
 
 exec bash scripts/production_bootstrap.sh "$@"
