@@ -364,14 +364,30 @@ def main() -> int:
 
     try:
         logger.info("\n[STEP 0.5] Canonical Broker Prebootstrap")
-        from bot.canonical_broker_prebootstrap_v22 import (
-            prepare_canonical_broker_runtime,
-        )
+        try:
+            from bot.canonical_broker_prebootstrap_v22 import (
+                prepare_canonical_broker_runtime,
+            )
 
-        manager = prepare_canonical_broker_runtime()
-
-        if not getattr(manager, "_fsm_initialized", False):
-            raise RuntimeError("canonical broker manager FSM is not initialized")
+            manager = prepare_canonical_broker_runtime()
+            if not bool(getattr(manager, "_fsm_initialized", False)):
+                raise RuntimeError("canonical broker manager FSM is not initialized")
+            logger.critical(
+                "DIRECT_CANONICAL_BROKER_PREBOOTSTRAP_V27_READY "
+                "fsm_initialized=true thread=%s",
+                threading.current_thread().name,
+            )
+            os.environ["NIJA_DIRECT_CANONICAL_BROKER_PREBOOTSTRAP_V27_READY"] = "1"
+        except Exception as broker_exc:
+            os.environ["NIJA_DIRECT_CANONICAL_BROKER_PREBOOTSTRAP_V27_READY"] = "0"
+            logger.critical(
+                "DIRECT_CANONICAL_BROKER_PREBOOTSTRAP_V27_FAILED err=%s:%s "
+                "trading_remains_fail_closed=true",
+                type(broker_exc).__name__,
+                broker_exc,
+                exc_info=True,
+            )
+            return 1
 
         logger.info("\n[STEP 1] Self-Healing Bootstrap")
         ok, broker, broker_name = _run_self_healing_startup()
