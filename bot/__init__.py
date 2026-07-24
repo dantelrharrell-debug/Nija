@@ -208,10 +208,14 @@ for _key, _value in {
 }.items():
     os.environ.setdefault(_key, _value)
 
-try:
-    importlib.import_module("sitecustomize")
-except Exception as _exc:
-    logger.warning("NIJA startup patch unavailable: %s", _exc)
+_NIJA_BOT_PACKAGE_RUNTIME_HOOKS_DEFERRED = _truthy("NIJA_DEFER_RUNTIME_SITE_HOOKS")
+if _NIJA_BOT_PACKAGE_RUNTIME_HOOKS_DEFERRED:
+    logger.info("NIJA_BOT_PACKAGE_RUNTIME_HOOKS_DEFERRED runtime_site_hooks=deferred")
+else:
+    try:
+        importlib.import_module("sitecustomize")
+    except Exception as _exc:
+        logger.warning("NIJA startup patch unavailable: %s", _exc)
 _normalize_credential_aliases("bot_init_after_sitecustomize")
 _strict_live_cleanup("bot_init_after_sitecustomize")
 
@@ -238,7 +242,7 @@ for _key, _value in (
 ):
     _set_float_floor(_key, _value)
 
-_PATCH_HOOKS = (
+_PATCH_HOOKS = () if _NIJA_BOT_PACKAGE_RUNTIME_HOOKS_DEFERRED else (
     ("strict_live_startup_sanitizer", "Strict live startup sanitizer"),
     ("live_redis_execution_bypass_guard", "Live Redis execution bypass guard"),
     ("writer_lock_release_guard", "Writer lock release guard"),
