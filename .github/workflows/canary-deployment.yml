@@ -36,7 +36,7 @@ jobs:
     
     outputs:
       image-digest: ${{ steps.build.outputs.digest }}
-      image-tag: ${{ steps.meta.outputs.tags }}
+      image-tag: ${{ steps.primary-tag.outputs.image }}
       
     steps:
     - name: Checkout repository
@@ -64,6 +64,16 @@ jobs:
           type=semver,pattern={{major}}.{{minor}}
           type=sha,prefix={{branch}}-
 
+    - name: Select primary image tag
+      id: primary-tag
+      run: |
+        IMAGE_TAG="$(printf '%s\n' "${{ steps.meta.outputs.tags }}" | sed -n '1p')"
+        if [ -z "${IMAGE_TAG}" ]; then
+          echo "No image tags were generated" >&2
+          exit 1
+        fi
+        echo "image=${IMAGE_TAG}" >> "${GITHUB_OUTPUT}"
+
     - name: Build and push Docker image
       id: build
       uses: docker/build-push-action@v5
@@ -83,7 +93,7 @@ jobs:
     - name: Run Trivy vulnerability scanner
       uses: aquasecurity/trivy-action@master
       with:
-        image-ref: ${{ steps.meta.outputs.tags }}
+        image-ref: ${{ steps.primary-tag.outputs.image }}
         format: 'sarif'
         output: 'trivy-results.sarif'
         severity: 'CRITICAL,HIGH'
@@ -102,8 +112,7 @@ jobs:
 
     - name: Sign container image
       run: |
-        IMAGE_TAG=$(echo "${{ steps.meta.outputs.tags }}" | head -n 1)
-        cosign sign --yes "${IMAGE_TAG}@${{ steps.build.outputs.digest }}"
+        cosign sign --yes "${{ steps.primary-tag.outputs.image }}@${{ steps.build.outputs.digest }}"
       env:
         COSIGN_EXPERIMENTAL: 1
 

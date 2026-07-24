@@ -9,6 +9,7 @@ state into one another.
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -48,9 +49,8 @@ def _clean_kill_switch_state():
     # Also reset the module-level KillSwitch singleton so its in-memory
     # is_active flag doesn't persist across tests.
     try:
-        import bot.kill_switch as ks_module  # type: ignore[import]
-
-        if ks_module._kill_switch is not None:
+        ks_module = sys.modules.get("bot.kill_switch")
+        if ks_module is not None and ks_module._kill_switch is not None:
             ks_module._kill_switch._is_active = False
             ks_module._kill_switch._activation_history = []
     except Exception:
@@ -58,8 +58,8 @@ def _clean_kill_switch_state():
 
     # Reset ExchangeKillSwitchProtector singleton.
     try:
-        import bot.exchange_kill_switch as eks_module  # type: ignore[import]
-
-        eks_module._protector = None
+        eks_module = sys.modules.get("bot.exchange_kill_switch")
+        if eks_module is not None:
+            eks_module._protector = None
     except Exception:
         pass
