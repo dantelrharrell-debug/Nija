@@ -363,6 +363,16 @@ def main() -> int:
         return 1
 
     try:
+        logger.info("\n[STEP 0.5] Canonical Broker Prebootstrap")
+        from bot.canonical_broker_prebootstrap_v22 import (
+            prepare_canonical_broker_runtime,
+        )
+
+        manager = prepare_canonical_broker_runtime()
+
+        if not getattr(manager, "_fsm_initialized", False):
+            raise RuntimeError("canonical broker manager FSM is not initialized")
+
         logger.info("\n[STEP 1] Self-Healing Bootstrap")
         ok, broker, broker_name = _run_self_healing_startup()
         if not ok:
