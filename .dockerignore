@@ -109,6 +109,8 @@ scripts/*
 !scripts/three_venue_config_check.py
 !scripts/render_entrypoint.sh
 !scripts/apply_startup_handoff_fix.py
+!scripts/apply_canonical_launcher_v26.py
+!scripts/canonical_runtime_launcher_v26.py
 !scripts/install_sitecustomize_defer_guard.py
 !scripts/runtime_entrypoint_attestation.py
 check_*.py
