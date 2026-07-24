@@ -211,6 +211,7 @@ class BotMainAuthorityOrderingTests(unittest.TestCase):
     def test_authority_precedes_nonce_and_broker_bootstrap(self):
         order: list[str] = []
         core_loop = types.ModuleType("bot.nija_core_loop")
+        prebootstrap_manager = types.SimpleNamespace(_fsm_initialized=True)
 
         def start_trading_engine(_broker):
             order.append("trading")
@@ -221,6 +222,10 @@ class BotMainAuthorityOrderingTests(unittest.TestCase):
         def acquire():
             order.append("authority")
             return True
+
+        def prebootstrap():
+            order.append("prebootstrap")
+            return prebootstrap_manager
 
         def bootstrap():
             order.append("nonce_and_broker")
@@ -238,6 +243,10 @@ class BotMainAuthorityOrderingTests(unittest.TestCase):
                     self.bot_main,
                     "_acquire_writer_authority_before_nonce",
                     side_effect=acquire,
+                ),
+                patch(
+                    "bot.canonical_broker_prebootstrap_v22.prepare_canonical_broker_runtime",
+                    side_effect=prebootstrap,
                 ),
                 patch.object(
                     self.bot_main,
@@ -260,7 +269,10 @@ class BotMainAuthorityOrderingTests(unittest.TestCase):
                 sys.modules["bot.nija_core_loop"] = previous
 
         self.assertEqual(code, 0)
-        self.assertEqual(order, ["authority", "nonce_and_broker", "fsm", "trading"])
+        self.assertEqual(
+            order,
+            ["authority", "prebootstrap", "nonce_and_broker", "fsm", "trading"],
+        )
 
 
 if __name__ == "__main__":
