@@ -1,0 +1,1 @@
+Canonical startup launcher v26 is ready for pull-request checks.
