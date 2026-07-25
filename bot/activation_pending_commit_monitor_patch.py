@@ -439,7 +439,7 @@ def _broker_manager_snapshot() -> tuple[bool, dict[str, Any]]:
             "sources": sources,
             "source": "broker_manager_cached",
         }
-        logger.warning(
+        logger.debug(
             "ACTIVATION_PENDING_COMMIT_MONITOR_BROKER_MANAGER_SNAPSHOT "
             "connected=%d total_balance=$%.2f accepted=%s brokers=%s source=cached_only",
             connected_count,
@@ -507,10 +507,9 @@ def _capital_ready_snapshot() -> tuple[bool, dict[str, Any]]:
         or (hydrated and real > 0.0 and registered > 0 and not stale)
     )
 
-    # If the CA snapshot is not yet accepted (stale/zero-broker), attempt to
-    # recover state directly from the canonical broker manager.  This converts
-    # a recovered broker/capital state into an accepted fresh capital snapshot
-    # without lowering any gate thresholds.
+    # If the CA snapshot is not yet accepted, inspect the canonical broker
+    # manager's already-published balances.  This path is observational only:
+    # it performs no private exchange I/O and republishes no capital feeds.
     if not accepted:
         bm_accepted, bm_meta = _broker_manager_snapshot()
         if bm_accepted:
