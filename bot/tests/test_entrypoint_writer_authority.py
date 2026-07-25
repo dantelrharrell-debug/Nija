@@ -211,7 +211,10 @@ class BotMainAuthorityOrderingTests(unittest.TestCase):
     def test_authority_precedes_nonce_and_broker_bootstrap(self):
         order: list[str] = []
         core_loop = types.ModuleType("bot.nija_core_loop")
-        prebootstrap_manager = types.SimpleNamespace(_fsm_initialized=True)
+        prebootstrap_manager = types.SimpleNamespace(
+            _fsm_initialized=True,
+            _platform_brokers={"kraken": types.SimpleNamespace(connected=True)},
+        )
 
         def start_trading_engine(_broker):
             order.append("trading")
@@ -273,6 +276,28 @@ class BotMainAuthorityOrderingTests(unittest.TestCase):
             order,
             ["authority", "prebootstrap", "nonce_and_broker", "fsm", "trading"],
         )
+
+    def test_prebootstrap_requires_connected_platform_broker(self):
+        manager = types.SimpleNamespace(_fsm_initialized=True, _platform_brokers={})
+
+        with (
+            patch.object(
+                self.bot_main,
+                "_acquire_writer_authority_before_nonce",
+                return_value=True,
+            ),
+            patch(
+                "bot.canonical_broker_prebootstrap_v22.prepare_canonical_broker_runtime",
+                return_value=manager,
+            ),
+            patch.object(self.bot_main, "_run_self_healing_startup") as startup,
+            patch.object(self.bot_main, "_release_writer_authority"),
+            patch.object(self.bot_main.signal, "signal"),
+        ):
+            code = self.bot_main.main()
+
+        self.assertEqual(code, 1)
+        startup.assert_not_called()
 
 
 if __name__ == "__main__":
