@@ -96,6 +96,9 @@ def _publish_connected(broker: Any, source: str) -> None:
     except Exception:
         pass
     spendable = _measure_spendable(broker)
+    os.environ["NIJA_COINBASE_CREDENTIALS_QUARANTINED"] = "0"
+    os.environ["NIJA_COINBASE_RECONNECT_DISABLED"] = "0"
+    os.environ.pop("NIJA_COINBASE_QUARANTINED_CREDENTIAL_FINGERPRINT", None)
     os.environ["NIJA_COINBASE_CONNECTED"] = "1"
     os.environ["NIJA_COINBASE_BALANCE_OBSERVED"] = "1"
     os.environ["NIJA_COINBASE_SPENDABLE_QUOTE"] = f"{spendable:.8f}"
@@ -205,6 +208,52 @@ def _mark_auth_failed(broker: Any) -> None:
                 pass
 
 
+def _flag(name: str) -> bool:
+    return str(os.environ.get(name, "") or "").strip().lower() in {
+        "1", "true", "yes", "on", "enabled",
+    }
+
+
+def _quarantined_for(key: str, secret: str) -> bool:
+    if not _flag("NIJA_COINBASE_CREDENTIALS_QUARANTINED"):
+        return False
+    pinned = str(
+        os.environ.get("NIJA_COINBASE_QUARANTINED_CREDENTIAL_FINGERPRINT", "") or ""
+    )
+    current = _pair_fingerprint(key, secret) if key and secret else ""
+    if pinned and current and current != pinned:
+        # A credential rotation is the only automatic release. The new pair must
+        # still pass the private account probe before becoming connected.
+        os.environ["NIJA_COINBASE_CREDENTIALS_QUARANTINED"] = "0"
+        os.environ["NIJA_COINBASE_RECONNECT_DISABLED"] = "0"
+        os.environ.pop("NIJA_COINBASE_QUARANTINED_CREDENTIAL_FINGERPRINT", None)
+        return False
+    return True
+
+
+def _auth_failure_detail(detail: str) -> bool:
+    value = str(detail or "").lower()
+    return any(
+        token in value
+        for token in ("401", "unauthorized", "invalid api key", "invalid_api_key")
+    )
+
+
+def _quarantine(broker: Any, key: str, secret: str) -> None:
+    _mark_auth_failed(broker)
+    fingerprint = _pair_fingerprint(key, secret) if key and secret else ""
+    os.environ["NIJA_COINBASE_CREDENTIALS_QUARANTINED"] = "1"
+    os.environ["NIJA_COINBASE_RECONNECT_DISABLED"] = "1"
+    if fingerprint:
+        os.environ["NIJA_COINBASE_QUARANTINED_CREDENTIAL_FINGERPRINT"] = fingerprint
+    os.environ["NIJA_COINBASE_CONNECTED"] = "0"
+    os.environ["NIJA_COINBASE_BALANCE_OBSERVED"] = "0"
+    os.environ["NIJA_COINBASE_SPENDABLE_QUOTE"] = "0.00000000"
+    os.environ["NIJA_COINBASE_TRADING_READY"] = "0"
+    os.environ["NIJA_COINBASE_ACTIVATED"] = "0"
+    os.environ["NIJA_COINBASE_ACTIVATION_STATE"] = "quarantined"
+
+
 def _patch_class(cls: type) -> bool:
     if not _is_coinbase_class(cls):
         return False
@@ -224,6 +273,13 @@ def _patch_class(cls: type) -> bool:
             os.environ.get("NIJA_COINBASE_CREDENTIAL_PAIR_SOURCE", "canonical")
             or "canonical"
         )
+
+        if _quarantined_for(primary_key, primary_secret):
+            _mark_auth_failed(self)
+            os.environ["NIJA_COINBASE_CONNECTED"] = "0"
+            os.environ["NIJA_COINBASE_TRADING_READY"] = "0"
+            os.environ["NIJA_COINBASE_ACTIVATION_STATE"] = "quarantined"
+            return False
 
         first_error = ""
         try:
@@ -314,16 +370,21 @@ def _patch_class(cls: type) -> bool:
                 primary_secret,
                 reset_failure=False,
             )
-        _mark_auth_failed(self)
-        os.environ["NIJA_COINBASE_CONNECTED"] = "0"
-        os.environ["NIJA_COINBASE_TRADING_READY"] = "0"
-        os.environ["NIJA_COINBASE_ACTIVATION_STATE"] = "authentication_failed"
         suffix = ";".join(failure_details[-4:]) or "authenticated_probe_failed"
+        if _auth_failure_detail(suffix):
+            _quarantine(self, primary_key, primary_secret)
+            state = "quarantined"
+        else:
+            _mark_auth_failed(self)
+            os.environ["NIJA_COINBASE_CONNECTED"] = "0"
+            os.environ["NIJA_COINBASE_TRADING_READY"] = "0"
+            os.environ["NIJA_COINBASE_ACTIVATION_STATE"] = "authentication_failed"
+            state = "authentication_failed"
         _log_failure_once(
             cls,
-            f"{suffix};alternative_pairs_attempted={attempted}",
+            f"{suffix};alternative_pairs_attempted={attempted};state={state}",
         )
-        return result
+        return False
 
     setattr(connect, _PATCH_ATTR, True)
     connect.__wrapped__ = current  # type: ignore[attr-defined]
@@ -374,4 +435,4 @@ def install() -> bool:
         return True
 
 
-__all__ = ["install", "_authenticated_probe", "_configured_pairs", "_patch_class"]
+__all__ = ["install", "_authenticated_probe", "_configured_pairs", "_patch_class", "_quarantined_for"]
