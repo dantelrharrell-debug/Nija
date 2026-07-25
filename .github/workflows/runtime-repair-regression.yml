@@ -39,8 +39,10 @@ on:
       - "bot/tests/test_startup_handoff_all_fixes.py"
       - "bot/tests/test_runtime_entrypoint_attestation_v23.py"
       - "scripts/apply_startup_handoff_fix.py"
+      - "scripts/canonical_runtime_launcher_v26.py"
       - "scripts/runtime_entrypoint_attestation.py"
       - "scripts/install_sitecustomize_defer_guard.py"
+      - "bot/tests/test_canonical_fast_entrypoint_v28.py"
       - ".github/workflows/runtime-repair-regression.yml"
   push:
     branches: [main]
@@ -81,8 +83,10 @@ on:
       - "bot/tests/test_startup_handoff_all_fixes.py"
       - "bot/tests/test_runtime_entrypoint_attestation_v23.py"
       - "scripts/apply_startup_handoff_fix.py"
+      - "scripts/canonical_runtime_launcher_v26.py"
       - "scripts/runtime_entrypoint_attestation.py"
       - "scripts/install_sitecustomize_defer_guard.py"
+      - "bot/tests/test_canonical_fast_entrypoint_v28.py"
       - ".github/workflows/runtime-repair-regression.yml"
 
 permissions:
@@ -128,7 +132,9 @@ jobs:
             bot/canonical_broker_prebootstrap_v22.py \
             bot/stalled_writer_release_guard_v22.py \
             scripts/apply_startup_handoff_fix.py \
+            scripts/canonical_runtime_launcher_v26.py \
             scripts/runtime_entrypoint_attestation.py \
+            scripts/install_sitecustomize_defer_guard.py \
             bot/bot.py \
             kraken_equity_freshness_v3_patch.py \
             bot/activation_pending_commit_monitor_patch.py \
@@ -156,6 +162,7 @@ jobs:
             bot/tests/test_stalled_writer_release_guard_v22.py \
             bot/tests/test_secondary_venue_runtime_diagnostics.py \
             bot/tests/test_startup_handoff_all_fixes.py \
+            bot/tests/test_canonical_fast_entrypoint_v28.py \
             bot/tests/test_runtime_entrypoint_attestation_v23.py \
             >"${TEST_LOG}" 2>&1
           status=$?
