@@ -57,6 +57,52 @@ def _live_mode() -> bool:
     )
 
 
+def _local_entrypoint_writer_authority() -> dict[str, Any]:
+    """Observe authority owned by this process without importing startup modules."""
+
+    for module_name in (
+        "bot.entrypoint_writer_authority",
+        "entrypoint_writer_authority",
+    ):
+        module = sys.modules.get(module_name)
+        if module is None:
+            continue
+        getter = getattr(module, "get_entrypoint_writer_authority", None)
+        if not callable(getter):
+            continue
+        try:
+            authority = getter()
+            result = getattr(authority, "result", None)
+            return {
+                "observed": True,
+                "acquired": bool(getattr(authority, "acquired", False)),
+                "lost": bool(getattr(authority, "lost", False)),
+                "instance_id": str(
+                    getattr(result, "instance_id", "")
+                    or getattr(authority, "_instance_id", "")
+                    or ""
+                ),
+            }
+        except Exception as exc:
+            logger.debug(
+                "local entrypoint writer authority probe failed module=%s err=%s",
+                module_name,
+                exc,
+            )
+            return {
+                "observed": True,
+                "acquired": False,
+                "lost": True,
+                "instance_id": "",
+            }
+    return {
+        "observed": False,
+        "acquired": False,
+        "lost": False,
+        "instance_id": "",
+    }
+
+
 def _writer_authority_snapshot() -> dict[str, Any]:
     token = str(os.environ.get("NIJA_WRITER_FENCING_TOKEN", "")).strip()
     generation = str(os.environ.get("NIJA_WRITER_LEASE_GENERATION", "")).strip()
@@ -64,6 +110,7 @@ def _writer_authority_snapshot() -> dict[str, Any]:
     lease = bool(lease_flag or token)
     runtime_auth = _truthy("NIJA_RUNTIME_EXECUTION_AUTHORITY", False)
     heartbeat_active = _truthy("NIJA_WRITER_HEARTBEAT_ACTIVE", False)
+    local = _local_entrypoint_writer_authority()
     return {
         "token": token,
         "token_present": bool(token),
@@ -73,7 +120,18 @@ def _writer_authority_snapshot() -> dict[str, Any]:
         "lease": lease,
         "runtime_auth": runtime_auth,
         "heartbeat_active": heartbeat_active,
-        "ready": bool(token and generation and lease),
+        "local_authority_observed": local["observed"],
+        "local_authority_acquired": local["acquired"],
+        "local_authority_lost": local["lost"],
+        "local_instance_id": local["instance_id"],
+        "ready": bool(
+            token
+            and generation
+            and lease
+            and local["observed"]
+            and local["acquired"]
+            and not local["lost"]
+        ),
     }
 
 
