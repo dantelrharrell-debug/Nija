@@ -7,6 +7,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 PATCHER = ROOT / "scripts" / "apply_startup_handoff_fix.py"
 START_SCRIPT = ROOT / "start.sh"
+DEFER_GUARD = ROOT / "scripts" / "install_sitecustomize_defer_guard.py"
 
 
 def _load_patcher():
@@ -38,11 +39,14 @@ def test_patcher_defers_hooks_before_every_python_preflight() -> None:
     export_pos = patched.index("export NIJA_DEFER_RUNTIME_SITE_HOOKS=1")
     first_python_pos = patched.index("$PY --version")
     attestation_pos = patched.index("STARTUP_HANDOFF_ENTRYPOINT_ATTESTATION_COMPLETE")
-    unset_pos = patched.index("unset NIJA_DEFER_RUNTIME_SITE_HOOKS")
-    launcher_pos = patched.index("$PY -u scripts/canonical_runtime_launcher_v26.py")
+    launcher_pos = patched.index(
+        "NIJA_DEFER_RUNTIME_SITE_HOOKS=1 "
+        "$PY -u scripts/canonical_runtime_launcher_v26.py"
+    )
 
     assert export_pos < first_python_pos
-    assert export_pos < attestation_pos < unset_pos < launcher_pos
+    assert export_pos < attestation_pos < launcher_pos
+    assert "unset NIJA_DEFER_RUNTIME_SITE_HOOKS" not in patched
     assert "$PY -u main.py" not in patched
     assert "STARTUP_HANDOFF_PREFLIGHT_BEGIN" in patched
     assert "STARTUP_HANDOFF_REDIS_VALIDATION_COMPLETE" in patched
@@ -66,11 +70,11 @@ def test_repository_start_script_uses_canonical_entrypoint_diagnostics() -> None
     assert first_python_candidates
     assert export_pos < min(first_python_candidates)
     assert patched.index("STARTUP_HANDOFF_ENTRYPOINT_ATTESTATION_COMPLETE") < patched.index(
-        "unset NIJA_DEFER_RUNTIME_SITE_HOOKS"
-    )
-    assert patched.index("unset NIJA_DEFER_RUNTIME_SITE_HOOKS") < patched.index(
+        "NIJA_DEFER_RUNTIME_SITE_HOOKS=1 "
         "$PY -u scripts/canonical_runtime_launcher_v26.py"
     )
+    assert "unset NIJA_DEFER_RUNTIME_SITE_HOOKS" not in patched
+    assert "runtime_site_hooks=deferred" in patched
     assert "CANONICAL_ENTRYPOINT_DIAGNOSTICS" in patched
     assert "bot/canonical_broker_prebootstrap_v22.py" in patched
     assert "bot/stalled_writer_release_guard_v22.py" in patched
@@ -105,3 +109,36 @@ def test_patcher_rejects_missing_runtime_anchor() -> None:
         assert "runtime launch anchor" in str(exc)
     else:
         raise AssertionError("expected missing runtime anchor to fail closed")
+
+
+def test_patcher_migrates_old_defer_unset_handoff() -> None:
+    module = _load_patcher()
+    current = module.patch_text(_startup_source())
+    legacy = current.replace(
+        "NIJA_DEFER_RUNTIME_SITE_HOOKS=1 "
+        "$PY -u scripts/canonical_runtime_launcher_v26.py",
+        "unset NIJA_DEFER_RUNTIME_SITE_HOOKS\n"
+        "$PY -u scripts/canonical_runtime_launcher_v26.py",
+        1,
+    )
+
+    migrated = module.patch_text(legacy)
+
+    assert migrated == current
+    assert "unset NIJA_DEFER_RUNTIME_SITE_HOOKS" not in migrated
+
+
+def test_defer_guard_blocks_sitecustomize_and_usercustomize() -> None:
+    spec = importlib.util.spec_from_file_location(
+        "install_sitecustomize_defer_guard_test",
+        DEFER_GUARD,
+    )
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    content = module.guard_content("/app")
+
+    assert 'sys.modules.setdefault("sitecustomize"' in content
+    assert 'sys.modules.setdefault("usercustomize"' in content
+    assert "NIJA_DEFER_RUNTIME_SITE_HOOKS" in content
