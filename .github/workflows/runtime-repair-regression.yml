@@ -163,6 +163,7 @@ jobs:
         continue-on-error: true
         run: |
           TEST_LOG="${RUNNER_TEMP}/nija-focused-runtime-tests.log"
+          set +e
           python -m pytest -q \
             bot/tests/test_funded_okx_capital_convergence_v31.py \
             bot/tests/test_capital_refresh_storm_guard_v29.py \
@@ -184,6 +185,7 @@ jobs:
             bot/tests/test_runtime_entrypoint_attestation_v23.py \
             >"${TEST_LOG}" 2>&1
           status=$?
+          set -e
           echo "status=${status}" >> "${GITHUB_OUTPUT}"
           if [ "${status}" -ne 0 ]; then
             echo "::group::Focused runtime test failure tail"
