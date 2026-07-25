@@ -86,6 +86,55 @@ def test_never_releases_live_active_or_authorized_runtime():
     assert not guard._should_release(authorized_pending, elapsed_s=999.0, timeout_s=30.0)
 
 
+def test_releases_early_boot_stall_regardless_of_production_intent(monkeypatch):
+    """An instance stuck before any LIVE_* state (e.g. broker connection hangs in
+    prepare_canonical_broker_runtime) has state='OFF' and production_intent=False.
+    The guard must still release the lock after the timeout so the new instance
+    can acquire it."""
+    monkeypatch.setenv("DRY_RUN_MODE", "false")
+    monkeypatch.setenv("PAPER_MODE", "false")
+
+    early_boot = _snapshot(
+        production_intent=False,
+        state="OFF",
+        writer_acquired=True,
+        authority=False,
+        shutdown_requested=False,
+        fsm_initialized=False,
+        sources_registered=False,
+        attempts_finalized=False,
+        hydrated=False,
+        capital=0.0,
+        stale=True,
+        valid_brokers=0,
+    )
+
+    assert not guard._should_release(early_boot, elapsed_s=359.9, timeout_s=360.0)
+    assert guard._should_release(early_boot, elapsed_s=360.0, timeout_s=360.0)
+
+
+def test_does_not_release_dry_run_early_boot_stall(monkeypatch):
+    monkeypatch.setenv("DRY_RUN_MODE", "true")
+    monkeypatch.setenv("PAPER_MODE", "false")
+
+    dry_run = _snapshot(
+        production_intent=False,
+        state="OFF",
+        writer_acquired=True,
+        authority=False,
+        shutdown_requested=False,
+        fsm_initialized=False,
+        sources_registered=False,
+        attempts_finalized=False,
+        hydrated=False,
+        capital=0.0,
+        stale=True,
+        valid_brokers=0,
+    )
+
+    assert not guard._should_release(dry_run, elapsed_s=999.0, timeout_s=30.0)
+
+
 def test_trigger_releases_current_lease_and_exits(monkeypatch):
     shutdown_event = threading.Event()
     release_calls = []
