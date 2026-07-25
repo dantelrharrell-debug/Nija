@@ -76,9 +76,21 @@ def install_canonical_startup_guard() -> ModuleType:
 
 
 def main() -> int:
+    # Keep package-wide hook fanout deferred for the whole canonical handoff.
+    # main.py installs the audited global, authority, execution, risk and
+    # fill-confirmed exit guards explicitly; bot.bot installs the remaining
+    # narrow venue guards before importing bot_main.
+    os.environ["NIJA_DEFER_RUNTIME_SITE_HOOKS"] = "1"
+    os.environ["NIJA_CANONICAL_ENTRYPOINT_FAST_PATH"] = "1"
     if not MAIN_PATH.is_file():
         raise RuntimeError(f"canonical main.py missing: {MAIN_PATH}")
     install_canonical_startup_guard()
+    print(
+        "CANONICAL_ENTRYPOINT_FAST_PATH_ARMED "
+        "marker=20260725-canonical-fast-entrypoint-v28 "
+        "package_hook_fanout=deferred",
+        flush=True,
+    )
     runpy.run_path(str(MAIN_PATH), run_name="__main__")
     return 0
 
