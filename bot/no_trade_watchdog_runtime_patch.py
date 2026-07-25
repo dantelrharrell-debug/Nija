@@ -262,6 +262,30 @@ def _install_autowire_worker() -> None:
         threading.Thread(target=_worker, name="no-trade-watchdog-autowire", daemon=True).start()
 
 
+def _recover_live_dispatch() -> tuple[bool, str]:
+    """Ask the installed dispatch bridge for one idempotent recovery attempt."""
+
+    for name in (
+        "nija_live_active_dispatch_bridge_patch",
+        "bot.live_active_dispatch_bridge_patch",
+        "live_active_dispatch_bridge_patch",
+    ):
+        module = sys.modules.get(name)
+        recover = getattr(module, "ensure_live_dispatch", None)
+        if not callable(recover):
+            continue
+        try:
+            return recover("no_trade_watchdog")
+        except Exception as exc:
+            logger.exception(
+                "NO_TRADE_WATCHDOG_DISPATCH_RECOVERY_FAILED module=%s error=%s",
+                name,
+                exc,
+            )
+            return False, f"recovery_error:{type(exc).__name__}"
+    return False, "dispatch_bridge_unavailable"
+
+
 def _install_live_active_monitor() -> None:
     global _MONITOR_STARTED
     if _MONITOR_STARTED:
@@ -293,6 +317,12 @@ def _install_live_active_monitor() -> None:
                         _risk_snapshot(),
                     )
                     _resolve_and_patch_modules()
+                    recovered, recovery_detail = _recover_live_dispatch()
+                    logger.warning(
+                        "NO_TRADE_WATCHDOG_DISPATCH_RECOVERY recovered=%s detail=%s",
+                        str(recovered).lower(),
+                        recovery_detail,
+                    )
                 else:
                     _log_watchdog("live_active_monitor", force=True)
                 next_warn = now + interval
