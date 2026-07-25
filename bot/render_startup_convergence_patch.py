@@ -6,11 +6,11 @@ This module repairs two startup-state problems without granting trading authorit
   environment value such as ``NIJA_RUNTIME_EXECUTION_AUTHORITY=true`` is reset
   to ``0`` until the current process owns a writer fencing token and lease
   generation.
-* After writer lineage exists, a bounded monitor asks the already-initialized
-  MultiAccountBrokerManager to re-run its normal capital watchdog refresh.  It
-  never creates brokers, never calls ``initialize()`` from a background thread,
-  and never bypasses capital, heartbeat, writer-lock, kill-switch, or state
-  machine gates.
+* After writer lineage exists, a bounded monitor converges the canonical
+  MultiAccountBrokerManager through its locked prebootstrap when startup import
+  churn has delayed initialization, then re-runs its normal capital watchdog
+  refresh. It never creates a second manager and never bypasses capital,
+  heartbeat, writer-lock, kill-switch, broker, or state-machine gates.
 
 The platform contract treats Kraken as the required primary broker and Coinbase
 as an optional isolated broker, so runtime convergence defaults to one valid
@@ -151,6 +151,50 @@ def _result_summary(result: Any) -> str:
     return f"type={type(result).__name__}"
 
 
+def _canonical_prebootstrap_manager() -> Tuple[Optional[Any], str]:
+    """Run the existing locked canonical prebootstrap after writer verification."""
+
+    module = None
+    for name in (
+        "nija_canonical_broker_prebootstrap_v22",
+        "bot.canonical_broker_prebootstrap_v22",
+    ):
+        candidate = sys.modules.get(name)
+        if candidate is not None:
+            module = candidate
+            break
+
+    if module is None:
+        return None, "canonical_prebootstrap_module_not_loaded"
+
+    prepare = getattr(module, "prepare_canonical_broker_runtime", None)
+    if not callable(prepare):
+        return None, "canonical_prebootstrap_prepare_missing"
+
+    try:
+        manager = prepare()
+    except Exception as exc:
+        logger.critical(
+            "RENDER_STARTUP_CANONICAL_PREBOOTSTRAP_FAILED marker=%s err=%s:%s "
+            "trading_remains_fail_closed=true",
+            _MARKER,
+            type(exc).__name__,
+            exc,
+            exc_info=True,
+        )
+        return None, f"canonical_prebootstrap_failed:{type(exc).__name__}"
+
+    if not bool(getattr(manager, "_fsm_initialized", False)):
+        return None, "canonical_prebootstrap_returned_uninitialized"
+
+    logger.critical(
+        "RENDER_STARTUP_CANONICAL_PREBOOTSTRAP_READY marker=%s generation=%s",
+        _MARKER,
+        os.environ.get("NIJA_WRITER_LEASE_GENERATION", "unknown"),
+    )
+    return manager, "canonical_prebootstrap_ready"
+
+
 def _attempt_recovery_once() -> Tuple[bool, str]:
     """Run one safe convergence attempt.
 
@@ -185,7 +229,9 @@ def _attempt_recovery_once() -> Tuple[bool, str]:
         return False, f"broker_manager_unavailable:{type(exc).__name__}"
 
     if not bool(getattr(manager, "_fsm_initialized", False)):
-        return False, "broker_manager_not_initialized"
+        manager, prebootstrap_reason = _canonical_prebootstrap_manager()
+        if manager is None:
+            return False, prebootstrap_reason
 
     has_sources = getattr(manager, "has_registered_sources", None)
     if not callable(has_sources) or not bool(has_sources()):
@@ -328,4 +374,5 @@ __all__ = [
     "install_import_hook",
     "normalize_derived_runtime_state",
     "_attempt_recovery_once",
+    "_canonical_prebootstrap_manager",
 ]
