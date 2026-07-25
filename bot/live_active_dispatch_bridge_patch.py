@@ -5,7 +5,9 @@ TradingStateMachine reaches LIVE_ACTIVE, but no TradingLoop thread is actually
 started. It does not relax order admission, set operator overrides, or create a
 second strategy. It starts an already-published TradingStrategy only after the
 canonical distributed writer lease, runtime execution authority, and LIVE_ACTIVE
-state are all present.
+state are all present. If startup missed publication, the bridge invokes the
+canonical publication helper only after those same gates pass; that helper is
+idempotent and never starts a loop or submits an order.
 
 The bridge also repairs a deferred-startup deadlock observed in production:
 ``activation_pending_commit_monitor_patch`` historically waited only for
@@ -419,6 +421,49 @@ def _find_strategy() -> Tuple[Optional[Any], str]:
     return None, "strategy_not_published"
 
 
+def _recover_strategy_publication() -> Tuple[Optional[Any], str]:
+    """Recover a missing publication without bypassing any live gate."""
+
+    module = None
+    for module_name in (
+        "bot.strategy_publication_patch",
+        "strategy_publication_patch",
+    ):
+        try:
+            module = importlib.import_module(module_name)
+            break
+        except Exception:
+            continue
+    if module is None:
+        return None, "publication_module_unavailable"
+
+    publisher = getattr(module, "publish_canonical_strategy", None)
+    if not callable(publisher):
+        return None, "publication_helper_unavailable"
+
+    try:
+        strategy, detail = publisher()
+    except Exception as exc:
+        logger.exception(
+            "LIVE_ACTIVE_DISPATCH_STRATEGY_RECOVERY_ERROR type=%s err=%s",
+            type(exc).__name__,
+            exc,
+        )
+        return None, f"publication_error:{type(exc).__name__}"
+
+    if strategy is None:
+        return None, str(detail or "publication_failed")
+    if not callable(getattr(strategy, "run_cycle", None)):
+        return None, "published_strategy_interface_invalid"
+
+    logger.critical(
+        "LIVE_ACTIVE_DISPATCH_STRATEGY_RECOVERED detail=%s strategy_type=%s",
+        detail,
+        type(strategy).__name__,
+    )
+    return strategy, f"publication_recovery:{detail}"
+
+
 def _set_start_gate() -> None:
     for module_name in ("bot.nija_core_loop", "nija_core_loop"):
         module = sys.modules.get(module_name)
@@ -511,6 +556,12 @@ def ensure_live_dispatch(source: str = "external_recovery") -> Tuple[bool, str]:
 
     strategy, strategy_source = _find_strategy()
     if strategy is None:
+        strategy, strategy_source = _recover_strategy_publication()
+    if strategy is None:
+        logger.error(
+            "LIVE_ACTIVE_DISPATCH_STRATEGY_RECOVERY_FAILED detail=%s",
+            strategy_source,
+        )
         return False, "strategy_not_published"
 
     started = _start_trading_loop(strategy, strategy_source)
@@ -597,10 +648,14 @@ def _monitor() -> None:
 
             strategy, source = _find_strategy()
             if strategy is None:
+                strategy, source = _recover_strategy_publication()
+            if strategy is None:
                 if now - last_log >= warn_every:
                     logger.critical(
                         "LIVE_ACTIVE_DISPATCH_BRIDGE_WAITING reason=no_strategy "
-                        "live_active=True writer_authority=True modules=%s",
+                        "recovery_detail=%s live_active=True "
+                        "writer_authority=True modules=%s",
+                        source,
                         sorted(
                             str(getattr(m, "__name__", ""))
                             for m in _module_candidates()
