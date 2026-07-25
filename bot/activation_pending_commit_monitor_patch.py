@@ -341,6 +341,11 @@ def _cached_broker_balance(
         if authoritative > 0.0:
             return authoritative, "okx_authenticated_wallet"
 
+    if normalized_key == "okx":
+        # Do not fall through to a stale generic cache after the authenticated
+        # OKX proof becomes unobserved or non-executable.
+        return 0.0, "okx_authenticated_wallet_unavailable"
+
     for attr in (
         "_last_known_balance",
         "_last_confirmed_balance",
