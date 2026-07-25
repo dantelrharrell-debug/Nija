@@ -124,3 +124,44 @@ def test_runtime_convergence_uses_existing_fail_closed_repair(monkeypatch) -> No
     assert ready is True
     assert detail == "ready"
     assert calls == ["install", "test"]
+
+
+def test_ensure_live_dispatch_starts_existing_strategy_only_when_ready(monkeypatch) -> None:
+    module = _load_module()
+    strategy = object()
+    calls: list[tuple[object, str]] = []
+
+    monkeypatch.setattr(module, "_loop_thread_running", lambda: False)
+    monkeypatch.setattr(module, "_ensure_deferred_startup_repairs", lambda: (True, "ready"))
+    monkeypatch.setattr(module, "_has_writer_authority", lambda: True)
+    monkeypatch.setattr(module, "_runtime_execution_authority", lambda: True)
+    monkeypatch.setattr(module, "_state_machine_live_active", lambda: True)
+    monkeypatch.setattr(module, "_dispatch_allowed", lambda: (True, "ok"))
+    monkeypatch.setattr(module, "_find_strategy", lambda: (strategy, "published"))
+    monkeypatch.setattr(
+        module,
+        "_start_trading_loop",
+        lambda candidate, source: calls.append((candidate, source)) or True,
+    )
+
+    started, detail = module.ensure_live_dispatch("watchdog")
+
+    assert started is True
+    assert detail == "started"
+    assert calls == [(strategy, "published")]
+
+
+def test_ensure_live_dispatch_never_constructs_missing_strategy(monkeypatch) -> None:
+    module = _load_module()
+    monkeypatch.setattr(module, "_loop_thread_running", lambda: False)
+    monkeypatch.setattr(module, "_ensure_deferred_startup_repairs", lambda: (True, "ready"))
+    monkeypatch.setattr(module, "_has_writer_authority", lambda: True)
+    monkeypatch.setattr(module, "_runtime_execution_authority", lambda: True)
+    monkeypatch.setattr(module, "_state_machine_live_active", lambda: True)
+    monkeypatch.setattr(module, "_dispatch_allowed", lambda: (True, "ok"))
+    monkeypatch.setattr(module, "_find_strategy", lambda: (None, "not_found"))
+
+    started, detail = module.ensure_live_dispatch("watchdog")
+
+    assert started is False
+    assert detail == "strategy_not_published"
