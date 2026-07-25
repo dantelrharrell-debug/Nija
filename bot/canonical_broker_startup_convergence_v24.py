@@ -26,6 +26,7 @@ import logging
 import os
 import sys
 import threading
+import time
 from functools import wraps
 from pathlib import Path
 from types import ModuleType
@@ -45,6 +46,7 @@ _INSTALLED = False
 _FINDER: "_CanonicalStartupFinder | None" = None
 _RUN_WRAP_ATTR = "_nija_canonical_broker_startup_convergence_v24"
 _BOT_MAIN_PATCH_ATTR = "_nija_canonical_broker_startup_convergence_bot_main_v24"
+_KRAKEN_RECOVERY_STARTED = False
 
 
 def _truthy(name: str, default: str = "false") -> bool:
@@ -120,6 +122,146 @@ def _install_secondary_diagnostics_v5() -> bool:
         return False
 
 
+def _kraken_credentials_configured() -> bool:
+    key = (
+        os.environ.get("KRAKEN_PLATFORM_API_KEY")
+        or os.environ.get("KRAKEN_API_KEY")
+        or ""
+    ).strip()
+    secret = (
+        os.environ.get("KRAKEN_PLATFORM_API_SECRET")
+        or os.environ.get("KRAKEN_API_SECRET")
+        or ""
+    ).strip()
+    disabled = str(
+        os.environ.get("NIJA_DISABLE_KRAKEN")
+        or os.environ.get("KRAKEN_EXECUTION_DISABLED")
+        or "false"
+    ).strip().lower() in _TRUE
+    return bool(key and secret and not disabled)
+
+
+def _start_kraken_authenticated_recovery(manager: Any) -> bool:
+    """Reconnect the registered platform Kraken broker before live cycles start.
+
+    The legacy reconnect method is normally called from a trading cycle. When
+    Kraken fails its first startup handshake, LIVE_ACTIVE may not exist yet, so
+    that cycle can never provide the retry. This writer-scoped recovery closes
+    that dependency without creating another broker or bypassing authentication.
+    """
+    global _KRAKEN_RECOVERY_STARTED
+    with _LOCK:
+        if _KRAKEN_RECOVERY_STARTED or not _kraken_credentials_configured():
+            return _KRAKEN_RECOVERY_STARTED
+        _KRAKEN_RECOVERY_STARTED = True
+
+    def recover() -> None:
+        marker = "20260725-kraken-authenticated-recovery-v29"
+        deadline = time.monotonic() + max(
+            120.0,
+            float(os.environ.get("NIJA_KRAKEN_RECOVERY_WINDOW_S", "1200") or 1200),
+        )
+        interval = max(
+            10.0,
+            float(os.environ.get("NIJA_KRAKEN_RECOVERY_INTERVAL_S", "30") or 30),
+        )
+        attempt = 0
+        while time.monotonic() < deadline:
+            lineage_ready, lineage_reason = _writer_lineage()
+            if not lineage_ready:
+                logger.warning(
+                    "KRAKEN_AUTHENTICATED_RECOVERY_STOPPED marker=%s reason=%s",
+                    marker,
+                    lineage_reason,
+                )
+                return
+            try:
+                broker_module = importlib.import_module("bot.broker_manager")
+                manager_module = importlib.import_module(
+                    "bot.multi_account_broker_manager"
+                )
+                broker_type = getattr(broker_module, "BrokerType").KRAKEN
+                broker = getattr(manager, "_platform_brokers", {}).get(broker_type)
+                if broker is None:
+                    broker = getattr(broker_module, "get_platform_broker")("kraken")
+                if broker is None:
+                    logger.error(
+                        "KRAKEN_AUTHENTICATED_RECOVERY_STOPPED marker=%s "
+                        "reason=registered_broker_missing",
+                        marker,
+                    )
+                    return
+
+                fsm = getattr(broker_module, "_KRAKEN_STARTUP_FSM", None)
+                if bool(getattr(broker, "connected", False)) or bool(
+                    getattr(fsm, "is_connected", False)
+                ):
+                    register = getattr(
+                        broker_module, "register_platform_broker", None
+                    )
+                    if callable(register):
+                        register("kraken", broker, connected=True)
+                    transition = getattr(manager, "_transition_platform_state", None)
+                    state = getattr(manager_module, "ConnectionState", None)
+                    if callable(transition) and state is not None:
+                        transition(broker_type, state.CONNECTED)
+                    os.environ["NIJA_KRAKEN_AUTHENTICATED_RECOVERY_READY"] = "1"
+                    logger.critical(
+                        "KRAKEN_AUTHENTICATED_RECOVERY_READY marker=%s "
+                        "attempt=%d connected=true",
+                        marker,
+                        attempt,
+                    )
+                    return
+
+                if bool(getattr(fsm, "is_connecting", False)):
+                    time.sleep(interval)
+                    continue
+
+                attempt += 1
+                logger.warning(
+                    "KRAKEN_AUTHENTICATED_RECOVERY_ATTEMPT marker=%s attempt=%d "
+                    "writer_scoped=true",
+                    marker,
+                    attempt,
+                )
+                reset = getattr(fsm, "reset", None)
+                if callable(reset):
+                    reset()
+                connected = bool(broker.connect())
+                if connected:
+                    continue
+            except Exception as exc:
+                logger.error(
+                    "KRAKEN_AUTHENTICATED_RECOVERY_FAILED marker=%s attempt=%d "
+                    "error=%s:%s",
+                    marker,
+                    attempt,
+                    type(exc).__name__,
+                    exc,
+                )
+            time.sleep(interval)
+
+        os.environ["NIJA_KRAKEN_AUTHENTICATED_RECOVERY_READY"] = "0"
+        logger.error(
+            "KRAKEN_AUTHENTICATED_RECOVERY_EXPIRED marker=%s attempts=%d "
+            "authentication_remains_fail_closed=true",
+            marker,
+            attempt,
+        )
+
+    threading.Thread(
+        target=recover,
+        name="KrakenAuthenticatedRecoveryV29",
+        daemon=True,
+    ).start()
+    logger.warning(
+        "KRAKEN_AUTHENTICATED_RECOVERY_STARTED "
+        "marker=20260725-kraken-authenticated-recovery-v29"
+    )
+    return True
+
+
 def _prepare_canonical_manager() -> Any:
     lineage_ready, lineage_reason = _writer_lineage()
     if not lineage_ready:
@@ -142,6 +284,7 @@ def _prepare_canonical_manager() -> Any:
         os.environ.get("NIJA_WRITER_LEASE_GENERATION", "unknown"),
     )
     os.environ["NIJA_CANONICAL_BROKER_STARTUP_CONVERGENCE_V24_READY"] = "1"
+    _start_kraken_authenticated_recovery(manager)
     return manager
 
 
@@ -308,6 +451,8 @@ __all__ = [
     "_live_intent",
     "_writer_lineage",
     "_prepare_canonical_manager",
+    "_kraken_credentials_configured",
+    "_start_kraken_authenticated_recovery",
     "_patch_self_healing_module",
     "_patch_bot_main_module",
 ]
