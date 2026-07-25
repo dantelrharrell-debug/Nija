@@ -10,6 +10,12 @@ on:
       - "bot/bot.py"
       - "kraken_equity_freshness_v3_patch.py"
       - "bot/activation_pending_commit_monitor_patch.py"
+      - "bot/okx_funding_wallet_readiness_patch.py"
+      - "secondary_venue_activation_patch.py"
+      - "three_venue_execution_readiness.py"
+      - "coinbase_authenticated_connect_recovery_patch.py"
+      - "bot/coinbase_balance_auth_convergence_patch.py"
+      - "bot/tests/test_funded_okx_capital_convergence_v31.py"
       - "bot/runtime_authority_convergence_repair_patch.py"
       - "bot/capital_authority_live_total_v2_patch.py"
       - "bot/tests/test_capital_refresh_storm_guard_v29.py"
@@ -54,6 +60,12 @@ on:
       - "bot/bot.py"
       - "kraken_equity_freshness_v3_patch.py"
       - "bot/activation_pending_commit_monitor_patch.py"
+      - "bot/okx_funding_wallet_readiness_patch.py"
+      - "secondary_venue_activation_patch.py"
+      - "three_venue_execution_readiness.py"
+      - "coinbase_authenticated_connect_recovery_patch.py"
+      - "bot/coinbase_balance_auth_convergence_patch.py"
+      - "bot/tests/test_funded_okx_capital_convergence_v31.py"
       - "bot/runtime_authority_convergence_repair_patch.py"
       - "bot/capital_authority_live_total_v2_patch.py"
       - "bot/tests/test_capital_refresh_storm_guard_v29.py"
@@ -138,6 +150,11 @@ jobs:
             bot/bot.py \
             kraken_equity_freshness_v3_patch.py \
             bot/activation_pending_commit_monitor_patch.py \
+            bot/okx_funding_wallet_readiness_patch.py \
+            secondary_venue_activation_patch.py \
+            three_venue_execution_readiness.py \
+            coinbase_authenticated_connect_recovery_patch.py \
+            bot/coinbase_balance_auth_convergence_patch.py \
             bot/runtime_authority_convergence_repair_patch.py \
             bot/capital_authority_live_total_v2_patch.py
 
@@ -147,6 +164,7 @@ jobs:
         run: |
           TEST_LOG="${RUNNER_TEMP}/nija-focused-runtime-tests.log"
           python -m pytest -q \
+            bot/tests/test_funded_okx_capital_convergence_v31.py \
             bot/tests/test_capital_refresh_storm_guard_v29.py \
             bot/tests/test_runtime_authority_convergence_repair_patch.py \
             bot/tests/test_critical_runtime_repairs_v10.py \
