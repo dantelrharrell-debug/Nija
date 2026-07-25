@@ -1,10 +1,16 @@
 # NIJA AI Trading LLC — Current Success State
 
-**Status date:** July 23, 2026
+**Status date:** July 25, 2026
 
 This README is the current recovery anchor for NIJA. It documents the active production broker contract, startup order, independent trade-entry path, automatic take-profit/stop-loss protection, and mobile-app direction.
 
 NIJA does not guarantee trades or profits. A connected brokerage may enter a trade only when writer authority, capital, signal, risk, exchange-minimum, and order-admission checks all pass.
+
+## Official NIJA Links
+
+- **Website:** [nijaaitrading.com](https://nijaaitrading.com)
+- **Mobile documentation:** [mobile/README.md](mobile/README.md)
+- **Owner:** NIJA AI Trading LLC
 
 ---
 
@@ -459,23 +465,27 @@ UNIVERSAL_BROKER_EXIT_SUPERVISOR_STARTED
 
 ---
 
-## Mobile App Blueprint
+## Mobile App
 
-The NIJA mobile app remains education-first.
+NIJA includes a Capacitor 5.7 mobile foundation for iOS and Android. The current repository contains the wrapper configuration, native projects, shared frontend, setup/build guides, and prototype mobile API routes.
 
-Five planned tabs:
+**Current mobile status: pre-beta.** Native packaging exists, but production authentication, secure device storage, push/biometric verification, automated mobile tests, legal review, signed release builds, and store approval are still required.
 
-1. **Home** — account, broker, system, positions, risk, and emergency pause.
-2. **Signals** — confidence, ADX, volume, spread, fees, readiness, and pass/skip reasons.
-3. **Trades** — completed, failed, skipped, and simulated activity.
-4. **Risk** — loss limits, position size, leverage, balance checks, disclosures, and consent.
-5. **Profile** — account, connected brokers, privacy, terms, support, and deletion.
+The detailed mobile source of truth is [mobile/README.md](mobile/README.md). It covers:
 
-Live Mode must remain locked until disclosures, consent, broker permissions, verified balance, execution readiness, audit logging, and emergency pause are complete.
+- Verified implementation status versus remaining work.
+- The official NIJA black-and-gold sword-and-laurel brand system.
+- The current Capacitor project structure and setup commands.
+- The planned Expo React Native target structure.
+- Server-side security and broker-secret boundaries.
+- Home, Signals, Trades, Risk, and Profile product navigation.
+- Live Mode consent, readiness, risk, and emergency-pause gates.
+- A six-stage delivery roadmap and the next ten development milestones.
 
-Broker secrets remain server-side only.
+Mobile clients are a secure control and visibility layer. Broker credentials, writer authority, risk decisions, and order execution remain server-side.
 
 ---
+
 
 ## Protection Stack Modules
 
