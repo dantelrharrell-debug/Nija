@@ -286,6 +286,24 @@ def _recover_live_dispatch() -> tuple[bool, str]:
     return False, "dispatch_bridge_unavailable"
 
 
+def _recover_before_runtime_probes() -> tuple[bool, str]:
+    """Attempt the gated live handoff before any synchronous import probes."""
+
+    recovered, recovery_detail = _recover_live_dispatch()
+    logger.warning(
+        "NO_TRADE_WATCHDOG_DISPATCH_RECOVERY recovered=%s detail=%s",
+        str(recovered).lower(),
+        recovery_detail,
+    )
+    patched = _patch_loaded_modules()
+    if patched:
+        logger.warning(
+            "NO_TRADE_WATCHDOG_LOADED_MODULES_PATCHED patched_modules=%d",
+            patched,
+        )
+    return recovered, recovery_detail
+
+
 def _install_live_active_monitor() -> None:
     global _MONITOR_STARTED
     if _MONITOR_STARTED:
@@ -316,13 +334,7 @@ def _install_live_active_monitor() -> None:
                         delay,
                         _risk_snapshot(),
                     )
-                    _resolve_and_patch_modules()
-                    recovered, recovery_detail = _recover_live_dispatch()
-                    logger.warning(
-                        "NO_TRADE_WATCHDOG_DISPATCH_RECOVERY recovered=%s detail=%s",
-                        str(recovered).lower(),
-                        recovery_detail,
-                    )
+                    _recover_before_runtime_probes()
                 else:
                     _log_watchdog("live_active_monitor", force=True)
                 next_warn = now + interval
