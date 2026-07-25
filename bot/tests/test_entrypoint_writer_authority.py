@@ -216,7 +216,14 @@ class BotMainAuthorityOrderingTests(unittest.TestCase):
             _platform_brokers={"kraken": types.SimpleNamespace(connected=True)},
         )
 
-        def start_trading_engine(_broker):
+        bootstrap_broker = types.SimpleNamespace(connected=True)
+        published_strategy = types.SimpleNamespace(
+            broker=bootstrap_broker,
+            run_cycle=lambda: None,
+        )
+
+        def start_trading_engine(strategy):
+            self.assertIs(strategy, published_strategy)
             order.append("trading")
             self.bot_main._shutdown_event.set()
 
@@ -232,11 +239,16 @@ class BotMainAuthorityOrderingTests(unittest.TestCase):
 
         def bootstrap():
             order.append("nonce_and_broker")
-            return True, object(), "kraken"
+            return True, bootstrap_broker, "kraken"
 
         def advance():
             order.append("fsm")
             return True
+
+        def publish_strategy(broker):
+            self.assertIs(broker, bootstrap_broker)
+            order.append("strategy")
+            return published_strategy
 
         previous = sys.modules.get("bot.nija_core_loop")
         sys.modules["bot.nija_core_loop"] = core_loop
@@ -261,6 +273,11 @@ class BotMainAuthorityOrderingTests(unittest.TestCase):
                     "_advance_bootstrap_fsm_to_running_supervised",
                     side_effect=advance,
                 ),
+                patch.object(
+                    self.bot_main,
+                    "_publish_canonical_strategy_for_runtime",
+                    side_effect=publish_strategy,
+                ),
                 patch.object(self.bot_main, "_release_writer_authority"),
                 patch.object(self.bot_main.signal, "signal"),
             ):
@@ -274,7 +291,14 @@ class BotMainAuthorityOrderingTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(
             order,
-            ["authority", "prebootstrap", "nonce_and_broker", "fsm", "trading"],
+            [
+                "authority",
+                "prebootstrap",
+                "nonce_and_broker",
+                "fsm",
+                "strategy",
+                "trading",
+            ],
         )
 
     def test_prebootstrap_requires_connected_platform_broker(self):
