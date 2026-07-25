@@ -209,10 +209,12 @@ def test_activation_monitor_accepts_only_funded_authenticated_okx_cache(
 
     monkeypatch.setenv("NIJA_OKX_FUNDING_STATUS", "under_minimum")
     amount, source = activation_monitor._cached_broker_balance(
-        SimpleNamespace(connected=True), "okx", None
+        SimpleNamespace(connected=True, _last_known_balance=144.96328582635033),
+        "okx",
+        None,
     )
     assert amount == 0.0
-    assert source == "unavailable"
+    assert source == "okx_authenticated_wallet_unavailable"
 
 
 def test_coinbase_connect_quarantines_confirmed_401_and_stops_retries(
@@ -270,6 +272,7 @@ def test_coinbase_balance_quarantine_returns_fail_closed_zero_without_retries(
 
     assert broker.get_account_balance() == 0.0
     assert os.environ["NIJA_COINBASE_CREDENTIALS_QUARANTINED"] == "1"
+    assert os.environ["NIJA_COINBASE_QUARANTINED_CREDENTIAL_FINGERPRINT"]
     assert broker.connected is False
 
     assert broker.get_account_balance() == 0.0
