@@ -284,21 +284,84 @@ def _state_machine() -> Any:
     return None
 
 
+
+_BALANCE_TOTAL_KEYS = (
+    "total_funds",
+    "total_balance",
+    "total_equity",
+    "equity",
+    "account_equity",
+    "portfolio_value",
+    "trading_balance",
+    "balance",
+    "usd_value",
+)
+
+
+def _balance_total(value: Any) -> float:
+    if isinstance(value, dict):
+        for key in _BALANCE_TOTAL_KEYS:
+            try:
+                amount = float(value.get(key) or 0.0)
+            except (TypeError, ValueError, OverflowError):
+                amount = 0.0
+            if amount > 0.0:
+                return amount
+        return 0.0
+    try:
+        amount = float(value or 0.0)
+    except (TypeError, ValueError, OverflowError):
+        return 0.0
+    return amount if amount > 0.0 else 0.0
+
+
+def _cached_broker_balance(
+    broker_obj: Any,
+    broker_key: str,
+    capital_authority: Any = None,
+) -> tuple[float, str]:
+    """Read an already-published balance without invoking broker I/O."""
+
+    for attr in (
+        "_last_known_balance",
+        "_last_confirmed_balance",
+        "last_known_balance",
+        "cached_balance",
+    ):
+        amount = _balance_total(getattr(broker_obj, attr, None))
+        if amount > 0.0:
+            return amount, attr
+
+    balances = getattr(capital_authority, "_broker_balances", {}) or {}
+    if isinstance(balances, dict):
+        wanted = broker_key.strip().lower()
+        for key, value in balances.items():
+            normalized = str(getattr(key, "value", key)).strip().lower()
+            if normalized == wanted:
+                amount = _balance_total(value)
+                if amount > 0.0:
+                    return amount, "capital_authority"
+
+    return 0.0, "unavailable"
+
+
+
 def _broker_manager_snapshot() -> tuple[bool, dict[str, Any]]:
-    """Pull connected-broker balance payload from the canonical manager.
+    """Observe connected brokers using accepted in-memory balances only.
 
-    Only observes modules already in sys.modules.  Feeds any non-zero balances
-    into CapitalAuthority via force_accept_feed() so that a stale zero-broker
-    CA can be unblocked without bypassing any gate logic.
-
-    Returns (accepted, meta) where meta mirrors the shape used by
-    _capital_ready_snapshot().
+    Startup monitors are not balance-refresh owners.  They must not call private
+    exchange endpoints or republish CapitalAuthority feeds; those mutations
+    belong to the broker manager and BalanceService.  Missing cached state is a
+    fail-closed result and the monitor will retry after the canonical owner
+    publishes a snapshot.
     """
+
     mabm_mod = _loaded_module(
         "bot.multi_account_broker_manager", "multi_account_broker_manager"
     )
     if mabm_mod is None:
         return False, {"reason": "broker_manager_module_not_loaded"}
+
     try:
         getter = getattr(mabm_mod, "get_broker_manager", None)
         if not callable(getter):
@@ -307,94 +370,78 @@ def _broker_manager_snapshot() -> tuple[bool, dict[str, Any]]:
         if mgr is None:
             return False, {"reason": "broker_manager_none"}
 
-        platform_brokers = getattr(mgr, "_platform_brokers", {})
-        connected_count = 0
-        total_balance = 0.0
-        per_broker: dict[str, float] = {}
-
-        for bt, broker_obj in list(platform_brokers.items()):
-            if broker_obj is None:
-                continue
-            try:
-                connected = bool(getattr(broker_obj, "connected", False))
-                if not connected:
-                    is_pc = getattr(mgr, "is_platform_connected", None)
-                    if callable(is_pc):
-                        connected = bool(is_pc(bt))
-                if not connected:
-                    continue
-                get_bal = getattr(broker_obj, "get_account_balance", None)
-                if not callable(get_bal):
-                    continue
-                raw = get_bal()
-                bal = 0.0
-                if isinstance(raw, dict):
-                    for k in ("trading_balance", "balance", "total", "usd_value"):
-                        v = raw.get(k)
-                        if v is not None:
-                            try:
-                                bal = float(v)
-                                break
-                            except Exception:
-                                pass
-                else:
-                    try:
-                        bal = float(raw or 0.0)
-                    except Exception:
-                        bal = 0.0
-                broker_key = str(getattr(bt, "value", bt))
-                per_broker[broker_key] = bal
-                total_balance += bal
-                connected_count += 1
-            except Exception as exc:
-                logger.debug(
-                    "ACTIVATION_PENDING_COMMIT broker_snapshot_error broker=%s err=%s", bt, exc
-                )
-
-        if connected_count == 0:
-            return False, {
-                "reason": "no_connected_brokers",
-                "hydrated": False,
-                "real_capital": 0.0,
-                "stale": True,
-                "registered_brokers": 0,
-                "accepted_latch": False,
-            }
-
-        # Feed recovered balances into CapitalAuthority to unblock hydration.
+        ca = None
         ca_mod = _loaded_module("bot.capital_authority", "capital_authority")
         if ca_mod is not None:
             ca_getter = getattr(ca_mod, "get_capital_authority", None)
             if callable(ca_getter):
                 try:
                     ca = ca_getter()
-                    if ca is not None:
-                        for broker_key, bal in per_broker.items():
-                            try:
-                                ca.force_accept_feed(broker_key, bal)
-                            except Exception as feed_exc:
-                                logger.debug(
-                                    "ACTIVATION_PENDING_COMMIT force_accept_feed err broker=%s err=%s",
-                                    broker_key,
-                                    feed_exc,
-                                )
-                except Exception as exc:
-                    logger.debug("ACTIVATION_PENDING_COMMIT ca_feed_error err=%s", exc)
+                except Exception:
+                    ca = None
 
-        accepted = connected_count > 0 and total_balance > 0.0
+        total_balance = 0.0
+        per_broker: dict[str, float] = {}
+        sources: dict[str, str] = {}
+        platform_brokers = getattr(mgr, "_platform_brokers", {})
+        for broker_type, broker_obj in list(platform_brokers.items()):
+            if broker_obj is None:
+                continue
+            try:
+                connected = bool(getattr(broker_obj, "connected", False))
+                if not connected:
+                    is_connected = getattr(mgr, "is_platform_connected", None)
+                    if callable(is_connected):
+                        connected = bool(is_connected(broker_type))
+                if not connected:
+                    continue
+
+                broker_key = str(getattr(broker_type, "value", broker_type))
+                balance, source = _cached_broker_balance(broker_obj, broker_key, ca)
+                if balance <= 0.0:
+                    logger.debug(
+                        "ACTIVATION_PENDING_COMMIT cached_balance_unavailable broker=%s",
+                        broker_key,
+                    )
+                    continue
+
+                per_broker[broker_key] = balance
+                sources[broker_key] = source
+                total_balance += balance
+            except Exception as exc:
+                logger.debug(
+                    "ACTIVATION_PENDING_COMMIT broker_snapshot_error broker=%s err=%s",
+                    broker_type,
+                    exc,
+                )
+
+        connected_count = len(per_broker)
+        if connected_count == 0:
+            return False, {
+                "reason": "no_connected_cached_balances",
+                "hydrated": False,
+                "real_capital": 0.0,
+                "stale": True,
+                "registered_brokers": 0,
+                "accepted_latch": False,
+                "source": "broker_manager_cached",
+            }
+
+        accepted = total_balance > 0.0
         meta = {
             "hydrated": accepted,
             "real_capital": total_balance,
             "stale": False,
             "registered_brokers": connected_count,
             "accepted_latch": accepted,
-            "reason": "broker_manager_ok" if accepted else "broker_manager_zero_balance",
+            "reason": "broker_manager_cached_ok" if accepted else "broker_manager_cached_zero",
             "per_broker": per_broker,
-            "source": "broker_manager",
+            "sources": sources,
+            "source": "broker_manager_cached",
         }
         logger.warning(
             "ACTIVATION_PENDING_COMMIT_MONITOR_BROKER_MANAGER_SNAPSHOT "
-            "connected=%d total_balance=$%.2f accepted=%s brokers=%s",
+            "connected=%d total_balance=$%.2f accepted=%s brokers=%s source=cached_only",
             connected_count,
             total_balance,
             accepted,
@@ -404,7 +451,6 @@ def _broker_manager_snapshot() -> tuple[bool, dict[str, Any]]:
     except Exception as exc:
         logger.debug("ACTIVATION_PENDING_COMMIT broker_manager_snapshot_error err=%s", exc)
         return False, {"reason": f"broker_manager_snapshot_error:{exc}"}
-
 
 def _capital_ready_snapshot() -> tuple[bool, dict[str, Any]]:
     module = _loaded_module("bot.capital_authority", "capital_authority")
