@@ -10,6 +10,7 @@ import logging
 from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger("nija")
+_LAST_COMPLETED_STRATEGY: Any = None
 
 
 def _get_entry_price_store() -> Optional[Any]:
@@ -331,6 +332,8 @@ def _collect_connected_brokers(strategy: Any) -> Dict[str, Any]:
 
 def sync_exchange_positions_on_startup(strategy: Any) -> int:
     """Reconcile every currently connected platform and user broker."""
+    global _LAST_COMPLETED_STRATEGY
+    _LAST_COMPLETED_STRATEGY = None
     logger.info("EXCHANGE_POSITION_SYNC starting startup position synchronisation")
     eps = _get_entry_price_store()
     connected_brokers = _collect_connected_brokers(strategy)
@@ -368,6 +371,13 @@ def sync_exchange_positions_on_startup(strategy: Any) -> int:
         total_reconciled,
         total_tracked,
     )
+    _LAST_COMPLETED_STRATEGY = strategy
+    logger.critical(
+        "EXCHANGE_POSITION_SYNC_DISPATCH_STRATEGY_READY type=%s connected_brokers=%d total_tracked=%d",
+        type(strategy).__name__,
+        len(connected_brokers),
+        total_tracked,
+    )
     logger.info("PositionTracker initialized: %d tracked positions", total_tracked)
     return total_reconciled
 
@@ -377,4 +387,5 @@ __all__ = [
     "_adopt_broker_positions",
     "_collect_connected_brokers",
     "_legacy_duplicate_snapshot_detected",
+    "_LAST_COMPLETED_STRATEGY",
 ]
