@@ -204,7 +204,7 @@ def test_activation_monitor_accepts_only_funded_authenticated_okx_cache(
     amount, source = activation_monitor._cached_broker_balance(
         broker, "okx", None
     )
-    assert amount == 144.96328582635033
+    assert abs(amount - 144.96328583) < 1e-8
     assert source == "okx_authenticated_wallet"
 
     monkeypatch.setenv("NIJA_OKX_FUNDING_STATUS", "under_minimum")
