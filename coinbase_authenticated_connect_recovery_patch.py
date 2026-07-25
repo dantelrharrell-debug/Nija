@@ -253,8 +253,11 @@ def _patch_class(cls: type) -> bool:
             if fingerprint == primary_fp:
                 continue
             with _LOCK:
-                failed_at = _FAILED_PAIR_AT.get(fingerprint, 0.0)
-            if now - failed_at < _PAIR_RETRY_COOLDOWN_S:
+                failed_at = _FAILED_PAIR_AT.get(fingerprint)
+            if (
+                failed_at is not None
+                and now - failed_at < _PAIR_RETRY_COOLDOWN_S
+            ):
                 continue
 
             attempted += 1
