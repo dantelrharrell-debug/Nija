@@ -6,6 +6,7 @@ private account endpoint succeeds on the broker or its authenticated SDK client.
 """
 from __future__ import annotations
 
+import hashlib
 import importlib
 import logging
 import os
@@ -22,6 +23,8 @@ _PATCH_ATTR = "_nija_coinbase_authenticated_connect_v1"
 _LOCK = threading.RLock()
 _STARTED = False
 _LAST_FAILURE: dict[str, float] = {}
+_FAILED_PAIR_AT: dict[str, float] = {}
+_PAIR_RETRY_COOLDOWN_S = 300.0
 
 
 def _is_coinbase_class(cls: type) -> bool:
@@ -118,6 +121,90 @@ def _log_failure_once(cls: type, detail: str) -> None:
     )
 
 
+def _configured_pairs() -> list[tuple[str, str, str]]:
+    try:
+        diagnostics = importlib.import_module("secondary_venue_runtime_diagnostics")
+        discover = getattr(diagnostics, "_configured_coinbase_pairs", None)
+        if callable(discover):
+            return list(discover())
+    except Exception as exc:
+        logger.debug(
+            "COINBASE_CREDENTIAL_PAIR_DISCOVERY_PENDING marker=%s error=%s",
+            _MARKER,
+            type(exc).__name__,
+        )
+    return []
+
+
+def _pair_fingerprint(key: str, secret: str) -> str:
+    return hashlib.sha256((key + "\0" + secret).encode("utf-8")).hexdigest()[:16]
+
+
+def _credential_targets(broker: Any) -> list[Any]:
+    targets = [broker]
+    try:
+        nested = getattr(broker, "_broker", None)
+    except Exception:
+        nested = None
+    if nested is not None and nested not in targets:
+        targets.append(nested)
+    return targets
+
+
+def _apply_pair(
+    broker: Any,
+    source: str,
+    key: str,
+    secret: str,
+    *,
+    reset_failure: bool = True,
+) -> None:
+    os.environ["COINBASE_API_KEY"] = key
+    os.environ["COINBASE_API_SECRET"] = secret
+    os.environ["COINBASE_PEM_CONTENT"] = secret
+    os.environ["NIJA_COINBASE_CREDENTIAL_PAIR_SOURCE"] = source
+    for target in _credential_targets(broker):
+        for attr, value in (
+            ("api_key", key),
+            ("api_secret", secret),
+            ("secret", secret),
+            ("private_key", secret),
+        ):
+            try:
+                if hasattr(target, attr):
+                    setattr(target, attr, value)
+            except Exception:
+                pass
+        if reset_failure:
+            for attr, value in (
+                ("connected", False),
+                ("client", None),
+                ("_auth_failed", False),
+                ("auth_failed", False),
+                ("_is_available", True),
+            ):
+                try:
+                    if hasattr(target, attr) or attr in {"connected", "_auth_failed"}:
+                        setattr(target, attr, value)
+                except Exception:
+                    pass
+
+
+def _mark_auth_failed(broker: Any) -> None:
+    for target in _credential_targets(broker):
+        for attr, value in (
+            ("connected", False),
+            ("_auth_failed", True),
+            ("auth_failed", True),
+            ("_is_available", False),
+        ):
+            try:
+                if hasattr(target, attr) or attr in {"connected", "_auth_failed"}:
+                    setattr(target, attr, value)
+            except Exception:
+                pass
+
+
 def _patch_class(cls: type) -> bool:
     if not _is_coinbase_class(cls):
         return False
@@ -127,16 +214,115 @@ def _patch_class(cls: type) -> bool:
 
     @wraps(current)
     def connect(self: Any, *args: Any, **kwargs: Any):
-        result = current(self, *args, **kwargs)
+        primary_key = str(os.environ.get("COINBASE_API_KEY", "") or "")
+        primary_secret = str(
+            os.environ.get("COINBASE_API_SECRET", "")
+            or os.environ.get("COINBASE_PEM_CONTENT", "")
+            or ""
+        )
+        primary_source = str(
+            os.environ.get("NIJA_COINBASE_CREDENTIAL_PAIR_SOURCE", "canonical")
+            or "canonical"
+        )
+
+        first_error = ""
+        try:
+            result = current(self, *args, **kwargs)
+        except Exception as exc:
+            result = False
+            first_error = f"{type(exc).__name__}:{str(exc)[:100]}"
+
         if bool(result) or bool(getattr(self, "connected", False)):
             return result
         authenticated, detail = _authenticated_probe(self)
         if authenticated:
             _publish_connected(self, detail)
             return True
+
+        primary_fp = (
+            _pair_fingerprint(primary_key, primary_secret)
+            if primary_key and primary_secret
+            else ""
+        )
+        now = time.monotonic()
+        attempted = 0
+        failure_details = [value for value in (first_error, detail) if value]
+
+        for source, key, secret in _configured_pairs():
+            fingerprint = _pair_fingerprint(key, secret)
+            if fingerprint == primary_fp:
+                continue
+            with _LOCK:
+                failed_at = _FAILED_PAIR_AT.get(fingerprint)
+            if (
+                failed_at is not None
+                and now - failed_at < _PAIR_RETRY_COOLDOWN_S
+            ):
+                continue
+
+            attempted += 1
+            logger.warning(
+                "COINBASE_AUTHENTICATED_PAIR_RETRY marker=%s "
+                "class=%s source=%s attempt=%d",
+                _MARKER,
+                cls.__name__,
+                source,
+                attempted,
+            )
+            _apply_pair(self, source, key, secret)
+            retry_error = ""
+            try:
+                retry_result = current(self, *args, **kwargs)
+            except Exception as exc:
+                retry_result = False
+                retry_error = f"{type(exc).__name__}:{str(exc)[:100]}"
+
+            if bool(retry_result) or bool(getattr(self, "connected", False)):
+                _publish_connected(self, f"credential_pair:{source}")
+                logger.critical(
+                    "COINBASE_AUTHENTICATED_PAIR_RECOVERED marker=%s "
+                    "class=%s source=%s",
+                    _MARKER,
+                    cls.__name__,
+                    source,
+                )
+                return True
+
+            authenticated, retry_detail = _authenticated_probe(self)
+            if authenticated:
+                _publish_connected(self, f"{source}:{retry_detail}")
+                logger.critical(
+                    "COINBASE_AUTHENTICATED_PAIR_RECOVERED marker=%s "
+                    "class=%s source=%s",
+                    _MARKER,
+                    cls.__name__,
+                    source,
+                )
+                return True
+
+            with _LOCK:
+                _FAILED_PAIR_AT[fingerprint] = time.monotonic()
+            failure_details.extend(
+                value for value in (retry_error, retry_detail) if value
+            )
+
+        if primary_key and primary_secret:
+            _apply_pair(
+                self,
+                primary_source,
+                primary_key,
+                primary_secret,
+                reset_failure=False,
+            )
+        _mark_auth_failed(self)
         os.environ["NIJA_COINBASE_CONNECTED"] = "0"
+        os.environ["NIJA_COINBASE_TRADING_READY"] = "0"
         os.environ["NIJA_COINBASE_ACTIVATION_STATE"] = "authentication_failed"
-        _log_failure_once(cls, detail)
+        suffix = ";".join(failure_details[-4:]) or "authenticated_probe_failed"
+        _log_failure_once(
+            cls,
+            f"{suffix};alternative_pairs_attempted={attempted}",
+        )
         return result
 
     setattr(connect, _PATCH_ATTR, True)
@@ -147,7 +333,6 @@ def _patch_class(cls: type) -> bool:
         _MARKER, cls.__module__, cls.__name__,
     )
     return True
-
 
 def _patch_module(module: ModuleType) -> bool:
     changed = False
@@ -189,4 +374,4 @@ def install() -> bool:
         return True
 
 
-__all__ = ["install", "_authenticated_probe", "_patch_class"]
+__all__ = ["install", "_authenticated_probe", "_configured_pairs", "_patch_class"]

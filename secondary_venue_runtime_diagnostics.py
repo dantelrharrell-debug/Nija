@@ -33,6 +33,39 @@ _COINBASE_KEY_ALIASES = (
     "CDP_API_KEY_NAME",
 )
 
+_COINBASE_CREDENTIAL_FAMILIES = (
+    (
+        "canonical",
+        "COINBASE_API_KEY",
+        (
+            "COINBASE_API_SECRET",
+            "COINBASE_PEM_CONTENT",
+            "COINBASE_API_PRIVATE_KEY",
+            "COINBASE_PRIVATE_KEY",
+        ),
+    ),
+    (
+        "platform",
+        "COINBASE_PLATFORM_API_KEY",
+        ("COINBASE_PLATFORM_API_SECRET",),
+    ),
+    (
+        "advanced",
+        "COINBASE_ADVANCED_API_KEY",
+        ("COINBASE_ADVANCED_API_SECRET",),
+    ),
+    (
+        "cdp",
+        "COINBASE_CDP_API_KEY",
+        ("COINBASE_CDP_API_SECRET",),
+    ),
+    (
+        "cdp_name",
+        "CDP_API_KEY_NAME",
+        ("CDP_API_KEY_PRIVATE_KEY",),
+    ),
+)
+
 
 def _strip_outer_quotes(value: str) -> str:
     value = value.strip()
@@ -178,6 +211,58 @@ def _restore_coinbase_quarantine_state() -> None:
     os.environ["COINBASE_LIVE_TRADING_ENABLED"] = "false"
 
 
+def _configured_coinbase_pairs() -> list[tuple[str, str, str]]:
+    """Return complete, cryptographically valid Coinbase key/PEM pairs.
+
+    Key and secret aliases are evaluated as families.  They must not be selected
+    independently because two individually valid values may belong to different
+    CDP API keys and Coinbase will correctly reject that combination with 401.
+    """
+
+    pairs: list[tuple[str, str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    configured_keys: dict[str, str] = {}
+    valid_secrets: dict[str, str] = {}
+
+    for name in _COINBASE_KEY_ALIASES:
+        value = str(os.environ.get(name, "") or "").strip()
+        if value:
+            configured_keys[name] = value
+
+    for name in _COINBASE_SECRET_ALIASES:
+        raw = str(os.environ.get(name, "") or "").strip()
+        if not raw:
+            continue
+        normalized = normalize_coinbase_private_key(raw)
+        valid, _category = _validate_coinbase_key(normalized)
+        if valid:
+            valid_secrets[name] = normalized
+
+    for family, key_name, secret_names in _COINBASE_CREDENTIAL_FAMILIES:
+        key = configured_keys.get(key_name, "")
+        if not key:
+            continue
+        for secret_name in secret_names:
+            secret = valid_secrets.get(secret_name, "")
+            if not secret or (key, secret) in seen:
+                continue
+            seen.add((key, secret))
+            pairs.append((f"{family}:{key_name}+{secret_name}", key, secret))
+
+    # Preserve compatibility with deployments that use one key alias and one
+    # differently named PEM alias.  This is safe only when the key is unique.
+    distinct_keys = list(dict.fromkeys(configured_keys.values()))
+    if len(distinct_keys) == 1:
+        key = distinct_keys[0]
+        for secret_name, secret in valid_secrets.items():
+            if (key, secret) in seen:
+                continue
+            seen.add((key, secret))
+            pairs.append((f"single_key_fallback:{secret_name}", key, secret))
+
+    return pairs
+
+
 def _normalize_coinbase_env() -> None:
     candidates = [
         (name, str(os.environ.get(name, "") or "").strip())
@@ -192,24 +277,55 @@ def _normalize_coinbase_env() -> None:
         logger.error("COINBASE_PEM_INVALID marker=%s reason=missing_secret", _MARKER)
         return
 
-    selected_secret = ""
-    for _source, raw in candidates:
-        normalized = normalize_coinbase_private_key(raw)
-        valid, _category = _validate_coinbase_key(normalized)
-        if valid:
-            selected_secret = normalized
-            break
-
-    if selected_secret:
-        for name in _COINBASE_SECRET_ALIASES:
-            os.environ[name] = selected_secret
+    pairs = _configured_coinbase_pairs()
+    if pairs:
+        source, selected_key, selected_secret = pairs[0]
+        # Only publish the canonical pair.  Do not overwrite the other aliases:
+        # authenticated recovery may need a later complete pair if the primary
+        # Coinbase key was revoked or rotated.
+        os.environ["COINBASE_API_KEY"] = selected_key
+        os.environ["COINBASE_API_SECRET"] = selected_secret
+        os.environ["COINBASE_PEM_CONTENT"] = selected_secret
+        os.environ["NIJA_COINBASE_CREDENTIAL_PAIR_SOURCE"] = source
+        os.environ["NIJA_COINBASE_CREDENTIAL_PAIR_COUNT"] = str(len(pairs))
         os.environ["NIJA_COINBASE_PEM_STATE"] = "valid"
         os.environ["NIJA_COINBASE_PEM_VALID"] = "1"
         os.environ["NIJA_COINBASE_PEM_QUARANTINED"] = "0"
         os.environ.pop("NIJA_COINBASE_PEM_INVALID_REASON", None)
         logger.warning(
-            "COINBASE_PEM_CANONICALIZED marker=%s validation=es256",
+            "COINBASE_PEM_CANONICALIZED marker=%s validation=es256 "
+            "pair_source=%s pair_count=%d key_shape=%s",
             _MARKER,
+            source,
+            len(pairs),
+            "cdp" if "organizations/" in selected_key and "/apiKeys/" in selected_key else "other",
+        )
+        return
+
+    valid_secrets = []
+    for source, raw in candidates:
+        normalized = normalize_coinbase_private_key(raw)
+        valid, _category = _validate_coinbase_key(normalized)
+        if valid:
+            valid_secrets.append((source, normalized))
+
+    if valid_secrets:
+        os.environ["NIJA_COINBASE_PEM_STATE"] = "credential_pair_ambiguous"
+        os.environ["NIJA_COINBASE_PEM_VALID"] = "1"
+        os.environ["NIJA_COINBASE_CONNECTED"] = "0"
+        os.environ["NIJA_COINBASE_TRADING_READY"] = "0"
+        logger.error(
+            "COINBASE_CREDENTIAL_PAIR_AMBIGUOUS marker=%s "
+            "keys=%d valid_secrets=%d action=fail_closed",
+            _MARKER,
+            len(
+                {
+                    str(os.environ.get(name, "") or "").strip()
+                    for name in _COINBASE_KEY_ALIASES
+                    if str(os.environ.get(name, "") or "").strip()
+                }
+            ),
+            len(valid_secrets),
         )
         return
 
@@ -230,7 +346,6 @@ def _normalize_coinbase_env() -> None:
         _MARKER,
     )
     _quarantine_coinbase()
-
 
 def _log_state(venue: str, *, force: bool = False) -> None:
     now = time.monotonic()
