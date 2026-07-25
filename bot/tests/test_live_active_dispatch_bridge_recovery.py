@@ -165,3 +165,28 @@ def test_ensure_live_dispatch_never_constructs_missing_strategy(monkeypatch) -> 
 
     assert started is False
     assert detail == "strategy_not_published"
+
+
+def test_ensure_live_dispatch_skips_deferred_repairs_after_live_gates(monkeypatch) -> None:
+    module = _load_module()
+    strategy = object()
+
+    monkeypatch.setattr(module, "_loop_thread_running", lambda: False)
+    monkeypatch.setattr(module, "_has_writer_authority", lambda: True)
+    monkeypatch.setattr(module, "_runtime_execution_authority", lambda: True)
+    monkeypatch.setattr(module, "_state_machine_live_active", lambda: True)
+    monkeypatch.setattr(
+        module,
+        "_ensure_deferred_startup_repairs",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("live dispatch must not wait on deferred startup repair")
+        ),
+    )
+    monkeypatch.setattr(module, "_dispatch_allowed", lambda: (True, "ok"))
+    monkeypatch.setattr(module, "_find_strategy", lambda: (strategy, "published"))
+    monkeypatch.setattr(module, "_start_trading_loop", lambda candidate, source: True)
+
+    started, detail = module.ensure_live_dispatch("watchdog")
+
+    assert started is True
+    assert detail == "started"

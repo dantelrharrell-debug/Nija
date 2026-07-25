@@ -56,3 +56,25 @@ def test_watchdog_does_not_import_missing_dispatch_bridge(monkeypatch):
 
     assert recovered is False
     assert detail == "dispatch_bridge_unavailable"
+
+
+def test_zero_cycle_recovery_precedes_loaded_module_patching(monkeypatch):
+    module = _load_module()
+    order: list[str] = []
+
+    monkeypatch.setattr(
+        module,
+        "_recover_live_dispatch",
+        lambda: order.append("recover") or (True, "started"),
+    )
+    monkeypatch.setattr(
+        module,
+        "_patch_loaded_modules",
+        lambda: order.append("patch_loaded") or 0,
+    )
+
+    recovered, detail = module._recover_before_runtime_probes()
+
+    assert recovered is True
+    assert detail == "started"
+    assert order == ["recover", "patch_loaded"]

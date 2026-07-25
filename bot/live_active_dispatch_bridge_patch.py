@@ -408,11 +408,16 @@ def ensure_live_dispatch(source: str = "external_recovery") -> Tuple[bool, str]:
     if _loop_thread_running():
         return True, "trading_loop_already_running"
 
-    _ensure_deferred_startup_repairs()
-    if _has_writer_authority() and (
-        not _runtime_execution_authority()
-        or not _state_machine_live_active()
-    ):
+    writer_ready = _has_writer_authority()
+    runtime_ready = _runtime_execution_authority()
+    state_ready = _state_machine_live_active()
+
+    # Deferred startup repair installers may synchronously wait on imports. Once
+    # every live gate is already satisfied, they cannot improve dispatch
+    # readiness and must not delay the existing-strategy handoff.
+    if not (writer_ready and runtime_ready and state_ready):
+        _ensure_deferred_startup_repairs()
+    if writer_ready and (not runtime_ready or not state_ready):
         _attempt_runtime_convergence(source)
 
     allowed, reason = _dispatch_allowed()
