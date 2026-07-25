@@ -10,6 +10,7 @@ from __future__ import annotations
 import importlib.util
 import logging
 import os
+import sys
 from pathlib import Path
 
 logger = logging.getLogger("nija.startup_patch")
@@ -232,11 +233,21 @@ def _install_patch_module(*, filename: str, module_name: str, success_log: str, 
         if spec is None or spec.loader is None:
             raise RuntimeError(f"could not load spec for {patch_path}")
         module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        installer = getattr(module, "install_import_hook", None)
-        if callable(installer):
-            installer()
-            logger.warning(success_log)
+        previous = sys.modules.get(module_name)
+        sys.modules[module_name] = module
+        try:
+            spec.loader.exec_module(module)
+            installer = getattr(module, "install_import_hook", None)
+            if callable(installer):
+                installer()
+                logger.warning(success_log)
+        except Exception:
+            if previous is None:
+                if sys.modules.get(module_name) is module:
+                    sys.modules.pop(module_name, None)
+            else:
+                sys.modules[module_name] = previous
+            raise
     except Exception as exc:
         logger.warning("%s unavailable: %s", error_prefix, exc)
 
