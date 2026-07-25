@@ -153,6 +153,27 @@ def _release_writer_authority() -> None:
             logger.warning("Writer-authority release failed: %s", exc, exc_info=True)
 
 
+def _connected_platform_broker_count(manager: object) -> int:
+    """Return the number of connected platform brokers on the manager."""
+
+    brokers = getattr(manager, "platform_brokers", None)
+    if callable(brokers):
+        brokers = brokers()
+    if brokers is None:
+        brokers = getattr(manager, "_platform_brokers", {})
+
+    try:
+        broker_values = dict(brokers or {}).values()
+    except Exception:
+        return 0
+
+    return sum(
+        1
+        for broker in broker_values
+        if broker is not None and bool(getattr(broker, "connected", False))
+    )
+
+
 def _run_self_healing_startup() -> tuple[bool, Optional[object], str]:
     """Run broker/nonce recovery only after writer lineage is verified."""
 
@@ -370,11 +391,15 @@ def main() -> int:
             )
 
             manager = prepare_canonical_broker_runtime()
-            if not bool(getattr(manager, "_fsm_initialized", False)):
-                raise RuntimeError("canonical broker manager FSM is not initialized")
+            if not getattr(manager, "_fsm_initialized", False):
+                raise RuntimeError("Broker manager did not initialize")
+            connected_brokers = _connected_platform_broker_count(manager)
+            if connected_brokers < 1:
+                raise RuntimeError("No connected platform broker")
             logger.critical(
                 "DIRECT_CANONICAL_BROKER_PREBOOTSTRAP_V27_READY "
-                "fsm_initialized=true thread=%s",
+                "fsm_initialized=true connected_brokers=%d thread=%s",
+                connected_brokers,
                 threading.current_thread().name,
             )
             os.environ["NIJA_DIRECT_CANONICAL_BROKER_PREBOOTSTRAP_V27_READY"] = "1"

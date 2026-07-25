@@ -11,6 +11,7 @@ def test_render_entrypoint_applies_launcher_before_bootstrap() -> None:
     bootstrap = 'exec bash scripts/production_bootstrap.sh "$@"'
     assert legacy in text
     assert v26 in text
+    assert "python3 -S scripts/apply_direct_broker_prebootstrap_v27.py" not in text
     assert bootstrap in text
     assert text.index(legacy) < text.index(v26) < text.index(bootstrap)
     assert "canonical_runtime_launcher_v26.py" in text

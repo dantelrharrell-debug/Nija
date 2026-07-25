@@ -47,7 +47,6 @@ _promote_secret_alias KRAKEN_PLATFORM_API_SECRET \
 export NIJA_DEFER_RUNTIME_SITE_HOOKS=1
 python3 -S scripts/apply_startup_handoff_fix.py
 python3 -S scripts/apply_canonical_launcher_v26.py
-python3 -S scripts/apply_direct_broker_prebootstrap_v27.py
 bash -n start.sh
 python3 -S -m py_compile \
     main.py \
