@@ -224,3 +224,58 @@ def test_find_strategy_returns_quickly_before_position_sync_completes(monkeypatc
 
     assert found is None
     assert detail == "strategy_not_published"
+
+
+def test_writer_snapshot_rejects_standby_process_with_shared_token(monkeypatch) -> None:
+    module = _load_module()
+    authority_module = ModuleType("bot.entrypoint_writer_authority")
+    authority = type(
+        "Authority",
+        (),
+        {"acquired": False, "lost": False, "result": None},
+    )()
+    authority_module.get_entrypoint_writer_authority = lambda: authority
+    monkeypatch.setitem(
+        sys.modules,
+        "bot.entrypoint_writer_authority",
+        authority_module,
+    )
+    monkeypatch.delitem(sys.modules, "entrypoint_writer_authority", raising=False)
+    monkeypatch.setenv("NIJA_WRITER_FENCING_TOKEN", "1139")
+    monkeypatch.setenv("NIJA_WRITER_LEASE_GENERATION", "1800")
+    monkeypatch.setenv("NIJA_WRITER_LEASE_ACQUIRED", "1")
+    monkeypatch.setenv("NIJA_RUNTIME_EXECUTION_AUTHORITY", "1")
+
+    snapshot = module._writer_authority_snapshot()
+
+    assert snapshot["token_present"] is True
+    assert snapshot["local_authority_observed"] is True
+    assert snapshot["local_authority_acquired"] is False
+    assert snapshot["ready"] is False
+
+
+def test_writer_snapshot_accepts_only_locally_acquired_authority(monkeypatch) -> None:
+    module = _load_module()
+    authority_module = ModuleType("bot.entrypoint_writer_authority")
+    authority = type(
+        "Authority",
+        (),
+        {"acquired": True, "lost": False, "result": None},
+    )()
+    authority_module.get_entrypoint_writer_authority = lambda: authority
+    monkeypatch.setitem(
+        sys.modules,
+        "bot.entrypoint_writer_authority",
+        authority_module,
+    )
+    monkeypatch.delitem(sys.modules, "entrypoint_writer_authority", raising=False)
+    monkeypatch.setenv("NIJA_WRITER_FENCING_TOKEN", "1140")
+    monkeypatch.setenv("NIJA_WRITER_LEASE_GENERATION", "1801")
+    monkeypatch.setenv("NIJA_WRITER_LEASE_ACQUIRED", "1")
+    monkeypatch.setenv("NIJA_RUNTIME_EXECUTION_AUTHORITY", "1")
+
+    snapshot = module._writer_authority_snapshot()
+
+    assert snapshot["local_authority_acquired"] is True
+    assert snapshot["local_authority_lost"] is False
+    assert snapshot["ready"] is True
