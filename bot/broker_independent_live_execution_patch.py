@@ -22,6 +22,30 @@ _MONITOR_STARTED = False
 _REENTRANT = threading.local()
 
 
+def _chain_has_attr(func: Any, attr: str, *, limit: int = 256) -> bool:
+    """Find an ownership marker anywhere in a linked wrapper chain."""
+    current = func
+    seen: set[int] = set()
+    for _ in range(limit):
+        if not callable(current) or id(current) in seen:
+            return False
+        seen.add(id(current))
+        if bool(getattr(current, attr, False)):
+            return True
+        wrapped = getattr(current, "__wrapped__", None)
+        if not callable(wrapped):
+            try:
+                code = getattr(current, "__code__", None)
+                closure = tuple(getattr(current, "__closure__", ()) or ())
+                freevars = tuple(getattr(code, "co_freevars", ()) or ())
+                values = {name: cell.cell_contents for name, cell in zip(freevars, closure)}
+                wrapped = next((values.get(name) for name in ("original", "original_run_scan_phase", "wrapped", "base") if callable(values.get(name))), None)
+            except Exception:
+                wrapped = None
+        current = wrapped
+    return False
+
+
 def _truthy_value(value: Any) -> bool:
     return str(value or "").strip().lower() in _TRUTHY
 
@@ -378,7 +402,7 @@ def _patch_core_loop_module(module: ModuleType) -> bool:
     original = getattr(cls, "run_scan_phase", None)
     if not callable(original):
         return False
-    if getattr(original, _WRAP_ATTR, False):
+    if _chain_has_attr(original, _WRAP_ATTR):
         _PATCHED = True
         return True
 
@@ -510,6 +534,7 @@ def _patch_core_loop_module(module: ModuleType) -> bool:
         )
 
     setattr(_independent_run_scan_phase, _WRAP_ATTR, True)
+    setattr(_independent_run_scan_phase, "__wrapped__", original)
     setattr(cls, "run_scan_phase", _independent_run_scan_phase)
     _PATCHED = True
     logger.warning("%s core_loop_module=%s", _MARKER, getattr(module, "__name__", "<unknown>"))
