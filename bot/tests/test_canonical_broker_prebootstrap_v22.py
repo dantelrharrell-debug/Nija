@@ -64,6 +64,51 @@ def test_initialize_retries_only_missing_fsm_latch():
     assert manager._fsm_initialized is True
 
 
+
+def test_initialize_repairs_silent_missing_fsm_latch():
+    calls = []
+
+    class Manager(_ReadyManager):
+        def __init__(self):
+            super().__init__()
+            self._fsm_initialized = False
+
+        def initialize(self):
+            calls.append("initialize")
+
+        def _init_capital_fsm(self):
+            calls.append("repair")
+            self._fsm_initialized = True
+
+    manager = Manager()
+    guard._initialize_manager(manager)
+
+    assert calls == ["initialize", "repair"]
+    assert manager._fsm_initialized is True
+
+
+def test_initialize_fails_closed_when_silent_latch_cannot_be_repaired():
+    class Manager(_ReadyManager):
+        def __init__(self):
+            super().__init__()
+            self._fsm_initialized = False
+
+        def initialize(self):
+            return None
+
+        def _init_capital_fsm(self):
+            return None
+
+    manager = Manager()
+
+    try:
+        guard._initialize_manager(manager)
+    except RuntimeError as exc:
+        assert "without initializing the capital FSM" in str(exc)
+    else:
+        raise AssertionError("unrepaired capital FSM must remain fail-closed")
+
+
 def test_initialize_does_not_retry_real_broker_failure():
     calls = []
 

@@ -184,6 +184,33 @@ def normalize_runtime_limits() -> None:
     os.environ["NIJA_CORE_LOOP_PROGRESS_LIMITS_NORMALIZED"] = "1"
 
 
+
+def _ensure_zero_signal_state_repair() -> bool:
+    """Synchronously restore the required Phase-3 state wrapper when it drifts."""
+
+    try:
+        module = __import__(
+            "bot.zero_signal_streak_state_repair_patch",
+            fromlist=["_try_loaded"],
+        )
+        repair = getattr(module, "_try_loaded", None)
+        repaired = bool(repair()) if callable(repair) else False
+        if repaired:
+            logger.warning(
+                "ZERO_SIGNAL_STATE_REPAIR_RECONVERGED marker=%s source=module_identity_audit",
+                _MARKER,
+            )
+        return repaired
+    except Exception as exc:
+        logger.error(
+            "ZERO_SIGNAL_STATE_REPAIR_RECONVERGENCE_FAILED marker=%s error=%s:%s",
+            _MARKER,
+            type(exc).__name__,
+            exc,
+        )
+        return False
+
+
 def audit() -> tuple[bool, dict[str, str]]:
     modules_ready, details = canonicalize_loaded_patch_modules()
     normalize_runtime_limits()
@@ -212,6 +239,10 @@ def audit() -> tuple[bool, dict[str, str]]:
         phase3 = getattr(cls, "_phase3_scan_and_enter", None) if isinstance(cls, type) else None
         capped, cap_cycle, cap_depth = _chain_has_attr(phase3, _ZERO_CAP_ATTR)
         state, state_cycle, state_depth = _chain_has_attr(phase3, _ZERO_STATE_ATTR)
+        if not state and not state_cycle and _ensure_zero_signal_state_repair():
+            phase3 = getattr(cls, "_phase3_scan_and_enter", None)
+            capped, cap_cycle, cap_depth = _chain_has_attr(phase3, _ZERO_CAP_ATTR)
+            state, state_cycle, state_depth = _chain_has_attr(phase3, _ZERO_STATE_ATTR)
         cycle = cap_cycle or state_cycle
         details["zero_signal_streak_chain"] = (
             f"cap_guard={capped};state_repair={state};cycle={cycle};depth={max(cap_depth, state_depth)}"
@@ -271,4 +302,5 @@ __all__ = [
     "install", "install_import_hook", "audit", "canonicalize_loaded_patch_modules",
     "recover_unregistered_patch_modules_from_threads", "normalize_runtime_limits",
     "_current_duplicates", "_chain_has_attr", "_wrapper_chain_status",
+    "_ensure_zero_signal_state_repair",
 ]
