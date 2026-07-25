@@ -39,10 +39,20 @@ _CONTRACTS = (
         ),
     ),
     FileContract(
+        "scripts/canonical_runtime_launcher_v26.py",
+        (
+            "NIJA_DEFER_RUNTIME_SITE_HOOKS",
+            "NIJA_CANONICAL_ENTRYPOINT_FAST_PATH",
+            "CANONICAL_ENTRYPOINT_FAST_PATH_ARMED",
+        ),
+    ),
+    FileContract(
         "bot/bot.py",
         (
             "canonical_broker_prebootstrap_v22",
             "stalled_writer_release_guard_v22",
+            "CANONICAL_ENTRYPOINT_FAST_PATH_READY",
+            "_FAST_PATH_INSTALLERS",
             "from bot.bot_main import main",
         ),
     ),
@@ -51,6 +61,8 @@ _CONTRACTS = (
         (
             "_acquire_writer_authority_before_nonce",
             "_run_self_healing_startup",
+            "_publish_canonical_strategy_for_runtime",
+            "CANONICAL_STRATEGY_HANDOFF_READY",
             "_release_writer_authority",
         ),
     ),
