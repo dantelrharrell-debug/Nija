@@ -326,6 +326,58 @@ def _advance_bootstrap_fsm_to_running_supervised() -> bool:
         return False
 
 
+def _fail_closed_strategy_publication(detail: str) -> None:
+    """Revoke process-local runtime claims when no executable strategy exists."""
+
+    os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "0"
+    os.environ["NIJA_RUNTIME_TRADING_STATE"] = "OFF"
+    logger.critical(
+        "CANONICAL_STRATEGY_PUBLICATION_FAILED detail=%s "
+        "runtime_state=OFF execution_authority=0 "
+        "trading_remains_fail_closed=true",
+        detail,
+    )
+
+
+def _publish_canonical_strategy_for_runtime(
+    broker: object,
+) -> Optional[object]:
+    """Build and publish the strategy required by the trading-loop contract."""
+
+    try:
+        from bot.strategy_publication_patch import publish_canonical_strategy
+
+        strategy, detail = publish_canonical_strategy(explicit_broker=broker)
+    except Exception as exc:
+        detail = f"publication_exception:{type(exc).__name__}:{exc}"
+        logger.critical(
+            "CANONICAL_STRATEGY_PUBLICATION_EXCEPTION type=%s err=%s",
+            type(exc).__name__,
+            exc,
+            exc_info=True,
+        )
+        strategy = None
+
+    if strategy is None or not callable(getattr(strategy, "run_cycle", None)):
+        if strategy is not None:
+            detail = "strategy_run_cycle_unavailable"
+        _fail_closed_strategy_publication(detail)
+        return None
+
+    if getattr(strategy, "broker", None) is None:
+        _fail_closed_strategy_publication("strategy_broker_missing")
+        return None
+
+    logger.critical(
+        "CANONICAL_STRATEGY_HANDOFF_READY detail=%s strategy=%s broker=%s "
+        "run_cycle=true",
+        detail,
+        type(strategy).__name__,
+        type(getattr(strategy, "broker", None)).__name__,
+    )
+    return strategy
+
+
 def _keep_process_alive_after_loop_return() -> None:
     """Keep the main process alive while supervised trading threads run."""
 
@@ -427,6 +479,14 @@ def main() -> int:
             return 1
 
         logger.info("✅ FSM is RUNNING_SUPERVISED")
+
+        logger.info("\n[STEP 2.5] Publishing Canonical Trading Strategy")
+        strategy = _publish_canonical_strategy_for_runtime(broker)
+        if strategy is None:
+            logger.critical(
+                "❌ Canonical TradingStrategy unavailable — exiting fail closed"
+            )
+            return 1
         _startup_complete = True
 
         logger.info("\n[STEP 3] Starting Trading Loop")
@@ -434,7 +494,7 @@ def main() -> int:
             from bot.nija_core_loop import start_trading_engine
 
             logger.info("🎯 Entering trading loop...")
-            start_trading_engine(broker)
+            start_trading_engine(strategy)
             if not _shutdown_event.is_set():
                 _keep_process_alive_after_loop_return()
         except KeyboardInterrupt:

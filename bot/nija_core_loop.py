@@ -5024,6 +5024,8 @@ def get_nija_core_loop(apex_strategy: Any = None, max_positions: int = 5) -> Nij
 #                    one continuous cycle ever runs.
 _loop_guard = threading.Lock()
 _loop_running = False
+_engine_start_guard = threading.Lock()
+_engine_thread: Optional[threading.Thread] = None
 # Hard trading-active flag.  Set to True only after BOTH the hydration and CSM
 # barriers have passed.  The main while-loop is conditioned on this flag so the
 # loop body never executes until the bot is genuinely ready to trade.
@@ -5095,48 +5097,78 @@ def _exec_test_probe(strategy: Any) -> Dict:
 
 
 def start_trading_engine(strategy: Any) -> threading.Thread:
-    """Single, guaranteed entry point for the trading loop thread.
+    """Start the one canonical trading-loop thread for a TradingStrategy."""
 
-    This is the ONLY function that may spawn a ``run_trading_loop`` thread.
-    All callers (``bot.py`` main, ``NijaCoreLoop.start``, etc.) must go
-    through here — no one else is permitted to call ``threading.Thread``
-    with ``run_trading_loop`` as the target directly.
+    global _engine_thread
 
-    Parameters
-    ----------
-    strategy : TradingStrategy instance (must not be None)
+    run_cycle = getattr(strategy, "run_cycle", None)
+    if strategy is None or not callable(run_cycle):
+        logger.critical(
+            "TRADING_ENGINE_START_REJECTED reason=invalid_strategy_interface "
+            "strategy_type=%s run_cycle=%s",
+            type(strategy).__name__,
+            callable(run_cycle),
+        )
+        raise TypeError(
+            "start_trading_engine requires a TradingStrategy-compatible "
+            "object with callable run_cycle()"
+        )
 
-    Returns
-    -------
-    threading.Thread — the started daemon thread
-    """
-    logger.critical("🚀 STARTING TRADING ENGINE THREAD")
-
-    # Install graceful shutdown handler before spawning the trading thread so
-    # SIGTERM is handled from the main thread (required by Python's signal API).
-    if _GRACEFUL_HANDOFF_AVAILABLE and _get_handoff_coordinator is not None:
-        try:
-            _get_handoff_coordinator().install_shutdown_handler()
-            logger.info(
-                "start_trading_engine: graceful shutdown handler installed "
-                "(SIGTERM will trigger clean lock release)"
-            )
-        except Exception as _hh_exc:
+    with _engine_start_guard:
+        if _engine_thread is not None and _engine_thread.is_alive():
             logger.warning(
-                "start_trading_engine: graceful shutdown handler install failed "
-                "(non-fatal): %s",
-                _hh_exc,
+                "TRADING_ENGINE_START_DEDUP existing_thread=%s ident=%s",
+                _engine_thread.name,
+                _engine_thread.ident,
             )
+            return _engine_thread
 
-    t = threading.Thread(
-        target=run_trading_loop,
-        args=(strategy,),
-        name="TradingLoop",
-        daemon=True,
-    )
-    t.start()
-    logger.critical("LIFECYCLE: entering live trading runtime")
-    return t
+        for existing in threading.enumerate():
+            try:
+                if existing.is_alive() and existing.name == "TradingLoop":
+                    _engine_thread = existing
+                    logger.warning(
+                        "TRADING_ENGINE_START_ADOPTED existing_thread=%s ident=%s",
+                        existing.name,
+                        existing.ident,
+                    )
+                    return existing
+            except Exception:
+                continue
+
+        logger.critical(
+            "🚀 STARTING TRADING ENGINE THREAD strategy_type=%s broker_type=%s",
+            type(strategy).__name__,
+            type(getattr(strategy, "broker", None)).__name__
+            if getattr(strategy, "broker", None) is not None
+            else "none",
+        )
+
+        # Install graceful shutdown handling before spawning the trading thread.
+        if _GRACEFUL_HANDOFF_AVAILABLE and _get_handoff_coordinator is not None:
+            try:
+                _get_handoff_coordinator().install_shutdown_handler()
+                logger.info(
+                    "start_trading_engine: graceful shutdown handler installed "
+                    "(SIGTERM will trigger clean lock release)"
+                )
+            except Exception as _hh_exc:
+                logger.warning(
+                    "start_trading_engine: graceful shutdown handler install failed "
+                    "(non-fatal): %s",
+                    _hh_exc,
+                )
+
+        thread = threading.Thread(
+            target=run_trading_loop,
+            args=(strategy,),
+            name="TradingLoop",
+            daemon=True,
+        )
+        _engine_thread = thread
+        thread.start()
+        logger.critical("LIFECYCLE: entering live trading runtime")
+        return thread
 
 
 # ---------------------------------------------------------------------------

@@ -50,7 +50,7 @@ def test_activation_monitor_observes_runtime_without_importing_it(monkeypatch) -
     assert module._state_machine() is None
     ready, detail = module._capital_ready_snapshot()
     assert ready is False
-    assert detail["reason"] == "capital_authority_unavailable"
+    assert detail["reason"] == "broker_manager_module_not_loaded"
     assert calls == []
 
 
