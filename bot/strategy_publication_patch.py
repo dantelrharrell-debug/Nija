@@ -56,7 +56,14 @@ def _strategy_class() -> Optional[type]:
 
 def _modules() -> list[Any]:
     out: list[Any] = []
-    for name in ("__main__", "bot", "bot.trading_strategy", "trading_strategy"):
+    for name in (
+        "__main__",
+        "bot",
+        "bot.bot",
+        "bot.bot_main",
+        "bot.trading_strategy",
+        "trading_strategy",
+    ):
         try:
             module = sys.modules.get(name) or importlib.import_module(name)
             if module is not None:
@@ -417,8 +424,95 @@ def _build_strategy(cls: type, brokers: dict[Any, dict[str, Any]]) -> Any:
         return strategy
 
 
+def publish_canonical_strategy(
+    explicit_broker: Any = None,
+) -> tuple[Optional[Any], str]:
+    """Synchronously build, hydrate, and publish the canonical live strategy.
+
+    The caller remains responsible for proving startup/live authority before
+    invoking this function.  This helper never changes trading state, grants
+    execution authority, starts a loop, or submits an order.
+    """
+
+    cls = _strategy_class()
+    if cls is None:
+        return None, "class_unavailable"
+
+    with _LOCK:
+        try:
+            existing = _existing(cls)
+            brokers, _ = _broker_results()
+            if explicit_broker is not None:
+                _add_broker(
+                    brokers,
+                    _normal_key(None, explicit_broker),
+                    explicit_broker,
+                    "canonical_runtime_handoff",
+                )
+
+            entry_ready = sorted(
+                str(key)
+                for key, meta in brokers.items()
+                if isinstance(meta, dict) and bool(meta.get("entry_ready"))
+            )
+            if not entry_ready:
+                logger.error(
+                    "STRATEGY_PUBLICATION_BLOCKED reason=no_entry_ready_brokers "
+                    "broker_keys=%s scan=%s explicit_broker=%s",
+                    sorted(str(key) for key in brokers.keys()),
+                    _LAST_SCAN_DETAIL,
+                    type(explicit_broker).__name__
+                    if explicit_broker is not None
+                    else "none",
+                )
+                return None, "no_entry_ready_brokers"
+
+            logger.warning(
+                "STRATEGY_PUBLICATION_BROKERS_READY count=%d keys=%s "
+                "entry_ready=%s",
+                len(brokers),
+                sorted(str(key) for key in brokers.keys()),
+                entry_ready,
+            )
+
+            if existing is not None:
+                if _hydrate_existing_strategy(existing, brokers):
+                    if not callable(getattr(existing, "run_cycle", None)):
+                        return None, "existing_strategy_interface_invalid"
+                    _publish(existing)
+                    return existing, "existing_published"
+                logger.warning(
+                    "STRATEGY_PUBLICATION_EXISTING_UNUSABLE "
+                    "rebuilding_with_live_brokers"
+                )
+
+            strategy = _build_strategy(cls, brokers)
+            if not _strategy_has_entry_broker(strategy):
+                _hydrate_existing_strategy(strategy, brokers)
+            if not _strategy_has_entry_broker(strategy):
+                return None, "built_strategy_has_no_entry_broker"
+            if not callable(getattr(strategy, "run_cycle", None)):
+                return None, "built_strategy_interface_invalid"
+
+            _publish(strategy)
+            return strategy, "built_published"
+        except Exception as exc:
+            logger.exception(
+                "STRATEGY_PUBLICATION_SYNCHRONOUS_ERROR type=%s err=%s",
+                type(exc).__name__,
+                exc,
+            )
+            return None, f"publication_error:{type(exc).__name__}"
+
+
 def _monitor() -> None:
-    interval = max(1.0, float(os.environ.get("NIJA_STRATEGY_PUBLICATION_INTERVAL_S", "3") or 3.0))
+    interval = max(
+        1.0,
+        float(
+            os.environ.get("NIJA_STRATEGY_PUBLICATION_INTERVAL_S", "3")
+            or 3.0
+        ),
+    )
     last_log = 0.0
     logger.warning("STRATEGY_PUBLICATION_MONITOR_STARTED interval_s=%.1f", interval)
     while True:
@@ -431,58 +525,17 @@ def _monitor() -> None:
             time.sleep(interval)
             continue
 
-        cls = _strategy_class()
-        if cls is None:
-            if now - last_log >= 15.0:
-                logger.warning("STRATEGY_PUBLICATION_WAITING reason=class_unavailable")
-                last_log = now
-            time.sleep(interval)
-            continue
-
-        with _LOCK:
-            existing = _existing(cls)
-            brokers, count = _broker_results()
-            if count <= 0:
-                if now - last_log >= 15.0:
-                    logger.warning(
-                        "STRATEGY_PUBLICATION_WAITING reason=no_connected_brokers scan=%s modules=%s existing=%s existing_broker=%s",
-                        _LAST_SCAN_DETAIL,
-                        sorted(name for name in sys.modules if name.endswith("multi_account_broker_manager") or name.endswith("broker_manager"))[:20],
-                        type(existing).__name__ if existing is not None else "none",
-                        type(getattr(existing, "broker", None)).__name__ if existing is not None and getattr(existing, "broker", None) is not None else "none",
-                    )
-                    last_log = now
-                time.sleep(interval)
-                continue
-
-            logger.warning(
-                "STRATEGY_PUBLICATION_BROKERS_READY count=%d keys=%s entry_ready=%s",
-                count,
-                sorted(str(key) for key in brokers.keys()),
-                sorted(str(key) for key, meta in brokers.items() if isinstance(meta, dict) and meta.get("entry_ready")),
-            )
-
-            if existing is not None:
-                if _hydrate_existing_strategy(existing, brokers):
-                    _publish(existing)
-                    return
-                logger.warning("STRATEGY_PUBLICATION_EXISTING_UNUSABLE rebuilding_with_live_brokers")
-
-            try:
-                strategy = _build_strategy(cls, brokers)
-                if not _strategy_has_entry_broker(strategy):
-                    _hydrate_existing_strategy(strategy, brokers)
-                if not _strategy_has_entry_broker(strategy):
-                    logger.warning("STRATEGY_PUBLICATION_BUILD_UNUSABLE retrying broker_keys=%s", sorted(str(key) for key in brokers.keys()))
-                    time.sleep(interval)
-                    continue
-            except Exception as exc:
-                logger.exception("STRATEGY_PUBLICATION_BUILD_ERROR err=%s", exc)
-                time.sleep(interval)
-                continue
-            _publish(strategy)
+        strategy, detail = publish_canonical_strategy()
+        if strategy is not None:
             return
-
+        if now - last_log >= 15.0:
+            logger.warning(
+                "STRATEGY_PUBLICATION_WAITING reason=%s scan=%s",
+                detail,
+                _LAST_SCAN_DETAIL,
+            )
+            last_log = now
+        time.sleep(interval)
 
 def install_import_hook() -> None:
     global _STARTED
