@@ -109,8 +109,10 @@ def test_existing_cdp_aliases_are_normalized_and_synchronized(monkeypatch):
 
     assert os.environ["NIJA_COINBASE_PEM_STATE"] == "valid"
     assert os.environ["NIJA_COINBASE_PEM_VALID"] == "1"
+    assert os.environ["COINBASE_API_KEY"] == os.environ["CDP_API_KEY_NAME"]
     assert "VALIDCDP" in os.environ["COINBASE_API_SECRET"]
-    assert all(os.environ[name] == os.environ["COINBASE_API_SECRET"] for name in _SECRET_ALIASES)
+    assert "VALIDCDP" in os.environ["CDP_API_KEY_PRIVATE_KEY"]
+    assert os.environ["NIJA_COINBASE_CREDENTIAL_PAIR_SOURCE"].startswith("cdp_name:")
 
 
 def test_malformed_base64_wrapped_pem_is_not_misclassified_as_legacy(monkeypatch):
@@ -155,7 +157,46 @@ def test_later_valid_alias_wins_over_stale_primary_alias(monkeypatch):
     assert os.environ["NIJA_COINBASE_PEM_VALID"] == "1"
     assert os.environ["NIJA_COINBASE_PEM_QUARANTINED"] == "0"
     assert "VALID" in os.environ["COINBASE_API_SECRET"]
-    assert all(os.environ[name] == os.environ["COINBASE_API_SECRET"] for name in _SECRET_ALIASES)
+    assert os.environ["NIJA_COINBASE_CREDENTIAL_PAIR_SOURCE"].startswith(
+        "single_key_fallback:"
+    )
+
+
+def test_matching_key_and_secret_family_wins_over_independent_aliases(monkeypatch):
+    _clear_coinbase_aliases(monkeypatch)
+    monkeypatch.setenv(
+        "COINBASE_API_KEY",
+        "organizations/example/apiKeys/stale",
+    )
+    monkeypatch.setenv("COINBASE_API_SECRET", "stale-broken-secret")
+    monkeypatch.setenv(
+        "COINBASE_PLATFORM_API_KEY",
+        "organizations/example/apiKeys/current",
+    )
+    monkeypatch.setenv(
+        "COINBASE_PLATFORM_API_SECRET",
+        "-----BEGIN EC PRIVATE KEY-----\\nPLATFORMVALID\\n-----END EC PRIVATE KEY-----",
+    )
+    module = _module()
+    monkeypatch.setattr(
+        module,
+        "_validate_coinbase_key",
+        lambda secret: (
+            "PLATFORMVALID" in secret,
+            "valid_es256" if "PLATFORMVALID" in secret else "invalid",
+        ),
+    )
+
+    module._normalize_coinbase_env()
+
+    assert (
+        os.environ["COINBASE_API_KEY"]
+        == "organizations/example/apiKeys/current"
+    )
+    assert "PLATFORMVALID" in os.environ["COINBASE_API_SECRET"]
+    assert os.environ["NIJA_COINBASE_CREDENTIAL_PAIR_SOURCE"].startswith(
+        "platform:"
+    )
 
 
 def test_non_cdp_legacy_secret_is_not_falsely_quarantined(monkeypatch):
@@ -197,6 +238,10 @@ def test_quarantine_state_is_restored_after_generic_activation_skip(monkeypatch)
 def test_valid_coinbase_secret_does_not_override_operator_disable_state(monkeypatch):
     _clear_coinbase_aliases(monkeypatch)
     monkeypatch.setenv(
+        "COINBASE_API_KEY",
+        "organizations/example/apiKeys/example",
+    )
+    monkeypatch.setenv(
         "COINBASE_API_SECRET",
         "-----BEGIN EC PRIVATE KEY-----\\nABC\\n-----END EC PRIVATE KEY-----",
     )
@@ -210,3 +255,107 @@ def test_valid_coinbase_secret_does_not_override_operator_disable_state(monkeypa
     assert os.environ["NIJA_COINBASE_PEM_VALID"] == "1"
     assert os.environ["NIJA_COINBASE_PEM_QUARANTINED"] == "0"
     assert os.environ["NIJA_DISABLE_COINBASE"] == "true"
+
+def test_authenticated_recovery_retries_complete_alternative_pair(monkeypatch):
+    module = importlib.reload(
+        importlib.import_module("coinbase_authenticated_connect_recovery_patch")
+    )
+    module._FAILED_PAIR_AT.clear()
+    bad_key = "organizations/example/apiKeys/stale"
+    good_key = "organizations/example/apiKeys/current"
+    bad_secret = "stale-pem"
+    good_secret = "current-pem"
+    monkeypatch.setenv("COINBASE_API_KEY", bad_key)
+    monkeypatch.setenv("COINBASE_API_SECRET", bad_secret)
+    monkeypatch.setenv("COINBASE_PEM_CONTENT", bad_secret)
+    monkeypatch.setenv("NIJA_COINBASE_CREDENTIAL_PAIR_SOURCE", "canonical")
+    monkeypatch.setattr(
+        module,
+        "_configured_pairs",
+        lambda: [
+            ("canonical", bad_key, bad_secret),
+            ("platform", good_key, good_secret),
+        ],
+    )
+    monkeypatch.setattr(
+        module,
+        "_authenticated_probe",
+        lambda _broker: (False, "private_probe_failed"),
+    )
+    monkeypatch.setattr(
+        module,
+        "_publish_connected",
+        lambda broker, _source: setattr(broker, "connected", True),
+    )
+
+    class CoinbasePairBroker:
+        def __init__(self):
+            self.connected = False
+            self._auth_failed = False
+
+        def connect(self):
+            matched = (
+                os.environ.get("COINBASE_API_KEY") == good_key
+                and os.environ.get("COINBASE_API_SECRET") == good_secret
+            )
+            self.connected = matched
+            self._auth_failed = not matched
+            return matched
+
+    assert module._patch_class(CoinbasePairBroker) is True
+    broker = CoinbasePairBroker()
+
+    assert broker.connect() is True
+    assert broker.connected is True
+    assert os.environ["COINBASE_API_KEY"] == good_key
+    assert os.environ["COINBASE_API_SECRET"] == good_secret
+    assert os.environ["NIJA_COINBASE_CREDENTIAL_PAIR_SOURCE"] == "platform"
+
+
+def test_authenticated_recovery_restores_primary_after_all_pairs_fail(monkeypatch):
+    module = importlib.reload(
+        importlib.import_module("coinbase_authenticated_connect_recovery_patch")
+    )
+    module._FAILED_PAIR_AT.clear()
+    primary_key = "organizations/example/apiKeys/primary"
+    primary_secret = "primary-pem"
+    monkeypatch.setenv("COINBASE_API_KEY", primary_key)
+    monkeypatch.setenv("COINBASE_API_SECRET", primary_secret)
+    monkeypatch.setenv("COINBASE_PEM_CONTENT", primary_secret)
+    monkeypatch.setenv("NIJA_COINBASE_CREDENTIAL_PAIR_SOURCE", "canonical")
+    monkeypatch.setattr(
+        module,
+        "_configured_pairs",
+        lambda: [
+            ("canonical", primary_key, primary_secret),
+            (
+                "platform",
+                "organizations/example/apiKeys/alternate",
+                "alternate-pem",
+            ),
+        ],
+    )
+    monkeypatch.setattr(
+        module,
+        "_authenticated_probe",
+        lambda _broker: (False, "private_probe_failed"),
+    )
+
+    class CoinbaseFailingBroker:
+        def __init__(self):
+            self.connected = False
+            self._auth_failed = False
+
+        def connect(self):
+            return False
+
+    assert module._patch_class(CoinbaseFailingBroker) is True
+    broker = CoinbaseFailingBroker()
+
+    assert broker.connect() is False
+    assert broker.connected is False
+    assert broker._auth_failed is True
+    assert os.environ["COINBASE_API_KEY"] == primary_key
+    assert os.environ["COINBASE_API_SECRET"] == primary_secret
+    assert os.environ["NIJA_COINBASE_ACTIVATION_STATE"] == "authentication_failed"
+
