@@ -67,6 +67,41 @@ def _is_kraken(cls: type) -> bool:
     return "kraken" in cls.__name__.lower()
 
 
+def _refresh_interval_s() -> float:
+    try:
+        configured = float(
+            os.environ.get("NIJA_KRAKEN_PRIVATE_EQUITY_MIN_REFRESH_S", "30")
+            or 30.0
+        )
+    except (TypeError, ValueError, OverflowError):
+        configured = 30.0
+    return max(5.0, configured)
+
+
+def _selected_payload(value: Any, total: float, *, cached: bool = False) -> Any:
+    if isinstance(value, Mapping):
+        updated = dict(value)
+        updated["total_balance"] = total
+        updated["total_funds"] = total
+        updated["equity_fresh"] = True
+        if cached:
+            updated["equity_cached_within_ttl"] = True
+        return updated
+    return total
+
+
+def _cached_private_equity(self: Any, now: float, ttl_s: float) -> tuple[Any, float]:
+    total = _f(getattr(self, "_nija_last_fresh_private_equity", 0.0))
+    observed_at = _f(
+        getattr(self, "_nija_last_fresh_private_equity_monotonic", 0.0)
+    )
+    if total <= 0.0 or observed_at <= 0.0 or now - observed_at >= ttl_s:
+        return None, 0.0
+    payload = getattr(self, "_nija_last_fresh_private_payload", total)
+    return _selected_payload(payload, total, cached=True), total
+
+
+
 def _patch_class(cls: type) -> bool:
     current = getattr(cls, "get_account_balance", None)
     if not _is_kraken(cls) or not callable(current):
@@ -78,33 +113,68 @@ def _patch_class(cls: type) -> bool:
 
     @wraps(current)
     def get_account_balance(self: Any, *args: Any, **kwargs: Any):
+        ttl_s = _refresh_interval_s()
+        now = time.monotonic()
+        cached_payload, cached_total = _cached_private_equity(self, now, ttl_s)
+        if cached_total > 0.0:
+            return cached_payload
+
+        refresh_lock = getattr(self, "_nija_private_equity_refresh_lock", None)
+        if refresh_lock is None:
+            with _LOCK:
+                refresh_lock = getattr(
+                    self, "_nija_private_equity_refresh_lock", None
+                )
+                if refresh_lock is None:
+                    refresh_lock = threading.Lock()
+                    setattr(self, "_nija_private_equity_refresh_lock", refresh_lock)
+
         fresh_value: Any = None
         fresh_total = 0.0
         fresh_error = ""
-        try:
-            fresh_value = live_method(self, *args, **kwargs)
-            fresh_total = _total(fresh_value)
-        except Exception as exc:
-            fresh_error = f"{type(exc).__name__}:{str(exc)[:180]}"
-
-        if fresh_total > 0:
-            try:
-                setattr(self, "_last_known_balance", fresh_total)
-                setattr(self, "_nija_last_fresh_private_equity", fresh_total)
-                setattr(self, "_nija_last_fresh_private_equity_at", time.time())
-            except Exception:
-                pass
-            logger.critical(
-                "KRAKEN_EQUITY_FRESH_PRIVATE_SELECTED marker=%s fresh=$%.8f cache_policy=fallback_only",
-                _MARKER, fresh_total,
+        with refresh_lock:
+            now = time.monotonic()
+            cached_payload, cached_total = _cached_private_equity(
+                self, now, ttl_s
             )
-            if isinstance(fresh_value, Mapping):
-                updated = dict(fresh_value)
-                updated["total_balance"] = fresh_total
-                updated["total_funds"] = fresh_total
-                updated["equity_fresh"] = True
-                return updated
-            return fresh_total
+            if cached_total > 0.0:
+                return cached_payload
+            try:
+                fresh_value = live_method(self, *args, **kwargs)
+                fresh_total = _total(fresh_value)
+            except Exception as exc:
+                fresh_error = f"{type(exc).__name__}:{str(exc)[:180]}"
+
+            if fresh_total > 0.0:
+                selected = _selected_payload(fresh_value, fresh_total)
+                try:
+                    setattr(self, "_last_known_balance", fresh_total)
+                    setattr(self, "_nija_last_fresh_private_equity", fresh_total)
+                    setattr(
+                        self,
+                        "_nija_last_fresh_private_equity_monotonic",
+                        time.monotonic(),
+                    )
+                    setattr(
+                        self,
+                        "_nija_last_fresh_private_equity_at",
+                        time.time(),
+                    )
+                    setattr(
+                        self,
+                        "_nija_last_fresh_private_payload",
+                        selected,
+                    )
+                except Exception:
+                    pass
+                logger.critical(
+                    "KRAKEN_EQUITY_FRESH_PRIVATE_SELECTED marker=%s "
+                    "fresh=$%.8f cache_policy=ttl_fallback_only ttl_s=%.1f",
+                    _MARKER,
+                    fresh_total,
+                    ttl_s,
+                )
+                return selected
 
         fallback = current(self, *args, **kwargs)
         fallback_total = _total(fallback)
@@ -122,7 +192,6 @@ def _patch_class(cls: type) -> bool:
         _MARKER, cls.__module__, cls.__name__,
     )
     return True
-
 
 def _patch_module(module: ModuleType) -> bool:
     changed = False
