@@ -47,6 +47,60 @@ def _f(value: Any, default: float = 0.0) -> float:
         return default
 
 
+
+_BALANCE_TOTAL_KEYS = (
+    "total_funds",
+    "total_balance",
+    "total_equity",
+    "equity",
+    "account_equity",
+    "portfolio_value",
+    "trading_balance",
+    "balance",
+    "usd_value",
+)
+
+
+def _balance_total(value: Any) -> float:
+    if isinstance(value, dict):
+        for key in _BALANCE_TOTAL_KEYS:
+            amount = _f(value.get(key))
+            if amount > 0.0:
+                return amount
+        return 0.0
+    return max(0.0, _f(value))
+
+
+def _cached_broker_balance(
+    broker_obj: Any,
+    broker_key: str,
+    capital_authority: Any = None,
+) -> tuple[float, str]:
+    """Read an already-published balance without invoking broker I/O."""
+
+    for attr in (
+        "_last_known_balance",
+        "_last_confirmed_balance",
+        "last_known_balance",
+        "cached_balance",
+    ):
+        amount = _balance_total(getattr(broker_obj, attr, None))
+        if amount > 0.0:
+            return amount, attr
+
+    balances = getattr(capital_authority, "_broker_balances", {}) or {}
+    if isinstance(balances, dict):
+        wanted = broker_key.strip().lower()
+        for key, value in balances.items():
+            normalized = str(getattr(key, "value", key)).strip().lower()
+            if normalized == wanted:
+                amount = _balance_total(value)
+                if amount > 0.0:
+                    return amount, "capital_authority"
+
+    return 0.0, "unavailable"
+
+
 def _i(value: Any, default: int = 0) -> int:
     try:
         return int(float(value or 0))
@@ -108,20 +162,29 @@ def _kill_switch_clear() -> tuple[bool, str]:
     return True, "kill_switch_clear"
 
 
-def _broker_manager_capital_payload() -> dict[str, Any]:
-    """Return connected-broker balance data directly from the canonical manager.
 
-    Only observes modules already in sys.modules so this helper never triggers
-    premature broker-manager construction.  Feeds any non-zero balances into
-    CapitalAuthority via force_accept_feed() to unblock a stale zero-broker CA.
-    Returns a dict with keys: connected_count, total_balance, per_broker.
+def _broker_manager_capital_payload() -> dict[str, Any]:
+    """Observe connected brokers using accepted in-memory balances only.
+
+    This recovery monitor must never own exchange refreshes.  The broker manager
+    and BalanceService are the only components allowed to call private balance
+    endpoints and publish CapitalAuthority feeds.  Returning no balance here is
+    intentionally fail-closed until one of those owners publishes a snapshot.
     """
-    result: dict[str, Any] = {"connected_count": 0, "total_balance": 0.0, "per_broker": {}}
+
+    result: dict[str, Any] = {
+        "connected_count": 0,
+        "total_balance": 0.0,
+        "per_broker": {},
+        "sources": {},
+        "source": "cached_only",
+    }
     mabm_mod = sys.modules.get("bot.multi_account_broker_manager") or sys.modules.get(
         "multi_account_broker_manager"
     )
     if mabm_mod is None:
         return result
+
     try:
         getter = getattr(mabm_mod, "get_broker_manager", None)
         if not callable(getter):
@@ -129,83 +192,67 @@ def _broker_manager_capital_payload() -> dict[str, Any]:
         mgr = getter()
         if mgr is None:
             return result
-        # Enumerate connected platform brokers (Coinbase, Kraken, OKX, …).
-        platform_brokers = getattr(mgr, "_platform_brokers", {})
-        broker_type_cls = getattr(mabm_mod, "BrokerType", None)
-        if broker_type_cls is None:
-            # Fall back to broker_manager module for the enum.
-            bm_mod = sys.modules.get("bot.broker_manager") or sys.modules.get("broker_manager")
-            if bm_mod is not None:
-                broker_type_cls = getattr(bm_mod, "BrokerType", None)
-        connected_count = 0
+
+        ca = None
+        ca_mod = sys.modules.get("bot.capital_authority") or sys.modules.get(
+            "capital_authority"
+        )
+        if ca_mod is not None:
+            ca_getter = getattr(ca_mod, "get_capital_authority", None)
+            if callable(ca_getter):
+                try:
+                    ca = ca_getter()
+                except Exception:
+                    ca = None
+
         total_balance = 0.0
         per_broker: dict[str, float] = {}
-        for bt, broker_obj in list(platform_brokers.items()):
+        sources: dict[str, str] = {}
+        platform_brokers = getattr(mgr, "_platform_brokers", {})
+        for broker_type, broker_obj in list(platform_brokers.items()):
             if broker_obj is None:
                 continue
             try:
                 connected = bool(getattr(broker_obj, "connected", False))
                 if not connected:
-                    # Also accept sticky-connected via is_platform_connected.
-                    is_pc = getattr(mgr, "is_platform_connected", None)
-                    if callable(is_pc):
-                        connected = bool(is_pc(bt))
+                    is_connected = getattr(mgr, "is_platform_connected", None)
+                    if callable(is_connected):
+                        connected = bool(is_connected(broker_type))
                 if not connected:
                     continue
-                get_bal = getattr(broker_obj, "get_account_balance", None)
-                if not callable(get_bal):
+
+                broker_key = str(getattr(broker_type, "value", broker_type))
+                balance, source = _cached_broker_balance(broker_obj, broker_key, ca)
+                if balance <= 0.0:
+                    logger.debug(
+                        "RUNTIME_AUTHORITY_CONVERGENCE cached_balance_unavailable broker=%s",
+                        broker_key,
+                    )
                     continue
-                raw = get_bal()
-                bal = 0.0
-                if isinstance(raw, dict):
-                    for k in ("trading_balance", "balance", "total", "usd_value"):
-                        v = raw.get(k)
-                        if v is not None:
-                            try:
-                                bal = float(v)
-                                break
-                            except Exception:
-                                pass
-                else:
-                    try:
-                        bal = float(raw or 0.0)
-                    except Exception:
-                        bal = 0.0
-                broker_key = str(getattr(bt, "value", bt))
-                per_broker[broker_key] = bal
-                total_balance += bal
-                connected_count += 1
+
+                per_broker[broker_key] = balance
+                sources[broker_key] = source
+                total_balance += balance
             except Exception as exc:
                 logger.debug(
-                    "RUNTIME_AUTHORITY_CONVERGENCE broker_payload_error broker=%s err=%s", bt, exc
+                    "RUNTIME_AUTHORITY_CONVERGENCE broker_payload_error broker=%s err=%s",
+                    broker_type,
+                    exc,
                 )
-        result = {"connected_count": connected_count, "total_balance": total_balance, "per_broker": per_broker}
-        if connected_count == 0 or total_balance <= 0.0:
-            return result
-        # Feed recovered balances into CapitalAuthority so that is_hydrated
-        # and valid_broker_count become non-zero.
-        try:
-            ca_mod = sys.modules.get("bot.capital_authority") or sys.modules.get("capital_authority")
-            if ca_mod is not None:
-                ca_getter = getattr(ca_mod, "get_capital_authority", None)
-                if callable(ca_getter):
-                    ca = ca_getter()
-                    if ca is not None:
-                        for broker_key, bal in per_broker.items():
-                            try:
-                                ca.force_accept_feed(broker_key, bal)
-                            except Exception as feed_exc:
-                                logger.debug(
-                                    "RUNTIME_AUTHORITY_CONVERGENCE force_accept_feed err broker=%s err=%s",
-                                    broker_key,
-                                    feed_exc,
-                                )
-        except Exception as exc:
-            logger.debug("RUNTIME_AUTHORITY_CONVERGENCE ca_feed_error err=%s", exc)
-    except Exception as exc:
-        logger.debug("RUNTIME_AUTHORITY_CONVERGENCE broker_manager_payload_error err=%s", exc)
-    return result
 
+        return {
+            "connected_count": len(per_broker),
+            "total_balance": total_balance,
+            "per_broker": per_broker,
+            "sources": sources,
+            "source": "cached_only",
+        }
+    except Exception as exc:
+        logger.debug(
+            "RUNTIME_AUTHORITY_CONVERGENCE broker_manager_payload_error err=%s",
+            exc,
+        )
+        return result
 
 def _capital_authority_ready() -> tuple[bool, str, dict[str, Any]]:
     if not _truthy("LIVE_CAPITAL_VERIFIED"):
