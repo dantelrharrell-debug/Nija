@@ -7,6 +7,7 @@ credential rebind and retry on a 401. Invalid credentials still fail closed.
 """
 from __future__ import annotations
 
+import hashlib
 import importlib
 import logging
 import os
@@ -37,6 +38,16 @@ def _quarantined() -> bool:
 def _quarantine(instance: Any) -> None:
     os.environ["NIJA_COINBASE_CREDENTIALS_QUARANTINED"] = "1"
     os.environ["NIJA_COINBASE_RECONNECT_DISABLED"] = "1"
+    key = str(os.environ.get("COINBASE_API_KEY", "") or "")
+    secret = str(
+        os.environ.get("COINBASE_API_SECRET", "")
+        or os.environ.get("COINBASE_PEM_CONTENT", "")
+        or ""
+    )
+    if key and secret:
+        os.environ["NIJA_COINBASE_QUARANTINED_CREDENTIAL_FINGERPRINT"] = (
+            hashlib.sha256((key + "\0" + secret).encode("utf-8")).hexdigest()[:16]
+        )
     os.environ["NIJA_COINBASE_CONNECTED"] = "0"
     os.environ["NIJA_COINBASE_BALANCE_OBSERVED"] = "0"
     os.environ["NIJA_COINBASE_SPENDABLE_QUOTE"] = "0.00000000"
