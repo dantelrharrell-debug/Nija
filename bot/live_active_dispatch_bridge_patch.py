@@ -402,6 +402,41 @@ def _start_trading_loop(strategy: Any, source: str) -> bool:
         return alive
 
 
+def ensure_live_dispatch(source: str = "external_recovery") -> Tuple[bool, str]:
+    """Perform one idempotent live-loop handoff attempt."""
+
+    if _loop_thread_running():
+        return True, "trading_loop_already_running"
+
+    _ensure_deferred_startup_repairs()
+    if _has_writer_authority() and (
+        not _runtime_execution_authority()
+        or not _state_machine_live_active()
+    ):
+        _attempt_runtime_convergence(source)
+
+    allowed, reason = _dispatch_allowed()
+    if not allowed:
+        return reason == "trading_loop_already_running", reason
+
+    strategy, strategy_source = _find_strategy()
+    if strategy is None:
+        return False, "strategy_not_published"
+
+    started = _start_trading_loop(strategy, strategy_source)
+    detail = "started" if started else "start_failed"
+    logger.log(
+        logging.CRITICAL if started else logging.ERROR,
+        "LIVE_ACTIVE_DISPATCH_BRIDGE_ENSURE source=%s started=%s detail=%s "
+        "strategy_source=%s",
+        source,
+        str(started).lower(),
+        detail,
+        strategy_source,
+    )
+    return started, detail
+
+
 def _monitor() -> None:
     interval = max(
         1.0,
@@ -517,4 +552,5 @@ __all__ = [
     "_attempt_runtime_convergence",
     "_dispatch_allowed",
     "_writer_authority_snapshot",
+    "ensure_live_dispatch",
 ]
