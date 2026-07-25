@@ -190,3 +190,37 @@ def test_ensure_live_dispatch_skips_deferred_repairs_after_live_gates(monkeypatc
 
     assert started is True
     assert detail == "started"
+
+
+def test_find_strategy_prefers_completed_position_sync_without_imports(monkeypatch) -> None:
+    module = _load_module()
+    strategy = object()
+    sync_module = ModuleType("bot.startup_position_sync")
+    sync_module._LAST_COMPLETED_STRATEGY = strategy
+    monkeypatch.setitem(sys.modules, "bot.startup_position_sync", sync_module)
+    monkeypatch.setattr(
+        module,
+        "_strategy_class",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("completed strategy discovery must not import or resolve a class")
+        ),
+    )
+
+    found, source = module._find_strategy()
+
+    assert found is strategy
+    assert source == "bot.startup_position_sync._LAST_COMPLETED_STRATEGY"
+
+
+def test_find_strategy_returns_quickly_before_position_sync_completes(monkeypatch) -> None:
+    module = _load_module()
+    sync_module = ModuleType("bot.startup_position_sync")
+    sync_module._LAST_COMPLETED_STRATEGY = None
+    monkeypatch.setitem(sys.modules, "bot.startup_position_sync", sync_module)
+    monkeypatch.setattr(module, "_strategy_from_initialized_state", lambda: (None, "not_found"))
+    monkeypatch.setattr(module, "_strategy_class", lambda: None)
+
+    found, detail = module._find_strategy()
+
+    assert found is None
+    assert detail == "strategy_not_published"

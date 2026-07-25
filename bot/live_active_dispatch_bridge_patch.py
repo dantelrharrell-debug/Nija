@@ -101,8 +101,10 @@ def _loop_thread_running() -> bool:
 
 def _state_machine_live_active() -> bool:
     for module_name in ("bot.trading_state_machine", "trading_state_machine"):
+        module = sys.modules.get(module_name)
+        if module is None:
+            continue
         try:
-            module = importlib.import_module(module_name)
             getter = getattr(module, "get_state_machine", None)
             if not callable(getter):
                 continue
@@ -275,8 +277,10 @@ def _module_candidates() -> list[Any]:
 
 def _strategy_class() -> Optional[type]:
     for module_name in ("bot.trading_strategy", "trading_strategy"):
+        module = sys.modules.get(module_name)
+        if module is None:
+            continue
         try:
-            module = importlib.import_module(module_name)
             cls = getattr(module, "TradingStrategy", None)
             if isinstance(cls, type):
                 return cls
@@ -287,6 +291,19 @@ def _strategy_class() -> Optional[type]:
                 exc,
             )
     return None
+
+
+def _strategy_from_completed_position_sync() -> Tuple[Optional[Any], str]:
+    """Return only the exact strategy whose broker snapshots finished syncing."""
+
+    for module_name in ("bot.startup_position_sync", "startup_position_sync"):
+        module = sys.modules.get(module_name)
+        if module is None:
+            continue
+        strategy = getattr(module, "_LAST_COMPLETED_STRATEGY", None)
+        if strategy is not None:
+            return strategy, f"{module_name}._LAST_COMPLETED_STRATEGY"
+    return None, "position_sync_not_complete"
 
 
 def _strategy_from_initialized_state() -> Tuple[Optional[Any], str]:
@@ -331,6 +348,9 @@ def _strategy_from_gc(cls: Optional[type]) -> Tuple[Optional[Any], str]:
 
 
 def _find_strategy() -> Tuple[Optional[Any], str]:
+    strategy, source = _strategy_from_completed_position_sync()
+    if strategy is not None:
+        return strategy, source
     strategy, source = _strategy_from_initialized_state()
     if strategy is not None:
         return strategy, source
@@ -338,13 +358,15 @@ def _find_strategy() -> Tuple[Optional[Any], str]:
     strategy, source = _strategy_from_module_globals(cls)
     if strategy is not None:
         return strategy, source
-    return _strategy_from_gc(cls)
+    return None, "strategy_not_published"
 
 
 def _set_start_gate() -> None:
     for module_name in ("bot.nija_core_loop", "nija_core_loop"):
+        module = sys.modules.get(module_name)
+        if module is None:
+            continue
         try:
-            module = importlib.import_module(module_name)
             ready = getattr(module, "TRADING_ENGINE_READY", None)
             if ready is not None and callable(getattr(ready, "set", None)):
                 ready.set()
@@ -369,10 +391,15 @@ def _start_trading_loop(strategy: Any, source: str) -> bool:
                 "LIVE_ACTIVE_DISPATCH_BRIDGE_ALREADY_RUNNING source=%s", source
             )
             return True
-        try:
-            module = importlib.import_module("bot.nija_core_loop")
-        except Exception:
-            module = importlib.import_module("nija_core_loop")
+        module = sys.modules.get("bot.nija_core_loop") or sys.modules.get(
+            "nija_core_loop"
+        )
+        if module is None:
+            logger.error(
+                "LIVE_ACTIVE_DISPATCH_BRIDGE_START_FAILED "
+                "reason=nija_core_loop_not_loaded"
+            )
+            return False
         starter = getattr(module, "start_trading_engine", None)
         if not callable(starter):
             logger.error(
