@@ -165,6 +165,30 @@ def _canonical_prebootstrap_manager() -> Tuple[Optional[Any], str]:
             break
 
     if module is None:
+        for name in (
+            "nija_canonical_broker_startup_convergence_v24_prebot",
+            "nija_canonical_broker_startup_convergence_v24",
+        ):
+            startup_guard = sys.modules.get(name)
+            loader = getattr(startup_guard, "_load_v22_module", None)
+            if callable(loader):
+                try:
+                    module = loader()
+                except Exception as exc:
+                    logger.error(
+                        "RENDER_STARTUP_CANONICAL_PREBOOTSTRAP_LOAD_FAILED "
+                        "marker=%s err=%s:%s",
+                        _MARKER,
+                        type(exc).__name__,
+                        exc,
+                    )
+                    return None, (
+                        "canonical_prebootstrap_load_failed:"
+                        f"{type(exc).__name__}"
+                    )
+                break
+
+    if module is None:
         return None, "canonical_prebootstrap_module_not_loaded"
 
     prepare = getattr(module, "prepare_canonical_broker_runtime", None)
