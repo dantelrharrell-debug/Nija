@@ -256,6 +256,8 @@ def test_coinbase_balance_quarantine_returns_fail_closed_zero_without_retries(
     monkeypatch,
 ):
     _clear_coinbase_quarantine(monkeypatch)
+    monkeypatch.setenv("COINBASE_API_KEY", "key")
+    monkeypatch.setenv("COINBASE_API_SECRET", "secret")
     monkeypatch.setattr(coinbase_balance, "_normalise", lambda: True)
 
     class CoinbaseBroker:
