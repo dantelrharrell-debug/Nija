@@ -6,6 +6,45 @@ This README is the current recovery anchor for NIJA. It documents the active pro
 
 NIJA does not guarantee trades or profits. A connected brokerage may enter a trade only when writer authority, capital, signal, risk, exchange-minimum, and order-admission checks all pass.
 
+## Current Recovery Checkpoint — July 25, 2026
+
+This is the durable return point for the active Render recovery.
+
+| Area | Proven state |
+|---|---|
+| Deployed source | The latest recovery changes are deployed and entrypoint-attested |
+| Canonical runtime | `launcher-v26 -> main.py -> bot.bot -> bot.bot_main` attestation passed |
+| Runtime guards | Guard audit reports ready with no missing required guards |
+| Coinbase key structure | Exactly one canonical key/secret pair is selected and the private key parses as valid ES256/ECDSA |
+| Coinbase connection | Still fail-closed: authenticated SDK requests returned `401 Unauthorized`; structural PEM validation is not connection proof |
+| OKX US | Independently connected, funded, market discovery succeeded, and venue readiness reported `ready` |
+| Kraken | Configured but disconnected in the latest multi-venue connectivity snapshots |
+| Writer authority | A restarted Render instance may safely wait for the previous rolling-deployment writer lease |
+| Trading state | No current claim of `LIVE_ACTIVE`, submitted order, confirmed fill, or profit |
+
+### Safe continuation from this checkpoint
+
+1. Do not repeatedly restart Render while `ENTRYPOINT_WRITER_AUTHORITY_STANDBY` is present.
+2. Wait for verified writer acquisition before judging the replacement instance.
+3. Do not regress the Coinbase key back to manual PEM construction. The PEM-format issue is resolved when startup reports:
+   ```text
+   COINBASE_PEM_CANONICALIZED validation=es256 pair_source=canonical:COINBASE_API_KEY+COINBASE_API_SECRET pair_count=1 key_shape=cdp
+   ```
+4. Coinbase must remain disconnected and fail-closed until a private account or balance request succeeds.
+5. If Coinbase continues returning `401 Unauthorized`, inspect Advanced Trade access, key enablement, View/Trade permissions, portfolio scope, IP restrictions, SDK signing, and runtime credential selection.
+6. Keep OKX independent when Coinbase or Kraken is degraded. Never use forced activation, synthetic capital, or writer-lock bypasses.
+
+Required evidence to advance this checkpoint:
+
+```text
+ENTRYPOINT_WRITER_AUTHORITY_READY
+COINBASE_AUTHENTICATED_CONNECT_RECOVERED   # only when Coinbase succeeds
+BROKER_INDEPENDENT_READINESS
+LIVE_BROKER_CONNECTIVITY_SNAPSHOT
+ACTIVATION_COMMITTED
+NIJA_RUNTIME_TRADING_STATE=LIVE_ACTIVE
+```
+
 ## Verified Production Milestone — July 25, 2026
 
 NIJA completed a successful production bootstrap milestone through the canonical Render runtime.
