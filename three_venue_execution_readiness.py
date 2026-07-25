@@ -168,9 +168,39 @@ def _connected(broker: Any) -> bool:
     return False
 
 
-def _balance(broker: Any) -> tuple[bool, float, str]:
+def _okx_authenticated_spendable(broker: Any) -> float:
+    if (
+        broker is None
+        or not _connected(broker)
+        or not _truthy("NIJA_OKX_BALANCE_OBSERVED")
+        or str(os.getenv("NIJA_OKX_FUNDING_STATUS", "") or "").strip().lower() != "funded"
+    ):
+        return 0.0
+    candidates: list[float] = []
+    for value in (
+        getattr(broker, "_okx_trading_spendable_quote", None),
+        os.getenv("NIJA_OKX_TRADING_SPENDABLE_QUOTE"),
+        os.getenv("NIJA_OKX_SPENDABLE_QUOTE"),
+    ):
+        try:
+            candidates.append(max(0.0, float(value or 0.0)))
+        except (TypeError, ValueError, OverflowError):
+            continue
+    return max(candidates, default=0.0)
+
+
+def _balance(venue: str, broker: Any) -> tuple[bool, float, str]:
     if broker is None:
         return False, 0.0, "broker_missing"
+
+    # Consume the authenticated OKX snapshot before invoking another private
+    # balance request. The proof is valid only while the broker is connected and
+    # the observer reports a funded Trading wallet.
+    if venue == "okx":
+        spendable = _okx_authenticated_spendable(broker)
+        if spendable > 0.0:
+            return True, spendable, "okx_authenticated_wallet"
+
     for method_name in ("get_account_balance_detailed", "get_account_balance"):
         method = getattr(broker, method_name, None)
         if not callable(method):
@@ -202,6 +232,7 @@ def _balance(broker: Any) -> tuple[bool, float, str]:
         except Exception as exc:
             return False, 0.0, f"{method_name}:{type(exc).__name__}"
     return False, 0.0, "balance_method_missing"
+
 
 
 def _markets(broker: Any) -> tuple[bool, Optional[int], str]:
@@ -275,7 +306,7 @@ def evaluate_venue(
         else None
     )
     connected = _connected(broker)
-    balance_ok, spendable, balance_reason = _balance(broker)
+    balance_ok, spendable, balance_reason = _balance(venue, broker)
     market_ok, market_count, market_reason = _markets(broker)
     adapter_ok = _adapter_ready(broker)
 

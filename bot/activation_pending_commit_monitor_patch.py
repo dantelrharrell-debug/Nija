@@ -322,6 +322,30 @@ def _cached_broker_balance(
 ) -> tuple[float, str]:
     """Read an already-published balance without invoking broker I/O."""
 
+    normalized_key = broker_key.strip().lower()
+    if (
+        normalized_key == "okx"
+        and bool(getattr(broker_obj, "connected", False))
+        and str(os.environ.get("NIJA_OKX_BALANCE_OBSERVED", "") or "").strip().lower()
+        in {"1", "true", "yes", "on"}
+        and str(os.environ.get("NIJA_OKX_FUNDING_STATUS", "") or "").strip().lower()
+        == "funded"
+    ):
+        candidates = (
+            getattr(broker_obj, "_okx_trading_total_quote", None),
+            getattr(broker_obj, "_okx_trading_spendable_quote", None),
+            os.environ.get("NIJA_OKX_TRADING_TOTAL_QUOTE"),
+            os.environ.get("NIJA_OKX_TRADING_SPENDABLE_QUOTE"),
+        )
+        authoritative = max((_balance_total(value) for value in candidates), default=0.0)
+        if authoritative > 0.0:
+            return authoritative, "okx_authenticated_wallet"
+
+    if normalized_key == "okx":
+        # Do not fall through to a stale generic cache after the authenticated
+        # OKX proof becomes unobserved or non-executable.
+        return 0.0, "okx_authenticated_wallet_unavailable"
+
     for attr in (
         "_last_known_balance",
         "_last_confirmed_balance",
@@ -334,10 +358,9 @@ def _cached_broker_balance(
 
     balances = getattr(capital_authority, "_broker_balances", {}) or {}
     if isinstance(balances, dict):
-        wanted = broker_key.strip().lower()
         for key, value in balances.items():
             normalized = str(getattr(key, "value", key)).strip().lower()
-            if normalized == wanted:
+            if normalized == normalized_key:
                 amount = _balance_total(value)
                 if amount > 0.0:
                     return amount, "capital_authority"

@@ -7,6 +7,7 @@ credential rebind and retry on a 401. Invalid credentials still fail closed.
 """
 from __future__ import annotations
 
+import hashlib
 import importlib
 import logging
 import os
@@ -28,6 +29,47 @@ def _is_401(exc: BaseException) -> bool:
     return any(token in text for token in ("401", "unauthorized", "invalid api key", "invalid_api_key"))
 
 
+def _quarantined() -> bool:
+    return str(
+        os.environ.get("NIJA_COINBASE_CREDENTIALS_QUARANTINED", "") or ""
+    ).strip().lower() in {"1", "true", "yes", "on", "enabled"}
+
+
+def _quarantine(instance: Any) -> None:
+    os.environ["NIJA_COINBASE_CREDENTIALS_QUARANTINED"] = "1"
+    os.environ["NIJA_COINBASE_RECONNECT_DISABLED"] = "1"
+    key = str(os.environ.get("COINBASE_API_KEY", "") or "")
+    secret = str(
+        os.environ.get("COINBASE_API_SECRET", "")
+        or os.environ.get("COINBASE_PEM_CONTENT", "")
+        or ""
+    )
+    if key and secret:
+        os.environ["NIJA_COINBASE_QUARANTINED_CREDENTIAL_FINGERPRINT"] = (
+            hashlib.sha256((key + "\0" + secret).encode("utf-8")).hexdigest()[:16]
+        )
+    os.environ["NIJA_COINBASE_CONNECTED"] = "0"
+    os.environ["NIJA_COINBASE_BALANCE_OBSERVED"] = "0"
+    os.environ["NIJA_COINBASE_SPENDABLE_QUOTE"] = "0.00000000"
+    os.environ["NIJA_COINBASE_TRADING_READY"] = "0"
+    os.environ["NIJA_COINBASE_ACTIVATED"] = "0"
+    os.environ["NIJA_COINBASE_ACTIVATION_STATE"] = "quarantined"
+    try:
+        instance.connected = False
+    except Exception:
+        pass
+    for attr in (
+        "_auth_permanently_failed", "auth_permanently_failed",
+        "_permanent_auth_failure", "_coinbase_auth_failed",
+        "_auth_failed", "_balance_auth_failed",
+    ):
+        try:
+            if hasattr(instance, attr) or attr in {"_auth_failed", "_balance_auth_failed"}:
+                setattr(instance, attr, True)
+        except Exception:
+            pass
+
+
 def _normalise() -> bool:
     try:
         module = importlib.import_module("bot.coinbase_funding_readiness_repair_patch")
@@ -39,6 +81,8 @@ def _normalise() -> bool:
 
 
 def _rebuild_client(instance: Any) -> bool:
+    if _quarantined():
+        return False
     if not _normalise():
         return False
     key = str(os.environ.get("COINBASE_API_KEY", "") or "").strip()
@@ -76,6 +120,8 @@ def _rebuild_client(instance: Any) -> bool:
         logger.critical("COINBASE_BALANCE_AUTH_CLIENT_REBOUND marker=%s class=%s authenticated=true", _MARKER, type(instance).__name__)
         return True
     except Exception as exc:
+        if _is_401(exc):
+            _quarantine(instance)
         logger.error("COINBASE_BALANCE_AUTH_REBIND_FAILED marker=%s class=%s error_type=%s error=%s", _MARKER, type(instance).__name__, type(exc).__name__, str(exc)[:240])
         return False
 
@@ -114,7 +160,14 @@ def _patch_class(cls: type) -> bool:
             continue
         @wraps(current)
         def balance(self: Any, *args: Any, __fn: Callable[..., Any] = current, __name: str = method_name, **kwargs: Any):
-            # A live connected client must not remain suppressed by a stale permanent-401 latch.
+            # A confirmed 401 is terminal for this credential fingerprint. Return
+            # a fail-closed zero without issuing another private request.
+            if _quarantined():
+                _quarantine(self)
+                return 0.0
+
+            # A live connected client must not remain suppressed by a stale
+            # permanent-401 latch before authentication has actually failed.
             if getattr(self, "connected", False) and _normalise():
                 for attr in ("_auth_permanently_failed", "auth_permanently_failed", "_permanent_auth_failure", "_balance_auth_failed"):
                     if hasattr(self, attr):
@@ -122,7 +175,17 @@ def _patch_class(cls: type) -> bool:
                             setattr(self, attr, False)
                         except Exception:
                             pass
-            return __fn(self, *args, **kwargs)
+            try:
+                return __fn(self, *args, **kwargs)
+            except Exception as exc:
+                if not _is_401(exc):
+                    raise
+                _quarantine(self)
+                logger.error(
+                    "COINBASE_BALANCE_AUTH_QUARANTINED marker=%s class=%s method=%s",
+                    _MARKER, type(self).__name__, __name,
+                )
+                return 0.0
         setattr(balance, _PATCH_ATTR, True)
         balance.__wrapped__ = current
         setattr(cls, method_name, balance)
@@ -164,4 +227,4 @@ def install() -> bool:
         return True
 
 
-__all__ = ["install", "_patch_class", "_rebuild_client"]
+__all__ = ["install", "_patch_class", "_rebuild_client", "_quarantined"]

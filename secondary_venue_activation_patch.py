@@ -278,14 +278,46 @@ def _mark_connected(manager: Any, broker_module: Any, venue: Venue) -> None:
 
 
 def _spendable(venue: Venue, broker: Any) -> tuple[float, str]:
+    resolver_result: Optional[tuple[float, str]] = None
     try:
         module = importlib.import_module("bot.spendable_quote_routing_patch")
         resolver = getattr(module, "_spendable_usd", None)
         if callable(resolver):
             value, _available, source = resolver(broker, venue.name)
-            return max(0.0, float(value or 0.0)), str(source)
+            resolver_result = (max(0.0, float(value or 0.0)), str(source))
+            if resolver_result[0] > 0.0:
+                return resolver_result
     except Exception:
         pass
+
+    # OKX's authenticated wallet observer is the canonical fallback when the
+    # generic routing cache is still zero. Require all private-proof latches so
+    # a stale environment value can never make an unobserved broker executable.
+    if (
+        venue.name == "okx"
+        and _connected(broker)
+        and _flag("NIJA_OKX_BALANCE_OBSERVED", False)
+        and str(os.environ.get("NIJA_OKX_FUNDING_STATUS", "") or "").strip().lower() == "funded"
+    ):
+        candidates: list[float] = []
+        for value in (
+            getattr(broker, "_okx_trading_spendable_quote", None),
+            os.environ.get("NIJA_OKX_TRADING_SPENDABLE_QUOTE"),
+            os.environ.get("NIJA_OKX_SPENDABLE_QUOTE"),
+        ):
+            try:
+                candidates.append(max(0.0, float(value or 0.0)))
+            except (TypeError, ValueError, OverflowError):
+                continue
+        authoritative = max(candidates, default=0.0)
+        if authoritative > 0.0:
+            return authoritative, "okx_authenticated_wallet"
+
+    # Preserve the resolver's fail-closed zero for other venues. In particular,
+    # do not turn a known Coinbase zero into another private 401 probe.
+    if resolver_result is not None:
+        return resolver_result
+
     for method_name in ("get_account_balance_detailed", "get_account_balance"):
         method = getattr(broker, method_name, None)
         if not callable(method):
@@ -304,6 +336,7 @@ def _spendable(venue: Venue, broker: Any) -> tuple[float, str]:
         except Exception:
             pass
     return 0.0, "unavailable"
+
 
 
 def _markets(broker: Any) -> Optional[int]:
@@ -352,8 +385,12 @@ def activate_once(venue: Venue, broker_module: Any = None, manager: Any = None) 
         _state(venue, "registration_pending")
         return "registration_pending"
     if not _connect(venue, broker, fingerprint):
+        quarantined = (
+            venue.name == "coinbase"
+            and _flag("NIJA_COINBASE_CREDENTIALS_QUARANTINED", False)
+        )
         auth_failed = bool(getattr(broker, "_auth_failed", False) or getattr(broker, "auth_failed", False))
-        state = "authentication_failed" if auth_failed else "connect_failed"
+        state = "quarantined" if quarantined else ("authentication_failed" if auth_failed else "connect_failed")
         _state(venue, state)
         return state
     _mark_connected(manager, broker_module, venue)
@@ -381,7 +418,7 @@ def activate_once(venue: Venue, broker_module: Any = None, manager: Any = None) 
 def _delay(state: str, failures: int) -> float:
     if state == "ready":
         return 60.0
-    if state in {"missing_credentials", "disabled", "authentication_failed"}:
+    if state in {"missing_credentials", "disabled", "authentication_failed", "quarantined"}:
         return 300.0
     if state == "connected_unfunded":
         return 120.0
