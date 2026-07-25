@@ -6,6 +6,28 @@ This README is the current recovery anchor for NIJA. It documents the active pro
 
 NIJA does not guarantee trades or profits. A connected brokerage may enter a trade only when writer authority, capital, signal, risk, exchange-minimum, and order-admission checks all pass.
 
+## Verified Production Milestone — July 25, 2026
+
+NIJA completed a successful production bootstrap milestone through the canonical Render runtime.
+
+| Component | Verified milestone |
+|---|---|
+| Canonical runtime | Deployed and entrypoint-attested |
+| Distributed authority | Redis-backed writer and nonce safety connected |
+| Kraken | Private balance hydrated and accepted |
+| Capital pipeline | High-confidence live-exchange snapshot accepted with at least one valid broker |
+| Bootstrap | Reached `CAPITAL_READY`; broker-scoped trading loop unblocked |
+| Runtime activation | `LIVE_ACTIVE`, kill switch clear, and distributed writer heartbeat valid |
+| Coinbase credential handling | Matched API-key/PEM family selected and ES256 validation passed |
+| Coinbase live readiness | Authenticated balance and trading-readiness proof still required |
+| OKX connection | Connected at manager layer; stable execution-readiness proof still required |
+| Exit protection | Kraken account-exit, cost-basis, margin-cost, and downstream safety guards installed |
+| Scan and execution | Trading-loop process reported running, but no observed scan cycle, order, or confirmed fill yet |
+
+This is a successful **Kraken-backed capital bootstrap and live-authority activation**, not a claim that all configured venues are ready or that a trade or profit is guaranteed. Kraken and OKX were constructed as connected platform brokers, but only Kraken has stable private-capital and execution-readiness proof in the verified log window. Each optional venue remains isolated and fail-closed until its own private authentication, balance, and execution-readiness checks succeed.
+
+The Coinbase credential-pair repair was delivered through [PR #2260](https://github.com/dantelrharrell-debug/Nija/pull/2260). It prevents startup from combining an API key from one configured credential family with a PEM belonging to another. A structurally valid PEM is not connection proof; Coinbase still requires a successful private account or balance request.
+
 ## Official NIJA Links
 
 - **Website:** [nijaaitrading.com](https://nijaaitrading.com)
@@ -211,7 +233,15 @@ CDP_API_KEY_NAME
 CDP_API_KEY_PRIVATE_KEY
 ```
 
-Do not keep conflicting Coinbase credential aliases. A stale canonical `COINBASE_API_SECRET` can override a valid alias.
+NIJA evaluates Coinbase credentials as complete key/PEM families. It does not independently select a key from one alias family and a secret from another. Startup publishes the selected pair to the canonical variables while preserving other complete configured pairs for bounded authenticated recovery.
+
+Expected normalization evidence:
+
+```text
+COINBASE_PEM_CANONICALIZED validation=es256 pair_source=<family> pair_count=<count>
+```
+
+A valid PEM proves key structure only; Coinbase is not connected until a private account or balance request succeeds.
 
 ### Coinbase PEM failure
 
@@ -256,14 +286,16 @@ can_trade=true
 Healthy Coinbase evidence:
 
 ```text
-COINBASE_AUTH_NORMALIZED
-pem_ok=True
+COINBASE_PEM_CANONICALIZED validation=es256 pair_source=<family> pair_count=<count>
+COINBASE_AUTHENTICATED_PAIR_RETRY              # optional when alternatives exist
+COINBASE_AUTHENTICATED_PAIR_RECOVERED
 COINBASE_CONNECTION_SUCCESS
+authenticated Coinbase balance observed
 NIJA_COINBASE_ACTIVATION_STATE=ready
 NIJA_COINBASE_TRADING_READY=1
 ```
 
-Credential normalization alone is not proof of a live connection.
+Credential normalization, ES256 validation, and recovery installation are not proof of a live Coinbase connection. If every private probe fails, NIJA restores the primary pair, publishes `authentication_failed`, and keeps Coinbase fail-closed without disabling Kraken or OKX.
 
 ---
 
