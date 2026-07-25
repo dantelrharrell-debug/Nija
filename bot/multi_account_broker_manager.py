@@ -185,6 +185,15 @@ if __name__ == "bot.multi_account_broker_manager":
 elif __name__ == "multi_account_broker_manager":
     sys.modules.setdefault("bot.multi_account_broker_manager", sys.modules[__name__])
 
+def _aggregate_user_capital_enabled() -> bool:
+    """Return whether user balances may enter the global authority snapshot."""
+
+    return str(
+        os.environ.get("NIJA_AGGREGATE_USER_CAPITAL_IN_AUTHORITY", "false")
+        or "false"
+    ).strip().lower() in {"1", "true", "yes", "on", "enabled", "y"}
+
+
 ACCOUNT_USABLE_BALANCE_MIN = float(
     os.getenv(
         "NIJA_ACCOUNT_USABLE_BALANCE_MIN",
@@ -2266,29 +2275,30 @@ class MultiAccountBrokerManager:
                 )
                 broker_map[broker_type.value] = broker
 
-            # ── User broker aggregation ───────────────────────────────────────
-            # Include connected user account brokers in the capital snapshot so
-            # that user-held balances (e.g. Kraken user accounts, Coinbase user
-            # accounts) are counted toward the total.  Without this loop only
-            # platform-level balances are aggregated, causing CapitalAuthority to
-            # report a fraction of the true account balance and the risk engine to
-            # reject trades based on an artificially low exposure cap.
-            #
-            # Key format mirrors get_all_brokers(): "{user_id}_{broker_type.value}"
-            # This guarantees uniqueness and avoids collisions with platform keys.
-            for _user_id, _user_broker_dict in self.user_brokers.items():
-                for _user_broker_type, _user_broker in _user_broker_dict.items():
-                    if _user_broker is None:
-                        continue
-                    if not getattr(_user_broker, "connected", False):
-                        continue
-                    _user_broker_key = f"{_user_id}_{_user_broker_type.value}"
-                    broker_map[_user_broker_key] = _user_broker
-                    logger.info(
-                        "[CapitalAuthorityRefresh] trigger=%s include user_broker=%s reason=connected",
-                        trigger,
-                        _user_broker_key,
-                    )
+            # User accounts are independently traded and must not inflate the
+            # platform CapitalAuthority used for platform readiness or sizing.
+            # An explicit opt-in remains available for legacy deployments.
+            if _aggregate_user_capital_enabled():
+                for _user_id, _user_broker_dict in self.user_brokers.items():
+                    for _user_broker_type, _user_broker in _user_broker_dict.items():
+                        if _user_broker is None:
+                            continue
+                        if not getattr(_user_broker, "connected", False):
+                            continue
+                        _user_broker_key = f"{_user_id}_{_user_broker_type.value}"
+                        broker_map[_user_broker_key] = _user_broker
+                        logger.warning(
+                            "[CapitalAuthorityRefresh] trigger=%s include "
+                            "user_broker=%s reason=explicit_legacy_opt_in",
+                            trigger,
+                            _user_broker_key,
+                        )
+            elif self.user_brokers:
+                logger.info(
+                    "[CapitalAuthorityRefresh] trigger=%s user_capital_excluded=true "
+                    "reason=independent_account_isolation",
+                    trigger,
+                )
 
             logger.info(
                 "[CapitalAuthorityRefresh] trigger=%s eligible_brokers=%s",
