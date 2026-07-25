@@ -21,6 +21,30 @@ _PATCHED = False
 _WATCHDOG_STARTED = False
 
 
+def _chain_has_attr(func: Any, attr: str, *, limit: int = 256) -> bool:
+    """Find an ownership marker anywhere in a linked wrapper chain."""
+    current = func
+    seen: set[int] = set()
+    for _ in range(limit):
+        if not callable(current) or id(current) in seen:
+            return False
+        seen.add(id(current))
+        if bool(getattr(current, attr, False)):
+            return True
+        wrapped = getattr(current, "__wrapped__", None)
+        if not callable(wrapped):
+            try:
+                code = getattr(current, "__code__", None)
+                closure = tuple(getattr(current, "__closure__", ()) or ())
+                freevars = tuple(getattr(code, "co_freevars", ()) or ())
+                values = {name: cell.cell_contents for name, cell in zip(freevars, closure)}
+                wrapped = next((values.get(name) for name in ("original", "original_run_scan_phase", "wrapped", "base") if callable(values.get(name))), None)
+            except Exception:
+                wrapped = None
+        current = wrapped
+    return False
+
+
 def _auth_module() -> ModuleType | None:
     module = sys.modules.get("broker_auth_recovery_patch")
     return module if isinstance(module, ModuleType) else None
@@ -153,7 +177,7 @@ def _patch_core_loop(module: ModuleType) -> bool:
     if not isinstance(cls, type):
         return False
     original = getattr(cls, "run_scan_phase", None)
-    if not callable(original) or getattr(original, "_nija_final_result_contract_e", False):
+    if not callable(original) or _chain_has_attr(original, "_nija_final_result_contract_e"):
         return False
 
     def run_scan_phase(self: Any, *args: Any, **kwargs: Any) -> Any:
@@ -188,7 +212,7 @@ def _patch_okx_classes() -> bool:
             if not isinstance(cls, type) or "okx" not in class_name.lower():
                 continue
             original = getattr(cls, "connect", None)
-            if not callable(original) or getattr(original, "_nija_final_okx_endpoint_e", False):
+            if not callable(original) or _chain_has_attr(original, "_nija_final_okx_endpoint_e"):
                 continue
 
             def connect(self: Any, *args: Any, __original: Callable[..., Any] = original, **kwargs: Any) -> Any:
