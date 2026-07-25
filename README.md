@@ -17,12 +17,14 @@ NIJA completed a successful production bootstrap milestone through the canonical
 | Kraken | Private balance hydrated and accepted |
 | Capital pipeline | High-confidence live-exchange snapshot accepted with at least one valid broker |
 | Bootstrap | Reached `CAPITAL_READY`; broker-scoped trading loop unblocked |
+| Runtime activation | `LIVE_ACTIVE`, kill switch clear, and distributed writer heartbeat valid |
 | Coinbase credential handling | Matched API-key/PEM family selected and ES256 validation passed |
 | Coinbase live readiness | Authenticated balance and trading-readiness proof still required |
-| OKX live readiness | Authenticated balance and trading-readiness proof still required |
-| Scan and execution | Post-handoff scan cycle, order submission, and confirmed fill still require runtime evidence |
+| OKX connection | Connected at manager layer; stable execution-readiness proof still required |
+| Exit protection | Kraken account-exit, cost-basis, margin-cost, and downstream safety guards installed |
+| Scan and execution | Trading-loop process reported running, but no observed scan cycle, order, or confirmed fill yet |
 
-This is a successful **Kraken-backed capital bootstrap**, not a claim that all configured venues are ready or that a trade or profit is guaranteed. Each optional venue remains isolated and fail-closed until its own private authentication, balance, and execution-readiness checks succeed.
+This is a successful **Kraken-backed capital bootstrap and live-authority activation**, not a claim that all configured venues are ready or that a trade or profit is guaranteed. Kraken and OKX were constructed as connected platform brokers, but only Kraken has stable private-capital and execution-readiness proof in the verified log window. Each optional venue remains isolated and fail-closed until its own private authentication, balance, and execution-readiness checks succeed.
 
 The Coinbase credential-pair repair was delivered through [PR #2260](https://github.com/dantelrharrell-debug/Nija/pull/2260). It prevents startup from combining an API key from one configured credential family with a PEM belonging to another. A structurally valid PEM is not connection proof; Coinbase still requires a successful private account or balance request.
 
