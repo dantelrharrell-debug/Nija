@@ -5,6 +5,7 @@ import importlib
 import logging
 import sys
 import threading
+import time
 from types import ModuleType
 from typing import Any, Callable, Optional
 
@@ -16,6 +17,7 @@ _LOCK = threading.Lock()
 _ORIGINAL_IMPORT: Optional[Callable[..., Any]] = None
 _ORIGINAL_IMPORT_MODULE: Optional[Callable[..., Any]] = None
 _APPLIED = False
+_LOG_INTERVAL_S = 60.0
 
 
 def _num(value: Any) -> float:
@@ -56,7 +58,16 @@ def _patch_module(module: ModuleType) -> bool:
     def live_total(self: Any) -> float:
         snapshot, broker_total, updated = _read_totals(self)
         selected = max(snapshot, broker_total, updated)
-        if selected > snapshot + 0.01:
+        now = time.monotonic()
+        last_log = _num(getattr(self, "_nija_live_total_last_log_monotonic", 0.0))
+        should_log = selected > snapshot + 0.01 and (
+            last_log <= 0.0 or now - last_log >= _LOG_INTERVAL_S
+        )
+        if should_log:
+            try:
+                setattr(self, "_nija_live_total_last_log_monotonic", now)
+            except Exception:
+                pass
             logger.warning(
                 "CAPITAL_AUTHORITY_LIVE_TOTAL_SELECTED marker=20260707b snapshot=$%.2f broker_sum=$%.2f updated=$%.2f selected=$%.2f",
                 snapshot,
