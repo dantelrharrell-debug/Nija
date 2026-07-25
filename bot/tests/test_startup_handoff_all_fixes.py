@@ -39,15 +39,16 @@ def test_patcher_defers_hooks_before_every_python_preflight() -> None:
     first_python_pos = patched.index("$PY --version")
     attestation_pos = patched.index("STARTUP_HANDOFF_ENTRYPOINT_ATTESTATION_COMPLETE")
     unset_pos = patched.index("unset NIJA_DEFER_RUNTIME_SITE_HOOKS")
-    main_pos = patched.index("$PY -u main.py")
+    launcher_pos = patched.index("$PY -u scripts/canonical_runtime_launcher_v26.py")
 
     assert export_pos < first_python_pos
-    assert export_pos < attestation_pos < unset_pos < main_pos
+    assert export_pos < attestation_pos < unset_pos < launcher_pos
+    assert "$PY -u main.py" not in patched
     assert "STARTUP_HANDOFF_PREFLIGHT_BEGIN" in patched
     assert "STARTUP_HANDOFF_REDIS_VALIDATION_COMPLETE" in patched
     assert "runtime_entrypoint_attestation.py" in patched
     assert "STARTUP_HANDOFF_RUNTIME_BEGIN" in patched
-    assert "canonical=main.py->bot.bot->bot.bot_main" in patched
+    assert "canonical=launcher-v26->main.py->bot.bot->bot.bot_main" in patched
     assert "STARTUP_HANDOFF_RUNTIME_EXIT" in patched
 
 
@@ -68,7 +69,7 @@ def test_repository_start_script_uses_canonical_entrypoint_diagnostics() -> None
         "unset NIJA_DEFER_RUNTIME_SITE_HOOKS"
     )
     assert patched.index("unset NIJA_DEFER_RUNTIME_SITE_HOOKS") < patched.index(
-        "$PY -u main.py"
+        "$PY -u scripts/canonical_runtime_launcher_v26.py"
     )
     assert "CANONICAL_ENTRYPOINT_DIAGNOSTICS" in patched
     assert "bot/canonical_broker_prebootstrap_v22.py" in patched
