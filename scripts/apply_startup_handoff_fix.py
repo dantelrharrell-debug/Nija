@@ -6,10 +6,10 @@ otherwise a harmless preflight command can acquire writer authority or enter
 standby before the canonical trading runtime starts.
 
 The patch also replaces obsolete root-``bot.py`` diagnostics, runs a
-standard-library-only runtime attestation, and permanently rewrites the runtime
-launch to ``scripts/canonical_runtime_launcher_v26.py``. This makes the v26
-ordering guard effective even when a platform overrides the Docker command with
-``bash start.sh``.
+standard-library-only runtime attestation, and permanently rewrites the runtime launch to
+``scripts/canonical_runtime_launcher_v26.py`` while preserving the defer flag
+through interpreter startup. This makes the v26 ordering guard effective even
+when a platform overrides the Docker command with ``bash start.sh``.
 """
 from __future__ import annotations
 
@@ -28,6 +28,7 @@ RUNTIME_EXIT_MARKER = "STARTUP_HANDOFF_RUNTIME_EXIT"
 LAUNCHER = "scripts/canonical_runtime_launcher_v26.py"
 LEGACY_LAUNCH = "$PY -u main.py"
 CANONICAL_LAUNCH = f"$PY -u {LAUNCHER}"
+CANONICAL_DEFERRED_LAUNCH = f"{DEFER_FLAG}=1 {CANONICAL_LAUNCH}"
 
 
 def _insert_early_defer(text: str) -> str:
@@ -115,38 +116,53 @@ def _attestation_block() -> str:
 
 
 def _insert_runtime_handoff(text: str) -> str:
+    # Earlier releases removed the defer flag immediately before starting the
+    # canonical interpreter. Python imports .pth, sitecustomize and usercustomize
+    # before launcher code executes, so that ordering let legacy repair fanout
+    # preempt the canonical runtime. Migrate already-patched scripts in place.
+    text = text.replace(f"unset {DEFER_FLAG}\n", "")
+
     if RUNTIME_MARKER in text:
         if ATTESTATION_MARKER not in text:
-            unset_anchor = f"unset {DEFER_FLAG}\n"
-            if unset_anchor not in text:
-                raise RuntimeError("start.sh runtime defer-unset anchor not found")
-            text = text.replace(unset_anchor, _attestation_block() + unset_anchor, 1)
+            runtime_anchor = 'echo "🚀 STARTUP_HANDOFF_RUNTIME_BEGIN'
+            runtime_pos = text.find(runtime_anchor)
+            if runtime_pos < 0:
+                raise RuntimeError("start.sh runtime marker anchor not found")
+            text = text[:runtime_pos] + _attestation_block() + text[runtime_pos:]
+        if CANONICAL_DEFERRED_LAUNCH not in text:
+            if CANONICAL_LAUNCH not in text:
+                raise RuntimeError("start.sh canonical launcher anchor not found")
+            text = text.replace(
+                CANONICAL_LAUNCH,
+                CANONICAL_DEFERRED_LAUNCH,
+                1,
+            )
         return text
+
     anchor = "set +e\n$PY -u main.py\nstatus=$?\n"
     if anchor not in text:
         raise RuntimeError("start.sh runtime launch anchor not found")
     replacement = (
         _attestation_block()
-        + f"unset {DEFER_FLAG}\n"
         + 'echo "🚀 STARTUP_HANDOFF_RUNTIME_BEGIN entrypoint=canonical_runtime_launcher_v26.py '
-        'canonical=launcher-v26->main.py->bot.bot->bot.bot_main runtime_site_hooks=enabled '
+        'canonical=launcher-v26->main.py->bot.bot->bot.bot_main runtime_site_hooks=deferred '
         'release=v26 commit=${GIT_COMMIT_SHORT:-${GIT_COMMIT:-unknown}}"\n'
         + "set +e\n"
-        + CANONICAL_LAUNCH + "\n"
+        + CANONICAL_DEFERRED_LAUNCH + "\n"
         + "status=$?\n"
         + 'echo "🧭 STARTUP_HANDOFF_RUNTIME_EXIT status=${status}"\n'
     )
     return text.replace(anchor, replacement, 1)
 
-
 def _enforce_v26_launcher(text: str) -> str:
-    text = text.replace(LEGACY_LAUNCH, CANONICAL_LAUNCH)
+    text = text.replace(LEGACY_LAUNCH, CANONICAL_DEFERRED_LAUNCH)
     if LEGACY_LAUNCH in text:
         raise RuntimeError("legacy direct main.py launch remains")
     if text.count(CANONICAL_LAUNCH) != 1:
         raise RuntimeError("canonical v26 launcher count invalid")
+    if text.count(CANONICAL_DEFERRED_LAUNCH) != 1:
+        raise RuntimeError("canonical v26 launcher must preserve runtime defer")
     return text
-
 
 def _validate(text: str) -> None:
     for marker in (
@@ -160,10 +176,11 @@ def _validate(text: str) -> None:
             raise RuntimeError(f"startup handoff marker count invalid: {marker}")
     export_pos = text.index(f"export {DEFER_FLAG}=1")
     attestation_pos = text.index(ATTESTATION_MARKER)
-    unset_pos = text.index(f"unset {DEFER_FLAG}")
-    launcher_pos = text.index(CANONICAL_LAUNCH)
-    if not export_pos < attestation_pos < unset_pos < launcher_pos:
+    launcher_pos = text.index(CANONICAL_DEFERRED_LAUNCH)
+    if not export_pos < attestation_pos < launcher_pos:
         raise RuntimeError("startup handoff ordering invalid")
+    if f"unset {DEFER_FLAG}" in text:
+        raise RuntimeError("runtime defer flag must persist through canonical launch")
     if LEGACY_LAUNCH in text:
         raise RuntimeError("legacy direct main.py launch remains")
     pre_launcher = text[:launcher_pos]
@@ -191,7 +208,7 @@ def main() -> None:
     print(
         "NIJA_STARTUP_HANDOFF_PATCH_APPLIED "
         "early_defer=true canonical_attestation=true portable_root=true "
-        "launcher=v26 release=v26 idempotent=true"
+        "launcher=v26 runtime_defer_persisted=true release=v26 idempotent=true"
     )
 
 

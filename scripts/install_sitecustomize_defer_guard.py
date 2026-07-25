@@ -7,10 +7,10 @@ writer, broker, activation, or execution monitors before ``main.py``. The
 existing .pth and ``bot.__init__`` guards did not stop Python's automatic
 ``sitecustomize`` import.
 
-This installer creates an early .pth file that places a no-op ``sitecustomize``
-module in ``sys.modules`` only for deferred preflight processes. The canonical
-``main.py`` process starts after the flag is removed and therefore imports the
-real ``sitecustomize.py`` normally.
+This installer creates an early .pth file that places no-op ``sitecustomize``
+and ``usercustomize`` modules in ``sys.modules`` only for deferred processes.
+The canonical launcher now keeps the flag set from the shell boundary through
+``main.py`` so neither historical startup hook can preempt canonical ownership.
 """
 
 from __future__ import annotations
@@ -27,7 +27,8 @@ def guard_content(app_root: str = "/app") -> str:
     code = (
         'import os,sys,types; '
         f'os.environ.get("{DEFER_FLAG}", "0") == "1" and '
-        'sys.modules.setdefault("sitecustomize", types.ModuleType("sitecustomize"))'
+        '(sys.modules.setdefault("sitecustomize", types.ModuleType("sitecustomize")), '
+        'sys.modules.setdefault("usercustomize", types.ModuleType("usercustomize")))'
     )
     return f"{root}\n{code}\n"
 
@@ -49,7 +50,7 @@ def main() -> None:
     target = install()
     print(
         "NIJA_SITECUSTOMIZE_DEFER_GUARD_INSTALLED "
-        f"path={target} flag={DEFER_FLAG}"
+        f"path={target} flag={DEFER_FLAG} modules=sitecustomize,usercustomize"
     )
 
 
