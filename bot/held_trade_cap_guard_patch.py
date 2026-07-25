@@ -15,6 +15,30 @@ _TRUE = {"1", "true", "yes", "on", "enabled", "y"}
 _CASH_ASSETS = {"USD", "USDT", "USDC", "DAI", "EUR", "GBP", "ZUSD", "USDG"}
 
 
+def _chain_has_attr(func: Any, attr: str, *, limit: int = 256) -> bool:
+    """Find an ownership marker anywhere in a linked wrapper chain."""
+    current = func
+    seen: set[int] = set()
+    for _ in range(limit):
+        if not callable(current) or id(current) in seen:
+            return False
+        seen.add(id(current))
+        if bool(getattr(current, attr, False)):
+            return True
+        wrapped = getattr(current, "__wrapped__", None)
+        if not callable(wrapped):
+            try:
+                code = getattr(current, "__code__", None)
+                closure = tuple(getattr(current, "__closure__", ()) or ())
+                freevars = tuple(getattr(code, "co_freevars", ()) or ())
+                values = {name: cell.cell_contents for name, cell in zip(freevars, closure)}
+                wrapped = next((values.get(name) for name in ("original", "original_run_scan_phase", "wrapped", "base") if callable(values.get(name))), None)
+            except Exception:
+                wrapped = None
+        current = wrapped
+    return False
+
+
 def _truthy(name: str, default: str = "true") -> bool:
     return str(os.environ.get(name, default)).strip().lower() in _TRUE
 
@@ -224,8 +248,8 @@ def _patch_module(module: ModuleType) -> bool:
     if not isinstance(cls, type):
         return False
     original = getattr(cls, "run_scan_phase", None)
-    if not callable(original) or getattr(original, _PATCHED_ATTR, False):
-        return bool(getattr(original, _PATCHED_ATTR, False))
+    if not callable(original) or _chain_has_attr(original, _PATCHED_ATTR):
+        return bool(callable(original) and _chain_has_attr(original, _PATCHED_ATTR))
 
     @wraps(original)
     def run_scan_phase(self: Any, broker: Any, balance: float, symbols: list[str], open_positions_count: int = 0, user_mode: bool = False):
@@ -249,6 +273,7 @@ def _patch_module(module: ModuleType) -> bool:
         return original(self, broker, balance, symbols, open_positions_count, user_mode)
 
     setattr(run_scan_phase, _PATCHED_ATTR, True)
+    setattr(run_scan_phase, "__wrapped__", original)
     setattr(cls, "run_scan_phase", run_scan_phase)
     logger.warning("%s class=NijaCoreLoop cap=%d", _MARKER, _cap())
     print(f"[NIJA-PRINT] HELD_TRADE_CAP_GUARD_PATCHED marker=20260706a cap={_cap()}", flush=True)
