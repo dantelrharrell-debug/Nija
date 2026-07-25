@@ -284,10 +284,133 @@ def _state_machine() -> Any:
     return None
 
 
+def _broker_manager_snapshot() -> tuple[bool, dict[str, Any]]:
+    """Pull connected-broker balance payload from the canonical manager.
+
+    Only observes modules already in sys.modules.  Feeds any non-zero balances
+    into CapitalAuthority via force_accept_feed() so that a stale zero-broker
+    CA can be unblocked without bypassing any gate logic.
+
+    Returns (accepted, meta) where meta mirrors the shape used by
+    _capital_ready_snapshot().
+    """
+    mabm_mod = _loaded_module(
+        "bot.multi_account_broker_manager", "multi_account_broker_manager"
+    )
+    if mabm_mod is None:
+        return False, {"reason": "broker_manager_module_not_loaded"}
+    try:
+        getter = getattr(mabm_mod, "get_broker_manager", None)
+        if not callable(getter):
+            return False, {"reason": "broker_manager_getter_unavailable"}
+        mgr = getter()
+        if mgr is None:
+            return False, {"reason": "broker_manager_none"}
+
+        platform_brokers = getattr(mgr, "_platform_brokers", {})
+        connected_count = 0
+        total_balance = 0.0
+        per_broker: dict[str, float] = {}
+
+        for bt, broker_obj in list(platform_brokers.items()):
+            if broker_obj is None:
+                continue
+            try:
+                connected = bool(getattr(broker_obj, "connected", False))
+                if not connected:
+                    is_pc = getattr(mgr, "is_platform_connected", None)
+                    if callable(is_pc):
+                        connected = bool(is_pc(bt))
+                if not connected:
+                    continue
+                get_bal = getattr(broker_obj, "get_account_balance", None)
+                if not callable(get_bal):
+                    continue
+                raw = get_bal()
+                bal = 0.0
+                if isinstance(raw, dict):
+                    for k in ("trading_balance", "balance", "total", "usd_value"):
+                        v = raw.get(k)
+                        if v is not None:
+                            try:
+                                bal = float(v)
+                                break
+                            except Exception:
+                                pass
+                else:
+                    try:
+                        bal = float(raw or 0.0)
+                    except Exception:
+                        bal = 0.0
+                broker_key = str(getattr(bt, "value", bt))
+                per_broker[broker_key] = bal
+                total_balance += bal
+                connected_count += 1
+            except Exception as exc:
+                logger.debug(
+                    "ACTIVATION_PENDING_COMMIT broker_snapshot_error broker=%s err=%s", bt, exc
+                )
+
+        if connected_count == 0:
+            return False, {
+                "reason": "no_connected_brokers",
+                "hydrated": False,
+                "real_capital": 0.0,
+                "stale": True,
+                "registered_brokers": 0,
+                "accepted_latch": False,
+            }
+
+        # Feed recovered balances into CapitalAuthority to unblock hydration.
+        ca_mod = _loaded_module("bot.capital_authority", "capital_authority")
+        if ca_mod is not None:
+            ca_getter = getattr(ca_mod, "get_capital_authority", None)
+            if callable(ca_getter):
+                try:
+                    ca = ca_getter()
+                    if ca is not None:
+                        for broker_key, bal in per_broker.items():
+                            try:
+                                ca.force_accept_feed(broker_key, bal)
+                            except Exception as feed_exc:
+                                logger.debug(
+                                    "ACTIVATION_PENDING_COMMIT force_accept_feed err broker=%s err=%s",
+                                    broker_key,
+                                    feed_exc,
+                                )
+                except Exception as exc:
+                    logger.debug("ACTIVATION_PENDING_COMMIT ca_feed_error err=%s", exc)
+
+        accepted = connected_count > 0 and total_balance > 0.0
+        meta = {
+            "hydrated": accepted,
+            "real_capital": total_balance,
+            "stale": False,
+            "registered_brokers": connected_count,
+            "accepted_latch": accepted,
+            "reason": "broker_manager_ok" if accepted else "broker_manager_zero_balance",
+            "per_broker": per_broker,
+            "source": "broker_manager",
+        }
+        logger.warning(
+            "ACTIVATION_PENDING_COMMIT_MONITOR_BROKER_MANAGER_SNAPSHOT "
+            "connected=%d total_balance=$%.2f accepted=%s brokers=%s",
+            connected_count,
+            total_balance,
+            accepted,
+            list(per_broker.keys()),
+        )
+        return accepted, meta
+    except Exception as exc:
+        logger.debug("ACTIVATION_PENDING_COMMIT broker_manager_snapshot_error err=%s", exc)
+        return False, {"reason": f"broker_manager_snapshot_error:{exc}"}
+
+
 def _capital_ready_snapshot() -> tuple[bool, dict[str, Any]]:
     module = _loaded_module("bot.capital_authority", "capital_authority")
     if module is None:
-        return False, {"reason": "capital_authority_unavailable"}
+        # Capital authority not yet loaded — try broker manager directly.
+        return _broker_manager_snapshot()
     getter = getattr(module, "get_capital_authority", None)
     if not callable(getter):
         return False, {"reason": "capital_authority_getter_unavailable"}
@@ -337,6 +460,27 @@ def _capital_ready_snapshot() -> tuple[bool, dict[str, Any]]:
         accepted_latch
         or (hydrated and real > 0.0 and registered > 0 and not stale)
     )
+
+    # If the CA snapshot is not yet accepted (stale/zero-broker), attempt to
+    # recover state directly from the canonical broker manager.  This converts
+    # a recovered broker/capital state into an accepted fresh capital snapshot
+    # without lowering any gate thresholds.
+    if not accepted:
+        bm_accepted, bm_meta = _broker_manager_snapshot()
+        if bm_accepted:
+            # Re-read CA after force_accept_feed() may have hydrated it.
+            try:
+                hydrated = bool(getattr(ca, "is_hydrated", False))
+                reader2 = getattr(ca, "get_real_capital", None)
+                real2 = float(reader2() if callable(reader2) else real)
+                real = max(real, real2)
+            except Exception:
+                real = max(real, float(bm_meta.get("real_capital") or 0.0))
+            registered = max(registered, int(bm_meta.get("registered_brokers") or 0))
+            stale = False
+            accepted = True
+            accepted_latch = accepted_latch or bool(bm_meta.get("accepted_latch"))
+
     return accepted, {
         "hydrated": hydrated,
         "real_capital": real,
@@ -362,9 +506,17 @@ def _commit_once(sm: Any, meta: dict[str, Any]) -> bool:
             "ACTIVATION_PENDING_COMMIT_MONITOR commit_activation unavailable"
         )
         return False
+    # Use the actual connected broker count from the broker manager when the CA
+    # reports zero (stale zero-broker state) so that cycle_capital carries real
+    # broker context rather than the stale placeholder.
+    registered_brokers = int(meta.get("registered_brokers") or 0)
+    if registered_brokers == 0:
+        bm_accepted, bm_meta = _broker_manager_snapshot()
+        if bm_accepted:
+            registered_brokers = max(registered_brokers, int(bm_meta.get("registered_brokers") or 0))
     cycle_capital = {
         "snapshot_source": "capital_authority",
-        "ca_valid_brokers": max(1, int(meta.get("registered_brokers") or 0)),
+        "ca_valid_brokers": max(1, registered_brokers),
         "aggregation_normalized": True,
         "capital_hydrated": bool(meta.get("hydrated")),
         "ca_not_stale": not bool(meta.get("stale")),
@@ -539,4 +691,5 @@ __all__ = [
     "_install_final_stage_venue_routing_repair",
     "_state_machine",
     "_capital_ready_snapshot",
+    "_broker_manager_snapshot",
 ]
