@@ -219,6 +219,57 @@ def test_recovery_runs_canonical_prebootstrap_after_writer_lineage(monkeypatch):
     assert calls == {"prepare": 1, "refresh": 1, "converge": 1}
 
 
+def test_recovery_loads_prebootstrap_from_launcher_guard(monkeypatch):
+    _clear_runtime_env(monkeypatch)
+    monkeypatch.setenv("LIVE_CAPITAL_VERIFIED", "true")
+    monkeypatch.setenv("NIJA_WRITER_FENCING_TOKEN", "token-launcher")
+    monkeypatch.setenv("NIJA_WRITER_LEASE_GENERATION", "11")
+    monkeypatch.setenv("NIJA_WRITER_LEASE_ACQUIRED", "1")
+    monkeypatch.setenv("NIJA_RUNTIME_EXECUTION_AUTHORITY", "0")
+    monkeypatch.setenv("NIJA_RUNTIME_TRADING_STATE", "OFF")
+
+    manager = SimpleNamespace(_fsm_initialized=False)
+    monkeypatch.setitem(
+        sys.modules,
+        "bot.multi_account_broker_manager",
+        SimpleNamespace(get_broker_manager=lambda: manager),
+    )
+    monkeypatch.delitem(
+        sys.modules,
+        "nija_canonical_broker_prebootstrap_v22",
+        raising=False,
+    )
+    monkeypatch.delitem(
+        sys.modules,
+        "bot.canonical_broker_prebootstrap_v22",
+        raising=False,
+    )
+
+    calls = {"load": 0, "prepare": 0}
+
+    def prepare():
+        calls["prepare"] += 1
+        manager._fsm_initialized = True
+        return manager
+
+    def load():
+        calls["load"] += 1
+        return SimpleNamespace(prepare_canonical_broker_runtime=prepare)
+
+    monkeypatch.setitem(
+        sys.modules,
+        "nija_canonical_broker_startup_convergence_v24_prebot",
+        SimpleNamespace(_load_v22_module=load),
+    )
+
+    module = _load_module()
+    recovered, reason = module._canonical_prebootstrap_manager()
+
+    assert recovered is manager
+    assert reason == "canonical_prebootstrap_ready"
+    assert calls == {"load": 1, "prepare": 1}
+
+
 def test_recovery_keeps_failed_canonical_prebootstrap_fail_closed(monkeypatch):
     _clear_runtime_env(monkeypatch)
     monkeypatch.setenv("LIVE_CAPITAL_VERIFIED", "true")
