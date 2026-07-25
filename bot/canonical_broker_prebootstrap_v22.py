@@ -112,6 +112,24 @@ def _initialize_manager(manager: Any) -> None:
         )
         initialize()
 
+    # Some legacy initialize paths return successfully after an InitRegistry
+    # short-circuit without setting the capital-FSM latch. Treat that exact
+    # silent state as recoverable, while keeping all broker/auth/balance
+    # failures fail-closed.
+    if not bool(getattr(manager, "_fsm_initialized", False)):
+        silent_latch = RuntimeError(
+            "initialize returned without setting _fsm_initialized"
+        )
+        if not _repair_capital_fsm_latch(manager, silent_latch):
+            raise RuntimeError(
+                "MultiAccountBrokerManager.initialize completed without "
+                "initializing the capital FSM"
+            )
+        logger.critical(
+            "CANONICAL_BROKER_PREBOOTSTRAP_V22_SILENT_LATCH_REPAIRED marker=%s",
+            _MARKER,
+        )
+
 
 def _platform_counts(manager: Any) -> tuple[int, int, list[str]]:
     brokers = getattr(manager, "platform_brokers", None)
