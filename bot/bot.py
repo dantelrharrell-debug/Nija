@@ -1,130 +1,131 @@
-"""Compatibility entrypoint for Railway/main.py."""
+"""Compatibility entrypoint for Railway/main.py.
+
+The canonical Render launcher keeps package-wide runtime hooks deferred while
+``main.py`` installs the audited safety set explicitly.  Replaying every
+historical compatibility installer here delayed ``bot_main.main()`` for many
+minutes while the health server reported the service as live.  The canonical
+fast path therefore installs only narrow guards that are not already owned by
+``main.py``, then hands off immediately.
+
+Direct/non-canonical launches retain the legacy installer set for compatibility.
+"""
 
 from __future__ import annotations
 
+import importlib
 import logging
+import os
 import sys
+from typing import Iterable
 
 logger = logging.getLogger("nija.bot_entrypoint")
+_FAST_PATH_MARKER = "20260725-canonical-fast-entrypoint-v28"
 
-try:
-    from bot.okx_patch_churn_guard_patch import install_import_hook as _install_okx_patch_churn_guard
-    _install_okx_patch_churn_guard()
-    logger.warning("OKX_PATCH_CHURN_GUARD_INSTALL_REQUESTED source=bot_entrypoint")
-except Exception as exc:
-    logger.warning("OKX_PATCH_CHURN_GUARD_INSTALL_FAILED source=bot_entrypoint err=%s", exc)
+# Each tuple is (module, success log label).  Names remain explicit so startup
+# attestation and source audits can prove which guards are eligible.
+_FAST_PATH_INSTALLERS = (
+    ("bot.okx_patch_churn_guard_patch", "OKX_PATCH_CHURN_GUARD"),
+    ("bot.disconnected_coinbase_balance_guard_patch", "COINBASE_BALANCE_DISCONNECTED_GUARD"),
+    ("bot.live_capital_first_snapshot_latch_patch", "LIVE_CAPITAL_FIRST_SNAPSHOT_LATCH"),
+    ("bot.startup_authority_prereq_repair_patch", "STARTUP_AUTHORITY_PREREQ_REPAIR"),
+    ("bot.okx_execution_min_notional_lift_patch", "OKX_EXECUTION_MIN_NOTIONAL_LIFT"),
+    ("bot.okx_order_instid_payload_repair_patch", "OKX_ORDER_INSTID_PAYLOAD_REPAIR"),
+    ("bot.okx_final_order_submission_bridge_patch", "OKX_FINAL_ORDER_SUBMISSION_BRIDGE"),
+    ("bot.stalled_writer_release_guard_v22", "STALLED_WRITER_RELEASE_GUARD_V22"),
+)
 
-try:
-    from bot.disconnected_coinbase_balance_guard_patch import install_import_hook as _install_coinbase_balance_guard
-    _install_coinbase_balance_guard()
-    logger.warning("COINBASE_BALANCE_DISCONNECTED_GUARD_INSTALL_REQUESTED source=bot_entrypoint")
-except Exception as exc:
-    logger.warning("COINBASE_BALANCE_DISCONNECTED_GUARD_INSTALL_FAILED source=bot_entrypoint err=%s", exc)
+_LEGACY_INSTALLERS = (
+    *_FAST_PATH_INSTALLERS,
+    ("bot.bootstrap_i12_capital_authority_repair_patch", "BOOTSTRAP_I12_CAPITAL_AUTHORITY_REPAIR"),
+    ("bot.trading_engine_strategy_wrapper_patch", "TRADING_ENGINE_STRATEGY_WRAPPER"),
+    ("bot.strategy_runtime_integrity_patch", "STRATEGY_RUNTIME_INTEGRITY"),
+    ("bot.live_entry_scan_adoption_timeout_patch", "SCAN_POSITION_ADOPTION_TIMEOUT"),
+    ("bot.writer_heartbeat_stale_repair_patch", "WRITER_HEARTBEAT_STALE_REPAIR"),
+    ("bot.ecel_okx_synthetic_contract_patch", "ECEL_OKX_SYNTHETIC_CONTRACT"),
+    ("bot.fallback_strict_score_floor_adaptive_patch", "FALLBACK_FLOOR_CALIBRATION"),
+    ("bot.canonical_broker_main_entry_guard_v20", "CANONICAL_BROKER_MAIN_GUARD"),
+    ("bot.canonical_broker_prebootstrap_v22", "CANONICAL_BROKER_PREBOOTSTRAP_V22"),
+)
 
-try:
-    from bot.live_capital_first_snapshot_latch_patch import install_import_hook as _install_live_capital_first_snapshot_latch
-    _install_live_capital_first_snapshot_latch()
-    logger.warning("LIVE_CAPITAL_FIRST_SNAPSHOT_LATCH_INSTALL_REQUESTED source=bot_entrypoint")
-except Exception as exc:
-    logger.warning("LIVE_CAPITAL_FIRST_SNAPSHOT_LATCH_INSTALL_FAILED source=bot_entrypoint err=%s", exc)
 
-try:
-    from bot.startup_authority_prereq_repair_patch import install_import_hook as _install_startup_authority_repair
-    _install_startup_authority_repair()
-    logger.warning("STARTUP_AUTHORITY_PREREQ_REPAIR_INSTALL_REQUESTED source=bot_entrypoint")
-except Exception as exc:
-    logger.warning("STARTUP_AUTHORITY_PREREQ_REPAIR_INSTALL_FAILED source=bot_entrypoint err=%s", exc)
+def _truthy(name: str) -> bool:
+    return str(os.environ.get(name, "")).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+        "enabled",
+        "y",
+    }
 
-try:
-    from bot.bootstrap_i12_capital_authority_repair_patch import install_import_hook as _install_bootstrap_i12_ca_repair
-    _install_bootstrap_i12_ca_repair()
-    logger.warning("BOOTSTRAP_I12_CAPITAL_AUTHORITY_REPAIR_INSTALL_REQUESTED source=bot_entrypoint")
-except Exception as exc:
-    logger.warning("BOOTSTRAP_I12_CAPITAL_AUTHORITY_REPAIR_FAILED source=bot_entrypoint err=%s", exc)
 
-try:
-    from bot.trading_engine_strategy_wrapper_patch import install_import_hook as _install_strategy_wrapper
-    _install_strategy_wrapper()
-    logger.warning("TRADING_ENGINE_STRATEGY_WRAPPER_INSTALL_REQUESTED source=bot_entrypoint")
-except Exception as exc:
-    logger.warning("TRADING_ENGINE_STRATEGY_WRAPPER_INSTALL_FAILED source=bot_entrypoint err=%s", exc)
+def _canonical_fast_path_enabled() -> bool:
+    return bool(
+        _truthy("NIJA_CANONICAL_ENTRYPOINT_FAST_PATH")
+        and _truthy("NIJA_DEFER_RUNTIME_SITE_HOOKS")
+        and os.environ.get("NIJA_CANONICAL_RUNTIME_LAUNCHER_V26_READY") == "1"
+    )
 
-try:
-    from bot.strategy_runtime_integrity_patch import install_import_hook as _install_strategy_runtime_integrity
-    _install_strategy_runtime_integrity()
-    logger.warning("STRATEGY_RUNTIME_INTEGRITY_INSTALL_REQUESTED source=bot_entrypoint")
-except Exception as exc:
-    logger.warning("STRATEGY_RUNTIME_INTEGRITY_INSTALL_FAILED source=bot_entrypoint err=%s", exc)
 
-try:
-    from bot.live_entry_scan_adoption_timeout_patch import install_import_hook as _install_scan_adoption_timeout
-    _install_scan_adoption_timeout()
-    logger.warning("SCAN_POSITION_ADOPTION_TIMEOUT_INSTALL_REQUESTED source=bot_entrypoint")
-except Exception as exc:
-    logger.warning("SCAN_POSITION_ADOPTION_TIMEOUT_INSTALL_FAILED source=bot_entrypoint err=%s", exc)
+def _install_guards(specs: Iterable[tuple[str, str]], *, mode: str) -> bool:
+    ready = True
+    installed: list[str] = []
+    for module_name, label in specs:
+        try:
+            module = importlib.import_module(module_name)
+            installer = getattr(module, "install_import_hook", None) or getattr(
+                module, "install", None
+            )
+            if not callable(installer):
+                raise RuntimeError("installer_missing")
+            result = installer()
+            if result is False:
+                raise RuntimeError("installer_returned_false")
+            installed.append(label)
+            logger.warning(
+                "%s_INSTALL_REQUESTED source=bot_entrypoint mode=%s",
+                label,
+                mode,
+            )
+        except Exception as exc:
+            ready = False
+            logger.critical(
+                "%s_INSTALL_FAILED source=bot_entrypoint mode=%s err=%s",
+                label,
+                mode,
+                exc,
+                exc_info=True,
+            )
+    logger.critical(
+        "BOT_ENTRYPOINT_GUARD_BUNDLE_COMPLETE marker=%s mode=%s ready=%s "
+        "installed=%s",
+        _FAST_PATH_MARKER,
+        mode,
+        ready,
+        ",".join(installed) or "none",
+    )
+    return ready
 
-try:
-    from bot.writer_heartbeat_stale_repair_patch import install_import_hook as _install_writer_heartbeat_stale_repair
-    _install_writer_heartbeat_stale_repair()
-    logger.warning("WRITER_HEARTBEAT_STALE_REPAIR_INSTALL_REQUESTED source=bot_entrypoint")
-except Exception as exc:
-    logger.warning("WRITER_HEARTBEAT_STALE_REPAIR_FAILED source=bot_entrypoint err=%s", exc)
 
-try:
-    from bot.ecel_okx_synthetic_contract_patch import install_import_hook as _install_ecel_okx_contract_repair
-    _install_ecel_okx_contract_repair()
-    logger.warning("ECEL_OKX_SYNTHETIC_CONTRACT_INSTALL_REQUESTED source=bot_entrypoint")
-except Exception as exc:
-    logger.warning("ECEL_OKX_SYNTHETIC_CONTRACT_INSTALL_FAILED source=bot_entrypoint err=%s", exc)
-
-try:
-    from bot.fallback_strict_score_floor_adaptive_patch import install_import_hook as _install_fallback_floor_calibration
-    _install_fallback_floor_calibration()
-    logger.warning("FALLBACK_FLOOR_CALIBRATION_INSTALL_REQUESTED source=bot_entrypoint")
-except Exception as exc:
-    logger.warning("FALLBACK_FLOOR_CALIBRATION_FAILED source=bot_entrypoint err=%s", exc)
-
-try:
-    from bot.okx_execution_min_notional_lift_patch import install_import_hook as _install_okx_execution_min_lift
-    _install_okx_execution_min_lift()
-    logger.warning("OKX_EXECUTION_MIN_NOTIONAL_LIFT_INSTALL_REQUESTED source=bot_entrypoint")
-except Exception as exc:
-    logger.warning("OKX_EXECUTION_MIN_NOTIONAL_LIFT_FAILED source=bot_entrypoint err=%s", exc)
-
-try:
-    from bot.okx_order_instid_payload_repair_patch import install_import_hook as _install_okx_order_instid_payload_repair
-    _install_okx_order_instid_payload_repair()
-    logger.warning("OKX_ORDER_INSTID_PAYLOAD_REPAIR_INSTALL_REQUESTED source=bot_entrypoint")
-except Exception as exc:
-    logger.warning("OKX_ORDER_INSTID_PAYLOAD_REPAIR_INSTALL_FAILED source=bot_entrypoint err=%s", exc)
-
-try:
-    from bot.okx_final_order_submission_bridge_patch import install_import_hook as _install_okx_final_order_submission_bridge
-    _install_okx_final_order_submission_bridge()
-    logger.warning("OKX_FINAL_ORDER_SUBMISSION_BRIDGE_INSTALL_REQUESTED source=bot_entrypoint")
-except Exception as exc:
-    logger.warning("OKX_FINAL_ORDER_SUBMISSION_BRIDGE_INSTALL_FAILED source=bot_entrypoint err=%s", exc)
-
-try:
-    from bot.canonical_broker_main_entry_guard_v20 import install_import_hook as _install_canonical_broker_main_guard
-    _install_canonical_broker_main_guard()
-    logger.warning("CANONICAL_BROKER_MAIN_GUARD_INSTALL_REQUESTED source=bot_entrypoint")
-except Exception as exc:
-    logger.warning("CANONICAL_BROKER_MAIN_GUARD_INSTALL_FAILED source=bot_entrypoint err=%s", exc)
-
-try:
-    from bot.canonical_broker_prebootstrap_v22 import install_import_hook as _install_canonical_broker_prebootstrap
-    _install_canonical_broker_prebootstrap()
-    logger.warning("CANONICAL_BROKER_PREBOOTSTRAP_V22_INSTALL_REQUESTED source=bot_entrypoint")
-except Exception as exc:
-    logger.warning("CANONICAL_BROKER_PREBOOTSTRAP_V22_INSTALL_FAILED source=bot_entrypoint err=%s", exc)
-
-try:
-    from bot.stalled_writer_release_guard_v22 import install_import_hook as _install_stalled_writer_release_guard
-    _install_stalled_writer_release_guard()
-    logger.warning("STALLED_WRITER_RELEASE_GUARD_V22_INSTALL_REQUESTED source=bot_entrypoint")
-except Exception as exc:
-    logger.warning("STALLED_WRITER_RELEASE_GUARD_V22_INSTALL_FAILED source=bot_entrypoint err=%s", exc)
+if _canonical_fast_path_enabled():
+    if not _install_guards(_FAST_PATH_INSTALLERS, mode="canonical_fast"):
+        os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "0"
+        os.environ["NIJA_RUNTIME_TRADING_STATE"] = "OFF"
+        raise RuntimeError(
+            "canonical fast-path safety guards failed; trading remains fail closed"
+        )
+    logger.critical(
+        "CANONICAL_ENTRYPOINT_FAST_PATH_READY marker=%s "
+        "package_hook_fanout=deferred handoff=bot.bot_main",
+        _FAST_PATH_MARKER,
+    )
+else:
+    logger.warning(
+        "BOT_ENTRYPOINT_LEGACY_COMPATIBILITY_PATH marker=%s "
+        "canonical_fast_path=false",
+        _FAST_PATH_MARKER,
+    )
+    _install_guards(_LEGACY_INSTALLERS, mode="legacy_compatibility")
 
 from bot.bot_main import main
 
