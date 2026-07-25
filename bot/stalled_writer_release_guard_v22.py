@@ -245,12 +245,22 @@ def _release_reason(snapshot: RuntimeSnapshot) -> str:
 def _should_release(snapshot: RuntimeSnapshot, elapsed_s: float, timeout_s: float) -> bool:
     if elapsed_s < timeout_s:
         return False
-    if not snapshot.production_intent or not snapshot.writer_acquired:
+    # Require the lock to actually be held by this process.
+    if not snapshot.writer_acquired:
         return False
+    # Never interrupt a process that is already live or has authority.
     if snapshot.shutdown_requested:
         return False
     if snapshot.authority or snapshot.state == "LIVE_ACTIVE":
         return False
+    # Do not auto-release dry-run or paper instances; they carry no live capital.
+    if _truthy_env("DRY_RUN_MODE") or _truthy_env("PAPER_MODE"):
+        return False
+    # Release whenever startup is stalled, regardless of trading-state value.
+    # An old instance can be stuck before reaching any LIVE_* state (e.g. broker
+    # connection hangs in prepare_canonical_broker_runtime()); in that case
+    # NIJA_RUNTIME_TRADING_STATE stays "OFF" and production_intent is False, so
+    # checking production_intent here would prevent the guard from ever firing.
     return not snapshot.manager_ready or not snapshot.capital_ready
 
 
