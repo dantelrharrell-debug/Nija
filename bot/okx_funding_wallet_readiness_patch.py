@@ -122,11 +122,13 @@ def _funding_wallet(broker: Any) -> tuple[bool, float, float, str]:
     return False, 0.0, 0.0, last_reason
 
 
-def _publish(broker: Any) -> None:
+def _publish(broker: Any) -> float:
+    """Publish one authenticated OKX wallet snapshot and return canonical capital."""
+
     trading_ok, trading_spendable, trading_total, trading_reason = _trading_wallet(broker)
     minimum = _minimum_trade()
 
-    # A funded Trading wallet is sufficient for execution.  Do not issue an
+    # A funded Trading wallet is sufficient for execution. Do not issue an
     # unnecessary Funding request, which previously caused a false auth error.
     if trading_ok and trading_spendable >= minimum:
         funding_ok, funding_spendable, funding_total, funding_reason = False, 0.0, 0.0, "not_required"
@@ -135,6 +137,7 @@ def _publish(broker: Any) -> None:
 
     observed = trading_ok or funding_ok
     total_observed = trading_total + funding_total
+    authoritative_trading = max(trading_spendable, trading_total) if trading_ok else 0.0
 
     if trading_ok and trading_spendable >= minimum:
         status = "funded"
@@ -160,12 +163,26 @@ def _publish(broker: Any) -> None:
         "NIJA_OKX_TRADING_READY": "1" if ready else "0",
         "NIJA_OKX_SPENDABLE_QUOTE": f"{trading_spendable:.8f}" if trading_ok else "unknown",
     }
+    if trading_ok:
+        values["NIJA_OKX_CONNECTED"] = "1"
+        values["NIJA_OKX_ACTIVATED"] = "1" if ready else "0"
+        values["NIJA_OKX_ACTIVATION_STATE"] = "ready" if ready else "connected_unfunded"
     os.environ.update(values)
+
     setattr(broker, "_okx_trading_spendable_quote", trading_spendable if trading_ok else None)
+    setattr(broker, "_okx_trading_total_quote", trading_total if trading_ok else None)
     setattr(broker, "_okx_funding_spendable_quote", funding_spendable if funding_ok else None)
     setattr(broker, "_okx_funding_status", status)
     setattr(broker, "trading_ready", ready)
     setattr(broker, "ready", ready)
+    if trading_ok:
+        setattr(broker, "connected", True)
+        if authoritative_trading > 0.0:
+            # These are the cache surfaces consumed by CapitalAuthority and the
+            # activation monitor. They come only from the authenticated private
+            # account response above.
+            setattr(broker, "_last_known_balance", authoritative_trading)
+            setattr(broker, "_last_confirmed_balance", authoritative_trading)
 
     if observed:
         logger.critical(
@@ -178,6 +195,8 @@ def _publish(broker: Any) -> None:
             "OKX_BALANCE_UNOBSERVED_NOT_UNDERFUNDED marker=%s trading_reason=%s funding_reason=%s",
             _MARKER, trading_reason, funding_reason,
         )
+    return authoritative_trading
+
 
 
 def _patch_class(cls: type) -> bool:
@@ -188,16 +207,20 @@ def _patch_class(cls: type) -> bool:
     @wraps(current)
     def get_account_balance(self: Any, *args: Any, **kwargs: Any) -> float:
         result = current(self, *args, **kwargs)
+        authoritative = 0.0
         try:
-            _publish(self)
+            authoritative = _publish(self)
         except Exception:
             logger.exception("OKX_DUAL_WALLET_PUBLISH_FAILED marker=%s", _MARKER)
-        return float(result or 0.0)
+        # Never let a stale legacy zero overwrite a newer authenticated private
+        # wallet observation.
+        return max(_float(result), authoritative)
 
     setattr(get_account_balance, _PATCH_ATTR, True)
     get_account_balance.__wrapped__ = current  # type: ignore[attr-defined]
     setattr(cls, "get_account_balance", get_account_balance)
     return True
+
 
 
 def _patch_loaded() -> bool:
