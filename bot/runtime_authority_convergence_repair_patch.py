@@ -259,10 +259,8 @@ def _capital_authority_ready() -> tuple[bool, str, dict[str, Any]]:
         return False, "live_capital_not_verified", {}
     if _truthy("DRY_RUN_MODE") or _truthy("PAPER_MODE"):
         return False, "simulation_mode", {}
-    # Attempt to repair a stale/zero-broker CapitalAuthority by pulling live
-    # balance directly from the canonical broker manager before we interrogate
-    # the authority.  This converts a recovered broker state into an accepted
-    # fresh capital snapshot without bypassing any gate logic.
+    # Observe balances already published by the canonical broker manager.
+    # Recovery monitors never call private exchange endpoints or mutate feeds.
     _broker_manager_capital_payload()
     try:
         try:
