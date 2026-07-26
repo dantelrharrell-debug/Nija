@@ -27,6 +27,8 @@ _LAST_FAILURE: dict[str, float] = {}
 _FAILED_PAIR_AT: dict[str, float] = {}
 _PAIR_RETRY_COOLDOWN_S = 300.0
 _CANONICAL_BROKERS: dict[str, weakref.ReferenceType[Any]] = {}
+_CANONICAL_SCOPE_ATTR = "_nija_coinbase_canonical_scope_v4"
+_CANONICAL_FINGERPRINT_ATTR = "_nija_coinbase_canonical_credential_fingerprint_v4"
 
 
 def _is_coinbase_class(cls: type) -> bool:
@@ -85,12 +87,41 @@ def _client_target(broker: Any) -> Any | None:
     return None
 
 
+def _credential_fingerprint_for_broker(broker: Any) -> str:
+    """Return a non-secret identity for the credential pair used by *broker*."""
+    key = ""
+    secret = ""
+    for target in reversed(_credential_targets(broker)):
+        key = str(getattr(target, "api_key", "") or key)
+        secret = str(
+            getattr(target, "api_secret", "")
+            or getattr(target, "secret", "")
+            or getattr(target, "private_key", "")
+            or secret
+        )
+        if key and secret:
+            break
+    key = key or str(os.environ.get("COINBASE_API_KEY", "") or "")
+    secret = secret or str(
+        os.environ.get("COINBASE_API_SECRET", "")
+        or os.environ.get("COINBASE_PEM_CONTENT", "")
+        or ""
+    )
+    return _pair_fingerprint(key, secret) if key and secret else ""
+
+
 def _remember_canonical(broker: Any) -> Any | None:
     """Record and publish the verified concrete broker for its account scope."""
     target = _client_target(broker)
     if target is None:
         return None
     scope = _account_scope(target)
+    fingerprint = _credential_fingerprint_for_broker(target)
+    try:
+        setattr(target, _CANONICAL_SCOPE_ATTR, scope)
+        setattr(target, _CANONICAL_FINGERPRINT_ATTR, fingerprint)
+    except Exception:
+        pass
     with _LOCK:
         _CANONICAL_BROKERS[scope] = weakref.ref(target)
 
@@ -131,6 +162,7 @@ def _remember_canonical(broker: Any) -> Any | None:
 
 def _canonical_for(broker: Any) -> Any | None:
     scope = _account_scope(broker)
+    from_platform_registry = False
     with _LOCK:
         reference = _CANONICAL_BROKERS.get(scope)
         target = reference() if reference is not None else None
@@ -141,9 +173,28 @@ def _canonical_for(broker: Any) -> Any | None:
             manager_module = importlib.import_module("bot.broker_manager")
             getter = getattr(manager_module, "get_platform_broker", None)
             target = getter("coinbase") if callable(getter) else None
+            from_platform_registry = target is not None
         except Exception:
             target = None
     if target is None or target is broker:
+        return None
+    canonical_scope = str(getattr(target, _CANONICAL_SCOPE_ATTR, "") or "")
+    canonical_fingerprint = str(
+        getattr(target, _CANONICAL_FINGERPRINT_ATTR, "") or ""
+    )
+    current_fingerprint = _credential_fingerprint_for_broker(broker)
+    # The process-wide platform registry can outlive a module reload or a
+    # credential rotation.  Adopt from it only when this patch previously
+    # verified that exact account scope, and never cross credential families.
+    if from_platform_registry and canonical_scope != scope:
+        return None
+    if canonical_scope and canonical_scope != scope:
+        return None
+    if (
+        canonical_fingerprint
+        and current_fingerprint
+        and canonical_fingerprint != current_fingerprint
+    ):
         return None
     if _client_target(target) is None or not bool(getattr(target, "connected", False)):
         return None
