@@ -1,51 +1,63 @@
 # NIJA AI Trading LLC — Current Success State
 
-**Status date:** July 25, 2026
+**Status date:** July 26, 2026  
+**Recovery commit:** [`5eba6f5`](https://github.com/dantelrharrell-debug/Nija/commit/5eba6f504140def3eed45c46a63d3f074bcd907e) via [PR #2273](https://github.com/dantelrharrell-debug/Nija/pull/2273)
 
-This README is the current recovery anchor for NIJA. It documents the active production broker contract, startup order, independent trade-entry path, automatic take-profit/stop-loss protection, and mobile-app direction.
+This README is the durable recovery anchor for NIJA. It records what the production logs have actually proved, what the merged recovery changes are intended to repair, and the exact evidence required before declaring all three venues live.
 
-NIJA does not guarantee trades or profits. A connected brokerage may enter a trade only when writer authority, capital, signal, risk, exchange-minimum, and order-admission checks all pass.
+NIJA does not guarantee trades or profits. A connected brokerage may enter a trade only when writer authority, authenticated capital, signal, risk, exchange-minimum, and order-admission checks all pass.
 
-## Current Recovery Checkpoint — July 25, 2026
-
-This is the durable return point for the active Render recovery.
+## Current Recovery Checkpoint — July 26, 2026
 
 | Area | Proven state |
 |---|---|
-| Deployed source | The latest recovery changes are deployed and entrypoint-attested |
-| Canonical runtime | `launcher-v26 -> main.py -> bot.bot -> bot.bot_main` attestation passed |
-| Runtime guards | Guard audit reports ready with no missing required guards |
-| Coinbase key structure | Exactly one canonical key/secret pair is selected and the private key parses as valid ES256/ECDSA |
-| Coinbase connection | Still fail-closed: authenticated SDK requests returned `401 Unauthorized`; structural PEM validation is not connection proof |
-| OKX US | Independently connected, funded, market discovery succeeded, and venue readiness reported `ready` |
-| Kraken | Configured but disconnected in the latest multi-venue connectivity snapshots |
-| Writer authority | A restarted Render instance may safely wait for the previous rolling-deployment writer lease |
-| Trading state | No current claim of `LIVE_ACTIVE`, submitted order, confirmed fill, or profit |
+| Source of truth | Kraken canonical-registration recovery and Coinbase wrapper-chain repair are merged into `main` at `5eba6f5`; Render rollout verification is still required |
+| Canonical runtime | `launcher-v26 -> main.py -> bot.bot -> bot.bot_main` entrypoint attestation passed before this recovery merge |
+| Coinbase | Valid ES256 key pair authenticated successfully; a runtime snapshot reported connected, ready, and about $200.21 spendable |
+| OKX US | Private balance returned HTTP 200; about $144.96 was observed, the US endpoint was selected, and router binding was verified |
+| Kraken before recovery merge | Credentials and user configurations loaded and nonce authority initialized, but the canonical connectivity snapshot still reported `kraken_connected=False` |
+| Kraken recovery now merged | The canonical writer-acquisition path starts authenticated Kraken recovery, repairs a missing Kraken registration narrowly, refreshes capital authority, and re-evaluates normal activation gates |
+| Exit protection | Kraken all-account exit protection, verified cost-basis recovery, universal broker exits, and automatic take-profit/stop-loss guards are installed; each venue still requires its own connected broker and verified position data |
+| Coinbase log stability | Recovery wrapper detection is now chain-aware, preventing repeated Coinbase `connect` wrapping during runtime convergence |
+| Writer authority | Rolling Render instances remain single-writer; a replacement may wait safely on the prior Redis lease |
+| Trading state | The latest supplied logs did not prove `LIVE_ACTIVE`, a submitted order, a confirmed fill, or a completed take-profit exit |
 
 ### Safe continuation from this checkpoint
 
-1. Do not repeatedly restart Render while `ENTRYPOINT_WRITER_AUTHORITY_STANDBY` is present.
-2. Wait for verified writer acquisition before judging the replacement instance.
-3. Do not regress the Coinbase key back to manual PEM construction. The PEM-format issue is resolved when startup reports:
+1. Allow Render to deploy commit `5eba6f5`; do not repeatedly restart while `ENTRYPOINT_WRITER_AUTHORITY_STANDBY` is present.
+2. Wait for the new instance to acquire and verify writer authority.
+3. Confirm the canonical recovery hook is installed:
    ```text
-   COINBASE_PEM_CANONICALIZED validation=es256 pair_source=canonical:COINBASE_API_KEY+COINBASE_API_SECRET pair_count=1 key_shape=cdp
+   CANONICAL_BROKER_STARTUP_CONVERGENCE_V30_ACQUIRE_PATCHED
    ```
-4. Coinbase must remain disconnected and fail-closed until a private account or balance request succeeds.
-5. If Coinbase continues returning `401 Unauthorized`, inspect Advanced Trade access, key enablement, View/Trade permissions, portfolio scope, IP restrictions, SDK signing, and runtime credential selection.
-6. Keep OKX independent when Coinbase or Kraken is degraded. Never use forced activation, synthetic capital, or writer-lock bypasses.
+4. Confirm authenticated Kraken recovery progresses:
+   ```text
+   KRAKEN_AUTHENTICATED_RECOVERY_STARTED
+   KRAKEN_AUTHENTICATED_RECOVERY_REGISTERED   # expected only if Kraken was absent
+   KRAKEN_AUTHENTICATED_RECOVERY_READY ... connected=true capital_rechecked=true
+   ```
+5. Confirm one final connectivity snapshot reports all intended venues independently connected and ready. Early startup snapshots may be transient; use the latest post-recovery snapshot.
+6. Confirm normal activation gates commit `LIVE_ACTIVE` without force flags.
+7. Confirm each connected venue is registered with the universal exit supervisor before relying on automatic take-profit protection.
+8. Never use forced activation, synthetic capital, credential bypasses, nonce bypasses, or writer-lock deletion to manufacture readiness.
 
 Required evidence to advance this checkpoint:
 
 ```text
 ENTRYPOINT_WRITER_AUTHORITY_READY
-COINBASE_AUTHENTICATED_CONNECT_RECOVERED   # only when Coinbase succeeds
+ENTRYPOINT_WRITER_AUTHORITY_VERIFIED
+KRAKEN_AUTHENTICATED_RECOVERY_READY
+LIVE_BROKER_CONNECTIVITY_SNAPSHOT ... kraken_connected=True coinbase_connected=True okx_connected=True
 BROKER_INDEPENDENT_READINESS
-LIVE_BROKER_CONNECTIVITY_SNAPSHOT
+UNIVERSAL_BROKER_EXIT_REGISTERED venue=kraken
+UNIVERSAL_BROKER_EXIT_REGISTERED venue=coinbase
+UNIVERSAL_BROKER_EXIT_REGISTERED venue=okx
 ACTIVATION_COMMITTED
 NIJA_RUNTIME_TRADING_STATE=LIVE_ACTIVE
 ```
 
-## Verified Production Milestone — July 25, 2026
+## Earlier Verified Production Milestone — July 25, 2026 (historical)
+
 
 NIJA completed a successful production bootstrap milestone through the canonical Render runtime.
 
