@@ -1,7 +1,8 @@
 # NIJA AI Trading LLC — Current Success State
 
 **Status date:** July 26, 2026  
-**Recovery commit:** [`5eba6f5`](https://github.com/dantelrharrell-debug/Nija/commit/5eba6f504140def3eed45c46a63d3f074bcd907e) via [PR #2273](https://github.com/dantelrharrell-debug/Nija/pull/2273)
+**Deployed checkpoint:** [`033e392`](https://github.com/dantelrharrell-debug/Nija/commit/033e392f10f7e833c3fe4698cb974659e7f83e99)  
+**Active recovery repair:** [PR #2275](https://github.com/dantelrharrell-debug/Nija/pull/2275)
 
 This README is the durable recovery anchor for NIJA. It records what the production logs have actually proved, what the merged recovery changes are intended to repair, and the exact evidence required before declaring all three venues live.
 
@@ -11,24 +12,26 @@ NIJA does not guarantee trades or profits. A connected brokerage may enter a tra
 
 | Area | Proven state |
 |---|---|
-| Source of truth | Kraken canonical-registration recovery and Coinbase wrapper-chain repair are merged into `main` at `5eba6f5`; Render rollout verification is still required |
-| Canonical runtime | `launcher-v26 -> main.py -> bot.bot -> bot.bot_main` entrypoint attestation passed before this recovery merge |
-| Coinbase | Valid ES256 key pair authenticated successfully; a runtime snapshot reported connected, ready, and about $200.21 spendable |
+| Source of truth | Render proved deployed commit `033e392`; follow-up writer-timing and Coinbase auth fail-closed repairs are tracked in PR #2275 |
+| Canonical runtime | `launcher-v26 -> main.py -> bot.bot -> bot.bot_main` entrypoint attestation and runtime guard audit passed on deployed commit `033e392` |
+| Coinbase | Valid ES256 credentials authenticated and about $200.21 was observed; a later 401 exposed stale cached capital being republished as ready, which PR #2275 now prevents |
 | OKX US | Private balance returned HTTP 200; about $144.96 was observed, the US endpoint was selected, and router binding was verified |
-| Kraken before recovery merge | Credentials and user configurations loaded and nonce authority initialized, but the canonical connectivity snapshot still reported `kraken_connected=False` |
-| Kraken recovery now merged | The canonical writer-acquisition path starts authenticated Kraken recovery, repairs a missing Kraken registration narrowly, refreshes capital authority, and re-evaluates normal activation gates |
+| Kraken deployed state | Credentials and user configurations loaded and nonce authority initialized, but repeated deployed snapshots still reported `kraken_connected=False` and no authenticated-recovery handoff marker |
+| Kraken recovery repair | PR #2275 adds a writer-lineage coordinator and retries transient lineage gaps so authenticated Kraken recovery cannot be lost during a rolling Render handoff |
 | Exit protection | Kraken all-account exit protection, verified cost-basis recovery, universal broker exits, and automatic take-profit/stop-loss guards are installed; each venue still requires its own connected broker and verified position data |
-| Coinbase log stability | Recovery wrapper detection is now chain-aware, preventing repeated Coinbase `connect` wrapping during runtime convergence |
+| Coinbase safety | Wrapper detection remains chain-aware; PR #2275 also preserves cached equity only for valuation while clearing connection, funding, activation, and execution readiness after auth loss |
 | Writer authority | Rolling Render instances remain single-writer; a replacement may wait safely on the prior Redis lease |
 | Trading state | The latest supplied logs did not prove `LIVE_ACTIVE`, a submitted order, a confirmed fill, or a completed take-profit exit |
 
 ### Safe continuation from this checkpoint
 
-1. Allow Render to deploy commit `5eba6f5`; do not repeatedly restart while `ENTRYPOINT_WRITER_AUTHORITY_STANDBY` is present.
+1. Merge PR #2275 and allow Render to deploy it; do not repeatedly restart while `ENTRYPOINT_WRITER_AUTHORITY_STANDBY` is present.
 2. Wait for the new instance to acquire and verify writer authority.
-3. Confirm the canonical recovery hook is installed:
+3. Confirm the canonical recovery hook and coordinator are installed:
    ```text
    CANONICAL_BROKER_STARTUP_CONVERGENCE_V30_ACQUIRE_PATCHED
+   KRAKEN_RECOVERY_COORDINATOR_STARTED
+   KRAKEN_RECOVERY_COORDINATOR_HANDOFF
    ```
 4. Confirm authenticated Kraken recovery progresses:
    ```text
@@ -46,6 +49,7 @@ Required evidence to advance this checkpoint:
 ```text
 ENTRYPOINT_WRITER_AUTHORITY_READY
 ENTRYPOINT_WRITER_AUTHORITY_VERIFIED
+KRAKEN_RECOVERY_COORDINATOR_HANDOFF
 KRAKEN_AUTHENTICATED_RECOVERY_READY
 LIVE_BROKER_CONNECTIVITY_SNAPSHOT ... kraken_connected=True coinbase_connected=True okx_connected=True
 BROKER_INDEPENDENT_READINESS
