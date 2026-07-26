@@ -107,6 +107,57 @@ def test_disconnected_broker_rebuilds_client_and_clears_transient_auth_latch(mon
     assert module.os.environ["NIJA_COINBASE_ACTIVATION_STATE"] == "ready"
 
 
+def test_connected_broker_with_missing_client_triggers_rebuild(monkeypatch):
+    """connected=True but client=None must force a full rebuild before declaring recovery."""
+    module = _module()
+
+    class Client:
+        def get_accounts(self):
+            return {"accounts": []}
+
+    rebuilt = []
+
+    class CoinbaseBroker:
+        def __init__(self):
+            # Simulate the inconsistent state: connected flag set but client lost.
+            self.client = None
+            self.connected = True
+            self._auth_failed = False
+            self._is_available = True
+            self._accounts_cache = None
+            self._accounts_cache_time = None
+            self._balance_cache = {"usd": 500.0}  # stale cached balance
+            self._balance_cache_time = None
+
+        def connect(self):
+            # When _apply_pair resets state, connected is False and client is None.
+            assert self.connected is False, "state must be reset before rebuilding"
+            assert self.client is None, "client must be cleared before rebuild"
+            self.client = Client()
+            self.connected = True
+            rebuilt.append(True)
+            return True
+
+    monkeypatch.setenv("COINBASE_API_KEY", "organizations/test/apiKeys/key")
+    monkeypatch.setenv(
+        "COINBASE_API_SECRET",
+        "-----BEGIN EC PRIVATE KEY-----\nTEST\n-----END EC PRIVATE KEY-----",
+    )
+    monkeypatch.delenv("NIJA_COINBASE_CREDENTIALS_QUARANTINED", raising=False)
+    monkeypatch.delenv("NIJA_COINBASE_RECONNECT_DISABLED", raising=False)
+    monkeypatch.setattr(module, "_measure_spendable", lambda broker: 500.0)
+
+    assert module._patch_class(CoinbaseBroker) is True
+    broker = CoinbaseBroker()
+
+    assert broker.connect() is True
+    assert rebuilt == [True], "original connect() must have been called to rebuild the client"
+    assert broker.client is not None
+    assert broker.connected is True
+    assert module.os.environ["NIJA_COINBASE_CONNECTED"] == "1"
+    assert module.os.environ["NIJA_COINBASE_TRADING_READY"] == "1"
+
+
 def test_transient_connect_failure_stays_retryable(monkeypatch):
     module = _module()
 

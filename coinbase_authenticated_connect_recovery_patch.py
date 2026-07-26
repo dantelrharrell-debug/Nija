@@ -341,10 +341,14 @@ def _patch_class(cls: type) -> bool:
             os.environ["NIJA_COINBASE_ACTIVATION_STATE"] = "quarantined"
             return False
 
-        # Rebuild the authenticated SDK client on every disconnected retry.
-        # This also clears transient client-lifecycle failures, while explicit
-        # 401 quarantines remain blocked by _quarantined_for() above.
-        if primary_key and primary_secret and not bool(getattr(self, "connected", False)):
+        # Rebuild the authenticated SDK client on every disconnected retry, or
+        # when the client is absent despite connected=True.  A None client with
+        # connected=True is an inconsistent state: the broker must re-authenticate
+        # before recovery is declared; cached balances must not bypass this check.
+        _client_missing = getattr(self, "client", None) is None
+        if primary_key and primary_secret and (
+            not bool(getattr(self, "connected", False)) or _client_missing
+        ):
             _apply_pair(
                 self,
                 primary_source,

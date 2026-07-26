@@ -201,10 +201,15 @@ def _measure_spendable(broker: Any) -> float:
                 continue
             except Exception:
                 break
-    for attr in ("available_usd", "available_usdc", "cash", "balance_cache", "_balance_cache", "last_balance_payload", "accounts"):
-        amount = _spendable_from_payload(getattr(broker, attr, None))
-        if amount > 0:
-            return amount
+    # Cached balance attributes are only safe when the broker has a live,
+    # authenticated SDK client.  A None client means the broker is not yet
+    # initialised; reading cached data would make it appear funded/ready for
+    # trading when it is not.
+    if getattr(broker, "client", None) is not None:
+        for attr in ("available_usd", "available_usdc", "cash", "balance_cache", "_balance_cache", "last_balance_payload", "accounts"):
+            amount = _spendable_from_payload(getattr(broker, attr, None))
+            if amount > 0:
+                return amount
     return 0.0
 
 
