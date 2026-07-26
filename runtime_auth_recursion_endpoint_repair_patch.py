@@ -10,7 +10,7 @@ from types import ModuleType
 from typing import Any, Callable
 
 logger = logging.getLogger("nija.runtime_auth_endpoint_repair")
-_MARKER = "20260726-coinbase-client-recovery-v3"
+_MARKER = "20260726-coinbase-client-recovery-v4"
 _LOCK = threading.RLock()
 _PATCHED = False
 _LOCAL = threading.local()
@@ -93,6 +93,14 @@ def _patch_coinbase_class(module: ModuleType) -> bool:
         def guarded(self: Any, *args: Any, __original: Callable[..., Any] = original,
                     __method_name: str = method_name, **kwargs: Any) -> Any:
             client = getattr(self, "client", None)
+            if client is None:
+                try:
+                    recovery = __import__("coinbase_authenticated_connect_recovery_patch")
+                    adopt = getattr(recovery, "adopt_canonical_client", None)
+                    if callable(adopt) and adopt(self):
+                        client = getattr(self, "client", None)
+                except Exception:
+                    client = None
             if client is None:
                 _mark_coinbase_disconnected(self, "client_uninitialized")
                 logger.error(

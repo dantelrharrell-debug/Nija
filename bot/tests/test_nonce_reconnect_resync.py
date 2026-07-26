@@ -48,6 +48,26 @@ def _make_csm(broker_name: str = "test_broker") -> ConnectionStabilityManager:
 
 class TestConnectionStabilityManagerHooks(unittest.TestCase):
 
+    def test_verified_replacement_moves_watchdog_ownership(self):
+        csm = _make_csm("coinbase_platform")
+        stale = MagicMock(name="stale_coinbase")
+        verified = MagicMock(name="verified_coinbase")
+        stale_reconnect = MagicMock(return_value=False)
+        verified_reconnect = MagicMock(return_value=True)
+
+        csm.register_broker(broker=stale, reconnect_fn=stale_reconnect)
+        csm.register_broker(
+            broker=verified,
+            reconnect_fn=verified_reconnect,
+            replace_existing=True,
+        )
+
+        self.assertIs(csm._broker, verified)
+        self.assertIs(csm._reconnect_fn, verified_reconnect)
+        self.assertTrue(csm._probe_connection())
+        verified_reconnect.assert_called_once_with()
+        stale_reconnect.assert_not_called()
+
     def test_register_pre_reconnect_hook_stored(self):
         csm = _make_csm()
         hook = MagicMock()

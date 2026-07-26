@@ -13,18 +13,22 @@ import os
 import sys
 import threading
 import time
+import weakref
 from functools import wraps
 from types import ModuleType
 from typing import Any, Mapping, Sequence
 
 logger = logging.getLogger("nija.coinbase_authenticated_connect_recovery")
-_MARKER = "20260726-coinbase-authenticated-reconnect-v2"
+_MARKER = "20260726-coinbase-canonical-client-v4"
 _PATCH_ATTR = "_nija_coinbase_authenticated_connect_v1"
 _LOCK = threading.RLock()
 _STARTED = False
 _LAST_FAILURE: dict[str, float] = {}
 _FAILED_PAIR_AT: dict[str, float] = {}
 _PAIR_RETRY_COOLDOWN_S = 300.0
+_CANONICAL_BROKERS: dict[str, weakref.ReferenceType[Any]] = {}
+_CANONICAL_SCOPE_ATTR = "_nija_coinbase_canonical_scope_v4"
+_CANONICAL_FINGERPRINT_ATTR = "_nija_coinbase_canonical_credential_fingerprint_v4"
 
 
 def _is_coinbase_class(cls: type) -> bool:
@@ -54,6 +58,204 @@ def _clients(broker: Any) -> list[Any]:
             found.append(value)
     found.insert(0, broker)
     return found
+
+
+def _account_scope(broker: Any) -> str:
+    """Return a stable account key so clients never cross account boundaries."""
+    targets = _credential_targets(broker)
+    target = targets[-1]
+    account_type = getattr(target, "account_type", None)
+    account_value = str(getattr(account_type, "value", account_type) or "platform").lower()
+    if account_value.endswith(".platform"):
+        account_value = "platform"
+    elif account_value.endswith(".user"):
+        account_value = "user"
+    user_id = str(getattr(target, "user_id", "") or "").strip().lower()
+    return f"{account_value}:{user_id}" if user_id else account_value
+
+
+def _client_target(broker: Any) -> Any | None:
+    """Find the concrete broker object that owns an authenticated SDK client."""
+    for target in reversed(_credential_targets(broker)):
+        client = getattr(target, "client", None)
+        if (
+            client is not None
+            and not bool(getattr(target, "_auth_failed", False))
+            and not bool(getattr(target, "auth_failed", False))
+        ):
+            return target
+    return None
+
+
+def _credential_fingerprint_for_broker(broker: Any) -> str:
+    """Return a non-secret identity for the credential pair used by *broker*."""
+    key = ""
+    secret = ""
+    for target in reversed(_credential_targets(broker)):
+        key = str(getattr(target, "api_key", "") or key)
+        secret = str(
+            getattr(target, "api_secret", "")
+            or getattr(target, "secret", "")
+            or getattr(target, "private_key", "")
+            or secret
+        )
+        if key and secret:
+            break
+    key = key or str(os.environ.get("COINBASE_API_KEY", "") or "")
+    secret = secret or str(
+        os.environ.get("COINBASE_API_SECRET", "")
+        or os.environ.get("COINBASE_PEM_CONTENT", "")
+        or ""
+    )
+    return _pair_fingerprint(key, secret) if key and secret else ""
+
+
+def _remember_canonical(broker: Any) -> Any | None:
+    """Record and publish the verified concrete broker for its account scope."""
+    target = _client_target(broker)
+    if target is None:
+        return None
+    scope = _account_scope(target)
+    fingerprint = _credential_fingerprint_for_broker(target)
+    try:
+        setattr(target, _CANONICAL_SCOPE_ATTR, scope)
+        setattr(target, _CANONICAL_FINGERPRINT_ATTR, fingerprint)
+    except Exception:
+        pass
+    with _LOCK:
+        _CANONICAL_BROKERS[scope] = weakref.ref(target)
+
+    manager = getattr(target, "_connection_stability_manager", None)
+    register = getattr(manager, "register_broker", None)
+    reconnect = getattr(target, "connect", None)
+    if callable(register) and callable(reconnect):
+        try:
+            register(
+                broker=target,
+                reconnect_fn=reconnect,
+                replace_existing=True,
+            )
+        except TypeError:
+            # Compatibility with a lightweight/legacy manager that predates
+            # explicit replacement.  The broker remains canonical locally.
+            pass
+        except Exception:
+            logger.debug(
+                "COINBASE_CANONICAL_WATCHDOG_REBIND_PENDING marker=%s scope=%s",
+                _MARKER,
+                scope,
+            )
+
+    if scope == "platform":
+        try:
+            manager_module = importlib.import_module("bot.broker_manager")
+            register_platform = getattr(manager_module, "register_platform_broker", None)
+            if callable(register_platform):
+                register_platform("coinbase", target, connected=True)
+        except Exception:
+            logger.debug(
+                "COINBASE_CANONICAL_PLATFORM_REGISTRY_PENDING marker=%s",
+                _MARKER,
+            )
+    return target
+
+
+def _canonical_for(broker: Any) -> Any | None:
+    scope = _account_scope(broker)
+    from_platform_registry = False
+    with _LOCK:
+        reference = _CANONICAL_BROKERS.get(scope)
+        target = reference() if reference is not None else None
+        if reference is not None and target is None:
+            _CANONICAL_BROKERS.pop(scope, None)
+    if target is None and scope == "platform":
+        try:
+            manager_module = importlib.import_module("bot.broker_manager")
+            getter = getattr(manager_module, "get_platform_broker", None)
+            target = getter("coinbase") if callable(getter) else None
+            from_platform_registry = target is not None
+        except Exception:
+            target = None
+    if target is None or target is broker:
+        return None
+    canonical_scope = str(getattr(target, _CANONICAL_SCOPE_ATTR, "") or "")
+    canonical_fingerprint = str(
+        getattr(target, _CANONICAL_FINGERPRINT_ATTR, "") or ""
+    )
+    current_fingerprint = _credential_fingerprint_for_broker(broker)
+    # The process-wide platform registry can outlive a module reload or a
+    # credential rotation.  Adopt from it only when this patch previously
+    # verified that exact account scope, and never cross credential families.
+    if from_platform_registry and canonical_scope != scope:
+        return None
+    if canonical_scope and canonical_scope != scope:
+        return None
+    if (
+        canonical_fingerprint
+        and current_fingerprint
+        and canonical_fingerprint != current_fingerprint
+    ):
+        return None
+    if _client_target(target) is None or not bool(getattr(target, "connected", False)):
+        return None
+    return target
+
+
+def adopt_canonical_client(broker: Any) -> bool:
+    """Adopt a verified client from the same account's canonical broker.
+
+    This repairs duplicate/stale runtime objects without converting missing
+    transport state into authentication success.  Platform and user clients
+    are never shared, and different users are isolated by ``user_id``.
+    """
+    if _client_target(broker) is not None:
+        return True
+    canonical = _canonical_for(broker)
+    if canonical is None:
+        return False
+    source = _client_target(canonical)
+    if source is None:
+        return False
+
+    client = getattr(source, "client", None)
+    if client is None:
+        return False
+    for target in _credential_targets(broker):
+        try:
+            target.client = client
+            target.connected = True
+            target._auth_failed = False
+            target._is_available = True
+        except Exception:
+            pass
+        for attr in (
+            "_accounts_cache",
+            "_accounts_cache_time",
+            "_balance_cache",
+            "_balance_cache_time",
+            "_last_known_balance",
+            "_balance_last_updated",
+            "portfolio_uuid",
+        ):
+            try:
+                if hasattr(source, attr) and hasattr(target, attr):
+                    setattr(target, attr, getattr(source, attr))
+            except Exception:
+                pass
+    logger.warning(
+        "COINBASE_CANONICAL_CLIENT_ADOPTED marker=%s scope=%s target=%s source=%s",
+        _MARKER,
+        _account_scope(broker),
+        type(broker).__name__,
+        type(source).__name__,
+    )
+    return True
+
+
+def _forget_canonical(broker: Any) -> None:
+    scope = _account_scope(broker)
+    with _LOCK:
+        _CANONICAL_BROKERS.pop(scope, None)
 
 
 def _payload_success(payload: Any) -> bool:
@@ -103,6 +305,7 @@ def _measure_spendable(broker: Any) -> float:
 
 
 def _publish_connected(broker: Any, source: str) -> None:
+    _remember_canonical(broker)
     for target in _credential_targets(broker):
         for attr, value in (
             ("connected", True),
@@ -300,6 +503,7 @@ def _auth_failure_detail(detail: str) -> bool:
 
 
 def _quarantine(broker: Any, key: str, secret: str) -> None:
+    _forget_canonical(broker)
     _mark_auth_failed(broker)
     fingerprint = _pair_fingerprint(key, secret) if key and secret else ""
     os.environ["NIJA_COINBASE_CREDENTIALS_QUARANTINED"] = "1"
@@ -345,10 +549,20 @@ def _patch_class(cls: type) -> bool:
         # when the client is absent despite connected=True.  A None client with
         # connected=True is an inconsistent state: the broker must re-authenticate
         # before recovery is declared; cached balances must not bypass this check.
-        _client_missing = getattr(self, "client", None) is None
-        if primary_key and primary_secret and (
-            not bool(getattr(self, "connected", False)) or _client_missing
-        ):
+        # Adapters own their concrete broker in ``_broker`` and intentionally
+        # have no direct ``client`` attribute.  Inspect the full credential
+        # target chain so an adapter reconnect cannot clear a healthy nested
+        # client.
+        _client_missing = _client_target(self) is None
+        if _client_missing:
+            adopt_canonical_client(self)
+            _client_missing = _client_target(self) is None
+        # Only clear credentials/client state when the complete adapter/broker
+        # chain truly has no client.  An adapter's own ``connected`` flag may
+        # still be False while its nested canonical broker is already healthy;
+        # resetting on that flag would destroy the authenticated client just
+        # before the adapter reuses it.
+        if primary_key and primary_secret and _client_missing:
             _apply_pair(
                 self,
                 primary_source,
@@ -364,7 +578,9 @@ def _patch_class(cls: type) -> bool:
             result = False
             first_error = f"{type(exc).__name__}:{str(exc)[:100]}"
 
-        if bool(result) or bool(getattr(self, "connected", False)):
+        if (
+            bool(result) or bool(getattr(self, "connected", False))
+        ) and _client_target(self) is not None:
             _publish_connected(self, "connect_result")
             return True
         authenticated, detail = _authenticated_probe(self)
@@ -410,7 +626,9 @@ def _patch_class(cls: type) -> bool:
                 retry_result = False
                 retry_error = f"{type(exc).__name__}:{str(exc)[:100]}"
 
-            if bool(retry_result) or bool(getattr(self, "connected", False)):
+            if (
+                bool(retry_result) or bool(getattr(self, "connected", False))
+            ) and _client_target(self) is not None:
                 _publish_connected(self, f"credential_pair:{source}")
                 logger.critical(
                     "COINBASE_AUTHENTICATED_PAIR_RECOVERED marker=%s "
@@ -518,6 +736,7 @@ def install() -> bool:
 __all__ = [
     "install",
     "_authenticated_probe",
+    "adopt_canonical_client",
     "_configured_pairs",
     "_patch_class",
     "_quarantined_for",

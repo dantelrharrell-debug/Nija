@@ -252,6 +252,48 @@ def test_coinbase_connect_quarantines_confirmed_401_and_stops_retries(
     assert broker.account_calls == 1
 
 
+def test_coinbase_adapter_does_not_reset_healthy_nested_client(
+    monkeypatch,
+):
+    _clear_coinbase_quarantine(monkeypatch)
+    monkeypatch.setenv("COINBASE_API_KEY", "key")
+    monkeypatch.setenv("COINBASE_API_SECRET", "secret")
+    monkeypatch.setattr(coinbase_connect, "_measure_spendable", lambda broker: 100.11)
+
+    expected_client = object()
+
+    class ConcreteBroker:
+        account_type = SimpleNamespace(value="platform")
+        user_id = None
+
+        def __init__(self):
+            self.client = expected_client
+            self.connected = True
+            self._auth_failed = False
+            self._is_available = True
+
+        def connect(self):
+            return True
+
+    class CoinbaseBrokerAdapter:
+        def __init__(self):
+            self._broker = ConcreteBroker()
+            self.connected = False
+
+        def connect(self):
+            assert self._broker.client is expected_client
+            self.connected = True
+            return True
+
+    assert coinbase_connect._patch_class(CoinbaseBrokerAdapter) is True
+    adapter = CoinbaseBrokerAdapter()
+
+    assert adapter.connect() is True
+    assert adapter._broker.client is expected_client
+    assert adapter._broker.connected is True
+    assert os.environ["NIJA_COINBASE_ACTIVATION_STATE"] == "ready"
+
+
 def test_coinbase_balance_quarantine_returns_fail_closed_zero_without_retries(
     monkeypatch,
 ):

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import os
+import weakref
 from types import ModuleType
 
+import coinbase_authenticated_connect_recovery_patch as recovery
 import runtime_auth_recursion_endpoint_repair_patch as repair
 
 
@@ -54,6 +56,83 @@ def test_coinbase_balance_fails_closed_when_client_is_missing(monkeypatch):
     assert os.environ["NIJA_COINBASE_CONNECTED"] == "0"
     assert os.environ["NIJA_COINBASE_FUNDING_STATUS"] == "client_uninitialized"
     assert os.environ["NIJA_COINBASE_ACTIVATION_STATE"] == "reconnect_pending"
+
+
+def test_coinbase_stale_instance_adopts_same_account_canonical_client(monkeypatch):
+    class AccountType:
+        value = "platform"
+
+    class Client:
+        def get_accounts(self):
+            return {"accounts": []}
+
+    class Stability:
+        def __init__(self):
+            self.reasons = []
+
+        def mark_disconnected(self, reason):
+            self.reasons.append(reason)
+
+    class CoinbaseBroker:
+        account_type = AccountType()
+        user_id = None
+
+        def __init__(self, client=None):
+            self.client = client
+            self.connected = client is not None
+            self._is_available = client is not None
+            self._auth_failed = False
+            self._connection_stability_manager = Stability()
+
+        def _get_account_balance_detailed(self, verbose=False):
+            assert self.client is canonical.client
+            return {"total_funds": 142.76, "trading_balance": 100.11}
+
+        def get_account_balance(self, verbose=False):
+            return self._get_account_balance_detailed()["trading_balance"]
+
+        def get_balance(self):
+            return self.get_account_balance()
+
+    canonical = CoinbaseBroker(Client())
+    stale = CoinbaseBroker()
+    with recovery._LOCK:
+        recovery._CANONICAL_BROKERS["platform"] = weakref.ref(canonical)
+    monkeypatch.setenv("NIJA_COINBASE_CONNECTED", "1")
+
+    module = ModuleType("bot.broker_manager")
+    module.CoinbaseBroker = CoinbaseBroker
+    assert repair._patch_coinbase_class(module) is True
+
+    payload = stale._get_account_balance_detailed()
+
+    assert payload["total_funds"] == 142.76
+    assert stale.client is canonical.client
+    assert stale.connected is True
+    assert stale._connection_stability_manager.reasons == []
+    assert os.environ["NIJA_COINBASE_CONNECTED"] == "1"
+
+
+def test_coinbase_canonical_client_is_never_shared_between_users():
+    class AccountType:
+        value = "user"
+
+    class CoinbaseBroker:
+        account_type = AccountType()
+
+        def __init__(self, user_id, client=None):
+            self.user_id = user_id
+            self.client = client
+            self.connected = client is not None
+            self._auth_failed = False
+
+    tania = CoinbaseBroker("tania", object())
+    daivon = CoinbaseBroker("daivon")
+    with recovery._LOCK:
+        recovery._CANONICAL_BROKERS["user:tania"] = weakref.ref(tania)
+
+    assert recovery.adopt_canonical_client(daivon) is False
+    assert daivon.client is None
 
 
 def test_okx_recursive_connect_is_blocked(monkeypatch):

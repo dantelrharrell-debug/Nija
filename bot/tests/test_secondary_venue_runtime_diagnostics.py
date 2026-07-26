@@ -291,6 +291,7 @@ def test_authenticated_recovery_retries_complete_alternative_pair(monkeypatch):
     class CoinbasePairBroker:
         def __init__(self):
             self.connected = False
+            self.client = None
             self._auth_failed = False
 
         def connect(self):
@@ -299,6 +300,7 @@ def test_authenticated_recovery_retries_complete_alternative_pair(monkeypatch):
                 and os.environ.get("COINBASE_API_SECRET") == good_secret
             )
             self.connected = matched
+            self.client = object() if matched else None
             self._auth_failed = not matched
             return matched
 
@@ -361,4 +363,3 @@ def test_authenticated_recovery_restores_primary_after_all_pairs_fail(monkeypatc
     assert os.environ["COINBASE_API_SECRET"] == primary_secret
     assert os.environ["NIJA_COINBASE_ACTIVATION_STATE"] == "reconnect_pending"
     assert os.environ.get("NIJA_COINBASE_RECONNECT_DISABLED", "0") != "1"
-
