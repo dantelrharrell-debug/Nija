@@ -349,6 +349,9 @@ def _resolve_selected_broker(request: Any) -> str:
         meta.get("execution_broker"),
         meta.get("dispatch_broker"),
         meta.get("broker_name"),
+        _broker_key_from_obj(
+            meta.get("broker_client") or meta.get("broker_adapter")
+        ),
         os.environ.get("NIJA_SELECTED_EXECUTION_BROKER"),
         os.environ.get("NIJA_PRIMARY_EXECUTION_BROKER"),
     ):

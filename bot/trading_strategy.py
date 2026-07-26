@@ -277,6 +277,19 @@ _HEARTBEAT_SYMBOL_CANDIDATES: List[str] = [
     "XRP-USD",
 ]
 
+_EQUITY_FALLBACK_SYMBOLS: List[str] = [
+    "AAPL",
+    "MSFT",
+    "GOOGL",
+    "AMZN",
+    "NVDA",
+    "META",
+    "TSLA",
+    "SPY",
+    "QQQ",
+    "IWM",
+]
+
 # Global minimum trade size — single source of truth imported by position_sizer.py.
 # Lowered to $10 for micro-cap / HF scalp mode with $174 balance (Apr 2026).
 GLOBAL_MIN_TRADE: float = float(os.environ.get("MIN_TRADE_USD", os.environ.get("MIN_NOTIONAL_USD", "10.0")))
@@ -374,6 +387,9 @@ class TradingStrategy:
         self.execution_engine: Optional[Any] = None
         self.market_readiness_gate: Optional[Any] = None
         self.symbols: List[str] = []
+        self._symbols_by_broker: Dict[str, List[str]] = {}
+        self._symbol_scan_cursor: Dict[str, int] = {}
+        self._symbol_universe_lock = threading.RLock()
         self.failed_brokers: Dict = {}
         self._symbol_universe_refresh_interval_s: float = max(
             0.0,
@@ -577,16 +593,61 @@ class TradingStrategy:
 
         logger.warning("⚠️  No connected primary broker found at init time")
 
-    def _populate_symbols(self) -> None:
-        """Populate the symbol universe from ALL connected brokers.
+    @staticmethod
+    def _dedupe_symbols(symbols: List[Any]) -> List[str]:
+        """Return normalized, non-empty symbols in stable discovery order."""
+        seen: set[str] = set()
+        deduped: List[str] = []
+        for raw_symbol in symbols:
+            symbol = str(raw_symbol or "").strip()
+            if not symbol or symbol in seen:
+                continue
+            seen.add(symbol)
+            deduped.append(symbol)
+        return deduped
 
-        Collects tradeable instruments from every connected platform broker
-        (Kraken, Coinbase, OKX, Alpaca) and merges them into a single
-        deduplicated list.  This expands the scan universe from Kraken-only
-        crypto pairs to stocks, forex, commodities, and all crypto venues.
+    def _ensure_symbol_universe_state(self) -> None:
+        """Hydrate symbol state for legacy/test-created strategy instances."""
+        state = object.__getattribute__(self, "__dict__")
+        state.setdefault("symbols", [])
+        state.setdefault("_symbols_by_broker", {})
+        state.setdefault("_symbol_scan_cursor", {})
+        state.setdefault("_symbol_universe_lock", threading.RLock())
+        state.setdefault("_last_symbol_refresh_ts", 0.0)
+
+    def _discover_broker_symbols(self, broker: Any) -> List[str]:
+        """Discover only the instruments advertised by ``broker``."""
+        broker_name = self._broker_key_from_obj(broker)
+        for method_name in ("get_available_markets", "get_all_products"):
+            method = getattr(broker, method_name, None)
+            if not callable(method):
+                continue
+            try:
+                products = method()
+            except Exception as exc:
+                logger.debug(
+                    "Symbol discovery failed for broker %s via %s: %s",
+                    broker_name,
+                    method_name,
+                    exc,
+                )
+                continue
+            if isinstance(products, list):
+                discovered = self._dedupe_symbols(products)
+                if discovered:
+                    return discovered
+        return []
+
+    def _populate_symbols(self) -> None:
+        """Populate broker-scoped market universes from connected venues.
+
+        The merged ``self.symbols`` list remains available for diagnostics and
+        older integrations.  Trading cycles must use ``_symbols_for_broker`` so
+        an equity venue never receives crypto pairs and a crypto venue never
+        receives stock tickers.
         """
-        all_symbols: List[str] = []
-        broker_counts: dict = {}
+        self._ensure_symbol_universe_state()
+        broker_symbols: Dict[str, List[str]] = {}
 
         # ── Collect symbols from all connected platform brokers ────────────
         brokers_to_query: List[Any] = []
@@ -618,45 +679,49 @@ class TradingStrategy:
 
         for _broker in brokers_to_query:
             _broker_name = self._broker_key_from_obj(_broker)
-            try:
-                if hasattr(_broker, "get_all_products"):
-                    _products = _broker.get_all_products()
-                    if isinstance(_products, list) and _products:
-                        _count = len(_products)
-                        broker_counts[_broker_name] = _count
-                        all_symbols.extend(str(p) for p in _products if p)
-                        logger.info(
-                            "✅ [SymbolUniverse] %s: loaded %d symbols",
-                            _broker_name.upper(),
-                            _count,
-                        )
-            except Exception as _sym_err:
-                logger.debug(
-                    "Symbol population failed for broker %s: %s", _broker_name, _sym_err
+            _products = self._discover_broker_symbols(_broker)
+            if _products:
+                broker_symbols[_broker_name] = _products
+                logger.info(
+                    "✅ [SymbolUniverse] %s: loaded %d broker-scoped symbols",
+                    _broker_name.upper(),
+                    len(_products),
                 )
 
-        if all_symbols:
-            # Deduplicate while preserving order (first occurrence wins)
-            seen: set = set()
-            merged: List[str] = []
-            for sym in all_symbols:
-                if sym not in seen:
-                    seen.add(sym)
-                    merged.append(sym)
-            self.symbols = merged
-            self._last_symbol_refresh_ts = time.time()
+        if broker_symbols:
+            merged = self._dedupe_symbols(
+                [
+                    symbol
+                    for symbols in broker_symbols.values()
+                    for symbol in symbols
+                ]
+            )
+            with self._symbol_universe_lock:
+                self._symbols_by_broker.update(broker_symbols)
+                self.symbols = merged
+                for broker_name, symbols in broker_symbols.items():
+                    if symbols:
+                        self._symbol_scan_cursor[broker_name] = (
+                            self._symbol_scan_cursor.get(broker_name, 0) % len(symbols)
+                        )
+                self._last_symbol_refresh_ts = time.time()
             logger.info(
-                "✅ [SymbolUniverse] Merged %d unique symbols across %d broker(s): %s",
+                "✅ [SymbolUniverse] Loaded %d unique symbols across %d broker(s): %s",
                 len(self.symbols),
-                len(broker_counts),
-                ", ".join(f"{k.upper()}={v}" for k, v in broker_counts.items()),
+                len(broker_symbols),
+                ", ".join(
+                    f"{name.upper()}={len(symbols)}"
+                    for name, symbols in broker_symbols.items()
+                ),
             )
             return
 
-        # Fallback: use a curated default list
+        # Backward-compatible diagnostic fallback.  Broker cycles select an
+        # asset-class-safe fallback in _symbols_for_broker().
         if not self.symbols:
-            self.symbols = _HEARTBEAT_SYMBOL_CANDIDATES.copy()
-            self._last_symbol_refresh_ts = time.time()
+            with self._symbol_universe_lock:
+                self.symbols = _HEARTBEAT_SYMBOL_CANDIDATES.copy()
+                self._last_symbol_refresh_ts = time.time()
             logger.info(
                 "ℹ️  Using default symbol list (%d symbols)", len(self.symbols)
             )
@@ -665,6 +730,78 @@ class TradingStrategy:
                 "Symbol refresh fallback: keeping existing universe (%d symbols)",
                 len(self.symbols),
             )
+
+    def _symbols_for_broker(
+        self,
+        broker: Optional[Any],
+        *,
+        max_symbols: Optional[int] = None,
+    ) -> List[str]:
+        """Return a rotating, broker-local scan window.
+
+        Large equity universes are intentionally rotated instead of permanently
+        truncating the first ``NIJA_MAX_SCAN_SYMBOLS`` entries.  Over successive
+        cycles every instrument advertised by the connected venue is scanned.
+        """
+        self._ensure_symbol_universe_state()
+        broker_name = self._broker_key_from_obj(broker) if broker is not None else "unknown"
+
+        with self._symbol_universe_lock:
+            universe = list(self._symbols_by_broker.get(broker_name, []))
+
+        if not universe and broker is not None:
+            universe = self._discover_broker_symbols(broker)
+            if universe:
+                with self._symbol_universe_lock:
+                    self._symbols_by_broker[broker_name] = list(universe)
+                    self._symbol_scan_cursor.setdefault(broker_name, 0)
+
+        if not universe:
+            if broker_name == "alpaca":
+                universe = _EQUITY_FALLBACK_SYMBOLS.copy()
+            elif broker_name in {"coinbase", "kraken", "okx", "binance"}:
+                universe = _HEARTBEAT_SYMBOL_CANDIDATES.copy()
+            else:
+                # Preserve compatibility for custom broker adapters whose
+                # asset class is not inferable from the broker name.
+                universe = list(self.symbols) or _HEARTBEAT_SYMBOL_CANDIDATES.copy()
+            logger.warning(
+                "⚠️ [SymbolUniverse] %s discovery unavailable; using %d-symbol safe fallback",
+                broker_name.upper(),
+                len(universe),
+            )
+
+        if max_symbols is None:
+            try:
+                scan_cap = max(
+                    1,
+                    int(os.environ.get("NIJA_MAX_SCAN_SYMBOLS", "100") or "100"),
+                )
+            except (TypeError, ValueError):
+                scan_cap = 100
+        else:
+            scan_cap = max(1, int(max_symbols))
+
+        window_size = min(scan_cap, len(universe))
+        with self._symbol_universe_lock:
+            start = self._symbol_scan_cursor.get(broker_name, 0) % len(universe)
+            window = [
+                universe[(start + offset) % len(universe)]
+                for offset in range(window_size)
+            ]
+            self._symbol_scan_cursor[broker_name] = (
+                start + window_size
+            ) % len(universe)
+
+        logger.info(
+            "🔄 [SymbolUniverse] %s rotating scan window start=%d count=%d total=%d next=%d",
+            broker_name.upper(),
+            start,
+            len(window),
+            len(universe),
+            self._symbol_scan_cursor[broker_name],
+        )
+        return window
 
     @staticmethod
     def _broker_key_from_obj(broker: Any) -> str:
@@ -1700,6 +1837,10 @@ class TradingStrategy:
                         self.apex.update_broker_client(_broker)
 
                 self._maybe_refresh_symbols()
+                _symbols_to_scan = self._symbols_for_broker(
+                    _broker,
+                    max_symbols=20 if self.nija_core_loop is None else None,
+                )
 
                 _account_balance = float(getattr(self.apex, "_last_account_balance", 0.0) or 0.0)
                 if _account_balance <= 0.0 and _broker is not None:
@@ -1787,10 +1928,9 @@ class TradingStrategy:
                             )
                     # ── End reconcile stale pending orders ───────────────────
 
-                    _symbols_to_scan = self.symbols or []
                     if not _symbols_to_scan:
                         self._maybe_refresh_symbols(force=True)
-                        _symbols_to_scan = self.symbols or []
+                        _symbols_to_scan = self._symbols_for_broker(_broker)
                     if not _symbols_to_scan:
                         logger.warning(
                             "⚠️ [RUN_CYCLE_EXIT] symbol universe empty — "
@@ -1872,7 +2012,7 @@ class TradingStrategy:
                     print(
                         "[NIJA-PRINT] legacy fallback path active — "
                         f"nija_core_loop={self.nija_core_loop!r} "
-                        f"symbols={len(self.symbols)} "
+                        f"symbols={len(_symbols_to_scan)} "
                         f"apex={type(self.apex).__name__}",
                         flush=True,
                     )
@@ -1880,10 +2020,10 @@ class TradingStrategy:
                         "⚡ [RUN_CYCLE] legacy analyze_market path — "
                         "nija_core_loop unavailable, calling analyze_market+execute_action directly | "
                         "symbols=%d balance=$%.2f",
-                        len(self.symbols[:20]),
+                        len(_symbols_to_scan),
                         _account_balance,
                     )
-                    for symbol in self.symbols[:20]:  # cap at 20 per cycle
+                    for symbol in _symbols_to_scan:
                         try:
                             if _broker is None or not callable(getattr(_broker, "get_candles", None)):
                                 continue

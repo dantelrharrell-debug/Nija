@@ -68,11 +68,11 @@ services:
       - key: PRIMARY_EXECUTION_VENUE
         value: "auto"
       - key: NIJA_BROKER_PRIORITY
-        value: "okx,coinbase,kraken"
+        value: "okx,coinbase,kraken,alpaca"
       - key: NIJA_ENTRY_BROKER_PRIORITY
-        value: "okx,coinbase,kraken"
+        value: "okx,coinbase,kraken,alpaca"
       - key: NIJA_ALLOWED_EXECUTION_BROKERS
-        value: "okx,coinbase,kraken"
+        value: "okx,coinbase,kraken,alpaca"
       - key: NIJA_BROKER_INDEPENDENT_LIVE_EXECUTION
         value: "true"
       - key: NIJA_INDEPENDENT_BROKER_TRADING
@@ -126,6 +126,13 @@ services:
       - key: OKX_US_REGION
         value: "true"
 
+      # Alpaca US equities/ETFs activation. The venue remains fail-closed until
+      # credentials, connection, market hours, and spendable cash are verified.
+      - key: ENABLE_ALPACA
+        value: "true"
+      - key: ALPACA_MIN_BALANCE_USD
+        value: "2.00"
+
       # Render cold-start convergence. Kraken remains the startup anchor and one
       # fresh authoritative broker is sufficient to initialize the manager.
       - key: NIJA_RUNTIME_AUTHORITY_CONVERGENCE_MIN_BROKERS
@@ -168,6 +175,12 @@ services:
       - key: OKX_API_SECRET
         sync: false
       - key: OKX_PASSPHRASE
+        sync: false
+      - key: ALPACA_API_KEY
+        sync: false
+      - key: ALPACA_API_SECRET
+        sync: false
+      - key: ALPACA_PAPER
         sync: false
 
       # Independent user broker credentials

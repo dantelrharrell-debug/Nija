@@ -15,7 +15,7 @@ _RUNTIME_MARKER = "20260709ao"
 _PATCHED_PROFILE_ATTR = "_nija_direct_broker_metadata_profile_guard_20260709ao"
 _PATCHED_DISPATCH_ATTR = "_nija_direct_broker_metadata_dispatch_guard_20260709ao"
 
-_BROKER_NAMES = {"coinbase", "kraken", "okx", "binance"}
+_BROKER_NAMES = {"coinbase", "kraken", "okx", "binance", "alpaca"}
 _UNCONFIGURED_LOG_TS: dict[str, float] = {}
 _UNAVAILABLE_LOG_TS: dict[str, float] = {}
 _UNAVAILABLE_CACHE: dict[str, float] = {}
@@ -52,12 +52,15 @@ def _norm(value: Any) -> str:
         "binancebroker": "binance",
         "binanceclient": "binance",
         "binance": "binance",
+        "alpacabrokeradapter": "alpaca",
+        "alpacabroker": "alpaca",
+        "alpaca": "alpaca",
     }
     return aliases.get(compact, text)
 
 
 def _configured_broker_names() -> set[str]:
-    configured = {"coinbase", "kraken", "okx"}
+    configured = {"coinbase", "kraken", "okx", "alpaca"}
     binance_enabled = (
         _truthy_env("NIJA_ENABLE_BINANCE")
         or _truthy_env("ENABLE_BINANCE")
@@ -282,6 +285,8 @@ def _module_candidates(target: str = "") -> Iterable[Any]:
         "okx_broker",
         "bot.binance_broker",
         "binance_broker",
+        "bot.alpaca_broker",
+        "alpaca_broker",
     )
     out: list[Any] = []
     for name in module_names:
@@ -304,6 +309,7 @@ def _module_candidates(target: str = "") -> Iterable[Any]:
                 "kraken_broker",
                 "okx_broker",
                 "binance_broker",
+                "alpaca_broker",
                 "capital_authority",
                 "_capital_authority",
             ):
@@ -534,7 +540,19 @@ def _patch_router(module: ModuleType) -> bool:
     if patched:
         logger.warning("%s class=MultiBrokerExecutionRouter unavailable_log_rate_limited=true", _MARKER)
         print("[NIJA-PRINT] DIRECT_BROKER_METADATA_GUARD_PATCHED marker=20260709ao unavailable_log_rate_limited=true", flush=True)
-    return patched
+    return bool(
+        patched
+        or getattr(
+            getattr(cls, "_profile_for_direct_broker", None),
+            _PATCHED_PROFILE_ATTR,
+            False,
+        )
+        or getattr(
+            getattr(cls, "_dispatch_via_inner_router", None),
+            _PATCHED_DISPATCH_ATTR,
+            False,
+        )
+    )
 
 
 def _try_patch_loaded() -> bool:

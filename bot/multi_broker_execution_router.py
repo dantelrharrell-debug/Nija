@@ -182,8 +182,8 @@ _CRYPTO_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-# Patterns for equity symbols (e.g. AAPL, MSFT, SPY, QQQ)
-_EQUITY_PATTERN = re.compile(r"^[A-Z]{1,5}$")
+# Patterns for US equity symbols, including class shares such as BRK.B/BF-B.
+_EQUITY_PATTERN = re.compile(r"^[A-Z]{1,6}(?:[.-][A-Z])?$")
 
 # Patterns for futures symbols (e.g. ES=F, NQ=F, CL=F, /ES, BTC-PERP)
 _FUTURES_PATTERN = re.compile(
@@ -256,6 +256,34 @@ class RouteRequest:
     short_sell: Optional[bool] = None
     extended_hours: Optional[bool] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
+
+
+def _asset_class_for_request(request: RouteRequest) -> AssetClass:
+    """Resolve an asset class using explicit venue context before heuristics."""
+    if request.asset_class:
+        try:
+            return AssetClass(request.asset_class.lower())
+        except ValueError:
+            pass
+
+    metadata = dict(request.metadata or {})
+    direct_broker = metadata.get("broker_client")
+    broker_type = getattr(direct_broker, "broker_type", None)
+    broker_label = str(
+        request.preferred_broker
+        or metadata.get("broker_name")
+        or getattr(broker_type, "value", broker_type)
+        or ""
+    ).strip().lower()
+    compact_label = broker_label.replace("-", "_").replace(" ", "_")
+
+    if compact_label in {"alpaca", "interactive_brokers_equity"}:
+        return AssetClass.EQUITY
+    if "futures" in compact_label:
+        return AssetClass.FUTURES
+    if "options" in compact_label or compact_label in {"tradier"}:
+        return AssetClass.OPTIONS
+    return detect_asset_class(request.symbol)
 
 
 @dataclass
@@ -377,12 +405,13 @@ class MultiBrokerExecutionRouter:
             asset_classes=[AssetClass.EQUITY],
             priority=1,
             fee_bps=0.0,    # Alpaca is commission-free
-            dispatch_fn=self._dispatch_equity_stub,
+            dispatch_fn=self._dispatch_via_inner_router,
         ))
         self.register_broker(BrokerProfile(
             name="interactive_brokers_equity",
             asset_classes=[AssetClass.EQUITY],
             priority=2,
+            available=False,
             fee_bps=5.0,
             dispatch_fn=self._dispatch_equity_stub,
         ))
@@ -392,6 +421,7 @@ class MultiBrokerExecutionRouter:
             name="interactive_brokers_futures",
             asset_classes=[AssetClass.FUTURES],
             priority=1,
+            available=False,
             fee_bps=5.0,
             dispatch_fn=self._dispatch_futures_stub,
         ))
@@ -399,6 +429,7 @@ class MultiBrokerExecutionRouter:
             name="td_ameritrade_futures",
             asset_classes=[AssetClass.FUTURES],
             priority=2,
+            available=False,
             fee_bps=8.0,
             dispatch_fn=self._dispatch_futures_stub,
         ))
@@ -408,6 +439,7 @@ class MultiBrokerExecutionRouter:
             name="interactive_brokers_options",
             asset_classes=[AssetClass.OPTIONS],
             priority=1,
+            available=False,
             fee_bps=5.0,
             dispatch_fn=self._dispatch_options_stub,
         ))
@@ -415,6 +447,7 @@ class MultiBrokerExecutionRouter:
             name="td_ameritrade_options",
             asset_classes=[AssetClass.OPTIONS],
             priority=2,
+            available=False,
             fee_bps=8.0,
             dispatch_fn=self._dispatch_options_stub,
         ))
@@ -449,13 +482,7 @@ class MultiBrokerExecutionRouter:
         t0 = time.monotonic()
 
         # 1. Determine asset class
-        if request.asset_class:
-            try:
-                ac = AssetClass(request.asset_class.lower())
-            except ValueError:
-                ac = detect_asset_class(request.symbol)
-        else:
-            ac = detect_asset_class(request.symbol)
+        ac = _asset_class_for_request(request)
 
         logger.info(
             "Routing %s %s %s (size=%.2f, asset_class=%s)",
@@ -1265,7 +1292,16 @@ class MultiBrokerExecutionRouter:
             raise RuntimeError(f"Unsupported broker order response: {result!r}")
 
         status = str(result.get("status") or result.get("state") or "").strip().lower()
-        if status in {"error", "failed", "rejected", "canceled", "cancelled"}:
+        if status in {
+            "error",
+            "failed",
+            "rejected",
+            "canceled",
+            "cancelled",
+            "skipped",
+            "blocked",
+            "unfilled",
+        }:
             raise RuntimeError(str(result.get("error") or result.get("message") or status))
 
         fill_price = float(
@@ -1395,13 +1431,7 @@ class MultiBrokerExecutionRouter:
         t0 = time.monotonic()
 
         # Determine asset class
-        if request.asset_class:
-            try:
-                ac = AssetClass(request.asset_class.lower())
-            except ValueError:
-                ac = detect_asset_class(request.symbol)
-        else:
-            ac = detect_asset_class(request.symbol)
+        ac = _asset_class_for_request(request)
 
         brokers = self._select_all_brokers(ac, request.side, request.size_usd)
         if not brokers:
@@ -1530,13 +1560,7 @@ class MultiBrokerExecutionRouter:
         t0 = time.monotonic()
 
         # Detect asset class once so _make_result has the correct label.
-        if request.asset_class:
-            try:
-                ac = AssetClass(request.asset_class.lower())
-            except ValueError:
-                ac = detect_asset_class(request.symbol)
-        else:
-            ac = detect_asset_class(request.symbol)
+        ac = _asset_class_for_request(request)
 
         # Minimum notional guard
         if slice_usd < broker.min_notional_usd:
@@ -1659,13 +1683,7 @@ class MultiBrokerExecutionRouter:
             priority order.  An empty list means no broker was available.
         """
         # Determine asset class
-        if request.asset_class:
-            try:
-                ac = AssetClass(request.asset_class.lower())
-            except ValueError:
-                ac = detect_asset_class(request.symbol)
-        else:
-            ac = detect_asset_class(request.symbol)
+        ac = _asset_class_for_request(request)
 
         brokers = self._select_all_brokers(ac, request.side)
         if not brokers:

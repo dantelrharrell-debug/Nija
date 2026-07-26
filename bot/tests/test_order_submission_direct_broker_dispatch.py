@@ -10,6 +10,10 @@ from bot.multi_broker_execution_router import MultiBrokerExecutionRouter
 class _Broker:
     def __init__(self) -> None:
         self.calls = []
+        self.broker_type = SimpleNamespace(value="kraken")
+
+    def get_available_balance(self):
+        return 1_000.0
 
     def place_market_order(self, symbol, side, quantity, size_type="quote"):
         self.calls.append((symbol, side, quantity, size_type))
@@ -41,6 +45,9 @@ def test_multi_broker_router_dispatches_to_direct_broker_client_before_inner_rou
 
 def test_direct_broker_ack_with_order_id_uses_price_hint_as_fill_price():
     class AckOnlyBroker:
+        def get_available_balance(self):
+            return 1_000.0
+
         def place_market_order(self, symbol, side, quantity, size_type="quote"):
             return {"status": "open", "order_id": "ord-2", "filled_size_usd": quantity}
 
@@ -62,13 +69,29 @@ class _FakeMultiRouter:
 
     def route(self, request):
         self.request = request
-        return SimpleNamespace(
+        result = SimpleNamespace(
             success=True,
             fill_price=99.0,
             filled_size_usd=request.size_usd,
             broker=request.preferred_broker,
+            order_id="ord-pipeline-metadata-test",
             error="",
         )
+        from bot.execution_contract_primitives import store_ack
+
+        store_ack(request, result)
+        return result
+
+
+class _RiskEngine:
+    def get_remaining_headroom_usd(self, account_id, available_balance_usd):
+        return float(available_balance_usd)
+
+    def assess(self, **kwargs):
+        return SimpleNamespace(approved=True, reason="approved")
+
+    def record_execution(self, **kwargs):
+        return None
 
 
 def test_execution_pipeline_preserves_direct_broker_metadata_to_multi_router():
@@ -80,7 +103,7 @@ def test_execution_pipeline_preserves_direct_broker_metadata_to_multi_router():
     pipeline._execution_observer = None
     pipeline._allocation_clamp = None
     pipeline._exchange_normalizer = None
-    pipeline._pre_trade_risk_engine = None
+    pipeline._pre_trade_risk_engine = _RiskEngine()
     pipeline._throttler = None
     pipeline._router = None
     pipeline._multi_router = router
@@ -154,6 +177,10 @@ def test_route_infers_kraken_profile_from_direct_client_without_preferred_broker
     class KrakenBrokerAdapter:
         def __init__(self):
             self.calls = []
+            self.broker_type = SimpleNamespace(value="kraken")
+
+        def get_available_balance(self):
+            return 1_000.0
 
         def place_market_order(self, symbol, side, quantity, size_type="quote"):
             self.calls.append((symbol, side, quantity, size_type))
