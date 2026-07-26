@@ -1220,14 +1220,15 @@ class TradingStateMachine:
         self._activation_committed: bool = False
 
         # Timestamp (monotonic) when the FSM first entered LIVE_PENDING_CONFIRMATION.
-        # Used by the 5-minute auto-transition timeout and the 30-second monitoring
-        # log inside commit_activation().  Reset to None whenever the state leaves
-        # LIVE_PENDING_CONFIRMATION (either forward to LIVE_ACTIVE or back to OFF).
+        # Used by the 5-minute stalled-state diagnostic and the 30-second monitoring
+        # log inside commit_activation().  Elapsed time never bypasses activation
+        # gates. Reset to None whenever the state leaves pending confirmation.
         self._pending_confirmation_since: Optional[float] = None
 
         # Timestamp (monotonic) of the last periodic "stuck in LIVE_PENDING_CONFIRMATION"
         # monitoring log emission.  Ensures the log fires at most once every 30 s.
         self._last_pending_log_time: Optional[float] = None
+        self._pending_timeout_reported: bool = False
 
         # Runtime dispatch authority handshake.
         # execution_authority=True is the canonical permission signal for order
@@ -1246,7 +1247,7 @@ class TradingStateMachine:
         # Startup override (operator-intent first):
         # - DRY_RUN_MODE=true          -> DRY_RUN
         # - LIVE_CAPITAL_VERIFIED=true and AUTO_ACTIVATE=true
-        #       -> LIVE_ACTIVE (or LIVE_PENDING_CONFIRMATION if HEARTBEAT_TRADE=true)
+        #       -> LIVE_PENDING_CONFIRMATION until every activation gate passes
         # - LIVE_CAPITAL_VERIFIED=true and AUTO_ACTIVATE=false
         #       -> LIVE_PENDING_CONFIRMATION (armed, not monitor/OFF)
         self._apply_startup_state_override()
@@ -1363,46 +1364,20 @@ class TradingStateMachine:
             if live_verified and (auto_activate or force_live):
                 ownership_ok, ownership_err = _startup_ownership_gate()
                 if not ownership_ok:
-                    # FORCE_TRADE / FORCE_LIVE_TRANSITION bypass: when an operator override
-                    # flag is active, do NOT block at OFF — arm to LIVE_PENDING_CONFIRMATION
-                    # so the 5-minute LPC auto-transition timeout can fire even when Redis /
-                    # distributed writer authority is unavailable.  Without this, the state
-                    # stays at OFF forever and the LPC timeout never triggers.
-                    _force_override = (
-                        _env_truthy("FORCE_TRADE")
-                        or _env_truthy("FORCE_TRADE_MODE")
-                        or _env_truthy("NIJA_FORCE_ACTIVATION")
-                        or _env_truthy("NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK")
-                    )
-                    if _force_override:
-                        logger.critical(
-                            "[STARTUP STATE OVERRIDE] ownership gate failed (%s) but FORCE_TRADE/NIJA_FORCE_ACTIVATION "
-                            "is set — arming to LIVE_PENDING_CONFIRMATION to allow LPC timeout activation. "
-                            "LIVE_CAPITAL_VERIFIED=%s AUTO_ACTIVATE=%s",
-                            ownership_err or "unknown",
-                            live_verified,
-                            auto_activate,
-                        )
-                        self._current_state = TradingState.LIVE_PENDING_CONFIRMATION
-                        self._activation_committed = False
-                        self._execution_authority = False
-                        self._core_loop_owns_execution = True
-                        self._can_dispatch_trades = False
-                        self._pending_confirmation_since = time.monotonic()
-                        self._last_pending_log_time = None
-                        logger.critical(
-                            "[STARTUP STATE OVERRIDE] FORCE_TRADE armed: OFF -> LIVE_PENDING_CONFIRMATION "
-                            "(5-minute LPC timeout will auto-activate to LIVE_ACTIVE)"
-                        )
-                        return
-                    self._current_state = TradingState.OFF
+                    # Arming is fail-closed: LIVE_PENDING_CONFIRMATION cannot
+                    # dispatch orders.  Preserve live intent here so ownership
+                    # and the remaining safety gates can converge after startup.
+                    self._current_state = TradingState.LIVE_PENDING_CONFIRMATION
                     self._activation_committed = False
                     self._execution_authority = False
                     self._core_loop_owns_execution = True
                     self._can_dispatch_trades = False
+                    self._pending_confirmation_since = time.monotonic()
+                    self._last_pending_log_time = None
                     logger.critical(
-                        "[STARTUP STATE OVERRIDE] BLOCKED LIVE ARMING: startup ownership missing reason=%s "
-                        "— set FORCE_TRADE=1 or NIJA_FORCE_ACTIVATION=1 to bypass this gate",
+                        "[STARTUP STATE OVERRIDE] LIVE INTENT ARMED FAIL-CLOSED: "
+                        "OFF -> LIVE_PENDING_CONFIRMATION ownership_pending=%s "
+                        "execution_authority=false",
                         ownership_err or "unknown",
                     )
                     return
@@ -1445,43 +1420,17 @@ class TradingStateMachine:
             if live_verified and not dry_run_mode:
                 ownership_ok, ownership_err = _startup_ownership_gate()
                 if not ownership_ok:
-                    # FORCE_TRADE bypass: same logic as the AUTO_ACTIVATE path above.
-                    # When an operator override flag is active, arm to LIVE_PENDING_CONFIRMATION
-                    # instead of blocking at OFF so the LPC timeout can fire.
-                    _force_override_lcv = (
-                        _env_truthy("FORCE_TRADE")
-                        or _env_truthy("FORCE_TRADE_MODE")
-                        or _env_truthy("NIJA_FORCE_ACTIVATION")
-                        or _env_truthy("NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK")
-                    )
-                    if _force_override_lcv:
-                        logger.critical(
-                            "[STARTUP STATE OVERRIDE] ownership gate failed (%s) but FORCE_TRADE/NIJA_FORCE_ACTIVATION "
-                            "is set — arming to LIVE_PENDING_CONFIRMATION (LPC timeout will activate). "
-                            "LIVE_CAPITAL_VERIFIED=%s",
-                            ownership_err or "unknown",
-                            live_verified,
-                        )
-                        self._current_state = TradingState.LIVE_PENDING_CONFIRMATION
-                        self._activation_committed = False
-                        self._execution_authority = False
-                        self._core_loop_owns_execution = True
-                        self._can_dispatch_trades = False
-                        self._pending_confirmation_since = time.monotonic()
-                        self._last_pending_log_time = None
-                        logger.critical(
-                            "[STARTUP STATE OVERRIDE] FORCE_TRADE armed: OFF -> LIVE_PENDING_CONFIRMATION "
-                            "(5-minute LPC timeout will auto-activate to LIVE_ACTIVE)"
-                        )
-                        return
-                    self._current_state = TradingState.OFF
+                    self._current_state = TradingState.LIVE_PENDING_CONFIRMATION
                     self._activation_committed = False
                     self._execution_authority = False
                     self._core_loop_owns_execution = True
                     self._can_dispatch_trades = False
+                    self._pending_confirmation_since = time.monotonic()
+                    self._last_pending_log_time = None
                     logger.critical(
-                        "[STARTUP STATE OVERRIDE] BLOCKED LIVE ARMING: startup ownership missing reason=%s "
-                        "— set FORCE_TRADE=1 or NIJA_FORCE_ACTIVATION=1 to bypass this gate",
+                        "[STARTUP STATE OVERRIDE] LIVE INTENT ARMED FAIL-CLOSED: "
+                        "OFF -> LIVE_PENDING_CONFIRMATION ownership_pending=%s "
+                        "execution_authority=false",
                         ownership_err or "unknown",
                     )
                     return
@@ -1901,14 +1850,16 @@ class TradingStateMachine:
                 self._can_dispatch_trades = False
                 self._pending_confirmation_since = None
                 self._last_pending_log_time = None
+                self._pending_timeout_reported = False
                 os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "0"
             elif new_state == TradingState.LIVE_PENDING_CONFIRMATION:
                 # Record when we first enter LIVE_PENDING_CONFIRMATION so the
-                # timeout and monitoring log in commit_activation() can measure
+                # stalled-state and monitoring logs in commit_activation() can measure
                 # elapsed time.  Only set if not already set (idempotent).
                 if self._pending_confirmation_since is None:
                     self._pending_confirmation_since = time.monotonic()
                     self._last_pending_log_time = None
+                    self._pending_timeout_reported = False
             elif new_state == TradingState.LIVE_ACTIVE:
                 self._activation_committed = True
                 self._execution_authority = True
@@ -1916,6 +1867,7 @@ class TradingStateMachine:
                 self._can_dispatch_trades = True
                 self._pending_confirmation_since = None
                 self._last_pending_log_time = None
+                self._pending_timeout_reported = False
                 os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "1"
 
             # Sync NIJA_RUNTIME_TRADING_STATE with the new FSM state so that
@@ -2124,7 +2076,6 @@ class TradingStateMachine:
             _env_truthy("FORCE_TRADE")
             or _env_truthy("FORCE_TRADE_MODE")
             or _env_truthy("FORCE_LIVE_TRANSITION")
-            or (_env_truthy("AUTO_ACTIVATE") and _env_truthy("HEARTBEAT_TRADE"))
         )
         runtime_mode = resolve_runtime_mode_safe(logger)
         _lcv_quick = runtime_mode.is_live if runtime_mode is not None else _env_truthy("LIVE_CAPITAL_VERIFIED")
@@ -2308,13 +2259,11 @@ class TradingStateMachine:
                     _dry_run_quick,
                 )
 
-        # ── 5-minute auto-transition timeout ─────────────────────────────────
+        # ── 5-minute pending-state diagnostic ────────────────────────────────
         # If the bot has been stuck in LIVE_PENDING_CONFIRMATION for longer than
-        # NIJA_PENDING_CONFIRMATION_TIMEOUT_S (default 300 s / 5 min) and the
-        # basic live-trading conditions are met, auto-transition to LIVE_ACTIVE
-        # without requiring the full gate stack to pass.  This prevents the
-        # deadlock where commit_activation() never fires because a distributed
-        # dependency (Redis, heartbeat marker) is permanently unavailable.
+        # NIJA_PENDING_CONFIRMATION_TIMEOUT_S (default 300 s / 5 min), report
+        # the stall once.  Elapsed time is never authority to bypass ownership,
+        # heartbeat, nonce, capital, or dispatch-health gates.
         _pending_timeout_s = max(
             30.0,
             float(os.environ.get("NIJA_PENDING_CONFIRMATION_TIMEOUT_S", "300") or 300),
@@ -2326,41 +2275,17 @@ class TradingStateMachine:
             _cur_state_for_timeout == TradingState.LIVE_PENDING_CONFIRMATION
             and _pending_since_for_timeout is not None
             and (time.monotonic() - _pending_since_for_timeout) >= _pending_timeout_s
-            and _lcv_quick
-            and not _dry_run_quick
+            and not self._pending_timeout_reported
         ):
-            _kill_for_timeout = False
-            try:
-                from kill_switch import get_kill_switch
-                _kill_for_timeout = get_kill_switch().is_active()
-            except Exception:
-                pass
-            if not _kill_for_timeout:
-                _elapsed_timeout = time.monotonic() - _pending_since_for_timeout
-                logger.critical(
-                    "[ACTIVATION TIMEOUT] LIVE_PENDING_CONFIRMATION for %.1fs (limit=%.1fs) — "
-                    "auto-transitioning to LIVE_ACTIVE. "
-                    "LIVE_CAPITAL_VERIFIED=true DRY_RUN_MODE=false kill_switch=inactive. "
-                    "Set NIJA_PENDING_CONFIRMATION_TIMEOUT_S to adjust the timeout.",
-                    _elapsed_timeout,
-                    _pending_timeout_s,
-                )
-                _timeout_ok = self._force_live_active_transition(
-                    f"ACTIVATION_TIMEOUT: auto-transition after {_elapsed_timeout:.1f}s in LIVE_PENDING_CONFIRMATION"
-                )
-                if _timeout_ok:
-                    logger.critical(
-                        "[ACTIVATION TIMEOUT] ✅ LIVE_ACTIVE — bot is now trading "
-                        "(elapsed=%.1fs timeout=%.1fs)",
-                        _elapsed_timeout,
-                        _pending_timeout_s,
-                    )
-                    return True
-                else:
-                    logger.critical(
-                        "[ACTIVATION TIMEOUT] _force_live_active_transition returned False — "
-                        "continuing with normal gate evaluation"
-                    )
+            _elapsed_timeout = time.monotonic() - _pending_since_for_timeout
+            self._pending_timeout_reported = True
+            logger.critical(
+                "[ACTIVATION PENDING THRESHOLD] LIVE_PENDING_CONFIRMATION for %.1fs "
+                "(threshold=%.1fs) — safety gates remain authoritative; "
+                "no timeout bypass applied.",
+                _elapsed_timeout,
+                _pending_timeout_s,
+            )
 
         # ── Pre-gate: eagerly start authority heartbeat monitor ──────────────
         # Must run BEFORE all heartbeat gate checks below.  Two independent
@@ -2409,14 +2334,13 @@ class TradingStateMachine:
         # writer-heartbeat / Redis infrastructure not yet being ready.  When it
         # does, commit_activation() returns False before reaching the
         # OFF→LIVE_PENDING_CONFIRMATION arm at the bottom of this method.  That
-        # keeps state at OFF forever and the 5-minute LPC auto-transition timeout
-        # (which auto-activates when distributed gates are permanently blocked)
-        # never fires because it only applies to LIVE_PENDING_CONFIRMATION state.
+        # keeps state at OFF and loses the operator's fail-closed activation
+        # intent instead of exposing which safety gate is still pending.
         #
         # By arming OFF→LPC eagerly here, we ensure:
         #   1. State reaches LPC regardless of gate failures.
-        #   2. The 5-minute timeout can force-transition to LIVE_ACTIVE even if some distributed gates are blocked.
-        #   3. The timeout path only checks LIVE_CAPITAL_VERIFIED, DRY_RUN_MODE, and kill_switch (not the full gate stack).
+        #   2. Gate failures remain observable and retryable.
+        #   3. Only the full activation gate stack can transition to LIVE_ACTIVE.
         #
         # LPC state is safe: it does NOT execute trades.
         with self._lock:
@@ -2429,7 +2353,7 @@ class TradingStateMachine:
                 )
                 logger.info(
                     "[COMMIT_ACTIVATION] OFF→LIVE_PENDING_CONFIRMATION early arming succeeded — "
-                    "5-minute LPC timeout is now active"
+                    "all activation safety gates remain required"
                 )
             except Exception as _early_arm_err:
                 logger.warning(
@@ -2523,11 +2447,8 @@ class TradingStateMachine:
                 os.environ.get("NIJA_WRITER_HEARTBEAT_ACTIVE", "unset"),
             )
 
-            # FORCE_TRADE fast-path: when FORCE_TRADE=1 (or NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK)
-            # and LIVE_CAPITAL_VERIFIED=true, bypass the live gate immediately via
-            # _force_live_active_transition() instead of waiting for the 5-minute LPC timeout.
-            # This is the same escape hatch used by the supervisor's hard-activation fallback,
-            # but applied here so the first commit_activation() call succeeds immediately.
+            # Explicit FORCE_TRADE fast-path. AUTO_ACTIVATE and HEARTBEAT_TRADE
+            # never enter this path; they must continue through normal gates.
             _ft_fast_path = (
                 _env_truthy("FORCE_TRADE")
                 or _env_truthy("FORCE_TRADE_MODE")

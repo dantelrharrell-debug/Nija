@@ -12366,7 +12366,7 @@ class _OKXRestClient:
         # any normalization done by sitecustomize._normalize_okx() is honoured even
         # when this module was imported before that normalization ran.
         self.BASE_URL = os.getenv("OKX_BASE_URL", "https://us.okx.com").rstrip("/")
-        logger.warning(
+        logger.debug(
             "OKX_AUTH_DIAG key=%s secret_len=%s passphrase_len=%s base_url=%s simulated=%s",
             bool(api_key),
             len(api_secret or ""),
@@ -12397,12 +12397,13 @@ class _OKXRestClient:
 
     def _headers(self, timestamp: str, method: str, request_path: str, body: str, *, private: bool) -> Dict[str, str]:
         if private:
-            prehash = timestamp + method.upper() + request_path + body
             signature = self._sign(timestamp, method, request_path, body)
-            logger.warning(
-                "OKX_AUTH_DETAIL timestamp=%s prehash=%r signing_algo=Base64-HMAC-SHA256 signature_len=%s",
+            logger.debug(
+                "OKX_AUTH_DETAIL timestamp=%s method=%s path=%s "
+                "signing_algo=Base64-HMAC-SHA256 signature_len=%s",
                 timestamp,
-                prehash,
+                method.upper(),
+                request_path,
                 len(signature),
             )
             headers: Dict[str, str] = {
@@ -12421,7 +12422,7 @@ class _OKXRestClient:
         _sim_active = self.simulated or _sim_env in {"1", "true", "yes", "y", "on"}
         if _sim_active:
             headers["x-simulated-trading"] = "1"
-        logger.warning(
+        logger.debug(
             "OKX_HEADERS_DIAG simulated_instance=%s simulated_env=%r simulated_header_sent=%s headers_keys=%s",
             self.simulated,
             _sim_env or "absent",
@@ -12448,20 +12449,11 @@ class _OKXRestClient:
         body = self._json_body(payload) if method != "GET" else ""
         ts = self._timestamp()
 
-        # Log authentication context (no secrets exposed) before every request
-        # so that any subsequent failure has full context in the log stream.
-        # Sanitize API key for logging (first 4 and last 4 chars only)
-        api_key_sample = ""
-        if self.api_key and len(self.api_key) >= 8:
-            api_key_sample = f"{self.api_key[:4]}...{self.api_key[-4:]}"
-        elif self.api_key:
-            api_key_sample = "***"
-
         _sim_env_val = os.getenv("OKX_SIMULATED_TRADING", "").strip().lower()
         _sim_active = self.simulated or _sim_env_val in {"1", "true", "yes", "y", "on"}
-        logger.warning(
+        logger.debug(
             "OKX_REQUEST_DIAG method=%s path=%s base_url=%s simulated_instance=%s simulated_env=%r "
-            "simulated_header_will_be_sent=%s key_present=%s key_sample=%s passphrase_present=%s "
+            "simulated_header_will_be_sent=%s key_present=%s passphrase_present=%s "
             "timestamp=%s body_empty=%s",
             method,
             request_path,
@@ -12470,7 +12462,6 @@ class _OKXRestClient:
             _sim_env_val or "absent",
             _sim_active,
             bool(self.api_key),
-            api_key_sample,
             bool(self.passphrase),
             ts,
             not body,
@@ -12484,31 +12475,59 @@ class _OKXRestClient:
             headers=request_headers,
             timeout=self.timeout,
         )
-        logger.warning(
-            "OKX_RESPONSE_DIAG status=%s method=%s path=%s response_body=%s",
-            response.status_code,
-            method,
-            request_path,
-            response.text,
-        )
 
-        # Always log the raw OKX response body before raising so the exact
-        # error message from OKX is visible in the log stream.
-        if not response.ok:
+        try:
+            response_body = response.json()
+        except Exception:
+            # Keep malformed-response diagnostics bounded.  Successful market
+            # and instrument payloads can be hundreds of kilobytes, and private
+            # balance bodies contain unnecessary account-level detail.
+            body_preview = str(response.text or "")[:512]
             logger.error(
-                "OKX_REQUEST_FAILED status=%s method=%s path=%s response_body=%s",
+                "OKX_RESPONSE_JSON_INVALID status=%s method=%s path=%s "
+                "body_bytes=%s body_preview=%r",
                 response.status_code,
                 method,
                 request_path,
-                response.text,
+                len((response.text or "").encode("utf-8", errors="replace")),
+                body_preview,
+            )
+            if not response.ok:
+                response.raise_for_status()
+            raise
+
+        okx_code = str(response_body.get("code", "unknown")) if isinstance(response_body, dict) else "unknown"
+        okx_msg = str(response_body.get("msg", "")) if isinstance(response_body, dict) else ""
+        response_data = response_body.get("data", []) if isinstance(response_body, dict) else []
+        data_items = len(response_data) if isinstance(response_data, list) else 0
+        body_bytes = len((response.text or "").encode("utf-8", errors="replace"))
+
+        logger.debug(
+            "OKX_RESPONSE_DIAG status=%s method=%s path=%s okx_code=%s "
+            "data_items=%s body_bytes=%s",
+            response.status_code,
+            method,
+            request_path,
+            okx_code,
+            data_items,
+            body_bytes,
+        )
+
+        if not response.ok:
+            logger.error(
+                "OKX_REQUEST_FAILED status=%s method=%s path=%s "
+                "okx_code=%s okx_msg=%r body_bytes=%s",
+                response.status_code,
+                method,
+                request_path,
+                okx_code,
+                okx_msg[:512],
+                body_bytes,
             )
 
             # Parse the JSON body even on HTTP 4xx responses so we can surface
             # OKX-specific error codes and messages for faster diagnosis.
             try:
-                err_body = response.json()
-                okx_code = err_body.get("code", "unknown")
-                okx_msg = err_body.get("msg", "")
                 logger.error(
                     "OKX_ERROR_DETAIL okx_code=%s okx_msg=%s",
                     okx_code,
@@ -12547,12 +12566,23 @@ class _OKXRestClient:
                         response.status_code,
                     )
             except Exception:
-                # JSON parse failed — the raw body was already logged above.
+                # Error-detail diagnostics are best effort; the bounded request
+                # failure record above remains available.
                 pass
 
             response.raise_for_status()
 
-        return response.json()
+        if okx_code != "0":
+            logger.warning(
+                "OKX_API_ERROR status=%s method=%s path=%s okx_code=%s okx_msg=%r",
+                response.status_code,
+                method,
+                request_path,
+                okx_code,
+                okx_msg[:512],
+            )
+
+        return response_body
 
     def get_balance(self) -> Dict[str, Any]:
         return self._request("GET", "/api/v5/account/balance", private=True)
@@ -12574,6 +12604,30 @@ class _OKXRestClient:
 
     def get_fills(self, instId: str, limit: str = "100") -> Dict[str, Any]:
         return self._request("GET", "/api/v5/trade/fills", params={"instId": instId, "limit": limit}, private=True)
+
+
+_OKX_SPENDABLE_CASH_CURRENCIES = frozenset({"USD", "USDT", "USDC"})
+
+
+def _okx_spendable_cash(details: Any) -> Dict[str, float]:
+    """Return spendable OKX quote cash without pricing stable cash as positions."""
+    balances = {currency: 0.0 for currency in _OKX_SPENDABLE_CASH_CURRENCIES}
+    if not isinstance(details, list):
+        return balances
+    for detail in details:
+        if not isinstance(detail, dict):
+            continue
+        currency = str(detail.get("ccy") or "").strip().upper()
+        if currency not in balances:
+            continue
+        raw_available = detail.get("availBal")
+        if raw_available in (None, ""):
+            raw_available = detail.get("cashBal")
+        try:
+            balances[currency] += max(0.0, float(raw_available or 0.0))
+        except (TypeError, ValueError):
+            continue
+    return balances
 
 
 class OKXBroker(BaseBroker):
@@ -12727,7 +12781,7 @@ class OKXBroker(BaseBroker):
 
     def get_account_balance(self, verbose: bool = True) -> float:
         """
-        Get total equity (USDT + position values) with fail-closed behavior.
+        Get total equity (USD/USDT/USDC + position values) fail-closed.
 
         CRITICAL FIX (Rule #3): Balance = CASH + POSITION VALUE
         Returns total equity (available cash + position market value), not just available balance.
@@ -12742,7 +12796,7 @@ class OKXBroker(BaseBroker):
             verbose: If True, logs detailed balance breakdown (default: True)
 
         Returns:
-            float: Total equity (available USDT + position values)
+            float: Total equity (available USD/USDT/USDC + position values)
                    Returns last known balance on error (not 0)
         """
         try:
@@ -12769,12 +12823,13 @@ class OKXBroker(BaseBroker):
                 if data and len(data) > 0:
                     details = data[0].get('details', [])
 
-                    # Find USDT balance
-                    available = 0.0
-                    for detail in details:
-                        if detail.get('ccy') == 'USDT':
-                            available = float(detail.get('availBal', 0))
-                            break
+                    # OKX US accounts may hold quote cash as USD rather than
+                    # USDT.  Treat USD, USDT, and USDC as spendable quote cash
+                    # and never send them through the position-pricing path.
+                    cash_balances = _okx_spendable_cash(details)
+                    usd_available = cash_balances["USD"] + cash_balances["USDC"]
+                    usdt_available = cash_balances["USDT"]
+                    available = usd_available + usdt_available
 
                     # FIX Rule #3: Get position values and add to available cash
                     position_value = 0.0
@@ -12805,8 +12860,9 @@ class OKXBroker(BaseBroker):
                     # Enhanced logging (only if verbose=True)
                     if verbose:
                         okx_raw = {
-                            "usd": 0.0,
-                            "usdt": available,
+                            "usd": cash_balances["USD"],
+                            "usdc": cash_balances["USDC"],
+                            "usdt": usdt_available,
                             "trading_balance": available,
                             "usd_held": 0.0,
                             "usdt_held": max(0.0, position_value),
@@ -12816,8 +12872,8 @@ class OKXBroker(BaseBroker):
                         _log_balance_snapshot(
                             account_label=f"okx:{getattr(self, 'account_identifier', 'PLATFORM')}",
                             source="okx.get_balance+positions",
-                            usd_available=0.0,
-                            secondary_available=available,
+                            usd_available=usd_available,
+                            secondary_available=usdt_available,
                             secondary_label="USDT",
                             usd_held=0.0,
                             secondary_held=max(0.0, position_value),
@@ -12836,9 +12892,9 @@ class OKXBroker(BaseBroker):
 
                     return total_equity
 
-                # No USDT found - treat as zero balance (not an error)
+                # No quote cash found - treat as zero balance (not an error)
                 if verbose:
-                    logger.warning("⚠️  No USDT balance found in OKX account")
+                    logger.warning("⚠️  No USD/USDT/USDC balance found in OKX account")
                 # Update last known balance to 0 (this is a successful API call, just zero balance)
                 self._last_known_balance = 0.0
                 self._balance_fetch_errors = 0
@@ -13073,9 +13129,12 @@ class OKXBroker(BaseBroker):
             details = data[0].get('details', [])
             raw_holdings = []
             for detail in details:
-                ccy = detail.get('ccy')
-                available = float(detail.get('availBal', 0))
-                if ccy != 'USDT' and available > 0:
+                ccy = str(detail.get('ccy') or '').strip().upper()
+                raw_available = detail.get('availBal')
+                if raw_available in (None, ''):
+                    raw_available = detail.get('cashBal')
+                available = float(raw_available or 0)
+                if ccy not in _OKX_SPENDABLE_CASH_CURRENCIES and available > 0:
                     okx_symbol = f'{ccy}-USDT'
                     raw_holdings.append((ccy, available, okx_symbol))
 

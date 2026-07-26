@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import importlib
 import os
+import sys
+from types import ModuleType
 from types import SimpleNamespace
 
 
@@ -115,6 +117,50 @@ def test_one_ready_venue_enables_execution_independently(monkeypatch) -> None:
     assert result["venues"]["kraken"]["ready"] is True
     assert result["venues"]["coinbase"]["ready"] is False
     assert result["venues"]["okx"]["ready"] is False
+
+
+def test_hydrated_fresh_capital_authority_satisfies_capital_gate(monkeypatch) -> None:
+    module = _module()
+    _set_credentials(monkeypatch)
+    monkeypatch.delenv("CAPITAL_SYSTEM_READY", raising=False)
+    monkeypatch.delenv("NIJA_CAPITAL_READY", raising=False)
+    monkeypatch.setenv("NIJA_RUNTIME_TRADING_STATE", "LIVE_PENDING_CONFIRMATION")
+    monkeypatch.setenv("NIJA_WRITER_LEASE_ACQUIRED", "1")
+    monkeypatch.setenv("NIJA_WRITER_FENCING_TOKEN", "token")
+
+    authority = SimpleNamespace(
+        is_hydrated=True,
+        is_stale=lambda: False,
+        get_real_capital=lambda: 116.09,
+    )
+    capital_module = ModuleType("bot.capital_authority")
+    capital_module.get_capital_authority = lambda: authority
+    monkeypatch.setitem(sys.modules, "bot.capital_authority", capital_module)
+    monkeypatch.delitem(sys.modules, "capital_authority", raising=False)
+
+    kraken = FakeBroker(balance=116.09)
+    manager = SimpleNamespace(
+        _platform_brokers={"kraken": kraken},
+        eligible_brokers={kraken},
+    )
+    broker_module = SimpleNamespace(BrokerType=FakeBrokerType)
+    monkeypatch.setattr(module, "_runtime", lambda: (broker_module, manager))
+
+    result = module.evaluate_all()
+
+    assert result["capital_ready"] is True
+    assert result["execution_ready"] is True
+
+
+def test_live_active_state_does_not_substitute_for_capital_readiness(monkeypatch) -> None:
+    module = _module()
+    monkeypatch.delenv("CAPITAL_SYSTEM_READY", raising=False)
+    monkeypatch.delenv("NIJA_CAPITAL_READY", raising=False)
+    monkeypatch.setenv("NIJA_RUNTIME_TRADING_STATE", "LIVE_ACTIVE")
+    monkeypatch.delitem(sys.modules, "bot.capital_authority", raising=False)
+    monkeypatch.delitem(sys.modules, "capital_authority", raising=False)
+
+    assert module._capital_ready() is False
 
 
 def test_publish_sets_independent_compatibility_flags(monkeypatch) -> None:

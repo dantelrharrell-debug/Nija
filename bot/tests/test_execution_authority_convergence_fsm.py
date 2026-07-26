@@ -166,7 +166,7 @@ class TestMaybeAutoActivateDelegation(unittest.TestCase):
                 snap = sm.get_execution_authority_snapshot(gates_ok=True)
                 self.assertFalse(snap["intent_present"])
 
-    def test_startup_override_blocks_live_arming_without_ownership(self) -> None:
+    def test_startup_override_arms_fail_closed_while_ownership_is_pending(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             state_path = os.path.join(tmp, "state.json")
             with patch.dict(
@@ -184,7 +184,11 @@ class TestMaybeAutoActivateDelegation(unittest.TestCase):
                 return_value=(False, "bootstrap_guard_not_held"),
             ):
                 sm = TradingStateMachine(state_file=state_path)
-                self.assertEqual(sm.get_current_state(), TradingState.OFF)
+                self.assertEqual(
+                    sm.get_current_state(),
+                    TradingState.LIVE_PENDING_CONFIRMATION,
+                )
+                self.assertFalse(sm.can_dispatch_trades())
 
     def test_startup_override_arms_live_when_ownership_is_present(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -602,11 +606,64 @@ class TestHeartbeatSafetyGating(unittest.TestCase):
                     "HEARTBEAT_TRADE": "true",
                     "HEARTBEAT_REQUIRED_FIRST_ACTIVATION": "false",
                     "HEARTBEAT_MARKER_PATH": marker_path,
+                    "FORCE_TRADE": "false",
+                    "FORCE_TRADE_MODE": "false",
+                    "FORCE_LIVE_TRANSITION": "false",
+                    "NIJA_FORCE_ACTIVATION": "false",
                 },
                 clear=False,
             ):
                 sm = TradingStateMachine(state_file=state_path)
                 self.assertFalse(sm.commit_activation())
+                self.assertEqual(
+                    sm.get_current_state(),
+                    TradingState.LIVE_PENDING_CONFIRMATION,
+                )
+
+    def test_pending_timeout_never_bypasses_safety_gates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_path = os.path.join(tmp, "state.json")
+            with patch.dict(
+                os.environ,
+                {
+                    "LIVE_CAPITAL_VERIFIED": "true",
+                    "DRY_RUN_MODE": "false",
+                    "AUTO_ACTIVATE": "false",
+                    "HEARTBEAT_TRADE": "false",
+                    "HEARTBEAT_REQUIRED_FIRST_ACTIVATION": "false",
+                    "NIJA_PENDING_CONFIRMATION_TIMEOUT_S": "30",
+                    "FORCE_TRADE": "false",
+                    "FORCE_TRADE_MODE": "false",
+                    "FORCE_LIVE_TRANSITION": "false",
+                    "NIJA_FORCE_ACTIVATION": "false",
+                },
+                clear=False,
+            ), patch(
+                "bot.trading_state_machine._startup_ownership_gate",
+                return_value=(False, "bootstrap_guard_not_held"),
+            ):
+                sm = TradingStateMachine(state_file=state_path)
+                sm._pending_confirmation_since = time.monotonic() - 31.0
+
+                with patch.object(
+                    sm,
+                    "_force_live_active_transition",
+                    wraps=sm._force_live_active_transition,
+                ) as forced_transition, patch(
+                    "bot.trading_state_machine._heartbeat_verification_required",
+                    return_value=True,
+                ), patch(
+                    "bot.trading_state_machine._heartbeat_verification_status",
+                    return_value=(False, "marker_missing", {}),
+                ):
+                    self.assertFalse(sm.commit_activation())
+
+                forced_transition.assert_not_called()
+                self.assertEqual(
+                    sm.get_current_state(),
+                    TradingState.LIVE_PENDING_CONFIRMATION,
+                )
+                self.assertFalse(sm.can_dispatch_trades())
 
     def test_commit_activation_arms_pending_when_off_with_live_intent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -626,7 +683,10 @@ class TestHeartbeatSafetyGating(unittest.TestCase):
                 return_value=(False, "bootstrap_guard_not_held"),
             ):
                 sm = TradingStateMachine(state_file=state_path)
-                self.assertEqual(sm.get_current_state(), TradingState.OFF)
+                self.assertEqual(
+                    sm.get_current_state(),
+                    TradingState.LIVE_PENDING_CONFIRMATION,
+                )
 
                 class _ReadyCA:
                     is_hydrated = True

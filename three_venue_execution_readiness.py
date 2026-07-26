@@ -104,6 +104,44 @@ def _truthy(name: str) -> bool:
     }
 
 
+def _capital_ready() -> bool:
+    """Observe canonical capital readiness without using trading state as proof.
+
+    ``LIVE_ACTIVE`` is a consumer of capital readiness, not a valid substitute
+    for it.  Treating the runtime state as proof made this observer circular:
+    a fully hydrated CapitalAuthority could still be reported as unready until
+    activation, while activation diagnostics waited for this observer.
+    """
+    if _truthy("CAPITAL_SYSTEM_READY") or _truthy("NIJA_CAPITAL_READY"):
+        return True
+
+    capital_module = sys.modules.get("bot.capital_authority") or sys.modules.get(
+        "capital_authority"
+    )
+    if not isinstance(capital_module, ModuleType):
+        return False
+    getter = getattr(capital_module, "get_capital_authority", None)
+    if not callable(getter):
+        return False
+    try:
+        authority = getter()
+        if authority is None or not bool(getattr(authority, "is_hydrated", False)):
+            return False
+        stale_reader = getattr(authority, "is_stale", None)
+        if bool(stale_reader() if callable(stale_reader) else True):
+            return False
+        capital_reader = getattr(authority, "get_real_capital", None)
+        real_capital = float(
+            capital_reader()
+            if callable(capital_reader)
+            else getattr(authority, "total_capital", 0.0)
+            or 0.0
+        )
+        return real_capital > 0.0
+    except Exception:
+        return False
+
+
 def _credentials_loaded(venue: str) -> tuple[bool, str]:
     missing: list[str] = []
     for aliases in _CREDENTIALS[venue]:
@@ -378,11 +416,7 @@ def evaluate_all() -> dict[str, Any]:
     writer_ready = _truthy("NIJA_WRITER_LEASE_ACQUIRED") and bool(
         os.getenv("NIJA_WRITER_FENCING_TOKEN", "").strip()
     )
-    capital_ready = (
-        _truthy("CAPITAL_SYSTEM_READY")
-        or _truthy("NIJA_CAPITAL_READY")
-        or str(os.getenv("NIJA_RUNTIME_TRADING_STATE", "")).strip() == "LIVE_ACTIVE"
-    )
+    capital_ready = _capital_ready()
     any_venue_ready = bool(ready_venues)
     all_venues_ready = len(ready_venues) == len(VENUES)
     execution_ready = writer_ready and capital_ready and any_venue_ready

@@ -429,6 +429,21 @@ def _signal_handler(signum: int, frame: Any) -> None:
         raise SystemExit(0)
 
 
+def _release_at_exit() -> None:
+    """Release ownership without surfacing logging-handler teardown failures."""
+
+    # Test runners and some process supervisors close captured logging streams
+    # before Python invokes application atexit callbacks. The release itself
+    # must still run, but logging's internal handler failure must not emit a
+    # misleading traceback after an otherwise clean shutdown.
+    previous_raise_exceptions = logging.raiseExceptions
+    logging.raiseExceptions = False
+    try:
+        release_owned_writer_lock("atexit")
+    finally:
+        logging.raiseExceptions = previous_raise_exceptions
+
+
 def install_import_hook() -> None:
     global _INSTALLED
     if _INSTALLED or bool(getattr(builtins, _PROCESS_INSTALL_MARKER, False)):
@@ -451,7 +466,7 @@ def install_import_hook() -> None:
         )
         thread.start()
 
-    atexit.register(lambda: release_owned_writer_lock("atexit"))
+    atexit.register(_release_at_exit)
     for sig in (signal.SIGTERM, signal.SIGINT):
         try:
             _PREVIOUS_HANDLERS[sig] = signal.getsignal(sig)

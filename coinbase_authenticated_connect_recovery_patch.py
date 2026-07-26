@@ -29,6 +29,7 @@ _PAIR_RETRY_COOLDOWN_S = 300.0
 _CANONICAL_BROKERS: dict[str, weakref.ReferenceType[Any]] = {}
 _CANONICAL_SCOPE_ATTR = "_nija_coinbase_canonical_scope_v4"
 _CANONICAL_FINGERPRINT_ATTR = "_nija_coinbase_canonical_credential_fingerprint_v4"
+_CONNECT_LOCAL = threading.local()
 
 
 def _is_coinbase_class(cls: type) -> bool:
@@ -47,6 +48,62 @@ def _wrapper_chain_has_patch(current: Any) -> bool:
     return False
 
 
+def _same_thread_connect_guard(current: Any):
+    """Stop a wrapper cycle from re-entering the same broker on one thread."""
+
+    @wraps(current)
+    def guarded(self: Any, *args: Any, **kwargs: Any):
+        identity = id(self)
+        active = set(getattr(_CONNECT_LOCAL, "active_brokers", set()))
+        if identity in active:
+            try:
+                self.connected = False
+                self._is_available = False
+                self._nija_coinbase_connect_reentry_blocked = True
+            except Exception:
+                pass
+            os.environ["NIJA_COINBASE_CONNECTED"] = "0"
+            os.environ["NIJA_COINBASE_TRADING_READY"] = "0"
+            os.environ["NIJA_COINBASE_ACTIVATION_STATE"] = "connect_recursion_blocked"
+            logger.error(
+                "COINBASE_CONNECT_REENTRY_BLOCKED marker=%s class=%s action=fail_closed",
+                _MARKER,
+                type(self).__name__,
+            )
+            return False
+
+        active.add(identity)
+        _CONNECT_LOCAL.active_brokers = active
+        try:
+            self._nija_coinbase_connect_reentry_blocked = False
+        except Exception:
+            pass
+        try:
+            return current(self, *args, **kwargs)
+        except RecursionError as exc:
+            try:
+                self.connected = False
+                self._is_available = False
+            except Exception:
+                pass
+            os.environ["NIJA_COINBASE_CONNECTED"] = "0"
+            os.environ["NIJA_COINBASE_TRADING_READY"] = "0"
+            os.environ["NIJA_COINBASE_ACTIVATION_STATE"] = "connect_recursion_blocked"
+            logger.error(
+                "COINBASE_CONNECT_RECURSION_FAIL_CLOSED marker=%s class=%s error=%s",
+                _MARKER,
+                type(self).__name__,
+                str(exc)[:160],
+            )
+            return False
+        finally:
+            remaining = set(getattr(_CONNECT_LOCAL, "active_brokers", set()))
+            remaining.discard(identity)
+            _CONNECT_LOCAL.active_brokers = remaining
+
+    return guarded
+
+
 def _clients(broker: Any) -> list[Any]:
     found: list[Any] = []
     for attr in ("client", "api_client", "rest_client", "coinbase_client", "_client", "_api_client"):
@@ -54,7 +111,9 @@ def _clients(broker: Any) -> list[Any]:
             value = getattr(broker, attr, None)
         except Exception:
             value = None
-        if value is not None and value not in found:
+        # SDK clients may implement recursive or non-boolean equality.  Client
+        # deduplication is about object identity, so never invoke ``__eq__``.
+        if value is not None and all(value is not existing for existing in found):
             found.append(value)
     found.insert(0, broker)
     return found
@@ -380,7 +439,7 @@ def _credential_targets(broker: Any) -> list[Any]:
         nested = getattr(broker, "_broker", None)
     except Exception:
         nested = None
-    if nested is not None and nested not in targets:
+    if nested is not None and all(nested is not target for target in targets):
         targets.append(nested)
     return targets
 
@@ -525,6 +584,7 @@ def _patch_class(cls: type) -> bool:
     if not callable(current) or _wrapper_chain_has_patch(current):
         return bool(callable(current) and _wrapper_chain_has_patch(current))
 
+    @_same_thread_connect_guard
     @wraps(current)
     def connect(self: Any, *args: Any, **kwargs: Any):
         primary_key = str(os.environ.get("COINBASE_API_KEY", "") or "")
@@ -577,6 +637,8 @@ def _patch_class(cls: type) -> bool:
         except Exception as exc:
             result = False
             first_error = f"{type(exc).__name__}:{str(exc)[:100]}"
+        if bool(getattr(self, "_nija_coinbase_connect_reentry_blocked", False)):
+            return False
 
         if (
             bool(result) or bool(getattr(self, "connected", False))
@@ -685,7 +747,6 @@ def _patch_class(cls: type) -> bool:
         return False
 
     setattr(connect, _PATCH_ATTR, True)
-    connect.__wrapped__ = current  # type: ignore[attr-defined]
     setattr(cls, "connect", connect)
     logger.warning(
         "COINBASE_AUTHENTICATED_CONNECT_SURFACE_PATCHED marker=%s module=%s class=%s",
