@@ -130,6 +130,7 @@ class ConnectionStabilityManager:
         self._broker: Optional[Any] = None
         self._reconnect_fn: Optional[Callable[[], bool]] = None
         self._health_probe_fn: Optional[Callable[[], bool]] = None
+        self._registration_lock = threading.Lock()
 
         # Post-reconnect hooks: callables fired after each successful reconnect.
         # Each hook receives no arguments and its return value is ignored.
@@ -156,13 +157,18 @@ class ConnectionStabilityManager:
         broker: Any,
         reconnect_fn: Callable[[], bool],
         health_probe_fn: Optional[Callable[[], bool]] = None,
+        *,
+        replace_existing: bool = False,
     ) -> None:
         """
         Register a broker instance and its connection callbacks.
 
-        If a broker is already registered this call is a no-op so that
+        If a broker is already registered this call is normally a no-op so
         repeated connect() calls during polling / watchdog re-entry do not
-        re-register the same broker multiple times.
+        re-register the same broker multiple times.  A caller that has just
+        completed an authenticated replacement lifecycle may set
+        ``replace_existing=True`` to move watchdog ownership away from a stale
+        instance.
 
         Args:
             broker: Broker object (used for logging context only).
@@ -171,16 +177,37 @@ class ConnectionStabilityManager:
             health_probe_fn: Optional lightweight callable that returns
                 ``True`` when the connection is alive.  If omitted the
                 watchdog calls ``reconnect_fn`` to test liveness.
+            replace_existing: Replace a different registered instance and its
+                callbacks.  This is intended for explicit, verified lifecycle
+                handoffs; routine duplicate registrations should leave it
+                ``False``.
         """
-        if self._broker is not None:
-            logger.debug(
-                f"[{self.broker_name}] Broker already registered — skipping duplicate registration"
+        with self._registration_lock:
+            existing = self._broker
+            if existing is broker:
+                # Refresh callbacks for the same object because runtime wrappers
+                # may have been installed after its first registration.
+                self._reconnect_fn = reconnect_fn
+                self._health_probe_fn = health_probe_fn
+                return
+            if existing is not None and not replace_existing:
+                logger.debug(
+                    f"[{self.broker_name}] Broker already registered — skipping duplicate registration"
+                )
+                return
+            self._broker = broker
+            self._reconnect_fn = reconnect_fn
+            self._health_probe_fn = health_probe_fn
+        if existing is None:
+            logger.info(f"🔌 [{self.broker_name}] Broker registered with ConnectionStabilityManager")
+        else:
+            logger.warning(
+                "🔄 [%s] Connection watchdog ownership moved to authenticated replacement "
+                "(old=%s new=%s)",
+                self.broker_name,
+                type(existing).__name__,
+                type(broker).__name__,
             )
-            return
-        self._broker = broker
-        self._reconnect_fn = reconnect_fn
-        self._health_probe_fn = health_probe_fn
-        logger.info(f"🔌 [{self.broker_name}] Broker registered with ConnectionStabilityManager")
 
     def register_pre_reconnect_hook(self, hook: Callable[[], None]) -> None:
         """Register a callable to be invoked before each reconnect attempt.
