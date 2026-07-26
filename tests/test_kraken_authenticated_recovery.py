@@ -124,3 +124,145 @@ def test_bot_main_acquire_triggers_v24_manager_preparation(monkeypatch):
         False,
     ) is True
     assert getattr(target._acquire_writer_authority_before_nonce, FakeV22._ACQUIRE_WRAP_ATTR) is True
+
+
+
+def test_coordinator_waits_for_writer_lineage_before_handoff(monkeypatch):
+    module = _module()
+    monkeypatch.setattr(module, "_KRAKEN_RECOVERY_STARTED", False)
+    monkeypatch.setattr(module, "_KRAKEN_RECOVERY_COORDINATOR_STARTED", False)
+    monkeypatch.setattr(module, "_kraken_credentials_configured", lambda: True)
+    monkeypatch.setenv("NIJA_KRAKEN_RECOVERY_COORDINATOR_INTERVAL_S", "5")
+    monkeypatch.setenv("NIJA_KRAKEN_RECOVERY_COORDINATOR_WINDOW_S", "1800")
+
+    lineage = iter(
+        [
+            (False, "fencing_token_missing"),
+            (True, "lineage_ready generation=7"),
+        ]
+    )
+    monkeypatch.setattr(module, "_writer_lineage", lambda: next(lineage))
+    sleeps = []
+    monkeypatch.setattr(module.time, "sleep", lambda seconds: sleeps.append(seconds))
+    prepared = []
+
+    def prepare():
+        prepared.append(True)
+        module._KRAKEN_RECOVERY_STARTED = True
+        return object()
+
+    monkeypatch.setattr(module, "_prepare_canonical_manager", prepare)
+
+    class ImmediateThread:
+        def __init__(self, target, **_kwargs):
+            self.target = target
+
+        def start(self):
+            self.target()
+
+    monkeypatch.setattr(module.threading, "Thread", ImmediateThread)
+
+    assert module._start_kraken_recovery_coordinator() is True
+    assert sleeps == [5.0]
+    assert prepared == [True]
+
+
+def test_authenticated_recovery_retries_transient_lineage_gap(monkeypatch):
+    module = _module()
+    monkeypatch.setattr(module, "_KRAKEN_RECOVERY_STARTED", False)
+    monkeypatch.setattr(module, "_kraken_credentials_configured", lambda: True)
+    monkeypatch.setenv("NIJA_KRAKEN_RECOVERY_INTERVAL_S", "30")
+    monkeypatch.setenv("NIJA_KRAKEN_RECOVERY_WINDOW_S", "1200")
+
+    lineage = iter(
+        [
+            (False, "lease_generation_missing"),
+            (True, "lineage_ready generation=8"),
+        ]
+    )
+    monkeypatch.setattr(module, "_writer_lineage", lambda: next(lineage))
+    sleeps = []
+    monkeypatch.setattr(module.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    class Broker:
+        connected = True
+
+        @staticmethod
+        def get_account_balance():
+            return 25.0
+
+    broker = Broker()
+    broker_type = object()
+
+    class ConnectionState:
+        CONNECTED = object()
+
+    manager_module = type(
+        "ManagerModule",
+        (),
+        {"ConnectionState": ConnectionState},
+    )
+    broker_module = type(
+        "BrokerModule",
+        (),
+        {
+            "_KRAKEN_STARTUP_FSM": type(
+                "FSM",
+                (),
+                {"is_connected": False, "is_connecting": False},
+            )(),
+            "register_platform_broker": staticmethod(
+                lambda _name, _broker, connected: connected
+            ),
+        },
+    )
+
+    class Manager:
+        def _transition_platform_state(self, _broker_type, _state):
+            return None
+
+        def on_broker_ready(self, _name, _balance_fn):
+            return None
+
+        def refresh_capital_authority(self, **_kwargs):
+            return None
+
+    manager = Manager()
+    monkeypatch.setattr(
+        module,
+        "_resolve_or_register_kraken_broker",
+        lambda _manager: (broker, broker_type, manager_module),
+    )
+
+    state_machine = type(
+        "StateMachine",
+        (),
+        {"maybe_auto_activate": lambda self: None},
+    )()
+    state_module = type(
+        "StateModule",
+        (),
+        {"get_state_machine": staticmethod(lambda: state_machine)},
+    )
+
+    def fake_import(name):
+        if name == "bot.broker_manager":
+            return broker_module
+        if name == "bot.trading_state_machine":
+            return state_module
+        raise AssertionError(name)
+
+    monkeypatch.setattr(module.importlib, "import_module", fake_import)
+
+    class ImmediateThread:
+        def __init__(self, target, **_kwargs):
+            self.target = target
+
+        def start(self):
+            self.target()
+
+    monkeypatch.setattr(module.threading, "Thread", ImmediateThread)
+
+    assert module._start_kraken_authenticated_recovery(manager) is True
+    assert sleeps == [30.0]
+    assert module.os.environ["NIJA_KRAKEN_AUTHENTICATED_RECOVERY_READY"] == "1"
