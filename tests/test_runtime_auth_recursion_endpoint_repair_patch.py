@@ -7,13 +7,29 @@ import runtime_auth_recursion_endpoint_repair_patch as repair
 
 
 def test_coinbase_balance_fails_closed_when_client_is_missing(monkeypatch):
+    class Stability:
+        def __init__(self):
+            self.reasons = []
+
+        def mark_disconnected(self, reason):
+            self.reasons.append(reason)
+
     class CoinbaseBroker:
         def __init__(self):
             self.client = None
             self.connected = True
+            self._is_available = True
+            self._auth_failed = False
+            self._connection_stability_manager = Stability()
 
         def _get_account_balance_detailed(self, verbose=False):
-            raise AssertionError("uninitialized client must not reach original balance method")
+            raise AssertionError("uninitialized client must not reach original detailed method")
+
+        def get_account_balance(self, verbose=False):
+            raise AssertionError("uninitialized client must not reach original float method")
+
+        def get_balance(self):
+            raise AssertionError("uninitialized client must not reach original float method")
 
     module = ModuleType("bot.broker_manager")
     module.CoinbaseBroker = CoinbaseBroker
@@ -25,9 +41,19 @@ def test_coinbase_balance_fails_closed_when_client_is_missing(monkeypatch):
     assert payload["total_funds"] == 0.0
     assert payload["trading_balance"] == 0.0
     assert payload["connected"] is False
+    assert broker.get_account_balance() == 0.0
+    assert broker.get_balance() == 0.0
     assert broker.connected is False
+    assert broker._is_available is False
+    assert broker._auth_failed is False
+    assert broker._connection_stability_manager.reasons == [
+        "client_uninitialized",
+        "client_uninitialized",
+        "client_uninitialized",
+    ]
     assert os.environ["NIJA_COINBASE_CONNECTED"] == "0"
     assert os.environ["NIJA_COINBASE_FUNDING_STATUS"] == "client_uninitialized"
+    assert os.environ["NIJA_COINBASE_ACTIVATION_STATE"] == "reconnect_pending"
 
 
 def test_okx_recursive_connect_is_blocked(monkeypatch):

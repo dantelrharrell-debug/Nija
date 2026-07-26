@@ -2973,6 +2973,13 @@ class CoinbaseBroker(BaseBroker):
                     self._accounts_cache_time = time.time()
 
                     self.connected = True
+                    # A successful private accounts request is authoritative:
+                    # clear any transient fail-closed state left by a lost SDK
+                    # client so balance/readiness checks can resume.
+                    self._auth_failed = False
+                    self._auth_failed_last_logged = 0.0
+                    self._is_available = True
+                    self._balance_fetch_errors = 0
 
                     if attempt > 1:
                         logging.info(f"✅ Connected to Coinbase Advanced Trade API (succeeded on attempt {attempt})")

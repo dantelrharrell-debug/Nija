@@ -10,7 +10,7 @@ from types import ModuleType
 from typing import Any, Callable
 
 logger = logging.getLogger("nija.runtime_auth_endpoint_repair")
-_MARKER = "20260716-auth-endpoint-v2"
+_MARKER = "20260726-coinbase-client-recovery-v3"
 _LOCK = threading.RLock()
 _PATCHED = False
 _LOCAL = threading.local()
@@ -44,15 +44,37 @@ def _zero_coinbase_balance() -> dict[str, Any]:
 
 
 def _mark_coinbase_disconnected(instance: Any, reason: str) -> None:
-    for attr, value in (("connected", False), ("_is_available", False), ("_auth_failed", True)):
+    """Fail closed for a missing client without poisoning credential state.
+
+    An uninitialized client is a transport/lifecycle failure, not proof that the
+    configured key pair is invalid. Only an authenticated 401 response may set
+    the permanent auth-failure latch and quarantine credentials.
+    """
+    for attr, value in (("connected", False), ("_is_available", False)):
         try:
             setattr(instance, attr, value)
+        except Exception:
+            pass
+    manager = getattr(instance, "_connection_stability_manager", None)
+    mark_disconnected = getattr(manager, "mark_disconnected", None)
+    if callable(mark_disconnected):
+        try:
+            mark_disconnected(reason)
         except Exception:
             pass
     os.environ["NIJA_COINBASE_CONNECTED"] = "0"
     os.environ["NIJA_COINBASE_BALANCE_OBSERVED"] = "0"
     os.environ["NIJA_COINBASE_SPENDABLE_QUOTE"] = "0.00000000"
     os.environ["NIJA_COINBASE_FUNDING_STATUS"] = reason
+    os.environ["NIJA_COINBASE_TRADING_READY"] = "0"
+    os.environ["NIJA_COINBASE_ACTIVATED"] = "0"
+    os.environ["NIJA_COINBASE_ACTIVATION_STATE"] = "reconnect_pending"
+
+
+def _coinbase_uninitialized_fallback(method_name: str) -> Any:
+    if method_name == "_get_account_balance_detailed":
+        return _zero_coinbase_balance()
+    return 0.0
 
 
 def _patch_coinbase_class(module: ModuleType) -> bool:
@@ -78,7 +100,7 @@ def _patch_coinbase_class(module: ModuleType) -> bool:
                     _MARKER,
                     __method_name,
                 )
-                return _zero_coinbase_balance()
+                return _coinbase_uninitialized_fallback(__method_name)
             return __original(self, *args, **kwargs)
 
         guarded._nija_coinbase_client_guard_v2 = True  # type: ignore[attr-defined]

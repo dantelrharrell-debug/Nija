@@ -18,7 +18,7 @@ from types import ModuleType
 from typing import Any, Mapping, Sequence
 
 logger = logging.getLogger("nija.coinbase_authenticated_connect_recovery")
-_MARKER = "20260720-coinbase-authenticated-connect-v1"
+_MARKER = "20260726-coinbase-authenticated-reconnect-v2"
 _PATCH_ATTR = "_nija_coinbase_authenticated_connect_v1"
 _LOCK = threading.RLock()
 _STARTED = False
@@ -103,10 +103,26 @@ def _measure_spendable(broker: Any) -> float:
 
 
 def _publish_connected(broker: Any, source: str) -> None:
-    try:
-        setattr(broker, "connected", True)
-    except Exception:
-        pass
+    for target in _credential_targets(broker):
+        for attr, value in (
+            ("connected", True),
+            ("_auth_failed", False),
+            ("auth_failed", False),
+            ("_is_available", True),
+            ("_balance_fetch_errors", 0),
+        ):
+            try:
+                if hasattr(target, attr) or attr in {"connected", "_auth_failed"}:
+                    setattr(target, attr, value)
+            except Exception:
+                pass
+        manager = getattr(target, "_connection_stability_manager", None)
+        mark_connected = getattr(manager, "mark_connected", None)
+        if callable(mark_connected):
+            try:
+                mark_connected()
+            except Exception:
+                pass
     spendable = _measure_spendable(broker)
     os.environ["NIJA_COINBASE_CREDENTIALS_QUARANTINED"] = "0"
     os.environ["NIJA_COINBASE_RECONNECT_DISABLED"] = "0"
@@ -194,12 +210,21 @@ def _apply_pair(
             for attr, value in (
                 ("connected", False),
                 ("client", None),
+                ("api_client", None),
+                ("rest_client", None),
+                ("coinbase_client", None),
+                ("_client", None),
+                ("_api_client", None),
                 ("_auth_failed", False),
                 ("auth_failed", False),
                 ("_is_available", True),
+                ("_accounts_cache", None),
+                ("_accounts_cache_time", None),
+                ("_balance_cache", None),
+                ("_balance_cache_time", None),
             ):
                 try:
-                    if hasattr(target, attr) or attr in {"connected", "_auth_failed"}:
+                    if hasattr(target, attr) or attr in {"connected", "client", "_auth_failed"}:
                         setattr(target, attr, value)
                 except Exception:
                     pass
@@ -216,6 +241,29 @@ def _mark_auth_failed(broker: Any) -> None:
             try:
                 if hasattr(target, attr) or attr in {"connected", "_auth_failed"}:
                     setattr(target, attr, value)
+            except Exception:
+                pass
+
+
+def _mark_connectivity_failed(broker: Any) -> None:
+    """Keep the venue fail-closed while allowing authenticated reconnects."""
+    for target in _credential_targets(broker):
+        for attr, value in (
+            ("connected", False),
+            ("_auth_failed", False),
+            ("auth_failed", False),
+            ("_is_available", False),
+        ):
+            try:
+                if hasattr(target, attr) or attr in {"connected", "_auth_failed"}:
+                    setattr(target, attr, value)
+            except Exception:
+                pass
+        manager = getattr(target, "_connection_stability_manager", None)
+        mark_disconnected = getattr(manager, "mark_disconnected", None)
+        if callable(mark_disconnected):
+            try:
+                mark_disconnected("coinbase_authenticated_reconnect_pending")
             except Exception:
                 pass
 
@@ -293,6 +341,18 @@ def _patch_class(cls: type) -> bool:
             os.environ["NIJA_COINBASE_ACTIVATION_STATE"] = "quarantined"
             return False
 
+        # Rebuild the authenticated SDK client on every disconnected retry.
+        # This also clears transient client-lifecycle failures, while explicit
+        # 401 quarantines remain blocked by _quarantined_for() above.
+        if primary_key and primary_secret and not bool(getattr(self, "connected", False)):
+            _apply_pair(
+                self,
+                primary_source,
+                primary_key,
+                primary_secret,
+                reset_failure=True,
+            )
+
         first_error = ""
         try:
             result = current(self, *args, **kwargs)
@@ -301,7 +361,8 @@ def _patch_class(cls: type) -> bool:
             first_error = f"{type(exc).__name__}:{str(exc)[:100]}"
 
         if bool(result) or bool(getattr(self, "connected", False)):
-            return result
+            _publish_connected(self, "connect_result")
+            return True
         authenticated, detail = _authenticated_probe(self)
         if authenticated:
             _publish_connected(self, detail)
@@ -387,11 +448,14 @@ def _patch_class(cls: type) -> bool:
             _quarantine(self, primary_key, primary_secret)
             state = "quarantined"
         else:
-            _mark_auth_failed(self)
+            _mark_connectivity_failed(self)
             os.environ["NIJA_COINBASE_CONNECTED"] = "0"
+            os.environ["NIJA_COINBASE_BALANCE_OBSERVED"] = "0"
+            os.environ["NIJA_COINBASE_SPENDABLE_QUOTE"] = "0.00000000"
             os.environ["NIJA_COINBASE_TRADING_READY"] = "0"
-            os.environ["NIJA_COINBASE_ACTIVATION_STATE"] = "authentication_failed"
-            state = "authentication_failed"
+            os.environ["NIJA_COINBASE_ACTIVATED"] = "0"
+            os.environ["NIJA_COINBASE_ACTIVATION_STATE"] = "reconnect_pending"
+            state = "reconnect_pending"
         _log_failure_once(
             cls,
             f"{suffix};alternative_pairs_attempted={attempted};state={state}",
