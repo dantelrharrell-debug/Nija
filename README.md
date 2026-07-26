@@ -4,7 +4,7 @@
 
 **Deployed checkpoint:** [`84c9302`](https://github.com/dantelrharrell-debug/Nija/commit/84c9302f91bd38d4dd54ef41c302c920a3ff2089)
 
-**Active recovery repair:** [PR #2279](https://github.com/dantelrharrell-debug/Nija/pull/2279) — Coinbase canonical-client convergence
+**Merged recovery checkpoint:** [`388e5f3`](https://github.com/dantelrharrell-debug/Nija/commit/388e5f31b41b74a04ef83128a85e245efb4de384) via [PR #2279](https://github.com/dantelrharrell-debug/Nija/pull/2279) — awaiting Render deployment verification
 
 This README is the durable recovery anchor for NIJA. It records what the production logs have actually proved, what the merged recovery changes are intended to repair, and the exact evidence required before declaring all three venues live.
 
@@ -17,7 +17,7 @@ NIJA does not guarantee trades or profits. A connected brokerage may enter a tra
 | Source of truth | Render proved deployed commit `84c9302`; the supplied post-deploy window reached simultaneous broker-local connectivity before Coinbase was downgraded by a stale duplicate instance |
 | Canonical runtime | `launcher-v26 -> main.py -> bot.bot -> bot.bot_main` entrypoint attestation passed on deployed commit `84c9302` |
 | Coinbase | Valid ES256 credentials authenticated; $100.11 spendable was observed, with the remaining account value held in crypto positions. Five seconds after all-three readiness, a duplicate broker with `client=None` incorrectly published `reconnect_pending` |
-| Coinbase canonical-client repair | The active repair preserves a healthy nested adapter client, adopts only a same-account authenticated canonical client, rebinds the connection watchdog to that broker, and keeps missing-client/401 paths fail-closed |
+| Coinbase canonical-client repair | The merged repair preserves a healthy nested adapter client, adopts only a same-account and same-credential-family authenticated canonical client, rebinds the connection watchdog to that broker, rejects pre-rotation clients, and keeps missing-client/401 paths fail-closed |
 | OKX US | Private balance returned HTTP 200; $144.96 was observed, the US endpoint was selected, dual-wallet funding status was `funded`, and router binding was verified |
 | Kraken deployed state | Nonce authority initialized and later broker-local readiness reported `kraken connected=true`; the supplied window still did not prove positive Kraken platform spendable capital or `trading_ready=true` |
 | Exit protection | Kraken all-account exit protection, verified cost-basis recovery, universal broker exits, and automatic take-profit/stop-loss guards are installed; each venue still requires its own connected broker and verified position data |
@@ -27,7 +27,7 @@ NIJA does not guarantee trades or profits. A connected brokerage may enter a tra
 
 ### Safe continuation from this checkpoint
 
-1. Merge [PR #2279](https://github.com/dantelrharrell-debug/Nija/pull/2279) and allow Render to deploy it; do not repeatedly restart while `ENTRYPOINT_WRITER_AUTHORITY_STANDBY` is present.
+1. Allow Render to deploy merged checkpoint [`388e5f3`](https://github.com/dantelrharrell-debug/Nija/commit/388e5f31b41b74a04ef83128a85e245efb4de384); do not repeatedly restart while `ENTRYPOINT_WRITER_AUTHORITY_STANDBY` is present.
 2. Wait for the new instance to acquire and verify writer authority.
 3. Confirm the canonical recovery hook and coordinator are installed:
    ```text
