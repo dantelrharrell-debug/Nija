@@ -38,7 +38,7 @@ def test_cached_balance_cannot_restore_readiness_after_401(monkeypatch):
     )
     broker = Broker()
 
-    assert wrapped(broker) == 200.21
+    assert wrapped(broker) == 0.0
     assert broker.connected is False
     assert broker._is_available is False
     assert broker.exit_only_mode is True
@@ -74,7 +74,7 @@ def test_adapter_detects_nested_broker_auth_failure(monkeypatch):
     wrapped = module._wrap_connect(Adapter, Adapter.connect)
     adapter = Adapter()
 
-    assert wrapped(adapter) is True
+    assert wrapped(adapter) is False
     assert adapter.connected is False
     assert adapter._broker.connected is False
     assert module.os.environ["NIJA_COINBASE_TRADING_READY"] == "0"
