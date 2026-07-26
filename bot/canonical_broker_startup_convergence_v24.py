@@ -48,6 +48,7 @@ _RUN_WRAP_ATTR = "_nija_canonical_broker_startup_convergence_v24"
 _BOT_MAIN_PATCH_ATTR = "_nija_canonical_broker_startup_convergence_bot_main_v24"
 _BOT_MAIN_ACQUIRE_WRAP_ATTR = "_nija_canonical_broker_startup_acquire_v30"
 _KRAKEN_RECOVERY_STARTED = False
+_KRAKEN_RECOVERY_COORDINATOR_STARTED = False
 
 
 def _truthy(name: str, default: str = "false") -> bool:
@@ -200,11 +201,14 @@ def _start_kraken_authenticated_recovery(manager: Any) -> bool:
             lineage_ready, lineage_reason = _writer_lineage()
             if not lineage_ready:
                 logger.warning(
-                    "KRAKEN_AUTHENTICATED_RECOVERY_STOPPED marker=%s reason=%s",
+                    "KRAKEN_AUTHENTICATED_RECOVERY_WAITING marker=%s reason=%s "
+                    "retry_s=%.1f",
                     marker,
                     lineage_reason,
+                    interval,
                 )
-                return
+                time.sleep(interval)
+                continue
             try:
                 broker_module = importlib.import_module("bot.broker_manager")
                 broker, broker_type, manager_module = _resolve_or_register_kraken_broker(
@@ -310,6 +314,95 @@ def _start_kraken_authenticated_recovery(manager: Any) -> bool:
     logger.warning(
         "KRAKEN_AUTHENTICATED_RECOVERY_STARTED "
         "marker=20260725-kraken-authenticated-recovery-v29"
+    )
+    return True
+
+
+
+def _start_kraken_recovery_coordinator() -> bool:
+    """Close the timing gap between import-hook install and writer acquisition.
+
+    A rolling Render deployment can install this module before the writer
+    fencing environment is published.  The coordinator waits for that lineage
+    instead of relying on a single wrapper callback.  It never connects a
+    broker until writer authority and the canonical manager FSM are both ready.
+    """
+    global _KRAKEN_RECOVERY_COORDINATOR_STARTED
+    with _LOCK:
+        if _KRAKEN_RECOVERY_COORDINATOR_STARTED:
+            return True
+        _KRAKEN_RECOVERY_COORDINATOR_STARTED = True
+
+    def coordinate() -> None:
+        marker = "20260726-kraken-recovery-coordinator-v31"
+        deadline = time.monotonic() + max(
+            120.0,
+            float(
+                os.environ.get(
+                    "NIJA_KRAKEN_RECOVERY_COORDINATOR_WINDOW_S", "1800"
+                )
+                or 1800
+            ),
+        )
+        interval = max(
+            2.0,
+            float(
+                os.environ.get(
+                    "NIJA_KRAKEN_RECOVERY_COORDINATOR_INTERVAL_S", "5"
+                )
+                or 5
+            ),
+        )
+        last_reason = ""
+        while time.monotonic() < deadline:
+            if _KRAKEN_RECOVERY_STARTED:
+                return
+            if not _kraken_credentials_configured():
+                reason = "credentials_not_configured_or_explicitly_disabled"
+            else:
+                lineage_ready, lineage_reason = _writer_lineage()
+                if not lineage_ready:
+                    reason = lineage_reason
+                else:
+                    try:
+                        _prepare_canonical_manager()
+                        if _KRAKEN_RECOVERY_STARTED:
+                            logger.critical(
+                                "KRAKEN_RECOVERY_COORDINATOR_HANDOFF marker=%s "
+                                "writer_lineage=true recovery_started=true",
+                                marker,
+                            )
+                            return
+                        reason = "canonical_manager_ready_recovery_not_started"
+                    except Exception as exc:
+                        reason = f"{type(exc).__name__}:{exc}"
+            if reason != last_reason:
+                logger.warning(
+                    "KRAKEN_RECOVERY_COORDINATOR_WAITING marker=%s reason=%s "
+                    "retry_s=%.1f",
+                    marker,
+                    reason,
+                    interval,
+                )
+                last_reason = reason
+            time.sleep(interval)
+
+        os.environ["NIJA_KRAKEN_AUTHENTICATED_RECOVERY_READY"] = "0"
+        logger.error(
+            "KRAKEN_RECOVERY_COORDINATOR_EXPIRED marker=%s "
+            "recovery_started=%s trading_remains_fail_closed=true",
+            marker,
+            _KRAKEN_RECOVERY_STARTED,
+        )
+
+    threading.Thread(
+        target=coordinate,
+        name="KrakenRecoveryCoordinatorV31",
+        daemon=True,
+    ).start()
+    logger.warning(
+        "KRAKEN_RECOVERY_COORDINATOR_STARTED "
+        "marker=20260726-kraken-recovery-coordinator-v31"
     )
     return True
 
@@ -532,6 +625,7 @@ def install_import_hook() -> bool:
         if not any(item is _FINDER for item in sys.meta_path):
             sys.meta_path.insert(0, _FINDER)
         _INSTALLED = True
+        _start_kraken_recovery_coordinator()
         os.environ["NIJA_CANONICAL_BROKER_STARTUP_CONVERGENCE_V24_INSTALLED"] = "1"
         logger.critical(
             "CANONICAL_BROKER_STARTUP_CONVERGENCE_V24_INSTALLED "
@@ -558,6 +652,7 @@ __all__ = [
     "_prepare_canonical_manager",
     "_kraken_credentials_configured",
     "_start_kraken_authenticated_recovery",
+    "_start_kraken_recovery_coordinator",
     "_patch_self_healing_module",
     "_patch_bot_main_module",
 ]
