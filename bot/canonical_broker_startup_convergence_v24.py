@@ -46,6 +46,7 @@ _INSTALLED = False
 _FINDER: "_CanonicalStartupFinder | None" = None
 _RUN_WRAP_ATTR = "_nija_canonical_broker_startup_convergence_v24"
 _BOT_MAIN_PATCH_ATTR = "_nija_canonical_broker_startup_convergence_bot_main_v24"
+_BOT_MAIN_ACQUIRE_WRAP_ATTR = "_nija_canonical_broker_startup_acquire_v30"
 _KRAKEN_RECOVERY_STARTED = False
 
 
@@ -141,6 +142,35 @@ def _kraken_credentials_configured() -> bool:
     return bool(key and secret and not disabled)
 
 
+def _resolve_or_register_kraken_broker(manager: Any) -> tuple[Any, Any, Any]:
+    """Return the canonical Kraken broker, repairing only a missing registration."""
+    broker_module = importlib.import_module("bot.broker_manager")
+    manager_module = importlib.import_module("bot.multi_account_broker_manager")
+    broker_type = getattr(broker_module, "BrokerType").KRAKEN
+    broker = getattr(manager, "_platform_brokers", {}).get(broker_type)
+    if broker is None:
+        broker = getattr(broker_module, "get_platform_broker")("kraken")
+    if broker is None:
+        broker_cls = getattr(broker_module, "KrakenBroker")
+        account_type = getattr(broker_module, "AccountType").PLATFORM
+        broker = broker_cls(account_type=account_type)
+        register = getattr(manager, "register_platform_broker_instance", None)
+        if not callable(register):
+            raise RuntimeError("canonical Kraken registration method unavailable")
+        register(
+            broker_type,
+            broker,
+            mark_connected_state=False,
+            allow_recovery_registration=True,
+        )
+        logger.critical(
+            "KRAKEN_AUTHENTICATED_RECOVERY_REGISTERED "
+            "marker=20260726-kraken-registration-recovery-v30 "
+            "source=canonical_manager late_registration=true"
+        )
+    return broker, broker_type, manager_module
+
+
 def _start_kraken_authenticated_recovery(manager: Any) -> bool:
     """Reconnect the registered platform Kraken broker before live cycles start.
 
@@ -177,20 +207,9 @@ def _start_kraken_authenticated_recovery(manager: Any) -> bool:
                 return
             try:
                 broker_module = importlib.import_module("bot.broker_manager")
-                manager_module = importlib.import_module(
-                    "bot.multi_account_broker_manager"
+                broker, broker_type, manager_module = _resolve_or_register_kraken_broker(
+                    manager
                 )
-                broker_type = getattr(broker_module, "BrokerType").KRAKEN
-                broker = getattr(manager, "_platform_brokers", {}).get(broker_type)
-                if broker is None:
-                    broker = getattr(broker_module, "get_platform_broker")("kraken")
-                if broker is None:
-                    logger.error(
-                        "KRAKEN_AUTHENTICATED_RECOVERY_STOPPED marker=%s "
-                        "reason=registered_broker_missing",
-                        marker,
-                    )
-                    return
 
                 fsm = getattr(broker_module, "_KRAKEN_STARTUP_FSM", None)
                 if bool(getattr(broker, "connected", False)) or bool(
@@ -205,10 +224,37 @@ def _start_kraken_authenticated_recovery(manager: Any) -> bool:
                     state = getattr(manager_module, "ConnectionState", None)
                     if callable(transition) and state is not None:
                         transition(broker_type, state.CONNECTED)
+                    ready_hook = getattr(manager, "on_broker_ready", None)
+                    if callable(ready_hook):
+                        ready_hook("kraken", broker.get_account_balance)
+                    refresh = getattr(manager, "refresh_capital_authority", None)
+                    if callable(refresh):
+                        try:
+                            refresh(trigger="kraken_authenticated_recovery")
+                        except Exception as refresh_exc:
+                            logger.warning(
+                                "KRAKEN_AUTHENTICATED_RECOVERY_CAPITAL_REFRESH_PENDING "
+                                "marker=%s error=%s:%s",
+                                marker,
+                                type(refresh_exc).__name__,
+                                refresh_exc,
+                            )
+                    try:
+                        state_module = importlib.import_module("bot.trading_state_machine")
+                        state_machine = state_module.get_state_machine()
+                        state_machine.maybe_auto_activate()
+                    except Exception as activation_exc:
+                        logger.warning(
+                            "KRAKEN_AUTHENTICATED_RECOVERY_ACTIVATION_PENDING "
+                            "marker=%s error=%s:%s",
+                            marker,
+                            type(activation_exc).__name__,
+                            activation_exc,
+                        )
                     os.environ["NIJA_KRAKEN_AUTHENTICATED_RECOVERY_READY"] = "1"
                     logger.critical(
                         "KRAKEN_AUTHENTICATED_RECOVERY_READY marker=%s "
-                        "attempt=%d connected=true",
+                        "attempt=%d connected=true capital_rechecked=true",
                         marker,
                         attempt,
                     )
@@ -228,9 +274,15 @@ def _start_kraken_authenticated_recovery(manager: Any) -> bool:
                 reset = getattr(fsm, "reset", None)
                 if callable(reset):
                     reset()
+                begin = getattr(manager, "begin_platform_connection", None)
+                if callable(begin):
+                    begin(broker_type)
                 connected = bool(broker.connect())
                 if connected:
                     continue
+                failed = getattr(manager, "mark_platform_failed", None)
+                if callable(failed):
+                    failed(broker_type)
             except Exception as exc:
                 logger.error(
                     "KRAKEN_AUTHENTICATED_RECOVERY_FAILED marker=%s attempt=%d "
@@ -353,14 +405,67 @@ def _patch_bot_main_module(module: ModuleType) -> bool:
         return False
     acquire_ok = bool(patch_acquire(module))
     main_ok = bool(patch_main(module))
-    ready = acquire_ok and main_ok
+    current_acquire = getattr(module, "_acquire_writer_authority_before_nonce", None)
+    if acquire_ok and callable(current_acquire) and not bool(
+        getattr(current_acquire, _BOT_MAIN_ACQUIRE_WRAP_ATTR, False)
+    ):
+        @wraps(current_acquire)
+        def converged_acquire(*args: Any, **kwargs: Any) -> bool:
+            acquired = bool(current_acquire(*args, **kwargs))
+            if not acquired:
+                return False
+            try:
+                _prepare_canonical_manager()
+                return True
+            except Exception as exc:
+                os.environ["NIJA_CANONICAL_BROKER_STARTUP_CONVERGENCE_V24_READY"] = "0"
+                logger.critical(
+                    "CANONICAL_BROKER_STARTUP_CONVERGENCE_V30_FAILED "
+                    "marker=20260726-kraken-registration-recovery-v30 "
+                    "error=%s:%s trading_remains_fail_closed=true",
+                    type(exc).__name__,
+                    exc,
+                    exc_info=True,
+                )
+                release = getattr(module, "_release_writer_authority", None)
+                if callable(release):
+                    try:
+                        release()
+                    except Exception:
+                        logger.exception(
+                            "CANONICAL_BROKER_STARTUP_CONVERGENCE_V30_RELEASE_FAILED "
+                            "marker=20260726-kraken-registration-recovery-v30"
+                        )
+                return False
+
+        setattr(converged_acquire, _BOT_MAIN_ACQUIRE_WRAP_ATTR, True)
+        v22_attr = getattr(v22, "_ACQUIRE_WRAP_ATTR", "")
+        if v22_attr:
+            setattr(converged_acquire, v22_attr, True)
+        setattr(converged_acquire, "__wrapped__", current_acquire)
+        setattr(module, "_acquire_writer_authority_before_nonce", converged_acquire)
+        logger.critical(
+            "CANONICAL_BROKER_STARTUP_CONVERGENCE_V30_ACQUIRE_PATCHED "
+            "marker=20260726-kraken-registration-recovery-v30 module=%s",
+            module.__name__,
+        )
+    final_acquire = getattr(module, "_acquire_writer_authority_before_nonce", None)
+    recovery_trigger = bool(
+        not callable(current_acquire)
+        or (
+            callable(final_acquire)
+            and getattr(final_acquire, _BOT_MAIN_ACQUIRE_WRAP_ATTR, False)
+        )
+    )
+    ready = bool(acquire_ok and main_ok and recovery_trigger)
     setattr(module, _BOT_MAIN_PATCH_ATTR, ready)
     logger.critical(
         "CANONICAL_BROKER_STARTUP_CONVERGENCE_V24_BOT_MAIN_PATCHED "
-        "marker=%s acquire=%s main=%s",
+        "marker=%s acquire=%s main=%s recovery_trigger=%s",
         _MARKER,
         acquire_ok,
         main_ok,
+        ready,
     )
     return ready
 

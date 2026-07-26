@@ -1699,6 +1699,7 @@ class MultiAccountBrokerManager:
         broker_type: BrokerType,
         broker: BaseBroker,
         mark_connected_state: bool = False,
+        allow_recovery_registration: bool = False,
     ) -> bool:
         """
         Register an already-created broker instance for the platform account.
@@ -1709,6 +1710,9 @@ class MultiAccountBrokerManager:
         Args:
             broker_type: Type of broker being registered
             broker: Already-created BaseBroker instance
+            allow_recovery_registration: Permit the writer-scoped Kraken recovery
+                path to repair a missing broker after startup registration was
+                finalized. Other venues remain immutable.
             
         Returns:
             True if successfully registered, False if already registered (idempotent)
@@ -1722,16 +1726,26 @@ class MultiAccountBrokerManager:
                 broker_type=broker_type,
                 broker=broker,
                 mark_connected_state=mark_connected_state,
+                allow_recovery_registration=allow_recovery_registration,
             )
 
         # Enforce immutability and single-registration atomically under the
         # registry lock so two concurrent callers cannot both pass the
         # "already registered?" check and double-write the same broker.
         with self._registry_meta_lock:
-            if self._platform_brokers_locked:
+            late_kraken_recovery = bool(
+                allow_recovery_registration and broker_type == BrokerType.KRAKEN
+            )
+            if self._platform_brokers_locked and not late_kraken_recovery:
                 error_msg = f"❌ INVARIANT VIOLATION: Cannot register platform broker {broker_type.value} - platform brokers are locked (immutable)"
                 logger.error(error_msg)
                 raise RuntimeError(error_msg)
+            if self._platform_brokers_locked and late_kraken_recovery:
+                logger.critical(
+                    "KRAKEN_LATE_RECOVERY_REGISTRATION_ALLOWED "
+                    "marker=20260726-kraken-registration-recovery-v30 "
+                    "reason=missing_from_finalized_registry writer_scoped_caller_required=true"
+                )
             if broker_type in self._platform_brokers:
                 if self._platform_brokers[broker_type] is broker:
                     # Same instance re-registering (e.g. broker.connect() called after
