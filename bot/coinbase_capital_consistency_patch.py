@@ -179,7 +179,7 @@ def _wrap_balance(cls: type, name: str, current: Any) -> Any:
         result = current(self, *args, **kwargs)
         if _auth_failure_detected(self):
             _publish_auth_failed(self)
-            return result
+            return 0.0
         amount = _payload_total(result)
         if amount <= 0 and bool(getattr(self, "connected", False)):
             amount = _known_balance(self)
@@ -208,7 +208,7 @@ def _wrap_connect(cls: type, current: Any) -> Any:
         result = current(self, *args, **kwargs)
         if _auth_failure_detected(self):
             _publish_auth_failed(self)
-            return result
+            return False
         connected = bool(result) or bool(getattr(self, "connected", False))
         if connected:
             amount = _known_balance(self)
