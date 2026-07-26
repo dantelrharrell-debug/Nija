@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+from types import ModuleType
 
 from bot import coinbase_funding_readiness_repair_patch as patch
 
@@ -14,6 +15,8 @@ def test_combined_json_recovers_key_and_private_key(monkeypatch):
     )
     monkeypatch.delenv("COINBASE_API_KEY", raising=False)
     monkeypatch.delenv("COINBASE_API_SECRET", raising=False)
+    monkeypatch.delenv("NIJA_COINBASE_BALANCE_OBSERVED", raising=False)
+    monkeypatch.delenv("NIJA_COINBASE_FUNDING_STATUS", raising=False)
 
     assert patch.recover_coinbase_environment() is True
     assert patch.os.environ["COINBASE_API_KEY"] == "organizations/test/apiKeys/key"
@@ -65,3 +68,55 @@ def test_measure_spendable_reads_cache_when_client_is_present():
             self._balance_cache = {"usd": 250.0}
 
     assert patch._measure_spendable(Broker()) == 250.0
+
+
+def test_patch_broker_module_detects_marker_inside_wrapper_chain():
+    def original(self):
+        return True
+
+    def recovery(self):
+        return original(self)
+
+    setattr(recovery, patch._PATCH_ATTR, True)
+    recovery.__wrapped__ = original
+
+    def outer(self):
+        return recovery(self)
+
+    outer.__wrapped__ = recovery
+
+    class CoinbaseBroker:
+        connect = outer
+
+    module = ModuleType("bot.broker_manager")
+    module.CoinbaseBroker = CoinbaseBroker
+    before = CoinbaseBroker.connect
+
+    assert patch._patch_broker_module(module) is True
+    assert CoinbaseBroker.connect is before
+
+
+def test_connect_wrapper_blocks_same_thread_reentry(monkeypatch):
+    class CoinbaseBroker:
+        def __init__(self):
+            self.connected = False
+            self._is_available = True
+
+        def connect(self):
+            return self.connect()
+
+    module = ModuleType("bot.broker_manager")
+    module.CoinbaseBroker = CoinbaseBroker
+    monkeypatch.setenv("COINBASE_API_KEY", "organizations/test/apiKeys/key")
+    monkeypatch.setenv(
+        "COINBASE_API_SECRET",
+        "-----BEGIN EC PRIVATE KEY-----\nTEST\n-----END EC PRIVATE KEY-----",
+    )
+
+    assert patch._patch_broker_module(module) is True
+    broker = CoinbaseBroker()
+
+    assert broker.connect() is False
+    assert broker.connected is False
+    assert broker._is_available is False
+    assert patch.os.environ["NIJA_COINBASE_FUNDING_STATUS"] == "connect_recursion_blocked"

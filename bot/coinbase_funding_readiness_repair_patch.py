@@ -26,6 +26,7 @@ _ORIGINAL_IMPORT = None
 _PATCH_ATTR = "_nija_coinbase_connection_funding_v3"
 _LAST_CREDENTIAL_SIGNATURE: tuple[Any, ...] | None = None
 _LAST_CONNECTION_SIGNATURE: tuple[Any, ...] | None = None
+_CONNECT_LOCAL = threading.local()
 
 
 def _clean(value: Any) -> str:
@@ -213,47 +214,92 @@ def _measure_spendable(broker: Any) -> float:
     return 0.0
 
 
+def _wrapper_chain_has_patch(current: Any) -> bool:
+    """Return True when this wrapper is already present anywhere in the chain."""
+    seen: set[int] = set()
+    candidate = current
+    while callable(candidate) and id(candidate) not in seen:
+        seen.add(id(candidate))
+        if bool(getattr(candidate, _PATCH_ATTR, False)):
+            return True
+        candidate = getattr(candidate, "__wrapped__", None)
+    return False
+
+
 def _connect_wrapper(cls: type, current):
     @wraps(current)
     def connect(self: Any, *args: Any, **kwargs: Any):
         global _LAST_CONNECTION_SIGNATURE
-        if not recover_coinbase_environment():
+        identity = id(self)
+        active = set(getattr(_CONNECT_LOCAL, "active_brokers", set()))
+        if identity in active:
             try:
                 self.connected = False
+                self._is_available = False
+                self._nija_coinbase_connect_reentry_blocked = True
             except Exception:
                 pass
             os.environ["NIJA_COINBASE_CONNECTED"] = "0"
             os.environ["NIJA_COINBASE_BALANCE_OBSERVED"] = "0"
-            os.environ["NIJA_COINBASE_FUNDING_STATUS"] = "auth_unavailable"
-            logger.error("COINBASE_CONNECTION_BLOCKED_INVALID_CREDENTIAL_FORMAT marker=%s class=%s", _MARKER, cls.__name__)
+            os.environ["NIJA_COINBASE_FUNDING_STATUS"] = "connect_recursion_blocked"
+            os.environ["NIJA_COINBASE_TRADING_READY"] = "0"
+            logger.error(
+                "COINBASE_CONNECTION_REENTRY_BLOCKED marker=%s class=%s action=fail_closed",
+                _MARKER,
+                cls.__name__,
+            )
             return False
+
+        active.add(identity)
+        _CONNECT_LOCAL.active_brokers = active
         try:
-            result = current(self, *args, **kwargs)
-        except Exception as exc:
+            self._nija_coinbase_connect_reentry_blocked = False
+        except Exception:
+            pass
+        try:
+            if not recover_coinbase_environment():
+                try:
+                    self.connected = False
+                except Exception:
+                    pass
+                os.environ["NIJA_COINBASE_CONNECTED"] = "0"
+                os.environ["NIJA_COINBASE_BALANCE_OBSERVED"] = "0"
+                os.environ["NIJA_COINBASE_FUNDING_STATUS"] = "auth_unavailable"
+                logger.error("COINBASE_CONNECTION_BLOCKED_INVALID_CREDENTIAL_FORMAT marker=%s class=%s", _MARKER, cls.__name__)
+                return False
             try:
-                self.connected = False
-            except Exception:
-                pass
-            os.environ["NIJA_COINBASE_CONNECTED"] = "0"
-            os.environ["NIJA_COINBASE_BALANCE_OBSERVED"] = "0"
-            os.environ["NIJA_COINBASE_FUNDING_STATUS"] = "auth_unavailable"
-            logger.error("COINBASE_CONNECTION_AUTH_FAILED marker=%s class=%s error_type=%s error=%s", _MARKER, cls.__name__, type(exc).__name__, str(exc)[:240])
-            return False
-        connected = bool(result) or bool(getattr(self, "connected", False))
-        if connected:
-            spendable = _measure_spendable(self)
-            _publish_ready(spendable)
-            signature = (cls.__name__, True, round(spendable, 8))
-            with _LOCK:
-                if signature != _LAST_CONNECTION_SIGNATURE:
-                    _LAST_CONNECTION_SIGNATURE = signature
-                    logger.critical("COINBASE_CONNECTION_RECOVERED marker=%s class=%s connected=true spendable_quote=$%.2f readiness_published=%s", _MARKER, cls.__name__, spendable, spendable > 0)
-        else:
-            os.environ["NIJA_COINBASE_CONNECTED"] = "0"
-            os.environ["NIJA_COINBASE_BALANCE_OBSERVED"] = "0"
-            os.environ["NIJA_COINBASE_FUNDING_STATUS"] = "auth_unavailable"
-            logger.error("COINBASE_CONNECTION_PROBE_FAILED marker=%s class=%s", _MARKER, cls.__name__)
-        return result
+                result = current(self, *args, **kwargs)
+            except Exception as exc:
+                try:
+                    self.connected = False
+                except Exception:
+                    pass
+                os.environ["NIJA_COINBASE_CONNECTED"] = "0"
+                os.environ["NIJA_COINBASE_BALANCE_OBSERVED"] = "0"
+                os.environ["NIJA_COINBASE_FUNDING_STATUS"] = "auth_unavailable"
+                logger.error("COINBASE_CONNECTION_AUTH_FAILED marker=%s class=%s error_type=%s error=%s", _MARKER, cls.__name__, type(exc).__name__, str(exc)[:240])
+                return False
+            if bool(getattr(self, "_nija_coinbase_connect_reentry_blocked", False)):
+                return False
+            connected = bool(result) or bool(getattr(self, "connected", False))
+            if connected:
+                spendable = _measure_spendable(self)
+                _publish_ready(spendable)
+                signature = (cls.__name__, True, round(spendable, 8))
+                with _LOCK:
+                    if signature != _LAST_CONNECTION_SIGNATURE:
+                        _LAST_CONNECTION_SIGNATURE = signature
+                        logger.critical("COINBASE_CONNECTION_RECOVERED marker=%s class=%s connected=true spendable_quote=$%.2f readiness_published=%s", _MARKER, cls.__name__, spendable, spendable > 0)
+            else:
+                os.environ["NIJA_COINBASE_CONNECTED"] = "0"
+                os.environ["NIJA_COINBASE_BALANCE_OBSERVED"] = "0"
+                os.environ["NIJA_COINBASE_FUNDING_STATUS"] = "auth_unavailable"
+                logger.error("COINBASE_CONNECTION_PROBE_FAILED marker=%s class=%s", _MARKER, cls.__name__)
+            return result
+        finally:
+            remaining = set(getattr(_CONNECT_LOCAL, "active_brokers", set()))
+            remaining.discard(identity)
+            _CONNECT_LOCAL.active_brokers = remaining
 
     setattr(connect, _PATCH_ATTR, True)
     connect.__wrapped__ = current  # type: ignore[attr-defined]
@@ -267,7 +313,7 @@ def _patch_broker_module(module: ModuleType) -> bool:
         current = getattr(cls, "connect", None) if isinstance(cls, type) else None
         if not callable(current):
             continue
-        if getattr(current, _PATCH_ATTR, False):
+        if _wrapper_chain_has_patch(current):
             changed = True
             continue
         cls.connect = _connect_wrapper(cls, current)

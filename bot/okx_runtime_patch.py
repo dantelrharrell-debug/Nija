@@ -377,7 +377,14 @@ def apply_okx_runtime_patches() -> bool:
             signature = base64.b64encode(
                 hmac.new(self.api_secret.encode("utf-8"), prehash.encode("utf-8"), hashlib.sha256).digest()
             ).decode("utf-8")
-            logger.warning("OKX_AUTH_DETAIL timestamp=%s prehash=%r signing_algo=Base64-HMAC-SHA256 signature_len=%s", timestamp, prehash, len(signature))
+            logger.debug(
+                "OKX_AUTH_DETAIL timestamp=%s method=%s path=%s "
+                "signing_algo=Base64-HMAC-SHA256 signature_len=%s",
+                timestamp,
+                method.upper(),
+                request_path,
+                len(signature),
+            )
             headers: Dict[str, str] = {
                 "OK-ACCESS-KEY": self.api_key,
                 "OK-ACCESS-SIGN": signature,
@@ -390,7 +397,12 @@ def apply_okx_runtime_patches() -> bool:
         _sim_active = bool(getattr(self, "simulated", False)) or _env_truthy("OKX_SIMULATED_TRADING") or _env_truthy("OKX_USE_TESTNET")
         if _sim_active:
             headers["x-simulated-trading"] = "1"
-        logger.warning("OKX_HEADERS_DIAG simulated_instance=%s simulated_header_sent=%s headers_keys=%s", bool(getattr(self, "simulated", False)), _sim_active, list(headers.keys()))
+        logger.debug(
+            "OKX_HEADERS_DIAG simulated_instance=%s simulated_header_sent=%s headers_keys=%s",
+            bool(getattr(self, "simulated", False)),
+            _sim_active,
+            list(headers.keys()),
+        )
         return headers
 
     def _request(self: Any, method: str, path: str, *, params: Optional[Dict[str, Any]] = None, payload: Optional[Dict[str, Any]] = None, private: bool = False) -> Dict[str, Any]:
@@ -399,29 +411,77 @@ def apply_okx_runtime_patches() -> bool:
         inst = str(clean_params.get("instId", "")).upper()
         is_market_data = path in {"/api/v5/market/candles", "/api/v5/market/ticker"}
         if is_market_data and _is_invalid_or_synthetic(inst):
-            logger.warning("OKX_INVALID_INSTRUMENT_CACHE_SKIP marker=20260703z instId=%s path=%s", inst, path)
+            logger.debug("OKX_INVALID_INSTRUMENT_CACHE_SKIP marker=20260703z instId=%s path=%s", inst, path)
             return {"code": "0", "msg": "invalid_or_synthetic_instrument_cached_skip", "data": []}
         query = "?" + urlencode(clean_params) if clean_params else ""
         request_path = f"{path}{query}"
         body = "" if method == "GET" or not payload else json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
         ts = self._timestamp()
         simulated = bool(getattr(self, "simulated", False)) or _env_truthy("OKX_SIMULATED_TRADING") or _env_truthy("OKX_USE_TESTNET")
-        logger.warning("OKX_REQUEST_DIAG method=%s path=%s base_url=%s simulated_instance=%s simulated_active=%s key_present=%s passphrase_present=%s timestamp=%s body_empty=%s", method, request_path, self.BASE_URL, bool(getattr(self, "simulated", False)), simulated, bool(getattr(self, "api_key", "")), bool(getattr(self, "passphrase", "")), ts, body == "")
+        logger.debug(
+            "OKX_REQUEST_DIAG method=%s path=%s base_url=%s simulated_instance=%s "
+            "simulated_active=%s key_present=%s passphrase_present=%s "
+            "timestamp=%s body_empty=%s",
+            method,
+            request_path,
+            self.BASE_URL,
+            bool(getattr(self, "simulated", False)),
+            simulated,
+            bool(getattr(self, "api_key", "")),
+            bool(getattr(self, "passphrase", "")),
+            ts,
+            body == "",
+        )
         request_headers = self._headers(ts, method, request_path, body, private=private)
         response = self.session.request(method, f"{self.BASE_URL}{request_path}", data=body if body else None, headers=request_headers, timeout=self.timeout)
-        logger.warning("OKX_RESPONSE_DIAG status=%s method=%s path=%s response_body=%s", response.status_code, method, request_path, response.text)
+        body_bytes = len((response.text or "").encode("utf-8", errors="replace"))
         try:
             parsed = response.json()
         except ValueError:
-            parsed = {"code": f"HTTP_{response.status_code}", "msg": response.text or "Non-JSON OKX response"}
+            body_preview = str(response.text or "")[:512]
+            parsed = {
+                "code": f"HTTP_{response.status_code}",
+                "msg": "Non-JSON OKX response",
+            }
+            log_fn = logger.error if not response.ok else logger.warning
+            log_fn(
+                "OKX_RESPONSE_JSON_INVALID status=%s method=%s path=%s "
+                "body_bytes=%s body_preview=%r",
+                response.status_code,
+                method,
+                request_path,
+                body_bytes,
+                body_preview,
+            )
         okx_code = str(parsed.get("code", "0"))
+        response_data = parsed.get("data", []) if isinstance(parsed, dict) else []
+        data_items = len(response_data) if isinstance(response_data, list) else 0
+        logger.debug(
+            "OKX_RESPONSE_DIAG status=%s method=%s path=%s okx_code=%s "
+            "data_items=%s body_bytes=%s",
+            response.status_code,
+            method,
+            request_path,
+            okx_code,
+            data_items,
+            body_bytes,
+        )
         if (not response.ok) or okx_code not in {"0", ""}:
             okx_msg = str(parsed.get("msg", ""))
             if is_market_data and okx_code == "51001" and inst:
                 _INVALID_OKX_INST_IDS.add(inst)
                 logger.warning("OKX_INVALID_INSTRUMENT_CACHED marker=20260703z instId=%s path=%s cache_size=%d", inst, path, len(_INVALID_OKX_INST_IDS))
             log_fn = logger.error if not response.ok else logger.warning
-            log_fn("OKX_REQUEST_FAILED status=%s method=%s path=%s okx_code=%s okx_msg=%s response_body=%s", response.status_code, method, request_path, okx_code, okx_msg, response.text)
+            log_fn(
+                "OKX_REQUEST_FAILED status=%s method=%s path=%s "
+                "okx_code=%s okx_msg=%r body_bytes=%s",
+                response.status_code,
+                method,
+                request_path,
+                okx_code,
+                okx_msg[:512],
+                body_bytes,
+            )
             hint = _okx_auth_hint(okx_code, response.status_code)
             if hint:
                 log_fn("OKX_HINT %s", hint)
@@ -432,7 +492,7 @@ def apply_okx_runtime_patches() -> bool:
     def get_ticker(self: Any, instId: str) -> Dict[str, Any]:
         normalized = _normalize_okx_inst_id(instId)
         if _is_invalid_or_synthetic(normalized):
-            logger.warning("OKX_CASH_OR_INVALID_TICKER_SKIPPED marker=20260703z instId=%s", normalized)
+            logger.debug("OKX_CASH_OR_INVALID_TICKER_SKIPPED marker=20260703z instId=%s", normalized)
             return {"code": "0", "msg": "cash_or_invalid_ticker_skipped", "data": []}
         return self._request("GET", "/api/v5/market/ticker", params={"instId": normalized})
 

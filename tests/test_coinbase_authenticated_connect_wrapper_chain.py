@@ -1,10 +1,46 @@
 from __future__ import annotations
 
 import importlib
+import sys
+
+import pytest
 
 
 def _module():
     return importlib.import_module("coinbase_authenticated_connect_recovery_patch")
+
+
+@pytest.fixture(autouse=True)
+def _clear_canonical_brokers():
+    module = _module()
+    with module._LOCK:
+        module._CANONICAL_BROKERS.clear()
+    manager = sys.modules.get("bot.broker_manager")
+    saved_registry = None
+    if manager is not None:
+        lock = getattr(manager, "_PLATFORM_BROKER_REGISTRY_LOCK")
+        with lock:
+            saved_registry = (
+                getattr(manager, "GLOBAL_PLATFORM_BROKERS").get("coinbase", False),
+                getattr(manager, "_PLATFORM_BROKER_INSTANCES").get("coinbase"),
+                getattr(manager, "_PLATFORM_BROKER_CONNECTED").get("coinbase", False),
+            )
+            getattr(manager, "GLOBAL_PLATFORM_BROKERS")["coinbase"] = False
+            getattr(manager, "_PLATFORM_BROKER_INSTANCES").pop("coinbase", None)
+            getattr(manager, "_PLATFORM_BROKER_CONNECTED")["coinbase"] = False
+    yield
+    with module._LOCK:
+        module._CANONICAL_BROKERS.clear()
+    if manager is not None and saved_registry is not None:
+        existed, broker, connected = saved_registry
+        lock = getattr(manager, "_PLATFORM_BROKER_REGISTRY_LOCK")
+        with lock:
+            getattr(manager, "GLOBAL_PLATFORM_BROKERS")["coinbase"] = existed
+            if broker is None:
+                getattr(manager, "_PLATFORM_BROKER_INSTANCES").pop("coinbase", None)
+            else:
+                getattr(manager, "_PLATFORM_BROKER_INSTANCES")["coinbase"] = broker
+            getattr(manager, "_PLATFORM_BROKER_CONNECTED")["coinbase"] = connected
 
 
 def test_wrapper_chain_detects_nested_recovery_marker():
@@ -60,6 +96,60 @@ def test_wrapper_chain_cycle_is_safe():
 
     outer.__wrapped__ = outer
     assert module._wrapper_chain_has_patch(outer) is False
+
+
+def test_authenticated_probe_deduplicates_clients_by_identity():
+    module = _module()
+
+    class Client:
+        def __eq__(self, other):
+            raise AssertionError("client equality must never be evaluated")
+
+        def get_accounts(self):
+            return {"accounts": []}
+
+    client = Client()
+    broker = type(
+        "CoinbaseBroker",
+        (),
+        {"client": client, "api_client": client},
+    )()
+
+    authenticated, source = module._authenticated_probe(broker)
+
+    assert authenticated is True
+    assert source == "Client.get_accounts"
+
+
+def test_recursive_connect_reentry_fails_closed(monkeypatch):
+    module = _module()
+
+    class CoinbaseBroker:
+        def __init__(self):
+            self.client = None
+            self.connected = False
+            self._is_available = True
+            self._auth_failed = False
+
+        def connect(self):
+            return self.connect()
+
+    monkeypatch.setenv("COINBASE_API_KEY", "organizations/test/apiKeys/key")
+    monkeypatch.setenv(
+        "COINBASE_API_SECRET",
+        "-----BEGIN EC PRIVATE KEY-----\nTEST\n-----END EC PRIVATE KEY-----",
+    )
+    monkeypatch.delenv("NIJA_COINBASE_CREDENTIALS_QUARANTINED", raising=False)
+    monkeypatch.setattr(module, "_configured_pairs", lambda: [])
+
+    assert module._patch_class(CoinbaseBroker) is True
+    broker = CoinbaseBroker()
+
+    assert broker.connect() is False
+    assert broker.connected is False
+    assert broker._is_available is False
+    assert module.os.environ["NIJA_COINBASE_CONNECTED"] == "0"
+    assert module.os.environ["NIJA_COINBASE_ACTIVATION_STATE"] == "connect_recursion_blocked"
 
 
 def test_disconnected_broker_rebuilds_client_and_clears_transient_auth_latch(monkeypatch):

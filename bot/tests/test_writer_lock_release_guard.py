@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import importlib
+import io
+import logging
 import os
 from pathlib import Path
 from typing import Any
@@ -104,6 +106,30 @@ def test_mismatched_redis_value_is_not_deleted(monkeypatch) -> None:
     assert module.release_owned_writer_lock("unit_test_mismatch") is False
     assert len(fake.calls) == 1
     assert os.environ["NIJA_WRITER_FENCING_TOKEN"] == "60"
+
+
+def test_atexit_release_suppresses_closed_logging_stream_error(
+    monkeypatch, capsys
+) -> None:
+    module = _module()
+    monkeypatch.setattr(
+        module,
+        "_local_authority_proof",
+        lambda: (False, "", "fencing_token_missing"),
+    )
+
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    module.logger.addHandler(handler)
+    module.logger.propagate = False
+    stream.close()
+    try:
+        module._release_at_exit()
+    finally:
+        module.logger.removeHandler(handler)
+        module.logger.propagate = True
+
+    assert "Logging error" not in capsys.readouterr().err
 
 
 def test_docker_healthcheck_uses_isolated_stdlib_python() -> None:
