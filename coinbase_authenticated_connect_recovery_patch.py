@@ -31,6 +31,18 @@ def _is_coinbase_class(cls: type) -> bool:
     return "coinbase" in cls.__name__.lower()
 
 
+def _wrapper_chain_has_patch(current: Any) -> bool:
+    """Return True when this recovery already exists anywhere in the chain."""
+    seen: set[int] = set()
+    candidate = current
+    while callable(candidate) and id(candidate) not in seen:
+        seen.add(id(candidate))
+        if bool(getattr(candidate, _PATCH_ATTR, False)):
+            return True
+        candidate = getattr(candidate, "__wrapped__", None)
+    return False
+
+
 def _clients(broker: Any) -> list[Any]:
     found: list[Any] = []
     for attr in ("client", "api_client", "rest_client", "coinbase_client", "_client", "_api_client"):
@@ -258,8 +270,8 @@ def _patch_class(cls: type) -> bool:
     if not _is_coinbase_class(cls):
         return False
     current = getattr(cls, "connect", None)
-    if not callable(current) or getattr(current, _PATCH_ATTR, False):
-        return bool(callable(current) and getattr(current, _PATCH_ATTR, False))
+    if not callable(current) or _wrapper_chain_has_patch(current):
+        return bool(callable(current) and _wrapper_chain_has_patch(current))
 
     @wraps(current)
     def connect(self: Any, *args: Any, **kwargs: Any):
@@ -435,4 +447,11 @@ def install() -> bool:
         return True
 
 
-__all__ = ["install", "_authenticated_probe", "_configured_pairs", "_patch_class", "_quarantined_for"]
+__all__ = [
+    "install",
+    "_authenticated_probe",
+    "_configured_pairs",
+    "_patch_class",
+    "_quarantined_for",
+    "_wrapper_chain_has_patch",
+]
