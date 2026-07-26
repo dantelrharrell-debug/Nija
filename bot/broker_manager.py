@@ -2485,7 +2485,16 @@ class _CoinbaseInvalidProductFilter(logging.Filter):
 
 # Coinbase-specific broker implementation
 class CoinbaseBroker(BaseBroker):
-    """Coinbase Advanced Trade broker implementation"""
+    """Coinbase Advanced Trade crypto broker implementation.
+
+    Coinbase Capital Markets stocks use a separate brokerage surface.  This
+    adapter must remain crypto-only until a dedicated equity API client is
+    connected.
+    """
+
+    brokerage_surface = "coinbase_advanced_trade"
+    equity_brokerage_surface = "coinbase_capital_markets"
+    equity_api_available = False
 
     def __init__(self, account_type: AccountType = AccountType.PLATFORM, user_id: Optional[str] = None):
         """Initialize Coinbase broker"""
@@ -6549,7 +6558,7 @@ class CoinbaseBroker(BaseBroker):
         return entry_prices
 
     def supports_asset_class(self, asset_class: str) -> bool:
-        """Coinbase supports crypto only"""
+        """This API adapter supports crypto, not Capital Markets equities."""
         return asset_class.lower() == "crypto"
 
     def get_available_markets(self) -> List[str]:
@@ -7864,6 +7873,10 @@ class KrakenBroker(BaseBroker):
     Documentation: https://docs.kraken.com/rest/
     Python wrapper: https://github.com/veox/python3-krakenex
     """
+
+    brokerage_surface = "kraken_spot_futures"
+    equity_brokerage_surface = "kraken_securities"
+    equity_api_available = False
 
     # HTTP timeout for Kraken API calls (in seconds)
     # This prevents indefinite hanging if the API is slow or unresponsive
@@ -12267,12 +12280,13 @@ class KrakenBroker(BaseBroker):
 
     def supports_asset_class(self, asset_class: str) -> bool:
         """
-        Kraken supports multiple asset classes.
+        Return the asset classes exposed by this Kraken API adapter.
 
         - Crypto: Spot trading via Kraken API (fully supported)
         - Futures: Via Kraken Futures API (enabled)
-        - Stocks: Via AlpacaBroker integration (use AlpacaBroker for stocks)
-        - Options: In development by Kraken (not yet available)
+        - Stocks: Kraken Securities is a separate brokerage surface and is not
+          exposed through this spot/futures adapter
+        - Options: Not exposed through this adapter
 
         Returns:
             bool: True if asset class is supported

@@ -5,7 +5,8 @@ NIJA Multi-Broker Execution Router
 Routes trade signals to the correct broker and market based on asset class:
 
   * **crypto**   → Coinbase / Kraken / Binance (existing BrokerManager)
-  * **equities** → Alpaca / Interactive Brokers
+  * **equities** → Alpaca; Coinbase Capital Markets / Kraken Securities
+                   when dedicated brokerage API adapters are connected
   * **futures**  → Interactive Brokers / TD Ameritrade
   * **options**  → Interactive Brokers / TD Ameritrade
 
@@ -92,6 +93,18 @@ _ROUTER_W_HEALTH: float = 0.20
 _ROUTER_W_LATENCY: float = 0.15
 _ROUTER_W_FEE: float = 0.10
 _ROUTER_LATENCY_CEILING_MS: float = 2_000.0
+
+# Coinbase and Kraken expose equities through legally and technically separate
+# brokerage products.  Their existing NIJA adapters authenticate against crypto
+# trading APIs and must never receive brokerage-equity orders.
+_EQUITY_SURFACE_BY_CRYPTO_BROKER: Dict[str, str] = {
+    "coinbase": "coinbase_capital_markets",
+    "kraken": "kraken_securities",
+}
+_EQUITY_SURFACE_ENABLE_ENV: Dict[str, str] = {
+    "coinbase_capital_markets": "NIJA_ENABLE_COINBASE_EQUITIES_API",
+    "kraken_securities": "NIJA_ENABLE_KRAKEN_EQUITIES_API",
+}
 
 # ---------------------------------------------------------------------------
 # Optional subsystem imports — degrade gracefully when unavailable.
@@ -277,7 +290,12 @@ def _asset_class_for_request(request: RouteRequest) -> AssetClass:
     ).strip().lower()
     compact_label = broker_label.replace("-", "_").replace(" ", "_")
 
-    if compact_label in {"alpaca", "interactive_brokers_equity"}:
+    if compact_label in {
+        "alpaca",
+        "coinbase_capital_markets",
+        "kraken_securities",
+        "interactive_brokers_equity",
+    }:
         return AssetClass.EQUITY
     if "futures" in compact_label:
         return AssetClass.FUTURES
@@ -408,9 +426,25 @@ class MultiBrokerExecutionRouter:
             dispatch_fn=self._dispatch_via_inner_router,
         ))
         self.register_broker(BrokerProfile(
-            name="interactive_brokers_equity",
+            name="coinbase_capital_markets",
             asset_classes=[AssetClass.EQUITY],
             priority=2,
+            available=False,
+            fee_bps=0.0,
+            dispatch_fn=self._dispatch_equity_stub,
+        ))
+        self.register_broker(BrokerProfile(
+            name="kraken_securities",
+            asset_classes=[AssetClass.EQUITY],
+            priority=3,
+            available=False,
+            fee_bps=0.0,
+            dispatch_fn=self._dispatch_equity_stub,
+        ))
+        self.register_broker(BrokerProfile(
+            name="interactive_brokers_equity",
+            asset_classes=[AssetClass.EQUITY],
+            priority=4,
             available=False,
             fee_bps=5.0,
             dispatch_fn=self._dispatch_equity_stub,
@@ -490,6 +524,31 @@ class MultiBrokerExecutionRouter:
             request.size_usd, ac.value,
         )
 
+        # Coinbase Capital Markets and Kraken Securities are separate from the
+        # crypto adapters carried in broker_client metadata.  Reject a
+        # venue-bound equity request before broker selection so it cannot be
+        # silently redirected to Alpaca or submitted through a crypto method.
+        surface_error = self._equity_surface_capability_error(ac, request)
+        if surface_error is not None:
+            surface, error = surface_error
+            elapsed_ms = (time.monotonic() - t0) * 1000
+            logger.error(
+                "BROKER_ASSET_CLASS_API_UNAVAILABLE | broker=%s symbol=%s error=%s",
+                surface,
+                request.symbol,
+                error,
+            )
+            return self._make_result(
+                request,
+                ac,
+                surface,
+                False,
+                0.0,
+                0.0,
+                elapsed_ms,
+                error,
+            )
+
         # Expose symbol + side as instance attributes so _select_broker can use
         # the ArbBestExecutionRouter for real-time best-execution selection.
         self._pending_request_symbol = request.symbol
@@ -524,6 +583,11 @@ class MultiBrokerExecutionRouter:
         # schedules and minimum notionals.
         if request.preferred_broker:
             _norm_preferred = self._normalize_broker_label(request.preferred_broker)
+            if ac is AssetClass.EQUITY:
+                _norm_preferred = _EQUITY_SURFACE_BY_CRYPTO_BROKER.get(
+                    _norm_preferred,
+                    _norm_preferred,
+                )
             _norm_selected = self._normalize_broker_label(broker.name)
             if _norm_preferred and _norm_selected and _norm_preferred != _norm_selected:
                 elapsed_ms = (time.monotonic() - t0) * 1000
@@ -685,6 +749,78 @@ class MultiBrokerExecutionRouter:
     # Internal helpers
     # ------------------------------------------------------------------
 
+    def _equity_surface_capability_error(
+        self,
+        asset_class: AssetClass,
+        request: RouteRequest,
+    ) -> Optional[Tuple[str, str]]:
+        """Return an explicit error for brokerage equity without an API adapter."""
+        if asset_class is not AssetClass.EQUITY:
+            return None
+
+        meta = dict(getattr(request, "metadata", {}) or {})
+        broker_obj = meta.get("broker_client") or meta.get("broker_adapter")
+        requested = self._normalize_broker_label(
+            request.preferred_broker
+            or meta.get("broker_name")
+            or self._infer_broker_name_from_client(broker_obj)
+        )
+        surface = _EQUITY_SURFACE_BY_CRYPTO_BROKER.get(requested, requested)
+        if surface not in set(_EQUITY_SURFACE_BY_CRYPTO_BROKER.values()):
+            return None
+
+        product_name = (
+            "Coinbase Capital Markets"
+            if surface == "coinbase_capital_markets"
+            else "Kraken Securities"
+        )
+        enabled = str(
+            os.environ.get(_EQUITY_SURFACE_ENABLE_ENV[surface], "false")
+        ).strip().lower() in {"1", "true", "yes", "on", "enabled", "y"}
+        if not enabled:
+            return (
+                surface,
+                "BROKER_ASSET_CLASS_API_UNAVAILABLE: "
+                f"{product_name} equity API integration is disabled; "
+                "a dedicated, verified securities adapter must be enabled",
+            )
+
+        # A future dedicated adapter must explicitly advertise both the
+        # brokerage surface and equity support.  Generic crypto order methods
+        # are intentionally insufficient.
+        if self._is_dedicated_equity_client(broker_obj, surface):
+            return None
+
+        return (
+            surface,
+            "BROKER_ASSET_CLASS_API_UNAVAILABLE: "
+            f"{product_name} stock trading requires a dedicated equity API "
+            "adapter; the connected crypto API client cannot submit stock orders",
+        )
+
+    def _is_dedicated_equity_client(self, broker_obj: Any, surface: str) -> bool:
+        if broker_obj is None:
+            return False
+        dedicated_surface = self._normalize_broker_label(
+            getattr(broker_obj, "brokerage_surface", "")
+        )
+        supports = getattr(broker_obj, "supports_asset_class", None)
+        try:
+            supports_equity = bool(
+                callable(supports) and supports(AssetClass.EQUITY.value)
+            )
+        except Exception:
+            supports_equity = False
+        dedicated_submit = any(
+            callable(getattr(broker_obj, method_name, None))
+            for method_name in ("place_equity_order", "submit_equity_order")
+        )
+        return (
+            dedicated_surface == surface
+            and supports_equity
+            and dedicated_submit
+        )
+
 
     def _profile_for_direct_broker(
         self,
@@ -702,6 +838,8 @@ class MultiBrokerExecutionRouter:
             or meta.get("broker_name")
             or self._infer_broker_name_from_client(broker_obj)
         )
+        if asset_class is AssetClass.EQUITY:
+            preferred = _EQUITY_SURFACE_BY_CRYPTO_BROKER.get(preferred, preferred)
 
         with self._lock:
             profile = self._brokers.get(preferred)
@@ -719,6 +857,21 @@ class MultiBrokerExecutionRouter:
 
         if profile is None:
             return None
+        if (
+            asset_class is AssetClass.EQUITY
+            and preferred in set(_EQUITY_SURFACE_BY_CRYPTO_BROKER.values())
+            and self._is_dedicated_equity_client(broker_obj, preferred)
+        ):
+            profile = BrokerProfile(
+                name=profile.name,
+                asset_classes=list(profile.asset_classes),
+                priority=profile.priority,
+                available=True,
+                fee_bps=profile.fee_bps,
+                dispatch_fn=self._dispatch_dedicated_equity_client,
+                min_notional_usd=profile.min_notional_usd,
+                observation_count=profile.observation_count,
+            )
         if not profile.available or asset_class not in profile.asset_classes:
             logger.warning(
                 "Direct broker profile unavailable | preferred=%s asset_class=%s available=%s",
@@ -760,8 +913,12 @@ class MultiBrokerExecutionRouter:
         alias_map = {
             "coinbasebrokeradapter": "coinbase",
             "coinbase": "coinbase",
+            "coinbasecapitalmarkets": "coinbase_capital_markets",
+            "coinbasecapitalmarketsbroker": "coinbase_capital_markets",
             "krakenbrokeradapter": "kraken",
             "kraken": "kraken",
+            "krakensecurities": "kraken_securities",
+            "krakensecuritiesbroker": "kraken_securities",
             "okxbrokeradapter": "okx",
             "okx": "okx",
             "binancebrokeradapter": "binance",
@@ -777,6 +934,7 @@ class MultiBrokerExecutionRouter:
 
     def _infer_broker_name_from_client(self, broker_obj: Any) -> str:
         candidates = (
+            getattr(broker_obj, "brokerage_surface", None),
             getattr(getattr(broker_obj, "broker_type", None), "value", None),
             getattr(broker_obj, "broker_type", None),
             getattr(broker_obj, "NAME", None),
@@ -1326,6 +1484,98 @@ class MultiBrokerExecutionRouter:
             fill_price = float(metadata.get("price_hint_usd") or 0.0)
         if fill_price <= 0:
             raise RuntimeError(f"Broker order acknowledged without fill price/order id: {result!r}")
+        return fill_price, filled_usd
+
+    @staticmethod
+    def _dispatch_dedicated_equity_client(
+        symbol: str,
+        side: str,
+        size_usd: float,
+        order_type: str = "MARKET",
+        limit_price: Optional[float] = None,
+        broker_name: str = "",
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[float, float]:
+        """Dispatch through the explicit NIJA brokerage-equity adapter contract."""
+        meta = dict(metadata or {})
+        broker = meta.get("broker_client") or meta.get("broker_adapter")
+        if broker is None:
+            raise RuntimeError(
+                f"BROKER_ASSET_CLASS_API_UNAVAILABLE: {broker_name} has no "
+                "dedicated brokerage client"
+            )
+        submit = getattr(broker, "place_equity_order", None)
+        if not callable(submit):
+            submit = getattr(broker, "submit_equity_order", None)
+        if not callable(submit):
+            raise RuntimeError(
+                f"BROKER_ASSET_CLASS_API_UNAVAILABLE: {broker_name} client "
+                "does not implement place_equity_order/submit_equity_order"
+            )
+
+        result = submit(
+            symbol=symbol,
+            side=side,
+            notional_usd=float(size_usd),
+            order_type=str(order_type or "MARKET").upper(),
+            limit_price=limit_price,
+        )
+        if isinstance(result, tuple) and len(result) >= 2:
+            fill_price = float(result[0] or 0.0)
+            filled_usd = float(result[1] or 0.0)
+            if fill_price <= 0 or filled_usd <= 0:
+                raise RuntimeError(
+                    f"Brokerage order tuple lacks positive fill evidence: {result!r}"
+                )
+            return fill_price, filled_usd
+        if not isinstance(result, dict):
+            raise RuntimeError(f"Unsupported brokerage order response: {result!r}")
+
+        status = str(result.get("status") or result.get("state") or "").strip().lower()
+        if status in {
+            "error",
+            "failed",
+            "rejected",
+            "canceled",
+            "cancelled",
+            "skipped",
+            "blocked",
+            "unfilled",
+        }:
+            raise RuntimeError(
+                str(result.get("error") or result.get("message") or status)
+            )
+        order_id = (
+            result.get("order_id")
+            or result.get("id")
+            or result.get("exchange_order_id")
+        )
+        fill_price = float(
+            result.get("filled_price")
+            or result.get("average_filled_price")
+            or result.get("average_fill_price")
+            or result.get("avg_price")
+            or result.get("price")
+            or meta.get("price_hint_usd")
+            or 0.0
+        )
+        filled_usd = float(
+            result.get("filled_size_usd")
+            or result.get("filled_value")
+            or result.get("notional_usd")
+            or result.get("size_usd")
+            or 0.0
+        )
+        if fill_price <= 0 and order_id:
+            fill_price = float(meta.get("price_hint_usd") or 0.0)
+        if not order_id:
+            raise RuntimeError(
+                f"Brokerage order was not acknowledged with a real order id: {result!r}"
+            )
+        if fill_price <= 0 or filled_usd <= 0:
+            raise RuntimeError(
+                f"Brokerage order ACK lacks price/notional evidence: {result!r}"
+            )
         return fill_price, filled_usd
 
     @staticmethod

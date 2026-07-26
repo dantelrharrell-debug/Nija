@@ -413,7 +413,15 @@ def _patch_multi_broker_router(module: ModuleType) -> bool:
                     except Exception:
                         existing = None
                     if existing is not None:
-                        return existing if getattr(existing, "available", True) else None
+                        if getattr(existing, "available", True):
+                            return existing
+                        # An unavailable static profile may become executable
+                        # for this request when the original router validates a
+                        # dedicated direct adapter (for example Coinbase
+                        # Capital Markets or Kraken Securities).  Delegate
+                        # instead of converting the fail-closed placeholder
+                        # into an unconditional rejection.
+                        return original_profile(self, asset_class, request)
 
                     # Do not fall back to the first crypto profile when the live direct
                     # broker is a concrete venue (for example OKX) that is not registered

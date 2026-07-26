@@ -453,3 +453,131 @@ def test_alpaca_declares_stock_equity_and_etf_support() -> None:
     assert broker.supports_asset_class("equities") is True
     assert broker.supports_asset_class("ETF") is True
     assert broker.supports_asset_class("options") is False
+
+
+def test_coinbase_and_kraken_stock_brokerage_surfaces_are_recognized() -> None:
+    from bot.broker_manager import CoinbaseBroker, KrakenBroker
+    from bot.multi_broker_execution_router import MultiBrokerExecutionRouter
+
+    coinbase = object.__new__(CoinbaseBroker)
+    kraken = object.__new__(KrakenBroker)
+    router = MultiBrokerExecutionRouter()
+
+    assert coinbase.equity_brokerage_surface == "coinbase_capital_markets"
+    assert kraken.equity_brokerage_surface == "kraken_securities"
+    assert coinbase.supports_asset_class("equity") is False
+    assert kraken.supports_asset_class("equity") is False
+    assert router._brokers["coinbase_capital_markets"].available is False
+    assert router._brokers["kraken_securities"].available is False
+
+
+@pytest.mark.parametrize(
+    ("broker_name", "surface"),
+    [
+        ("coinbase", "coinbase_capital_markets"),
+        ("kraken", "kraken_securities"),
+    ],
+)
+def test_crypto_api_clients_cannot_receive_stock_orders(
+    broker_name,
+    surface,
+) -> None:
+    from bot.multi_broker_execution_router import (
+        MultiBrokerExecutionRouter,
+        RouteRequest,
+    )
+
+    calls = []
+
+    class CryptoClient:
+        broker_type = SimpleNamespace(value=broker_name)
+
+        def supports_asset_class(self, asset_class):
+            return asset_class == "crypto"
+
+        def place_market_order(self, *args, **kwargs):
+            calls.append((args, kwargs))
+            raise AssertionError("crypto order method must not receive stock orders")
+
+    router = MultiBrokerExecutionRouter()
+    router._get_execution_quality_filter = lambda: None
+    result = router.route(
+        RouteRequest(
+            strategy="equity-safety-test",
+            symbol="AAPL",
+            side="buy",
+            size_usd=25.0,
+            asset_class="equity",
+            preferred_broker=broker_name,
+            metadata={
+                "broker_name": broker_name,
+                "broker_client": CryptoClient(),
+                "price_hint_usd": 210.0,
+            },
+        )
+    )
+
+    assert result.success is False
+    assert result.broker == surface
+    assert "BROKER_ASSET_CLASS_API_UNAVAILABLE" in str(result.error)
+    assert calls == []
+
+
+def test_dedicated_coinbase_equity_adapter_uses_brokerage_order_contract(
+    monkeypatch,
+) -> None:
+    from bot.multi_broker_execution_router import (
+        MultiBrokerExecutionRouter,
+        RouteRequest,
+    )
+
+    submitted = []
+
+    class CoinbaseCapitalMarketsClient:
+        brokerage_surface = "coinbase_capital_markets"
+
+        def supports_asset_class(self, asset_class):
+            return asset_class == "equity"
+
+        def get_available_balance(self):
+            return 100.0
+
+        def place_equity_order(self, **kwargs):
+            submitted.append(dict(kwargs))
+            return {
+                "status": "accepted",
+                "order_id": "ccm-stock-order-1",
+                "filled_price": 210.0,
+                "filled_size_usd": kwargs["notional_usd"],
+            }
+
+    monkeypatch.setenv("NIJA_ENABLE_COINBASE_EQUITIES_API", "true")
+    router = MultiBrokerExecutionRouter()
+    router._get_execution_quality_filter = lambda: None
+    result = router.route(
+        RouteRequest(
+            strategy="equity-adapter-test",
+            symbol="AAPL",
+            side="buy",
+            size_usd=25.0,
+            asset_class="equity",
+            preferred_broker="coinbase",
+            metadata={
+                "broker_name": "coinbase_capital_markets",
+                "broker_client": CoinbaseCapitalMarketsClient(),
+                "price_hint_usd": 210.0,
+            },
+        )
+    )
+
+    assert result.success is True
+    assert result.broker == "coinbase_capital_markets"
+    assert submitted == [
+        {
+            "symbol": "AAPL",
+            "side": "buy",
+            "notional_usd": 25.0,
+            "order_type": "MARKET",
+            "limit_price": None,
+        }
+    ]
