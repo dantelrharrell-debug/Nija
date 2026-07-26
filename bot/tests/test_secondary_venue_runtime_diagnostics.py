@@ -354,8 +354,11 @@ def test_authenticated_recovery_restores_primary_after_all_pairs_fail(monkeypatc
 
     assert broker.connect() is False
     assert broker.connected is False
-    assert broker._auth_failed is True
+    # A private-probe transport failure is not proof that credentials are bad.
+    # The venue remains fail-closed, but future authenticated reconnects stay enabled.
+    assert broker._auth_failed is False
     assert os.environ["COINBASE_API_KEY"] == primary_key
     assert os.environ["COINBASE_API_SECRET"] == primary_secret
-    assert os.environ["NIJA_COINBASE_ACTIVATION_STATE"] == "authentication_failed"
+    assert os.environ["NIJA_COINBASE_ACTIVATION_STATE"] == "reconnect_pending"
+    assert os.environ.get("NIJA_COINBASE_RECONNECT_DISABLED", "0") != "1"
 
