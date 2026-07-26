@@ -4,7 +4,7 @@
 
 **Deployed checkpoint:** [`84c9302`](https://github.com/dantelrharrell-debug/Nija/commit/84c9302f91bd38d4dd54ef41c302c920a3ff2089)
 
-**Active recovery repair:** Coinbase canonical-client convergence (pending merge from `fix/coinbase-canonical-client-convergence`)
+**Active recovery repair:** [PR #2279](https://github.com/dantelrharrell-debug/Nija/pull/2279) — Coinbase canonical-client convergence
 
 This README is the durable recovery anchor for NIJA. It records what the production logs have actually proved, what the merged recovery changes are intended to repair, and the exact evidence required before declaring all three venues live.
 
@@ -27,7 +27,7 @@ NIJA does not guarantee trades or profits. A connected brokerage may enter a tra
 
 ### Safe continuation from this checkpoint
 
-1. Merge the Coinbase canonical-client repair and allow Render to deploy it; do not repeatedly restart while `ENTRYPOINT_WRITER_AUTHORITY_STANDBY` is present.
+1. Merge [PR #2279](https://github.com/dantelrharrell-debug/Nija/pull/2279) and allow Render to deploy it; do not repeatedly restart while `ENTRYPOINT_WRITER_AUTHORITY_STANDBY` is present.
 2. Wait for the new instance to acquire and verify writer authority.
 3. Confirm the canonical recovery hook and coordinator are installed:
    ```text
