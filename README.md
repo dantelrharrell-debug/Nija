@@ -1,8 +1,10 @@
 # NIJA AI Trading LLC — Current Success State
 
-**Status date:** July 26, 2026  
-**Deployed checkpoint:** [`033e392`](https://github.com/dantelrharrell-debug/Nija/commit/033e392f10f7e833c3fe4698cb974659e7f83e99)  
-**Active recovery repair:** [PR #2275](https://github.com/dantelrharrell-debug/Nija/pull/2275)
+**Status date:** July 26, 2026
+
+**Deployed checkpoint:** [`84c9302`](https://github.com/dantelrharrell-debug/Nija/commit/84c9302f91bd38d4dd54ef41c302c920a3ff2089)
+
+**Active recovery repair:** Coinbase canonical-client convergence (pending merge from `fix/coinbase-canonical-client-convergence`)
 
 This README is the durable recovery anchor for NIJA. It records what the production logs have actually proved, what the merged recovery changes are intended to repair, and the exact evidence required before declaring all three venues live.
 
@@ -12,43 +14,49 @@ NIJA does not guarantee trades or profits. A connected brokerage may enter a tra
 
 | Area | Proven state |
 |---|---|
-| Source of truth | Render proved deployed commit `033e392`; follow-up writer-timing and Coinbase auth fail-closed repairs are tracked in PR #2275 |
-| Canonical runtime | `launcher-v26 -> main.py -> bot.bot -> bot.bot_main` entrypoint attestation and runtime guard audit passed on deployed commit `033e392` |
-| Coinbase | Valid ES256 credentials authenticated and about $200.21 was observed; a later 401 exposed stale cached capital being republished as ready, which PR #2275 now prevents |
-| OKX US | Private balance returned HTTP 200; about $144.96 was observed, the US endpoint was selected, and router binding was verified |
-| Kraken deployed state | Credentials and user configurations loaded and nonce authority initialized, but repeated deployed snapshots still reported `kraken_connected=False` and no authenticated-recovery handoff marker |
-| Kraken recovery repair | PR #2275 adds a writer-lineage coordinator and retries transient lineage gaps so authenticated Kraken recovery cannot be lost during a rolling Render handoff |
+| Source of truth | Render proved deployed commit `84c9302`; the supplied post-deploy window reached simultaneous broker-local connectivity before Coinbase was downgraded by a stale duplicate instance |
+| Canonical runtime | `launcher-v26 -> main.py -> bot.bot -> bot.bot_main` entrypoint attestation passed on deployed commit `84c9302` |
+| Coinbase | Valid ES256 credentials authenticated; $100.11 spendable was observed, with the remaining account value held in crypto positions. Five seconds after all-three readiness, a duplicate broker with `client=None` incorrectly published `reconnect_pending` |
+| Coinbase canonical-client repair | The active repair preserves a healthy nested adapter client, adopts only a same-account authenticated canonical client, rebinds the connection watchdog to that broker, and keeps missing-client/401 paths fail-closed |
+| OKX US | Private balance returned HTTP 200; $144.96 was observed, the US endpoint was selected, dual-wallet funding status was `funded`, and router binding was verified |
+| Kraken deployed state | Nonce authority initialized and later broker-local readiness reported `kraken connected=true`; the supplied window still did not prove positive Kraken platform spendable capital or `trading_ready=true` |
 | Exit protection | Kraken all-account exit protection, verified cost-basis recovery, universal broker exits, and automatic take-profit/stop-loss guards are installed; each venue still requires its own connected broker and verified position data |
-| Coinbase safety | Wrapper detection remains chain-aware; PR #2275 also preserves cached equity only for valuation while clearing connection, funding, activation, and execution readiness after auth loss |
+| Coinbase safety | Platform clients cannot be shared with user accounts, one user's client cannot be shared with another user, and a genuine 401 still quarantines only Coinbase |
 | Writer authority | Rolling Render instances remain single-writer; a replacement may wait safely on the prior Redis lease |
 | Trading state | The latest supplied logs did not prove `LIVE_ACTIVE`, a submitted order, a confirmed fill, or a completed take-profit exit |
 
 ### Safe continuation from this checkpoint
 
-1. Merge PR #2275 and allow Render to deploy it; do not repeatedly restart while `ENTRYPOINT_WRITER_AUTHORITY_STANDBY` is present.
+1. Merge the Coinbase canonical-client repair and allow Render to deploy it; do not repeatedly restart while `ENTRYPOINT_WRITER_AUTHORITY_STANDBY` is present.
 2. Wait for the new instance to acquire and verify writer authority.
 3. Confirm the canonical recovery hook and coordinator are installed:
    ```text
-   CANONICAL_BROKER_STARTUP_CONVERGENCE_V30_ACQUIRE_PATCHED
+   COINBASE_AUTHENTICATED_CONNECT_RECOVERY_INSTALLED marker=20260726-coinbase-canonical-client-v4
    KRAKEN_RECOVERY_COORDINATOR_STARTED
    KRAKEN_RECOVERY_COORDINATOR_HANDOFF
    ```
-4. Confirm authenticated Kraken recovery progresses:
+4. Confirm Coinbase remains ready through at least two connection-watchdog intervals. A stale alias may be repaired with:
+   ```text
+   COINBASE_CANONICAL_CLIENT_ADOPTED
+   ```
+   It must not be followed by `COINBASE_CLIENT_UNINITIALIZED_FAIL_CLOSED` for the same account.
+5. Confirm authenticated Kraken recovery progresses:
    ```text
    KRAKEN_AUTHENTICATED_RECOVERY_STARTED
    KRAKEN_AUTHENTICATED_RECOVERY_REGISTERED   # expected only if Kraken was absent
    KRAKEN_AUTHENTICATED_RECOVERY_READY ... connected=true capital_rechecked=true
    ```
-5. Confirm one final connectivity snapshot reports all intended venues independently connected and ready. Early startup snapshots may be transient; use the latest post-recovery snapshot.
-6. Confirm normal activation gates commit `LIVE_ACTIVE` without force flags.
-7. Confirm each connected venue is registered with the universal exit supervisor before relying on automatic take-profit protection.
-8. Never use forced activation, synthetic capital, credential bypasses, nonce bypasses, or writer-lock deletion to manufacture readiness.
+6. Confirm one final connectivity snapshot reports all intended venues independently connected and ready. Early startup snapshots may be transient; use the latest post-recovery snapshot.
+7. Confirm normal activation gates commit `LIVE_ACTIVE` without force flags.
+8. Confirm each connected venue is registered with the universal exit supervisor before relying on automatic take-profit protection.
+9. Never use forced activation, synthetic capital, credential bypasses, nonce bypasses, or writer-lock deletion to manufacture readiness.
 
 Required evidence to advance this checkpoint:
 
 ```text
 ENTRYPOINT_WRITER_AUTHORITY_READY
 ENTRYPOINT_WRITER_AUTHORITY_VERIFIED
+COINBASE_AUTHENTICATED_CONNECT_RECOVERED
 KRAKEN_RECOVERY_COORDINATOR_HANDOFF
 KRAKEN_AUTHENTICATED_RECOVERY_READY
 LIVE_BROKER_CONNECTIVITY_SNAPSHOT ... kraken_connected=True coinbase_connected=True okx_connected=True
