@@ -38,3 +38,30 @@ def test_spendable_payload_sums_usd_and_usdc():
         "wallet": {"currency": "USDC", "available_balance": {"value": "44.29"}},
     }
     assert patch._spendable_from_payload(payload) == 144.29
+
+
+def test_measure_spendable_ignores_cached_balance_when_client_is_none():
+    """A broker with client=None must return 0 from _measure_spendable.
+
+    Cached attributes like _balance_cache must not make an uninitialized client
+    appear funded/ready for trading.
+    """
+
+    class Broker:
+        def __init__(self):
+            self.client = None  # uninitialized
+            self._balance_cache = {"usd": 999.0, "trading_balance": 999.0}
+            self.balance_cache = {"usd": 999.0}
+
+    assert patch._measure_spendable(Broker()) == 0.0
+
+
+def test_measure_spendable_reads_cache_when_client_is_present():
+    """A broker with a live client may use _balance_cache as a fallback."""
+
+    class Broker:
+        def __init__(self):
+            self.client = object()  # non-None — client is initialised
+            self._balance_cache = {"usd": 250.0}
+
+    assert patch._measure_spendable(Broker()) == 250.0
