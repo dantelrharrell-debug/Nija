@@ -449,16 +449,15 @@ def _patch_bot_main_module(module: ModuleType) -> bool:
             "marker=20260726-kraken-registration-recovery-v30 module=%s",
             module.__name__,
         )
-    ready = bool(
-        acquire_ok
-        and main_ok
-        and callable(getattr(module, "_acquire_writer_authority_before_nonce", None))
-        and getattr(
-            getattr(module, "_acquire_writer_authority_before_nonce", None),
-            _BOT_MAIN_ACQUIRE_WRAP_ATTR,
-            False,
+    final_acquire = getattr(module, "_acquire_writer_authority_before_nonce", None)
+    recovery_trigger = bool(
+        not callable(current_acquire)
+        or (
+            callable(final_acquire)
+            and getattr(final_acquire, _BOT_MAIN_ACQUIRE_WRAP_ATTR, False)
         )
     )
+    ready = bool(acquire_ok and main_ok and recovery_trigger)
     setattr(module, _BOT_MAIN_PATCH_ATTR, ready)
     logger.critical(
         "CANONICAL_BROKER_STARTUP_CONVERGENCE_V24_BOT_MAIN_PATCHED "
