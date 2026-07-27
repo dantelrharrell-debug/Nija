@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
 import sys
 
 import prebot_writer_authority_bootstrap as prebot
@@ -53,3 +54,23 @@ def test_prebot_identity_never_requires_bot_package(monkeypatch) -> None:
     assert instance_id == "srv-instance-1"
     assert identity["service_id"] == "srv-service-1"
     assert "instance_id=srv-instance-1" in owner
+
+
+def test_prebot_redis_ready_log_is_idempotent(monkeypatch) -> None:
+    prebot._READY_ENDPOINTS.clear()
+    messages: list[tuple[str, str]] = []
+
+    class FakeRedis:
+        def ping(self) -> None:
+            return None
+
+    monkeypatch.setenv("REDIS_URL", "redis://red-renderprivate:6379")
+    monkeypatch.setitem(sys.modules, "redis", SimpleNamespace(Redis=SimpleNamespace(from_url=lambda *args, **kwargs: FakeRedis())))
+    monkeypatch.setattr(prebot.logger, "warning", lambda message, marker, endpoint: messages.append((marker, endpoint)))
+
+    first = prebot._connect_redis_prebot()
+    second = prebot._connect_redis_prebot()
+
+    assert first[0] is not None
+    assert second[0] is not None
+    assert messages == [(prebot._MARKER, "redis://***@red-renderprivate:6379")]

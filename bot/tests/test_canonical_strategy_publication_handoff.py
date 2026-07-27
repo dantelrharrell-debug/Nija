@@ -120,3 +120,42 @@ def test_bot_main_revokes_runtime_claims_when_publication_fails(
     assert result is None
     assert module.os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] == "0"
     assert module.os.environ["NIJA_RUNTIME_TRADING_STATE"] == "OFF"
+
+
+def test_strategy_monitor_install_is_deferred_until_explicit_start(monkeypatch) -> None:
+    module = _load(
+        "bot/strategy_publication_patch.py",
+        "nija_test_strategy_publication_patch_monitor",
+    )
+    started: list[str] = []
+
+    class FakeThread:
+        def __init__(self, target=None, name=None, daemon=None):
+            self.target = target
+            self.name = name
+            self.daemon = daemon
+
+        def start(self):
+            started.append("started")
+
+        def is_alive(self):
+            return True
+
+    monkeypatch.setattr(module.threading, "Thread", FakeThread)
+
+    module.install_import_hook()
+    assert started == []
+
+    assert module.start_monitor() is True
+    assert started == ["started"]
+
+
+def test_bot_main_treats_lock_contention_as_safe_standby(monkeypatch) -> None:
+    module = _load("bot/bot_main.py", "nija_test_bot_main_lock_contention")
+    monkeypatch.setattr(module.signal, "signal", lambda *args, **kwargs: None)
+    monkeypatch.setattr(module, "_acquire_writer_authority_before_nonce", lambda: False)
+    monkeypatch.setattr(module, "_release_writer_authority", lambda: None)
+    module._shutdown_event.clear()
+    module._writer_authority_last_error = "active_writer_lock_held"
+
+    assert module.main() == 0

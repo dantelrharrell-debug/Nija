@@ -23,6 +23,7 @@ logger = logging.getLogger("nija.writer_generation_scope_repair")
 MARKER = "20260712f"
 _LOCK = threading.RLock()
 _INSTALLED = False
+_LAST_PLATFORM_GENERATION: int | None = None
 
 _GENERATION_ENV_KEYS = (
     "NIJA_WRITER_LEASE_GENERATION",
@@ -64,6 +65,7 @@ def _patch_nonce_backend(module: ModuleType) -> bool:
         return False
 
     def _ensure_writer_lease(self: Any, key_id: str, *args: Any, **kwargs: Any) -> int:
+        global _LAST_PLATFORM_GENERATION
         platform_id = _platform_key_id()
         is_platform = bool(platform_id and str(key_id) == platform_id)
         before = _snapshot_generation_env()
@@ -71,10 +73,12 @@ def _patch_nonce_backend(module: ModuleType) -> bool:
         if is_platform:
             os.environ["NIJA_WRITER_LEASE_GENERATION"] = str(version)
             os.environ["NIJA_WRITER_LEASE_GENERATION_LAST"] = str(version)
-            logger.info(
-                "PLATFORM_WRITER_GENERATION_PUBLISHED marker=%s key_id=%s generation=%d",
-                MARKER, key_id, version,
-            )
+            if _LAST_PLATFORM_GENERATION != version:
+                _LAST_PLATFORM_GENERATION = version
+                logger.info(
+                    "PLATFORM_WRITER_GENERATION_PUBLISHED marker=%s key_id=%s generation=%d",
+                    MARKER, key_id, version,
+                )
         else:
             _restore_generation_env(before)
             logger.debug(
