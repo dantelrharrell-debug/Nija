@@ -1,9 +1,9 @@
 """Canonical runtime-identity repair for preactivation readiness.
 
 The legacy v16 monitor can observe an imported capital-authority alias that is
-older than the live coordinator snapshot.  It can also miss a published
+older than the live coordinator snapshot. It can also miss a published
 strategy when the strategy is stored on a runtime module not included in its
-small hard-coded module list.  This guard replaces those two probes with
+small hard-coded module list. This guard replaces those two probes with
 process-wide canonical discovery while preserving all original fail-closed
 activation gates.
 """
@@ -13,7 +13,6 @@ import importlib
 import logging
 import os
 import sys
-import time
 from types import ModuleType
 from typing import Any
 
@@ -62,6 +61,7 @@ def _authority_snapshot(authority: Any, source: str) -> dict[str, Any]:
     result["registered"] = max(
         _int(getattr(authority, "registered_broker_count", 0)),
         _int(getattr(authority, "valid_broker_count", 0)),
+        _int(getattr(authority, "broker_count", 0)),
     )
     values = getattr(authority, "broker_values", None) or getattr(authority, "values", None) or {}
     if isinstance(values, dict):
@@ -72,7 +72,7 @@ def _authority_snapshot(authority: Any, source: str) -> dict[str, Any]:
     stale_probe = getattr(authority, "is_stale", None)
     try:
         result["stale"] = bool(stale_probe()) if callable(stale_probe) else bool(
-            getattr(authority, "stale", False)
+            getattr(authority, "stale", getattr(authority, "is_stale", False))
         )
     except Exception:
         result["stale"] = True
@@ -95,7 +95,11 @@ def _candidate_authorities() -> list[tuple[Any, str]]:
         "capital_authority",
         "bot.capital_flow_state_machine",
         "bot.capital_csm_v2",
+        "capital_csm_v2",
         "bot.multi_account_broker_manager",
+        "bot.bot",
+        "bot.bot_main",
+        "__main__",
     )
     for module_name in module_names:
         module = sys.modules.get(module_name)
@@ -104,7 +108,7 @@ def _candidate_authorities() -> list[tuple[Any, str]]:
                 module = importlib.import_module(module_name)
             except Exception:
                 continue
-        for getter_name in ("get_capital_authority", "get_authority"):
+        for getter_name in ("get_capital_authority", "get_authority", "get_capital_csm"):
             getter = getattr(module, getter_name, None)
             if callable(getter):
                 try:
@@ -119,6 +123,9 @@ def _candidate_authorities() -> list[tuple[Any, str]]:
             "capital_authority",
             "CAPITAL_AUTHORITY",
             "authority",
+            "capital_csm",
+            "_capital_csm",
+            "csm",
         ):
             authority = getattr(module, attr_name, None)
             if authority is not None and id(authority) not in seen:
@@ -140,9 +147,6 @@ def _capital_snapshot() -> dict[str, Any]:
     if not snapshots:
         return {"hydrated": False, "stale": True, "real": 0.0, "registered": 0, "source": "none"}
 
-    # Prefer a fresh, hydrated, funded snapshot.  Capital amount and broker
-    # completeness break ties, then timestamp.  A stale alias can no longer
-    # override a newer live coordinator view.
     best = max(
         snapshots,
         key=lambda item: (
@@ -156,10 +160,17 @@ def _capital_snapshot() -> dict[str, Any]:
     best = dict(best)
     best["candidate_count"] = len(snapshots)
 
-    # Readiness handoff is a corroborating proof emitted only after the CSM has
-    # accepted a fresh live snapshot.  It may clear a stale flag on an otherwise
-    # matching hydrated snapshot, but it never invents capital or broker count.
-    handoff_ready = os.environ.get("NIJA_CAPITAL_READINESS_HANDOFF_V34_READY", "") == "1"
+    # v34 publishes NIJA_CAPITAL_READINESS_HANDOFF_V34 after CapitalCSMv2 has
+    # accepted a fresh positive snapshot. Accept the legacy *_READY spelling as
+    # well for compatibility with any already-running deployment.
+    handoff_ready = (
+        os.environ.get("NIJA_CAPITAL_READINESS_HANDOFF_V34", "") == "1"
+        or os.environ.get("NIJA_CAPITAL_READINESS_HANDOFF_V34_READY", "") == "1"
+        or (
+            os.environ.get("CAPITAL_SYSTEM_READY", "") == "1"
+            and os.environ.get("NIJA_CAPITAL_READY", "") == "1"
+        )
+    )
     if handoff_ready and best.get("hydrated") and _float(best.get("real")) > 0.0 and _int(best.get("registered")) > 0:
         best["stale"] = False
         best["handoff_corroborated"] = True
@@ -188,7 +199,10 @@ def _strategy_published() -> bool:
             value = getattr(module, attr, None)
             if value is None:
                 continue
-            if type(value).__name__ == "TradingStrategy" and callable(getattr(value, "run_cycle", None)):
+            if type(value).__name__ == "TradingStrategy" and (
+                callable(getattr(value, "run_cycle", None))
+                or callable(getattr(value, "run", None))
+            ):
                 return True
     return False
 
