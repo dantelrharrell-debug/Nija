@@ -8,7 +8,7 @@ on:
       prune_mode:
         description: "none | merged | merged_and_stale"
         required: true
-        default: "none"
+        default: "merged"
         type: choice
         options:
           - none
@@ -38,7 +38,7 @@ jobs:
             const repo = context.repo.repo;
             const branchPrefix = `${owner}:`;
             const staleDays = Number(core.getInput('stale_days') || '90');
-            const pruneMode = core.getInput('prune_mode') || 'none';
+            const pruneMode = core.getInput('prune_mode') || 'merged';
             const pruneMerged = pruneMode === 'merged' || pruneMode === 'merged_and_stale';
             const pruneStale = pruneMode === 'merged_and_stale';
 
