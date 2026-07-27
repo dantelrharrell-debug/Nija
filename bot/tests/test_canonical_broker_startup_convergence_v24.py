@@ -166,6 +166,19 @@ def test_bot_main_patch_delegates_to_v22_guards(monkeypatch):
     assert calls == ["acquire", "main"]
 
 
+def test_install_hook_does_not_start_recovery_coordinator_pre_authority(monkeypatch):
+    module = _load_module()
+    calls: list[str] = []
+    monkeypatch.setattr(module, "_install_secondary_diagnostics_v5", lambda: True)
+    monkeypatch.setattr(module, "_patch_loaded_modules", lambda: None)
+    monkeypatch.setattr(module, "_start_kraken_recovery_coordinator", lambda: calls.append("started") or True)
+    monkeypatch.delenv("NIJA_CANONICAL_BROKER_STARTUP_CONVERGENCE_V24_INSTALLED", raising=False)
+
+    assert module.install_import_hook() is True
+    assert calls == []
+    assert module.os.environ["NIJA_CANONICAL_BROKER_STARTUP_CONVERGENCE_V24_INSTALLED"] == "1"
+
+
 def test_logging_guard_live_intent_accepts_supported_aliases(monkeypatch):
     guard = _load_logging_guard(monkeypatch)
 

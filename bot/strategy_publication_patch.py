@@ -18,7 +18,8 @@ from typing import Any, Optional
 
 logger = logging.getLogger("nija.strategy_publication_patch")
 _TRUTHY = {"1", "true", "yes", "on", "enabled", "y"}
-_STARTED = False
+_INSTALL_REQUESTED = False
+_MONITOR_STARTED = False
 _LOCK = threading.Lock()
 _PUBLISHED: Any = None
 _LAST_SCAN_DETAIL = ""
@@ -538,10 +539,19 @@ def _monitor() -> None:
         time.sleep(interval)
 
 def install_import_hook() -> None:
-    global _STARTED
-    if _STARTED:
-        return
-    _STARTED = True
-    thread = threading.Thread(target=_monitor, name="strategy-publication-monitor", daemon=True)
-    thread.start()
-    logger.warning("STRATEGY_PUBLICATION_INSTALL_COMPLETE thread_alive=%s", thread.is_alive())
+    global _INSTALL_REQUESTED
+    with _LOCK:
+        _INSTALL_REQUESTED = True
+    logger.warning("STRATEGY_PUBLICATION_INSTALL_COMPLETE deferred_until_explicit_start=true")
+
+
+def start_monitor() -> bool:
+    global _MONITOR_STARTED
+    with _LOCK:
+        if _MONITOR_STARTED:
+            return True
+        thread = threading.Thread(target=_monitor, name="strategy-publication-monitor", daemon=True)
+        thread.start()
+        _MONITOR_STARTED = True
+    logger.warning("STRATEGY_PUBLICATION_MONITOR_ARMED thread_alive=%s", thread.is_alive())
+    return thread.is_alive()

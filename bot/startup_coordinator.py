@@ -613,7 +613,9 @@ class StartupCoordinator:
             if not self._reconcile_permitted_locked():
                 self._runtime.coordinator_state = (
                     StartupCoordinatorState.CAPITAL_READY
-                    if self._runtime.capital_state == "RUNNING" and self._runtime.capital_hydrated
+                    if self._runtime.capital_state == "RUNNING"
+                    and self._runtime.capital_hydrated
+                    and not self._runtime.capital_stale
                     else StartupCoordinatorState.CAPITAL_PENDING
                 )
             return event_version

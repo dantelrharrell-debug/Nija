@@ -2771,7 +2771,7 @@ class TradingStateMachine:
             capital_state=_capital_state_value,
             capital_hydrated=_ca_hydrated_lcv,
             capital_balance=_ca_balance_lcv,
-            capital_stale=bool(_ca_lcv.is_stale()) if _ca_lcv is not None and hasattr(_ca_lcv, "is_stale") else True,
+            capital_stale=bool(_ca_lcv.is_stale(ttl_s=90.0)) if _ca_lcv is not None and hasattr(_ca_lcv, "is_stale") else True,
             readiness_key="__snapshot__",
             readiness_value=bool(all(_readiness_snapshot.values())) if _readiness_snapshot else False,
             readiness_version=_readiness_version,
@@ -3752,7 +3752,12 @@ def activation_invariant(
         live-exchange snapshot.
     """
     ca_hydrated = (ca is None) or bool(ca.is_hydrated)
-    ca_not_stale = (ca is None) or (not ca.is_stale())
+    # Use the same 90-second freshness TTL as _DEFAULT_FRESHNESS_TTL_S in
+    # capital_authority.py.  The default 60-second TTL was tighter than the
+    # capital-watchdog refresh cadence (30 s guard, 90 s freshness window),
+    # causing this gate to treat recently-published snapshots as stale during
+    # startup and between watchdog refresh cycles.
+    ca_not_stale = (ca is None) or (not ca.is_stale(ttl_s=90.0))
     valid_brokers = int(cycle_capital.get("ca_valid_brokers", 0))
     brokers_ready = (
         valid_brokers > 0
