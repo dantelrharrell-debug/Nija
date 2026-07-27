@@ -24,6 +24,7 @@ from typing import Any
 MARKER = "20260724-canonical-runtime-launcher-v26"
 ROOT = Path(__file__).resolve().parents[1]
 V24_PATH = ROOT / "bot" / "canonical_broker_startup_convergence_v24.py"
+V32_PATH = ROOT / "bot" / "runtime_execution_convergence_v32.py"
 MAIN_PATH = ROOT / "main.py"
 LOGGER = logging.getLogger("nija.canonical_runtime_launcher")
 
@@ -38,8 +39,26 @@ def _load_module_by_path(module_name: str, path: Path) -> ModuleType:
     return module
 
 
+def _install_runtime_execution_convergence() -> ModuleType:
+    """Install the fail-closed reconnect/capital/Kraken convergence hook."""
+
+    if not V32_PATH.is_file():
+        raise RuntimeError(f"runtime execution convergence module missing: {V32_PATH}")
+    module = _load_module_by_path(
+        "nija_runtime_execution_convergence_v32_prebot", V32_PATH
+    )
+    installer: Any = getattr(module, "install_import_hook", None) or getattr(
+        module, "install", None
+    )
+    if not callable(installer) or not bool(installer()):
+        raise RuntimeError("runtime execution convergence v32 installer failed")
+    if os.environ.get("NIJA_RUNTIME_EXECUTION_CONVERGENCE_V32_INSTALLED") != "1":
+        raise RuntimeError("runtime execution convergence v32 did not attest installed")
+    return module
+
+
 def install_canonical_startup_guard() -> ModuleType:
-    """Install v24 before any application import and verify the contract."""
+    """Install v24 and v32 before any application import and verify contracts."""
 
     if "bot.bot_main" in sys.modules:
         raise RuntimeError(
@@ -60,14 +79,13 @@ def install_canonical_startup_guard() -> ModuleType:
     ) != "1":
         raise RuntimeError("canonical startup convergence v24 did not attest installed")
 
+    _install_runtime_execution_convergence()
+
     os.environ["NIJA_CANONICAL_RUNTIME_LAUNCHER_V26_READY"] = "1"
     os.environ["NIJA_CANONICAL_RUNTIME_LAUNCHER_V26_MARKER"] = MARKER
-    # Emit one canonical startup attestation.  Previously both print() and a
-    # CRITICAL logger emitted the identical payload, which made a single process
-    # look like two launchers in Render logs.
     LOGGER.critical(
         "CANONICAL_RUNTIME_LAUNCHER_V26_READY marker=%s "
-        "bot_main_preloaded=false v24_installed=true",
+        "bot_main_preloaded=false v24_installed=true v32_installed=true",
         MARKER,
     )
     return module
