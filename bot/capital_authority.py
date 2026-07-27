@@ -2210,7 +2210,13 @@ class CapitalAuthority:
         # met, set _first_snap_accepted exactly once (idempotent after that).
         # This replaces the duplicate CA_READY state tracking and becomes the
         # single source of truth for snapshot readiness.
-        _snap_is_stale: bool = bool(getattr(snapshot, "is_stale", True))
+        #
+        # NOTE: Do NOT read is_stale from the snapshot dataclass — CapitalSnapshot
+        # has no such attribute and getattr would always return the default (True).
+        # Call self.is_stale() instead: self.last_updated was just set to
+        # computed_at above, so this correctly reflects the freshness of the
+        # snapshot we just published.
+        _snap_is_stale: bool = self.is_stale()
         _snap_valid_broker_count: int = sum(
             1 for bal in new_balances.values() if bal > 0.0
         )
