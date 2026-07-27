@@ -15,11 +15,23 @@ _RUNTIME_MARKER = "20260709ao"
 _PATCHED_PROFILE_ATTR = "_nija_direct_broker_metadata_profile_guard_20260709ao"
 _PATCHED_DISPATCH_ATTR = "_nija_direct_broker_metadata_dispatch_guard_20260709ao"
 
-_BROKER_NAMES = {"coinbase", "kraken", "okx", "binance"}
+_BROKER_NAMES = {
+    "coinbase",
+    "coinbase_capital_markets",
+    "kraken",
+    "kraken_securities",
+    "okx",
+    "binance",
+    "alpaca",
+}
 _UNCONFIGURED_LOG_TS: dict[str, float] = {}
 _UNAVAILABLE_LOG_TS: dict[str, float] = {}
 _UNAVAILABLE_CACHE: dict[str, float] = {}
 _RESOLVED_CACHE: dict[str, Any] = {}
+_EQUITY_SURFACE_BY_CRYPTO_BROKER = {
+    "coinbase": "coinbase_capital_markets",
+    "kraken": "kraken_securities",
+}
 
 
 def _truthy_env(name: str, default: str = "false") -> bool:
@@ -41,9 +53,13 @@ def _norm(value: Any) -> str:
         "coinbasebroker": "coinbase",
         "coinbaseadvancedtradebroker": "coinbase",
         "coinbase": "coinbase",
+        "coinbasecapitalmarkets": "coinbase_capital_markets",
+        "coinbasecapitalmarketsbroker": "coinbase_capital_markets",
         "krakenbrokeradapter": "kraken",
         "krakenbroker": "kraken",
         "kraken": "kraken",
+        "krakensecurities": "kraken_securities",
+        "krakensecuritiesbroker": "kraken_securities",
         "okxbrokeradapter": "okx",
         "okxbroker": "okx",
         "okxrestclient": "okx",
@@ -52,12 +68,15 @@ def _norm(value: Any) -> str:
         "binancebroker": "binance",
         "binanceclient": "binance",
         "binance": "binance",
+        "alpacabrokeradapter": "alpaca",
+        "alpacabroker": "alpaca",
+        "alpaca": "alpaca",
     }
     return aliases.get(compact, text)
 
 
 def _configured_broker_names() -> set[str]:
-    configured = {"coinbase", "kraken", "okx"}
+    configured = {"coinbase", "kraken", "okx", "alpaca"}
     binance_enabled = (
         _truthy_env("NIJA_ENABLE_BINANCE")
         or _truthy_env("ENABLE_BINANCE")
@@ -67,6 +86,10 @@ def _configured_broker_names() -> set[str]:
     binance_secret = bool(os.environ.get("BINANCE_API_SECRET") or os.environ.get("BINANCE_SECRET"))
     if binance_enabled and binance_key and binance_secret:
         configured.add("binance")
+    if _truthy_env("NIJA_ENABLE_COINBASE_EQUITIES_API"):
+        configured.add("coinbase_capital_markets")
+    if _truthy_env("NIJA_ENABLE_KRAKEN_EQUITIES_API"):
+        configured.add("kraken_securities")
     return configured
 
 
@@ -125,6 +148,7 @@ def _infer_client_name(client: Any) -> str:
     if client is None:
         return ""
     candidates = (
+        getattr(client, "brokerage_surface", None),
         getattr(getattr(client, "broker_type", None), "value", None),
         getattr(client, "broker_type", None),
         getattr(client, "exchange", None),
@@ -154,6 +178,8 @@ def _is_live_client(obj: Any, target: str) -> bool:
     if getattr(obj, "connected", True) is False:
         return False
     methods = (
+        "place_equity_order",
+        "submit_equity_order",
         "place_market_order",
         "place_order",
         "submit_order",
@@ -282,6 +308,8 @@ def _module_candidates(target: str = "") -> Iterable[Any]:
         "okx_broker",
         "bot.binance_broker",
         "binance_broker",
+        "bot.alpaca_broker",
+        "alpaca_broker",
     )
     out: list[Any] = []
     for name in module_names:
@@ -304,6 +332,7 @@ def _module_candidates(target: str = "") -> Iterable[Any]:
                 "kraken_broker",
                 "okx_broker",
                 "binance_broker",
+                "alpaca_broker",
                 "capital_authority",
                 "_capital_authority",
             ):
@@ -446,6 +475,14 @@ def _patch_router(module: ModuleType) -> bool:
             client = meta.get("broker_client") or meta.get("broker_adapter")
             client_name = _infer_client_name(client)
             target_name = _preferred_name(request, meta, self)
+            asset_value = str(
+                getattr(asset_class, "value", asset_class) or ""
+            ).strip().lower()
+            if asset_value == "equity":
+                target_name = _EQUITY_SURFACE_BY_CRYPTO_BROKER.get(
+                    target_name,
+                    target_name,
+                )
             if target_name and not _is_configured_target(target_name):
                 _log_unconfigured_once(target_name, symbol=str(getattr(request, "symbol", "")))
                 return None
@@ -534,7 +571,19 @@ def _patch_router(module: ModuleType) -> bool:
     if patched:
         logger.warning("%s class=MultiBrokerExecutionRouter unavailable_log_rate_limited=true", _MARKER)
         print("[NIJA-PRINT] DIRECT_BROKER_METADATA_GUARD_PATCHED marker=20260709ao unavailable_log_rate_limited=true", flush=True)
-    return patched
+    return bool(
+        patched
+        or getattr(
+            getattr(cls, "_profile_for_direct_broker", None),
+            _PATCHED_PROFILE_ATTR,
+            False,
+        )
+        or getattr(
+            getattr(cls, "_dispatch_via_inner_router", None),
+            _PATCHED_DISPATCH_ATTR,
+            False,
+        )
+    )
 
 
 def _try_patch_loaded() -> bool:

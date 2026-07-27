@@ -30,6 +30,19 @@ _ROUTER_ROUTE_WRAP_ATTR = "_nija_execution_route_integrity_route_v20260705c"
 _INDEPENDENT_INIT_WRAP_ATTR = "_nija_execution_route_integrity_independent_init_v20260705c"
 _INDEPENDENT_THREAD_WRAP_ATTR = "_nija_execution_route_integrity_independent_thread_v20260705c"
 
+_EQUITY_SURFACE_BY_CRYPTO_BROKER = {
+    "coinbase": "coinbase_capital_markets",
+    "kraken": "kraken_securities",
+}
+_CRYPTO_BROKER_BY_EQUITY_SURFACE = {
+    surface: broker
+    for broker, surface in _EQUITY_SURFACE_BY_CRYPTO_BROKER.items()
+}
+_EQUITY_SURFACE_ENABLE_ENV = {
+    "coinbase_capital_markets": "NIJA_ENABLE_COINBASE_EQUITIES_API",
+    "kraken_securities": "NIJA_ENABLE_KRAKEN_EQUITIES_API",
+}
+
 
 def _truthy_value(value: Any) -> bool:
     return str(value or "").strip().lower() in _TRUTHY
@@ -115,6 +128,13 @@ def _allowed_brokers() -> list[str]:
         allowed = _csv_env("NIJA_ENTRY_BROKER_PRIORITY", "okx,kraken,coinbase,alpaca")
     if _okx_execution_enabled() and "okx" not in _disabled_brokers(explicit_only=True) and "okx" not in allowed:
         allowed = ["okx"] + allowed
+    for surface, parent in _CRYPTO_BROKER_BY_EQUITY_SURFACE.items():
+        if (
+            _truthy(_EQUITY_SURFACE_ENABLE_ENV[surface], "false")
+            and (parent in allowed or surface in allowed)
+            and surface not in allowed
+        ):
+            allowed.append(surface)
     return [name for name in allowed if _broker_enabled(name)]
 
 
@@ -122,12 +142,13 @@ def _broker_enabled(name: Any) -> bool:
     key = _normalise_broker_name(name)
     if not key or key == "unknown":
         return False
-    if key in _disabled_brokers():
+    parent = _CRYPTO_BROKER_BY_EQUITY_SURFACE.get(key)
+    if key in _disabled_brokers() or (parent and parent in _disabled_brokers()):
         return False
     allowed = _csv_env("NIJA_ALLOWED_EXECUTION_BROKERS", "")
     if key == "okx" and _okx_execution_enabled() and key not in _disabled_brokers(explicit_only=True):
         return True
-    if allowed and key not in allowed:
+    if allowed and key not in allowed and (not parent or parent not in allowed):
         return False
     return True
 
@@ -137,6 +158,16 @@ def _normalise_broker_name(value: Any) -> str:
     text = str(raw or "").strip().lower()
     if not text:
         return ""
+    compact = text.replace("-", "").replace("_", "").replace(" ", "")
+    equity_aliases = {
+        "coinbasecapitalmarkets": "coinbase_capital_markets",
+        "coinbasecapitalmarketsbroker": "coinbase_capital_markets",
+        "ccm": "coinbase_capital_markets",
+        "krakensecurities": "kraken_securities",
+        "krakensecuritiesbroker": "kraken_securities",
+    }
+    if compact in equity_aliases:
+        return equity_aliases[compact]
     for key in ("kraken", "coinbase", "okx", "alpaca", "binance"):
         if key in text:
             return key
@@ -146,7 +177,14 @@ def _normalise_broker_name(value: Any) -> str:
 def _broker_key_from_obj(obj: Any) -> str:
     if obj is None:
         return "unknown"
-    for attr in ("broker_type", "name", "broker_name", "exchange", "exchange_name"):
+    for attr in (
+        "brokerage_surface",
+        "broker_type",
+        "name",
+        "broker_name",
+        "exchange",
+        "exchange_name",
+    ):
         try:
             value = getattr(obj, attr, None)
             key = _normalise_broker_name(value)
@@ -344,16 +382,30 @@ def _route_guard_error_tokens(error: Any) -> bool:
 
 def _resolve_selected_broker(request: Any) -> str:
     meta = dict(getattr(request, "metadata", {}) or {})
+    asset_class = str(
+        getattr(
+            getattr(request, "asset_class", None),
+            "value",
+            getattr(request, "asset_class", None),
+        )
+        or meta.get("asset_class")
+        or ""
+    ).strip().lower()
     for candidate in (
         getattr(request, "preferred_broker", None),
         meta.get("execution_broker"),
         meta.get("dispatch_broker"),
         meta.get("broker_name"),
+        _broker_key_from_obj(
+            meta.get("broker_client") or meta.get("broker_adapter")
+        ),
         os.environ.get("NIJA_SELECTED_EXECUTION_BROKER"),
         os.environ.get("NIJA_PRIMARY_EXECUTION_BROKER"),
     ):
         key = _normalise_broker_name(candidate)
         if key:
+            if asset_class in {"equity", "equities", "stock", "stocks", "etf", "etfs"}:
+                key = _EQUITY_SURFACE_BY_CRYPTO_BROKER.get(key, key)
             return key
     allowed = _allowed_brokers()
     return allowed[0] if allowed else "kraken"

@@ -2485,7 +2485,16 @@ class _CoinbaseInvalidProductFilter(logging.Filter):
 
 # Coinbase-specific broker implementation
 class CoinbaseBroker(BaseBroker):
-    """Coinbase Advanced Trade broker implementation"""
+    """Coinbase Advanced Trade crypto broker implementation.
+
+    Coinbase Capital Markets stocks use a separate brokerage surface.  This
+    adapter must remain crypto-only until a dedicated equity API client is
+    connected.
+    """
+
+    brokerage_surface = "coinbase_advanced_trade"
+    equity_brokerage_surface = "coinbase_capital_markets"
+    equity_api_available = False
 
     def __init__(self, account_type: AccountType = AccountType.PLATFORM, user_id: Optional[str] = None):
         """Initialize Coinbase broker"""
@@ -6549,7 +6558,7 @@ class CoinbaseBroker(BaseBroker):
         return entry_prices
 
     def supports_asset_class(self, asset_class: str) -> bool:
-        """Coinbase supports crypto only"""
+        """This API adapter supports crypto, not Capital Markets equities."""
         return asset_class.lower() == "crypto"
 
     def get_available_markets(self) -> List[str]:
@@ -6598,6 +6607,9 @@ class AlpacaBroker(BaseBroker):
             raise ValueError("USER account_type requires user_id parameter")
 
         self.api = None
+        self._api_key = ""
+        self._api_secret = ""
+        self._paper = True
 
         # Set identifier for logging
         if account_type == AccountType.PLATFORM:
@@ -6717,6 +6729,9 @@ class AlpacaBroker(BaseBroker):
 
             # Mark that credentials were configured (we have API key and secret)
             self.credentials_configured = True
+            self._api_key = api_key
+            self._api_secret = api_secret
+            self._paper = bool(paper)
 
             client = TradingClient(api_key, api_secret, paper=paper)
             if client is None:
@@ -6864,6 +6879,36 @@ class AlpacaBroker(BaseBroker):
             logger.error(f"Error fetching Alpaca balance: {e}")
             return 0.0
 
+    def get_available_balance(self) -> float:
+        """Return spendable Alpaca cash, excluding open-position equity."""
+        if self.api is None:
+            return 0.0
+        try:
+            account = self.api.get_account()
+            return max(0.0, float(getattr(account, "cash", 0.0) or 0.0))
+        except Exception as exc:
+            logger.error(
+                "Error fetching Alpaca available cash for %s: %s",
+                self.account_identifier,
+                exc,
+            )
+            return 0.0
+
+    def is_market_open(self) -> bool:
+        """Return Alpaca's regular-session status, failing closed on errors."""
+        if self.api is None:
+            return False
+        try:
+            clock = self.api.get_clock()
+            return bool(getattr(clock, "is_open", False))
+        except Exception as exc:
+            logger.error(
+                "Alpaca market-clock probe failed for %s: %s",
+                self.account_identifier,
+                exc,
+            )
+            return False
+
     def place_market_order(
         self,
         symbol: str,
@@ -6899,6 +6944,45 @@ class AlpacaBroker(BaseBroker):
             return _auth_block
 
         try:
+            if self.api is None:
+                return {"status": "error", "error": "API not connected"}
+
+            try:
+                order_size = float(quantity)
+            except (TypeError, ValueError):
+                return {"status": "error", "error": "INVALID_ORDER_SIZE"}
+            if order_size <= 0.0:
+                return {"status": "error", "error": "INVALID_ORDER_SIZE"}
+
+            normalized_side = str(side or "").strip().lower()
+            if normalized_side not in {"buy", "sell"}:
+                return {"status": "error", "error": "INVALID_ORDER_SIDE"}
+
+            normalized_size_type = str(size_type or "").strip().lower()
+            if normalized_size_type not in {
+                "quote",
+                "usd",
+                "notional",
+                "base",
+                "qty",
+                "quantity",
+                "shares",
+            }:
+                return {
+                    "status": "error",
+                    "error": f"UNSUPPORTED_SIZE_TYPE:{normalized_size_type or 'empty'}",
+                }
+
+            if not force_liquidate and not self.is_market_open():
+                logger.warning(
+                    "⛔ Alpaca order blocked: regular market is closed | "
+                    "account=%s symbol=%s side=%s",
+                    self.account_identifier,
+                    symbol,
+                    side,
+                )
+                return {"status": "skipped", "error": "MARKET_CLOSED"}
+
             _iso = _check_broker_isolation(self.broker_type, side)
             if _iso is not None:
                 return _iso
@@ -6906,16 +6990,23 @@ class AlpacaBroker(BaseBroker):
             from alpaca.trading.requests import MarketOrderRequest
             from alpaca.trading.enums import OrderSide, TimeInForce
 
-            order_side = OrderSide.BUY if side.lower() == 'buy' else OrderSide.SELL
-            order_data = MarketOrderRequest(
-                symbol=symbol,
-                qty=quantity,
-                side=order_side,
-                time_in_force=TimeInForce.DAY,
-            )
+            order_side = OrderSide.BUY if normalized_side == "buy" else OrderSide.SELL
+            request_kwargs: Dict[str, Any] = {
+                "symbol": symbol,
+                "side": order_side,
+                "time_in_force": TimeInForce.DAY,
+            }
+            if normalized_size_type in {"quote", "usd", "notional"}:
+                # The execution pipeline sizes entries in USD.  Alpaca's ``qty``
+                # field means shares, so using it here can multiply exposure by
+                # the stock price.  Fractional market orders support ``notional``.
+                request_kwargs["notional"] = round(order_size, 2)
+                size_label = "USD notional"
+            else:
+                request_kwargs["qty"] = order_size
+                size_label = "shares"
 
-            if self.api is None:
-                return {"status": "error", "error": "API not connected"}
+            order_data = MarketOrderRequest(**request_kwargs)
 
             order = self.api.submit_order(order_data)
             account_label = getattr(self, 'account_identifier', None) or "PLATFORM"
@@ -6930,7 +7021,7 @@ class AlpacaBroker(BaseBroker):
                     logger.info(LOG_SEPARATOR)
                     logger.info(f"   Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}")
                     logger.info(f"   Symbol: {symbol}")
-                    logger.info(f"   Size: {quantity} (shares)")
+                    logger.info(f"   Size: {order_size} ({size_label})")
                     logger.info(f"   Account: {account_label}")
                     logger.info(f"   Side: {side.upper()}")
                     logger.info(f"   Exchange: Alpaca (Stocks)")
@@ -6946,7 +7037,7 @@ class AlpacaBroker(BaseBroker):
             logger.info(f"   Exchange: Alpaca (Stocks)")
             logger.info(f"   Order Type: {side.upper()}")
             logger.info(f"   Symbol: {symbol}")
-            logger.info(f"   Quantity: {quantity}")
+            logger.info(f"   Size: {order_size} ({size_label})")
             order_any = cast(Any, order)
             logger.info(f"   Order ID: {getattr(order_any, 'id', 'N/A')}")
             logger.info(f"   Account: {account_label}")
@@ -7028,7 +7119,14 @@ class AlpacaBroker(BaseBroker):
             logger.error(f"Error fetching positions: {e}")
             return []
 
-    def get_candles(self, symbol: str, timeframe: str, count: int) -> List[Dict]:
+    def get_candles(
+        self,
+        symbol: str,
+        timeframe: str = "5m",
+        count: int = 200,
+        *,
+        limit: Optional[int] = None,
+    ) -> List[Dict]:
         """Get candle data with retry logic for rate limiting"""
         # Import Alpaca SDK dependencies (method-level import to avoid import errors when SDK not installed)
         try:
@@ -7040,12 +7138,20 @@ class AlpacaBroker(BaseBroker):
             logging.error("Alpaca SDK not installed. Run: pip install alpaca-py")
             return []
 
-        # Get credentials and create client outside retry loop (doesn't change between retries)
-        api_key = os.getenv("ALPACA_API_KEY")
-        api_secret = os.getenv("ALPACA_API_SECRET")
+        if limit is not None:
+            count = int(limit)
+
+        # Use the credentials selected by connect().  Reading only the platform
+        # environment variables here silently broke market data for user Alpaca
+        # accounts even when their trading client was connected correctly.
+        api_key = self._api_key
+        api_secret = self._api_secret
 
         if not api_key or not api_secret:
-            logging.error("Alpaca API credentials not configured")
+            logging.error(
+                "Alpaca API credentials not configured for %s",
+                self.account_identifier,
+            )
             return []
 
         data_client = StockHistoricalDataClient(api_key, api_secret)
@@ -7134,8 +7240,15 @@ class AlpacaBroker(BaseBroker):
         return []
 
     def supports_asset_class(self, asset_class: str) -> bool:
-        """Alpaca supports stocks"""
-        return asset_class.lower() in ["stocks", "stock"]
+        """Alpaca supports US equities and exchange-traded funds."""
+        return asset_class.lower() in {
+            "stock",
+            "stocks",
+            "equity",
+            "equities",
+            "etf",
+            "etfs",
+        }
 
     def get_all_products(self) -> list:
         """
@@ -7760,6 +7873,10 @@ class KrakenBroker(BaseBroker):
     Documentation: https://docs.kraken.com/rest/
     Python wrapper: https://github.com/veox/python3-krakenex
     """
+
+    brokerage_surface = "kraken_spot_futures"
+    equity_brokerage_surface = "kraken_securities"
+    equity_api_available = False
 
     # HTTP timeout for Kraken API calls (in seconds)
     # This prevents indefinite hanging if the API is slow or unresponsive
@@ -12163,12 +12280,13 @@ class KrakenBroker(BaseBroker):
 
     def supports_asset_class(self, asset_class: str) -> bool:
         """
-        Kraken supports multiple asset classes.
+        Return the asset classes exposed by this Kraken API adapter.
 
         - Crypto: Spot trading via Kraken API (fully supported)
         - Futures: Via Kraken Futures API (enabled)
-        - Stocks: Via AlpacaBroker integration (use AlpacaBroker for stocks)
-        - Options: In development by Kraken (not yet available)
+        - Stocks: Kraken Securities is a separate brokerage surface and is not
+          exposed through this spot/futures adapter
+        - Options: Not exposed through this adapter
 
         Returns:
             bool: True if asset class is supported

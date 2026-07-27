@@ -108,9 +108,9 @@ def _apply_defaults() -> None:
     os.environ.setdefault("NIJA_MASTER_SIGNAL_ONLY", "true")
     os.environ.setdefault("NIJA_BROKER_SCOPED_POSITION_CAP", "true")
     os.environ.setdefault("NIJA_BROKER_SCOPED_ZERO_SIGNAL_STREAK", "true")
-    os.environ.setdefault("NIJA_ALLOWED_EXECUTION_BROKERS", "okx,coinbase,kraken")
-    os.environ.setdefault("NIJA_ENTRY_BROKER_PRIORITY", "okx,coinbase,kraken")
-    os.environ.setdefault("NIJA_BROKER_PRIORITY", "okx,coinbase,kraken")
+    os.environ.setdefault("NIJA_ALLOWED_EXECUTION_BROKERS", "okx,coinbase,kraken,alpaca")
+    os.environ.setdefault("NIJA_ENTRY_BROKER_PRIORITY", "okx,coinbase,kraken,alpaca")
+    os.environ.setdefault("NIJA_BROKER_PRIORITY", "okx,coinbase,kraken,alpaca")
     # User explicitly requested OKX live routing with Coinbase and Kraken.
     # These flags also satisfy execution_route_integrity_patch._okx_execution_enabled().
     os.environ.setdefault("NIJA_OKX_EXECUTION_ENABLED", "true")
@@ -125,7 +125,7 @@ def _broker_enabled(name: str) -> bool:
     disabled = set(_csv_env("NIJA_DISABLED_BROKERS", ""))
     if key in disabled:
         return False
-    allowed = _csv_env("NIJA_ALLOWED_EXECUTION_BROKERS", "okx,coinbase,kraken")
+    allowed = _csv_env("NIJA_ALLOWED_EXECUTION_BROKERS", "okx,coinbase,kraken,alpaca")
     return not allowed or key in allowed
 
 
@@ -419,7 +419,7 @@ def _patch_core_loop_module(module: ModuleType) -> bool:
 
         apex = getattr(self, "apex", None)
         candidates = _collect_candidate_brokers(apex, broker)
-        priority = _csv_env("NIJA_BROKER_PRIORITY", "okx,coinbase,kraken")
+        priority = _csv_env("NIJA_BROKER_PRIORITY", "okx,coinbase,kraken,alpaca")
         names = [name for name in priority if name in candidates] + sorted(set(candidates) - set(priority))
         selected = [(name, candidates[name]) for name in names if _broker_enabled(name) and _broker_is_connected_or_ready(candidates[name])]
 
@@ -583,8 +583,8 @@ def install_import_hook() -> None:
             "%s install_start=True independent=%s allowed=%s priority=%s",
             _MARKER,
             os.environ.get("NIJA_BROKER_INDEPENDENT_LIVE_EXECUTION"),
-            _csv_env("NIJA_ALLOWED_EXECUTION_BROKERS", "okx,coinbase,kraken"),
-            _csv_env("NIJA_BROKER_PRIORITY", "okx,coinbase,kraken"),
+            _csv_env("NIJA_ALLOWED_EXECUTION_BROKERS", "okx,coinbase,kraken,alpaca"),
+            _csv_env("NIJA_BROKER_PRIORITY", "okx,coinbase,kraken,alpaca"),
         )
         _try_patch_loaded()
         _start_monitor()

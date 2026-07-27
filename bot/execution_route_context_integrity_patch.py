@@ -156,9 +156,17 @@ def _patch(module: ModuleType) -> bool:
         if inflight is None:
             inflight = set()
             setattr(self, "_nija_route_inflight", inflight)
+        active_threads = getattr(self, "_nija_route_active_threads", None)
+        if active_threads is None:
+            active_threads = set()
+            setattr(self, "_nija_route_active_threads", active_threads)
+        active_token = (threading.get_ident(), key)
+        same_thread_reentry = False
         if key:
             with lock:
-                if key in inflight:
+                if active_token in active_threads:
+                    same_thread_reentry = True
+                elif key in inflight:
                     message = f"duplicate in-flight dispatch blocked: {key}"
                     logger.critical("EXECUTION_DUPLICATE_INFLIGHT_BLOCKED marker=%s key=%s", _MARKER, key)
                     if result_cls is not None:
@@ -167,13 +175,23 @@ def _patch(module: ModuleType) -> bool:
                             size_usd=float(request.size_usd or 0), broker=expected, error=message,
                         )
                     return None
-                inflight.add(key)
+                else:
+                    inflight.add(key)
+                    active_threads.add(active_token)
+        if same_thread_reentry:
+            logger.debug(
+                "EXECUTION_ROUTE_CONTEXT_SAME_THREAD_REENTRY marker=%s key=%s action=continue_wrapper_chain",
+                _MARKER,
+                key,
+            )
+            return original(self, request, t_start, *args, **kwargs)
         try:
             result = original(self, request, t_start, *args, **kwargs)
         finally:
             if key:
                 with lock:
                     inflight.discard(key)
+                    active_threads.discard(active_token)
         actual = _broker(getattr(result, "broker", ""))
         if expected and actual and actual != expected:
             logger.critical(
