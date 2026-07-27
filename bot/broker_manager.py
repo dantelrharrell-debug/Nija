@@ -2617,6 +2617,12 @@ class CoinbaseBroker(BaseBroker):
         # Allows emergency sells even when account is too small for new entries
         self.exit_only_mode = False
 
+        # Re-entrance guard for connect(): prevents the ConnectionStabilityManager watchdog
+        # from racing into a second concurrent connect() call while one is already midway
+        # through the retry loop.  RLock is used so that internal helpers called from
+        # within connect() can safely re-acquire without deadlocking.
+        self._connect_lock = threading.RLock()
+
         # CONNECTION STABILITY: Initialize per-broker watchdog and HTTP pool manager
         if CONNECTION_STABILITY_AVAILABLE:
             _cm_key = f"coinbase_{account_type.value}"
@@ -2906,8 +2912,20 @@ class CoinbaseBroker(BaseBroker):
 
     def connect(self) -> bool:
         """Connect to Coinbase Advanced Trade API with retry logic"""
-        # Guard: skip reconnect if already connected — prevents repeated "Connected" log spam
+        # Fast path before acquiring lock (avoids lock overhead when already connected).
         if self.connected:
+            return True
+        # Re-entrance guard: prevents the ConnectionStabilityManager watchdog from
+        # starting a concurrent connect() while one is already in progress.
+        # timeout=120s so a stalled attempt cannot block the watchdog thread forever.
+        if not self._connect_lock.acquire(blocking=True, timeout=120):
+            logging.warning(
+                "⚠️  CoinbaseBroker.connect() lock acquire timed out — returning current state"
+            )
+            return self.connected
+        # Re-check under lock: another thread may have connected while we waited.
+        if self.connected:
+            self._connect_lock.release()
             return True
         if self.account_type == AccountType.PLATFORM:
             try:
@@ -3165,6 +3183,8 @@ class CoinbaseBroker(BaseBroker):
         except Exception as e:
             logging.error(f"❌ Coinbase connection error: {e}")
             return False
+        finally:
+            self._connect_lock.release()
 
     def _detect_portfolio(self):
         """DISABLED: Always use default Advanced Trade portfolio"""
