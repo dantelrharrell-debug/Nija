@@ -34,6 +34,7 @@ _shutdown_event = threading.Event()
 _startup_complete = False
 _writer_authority_runtime = None
 _authority_heartbeat_monitor = None
+_writer_authority_last_error = ""
 
 
 def _signal_handler(signum: int, frame) -> None:
@@ -47,16 +48,24 @@ def _signal_handler(signum: int, frame) -> None:
 def _acquire_writer_authority_before_nonce() -> bool:
     """Establish Redis fencing lineage before any nonce-manager access."""
 
-    global _writer_authority_runtime, _authority_heartbeat_monitor
+    global _writer_authority_runtime, _authority_heartbeat_monitor, _writer_authority_last_error
 
     try:
         from bot.entrypoint_writer_authority import get_entrypoint_writer_authority
 
         runtime = get_entrypoint_writer_authority()
         result = runtime.acquire_with_standby(shutdown_event=_shutdown_event)
+        _writer_authority_last_error = str(getattr(result, "error", "") or "")
         if not result.acquired:
             if result.error == "shutdown_requested":
                 logger.info("Writer-authority standby interrupted by shutdown")
+            elif result.error == "active_writer_lock_held":
+                logger.warning(
+                    "ENTRYPOINT_WRITER_AUTHORITY_STANDBY_CONFIRMED marker=20260710u "
+                    "holder=%s pttl_ms=%s",
+                    result.holder,
+                    result.pttl_ms,
+                )
             else:
                 logger.critical(
                     "ENTRYPOINT_WRITER_AUTHORITY_BLOCKED marker=20260710u error=%s "
@@ -121,6 +130,7 @@ def _acquire_writer_authority_before_nonce() -> bool:
         return True
 
     except Exception as exc:
+        _writer_authority_last_error = f"{type(exc).__name__}:{exc}"
         logger.critical(
             "ENTRYPOINT_WRITER_AUTHORITY_BOOTSTRAP_EXCEPTION marker=20260710u "
             "type=%s err=%s",
@@ -375,6 +385,15 @@ def _publish_canonical_strategy_for_runtime(
         type(strategy).__name__,
         type(getattr(strategy, "broker", None)).__name__,
     )
+    try:
+        from bot.strategy_publication_patch import start_monitor
+
+        start_monitor()
+    except Exception as exc:
+        logger.warning(
+            "CANONICAL_STRATEGY_PUBLICATION_MONITOR_START_FAILED err=%s",
+            exc,
+        )
     return strategy
 
 
@@ -431,6 +450,9 @@ def main() -> int:
     if not _acquire_writer_authority_before_nonce():
         if _shutdown_event.is_set():
             logger.info("Startup stopped while waiting for writer authority")
+            return 0
+        if _writer_authority_last_error == "active_writer_lock_held":
+            logger.info("Writer authority held elsewhere; remaining safe standby")
             return 0
         logger.critical("❌ Writer authority unavailable — trading remains blocked")
         return 1

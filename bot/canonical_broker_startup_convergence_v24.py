@@ -460,6 +460,7 @@ def _patch_self_healing_module(module: ModuleType) -> bool:
                     + lineage_reason
                 )
             try:
+                _start_kraken_recovery_coordinator()
                 _prepare_canonical_manager()
             except Exception as exc:
                 os.environ[
@@ -508,6 +509,7 @@ def _patch_bot_main_module(module: ModuleType) -> bool:
             if not acquired:
                 return False
             try:
+                _start_kraken_recovery_coordinator()
                 _prepare_canonical_manager()
                 return True
             except Exception as exc:
@@ -625,7 +627,6 @@ def install_import_hook() -> bool:
         if not any(item is _FINDER for item in sys.meta_path):
             sys.meta_path.insert(0, _FINDER)
         _INSTALLED = True
-        _start_kraken_recovery_coordinator()
         os.environ["NIJA_CANONICAL_BROKER_STARTUP_CONVERGENCE_V24_INSTALLED"] = "1"
         logger.critical(
             "CANONICAL_BROKER_STARTUP_CONVERGENCE_V24_INSTALLED "

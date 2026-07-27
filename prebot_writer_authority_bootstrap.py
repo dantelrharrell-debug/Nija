@@ -34,6 +34,7 @@ _INSTALLED = False
 _RUNTIME: Any = None
 _CANONICAL_NAME = "bot.entrypoint_writer_authority"
 _ALIAS_NAME = "entrypoint_writer_authority"
+_READY_ENDPOINTS: set[str] = set()
 
 
 def _truthy(name: str, default: str = "false") -> bool:
@@ -188,11 +189,15 @@ def _connect_redis_prebot(timeout_s: float = 3.0):
                 **kwargs,
             )
             client.ping()
-            logger.warning(
-                "PREBOT_WRITER_REDIS_READY marker=%s endpoint=%s",
-                _MARKER,
-                _safe_endpoint(url),
-            )
+            endpoint = _safe_endpoint(url)
+            with _LOCK:
+                if endpoint not in _READY_ENDPOINTS:
+                    _READY_ENDPOINTS.add(endpoint)
+                    logger.warning(
+                        "PREBOT_WRITER_REDIS_READY marker=%s endpoint=%s",
+                        _MARKER,
+                        endpoint,
+                    )
             return client, url, ""
         except Exception as exc:
             errors.append(
