@@ -122,10 +122,20 @@ def _call_method(obj: Any, method_name: str, *args: Any) -> Any:
 
 
 def _extract_available_balance(broker: Any) -> float:
-    get_balance = getattr(broker, "get_account_balance", None)
-    if not callable(get_balance):
+    raw = None
+    for method_name in (
+        "get_available_balance",
+        "get_cash_balance",
+        "get_account_balance",
+    ):
+        get_balance = getattr(broker, method_name, None)
+        if not callable(get_balance):
+            continue
+        raw = get_balance()
+        if raw is not None:
+            break
+    if raw is None:
         return 0.0
-    raw = get_balance()
     if isinstance(raw, dict):
         for key in ("available_balance", "trading_balance", "available", "free", "total_balance"):
             try:
@@ -363,14 +373,34 @@ def _normalize_coinbase_result(result: Dict[str, Any], size_usd: float = 0.0) ->
 
 def _looks_confirmed_fill(result: Dict[str, Any]) -> tuple[bool, str]:
     status = str(result.get("status") or result.get("state") or "").strip().lower()
-    if status in {"error", "failed", "rejected", "canceled", "cancelled", "unfilled"}:
+    if status in {
+        "error",
+        "failed",
+        "rejected",
+        "canceled",
+        "cancelled",
+        "unfilled",
+        "skipped",
+        "blocked",
+    }:
         return False, f"terminal_reject_status:{status or 'unknown'}"
     order_id = str(result.get("order_id") or result.get("id") or result.get("exchange_order_id") or "").strip().lower()
-    if status not in {"filled", "closed", "complete", "completed", "done"}:
-        return False, f"unconfirmed_status:{status or 'missing'}"
     if order_id in _PSEUDO_ORDER_IDS:
         return False, f"pseudo_order_id:{order_id or 'missing'}"
-    return True, "confirmed_fill"
+    if status in {"filled", "closed", "complete", "completed", "done"}:
+        return True, "confirmed_fill"
+    if status in {
+        "open",
+        "new",
+        "accepted",
+        "accepted_for_bidding",
+        "pending",
+        "pending_new",
+        "partially_filled",
+        "submitted",
+    }:
+        return True, "confirmed_broker_ack"
+    return False, f"unconfirmed_status:{status or 'missing'}"
 
 
 def _patch_module(module: ModuleType) -> bool:
@@ -454,7 +484,8 @@ def _patch_module(module: ModuleType) -> bool:
 
         confirmed, reason = _looks_confirmed_fill(result)
         if not confirmed:
-            raise RuntimeError(reason)
+            broker_error = str(result.get("error") or result.get("message") or "").strip()
+            raise RuntimeError(broker_error or reason)
 
         fill_price = float(
             result.get("filled_price")
@@ -462,6 +493,7 @@ def _patch_module(module: ModuleType) -> bool:
             or result.get("average_fill_price")
             or result.get("avg_price")
             or result.get("price")
+            or metadata.get("price_hint_usd")
             or 0.0
         )
         filled_usd = float(
@@ -473,8 +505,14 @@ def _patch_module(module: ModuleType) -> bool:
         )
         if fill_price <= 0 or filled_usd <= 0:
             raise RuntimeError(f"confirmed_status_without_fill_amounts:{result!r}")
+        log_marker = (
+            "DIRECT_BROKER_CONFIRMED_FILL"
+            if reason == "confirmed_fill"
+            else "DIRECT_BROKER_CONFIRMED_ACK"
+        )
         logger.critical(
-            "DIRECT_BROKER_CONFIRMED_FILL marker=%s broker=%s symbol=%s side=%s filled_usd=$%.2f price=%.8f",
+            "%s marker=%s broker=%s symbol=%s side=%s notional_usd=$%.2f price_reference=%.8f",
+            log_marker,
             _MARKER,
             label,
             symbol,

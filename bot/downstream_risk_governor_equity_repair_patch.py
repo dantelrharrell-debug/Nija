@@ -189,6 +189,36 @@ def _replace_size(request: Any, size: float) -> Any:
     return result
 
 
+def _mark_pre_dispatch_checked(request: Any, wrapper_token: str) -> Any:
+    metadata = dict(getattr(request, "metadata", {}) or {})
+    tokens = {
+        str(token)
+        for token in (
+            metadata.get("pre_dispatch_risk_sizing_wrappers") or ()
+        )
+    }
+    if wrapper_token in tokens:
+        return request
+    tokens.add(wrapper_token)
+    metadata["pre_dispatch_risk_sizing_marker"] = _MARKER
+    metadata["pre_dispatch_risk_sizing_wrappers"] = sorted(tokens)
+    if is_dataclass(request):
+        try:
+            return replace(request, metadata=metadata)
+        except Exception:
+            pass
+    try:
+        import copy
+        result = copy.copy(request)
+    except Exception:
+        result = request
+    try:
+        setattr(result, "metadata", metadata)
+    except Exception:
+        pass
+    return result
+
+
 def _deny(module: ModuleType, request: Any, started: float, reason: str) -> Any:
     logger.critical(
         "PRE_DISPATCH_RISK_SIZING_PATCH_FAIL_CLOSED marker=%s symbol=%s side=%s reason=%s",
@@ -253,9 +283,32 @@ def _install_on_execution_pipeline(module: ModuleType) -> bool:
         os.environ["NIJA_PRE_DISPATCH_RISK_SIZING_READY"] = "1"
         return True
 
+    wrapper_token = f"{module.__name__}:{id(current)}"
+
     @wraps(current)
     def execute(self: Any, request: Any, *args: Any, **kwargs: Any) -> Any:
         started = time.monotonic()
+        metadata = dict(getattr(request, "metadata", {}) or {})
+        checked_wrappers = {
+            str(token)
+            for token in (
+                metadata.get("pre_dispatch_risk_sizing_wrappers") or ()
+            )
+        }
+        if wrapper_token in checked_wrappers:
+            return _deny(
+                module,
+                request,
+                started,
+                "PRE_DISPATCH_RISK_REENTRANCY_BLOCKED",
+            )
+        if metadata.get("pre_dispatch_risk_sizing_marker") == _MARKER:
+            return current(
+                self,
+                _mark_pre_dispatch_checked(request, wrapper_token),
+                *args,
+                **kwargs,
+            )
         if not _entry_increases_exposure(request):
             return current(self, request, *args, **kwargs)
 
@@ -316,7 +369,12 @@ def _install_on_execution_pipeline(module: ModuleType) -> bool:
                 dispatch_request = request
 
             try:
-                return current(self, dispatch_request, *args, **kwargs)
+                return current(
+                    self,
+                    _mark_pre_dispatch_checked(dispatch_request, wrapper_token),
+                    *args,
+                    **kwargs,
+                )
             except RecursionError as exc:
                 return _deny(module, dispatch_request, started, f"PRE_DISPATCH_EXECUTION_CHAIN_RECURSION:{exc}")
         finally:
