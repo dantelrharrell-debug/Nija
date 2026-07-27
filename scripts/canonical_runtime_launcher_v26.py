@@ -62,11 +62,9 @@ def install_canonical_startup_guard() -> ModuleType:
 
     os.environ["NIJA_CANONICAL_RUNTIME_LAUNCHER_V26_READY"] = "1"
     os.environ["NIJA_CANONICAL_RUNTIME_LAUNCHER_V26_MARKER"] = MARKER
-    print(
-        "CANONICAL_RUNTIME_LAUNCHER_V26_READY "
-        f"marker={MARKER} bot_main_preloaded=false v24_installed=true",
-        flush=True,
-    )
+    # Emit one canonical startup attestation.  Previously both print() and a
+    # CRITICAL logger emitted the identical payload, which made a single process
+    # look like two launchers in Render logs.
     LOGGER.critical(
         "CANONICAL_RUNTIME_LAUNCHER_V26_READY marker=%s "
         "bot_main_preloaded=false v24_installed=true",
