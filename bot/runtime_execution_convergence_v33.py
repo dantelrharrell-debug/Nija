@@ -63,7 +63,6 @@ def _kraken_configured() -> bool:
 
 def _bound_safe_unwrap(fn: Callable[..., Any]) -> Callable[..., Any]:
     """Unwrap decorators without discarding a bound method's instance."""
-
     bound_self = getattr(fn, "__self__", None)
     current: Callable[..., Any] = fn
     seen: set[int] = set()
@@ -73,7 +72,6 @@ def _bound_safe_unwrap(fn: Callable[..., Any]) -> Callable[..., Any]:
         if not callable(wrapped):
             break
         current = wrapped
-
     if bound_self is not None and getattr(current, "__self__", None) is None:
         descriptor = getattr(current, "__get__", None)
         if callable(descriptor):
@@ -96,6 +94,8 @@ def _patch_v32() -> bool:
 
 
 def _arm_kraken_recovery() -> bool:
+    if _truthy("NIJA_KRAKEN_RECOVERY_V33_ARMED"):
+        return True
     if not _writer_ready() or not _kraken_configured():
         return False
     for name in _V24_TARGETS:
@@ -132,6 +132,10 @@ def _monitor() -> None:
     while True:
         try:
             _patch_v32()
+            if _writer_ready() and _kraken_configured() and not _truthy(
+                "NIJA_KRAKEN_RECOVERY_V33_ARMED"
+            ):
+                _arm_kraken_recovery()
             state = (
                 f"writer={int(_writer_ready())};"
                 f"configured={int(_kraken_configured())};"
@@ -144,8 +148,6 @@ def _monitor() -> None:
                     state,
                 )
                 last_state = state
-            if _writer_ready() and _kraken_configured():
-                _arm_kraken_recovery()
         except Exception as exc:
             LOGGER.error(
                 "RUNTIME_EXECUTION_CONVERGENCE_V33_MONITOR_ERROR marker=%s error=%s:%s",
