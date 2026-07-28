@@ -364,6 +364,11 @@ def _configured_venues() -> dict[str, bool]:
     }
 
 
+def _optional_policy_enabled() -> bool:
+    policy = str(os.environ.get("NIJA_RUNTIME_AUTHORITY_BROKER_POLICY", "") or "").strip().lower()
+    return policy in {"optional", "broker_independent"}
+
+
 def _reconcile_brokers_once() -> dict[str, bool]:
     for broker in _iter_manager_brokers():
         supervisor._register_broker(broker)
@@ -374,13 +379,15 @@ def _reconcile_brokers_once() -> dict[str, bool]:
             if venue in label and bool(getattr(broker, "connected", False)):
                 connected[venue] = True
     configured = _configured_venues()
-    logger.warning(
+    all_configured_connected = all((not configured[name]) or connected[name] for name in configured)
+    emit = logger.info if (_optional_policy_enabled() and not all_configured_connected) else logger.warning
+    emit(
         "LIVE_BROKER_CONNECTIVITY_SNAPSHOT marker=%s kraken_configured=%s kraken_connected=%s coinbase_configured=%s coinbase_connected=%s okx_configured=%s okx_connected=%s all_configured_connected=%s",
         _MARKER,
         configured["kraken"], connected["kraken"],
         configured["coinbase"], connected["coinbase"],
         configured["okx"], connected["okx"],
-        all((not configured[name]) or connected[name] for name in configured),
+        all_configured_connected,
     )
     return connected
 

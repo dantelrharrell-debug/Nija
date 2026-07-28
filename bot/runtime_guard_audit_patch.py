@@ -31,7 +31,8 @@ def _ready(env: Mapping[str, str] | None = None) -> tuple[bool, list[str]]:
 def _emit() -> bool:
     ready, missing = _ready()
     commit = next((str(os.environ.get(name, "") or "").strip() for name in ("RENDER_GIT_COMMIT", "GIT_COMMIT", "SOURCE_VERSION") if str(os.environ.get(name, "") or "").strip()), "unknown")
-    logger.critical(
+    emit = logger.info if ready else logger.critical
+    emit(
         "RUNTIME_GUARD_AUDIT marker=%s ready=%s commit=%s scan_hard_clamp=%s verified_cost_basis=%s "
         "daily_gain_harvest=%s kraken_min_notional=%s okx_dual_wallet=%s post_import_convergence=%s "
         "authority_policy=%s authority_min_brokers=%s okx_balance_observed=%s okx_funding_status=%s "
@@ -76,7 +77,7 @@ def install() -> bool:
             _STARTED = True
             threading.Thread(target=_watchdog, name="RuntimeGuardAudit", daemon=True).start()
         os.environ["NIJA_RUNTIME_GUARD_AUDIT_INSTALLED"] = "1"
-        logger.critical("RUNTIME_GUARD_AUDIT_INSTALLED marker=%s interval_s=%s", _MARKER, os.environ.get("NIJA_RUNTIME_GUARD_AUDIT_INTERVAL_S", "60"))
+        logger.info("RUNTIME_GUARD_AUDIT_INSTALLED marker=%s interval_s=%s", _MARKER, os.environ.get("NIJA_RUNTIME_GUARD_AUDIT_INTERVAL_S", "60"))
         return True
 
 
