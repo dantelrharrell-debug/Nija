@@ -1036,7 +1036,10 @@ class MultiAccountBrokerManager:
     def _init_portfolio(self) -> None:
         """Initialize portfolio manager (called once via InitRegistry)."""
         try:
-            from portfolio_state import get_portfolio_manager
+            try:
+                from bot.portfolio_state import get_portfolio_manager
+            except ImportError:
+                from portfolio_state import get_portfolio_manager  # type: ignore[import]
             self.portfolio_manager = get_portfolio_manager()
             logger.info("✅ Portfolio manager initialized for user accounts")
         except ImportError:

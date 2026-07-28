@@ -221,6 +221,56 @@ _KRAKEN_NONCE_MUTATING_METHODS = {
     "EditOrder",
 }
 
+# ── Canonical Kraken authentication error reason codes ────────────────────────
+# Maps substrings from Kraken error arrays/exception messages to canonical codes
+# that are safe to expose in logs, status dicts, and readiness reports.
+_KRAKEN_CANONICAL_ERROR_MAP = (
+    # (substring_lower, canonical_code)
+    ("eapi:invalid key",         "INVALID_API_KEY"),
+    ("invalid key",              "INVALID_API_KEY"),
+    ("eapi:invalid signature",   "INVALID_SIGNATURE"),
+    ("invalid signature",        "INVALID_SIGNATURE"),
+    ("eapi:invalid nonce",       "NONCE_REJECTED"),
+    ("invalid nonce",            "NONCE_REJECTED"),
+    ("egeneral:permission denied", "PERMISSION_DENIED"),
+    ("eapi:invalid permission",  "PERMISSION_DENIED"),
+    ("permission denied",        "PERMISSION_DENIED"),
+    ("insufficient permission",  "PERMISSION_DENIED"),
+)
+
+
+def _kraken_canonical_auth_reason(error_list: list) -> str:
+    """Return the first matching canonical reason code for a Kraken error array.
+
+    Args:
+        error_list: The ``balance['error']`` list returned by krakenex.
+
+    Returns:
+        A canonical code string (e.g. ``"INVALID_API_KEY"``) or ``""`` if no
+        match is found.
+    """
+    combined = " ".join(str(e) for e in error_list).lower()
+    for fragment, code in _KRAKEN_CANONICAL_ERROR_MAP:
+        if fragment in combined:
+            return code
+    return ""
+
+
+def _kraken_canonical_auth_reason_from_str(error_str: str) -> str:
+    """Return the first matching canonical reason code from an exception message.
+
+    Args:
+        error_str: Exception message string.
+
+    Returns:
+        A canonical code string or ``""`` if no match is found.
+    """
+    lower = (error_str or "").lower()
+    for fragment, code in _KRAKEN_CANONICAL_ERROR_MAP:
+        if fragment in lower:
+            return code
+    return ""
+
 # Keep both import paths bound to the same module object so process-wide broker
 # registries and platform-broker guards are not duplicated.
 if __name__ == "bot.broker_manager":
@@ -9284,6 +9334,16 @@ class KrakenBroker(BaseBroker):
                         if balance['error']:
                             error_msgs = ', '.join(balance['error'])
 
+                            # Always log the exact raw Kraken response to expose the underlying auth error
+                            logger.error(
+                                "❌ Kraken Balance endpoint raw response [%s]: %s",
+                                cred_label, balance,
+                            )
+
+                            # Resolve a canonical authentication failure reason from the Kraken error array.
+                            # Kraken returns errors in the format ['EAPI:Invalid key', ...].
+                            _canonical_reason = _kraken_canonical_auth_reason(balance['error'])
+
                             # Check if it's a permission error (EGeneral:Permission denied, EAPI:Invalid permission, etc.)
                             is_permission_error = any(keyword in error_msgs.lower() for keyword in [
                                 'permission denied', 'egeneral:permission',
@@ -9291,8 +9351,14 @@ class KrakenBroker(BaseBroker):
                             ])
 
                             if is_permission_error:
-                                self.last_connection_error = f"Permission denied: {error_msgs}"
-                                logger.error(f"❌ Kraken connection test failed ({cred_label}): {error_msgs}")
+                                self.last_connection_error = (
+                                    f"{_canonical_reason}: {error_msgs}"
+                                    if _canonical_reason else f"Permission denied: {error_msgs}"
+                                )
+                                logger.error(
+                                    "❌ Kraken connection test failed [%s] reason=%s: %s",
+                                    cred_label, _canonical_reason or "PERMISSION_DENIED", error_msgs,
+                                )
 
                                 # Track this account as failed due to permission error for this session
                                 # The cache will be automatically cleared if valid credentials are detected later
@@ -9414,7 +9480,12 @@ class KrakenBroker(BaseBroker):
                                     )
                                 continue
                             else:
-                                self.last_connection_error = error_msgs
+                                _reason = _canonical_reason or (
+                                    "NONCE_REJECTED" if is_nonce_error else
+                                    "AUTH_LOCKOUT" if is_lockout_error else
+                                    "KRAKEN_API_ERROR"
+                                )
+                                self.last_connection_error = f"{_reason}: {error_msgs}"
                                 if is_nonce_error:
                                     _nonce_state = ""
                                     if get_global_nonce_manager is not None:
@@ -9427,19 +9498,19 @@ class KrakenBroker(BaseBroker):
                                         except Exception:
                                             pass
                                     logger.error(
-                                        "❌ NONCE ERROR [%s] all %d attempts exhausted: %s%s",
-                                        cred_label, max_attempts, error_msgs, _nonce_state,
+                                        "❌ NONCE ERROR [%s] reason=%s all %d attempts exhausted: %s%s",
+                                        cred_label, _reason, max_attempts, error_msgs, _nonce_state,
                                     )
                                 elif is_lockout_error:
                                     # Do not include raw credential variable names — log account label only
                                     logger.error(
-                                        "❌ AUTH FAILURE [%s]: %s",
-                                        cred_label, error_msgs,
+                                        "❌ AUTH FAILURE [%s] reason=%s: %s",
+                                        cred_label, _reason, error_msgs,
                                     )
                                 else:
                                     logger.error(
-                                        "❌ Kraken connection test failed [%s]: %s",
-                                        cred_label, error_msgs,
+                                        "❌ Kraken connection test failed [%s] reason=%s: %s",
+                                        cred_label, _reason, error_msgs,
                                     )
                                 return False
 
@@ -9815,6 +9886,20 @@ class KrakenBroker(BaseBroker):
                     error_msg_lower = error_msg.lower()
                     self.connected = False
 
+                    # Detect HTTP errors from the requests library and log the status code.
+                    _http_status: Optional[int] = None
+                    try:
+                        _resp = getattr(e, 'response', None)
+                        if _resp is not None and hasattr(_resp, 'status_code'):
+                            _http_status = int(_resp.status_code)
+                    except Exception:
+                        pass
+                    if _http_status is not None:
+                        logger.error(
+                            "❌ Kraken HTTP error [%s]: status=%d — %s",
+                            cred_label, _http_status, error_msg,
+                        )
+
                     # Hard stop: another process owns this Kraken API key's
                     # process-lifetime nonce lock.  This instance may look
                     # "logically configured" but is physically blocked from
@@ -9872,8 +9957,8 @@ class KrakenBroker(BaseBroker):
                             logger.info(f"   Will retry with exponential backoff...")
                             continue  # Jump to next iteration, which adds delay before retry
                         else:
-                            self.last_connection_error = "Connection timeout or network error (API unresponsive)"
-                            logger.warning(f"⚠️  Kraken connection failed after {max_attempts} timeout attempts")
+                            self.last_connection_error = "NETWORK_TIMEOUT: Connection timeout or network error (API unresponsive)"
+                            logger.warning(f"⚠️  Kraken connection failed after {max_attempts} timeout attempts reason=NETWORK_TIMEOUT")
                             logger.warning(f"   The Kraken API may be experiencing issues or network connectivity problems")
                             logger.warning(f"   Will try again on next connection cycle")
                             return False
@@ -9886,8 +9971,16 @@ class KrakenBroker(BaseBroker):
                     ])
 
                     if is_permission_error:
-                        self.last_connection_error = f"Permission denied: {error_msg}"
-                        logger.error(f"❌ Kraken connection test failed ({cred_label}): {error_msg}")
+                        _exc_canonical = _kraken_canonical_auth_reason_from_str(error_msg) or "PERMISSION_DENIED"
+                        self.last_connection_error = f"{_exc_canonical}: {error_msg}"
+                        logger.error(
+                            "❌ Kraken connection test failed [%s] reason=%s: %s",
+                            cred_label, _exc_canonical, error_msg,
+                        )
+                        # Preserve full traceback for auth exceptions
+                        logger.exception(
+                            "   Traceback for Kraken auth exception [%s]:", cred_label,
+                        )
 
                         # Track this account as failed due to permission error for this session
                         # The cache will be automatically cleared if valid credentials are detected later
@@ -9995,15 +10088,26 @@ class KrakenBroker(BaseBroker):
                             logger.info(f"   🔄 Kraken ({cred_label}) retry {attempt}/{max_attempts} ({error_type})")
                         continue
                     else:
-                        # Handle errors gracefully for non-retryable or final attempt
-                        self.last_connection_error = error_msg
+                        # Handle errors gracefully for non-retryable or final attempt.
+                        # Emit a canonical reason code and preserve the full traceback.
                         error_str = error_msg.lower()
-                        if 'api' in error_str and ('key' in error_str or 'signature' in error_str or 'authentication' in error_str):
-                            logger.warning("⚠️  Kraken authentication failed - invalid or expired API credentials")
-                        elif 'connection' in error_str or 'network' in error_str or 'timeout' in error_str:
-                            logger.warning("⚠️  Kraken connection failed - network issue or API unavailable")
-                        else:
-                            logger.warning(f"⚠️  Kraken connection failed: {error_msg}")
+                        _exc_canonical = _kraken_canonical_auth_reason_from_str(error_msg)
+                        if not _exc_canonical:
+                            _exc_canonical = (
+                                "INVALID_API_KEY" if ('api' in error_str and 'key' in error_str) else
+                                "INVALID_SIGNATURE" if ('signature' in error_str) else
+                                "NETWORK_TIMEOUT" if ('connection' in error_str or 'network' in error_str or 'timeout' in error_str) else
+                                "KRAKEN_API_ERROR"
+                            )
+                        self.last_connection_error = f"{_exc_canonical}: {error_msg}"
+                        logger.error(
+                            "❌ Kraken connection failed [%s] reason=%s: %s",
+                            cred_label, _exc_canonical, error_msg,
+                        )
+                        # Always preserve the full traceback for non-retryable auth failures
+                        logger.exception(
+                            "   Full traceback for Kraken connection failure [%s]:", cred_label,
+                        )
                         return False
 
             # Should never reach here, but just in case
