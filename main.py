@@ -49,6 +49,32 @@ def _install_global_runtime_startup_guards() -> None:
         logger.warning("GLOBAL_RUNTIME_STARTUP_GUARDS_PREBOT_FAILED err=%s", exc)
 
 
+def _install_preactivation_runtime_identity_guard_v36() -> None:
+    """Install canonical capital/strategy identity probes before bot startup."""
+
+    try:
+        guard = _load_repo_module_by_path(
+            "nija_preactivation_runtime_identity_guard_v36_prebot",
+            os.path.join("bot", "preactivation_runtime_identity_guard_v36.py"),
+        )
+        installer = getattr(guard, "install_import_hook", None) or getattr(guard, "install", None)
+        if not callable(installer) or not bool(installer()):
+            raise RuntimeError("preactivation runtime identity v36 installer unavailable or returned false")
+        if os.environ.get("NIJA_PREACTIVATION_RUNTIME_IDENTITY_V36_INSTALLED") != "1":
+            raise RuntimeError("preactivation runtime identity v36 did not publish installed marker")
+        print("PREACTIVATION_RUNTIME_IDENTITY_V36_INSTALL_REQUESTED", flush=True)
+        logger.critical("PREACTIVATION_RUNTIME_IDENTITY_V36_INSTALL_REQUESTED verified=true")
+    except Exception as exc:
+        logger.critical("PREACTIVATION_RUNTIME_IDENTITY_V36_INSTALL_FAILED err=%s", exc, exc_info=True)
+        live = (
+            str(os.environ.get("LIVE_TRADING", "")).lower() in {"1", "true", "yes", "on"}
+            or str(os.environ.get("LIVE_CAPITAL_VERIFIED", "")).lower() in {"1", "true", "yes", "on"}
+            or str(os.environ.get("NIJA_EXECUTION_ACTIVE", "")).lower() in {"1", "true", "yes", "on"}
+        ) and str(os.environ.get("DRY_RUN_MODE", "")).lower() not in {"1", "true", "yes", "on"} and str(os.environ.get("PAPER_MODE", "")).lower() not in {"1", "true", "yes", "on"}
+        if live:
+            raise
+
+
 def _install_logging_format_guard() -> None:
     """Install logging format protection before any startup modules emit logs."""
 
@@ -260,6 +286,7 @@ def _install_live_entry_completion_repair() -> None:
 
 
 _install_global_runtime_startup_guards()
+_install_preactivation_runtime_identity_guard_v36()
 _install_logging_format_guard()
 _install_live_broker_profit_exit_v25()
 _run_pre_startup_sanitization()
