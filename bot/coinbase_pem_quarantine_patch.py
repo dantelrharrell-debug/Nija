@@ -305,7 +305,7 @@ def install_import_hook() -> None:
 
         builtins.__import__ = guarded_import  # type: ignore[assignment]
     _patch_loaded()
-    logger.critical("COINBASE_PEM_QUARANTINE_INSTALLED marker=%s", _MARKER)
+    logger.warning("COINBASE_PEM_QUARANTINE_INSTALLED marker=%s", _MARKER)
 
 
 __all__ = ["install_import_hook", "_normalize_pem", "_validate_pem", "_preflight", "_patch_class"]

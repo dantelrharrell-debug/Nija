@@ -12447,7 +12447,7 @@ class KrakenBroker(BaseBroker):
 
         try:
             if not self.kraken_api:
-                logging.warning("⚠️  Kraken not connected, cannot fetch products")
+                logging.info("Kraken not connected, skipping products fetch")
                 return []
 
             # Initialize symbol mapper with API data for dynamic symbol detection

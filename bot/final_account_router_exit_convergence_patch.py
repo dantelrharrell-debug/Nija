@@ -38,7 +38,7 @@ def _patch_okx_router() -> bool:
         logger.error("OKX_ROUTER_BIND_PENDING marker=%s router_module=%s", _MARKER, router.__name__)
         return False
     os.environ["NIJA_OKX_ROUTER_PATCHED"] = "1"
-    logger.critical("OKX_ROUTER_BIND_VERIFIED marker=%s router_patched=true", _MARKER)
+    logger.info("OKX_ROUTER_BIND_VERIFIED marker=%s router_patched=true", _MARKER)
     return True
 
 
