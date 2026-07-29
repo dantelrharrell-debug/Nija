@@ -22,6 +22,12 @@ _INSTALLED = False
 _ORIGINAL_CAPITAL_SNAPSHOT = None
 _ORIGINAL_STRATEGY_PUBLISHED = None
 
+_TRUE = {"1", "true", "yes", "on", "enabled", "y"}
+
+
+def _truthy(name: str, default: str = "false") -> bool:
+    return str(os.environ.get(name, default) or "").strip().lower() in _TRUE
+
 
 def _float(value: Any, default: float = 0.0) -> float:
     try:
@@ -164,12 +170,9 @@ def _capital_snapshot() -> dict[str, Any]:
     # accepted a fresh positive snapshot. Accept the legacy *_READY spelling as
     # well for compatibility with any already-running deployment.
     handoff_ready = (
-        os.environ.get("NIJA_CAPITAL_READINESS_HANDOFF_V34", "") == "1"
-        or os.environ.get("NIJA_CAPITAL_READINESS_HANDOFF_V34_READY", "") == "1"
-        or (
-            os.environ.get("CAPITAL_SYSTEM_READY", "") == "1"
-            and os.environ.get("NIJA_CAPITAL_READY", "") == "1"
-        )
+        _truthy("NIJA_CAPITAL_READINESS_HANDOFF_V34")
+        or _truthy("NIJA_CAPITAL_READINESS_HANDOFF_V34_READY")
+        or (_truthy("CAPITAL_SYSTEM_READY") and _truthy("NIJA_CAPITAL_READY"))
     )
     if handoff_ready and best.get("hydrated") and _float(best.get("real")) > 0.0 and _int(best.get("registered")) > 0:
         best["stale"] = False
