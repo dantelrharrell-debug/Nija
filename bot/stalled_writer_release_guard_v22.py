@@ -152,6 +152,17 @@ def _capital_snapshot() -> tuple[bool, float, bool, int]:
             valid = candidate
             break
 
+    handoff_ready = (
+        os.environ.get("NIJA_CAPITAL_READINESS_HANDOFF_V34", "") == "1"
+        or os.environ.get("NIJA_CAPITAL_READINESS_HANDOFF_V34_READY", "") == "1"
+        or (
+            os.environ.get("CAPITAL_SYSTEM_READY", "") == "1"
+            and os.environ.get("NIJA_CAPITAL_READY", "") == "1"
+        )
+    )
+    if handoff_ready and hydrated and capital > 0.0 and valid > 0:
+        stale = False
+
     return hydrated, capital, stale, valid
 
 
