@@ -161,6 +161,13 @@ def _capital_snapshot() -> tuple[bool, float, bool, int]:
             or (_truthy_env("CAPITAL_SYSTEM_READY") and _truthy_env("NIJA_CAPITAL_READY"))
         ):
             stale = False
+    handoff_ready = (
+        _truthy_env("NIJA_CAPITAL_READINESS_HANDOFF_V34")
+        or _truthy_env("NIJA_CAPITAL_READINESS_HANDOFF_V34_READY")
+        or (_truthy_env("CAPITAL_SYSTEM_READY") and _truthy_env("NIJA_CAPITAL_READY"))
+    )
+    if handoff_ready and hydrated and capital > 0.0 and valid > 0:
+        stale = False
 
     return hydrated, capital, stale, valid
 

@@ -22,6 +22,12 @@ _INSTALLED = False
 _ORIGINAL_CAPITAL_SNAPSHOT = None
 _ORIGINAL_STRATEGY_PUBLISHED = None
 
+_TRUE = {"1", "true", "yes", "on", "enabled", "y"}
+
+
+def _truthy(name: str, default: str = "false") -> bool:
+    return str(os.environ.get(name, default) or "").strip().lower() in _TRUE
+
 
 def _float(value: Any, default: float = 0.0) -> float:
     try:
@@ -174,6 +180,9 @@ def _capital_snapshot() -> dict[str, Any]:
         _truthy_env("NIJA_CAPITAL_READINESS_HANDOFF_V34")
         or _truthy_env("NIJA_CAPITAL_READINESS_HANDOFF_V34_READY")
         or (_truthy_env("CAPITAL_SYSTEM_READY") and _truthy_env("NIJA_CAPITAL_READY"))
+        _truthy("NIJA_CAPITAL_READINESS_HANDOFF_V34")
+        or _truthy("NIJA_CAPITAL_READINESS_HANDOFF_V34_READY")
+        or (_truthy("CAPITAL_SYSTEM_READY") and _truthy("NIJA_CAPITAL_READY"))
     )
     if handoff_ready and best.get("hydrated") and _float(best.get("real")) > 0.0 and _int(best.get("registered")) > 0:
         best["stale"] = False

@@ -12894,6 +12894,12 @@ class OKXBroker(BaseBroker):
         self.trade_api = None
         self.use_testnet = False
 
+        # Re-entrance guard: prevents concurrent connect() calls from racing into
+        # credential validation and setting up duplicate REST clients.
+        # Uses an RLock so the same thread can call connect() recursively without
+        # deadlocking (consistent with the CoinbaseBroker pattern).
+        self._connect_lock = threading.RLock()
+
         # Balance tracking for fail-closed behavior (Jan 19, 2026)
         # When balance fetch fails, preserve last known balance instead of returning 0
         self._last_known_balance = None  # Last successful balance fetch
@@ -12953,6 +12959,12 @@ class OKXBroker(BaseBroker):
         # Re-entrance guard: prevents concurrent reconnect attempts (e.g. from
         # ConnectionStabilityManager watchdog) from starting a second connect() while
         # one is already in progress.  Mirrors CoinbaseBroker's locking pattern.
+        # Fast path before acquiring lock: avoids lock overhead when already connected.
+        if self.connected:
+            return True
+        # Re-entrance guard: prevents concurrent connect() calls from racing into
+        # credential validation and setting up duplicate REST clients.
+        # timeout=120s matches the CoinbaseBroker pattern.
         if not self._connect_lock.acquire(blocking=True, timeout=120):
             logging.warning(
                 "⚠️  OKXBroker.connect() lock acquire timed out — returning current state"

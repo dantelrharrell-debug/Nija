@@ -68,6 +68,12 @@ def _capital_snapshot(manager: Any) -> dict[str, Any]:
     except Exception:
         stale = True
 
+    hydrated_raw = getattr(authority, "is_hydrated", False)
+    try:
+        hydrated = bool(hydrated_raw() if callable(hydrated_raw) else hydrated_raw)
+    except Exception:
+        hydrated = False
+
     valid = int(getattr(manager, "_capital_last_valid_brokers", 0) or 0)
     if valid <= 0:
         for attr in ("valid_brokers", "broker_count", "_valid_broker_count"):
@@ -90,6 +96,16 @@ def _capital_snapshot(manager: Any) -> dict[str, Any]:
             or (_truthy("CAPITAL_SYSTEM_READY") and _truthy("NIJA_CAPITAL_READY"))
         ):
             stale = False
+    # Honor capital-readiness handoff attestations: if the handoff signal is
+    # set and capital is hydrated with positive capital and at least one valid
+    # broker, treat a stale flag as a startup-freshness artefact and clear it.
+    handoff_ready = (
+        _truthy("NIJA_CAPITAL_READINESS_HANDOFF_V34")
+        or _truthy("NIJA_CAPITAL_READINESS_HANDOFF_V34_READY")
+        or (_truthy("CAPITAL_SYSTEM_READY") and _truthy("NIJA_CAPITAL_READY"))
+    )
+    if handoff_ready and hydrated and capital > 0.0 and valid > 0:
+        stale = False
 
     return {
         "hydrated": hydrated,
