@@ -68,6 +68,60 @@ def test_releases_unready_writer_after_timeout():
     assert "broker_manager_not_initialized" in guard._release_reason(snapshot)
 
 
+def test_capital_handoff_corroborates_stale_capital_snapshot(monkeypatch):
+    monkeypatch.setenv("NIJA_CAPITAL_READINESS_HANDOFF_V34", "1")
+
+    authority = types.SimpleNamespace(
+        is_hydrated=True,
+        get_real_capital=lambda: 125.0,
+        is_stale=lambda: True,
+        valid_brokers=1,
+    )
+    module = types.SimpleNamespace(get_capital_authority=lambda: authority)
+    monkeypatch.setitem(guard.sys.modules, "bot.capital_authority", module)
+    monkeypatch.setitem(guard.sys.modules, "capital_authority", module)
+
+    hydrated, capital, stale, valid_brokers = guard._capital_snapshot()
+
+    assert hydrated is True
+    assert capital == 125.0
+    assert stale is False
+    assert valid_brokers == 1
+
+
+def test_does_not_release_when_v34_handoff_corroborates_capital(monkeypatch):
+    monkeypatch.setenv("NIJA_CAPITAL_READINESS_HANDOFF_V34", "1")
+    monkeypatch.setenv("NIJA_WRITER_LEASE_ACQUIRED", "1")
+    monkeypatch.setenv("NIJA_WRITER_FENCING_TOKEN", "1090")
+    monkeypatch.setenv("NIJA_WRITER_LEASE_GENERATION", "1738")
+    monkeypatch.setenv("NIJA_RUNTIME_TRADING_STATE", "LIVE_PENDING_CONFIRMATION")
+    monkeypatch.setenv("DRY_RUN_MODE", "false")
+    monkeypatch.setenv("PAPER_MODE", "false")
+    monkeypatch.setenv("NIJA_RUNTIME_EXECUTION_AUTHORITY", "0")
+    monkeypatch.setattr(guard, "_manager_snapshot", lambda: (True, True, True))
+
+    authority = types.SimpleNamespace(
+        is_hydrated=True,
+        get_real_capital=lambda: 125.0,
+        is_stale=lambda: True,
+        valid_brokers=1,
+    )
+    module = types.SimpleNamespace(get_capital_authority=lambda: authority)
+    monkeypatch.setitem(guard.sys.modules, "bot.capital_authority", module)
+    monkeypatch.setitem(guard.sys.modules, "capital_authority", module)
+
+    bot_main = types.SimpleNamespace(
+        _writer_authority_runtime=types.SimpleNamespace(acquired=True),
+        _shutdown_event=threading.Event(),
+    )
+
+    snapshot = guard._runtime_snapshot(bot_main)
+
+    assert snapshot.manager_ready is True
+    assert snapshot.capital_ready is True
+    assert not guard._should_release(snapshot, elapsed_s=999.0, timeout_s=30.0)
+
+
 def test_never_releases_live_active_or_authorized_runtime():
     live_active = _snapshot(
         state="LIVE_ACTIVE",
