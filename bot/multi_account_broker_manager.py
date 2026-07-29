@@ -4372,6 +4372,11 @@ class MultiAccountBrokerManager:
         that a transient startup failure (network blip, nonce error, rate-limit)
         does not permanently prevent the Platform account from trading.
 
+        After a successful reconnect, synchronizes readiness state by:
+          - updating the global _PLATFORM_BROKER_CONNECTED registry flag;
+          - advancing the ConnectionState FSM to CONNECTED via _mark_platform_connected;
+          - re-seeding CapitalAuthority with the balance feed via on_broker_ready.
+
         Returns True if the broker is now connected after the attempt; False
         if it is still offline (caller should retry on the next cycle).
         """
@@ -4379,13 +4384,18 @@ class MultiAccountBrokerManager:
         if broker is None:
             return False
         if broker.connected:
-            return True  # Already connected – nothing to do
+            # Adopt already-connected instance: ensure readiness state is in sync
+            # even when this manager is seeing the broker for the first time (e.g.
+            # after a re-initialization).  Both calls are idempotent.
+            self._sync_reconnect_readiness(broker_type, broker)
+            return True
 
         broker_name = broker_type.value.upper()
         logger.info(f"🔄 Background reconnect: attempting to reconnect Platform {broker_name}…")
         try:
             if broker.connect():
                 logger.info(f"   ✅ Platform {broker_name} reconnected successfully")
+                self._sync_reconnect_readiness(broker_type, broker)
                 return True
             else:
                 logger.debug(f"   ⚠️  Platform {broker_name} reconnect attempt failed (will retry later)")
@@ -4393,6 +4403,36 @@ class MultiAccountBrokerManager:
         except Exception as exc:
             logger.debug(f"   ⚠️  Platform {broker_name} reconnect error: {exc}")
             return False
+
+    def _sync_reconnect_readiness(self, broker_type: BrokerType, broker: "BaseBroker") -> None:
+        """Synchronize connection-readiness state after a broker reconnects.
+
+        Called from ``try_reconnect_platform_broker`` after ``broker.connect()``
+        succeeds (or when an already-connected broker is adopted).  Updates the
+        global registry flag, ConnectionState FSM, and CapitalAuthority balance
+        feed in one shot so the rest of the system sees a consistent connected state.
+
+        All operations are idempotent and individually fault-isolated.
+        """
+        key = broker_type.value.lower()
+        try:
+            with _PLATFORM_BROKER_REGISTRY_LOCK:
+                _PLATFORM_BROKER_CONNECTED[key] = True
+        except Exception as exc:
+            logger.warning("[MABM] _sync_reconnect_readiness: registry update failed for %s: %s", key, exc)
+        try:
+            self._mark_platform_connected(broker_type)
+        except Exception as exc:
+            logger.warning("[MABM] _sync_reconnect_readiness: _mark_platform_connected failed for %s: %s", key, exc)
+        try:
+            self.on_broker_ready(key, broker.get_account_balance)
+        except Exception as exc:
+            logger.warning("[MABM] _sync_reconnect_readiness: on_broker_ready failed for %s: %s", key, exc)
+        logger.info(
+            "[MABM] _sync_reconnect_readiness: readiness synchronized for broker=%s connected=%s",
+            key,
+            getattr(broker, "connected", False),
+        )
 
     def get_platform_balance(self, broker_type: Optional[BrokerType] = None) -> float:
         """
@@ -6146,6 +6186,19 @@ class MultiAccountBrokerManager:
                     "🔒 Platform %s connect() already completed — skipping duplicate",
                     key.upper(),
                 )
+                # Adopt the already-connected instance: synchronize readiness state for
+                # this manager instance in case it was not present when the broker first
+                # connected (e.g. after a reconnect that bypassed initialize_platform_brokers).
+                # _sync_reconnect_readiness is idempotent and individually fault-isolated.
+                if getattr(broker, "connected", False):
+                    try:
+                        self._sync_reconnect_readiness(broker_type, broker)
+                    except Exception as _sync_err:
+                        logger.debug(
+                            "[MABM] _connect_and_register: readiness sync skipped for %s: %s",
+                            key,
+                            _sync_err,
+                        )
                 return getattr(broker, "connected", True)
 
             # Register the broker object first so startup capital-refresh loops
