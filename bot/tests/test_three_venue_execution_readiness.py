@@ -152,6 +152,40 @@ def test_hydrated_fresh_capital_authority_satisfies_capital_gate(monkeypatch) ->
     assert result["execution_ready"] is True
 
 
+def test_handoff_corroboration_clears_stale_capital_snapshot(monkeypatch) -> None:
+    module = _module()
+    _set_credentials(monkeypatch)
+    monkeypatch.delenv("CAPITAL_SYSTEM_READY", raising=False)
+    monkeypatch.delenv("NIJA_CAPITAL_READY", raising=False)
+    monkeypatch.setenv("NIJA_CAPITAL_READINESS_HANDOFF_V34", "1")
+    monkeypatch.setenv("NIJA_WRITER_LEASE_ACQUIRED", "1")
+    monkeypatch.setenv("NIJA_WRITER_FENCING_TOKEN", "token")
+
+    authority = SimpleNamespace(
+        is_hydrated=lambda: True,
+        is_stale=lambda *_args, **_kwargs: True,
+        get_real_capital=lambda: 116.09,
+        valid_brokers=2,
+    )
+    capital_module = ModuleType("bot.capital_authority")
+    capital_module.get_capital_authority = lambda: authority
+    monkeypatch.setitem(sys.modules, "bot.capital_authority", capital_module)
+    monkeypatch.delitem(sys.modules, "capital_authority", raising=False)
+
+    kraken = FakeBroker(balance=116.09)
+    manager = SimpleNamespace(
+        _platform_brokers={"kraken": kraken},
+        eligible_brokers={kraken},
+    )
+    broker_module = SimpleNamespace(BrokerType=FakeBrokerType)
+    monkeypatch.setattr(module, "_runtime", lambda: (broker_module, manager))
+
+    result = module.evaluate_all()
+
+    assert result["capital_ready"] is True
+    assert result["execution_ready"] is True
+
+
 def test_live_active_state_does_not_substitute_for_capital_readiness(monkeypatch) -> None:
     module = _module()
     monkeypatch.delenv("CAPITAL_SYSTEM_READY", raising=False)

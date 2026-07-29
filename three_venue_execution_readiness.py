@@ -125,15 +125,22 @@ def _capital_ready() -> bool:
         return False
     try:
         authority = getter()
-        if authority is None or not bool(getattr(authority, "is_hydrated", False)):
+        if authority is None:
             return False
+
+        hydrated_reader = getattr(authority, "is_hydrated", False)
+        hydrated = bool(
+            hydrated_reader() if callable(hydrated_reader) else hydrated_reader
+        )
+        if not hydrated:
+            return False
+
         stale_reader = getattr(authority, "is_stale", None)
         # Use 90-second TTL to match capital_authority._DEFAULT_FRESHNESS_TTL_S.
         # The default 60-second TTL caused false "stale" readings when capital was
         # refreshed 60-90 seconds ago, keeping execution_ready=False and producing
         # repeated THREE_VENUE_EXECUTION_WAITING log lines despite valid capital.
-        if bool(stale_reader(90.0) if callable(stale_reader) else True):
-            return False
+        stale = bool(stale_reader(90.0) if callable(stale_reader) else True)
         capital_reader = getattr(authority, "get_real_capital", None)
         real_capital = float(
             capital_reader()
@@ -141,7 +148,26 @@ def _capital_ready() -> bool:
             else getattr(authority, "total_capital", 0.0)
             or 0.0
         )
-        return real_capital > 0.0
+
+        valid_brokers = 0
+        for attr in ("valid_brokers", "broker_count", "_valid_broker_count"):
+            try:
+                candidate = int(getattr(authority, attr, 0) or 0)
+            except Exception:
+                candidate = 0
+            if candidate > 0:
+                valid_brokers = candidate
+                break
+
+        handoff_ready = (
+            _truthy("NIJA_CAPITAL_READINESS_HANDOFF_V34")
+            or _truthy("NIJA_CAPITAL_READINESS_HANDOFF_V34_READY")
+            or (_truthy("CAPITAL_SYSTEM_READY") and _truthy("NIJA_CAPITAL_READY"))
+        )
+        if handoff_ready and real_capital > 0.0 and valid_brokers > 0:
+            stale = False
+
+        return real_capital > 0.0 and not stale
     except Exception:
         return False
 
