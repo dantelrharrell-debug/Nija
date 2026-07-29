@@ -247,6 +247,15 @@ def _capital_snapshot_meta() -> tuple[bool, dict[str, Any]]:
         # broker for the activation snapshot flag.
         valid_brokers = 1
 
+    # v34 handoff-corroboration: if CSMv2 has confirmed a fresh positive snapshot,
+    # treat the authority's stale flag as a false-positive and clear it.
+    if stale and hydrated and real_capital > 0.0 and valid_brokers > 0:
+        if (
+            _truthy("NIJA_CAPITAL_READINESS_HANDOFF_V34")
+            or _truthy("NIJA_CAPITAL_READINESS_HANDOFF_V34_READY")
+            or (_truthy("CAPITAL_SYSTEM_READY") and _truthy("NIJA_CAPITAL_READY"))
+        ):
+            stale = False
     # Honor capital-readiness handoff attestations: if the handoff signal is set
     # and capital is hydrated with positive capital and at least one valid broker,
     # treat a stale flag as a startup-freshness artefact and clear it so that

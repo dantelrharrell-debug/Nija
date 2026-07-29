@@ -12906,7 +12906,10 @@ class OKXBroker(BaseBroker):
         self._balance_fetch_errors = 0   # Count of consecutive errors
         self._is_available = True        # Broker availability flag
 
-        # Initialize position tracker for profit-based exits.
+        # Re-entrance guard for connect(): prevents concurrent reconnect attempts
+        # (e.g. from ConnectionStabilityManager watchdog) from racing into a second
+        # concurrent connect() while one is already in progress.  Mirrors CoinbaseBroker.
+        self._connect_lock = threading.RLock()
         # OKX is a degraded optional broker — a position-tracker failure puts the
         # instance into degraded mode rather than crashing startup entirely.
         self.position_tracker = None
@@ -12950,6 +12953,12 @@ class OKXBroker(BaseBroker):
         Returns:
             bool: True if connected successfully
         """
+        # Fast path before acquiring lock (avoids lock overhead when already connected).
+        if self.connected:
+            return True
+        # Re-entrance guard: prevents concurrent reconnect attempts (e.g. from
+        # ConnectionStabilityManager watchdog) from starting a second connect() while
+        # one is already in progress.  Mirrors CoinbaseBroker's locking pattern.
         # Fast path before acquiring lock: avoids lock overhead when already connected.
         if self.connected:
             return True

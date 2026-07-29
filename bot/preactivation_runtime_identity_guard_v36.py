@@ -43,6 +43,13 @@ def _int(value: Any, default: int = 0) -> int:
         return default
 
 
+_TRUE = {"1", "true", "yes", "on", "enabled", "y"}
+
+
+def _truthy_env(name: str, default: str = "false") -> bool:
+    return str(os.environ.get(name, default) or "").strip().lower() in _TRUE
+
+
 def _authority_snapshot(authority: Any, source: str) -> dict[str, Any]:
     result: dict[str, Any] = {
         "hydrated": bool(getattr(authority, "is_hydrated", False)),
@@ -170,6 +177,9 @@ def _capital_snapshot() -> dict[str, Any]:
     # accepted a fresh positive snapshot. Accept the legacy *_READY spelling as
     # well for compatibility with any already-running deployment.
     handoff_ready = (
+        _truthy_env("NIJA_CAPITAL_READINESS_HANDOFF_V34")
+        or _truthy_env("NIJA_CAPITAL_READINESS_HANDOFF_V34_READY")
+        or (_truthy_env("CAPITAL_SYSTEM_READY") and _truthy_env("NIJA_CAPITAL_READY"))
         _truthy("NIJA_CAPITAL_READINESS_HANDOFF_V34")
         or _truthy("NIJA_CAPITAL_READINESS_HANDOFF_V34_READY")
         or (_truthy("CAPITAL_SYSTEM_READY") and _truthy("NIJA_CAPITAL_READY"))
