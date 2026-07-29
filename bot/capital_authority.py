@@ -1919,15 +1919,11 @@ class CapitalAuthority:
 
     def is_fresh(self, ttl_s: float = _DEFAULT_FRESHNESS_TTL_S) -> bool:
         """
-        Return ``True`` only when **both** conditions hold:
+        Return ``True`` when the last refresh occurred within *ttl_s* seconds.
 
-        1. The last refresh occurred within *ttl_s* seconds.
-        2. At least ``_expected_brokers`` brokers contributed a non-zero
-           balance (prevents partial-aggregation silently passing as valid).
-
-        When :attr:`opportunistic` mode is active, condition 2 is relaxed to
-        require only **1** broker with a non-zero balance, allowing trading to
-        start faster when not all expected brokers have connected yet.
+        Snapshot age is evaluated independently of broker completeness.  Use
+        :meth:`is_brokers_complete` as a separate gate when you also need to
+        verify that all expected brokers have contributed balances.
 
         This is the preferred freshness gate for live-trading code paths.
         Unlike ``is_stale(ttl_s=float('inf'))``, a snapshot that was once
@@ -1943,12 +1939,24 @@ class CapitalAuthority:
             if self.last_updated is None:
                 return False
             age = (datetime.now(timezone.utc) - self.last_updated).total_seconds()
-            if age > ttl_s:
-                return False
+            return age <= ttl_s
+
+    def is_brokers_complete(self) -> bool:
+        """
+        Return ``True`` when at least ``_expected_brokers`` brokers have
+        contributed a balance entry, preventing partial-aggregation from
+        silently passing as a valid full snapshot.
+
+        When :attr:`opportunistic` mode is active the threshold is relaxed to
+        **1** broker, allowing trading to start faster when not all expected
+        brokers have connected yet.
+
+        This is a separate gate from :meth:`is_fresh` so that snapshot-age
+        freshness and account-completeness can be enforced independently.
+        """
+        with self._lock:
             min_brokers = 1 if self._opportunistic else self._expected_brokers
-            if len(self._broker_balances) < min_brokers:
-                return False
-            return True
+            return len(self._broker_balances) >= min_brokers
 
     def set_expected_brokers(self, count: int) -> None:
         """
@@ -1982,7 +1990,7 @@ class CapitalAuthority:
 
     @property
     def expected_brokers(self) -> int:
-        """Minimum broker count required for :meth:`is_fresh` to return ``True``."""
+        """Minimum broker count required for :meth:`is_brokers_complete` to return ``True``."""
         with self._lock:
             return self._expected_brokers
 
@@ -1991,8 +1999,9 @@ class CapitalAuthority:
         """Whether opportunistic mode is active.
 
         When ``True``, :attr:`CAPITAL_SYSTEM_READY` is set (and
-        :meth:`is_fresh` returns ``True``) as soon as **at least one** broker
-        reports a positive balance, regardless of ``expected_brokers``.
+        :meth:`is_brokers_complete` returns ``True``) as soon as **at least
+        one** broker reports a positive balance, regardless of
+        ``expected_brokers``.
 
         This allows trading to start faster when some brokers are slow to
         connect, at the cost of a less complete initial capital picture.
