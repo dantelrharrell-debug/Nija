@@ -1,5 +1,13 @@
 # CHANGELOG
 
+## [7.2.1] - 2026-07-29
+
+### Fixed
+
+- **Capital handoff regression**: `_capital_snapshot` helpers now use `_truthy_env()` instead of bare `== '1'` for `CAPITAL_SYSTEM_READY`/`NIJA_CAPITAL_READY`, so `true`/`yes`/`on` values also clear the stale-capital flag.
+- **Inconsistent capital handoff**: Added `NIJA_CAPITAL_READINESS_HANDOFF_V34` corroboration blocks to `canonical_broker_bootstrap_handoff_patch`, `canonical_broker_main_entry_guard_v20`, and `activation_snapshot_bridge_patch`, matching the `stalled_writer_release_guard_v22` pattern. Strategy activation is no longer blocked by startup-freshness timing artefacts when `CapitalAuthority` is hydrated with positive capital and valid brokers.
+- **OKX re-entrance guard**: `OKXBroker.connect()` is now protected by `_connect_lock` (`threading.RLock`) with double-checked locking, matching `CoinbaseBroker`'s pattern.
+
 ## [7.2.0] - 2026-02-03
 
 ### Breaking Changes
