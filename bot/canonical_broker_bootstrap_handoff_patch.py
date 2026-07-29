@@ -79,8 +79,20 @@ def _capital_snapshot(manager: Any) -> dict[str, Any]:
                 valid = candidate
                 break
 
+    hydrated = bool(getattr(authority, "is_hydrated", False))
+
+    # v34 handoff-corroboration: if CSMv2 has confirmed a fresh positive snapshot,
+    # treat the authority's stale flag as a false-positive and clear it.
+    if stale and hydrated and capital > 0.0 and valid > 0:
+        if (
+            _truthy("NIJA_CAPITAL_READINESS_HANDOFF_V34")
+            or _truthy("NIJA_CAPITAL_READINESS_HANDOFF_V34_READY")
+            or (_truthy("CAPITAL_SYSTEM_READY") and _truthy("NIJA_CAPITAL_READY"))
+        ):
+            stale = False
+
     return {
-        "hydrated": bool(getattr(authority, "is_hydrated", False)),
+        "hydrated": hydrated,
         "capital": capital,
         "stale": stale,
         "valid_brokers": valid,
