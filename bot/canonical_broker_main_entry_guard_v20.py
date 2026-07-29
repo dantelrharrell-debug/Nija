@@ -82,6 +82,17 @@ def _authority_snapshot(manager: Any) -> dict[str, Any]:
                 valid = candidate
                 break
 
+    # Honor capital-readiness handoff attestations: if the handoff signal is
+    # set and capital is hydrated with positive capital and at least one valid
+    # broker, treat a stale flag as a startup-freshness artefact and clear it.
+    handoff_ready = (
+        _truthy("NIJA_CAPITAL_READINESS_HANDOFF_V34")
+        or _truthy("NIJA_CAPITAL_READINESS_HANDOFF_V34_READY")
+        or (_truthy("CAPITAL_SYSTEM_READY") and _truthy("NIJA_CAPITAL_READY"))
+    )
+    if handoff_ready and hydrated and capital > 0.0 and valid > 0:
+        stale = False
+
     return {
         "hydrated": hydrated,
         "capital": capital,
