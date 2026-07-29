@@ -12894,6 +12894,12 @@ class OKXBroker(BaseBroker):
         self.trade_api = None
         self.use_testnet = False
 
+        # Re-entrance guard: prevents concurrent connect() calls from racing into
+        # credential validation and setting up duplicate REST clients.
+        # Uses an RLock so the same thread can call connect() recursively without
+        # deadlocking (consistent with the CoinbaseBroker pattern).
+        self._connect_lock = threading.RLock()
+
         # Balance tracking for fail-closed behavior (Jan 19, 2026)
         # When balance fetch fails, preserve last known balance instead of returning 0
         self._last_known_balance = None  # Last successful balance fetch
@@ -12944,6 +12950,21 @@ class OKXBroker(BaseBroker):
         Returns:
             bool: True if connected successfully
         """
+        # Fast path before acquiring lock: avoids lock overhead when already connected.
+        if self.connected:
+            return True
+        # Re-entrance guard: prevents concurrent connect() calls from racing into
+        # credential validation and setting up duplicate REST clients.
+        # timeout=120s matches the CoinbaseBroker pattern.
+        if not self._connect_lock.acquire(blocking=True, timeout=120):
+            logging.warning(
+                "⚠️  OKXBroker.connect() lock acquire timed out — returning current state"
+            )
+            return self.connected
+        # Re-check under lock: another thread may have connected while we waited.
+        if self.connected:
+            self._connect_lock.release()
+            return True
         try:
             # Support per-user credentials for USER accounts:
             #   OKX_USER_{USERID}_API_KEY / _API_SECRET / _PASSPHRASE
@@ -13020,8 +13041,8 @@ class OKXBroker(BaseBroker):
             self.connected = False
             self._is_available = False
             return False
-
-    def get_account_balance(self, verbose: bool = True) -> float:
+        finally:
+            self._connect_lock.release()
         """
         Get total equity (USD/USDT/USDC + position values) fail-closed.
 
