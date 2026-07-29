@@ -13043,6 +13043,8 @@ class OKXBroker(BaseBroker):
             return False
         finally:
             self._connect_lock.release()
+
+    def get_account_balance(self, verbose: bool = True) -> float:
         """
         Get total equity (USD/USDT/USDC + position values) fail-closed.
 
