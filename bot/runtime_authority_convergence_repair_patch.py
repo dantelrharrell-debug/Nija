@@ -333,7 +333,7 @@ def _heartbeat_ready() -> tuple[bool, str]:
     alive_raw = os.environ.get("NIJA_WRITER_HEARTBEAT_ALIVE_TS", "").strip()
     if not token or not generation:
         return False, f"writer_token_or_generation_missing token={bool(token)} generation={generation or 'missing'}"
-    if active != "1":
+    if not _truthy("NIJA_WRITER_HEARTBEAT_ACTIVE"):
         return False, f"heartbeat_inactive active={active or 'missing'}"
     alive_ts = _f(alive_raw, 0.0)
     if alive_ts <= 0.0:
@@ -378,7 +378,7 @@ def converge_runtime_authority(source: str = "manual") -> bool:
         return False
     env_state = os.environ.get("NIJA_RUNTIME_TRADING_STATE", "").strip().upper()
     env_auth = os.environ.get("NIJA_RUNTIME_EXECUTION_AUTHORITY", "").strip()
-    if env_state == "LIVE_ACTIVE" and env_auth == "1":
+    if env_state == "LIVE_ACTIVE" and _truthy("NIJA_RUNTIME_EXECUTION_AUTHORITY"):
         return False
     ready, detail, meta = _safe_to_recover()
     if not ready:
