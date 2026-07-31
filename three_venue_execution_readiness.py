@@ -377,6 +377,13 @@ def evaluate_venue(
     balance_ok, spendable, balance_reason = _balance(venue, broker)
     market_ok, market_count, market_reason = _markets(broker)
     adapter_ok = _adapter_ready(broker)
+    authenticated_okx_wallet_ready = (
+        venue == "okx"
+        and connected
+        and balance_ok
+        and spendable > 0.0
+        and balance_reason == "okx_authenticated_wallet"
+    )
 
     if venue == "kraken":
         marked_ready = connected and balance_ok and spendable > 0
@@ -384,6 +391,12 @@ def evaluate_venue(
         marked_ready = activation == "ready" and _truthy(
             f"NIJA_{venue.upper()}_TRADING_READY"
         )
+        if authenticated_okx_wallet_ready:
+            marked_ready = True
+            activation = "ready"
+            os.environ["NIJA_OKX_ACTIVATION_STATE"] = "ready"
+            os.environ["NIJA_OKX_TRADING_READY"] = "1"
+            os.environ["NIJA_OKX_ACTIVATED"] = "1"
         if activation == "ready" and market_count is None:
             market_ok = True
             market_reason = "activation_ready:adapter_managed"
