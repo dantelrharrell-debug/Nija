@@ -91,6 +91,22 @@ def _install_logging_format_guard() -> None:
         logger.warning("LOGGING_FORMAT_GUARD_INSTALL_FAILED err=%s", exc)
 
 
+def _install_runtime_auth_endpoint_repair() -> None:
+    """Install Coinbase/OKX auth recursion guards on the canonical path."""
+
+    try:
+        repair = importlib.import_module("runtime_auth_recursion_endpoint_repair_patch")
+        installer = getattr(repair, "install", None) or getattr(repair, "install_import_hook", None)
+        if callable(installer):
+            installer()
+            print("RUNTIME_AUTH_ENDPOINT_REPAIR_INSTALL_REQUESTED", flush=True)
+            logger.warning("RUNTIME_AUTH_ENDPOINT_REPAIR_INSTALL_REQUESTED")
+        else:
+            logger.warning("RUNTIME_AUTH_ENDPOINT_REPAIR_SKIPPED installer_missing")
+    except Exception as exc:
+        logger.warning("RUNTIME_AUTH_ENDPOINT_REPAIR_FAILED err=%s", exc)
+
+
 def _install_live_broker_profit_exit_v25() -> None:
     """Install fill-confirmed, fee-aware broker and engine exits."""
 
@@ -153,9 +169,9 @@ def _install_authority_readiness_repair() -> None:
             print("AUTHORITY_READY_REPAIR_INSTALL_REQUESTED", flush=True)
             logger.warning("AUTHORITY_READY_REPAIR_INSTALL_REQUESTED")
         else:
-            logger.warning("AUTHORITY_READY_REPAIR_INSTALL_SKIPPED installer_missing")
+            logger.warning("AUTHORITY_READY_REPAIR_SKIPPED installer_missing")
     except Exception as exc:
-        logger.warning("AUTHORITY_READY_REPAIR_INSTALL_FAILED err=%s", exc)
+        logger.warning("AUTHORITY_READY_REPAIR_FAILED err=%s", exc)
 
 
 def _install_execution_bootstrap_authority_repair() -> None:
@@ -288,6 +304,7 @@ def _install_live_entry_completion_repair() -> None:
 _install_global_runtime_startup_guards()
 _install_preactivation_runtime_identity_guard_v36()
 _install_logging_format_guard()
+_install_runtime_auth_endpoint_repair()
 _install_live_broker_profit_exit_v25()
 _run_pre_startup_sanitization()
 _install_strategy_publication()

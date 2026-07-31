@@ -5,6 +5,7 @@ import logging
 import os
 import sys
 import threading
+import time
 from functools import wraps
 from types import ModuleType
 from typing import Any, Callable
@@ -13,6 +14,7 @@ logger = logging.getLogger("nija.runtime_auth_endpoint_repair")
 _MARKER = "20260726-coinbase-client-recovery-v4"
 _LOCK = threading.RLock()
 _PATCHED = False
+_WATCHDOG_STARTED = False
 _LOCAL = threading.local()
 
 
@@ -114,6 +116,45 @@ def _patch_coinbase_class(module: ModuleType) -> bool:
         guarded._nija_coinbase_client_guard_v2 = True  # type: ignore[attr-defined]
         guarded.__wrapped__ = original  # type: ignore[attr-defined]
         setattr(cls, method_name, guarded)
+        changed = True
+
+    original_connect = getattr(cls, "connect", None)
+    if callable(original_connect) and not getattr(original_connect, "_nija_coinbase_connect_reentry_guard_v1", False):
+        @wraps(original_connect)
+        def connect(self: Any, *args: Any, __original: Callable[..., Any] = original_connect, **kwargs: Any) -> Any:
+            active = getattr(_LOCAL, "coinbase_connect_active", set())
+            identity = id(self)
+            if identity in active:
+                _mark_coinbase_disconnected(self, "connect_recursion_blocked")
+                logger.error(
+                    "COINBASE_CONNECT_REENTRY_BLOCKED marker=%s class=%s action=fail_closed",
+                    _MARKER,
+                    type(self).__name__,
+                )
+                return False
+
+            active = set(active)
+            active.add(identity)
+            _LOCAL.coinbase_connect_active = active
+            try:
+                return __original(self, *args, **kwargs)
+            except RecursionError as exc:
+                _mark_coinbase_disconnected(self, "connect_recursion_blocked")
+                logger.error(
+                    "COINBASE_CONNECT_RECURSION_FAIL_CLOSED marker=%s class=%s error=%s",
+                    _MARKER,
+                    type(self).__name__,
+                    str(exc)[:160],
+                )
+                return False
+            finally:
+                current = set(getattr(_LOCAL, "coinbase_connect_active", set()))
+                current.discard(identity)
+                _LOCAL.coinbase_connect_active = current
+
+        connect._nija_coinbase_connect_reentry_guard_v1 = True  # type: ignore[attr-defined]
+        connect.__wrapped__ = original_connect  # type: ignore[attr-defined]
+        setattr(cls, "connect", connect)
         changed = True
 
     if changed:
@@ -233,20 +274,58 @@ def _disable_recursive_convergence_hook() -> None:
     logger.warning("RUNTIME_CONVERGENCE_RECURSION_REPAIRED marker=%s", _MARKER)
 
 
+def _patch_loaded() -> bool:
+    changed = False
+    for name in (
+        "bot.broker_manager",
+        "broker_manager",
+        "bot.broker_integration",
+        "broker_integration",
+    ):
+        module = sys.modules.get(name)
+        if isinstance(module, ModuleType):
+            changed = _patch_coinbase_class(module) or changed
+            changed = _patch_okx_class(module) or changed
+    return changed
+
+
+def _watchdog() -> None:
+    global _PATCHED
+    deadline = time.monotonic() + max(
+        60.0,
+        float(os.environ.get("NIJA_RUNTIME_AUTH_ENDPOINT_REPAIR_WATCHDOG_S", "600") or 600),
+    )
+    while time.monotonic() < deadline:
+        try:
+            _disable_recursive_convergence_hook()
+            _PATCHED = _patch_loaded() or _PATCHED
+        except Exception as exc:
+            logger.warning("RUNTIME_AUTH_ENDPOINT_REPAIR_RETRY marker=%s err=%s", _MARKER, exc)
+        time.sleep(0.25)
+
+
 def install() -> None:
+    global _PATCHED, _WATCHDOG_STARTED
     with _LOCK:
         _disable_recursive_convergence_hook()
-        for name in ("bot.broker_manager", "broker_manager"):
-            module = sys.modules.get(name)
-            if isinstance(module, ModuleType):
-                _patch_coinbase_class(module)
-                _patch_okx_class(module)
+        _PATCHED = _patch_loaded() or _PATCHED
+        if not _WATCHDOG_STARTED:
+            _WATCHDOG_STARTED = True
+            threading.Thread(
+                target=_watchdog,
+                name="RuntimeAuthEndpointRepairWatchdog",
+                daemon=True,
+            ).start()
         os.environ["NIJA_RUNTIME_AUTH_ENDPOINT_REPAIR_INSTALLED"] = "1"
-        logger.warning("RUNTIME_AUTH_ENDPOINT_REPAIR_INSTALLED marker=%s patched=%s", _MARKER, _PATCHED)
+        logger.warning(
+            "RUNTIME_AUTH_ENDPOINT_REPAIR_INSTALLED marker=%s patched=%s watchdog=true",
+            _MARKER,
+            _PATCHED,
+        )
 
 
 def installed() -> bool:
-    return _PATCHED
+    return _PATCHED or _WATCHDOG_STARTED
 
 
 __all__ = [
