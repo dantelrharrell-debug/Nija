@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import weakref
 from types import ModuleType
 
@@ -210,3 +211,20 @@ def test_okx_endpoint_is_applied_without_recursion(monkeypatch):
     assert broker.connect() is True
     assert broker.connected is True
     assert broker.base_url == "https://us.okx.com"
+
+
+def test_runtime_convergence_repair_is_idempotent(monkeypatch):
+    module = ModuleType("runtime_convergence_hardening_patch")
+
+    def unsafe_patch_auth_surface(target):
+        return True
+
+    module._patch_auth_surface = unsafe_patch_auth_surface
+    monkeypatch.setitem(sys.modules, "runtime_convergence_hardening_patch", module)
+
+    assert repair._disable_recursive_convergence_hook() is True
+    first = module._patch_auth_surface
+    assert getattr(first, "_nija_runtime_convergence_recursion_safe_v2") is True
+
+    assert repair._disable_recursive_convergence_hook() is False
+    assert module._patch_auth_surface is first
