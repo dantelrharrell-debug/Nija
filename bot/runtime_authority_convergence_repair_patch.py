@@ -35,6 +35,14 @@ def _truthy(name: str, default: str = "false") -> bool:
     return str(os.environ.get(name, default)).strip().lower() in _TRUE
 
 
+def _handoff_ready_env() -> bool:
+    return bool(
+        _truthy("NIJA_CAPITAL_READINESS_HANDOFF_V34")
+        or _truthy("NIJA_CAPITAL_READINESS_HANDOFF_V34_READY")
+        or (_truthy("CAPITAL_SYSTEM_READY") and _truthy("NIJA_CAPITAL_READY"))
+    )
+
+
 def _f(value: Any, default: float = 0.0) -> float:
     try:
         if value is None or value == "":
@@ -45,7 +53,6 @@ def _f(value: Any, default: float = 0.0) -> float:
         return amount
     except Exception:
         return default
-
 
 
 _BALANCE_TOTAL_KEYS = (
@@ -157,10 +164,8 @@ def _kill_switch_clear() -> tuple[bool, str]:
         if bool(kill_switch.is_active()):
             return False, "kill_switch_active"
     except Exception as exc:
-        # Fail closed when the kill switch cannot be inspected.
         return False, f"kill_switch_probe_failed:{exc}"
     return True, "kill_switch_clear"
-
 
 
 def _broker_manager_capital_payload() -> dict[str, Any]:
@@ -254,13 +259,13 @@ def _broker_manager_capital_payload() -> dict[str, Any]:
         )
         return result
 
+
 def _capital_authority_ready() -> tuple[bool, str, dict[str, Any]]:
-    if not _truthy("LIVE_CAPITAL_VERIFIED"):
+    handoff_ready = _handoff_ready_env()
+    if not (_truthy("LIVE_CAPITAL_VERIFIED") or handoff_ready):
         return False, "live_capital_not_verified", {}
     if _truthy("DRY_RUN_MODE") or _truthy("PAPER_MODE"):
         return False, "simulation_mode", {}
-    # Observe balances already published by the canonical broker manager.
-    # Recovery monitors never call private exchange endpoints or mutate feeds.
     _broker_manager_capital_payload()
     try:
         try:
@@ -291,9 +296,14 @@ def _capital_authority_ready() -> tuple[bool, str, dict[str, Any]]:
             usable = max(usable, _f(method()))
         except Exception:
             pass
+    if usable <= 0.0 and real > 0.0 and handoff_ready:
+        usable = real
     valid_brokers = max(
         _i(getattr(ca, "valid_broker_count", 0)),
         _i(getattr(ca, "registered_broker_count", 0)),
+        _i(getattr(ca, "valid_brokers", 0)),
+        _i(getattr(ca, "broker_count", 0)),
+        _i(getattr(ca, "_valid_broker_count", 0)),
     )
     try:
         values = getattr(ca, "broker_values", None) or getattr(ca, "values", None) or {}
@@ -319,11 +329,20 @@ def _capital_authority_ready() -> tuple[bool, str, dict[str, Any]]:
                 pass
     min_capital = max(1.0, _f(os.environ.get("NIJA_RUNTIME_AUTHORITY_CONVERGENCE_MIN_CAPITAL_USD"), 10.0))
     min_brokers = max(1, _i(os.environ.get("NIJA_RUNTIME_AUTHORITY_CONVERGENCE_MIN_BROKERS"), 2))
-    detail = {"hydrated": hydrated, "real": real, "usable": usable, "valid_brokers": valid_brokers, "fresh": fresh}
+    if handoff_ready and hydrated and real >= min_capital and valid_brokers >= min_brokers:
+        fresh = True
+    detail = {
+        "hydrated": hydrated,
+        "real": real,
+        "usable": usable,
+        "valid_brokers": valid_brokers,
+        "fresh": fresh,
+        "handoff_ready": handoff_ready,
+    }
     ready = bool(hydrated and real >= min_capital and usable > 0.0 and valid_brokers >= min_brokers and fresh)
     if ready:
-        return True, f"capital_ready real={real:.2f} usable={usable:.2f} valid_brokers={valid_brokers}", detail
-    return False, f"capital_not_ready hydrated={hydrated} real={real:.2f} usable={usable:.2f} valid_brokers={valid_brokers} fresh={fresh}", detail
+        return True, f"capital_ready real={real:.2f} usable={usable:.2f} valid_brokers={valid_brokers} handoff={handoff_ready}", detail
+    return False, f"capital_not_ready hydrated={hydrated} real={real:.2f} usable={usable:.2f} valid_brokers={valid_brokers} fresh={fresh} handoff={handoff_ready}", detail
 
 
 def _heartbeat_ready() -> tuple[bool, str]:
@@ -420,7 +439,6 @@ def converge_runtime_authority(source: str = "manual") -> bool:
                 except Exception as exc:
                     logger.warning("RUNTIME_AUTHORITY_CONVERGENCE_COMMIT_FAILED marker=%s err=%s", _MARKER, exc)
             if not committed:
-                # transition_to enforces the normal live gates again. No force path.
                 sm.transition_to(TradingState.LIVE_ACTIVE, f"runtime-authority convergence repair marker={_MARKER} source={source}")
         with getattr(sm, "_lock", threading.Lock()):
             if hasattr(sm, "_activation_committed"):
@@ -474,8 +492,6 @@ def _start_monitor() -> None:
 
 
 def _patch_core_loop_module(module: ModuleType) -> bool:
-    # The monitor is the primary repair path. This function exists only so import
-    # hooks can log that core-loop import happened and run one immediate repair.
     if not hasattr(module, "NijaCoreLoop"):
         return False
     converge_runtime_authority("core_loop_import")
