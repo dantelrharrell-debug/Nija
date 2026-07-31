@@ -34,8 +34,11 @@ def _ready() -> tuple[bool, str]:
         return False, "live_capital_not_verified"
     if _truthy("DRY_RUN_MODE") or _truthy("PAPER_MODE"):
         return False, "simulation_mode"
-    if str(os.environ.get("NIJA_RUNTIME_TRADING_STATE", "")).strip() != "LIVE_ACTIVE":
-        return False, "state_not_live_active"
+    runtime_state = str(
+        os.environ.get("NIJA_RUNTIME_TRADING_STATE", "")
+    ).strip().upper()
+    if runtime_state not in {"LIVE_PENDING_CONFIRMATION", "LIVE_ACTIVE"}:
+        return False, f"state_not_publishable:{runtime_state or 'unset'}"
     if not str(os.environ.get("NIJA_WRITER_FENCING_TOKEN", "")).strip():
         return False, "writer_token_missing"
     if not str(os.environ.get("NIJA_WRITER_LEASE_GENERATION", "")).strip():
