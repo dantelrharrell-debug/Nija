@@ -189,6 +189,21 @@ def test_does_not_release_dry_run_early_boot_stall(monkeypatch):
     assert not guard._should_release(dry_run, elapsed_s=999.0, timeout_s=30.0)
 
 
+def test_attempt_authority_convergence_retry_uses_ready_source(monkeypatch):
+    calls = []
+    convergence_module = types.SimpleNamespace(
+        converge_runtime_authority=lambda source: calls.append(source)
+    )
+    monkeypatch.setitem(
+        guard.sys.modules,
+        "bot.runtime_authority_convergence_repair_patch",
+        convergence_module,
+    )
+
+    assert guard._attempt_authority_convergence_retry("unit_test") is True
+    assert calls == ["stalled_writer_ready_authority_retry:unit_test"]
+
+
 def test_attempt_emergency_stop_recovery_clears_and_converges(monkeypatch):
     calls = []
 
@@ -204,7 +219,9 @@ def test_attempt_emergency_stop_recovery_clears_and_converges(monkeypatch):
     )
 
     assert guard._attempt_emergency_stop_recovery("unit_test") == 1
-    assert calls == ["stalled_writer_emergency_stop_recovery:unit_test"]
+    assert calls == [
+        "stalled_writer_ready_authority_retry:emergency_stop_recovery:unit_test"
+    ]
 
 
 def test_trigger_releases_current_lease_and_exits(monkeypatch):

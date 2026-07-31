@@ -428,6 +428,37 @@ def _should_release(snapshot: RuntimeSnapshot, elapsed_s: float, timeout_s: floa
     return not snapshot.manager_ready or not snapshot.capital_ready
 
 
+def _attempt_authority_convergence_retry(source: str) -> bool:
+    """Ask the normal authority convergence path to re-evaluate ready startup."""
+    before_state = _runtime_state()
+    before_auth = _truthy_env("NIJA_RUNTIME_EXECUTION_AUTHORITY")
+    try:
+        try:
+            from bot.runtime_authority_convergence_repair_patch import converge_runtime_authority
+        except ImportError:
+            from runtime_authority_convergence_repair_patch import converge_runtime_authority  # type: ignore[import]
+        converge_runtime_authority(f"stalled_writer_ready_authority_retry:{source}")
+    except Exception as exc:
+        logger.warning(
+            "STALLED_WRITER_RELEASE_GUARD_V22_AUTHORITY_CONVERGENCE_FAILED marker=%s source=%s err=%s",
+            _MARKER,
+            source,
+            exc,
+        )
+        return False
+
+    logger.critical(
+        "STALLED_WRITER_RELEASE_GUARD_V22_AUTHORITY_CONVERGENCE_RETRIED marker=%s source=%s before_state=%s before_auth=%s after_state=%s after_auth=%s",
+        _MARKER,
+        source,
+        before_state,
+        before_auth,
+        _runtime_state(),
+        _truthy_env("NIJA_RUNTIME_EXECUTION_AUTHORITY"),
+    )
+    return True
+
+
 def _attempt_emergency_stop_recovery(source: str) -> int:
     """Clear only a safe stale emergency-stop latch, then rerun convergence."""
     try:
@@ -451,19 +482,7 @@ def _attempt_emergency_stop_recovery(source: str) -> int:
     if result <= 0:
         return 0
 
-    try:
-        try:
-            from bot.runtime_authority_convergence_repair_patch import converge_runtime_authority
-        except ImportError:
-            from runtime_authority_convergence_repair_patch import converge_runtime_authority  # type: ignore[import]
-        converge_runtime_authority(f"stalled_writer_emergency_stop_recovery:{source}")
-    except Exception as exc:
-        logger.warning(
-            "STALLED_WRITER_RELEASE_GUARD_V22_EMERGENCY_CONVERGENCE_FAILED marker=%s source=%s err=%s",
-            _MARKER,
-            source,
-            exc,
-        )
+    _attempt_authority_convergence_retry(f"emergency_stop_recovery:{source}")
 
     logger.critical(
         "STALLED_WRITER_RELEASE_GUARD_V22_EMERGENCY_RECOVERY_APPLIED marker=%s source=%s cleared=%s trading_remains_gate_controlled=true",
@@ -552,10 +571,13 @@ def _monitor() -> None:
 
     timeout_s = max(30.0, _float_env("NIJA_STALLED_WRITER_RELEASE_TIMEOUT_S", 360.0))
     poll_s = max(1.0, _float_env("NIJA_STALLED_WRITER_RELEASE_POLL_S", 5.0))
+    retry_after_s = max(30.0, _float_env("NIJA_STALLED_WRITER_READY_AUTHORITY_RETRY_AFTER_S", 60.0))
+    retry_interval_s = max(15.0, _float_env("NIJA_STALLED_WRITER_READY_AUTHORITY_RETRY_INTERVAL_S", 60.0))
     lease_seen_at: Optional[float] = None
     observed_token = ""
     observed_generation = ""
     last_wait_log = 0.0
+    last_ready_authority_retry = 0.0
 
     while not _STOP.is_set():
         snapshot = _runtime_snapshot(bot_main)
@@ -570,6 +592,7 @@ def _monitor() -> None:
                 lease_seen_at = now
                 observed_token = snapshot.token
                 observed_generation = snapshot.generation
+                last_ready_authority_retry = 0.0
                 logger.warning(
                     "STALLED_WRITER_RELEASE_GUARD_V22_LEASE_OBSERVED marker=%s token_prefix=%s generation=%s timeout_s=%.1f production_intent=%s state=%s",
                     _MARKER,
@@ -583,6 +606,7 @@ def _monitor() -> None:
             lease_seen_at = None
             observed_token = ""
             observed_generation = ""
+            last_ready_authority_retry = 0.0
 
         if lease_seen_at is not None:
             elapsed_s = now - lease_seen_at
@@ -599,6 +623,20 @@ def _monitor() -> None:
                     snapshot.capital_ready,
                 )
                 last_wait_log = now
+
+            if (
+                snapshot.manager_ready
+                and snapshot.capital_ready
+                and not snapshot.authority
+                and snapshot.state in {"OFF", "LIVE_PENDING_CONFIRMATION"}
+                and elapsed_s >= retry_after_s
+                and now - last_ready_authority_retry >= retry_interval_s
+            ):
+                last_ready_authority_retry = now
+                _attempt_authority_convergence_retry("stalled_writer_monitor")
+                snapshot = _runtime_snapshot(bot_main)
+                if snapshot.authority or snapshot.state == "LIVE_ACTIVE":
+                    continue
 
             if (
                 snapshot.state == "EMERGENCY_STOP"
@@ -662,6 +700,7 @@ __all__ = [
     "_production_writer_intent",
     "_runtime_snapshot",
     "_should_release",
+    "_attempt_authority_convergence_retry",
     "_attempt_emergency_stop_recovery",
     "_release_reason",
     "_trigger_release",
