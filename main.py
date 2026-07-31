@@ -107,6 +107,21 @@ def _install_runtime_auth_endpoint_repair() -> None:
         logger.warning("RUNTIME_AUTH_ENDPOINT_REPAIR_FAILED err=%s", exc)
 
 
+def _install_current_capital_snapshot_freshness_repair() -> None:
+    """Install current live-snapshot freshness repair before capital refresh."""
+
+    try:
+        repair = importlib.import_module("bot.current_capital_snapshot_freshness_repair_patch")
+        installer = getattr(repair, "install_import_hook", None) or getattr(repair, "install", None)
+        if callable(installer) and bool(installer()):
+            print("CURRENT_CAPITAL_SNAPSHOT_FRESHNESS_REPAIR_INSTALL_REQUESTED", flush=True)
+            logger.warning("CURRENT_CAPITAL_SNAPSHOT_FRESHNESS_REPAIR_INSTALL_REQUESTED")
+        else:
+            logger.warning("CURRENT_CAPITAL_SNAPSHOT_FRESHNESS_REPAIR_SKIPPED installer_missing_or_false")
+    except Exception as exc:
+        logger.warning("CURRENT_CAPITAL_SNAPSHOT_FRESHNESS_REPAIR_FAILED err=%s", exc)
+
+
 def _install_live_broker_profit_exit_v25() -> None:
     """Install fill-confirmed, fee-aware broker and engine exits."""
 
@@ -305,6 +320,7 @@ _install_global_runtime_startup_guards()
 _install_preactivation_runtime_identity_guard_v36()
 _install_logging_format_guard()
 _install_runtime_auth_endpoint_repair()
+_install_current_capital_snapshot_freshness_repair()
 _install_live_broker_profit_exit_v25()
 _run_pre_startup_sanitization()
 _install_strategy_publication()
