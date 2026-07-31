@@ -122,6 +122,21 @@ def _install_current_capital_snapshot_freshness_repair() -> None:
         logger.warning("CURRENT_CAPITAL_SNAPSHOT_FRESHNESS_REPAIR_FAILED err=%s", exc)
 
 
+def _install_authority_heartbeat_timeout_grace_repair() -> None:
+    """Install soft authority-heartbeat timeout grace before the monitor starts."""
+
+    try:
+        repair = importlib.import_module("bot.authority_heartbeat_timeout_grace_patch")
+        installer = getattr(repair, "install_import_hook", None) or getattr(repair, "install", None)
+        if callable(installer) and bool(installer()):
+            print("AUTHORITY_HEARTBEAT_TIMEOUT_GRACE_INSTALL_REQUESTED", flush=True)
+            logger.warning("AUTHORITY_HEARTBEAT_TIMEOUT_GRACE_INSTALL_REQUESTED")
+        else:
+            logger.warning("AUTHORITY_HEARTBEAT_TIMEOUT_GRACE_SKIPPED installer_missing_or_false")
+    except Exception as exc:
+        logger.warning("AUTHORITY_HEARTBEAT_TIMEOUT_GRACE_FAILED err=%s", exc)
+
+
 def _install_live_broker_profit_exit_v25() -> None:
     """Install fill-confirmed, fee-aware broker and engine exits."""
 
@@ -321,6 +336,7 @@ _install_preactivation_runtime_identity_guard_v36()
 _install_logging_format_guard()
 _install_runtime_auth_endpoint_repair()
 _install_current_capital_snapshot_freshness_repair()
+_install_authority_heartbeat_timeout_grace_repair()
 _install_live_broker_profit_exit_v25()
 _run_pre_startup_sanitization()
 _install_strategy_publication()
