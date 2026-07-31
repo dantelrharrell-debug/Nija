@@ -5,6 +5,7 @@ import logging
 import os
 import sys
 import threading
+import time
 from functools import wraps
 from types import ModuleType
 from typing import Any
@@ -15,11 +16,20 @@ _HOOK_FLAG = "_NIJA_OPERATOR_EMERGENCY_STOP_PREEXEC_CLEAR_HOOK_20260710T"
 _EXEC_PATCH_ATTR = "_nija_operator_emergency_clear_pre_execute_20260710t"
 _KILL_PATCH_ATTR = "_nija_operator_emergency_clear_kill_switch_20260710t"
 _CLEAR_LOCK = threading.Lock()
+_DEFERRED_CLEAR_LOCK = threading.Lock()
+_DEFERRED_CLEAR_STARTED = False
 _TRUTHY = {"1", "true", "yes", "on", "y", "enabled"}
 
 
 def _truthy_env(name: str) -> bool:
     return str(os.environ.get(name, "")).strip().lower() in _TRUTHY
+
+
+def _float_env(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, str(default)) or default)
+    except (TypeError, ValueError):
+        return default
 
 
 def _clear_patch_module() -> ModuleType:
@@ -132,6 +142,60 @@ def _run_operator_clear(source: str) -> int:
         _CLEAR_LOCK.release()
 
 
+def _start_deferred_clear_monitor() -> None:
+    """Re-check stale env-only emergency stops after late startup state changes."""
+    global _DEFERRED_CLEAR_STARTED
+    if not _truthy_env("NIJA_OPERATOR_EMERGENCY_STOP_DEFERRED_CLEAR_ENABLED") and os.environ.get(
+        "NIJA_OPERATOR_EMERGENCY_STOP_DEFERRED_CLEAR_ENABLED"
+    ) is not None:
+        return
+
+    with _DEFERRED_CLEAR_LOCK:
+        if _DEFERRED_CLEAR_STARTED:
+            return
+        _DEFERRED_CLEAR_STARTED = True
+
+    timeout_s = max(30.0, _float_env("NIJA_OPERATOR_EMERGENCY_STOP_DEFERRED_CLEAR_TIMEOUT_S", 3600.0))
+    poll_s = max(1.0, _float_env("NIJA_OPERATOR_EMERGENCY_STOP_DEFERRED_CLEAR_POLL_S", 5.0))
+
+    def _worker() -> None:
+        deadline = time.monotonic() + timeout_s
+        logger.warning(
+            "OPERATOR_EMERGENCY_STOP_DEFERRED_CLEAR_MONITOR_STARTED marker=%s timeout_s=%.1f poll_s=%.1f",
+            _MARKER,
+            timeout_s,
+            poll_s,
+        )
+        while time.monotonic() < deadline:
+            try:
+                result = _run_operator_clear("deferred_monitor")
+                if result > 0:
+                    logger.critical(
+                        "OPERATOR_EMERGENCY_STOP_DEFERRED_CLEAR_MONITOR_APPLIED marker=%s cleared=%s",
+                        _MARKER,
+                        result,
+                    )
+                    return
+            except Exception as exc:
+                logger.warning(
+                    "OPERATOR_EMERGENCY_STOP_DEFERRED_CLEAR_MONITOR_FAILED marker=%s err=%s",
+                    _MARKER,
+                    exc,
+                )
+            time.sleep(poll_s)
+        logger.warning(
+            "OPERATOR_EMERGENCY_STOP_DEFERRED_CLEAR_MONITOR_EXPIRED marker=%s timeout_s=%.1f",
+            _MARKER,
+            timeout_s,
+        )
+
+    threading.Thread(
+        target=_worker,
+        name="operator-emergency-stop-deferred-clear",
+        daemon=True,
+    ).start()
+
+
 def _patch_kill_switch_module(module: ModuleType) -> bool:
     cls = getattr(module, "KillSwitch", None)
     if not isinstance(cls, type):
@@ -215,6 +279,7 @@ def _patch_loaded() -> None:
 
 def install_import_hook() -> None:
     _run_operator_clear("startup")
+    _start_deferred_clear_monitor()
     _patch_loaded()
     if getattr(builtins, _HOOK_FLAG, False):
         return
