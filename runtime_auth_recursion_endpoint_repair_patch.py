@@ -15,6 +15,7 @@ _MARKER = "20260726-coinbase-client-recovery-v4"
 _LOCK = threading.RLock()
 _PATCHED = False
 _WATCHDOG_STARTED = False
+_CONVERGENCE_HOOK_REPAIRED = False
 _LOCAL = threading.local()
 
 
@@ -229,10 +230,16 @@ def _patch_okx_class(module: ModuleType) -> bool:
     return True
 
 
-def _disable_recursive_convergence_hook() -> None:
+def _disable_recursive_convergence_hook() -> bool:
+    global _CONVERGENCE_HOOK_REPAIRED
     module = sys.modules.get("runtime_convergence_hardening_patch")
     if not isinstance(module, ModuleType):
-        return
+        return False
+
+    existing = getattr(module, "_patch_auth_surface", None)
+    if getattr(existing, "_nija_runtime_convergence_recursion_safe_v2", False):
+        _CONVERGENCE_HOOK_REPAIRED = True
+        return False
 
     def safe_patch_auth_surface(target: ModuleType) -> bool:
         auth = sys.modules.get("broker_auth_recovery_patch")
@@ -270,8 +277,11 @@ def _disable_recursive_convergence_hook() -> None:
                 patched = True
         return patched
 
+    safe_patch_auth_surface._nija_runtime_convergence_recursion_safe_v2 = True  # type: ignore[attr-defined]
     module._patch_auth_surface = safe_patch_auth_surface
+    _CONVERGENCE_HOOK_REPAIRED = True
     logger.warning("RUNTIME_CONVERGENCE_RECURSION_REPAIRED marker=%s", _MARKER)
+    return True
 
 
 def _patch_loaded() -> bool:
