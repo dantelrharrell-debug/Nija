@@ -428,6 +428,52 @@ def _should_release(snapshot: RuntimeSnapshot, elapsed_s: float, timeout_s: floa
     return not snapshot.manager_ready or not snapshot.capital_ready
 
 
+def _attempt_emergency_stop_recovery(source: str) -> int:
+    """Clear only a safe stale emergency-stop latch, then rerun convergence."""
+    try:
+        try:
+            from bot import operator_emergency_stop_clear_patch as clear_patch
+        except ImportError:
+            import operator_emergency_stop_clear_patch as clear_patch  # type: ignore[import]
+        run_once = getattr(clear_patch, "run_once", None)
+        if not callable(run_once):
+            return 0
+        result = int(run_once() or 0)
+    except Exception as exc:
+        logger.warning(
+            "STALLED_WRITER_RELEASE_GUARD_V22_EMERGENCY_CLEAR_FAILED marker=%s source=%s err=%s",
+            _MARKER,
+            source,
+            exc,
+        )
+        return 0
+
+    if result <= 0:
+        return 0
+
+    try:
+        try:
+            from bot.runtime_authority_convergence_repair_patch import converge_runtime_authority
+        except ImportError:
+            from runtime_authority_convergence_repair_patch import converge_runtime_authority  # type: ignore[import]
+        converge_runtime_authority(f"stalled_writer_emergency_stop_recovery:{source}")
+    except Exception as exc:
+        logger.warning(
+            "STALLED_WRITER_RELEASE_GUARD_V22_EMERGENCY_CONVERGENCE_FAILED marker=%s source=%s err=%s",
+            _MARKER,
+            source,
+            exc,
+        )
+
+    logger.critical(
+        "STALLED_WRITER_RELEASE_GUARD_V22_EMERGENCY_RECOVERY_APPLIED marker=%s source=%s cleared=%s trading_remains_gate_controlled=true",
+        _MARKER,
+        source,
+        result,
+    )
+    return result
+
+
 def _terminate_process(exit_code: int) -> None:
     logging.shutdown()
     os._exit(exit_code)
@@ -554,6 +600,18 @@ def _monitor() -> None:
                 )
                 last_wait_log = now
 
+            if (
+                snapshot.state == "EMERGENCY_STOP"
+                and not snapshot.authority
+                and snapshot.manager_ready
+                and snapshot.capital_ready
+            ):
+                cleared = _attempt_emergency_stop_recovery("stalled_writer_monitor")
+                if cleared > 0:
+                    lease_seen_at = now
+                    last_wait_log = 0.0
+                    continue
+
             if _should_release(snapshot, elapsed_s, timeout_s):
                 confirm = _runtime_snapshot(bot_main)
                 if (
@@ -604,6 +662,7 @@ __all__ = [
     "_production_writer_intent",
     "_runtime_snapshot",
     "_should_release",
+    "_attempt_emergency_stop_recovery",
     "_release_reason",
     "_trigger_release",
 ]
