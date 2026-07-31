@@ -54,6 +54,79 @@ def _int_env(name: str, default: int) -> int:
         return default
 
 
+def _clear_writer_env() -> None:
+    os.environ["NIJA_WRITER_LEASE_ACQUIRED"] = "0"
+    os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"] = "0"
+    os.environ["NIJA_WRITER_HEARTBEAT_ALIVE_TS"] = "0"
+    os.environ.pop("NIJA_WRITER_FENCING_TOKEN", None)
+    os.environ.pop("NIJA_WRITER_FENCING_TOKEN_FALLBACK", None)
+
+
+def _compare_delete_env_writer_lock(snapshot: "RuntimeSnapshot") -> bool:
+    """Delete only this process's exact Redis writer lock when release drifted.
+
+    The normal bot_main release path can be unavailable when the guard imported a
+    different module identity than the one that acquired the lease.  This fallback
+    uses only the published lock key/token/owner and a Redis compare-and-delete;
+    it never deletes a lock with a different token.
+    """
+    token = str(snapshot.token or os.environ.get("NIJA_WRITER_FENCING_TOKEN", "") or "").strip()
+    lock_key = str(os.environ.get("NIJA_WRITER_LOCK_KEY", "") or "").strip()
+    meta_key = str(os.environ.get("NIJA_WRITER_LOCK_META_KEY", "") or "").strip()
+    owner = str(os.environ.get("NIJA_WRITER_OWNER_ID", "") or "").strip()
+    if not token or not lock_key:
+        return False
+
+    try:
+        try:
+            from bot.redis_env import get_redis_url
+            from bot.redis_runtime import connect_redis_with_fallback
+        except ImportError:
+            from redis_env import get_redis_url  # type: ignore[import]
+            from redis_runtime import connect_redis_with_fallback  # type: ignore[import]
+
+        redis_url = str(get_redis_url() or "").strip()
+        if not redis_url:
+            return False
+        client, _effective_url = connect_redis_with_fallback(
+            url=redis_url,
+            decode_responses=True,
+            socket_timeout=3,
+            socket_connect_timeout=3,
+            retries=1,
+            delay_s=0.0,
+            log=lambda msg: logger.debug("stalled writer Redis release: %s", msg),
+        )
+        expected = f"{token}:{owner}" if owner else ""
+        script = """
+        local current = redis.call('GET', KEYS[1]) or ''
+        local token_prefix = ARGV[1] .. ':'
+        if current == ARGV[2] or string.sub(current, 1, string.len(token_prefix)) == token_prefix then
+            redis.call('DEL', KEYS[1])
+            if KEYS[2] and KEYS[2] ~= '' then redis.call('DEL', KEYS[2]) end
+            return 1
+        end
+        return 0
+        """
+        released = bool(int(client.eval(script, 2, lock_key, meta_key, token, expected) or 0))
+        logger.critical(
+            "STALLED_WRITER_RELEASE_GUARD_V22_REDIS_FALLBACK marker=%s released=%s lock_key=%s token_prefix=%s",
+            _MARKER,
+            released,
+            lock_key,
+            token[:8],
+        )
+        return released
+    except Exception as exc:
+        logger.critical(
+            "STALLED_WRITER_RELEASE_GUARD_V22_REDIS_FALLBACK_FAILED marker=%s err=%s",
+            _MARKER,
+            exc,
+            exc_info=True,
+        )
+        return False
+
+
 def _runtime_state() -> str:
     return str(os.environ.get("NIJA_RUNTIME_TRADING_STATE", "OFF") or "OFF").strip().upper()
 
@@ -152,8 +225,6 @@ def _capital_snapshot() -> tuple[bool, float, bool, int]:
             valid = candidate
             break
 
-    # v34 handoff-corroboration: if CSMv2 has confirmed a fresh positive snapshot,
-    # treat the authority's stale flag as a false-positive and clear it.
     if stale and hydrated and capital > 0.0 and valid > 0:
         if (
             _truthy_env("NIJA_CAPITAL_READINESS_HANDOFF_V34")
@@ -262,22 +333,14 @@ def _release_reason(snapshot: RuntimeSnapshot) -> str:
 def _should_release(snapshot: RuntimeSnapshot, elapsed_s: float, timeout_s: float) -> bool:
     if elapsed_s < timeout_s:
         return False
-    # Require the lock to actually be held by this process.
     if not snapshot.writer_acquired:
         return False
-    # Never interrupt a process that is already live or has authority.
     if snapshot.shutdown_requested:
         return False
     if snapshot.authority or snapshot.state == "LIVE_ACTIVE":
         return False
-    # Do not auto-release dry-run or paper instances; they carry no live capital.
     if _truthy_env("DRY_RUN_MODE") or _truthy_env("PAPER_MODE"):
         return False
-    # Release whenever startup is stalled, regardless of trading-state value.
-    # An old instance can be stuck before reaching any LIVE_* state (e.g. broker
-    # connection hangs in prepare_canonical_broker_runtime()); in that case
-    # NIJA_RUNTIME_TRADING_STATE stays "OFF" and production_intent is False, so
-    # checking production_intent here would prevent the guard from ever firing.
     return not snapshot.manager_ready or not snapshot.capital_ready
 
 
@@ -323,10 +386,20 @@ def _trigger_release(bot_main: Any, snapshot: RuntimeSnapshot, reason: str) -> N
     token_after = str(os.environ.get("NIJA_WRITER_FENCING_TOKEN", "") or "").strip()
     lease_after = _truthy_env("NIJA_WRITER_LEASE_ACQUIRED")
     release_verified = not token_after and not lease_after
+    fallback_released = False
+    if not release_verified:
+        fallback_released = _compare_delete_env_writer_lock(snapshot)
+        if fallback_released:
+            _clear_writer_env()
+            token_after = str(os.environ.get("NIJA_WRITER_FENCING_TOKEN", "") or "").strip()
+            lease_after = _truthy_env("NIJA_WRITER_LEASE_ACQUIRED")
+            release_verified = not token_after and not lease_after
+
     logger.critical(
-        "STALLED_WRITER_RELEASE_GUARD_V22_RELEASED marker=%s verified=%s release_error=%s exit_enabled=%s",
+        "STALLED_WRITER_RELEASE_GUARD_V22_RELEASED marker=%s verified=%s fallback_released=%s release_error=%s exit_enabled=%s",
         _MARKER,
         release_verified,
+        fallback_released,
         release_error or "none",
         _truthy_env("NIJA_STALLED_WRITER_EXIT_PROCESS", "true"),
     )
