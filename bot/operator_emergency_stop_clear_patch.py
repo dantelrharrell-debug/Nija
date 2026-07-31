@@ -203,11 +203,12 @@ def _safe_to_clear_stale_env_only() -> tuple[bool, str]:
     present, text = _env_only_stop_present()
     if not present:
         return False, "no_stop_env_latch_present"
-    if any(token in text for token in _TERMINAL_RISK_TOKENS):
+    text_l = str(text or "").lower()
+    if any(token in text_l for token in _TERMINAL_RISK_TOKENS):
         return False, "terminal_risk_reason_present"
-    if text and any(token in text for token in _MANUAL_CLEAR_ALLOWED_TOKENS):
+    if text_l and any(token in text_l for token in _MANUAL_CLEAR_ALLOWED_TOKENS):
         return True, "stale_manual_env_latch_no_kill_file"
-    if "runtime_state=emergency_stop" in text:
+    if "runtime_state=emergency_stop" in text_l:
         return True, "stale_runtime_env_latch_no_kill_file"
     return False, "unknown_emergency_stop_reason"
 
