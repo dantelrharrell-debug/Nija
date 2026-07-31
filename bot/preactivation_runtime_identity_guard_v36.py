@@ -180,7 +180,7 @@ def _capital_snapshot() -> dict[str, Any]:
         _truthy_env("NIJA_CAPITAL_READINESS_HANDOFF_V34")
         or _truthy_env("NIJA_CAPITAL_READINESS_HANDOFF_V34_READY")
         or (_truthy_env("CAPITAL_SYSTEM_READY") and _truthy_env("NIJA_CAPITAL_READY"))
-        _truthy("NIJA_CAPITAL_READINESS_HANDOFF_V34")
+        or _truthy("NIJA_CAPITAL_READINESS_HANDOFF_V34")
         or _truthy("NIJA_CAPITAL_READINESS_HANDOFF_V34_READY")
         or (_truthy("CAPITAL_SYSTEM_READY") and _truthy("NIJA_CAPITAL_READY"))
     )
