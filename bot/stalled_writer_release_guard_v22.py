@@ -145,12 +145,12 @@ def _production_writer_intent() -> bool:
     )
 
 
-def _manager_snapshot() -> tuple[bool, bool, bool]:
+def _manager_instance() -> Any:
     module = sys.modules.get("bot.multi_account_broker_manager") or sys.modules.get(
         "multi_account_broker_manager"
     )
     if module is None:
-        return False, False, False
+        return None
 
     manager = getattr(module, "multi_account_broker_manager", None)
     if manager is None:
@@ -160,6 +160,69 @@ def _manager_snapshot() -> tuple[bool, bool, bool]:
                 manager = getter()
             except Exception:
                 manager = None
+    return manager
+
+
+def _connected_platform_broker_count(manager: Any) -> int:
+    if manager is None:
+        return 0
+
+    broker_map = getattr(manager, "_platform_brokers", None)
+    try:
+        items = list(broker_map.items()) if broker_map is not None else []
+    except Exception:
+        items = []
+
+    count = 0
+    for _broker_type, broker in items:
+        try:
+            connected = bool(getattr(broker, "connected", False))
+            ready = bool(getattr(broker, "capital_ready", connected))
+            balance = getattr(broker, "_last_known_balance", None)
+            has_balance = balance is not None
+            if connected and (ready or has_balance):
+                count += 1
+        except Exception:
+            continue
+    return count
+
+
+def _manager_valid_broker_count(manager: Any) -> int:
+    if manager is None:
+        return 0
+
+    for attr in ("_capital_last_valid_brokers", "valid_brokers", "broker_count", "_valid_broker_count"):
+        try:
+            candidate = int(getattr(manager, attr, 0) or 0)
+        except Exception:
+            candidate = 0
+        if candidate > 0:
+            return candidate
+
+    for attr in ("_capital_last_snapshot", "_last_capital_snapshot", "last_capital_snapshot"):
+        snapshot = getattr(manager, attr, None)
+        if snapshot is None:
+            continue
+        for count_attr in ("broker_count", "valid_brokers", "expected_brokers"):
+            try:
+                candidate = int(getattr(snapshot, count_attr, 0) or 0)
+            except Exception:
+                candidate = 0
+            if candidate > 0:
+                return candidate
+        balances = getattr(snapshot, "broker_balances", None)
+        try:
+            candidate = len([name for name, value in dict(balances or {}).items() if name and float(value or 0.0) >= 0.0])
+        except Exception:
+            candidate = 0
+        if candidate > 0:
+            return candidate
+
+    return _connected_platform_broker_count(manager)
+
+
+def _manager_snapshot() -> tuple[bool, bool, bool]:
+    manager = _manager_instance()
     if manager is None:
         return False, False, False
 
@@ -225,13 +288,34 @@ def _capital_snapshot() -> tuple[bool, float, bool, int]:
             valid = candidate
             break
 
-    if stale and hydrated and capital > 0.0 and valid > 0:
-        if (
-            _truthy_env("NIJA_CAPITAL_READINESS_HANDOFF_V34")
-            or _truthy_env("NIJA_CAPITAL_READINESS_HANDOFF_V34_READY")
-            or (_truthy_env("CAPITAL_SYSTEM_READY") and _truthy_env("NIJA_CAPITAL_READY"))
-        ):
-            stale = False
+    if valid <= 0:
+        manager = _manager_instance()
+        valid = _manager_valid_broker_count(manager)
+
+    if valid <= 0:
+        for attr in ("_last_snapshot", "snapshot", "current_snapshot"):
+            snapshot = getattr(authority, attr, None)
+            if snapshot is None:
+                continue
+            for count_attr in ("broker_count", "valid_brokers", "expected_brokers"):
+                try:
+                    candidate = int(getattr(snapshot, count_attr, 0) or 0)
+                except Exception:
+                    candidate = 0
+                if candidate > 0:
+                    valid = candidate
+                    break
+            if valid > 0:
+                break
+            balances = getattr(snapshot, "broker_balances", None)
+            try:
+                candidate = len([name for name, value in dict(balances or {}).items() if name and float(value or 0.0) >= 0.0])
+            except Exception:
+                candidate = 0
+            if candidate > 0:
+                valid = candidate
+                break
+
     handoff_ready = (
         _truthy_env("NIJA_CAPITAL_READINESS_HANDOFF_V34")
         or _truthy_env("NIJA_CAPITAL_READINESS_HANDOFF_V34_READY")
