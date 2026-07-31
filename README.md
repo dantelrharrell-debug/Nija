@@ -1,108 +1,108 @@
 # NIJA AI Trading LLC — Current Success State
 
-**Status date:** July 26, 2026
+**Status date:** July 31, 2026
 
-**Last verified Render deployment:** [`388e5f3`](https://github.com/dantelrharrell-debug/Nija/commit/388e5f31b41b74a04ef83128a85e245efb4de384)
+**Current hardening checkpoint:** [`f010e9c`](https://github.com/dantelrharrell-debug/Nija/commit/f010e9c1fa6fe92dae4e8681429f15b4223f916d)
 
-**Durable recovery branch:** [`recovery/2026-07-26-1437-three-broker-connected`](https://github.com/dantelrharrell-debug/Nija/tree/recovery/2026-07-26-1437-three-broker-connected)
+**Latest recovery PRs:** [PR #2320](https://github.com/dantelrharrell-debug/Nija/pull/2320) — authority heartbeat timeout recovery; [PR #2321](https://github.com/dantelrharrell-debug/Nija/pull/2321) — isolated timeout-grace tests
 
-**Repair provenance:** [PR #2279](https://github.com/dantelrharrell-debug/Nija/pull/2279) — Coinbase canonical-client and watchdog convergence
+This README is the durable recovery anchor for NIJA. It separates what production logs have proved from what still must happen before any run is declared actively trading.
 
-This README is the durable recovery anchor for NIJA. It separates what production logs have proved from what still must happen before trading is declared active.
+NIJA does not guarantee trades, fills, profits, income, or returns. A connected brokerage may enter a trade only when writer authority, authenticated capital, signal, risk, exchange-minimum, order-admission, and venue-specific execution checks all pass.
 
-NIJA does not guarantee trades or profits. A connected brokerage may enter a trade only when writer authority, authenticated capital, signal, risk, exchange-minimum, and order-admission checks all pass.
+## Current Recovery Checkpoint — July 31, 2026
 
-## Current Recovery Checkpoint — July 26, 2026 at 14:37 UTC
+The July 31 recovery work cleared the startup blockers observed after the July 26 three-broker recovery. The latest logs showed the system had progressed through capital readiness, three-broker connectivity, live broker exit registration, entry-price repair, and runtime guard audit readiness. The remaining blocker was an authority heartbeat probe that timed out even though Redis was reachable and the writer generation matched. PR #2320 hardened that path.
 
-| Area | Proven state |
+| Area | Proven or patched state |
 |---|---|
-| Source of truth | Render entrypoint attestation proved branch `main`, deployed commit `388e5f3`, and the canonical `main.py -> bot.bot -> bot.bot_main` runtime |
-| Coinbase | ES256 credentials canonicalized; canonical-client recovery v4 installed; the platform broker was registered for automatic exits and reported `coinbase_connected=True` in the all-three snapshot |
-| Coinbase repair | Healthy clients are preserved only within the same account and credential family; stale aliases may adopt the verified client; pre-rotation clients are rejected; missing-client and confirmed-401 paths remain fail-closed |
-| OKX US | Platform broker registered for automatic exits and reported `okx_connected=True`; earlier authenticated production evidence observed $144.96 and `funded` dual-wallet status |
-| Kraken | Platform broker registered for automatic exits and reported `kraken_connected=True`; 824 tradable pairs were detected and one `ETH-USD` position was visible without tracker mutation |
-| Three-broker convergence | One production snapshot reported `kraken_connected=True coinbase_connected=True okx_connected=True all_configured_connected=True` |
-| Exit protection | Universal broker exit supervision registered Kraken, Coinbase, and OKX platform brokers in the same deployed window |
-| Writer authority | The replacement Render instance remained safely in `ENTRYPOINT_WRITER_AUTHORITY_STANDBY` because the prior instance still held the Redis writer lease; generation 1887 was published |
-| Kraken recovery coordinator | Installed and running, but waiting for the fencing token that becomes available only after writer authority transfers |
-| Trading state | `STRATEGY_PUBLICATION_WAITING reason=state_not_live_active`; this window did not yet prove `LIVE_ACTIVE`, an order submission, a fill, or a completed exit |
+| Source of truth | Canonical runtime path remains `scripts/canonical_runtime_launcher_v26.py -> main.py -> bot.bot -> bot.bot_main` |
+| Latest code checkpoint | `main` includes commit `f010e9c1fa6fe92dae4e8681429f15b4223f916d` |
+| Capital readiness | Runtime evidence showed `CAPITAL_READINESS_HANDOFF_V34_READY` with fresh live-exchange capital around `$466` and `broker_count=3` |
+| Broker connectivity | Runtime evidence showed Kraken, Coinbase, and OKX all connected in `LIVE_BROKER_CONNECTIVITY_SNAPSHOT` |
+| Exit protection | `UNIVERSAL_BROKER_EXIT_REGISTERED` was observed for OKX, Coinbase, and Kraken platform brokers |
+| Runtime guard audit | Runtime evidence showed `RUNTIME_GUARD_AUDIT ready=true missing=none` |
+| Entry cost-basis repair | Runtime evidence repaired the visible `ETH-USD` entry price from broker/account data |
+| Prior blocker | `AUTHORITY_HEARTBEAT_EXPIRED` forced `LIVE_PENDING_CONFIRMATION -> EMERGENCY_STOP` after three 5-second authority probe timeouts |
+| Current hardening | `bot.authority_heartbeat_timeout_grace_patch` now suppresses only soft authority-probe timeouts when Redis proves the current process still owns the writer lock token and matching generation |
+| Fail-closed behavior | Generation mismatch, Redis outage, missing lock, token mismatch, missing fencing token, and non-timeout authority failures still fall through to the original emergency-stop path |
+| Trading state | Latest user-provided logs proved readiness and protection layers, but did not prove a new order fill or completed exit after the final heartbeat fix deployed |
 
-### Durable recovery anchor
-
-The recovery branch above is intended to point permanently to the repository state containing the verified Coinbase repair and this success record. Render credentials and broker secrets are environment variables and are not stored in GitHub, so they must remain configured separately.
-
-To return safely to this checkpoint:
-
-1. Open the [durable recovery branch](https://github.com/dantelrharrell-debug/Nija/tree/recovery/2026-07-26-1437-three-broker-connected) in GitHub.
-2. Create a new recovery branch or pull request from that anchor into `main`; review the diff before merging. Do not force-push or hard-reset `main`.
-3. If the application itself must be rolled back, use Render's rollback/redeploy control for the deployment associated with commit [`388e5f3`](https://github.com/dantelrharrell-debug/Nija/commit/388e5f31b41b74a04ef83128a85e245efb4de384).
-4. Keep the existing Render environment variables, Redis instance, and broker credentials in place; the Git checkpoint cannot restore secrets.
-5. Verify the markers below before allowing normal activation. Never delete the writer lease or use force-activation flags to manufacture readiness.
-
-### Verified evidence at this checkpoint
+### July 31 success evidence
 
 ```text
-RUNTIME_ENTRYPOINT_ATTESTATION_OK ... branch=main commit=388e5f31b41b74a04ef83128a85e245efb4de384
-COINBASE_AUTHENTICATED_CONNECT_RECOVERY_INSTALLED marker=20260726-coinbase-canonical-client-v4
+CAPITAL_READINESS_HANDOFF_V34_READY ... capital=466.59 broker_count=3 fresh=true
+LIVE_BROKER_CONNECTIVITY_SNAPSHOT ... kraken_connected=True coinbase_connected=True okx_connected=True all_configured_connected=True
 UNIVERSAL_BROKER_EXIT_REGISTERED venue=okx account=platform
 UNIVERSAL_BROKER_EXIT_REGISTERED venue=coinbase account=platform
 UNIVERSAL_BROKER_EXIT_REGISTERED venue=kraken account=platform
-LIVE_BROKER_CONNECTIVITY_SNAPSHOT ... kraken_connected=True coinbase_connected=True okx_connected=True all_configured_connected=True
+RUNTIME_GUARD_AUDIT ... ready=true ... missing=none
+[EntryPriceStore] repair: ETH-USD -> $1742.9200 qty=0.0381184362 (source=api)
 ```
 
-### Safe continuation from this checkpoint
+### Last confirmed blocker fixed
 
-1. Keep the replacement Render instance running; do not repeatedly restart it while `ENTRYPOINT_WRITER_AUTHORITY_STANDBY` is present.
-2. Wait for the previous instance to release its Redis lease, then confirm:
+The final blocking pattern before PR #2320 was:
+
+```text
+AUTHORITY_HEARTBEAT: HEARTBEAT FAILURE #3/3 — Authority check timed out after 5.0s | local_generation=2881 redis_generation=2881 redis_conn=reachable is_generation_mismatch=False
+AuthorityHeartbeatMonitor: forcing EMERGENCY_STOP — AUTHORITY HEARTBEAT EXPIRED
+State transition: LIVE_PENDING_CONFIRMATION -> EMERGENCY_STOP
+```
+
+This was treated as a slow authority status probe, not proven lost authority, because Redis was reachable and the writer generation matched. The new guard requires Redis to prove both generation and lock-token ownership before grace is applied.
+
+Expected post-deploy markers:
+
+```text
+AUTHORITY_HEARTBEAT_TIMEOUT_GRACE_INSTALL_REQUESTED
+AUTHORITY_HEARTBEAT_TIMEOUT_GRACE_INSTALLED marker=20260731-authority-heartbeat-timeout-grace-v1
+```
+
+If the same soft timeout recurs while ownership is still valid, the expected recovery marker is:
+
+```text
+AUTHORITY_HEARTBEAT_TIMEOUT_GRACE_APPLIED marker=20260731-authority-heartbeat-timeout-grace-v1
+```
+
+If ownership is not proven, NIJA must still halt and publish:
+
+```text
+AUTHORITY_HEARTBEAT_TIMEOUT_GRACE_DENIED
+AUTHORITY_HEARTBEAT_EXPIRED
+```
+
+## Safe Continuation From This Checkpoint
+
+1. Deploy or wait for Render to deploy commit `f010e9c1fa6fe92dae4e8681429f15b4223f916d` or newer.
+2. Confirm the canonical entrypoint attestation references that commit or a later audited commit.
+3. Confirm the heartbeat hardening module installs:
+   ```text
+   AUTHORITY_HEARTBEAT_TIMEOUT_GRACE_INSTALLED
+   ```
+4. Confirm writer authority and generation remain valid:
    ```text
    ENTRYPOINT_WRITER_AUTHORITY_READY
    ENTRYPOINT_WRITER_AUTHORITY_VERIFIED
    ```
-3. Confirm Kraken's coordinator completes its authority handoff:
+5. Confirm capital and broker readiness remain live, fresh, and broker-backed:
    ```text
-   KRAKEN_RECOVERY_COORDINATOR_HANDOFF
-   KRAKEN_AUTHENTICATED_RECOVERY_READY ... connected=true capital_rechecked=true
+   CAPITAL_READINESS_HANDOFF_V34_READY
+   FIRST_SNAPSHOT_GATE_LATCH accepted_latched=True stale=False
+   LIVE_BROKER_CONNECTIVITY_SNAPSHOT ... all_configured_connected=True
    ```
-4. Confirm Coinbase remains connected through at least two 30-second connection-watchdog intervals. It must not be followed by `COINBASE_CLIENT_UNINITIALIZED_FAIL_CLOSED` for the same account.
-5. Confirm broker-local readiness and authenticated spendable capital independently for every venue intended to enter trades.
-6. Confirm normal activation gates commit:
+6. Confirm runtime activation advances without emergency stop:
    ```text
    ACTIVATION_COMMITTED
    NIJA_RUNTIME_TRADING_STATE=LIVE_ACTIVE
    ```
-7. Confirm broker-specific scans, admitted orders, fills, and exits only from real runtime evidence. Connectivity alone is not proof of a trade or profit.
-8. Never use forced activation, synthetic capital, credential bypasses, nonce bypasses, or writer-lock deletion.
-
-## Earlier Verified Production Milestone — July 25, 2026 (historical)
-
-
-NIJA completed a successful production bootstrap milestone through the canonical Render runtime.
-
-| Component | Verified milestone |
-|---|---|
-| Canonical runtime | Deployed and entrypoint-attested |
-| Distributed authority | Redis-backed writer and nonce safety connected |
-| Kraken | Private balance hydrated and accepted |
-| Capital pipeline | High-confidence live-exchange snapshot accepted with at least one valid broker |
-| Bootstrap | Reached `CAPITAL_READY`; broker-scoped trading loop unblocked |
-| Runtime activation | `LIVE_ACTIVE`, kill switch clear, and distributed writer heartbeat valid |
-| Coinbase credential handling | Matched API-key/PEM family selected and ES256 validation passed |
-| Coinbase live readiness | Authenticated balance and trading-readiness proof still required |
-| OKX connection | Connected at manager layer; stable execution-readiness proof still required |
-| Exit protection | Kraken account-exit, cost-basis, margin-cost, and downstream safety guards installed |
-| Scan and execution | Trading-loop process reported running, but no observed scan cycle, order, or confirmed fill yet |
-
-This is a successful **Kraken-backed capital bootstrap and live-authority activation**, not a claim that all configured venues are ready or that a trade or profit is guaranteed. Kraken and OKX were constructed as connected platform brokers, but only Kraken has stable private-capital and execution-readiness proof in the verified log window. Each optional venue remains isolated and fail-closed until its own private authentication, balance, and execution-readiness checks succeed.
-
-The Coinbase credential-pair repair was delivered through [PR #2260](https://github.com/dantelrharrell-debug/Nija/pull/2260). It prevents startup from combining an API key from one configured credential family with a PEM belonging to another. A structurally valid PEM is not connection proof; Coinbase still requires a successful private account or balance request.
-
-## Official NIJA Links
-
-- **Website:** [nijaaitrading.com](https://nijaaitrading.com)
-- **Mobile documentation:** [mobile/README.md](mobile/README.md)
-- **Owner:** NIJA AI Trading LLC
-
----
+7. Confirm scans and execution-admission logs before expecting any trade:
+   ```text
+   BROKER_INDEPENDENT_SCAN_START
+   BROKER_INDEPENDENT_SCAN_BROKER_START broker=<venue>
+   ```
+8. Confirm fills and exits only from real broker/order evidence. Connectivity and `LIVE_ACTIVE` are not proof of a trade or profit.
+9. Never use forced activation, synthetic capital, credential bypasses, nonce bypasses, or manual writer-lock deletion to manufacture readiness.
 
 ## Current Live Broker Contract
 
@@ -130,8 +130,6 @@ PRIMARY_EXECUTION_VENUE=auto
 
 `PRIMARY_EXECUTION_VENUE` may force only `kraken`, `coinbase`, or `okx`. Use `auto`, `best`, `all`, or an empty value for independent multi-venue routing.
 
----
-
 ## Brokerage Independence
 
 Every platform and user brokerage trades independently.
@@ -150,8 +148,6 @@ NIJA_THREE_VENUE_EXECUTION_READY=1
 
 A degraded optional venue is excluded until it recovers.
 
----
-
 ## Production Startup Order
 
 The active Render startup path is:
@@ -159,6 +155,7 @@ The active Render startup path is:
 ```text
 scripts/production_bootstrap.sh
     -> start.sh
+    -> scripts/canonical_runtime_launcher_v26.py
     -> main.py
     -> bot.bot
     -> bot.bot_main
@@ -167,22 +164,60 @@ scripts/production_bootstrap.sh
 Safety-critical order:
 
 1. Start the isolated Render liveness server.
-2. Acquire the Redis single-writer lease and fencing generation.
-3. Start writer and authority heartbeats.
-4. Initialize Kraken nonce protection.
-5. Run SelfHealingStartup and connect the primary broker.
-6. Initialize the canonical `MultiAccountBrokerManager`.
-7. Connect configured Coinbase and OKX platform brokers.
-8. Connect configured user broker accounts.
-9. Hydrate real broker balances into `CapitalAuthority`.
-10. Publish per-venue execution readiness.
-11. Commit `LIVE_ACTIVE` only through the normal state machine.
-12. Start independent broker-scoped scanning and execution.
-13. Keep automatic position exits running for every registered live broker instance.
+2. Install pre-bot runtime guard patches, including current capital freshness and authority heartbeat timeout grace.
+3. Acquire the Redis single-writer lease and fencing generation.
+4. Start writer and authority heartbeats.
+5. Initialize Kraken nonce protection.
+6. Run SelfHealingStartup and connect the primary broker.
+7. Initialize the canonical `MultiAccountBrokerManager`.
+8. Connect configured Coinbase and OKX platform brokers.
+9. Connect configured user broker accounts.
+10. Hydrate real broker balances into `CapitalAuthority`.
+11. Publish per-venue execution readiness.
+12. Commit `LIVE_ACTIVE` only through the normal state machine.
+13. Start independent broker-scoped scanning and execution.
+14. Keep automatic position exits running for every registered live broker instance.
 
 No deployment variable may pre-grant writer authority or `LIVE_ACTIVE`.
 
----
+## Authority Heartbeat Hardening
+
+The authority heartbeat is a safety system, not a trading signal. It protects the single-writer lease and must remain fail-closed when authority is genuinely lost.
+
+Current hardening module:
+
+```text
+bot/authority_heartbeat_timeout_grace_patch.py
+```
+
+The module may suppress lockdown only for this narrow case:
+
+```text
+reason contains: Authority check timed out
+is_generation_mismatch=False
+Redis generation == NIJA_WRITER_LEASE_GENERATION
+Redis writer lock token == NIJA_WRITER_FENCING_TOKEN
+```
+
+It must not suppress lockdown for:
+
+```text
+generation mismatch
+Redis ping timeout or Redis unavailable
+missing writer lock
+writer lock held by another token
+missing fencing token
+explicit authority assertion failure
+operator emergency stop
+```
+
+Operational override:
+
+```bash
+NIJA_AUTHORITY_HEARTBEAT_TIMEOUT_GRACE_DISABLED=true
+```
+
+Use the override only if the timeout-grace path itself is suspected of masking a real authority issue.
 
 ## Writer Authority Handoff
 
@@ -204,8 +239,6 @@ PREBOT_WRITER_AUTHORITY_READY
 ENTRYPOINT_WRITER_AUTHORITY_READY
 ENTRYPOINT_WRITER_AUTHORITY_VERIFIED
 ```
-
----
 
 ## Connect Kraken
 
@@ -257,8 +290,6 @@ THREE_VENUE_EXECUTION_STAGE venue=kraken
 
 Kraken's configured effective order floor must be respected. Current defaults include additional headroom for fees and exchange minimums.
 
----
-
 ## Connect Coinbase Advanced Trade Correctly
 
 NIJA connects to Coinbase Advanced Trade at:
@@ -267,16 +298,7 @@ NIJA connects to Coinbase Advanced Trade at:
 https://api.coinbase.com/api/v3/brokerage
 ```
 
-### Create the correct Coinbase key
-
-1. Sign in to Coinbase Developer Platform.
-2. Open **API Keys** and choose **Secret API Keys**.
-3. Create a key for NIJA.
-4. Select **ECDSA / ES256**.
-5. Enable **View** and **Trade**.
-6. Keep **Transfer** disabled.
-7. Restrict the key to the intended funded portfolio when applicable.
-8. Save the complete API key name and EC private key.
+Create a Coinbase Developer Platform **Secret API Key** using **ECDSA / ES256**, with **View** and **Trade** enabled and **Transfer** disabled.
 
 Canonical variables:
 
@@ -301,7 +323,7 @@ CDP_API_KEY_NAME
 CDP_API_KEY_PRIVATE_KEY
 ```
 
-NIJA evaluates Coinbase credentials as complete key/PEM families. It does not independently select a key from one alias family and a secret from another. Startup publishes the selected pair to the canonical variables while preserving other complete configured pairs for bounded authenticated recovery.
+NIJA evaluates Coinbase credentials as complete key/PEM families. It does not independently select a key from one alias family and a secret from another.
 
 Expected normalization evidence:
 
@@ -311,51 +333,10 @@ COINBASE_PEM_CANONICALIZED validation=es256 pair_source=<family> pair_count=<cou
 
 A valid PEM proves key structure only; Coinbase is not connected until a private account or balance request succeeds.
 
-### Coinbase PEM failure
-
-This marker means Coinbase cannot authenticate:
-
-```text
-COINBASE_PEM_INVALID
-```
-
-It is a credential-format problem, not a trading-strategy problem. Correct it by replacing `COINBASE_API_SECRET` with the matching multi-line EC private key:
-
-```text
------BEGIN EC PRIVATE KEY-----
-base64-key-material
------END EC PRIVATE KEY-----
-```
-
-Rules:
-
-- Preserve real line breaks.
-- Preserve both boundary lines.
-- Do not add leading spaces.
-- Do not wrap the entire value in extra quote characters in Render.
-- Do not paste an unrelated JSON payload or Ed25519 key.
-- The private key must belong to the exact `organizations/.../apiKeys/...` name.
-
-Validation commands from a secure backend shell:
-
-```bash
-python validate_broker_credentials.py
-python validate_broker_credentials.py --test-connections
-python scripts/auth_sanity.py
-```
-
-Required permissions:
-
-```text
-can_view=true
-can_trade=true
-```
-
 Healthy Coinbase evidence:
 
 ```text
 COINBASE_PEM_CANONICALIZED validation=es256 pair_source=<family> pair_count=<count>
-COINBASE_AUTHENTICATED_PAIR_RETRY              # optional when alternatives exist
 COINBASE_AUTHENTICATED_PAIR_RECOVERED
 COINBASE_CONNECTION_SUCCESS
 authenticated Coinbase balance observed
@@ -364,8 +345,6 @@ NIJA_COINBASE_TRADING_READY=1
 ```
 
 Credential normalization, ES256 validation, and recovery installation are not proof of a live Coinbase connection. If every private probe fails, NIJA restores the primary pair, publishes `authentication_failed`, and keeps Coinbase fail-closed without disabling Kraken or OKX.
-
----
 
 ## Connect OKX US Correctly
 
@@ -411,8 +390,6 @@ THREE_VENUE_EXECUTION_STAGE venue=okx
 
 If credentials are absent, OKX is reported as `missing_credentials` and remains isolated.
 
----
-
 ## Independent Trade Entry Contract
 
 NIJA's independent broker router scans every connected and eligible live venue separately.
@@ -446,24 +423,13 @@ BROKER_EXECUTION_DISCONNECTED_SKIPPED
 
 A connected brokerage still will not enter a trade unless all normal conditions pass. Do not use `FORCE_TRADE`, forced activation, or writer-lock bypasses to manufacture an entry.
 
----
-
 ## Automatic Take-Profit And Stop-Loss Contract
 
 NIJA has two complementary exit layers.
 
 ### Execution-engine exit monitor
 
-Every `ExecutionEngine` instance is registered with the process-wide automatic exit monitor. It evaluates:
-
-- Stored stop-loss.
-- Synthesized loss-cap stop when a stored stop is absent.
-- Take-profit 1, 2, and 3.
-- Trailing profit lock.
-- Trailing stop-loss.
-- Breakeven stop-loss.
-- Combined breakeven-to-trailing logic.
-- Combined trailing take-profit and trailing stop-loss.
+Every `ExecutionEngine` instance is registered with the process-wide automatic exit monitor. It evaluates stored stop-loss, synthesized loss-cap stops, take-profit levels, trailing profit lock, trailing stop-loss, breakeven stop-loss, and combined trailing logic.
 
 ### Universal broker-native exit supervisor
 
@@ -511,8 +477,6 @@ NIJA_PROFIT_LOCK_CALLBACK_PCT=0.0035
 NIJA_COMBINED_TRAILING_TP_SL_ENABLED=true
 ```
 
----
-
 ## Canonical Readiness Proof
 
 A healthy deployment should progress through these groups.
@@ -522,6 +486,8 @@ A healthy deployment should progress through these groups.
 ```text
 PREBOT_WRITER_AUTHORITY_READY
 ENTRYPOINT_WRITER_AUTHORITY_READY
+ENTRYPOINT_WRITER_AUTHORITY_VERIFIED
+AUTHORITY_HEARTBEAT_TIMEOUT_GRACE_INSTALLED
 ```
 
 ### Broker and capital bootstrap
@@ -529,7 +495,8 @@ ENTRYPOINT_WRITER_AUTHORITY_READY
 ```text
 CANONICAL_BROKER_BOOTSTRAP_HANDOFF_INSTALLED
 CANONICAL_BROKER_BOOTSTRAP_INITIALIZING
-CANONICAL_BROKER_BOOTSTRAP_READY hydrated=True capital=<positive> valid_brokers>=1
+CAPITAL_READINESS_HANDOFF_V34_READY
+FIRST_SNAPSHOT_GATE_LATCH accepted_latched=True stale=False
 CAPITAL_READY
 ```
 
@@ -541,6 +508,7 @@ THREE_VENUE_EXECUTION_READINESS_INSTALLED
 THREE_VENUE_EXECUTION_STAGE venue=kraken
 THREE_VENUE_EXECUTION_STAGE venue=coinbase
 THREE_VENUE_EXECUTION_STAGE venue=okx
+LIVE_BROKER_CONNECTIVITY_SNAPSHOT ... all_configured_connected=True
 ```
 
 ### Runtime activation
@@ -550,6 +518,7 @@ PREACTIVATION_READINESS_V16_RECONSTRUCTED
 ACTIVATION_COMMITTED
 NIJA_RUNTIME_TRADING_STATE=LIVE_ACTIVE
 NIJA_RUNTIME_EXECUTION_AUTHORITY=1
+RUNTIME_GUARD_AUDIT ... ready=true ... missing=none
 ```
 
 ### Trading and exits
@@ -559,11 +528,10 @@ BROKER_INDEPENDENT_SCAN_START
 BROKER_INDEPENDENT_SCAN_BROKER_START
 AUTO_EXIT_SL_TP_MONITOR_STARTED
 UNIVERSAL_BROKER_EXIT_SUPERVISOR_STARTED
+UNIVERSAL_BROKER_EXIT_REGISTERED venue=<venue> account=<account>
 ```
 
-`LIVE_ACTIVE` proves runtime readiness. It does not prove that a qualifying signal exists or that an order has been filled.
-
----
+`LIVE_ACTIVE` proves runtime readiness. It does not prove that a qualifying signal exists, that an order has been filled, or that an exit has closed.
 
 ## Mobile App
 
@@ -571,27 +539,17 @@ NIJA includes a Capacitor 5.7 mobile foundation for iOS and Android. The current
 
 **Current mobile status: pre-beta.** Native packaging exists, but production authentication, secure device storage, push/biometric verification, automated mobile tests, legal review, signed release builds, and store approval are still required.
 
-The detailed mobile source of truth is [mobile/README.md](mobile/README.md). It covers:
-
-- Verified implementation status versus remaining work.
-- The official NIJA black-and-gold sword-and-laurel brand system.
-- The current Capacitor project structure and setup commands.
-- The planned Expo React Native target structure.
-- Server-side security and broker-secret boundaries.
-- Home, Signals, Trades, Risk, and Profile product navigation.
-- Live Mode consent, readiness, risk, and emergency-pause gates.
-- A six-stage delivery roadmap and the next ten development milestones.
+The detailed mobile source of truth is [mobile/README.md](mobile/README.md).
 
 Mobile clients are a secure control and visibility layer. Broker credentials, writer authority, risk decisions, and order execution remain server-side.
-
----
-
 
 ## Protection Stack Modules
 
 Key live modules include:
 
 ```text
+bot/authority_heartbeat_timeout_grace_patch.py
+bot/current_capital_snapshot_freshness_repair_patch.py
 bot/broker_independent_live_execution_patch.py
 disconnected_broker_execution_guard_patch.py
 secondary_venue_activation_patch.py
@@ -608,7 +566,21 @@ bot/combined_trailing_tp_sl_runtime_patch.py
 bot/combined_trailing_position_size_calculator.py
 ```
 
----
+## Earlier Verified Production Milestone — July 26, 2026
+
+NIJA completed a successful production bootstrap milestone through the canonical Render runtime on July 26. That checkpoint proved Coinbase canonical-client recovery, all-three broker connectivity evidence, and universal broker exit registration in the same deployed window, but it did not yet prove `LIVE_ACTIVE`, an order submission, a fill, or a completed exit.
+
+Historical anchor:
+
+- Commit [`388e5f3`](https://github.com/dantelrharrell-debug/Nija/commit/388e5f31b41b74a04ef83128a85e245efb4de384)
+- Branch [`recovery/2026-07-26-1437-three-broker-connected`](https://github.com/dantelrharrell-debug/Nija/tree/recovery/2026-07-26-1437-three-broker-connected)
+- PR [#2279](https://github.com/dantelrharrell-debug/Nija/pull/2279)
+
+## Official NIJA Links
+
+- **Website:** [nijaaitrading.com](https://nijaaitrading.com)
+- **Mobile documentation:** [mobile/README.md](mobile/README.md)
+- **Owner:** NIJA AI Trading LLC
 
 ## Important Disclaimer
 
