@@ -159,3 +159,23 @@ def test_bot_main_treats_lock_contention_as_safe_standby(monkeypatch) -> None:
     module._writer_authority_last_error = "active_writer_lock_held"
 
     assert module.main() == 0
+
+def test_publication_monitor_accepts_safe_pending_state(monkeypatch) -> None:
+    module = _load(
+        "bot/strategy_publication_patch.py",
+        "nija_test_strategy_publication_pending",
+    )
+    monkeypatch.setenv("LIVE_CAPITAL_VERIFIED", "true")
+    monkeypatch.setenv("DRY_RUN_MODE", "false")
+    monkeypatch.setenv("PAPER_MODE", "false")
+    monkeypatch.setenv("NIJA_RUNTIME_TRADING_STATE", "LIVE_PENDING_CONFIRMATION")
+    monkeypatch.setenv("NIJA_WRITER_FENCING_TOKEN", "token")
+    monkeypatch.setenv("NIJA_WRITER_LEASE_GENERATION", "1")
+
+    assert module._ready() == (True, "ok")
+
+    monkeypatch.setenv("NIJA_RUNTIME_TRADING_STATE", "OFF")
+    ready, detail = module._ready()
+    assert ready is False
+    assert detail == "state_not_publishable:OFF"
+
