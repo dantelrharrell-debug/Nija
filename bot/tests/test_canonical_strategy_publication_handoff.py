@@ -160,7 +160,7 @@ def test_bot_main_treats_lock_contention_as_safe_standby(monkeypatch) -> None:
 
     assert module.main() == 0
 
-def test_publication_monitor_accepts_safe_pending_state(monkeypatch) -> None:
+def test_publication_monitor_accepts_safe_preactivation_states(monkeypatch) -> None:
     module = _load(
         "bot/strategy_publication_patch.py",
         "nija_test_strategy_publication_pending",
@@ -175,7 +175,10 @@ def test_publication_monitor_accepts_safe_pending_state(monkeypatch) -> None:
     assert module._ready() == (True, "ok")
 
     monkeypatch.setenv("NIJA_RUNTIME_TRADING_STATE", "OFF")
+    assert module._ready() == (True, "ok")
+
+    monkeypatch.setenv("NIJA_RUNTIME_TRADING_STATE", "EMERGENCY_STOP")
     ready, detail = module._ready()
     assert ready is False
-    assert detail == "state_not_publishable:OFF"
+    assert detail == "state_not_publishable:EMERGENCY_STOP"
 

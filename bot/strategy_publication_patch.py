@@ -37,7 +37,7 @@ def _ready() -> tuple[bool, str]:
     runtime_state = str(
         os.environ.get("NIJA_RUNTIME_TRADING_STATE", "")
     ).strip().upper()
-    if runtime_state not in {"LIVE_PENDING_CONFIRMATION", "LIVE_ACTIVE"}:
+    if runtime_state not in {"OFF", "LIVE_PENDING_CONFIRMATION", "LIVE_ACTIVE"}:
         return False, f"state_not_publishable:{runtime_state or 'unset'}"
     if not str(os.environ.get("NIJA_WRITER_FENCING_TOKEN", "")).strip():
         return False, "writer_token_missing"
