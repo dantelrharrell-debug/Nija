@@ -2264,6 +2264,7 @@ class CapitalAuthority:
             _was_already_accepted = self._first_snap_accepted
             if _all_conditions_met and not _was_already_accepted:
                 self._first_snap_accepted = True
+            _accepted_latched = self._first_snap_accepted
 
         _newly_accepted: bool = _all_conditions_met and not _was_already_accepted
 
@@ -2275,12 +2276,14 @@ class CapitalAuthority:
             "  snapshot_timestamp: %s\n"
             "  snapshot_source: %s\n"
             "  accepted: %s\n"
+            "  newly_accepted: %s\n"
             "  reason: %s",
             _gate_ca_hydrated,
             snapshot_real,
             _snap_valid_broker_count,
             _snap_computed_at_iso,
             _snap_source,
+            _accepted_latched,
             _newly_accepted,
             _gate_reason,
         )
