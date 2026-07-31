@@ -354,6 +354,7 @@ class CapitalCSMv2:
             _was_already_accepted = self._first_snap_accepted
             if _all_gate_conditions_met and not _was_already_accepted:
                 self._first_snap_accepted = True
+            _accepted_latched = self._first_snap_accepted
 
         _newly_accepted: bool = _all_gate_conditions_met and not _was_already_accepted
 
@@ -365,12 +366,14 @@ class CapitalCSMv2:
             "  snapshot_timestamp: %s\n"
             "  snapshot_source: %s\n"
             "  accepted: %s\n"
+            "  newly_accepted: %s\n"
             "  reason: %s",
             _gate_ca_hydrated,
             real_capital,
             broker_count,
             _snap_timestamp_iso,
             _snap_source,
+            _accepted_latched,
             _newly_accepted,
             _gate_reason,
         )
