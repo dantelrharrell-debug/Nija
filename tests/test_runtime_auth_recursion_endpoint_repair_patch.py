@@ -135,6 +135,40 @@ def test_coinbase_canonical_client_is_never_shared_between_users():
     assert daivon.client is None
 
 
+def test_coinbase_recursive_connect_is_blocked(monkeypatch):
+    class Stability:
+        def __init__(self):
+            self.reasons = []
+
+        def mark_disconnected(self, reason):
+            self.reasons.append(reason)
+
+    class CoinbaseBroker:
+        def __init__(self):
+            self.connected = True
+            self._is_available = True
+            self._auth_failed = False
+            self._connection_stability_manager = Stability()
+
+        def connect(self):
+            return self.connect()
+
+    module = ModuleType("bot.broker_manager")
+    module.CoinbaseBroker = CoinbaseBroker
+
+    assert repair._patch_coinbase_class(module) is True
+    broker = CoinbaseBroker()
+
+    assert broker.connect() is False
+    assert broker.connected is False
+    assert broker._is_available is False
+    assert broker._auth_failed is False
+    assert broker._connection_stability_manager.reasons == ["connect_recursion_blocked"]
+    assert os.environ["NIJA_COINBASE_CONNECTED"] == "0"
+    assert os.environ["NIJA_COINBASE_FUNDING_STATUS"] == "connect_recursion_blocked"
+    assert os.environ["NIJA_COINBASE_ACTIVATION_STATE"] == "reconnect_pending"
+
+
 def test_okx_recursive_connect_is_blocked(monkeypatch):
     class OKXBroker:
         def __init__(self):
