@@ -15,19 +15,13 @@ def test_timeout_grace_suppresses_lockdown_when_writer_lock_matches(monkeypatch)
                 return b"token-123:owner"
             return None
 
-        def set(self, *args, **kwargs):
-            return True
-
-        def expire(self, *args, **kwargs):
-            return True
-
     monkeypatch.setenv("NIJA_WRITER_FENCING_TOKEN", "token-123")
     monkeypatch.setenv("NIJA_WRITER_LEASE_GENERATION", "2881")
     monkeypatch.setenv("NIJA_WRITER_SCOPE", "platform")
     monkeypatch.setenv("HEARTBEAT_MARKER_PATH", os.devnull)
     monkeypatch.setattr(patch, "_redis_url", lambda: "redis://example/0")
     monkeypatch.setattr(patch, "_redis_client", lambda redis_url, timeout_s: FakeRedis())
-    monkeypatch.setattr(authority_heartbeat, "_write_heartbeat_marker", lambda: None)
+    monkeypatch.setattr(patch, "_refresh_healthy_heartbeat", lambda module, monitor: os.environ.__setitem__("NIJA_WRITER_HEARTBEAT_ACTIVE", "1"))
 
     assert patch.install_import_hook() is True
 
@@ -65,6 +59,7 @@ def test_timeout_grace_denies_when_writer_lock_token_differs(monkeypatch):
     monkeypatch.setenv("NIJA_WRITER_SCOPE", "platform")
     monkeypatch.setattr(patch, "_redis_url", lambda: "redis://example/0")
     monkeypatch.setattr(patch, "_redis_client", lambda redis_url, timeout_s: FakeRedis())
+    monkeypatch.setattr(patch, "_refresh_healthy_heartbeat", lambda module, monitor: None)
 
     assert patch.install_import_hook() is True
 
