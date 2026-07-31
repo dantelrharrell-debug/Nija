@@ -2362,8 +2362,17 @@ class TradingStateMachine:
                 )
 
         _heartbeat_required_first = _heartbeat_verification_required()
-        _heartbeat_ok, _heartbeat_err, _heartbeat_meta = _heartbeat_verification_status()
         _heartbeat_trade = _env_truthy("HEARTBEAT_TRADE")
+        if _heartbeat_required_first:
+            _heartbeat_ok, _heartbeat_err, _heartbeat_meta = _heartbeat_verification_status()
+        else:
+            _heartbeat_ok = True
+            _heartbeat_err = "not_required"
+            _heartbeat_meta = {
+                "path": _heartbeat_marker_path(),
+                "required_stage": _heartbeat_min_required_stage(),
+                "max_age_s": _heartbeat_verification_max_age_seconds(),
+            }
 
         if _heartbeat_required_first and not _heartbeat_ok:
             # Bootstrap grace: on a fresh deployment the heartbeat_verified.flag

@@ -85,3 +85,16 @@ def test_activation_uses_normal_commit_path(monkeypatch):
     assert active is True
     assert calls == ["commit"]
     assert details["state_after"] == "LIVE_ACTIVE"
+
+def test_starts_strategy_publication_monitor_once(monkeypatch):
+    patch = _module()
+    calls: list[str] = []
+    publication = ModuleType("bot.strategy_publication_patch")
+    publication.start_monitor = lambda: calls.append("start") or True
+    monkeypatch.setitem(sys.modules, "bot.strategy_publication_patch", publication)
+    patch._STRATEGY_PUBLICATION_MONITOR_STARTED = False
+
+    assert patch._ensure_strategy_publication_monitor() == (True, "started")
+    assert patch._ensure_strategy_publication_monitor() == (True, "already_started")
+    assert calls == ["start"]
+

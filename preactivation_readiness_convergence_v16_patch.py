@@ -34,6 +34,7 @@ _KEYS = (
 _LOCK = threading.RLock()
 _STARTED = False
 _LAST_SIGNATURE = ""
+_STRATEGY_PUBLICATION_MONITOR_STARTED = False
 
 
 def _truthy(name: str, default: str = "false") -> bool:
@@ -56,6 +57,29 @@ def _int(value: Any, default: int = 0) -> int:
 
 def _live_mode() -> bool:
     return _truthy("LIVE_CAPITAL_VERIFIED") and not _truthy("DRY_RUN_MODE") and not _truthy("PAPER_MODE")
+
+
+def _ensure_strategy_publication_monitor() -> tuple[bool, str]:
+    """Start the safe publisher once live intent enters preactivation."""
+
+    global _STRATEGY_PUBLICATION_MONITOR_STARTED
+    if _STRATEGY_PUBLICATION_MONITOR_STARTED:
+        return True, "already_started"
+    try:
+        try:
+            module = importlib.import_module("bot.strategy_publication_patch")
+        except Exception:
+            module = importlib.import_module("strategy_publication_patch")
+        start = getattr(module, "start_monitor", None)
+        if not callable(start):
+            return False, "start_monitor_unavailable"
+        started = bool(start())
+        if started:
+            _STRATEGY_PUBLICATION_MONITOR_STARTED = True
+            return True, "started"
+        return False, "start_monitor_returned_false"
+    except Exception as exc:
+        return False, f"start_monitor_failed:{type(exc).__name__}:{exc}"
 
 
 def _capital_snapshot() -> dict[str, Any]:
@@ -313,7 +337,13 @@ def _cycle() -> tuple[bool, dict[str, Any]]:
         pass
     if not _live_mode():
         return False, {"live_mode": False}
-    return _attempt_activation()
+    publisher_started, publisher_detail = _ensure_strategy_publication_monitor()
+    active, details = _attempt_activation()
+    details["strategy_publication_monitor"] = {
+        "started": publisher_started,
+        "detail": publisher_detail,
+    }
+    return active, details
 
 
 def _monitor() -> None:

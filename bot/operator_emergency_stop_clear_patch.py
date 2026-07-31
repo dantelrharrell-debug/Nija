@@ -270,7 +270,7 @@ def run_once() -> int:
                 flush=True,
             )
             return 1
-        logger.info(
+        logger.debug(
             "OPERATOR_EMERGENCY_STOP_CLEAR_NOOP marker=%s reason=no_kill_or_state_file_found env_reason=%s",
             _MARKER,
             reason,
