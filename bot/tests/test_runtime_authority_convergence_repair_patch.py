@@ -22,6 +22,25 @@ class FakeCapitalAuthority:
         return True
 
 
+class HandoffOnlyCapitalAuthority:
+    is_hydrated = True
+    total_capital = 466.62
+    real_capital = 466.62
+    usable_capital = 0.0
+    risk_capital = 0.0
+    valid_brokers = 3
+    broker_count = 3
+
+    def get_real_capital(self):
+        return 466.62
+
+    def get_usable_capital(self):
+        return 0.0
+
+    def is_stale(self):
+        return True
+
+
 class FakeKillSwitch:
     def __init__(self, active=False):
         self._active = active
@@ -53,6 +72,23 @@ def test_capital_authority_ready_for_logged_579_case(monkeypatch):
     assert "capital_ready" in reason
     assert detail["real"] == 579.90
     assert detail["valid_brokers"] == 3
+
+
+def test_capital_authority_accepts_handoff_ready_snapshot_without_usable_field(monkeypatch):
+    _live_env(monkeypatch)
+    monkeypatch.delenv("LIVE_CAPITAL_VERIFIED", raising=False)
+    monkeypatch.setenv("NIJA_CAPITAL_READINESS_HANDOFF_V34_READY", "1")
+    import bot.capital_authority as ca_mod
+    monkeypatch.setattr(ca_mod, "get_capital_authority", lambda: HandoffOnlyCapitalAuthority())
+
+    ready, reason, detail = patch._capital_authority_ready()
+
+    assert ready is True
+    assert "handoff=True" in reason
+    assert detail["real"] == 466.62
+    assert detail["usable"] == 466.62
+    assert detail["valid_brokers"] == 3
+    assert detail["fresh"] is True
 
 
 def test_heartbeat_ready_requires_token_generation_and_fresh_alive(monkeypatch):
