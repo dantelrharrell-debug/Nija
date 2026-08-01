@@ -505,6 +505,160 @@ def _attempt_authority_convergence_retry(source: str) -> bool:
     return True
 
 
+def _ingest_authority_snapshot_into_csm(source: str) -> bool:
+    """Close a missed CapitalAuthority -> CapitalCSMv2 bootstrap handoff.
+
+    The authority and CSM intentionally have separate single-writer APIs.  A
+    seed snapshot can be accepted by CapitalAuthority while the producer's
+    capital FSM is still wiring, leaving the canonical CSM in
+    ``INITIALIZING``.  Re-ingest only the exact, fresh, positive snapshot that
+    CapitalAuthority already accepted.  No capital is synthesized and no CSM
+    fields are assigned directly.
+    """
+    csm_module = sys.modules.get("bot.capital_csm_v2") or sys.modules.get(
+        "capital_csm_v2"
+    )
+    if csm_module is None:
+        try:
+            from bot import capital_csm_v2 as csm_module
+        except Exception as exc:
+            logger.warning(
+                "STALLED_WRITER_RELEASE_GUARD_V22_CSM_HANDOFF_FAILED "
+                "marker=%s source=%s reason=csm_import err=%s",
+                _MARKER,
+                source,
+                exc,
+            )
+            return False
+
+    csm_getter = getattr(csm_module, "get_csm_v2", None)
+    if not callable(csm_getter):
+        return False
+    try:
+        csm = csm_getter()
+    except Exception:
+        return False
+
+    hydrated_raw = getattr(csm, "is_hydrated", False)
+    try:
+        already_hydrated = bool(
+            hydrated_raw() if callable(hydrated_raw) else hydrated_raw
+        )
+    except Exception:
+        already_hydrated = False
+    if already_hydrated:
+        return True
+
+    authority_module = sys.modules.get("bot.capital_authority") or sys.modules.get(
+        "capital_authority"
+    )
+    if authority_module is None:
+        try:
+            from bot import capital_authority as authority_module
+        except Exception:
+            return False
+    authority_getter = getattr(authority_module, "get_capital_authority", None)
+    if not callable(authority_getter):
+        return False
+    try:
+        authority = authority_getter()
+        authority_hydrated_raw = getattr(authority, "is_hydrated", False)
+        authority_hydrated = bool(
+            authority_hydrated_raw()
+            if callable(authority_hydrated_raw)
+            else authority_hydrated_raw
+        )
+        accepted = bool(
+            getattr(authority, "first_snap_accepted", False)
+            or getattr(authority, "_first_snap_accepted", False)
+        )
+        typed_getter = getattr(authority, "get_typed_snapshot", None)
+        snapshot = (
+            typed_getter()
+            if callable(typed_getter)
+            else getattr(authority, "_last_typed_snapshot", None)
+        )
+    except Exception:
+        return False
+
+    if not authority_hydrated or not accepted or snapshot is None:
+        logger.warning(
+            "STALLED_WRITER_RELEASE_GUARD_V22_CSM_HANDOFF_BLOCKED "
+            "marker=%s source=%s authority_hydrated=%s accepted=%s snapshot=%s",
+            _MARKER,
+            source,
+            authority_hydrated,
+            accepted,
+            snapshot is not None,
+        )
+        return False
+
+    try:
+        capital = float(getattr(snapshot, "real_capital", 0.0) or 0.0)
+        broker_count = int(getattr(snapshot, "broker_count", 0) or 0)
+        try:
+            stale = bool(
+                authority.is_stale(
+                    ttl_s=max(
+                        30.0,
+                        _float_env(
+                            "NIJA_RUNTIME_AUTHORITY_CONVERGENCE_CAPITAL_TTL_S",
+                            240.0,
+                        ),
+                    )
+                )
+            )
+        except TypeError:
+            stale = bool(authority.is_stale())
+    except Exception:
+        return False
+
+    if capital <= 0.0 or broker_count <= 0 or stale:
+        logger.warning(
+            "STALLED_WRITER_RELEASE_GUARD_V22_CSM_HANDOFF_BLOCKED "
+            "marker=%s source=%s capital=%.2f broker_count=%d stale=%s",
+            _MARKER,
+            source,
+            capital,
+            broker_count,
+            stale,
+        )
+        return False
+
+    ingest = getattr(csm, "ingest_snapshot", None)
+    if not callable(ingest):
+        return False
+    try:
+        state = ingest(snapshot)
+        hydrated_raw = getattr(csm, "is_hydrated", False)
+        hydrated = bool(
+            hydrated_raw() if callable(hydrated_raw) else hydrated_raw
+        )
+    except Exception as exc:
+        logger.warning(
+            "STALLED_WRITER_RELEASE_GUARD_V22_CSM_HANDOFF_FAILED "
+            "marker=%s source=%s reason=ingest err=%s",
+            _MARKER,
+            source,
+            exc,
+            exc_info=True,
+        )
+        return False
+
+    logger.critical(
+        "STALLED_WRITER_RELEASE_GUARD_V22_CSM_HANDOFF_RETRIED "
+        "marker=%s source=%s state=%s hydrated=%s capital=%.2f broker_count=%d "
+        "accepted_authority_snapshot=true",
+        _MARKER,
+        source,
+        str(getattr(state, "value", state) or "unknown"),
+        hydrated,
+        capital,
+        broker_count,
+    )
+    return hydrated
+
+
 def _attempt_bootstrap_progression(source: str) -> bool:
     """Retry the normal validated capital-ready BootstrapFSM handoff.
 
@@ -539,6 +693,15 @@ def _attempt_bootstrap_progression(source: str) -> bool:
         logger.warning(
             "STALLED_WRITER_RELEASE_GUARD_V22_BOOTSTRAP_RETRY_BLOCKED "
             "marker=%s source=%s reason=startup_validation_not_attested",
+            _MARKER,
+            source,
+        )
+        return False
+
+    if not _ingest_authority_snapshot_into_csm(source):
+        logger.warning(
+            "STALLED_WRITER_RELEASE_GUARD_V22_BOOTSTRAP_RETRY_BLOCKED "
+            "marker=%s source=%s reason=canonical_csm_not_hydrated",
             _MARKER,
             source,
         )
@@ -855,6 +1018,7 @@ __all__ = [
     "_production_writer_intent",
     "_runtime_snapshot",
     "_should_release",
+    "_ingest_authority_snapshot_into_csm",
     "_attempt_bootstrap_progression",
     "_attempt_authority_convergence_retry",
     "_attempt_emergency_stop_recovery",

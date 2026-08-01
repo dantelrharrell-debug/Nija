@@ -276,11 +276,75 @@ def test_bootstrap_progression_retries_only_validated_ready_manager(monkeypatch)
     bootstrap_fsm = types.SimpleNamespace(state=state, advance_to_capital_ready=advance)
     bootstrap_module = types.SimpleNamespace(get_bootstrap_fsm=lambda: bootstrap_fsm)
     monkeypatch.setattr(guard, "_manager_instance", lambda: manager)
+    monkeypatch.setattr(
+        guard,
+        "_ingest_authority_snapshot_into_csm",
+        lambda source: source == "unit_test",
+    )
     monkeypatch.setitem(guard.sys.modules, "bot.bootstrap_state_machine", bootstrap_module)
 
     assert guard._attempt_bootstrap_progression("unit_test") is True
     assert calls == ["stalled_writer_ready_bootstrap_retry:unit_test"]
     assert state.value == "CAPITAL_READY"
+
+
+def test_missed_authority_snapshot_is_ingested_into_canonical_csm(monkeypatch):
+    snapshot = types.SimpleNamespace(real_capital=371.07, broker_count=2)
+    authority = types.SimpleNamespace(
+        is_hydrated=True,
+        first_snap_accepted=True,
+        get_typed_snapshot=lambda: snapshot,
+        is_stale=lambda ttl_s: False,
+    )
+    authority_module = types.SimpleNamespace(
+        get_capital_authority=lambda: authority
+    )
+
+    calls = []
+    csm = types.SimpleNamespace(is_hydrated=False)
+
+    def ingest(received):
+        calls.append(received)
+        csm.is_hydrated = True
+        return types.SimpleNamespace(value="READY")
+
+    csm.ingest_snapshot = ingest
+    csm_module = types.SimpleNamespace(get_csm_v2=lambda: csm)
+
+    monkeypatch.setitem(guard.sys.modules, "bot.capital_authority", authority_module)
+    monkeypatch.setitem(guard.sys.modules, "capital_authority", authority_module)
+    monkeypatch.setitem(guard.sys.modules, "bot.capital_csm_v2", csm_module)
+    monkeypatch.setitem(guard.sys.modules, "capital_csm_v2", csm_module)
+
+    assert guard._ingest_authority_snapshot_into_csm("unit_test") is True
+    assert calls == [snapshot]
+
+
+def test_stale_authority_snapshot_is_not_replayed_into_csm(monkeypatch):
+    snapshot = types.SimpleNamespace(real_capital=371.07, broker_count=2)
+    authority = types.SimpleNamespace(
+        is_hydrated=True,
+        first_snap_accepted=True,
+        get_typed_snapshot=lambda: snapshot,
+        is_stale=lambda ttl_s: True,
+    )
+    authority_module = types.SimpleNamespace(
+        get_capital_authority=lambda: authority
+    )
+    calls = []
+    csm = types.SimpleNamespace(
+        is_hydrated=False,
+        ingest_snapshot=lambda received: calls.append(received),
+    )
+    csm_module = types.SimpleNamespace(get_csm_v2=lambda: csm)
+
+    monkeypatch.setitem(guard.sys.modules, "bot.capital_authority", authority_module)
+    monkeypatch.setitem(guard.sys.modules, "capital_authority", authority_module)
+    monkeypatch.setitem(guard.sys.modules, "bot.capital_csm_v2", csm_module)
+    monkeypatch.setitem(guard.sys.modules, "capital_csm_v2", csm_module)
+
+    assert guard._ingest_authority_snapshot_into_csm("unit_test") is False
+    assert calls == []
 
 
 def test_bootstrap_progression_refuses_unattested_startup(monkeypatch):
