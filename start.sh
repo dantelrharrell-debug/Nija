@@ -28,6 +28,7 @@ echo ""
 # ─────────────────────────────────────────────────────────────────────────────
 _SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 _PID_FILE="${_SCRIPT_DIR}/data/nija.pid"
+source "${_SCRIPT_DIR}/scripts/credential_diagnostics.sh"
 
 # Seconds to wait for a graceful shutdown before escalating to SIGKILL.
 _GRACE_PERIOD_SECONDS=10
@@ -1275,20 +1276,10 @@ else
 fi
 
 # Kraken - User #1 (Daivon)
-echo "   👤 KRAKEN (User #1: Daivon):"
-if [ -n "${KRAKEN_USER_DAIVON_API_KEY}" ] && [ -n "${KRAKEN_USER_DAIVON_API_SECRET}" ]; then
-    echo "      ✅ Configured (Key: ${#KRAKEN_USER_DAIVON_API_KEY} chars, Secret: ${#KRAKEN_USER_DAIVON_API_SECRET} chars)"
-else
-    echo "      ❌ Not configured"
-fi
+nija_print_kraken_user_credential_status "User #1: Daivon" "DAIVON" "DAIVON_FRAZIER"
 
 # Kraken - User #2 (Tania)
-echo "   👤 KRAKEN (User #2: Tania):"
-if [ -n "${KRAKEN_USER_TANIA_API_KEY}" ] && [ -n "${KRAKEN_USER_TANIA_API_SECRET}" ]; then
-    echo "      ✅ Configured (Key: ${#KRAKEN_USER_TANIA_API_KEY} chars, Secret: ${#KRAKEN_USER_TANIA_API_SECRET} chars)"
-else
-    echo "      ❌ Not configured"
-fi
+nija_print_kraken_user_credential_status "User #2: Tania" "TANIA" "TANIA_GILBERT"
 
 # OKX
 echo "   📊 OKX (Master):"
