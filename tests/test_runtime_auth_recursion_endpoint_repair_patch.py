@@ -300,6 +300,47 @@ def test_okx_stale_attempt_is_reclaimed(monkeypatch):
     assert broker.calls == 1
 
 
+def test_okx_obsolete_failure_cannot_clear_newer_success(monkeypatch):
+    monkeypatch.setenv("NIJA_OKX_CONNECT_STALE_TIMEOUT_S", "1")
+    first_entered = threading.Event()
+    release_first = threading.Event()
+
+    class OKXBroker:
+        def __init__(self):
+            self.connected = False
+            self._is_available = False
+            self.calls = 0
+
+        def connect(self):
+            self.calls += 1
+            if self.calls == 1:
+                first_entered.set()
+                release_first.wait(3)
+                self.connected = False
+                self._is_available = False
+                return False
+            self.connected = True
+            self._is_available = True
+            return True
+
+    module = ModuleType("bot.broker_manager")
+    module.OKXBroker = OKXBroker
+    assert repair._patch_okx_class(module) is True
+    broker = OKXBroker()
+    first_result = []
+    worker = threading.Thread(target=lambda: first_result.append(broker.connect()))
+    worker.start()
+    assert first_entered.wait(1)
+    broker._nija_okx_connect_attempt["started_at"] = time.monotonic() - 2
+
+    assert broker.connect() is True
+    release_first.set()
+    worker.join(2)
+    assert first_result == [True]
+    assert broker.connected is True
+    assert broker._is_available is True
+
+
 def test_okx_reentry_log_preserves_original_exception(monkeypatch, caplog):
     class OKXBroker:
         def __init__(self):
