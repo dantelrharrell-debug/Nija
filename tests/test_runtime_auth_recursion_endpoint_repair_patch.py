@@ -213,6 +213,39 @@ def test_okx_endpoint_is_applied_without_recursion(monkeypatch):
     assert broker.connect() is True
     assert broker.connected is True
     assert broker.base_url == "https://us.okx.com"
+    assert os.environ["NIJA_OKX_CONNECTED"] == "1"
+    assert os.environ["NIJA_OKX_ACTIVATION_STATE"] == "authenticated"
+    assert os.environ["NIJA_OKX_FUNDING_STATUS"] == "authenticated"
+
+
+def test_okx_nested_probe_does_not_clear_successful_owner(monkeypatch):
+    class OKXBroker:
+        def __init__(self):
+            self.connected = False
+            self._is_available = False
+            self.account_api = None
+            self.calls = 0
+
+        def connect(self):
+            self.calls += 1
+            assert self.connect() is False
+            self.account_api = object()
+            self.connected = True
+            self._is_available = True
+            return True
+
+    module = ModuleType("bot.broker_manager")
+    module.OKXBroker = OKXBroker
+    assert repair._patch_okx_class(module) is True
+    broker = OKXBroker()
+
+    assert broker.connect() is True
+    assert broker.calls == 1
+    assert broker.account_api is not None
+    assert broker.connected is True
+    assert broker._is_available is True
+    assert os.environ["NIJA_OKX_CONNECTED"] == "1"
+    assert os.environ["NIJA_OKX_ACTIVATION_STATE"] == "authenticated"
 
 
 def test_okx_failed_initialization_releases_guard_and_allows_retry(monkeypatch):
@@ -242,6 +275,8 @@ def test_okx_failed_initialization_releases_guard_and_allows_retry(monkeypatch):
     assert os.environ["NIJA_OKX_ACTIVATION_STATE"] == "reconnect_pending"
     assert broker.connect() is True
     assert broker.calls == 2
+    assert os.environ["NIJA_OKX_CONNECTED"] == "1"
+    assert os.environ["NIJA_OKX_ACTIVATION_STATE"] == "authenticated"
 
 
 def test_okx_live_attempt_blocks_concurrent_connect_without_mutating_owner(monkeypatch):

@@ -614,7 +614,7 @@ def _commit_once(sm: Any, meta: dict[str, Any]) -> bool:
     return ok
 
 
-def _monitor() -> None:
+def _monitor(stop_event: threading.Event | None = None) -> None:
     interval = max(
         0.5,
         float(
@@ -649,7 +649,14 @@ def _monitor() -> None:
         interval,
         timeout_s,
     )
-    while time.monotonic() < deadline:
+    while stop_event is None or not stop_event.is_set():
+        now_monotonic = time.monotonic()
+        if now_monotonic >= deadline:
+            logger.warning(
+                "ACTIVATION_PENDING_COMMIT_MONITOR_STILL_WAITING timeout_s=%.1f continuing=true",
+                timeout_s,
+            )
+            deadline = now_monotonic + timeout_s
         try:
             if not _live_mode():
                 time.sleep(interval)
@@ -699,9 +706,7 @@ def _monitor() -> None:
                 "ACTIVATION_PENDING_COMMIT_MONITOR_ERROR err=%s", exc
             )
             time.sleep(interval)
-    logger.warning(
-        "ACTIVATION_PENDING_COMMIT_MONITOR_TIMEOUT timeout_s=%.1f", timeout_s
-    )
+    logger.info("ACTIVATION_PENDING_COMMIT_MONITOR_STOPPED requested=true")
 
 
 def install_import_hook() -> None:

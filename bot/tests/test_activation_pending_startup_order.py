@@ -100,3 +100,23 @@ def test_startup_repairs_wait_for_broker_manager(monkeypatch) -> None:
 
     assert module.ensure_startup_execution_repairs_ready(timeout_s=0.0) is False
     assert called == []
+
+
+def test_activation_monitor_continues_after_diagnostic_deadline(
+    monkeypatch, caplog
+) -> None:
+    module = importlib.import_module("bot.activation_pending_commit_monitor_patch")
+    stop_event = threading.Event()
+    monotonic_values = iter((0.0, 31.0))
+
+    monkeypatch.setenv("NIJA_ACTIVATION_PENDING_COMMIT_MONITOR_TIMEOUT_S", "30")
+    monkeypatch.setattr(module, "_live_mode", lambda: False)
+    monkeypatch.setattr(module.time, "monotonic", lambda: next(monotonic_values))
+    monkeypatch.setattr(module.time, "sleep", lambda _seconds: stop_event.set())
+
+    with caplog.at_level(logging.WARNING):
+        module._monitor(stop_event=stop_event)
+
+    assert stop_event.is_set()
+    assert "ACTIVATION_PENDING_COMMIT_MONITOR_STILL_WAITING" in caplog.text
+    assert "continuing=true" in caplog.text
