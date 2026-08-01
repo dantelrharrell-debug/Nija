@@ -67,6 +67,31 @@ def test_platform_nonce_lease_publishes_platform_generation(monkeypatch):
     assert os.environ["NIJA_WRITER_LEASE_GENERATION_LAST"] == "303"
 
 
+def test_user_nonce_publisher_never_exposes_user_generation(monkeypatch):
+    patch = _load_patch()
+    monkeypatch.setenv("KRAKEN_PLATFORM_API_KEY", "platform-secret")
+    monkeypatch.setenv("NIJA_WRITER_LEASE_GENERATION", "101")
+    observed = []
+
+    module = ModuleType("fake_nonce")
+
+    class Backend:
+        def _publish_lock_acquired_state(self, lease_version):
+            os.environ["NIJA_WRITER_LEASE_GENERATION"] = str(lease_version)
+            observed.append(os.environ["NIJA_WRITER_LEASE_GENERATION"])
+
+        def _ensure_writer_lease(self, key_id):
+            self._publish_lock_acquired_state(202)
+            return 202
+
+    module._PerKeyRedisBackend = Backend
+    assert patch._patch_nonce_backend(module)
+
+    assert Backend()._ensure_writer_lease("user-key-id") == 202
+    assert observed == []
+    assert os.environ["NIJA_WRITER_LEASE_GENERATION"] == "101"
+
+
 def test_tracker_reads_platform_per_key_version(monkeypatch):
     patch = _load_patch()
     monkeypatch.setenv("KRAKEN_PLATFORM_API_KEY", "platform-secret")

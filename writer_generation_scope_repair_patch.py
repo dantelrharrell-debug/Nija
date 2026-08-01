@@ -22,6 +22,7 @@ from typing import Any, Callable
 logger = logging.getLogger("nija.writer_generation_scope_repair")
 MARKER = "20260712f"
 _LOCK = threading.RLock()
+_LEASE_SCOPE = threading.local()
 _INSTALLED = False
 _LAST_PLATFORM_GENERATION: int | None = None
 
@@ -64,12 +65,58 @@ def _patch_nonce_backend(module: ModuleType) -> bool:
     if not callable(original) or getattr(original, "_nija_platform_generation_scoped", False):
         return False
 
+    # The legacy repair restored process-wide generation variables only after
+    # ``_ensure_writer_lease`` returned.  The underlying method publishes its
+    # lease version before returning, so other threads could observe a user
+    # account's nonce-lease generation during that window and revoke platform
+    # execution authority.  Scope the publisher itself with thread-local key
+    # identity so a user lease never mutates platform lineage, even transiently.
+    publish_original = getattr(backend, "_publish_lock_acquired_state", None)
+    if callable(publish_original) and not getattr(
+        publish_original,
+        "_nija_platform_generation_scoped",
+        False,
+    ):
+        def _publish_lock_acquired_state(
+            self: Any,
+            lease_version: int,
+            *args: Any,
+            **kwargs: Any,
+        ) -> Any:
+            key_id = str(getattr(_LEASE_SCOPE, "key_id", "") or "")
+            platform_id = _platform_key_id()
+            if key_id and platform_id and key_id != platform_id:
+                logger.debug(
+                    "USER_NONCE_LEASE_GLOBAL_PUBLICATION_SUPPRESSED "
+                    "marker=%s key_id=%s lease_version=%d",
+                    MARKER,
+                    key_id,
+                    lease_version,
+                )
+                return None
+            return publish_original(self, lease_version, *args, **kwargs)
+
+        _publish_lock_acquired_state._nija_platform_generation_scoped = True  # type: ignore[attr-defined]
+        _publish_lock_acquired_state.__wrapped__ = publish_original  # type: ignore[attr-defined]
+        setattr(backend, "_publish_lock_acquired_state", _publish_lock_acquired_state)
+
     def _ensure_writer_lease(self: Any, key_id: str, *args: Any, **kwargs: Any) -> int:
         global _LAST_PLATFORM_GENERATION
         platform_id = _platform_key_id()
         is_platform = bool(platform_id and str(key_id) == platform_id)
         before = _snapshot_generation_env()
-        version = int(original(self, key_id, *args, **kwargs))
+        previous_key_id = getattr(_LEASE_SCOPE, "key_id", None)
+        _LEASE_SCOPE.key_id = str(key_id)
+        try:
+            version = int(original(self, key_id, *args, **kwargs))
+        finally:
+            if previous_key_id is None:
+                try:
+                    delattr(_LEASE_SCOPE, "key_id")
+                except AttributeError:
+                    pass
+            else:
+                _LEASE_SCOPE.key_id = previous_key_id
         if is_platform:
             os.environ["NIJA_WRITER_LEASE_GENERATION"] = str(version)
             os.environ["NIJA_WRITER_LEASE_GENERATION_LAST"] = str(version)

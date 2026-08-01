@@ -54,6 +54,27 @@ def _okx_error_text(error: Any) -> str:
     return f"{type(error).__name__}: {error}"[:240]
 
 
+def _connect_chain_has_attr(connect: Any, attr: str, *, limit: int = 128) -> bool:
+    """Return whether a linked connect wrapper already has an ownership marker.
+
+    Later compatibility installers may wrap the canonical OKX connect owner
+    without copying all of its marker attributes.  Looking only at the outer
+    callable then causes this watchdog to install a second runtime attempt
+    guard.  The nested guard sees the same instance and thread and correctly
+    rejects the call as recursion, leaving OKX permanently disconnected.
+    """
+    current = connect
+    seen: set[int] = set()
+    for _ in range(limit):
+        if not callable(current) or id(current) in seen:
+            return False
+        seen.add(id(current))
+        if bool(getattr(current, attr, False)):
+            return True
+        current = getattr(current, "__wrapped__", None)
+    return False
+
+
 def _reset_okx_connection_state(instance: Any, reason: str, error: BaseException | None = None) -> None:
     """Return a failed OKX initialization to a clean, retryable state."""
     for attr, value in (
@@ -370,7 +391,16 @@ def _patch_okx_class(module: ModuleType) -> bool:
     if not isinstance(cls, type):
         return False
     original = getattr(cls, "connect", None)
-    if not callable(original) or getattr(original, "_nija_endpoint_instance_repair_v3", False):
+    if not callable(original):
+        return False
+    if _connect_chain_has_attr(original, "_nija_endpoint_instance_repair_v3"):
+        # Propagate ownership to the outer compatibility wrapper so repeated
+        # watchdog scans stay constant-time and cannot add a second guard.
+        try:
+            original._nija_endpoint_instance_repair_v2 = True  # type: ignore[attr-defined]
+            original._nija_endpoint_instance_repair_v3 = True  # type: ignore[attr-defined]
+        except Exception:
+            pass
         return False
 
     @wraps(original)
