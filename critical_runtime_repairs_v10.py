@@ -47,6 +47,7 @@ _OKX_COMPAT_ATTRS = (
     "_nija_final_okx_endpoint_e",
     "_nija_okx_connect_canonical_20260713b",
     "_nija_endpoint_instance_repair_v2",
+    "_nija_endpoint_instance_repair_v3",
     "_nija_runtime_convergence_auth_e",
     "_nija_final_auth_safe",
     "_nija_runtime_convergence_auth_safe_v2",

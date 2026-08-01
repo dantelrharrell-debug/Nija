@@ -8,6 +8,7 @@ import weakref
 from types import ModuleType
 
 import coinbase_authenticated_connect_recovery_patch as recovery
+import critical_runtime_repairs_v10 as critical_repairs
 import runtime_auth_recursion_endpoint_repair_patch as repair
 
 
@@ -216,6 +217,48 @@ def test_okx_endpoint_is_applied_without_recursion(monkeypatch):
     assert os.environ["NIJA_OKX_CONNECTED"] == "1"
     assert os.environ["NIJA_OKX_ACTIVATION_STATE"] == "authenticated"
     assert os.environ["NIJA_OKX_FUNDING_STATUS"] == "authenticated"
+
+
+def test_okx_compatibility_wrapper_does_not_gain_a_second_attempt_guard(monkeypatch):
+    monkeypatch.setenv("OKX_BASE_URL", "https://us.okx.com")
+
+    class OKXBroker:
+        def __init__(self):
+            self.connected = False
+            self.base_url = ""
+            self.calls = 0
+
+        def connect(self):
+            self.calls += 1
+            self.connected = True
+            return True
+
+    module = ModuleType("bot.broker_manager")
+    module.OKXBroker = OKXBroker
+    assert repair._patch_okx_class(module) is True
+    canonical_guard = OKXBroker.connect
+
+    # Reproduce a later compatibility installer that preserves __wrapped__ but
+    # does not copy the current endpoint-owner marker to its outer callable.
+    def compatibility_connect(self, *args, **kwargs):
+        return canonical_guard(self, *args, **kwargs)
+
+    compatibility_connect.__wrapped__ = canonical_guard
+    compatibility_connect._nija_endpoint_instance_repair_v2 = True
+    OKXBroker.connect = compatibility_connect
+
+    assert repair._patch_okx_class(module) is False
+    assert OKXBroker.connect is compatibility_connect
+    assert OKXBroker.connect._nija_endpoint_instance_repair_v3 is True
+
+    broker = OKXBroker()
+    assert broker.connect() is True
+    assert broker.calls == 1
+    assert broker.connected is True
+
+
+def test_critical_okx_owner_preserves_current_endpoint_guard_marker():
+    assert "_nija_endpoint_instance_repair_v3" in critical_repairs._OKX_COMPAT_ATTRS
 
 
 def test_okx_nested_probe_does_not_clear_successful_owner(monkeypatch):
