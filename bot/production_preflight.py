@@ -869,6 +869,7 @@ def run_preflight() -> None:
     _step7_adversarial_validation()
     _step8_graceful_handoff_lock()
 
+    os.environ["NIJA_STARTUP_VALIDATED"] = "1"
     elapsed = time.monotonic() - start
     log.info(SEPARATOR)
     log.info("✅  ALL PRE-FLIGHT CHECKS PASSED  (%.2f s)", elapsed)
