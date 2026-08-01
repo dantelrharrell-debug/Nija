@@ -2177,12 +2177,16 @@ class MultiAccountBrokerManager:
                                 # capital bootstrap FSM has finished wiring.
                                 # Feed it immediately after the registration
                                 # gate opens, using the exact CA-accepted seed.
-                                self._ingest_canonical_csm_snapshot(
+                                _seed_csm_hydrated = self._ingest_canonical_csm_snapshot(
                                     _seed_snapshot,
                                     "bootstrap_seed",
                                 )
                                 _seed_handoff_ready = False
-                                if _CAPITAL_FSM_AVAILABLE and self._capital_bootstrap_fsm is not None:
+                                if (
+                                    _seed_csm_hydrated
+                                    and _CAPITAL_FSM_AVAILABLE
+                                    and self._capital_bootstrap_fsm is not None
+                                ):
                                     if self._capital_event_bus is not None:
                                         self._capital_event_bus.emit(CapitalEvent(
                                             event_type=CapitalEventType.CAPITAL_READY,
@@ -2212,8 +2216,10 @@ class MultiAccountBrokerManager:
                                     }
                                 logger.warning(
                                     "[MABM] bootstrap seed accepted but readiness handoff is pending "
-                                    "(capital_fsm_ready=%s startup_lock_released=%s); "
+                                    "(csm_hydrated=%s capital_fsm_ready=%s "
+                                    "startup_lock_released=%s); "
                                     "falling through to normal pipeline",
+                                    _seed_csm_hydrated,
                                     _seed_handoff_ready,
                                     _startup_released,
                                 )

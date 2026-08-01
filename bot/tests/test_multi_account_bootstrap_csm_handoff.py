@@ -123,3 +123,48 @@ def test_real_bootstrap_seed_path_hydrates_authority_and_csm(monkeypatch, tmp_pa
         reset_broker_manager_singleton()
         reset_csm_v2_singleton()
         reset_capital_authority_singleton(clear_disk_cache=True)
+
+
+def test_seed_path_does_not_advance_when_csm_handoff_fails(monkeypatch, tmp_path):
+    monkeypatch.setenv("LIVE_CAPITAL_VERIFIED", "true")
+    monkeypatch.setenv("NIJA_LOCK_ACQUIRED", "true")
+    monkeypatch.setattr(capital_authority_module, "_STATE_DIR", tmp_path)
+    monkeypatch.setattr(
+        capital_authority_module,
+        "_STATE_FILE",
+        tmp_path / "capital_authority_state.json",
+    )
+
+    reset_capital_authority_singleton(clear_disk_cache=True)
+    reset_csm_v2_singleton()
+    reset_broker_manager_singleton()
+    try:
+        manager = get_broker_manager()
+        manager.register_platform_broker_instance(
+            BrokerType.COINBASE,
+            _ReadyBroker(),
+            mark_connected_state=False,
+        )
+        manager._capital_bootstrap_fsm = types.SimpleNamespace(state="TEST_READY")
+        advance_calls = []
+        monkeypatch.setattr(
+            manager,
+            "_ingest_canonical_csm_snapshot",
+            lambda snapshot, source: False,
+        )
+        monkeypatch.setattr(
+            manager,
+            "_advance_seed_capital_bootstrap_ready",
+            lambda: advance_calls.append(True) or True,
+        )
+
+        manager.refresh_capital_authority(
+            trigger="platform_connect:coinbase:attempt_1"
+        )
+
+        assert get_capital_authority().first_snap_accepted is True
+        assert advance_calls == []
+    finally:
+        reset_broker_manager_singleton()
+        reset_csm_v2_singleton()
+        reset_capital_authority_singleton(clear_disk_cache=True)
