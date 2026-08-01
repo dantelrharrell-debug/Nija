@@ -1376,6 +1376,59 @@ class MultiAccountBrokerManager:
         )
         return snapshot
 
+    def _ingest_canonical_csm_snapshot(self, snapshot: Any, source: str) -> bool:
+        """Hydrate the canonical CSM-v2 from an accepted capital snapshot.
+
+        CapitalAuthority publication and CapitalCSMv2 ingestion are separate
+        write paths.  The bootstrap seed used to perform the CSM handoff only
+        when the capital bootstrap FSM was already wired.  During a valid
+        startup ordering the authority could therefore accept fresh capital
+        while CSM-v2 remained ``INITIALIZING``, causing the I12 hydration
+        barrier to block the otherwise-ready bootstrap indefinitely.
+
+        This helper does not synthesize capital or mutate CSM state directly;
+        it calls the canonical ``ingest_snapshot`` single-writer API with the
+        exact snapshot already accepted by CapitalAuthority.
+        """
+        try:
+            module = importlib.import_module("bot.capital_csm_v2")
+            getter = getattr(module, "get_csm_v2", None)
+            if not callable(getter):
+                raise RuntimeError("bot.capital_csm_v2.get_csm_v2 unavailable")
+            csm = getter()
+            state = csm.ingest_snapshot(snapshot)
+            hydrated_raw = getattr(csm, "is_hydrated", False)
+            hydrated = bool(
+                hydrated_raw() if callable(hydrated_raw) else hydrated_raw
+            )
+            state_value = str(getattr(state, "value", state) or "unknown")
+            if hydrated:
+                logger.info(
+                    "[MABM] canonical CSM-v2 snapshot handoff complete "
+                    "source=%s state=%s capital=$%.2f brokers=%d",
+                    source,
+                    state_value,
+                    float(getattr(snapshot, "real_capital", 0.0) or 0.0),
+                    int(getattr(snapshot, "broker_count", 0) or 0),
+                )
+            else:
+                logger.warning(
+                    "[MABM] canonical CSM-v2 snapshot handoff remained unhydrated "
+                    "source=%s state=%s",
+                    source,
+                    state_value,
+                )
+            return hydrated
+        except Exception as exc:
+            logger.warning(
+                "[MABM] canonical CSM-v2 snapshot handoff failed "
+                "source=%s err=%s",
+                source,
+                exc,
+                exc_info=True,
+            )
+            return False
+
     def _advance_seed_capital_bootstrap_ready(self) -> bool:
         """Legally converge the capital bootstrap FSM after a seed publish."""
         boot_fsm = self._capital_bootstrap_fsm
@@ -2119,23 +2172,17 @@ class MultiAccountBrokerManager:
                                     sorted(_seed_snapshot.broker_balances.keys()),
                                 )
                                 self.finalize_broker_registration()
+                                # CSM-v2 hydration is an independent safety
+                                # contract and must not depend on whether the
+                                # capital bootstrap FSM has finished wiring.
+                                # Feed it immediately after the registration
+                                # gate opens, using the exact CA-accepted seed.
+                                self._ingest_canonical_csm_snapshot(
+                                    _seed_snapshot,
+                                    "bootstrap_seed",
+                                )
                                 _seed_handoff_ready = False
                                 if _CAPITAL_FSM_AVAILABLE and self._capital_bootstrap_fsm is not None:
-                                    # ── Notify CSM-v2 BEFORE the READY transition ────────────────
-                                    # The READY transition fires _on_capital_bootstrap_ready
-                                    # synchronously; that callback calls advance_to_capital_ready()
-                                    # which runs the I12 hydration barrier.  Feed CSM-v2 the seed
-                                    # snapshot here so it is already hydrated when I12 fires.
-                                    try:
-                                        from bot.capital_csm_v2 import get_csm_v2 as _csmv2  # noqa: PLC0415
-                                        _csmv2().ingest_snapshot(_seed_snapshot)
-                                    except ImportError:
-                                        pass
-                                    except Exception as _csm_seed_exc:
-                                        logger.warning(
-                                            "[MABM] bootstrap seed CSM-v2 ingest failed (non-fatal): %s",
-                                            _csm_seed_exc,
-                                        )
                                     if self._capital_event_bus is not None:
                                         self._capital_event_bus.emit(CapitalEvent(
                                             event_type=CapitalEventType.CAPITAL_READY,
