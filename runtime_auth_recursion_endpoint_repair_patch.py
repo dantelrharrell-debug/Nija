@@ -156,6 +156,28 @@ def _okx_attempt_is_current(instance: Any, token: int) -> bool:
         return bool(isinstance(active, dict) and active.get("token") == token)
 
 
+def _mark_okx_attempt_success(instance: Any, token: int) -> None:
+    with _OKX_CONNECT_STATE_LOCK:
+        active = getattr(instance, "_nija_okx_connect_attempt", None)
+        if isinstance(active, dict) and active.get("token") == token:
+            active["successful"] = True
+
+
+def _restore_latest_okx_success(instance: Any) -> bool:
+    """Restore readiness if an obsolete attempt completed after a newer success."""
+    with _OKX_CONNECT_STATE_LOCK:
+        active = getattr(instance, "_nija_okx_connect_attempt", None)
+        successful = bool(isinstance(active, dict) and active.get("successful"))
+    if successful:
+        for attr, value in (("connected", True), ("_is_available", True)):
+            if hasattr(instance, attr):
+                try:
+                    setattr(instance, attr, value)
+                except Exception:
+                    pass
+    return successful
+
+
 def _set_okx_endpoint(instance: Any, url: str) -> None:
     os.environ["OKX_BASE_URL"] = url
     for attr in ("base_url", "api_base_url", "endpoint", "api_url", "rest_url"):
@@ -356,6 +378,7 @@ def _patch_okx_class(module: ModuleType) -> bool:
                     type(self).__name__,
                     token,
                 )
+                _restore_latest_okx_success(self)
                 return bool(getattr(self, "connected", False))
             configured_after = str(os.environ.get("OKX_BASE_URL", "") or "").strip().rstrip("/")
             if configured_after and configured_after != configured:
@@ -364,6 +387,7 @@ def _patch_okx_class(module: ModuleType) -> bool:
                 failure_reason = getattr(self, "_nija_okx_last_connect_reason", None) or "connect_failed_retryable"
                 _reset_okx_connection_state(self, failure_reason)
             else:
+                _mark_okx_attempt_success(self, token)
                 try:
                     self._nija_okx_last_connect_error = None
                 except Exception:
@@ -378,6 +402,7 @@ def _patch_okx_class(module: ModuleType) -> bool:
                     token,
                     _okx_error_text(exc),
                 )
+                _restore_latest_okx_success(self)
                 return bool(getattr(self, "connected", False))
             _record_okx_connect_exception(self, token, exc)
             reason = "connect_recursion_blocked" if isinstance(exc, RecursionError) else "connect_failed_retryable"
