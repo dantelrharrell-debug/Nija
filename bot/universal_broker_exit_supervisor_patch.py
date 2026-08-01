@@ -198,28 +198,70 @@ def _scan_broker(broker: Any) -> int:
     return closed
 
 
+def _logical_identity(broker: Any) -> tuple[str, str]:
+    return (
+        str(auto_exit._broker_label(broker) or "unknown").strip().lower(),
+        str(_account_label(broker) or "platform").strip().lower(),
+    )
+
+
+def _registered_values() -> list[Any]:
+    return list(_BROKERS) + list(_STRONG_BROKERS)
+
+
+def _discard_broker(broker: Any) -> None:
+    try:
+        _BROKERS.discard(broker)
+    except TypeError:
+        pass
+    while broker in _STRONG_BROKERS:
+        _STRONG_BROKERS.remove(broker)
+
+
 def _register_broker(broker: Any) -> None:
     if broker is None:
         return
+    identity = _logical_identity(broker)
+    replaced = None
     with _LOCK:
+        for existing in _registered_values():
+            if existing is broker:
+                _start()
+                return
+            if _logical_identity(existing) == identity:
+                replaced = existing
+                _discard_broker(existing)
         try:
             _BROKERS.add(broker)
         except TypeError:
-            if broker not in _STRONG_BROKERS:
-                _STRONG_BROKERS.append(broker)
-    logger.info("UNIVERSAL_BROKER_EXIT_REGISTERED marker=%s venue=%s account=%s class=%s", _MARKER, auto_exit._broker_label(broker), _account_label(broker), type(broker).__name__)
+            _STRONG_BROKERS.append(broker)
+    if replaced is not None:
+        logger.warning(
+            "UNIVERSAL_BROKER_EXIT_REPLACED marker=%s venue=%s account=%s old_class=%s new_class=%s",
+            _MARKER,
+            identity[0],
+            identity[1],
+            type(replaced).__name__,
+            type(broker).__name__,
+        )
+    else:
+        logger.info(
+            "UNIVERSAL_BROKER_EXIT_REGISTERED marker=%s venue=%s account=%s class=%s",
+            _MARKER,
+            identity[0],
+            identity[1],
+            type(broker).__name__,
+        )
     _start()
 
 
 def _snapshot() -> list[Any]:
-    values = list(_BROKERS) + list(_STRONG_BROKERS)
-    out: list[Any] = []
-    seen: set[int] = set()
+    values = _registered_values()
+    latest: dict[tuple[str, str], Any] = {}
     for broker in values:
-        if broker is not None and id(broker) not in seen:
-            seen.add(id(broker))
-            out.append(broker)
-    return out
+        if broker is not None:
+            latest[_logical_identity(broker)] = broker
+    return list(latest.values())
 
 
 def _start() -> None:
