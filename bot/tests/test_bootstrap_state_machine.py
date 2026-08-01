@@ -73,6 +73,29 @@ def _authority_ready_patch():
     )
 
 
+def test_capital_fast_forward_requires_startup_validation(monkeypatch):
+    monkeypatch.delenv("NIJA_STARTUP_VALIDATED", raising=False)
+    fsm = _fresh()
+    assert fsm.transition(BootstrapState.LOCK_ACQUIRED, "lock") is True
+
+    assert fsm.advance_to_capital_ready("capital accepted") is False
+    assert fsm.state == BootstrapState.LOCK_ACQUIRED
+
+
+def test_validated_capital_fast_forward_reaches_capital_ready(monkeypatch):
+    monkeypatch.setenv("NIJA_STARTUP_VALIDATED", "1")
+    fsm = _fresh()
+    assert fsm.transition(BootstrapState.LOCK_ACQUIRED, "lock") is True
+    monkeypatch.setattr(
+        fsm,
+        "assert_invariant_i12_capital_hydration",
+        lambda timeout=5.0: None,
+    )
+
+    assert fsm.advance_to_capital_ready("capital accepted") is True
+    assert fsm.state == BootstrapState.CAPITAL_READY
+
+
 # ---------------------------------------------------------------------------
 # Full forward path
 # ---------------------------------------------------------------------------

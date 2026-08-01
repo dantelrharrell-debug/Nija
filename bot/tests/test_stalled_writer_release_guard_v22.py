@@ -89,6 +89,60 @@ def test_capital_handoff_corroborates_stale_capital_snapshot(monkeypatch):
     assert valid_brokers == 1
 
 
+def test_manager_ready_requires_startup_validated_bootstrap_state(monkeypatch):
+    manager = types.SimpleNamespace(
+        _fsm_initialized=True,
+        has_registered_sources=lambda: True,
+        has_attempted_connections=lambda: True,
+    )
+    state = types.SimpleNamespace(value="LOCK_ACQUIRED")
+    bootstrap_fsm = types.SimpleNamespace(state=state)
+    bootstrap_module = types.SimpleNamespace(
+        get_bootstrap_fsm=lambda: bootstrap_fsm
+    )
+    monkeypatch.setattr(guard, "_manager_instance", lambda: manager)
+    monkeypatch.setitem(
+        guard.sys.modules,
+        "bot.bootstrap_state_machine",
+        bootstrap_module,
+    )
+
+    assert guard._manager_snapshot() == (False, True, True)
+
+    state.value = "STARTUP_VALIDATED"
+    assert guard._manager_snapshot() == (True, True, True)
+
+
+def test_accepted_capital_uses_canonical_broker_count_and_ttl(monkeypatch):
+    monkeypatch.delenv("NIJA_CAPITAL_READINESS_HANDOFF_V34", raising=False)
+    monkeypatch.delenv("NIJA_CAPITAL_READINESS_HANDOFF_V34_READY", raising=False)
+    monkeypatch.delenv("CAPITAL_SYSTEM_READY", raising=False)
+    monkeypatch.delenv("NIJA_CAPITAL_READY", raising=False)
+    monkeypatch.setenv(
+        "NIJA_RUNTIME_AUTHORITY_CONVERGENCE_CAPITAL_TTL_S",
+        "240",
+    )
+    observed_ttls = []
+    authority = types.SimpleNamespace(
+        is_hydrated=True,
+        get_real_capital=lambda: 125.0,
+        is_stale=lambda ttl_s: observed_ttls.append(ttl_s) or True,
+        valid_broker_count=2,
+        first_snap_accepted=True,
+    )
+    module = types.SimpleNamespace(get_capital_authority=lambda: authority)
+    monkeypatch.setitem(guard.sys.modules, "bot.capital_authority", module)
+    monkeypatch.setitem(guard.sys.modules, "capital_authority", module)
+
+    hydrated, capital, stale, valid_brokers = guard._capital_snapshot()
+
+    assert hydrated is True
+    assert capital == 125.0
+    assert stale is False
+    assert valid_brokers == 2
+    assert observed_ttls == [240.0]
+
+
 def test_does_not_release_when_v34_handoff_corroborates_capital(monkeypatch):
     monkeypatch.setenv("NIJA_CAPITAL_READINESS_HANDOFF_V34", "1")
     monkeypatch.setenv("NIJA_WRITER_LEASE_ACQUIRED", "1")

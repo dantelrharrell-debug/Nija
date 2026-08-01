@@ -142,6 +142,14 @@ _STRATEGY_ARM_ALLOWED_STATES = frozenset({
     BootstrapState.RUNNING_SUPERVISED,
 })
 
+_TRUE_ENV_VALUES = {"1", "true", "yes", "on", "enabled", "y"}
+
+
+def _startup_validation_attested() -> bool:
+    return str(
+        os.environ.get("NIJA_STARTUP_VALIDATED", "") or ""
+    ).strip().lower() in _TRUE_ENV_VALUES
+
 # ---------------------------------------------------------------------------
 # Balance polling latch states
 # ---------------------------------------------------------------------------
@@ -899,6 +907,25 @@ class BootstrapStateMachine:
                 "[BootstrapFSM] advance_to_capital_ready: FSM is in error/terminal "
                 "state %s — cannot advance to CAPITAL_READY",
                 self.state.value,
+            )
+            return False
+
+        if (
+            self.state.value
+            in {
+                BootstrapState.BOOT_INIT.value,
+                *{
+                    state.value
+                    for state in _HAPPY_PATH_TO_CAPITAL_READY[:8]
+                },
+            }
+            and not _startup_validation_attested()
+        ):
+            logger.error(
+                "❌ [BootstrapFSM] advance_to_capital_ready blocked: "
+                "NIJA_STARTUP_VALIDATED is not attested (state=%s reason=%s)",
+                self.state.value,
+                reason,
             )
             return False
 
