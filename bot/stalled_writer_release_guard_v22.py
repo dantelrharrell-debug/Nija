@@ -228,6 +228,27 @@ def _manager_snapshot() -> tuple[bool, bool, bool]:
 
     fsm_initialized = bool(getattr(manager, "_fsm_initialized", False))
 
+    bootstrap_validated = False
+    module = sys.modules.get("bot.bootstrap_state_machine") or sys.modules.get(
+        "bootstrap_state_machine"
+    )
+    getter = getattr(module, "get_bootstrap_fsm", None) if module is not None else None
+    if callable(getter):
+        try:
+            state = getter().state
+            state_value = str(getattr(state, "value", state) or "")
+            bootstrap_validated = state_value in {
+                "STARTUP_VALIDATED",
+                "CAPITAL_REFRESHING",
+                "CAPITAL_READY",
+                "INIT_COMPLETE",
+                "DEGRADED_READY",
+                "THREADS_STARTING",
+                "RUNNING_SUPERVISED",
+            }
+        except Exception:
+            bootstrap_validated = False
+
     has_sources = getattr(manager, "has_registered_sources", None)
     try:
         sources_registered = bool(has_sources()) if callable(has_sources) else False
@@ -240,7 +261,7 @@ def _manager_snapshot() -> tuple[bool, bool, bool]:
     except Exception:
         attempts_finalized = False
 
-    return fsm_initialized, sources_registered, attempts_finalized
+    return fsm_initialized and bootstrap_validated, sources_registered, attempts_finalized
 
 
 def _capital_snapshot() -> tuple[bool, float, bool, int]:
@@ -274,12 +295,32 @@ def _capital_snapshot() -> tuple[bool, float, bool, int]:
             capital = 0.0
 
     try:
-        stale = bool(authority.is_stale())
+        stale = bool(
+            authority.is_stale(
+                ttl_s=max(
+                    30.0,
+                    _float_env(
+                        "NIJA_RUNTIME_AUTHORITY_CONVERGENCE_CAPITAL_TTL_S",
+                        240.0,
+                    ),
+                )
+            )
+        )
+    except TypeError:
+        try:
+            stale = bool(authority.is_stale())
+        except Exception:
+            stale = True
     except Exception:
         stale = True
 
     valid = 0
-    for attr in ("valid_brokers", "broker_count", "_valid_broker_count"):
+    for attr in (
+        "valid_broker_count",
+        "valid_brokers",
+        "broker_count",
+        "_valid_broker_count",
+    ):
         try:
             candidate = int(getattr(authority, attr, 0) or 0)
         except Exception:
@@ -321,7 +362,12 @@ def _capital_snapshot() -> tuple[bool, float, bool, int]:
         or _truthy_env("NIJA_CAPITAL_READINESS_HANDOFF_V34_READY")
         or (_truthy_env("CAPITAL_SYSTEM_READY") and _truthy_env("NIJA_CAPITAL_READY"))
     )
-    if handoff_ready and hydrated and capital > 0.0 and valid > 0:
+    accepted_latch = bool(
+        getattr(authority, "first_snap_accepted", False)
+        or getattr(authority, "_first_snap_accepted", False)
+        or getattr(authority, "first_snapshot_accepted", False)
+    )
+    if (handoff_ready or accepted_latch) and hydrated and capital > 0.0 and valid > 0:
         stale = False
 
     return hydrated, capital, stale, valid
