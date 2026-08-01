@@ -1,10 +1,8 @@
 name: gh Auth Verify
 
-# Verifies that gh CLI is available and authenticated via GH_TOKEN secret.
-# The token requires:
-#   - Contents: read/write
-#   - Pull requests: read/write (workflow may open PRs)
-# The token value is NEVER printed in logs.
+# Verifies that gh CLI is available and authenticated non-interactively.
+# Prefer an explicitly configured GH_TOKEN, but use GitHub's scoped workflow
+# token when that optional secret is absent. Token values are never printed.
 
 on:
   workflow_dispatch:
@@ -13,30 +11,23 @@ on:
   pull_request:
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
+  pull-requests: read
 
 jobs:
   verify-gh-auth:
     runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GH_TOKEN || github.token }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
       # gh CLI is pre-installed on ubuntu-latest runners.
-      # Authenticate using the GH_TOKEN secret — value is masked in logs.
-      - name: Authenticate gh CLI
-        env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
-        run: |
-          echo "$GH_TOKEN" | gh auth login --with-token
-
       - name: Verify gh version
         run: gh --version
 
       - name: Verify gh auth status
-        env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
         run: gh auth status
 
       - name: Verify git remote
