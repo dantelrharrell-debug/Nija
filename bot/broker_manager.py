@@ -3757,9 +3757,12 @@ class CoinbaseBroker(BaseBroker):
                 self._accounts_cache = resp
                 self._accounts_cache_time = time.time()
 
-            logging.info("BALANCE RESPONSE RAW: %s", str(resp)[:1200])
-
             accounts = getattr(resp, 'accounts', []) or (resp.get('accounts', []) if isinstance(resp, dict) else [])
+            logging.info(
+                "BALANCE RESPONSE SUMMARY: broker=coinbase type=%s accounts=%d",
+                type(resp).__name__,
+                len(accounts),
+            )
 
             # IMPROVEMENT #2: Validate API permissions
             if not accounts:
@@ -10208,7 +10211,6 @@ class KrakenBroker(BaseBroker):
                 self.account_identifier,
                 type(balance).__name__,
             )
-            logger.info("BALANCE RESPONSE RAW: %s", str(balance)[:1200])
 
             if balance and 'error' in balance and balance['error']:
                 error_msgs = ', '.join(balance['error'])
@@ -10297,7 +10299,12 @@ class KrakenBroker(BaseBroker):
                 # Use MONITORING category for balance checks (conservative rate limiting)
                 balance_category = KrakenAPICategory.MONITORING if KrakenAPICategory is not None else None
                 trade_balance = self._kraken_private_call('TradeBalance', {'asset': 'ZUSD'}, category=balance_category)
-                logger.info("BALANCE RESPONSE RAW: %s", str(trade_balance)[:1200])
+                logger.info(
+                    "[KrakenBalancePipeline] trade_balance_response account=%s type=%s has_error=%s",
+                    self.account_identifier,
+                    type(trade_balance).__name__,
+                    bool(isinstance(trade_balance, dict) and trade_balance.get("error")),
+                )
                 held_amount = 0.0
                 trade_balance_equity_usd = 0.0
 
