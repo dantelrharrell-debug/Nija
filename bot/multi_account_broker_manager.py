@@ -1376,6 +1376,49 @@ class MultiAccountBrokerManager:
         )
         return snapshot
 
+    def _advance_seed_capital_bootstrap_ready(self) -> bool:
+        """Legally converge the capital bootstrap FSM after a seed publish."""
+        boot_fsm = self._capital_bootstrap_fsm
+        if not _CAPITAL_FSM_AVAILABLE or boot_fsm is None:
+            return False
+
+        try:
+            claim = getattr(boot_fsm, "claim_bootstrap_ownership", None)
+            if callable(claim):
+                claim()
+            next_state = {
+                CapitalBootstrapState.BOOT_IDLE: CapitalBootstrapState.WAIT_PLATFORM,
+                CapitalBootstrapState.WAIT_PLATFORM: CapitalBootstrapState.INIT_COMPLETE,
+                CapitalBootstrapState.INIT_COMPLETE: CapitalBootstrapState.REFRESH_REQUESTED,
+                CapitalBootstrapState.REFRESH_REQUESTED: CapitalBootstrapState.REFRESH_IN_FLIGHT,
+                CapitalBootstrapState.REFRESH_IN_FLIGHT: CapitalBootstrapState.SNAPSHOT_EVALUATING,
+                CapitalBootstrapState.SNAPSHOT_EVALUATING: CapitalBootstrapState.READY,
+                CapitalBootstrapState.DEGRADED: CapitalBootstrapState.REFRESH_REQUESTED,
+                CapitalBootstrapState.FAILED: CapitalBootstrapState.REFRESH_REQUESTED,
+            }
+            for _ in range(8):
+                if bool(getattr(boot_fsm, "is_ready", False)):
+                    return True
+                current = boot_fsm.state
+                target = next_state.get(current)
+                if target is None or not boot_fsm.transition(
+                    target,
+                    "accepted bootstrap seed",
+                ):
+                    logger.error(
+                        "[MABM] bootstrap seed capital FSM handoff blocked: state=%s target=%s",
+                        getattr(current, "value", current),
+                        getattr(target, "value", target),
+                    )
+                    return False
+            return bool(getattr(boot_fsm, "is_ready", False))
+        except Exception as exc:
+            logger.exception(
+                "[MABM] bootstrap seed capital FSM handoff failed: %s",
+                exc,
+            )
+            return False
+
     def finalize_broker_registration(self) -> None:
         """Signal that all expected brokers have been registered.
 
@@ -1508,7 +1551,7 @@ class MultiAccountBrokerManager:
             return False
         return _current_idx >= _target_idx
 
-    def finalize_bootstrap_ready(self) -> None:
+    def finalize_bootstrap_ready(self) -> bool:
         """Release the global startup lock after full system sync is confirmed.
 
         This is the **final** step in the bootstrap sequence and MUST be called
@@ -1543,27 +1586,26 @@ class MultiAccountBrokerManager:
             if not self._startup_lock_released:
                 self._startup_lock_released = True  # sync local flag to event state
             logger.debug("[MABM] finalize_bootstrap_ready: startup lock already released — no-op")
-            return
+            return True
         _bootstrap_state = self._get_system_bootstrap_state_name()
         if not self._is_system_bootstrap_at_least("LOCK_ACQUIRED"):
             logger.warning(
                 "[MABM] finalize_bootstrap_ready blocked: bootstrap state=%s is before LOCK_ACQUIRED",
                 _bootstrap_state,
             )
-            return
+            return False
         if not self._is_system_bootstrap_at_least("STARTUP_VALIDATED"):
             logger.info(
                 "[MABM] finalize_bootstrap_ready deferred: bootstrap state=%s is before STARTUP_VALIDATED",
                 _bootstrap_state,
             )
-            return
+            return False
         # Verify prerequisite: broker registration must be complete.
         if not self._broker_registration_complete.is_set():
             logger.warning(
                 "[MABM] finalize_bootstrap_ready: broker registration not yet complete — aborting"
             )
-            return
-        self._startup_lock_released = True
+            return False
         logger.warning(
             "✅ [MABM] STARTUP LOCK RELEASING — all prerequisites confirmed "
             "(registered_brokers=%d)",
@@ -1589,6 +1631,13 @@ class MultiAccountBrokerManager:
             logger.warning(
                 "[MABM] finalize_bootstrap_ready: could not release CA startup lock: %s", _exc
             )
+        released = self._startup_lock_is_set()
+        self._startup_lock_released = released
+        if not released:
+            logger.error(
+                "[MABM] finalize_bootstrap_ready: CapitalAuthority did not release STARTUP_LOCK"
+            )
+        return released
 
     def _on_capital_bootstrap_ready(self) -> None:
         """Option A trigger: advance the system BootstrapStateMachine to CAPITAL_READY.
@@ -2070,7 +2119,7 @@ class MultiAccountBrokerManager:
                                     sorted(_seed_snapshot.broker_balances.keys()),
                                 )
                                 self.finalize_broker_registration()
-                                self.finalize_bootstrap_ready()
+                                _seed_handoff_ready = False
                                 if _CAPITAL_FSM_AVAILABLE and self._capital_bootstrap_fsm is not None:
                                     # ── Notify CSM-v2 BEFORE the READY transition ────────────────
                                     # The READY transition fires _on_capital_bootstrap_ready
@@ -2091,19 +2140,36 @@ class MultiAccountBrokerManager:
                                         self._capital_event_bus.emit(CapitalEvent(
                                             event_type=CapitalEventType.CAPITAL_READY,
                                             trigger="bootstrap_seed",
+                                            snapshot=_seed_snapshot,
                                         ))
-                                with self._capital_state_lock:
-                                    self._capital_ready = True
-                                    self._capital_last_refresh_ts = time.time()
-                                return {
-                                    "ready": 1.0,
-                                    "total_capital": _seed_snapshot.real_capital,
-                                    "valid_brokers": float(_seed_snapshot.broker_count),
-                                    "kraken_capital": float(
-                                        _seed_snapshot.broker_balances.get("kraken", 0.0)
-                                    ),
-                                    "bootstrap_seed": 1.0,
-                                }
+                                        self._capital_event_bus.dispatch_pending()
+                                    _seed_handoff_ready = self._advance_seed_capital_bootstrap_ready()
+                                if _seed_handoff_ready:
+                                    self.finalize_bootstrap_ready()
+                                _startup_released = bool(
+                                    self._startup_lock_released
+                                    or self._startup_lock_is_set()
+                                )
+                                if _seed_handoff_ready and _startup_released:
+                                    with self._capital_state_lock:
+                                        self._capital_ready = True
+                                        self._capital_last_refresh_ts = time.time()
+                                    return {
+                                        "ready": 1.0,
+                                        "total_capital": _seed_snapshot.real_capital,
+                                        "valid_brokers": float(_seed_snapshot.broker_count),
+                                        "kraken_capital": float(
+                                            _seed_snapshot.broker_balances.get("kraken", 0.0)
+                                        ),
+                                        "bootstrap_seed": 1.0,
+                                    }
+                                logger.warning(
+                                    "[MABM] bootstrap seed accepted but readiness handoff is pending "
+                                    "(capital_fsm_ready=%s startup_lock_released=%s); "
+                                    "falling through to normal pipeline",
+                                    _seed_handoff_ready,
+                                    _startup_released,
+                                )
                             else:
                                 logger.warning(
                                     "[MABM] bootstrap seed publish rejected — "
