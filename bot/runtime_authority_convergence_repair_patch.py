@@ -14,6 +14,7 @@ _MARKER = "20260709u"
 _HOOK_FLAG = "_NIJA_RUNTIME_AUTHORITY_CONVERGENCE_REPAIR_HOOK_V20260709U"
 _MONITOR_STARTED = False
 _MONITOR_LOCK = threading.Lock()
+_CONVERGENCE_LOCAL = threading.local()
 _TRUE = {"1", "true", "yes", "on", "enabled", "y"}
 _UNSAFE_REASON_TOKENS = (
     "manual",
@@ -392,7 +393,7 @@ def _safe_to_recover() -> tuple[bool, str, dict[str, Any]]:
     return True, f"{kill_detail}; {capital_detail}; {hb_detail}; {writer_detail}", capital_meta
 
 
-def converge_runtime_authority(source: str = "manual") -> bool:
+def _converge_runtime_authority_once(source: str = "manual") -> bool:
     if not _truthy("NIJA_RUNTIME_AUTHORITY_CONVERGENCE_REPAIR_ENABLED", "true"):
         return False
     env_state = os.environ.get("NIJA_RUNTIME_TRADING_STATE", "").strip().upper()
@@ -439,7 +440,14 @@ def converge_runtime_authority(source: str = "manual") -> bool:
                 except Exception as exc:
                     logger.warning("RUNTIME_AUTHORITY_CONVERGENCE_COMMIT_FAILED marker=%s err=%s", _MARKER, exc)
             if not committed:
-                sm.transition_to(TradingState.LIVE_ACTIVE, f"runtime-authority convergence repair marker={_MARKER} source={source}")
+                logger.warning(
+                    "RUNTIME_AUTHORITY_CONVERGENCE_COMMIT_REJECTED marker=%s "
+                    "source=%s state=%s activation_gates_remain_authoritative=true",
+                    _MARKER,
+                    source,
+                    state_value,
+                )
+                return False
         with getattr(sm, "_lock", threading.Lock()):
             if hasattr(sm, "_activation_committed"):
                 sm._activation_committed = True
@@ -466,6 +474,23 @@ def converge_runtime_authority(source: str = "manual") -> bool:
     except Exception as exc:
         logger.warning("RUNTIME_AUTHORITY_CONVERGENCE_FAILED marker=%s source=%s err=%s", _MARKER, source, exc)
         return False
+
+
+def converge_runtime_authority(source: str = "manual") -> bool:
+    """Converge authority once per thread without recursive activation calls."""
+
+    if bool(getattr(_CONVERGENCE_LOCAL, "active", False)):
+        logger.debug(
+            "RUNTIME_AUTHORITY_CONVERGENCE_REENTRY_BLOCKED marker=%s source=%s",
+            _MARKER,
+            source,
+        )
+        return False
+    _CONVERGENCE_LOCAL.active = True
+    try:
+        return _converge_runtime_authority_once(source)
+    finally:
+        _CONVERGENCE_LOCAL.active = False
 
 
 def _monitor() -> None:
