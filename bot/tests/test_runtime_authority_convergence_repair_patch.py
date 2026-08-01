@@ -41,6 +41,18 @@ class HandoffOnlyCapitalAuthority:
         return True
 
 
+class ConflictingFreshnessCapitalAuthority(FakeCapitalAuthority):
+    def __init__(self):
+        self.freshness_ttls = []
+
+    def is_fresh(self, ttl_s=240.0):
+        self.freshness_ttls.append(ttl_s)
+        return True
+
+    def is_stale(self, ttl_s=60.0):
+        raise AssertionError("is_stale must not overwrite canonical is_fresh")
+
+
 class FakeKillSwitch:
     def __init__(self, active=False):
         self._active = active
@@ -89,6 +101,22 @@ def test_capital_authority_accepts_handoff_ready_snapshot_without_usable_field(m
     assert detail["usable"] == 466.62
     assert detail["valid_brokers"] == 3
     assert detail["fresh"] is True
+
+
+def test_capital_freshness_uses_one_consistent_ttl(monkeypatch):
+    _live_env(monkeypatch)
+    monkeypatch.setenv(
+        "NIJA_RUNTIME_AUTHORITY_CONVERGENCE_CAPITAL_TTL_S", "240"
+    )
+    authority = ConflictingFreshnessCapitalAuthority()
+    import bot.capital_authority as ca_mod
+    monkeypatch.setattr(ca_mod, "get_capital_authority", lambda: authority)
+
+    ready, _reason, detail = patch._capital_authority_ready()
+
+    assert ready is True
+    assert detail["fresh"] is True
+    assert authority.freshness_ttls == [240.0]
 
 
 def test_heartbeat_ready_requires_token_generation_and_fresh_alive(monkeypatch):
