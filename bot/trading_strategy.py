@@ -396,6 +396,8 @@ class TradingStrategy:
             float(_SYMBOL_UNIVERSE_REFRESH_INTERVAL_S),
         )
         self._last_symbol_refresh_ts: float = 0.0
+        self._wiring_recovery_lock = threading.Lock()
+        self._wiring_recovery_last_attempt = 0.0
 
         # Heartbeat trade state
         self._heartbeat_trade_enabled: bool = (
@@ -1738,36 +1740,87 @@ class TradingStrategy:
     # -----------------------------------------------------------------------
 
     def _ensure_nija_wiring(self) -> None:
-        """Ensure APEX and NijaCoreLoop references are correctly wired.
-
-        This self-heals runtime ordering issues where TradingStrategy is
-        constructed before all optional modules are fully ready.
-        """
+        """Recover and align APEX/CoreLoop wiring after transient startup failures."""
         if self.apex is None:
-            return
+            cooldown = max(
+                1.0,
+                _env_float("NIJA_STRATEGY_WIRING_RETRY_SECONDS", default=30.0),
+            )
+            now = time.monotonic()
+            if now - self._wiring_recovery_last_attempt < cooldown:
+                return
+            if not self._wiring_recovery_lock.acquire(blocking=False):
+                return
+            try:
+                if self.apex is None:
+                    now = time.monotonic()
+                    if now - self._wiring_recovery_last_attempt < cooldown:
+                        return
+                    self._wiring_recovery_last_attempt = now
+                    strategy_cls = NIJAApexStrategyV71
+                    if strategy_cls is None:
+                        try:
+                            from bot.nija_apex_strategy_v71 import NIJAApexStrategyV71 as strategy_cls
+                        except ImportError:
+                            try:
+                                from nija_apex_strategy_v71 import NIJAApexStrategyV71 as strategy_cls  # type: ignore[import,no-redef]
+                            except ImportError:
+                                strategy_cls = None
+                    if strategy_cls is None:
+                        logger.error("APEX_WIRING_RECOVERY_DEFERRED reason=strategy_class_unavailable")
+                        return
+                    try:
+                        broker = self.broker or self._get_active_broker()
+                        self.apex = strategy_cls(broker_client=broker)
+                        self.execution_engine = getattr(self.apex, "execution_engine", None)
+                        logger.critical(
+                            "APEX_WIRING_RECOVERED strategy=%s broker=%s",
+                            type(self.apex).__name__,
+                            type(broker).__name__ if broker is not None else "None",
+                        )
+                    except Exception as exc:
+                        self.apex = None
+                        self.execution_engine = None
+                        logger.error(
+                            "APEX_WIRING_RECOVERY_FAILED error_type=%s error=%s retry_in_s=%.1f",
+                            type(exc).__name__,
+                            str(exc)[:240],
+                            cooldown,
+                        )
+                        return
+            finally:
+                self._wiring_recovery_lock.release()
 
         if self.execution_engine is None:
             self.execution_engine = getattr(self.apex, "execution_engine", None)
 
-        if not _CORE_LOOP_AVAILABLE or get_nija_core_loop is None:
+        loop_factory = get_nija_core_loop
+        if loop_factory is None:
+            try:
+                from bot.nija_core_loop import get_nija_core_loop as loop_factory
+            except ImportError:
+                try:
+                    from nija_core_loop import get_nija_core_loop as loop_factory  # type: ignore[import,no-redef]
+                except ImportError:
+                    loop_factory = None
+        if loop_factory is None:
             return
 
         if self.nija_core_loop is None:
             try:
-                _max_positions = int(os.environ.get("NIJA_MAX_POSITIONS", "5") or 5)
-                self.nija_core_loop = get_nija_core_loop(
+                max_positions = int(os.environ.get("NIJA_MAX_POSITIONS", "5") or 5)
+                self.nija_core_loop = loop_factory(
                     apex_strategy=self.apex,
-                    max_positions=max(1, _max_positions),
+                    max_positions=max(1, max_positions),
                 )
-                logger.info("✅ NijaCoreLoop lazily attached during run_cycle")
-            except Exception as _wire_err:
-                logger.warning("⚠️ NijaCoreLoop lazy attach failed: %s", _wire_err)
+                logger.info("NijaCoreLoop lazily attached during run_cycle")
+            except Exception as exc:
+                logger.warning("NijaCoreLoop lazy attach failed: %s", exc)
                 return
 
-        # Keep singleton core loop aligned with the active APEX instance.
         if getattr(self.nija_core_loop, "apex", None) is not self.apex:
             self.nija_core_loop.apex = self.apex
-            logger.info("🔗 NijaCoreLoop apex reference re-synchronized")
+            logger.info("NijaCoreLoop apex reference re-synchronized")
 
     def run_cycle(self, broker: Optional[Any] = None, user_mode: bool = False) -> int:
         """Execute one trading cycle and return the recommended next interval in seconds.
@@ -1792,9 +1845,9 @@ class TradingStrategy:
             f"nija_core_loop={type(self.nija_core_loop).__name__ if self.nija_core_loop is not None else 'None'}",
             flush=True,
         )
+        self._ensure_nija_wiring()
         if self.apex is not None:
             try:
-                self._ensure_nija_wiring()
                 print(
                     f"[NIJA-PRINT] after _ensure_nija_wiring | "
                     f"nija_core_loop={type(self.nija_core_loop).__name__ if self.nija_core_loop is not None else 'None'} "
