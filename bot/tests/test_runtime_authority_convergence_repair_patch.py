@@ -134,3 +134,59 @@ def test_safe_to_recover_when_kill_switch_clear_capital_ready_and_writer_ok(monk
     assert "kill_switch_clear" in reason
     assert "capital_ready" in reason
     assert detail["usable"] == 568.30
+
+def test_convergence_blocks_same_thread_reentry(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        patch,
+        "_converge_runtime_authority_once",
+        lambda source: calls.append(source) or True,
+    )
+    monkeypatch.setattr(patch._CONVERGENCE_LOCAL, "active", True, raising=False)
+
+    assert patch.converge_runtime_authority("nested") is False
+    assert calls == []
+
+
+def test_rejected_activation_commit_does_not_force_live_transition(monkeypatch):
+    import bot.trading_state_machine as tsm
+
+    class FakeStateMachine:
+        def __init__(self):
+            self.state = tsm.TradingState.OFF
+            self.commit_calls = 0
+            self.transitions = []
+
+        def get_current_state(self):
+            return self.state
+
+        def commit_activation(self, cycle_capital=None):
+            self.commit_calls += 1
+            return False
+
+        def transition_to(self, state, reason):
+            self.transitions.append((state, reason))
+            self.state = state
+            return True
+
+    sm = FakeStateMachine()
+    monkeypatch.setenv("NIJA_RUNTIME_AUTHORITY_CONVERGENCE_REPAIR_ENABLED", "true")
+    monkeypatch.setenv("NIJA_RUNTIME_TRADING_STATE", "OFF")
+    monkeypatch.setenv("NIJA_RUNTIME_EXECUTION_AUTHORITY", "0")
+    monkeypatch.setattr(
+        patch,
+        "_safe_to_recover",
+        lambda: (
+            True,
+            "all safety proofs passed",
+            {"valid_brokers": 3, "hydrated": True, "fresh": True, "real": 466.21},
+        ),
+    )
+    monkeypatch.setattr(tsm, "get_state_machine", lambda: sm)
+    monkeypatch.setattr(patch._CONVERGENCE_LOCAL, "active", False, raising=False)
+
+    assert patch.converge_runtime_authority("test") is False
+    assert sm.commit_calls == 1
+    assert sm.transitions == []
+    assert sm.state == tsm.TradingState.OFF
+
