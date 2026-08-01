@@ -258,6 +258,52 @@ def test_attempt_authority_convergence_retry_uses_ready_source(monkeypatch):
     assert calls == ["stalled_writer_ready_authority_retry:unit_test"]
 
 
+def test_bootstrap_progression_retries_only_validated_ready_manager(monkeypatch):
+    monkeypatch.setenv("NIJA_STARTUP_VALIDATED", "1")
+    manager = types.SimpleNamespace(
+        _fsm_initialized=True,
+        has_registered_sources=lambda: True,
+        has_attempted_connections=lambda: True,
+    )
+    state = types.SimpleNamespace(value="LOCK_ACQUIRED")
+    calls = []
+
+    def advance(*, reason):
+        calls.append(reason)
+        state.value = "CAPITAL_READY"
+        return True
+
+    bootstrap_fsm = types.SimpleNamespace(state=state, advance_to_capital_ready=advance)
+    bootstrap_module = types.SimpleNamespace(get_bootstrap_fsm=lambda: bootstrap_fsm)
+    monkeypatch.setattr(guard, "_manager_instance", lambda: manager)
+    monkeypatch.setitem(guard.sys.modules, "bot.bootstrap_state_machine", bootstrap_module)
+
+    assert guard._attempt_bootstrap_progression("unit_test") is True
+    assert calls == ["stalled_writer_ready_bootstrap_retry:unit_test"]
+    assert state.value == "CAPITAL_READY"
+
+
+def test_bootstrap_progression_refuses_unattested_startup(monkeypatch):
+    monkeypatch.delenv("NIJA_STARTUP_VALIDATED", raising=False)
+    manager = types.SimpleNamespace(
+        _fsm_initialized=True,
+        has_registered_sources=lambda: True,
+        has_attempted_connections=lambda: True,
+    )
+    state = types.SimpleNamespace(value="LOCK_ACQUIRED")
+    calls = []
+    bootstrap_fsm = types.SimpleNamespace(
+        state=state,
+        advance_to_capital_ready=lambda *, reason: calls.append(reason) or True,
+    )
+    bootstrap_module = types.SimpleNamespace(get_bootstrap_fsm=lambda: bootstrap_fsm)
+    monkeypatch.setattr(guard, "_manager_instance", lambda: manager)
+    monkeypatch.setitem(guard.sys.modules, "bot.bootstrap_state_machine", bootstrap_module)
+
+    assert guard._attempt_bootstrap_progression("unit_test") is False
+    assert calls == []
+
+
 def test_attempt_emergency_stop_recovery_clears_and_converges(monkeypatch):
     calls = []
 

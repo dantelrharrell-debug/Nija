@@ -505,6 +505,98 @@ def _attempt_authority_convergence_retry(source: str) -> bool:
     return True
 
 
+def _attempt_bootstrap_progression(source: str) -> bool:
+    """Retry the normal validated capital-ready BootstrapFSM handoff.
+
+    Capital can become ready while ``MultiAccountBrokerManager.initialize`` is
+    still completing independent user-account work.  In that ordering, the
+    one-shot capital callback can miss the composite BootstrapFSM handoff and
+    leave it at ``LOCK_ACQUIRED``.  The old monitor then required
+    ``STARTUP_VALIDATED`` before it would retry authority, creating a circular
+    wait until it eventually released a healthy writer lease.
+
+    This recovery does not force a state.  It calls the canonical
+    ``advance_to_capital_ready`` helper only after the manager FSM, broker
+    registration, connection-attempt finalization, startup-validation
+    attestation, and real fresh capital have already been proven.  The helper
+    still enforces its I12 hydration barrier and legal FSM transitions.
+    """
+    manager = _manager_instance()
+    if manager is None or not bool(getattr(manager, "_fsm_initialized", False)):
+        return False
+
+    has_sources = getattr(manager, "has_registered_sources", None)
+    attempted = getattr(manager, "has_attempted_connections", None)
+    try:
+        if not callable(has_sources) or not bool(has_sources()):
+            return False
+        if not callable(attempted) or not bool(attempted()):
+            return False
+    except Exception:
+        return False
+
+    if not _truthy_env("NIJA_STARTUP_VALIDATED"):
+        logger.warning(
+            "STALLED_WRITER_RELEASE_GUARD_V22_BOOTSTRAP_RETRY_BLOCKED "
+            "marker=%s source=%s reason=startup_validation_not_attested",
+            _MARKER,
+            source,
+        )
+        return False
+
+    module = sys.modules.get("bot.bootstrap_state_machine") or sys.modules.get(
+        "bootstrap_state_machine"
+    )
+    if module is None:
+        try:
+            from bot import bootstrap_state_machine as module
+        except Exception as exc:
+            logger.warning(
+                "STALLED_WRITER_RELEASE_GUARD_V22_BOOTSTRAP_RETRY_FAILED "
+                "marker=%s source=%s err=%s",
+                _MARKER,
+                source,
+                exc,
+            )
+            return False
+
+    getter = getattr(module, "get_bootstrap_fsm", None)
+    if not callable(getter):
+        return False
+    try:
+        fsm = getter()
+        before = str(getattr(getattr(fsm, "state", None), "value", "") or "")
+        advance = getattr(fsm, "advance_to_capital_ready", None)
+        if not callable(advance):
+            return False
+        advanced = bool(
+            advance(reason=f"stalled_writer_ready_bootstrap_retry:{source}")
+        )
+        after = str(getattr(getattr(fsm, "state", None), "value", "") or "")
+    except Exception as exc:
+        logger.warning(
+            "STALLED_WRITER_RELEASE_GUARD_V22_BOOTSTRAP_RETRY_FAILED "
+            "marker=%s source=%s err=%s",
+            _MARKER,
+            source,
+            exc,
+            exc_info=True,
+        )
+        return False
+
+    logger.critical(
+        "STALLED_WRITER_RELEASE_GUARD_V22_BOOTSTRAP_RETRIED "
+        "marker=%s source=%s before_state=%s after_state=%s advanced=%s "
+        "safety_gates_preserved=true",
+        _MARKER,
+        source,
+        before or "unknown",
+        after or "unknown",
+        advanced,
+    )
+    return advanced
+
+
 def _attempt_emergency_stop_recovery(source: str) -> int:
     """Clear only a safe stale emergency-stop latch, then rerun convergence."""
     try:
@@ -624,6 +716,7 @@ def _monitor() -> None:
     observed_generation = ""
     last_wait_log = 0.0
     last_ready_authority_retry = 0.0
+    last_bootstrap_progression_retry = 0.0
 
     while not _STOP.is_set():
         snapshot = _runtime_snapshot(bot_main)
@@ -639,6 +732,7 @@ def _monitor() -> None:
                 observed_token = snapshot.token
                 observed_generation = snapshot.generation
                 last_ready_authority_retry = 0.0
+                last_bootstrap_progression_retry = 0.0
                 logger.warning(
                     "STALLED_WRITER_RELEASE_GUARD_V22_LEASE_OBSERVED marker=%s token_prefix=%s generation=%s timeout_s=%.1f production_intent=%s state=%s",
                     _MARKER,
@@ -653,6 +747,7 @@ def _monitor() -> None:
             observed_token = ""
             observed_generation = ""
             last_ready_authority_retry = 0.0
+            last_bootstrap_progression_retry = 0.0
 
         if lease_seen_at is not None:
             elapsed_s = now - lease_seen_at
@@ -669,6 +764,20 @@ def _monitor() -> None:
                     snapshot.capital_ready,
                 )
                 last_wait_log = now
+
+            if (
+                not snapshot.manager_ready
+                and snapshot.sources_registered
+                and snapshot.attempts_finalized
+                and snapshot.capital_ready
+                and not snapshot.authority
+                and snapshot.state in {"OFF", "LIVE_PENDING_CONFIRMATION"}
+                and elapsed_s >= retry_after_s
+                and now - last_bootstrap_progression_retry >= retry_interval_s
+            ):
+                last_bootstrap_progression_retry = now
+                _attempt_bootstrap_progression("stalled_writer_monitor")
+                snapshot = _runtime_snapshot(bot_main)
 
             if (
                 snapshot.manager_ready
@@ -746,6 +855,7 @@ __all__ = [
     "_production_writer_intent",
     "_runtime_snapshot",
     "_should_release",
+    "_attempt_bootstrap_progression",
     "_attempt_authority_convergence_retry",
     "_attempt_emergency_stop_recovery",
     "_release_reason",
