@@ -1561,6 +1561,8 @@ echo "      ⚠️  API ERROR / RATE LIMITED       — connectivity or throttlin
 echo "      ⚠️  INSUFFICIENT FUNDS             — balance too low for trade"
 echo ""
 
+export NIJA_STARTUP_VALIDATED=1
+echo "✅ STARTUP_VALIDATION_ATTESTED source=start.sh"
 echo "🔄 Starting live trading bot..."
 echo "Working directory: $(pwd)"
 echo "Bot file exists: $(test -f ./bot.py && echo 'YES' || echo 'NO')"
