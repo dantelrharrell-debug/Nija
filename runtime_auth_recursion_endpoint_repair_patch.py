@@ -12,11 +12,148 @@ from typing import Any, Callable
 
 logger = logging.getLogger("nija.runtime_auth_endpoint_repair")
 _MARKER = "20260726-coinbase-client-recovery-v4"
+_OKX_MARKER = "20260731-okx-connect-state-v5"
 _LOCK = threading.RLock()
 _PATCHED = False
 _WATCHDOG_STARTED = False
 _CONVERGENCE_HOOK_REPAIRED = False
 _LOCAL = threading.local()
+_OKX_CONNECT_STATE_LOCK = threading.RLock()
+_OKX_CONNECT_SEQUENCE = 0
+
+
+class _OKXRuntimeConnectLock:
+    """Compatibility lock for connect() after the runtime attempt guard owns serialization."""
+
+    _nija_okx_runtime_owned = True
+
+    def acquire(self, blocking: bool = True, timeout: float = -1) -> bool:
+        return True
+
+    def release(self) -> None:
+        return None
+
+    def __enter__(self) -> "_OKXRuntimeConnectLock":
+        return self
+
+    def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
+        return None
+
+
+def _okx_connect_timeout_seconds() -> float:
+    try:
+        configured = float(os.environ.get("NIJA_OKX_CONNECT_STALE_TIMEOUT_S", "120") or 120)
+    except (TypeError, ValueError):
+        configured = 120.0
+    return max(1.0, configured)
+
+
+def _okx_error_text(error: Any) -> str:
+    if error is None:
+        return "none"
+    return f"{type(error).__name__}: {error}"[:240]
+
+
+def _reset_okx_connection_state(instance: Any, reason: str, error: BaseException | None = None) -> None:
+    """Return a failed OKX initialization to a clean, retryable state."""
+    for attr, value in (
+        ("connected", False),
+        ("_connecting", False),
+        ("_connection_in_progress", False),
+        ("_connect_in_progress", False),
+        ("_auth_failed", False),
+        ("auth_failed", False),
+        ("_authentication_failed", False),
+        ("_is_available", False),
+        ("client", None),
+        ("account_api", None),
+        ("market_api", None),
+        ("trade_api", None),
+    ):
+        if hasattr(instance, attr):
+            try:
+                setattr(instance, attr, value)
+            except Exception:
+                pass
+    try:
+        instance._nija_okx_last_connect_error = error
+        instance._nija_okx_last_connect_reason = reason
+    except Exception:
+        pass
+    os.environ["NIJA_OKX_CONNECTED"] = "0"
+    os.environ["NIJA_OKX_TRADING_READY"] = "0"
+    os.environ["NIJA_OKX_ACTIVATED"] = "0"
+    os.environ["NIJA_OKX_ACTIVATION_STATE"] = "reconnect_pending"
+    os.environ["NIJA_OKX_FUNDING_STATUS"] = reason
+
+
+def _begin_okx_connect_attempt(instance: Any) -> tuple[int | None, dict[str, Any] | None]:
+    """Atomically claim a bounded OKX connection attempt for this instance."""
+    global _OKX_CONNECT_SEQUENCE
+    now = time.monotonic()
+    owner = threading.get_ident()
+    timeout = _okx_connect_timeout_seconds()
+    with _OKX_CONNECT_STATE_LOCK:
+        active = getattr(instance, "_nija_okx_connect_attempt", None)
+        if isinstance(active, dict) and active.get("active"):
+            age = max(0.0, now - float(active.get("started_at", now)))
+            original_error = active.get("first_exception") or sys.exc_info()[1] or getattr(
+                instance, "_nija_okx_last_connect_error", None
+            )
+            if active.get("first_exception") is None and original_error is not None:
+                active["first_exception"] = original_error
+            if age < timeout:
+                return None, {
+                    "reason": "same_thread_recursion" if active.get("owner") == owner else "connection_in_progress",
+                    "age": age,
+                    "timeout": timeout,
+                    "error": original_error,
+                }
+            logger.error(
+                "OKX_CONNECT_STALE_ATTEMPT_RECLAIMED marker=%s class=%s age_s=%.3f timeout_s=%.3f "
+                "original_error=%s",
+                _OKX_MARKER,
+                type(instance).__name__,
+                age,
+                timeout,
+                _okx_error_text(original_error),
+            )
+        _OKX_CONNECT_SEQUENCE += 1
+        token = _OKX_CONNECT_SEQUENCE
+        instance._nija_okx_connect_attempt = {
+            "active": True,
+            "token": token,
+            "owner": owner,
+            "started_at": now,
+            "first_exception": None,
+        }
+        instance._nija_okx_last_connect_reason = None
+        return token, None
+
+
+def _record_okx_connect_exception(instance: Any, token: int, error: BaseException) -> None:
+    with _OKX_CONNECT_STATE_LOCK:
+        active = getattr(instance, "_nija_okx_connect_attempt", None)
+        if isinstance(active, dict) and active.get("token") == token and active.get("first_exception") is None:
+            active["first_exception"] = error
+    try:
+        instance._nija_okx_last_connect_error = error
+    except Exception:
+        pass
+
+
+def _finish_okx_connect_attempt(instance: Any, token: int) -> None:
+    """Release only the attempt owned by token; stale callers cannot clear a retry."""
+    with _OKX_CONNECT_STATE_LOCK:
+        active = getattr(instance, "_nija_okx_connect_attempt", None)
+        if isinstance(active, dict) and active.get("token") == token:
+            active["active"] = False
+
+
+def _okx_attempt_is_current(instance: Any, token: int) -> bool:
+    with _OKX_CONNECT_STATE_LOCK:
+        active = getattr(instance, "_nija_okx_connect_attempt", None)
+        return bool(isinstance(active, dict) and active.get("token") == token)
 
 
 def _set_okx_endpoint(instance: Any, url: str) -> None:
@@ -170,63 +307,101 @@ def _patch_okx_class(module: ModuleType) -> bool:
     if not isinstance(cls, type):
         return False
     original = getattr(cls, "connect", None)
-    if not callable(original) or getattr(original, "_nija_endpoint_instance_repair_v2", False):
+    if not callable(original) or getattr(original, "_nija_endpoint_instance_repair_v3", False):
         return False
 
     @wraps(original)
     def connect(self: Any, *args: Any, __original: Callable[..., Any] = original, **kwargs: Any) -> Any:
-        active = getattr(_LOCAL, "okx_connect_active", set())
-        identity = id(self)
-        if identity in active:
-            try:
-                self.connected = False
-            except Exception:
-                pass
-            os.environ["NIJA_OKX_CONNECTED"] = "0"
-            os.environ["NIJA_OKX_FUNDING_STATUS"] = "connect_recursion_blocked"
+        token, blocked = _begin_okx_connect_attempt(self)
+        if token is None:
+            reason = str((blocked or {}).get("reason", "connection_in_progress"))
+            error = (blocked or {}).get("error")
+            if reason == "same_thread_recursion":
+                _reset_okx_connection_state(self, "connect_recursion_blocked", error)
             logger.error(
-                "OKX_CONNECT_REENTRY_BLOCKED marker=%s class=%s action=fail_closed",
-                _MARKER,
+                "OKX_CONNECT_REENTRY_BLOCKED marker=%s class=%s reason=%s age_s=%.3f timeout_s=%.3f "
+                "original_error=%s action=fail_closed_retryable",
+                _OKX_MARKER,
                 type(self).__name__,
+                reason,
+                float((blocked or {}).get("age", 0.0)),
+                float((blocked or {}).get("timeout", _okx_connect_timeout_seconds())),
+                _okx_error_text(error),
             )
             return False
-
-        active = set(active)
-        active.add(identity)
-        _LOCAL.okx_connect_active = active
         try:
+            # The wrapper is now the authoritative mutex. Bypass legacy RLocks,
+            # which allow recursion and can retain ownership for 120 seconds.
+            legacy_lock = getattr(self, "_connect_lock", None)
+            if legacy_lock is not None and not getattr(legacy_lock, "_nija_okx_runtime_owned", False):
+                try:
+                    self._connect_lock = _OKXRuntimeConnectLock()
+                except Exception:
+                    pass
+            # Clear latches left by a prior authentication/initialization failure.
+            for attr in ("_auth_failed", "auth_failed", "_authentication_failed"):
+                if hasattr(self, attr):
+                    try:
+                        setattr(self, attr, False)
+                    except Exception:
+                        pass
             configured = str(os.environ.get("OKX_BASE_URL", "") or "").strip().rstrip("/")
             if configured:
                 _set_okx_endpoint(self, configured)
             result = __original(self, *args, **kwargs)
+            if not _okx_attempt_is_current(self, token):
+                logger.warning(
+                    "OKX_CONNECT_STALE_RESULT_IGNORED marker=%s class=%s token=%s",
+                    _OKX_MARKER,
+                    type(self).__name__,
+                    token,
+                )
+                return bool(getattr(self, "connected", False))
             configured_after = str(os.environ.get("OKX_BASE_URL", "") or "").strip().rstrip("/")
             if configured_after and configured_after != configured:
                 _set_okx_endpoint(self, configured_after)
+            if not result:
+                failure_reason = getattr(self, "_nija_okx_last_connect_reason", None) or "connect_failed_retryable"
+                _reset_okx_connection_state(self, failure_reason)
+            else:
+                try:
+                    self._nija_okx_last_connect_error = None
+                except Exception:
+                    pass
             return result
-        except RecursionError as exc:
-            try:
-                self.connected = False
-            except Exception:
-                pass
-            os.environ["NIJA_OKX_CONNECTED"] = "0"
-            os.environ["NIJA_OKX_FUNDING_STATUS"] = "connect_recursion_blocked"
-            logger.error(
-                "OKX_CONNECT_RECURSION_FAIL_CLOSED marker=%s class=%s error=%s",
-                _MARKER,
+        except Exception as exc:
+            if not _okx_attempt_is_current(self, token):
+                logger.warning(
+                    "OKX_CONNECT_STALE_EXCEPTION_IGNORED marker=%s class=%s token=%s error=%s",
+                    _OKX_MARKER,
+                    type(self).__name__,
+                    token,
+                    _okx_error_text(exc),
+                )
+                return bool(getattr(self, "connected", False))
+            _record_okx_connect_exception(self, token, exc)
+            reason = "connect_recursion_blocked" if isinstance(exc, RecursionError) else "connect_failed_retryable"
+            _reset_okx_connection_state(self, reason, exc)
+            logger.exception(
+                "OKX_CONNECT_ATTEMPT_FAILED marker=%s class=%s error=%s action=reset_retryable",
+                _OKX_MARKER,
                 type(self).__name__,
-                str(exc)[:160],
+                _okx_error_text(exc),
             )
             return False
         finally:
-            current = set(getattr(_LOCAL, "okx_connect_active", set()))
-            current.discard(identity)
-            _LOCAL.okx_connect_active = current
+            _finish_okx_connect_attempt(self, token)
 
     connect._nija_endpoint_instance_repair_v2 = True  # type: ignore[attr-defined]
+    connect._nija_endpoint_instance_repair_v3 = True  # type: ignore[attr-defined]
     connect.__wrapped__ = original  # type: ignore[attr-defined]
     setattr(cls, "connect", connect)
     _PATCHED = True
-    logger.warning("OKX_INSTANCE_ENDPOINT_REPAIR_PATCHED marker=%s class=%s reentry_guard=true", _MARKER, cls.__name__)
+    logger.warning(
+        "OKX_INSTANCE_ENDPOINT_REPAIR_PATCHED marker=%s class=%s reentry_guard=true stale_timeout=true retry_reset=true",
+        _OKX_MARKER,
+        cls.__name__,
+    )
     return True
 
 
@@ -342,6 +517,9 @@ __all__ = [
     "install",
     "installed",
     "_set_okx_endpoint",
+    "_reset_okx_connection_state",
+    "_begin_okx_connect_attempt",
+    "_finish_okx_connect_attempt",
     "_zero_coinbase_balance",
     "_patch_coinbase_class",
     "_patch_okx_class",
