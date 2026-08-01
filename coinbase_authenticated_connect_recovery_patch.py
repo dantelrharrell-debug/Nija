@@ -48,6 +48,31 @@ def _wrapper_chain_has_patch(current: Any) -> bool:
     return False
 
 
+def _deepest_connect(current: Any) -> tuple[Any, int, bool]:
+    """Return the deepest acyclic connector exposed by a wrapper chain."""
+    seen: set[int] = set()
+    candidate = current
+    deepest = current
+    depth = 0
+    cycle = False
+    while callable(candidate):
+        identity = id(candidate)
+        if identity in seen:
+            cycle = True
+            break
+        seen.add(identity)
+        wrapped = getattr(candidate, "__wrapped__", None)
+        if not callable(wrapped):
+            break
+        if id(wrapped) in seen:
+            cycle = True
+            break
+        deepest = wrapped
+        candidate = wrapped
+        depth += 1
+    return deepest, depth, cycle
+
+
 def _same_thread_connect_guard(current: Any):
     """Stop a wrapper cycle from re-entering the same broker on one thread."""
 
@@ -583,6 +608,7 @@ def _patch_class(cls: type) -> bool:
     current = getattr(cls, "connect", None)
     if not callable(current) or _wrapper_chain_has_patch(current):
         return bool(callable(current) and _wrapper_chain_has_patch(current))
+    connect_target, wrapper_depth, wrapper_cycle = _deepest_connect(current)
 
     @_same_thread_connect_guard
     @wraps(current)
@@ -633,7 +659,7 @@ def _patch_class(cls: type) -> bool:
 
         first_error = ""
         try:
-            result = current(self, *args, **kwargs)
+            result = connect_target(self, *args, **kwargs)
         except Exception as exc:
             result = False
             first_error = f"{type(exc).__name__}:{str(exc)[:100]}"
@@ -683,7 +709,7 @@ def _patch_class(cls: type) -> bool:
             _apply_pair(self, source, key, secret)
             retry_error = ""
             try:
-                retry_result = current(self, *args, **kwargs)
+                retry_result = connect_target(self, *args, **kwargs)
             except Exception as exc:
                 retry_result = False
                 retry_error = f"{type(exc).__name__}:{str(exc)[:100]}"
@@ -749,8 +775,9 @@ def _patch_class(cls: type) -> bool:
     setattr(connect, _PATCH_ATTR, True)
     setattr(cls, "connect", connect)
     logger.warning(
-        "COINBASE_AUTHENTICATED_CONNECT_SURFACE_PATCHED marker=%s module=%s class=%s",
-        _MARKER, cls.__module__, cls.__name__,
+        "COINBASE_AUTHENTICATED_CONNECT_SURFACE_PATCHED marker=%s module=%s class=%s "
+        "wrapper_depth=%d wrapper_cycle=%s",
+        _MARKER, cls.__module__, cls.__name__, wrapper_depth, str(wrapper_cycle).lower(),
     )
     return True
 
