@@ -279,3 +279,70 @@ def test_transient_connect_failure_stays_retryable(monkeypatch):
     assert broker._is_available is False
     assert module.os.environ["NIJA_COINBASE_ACTIVATION_STATE"] == "reconnect_pending"
     assert module.os.environ.get("NIJA_COINBASE_RECONNECT_DISABLED", "0") != "1"
+
+
+def test_recursive_outer_wrapper_uses_deepest_connector(monkeypatch):
+    module = _module()
+    calls = []
+
+    class Client:
+        def get_accounts(self):
+            return {"accounts": []}
+
+    def base_connect(self):
+        calls.append("base")
+        self.client = Client()
+        self.connected = True
+        return True
+
+    def recursive_wrapper(self):
+        calls.append("wrapper")
+        return self.connect()
+
+    recursive_wrapper.__wrapped__ = base_connect
+
+    class CoinbaseBroker:
+        connect = recursive_wrapper
+
+        def __init__(self):
+            self.client = None
+            self.connected = False
+            self._auth_failed = False
+            self._is_available = True
+            self._balance_fetch_errors = 0
+
+    monkeypatch.setenv("COINBASE_API_KEY", "organizations/test/apiKeys/key")
+    monkeypatch.setenv(
+        "COINBASE_API_SECRET",
+        "-----BEGIN EC PRIVATE KEY-----\nTEST\n-----END EC PRIVATE KEY-----",
+    )
+    monkeypatch.delenv("NIJA_COINBASE_CREDENTIALS_QUARANTINED", raising=False)
+    monkeypatch.setattr(module, "_measure_spendable", lambda broker: 100.0)
+
+    assert module._patch_class(CoinbaseBroker) is True
+    broker = CoinbaseBroker()
+
+    assert broker.connect() is True
+    assert calls == ["base"]
+    assert broker.client is not None
+    assert broker.connected is True
+    assert module.os.environ["NIJA_COINBASE_CONNECTED"] == "1"
+
+
+def test_deepest_connect_stops_at_wrapper_cycle():
+    module = _module()
+
+    def first(self):
+        return False
+
+    def second(self):
+        return False
+
+    first.__wrapped__ = second
+    second.__wrapped__ = first
+
+    target, depth, cycle = module._deepest_connect(first)
+
+    assert target is second
+    assert depth == 1
+    assert cycle is True
