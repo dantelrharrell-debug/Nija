@@ -9,6 +9,7 @@ compatibility and now means that the execution system has at least one ready ven
 """
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 import os
@@ -42,6 +43,35 @@ _STATE_FILE = Path(
 _LOCK = threading.RLock()
 _INSTALLED = False
 _LAST_SIGNATURE = ""
+
+
+def _capital_snapshot_is_stale(authority: Any) -> bool:
+    """Read snapshot staleness across legacy and canonical authority APIs."""
+    reader = getattr(authority, "is_stale", None)
+    if not callable(reader):
+        return True
+
+    try:
+        parameters = inspect.signature(reader).parameters.values()
+    except (TypeError, ValueError):
+        # Some extension-backed callables do not expose a Python signature.
+        try:
+            return bool(reader(90.0))
+        except TypeError:
+            return bool(reader())
+
+    parameters = tuple(parameters)
+    if any(parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in parameters):
+        return bool(reader(ttl_s=90.0))
+    if any(parameter.name == "ttl_s" for parameter in parameters):
+        return bool(reader(ttl_s=90.0))
+    if any(
+        parameter.kind
+        in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+        for parameter in parameters
+    ) or any(parameter.kind == inspect.Parameter.VAR_POSITIONAL for parameter in parameters):
+        return bool(reader(90.0))
+    return bool(reader())
 
 _CREDENTIALS = {
     "kraken": (
@@ -135,12 +165,11 @@ def _capital_ready() -> bool:
         if not hydrated:
             return False
 
-        stale_reader = getattr(authority, "is_stale", None)
         # Use 90-second TTL to match capital_authority._DEFAULT_FRESHNESS_TTL_S.
         # The default 60-second TTL caused false "stale" readings when capital was
         # refreshed 60-90 seconds ago, keeping execution_ready=False and producing
         # repeated THREE_VENUE_EXECUTION_WAITING log lines despite valid capital.
-        stale = bool(stale_reader(90.0) if callable(stale_reader) else True)
+        stale = _capital_snapshot_is_stale(authority)
         capital_reader = getattr(authority, "get_real_capital", None)
         real_capital = float(
             capital_reader()
