@@ -312,22 +312,33 @@ def _capital_authority_ready() -> tuple[bool, str, dict[str, Any]]:
             valid_brokers = max(valid_brokers, sum(1 for value in values.values() if _f(value) > 0.0))
     except Exception:
         pass
-    fresh = True
-    for method_name in ("is_fresh", "is_stale"):
-        method = getattr(ca, method_name, None)
-        if callable(method):
+    ttl_s = max(
+        30.0,
+        _f(
+            os.environ.get("NIJA_RUNTIME_AUTHORITY_CONVERGENCE_CAPITAL_TTL_S"),
+            240.0,
+        ),
+    )
+    fresh = False
+    fresh_reader = getattr(ca, "is_fresh", None)
+    stale_reader = getattr(ca, "is_stale", None)
+    try:
+        if callable(fresh_reader):
             try:
-                if method_name == "is_fresh":
-                    fresh = bool(method(ttl_s=max(30.0, _f(os.environ.get("NIJA_RUNTIME_AUTHORITY_CONVERGENCE_CAPITAL_TTL_S"), 240.0))))
-                else:
-                    fresh = not bool(method())
+                fresh = bool(fresh_reader(ttl_s=ttl_s))
             except TypeError:
-                try:
-                    fresh = bool(method()) if method_name == "is_fresh" else not bool(method())
-                except Exception:
-                    pass
-            except Exception:
-                pass
+                fresh = bool(fresh_reader())
+        elif fresh_reader is not None:
+            fresh = bool(fresh_reader)
+        elif callable(stale_reader):
+            try:
+                fresh = not bool(stale_reader(ttl_s=ttl_s))
+            except TypeError:
+                fresh = not bool(stale_reader())
+        elif stale_reader is not None:
+            fresh = not bool(stale_reader)
+    except Exception:
+        fresh = False
     min_capital = max(1.0, _f(os.environ.get("NIJA_RUNTIME_AUTHORITY_CONVERGENCE_MIN_CAPITAL_USD"), 10.0))
     min_brokers = max(1, _i(os.environ.get("NIJA_RUNTIME_AUTHORITY_CONVERGENCE_MIN_BROKERS"), 2))
     if handoff_ready and hydrated and real >= min_capital and valid_brokers >= min_brokers:
