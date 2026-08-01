@@ -7,6 +7,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 HELPER = ROOT / "scripts" / "credential_diagnostics.sh"
+DOCKERIGNORE = ROOT / ".dockerignore"
+DOCKERFILE = ROOT / "Dockerfile"
 
 
 def _run(extra_env: dict[str, str]) -> subprocess.CompletedProcess[str]:
@@ -64,3 +66,12 @@ def test_partial_tania_credentials_are_reported_as_incomplete() -> None:
     assert result.returncode == 0
     assert "Incomplete configuration" in result.stdout
     assert "Secret: missing" in result.stdout
+
+
+def test_credential_helper_is_included_and_validated_in_runtime_image() -> None:
+    dockerignore = DOCKERIGNORE.read_text(encoding="utf-8")
+    dockerfile = DOCKERFILE.read_text(encoding="utf-8")
+
+    assert "!scripts/credential_diagnostics.sh" in dockerignore.splitlines()
+    assert "test -f /app/scripts/credential_diagnostics.sh" in dockerfile
+    assert "bash -n /app/scripts/credential_diagnostics.sh" in dockerfile

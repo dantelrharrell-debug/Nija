@@ -11,6 +11,7 @@ RUN python -S /app/scripts/install_sitecustomize_defer_guard.py && \
     python -S /app/apply_bot_package_defer_fix.py && \
     python -S /app/scripts/apply_startup_handoff_fix.py && \
     bash -n /app/start.sh && \
+    bash -n /app/scripts/credential_diagnostics.sh && \
     bash -n /app/scripts/production_bootstrap.sh && \
     bash -n /app/scripts/render_entrypoint.sh
 RUN NIJA_DEFER_RUNTIME_SITE_HOOKS=1 python -S -m py_compile \
@@ -78,6 +79,7 @@ RUN python -S -c "import pathlib; required = [pathlib.Path('/app/apply_bot_packa
 RUN NIJA_DEFER_RUNTIME_SITE_HOOKS=1 GIT_BRANCH=build-attestation GIT_COMMIT=build-attestation DRY_RUN_MODE=true python -S /app/scripts/runtime_entrypoint_attestation.py
 
 RUN test -f /app/scripts/redis_connectivity_check.sh && \
+    test -f /app/scripts/credential_diagnostics.sh && \
     test -f /app/scripts/production_bootstrap.sh && \
     test -f /app/scripts/three_venue_config_check.py && \
     test -f /app/scripts/render_entrypoint.sh && \
