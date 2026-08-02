@@ -26,21 +26,26 @@ class _Broker:
 class CapitalRefreshSharedDeadlineTests(unittest.TestCase):
     def test_all_fetches_start_together_and_share_one_timeout(self):
         release = threading.Event()
+        timeout = 0.08
         brokers = {
             "coinbase": _Broker(10.0, release),
             "kraken": _Broker(20.0, release),
             "okx": _Broker(30.0, release),
         }
-        with patch.object(guard, "_timeout_seconds", return_value=0.08):
-            batch = guard._BalanceFetchBatch(brokers)
-            started_at = time.monotonic()
-            values = [batch.result_for(name, broker) for name, broker in brokers.items()]
-            elapsed = time.monotonic() - started_at
+        try:
+            with patch.object(guard, "_timeout_seconds", return_value=timeout):
+                batch = guard._BalanceFetchBatch(brokers)
+                started_at = time.monotonic()
+                values = [
+                    batch.result_for(name, broker) for name, broker in brokers.items()
+                ]
+                elapsed = time.monotonic() - started_at
+        finally:
+            release.set()
 
         self.assertTrue(all(broker.started.is_set() for broker in brokers.values()))
         self.assertEqual(values, [10.0, 20.0, 30.0])
-        self.assertLess(elapsed, 0.16)
-        release.set()
+        self.assertLess(elapsed, timeout * 2)
 
     def test_completed_result_and_exception_preserve_semantics(self):
         error = RuntimeError("venue failed")
@@ -57,7 +62,9 @@ class CapitalRefreshSharedDeadlineTests(unittest.TestCase):
 
         class Coordinator:
             def _pipeline(self, broker_map, trigger, open_exposure_usd):
-                self.all_started = all(broker.started.is_set() for broker in brokers.values())
+                self.all_started = all(
+                    broker.started.wait(0.2) for broker in brokers.values()
+                )
                 release.set()
                 return [broker.get_account_balance() for broker in broker_map.values()]
 
@@ -84,11 +91,13 @@ class CapitalRefreshSharedDeadlineTests(unittest.TestCase):
         module.CapitalRefreshCoordinator = Coordinator
         self.assertTrue(guard._patch(module))
 
-        with patch.object(guard, "_timeout_seconds", return_value=0.05):
-            result = Coordinator()._pipeline({"okx": broker}, "test", 0.0)
+        try:
+            with patch.object(guard, "_timeout_seconds", return_value=0.05):
+                result = Coordinator()._pipeline({"okx": broker}, "test", 0.0)
+        finally:
+            release.set()
         self.assertEqual(result, (12.0, True))
         self.assertFalse(guard.current_refresh_used_fallback())
-        release.set()
 
 
 if __name__ == "__main__":
