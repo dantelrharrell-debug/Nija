@@ -19,13 +19,27 @@ from typing import Any
 from bot import auto_exit_sl_tp_runtime_patch as auto_exit
 
 logger = logging.getLogger("nija.universal_broker_exit_supervisor")
-_MARKER = "20260716-universal-exit-v1"
+_MARKER = "20260802-universal-exit-shared-state-v2"
 _PATCHED = "__nija_universal_broker_exit_supervisor_v1__"
-_LOCK = threading.RLock()
-_BROKERS: "weakref.WeakSet[Any]" = weakref.WeakSet()
-_STRONG_BROKERS: list[Any] = []
-_ACTIVE: set[str] = set()
-_STARTED = False
+_STATE_KEY = "_NIJA_UNIVERSAL_BROKER_EXIT_SHARED_STATE_V2"
+if not hasattr(builtins, _STATE_KEY):
+    setattr(
+        builtins,
+        _STATE_KEY,
+        {
+            "lock": threading.RLock(),
+            "brokers": weakref.WeakSet(),
+            "strong_brokers": [],
+            "active": set(),
+            "started": False,
+        },
+    )
+_STATE: dict[str, Any] = getattr(builtins, _STATE_KEY)
+_LOCK: threading.RLock = _STATE["lock"]
+_BROKERS: "weakref.WeakSet[Any]" = _STATE["brokers"]
+_STRONG_BROKERS: list[Any] = _STATE["strong_brokers"]
+_ACTIVE: set[str] = _STATE["active"]
+_STARTED = bool(_STATE["started"])
 
 
 def _truthy(name: str, default: str = "true") -> bool:
@@ -269,8 +283,10 @@ def _start() -> None:
     if not _truthy("NIJA_UNIVERSAL_BROKER_EXIT_ENABLED", "true"):
         return
     with _LOCK:
-        if _STARTED:
+        if bool(_STATE["started"]):
+            _STARTED = True
             return
+        _STATE["started"] = True
         _STARTED = True
     interval = max(1.0, _f(os.environ.get("NIJA_UNIVERSAL_EXIT_POLL_SECONDS"), 3.0))
 
