@@ -765,6 +765,19 @@ class CoinbaseBrokerAdapter(BrokerInterface):
         if _auth_block is not None:
             return _auth_block
 
+        # Q4 DIAGNOSTIC: Confirm place_market_order() is being reached by the pipeline.
+        logger.critical(
+            "🟢 [DIAGNOSTIC] place_market_order() CALLED | symbol=%s side=%s size=%.4f "
+            "size_type=%s — order is reaching the Coinbase broker adapter.",
+            symbol, side, float(size or 0.0), size_type,
+        )
+        print(
+            f"[NIJA-PRINT] place_market_order CALLED | "
+            f"symbol={symbol} side={side} size={float(size or 0.0):.4f} "
+            f"size_type={size_type}",
+            flush=True,
+        )
+
         try:
             broker = self._get_broker()
             market_submit = getattr(broker, 'place_market_order', None)

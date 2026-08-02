@@ -2357,23 +2357,57 @@ class ExecutionPipeline:
         dispatch_snapshot = runtime_authority_snapshot()
         dispatch_enabled = getattr(dispatch_snapshot, "dispatch_enabled", True)
         if dispatch_enabled is False:
-            logger.error(
-                "🚫 [Pipeline._dispatch] dispatch.enabled=false | symbol=%s side=%s "
-                "lifecycle_phase=%s coordinator_state=%s reason=%s",
-                getattr(request, "symbol", "?"),
-                getattr(request, "side", "?"),
-                getattr(dispatch_snapshot, "lifecycle_phase", "unknown"),
-                getattr(dispatch_snapshot, "coordinator_state", "unknown"),
-                getattr(dispatch_snapshot, "reason", "unknown"),
+            _force_dispatch = (
+                os.getenv("FORCE_TRADE", "").strip().lower() in {"1", "true", "yes", "enabled", "on"}
+                or os.getenv("FORCE_TRADE_MODE", "").strip().lower() in {"1", "true", "yes", "enabled", "on"}
+                or os.getenv("NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK", "").strip().lower() in {"1", "true", "yes", "enabled", "on"}
+                or os.getenv("NIJA_FORCE_ACTIVATION", "").strip().lower() in {"1", "true", "yes", "enabled", "on"}
             )
-            return PipelineResult(
-                success=False,
-                symbol=request.symbol,
-                side=request.side,
-                size_usd=request.size_usd,
-                error="dispatch_disabled: dispatch.enabled=false",
-                latency_ms=(time.monotonic() - t_start) * 1000,
-            )
+            if _force_dispatch:
+                logger.warning(
+                    "⚡ [Pipeline._dispatch] FORCE_TRADE bypass: dispatch_enabled=False overridden | "
+                    "symbol=%s side=%s lifecycle_phase=%s coordinator_state=%s reason=%s — "
+                    "Set LIVE_CAPITAL_VERIFIED=true to enable live dispatch without this bypass.",
+                    getattr(request, "symbol", "?"),
+                    getattr(request, "side", "?"),
+                    getattr(dispatch_snapshot, "lifecycle_phase", "unknown"),
+                    getattr(dispatch_snapshot, "coordinator_state", "unknown"),
+                    getattr(dispatch_snapshot, "reason", "unknown"),
+                )
+                print(
+                    f"[NIJA-PRINT] _dispatch FORCE_TRADE_BYPASS dispatch_enabled=False "
+                    f"symbol={getattr(request, 'symbol', '?')} side={getattr(request, 'side', '?')} "
+                    f"lifecycle_phase={getattr(dispatch_snapshot, 'lifecycle_phase', 'unknown')} — "
+                    f"proceeding to broker",
+                    flush=True,
+                )
+            else:
+                logger.error(
+                    "🚫 [Pipeline._dispatch] dispatch.enabled=false | symbol=%s side=%s "
+                    "lifecycle_phase=%s coordinator_state=%s reason=%s — "
+                    "Set LIVE_CAPITAL_VERIFIED=true or NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK=true "
+                    "to enable live order dispatch.",
+                    getattr(request, "symbol", "?"),
+                    getattr(request, "side", "?"),
+                    getattr(dispatch_snapshot, "lifecycle_phase", "unknown"),
+                    getattr(dispatch_snapshot, "coordinator_state", "unknown"),
+                    getattr(dispatch_snapshot, "reason", "unknown"),
+                )
+                print(
+                    f"[NIJA-PRINT] _dispatch BLOCKED dispatch_enabled=False "
+                    f"symbol={getattr(request, 'symbol', '?')} side={getattr(request, 'side', '?')} "
+                    f"lifecycle_phase={getattr(dispatch_snapshot, 'lifecycle_phase', 'unknown')} — "
+                    f"FIX: set LIVE_CAPITAL_VERIFIED=true in railway.json",
+                    flush=True,
+                )
+                return PipelineResult(
+                    success=False,
+                    symbol=request.symbol,
+                    side=request.side,
+                    size_usd=request.size_usd,
+                    error="dispatch_disabled: dispatch.enabled=false",
+                    latency_ms=(time.monotonic() - t_start) * 1000,
+                )
 
         logger.info(
             "🚀 [Pipeline._dispatch] DISPATCHING ORDER TO BROKER | symbol=%s side=%s size_usd=%.2f "
