@@ -341,7 +341,20 @@ def _patch_coinbase_class(module: ModuleType) -> bool:
         changed = True
 
     original_connect = getattr(cls, "connect", None)
-    if callable(original_connect) and not getattr(original_connect, "_nija_coinbase_connect_reentry_guard_v1", False):
+    coinbase_guard_attr = "_nija_coinbase_connect_reentry_guard_v1"
+    has_coinbase_guard = bool(
+        callable(original_connect)
+        and _connect_chain_has_attr(original_connect, coinbase_guard_attr)
+    )
+    if has_coinbase_guard:
+        # A later compatibility wrapper may sit outside the canonical owner
+        # without copying its marker. Propagate ownership instead of adding a
+        # second guard whose nested call would be mistaken for recursion.
+        try:
+            setattr(original_connect, coinbase_guard_attr, True)
+        except Exception:
+            pass
+    elif callable(original_connect):
         @wraps(original_connect)
         def connect(self: Any, *args: Any, __original: Callable[..., Any] = original_connect, **kwargs: Any) -> Any:
             active = getattr(_LOCAL, "coinbase_connect_active", set())
