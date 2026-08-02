@@ -298,6 +298,7 @@ class BotMainAuthorityOrderingTests(unittest.TestCase):
         from bot.startup_coordinator import (
             StartupCoordinator,
             StartupCoordinatorState,
+            StartupEvent,
         )
 
         coordinator = StartupCoordinator()
@@ -318,6 +319,30 @@ class BotMainAuthorityOrderingTests(unittest.TestCase):
                 coordinator._runtime.coordinator_state,
                 StartupCoordinatorState.SUPERVISED_RUNNING,
             )
+            history = list(coordinator._history)
+
+        self.assertEqual(
+            [entry["event"] for entry in history],
+            [
+                StartupEvent.THREADS_LAUNCHED.value,
+                StartupEvent.THREADS_CONFIRMED_RUNNING.value,
+            ],
+        )
+        self.assertEqual(
+            [entry["state"] for entry in history],
+            [
+                StartupCoordinatorState.THREADS_PENDING.value,
+                StartupCoordinatorState.SUPERVISED_RUNNING.value,
+            ],
+        )
+
+        repeated_version = coordinator.record_threads_supervised(
+            2,
+            bootstrap_state="RUNNING_SUPERVISED",
+        )
+        self.assertEqual(repeated_version, version)
+        with coordinator._lock:
+            self.assertEqual(list(coordinator._history), history)
 
     def test_running_supervised_handoff_publishes_thread_evidence(self):
         from bot.bootstrap_state_machine import BootstrapState
