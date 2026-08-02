@@ -29,6 +29,7 @@ _ENV_KEYS = (
     "NIJA_WRITER_HEARTBEAT_LAST_TS",
     "NIJA_WRITER_HEARTBEAT_ALIVE_TS",
     "NIJA_ENTRYPOINT_WRITER_LOCK_WAIT_S",
+    "NIJA_WRITER_RELEASE_HEARTBEAT_JOIN_S",
     "NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK",
     "NIJA_CONFIRM_BYPASS_RISKS",
     "NIJA_WRITER_FENCING_TOKEN_FALLBACK",
@@ -110,6 +111,59 @@ class EntrypointWriterAuthorityTests(unittest.TestCase):
         self.assertEqual(result.error, "active_writer_lock_held")
         self.assertEqual(result.holder, "9:other-instance")
         client.delete.assert_not_called()
+
+    def test_release_joins_heartbeat_before_deleting_owned_lease(self):
+        order = []
+        client = MagicMock()
+
+        def delete_owned_lease(*_args):
+            order.append("delete")
+            return 1
+
+        client.eval.side_effect = delete_owned_lease
+
+        class Heartbeat:
+            alive = True
+
+            def is_alive(self):
+                return self.alive
+
+            def join(self, timeout):
+                self.assert_timeout = timeout
+                order.append("join")
+                self.alive = False
+
+        runtime = EntrypointWriterAuthority()
+        runtime._client = client
+        runtime._lock_key = "nija:writer_lock:test"
+        runtime._meta_key = "nija:writer_lock_meta:test"
+        runtime._lock_value = "17:local-owner"
+        runtime._heartbeat_thread = Heartbeat()
+
+        self.assertTrue(runtime.release())
+        self.assertEqual(order, ["join", "delete"])
+        self.assertIsNone(runtime._heartbeat_thread)
+        self.assertEqual(os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"], "0")
+
+    def test_release_keeps_lease_when_heartbeat_cannot_quiesce(self):
+        client = MagicMock()
+
+        class StuckHeartbeat:
+            def is_alive(self):
+                return True
+
+            def join(self, timeout):
+                self.assert_timeout = timeout
+
+        runtime = EntrypointWriterAuthority()
+        runtime._client = client
+        runtime._lock_key = "nija:writer_lock:test"
+        runtime._meta_key = "nija:writer_lock_meta:test"
+        runtime._lock_value = "17:local-owner"
+        runtime._heartbeat_thread = StuckHeartbeat()
+
+        self.assertFalse(runtime.release())
+        client.eval.assert_not_called()
 
     def test_redis_unavailable_remains_fail_closed_without_explicit_fallback(self):
         runtime = EntrypointWriterAuthority()
