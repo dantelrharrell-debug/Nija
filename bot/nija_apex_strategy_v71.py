@@ -20,51 +20,94 @@ from typing import Any, Dict, Optional, Tuple, List
 import logging
 import os
 
-from indicators import (
-    calculate_vwap, calculate_ema, calculate_rsi, calculate_macd,
-    calculate_atr, calculate_adx, calculate_bollinger_bands, scalar,
-    calculate_supertrend,
-)
-from risk_manager import RiskManager, EXTREME_VOLATILITY_ATR_PCT, _ATR_POSITION_SIZE_REFERENCE
-from execution_engine import ExecutionEngine
+try:
+    from bot.indicators import (
+        calculate_vwap, calculate_ema, calculate_rsi, calculate_macd,
+        calculate_atr, calculate_adx, calculate_bollinger_bands, scalar,
+        calculate_supertrend,
+    )
+    from bot.risk_manager import (
+        RiskManager,
+        EXTREME_VOLATILITY_ATR_PCT,
+        _ATR_POSITION_SIZE_REFERENCE,
+    )
+    from bot.execution_engine import ExecutionEngine
+except ImportError:
+    # Direct/script launches retain compatibility with the historical flat
+    # module layout.  Canonical package launches must not depend on /app/bot
+    # being injected into sys.path by the deferred runtime-hook fanout.
+    from indicators import (
+        calculate_vwap, calculate_ema, calculate_rsi, calculate_macd,
+        calculate_atr, calculate_adx, calculate_bollinger_bands, scalar,
+        calculate_supertrend,
+    )
+    from risk_manager import RiskManager, EXTREME_VOLATILITY_ATR_PCT, _ATR_POSITION_SIZE_REFERENCE
+    from execution_engine import ExecutionEngine
 
 # Import profitability assertion for configuration validation
 # Initialize logger before any imports that might use it
 logger = logging.getLogger("nija")
 
 try:
-    from profitability_assertion import assert_strategy_is_profitable, ProfitabilityAssertionError
+    from bot.profitability_assertion import assert_strategy_is_profitable, ProfitabilityAssertionError
     PROFITABILITY_ASSERTION_AVAILABLE = True
 except ImportError:
-    PROFITABILITY_ASSERTION_AVAILABLE = False
-    logger.warning("Profitability assertion module not available - configuration validation disabled")
+    try:
+        from profitability_assertion import assert_strategy_is_profitable, ProfitabilityAssertionError
+        PROFITABILITY_ASSERTION_AVAILABLE = True
+    except ImportError:
+        PROFITABILITY_ASSERTION_AVAILABLE = False
+        logger.warning("Profitability assertion module not available - configuration validation disabled")
 
 # Import exchange capabilities for SHORT entry validation and fee-aware profit targets
 try:
-    from exchange_capabilities import can_short, get_broker_capabilities, get_min_profit_target as _get_exchange_min_profit_target
+    from bot.exchange_capabilities import (
+        can_short,
+        get_broker_capabilities,
+        get_min_profit_target as _get_exchange_min_profit_target,
+    )
     EXCHANGE_CAPABILITIES_AVAILABLE = True
 except ImportError:
-    EXCHANGE_CAPABILITIES_AVAILABLE = False
-    logger.warning("Exchange capabilities module not available - SHORT validation and fee-aware targets disabled")
+    try:
+        from exchange_capabilities import (
+            can_short,
+            get_broker_capabilities,
+            get_min_profit_target as _get_exchange_min_profit_target,
+        )
+        EXCHANGE_CAPABILITIES_AVAILABLE = True
+    except ImportError:
+        EXCHANGE_CAPABILITIES_AVAILABLE = False
+        logger.warning("Exchange capabilities module not available - SHORT validation and fee-aware targets disabled")
 
 # Import position sizer for minimum position validation
 try:
-    from position_sizer import MIN_POSITION_USD, calculate_position_size as _calc_position_size
+    from bot.position_sizer import MIN_POSITION_USD, calculate_position_size as _calc_position_size
     _CALC_POSITION_SIZE_AVAILABLE = True
 except ImportError:
-    MIN_POSITION_USD = 10.0  # Default to $10 minimum for micro-cap / HF scalp mode (Apr 2026)
-    logger.warning("Could not import MIN_POSITION_USD from position_sizer, using default $10.00")
+    try:
+        from position_sizer import MIN_POSITION_USD, calculate_position_size as _calc_position_size
+        _CALC_POSITION_SIZE_AVAILABLE = True
+    except ImportError:
+        MIN_POSITION_USD = 10.0  # Default to $10 minimum for micro-cap / HF scalp mode (Apr 2026)
+        _CALC_POSITION_SIZE_AVAILABLE = False
+        logger.warning("Could not import MIN_POSITION_USD from position_sizer, using default $10.00")
 
 # Import small account constants from fee_aware_config
 try:
-    from fee_aware_config import (
+    from bot.fee_aware_config import (
         SMALL_ACCOUNT_THRESHOLD,
         SMALL_ACCOUNT_MAX_POSITION_PCT
     )
 except ImportError:
-    SMALL_ACCOUNT_THRESHOLD = 200.0  # Fallback — raised to cover $174 balance (Apr 2026)
-    SMALL_ACCOUNT_MAX_POSITION_PCT = 0.30  # Fallback — aligned with MAX_POSITION_SIZE hard limit
-    logger.warning("Could not import small account constants from fee_aware_config, using defaults")
+    try:
+        from fee_aware_config import (
+            SMALL_ACCOUNT_THRESHOLD,
+            SMALL_ACCOUNT_MAX_POSITION_PCT,
+        )
+    except ImportError:
+        SMALL_ACCOUNT_THRESHOLD = 200.0  # Fallback — raised to cover $174 balance (Apr 2026)
+        SMALL_ACCOUNT_MAX_POSITION_PCT = 0.30  # Fallback — aligned with MAX_POSITION_SIZE hard limit
+        logger.warning("Could not import small account constants from fee_aware_config, using defaults")
 
 # Broker-specific minimum position sizes (Jan 24, 2026)
 # Env-overridable via KRAKEN_MIN_NOTIONAL_USD for micro-cap / HF scalp mode.
@@ -215,20 +258,29 @@ except ImportError:
 
 # Import emergency liquidation for capital preservation (FIX 3)
 try:
-    from emergency_liquidation import EmergencyLiquidator
+    from bot.emergency_liquidation import EmergencyLiquidator
     EMERGENCY_LIQUIDATION_AVAILABLE = True
 except ImportError:
-    EMERGENCY_LIQUIDATION_AVAILABLE = False
-    logger.warning("Emergency liquidation module not available")
+    try:
+        from emergency_liquidation import EmergencyLiquidator
+        EMERGENCY_LIQUIDATION_AVAILABLE = True
+    except ImportError:
+        EMERGENCY_LIQUIDATION_AVAILABLE = False
+        logger.warning("Emergency liquidation module not available")
 
 # Import enhanced entry scoring and regime detection
 try:
-    from enhanced_entry_scoring import EnhancedEntryScorer
-    from market_regime_detector import RegimeDetector, MarketRegime
+    from bot.enhanced_entry_scoring import EnhancedEntryScorer
+    from bot.market_regime_detector import RegimeDetector, MarketRegime
     ENHANCED_SCORING_AVAILABLE = True
 except ImportError:
-    ENHANCED_SCORING_AVAILABLE = False
-    logger.warning("Enhanced scoring and regime detection modules not available - using basic scoring")
+    try:
+        from enhanced_entry_scoring import EnhancedEntryScorer
+        from market_regime_detector import RegimeDetector, MarketRegime
+        ENHANCED_SCORING_AVAILABLE = True
+    except ImportError:
+        ENHANCED_SCORING_AVAILABLE = False
+        logger.warning("Enhanced scoring and regime detection modules not available - using basic scoring")
 
 # Import entry optimizer (RSI divergence, Bollinger Band zone, volume pattern)
 try:
@@ -248,13 +300,17 @@ except ImportError:
 # Capital Allocation AI).  All three components are optional – the strategy degrades
 # gracefully when any of them is unavailable.
 try:
-    from ai_intelligence_hub import get_ai_intelligence_hub, AIIntelligenceHub
+    from bot.ai_intelligence_hub import get_ai_intelligence_hub, AIIntelligenceHub
     AI_HUB_AVAILABLE = True
 except ImportError:
-    AI_HUB_AVAILABLE = False
-    get_ai_intelligence_hub = None  # type: ignore
-    AIIntelligenceHub = None  # type: ignore
-    logger.warning("AI Intelligence Hub not available – running without AI regime / risk / allocation layer")
+    try:
+        from ai_intelligence_hub import get_ai_intelligence_hub, AIIntelligenceHub
+        AI_HUB_AVAILABLE = True
+    except ImportError:
+        AI_HUB_AVAILABLE = False
+        get_ai_intelligence_hub = None  # type: ignore
+        AIIntelligenceHub = None  # type: ignore
+        logger.warning("AI Intelligence Hub not available – running without AI regime / risk / allocation layer")
 
 # Import profit optimization stack (all three are optional – graceful degradation)
 # ProfitHarvestLayer: ratchet-tier profit locking + partial harvests
