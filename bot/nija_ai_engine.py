@@ -649,8 +649,28 @@ class NijaAIEngine:
                 float(breakdown.get("wrss_factor", 1.0)),
                 self._force_trade_signal_enabled(),
             )
+            _sb = breakdown.get("score_breakdown", {}) if isinstance(breakdown, dict) else {}
+            _trend = float((_sb.get("trend_strength", _sb.get("trend", 0.0)) or 0.0))
+            _momentum = float((_sb.get("dual_rsi", _sb.get("momentum", 0.0)) or 0.0))
+            _volume = float((_sb.get("volume", 0.0) or 0.0))
+            _volatility = float((_sb.get("volatility", 0.0) or 0.0))
+            _risk = float((breakdown.get("risk_score", 0.0) or 0.0))
 
             if composite < effective_floor:
+                logger.info(
+                    "AI_SCORE symbol=%s confidence=%.2f trend_score=%.2f momentum_score=%.2f "
+                    "volume_score=%.2f volatility_score=%.2f risk_score=%.2f overall_score=%.2f "
+                    "decision=reject threshold_failed=composite_score<%.2f",
+                    symbol,
+                    composite,
+                    _trend,
+                    _momentum,
+                    _volume,
+                    _volatility,
+                    _risk,
+                    composite,
+                    effective_floor,
+                )
                 if self._force_trade_signal_enabled():
                     logger.warning(
                         "⚡ FORCE_TRADE AI signal override: %s %s score=%.1f < floor=%.1f — "
@@ -680,6 +700,20 @@ class NijaAIEngine:
 
             reason = self._build_reason(side, composite, breakdown, regime)
             mult = self._position_multiplier(composite)
+            logger.info(
+                "AI_SCORE symbol=%s confidence=%.2f trend_score=%.2f momentum_score=%.2f "
+                "volume_score=%.2f volatility_score=%.2f risk_score=%.2f overall_score=%.2f "
+                "decision=approve threshold=%.2f",
+                symbol,
+                composite,
+                _trend,
+                _momentum,
+                _volume,
+                _volatility,
+                _risk,
+                composite,
+                effective_floor,
+            )
 
             # ── Weight tuner: record signal entry + apply portfolio multiplier ─
             _regime_str = str(regime.value) if hasattr(regime, "value") else str(regime or "default")

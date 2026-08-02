@@ -1243,6 +1243,26 @@ class NijaCoreLoop:
         except (TypeError, ValueError):
             return default
 
+    @staticmethod
+    def _log_pipeline_stage(
+        stage: str,
+        status: str,
+        duration_ms: float,
+        reason: str = "",
+        **fields: Any,
+    ) -> None:
+        parts = [
+            "PIPELINE_STAGE",
+            f"stage={stage}",
+            f"status={status}",
+            f"duration_ms={duration_ms:.1f}",
+        ]
+        if reason:
+            parts.append(f"reason={reason}")
+        for key, value in fields.items():
+            parts.append(f"{key}={value}")
+        logger.info(" ".join(parts))
+
     @classmethod
     def _resolve_final_order_notional(
         cls,
@@ -1409,6 +1429,9 @@ class NijaCoreLoop:
 
         result = CoreLoopResult()
         cycle_start = time.time()
+        _stage_start = cycle_start
+        _stage_reason = "ok"
+        _gate_rejections: Dict[str, int] = {}
 
         # ── Scan-size throttling ──────────────────────────────────────────
         # Cap the symbol universe to NIJA_MAX_SCAN_SYMBOLS (default 100) to
@@ -1688,16 +1711,37 @@ class NijaCoreLoop:
             open_positions=snapshot.open_positions,
             symbols=len(symbols),
         )
+        self._log_pipeline_stage(
+            "scanner",
+            "passed",
+            duration_ms=(time.time() - _stage_start) * 1000.0,
+            symbols_scanned=len(symbols),
+            markets_loaded=_universe_tradeable,
+        )
         self._total_cycles += 1
 
         # ── Phase 1: Safety gate ──────────────────────────────────────────
+        _stage_start = time.time()
         can_enter, safety_reason = self._phase1_safety(broker, snapshot)
+        self._log_pipeline_stage(
+            "risk_governor",
+            "passed" if can_enter else "failed",
+            duration_ms=(time.time() - _stage_start) * 1000.0,
+            reason=safety_reason if not can_enter else "ok",
+        )
         if not can_enter:
             logger.info("🛡️  Core loop safety gate blocked entries: %s", safety_reason)
             user_mode = True
 
         # ── Phase 2: Position management ─────────────────────────────────
+        _stage_start = time.time()
         exits = self._phase2_manage_positions(broker, snapshot)
+        self._log_pipeline_stage(
+            "position_monitor",
+            "passed",
+            duration_ms=(time.time() - _stage_start) * 1000.0,
+            exits=exits,
+        )
         result.exits_taken = exits
         # Update available slots after exits
         effective_open = max(0, snapshot.open_positions - exits)
@@ -1801,12 +1845,20 @@ class NijaCoreLoop:
                     len(symbols), available_slots, effective_open,
                     user_mode, not can_enter, _md_healthy,
                 )
+                _stage_start = time.time()
                 entries, blocked, scored, _gate_rejections = self._phase3_scan_and_enter(
                     broker=broker,
                     snapshot=snapshot,
                     symbols=symbols,
                     available_slots=available_slots,
                     zero_signal_streak=self._zero_signal_streak,
+                )
+                self._log_pipeline_stage(
+                    "signal_generator",
+                    "passed" if scored > 0 else "failed",
+                    duration_ms=(time.time() - _stage_start) * 1000.0,
+                    reason="no_symbols_scored" if scored <= 0 else "ok",
+                    symbols_scored=scored,
                 )
                 result.entries_taken = entries
                 result.entries_blocked = blocked
@@ -1954,6 +2006,68 @@ class NijaCoreLoop:
             result.next_interval = 150
 
         elapsed_ms = (time.time() - cycle_start) * 1000
+        _risk_rejections = (
+            int(_gate_rejections.get("risk_gate_rejected", 0))
+            + int(_gate_rejections.get("capital_gate_rejected", 0))
+            + int(_gate_rejections.get("notional_gate_rejected", 0))
+            + int(_gate_rejections.get("ai_gate_rejected", 0))
+        )
+        _signals_generated = int(result.symbols_scored or 0)
+        _signals_filtered = max(
+            0,
+            _signals_generated - int(result.candidates_selected or 0),
+        )
+        logger.info(
+            "SCAN_STARTED symbols_scanned=%d markets_loaded=%d scan_duration_ms=%.0f "
+            "signals_generated=%d signals_filtered=%d ai_scores_generated=%d "
+            "risk_rejections=%d entry_candidates=%d orders_attempted=%d "
+            "orders_submitted=%d orders_accepted=%d orders_rejected=%d fills_received=%d",
+            len(symbols),
+            _universe_tradeable,
+            elapsed_ms,
+            _signals_generated,
+            _signals_filtered,
+            _signals_generated,
+            _risk_rejections,
+            int(result.candidates_selected or 0),
+            int(result.candidates_order_ready or 0),
+            int(result.orders_submitted or 0),
+            int(result.broker_acks or 0),
+            max(0, int(result.orders_submitted or 0) - int(result.broker_acks or 0)),
+            int(result.fills or 0),
+        )
+        logger.info(
+            "SCANNER_DIAGNOSTICS symbols_loaded=%d symbols_after_filters=%d "
+            "symbols_after_liquidity=%d symbols_after_spread=%d symbols_after_volatility=%d "
+            "symbols_after_AI=%d symbols_after_risk=%d symbols_ready_for_order=%d",
+            _universe_before,
+            _universe_tradeable,
+            max(0, _universe_tradeable - int(_gate_rejections.get("volume_gate_rejected", 0))),
+            max(0, _universe_tradeable - int(_gate_rejections.get("market_filter_rejected", 0))),
+            max(0, _universe_tradeable - int(_gate_rejections.get("adx_gate_rejected", 0))),
+            int(result.candidates_selected or 0),
+            max(0, int(result.candidates_selected or 0) - _risk_rejections),
+            int(result.candidates_order_ready or 0),
+        )
+        logger.info(
+            "RUNTIME_HEALTH capital=%.2f broker_status=%s signals_generated=%d "
+            "trades_submitted=%d trades_filled=%d open_positions=%d profit=%.4f "
+            "drawdown=%.4f win_rate=%.4f sharpe=%.4f average_hold_time=%s "
+            "average_decision_time_ms=%.0f scan_latency_ms=%.0f",
+            float(snapshot.balance or 0.0),
+            "connected",
+            _signals_generated,
+            int(result.orders_submitted or 0),
+            int(result.fills or 0),
+            int(snapshot.open_positions or 0),
+            float(getattr(self.apex, "_daily_pnl_usd", 0.0) or 0.0),
+            float(getattr(self.apex, "drawdown_pct", 0.0) or 0.0),
+            float(getattr(self.apex, "win_rate", 0.0) or 0.0),
+            float(getattr(self.apex, "sharpe_ratio", 0.0) or 0.0),
+            str(getattr(self.apex, "average_hold_time", "n/a") or "n/a"),
+            elapsed_ms / max(1, len(symbols)),
+            elapsed_ms,
+        )
 
         # ── Cycle summary ─────────────────────────────────────────────────
         logger.info(
@@ -2760,6 +2874,7 @@ class NijaCoreLoop:
 
                 # ── Standard AI scoring ───────────────────────────────────
                 if ai is not None:
+                    _ai_stage_start = time.time()
                     logger.critical(
                         "🔎 [Phase3] EVALUATING_MARKET | symbol=%s side=%s "
                         "regime=%s entry_type=%s idx=%d/%d",
@@ -2779,6 +2894,12 @@ class NijaCoreLoop:
                         symbol=symbol,
                     )
                     if sig is not None:
+                        self._log_pipeline_stage(
+                            "ai_confidence",
+                            "passed",
+                            duration_ms=(time.time() - _ai_stage_start) * 1000.0,
+                            symbol=symbol,
+                        )
                         _diag_confidence = sig.composite_score
                         # Check whether the selected venue is actually live-executable
                         # before logging SIGNAL_PASSED.  A signal routed to a disabled
@@ -2825,6 +2946,13 @@ class NijaCoreLoop:
                             )
                             candidates.append(sig)
                     else:
+                        self._log_pipeline_stage(
+                            "ai_confidence",
+                            "failed",
+                            duration_ms=(time.time() - _ai_stage_start) * 1000.0,
+                            symbol=symbol,
+                            reason="below_threshold",
+                        )
                         _funnel["signal"] = ("FAIL", "RSI_BELOW_THRESHOLD")
                         # Determine which sub-gate caused the rejection by
                         # inspecting the score breakdown from a lightweight
@@ -3492,11 +3620,11 @@ class NijaCoreLoop:
             try:
                 _funnel = funnel_traces.setdefault(sig.symbol, {})
                 df = self._fetch_df(broker, sig.symbol)
-                if df is None or len(df) < 100:
+                if df is None or len(df) < 50:
                     _df_exec_len = len(df) if df is not None else 0
                     logger.critical(
                         "🚫 [Phase3] EXEC_LOOP_DATA_SKIP symbol=%s — "
-                        "df_len=%d (need>=100) at execution time; "
+                        "df_len=%d (need>=50) at execution time; "
                         "symbol passed scoring (need>=50) but failed exec re-fetch. "
                         "This signal is silently dropped before execute_action().",
                         sig.symbol, _df_exec_len,
@@ -3508,6 +3636,12 @@ class NijaCoreLoop:
                         flush=True,
                     )
                     _funnel["market_data"] = ("FAIL", "DATA_INSUFFICIENT")
+                    logger.warning(
+                        "ENTRY_REJECTED symbol=%s confidence=%.2f risk_score=0.0 spread=0.0 "
+                        "volatility=0.0 liquidity=0.0 reason=data_insufficient",
+                        sig.symbol,
+                        float(getattr(sig, "composite_score", 0.0) or 0.0),
+                    )
                     continue
                 # ── Trade Permission Engine ───────────────────────────────
                 # Single authoritative decision check: emits DECISION TRACE
@@ -3526,6 +3660,7 @@ class NijaCoreLoop:
                 )
                 _perm = None
                 if _TPE_AVAILABLE and _get_tpe is not None:
+                    _risk_stage_start = time.time()
                     try:
                         _perm = _get_tpe().evaluate(
                             symbol=sig.symbol,
@@ -3593,6 +3728,28 @@ class NijaCoreLoop:
                                 )
                                 self._n_vetoed += 1
                                 self._record_reject(_tpe_reason)
+                                logger.warning(
+                                    "RISK_GOVERNOR_REJECTED symbol=%s reason=%s daily_loss=%.4f drawdown=%.4f "
+                                    "max_exposure=%.4f correlation=%.4f duplicate_position=%s cooldown=%s "
+                                    "position_cap=%s sector_exposure=%.4f",
+                                    sig.symbol,
+                                    _tpe_reason,
+                                    float(getattr(_perm, "daily_loss", 0.0) or 0.0),
+                                    float(getattr(_perm, "drawdown", 0.0) or 0.0),
+                                    float(getattr(_perm, "max_exposure", 0.0) or 0.0),
+                                    float(getattr(_perm, "correlation", 0.0) or 0.0),
+                                    bool(getattr(_perm, "duplicate_position", False)),
+                                    bool(getattr(_perm, "cooldown_active", False)),
+                                    bool(getattr(_perm, "position_cap_reached", False)),
+                                    float(getattr(_perm, "sector_exposure", 0.0) or 0.0),
+                                )
+                                logger.warning(
+                                    "ENTRY_REJECTED symbol=%s confidence=%.2f risk_score=%.2f spread=0.0 "
+                                    "volatility=0.0 liquidity=0.0 reason=risk_governor",
+                                    sig.symbol,
+                                    float(getattr(sig, "composite_score", 0.0) or 0.0),
+                                    float(getattr(_perm, "risk_score", 0.0) or 0.0),
+                                )
                                 # Classify TPE rejection into the appropriate gate counter
                                 _tpe_reason_lower = str(_tpe_reason).lower()
                                 if "notional" in _tpe_reason_lower or "min_notional" in _tpe_reason_lower:
@@ -3606,6 +3763,13 @@ class NijaCoreLoop:
                                 continue
                         else:
                             _funnel["ai_gate"] = ("PASS", "")
+                        self._log_pipeline_stage(
+                            "risk_governor",
+                            "passed" if (_perm is None or getattr(_perm, "final_decision", "EXECUTE") == "EXECUTE") else "failed",
+                            duration_ms=(time.time() - _risk_stage_start) * 1000.0,
+                            symbol=sig.symbol,
+                            reason=getattr(_perm, "block_reason", "") if _perm is not None else "",
+                        )
                     except Exception as _tpe_err:
                         logger.warning(
                             "TradePermissionEngine error for %s (non-fatal): %s",
@@ -3965,6 +4129,15 @@ class NijaCoreLoop:
                     }:
                         _phase3_metrics["candidates_terminal_risk_blocked"] += 1
                     self._record_reject(_reject_key)
+                    logger.warning(
+                        "ENTRY_REJECTED symbol=%s confidence=%.2f risk_score=0.0 spread=%.4f "
+                        "volatility=0.0 liquidity=%.4f reason=%s",
+                        sig.symbol,
+                        float(getattr(sig, "composite_score", 0.0) or 0.0),
+                        float(analysis.get("spread_pct", 0.0) or 0.0),
+                        float(analysis.get("actual_volume_ratio", 0.0) or 0.0),
+                        str(_reject_key).lower(),
+                    )
                     logger.critical(
                         "🚫 [Phase3] SIGNAL BLOCKED before execute_action | symbol=%s "
                         "action=%s reason=%s reject_key=%s fallback_active=%s force_trade=%s — "
@@ -4073,6 +4246,47 @@ class NijaCoreLoop:
                 _capital_allocated = float(
                     analysis.get("capital_allocated", analysis.get("position_size", 0.0)) or 0.0
                 )
+                _rounded_qty = float(analysis.get("quantity", analysis.get("base_size", 0.0)) or 0.0)
+                _expected_fee = _order_notional * 0.0026
+                _expected_slippage = _order_notional * float(analysis.get("slippage_pct", 0.001) or 0.001)
+                logger.info(
+                    "ORDER_SIZE_AUDIT symbol=%s available_capital=%.2f risk_allocation=%.2f "
+                    "calculated_quantity=%.8f rounded_quantity=%.8f exchange_min=%.2f "
+                    "minimum_notional=%.2f expected_fee=%.4f expected_slippage=%.4f",
+                    sig.symbol,
+                    float(snapshot.balance or 0.0),
+                    _capital_allocated,
+                    float(analysis.get("position_size", 0.0) or 0.0),
+                    _rounded_qty,
+                    _min_notional,
+                    _min_notional,
+                    _expected_fee,
+                    _expected_slippage,
+                )
+                if _order_notional <= 0.0 or (_min_notional > 0.0 and _order_notional < _min_notional):
+                    self._log_pipeline_stage(
+                        "order_size",
+                        "failed",
+                        duration_ms=0.0,
+                        symbol=sig.symbol,
+                        reason="min_notional",
+                    )
+                    logger.warning(
+                        "ORDER_SIZE_REJECTED symbol=%s reason=min_notional available_capital=%.2f "
+                        "order_notional=%.4f minimum_notional=%.4f",
+                        sig.symbol,
+                        float(snapshot.balance or 0.0),
+                        _order_notional,
+                        _min_notional,
+                    )
+                    blocked += 1
+                    continue
+                self._log_pipeline_stage(
+                    "order_size",
+                    "passed",
+                    duration_ms=0.0,
+                    symbol=sig.symbol,
+                )
                 _analysis_meta = analysis.get("metadata") if isinstance(analysis.get("metadata"), dict) else {}
                 _ai_eval = _analysis_meta.get("ai_eval") if isinstance(_analysis_meta, dict) else {}
                 _sector_before = float(
@@ -4080,6 +4294,14 @@ class NijaCoreLoop:
                 )
                 _sector_after = float(
                     ((_ai_eval or {}).get("projected_sector_exposure_pct", _sector_before) or _sector_before)
+                )
+                logger.info(
+                    "ORDER_SUBMITTED venue=%s symbol=%s qty=%.8f price=%.8f side=%s",
+                    _broker_name,
+                    sig.symbol,
+                    _rounded_qty,
+                    float(analysis.get("entry_price", 0.0) or 0.0),
+                    sig.side,
                 )
                 success = self.apex.execute_action(analysis, sig.symbol)
                 # Record orders_submitted AFTER execute_action returns so the counter
@@ -4112,10 +4334,32 @@ class NijaCoreLoop:
                     success,
                 )
                 if success:
+                    self._log_pipeline_stage(
+                        "exchange_adapter",
+                        "passed",
+                        duration_ms=0.0,
+                        symbol=sig.symbol,
+                        reason="accepted",
+                    )
                     entries += 1
                     _phase3_metrics["broker_acks"] += 1
                     _phase3_metrics["fills"] += 1
                     _phase3_metrics["execute_successes"] += 1
+                    logger.info(
+                        "ORDER_ACCEPTED venue=%s symbol=%s qty=%.8f side=%s exchange_reason=%s",
+                        _broker_name,
+                        sig.symbol,
+                        _rounded_qty,
+                        sig.side,
+                        "accepted",
+                    )
+                    logger.info(
+                        "ORDER_FILLED venue=%s symbol=%s qty=%.8f side=%s",
+                        _broker_name,
+                        sig.symbol,
+                        _rounded_qty,
+                        sig.side,
+                    )
                     logger.info(
                         "   ✅ Core loop entry: %s %s score=%.1f mult=×%.2f%s",
                         sig.symbol, sig.side.upper(),
@@ -4131,6 +4375,13 @@ class NijaCoreLoop:
                     )
                     self._n_placed += 1
                 else:
+                    self._log_pipeline_stage(
+                        "exchange_adapter",
+                        "failed",
+                        duration_ms=0.0,
+                        symbol=sig.symbol,
+                        reason="rejected",
+                    )
                     blocked += 1
                     logger.critical(
                         "❌ [CoreLoop] ORDER REJECTED | symbol=%s side=%s action=%s "
@@ -4160,6 +4411,14 @@ class NijaCoreLoop:
                         CycleOutcome.ORDER_REJECTED,
                         symbol=sig.symbol,
                         reason="execute_action_returned_false",
+                    )
+                    logger.warning(
+                        "ORDER_REJECTED venue=%s symbol=%s qty=%.8f side=%s exchange_reason=%s",
+                        _broker_name,
+                        sig.symbol,
+                        _rounded_qty,
+                        sig.side,
+                        "execute_action_returned_false",
                     )
                     self._n_rejected += 1
                     try:
