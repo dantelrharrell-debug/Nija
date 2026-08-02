@@ -55,6 +55,17 @@ def _broker_threshold(snapshot: Any) -> int:
         return 1
 
 
+def _capital_freshness_ttl_s() -> float:
+    try:
+        module = __import__(
+            "bot.capital_flow_state_machine",
+            fromlist=["FRESHNESS_TTL_S"],
+        )
+        return max(5.0, float(getattr(module, "FRESHNESS_TTL_S", 90.0) or 90.0))
+    except Exception:
+        return 90.0
+
+
 def _current_refresh_fallback_status() -> dict[str, Any]:
     for name in (
         "bot.capital_refresh_stall_guard_v35",
@@ -64,7 +75,7 @@ def _current_refresh_fallback_status() -> dict[str, Any]:
         status_getter = getattr(module, "current_refresh_fallback_status", None)
         if callable(status_getter):
             try:
-                return dict(status_getter())
+                return dict(status_getter(_capital_freshness_ttl_s()))
             except Exception:
                 return {
                     "used_fallback": True,
@@ -101,14 +112,7 @@ def _should_repair(snapshot: Any) -> bool:
         real_capital = float(getattr(snapshot, "real_capital", 0.0) or 0.0)
         broker_count = int(getattr(snapshot, "broker_count", 0) or 0)
         broker_balances = dict(getattr(snapshot, "broker_balances", {}) or {})
-        fresh_ttl_s = float(
-            getattr(
-                __import__("bot.capital_flow_state_machine", fromlist=["FRESHNESS_TTL_S"]),
-                "FRESHNESS_TTL_S",
-                90.0,
-            )
-            or 90.0
-        )
+        fresh_ttl_s = _capital_freshness_ttl_s()
     except Exception:
         return False
 
