@@ -2932,7 +2932,7 @@ class TradingStateMachine:
                         rolled_back = True
                 if rolled_back:
                     try:
-                        self._save_state()
+                        self._persist_state()
                     except Exception:
                         logger.exception(
                             "ACTIVATION_ROLLBACK_PERSIST_FAILED trading_remains_fail_closed=true"
