@@ -1,6 +1,7 @@
 """Keep Coinbase valuation caches separate from execution readiness."""
 from __future__ import annotations
 
+import builtins
 import logging
 import os
 import sys
@@ -11,10 +12,21 @@ from types import ModuleType
 from typing import Any, Iterator, Mapping
 
 logger = logging.getLogger("nija.coinbase_capital_consistency")
-_MARKER = "20260726-coinbase-capital-auth-fail-closed-v2"
+_MARKER = "20260802-coinbase-capital-install-idempotency-v3"
 _PATCH_ATTR = "_nija_coinbase_capital_consistency_v2"
-_LOCK = threading.RLock()
-_STARTED = False
+_STATE_KEY = "_NIJA_COINBASE_CAPITAL_CONSISTENCY_SHARED_STATE_V3"
+if not hasattr(builtins, _STATE_KEY):
+    setattr(
+        builtins,
+        _STATE_KEY,
+        {
+            "lock": threading.RLock(),
+            "monitor_started": False,
+            "install_attested": False,
+        },
+    )
+_STATE: dict[str, Any] = getattr(builtins, _STATE_KEY)
+_LOCK: threading.RLock = _STATE["lock"]
 
 
 def _number(value: Any) -> float:
@@ -296,21 +308,23 @@ def _monitor() -> None:
 
 
 def install() -> bool:
-    global _STARTED
+    """Install once even when compatibility loaders import this file by alias."""
     with _LOCK:
         _patch_loaded()
-        if not _STARTED:
-            _STARTED = True
+        if not bool(_STATE["monitor_started"]):
+            _STATE["monitor_started"] = True
             threading.Thread(
                 target=_monitor,
-                name="CoinbaseCapitalConsistencyV2",
+                name="CoinbaseCapitalConsistencyV3",
                 daemon=True,
             ).start()
         os.environ["NIJA_COINBASE_CAPITAL_CONSISTENCY_INSTALLED"] = "1"
-        logger.critical(
-            "COINBASE_CAPITAL_CONSISTENCY_INSTALLED marker=%s",
-            _MARKER,
-        )
+        if not bool(_STATE["install_attested"]):
+            _STATE["install_attested"] = True
+            logger.critical(
+                "COINBASE_CAPITAL_CONSISTENCY_INSTALLED marker=%s",
+                _MARKER,
+            )
         return True
 
 
