@@ -115,6 +115,32 @@ def _resolve_bootstrap_fsm():
             continue
     return None, None
 
+def _current_refresh_requires_stale() -> bool:
+    """Return True when this refresh used unknown or expired cached capital."""
+
+    for module_name in (
+        "bot.capital_refresh_stall_guard_v35",
+        "capital_refresh_stall_guard_v35",
+    ):
+        module = sys.modules.get(module_name)
+        if module is None:
+            continue
+        status_getter = getattr(module, "current_refresh_fallback_status", None)
+        if callable(status_getter):
+            try:
+                status = dict(status_getter(FRESHNESS_TTL_S))
+            except Exception:
+                return True
+            return bool(status.get("used_fallback") and not status.get("all_recent"))
+        fallback_checker = getattr(module, "current_refresh_used_fallback", None)
+        if callable(fallback_checker):
+            try:
+                return bool(fallback_checker())
+            except Exception:
+                return True
+    return False
+
+
 # Keep both import paths bound to the same module object.
 # This avoids duplicate process-wide singletons when callers mix
 # `bot.capital_flow_state_machine` and `capital_flow_state_machine`.
@@ -1090,6 +1116,8 @@ class CapitalRefreshCoordinator:
         # =================================================================
         raw_balances: Dict[str, float] = {}   # broker_id → fetched scalar
         balance_fetched_successfully = False
+        kraken_present = False
+        kraken_balance_fetched_successfully = False
         kraken_fetch_ts: Optional[float] = None
         kraken_response_age_s: float = FRESHNESS_TTL_S   # default = maximally stale
         assets_priced_success_pct: float = 1.0
@@ -1099,7 +1127,12 @@ class CapitalRefreshCoordinator:
             if broker is None:
                 continue
             broker_key = str(broker_id)
-            is_kraken = broker_key.lower() == "kraken"
+            broker_identity = str(getattr(broker_id, "value", broker_id) or "").strip().lower()
+            is_kraken = (
+                broker_identity == "kraken"
+                or broker_key.strip().lower().split(".")[-1] == "kraken"
+            )
+            kraken_present = kraken_present or is_kraken
 
             # Read Kraken diagnostics BEFORE the fetch so they reflect the
             # state that was current when this refresh was triggered.
@@ -1133,6 +1166,8 @@ class CapitalRefreshCoordinator:
                 raw = broker.get_account_balance()
                 if raw is not None:
                     balance_fetched_successfully = True
+                    if is_kraken:
+                        kraken_balance_fetched_successfully = True
                 if is_kraken and hasattr(broker, "get_balance_fetch_timestamp"):
                     # Use the broker's own timestamp for accuracy (it may have
                     # served a TTL-cached result rather than hitting the API).
@@ -1271,11 +1306,28 @@ class CapitalRefreshCoordinator:
             api_error_count=api_error_count,
         )
 
+        # Freshness belongs to the snapshot built by this refresh, not to the
+        # previously published authority snapshot. Preserve fail-closed behavior
+        # for an expired/unknown timeout fallback and for a configured Kraken
+        # venue whose current balance observation was not successful.
+        fallback_requires_stale = _current_refresh_requires_stale()
+        current_fetch_fresh = bool(
+            balance_fetched_successfully
+            and (
+                not kraken_present
+                or (
+                    kraken_balance_fetched_successfully
+                    and kraken_response_age_s < FRESHNESS_TTL_S
+                )
+            )
+        )
         is_fresh = (
             len(new_balances) >= broker_threshold
-            and prior_age_s <= FRESHNESS_TTL_S
+            and current_fetch_fresh
+            and not fallback_requires_stale
             and real > 0.0
         )
+        current_snapshot_age_s = 0.0 if is_fresh else prior_age_s
 
         snapshot = CapitalSnapshot(
             real_capital=real,
@@ -1287,7 +1339,7 @@ class CapitalRefreshCoordinator:
             broker_count=len(new_balances),
             expected_brokers=expected,
             computed_at=now,
-            snapshot_age_s=prior_age_s,
+            snapshot_age_s=current_snapshot_age_s,
             kraken_response_age_s=kraken_response_age_s,
             assets_priced_success_pct=float(assets_priced_success_pct),
             api_error_count=int(api_error_count),
