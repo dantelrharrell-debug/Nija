@@ -275,9 +275,9 @@ def _publish_supervised_thread_evidence() -> bool:
             if worker is not threading.current_thread() and worker.is_alive()
         )
         worker_count = max(1, live_workers)
-        coordinator.record_threads_launched(worker_count)
-        coordinator.record_threads_confirmed_running(
-            bootstrap_state="RUNNING_SUPERVISED"
+        coordinator.record_threads_supervised(
+            worker_count,
+            bootstrap_state="RUNNING_SUPERVISED",
         )
         logger.critical(
             "SUPERVISED_THREAD_EVIDENCE_PUBLISHED "

@@ -695,6 +695,51 @@ class StartupCoordinator:
                 {"bootstrap_state": self._runtime.bootstrap_state},
             )
 
+    def record_threads_supervised(
+        self,
+        count: int,
+        *,
+        bootstrap_state: str = "RUNNING_SUPERVISED",
+    ) -> int:
+        """Atomically publish launched and supervised thread readiness evidence."""
+
+        normalized_count = max(0, int(count or 0))
+        if normalized_count <= 0:
+            raise ValueError("supervised thread count must be positive")
+
+        with self._lock:
+            already_supervised = bool(
+                self._runtime.threads_launched == normalized_count
+                and self._runtime.threads_confirmed_running
+                and self._runtime.bootstrap_state == bootstrap_state
+                and self._runtime.coordinator_state
+                == StartupCoordinatorState.SUPERVISED_RUNNING
+            )
+            if already_supervised:
+                return self._runtime.event_version
+
+            count_changed = self._runtime.threads_launched != normalized_count
+            self._runtime.threads_launched = normalized_count
+            if count_changed:
+                self._runtime.coordinator_state = StartupCoordinatorState.THREADS_PENDING
+                self._publish_locked(
+                    StartupEvent.THREADS_LAUNCHED,
+                    {"count": normalized_count, "atomic_supervision": True},
+                )
+
+            self._runtime.bootstrap_state = bootstrap_state
+            self._runtime.threads_confirmed_running = True
+            self._runtime.coordinator_state = StartupCoordinatorState.SUPERVISED_RUNNING
+            self._runtime._last_bootstrap_state_published = bootstrap_state
+            return self._publish_locked(
+                StartupEvent.THREADS_CONFIRMED_RUNNING,
+                {
+                    "bootstrap_state": bootstrap_state,
+                    "count": normalized_count,
+                    "atomic_supervision": True,
+                },
+            )
+
     def record_activation_requested(self, *, requested: bool = True, source: str = "") -> int:
         with self._lock:
             self._runtime.activation_requested = bool(requested)

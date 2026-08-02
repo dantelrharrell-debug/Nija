@@ -270,9 +270,9 @@ class BotMainAuthorityOrderingTests(unittest.TestCase):
         ):
             self.assertTrue(self.bot_main._publish_supervised_thread_evidence())
 
-        coordinator.record_threads_launched.assert_called_once_with(1)
-        coordinator.record_threads_confirmed_running.assert_called_once_with(
-            bootstrap_state="RUNNING_SUPERVISED"
+        coordinator.record_threads_supervised.assert_called_once_with(
+            1,
+            bootstrap_state="RUNNING_SUPERVISED",
         )
 
     def test_supervised_thread_evidence_blocks_without_live_heartbeat(self):
@@ -292,8 +292,101 @@ class BotMainAuthorityOrderingTests(unittest.TestCase):
         ):
             self.assertFalse(self.bot_main._publish_supervised_thread_evidence())
 
-        coordinator.record_threads_launched.assert_not_called()
-        coordinator.record_threads_confirmed_running.assert_not_called()
+        coordinator.record_threads_supervised.assert_not_called()
+
+    def test_atomic_supervised_thread_record_sets_complete_proof(self):
+        from bot.startup_coordinator import (
+            StartupCoordinator,
+            StartupCoordinatorState,
+            StartupEvent,
+        )
+
+        coordinator = StartupCoordinator()
+        version = coordinator.record_threads_supervised(
+            2,
+            bootstrap_state="RUNNING_SUPERVISED",
+        )
+
+        self.assertGreater(version, 0)
+        with coordinator._lock:
+            self.assertEqual(coordinator._runtime.threads_launched, 2)
+            self.assertTrue(coordinator._runtime.threads_confirmed_running)
+            self.assertEqual(
+                coordinator._runtime.bootstrap_state,
+                "RUNNING_SUPERVISED",
+            )
+            self.assertEqual(
+                coordinator._runtime.coordinator_state,
+                StartupCoordinatorState.SUPERVISED_RUNNING,
+            )
+            history = list(coordinator._history)
+
+        self.assertEqual(
+            [entry["event"] for entry in history],
+            [
+                StartupEvent.THREADS_LAUNCHED.value,
+                StartupEvent.THREADS_CONFIRMED_RUNNING.value,
+            ],
+        )
+        self.assertEqual(
+            [entry["state"] for entry in history],
+            [
+                StartupCoordinatorState.THREADS_PENDING.value,
+                StartupCoordinatorState.SUPERVISED_RUNNING.value,
+            ],
+        )
+
+        repeated_version = coordinator.record_threads_supervised(
+            2,
+            bootstrap_state="RUNNING_SUPERVISED",
+        )
+        self.assertEqual(repeated_version, version)
+        with coordinator._lock:
+            self.assertEqual(list(coordinator._history), history)
+
+    def test_running_supervised_handoff_publishes_thread_evidence(self):
+        from bot.bootstrap_state_machine import BootstrapState
+
+        fsm = types.SimpleNamespace(state=BootstrapState.RUNNING_SUPERVISED)
+        with (
+            patch(
+                "bot.bootstrap_state_machine.get_bootstrap_fsm",
+                return_value=fsm,
+            ),
+            patch.object(self.bot_main, "_apply_bootstrap_i12_repair_direct"),
+            patch.object(
+                self.bot_main,
+                "_publish_supervised_thread_evidence",
+                return_value=True,
+            ) as publish,
+        ):
+            self.assertTrue(
+                self.bot_main._advance_bootstrap_fsm_to_running_supervised()
+            )
+
+        publish.assert_called_once_with()
+
+    def test_running_supervised_handoff_fails_closed_without_thread_evidence(self):
+        from bot.bootstrap_state_machine import BootstrapState
+
+        fsm = types.SimpleNamespace(state=BootstrapState.RUNNING_SUPERVISED)
+        with (
+            patch(
+                "bot.bootstrap_state_machine.get_bootstrap_fsm",
+                return_value=fsm,
+            ),
+            patch.object(self.bot_main, "_apply_bootstrap_i12_repair_direct"),
+            patch.object(
+                self.bot_main,
+                "_publish_supervised_thread_evidence",
+                return_value=False,
+            ) as publish,
+        ):
+            self.assertFalse(
+                self.bot_main._advance_bootstrap_fsm_to_running_supervised()
+            )
+
+        publish.assert_called_once_with()
 
     def test_bootstrap_is_not_called_when_writer_authority_is_missing(self):
         with (
