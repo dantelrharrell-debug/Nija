@@ -100,3 +100,52 @@ def test_capital_wrapper_patch_is_chain_aware():
     assert module._patch_class(Broker) is False
     assert Broker.connect is first_connect
     assert Broker.get_account_balance is first_balance
+
+
+
+def test_install_is_process_wide_idempotent_across_module_aliases(
+    monkeypatch, caplog
+):
+    module = _module()
+    state = module._STATE
+    original_started = state["monitor_started"]
+    original_attested = state["install_attested"]
+    started = []
+
+    class FakeThread:
+        def __init__(self, **kwargs):
+            started.append(kwargs)
+
+        def start(self):
+            return None
+
+    alias_name = "nija_test_coinbase_capital_consistency_alias"
+    try:
+        state["monitor_started"] = False
+        state["install_attested"] = False
+        monkeypatch.setattr(module.threading, "Thread", FakeThread)
+        monkeypatch.setattr(module, "_patch_loaded", lambda: False)
+        caplog.clear()
+        caplog.set_level(module.logging.CRITICAL)
+
+        spec = importlib.util.spec_from_file_location(alias_name, module.__file__)
+        assert spec is not None
+        assert spec.loader is not None
+        alias = importlib.util.module_from_spec(spec)
+        importlib.sys.modules[alias_name] = alias
+        spec.loader.exec_module(alias)
+
+        assert module.install() is True
+        records = [
+            record
+            for record in caplog.records
+            if "COINBASE_CAPITAL_CONSISTENCY_INSTALLED" in record.getMessage()
+        ]
+        assert len(started) == 1
+        assert len(records) == 1
+        assert state["monitor_started"] is True
+        assert state["install_attested"] is True
+    finally:
+        importlib.sys.modules.pop(alias_name, None)
+        state["monitor_started"] = original_started
+        state["install_attested"] = original_attested
