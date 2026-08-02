@@ -116,7 +116,7 @@ def test_broker_class_patch_registers_new_instances(monkeypatch):
 
 
 
-def test_compat_imports_share_registry_and_do_not_double_replace(monkeypatch, caplog):
+def test_compat_imports_share_registry_and_log_one_replacement(monkeypatch, caplog):
     monkeypatch.setenv("NIJA_UNIVERSAL_BROKER_EXIT_ENABLED", "false")
     guard._BROKERS.clear()
     guard._STRONG_BROKERS.clear()
@@ -135,13 +135,16 @@ def test_compat_imports_share_registry_and_do_not_double_replace(monkeypatch, ca
     assert peer._BROKERS is guard._BROKERS
     assert peer._ACTIVE is guard._ACTIVE
 
-    broker = FakeKrakenBroker("user:tania", [], {})
+    original = FakeKrakenBroker("user:tania", [], {})
+    replacement = FakeKrakenBroker("user:tania", [], {})
     caplog.set_level(logging.INFO, logger="nija.universal_broker_exit_supervisor")
     try:
-        guard._register_broker(broker)
-        peer._register_broker(broker)
+        guard._register_broker(original)
+        peer._register_broker(replacement)
+        guard._register_broker(replacement)
     finally:
-        guard._discard_broker(broker)
+        guard._discard_broker(original)
+        guard._discard_broker(replacement)
 
     registered = [
         record for record in caplog.records
@@ -152,4 +155,4 @@ def test_compat_imports_share_registry_and_do_not_double_replace(monkeypatch, ca
         if "UNIVERSAL_BROKER_EXIT_REPLACED" in record.getMessage()
     ]
     assert len(registered) == 1
-    assert replaced == []
+    assert len(replaced) == 1
