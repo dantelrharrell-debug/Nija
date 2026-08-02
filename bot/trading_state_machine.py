@@ -2153,6 +2153,16 @@ class TradingStateMachine:
             else os.environ.get("LIVE_TRADING", "false")
         )
 
+        with self._lock:
+            _current_for_attempt = self._current_state
+        logger.info(
+            "[ACTIVATION_ATTEMPT] state=%s live_capital_verified=%s dry_run=%s force=%s",
+            _current_for_attempt.value,
+            _lcv_quick,
+            _dry_run_quick,
+            _force,
+        )
+
         # ── FORCE_TRADE fast-path ─────────────────────────────────────────────
         # When FORCE_TRADE=1 / FORCE_TRADE_MODE=1 is set, bypass ALL activation
         # gates (including LIVE_CAPITAL_VERIFIED, distributed writer authority,
@@ -2644,6 +2654,10 @@ class TradingStateMachine:
 
         # ── Gate 1.5: authority + runtime safety probes are sampled once ──────
         authority_ready = _is_authority_ready()
+        if not authority_ready:
+            logger.info(
+                "[AUTHORITY_WAITING] authority_ready=False — coordinator proof will block at authority.ready gate"
+            )
         if (
             not authority_ready
             and current == TradingState.OFF
@@ -2832,7 +2846,17 @@ class TradingStateMachine:
             capital_state=_capital_state_value,
             capital_hydrated=_ca_hydrated_lcv,
             capital_balance=_ca_balance_lcv,
-            capital_stale=bool(_ca_lcv.is_stale(ttl_s=90.0)) if _ca_lcv is not None and hasattr(_ca_lcv, "is_stale") else True,
+            # When the capital readiness gate passed (_cap_ready=True) the gate
+            # already validated freshness (including any synchronous refresh).
+            # Trust the gate's verdict instead of a hard-coded 90-second TTL
+            # that can misfire when capital was refreshed 91–300 seconds ago.
+            # If the gate did not pass, fall back to the TTL check so the
+            # coordinator still receives an accurate stale signal.
+            capital_stale=(
+                False
+                if _cap_ready
+                else (bool(_ca_lcv.is_stale(ttl_s=90.0)) if _ca_lcv is not None and hasattr(_ca_lcv, "is_stale") else True)
+            ),
             readiness_key="__snapshot__",
             readiness_value=bool(all(_readiness_snapshot.values())) if _readiness_snapshot else False,
             readiness_version=_readiness_version,
@@ -2886,12 +2910,87 @@ class TradingStateMachine:
                 _block_reason,
                 _block_detail or "n/a",
             )
+            logger.warning(
+                "[ACTIVATION_FAILURE] coordinator proof blocked activation "
+                "first_gate=%s failed_gates=%s authority_ready=%s capital_stale=%s "
+                "runtime_authority_state=%s",
+                _system_readiness_proof.first_blocking_gate,
+                ",".join(_system_readiness_proof.failed_gates),
+                authority_ready,
+                not _cap_ready,
+                _frozen_snapshot.runtime_authority_state,
+            )
+
+            # ── 30-second watchdog ────────────────────────────────────────────
+            # If all outer activation gates have been satisfied (BROKER_INDEPENDENT_
+            # EXECUTION_READY was logged) and the coordinator proof is still
+            # blocking after 30 seconds, log every unsatisfied gate at CRITICAL
+            # level and trigger a forced re-evaluation via the convergence path.
+            _bier_at = _broker_execution_ready_at
+            if _bier_at is not None:
+                _watchdog_elapsed = time.monotonic() - _bier_at
+                _watchdog_timeout_s = max(
+                    30.0,
+                    float(
+                        os.environ.get(
+                            "NIJA_AUTHORITY_WATCHDOG_TIMEOUT_S", "30"
+                        ) or "30"
+                    ),
+                )
+                if _watchdog_elapsed >= _watchdog_timeout_s:
+                    with self._lock:
+                        _state_for_watchdog = self._current_state
+                    if _state_for_watchdog == TradingState.LIVE_PENDING_CONFIRMATION:
+                        logger.critical(
+                            "[AUTHORITY_TIMEOUT] LIVE_PENDING_CONFIRMATION for %.1fs after "
+                            "BROKER_INDEPENDENT_EXECUTION_READY (threshold=%.1fs) — "
+                            "unsatisfied coordinator gates: %s  gate_results=%s",
+                            _watchdog_elapsed,
+                            _watchdog_timeout_s,
+                            ",".join(_system_readiness_proof.failed_gates),
+                            {
+                                k: v
+                                for k, v in (
+                                    getattr(_system_readiness_proof, "gate_results", None)
+                                    or {}
+                                ).items()
+                                if not v
+                            },
+                        )
+                        # Force a re-evaluation of the convergence path.
+                        try:
+                            try:
+                                from bot.runtime_authority_convergence_repair_patch import (
+                                    converge_runtime_authority,
+                                )
+                            except ImportError:
+                                from runtime_authority_convergence_repair_patch import (  # type: ignore[import]
+                                    converge_runtime_authority,
+                                )
+                            converge_runtime_authority(
+                                "authority_timeout_watchdog"
+                            )
+                            logger.critical(
+                                "[AUTHORITY_TIMEOUT] watchdog triggered "
+                                "converge_runtime_authority — re-evaluation scheduled"
+                            )
+                        except Exception as _watch_err:
+                            logger.warning(
+                                "[AUTHORITY_TIMEOUT] watchdog convergence call failed: %s",
+                                _watch_err,
+                            )
             return False
 
         _coordinator_committed = False
         try:
             self._first_snap_accepted = True
             logger.critical("🚀 ACTIVATING TRADING ENGINE")
+            logger.critical(
+                "[ACTIVATION_ATTEMPT] transitioning to LIVE_ACTIVE "
+                "version=%s state=%s",
+                _frozen_snapshot.snapshot_version,
+                current.value,
+            )
             self.transition_to(
                 TradingState.LIVE_ACTIVE,
                 f"STARTUP_COORDINATOR_COMMIT version={_frozen_snapshot.snapshot_version}",
@@ -2907,6 +3006,11 @@ class TradingStateMachine:
             _coordinator_committed = True
             logger.critical("STATE AFTER ACTIVATION = %s", self._current_state)
             logger.critical("ACTIVATION_COMMITTED — LIVE_ACTIVE confirmed")
+            logger.critical(
+                "[ACTIVATION_SUCCESS] LIVE_ACTIVE state=%s is_live=%s",
+                self._current_state.value,
+                self.is_live_trading_active(),
+            )
             logger.critical(
                 "ACTIVATION STATE CONFIRMED: current_state=%s is_live=%s",
                 self._current_state.value,
@@ -3269,13 +3373,26 @@ def _activation_intent_present(runtime_mode: Optional[Any] = None) -> bool:
 
 
 def _is_authority_ready() -> bool:
-    """Return readiness-table authority gate state, fail-closed on errors."""
+    """Return readiness-table authority gate state, fail-closed on errors.
+
+    Primary path: returns the ``authority_ready`` key from the global readiness
+    table (set by the authority heartbeat on every successful tick).
+
+    Bootstrap fallback: if the readiness table still says ``False`` (e.g. the
+    first heartbeat tick has not yet fired), probe the writer authority gate
+    directly.  When that gate passes, bootstrap ``authority_ready=True`` in
+    the table so subsequent calls are fast and the coordinator proof unblocks.
+    This handles Coinbase-only / no-Redis deployments where the distributed
+    nonce manager never calls ``ensure_writer_lock``.
+    """
     try:
         try:
             from bot.readiness_table import snapshot as _rt_snapshot
         except ImportError:
             from readiness_table import snapshot as _rt_snapshot  # type: ignore[import]
-        return bool((_rt_snapshot() or {}).get("authority_ready", False))
+        _table = _rt_snapshot() or {}
+        if _table.get("authority_ready", False):
+            return True
     except Exception as _exc:
         _log_activation_diag_once(
             "auto_activate_blocked",
@@ -3284,6 +3401,40 @@ def _is_authority_ready() -> bool:
             _exc,
         )
         return False
+
+    # Readiness table says authority_ready=False.  Probe the writer gate as a
+    # one-shot bootstrap so deployments without Redis do not stall permanently.
+    logger.info(
+        "[AUTHORITY_WAITING] authority_ready=False in readiness_table — "
+        "probing writer authority gate for bootstrap"
+    )
+    _writer_ok, _writer_err = _distributed_writer_authority_gate()
+    if _writer_ok:
+        try:
+            try:
+                from bot.readiness_table import mark_ready as _rt_mark
+            except ImportError:
+                from readiness_table import mark_ready as _rt_mark  # type: ignore[import]
+            _rt_mark("authority_ready")
+            # Also mark nonce_ready for Coinbase-only mode (Kraken nonce not
+            # required), which unblocks the prereqs_ready check inside the
+            # coordinator's _reconcile_runtime_authority_locked().
+            if not os.environ.get("KRAKEN_NONCE_LEASE_REQUIRED", "").strip():
+                _rt_mark("nonce_ready")
+            logger.critical(
+                "[AUTHORITY_GRANTED] writer_authority_gate_passed — "
+                "bootstrapped authority_ready=True in readiness_table"
+            )
+        except Exception:
+            pass
+        return True
+
+    logger.warning(
+        "[AUTHORITY_DENIED] writer_authority_gate_failed — authority_ready remains False "
+        "reason=%s",
+        _writer_err,
+    )
+    return False
 
 
 def _runtime_writer_nonce_ready() -> tuple[bool, str]:
@@ -3912,6 +4063,14 @@ def activation_invariant(
 # Commit activation — final diagnostic gate with structured critical logging
 # ---------------------------------------------------------------------------
 
+# Monotonic timestamp (time.monotonic()) of the first time all broker-
+# independent outer activation gates passed (capital, execution, venue,
+# live_capital).  Used by the 30-second watchdog inside commit_activation()
+# to detect LIVE_PENDING_CONFIRMATION stalls and log every unsatisfied gate.
+_broker_execution_ready_at: Optional[float] = None
+# Lock protecting _broker_execution_ready_at writes.
+_broker_execution_ready_lock = threading.Lock()
+
 
 def commit_activation(
     kill: bool,
@@ -3988,6 +4147,23 @@ def commit_activation(
     if not invariant:
         logger.critical("ACTIVATION BLOCKED: activation_invariant returned False (check valid_brokers, snap_source, ca_hydrated, ca_not_stale, brokers_ready)")
         return False
+
+    # All outer activation gates passed.  Log BROKER_INDEPENDENT_EXECUTION_READY
+    # exactly once and record the timestamp for the 30-second watchdog.
+    global _broker_execution_ready_at
+    if _broker_execution_ready_at is None:
+        with _broker_execution_ready_lock:
+            if _broker_execution_ready_at is None:
+                _broker_execution_ready_at = time.monotonic()
+                logger.critical(
+                    "BROKER_INDEPENDENT_EXECUTION_READY "
+                    "capital=%s execution=%s venue=%s live_capital=%s "
+                    "— all outer gates satisfied; coordinator proof pending",
+                    capital_ready,
+                    execution_ready,
+                    venue_ready,
+                    live_verified,
+                )
 
     return True
 

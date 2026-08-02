@@ -672,6 +672,59 @@ class AuthorityHeartbeatMonitor:
                     _redis_write_exc,
                     exc_info=True,
                 )
+
+            # ── Mark authority_ready and nonce_ready in the readiness table ──
+            # The readiness table's authority_ready key is never marked by the
+            # distributed nonce manager in Coinbase-only / no-Redis deployments,
+            # which permanently blocks the coordinator's system_readiness_proof
+            # and prevents LIVE_PENDING_CONFIRMATION → LIVE_ACTIVE.
+            # A passing authority heartbeat tick is the correct time to mark it.
+            try:
+                try:
+                    from bot.readiness_table import mark_ready as _rt_mark, snapshot as _rt_snap
+                except ImportError:
+                    from readiness_table import mark_ready as _rt_mark, snapshot as _rt_snap  # type: ignore[import]
+                _rt_table = _rt_snap() or {}
+                if not _rt_table.get("authority_ready", False):
+                    _rt_mark("authority_ready")
+                    logger.critical(
+                        "[AUTHORITY_GRANTED] authority_heartbeat_tick_passed — "
+                        "marked authority_ready=True in readiness_table"
+                    )
+                # For Coinbase-only deployments the Kraken nonce lease is not
+                # required.  Mark nonce_ready so prereqs_ready can be satisfied.
+                if not _rt_table.get("nonce_ready", False):
+                    _kraken_nonce_required = os.environ.get(
+                        "KRAKEN_NONCE_LEASE_REQUIRED", ""
+                    ).strip()
+                    if not _kraken_nonce_required:
+                        _rt_mark("nonce_ready")
+                        logger.info(
+                            "AUTHORITY_HEARTBEAT: marked nonce_ready=True "
+                            "(Coinbase-only mode — Kraken nonce not required)"
+                        )
+            except Exception as _rt_exc:
+                logger.debug(
+                    "AUTHORITY_HEARTBEAT: readiness_table update failed: %s", _rt_exc
+                )
+
+            # Notify the startup coordinator so it immediately re-evaluates the
+            # authority convergence path without waiting for the next tick from
+            # commit_activation().
+            try:
+                try:
+                    from bot.startup_coordinator import get_startup_coordinator
+                except ImportError:
+                    from startup_coordinator import get_startup_coordinator  # type: ignore[import]
+                get_startup_coordinator().record_authority(
+                    ready=True,
+                    status={"source": "authority_heartbeat"},
+                )
+            except Exception as _coord_exc:
+                logger.debug(
+                    "AUTHORITY_HEARTBEAT: coordinator record_authority failed: %s",
+                    _coord_exc,
+                )
             return
 
         # ── Failure path ─────────────────────────────────────────────────────
