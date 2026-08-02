@@ -201,13 +201,28 @@ def _strict_authority_ready() -> tuple[bool, str]:
 
 
 def _bootstrap_ready() -> tuple[bool, list[str]]:
+    state_value = "UNAVAILABLE"
+    try:
+        try:
+            module = importlib.import_module("bot.bootstrap_state_machine")
+        except Exception:
+            module = importlib.import_module("bootstrap_state_machine")
+        fsm = module.get_bootstrap_fsm()
+        state = getattr(fsm, "state", None)
+        state_value = str(getattr(state, "value", state) or "UNKNOWN").strip().upper()
+    except Exception:
+        state_value = "UNAVAILABLE"
+
     required = {
+        "bootstrap_supervised": state_value == "RUNNING_SUPERVISED",
         "module_identity": _truthy("NIJA_RUNTIME_MODULE_IDENTITY_READY"),
         "scan_wrapper_depth": _truthy("NIJA_SCAN_WRAPPER_DEPTH_READY"),
         "zero_signal_state": _truthy("NIJA_ZERO_SIGNAL_STREAK_STATE_READY"),
         "pre_dispatch_risk": _truthy("NIJA_PRE_DISPATCH_RISK_SIZING_READY"),
     }
     missing = [name for name, ready in required.items() if not ready]
+    if state_value != "RUNNING_SUPERVISED":
+        missing.append(f"bootstrap_state:{state_value}")
     return not missing, missing
 
 
