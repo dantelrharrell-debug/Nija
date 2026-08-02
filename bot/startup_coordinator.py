@@ -720,16 +720,17 @@ class StartupCoordinator:
 
             count_changed = self._runtime.threads_launched != normalized_count
             self._runtime.threads_launched = normalized_count
-            self._runtime.bootstrap_state = bootstrap_state
-            self._runtime.threads_confirmed_running = True
-            self._runtime.coordinator_state = StartupCoordinatorState.SUPERVISED_RUNNING
-            self._runtime._last_bootstrap_state_published = bootstrap_state
-
             if count_changed:
+                self._runtime.coordinator_state = StartupCoordinatorState.THREADS_PENDING
                 self._publish_locked(
                     StartupEvent.THREADS_LAUNCHED,
                     {"count": normalized_count, "atomic_supervision": True},
                 )
+
+            self._runtime.bootstrap_state = bootstrap_state
+            self._runtime.threads_confirmed_running = True
+            self._runtime.coordinator_state = StartupCoordinatorState.SUPERVISED_RUNNING
+            self._runtime._last_bootstrap_state_published = bootstrap_state
             return self._publish_locked(
                 StartupEvent.THREADS_CONFIRMED_RUNNING,
                 {
