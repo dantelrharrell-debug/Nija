@@ -247,6 +247,54 @@ class BotMainAuthorityOrderingTests(unittest.TestCase):
         self.bot_main._shutdown_event.clear()
         self.bot_main._startup_complete = False
 
+    def test_supervised_thread_evidence_publishes_only_from_live_writer(self):
+        heartbeat = types.SimpleNamespace(is_alive=lambda: True)
+        runtime = types.SimpleNamespace(
+            acquired=True,
+            lost=False,
+            _heartbeat_thread=heartbeat,
+        )
+        coordinator = MagicMock()
+
+        with (
+            patch.object(self.bot_main, "_writer_authority_runtime", runtime),
+            patch(
+                "bot.startup_coordinator.get_startup_coordinator",
+                return_value=coordinator,
+            ),
+            patch.object(
+                self.bot_main.threading,
+                "enumerate",
+                return_value=[self.bot_main.threading.current_thread(), heartbeat],
+            ),
+        ):
+            self.assertTrue(self.bot_main._publish_supervised_thread_evidence())
+
+        coordinator.record_threads_launched.assert_called_once_with(1)
+        coordinator.record_threads_confirmed_running.assert_called_once_with(
+            bootstrap_state="RUNNING_SUPERVISED"
+        )
+
+    def test_supervised_thread_evidence_blocks_without_live_heartbeat(self):
+        runtime = types.SimpleNamespace(
+            acquired=True,
+            lost=False,
+            _heartbeat_thread=types.SimpleNamespace(is_alive=lambda: False),
+        )
+        coordinator = MagicMock()
+
+        with (
+            patch.object(self.bot_main, "_writer_authority_runtime", runtime),
+            patch(
+                "bot.startup_coordinator.get_startup_coordinator",
+                return_value=coordinator,
+            ),
+        ):
+            self.assertFalse(self.bot_main._publish_supervised_thread_evidence())
+
+        coordinator.record_threads_launched.assert_not_called()
+        coordinator.record_threads_confirmed_running.assert_not_called()
+
     def test_bootstrap_is_not_called_when_writer_authority_is_missing(self):
         with (
             patch.object(
