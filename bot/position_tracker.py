@@ -25,6 +25,7 @@ except Exception:
 
 _VERIFIED_SOURCES = {
     "api", "execution", "trade_history", "closed_orders", "fills",
+    "broker_position",
     "manual_verified", "reconstructed_verified_cost_basis",
 }
 _UNVERIFIED_SOURCE_TOKENS = {
@@ -254,15 +255,10 @@ class PositionTracker:
                     effective_entry = old_entry
                     effective_source = str((existing or {}).get("entry_price_source") or "execution")
                     verified = True
-                elif current_price > 0:
-                    effective_entry = current_price
-                    effective_source = "estimated_from_adoption_mark"
-                    verified = False
-                elif broker_value > 0:
-                    effective_entry = broker_value / quantity
-                    effective_source = "estimated_from_broker_market_value"
-                    verified = False
                 else:
+                    # Current market value is visibility data, not cost basis.
+                    # Keep the entry explicitly unresolved until broker-native
+                    # position or order-history evidence is available.
                     effective_entry = 0.0
                     effective_source = "reconciliation_required"
                     verified = False
