@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import importlib.util
+import logging
+from pathlib import Path
 from types import SimpleNamespace
 
 from bot import universal_broker_exit_supervisor_patch as guard
@@ -110,3 +113,46 @@ def test_broker_class_patch_registers_new_instances(monkeypatch):
     assert guard._patch_module(module) is True
     broker = FakeKrakenBroker("platform", [], {})
     assert registered == [broker]
+
+
+
+def test_compat_imports_share_registry_and_log_one_replacement(monkeypatch, caplog):
+    monkeypatch.setenv("NIJA_UNIVERSAL_BROKER_EXIT_ENABLED", "false")
+    guard._BROKERS.clear()
+    guard._STRONG_BROKERS.clear()
+
+    module_path = Path(guard.__file__)
+    spec = importlib.util.spec_from_file_location(
+        "universal_broker_exit_supervisor_patch_compat_test",
+        module_path,
+    )
+    assert spec is not None and spec.loader is not None
+    peer = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(peer)
+
+    assert peer._STATE is guard._STATE
+    assert peer._LOCK is guard._LOCK
+    assert peer._BROKERS is guard._BROKERS
+    assert peer._ACTIVE is guard._ACTIVE
+
+    original = FakeKrakenBroker("user:tania", [], {})
+    replacement = FakeKrakenBroker("user:tania", [], {})
+    caplog.set_level(logging.INFO, logger="nija.universal_broker_exit_supervisor")
+    try:
+        guard._register_broker(original)
+        peer._register_broker(replacement)
+        guard._register_broker(replacement)
+    finally:
+        guard._discard_broker(original)
+        guard._discard_broker(replacement)
+
+    registered = [
+        record for record in caplog.records
+        if "UNIVERSAL_BROKER_EXIT_REGISTERED" in record.getMessage()
+    ]
+    replaced = [
+        record for record in caplog.records
+        if "UNIVERSAL_BROKER_EXIT_REPLACED" in record.getMessage()
+    ]
+    assert len(registered) == 1
+    assert len(replaced) == 1
