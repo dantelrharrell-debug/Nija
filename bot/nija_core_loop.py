@@ -2161,6 +2161,67 @@ class NijaCoreLoop:
         if self._total_cycles % CYCLE_SUMMARY_INTERVAL == 0:
             self._log_execution_kpis()
 
+        # ── Q1–Q4 DIAGNOSTIC SUMMARY ─────────────────────────────────────
+        # Answers the four key investigative questions every cycle in one block:
+        #   Q1: How many symbols are scanned?
+        #   Q2: How many trade candidates are generated?
+        #   Q3: Why is each candidate accepted or rejected? (gate_rejections)
+        #   Q4: Is place_market_order() ever called? (orders_submitted counter)
+        _gate_rej_diag = locals().get("_gate_rejections") or {}
+        _q4_answer = (
+            "YES — place_market_order() was called this cycle"
+            if int(result.orders_submitted or 0) > 0
+            else "NO — place_market_order() was NOT called this cycle"
+        )
+        logger.critical(
+            "📊 [DIAGNOSTIC_SUMMARY] cycle=%d | "
+            "Q1_symbols_scanned=%d (tradeable=%d quarantined=%d) | "
+            "Q2_candidates_generated=%d (scored=%d blocked=%d) | "
+            "Q3_gate_rejections: data_insufficient=%d vol_too_low=%d mkt_filter=%d "
+            "adx=%d rsi=%d confidence=%d risk=%d capital=%d notional=%d tpe=%d | "
+            "Q4_place_market_order: %s (orders_submitted=%d broker_acks=%d fills=%d) | "
+            "VERDICT: %s",
+            self._total_cycles,
+            _universe_before, _universe_tradeable, _universe_quarantined,
+            int(result.candidates_selected or 0),
+            int(result.symbols_scored or 0),
+            int(result.entries_blocked or 0),
+            int(_gate_rej_diag.get("data_insufficient", 0)),
+            int(_gate_rej_diag.get("volume_gate_rejected", 0)),
+            int(_gate_rej_diag.get("market_filter_rejected", 0)),
+            int(_gate_rej_diag.get("adx_gate_rejected", 0)),
+            int(_gate_rej_diag.get("momentum_filter_rejected", 0)),
+            int(_gate_rej_diag.get("confidence_gate_rejected", 0)),
+            int(_gate_rej_diag.get("risk_gate_rejected", 0)),
+            int(_gate_rej_diag.get("capital_gate_rejected", 0)),
+            int(_gate_rej_diag.get("notional_gate_rejected", 0)),
+            int(_gate_rej_diag.get("ai_gate_rejected", 0)),
+            _q4_answer,
+            int(result.orders_submitted or 0),
+            int(result.broker_acks or 0),
+            int(result.fills or 0),
+            "TRADING" if int(result.fills or 0) > 0 else (
+                "ORDER_ATTEMPTED" if int(result.orders_submitted or 0) > 0 else (
+                    "CANDIDATE_FOUND_NOT_ORDERED" if int(result.candidates_selected or 0) > 0 else (
+                        "NO_CANDIDATES" if int(result.symbols_scored or 0) > 0 else "NO_SIGNALS"
+                    )
+                )
+            ),
+        )
+        print(
+            f"[NIJA-PRINT] DIAGNOSTIC_SUMMARY cycle={self._total_cycles} | "
+            f"Q1_symbols_scanned={_universe_before} tradeable={_universe_tradeable} | "
+            f"Q2_candidates={int(result.candidates_selected or 0)} scored={int(result.symbols_scored or 0)} | "
+            f"Q3_top_rejection: data={int(_gate_rej_diag.get('data_insufficient', 0))} "
+            f"vol={int(_gate_rej_diag.get('volume_gate_rejected', 0))} "
+            f"mkt_filter={int(_gate_rej_diag.get('market_filter_rejected', 0))} "
+            f"confidence={int(_gate_rej_diag.get('confidence_gate_rejected', 0))} "
+            f"risk={int(_gate_rej_diag.get('risk_gate_rejected', 0))} | "
+            f"Q4_place_market_order={'CALLED' if int(result.orders_submitted or 0) > 0 else 'NEVER_CALLED'} "
+            f"orders_submitted={int(result.orders_submitted or 0)} fills={int(result.fills or 0)}",
+            flush=True,
+        )
+
         return result
 
     # ------------------------------------------------------------------
