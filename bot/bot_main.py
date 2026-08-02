@@ -242,6 +242,61 @@ def _apply_bootstrap_i12_repair_direct(bootstrap_module) -> None:
         )
 
 
+def _publish_supervised_thread_evidence() -> bool:
+    """Publish concrete supervised-worker evidence to the activation coordinator."""
+
+    runtime = _writer_authority_runtime
+    heartbeat = getattr(runtime, "_heartbeat_thread", None) if runtime is not None else None
+    heartbeat_alive = bool(
+        runtime is not None
+        and bool(getattr(runtime, "acquired", False))
+        and not bool(getattr(runtime, "lost", True))
+        and heartbeat is not None
+        and callable(getattr(heartbeat, "is_alive", None))
+        and heartbeat.is_alive()
+    )
+    if not heartbeat_alive:
+        logger.critical(
+            "SUPERVISED_THREAD_EVIDENCE_BLOCKED marker=20260802-activation-thread-proof-v1 "
+            "writer_acquired=%s writer_lost=%s heartbeat_alive=false "
+            "activation_remains_pending=true",
+            bool(runtime and getattr(runtime, "acquired", False)),
+            bool(runtime is None or getattr(runtime, "lost", True)),
+        )
+        return False
+
+    try:
+        from bot.startup_coordinator import get_startup_coordinator
+
+        coordinator = get_startup_coordinator()
+        live_workers = sum(
+            1
+            for worker in threading.enumerate()
+            if worker is not threading.current_thread() and worker.is_alive()
+        )
+        worker_count = max(1, live_workers)
+        coordinator.record_threads_launched(worker_count)
+        coordinator.record_threads_confirmed_running(
+            bootstrap_state="RUNNING_SUPERVISED"
+        )
+        logger.critical(
+            "SUPERVISED_THREAD_EVIDENCE_PUBLISHED "
+            "marker=20260802-activation-thread-proof-v1 workers=%d "
+            "writer_heartbeat_alive=true",
+            worker_count,
+        )
+        return True
+    except Exception as exc:
+        logger.critical(
+            "SUPERVISED_THREAD_EVIDENCE_FAILED "
+            "marker=20260802-activation-thread-proof-v1 err=%s "
+            "activation_remains_pending=true",
+            exc,
+            exc_info=True,
+        )
+        return False
+
+
 def _advance_bootstrap_fsm_to_running_supervised() -> bool:
     """Advance BootstrapFSM using only legal transitions."""
 
@@ -254,6 +309,11 @@ def _advance_bootstrap_fsm_to_running_supervised() -> bool:
 
         fsm = get_bootstrap_fsm()
         if fsm.state == BootstrapState.RUNNING_SUPERVISED:
+            if not _publish_supervised_thread_evidence():
+                logger.error(
+                    "FSM is RUNNING_SUPERVISED but supervised thread proof is unavailable"
+                )
+                return False
             logger.info("✅ FSM already RUNNING_SUPERVISED")
             return True
 
@@ -323,6 +383,11 @@ def _advance_bootstrap_fsm_to_running_supervised() -> bool:
                 return False
 
         if fsm.state == BootstrapState.RUNNING_SUPERVISED:
+            if not _publish_supervised_thread_evidence():
+                logger.error(
+                    "FSM reached RUNNING_SUPERVISED without supervised thread proof"
+                )
+                return False
             logger.info("✅ FSM is RUNNING_SUPERVISED")
             return True
 
