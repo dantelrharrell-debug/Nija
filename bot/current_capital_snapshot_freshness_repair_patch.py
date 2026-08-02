@@ -1,15 +1,10 @@
-"""Repair current live capital snapshots that inherit stale prior age.
+"""Repair freshness only for confirmed current live-broker snapshots.
 
-The coordinator builds a new ``CapitalSnapshot`` after fetching broker balances,
-but its ``is_fresh`` calculation historically used the age of the previous
-CapitalAuthority snapshot.  On first live refresh that previous age can be
-infinite, causing a brand-new live-exchange snapshot with positive capital and
-valid broker balances to carry ``is_stale=True``.
-
-This patch preserves the original ``CapitalSnapshot`` class identity and wraps
-only its constructor.  It clears the stale flag only for a newly constructed,
-positive, broker-backed, medium-or-better confidence snapshot.  It does not
-publish capital, grant writer authority, alter risk sizing, or submit orders.
+The coordinator historically derives a new snapshot's freshness from the prior
+authority snapshot age. This patch repairs that inherited stale flag only when
+the current refresh completed without a timeout fallback. If any venue supplied
+cached capital, the new snapshot remains explicitly stale and cannot be promoted
+to current live-exchange data.
 """
 from __future__ import annotations
 
@@ -17,12 +12,13 @@ from datetime import datetime, timezone
 import functools
 import logging
 import os
+import sys
 import threading
 from typing import Any
 
 logger = logging.getLogger("nija.current_capital_snapshot_freshness_repair")
 
-_MARKER = "20260731-current-capital-snapshot-freshness-v1"
+_MARKER = "20260802-current-capital-snapshot-freshness-v2"
 _TRUE = {"1", "true", "yes", "on", "enabled", "y"}
 _LOCK = threading.RLock()
 _INSTALLED = False
@@ -59,12 +55,36 @@ def _broker_threshold(snapshot: Any) -> int:
         return 1
 
 
+def _current_refresh_used_fallback() -> bool:
+    for name in (
+        "bot.capital_refresh_stall_guard_v35",
+        "capital_refresh_stall_guard_v35",
+    ):
+        module = sys.modules.get(name)
+        checker = getattr(module, "current_refresh_used_fallback", None)
+        if callable(checker):
+            try:
+                return bool(checker())
+            except Exception:
+                return True
+    return False
+
+
 def _should_repair(snapshot: Any) -> bool:
+    if _current_refresh_used_fallback():
+        return False
     try:
         real_capital = float(getattr(snapshot, "real_capital", 0.0) or 0.0)
         broker_count = int(getattr(snapshot, "broker_count", 0) or 0)
         broker_balances = dict(getattr(snapshot, "broker_balances", {}) or {})
-        fresh_ttl_s = float(getattr(__import__("bot.capital_flow_state_machine", fromlist=["FRESHNESS_TTL_S"]), "FRESHNESS_TTL_S", 90.0) or 90.0)
+        fresh_ttl_s = float(
+            getattr(
+                __import__("bot.capital_flow_state_machine", fromlist=["FRESHNESS_TTL_S"]),
+                "FRESHNESS_TTL_S",
+                90.0,
+            )
+            or 90.0
+        )
     except Exception:
         return False
 
@@ -106,13 +126,25 @@ def install_import_hook() -> bool:
             @functools.wraps(current_init)
             def _init_with_current_freshness(self: Any, *args: Any, **kwargs: Any) -> None:
                 current_init(self, *args, **kwargs)
+                if _current_refresh_used_fallback():
+                    object.__setattr__(self, "is_fresh", False)
+                    object.__setattr__(self, "is_stale", True)
+                    logger.warning(
+                        "CURRENT_CAPITAL_SNAPSHOT_CACHE_FALLBACK_STALE marker=%s "
+                        "real=%.2f broker_count=%s",
+                        _MARKER,
+                        float(getattr(self, "real_capital", 0.0) or 0.0),
+                        getattr(self, "broker_count", "unknown"),
+                    )
+                    return
                 if not _should_repair(self):
                     return
                 object.__setattr__(self, "is_fresh", True)
                 object.__setattr__(self, "is_stale", False)
                 object.__setattr__(self, "snapshot_age_s", 0.0)
                 logger.warning(
-                    "CURRENT_CAPITAL_SNAPSHOT_FRESHNESS_REPAIRED marker=%s real=%.2f broker_count=%s confidence=%s",
+                    "CURRENT_CAPITAL_SNAPSHOT_FRESHNESS_REPAIRED marker=%s "
+                    "real=%.2f broker_count=%s confidence=%s",
                     _MARKER,
                     float(getattr(self, "real_capital", 0.0) or 0.0),
                     getattr(self, "broker_count", "unknown"),
