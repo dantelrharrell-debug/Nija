@@ -36,6 +36,31 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
     return parsed if parsed == parsed else default
 
 
+def _position_payload_entry_price(
+    position: Optional[Dict],
+    broker_quantity: float,
+) -> Tuple[float, str]:
+    """Return broker-native cost basis carried by the position payload."""
+
+    if not isinstance(position, dict):
+        return 0.0, ""
+    for key in (
+        "entry_price",
+        "average_entry_price",
+        "avg_entry_price",
+        "avg_price",
+        "cost_basis_price",
+    ):
+        price = _safe_float(position.get(key))
+        if price > 0:
+            return price, "broker_position"
+    for key in ("cost_basis", "cost_basis_usd", "total_cost", "executed_cost"):
+        total_cost = _safe_float(position.get(key))
+        if total_cost > 0 and broker_quantity > 0:
+            return total_cost / broker_quantity, "broker_position"
+    return 0.0, ""
+
+
 def _legacy_duplicate_snapshot_detected(
     existing: Optional[Dict],
     broker_quantity: float,
@@ -65,8 +90,17 @@ def _resolve_entry_price(
     eps: Optional[Any],
     broker_quantity: float,
     existing: Optional[Dict] = None,
+    position: Optional[Dict] = None,
 ) -> Tuple[float, str]:
-    """Resolve a trustworthy cost-basis price without using current market price."""
+    """Resolve cost basis from broker-native evidence, never from market price."""
+
+    payload_price, payload_source = _position_payload_entry_price(
+        position,
+        broker_quantity,
+    )
+    if payload_price > 0:
+        return payload_price, payload_source
+
     if hasattr(broker, "get_real_entry_price"):
         try:
             price = _safe_float(broker.get_real_entry_price(symbol))
@@ -101,20 +135,26 @@ def _resolve_entry_price(
             stored = _safe_float(getattr(record, "price", None))
             source = str(getattr(record, "source", "override") or "override")
             stored_qty = _safe_float(getattr(record, "quantity", 0.0))
-            if stored > 0:
-                if source in {"execution", "api"}:
+            verified_sources = {
+                "execution", "api", "trade_history", "closed_orders", "fills",
+                "broker_position", "reconstructed_verified_cost_basis",
+            }
+            if stored > 0 and source.strip().lower() in verified_sources:
+                if stored_qty > 0 and broker_quantity > 0:
+                    relative_qty_error = abs(stored_qty - broker_quantity) / max(broker_quantity, 1e-12)
+                    if relative_qty_error > 0.05:
+                        logger.warning(
+                            "EXCHANGE_POSITION_SYNC stale_verified_record_ignored "
+                            "symbol=%s stored_qty=%.8f broker_qty=%.8f source=%s",
+                            symbol,
+                            stored_qty,
+                            broker_quantity,
+                            source,
+                        )
+                    else:
+                        return stored, source
+                else:
                     return stored, source
-                if stored_qty <= 0 or broker_quantity <= 0:
-                    return stored, source
-                relative_qty_error = abs(stored_qty - broker_quantity) / max(broker_quantity, 1e-12)
-                if relative_qty_error <= 0.05:
-                    return stored, source
-                logger.warning(
-                    "EXCHANGE_POSITION_SYNC stale_override_ignored symbol=%s stored_qty=%.8f broker_qty=%.8f",
-                    symbol,
-                    stored_qty,
-                    broker_quantity,
-                )
         except Exception as exc:
             logger.debug("startup_position_sync: EntryPriceStore lookup failed for %s: %s", symbol, exc)
 
@@ -206,6 +246,7 @@ def _adopt_broker_positions(broker: Any, broker_name: str, eps: Optional[Any]) -
                 eps,
                 quantity,
                 existing,
+                position=pos,
             )
             changed = _position_changed(existing, quantity, entry_price)
 
