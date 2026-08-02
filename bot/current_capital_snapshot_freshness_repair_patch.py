@@ -1,10 +1,10 @@
 """Repair freshness only for confirmed current live-broker snapshots.
 
 The coordinator historically derives a new snapshot's freshness from the prior
-authority snapshot age. This patch repairs that inherited stale flag only when
-the current refresh completed without a timeout fallback. If any venue supplied
-cached capital, the new snapshot remains explicitly stale and cannot be promoted
-to current live-exchange data.
+authority snapshot age. This patch repairs that inherited stale flag when the
+current refresh uses live values or a cached value backed by a successful live
+observation inside the configured freshness TTL. Unknown or expired cached
+capital remains explicitly stale and cannot be promoted.
 """
 from __future__ import annotations
 
