@@ -4,7 +4,7 @@ import types
 import unittest
 from unittest.mock import patch
 
-import capital_refresh_stall_guard_v35 as guard
+from bot import capital_refresh_stall_guard_v35 as guard
 
 
 class _Broker:
