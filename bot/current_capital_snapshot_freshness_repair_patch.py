@@ -18,7 +18,7 @@ from typing import Any
 
 logger = logging.getLogger("nija.current_capital_snapshot_freshness_repair")
 
-_MARKER = "20260802-current-capital-snapshot-freshness-v2"
+_MARKER = "20260802-current-capital-snapshot-freshness-v3"
 _TRUE = {"1", "true", "yes", "on", "enabled", "y"}
 _LOCK = threading.RLock()
 _INSTALLED = False
@@ -55,23 +55,47 @@ def _broker_threshold(snapshot: Any) -> int:
         return 1
 
 
-def _current_refresh_used_fallback() -> bool:
+def _current_refresh_fallback_status() -> dict[str, Any]:
     for name in (
         "bot.capital_refresh_stall_guard_v35",
         "capital_refresh_stall_guard_v35",
     ):
         module = sys.modules.get(name)
+        status_getter = getattr(module, "current_refresh_fallback_status", None)
+        if callable(status_getter):
+            try:
+                return dict(status_getter())
+            except Exception:
+                return {
+                    "used_fallback": True,
+                    "all_recent": False,
+                    "brokers": {},
+                }
         checker = getattr(module, "current_refresh_used_fallback", None)
         if callable(checker):
             try:
-                return bool(checker())
+                used = bool(checker())
             except Exception:
-                return True
-    return False
+                used = True
+            return {
+                "used_fallback": used,
+                "all_recent": False,
+                "brokers": {},
+            }
+    return {
+        "used_fallback": False,
+        "all_recent": True,
+        "brokers": {},
+    }
+
+
+def _current_refresh_requires_stale() -> bool:
+    status = _current_refresh_fallback_status()
+    return bool(status.get("used_fallback") and not status.get("all_recent"))
 
 
 def _should_repair(snapshot: Any) -> bool:
-    if _current_refresh_used_fallback():
+    if _current_refresh_requires_stale():
         return False
     try:
         real_capital = float(getattr(snapshot, "real_capital", 0.0) or 0.0)
@@ -126,15 +150,20 @@ def install_import_hook() -> bool:
             @functools.wraps(current_init)
             def _init_with_current_freshness(self: Any, *args: Any, **kwargs: Any) -> None:
                 current_init(self, *args, **kwargs)
-                if _current_refresh_used_fallback():
+                fallback_status = _current_refresh_fallback_status()
+                if bool(
+                    fallback_status.get("used_fallback")
+                    and not fallback_status.get("all_recent")
+                ):
                     object.__setattr__(self, "is_fresh", False)
                     object.__setattr__(self, "is_stale", True)
                     logger.warning(
                         "CURRENT_CAPITAL_SNAPSHOT_CACHE_FALLBACK_STALE marker=%s "
-                        "real=%.2f broker_count=%s",
+                        "real=%.2f broker_count=%s fallback_brokers=%s",
                         _MARKER,
                         float(getattr(self, "real_capital", 0.0) or 0.0),
                         getattr(self, "broker_count", "unknown"),
+                        fallback_status.get("brokers", {}),
                     )
                     return
                 if not _should_repair(self):
@@ -144,11 +173,12 @@ def install_import_hook() -> bool:
                 object.__setattr__(self, "snapshot_age_s", 0.0)
                 logger.warning(
                     "CURRENT_CAPITAL_SNAPSHOT_FRESHNESS_REPAIRED marker=%s "
-                    "real=%.2f broker_count=%s confidence=%s",
+                    "real=%.2f broker_count=%s confidence=%s fallback_recent=%s",
                     _MARKER,
                     float(getattr(self, "real_capital", 0.0) or 0.0),
                     getattr(self, "broker_count", "unknown"),
                     getattr(getattr(self, "confidence", None), "band", "unknown"),
+                    bool(fallback_status.get("used_fallback")),
                 )
 
             setattr(_init_with_current_freshness, "_nija_current_snapshot_freshness_repair", True)
