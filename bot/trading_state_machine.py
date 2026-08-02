@@ -495,10 +495,11 @@ def _distributed_writer_authority_gate() -> tuple[bool, str]:
 
 
 def _nonce_writer_lease_gate() -> tuple[bool, str]:
-    """Verify nonce writer lease ownership for the platform Kraken key.
+    """Verify and, when safe, wait for the platform Kraken nonce lease.
 
-    This prevents LIVE activation when a stale/foreign process still owns the
-    Redis nonce lease for the same API key (split-brain protection).
+    A lease owned by this process is allowed to mature for a bounded interval.
+    Ownership errors, missing Redis state, and exhausted wait budgets remain
+    fail-closed; no activation gate is bypassed.
     """
     if not _env_truthy("NIJA_ENFORCE_NONCE_WRITER_LEASE", "true"):
         return True, ""
@@ -508,7 +509,6 @@ def _nonce_writer_lease_gate() -> tuple[bool, str]:
         or os.environ.get("KRAKEN_API_KEY", "").strip()
     )
     if not platform_key:
-        # No Kraken platform key configured in this process; nothing to verify.
         return True, ""
     if not _kraken_nonce_gates_required():
         logger.info(
@@ -517,10 +517,20 @@ def _nonce_writer_lease_gate() -> tuple[bool, str]:
         return True, ""
 
     retries = max(1, int(os.environ.get("NIJA_NONCE_LEASE_RETRIES", "3") or "3"))
-    retry_delay_s = max(0.0, float(os.environ.get("NIJA_NONCE_LEASE_RETRY_DELAY_S", "0.20") or "0.20"))
+    retry_delay_s = max(
+        0.0,
+        float(os.environ.get("NIJA_NONCE_LEASE_RETRY_DELAY_S", "0.20") or "0.20"),
+    )
+    max_wait_s = max(
+        0.0,
+        float(os.environ.get("NIJA_NONCE_LEASE_STABILITY_MAX_WAIT_S", "35") or "35"),
+    )
+    started = time.monotonic()
     last_err = ""
+    unstable_err = ""
+    failures = 0
 
-    for attempt in range(retries):
+    while True:
         try:
             try:
                 from bot.distributed_nonce_manager import (
@@ -540,49 +550,79 @@ def _nonce_writer_lease_gate() -> tuple[bool, str]:
             manager = get_distributed_nonce_manager()
             manager.ensure_writer_lock(key_id)
             status_fn = getattr(manager, "get_writer_lease_status", None)
-            if callable(status_fn):
-                status = status_fn(key_id)
-                if isinstance(status, dict):
-                    token = status.get("token")
-                    if token is not None and str(token).strip():
-                        setattr(manager, "fencing_token", str(token).strip())
+            status = status_fn(key_id) if callable(status_fn) else None
+            if not isinstance(status, dict):
+                raise RuntimeError("nonce lease stability status unavailable")
+
+            status_error = str(status.get("error") or "").strip()
+            if status_error:
+                raise RuntimeError(f"nonce lease status error: {status_error}")
+            if status.get("enabled") is False:
+                return True, ""
+
+            token = status.get("token")
+            if token is not None and str(token).strip():
+                setattr(manager, "fencing_token", str(token).strip())
+
             stability_required_s = _nonce_lease_stability_requirement_s()
-            if stability_required_s > 0:
-                status = None
-                status_fn = getattr(manager, "get_writer_lease_status", None)
-                if callable(status_fn):
-                    status = status_fn(key_id)
-                if not isinstance(status, dict):
-                    raise RuntimeError("nonce lease stability status unavailable")
-                if status.get("enabled") is False:
-                    return True, ""
-                stable_for = status.get("stable_for_s")
-                if not isinstance(stable_for, (int, float)):
-                    stable_for = 0.0
-                if stable_for < stability_required_s:
-                    token = status.get("token")
-                    owner = status.get("owner_instance") or status.get("owner_id") or "<unknown>"
-                    raise RuntimeError(
-                        "nonce lease unstable "
-                        f"(stable_for={stable_for:.1f}s required={stability_required_s:.1f}s "
-                        f"token={token} owner={owner})"
-                    )
-            return True, ""
+            stable_for = status.get("stable_for_s")
+            if stability_required_s <= 0:
+                return True, ""
+            if not isinstance(stable_for, (int, float)):
+                stable_for = 0.0
+            if float(stable_for) >= stability_required_s:
+                return True, ""
+
+            owner = status.get("owner_instance") or status.get("owner_id") or "<unknown>"
+            remaining_s = max(0.0, stability_required_s - float(stable_for))
+            unstable_err = (
+                "nonce lease unstable "
+                f"(stable_for={float(stable_for):.1f}s required={stability_required_s:.1f}s "
+                f"token={token} owner={owner})"
+            )
+            wait_budget_s = max(0.0, max_wait_s - (time.monotonic() - started))
+            if wait_budget_s <= 0:
+                last_err = unstable_err
+                break
+
+            sleep_s = min(
+                max(retry_delay_s, remaining_s + 0.10),
+                5.0,
+                wait_budget_s,
+            )
+            logger.warning(
+                "[NONCE LEASE WAITING] activation deferred while same-owner Redis "
+                "nonce lease matures stable_for=%.1fs required=%.1fs remaining=%.1fs "
+                "token=%s owner=%s sleep=%.2fs budget_remaining=%.2fs",
+                float(stable_for),
+                stability_required_s,
+                remaining_s,
+                token,
+                owner,
+                sleep_s,
+                wait_budget_s,
+            )
+            time.sleep(sleep_s)
         except Exception as exc:
+            failures += 1
             last_err = str(exc)
-            if attempt < retries - 1 and retry_delay_s > 0:
-                time.sleep(retry_delay_s)
+            if failures >= retries:
+                break
+            wait_budget_s = max(0.0, max_wait_s - (time.monotonic() - started))
+            if wait_budget_s <= 0:
+                break
+            time.sleep(min(retry_delay_s, wait_budget_s))
 
-    # Hard fail — no fail-open for transient Redis errors.
-    # Nonce lease is a mandatory safety gate; Redis unavailability blocks activation.
     err = (
-        f"LIVE TRADING BLOCKED: nonce writer lease verification failed "
-        f"after {retries} attempt(s). Redis nonce lease is required before "
-        f"LIVE_ACTIVE is permitted. last_error={last_err}"
+        "LIVE TRADING BLOCKED: nonce writer lease verification deferred/failed "
+        f"after {failures} failure(s). Redis nonce lease is required before "
+        f"LIVE_ACTIVE is permitted. last_error={last_err or unstable_err}"
     )
-    logger.critical("[NONCE LEASE HARD FAIL] %s", err)
+    if "nonce lease unstable" in (last_err or unstable_err):
+        logger.warning("[NONCE LEASE WAITING] %s", err)
+    else:
+        logger.critical("[NONCE LEASE HARD FAIL] %s", err)
     return False, err
-
 
 def _nonce_lease_stability_requirement_s() -> float:
     """Return required lease stability window in seconds (0 disables)."""
