@@ -437,6 +437,12 @@ class CostBasisReconciler:
             if pos.get("cost_basis_verified") is True:
                 logger.debug("COST_BASIS_RECONCILER_SKIP_VERIFIED symbol=%s", symbol)
                 continue
+            if pos.get("classification") == "DUST" or pos.get("exclude_from_reconciliation") is True:
+                logger.info("COST_BASIS_RECONCILER_SKIP_DUST symbol=%s", symbol)
+                continue
+            if pos.get("position_adoption_timestamp"):
+                logger.info("COST_BASIS_RECONCILER_SKIP_ADOPTED symbol=%s", symbol)
+                continue
             unverified[symbol] = pos
 
         return unverified
@@ -487,6 +493,22 @@ class CostBasisReconciler:
             return self._adopt_position(symbol, position, reason=f"fill_fetch_exception: {exc}")
 
         if not fills:
+            _qty_from_orders, _vwap_from_orders, _orders_used = self._recover_vwap_from_historical_orders(symbol)
+            if _vwap_from_orders > 0 and _qty_from_orders + max(1e-8, qty * 0.02) >= qty:
+                self._persist_verified(symbol, _vwap_from_orders, qty, _orders_used)
+                return ReconciliationResult(
+                    symbol=symbol,
+                    status="verified",
+                    entry_price=_vwap_from_orders,
+                    quantity=qty,
+                    fills_used=_orders_used,
+                    adoption_policy="",
+                    auto_exit_blocked=False,
+                    details=(
+                        f"vwap={_vwap_from_orders:.8f} reconstructed_qty={_qty_from_orders:.8f} "
+                        f"source=historical_orders orders={_orders_used} broker={self._broker_name}"
+                    ),
+                )
             return self._adopt_position(symbol, position, reason="no_fill_history_returned")
 
         reconstructed_qty, vwap = _reconstruct_vwap(fills)
@@ -499,6 +521,22 @@ class CostBasisReconciler:
                 "held_qty=%.8f history_qty=%.8f fills=%d",
                 symbol, qty, reconstructed_qty, len(fills),
             )
+            _qty_from_orders, _vwap_from_orders, _orders_used = self._recover_vwap_from_historical_orders(symbol)
+            if _vwap_from_orders > 0 and _qty_from_orders + tolerance >= qty:
+                self._persist_verified(symbol, _vwap_from_orders, qty, _orders_used)
+                return ReconciliationResult(
+                    symbol=symbol,
+                    status="verified",
+                    entry_price=_vwap_from_orders,
+                    quantity=qty,
+                    fills_used=_orders_used,
+                    adoption_policy="",
+                    auto_exit_blocked=False,
+                    details=(
+                        f"vwap={_vwap_from_orders:.8f} reconstructed_qty={_qty_from_orders:.8f} "
+                        f"source=historical_orders orders={_orders_used} broker={self._broker_name}"
+                    ),
+                )
             return self._adopt_position(
                 symbol, position,
                 reason=(
@@ -587,6 +625,9 @@ class CostBasisReconciler:
                     existing.update({
                         "position_adoption_timestamp": now,
                         "position_adoption_price": adoption_price,
+                        "adoption_timestamp": now,
+                        "adoption_price": adoption_price,
+                        "adopted_position": True,
                         "position_adoption_source": "market_price",
                         "position_adoption_reason": reason,
                         "position_adoption_policy": policy,
@@ -616,6 +657,80 @@ class CostBasisReconciler:
             auto_exit_blocked=auto_blocked,
             details=f"reason={reason} policy={policy}",
         )
+
+    def _recover_vwap_from_historical_orders(self, symbol: str) -> Tuple[float, float, int]:
+        """Fallback recovery pipeline using historical orders when fills are unavailable."""
+        order_rows: List[Mapping[str, Any]] = []
+        candidate_methods = ("get_orders", "get_order_history", "fetch_orders", "list_orders")
+        for method_name in candidate_methods:
+            method = getattr(self._broker, method_name, None)
+            if not callable(method):
+                continue
+            try:
+                try:
+                    payload = method(symbol=symbol)
+                except TypeError:
+                    payload = method(symbol)
+                if isinstance(payload, Mapping):
+                    for key in ("orders", "data", "result"):
+                        maybe = payload.get(key)
+                        if isinstance(maybe, list):
+                            order_rows.extend([row for row in maybe if isinstance(row, Mapping)])
+                            break
+                elif isinstance(payload, list):
+                    order_rows.extend([row for row in payload if isinstance(row, Mapping)])
+            except Exception as exc:
+                logger.debug("COST_BASIS_RECONCILER_ORDER_HISTORY_ERROR symbol=%s method=%s error=%s", symbol, method_name, exc)
+            if order_rows:
+                break
+
+        fills: List[FillRecord] = []
+        for row in order_rows:
+            try:
+                side = str(row.get("side") or row.get("action") or "").strip().lower()
+                status = str(row.get("status") or row.get("state") or "").strip().lower()
+                if status and status not in {"closed", "filled", "done", "executed"}:
+                    continue
+                qty = float(
+                    row.get("filled_size")
+                    or row.get("filled_qty")
+                    or row.get("size")
+                    or row.get("quantity")
+                    or 0.0
+                )
+                price = float(
+                    row.get("average_price")
+                    or row.get("avg_price")
+                    or row.get("fill_price")
+                    or row.get("price")
+                    or 0.0
+                )
+                if qty > 0 and price > 0 and side in {"buy", "sell"}:
+                    fills.append(
+                        FillRecord(
+                            timestamp=float(row.get("timestamp") or row.get("ts") or 0.0),
+                            side=side,
+                            quantity=qty,
+                            price=price,
+                            fee=float(row.get("fee") or 0.0),
+                            order_id=str(row.get("id") or row.get("order_id") or ""),
+                        )
+                    )
+            except Exception:
+                continue
+        fills.sort(key=lambda x: x.timestamp)
+        if not fills:
+            return 0.0, 0.0, 0
+        qty_held, vwap = _reconstruct_vwap(fills)
+        logger.info(
+            "COST_BASIS_RECONCILER_ORDER_HISTORY_RECOVERY symbol=%s broker=%s orders=%d qty=%.8f vwap=%.8f",
+            symbol,
+            self._broker_name,
+            len(fills),
+            qty_held,
+            vwap,
+        )
+        return qty_held, vwap, len(fills)
 
 
 # ---------------------------------------------------------------------------

@@ -302,6 +302,56 @@ class DustPositionFilter:
         )
 
 
+class DustPositionManager:
+    """Classify positions and apply dust exclusion flags."""
+
+    def __init__(self, threshold_usd: Optional[float] = None) -> None:
+        self.threshold_usd = (
+            float(threshold_usd)
+            if threshold_usd is not None
+            else _env_float(_ENV_DUST_THRESHOLD, _DEFAULT_DUST_USD)
+        )
+        self._filter = DustPositionFilter(dust_threshold_usd=self.threshold_usd)
+
+    def classify(
+        self,
+        symbol: str,
+        position: Dict[str, Any],
+        price_usd: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        is_dust = self._filter.is_dust_position(position, price_usd=price_usd)
+        value_usd = float(position.get("size_usd") or 0.0)
+        if price_usd and float(position.get("quantity") or 0.0) > 0:
+            value_usd = float(position.get("quantity") or 0.0) * float(price_usd)
+        payload = {
+            "classification": "DUST" if is_dust else "ACTIVE",
+            "position_value_usd": value_usd,
+            "dust_threshold_usd": self.threshold_usd,
+            "exclude_from_reconciliation": bool(is_dust),
+            "exclude_from_auto_exit": bool(is_dust),
+            "exclude_from_strategy": bool(is_dust),
+            "exclude_from_position_limit": bool(is_dust),
+        }
+        if is_dust:
+            logger.info(
+                "DUST_CLASSIFIED symbol=%s classification=DUST position_value_usd=%.8f threshold_usd=%.2f",
+                symbol,
+                value_usd,
+                self.threshold_usd,
+            )
+        return payload
+
+    def apply_to_position(
+        self,
+        symbol: str,
+        position: Dict[str, Any],
+        price_usd: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        enriched = dict(position)
+        enriched.update(self.classify(symbol, enriched, price_usd=price_usd))
+        return enriched
+
+
 # ---------------------------------------------------------------------------
 # Module-level convenience functions
 # ---------------------------------------------------------------------------
@@ -352,6 +402,7 @@ def get_active_positions(
 
 __all__ = [
     "DustPositionFilter",
+    "DustPositionManager",
     "DustRecord",
     "DustFilterReport",
     "is_dust_position",

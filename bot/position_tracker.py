@@ -22,6 +22,10 @@ try:
     ENTRY_PRICE_STORE_AVAILABLE = True
 except Exception:
     ENTRY_PRICE_STORE_AVAILABLE = False
+try:
+    from bot.dust_position_filter import DustPositionManager
+except Exception:
+    DustPositionManager = None  # type: ignore
 
 _VERIFIED_SOURCES = {
     "api", "execution", "trade_history", "closed_orders", "fills",
@@ -40,6 +44,7 @@ class PositionTracker:
         self.storage_file = os.path.abspath(storage_file)
         self.positions: Dict[str, Dict] = {}
         self.lock = Lock()
+        self._dust_manager = DustPositionManager() if DustPositionManager is not None else None
         self._load_positions()
         self._eps = get_entry_price_store() if ENTRY_PRICE_STORE_AVAILABLE else None
         logger.info("PositionTracker initialized: %d tracked positions", len(self.positions))
@@ -284,6 +289,17 @@ class PositionTracker:
                     "last_broker_snapshot_value_usd": broker_value,
                     "last_broker_snapshot_price": current_price,
                 }
+                if self._dust_manager is not None:
+                    try:
+                        self.positions[symbol].update(
+                            self._dust_manager.classify(
+                                symbol,
+                                self.positions[symbol],
+                                price_usd=current_price if current_price > 0 else None,
+                            )
+                        )
+                    except Exception as _dust_exc:
+                        logger.debug("Dust classification skipped for %s: %s", symbol, _dust_exc)
                 self._save_positions()
 
             changed = (
@@ -302,10 +318,19 @@ class PositionTracker:
             if verified:
                 self._persist_entry_price(symbol, effective_entry, quantity, effective_source)
             else:
-                logger.critical(
-                    "POSITION_COST_BASIS_RECONCILIATION_REQUIRED symbol=%s qty=%.8f adoption_mark=$%.8f source=%s auto_exit_blocked=true",
-                    symbol, quantity, effective_entry, effective_source,
-                )
+                _is_dust = bool(self.positions.get(symbol, {}).get("classification") == "DUST")
+                if _is_dust:
+                    logger.info(
+                        "POSITION_COST_BASIS_RECONCILIATION_SKIPPED_DUST symbol=%s qty=%.8f source=%s threshold_policy=dust",
+                        symbol,
+                        quantity,
+                        effective_source,
+                    )
+                else:
+                    logger.critical(
+                        "POSITION_COST_BASIS_RECONCILIATION_REQUIRED symbol=%s qty=%.8f adoption_mark=$%.8f source=%s auto_exit_blocked=true",
+                        symbol, quantity, effective_entry, effective_source,
+                    )
             return True
         except Exception as exc:
             logger.error("Error synchronizing broker snapshot for %s: %s", symbol, exc)
