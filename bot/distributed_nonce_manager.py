@@ -155,6 +155,7 @@ import logging
 import os
 import random
 import socket
+import sys
 import threading
 import time
 import uuid
@@ -175,6 +176,13 @@ except ImportError:
             return
 
 _logger = logging.getLogger(__name__)
+
+# Keep both supported import paths bound to one module so the process owns a
+# single nonce-manager singleton and one continuous lease-stability clock.
+if __name__ == "bot.distributed_nonce_manager":
+    sys.modules.setdefault("distributed_nonce_manager", sys.modules[__name__])
+elif __name__ == "distributed_nonce_manager":
+    sys.modules.setdefault("bot.distributed_nonce_manager", sys.modules[__name__])
 
 
 def _env_true(name: str, default: str = "0") -> bool:

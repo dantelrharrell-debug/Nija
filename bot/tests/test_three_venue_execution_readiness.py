@@ -115,6 +115,7 @@ def test_one_ready_venue_enables_execution_independently(monkeypatch) -> None:
     assert result["ready_venues"] == ["kraken"]
     assert result["degraded_venues"] == ["coinbase", "okx"]
     assert result["venues"]["kraken"]["ready"] is True
+    assert result["venues"]["kraken"]["activation_state"] == "ready"
     assert result["venues"]["coinbase"]["ready"] is False
     assert result["venues"]["okx"]["ready"] is False
 
@@ -267,6 +268,54 @@ def test_publish_sets_independent_compatibility_flags(monkeypatch) -> None:
     assert os.environ["NIJA_ANY_VENUE_EXECUTION_READY"] == "1"
     assert os.environ["NIJA_EXECUTION_READY_VENUES"] == "kraken"
     assert os.environ["NIJA_EXECUTION_DEGRADED_VENUES"] == "coinbase,okx"
+    assert os.environ["NIJA_KRAKEN_ACTIVATION_STATE"] == "ready"
+    assert os.environ["NIJA_KRAKEN_TRADING_READY"] == "1"
+    assert os.environ["NIJA_KRAKEN_ACTIVATED"] == "1"
+
+
+def test_kraken_activation_flags_clear_when_any_stage_fails(monkeypatch) -> None:
+    module = _module()
+    monkeypatch.setattr(
+        module,
+        "evaluate_all",
+        lambda: {
+            "marker": module.MARKER,
+            "timestamp": 1.0,
+            "pid": 1,
+            "writer_ready": True,
+            "capital_ready": True,
+            "any_venue_ready": False,
+            "all_venues_ready": False,
+            "execution_ready": False,
+            "three_venue_execution_ready": False,
+            "ready_venues": [],
+            "degraded_venues": ["kraken", "coinbase", "okx"],
+            "venues": {
+                venue: {
+                    "credentials_loaded": True,
+                    "authentication_succeeded": venue != "kraken",
+                    "balance_fetched": True,
+                    "market_metadata_loaded": True,
+                    "order_adapter_initialized": True,
+                    "venue_marked_ready": venue != "kraken",
+                    "eligible_for_execution": False,
+                    "spendable_quote": 0.0,
+                    "activation_state": "not_ready",
+                    "reason": "not_execution_eligible",
+                    "ready": False,
+                }
+                for venue in module.VENUES
+            },
+        },
+    )
+    monkeypatch.setattr(module, "_write_state", lambda payload: None)
+    monkeypatch.setattr(module, "_LAST_SIGNATURE", "")
+
+    module.publish_once(force=True)
+
+    assert os.environ["NIJA_KRAKEN_ACTIVATION_STATE"] == "not_ready"
+    assert os.environ["NIJA_KRAKEN_TRADING_READY"] == "0"
+    assert os.environ["NIJA_KRAKEN_ACTIVATED"] == "0"
 
 
 def test_source_bootstrap_installs_definitive_verifier() -> None:

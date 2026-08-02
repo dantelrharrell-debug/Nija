@@ -443,6 +443,12 @@ def evaluate_venue(
         and _manager_marks_eligible(manager, broker_module, venue, broker)
     )
 
+    # Kraken is the primary venue and has no secondary-activation handshake.
+    # Its activation state is therefore derived from the same complete,
+    # fail-closed stage contract used to determine execution eligibility.
+    if venue == "kraken":
+        activation = "ready" if eligible else "not_ready"
+
     reasons = [
         reason
         for reason in (
@@ -546,6 +552,10 @@ def publish_once(*, force: bool = False) -> dict[str, Any]:
     os.environ["NIJA_ANY_VENUE_EXECUTION_READY"] = "1" if enabled else "0"
     os.environ["NIJA_EXECUTION_READY_VENUES"] = ready_csv
     os.environ["NIJA_EXECUTION_DEGRADED_VENUES"] = degraded_csv
+    kraken_ready = bool(payload["venues"]["kraken"]["ready"])
+    os.environ["NIJA_KRAKEN_ACTIVATION_STATE"] = "ready" if kraken_ready else "not_ready"
+    os.environ["NIJA_KRAKEN_TRADING_READY"] = "1" if kraken_ready else "0"
+    os.environ["NIJA_KRAKEN_ACTIVATED"] = "1" if kraken_ready else "0"
     os.environ["NIJA_THREE_VENUE_STAGE_VERIFIER_MARKER"] = MARKER
     _write_state(payload)
 
