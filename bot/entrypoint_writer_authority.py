@@ -7,7 +7,10 @@ created or inspected.  This module provides that missing ordering contract.
 Safety properties
 -----------------
 * Redis lock acquisition is atomic (Lua + SET under one Redis transaction).
-* An active holder is never force-deleted by this module.
+* An active holder is never force-deleted unless its metadata heartbeat is
+  detectably stale (age >= NIJA_WRITER_STALE_LOCK_THRESHOLD_S, default 2x TTL).
+* Stale-lock reclaim is a compare-and-delete: only the exact stale value read
+  before the reclaim is deleted, so a racing live writer is never evicted.
 * The process remains fail-closed in standby while Redis/lock authority is
   unavailable.
 * Heartbeat renewal verifies exact lock ownership before extending the TTL.
@@ -18,6 +21,18 @@ Safety properties
 * Local fallback is available only through the explicit operator flags
   ``NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK`` and
   ``NIJA_CONFIRM_BYPASS_RISKS``.
+
+Structured log events emitted
+------------------------------
+WRITER_ELECTION_STARTED       – standby loop begins trying to acquire authority
+LOCK_ACQUIRED                 – this instance successfully holds the writer lock
+HEARTBEAT_RENEWED             – periodic heartbeat successfully extended the lease
+STALE_LOCK_DETECTED           – current lock holder's heartbeat is past threshold
+FORCED_RECOVERY               – stale lock was evicted; this instance takes over
+ACTIVE_WRITER_TRANSITION      – a new writer is now active (emitted on every
+                                acquisition, including post-recovery takeovers)
+SCAN_STARTED_RECORDED         – trading scan loop emitted its first SCAN_STARTED
+SCAN_STARTED_DEADLINE_EXCEEDED – scan did not start within the expected window
 """
 
 from __future__ import annotations
@@ -160,6 +175,8 @@ class EntrypointWriterAuthority:
         self._instance_id = ""
         self._acquired_at = 0.0
         self._local_fallback = False
+        self._scan_started_at = 0.0
+        self._scan_started_watchdog_thread: Optional[threading.Thread] = None
 
     @property
     def acquired(self) -> bool:
@@ -200,6 +217,14 @@ class EntrypointWriterAuthority:
         last_result = EntrypointWriterAuthorityResult(
             acquired=False,
             error="not_attempted",
+        )
+
+        logger.critical(
+            "WRITER_ELECTION_STARTED marker=%s standby_limit_s=%.0f retry_s=%.1f pid=%d",
+            _MARKER,
+            standby_limit_s,
+            retry_s,
+            os.getpid(),
         )
 
         while True:
@@ -304,6 +329,11 @@ class EntrypointWriterAuthority:
             retry_s = _cfg_float(
                 "NIJA_ENTRYPOINT_WRITER_LOCK_RETRY_S", 0.5, minimum=0.1
             )
+            stale_threshold_s = _cfg_float(
+                "NIJA_WRITER_STALE_LOCK_THRESHOLD_S",
+                max(ttl_s * 2.0, 120.0),
+                minimum=30.0,
+            )
             deadline = time.monotonic() + wait_s
             holder = ""
             pttl_ms = -2
@@ -361,6 +391,33 @@ class EntrypointWriterAuthority:
                         ttl_s=ttl_s,
                     )
 
+                # Lock is held.  Check whether the holder's heartbeat is stale;
+                # if so, forcibly reclaim the lock on behalf of this instance.
+                stale, stale_detail = self._check_stale_lock(
+                    client, meta_key, holder, stale_threshold_s
+                )
+                if stale:
+                    logger.critical(
+                        "STALE_LOCK_DETECTED marker=%s holder=%s "
+                        "stale_detail=%s pttl_ms=%s instance=%s",
+                        _MARKER,
+                        holder,
+                        stale_detail,
+                        pttl_ms,
+                        instance_id,
+                    )
+                    reclaimed = self._force_reclaim_stale_lock(
+                        client, lock_key, meta_key, holder
+                    )
+                    if reclaimed:
+                        logger.critical(
+                            "FORCED_RECOVERY marker=%s old_holder=%s instance=%s",
+                            _MARKER,
+                            holder,
+                            instance_id,
+                        )
+                        continue  # Retry acquire immediately after eviction
+
                 if time.monotonic() >= deadline:
                     return EntrypointWriterAuthorityResult(
                         acquired=False,
@@ -378,6 +435,83 @@ class EntrypointWriterAuthority:
             return _cfg_int("NIJA_WRITER_LOCK_TTL_S", 60, minimum=15)
         lease_ms = _cfg_int("NIJA_REDIS_LEASE_TTL_MS", 60000, minimum=15000)
         return max(15, int((lease_ms + 999) // 1000))
+
+    def _check_stale_lock(
+        self,
+        client: Any,
+        meta_key: str,
+        holder: str,
+        threshold_s: float,
+    ) -> tuple[bool, str]:
+        """Return (is_stale, detail) by inspecting the holder's heartbeat timestamp.
+
+        The check reads the metadata key written by the current lock holder
+        during each heartbeat tick.  If the ``heartbeat_at`` field is older
+        than *threshold_s* seconds the holder is considered stale (crashed or
+        frozen).  A missing or unparseable metadata entry is treated as
+        *not* stale to avoid false evictions.
+        """
+        if not meta_key:
+            return False, "no_meta_key"
+        try:
+            meta_raw = client.get(meta_key)
+        except Exception as exc:
+            return False, f"meta_read_error:{type(exc).__name__}:{exc}"
+        if not meta_raw:
+            return False, "no_metadata"
+        try:
+            meta = json.loads(meta_raw)
+        except Exception:
+            return False, "meta_parse_error"
+        heartbeat_at = float(meta.get("heartbeat_at") or 0)
+        if heartbeat_at <= 0:
+            return False, "no_heartbeat_ts"
+        age_s = time.time() - heartbeat_at
+        if age_s >= threshold_s:
+            return True, f"heartbeat_age={age_s:.1f}s threshold={threshold_s:.1f}s"
+        return False, f"heartbeat_fresh age={age_s:.1f}s"
+
+    _STALE_RECLAIM_SCRIPT = """
+    local current = redis.call('GET', KEYS[1])
+    if not current then return 1 end
+    if current ~= ARGV[1] then return 0 end
+    redis.call('DEL', KEYS[1])
+    if KEYS[2] ~= '' then redis.call('DEL', KEYS[2]) end
+    return 1
+    """
+
+    def _force_reclaim_stale_lock(
+        self,
+        client: Any,
+        lock_key: str,
+        meta_key: str,
+        old_holder: str,
+    ) -> bool:
+        """Compare-and-delete the stale lock so only the exact stale value is evicted.
+
+        Returns True when the lock was deleted (or was already gone), False
+        when the holder changed between our staleness check and the delete
+        (another live writer took over in the interim).
+        """
+        try:
+            result = int(
+                client.eval(
+                    self._STALE_RECLAIM_SCRIPT,
+                    2,
+                    lock_key,
+                    meta_key or "",
+                    old_holder,
+                )
+                or 0
+            )
+            return result == 1
+        except Exception as exc:
+            logger.warning(
+                "ENTRYPOINT_WRITER_STALE_RECLAIM_FAILED marker=%s err=%s",
+                _MARKER,
+                exc,
+            )
+            return False
 
     @staticmethod
     def _as_text(value: Any) -> str:
@@ -418,6 +552,7 @@ class EntrypointWriterAuthority:
         self._lock_value = f"{token}:{owner}"
         self._ttl_s = ttl_s
         self._acquired_at = time.time()
+        self._scan_started_at = 0.0
         self._local_fallback = False
         self._lost.clear()
         self._stop.clear()
@@ -425,6 +560,24 @@ class EntrypointWriterAuthority:
         self._publish_env(scope=scope, generation_key=generation_key, fallback=False)
         self._write_metadata()
         self._start_heartbeat()
+        self._start_scan_started_watchdog()
+
+        logger.critical(
+            "LOCK_ACQUIRED marker=%s token_prefix=%s generation=%s instance=%s",
+            _MARKER,
+            token[:8],
+            generation,
+            instance_id,
+        )
+        logger.critical(
+            "ACTIVE_WRITER_TRANSITION marker=%s token_prefix=%s generation=%s "
+            "instance=%s acquired_at=%.3f",
+            _MARKER,
+            token[:8],
+            generation,
+            instance_id,
+            self._acquired_at,
+        )
 
         result = EntrypointWriterAuthorityResult(
             acquired=True,
@@ -559,6 +712,62 @@ class EntrypointWriterAuthority:
         )
         self._heartbeat_thread.start()
 
+    def record_scan_started(self) -> None:
+        """Record that the trading scan loop has emitted its first SCAN_STARTED.
+
+        Call this immediately after the scan loop emits ``SCAN_STARTED`` so
+        the startup-window watchdog can confirm timely scan commencement.
+        Idempotent — only the first call is recorded.
+        """
+        if self._scan_started_at:
+            return
+        self._scan_started_at = time.time()
+        elapsed = self._scan_started_at - self._acquired_at if self._acquired_at else 0.0
+        logger.info(
+            "SCAN_STARTED_RECORDED marker=%s elapsed_since_acquisition=%.1fs "
+            "instance=%s generation=%s",
+            _MARKER,
+            elapsed,
+            self._instance_id,
+            self._generation,
+        )
+
+    def _start_scan_started_watchdog(self) -> None:
+        """Start a daemon thread that warns if SCAN_STARTED is not recorded in time."""
+        if self._scan_started_watchdog_thread is not None and \
+                self._scan_started_watchdog_thread.is_alive():
+            return
+        deadline_s = _cfg_float("NIJA_SCAN_STARTED_DEADLINE_S", 300.0, minimum=30.0)
+        t = threading.Thread(
+            target=self._scan_started_watchdog_loop,
+            args=(deadline_s,),
+            name="entrypoint-scan-started-watchdog",
+            daemon=True,
+        )
+        t.start()
+        self._scan_started_watchdog_thread = t
+
+    def _scan_started_watchdog_loop(self, deadline_s: float) -> None:
+        acquired_at = self._acquired_at or time.time()
+        poll_interval = min(10.0, max(1.0, deadline_s / 10.0))
+        while not self._stop.is_set():
+            if self._scan_started_at:
+                return  # Scan started in time; watchdog duty fulfilled
+            elapsed = time.time() - acquired_at
+            if elapsed >= deadline_s:
+                logger.error(
+                    "SCAN_STARTED_DEADLINE_EXCEEDED marker=%s deadline_s=%.0f "
+                    "elapsed_since_acquisition=%.1fs writer_acquired=%s instance=%s",
+                    _MARKER,
+                    deadline_s,
+                    elapsed,
+                    self.acquired,
+                    self._instance_id,
+                )
+                return
+            remaining = (acquired_at + deadline_s) - time.time()
+            self._stop.wait(min(poll_interval, max(0.1, remaining)))
+
     def _heartbeat_loop(self) -> None:
         interval_s = _cfg_float(
             "NIJA_WRITER_HEARTBEAT_INTERVAL_S",
@@ -621,6 +830,12 @@ class EntrypointWriterAuthority:
                 os.environ["NIJA_WRITER_HEARTBEAT_LAST_TS"] = now
                 os.environ["NIJA_WRITER_HEARTBEAT_ALIVE_TS"] = now
                 os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"] = "1"
+                logger.debug(
+                    "HEARTBEAT_RENEWED marker=%s token_prefix=%s generation=%s",
+                    _MARKER,
+                    self._token[:8],
+                    self._generation,
+                )
                 return True, ""
             if code == -1:
                 reacquired = bool(
