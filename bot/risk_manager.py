@@ -38,17 +38,20 @@ except ImportError:
 
 # Import scalar helper for indicator conversions
 try:
-    from indicators import scalar
+    from bot.indicators import scalar
 except ImportError:
-    # Fallback if indicators.py is not available
-    def scalar(x):
-        if isinstance(x, (tuple, list)):
-            return float(x[0])
-        return float(x)
+    try:
+        from indicators import scalar
+    except ImportError:
+        # Fallback if indicators.py is not available
+        def scalar(x):
+            if isinstance(x, (tuple, list)):
+                return float(x[0])
+            return float(x)
 
 # Import fee-aware configuration
 try:
-    from fee_aware_config import (
+    from bot.fee_aware_config import (
         MIN_BALANCE_TO_TRADE,
         MICRO_ACCOUNT_THRESHOLD,
         get_position_size_pct,
@@ -60,10 +63,23 @@ try:
     FEE_AWARE_MODE = True
     logger.info("✅ Fee-aware configuration loaded - PROFITABILITY MODE ACTIVE")
 except ImportError:
-    FEE_AWARE_MODE = False
-    MIN_BALANCE_TO_TRADE = 10.0
-    MICRO_ACCOUNT_THRESHOLD = 5.0
-    logger.warning("⚠️ Fee-aware config not found - using legacy mode")
+    try:
+        from fee_aware_config import (
+            MIN_BALANCE_TO_TRADE,
+            MICRO_ACCOUNT_THRESHOLD,
+            get_position_size_pct,
+            get_min_profit_target,
+            should_trade,
+            get_fee_adjusted_targets,
+            MAX_TRADES_PER_DAY,
+        )
+        FEE_AWARE_MODE = True
+        logger.info("✅ Fee-aware configuration loaded - PROFITABILITY MODE ACTIVE")
+    except ImportError:
+        FEE_AWARE_MODE = False
+        MIN_BALANCE_TO_TRADE = 10.0
+        MICRO_ACCOUNT_THRESHOLD = 5.0
+        logger.warning("⚠️ Fee-aware config not found - using legacy mode")
 
 # Import tier configuration for tier-aware risk management
 try:
@@ -84,17 +100,24 @@ except ImportError:
 
 # Import small account constants from fee_aware_config
 try:
-    from fee_aware_config import (
+    from bot.fee_aware_config import (
         SMALL_ACCOUNT_THRESHOLD,
         SMALL_ACCOUNT_MAX_PCT_DIFF,
         STANDARD_MAX_PCT_DIFF
     )
 except ImportError:
-    # Fallback values if import fails
-    SMALL_ACCOUNT_THRESHOLD = 100.0
-    SMALL_ACCOUNT_MAX_PCT_DIFF = 10.0
-    STANDARD_MAX_PCT_DIFF = 5.0
-    logger.warning("Could not import small account constants from fee_aware_config, using defaults")
+    try:
+        from fee_aware_config import (
+            SMALL_ACCOUNT_THRESHOLD,
+            SMALL_ACCOUNT_MAX_PCT_DIFF,
+            STANDARD_MAX_PCT_DIFF,
+        )
+    except ImportError:
+        # Fallback values if import fails
+        SMALL_ACCOUNT_THRESHOLD = 100.0
+        SMALL_ACCOUNT_MAX_PCT_DIFF = 10.0
+        STANDARD_MAX_PCT_DIFF = 5.0
+        logger.warning("Could not import small account constants from fee_aware_config, using defaults")
 
 # ==============================================================================
 # HARD RISK LIMITS (non-negotiable — applied to every trade)

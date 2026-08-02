@@ -46,7 +46,7 @@ logger = logging.getLogger("nija.ai_hub")
 # ---------------------------------------------------------------------------
 
 try:
-    from market_regime_classification_ai import (
+    from bot.market_regime_classification_ai import (
         MarketRegimeClassificationAI,
         MarketRegimeType,
         StrategyType as RegimeStrategyType,
@@ -54,13 +54,22 @@ try:
     )
     REGIME_AI_AVAILABLE = True
 except ImportError:
-    REGIME_AI_AVAILABLE = False
-    MarketRegimeClassificationAI = None  # type: ignore
-    MarketRegimeType = None  # type: ignore
-    logger.warning("MarketRegimeClassificationAI not available – regime AI disabled")
+    try:
+        from market_regime_classification_ai import (
+            MarketRegimeClassificationAI,
+            MarketRegimeType,
+            StrategyType as RegimeStrategyType,
+            RegimeClassification,
+        )
+        REGIME_AI_AVAILABLE = True
+    except ImportError:
+        REGIME_AI_AVAILABLE = False
+        MarketRegimeClassificationAI = None  # type: ignore
+        MarketRegimeType = None  # type: ignore
+        logger.warning("MarketRegimeClassificationAI not available – regime AI disabled")
 
 try:
-    from portfolio_risk_engine import (
+    from bot.portfolio_risk_engine import (
         PortfolioRiskEngine,
         PositionExposure,
         get_portfolio_risk_engine,
@@ -68,23 +77,40 @@ try:
     )
     PORTFOLIO_RISK_AVAILABLE = True
 except ImportError:
-    PORTFOLIO_RISK_AVAILABLE = False
-    PortfolioRiskEngine = None  # type: ignore
-    PositionExposure = None  # type: ignore
-    get_portfolio_risk_engine = None  # type: ignore
-    logger.warning("PortfolioRiskEngine not available – portfolio risk control disabled")
+    try:
+        from portfolio_risk_engine import (
+            PortfolioRiskEngine,
+            PositionExposure,
+            get_portfolio_risk_engine,
+            PortfolioRiskMetrics,
+        )
+        PORTFOLIO_RISK_AVAILABLE = True
+    except ImportError:
+        PORTFOLIO_RISK_AVAILABLE = False
+        PortfolioRiskEngine = None  # type: ignore
+        PositionExposure = None  # type: ignore
+        get_portfolio_risk_engine = None  # type: ignore
+        logger.warning("PortfolioRiskEngine not available – portfolio risk control disabled")
 
 try:
-    from capital_allocation_brain import (
+    from bot.capital_allocation_brain import (
         CapitalAllocationBrain,
         AllocationMethod,
         AllocationPlan,
     )
     CAPITAL_BRAIN_AVAILABLE = True
 except ImportError:
-    CAPITAL_BRAIN_AVAILABLE = False
-    CapitalAllocationBrain = None  # type: ignore
-    logger.warning("CapitalAllocationBrain not available – capital allocation AI disabled")
+    try:
+        from capital_allocation_brain import (
+            CapitalAllocationBrain,
+            AllocationMethod,
+            AllocationPlan,
+        )
+        CAPITAL_BRAIN_AVAILABLE = True
+    except ImportError:
+        CAPITAL_BRAIN_AVAILABLE = False
+        CapitalAllocationBrain = None  # type: ignore
+        logger.warning("CapitalAllocationBrain not available – capital allocation AI disabled")
 
 try:
     from multi_account_broker_manager import get_broker_manager as _get_broker_manager
@@ -338,7 +364,10 @@ class AIIntelligenceHub:
         # Rule: NANO capital cannot influence global allocation decisions.
         if portfolio_value <= 0.0:
             try:
-                from capital_authority import get_capital_authority as _get_ca_hub
+                try:
+                    from bot.capital_authority import get_capital_authority as _get_ca_hub
+                except ImportError:
+                    from capital_authority import get_capital_authority as _get_ca_hub
                 _ca_hub = _get_ca_hub()
                 if _ca_hub.is_fresh():
                     # Primary capital = Kraken/authoritative only (NANO excluded).
@@ -823,7 +852,10 @@ class AIIntelligenceHub:
         if self.regime_ai is not None and regime and strategy:
             try:
                 regime_type = MarketRegimeType(regime)
-                from market_regime_classification_ai import StrategyType as ST
+                try:
+                    from bot.market_regime_classification_ai import StrategyType as ST
+                except ImportError:
+                    from market_regime_classification_ai import StrategyType as ST
                 strategy_type = ST(strategy)
                 self.regime_ai.update_performance(regime_type, strategy_type, pnl, is_win)
             except Exception as exc:

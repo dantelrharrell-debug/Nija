@@ -1,11 +1,58 @@
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 import threading
 from pathlib import Path
 from types import SimpleNamespace
 
 from bot import trading_strategy as strategy_module
 from bot import universal_broker_exit_supervisor_patch as exit_supervisor
+
+
+def test_canonical_deferred_hooks_import_full_apex_stack():
+    """Canonical launches must not depend on /app/bot being on sys.path."""
+    repo_root = Path(__file__).resolve().parents[2]
+    env = os.environ.copy()
+    env["NIJA_DEFER_RUNTIME_SITE_HOOKS"] = "1"
+    env.pop("PYTHONPATH", None)
+    probe = """
+import bot.ai_intelligence_hub as hub
+import bot.execution_engine as execution
+import bot.nija_apex_strategy_v71 as apex
+import bot.risk_manager as risk
+
+checks = (
+    apex.NIJAApexStrategyV71 is not None,
+    apex.PROFITABILITY_ASSERTION_AVAILABLE,
+    apex.EXCHANGE_CAPABILITIES_AVAILABLE,
+    apex._CALC_POSITION_SIZE_AVAILABLE,
+    apex.EMERGENCY_LIQUIDATION_AVAILABLE,
+    apex.ENHANCED_SCORING_AVAILABLE,
+    apex.AI_HUB_AVAILABLE,
+    hub.REGIME_AI_AVAILABLE,
+    hub.PORTFOLIO_RISK_AVAILABLE,
+    hub.CAPITAL_BRAIN_AVAILABLE,
+    risk.FEE_AWARE_MODE,
+    execution.FEE_AWARE_MODE,
+)
+assert all(checks), checks
+print("APEX_CANONICAL_IMPORT_OK")
+"""
+
+    result = subprocess.run(
+        [sys.executable, "-c", probe],
+        cwd=repo_root,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=45,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "APEX_CANONICAL_IMPORT_OK" in result.stdout
 
 
 def _strategy_shell() -> strategy_module.TradingStrategy:

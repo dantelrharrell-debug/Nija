@@ -429,15 +429,24 @@ def trade_is_economical(
 
 # Import fee-aware configuration for profit calculations
 try:
-    from fee_aware_config import MARKET_ORDER_ROUND_TRIP
+    from bot.fee_aware_config import MARKET_ORDER_ROUND_TRIP
     FEE_AWARE_MODE = True
     # Use market order fees as conservative estimate (worst case)
     DEFAULT_ROUND_TRIP_FEE = MARKET_ORDER_ROUND_TRIP  # 1.4%
     logger.info(f"✅ Fee-aware profit calculations enabled (round-trip fee: {DEFAULT_ROUND_TRIP_FEE*100:.1f}%)")
 except ImportError:
-    FEE_AWARE_MODE = False
-    DEFAULT_ROUND_TRIP_FEE = 0.014  # 1.4% default
-    logger.warning(f"⚠️ Fee-aware config not found - using default {DEFAULT_ROUND_TRIP_FEE*100:.1f}% round-trip fee")
+    try:
+        from fee_aware_config import MARKET_ORDER_ROUND_TRIP
+        FEE_AWARE_MODE = True
+        DEFAULT_ROUND_TRIP_FEE = MARKET_ORDER_ROUND_TRIP
+        logger.info(f"✅ Fee-aware profit calculations enabled (round-trip fee: {DEFAULT_ROUND_TRIP_FEE*100:.1f}%)")
+    except ImportError:
+        FEE_AWARE_MODE = False
+        DEFAULT_ROUND_TRIP_FEE = 0.014  # 1.4% default
+        logger.warning(
+            "⚠️ Fee-aware config not found - using default %.1f%% round-trip fee",
+            DEFAULT_ROUND_TRIP_FEE * 100,
+        )
 
 # Import trade ledger database
 try:
