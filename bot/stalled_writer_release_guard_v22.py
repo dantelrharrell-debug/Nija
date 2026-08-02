@@ -221,6 +221,20 @@ def _manager_valid_broker_count(manager: Any) -> int:
     return _connected_platform_broker_count(manager)
 
 
+def _bootstrap_state_value() -> str:
+    module = sys.modules.get("bot.bootstrap_state_machine") or sys.modules.get(
+        "bootstrap_state_machine"
+    )
+    getter = getattr(module, "get_bootstrap_fsm", None) if module is not None else None
+    if not callable(getter):
+        return "UNKNOWN"
+    try:
+        state = getter().state
+        return str(getattr(state, "value", state) or "UNKNOWN").strip().upper()
+    except Exception:
+        return "UNKNOWN"
+
+
 def _manager_snapshot() -> tuple[bool, bool, bool]:
     manager = _manager_instance()
     if manager is None:
@@ -736,6 +750,27 @@ def _attempt_bootstrap_progression(source: str) -> bool:
             advance(reason=f"stalled_writer_ready_bootstrap_retry:{source}")
         )
         after = str(getattr(getattr(fsm, "state", None), "value", "") or "")
+        supervised = after == "RUNNING_SUPERVISED"
+        if not supervised:
+            bot_main = sys.modules.get("bot.bot_main")
+            handoff = getattr(
+                bot_main,
+                "_advance_bootstrap_fsm_to_running_supervised",
+                None,
+            ) if bot_main is not None else None
+            if not callable(handoff):
+                logger.warning(
+                    "STALLED_WRITER_RELEASE_GUARD_V22_BOOTSTRAP_RETRY_BLOCKED "
+                    "marker=%s source=%s reason=canonical_supervised_handoff_unavailable "
+                    "state=%s",
+                    _MARKER,
+                    source,
+                    after or "unknown",
+                )
+                return False
+            supervised = bool(handoff())
+            after = str(getattr(getattr(fsm, "state", None), "value", "") or "")
+            supervised = bool(supervised and after == "RUNNING_SUPERVISED")
     except Exception as exc:
         logger.warning(
             "STALLED_WRITER_RELEASE_GUARD_V22_BOOTSTRAP_RETRY_FAILED "
@@ -750,14 +785,15 @@ def _attempt_bootstrap_progression(source: str) -> bool:
     logger.critical(
         "STALLED_WRITER_RELEASE_GUARD_V22_BOOTSTRAP_RETRIED "
         "marker=%s source=%s before_state=%s after_state=%s advanced=%s "
-        "safety_gates_preserved=true",
+        "supervised=%s safety_gates_preserved=true",
         _MARKER,
         source,
         before or "unknown",
         after or "unknown",
         advanced,
+        supervised,
     )
-    return advanced
+    return supervised
 
 
 def _attempt_emergency_stop_recovery(source: str) -> int:
@@ -929,7 +965,7 @@ def _monitor() -> None:
                 last_wait_log = now
 
             if (
-                not snapshot.manager_ready
+                _bootstrap_state_value() != "RUNNING_SUPERVISED"
                 and snapshot.sources_registered
                 and snapshot.attempts_finalized
                 and snapshot.capital_ready
