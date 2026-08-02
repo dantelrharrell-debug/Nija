@@ -2870,100 +2870,122 @@ class KrakenBrokerAdapter(BrokerInterface):
             return None
 
     def get_real_entry_price(self, symbol: str) -> Optional[float]:
+        """Recover the remaining position's weighted entry from Kraken history.
+
+        Exchange history is authoritative. The local store is used only when it
+        carries an explicitly verified source and Kraken history is unavailable.
         """
-        Try to get real entry price for *symbol* with three layers of resilience:
-
-        1. **In-memory cache** — return immediately if already fetched this session.
-        2. **Local entry price store** — check the JSON-backed store that is written
-           whenever a trade executes; this eliminates 90 % of broker API calls after
-           a restart.
-        3. **Kraken order history** — query ``ClosedOrders`` with up to 3 retries
-           (backoff: 1.5 s, 3 s, 4.5 s) before giving up.
-
-        Successful API results are cached permanently in memory and written back to
-        the local store so they are available immediately on the next call.
-
-        Args:
-            symbol: Trading symbol (e.g. ``'HBAR-USD'``).
-
-        Returns:
-            Entry price as a float, or ``None`` if unavailable.
-        """
-        # ── Layer 1: in-memory permanent cache ────────────────────────────────
         with self._entry_price_cache_lock:
             cached = self._entry_price_cache.get(symbol)
         if cached is not None:
             return cached
 
-        # ── Layer 2: local entry price store (JSON) ───────────────────────────
+        def _pair_matches(raw_pair: Any) -> bool:
+            normalized = "".join(ch for ch in str(raw_pair or "").upper() if ch.isalnum())
+            parts = str(symbol or "").replace("/", "-").upper().split("-")
+            if len(parts) != 2:
+                return False
+            base, quote = parts
+            base_aliases = {base, f"X{base}"}
+            quote_aliases = {quote, f"Z{quote}"}
+            if base == "BTC":
+                base_aliases.update({"XBT", "XXBT"})
+            return normalized in {
+                f"{base_alias}{quote_alias}"
+                for base_alias in base_aliases
+                for quote_alias in quote_aliases
+            }
+
+        api_error: Optional[Exception] = None
+        if self.api:
+            try:
+                result = self._kraken_api_call("ClosedOrders", {"trades": True})
+                closed = (
+                    result.get("result", {}).get("closed", {})
+                    if isinstance(result, dict)
+                    else {}
+                )
+                remaining_qty = 0.0
+                remaining_cost = 0.0
+                matched = 0
+                ordered = sorted(
+                    closed.values(),
+                    key=lambda order: float(order.get("closetm") or order.get("opentm") or 0.0),
+                )
+                for order in ordered:
+                    description = order.get("descr", {}) if isinstance(order, dict) else {}
+                    if not _pair_matches(description.get("pair")):
+                        continue
+                    status = str(order.get("status") or "").strip().lower()
+                    if status and status not in {"closed", "filled"}:
+                        continue
+                    quantity = float(order.get("vol_exec") or order.get("vol") or 0.0)
+                    price = float(order.get("price") or description.get("price") or 0.0)
+                    if quantity <= 0 or price <= 0:
+                        continue
+                    matched += 1
+                    side = str(description.get("type") or "").strip().lower()
+                    if side == "buy":
+                        remaining_qty += quantity
+                        remaining_cost += quantity * price
+                    elif side == "sell" and remaining_qty > 0:
+                        reduction = min(quantity, remaining_qty)
+                        average = remaining_cost / remaining_qty
+                        remaining_qty -= reduction
+                        remaining_cost = max(0.0, remaining_cost - average * reduction)
+
+                if matched and remaining_qty > 0 and remaining_cost > 0:
+                    average_entry = remaining_cost / remaining_qty
+                    with self._entry_price_cache_lock:
+                        self._entry_price_cache[symbol] = average_entry
+                    if _ENTRY_PRICE_STORE_AVAILABLE and _get_eps is not None:
+                        try:
+                            _get_eps().save(
+                                symbol,
+                                average_entry,
+                                source="api",
+                                quantity=remaining_qty,
+                            )
+                        except Exception:
+                            pass
+                    logger.info(
+                        "[EntryPrice] %s: recovered weighted Kraken entry $%.8f "
+                        "remaining_qty=%.8f matched_orders=%d",
+                        symbol,
+                        average_entry,
+                        remaining_qty,
+                        matched,
+                    )
+                    return average_entry
+            except Exception as exc:
+                api_error = exc
+                logger.warning(
+                    "[EntryPrice] %s: Kraken history recovery failed: %s",
+                    symbol,
+                    exc,
+                )
+
         if _ENTRY_PRICE_STORE_AVAILABLE and _get_eps is not None:
             try:
-                local_price = _get_eps().get(symbol)
-                local_price_value = getattr(local_price, 'price', local_price)
-                if local_price_value is None:
-                    raise ValueError("missing local price")
-                local_price_float = float(cast(Any, local_price_value))
-                if local_price_float > 0:
-                    logger.debug(f"[EntryPrice] {symbol}: Using local store price ${local_price_float:.6g}")
-                    with self._entry_price_cache_lock:
-                        self._entry_price_cache[symbol] = local_price_float
-                    return local_price_float
-            except Exception as _eps_err:
-                logger.debug(f"[EntryPrice] {symbol}: local store lookup failed: {_eps_err}")
-
-        # ── Layer 3: Kraken order history (3× retry with backoff) ─────────────
-        if not self.api:
-            return None
-
-        # Convert symbol to Kraken pair format
-        kraken_symbol = symbol.replace('-', '').upper()
-        if kraken_symbol.startswith('BTC'):
-            kraken_symbol = kraken_symbol.replace('BTC', 'XBT', 1)
-
-        last_exc = None
-        for attempt in range(3):
-            try:
-                result = self._kraken_api_call('ClosedOrders', {'trades': True})
-
-                if result and 'result' in result and 'closed' in result['result']:
-                    closed_orders = result['result']['closed']
-
-                    # Find most recent buy order for this symbol
-                    for _oid, order_data in sorted(
-                        closed_orders.items(),
-                        key=lambda x: x[1].get('opentm', 0),
-                        reverse=True,
-                    ):
-                        if order_data.get('descr', {}).get('pair') == kraken_symbol:
-                            if order_data.get('descr', {}).get('type') == 'buy':
-                                avg_price = float(order_data.get('price', 0))
-                                if avg_price > 0:
-                                    logger.debug(f"[EntryPrice] {symbol}: Fetched ${avg_price:.6g} from Kraken history")
-                                    # Persist to in-memory cache and local store
-                                    with self._entry_price_cache_lock:
-                                        self._entry_price_cache[symbol] = avg_price
-                                    if _ENTRY_PRICE_STORE_AVAILABLE and _get_eps is not None:
-                                        try:
-                                            _get_eps().save(symbol, avg_price)
-                                        except Exception:
-                                            pass
-                                    return avg_price
-
-                # Successful API call but no matching order found — stop retrying
-                logger.debug(f"[EntryPrice] {symbol}: No matching buy order in Kraken history")
-                return None
-
-            except Exception as exc:
-                last_exc = exc
-                if attempt < 2:
-                    delay = 1.5 * (attempt + 1)
-                    logger.warning(
-                        f"[EntryPrice] {symbol}: Kraken ClosedOrders attempt {attempt + 1}/3 failed "
-                        f"({exc}); retrying in {delay:.1f}s"
+                record = _get_eps().get(symbol)
+                price = float(getattr(record, "price", 0.0) or 0.0)
+                source = str(getattr(record, "source", "") or "").strip().lower()
+                verified_sources = {
+                    "execution", "api", "trade_history", "closed_orders", "fills",
+                    "broker_position", "reconstructed_verified_cost_basis",
+                }
+                if price > 0 and source in verified_sources:
+                    logger.info(
+                        "[EntryPrice] %s: using verified local fallback source=%s "
+                        "after Kraken history result=%s",
+                        symbol,
+                        source,
+                        "error" if api_error is not None else "no_open_cost_basis",
                     )
-                    time.sleep(delay)
+                    return price
+            except Exception as exc:
+                logger.debug("[EntryPrice] %s: verified local fallback failed: %s", symbol, exc)
 
-        logger.debug(f"[EntryPrice] {symbol}: All 3 Kraken attempts failed ({last_exc})")
         return None
 
     def refresh_positions_from_exchange(self) -> List[Dict]:
