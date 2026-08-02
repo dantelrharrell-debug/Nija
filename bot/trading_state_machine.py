@@ -1258,6 +1258,10 @@ class TradingStateMachine:
         # All supervisor paths MUST check this flag and call commit_activation()
         # as the sole authority for the OFF → LIVE_ACTIVE transition.
         self._activation_committed: bool = False
+        # Serialize the complete activation transaction. Individual state reads use
+        # _lock, but gate evaluation and coordinator finalization must not race
+        # across the activation monitor, preactivation monitor, and supervisor.
+        self._activation_commit_lock = threading.RLock()
 
         # Timestamp (monotonic) when the FSM first entered LIVE_PENDING_CONFIRMATION.
         # Used by the 5-minute stalled-state diagnostic and the 30-second monitoring
@@ -2077,6 +2081,14 @@ class TradingStateMachine:
         self,
         cycle_capital: Optional[Dict[str, Any]] = None,
     ) -> bool:
+        """Serialize and execute the canonical activation transaction."""
+        with self._activation_commit_lock:
+            return self._commit_activation_unlocked(cycle_capital=cycle_capital)
+
+    def _commit_activation_unlocked(
+        self,
+        cycle_capital: Optional[Dict[str, Any]] = None,
+    ) -> bool:
         """Single atomic activation commit — the ONE source of truth for OFF → LIVE_ACTIVE.
 
         This is the FINAL AUTHORITY for the activation transition.  All callers
@@ -2876,6 +2888,7 @@ class TradingStateMachine:
             )
             return False
 
+        _coordinator_committed = False
         try:
             self._first_snap_accepted = True
             logger.critical("🚀 ACTIVATING TRADING ENGINE")
@@ -2891,6 +2904,7 @@ class TradingStateMachine:
                 f"FSM state must be LIVE_ACTIVE after activation, got {self._current_state}"
             )
             _coordinator.finalize_activation_commit(_frozen_snapshot)
+            _coordinator_committed = True
             logger.critical("STATE AFTER ACTIVATION = %s", self._current_state)
             logger.critical("ACTIVATION_COMMITTED — LIVE_ACTIVE confirmed")
             logger.critical(
@@ -2900,7 +2914,38 @@ class TradingStateMachine:
             )
             return True
         except Exception as exc:
-            logger.critical("[AUTO_ACTIVATE BLOCKED] reason=COMMIT_TRANSITION_FAILED error=%s", exc)
+            if not _coordinator_committed:
+                rolled_back = False
+                with self._lock:
+                    if self._current_state == TradingState.LIVE_ACTIVE:
+                        self._current_state = TradingState.LIVE_PENDING_CONFIRMATION
+                        self._activation_committed = False
+                        self._execution_authority = False
+                        self._core_loop_owns_execution = True
+                        self._can_dispatch_trades = False
+                        self._pending_confirmation_since = time.monotonic()
+                        self._last_pending_log_time = None
+                        os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "0"
+                        os.environ["NIJA_RUNTIME_TRADING_STATE"] = (
+                            TradingState.LIVE_PENDING_CONFIRMATION.value
+                        )
+                        rolled_back = True
+                if rolled_back:
+                    try:
+                        self._persist_state()
+                    except Exception:
+                        logger.exception(
+                            "ACTIVATION_ROLLBACK_PERSIST_FAILED trading_remains_fail_closed=true"
+                        )
+                    logger.error(
+                        "ACTIVATION_ROLLED_BACK reason=coordinator_commit_failed "
+                        "state=LIVE_PENDING_CONFIRMATION execution_authority=false"
+                    )
+            logger.error(
+                "[AUTO_ACTIVATE BLOCKED] reason=COMMIT_TRANSITION_FAILED error=%s",
+                exc,
+                exc_info=True,
+            )
             return False
 
     def get_activation_committed(self) -> bool:

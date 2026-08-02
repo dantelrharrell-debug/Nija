@@ -283,9 +283,22 @@ def test_bootstrap_progression_retries_only_validated_ready_manager(monkeypatch)
     )
     monkeypatch.setitem(guard.sys.modules, "bot.bootstrap_state_machine", bootstrap_module)
 
+    handoff_calls = []
+
+    def complete_supervised_handoff():
+        handoff_calls.append(True)
+        state.value = "RUNNING_SUPERVISED"
+        return True
+
+    bot_main = types.SimpleNamespace(
+        _advance_bootstrap_fsm_to_running_supervised=complete_supervised_handoff
+    )
+    monkeypatch.setitem(guard.sys.modules, "bot.bot_main", bot_main)
+
     assert guard._attempt_bootstrap_progression("unit_test") is True
     assert calls == ["stalled_writer_ready_bootstrap_retry:unit_test"]
-    assert state.value == "CAPITAL_READY"
+    assert handoff_calls == [True]
+    assert state.value == "RUNNING_SUPERVISED"
 
 
 def test_missed_authority_snapshot_is_ingested_into_canonical_csm(monkeypatch):
