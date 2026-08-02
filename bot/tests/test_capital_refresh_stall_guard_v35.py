@@ -99,6 +99,57 @@ class CapitalRefreshSharedDeadlineTests(unittest.TestCase):
         self.assertEqual(result, (12.0, True))
         self.assertFalse(guard.current_refresh_used_fallback())
 
+    def test_recent_live_balance_fallback_remains_within_freshness_ttl(self):
+        broker = _Broker(12.0)
+        live_batch = guard._BalanceFetchBatch({"okx": broker})
+        self.assertEqual(live_batch.result_for("okx", broker), 12.0)
+        self.assertGreater(
+            getattr(broker, guard._LIVE_BALANCE_OBSERVED_AT, 0.0),
+            0.0,
+        )
+
+        release = threading.Event()
+        broker._release = release
+        try:
+            guard._REFRESH_CONTEXT.used_fallback = False
+            guard._REFRESH_CONTEXT.fallback_brokers = {}
+            with patch.object(guard, "_timeout_seconds", return_value=0.05):
+                cached_batch = guard._BalanceFetchBatch({"okx": broker})
+                self.assertEqual(cached_batch.result_for("okx", broker), 12.0)
+            status = guard.current_refresh_fallback_status(90.0)
+        finally:
+            release.set()
+            guard._REFRESH_CONTEXT.used_fallback = False
+            guard._REFRESH_CONTEXT.fallback_brokers = {}
+
+        self.assertTrue(status["used_fallback"])
+        self.assertTrue(status["all_recent"])
+        self.assertIn("okx", status["brokers"])
+
+    def test_expired_live_balance_fallback_remains_fail_closed(self):
+        release = threading.Event()
+        broker = _Broker(12.0, release)
+        setattr(
+            broker,
+            guard._LIVE_BALANCE_OBSERVED_AT,
+            time.monotonic() - 120.0,
+        )
+        try:
+            guard._REFRESH_CONTEXT.used_fallback = False
+            guard._REFRESH_CONTEXT.fallback_brokers = {}
+            with patch.object(guard, "_timeout_seconds", return_value=0.05):
+                batch = guard._BalanceFetchBatch({"okx": broker})
+                self.assertEqual(batch.result_for("okx", broker), 12.0)
+            status = guard.current_refresh_fallback_status(90.0)
+        finally:
+            release.set()
+            guard._REFRESH_CONTEXT.used_fallback = False
+            guard._REFRESH_CONTEXT.fallback_brokers = {}
+
+        self.assertTrue(status["used_fallback"])
+        self.assertFalse(status["all_recent"])
+        self.assertGreater(status["brokers"]["okx"]["age_s"], 90.0)
+
 
 if __name__ == "__main__":
     unittest.main()
