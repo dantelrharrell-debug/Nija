@@ -1,10 +1,10 @@
 """Capital refresh stall guard v35.
 
-Bounds broker balance calls only inside CapitalRefreshCoordinator. A broker API
-call that stalls cannot leave the bootstrap FSM permanently in
-REFRESH_IN_FLIGHT. On timeout, an already-hydrated broker balance is reused;
-without a cached payload the coordinator records that venue as unavailable and
-continues fail-closed with the remaining venues.
+Bounds broker balance calls only inside CapitalRefreshCoordinator. All venue
+fetches begin together and share one deadline, so a stalled API cannot multiply
+the refresh timeout by the number of brokers. On timeout, an already-hydrated
+broker balance is reused; without a cached payload the coordinator records that
+venue as unavailable and continues fail-closed with the remaining venues.
 """
 from __future__ import annotations
 
@@ -18,10 +18,11 @@ from types import ModuleType
 from typing import Any, Dict
 
 LOGGER = logging.getLogger("nija.capital_refresh_stall_guard_v35")
-MARKER = "20260727-capital-refresh-stall-guard-v35"
+MARKER = "20260802-capital-refresh-shared-deadline-v36"
 _TARGETS = ("bot.capital_flow_state_machine", "capital_flow_state_machine")
 _LOCK = threading.RLock()
 _STARTED = False
+_REFRESH_CONTEXT = threading.local()
 
 
 def _timeout_seconds() -> float:
@@ -31,49 +32,48 @@ def _timeout_seconds() -> float:
         return 8.0
 
 
-class _BoundedBrokerProxy:
-    """Transparent broker proxy with a bounded get_account_balance call."""
+class _BalanceFetchBatch:
+    """Start all broker calls together and enforce one shared deadline."""
 
-    def __init__(self, broker_id: str, broker: Any) -> None:
-        object.__setattr__(self, "_broker_id", str(broker_id))
-        object.__setattr__(self, "_broker", broker)
+    def __init__(self, broker_map: Dict[str, Any]) -> None:
+        self._started_at = time.monotonic()
+        self._deadline = self._started_at + _timeout_seconds()
+        self._results: Dict[str, "queue.Queue[tuple[bool, Any]]"] = {}
+        for broker_id, broker in broker_map.items():
+            result_queue: "queue.Queue[tuple[bool, Any]]" = queue.Queue(maxsize=1)
+            self._results[broker_id] = result_queue
 
-    def __getattr__(self, name: str) -> Any:
-        return getattr(object.__getattribute__(self, "_broker"), name)
-
-    def __setattr__(self, name: str, value: Any) -> None:
-        setattr(object.__getattribute__(self, "_broker"), name, value)
-
-    def get_account_balance(self) -> Any:
-        broker = object.__getattribute__(self, "_broker")
-        broker_id = object.__getattribute__(self, "_broker_id")
-        result_queue: "queue.Queue[tuple[bool, Any]]" = queue.Queue(maxsize=1)
-
-        def _call() -> None:
-            try:
-                result_queue.put_nowait((True, broker.get_account_balance()))
-            except BaseException as exc:  # preserve broker exception semantics
+            def _call(
+                target: Any = broker,
+                output: "queue.Queue[tuple[bool, Any]]" = result_queue,
+            ) -> None:
                 try:
-                    result_queue.put_nowait((False, exc))
-                except queue.Full:
-                    pass
+                    output.put_nowait((True, target.get_account_balance()))
+                except BaseException as exc:  # preserve broker exception semantics
+                    try:
+                        output.put_nowait((False, exc))
+                    except queue.Full:
+                        pass
 
-        worker = threading.Thread(
-            target=_call,
-            name=f"capital-balance-fetch-{broker_id}",
-            daemon=True,
-        )
-        started_at = time.monotonic()
-        worker.start()
+            threading.Thread(
+                target=_call,
+                name=f"capital-balance-fetch-{broker_id}",
+                daemon=True,
+            ).start()
+
+    def result_for(self, broker_id: str, broker: Any) -> Any:
+        result_queue = self._results[broker_id]
+        remaining = max(0.0, self._deadline - time.monotonic())
         try:
-            ok, value = result_queue.get(timeout=_timeout_seconds())
+            ok, value = result_queue.get(timeout=remaining)
         except queue.Empty:
+            _REFRESH_CONTEXT.used_fallback = True
             cached = getattr(broker, "_last_known_balance", None)
-            elapsed = time.monotonic() - started_at
+            elapsed = time.monotonic() - self._started_at
             if cached is not None:
-                LOGGER.error(
+                LOGGER.warning(
                     "CAPITAL_REFRESH_BROKER_FETCH_TIMEOUT_FALLBACK marker=%s "
-                    "broker=%s elapsed=%.2fs cached_payload=true",
+                    "broker=%s elapsed=%.2fs cached_payload=true shared_deadline=true",
                     MARKER,
                     broker_id,
                     elapsed,
@@ -81,7 +81,7 @@ class _BoundedBrokerProxy:
                 return cached
             LOGGER.error(
                 "CAPITAL_REFRESH_BROKER_FETCH_TIMEOUT marker=%s broker=%s "
-                "elapsed=%.2fs cached_payload=false",
+                "elapsed=%.2fs cached_payload=false shared_deadline=true",
                 MARKER,
                 broker_id,
                 elapsed,
@@ -92,6 +92,32 @@ class _BoundedBrokerProxy:
         if ok:
             return value
         raise value
+
+
+def current_refresh_used_fallback() -> bool:
+    """Return whether this thread's active refresh consumed cached capital."""
+    return bool(getattr(_REFRESH_CONTEXT, "used_fallback", False))
+
+
+class _BoundedBrokerProxy:
+    """Transparent broker proxy backed by a shared balance-fetch batch."""
+
+    def __init__(self, broker_id: str, broker: Any, batch: _BalanceFetchBatch) -> None:
+        object.__setattr__(self, "_broker_id", str(broker_id))
+        object.__setattr__(self, "_broker", broker)
+        object.__setattr__(self, "_batch", batch)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(object.__getattribute__(self, "_broker"), name)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        setattr(object.__getattribute__(self, "_broker"), name, value)
+
+    def get_account_balance(self) -> Any:
+        return object.__getattribute__(self, "_batch").result_for(
+            object.__getattribute__(self, "_broker_id"),
+            object.__getattribute__(self, "_broker"),
+        )
 
 
 def _patch(module: ModuleType) -> bool:
@@ -110,23 +136,33 @@ def _patch(module: ModuleType) -> bool:
         trigger: str,
         open_exposure_usd: float,
     ) -> Any:
-        bounded_map = {
-            str(broker_id): _BoundedBrokerProxy(str(broker_id), broker)
+        _REFRESH_CONTEXT.used_fallback = False
+        live_map = {
+            str(broker_id): broker
             for broker_id, broker in broker_map.items()
             if broker is not None
         }
-        return original(
-            self,
-            broker_map=bounded_map,
-            trigger=trigger,
-            open_exposure_usd=open_exposure_usd,
-        )
+        batch = _BalanceFetchBatch(live_map)
+        bounded_map = {
+            broker_id: _BoundedBrokerProxy(broker_id, broker, batch)
+            for broker_id, broker in live_map.items()
+        }
+        try:
+            return original(
+                self,
+                broker_map=bounded_map,
+                trigger=trigger,
+                open_exposure_usd=open_exposure_usd,
+            )
+        finally:
+            _REFRESH_CONTEXT.used_fallback = False
 
     _pipeline_with_bounded_brokers._nija_capital_refresh_stall_guard_v35 = True
     cls._pipeline = _pipeline_with_bounded_brokers
     os.environ["NIJA_CAPITAL_REFRESH_STALL_GUARD_V35_PATCHED"] = "1"
     LOGGER.critical(
-        "CAPITAL_REFRESH_STALL_GUARD_V35_PATCHED marker=%s module=%s timeout_s=%.2f",
+        "CAPITAL_REFRESH_STALL_GUARD_V35_PATCHED marker=%s module=%s "
+        "timeout_s=%.2f shared_deadline=true",
         MARKER,
         module.__name__,
         _timeout_seconds(),
@@ -158,7 +194,8 @@ def install() -> bool:
         return False
     os.environ["NIJA_CAPITAL_REFRESH_STALL_GUARD_V35_INSTALLED"] = "1"
     LOGGER.critical(
-        "CAPITAL_REFRESH_STALL_GUARD_V35_INSTALLED marker=%s fail_closed=true",
+        "CAPITAL_REFRESH_STALL_GUARD_V35_INSTALLED marker=%s "
+        "fail_closed=true shared_deadline=true",
         MARKER,
     )
     return True
