@@ -23,6 +23,17 @@ _TARGETS = ("bot.capital_flow_state_machine", "capital_flow_state_machine")
 _LOCK = threading.RLock()
 _STARTED = False
 _REFRESH_CONTEXT = threading.local()
+_LIVE_BALANCE_OBSERVED_AT = "_nija_capital_live_balance_observed_monotonic"
+
+
+def _freshness_ttl_seconds() -> float:
+    try:
+        return max(
+            5.0,
+            float(os.getenv("NIJA_CAPITAL_FRESHNESS_TTL_S", "90.0") or "90.0"),
+        )
+    except (TypeError, ValueError):
+        return 90.0
 
 
 def _timeout_seconds() -> float:
@@ -48,7 +59,12 @@ class _BalanceFetchBatch:
                 output: "queue.Queue[tuple[bool, Any]]" = result_queue,
             ) -> None:
                 try:
-                    output.put_nowait((True, target.get_account_balance()))
+                    value = target.get_account_balance()
+                    try:
+                        setattr(target, _LIVE_BALANCE_OBSERVED_AT, time.monotonic())
+                    except Exception:
+                        pass
+                    output.put_nowait((True, value))
                 except BaseException as exc:  # preserve broker exception semantics
                     try:
                         output.put_nowait((False, exc))
@@ -69,14 +85,34 @@ class _BalanceFetchBatch:
         except queue.Empty:
             _REFRESH_CONTEXT.used_fallback = True
             cached = getattr(broker, "_last_known_balance", None)
-            elapsed = time.monotonic() - self._started_at
+            now = time.monotonic()
+            observed_at = float(
+                getattr(broker, _LIVE_BALANCE_OBSERVED_AT, 0.0) or 0.0
+            )
+            cached_age_s = (
+                max(0.0, now - observed_at)
+                if observed_at > 0.0
+                else float("inf")
+            )
+            fallback_brokers = dict(
+                getattr(_REFRESH_CONTEXT, "fallback_brokers", {}) or {}
+            )
+            fallback_brokers[str(broker_id)] = {
+                "age_s": cached_age_s,
+                "observed": observed_at > 0.0,
+            }
+            _REFRESH_CONTEXT.fallback_brokers = fallback_brokers
+            elapsed = now - self._started_at
             if cached is not None:
                 LOGGER.warning(
                     "CAPITAL_REFRESH_BROKER_FETCH_TIMEOUT_FALLBACK marker=%s "
-                    "broker=%s elapsed=%.2fs cached_payload=true shared_deadline=true",
+                    "broker=%s elapsed=%.2fs cached_payload=true cached_age_s=%.2f "
+                    "cached_within_ttl=%s shared_deadline=true",
                     MARKER,
                     broker_id,
                     elapsed,
+                    cached_age_s,
+                    cached_age_s <= _freshness_ttl_seconds(),
                 )
                 return cached
             LOGGER.error(
@@ -97,6 +133,35 @@ class _BalanceFetchBatch:
 def current_refresh_used_fallback() -> bool:
     """Return whether this thread's active refresh consumed cached capital."""
     return bool(getattr(_REFRESH_CONTEXT, "used_fallback", False))
+
+
+def current_refresh_fallback_status(
+    freshness_ttl_s: float | None = None,
+) -> Dict[str, Any]:
+    """Return freshness evidence for cached balances used by this refresh."""
+
+    used_fallback = current_refresh_used_fallback()
+    brokers = dict(getattr(_REFRESH_CONTEXT, "fallback_brokers", {}) or {})
+    ttl_s = (
+        _freshness_ttl_seconds()
+        if freshness_ttl_s is None
+        else max(5.0, float(freshness_ttl_s))
+    )
+    all_recent = bool(
+        used_fallback
+        and brokers
+        and all(
+            bool(record.get("observed"))
+            and float(record.get("age_s", float("inf"))) <= ttl_s
+            for record in brokers.values()
+        )
+    )
+    return {
+        "used_fallback": used_fallback,
+        "all_recent": all_recent,
+        "freshness_ttl_s": ttl_s,
+        "brokers": brokers,
+    }
 
 
 class _BoundedBrokerProxy:
@@ -137,6 +202,7 @@ def _patch(module: ModuleType) -> bool:
         open_exposure_usd: float,
     ) -> Any:
         _REFRESH_CONTEXT.used_fallback = False
+        _REFRESH_CONTEXT.fallback_brokers = {}
         live_map = {
             str(broker_id): broker
             for broker_id, broker in broker_map.items()
@@ -156,6 +222,7 @@ def _patch(module: ModuleType) -> bool:
             )
         finally:
             _REFRESH_CONTEXT.used_fallback = False
+            _REFRESH_CONTEXT.fallback_brokers = {}
 
     _pipeline_with_bounded_brokers._nija_capital_refresh_stall_guard_v35 = True
     cls._pipeline = _pipeline_with_bounded_brokers
