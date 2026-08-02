@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import sys
 
 
 def _module():
@@ -102,7 +103,6 @@ def test_capital_wrapper_patch_is_chain_aware():
     assert Broker.get_account_balance is first_balance
 
 
-
 def test_install_is_process_wide_idempotent_across_module_aliases(
     monkeypatch, caplog
 ):
@@ -132,7 +132,7 @@ def test_install_is_process_wide_idempotent_across_module_aliases(
         assert spec is not None
         assert spec.loader is not None
         alias = importlib.util.module_from_spec(spec)
-        importlib.sys.modules[alias_name] = alias
+        sys.modules[alias_name] = alias
         spec.loader.exec_module(alias)
 
         assert module.install() is True
@@ -146,6 +146,6 @@ def test_install_is_process_wide_idempotent_across_module_aliases(
         assert state["monitor_started"] is True
         assert state["install_attested"] is True
     finally:
-        importlib.sys.modules.pop(alias_name, None)
+        sys.modules.pop(alias_name, None)
         state["monitor_started"] = original_started
         state["install_attested"] = original_attested
