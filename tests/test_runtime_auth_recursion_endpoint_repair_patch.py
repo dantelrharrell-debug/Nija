@@ -173,6 +173,41 @@ def test_coinbase_recursive_connect_is_blocked(monkeypatch):
     assert os.environ["NIJA_COINBASE_ACTIVATION_STATE"] == "reconnect_pending"
 
 
+
+def test_coinbase_compatibility_wrapper_does_not_gain_second_reentry_guard():
+    class CoinbaseBroker:
+        def __init__(self):
+            self.connected = False
+            self._is_available = True
+            self.calls = 0
+
+        def connect(self):
+            self.calls += 1
+            self.connected = True
+            return True
+
+    module = ModuleType("bot.broker_manager")
+    module.CoinbaseBroker = CoinbaseBroker
+    assert repair._patch_coinbase_class(module) is True
+    canonical_guard = CoinbaseBroker.connect
+
+    # Reproduce a later compatibility wrapper that preserves __wrapped__ but
+    # does not copy the canonical reentry-owner marker.
+    def compatibility_connect(self, *args, **kwargs):
+        return canonical_guard(self, *args, **kwargs)
+
+    compatibility_connect.__wrapped__ = canonical_guard
+    CoinbaseBroker.connect = compatibility_connect
+
+    assert repair._patch_coinbase_class(module) is False
+    assert CoinbaseBroker.connect is compatibility_connect
+    assert CoinbaseBroker.connect._nija_coinbase_connect_reentry_guard_v1 is True
+
+    broker = CoinbaseBroker()
+    assert broker.connect() is True
+    assert broker.calls == 1
+    assert broker.connected is True
+
 def test_okx_recursive_connect_is_blocked(monkeypatch):
     class OKXBroker:
         def __init__(self):
