@@ -63,6 +63,22 @@ class CurrentCapitalFreshnessRepairTests(unittest.TestCase):
         ):
             self.assertTrue(repair._should_repair(snapshot))
 
+    def test_fallback_status_uses_canonical_capital_ttl(self):
+        expected = {
+            "used_fallback": True,
+            "all_recent": True,
+            "brokers": {"okx": {"age_s": 10.0, "observed": True}},
+        }
+        with patch.object(
+            guard,
+            "current_refresh_fallback_status",
+            return_value=expected,
+        ) as status_getter:
+            status = repair._current_refresh_fallback_status()
+
+        self.assertEqual(status, expected)
+        status_getter.assert_called_once_with(90.0)
+
     def test_constructor_forces_cache_backed_snapshot_stale(self):
         class Snapshot:
             def __init__(self):
