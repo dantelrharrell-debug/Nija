@@ -11,6 +11,8 @@ Safety properties
 * The process remains fail-closed in standby while Redis/lock authority is
   unavailable.
 * Heartbeat renewal verifies exact lock ownership before extending the TTL.
+* Release joins the renewal thread before compare-and-delete, so shutdown cannot
+  recreate a countdown-only lease after deletion.
 * Release is compare-and-delete; a process can never delete another writer's
   lock.
 * Local fallback is available only through the explicit operator flags
@@ -670,10 +672,28 @@ class EntrypointWriterAuthority:
             )
 
     def release(self) -> bool:
-        """Stop heartbeat and compare-and-delete only this process's lock."""
+        """Quiesce heartbeat, then compare-delete only this process's lock."""
+
+        self._stop.set()
+        heartbeat = self._heartbeat_thread
+        if heartbeat is not None and heartbeat is not threading.current_thread():
+            if heartbeat.is_alive():
+                heartbeat.join(
+                    timeout=_cfg_float(
+                        "NIJA_WRITER_RELEASE_HEARTBEAT_JOIN_S",
+                        2.0,
+                        minimum=0.1,
+                    )
+                )
+            if heartbeat.is_alive():
+                logger.error(
+                    "ENTRYPOINT_WRITER_AUTHORITY_RELEASE_DEFERRED marker=%s "
+                    "reason=heartbeat_thread_still_alive lock_delete_skipped=true",
+                    _MARKER,
+                )
+                return False
 
         with self._state_lock:
-            self._stop.set()
             released = False
             if self._client is not None and self._lock_key and self._lock_value:
                 script = """
@@ -703,13 +723,15 @@ class EntrypointWriterAuthority:
                         exc,
                     )
 
+            self._heartbeat_thread = None
             os.environ["NIJA_WRITER_LEASE_ACQUIRED"] = "0"
             os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"] = "0"
             os.environ["NIJA_WRITER_HEARTBEAT_ALIVE_TS"] = "0"
             os.environ.pop("NIJA_WRITER_FENCING_TOKEN", None)
             os.environ.pop("NIJA_WRITER_FENCING_TOKEN_FALLBACK", None)
             logger.info(
-                "ENTRYPOINT_WRITER_AUTHORITY_RELEASED marker=%s released=%s local_fallback=%s",
+                "ENTRYPOINT_WRITER_AUTHORITY_RELEASED marker=%s released=%s "
+                "local_fallback=%s heartbeat_quiesced=true",
                 _MARKER,
                 released,
                 self._local_fallback,
