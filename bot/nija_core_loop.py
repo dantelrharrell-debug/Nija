@@ -2975,6 +2975,10 @@ class NijaCoreLoop:
                     _market_filter_checks += 1
                     if not allow:
                         blocked += 1
+                        _market_reject = self._canonical_reject_reason(
+                            market_reason or "MARKET_FILTER_BLOCKED"
+                        )
+                        self._record_reject(_market_reject)
                         if _sdd is not None:
                             _sdd.record_skip(symbol, "market_filter")
                         _funnel["regime"] = ("FAIL", market_reason or "MARKET_FILTER_BLOCKED")
@@ -3869,7 +3873,6 @@ class NijaCoreLoop:
                             getattr(_perm, "block_reason", "") or "none",
                         )
                         if _perm.final_decision != "EXECUTE":
-                            blocked += 1
                             # ── Entry-to-Order Trace: per-signal veto (TPE) ──
                             _tpe_reason = (
                                 getattr(_perm, "block_reason", None)
@@ -4124,6 +4127,7 @@ class NijaCoreLoop:
                             sig.side, sig.symbol,
                         )
                         blocked += 1
+                        self._record_reject("UNKNOWN_SIGNAL_SIDE")
                         continue
                     analysis["action"] = action
                     analysis["reason"] = analysis.get("reason", "") + " [fallback_entry]"
@@ -4192,6 +4196,7 @@ class NijaCoreLoop:
                                         _fallback_err,
                                     )
                                     blocked += 1
+                                    self._record_reject("ILLIQUID_POLICY_HARD_BLOCK")
                                     _funnel["profitability"] = (
                                         "FAIL",
                                         f"ILLIQUID_POLICY_HARD_BLOCK:{_fallback_err}",
@@ -4244,6 +4249,7 @@ class NijaCoreLoop:
                                         _emergency_err,
                                     )
                                     blocked += 1
+                                    self._record_reject("EMERGENCY_PAYLOAD_FAILED")
                                     _funnel["profitability"] = (
                                         "FAIL",
                                         f"EMERGENCY_PAYLOAD_FAILED:{_emergency_err}",
@@ -4455,6 +4461,7 @@ class NijaCoreLoop:
                         _min_notional,
                     )
                     blocked += 1
+                    self._record_reject("MIN_NOTIONAL")
                     continue
                 self._log_pipeline_stage(
                     "order_size",
@@ -4592,6 +4599,7 @@ class NijaCoreLoop:
                         reason="rejected",
                     )
                     blocked += 1
+                    self._record_reject("EXCHANGE_ORDER_REJECTED")
                     logger.critical(
                         "❌ [CoreLoop] ORDER REJECTED | symbol=%s side=%s action=%s "
                         "position_size=$%.2f entry_price=%.6f stop_loss=%.6f score=%.1f "
@@ -4644,6 +4652,11 @@ class NijaCoreLoop:
                 )
                 logger.warning("Phase3 execute error for %s: %s", sig.symbol, exec_err)
                 blocked += 1
+                self._record_reject(
+                    self._canonical_reject_reason(
+                        f"EXECUTION_EXCEPTION:{type(exec_err).__name__}"
+                    )
+                )
                 _funnel = funnel_traces.setdefault(sig.symbol, {})
                 _funnel["profitability"] = ("FAIL", f"EXECUTION_EXCEPTION:{exec_err}")
                 # Authority-gate denials (ExecutionBlocked) must NOT be recorded
