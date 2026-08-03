@@ -2037,10 +2037,22 @@ class NijaCoreLoop:
             + int(_gate_rejections.get("ai_gate_rejected", 0))
         )
         _signals_generated = int(result.symbols_scored or 0)
+        _qualified_signals = int(result.candidates_order_ready or 0)
         _signals_filtered = max(
             0,
             _signals_generated - int(result.candidates_selected or 0),
         )
+        logger.info(
+            "SCAN_CYCLE",
+            extra={
+                "markets": int(_universe_tradeable),
+                "signals": _signals_generated,
+                "qualified": _qualified_signals,
+                "orders_submitted": int(result.orders_submitted or 0),
+            },
+        )
+        if _qualified_signals <= 0 and int(result.orders_submitted or 0) <= 0:
+            logger.info("WAITING_FOR_MARKET_SIGNALS")
         logger.info(
             "SCAN_STARTED symbols_scanned=%d markets_loaded=%d scan_duration_ms=%.0f "
             "signals_generated=%d signals_filtered=%d ai_scores_generated=%d "

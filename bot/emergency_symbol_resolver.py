@@ -100,6 +100,8 @@ class DelistedAssetRegistry:
     ) -> None:
         """Record a symbol as delisted / non-tradeable residual."""
         with self._registry_lock:
+            existing = self._delisted.get(symbol, {})
+            now = time.time()
             if symbol not in self._delisted:
                 logger.warning(
                     f"🚫 DELISTED ASSET PROTOCOL: {symbol} classified as "
@@ -109,10 +111,17 @@ class DelistedAssetRegistry:
                 "symbol": symbol,
                 "status": "Non-Tradeable Residual",
                 "reason": reason,
-                "detected_at": time.time(),
-                "sell_attempted": self._delisted.get(symbol, {}).get("sell_attempted", False),
-                "permanent_dust": self._delisted.get(symbol, {}).get("permanent_dust", False),
+                "detected_at": existing.get("detected_at", now),
+                "last_checked": now,
+                "sell_attempted": existing.get("sell_attempted", False),
+                "permanent_dust": existing.get("permanent_dust", False),
             }
+
+    def mark_checked(self, symbol: str) -> None:
+        """Update resolver check timestamp for an already-delisted symbol."""
+        with self._registry_lock:
+            if symbol in self._delisted:
+                self._delisted[symbol]["last_checked"] = time.time()
 
     def mark_sell_attempted(self, symbol: str) -> None:
         """Record that we attempted a market sell for a delisted asset."""
@@ -215,6 +224,10 @@ class EmergencySymbolResolver:
 
     # Minimum number of consecutive failures before a symbol is marked delisted
     FAILURES_BEFORE_DELISTED = 3
+    # Recheck window for already-delisted assets to avoid repeated work each scan
+    DELISTED_CACHE_REFRESH_SECONDS = 24 * 60 * 60
+    _metadata_refresh_token = 0
+    _metadata_refresh_lock = Lock()
 
     def __init__(self, kraken_api) -> None:
         """
@@ -225,6 +238,13 @@ class EmergencySymbolResolver:
         self._failure_counts: Dict[str, int] = {}
         self._failure_lock = Lock()
         self._registry = DelistedAssetRegistry.get_instance()
+        self._seen_metadata_refresh_token = self._metadata_refresh_token
+
+    @classmethod
+    def notify_metadata_refresh(cls) -> None:
+        """Invalidate per-instance delisted lookup suppression after metadata refresh."""
+        with cls._metadata_refresh_lock:
+            cls._metadata_refresh_token += 1
 
     # ------------------------------------------------------------------
     # Public entry-point
@@ -241,6 +261,27 @@ class EmergencySymbolResolver:
             ResolvedSymbol with .price set if found, or .status == DELISTED.
         """
         logger.debug(f"🔎 EmergencySymbolResolver: trying to resolve {standard_symbol}")
+
+        with self._metadata_refresh_lock:
+            refresh_token = self._metadata_refresh_token
+        force_recheck = self._seen_metadata_refresh_token != refresh_token
+        if force_recheck:
+            self._seen_metadata_refresh_token = refresh_token
+            self._failure_counts.pop(standard_symbol, None)
+
+        _now = time.time()
+        if self._registry.is_delisted(standard_symbol):
+            metadata = self._registry.get_metadata(standard_symbol) or {}
+            last_checked = float(metadata.get("last_checked", metadata.get("detected_at", 0.0)) or 0.0)
+            if (not force_recheck) and ((_now - last_checked) < self.DELISTED_CACHE_REFRESH_SECONDS):
+                return ResolvedSymbol(
+                    original_symbol=standard_symbol,
+                    status=SymbolStatus.DELISTED,
+                    reason=(
+                        f"Cached delisted/non-tradeable symbol ({int(_now - last_checked)}s since last check)"
+                    ),
+                )
+            self._registry.mark_checked(standard_symbol)
 
         # Stage 1 — alternate pair mapping
         result = self._try_alternate_pairs(standard_symbol)
@@ -483,3 +524,8 @@ def get_active_position_symbols(all_symbols: List[str]) -> List[str]:
     if excluded:
         logger.debug(f"   ℹ️  {excluded} delisted asset(s) excluded from active cap count")
     return active
+
+
+def notify_exchange_metadata_refresh() -> None:
+    """Invalidate delisted recheck suppression after exchange metadata refresh."""
+    EmergencySymbolResolver.notify_metadata_refresh()
