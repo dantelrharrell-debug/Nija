@@ -116,7 +116,7 @@ def test_broker_class_patch_registers_new_instances(monkeypatch):
 
 
 
-def test_compat_imports_share_registry_and_log_one_replacement(monkeypatch, caplog):
+def test_compat_imports_share_registry_and_skip_duplicate_replacement(monkeypatch, caplog):
     monkeypatch.setenv("NIJA_UNIVERSAL_BROKER_EXIT_ENABLED", "false")
     guard._BROKERS.clear()
     guard._STRONG_BROKERS.clear()
@@ -154,5 +154,10 @@ def test_compat_imports_share_registry_and_log_one_replacement(monkeypatch, capl
         record for record in caplog.records
         if "UNIVERSAL_BROKER_EXIT_REPLACED" in record.getMessage()
     ]
+    duplicate_skipped = [
+        record for record in caplog.records
+        if "UNIVERSAL_BROKER_EXIT_DUPLICATE_SKIPPED" in record.getMessage()
+    ]
     assert len(registered) == 1
-    assert len(replaced) == 1
+    assert len(replaced) == 0
+    assert len(duplicate_skipped) == 1

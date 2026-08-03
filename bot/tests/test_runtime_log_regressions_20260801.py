@@ -113,7 +113,7 @@ def test_failed_apex_recovery_is_rate_limited(monkeypatch):
     assert strategy.apex is None
 
 
-def test_exit_registration_is_idempotent_and_replaces_stale_instance(monkeypatch):
+def test_exit_registration_is_idempotent_and_skips_duplicate_identity(monkeypatch):
     class Broker:
         venue = "kraken"
         account_id = "platform"
@@ -134,7 +134,7 @@ def test_exit_registration_is_idempotent_and_replaces_stale_instance(monkeypatch
     assert exit_supervisor._snapshot() == [first]
 
     exit_supervisor._register_broker(replacement)
-    assert exit_supervisor._snapshot() == [replacement]
+    assert exit_supervisor._snapshot() == [first]
 
 
 def test_broker_manager_does_not_log_raw_balance_payloads():

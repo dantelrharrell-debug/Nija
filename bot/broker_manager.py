@@ -575,14 +575,14 @@ except ImportError:
 try:
     from bot.emergency_symbol_resolver import (
         EmergencySymbolResolver, SymbolStatus,
-        DelistedAssetRegistry, is_excluded_from_exposure,
+        DelistedAssetRegistry, is_excluded_from_exposure, notify_exchange_metadata_refresh,
     )
     EMERGENCY_RESOLVER_AVAILABLE = True
 except ImportError:
     try:
         from emergency_symbol_resolver import (
             EmergencySymbolResolver, SymbolStatus,
-            DelistedAssetRegistry, is_excluded_from_exposure,
+            DelistedAssetRegistry, is_excluded_from_exposure, notify_exchange_metadata_refresh,
         )
         EMERGENCY_RESOLVER_AVAILABLE = True
     except ImportError:
@@ -591,6 +591,7 @@ except ImportError:
         SymbolStatus = None
         DelistedAssetRegistry = None
         is_excluded_from_exposure = None
+        notify_exchange_metadata_refresh = None
 
 # Import Kraken Rate Profiles for separate entry/exit API budgets (Jan 23, 2026)
 try:
@@ -8452,6 +8453,11 @@ class KrakenBroker(BaseBroker):
             market_data = get_kraken_market_data()
             if market_data.fetch_and_cache(self.kraken_api):
                 pair_count = len(market_data.get_all_pairs())
+                if callable(notify_exchange_metadata_refresh):
+                    try:
+                        notify_exchange_metadata_refresh()
+                    except Exception:
+                        pass
                 logger.info(f"   ✅ Market data loaded: {pair_count} trading pairs with minimum volumes")
                 return True
             else:

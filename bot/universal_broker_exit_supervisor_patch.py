@@ -31,6 +31,7 @@ if not hasattr(builtins, _STATE_KEY):
             "brokers": weakref.WeakSet(),
             "strong_brokers": [],
             "active": set(),
+            "duplicate_accounts": set(),
             "started": False,
         },
     )
@@ -39,6 +40,7 @@ _LOCK: threading.RLock = _STATE["lock"]
 _BROKERS: "weakref.WeakSet[Any]" = _STATE["brokers"]
 _STRONG_BROKERS: list[Any] = _STATE["strong_brokers"]
 _ACTIVE: set[str] = _STATE["active"]
+_DUPLICATE_ACCOUNTS: set[tuple[str, str]] = _STATE["duplicate_accounts"]
 _STARTED = bool(_STATE["started"])
 
 
@@ -243,12 +245,25 @@ def _register_broker(broker: Any) -> None:
                 _start()
                 return
             if _logical_identity(existing) == identity:
+                if type(existing) is type(broker):
+                    if identity not in _DUPLICATE_ACCOUNTS:
+                        logger.info(
+                            "UNIVERSAL_BROKER_EXIT_DUPLICATE_SKIPPED marker=%s venue=%s account=%s class=%s",
+                            _MARKER,
+                            identity[0],
+                            identity[1],
+                            type(broker).__name__,
+                        )
+                        _DUPLICATE_ACCOUNTS.add(identity)
+                    _start()
+                    return
                 replaced = existing
                 _discard_broker(existing)
         try:
             _BROKERS.add(broker)
         except TypeError:
             _STRONG_BROKERS.append(broker)
+        _DUPLICATE_ACCOUNTS.discard(identity)
     if replaced is not None:
         logger.warning(
             "UNIVERSAL_BROKER_EXIT_REPLACED marker=%s venue=%s account=%s old_class=%s new_class=%s",
