@@ -10,6 +10,7 @@ compatibility and now means that the execution system has at least one ready ven
 from __future__ import annotations
 
 import inspect
+import importlib
 import json
 import logging
 import os
@@ -132,6 +133,70 @@ def _truthy(name: str) -> bool:
         "enabled",
         "y",
     }
+
+
+def _float_env(name: str, default: float = 0.0) -> float:
+    try:
+        return float(os.getenv(name, default) or default)
+    except (TypeError, ValueError):
+        return default
+
+
+def _writer_core_loop_alive() -> bool:
+    raw = str(os.getenv("NIJA_CORE_THREAD_ALIVE", "") or "").strip().lower()
+    if raw:
+        return raw in {"1", "true", "yes", "on", "enabled", "y"}
+    try:
+        try:
+            module = importlib.import_module("bot.entrypoint_writer_authority")
+        except ImportError:
+            module = importlib.import_module("entrypoint_writer_authority")
+        runtime = getattr(module, "_SINGLETON", None)
+        thread = getattr(runtime, "_core_thread", None)
+        is_alive = getattr(thread, "is_alive", None)
+        alive = bool(is_alive()) if callable(is_alive) else False
+        if alive:
+            os.environ["NIJA_CORE_THREAD_ALIVE"] = "1"
+        return alive
+    except Exception:
+        return False
+
+
+def writer_authority_snapshot(*, now: float | None = None) -> dict[str, Any]:
+    current = time.time() if now is None else now
+    lease_acquired = _truthy("NIJA_WRITER_LEASE_ACQUIRED")
+    fencing_token = bool(str(os.getenv("NIJA_WRITER_FENCING_TOKEN", "") or "").strip())
+    heartbeat_active = _truthy("NIJA_WRITER_HEARTBEAT_ACTIVE")
+    heartbeat_alive_ts = _float_env("NIJA_WRITER_HEARTBEAT_ALIVE_TS", 0.0)
+    heartbeat_max_age_s = max(
+        5.0,
+        _float_env("NIJA_RUNTIME_AUTHORITY_CONVERGENCE_HEARTBEAT_MAX_AGE_S", 90.0),
+    )
+    heartbeat_age_s = (
+        max(0.0, current - heartbeat_alive_ts) if heartbeat_alive_ts > 0.0 else float("inf")
+    )
+    heartbeat_healthy = (
+        heartbeat_active
+        and heartbeat_alive_ts > 0.0
+        and heartbeat_age_s <= heartbeat_max_age_s
+    )
+    core_loop_alive = _writer_core_loop_alive()
+    ready = lease_acquired and fencing_token and heartbeat_healthy and core_loop_alive
+    return {
+        "lease_acquired": lease_acquired,
+        "fencing_token": fencing_token,
+        "heartbeat_active": heartbeat_active,
+        "heartbeat_alive_ts": heartbeat_alive_ts,
+        "heartbeat_age_s": heartbeat_age_s,
+        "heartbeat_max_age_s": heartbeat_max_age_s,
+        "heartbeat_healthy": heartbeat_healthy,
+        "core_loop_alive": core_loop_alive,
+        "ready": ready,
+    }
+
+
+def writer_authority_ready(*, now: float | None = None) -> bool:
+    return bool(writer_authority_snapshot(now=now)["ready"])
 
 
 def _capital_ready() -> bool:
@@ -491,9 +556,8 @@ def evaluate_all() -> dict[str, Any]:
     rows = [evaluate_venue(name, broker_module, manager) for name in VENUES]
     ready_venues = [row.venue for row in rows if row.ready]
     degraded_venues = [row.venue for row in rows if not row.ready]
-    writer_ready = _truthy("NIJA_WRITER_LEASE_ACQUIRED") and bool(
-        os.getenv("NIJA_WRITER_FENCING_TOKEN", "").strip()
-    )
+    writer_state = writer_authority_snapshot()
+    writer_ready = bool(writer_state["ready"])
     capital_ready = _capital_ready()
     any_venue_ready = bool(ready_venues)
     all_venues_ready = len(ready_venues) == len(VENUES)
@@ -504,6 +568,7 @@ def evaluate_all() -> dict[str, Any]:
         "timestamp": time.time(),
         "pid": os.getpid(),
         "writer_ready": writer_ready,
+        "writer_state": writer_state,
         "capital_ready": capital_ready,
         "any_venue_ready": any_venue_ready,
         "all_venues_ready": all_venues_ready,
@@ -622,6 +687,51 @@ def publish_once(*, force: bool = False) -> dict[str, Any]:
     return payload
 
 
+def reconcile_execution_readiness(*, trigger: str = "manual", force: bool = False) -> dict[str, Any]:
+    payload = publish_once(force=force)
+    runtime_enabled = _truthy("NIJA_RUNTIME_EXECUTION_AUTHORITY")
+    if (
+        payload["writer_ready"]
+        and payload["capital_ready"]
+        and payload["any_venue_ready"]
+        and not runtime_enabled
+    ):
+        state = payload.get("writer_state", {})
+        logger.critical(
+            "WRITER_AUTHORITY_STATE_MACHINE_BUG marker=%s trigger=%s "
+            "lease=%s token=%s heartbeat_healthy=%s core_loop_alive=%s "
+            "capital_ready=%s ready_venues=%s runtime_execution_authority=%s auto_repair=true",
+            MARKER,
+            trigger,
+            state.get("lease_acquired"),
+            state.get("fencing_token"),
+            state.get("heartbeat_healthy"),
+            state.get("core_loop_alive"),
+            payload["capital_ready"],
+            ",".join(payload["ready_venues"]) or "none",
+            runtime_enabled,
+        )
+    if payload["writer_ready"]:
+        try:
+            repair = importlib.import_module("bot.runtime_authority_convergence_repair_patch")
+        except ImportError:
+            try:
+                repair = importlib.import_module("runtime_authority_convergence_repair_patch")
+            except ImportError:
+                return payload
+        converge = getattr(repair, "converge_runtime_authority", None)
+        if callable(converge):
+            try:
+                converge(f"three_venue_execution_readiness:{trigger}")
+            except Exception:
+                logger.exception(
+                    "THREE_VENUE_EXECUTION_RECONCILE_FAILED marker=%s trigger=%s",
+                    MARKER,
+                    trigger,
+                )
+    return payload
+
+
 def _monitor() -> None:
     interval = max(
         2.0,
@@ -629,7 +739,7 @@ def _monitor() -> None:
     )
     while True:
         try:
-            publish_once()
+            reconcile_execution_readiness(trigger="monitor")
         except Exception as exc:
             os.environ["NIJA_THREE_VENUE_EXECUTION_READY"] = "0"
             os.environ["NIJA_ANY_VENUE_EXECUTION_READY"] = "0"
@@ -671,8 +781,11 @@ __all__ = [
     "STAGES",
     "VENUES",
     "VenueReadiness",
+    "writer_authority_snapshot",
+    "writer_authority_ready",
     "evaluate_venue",
     "evaluate_all",
     "publish_once",
+    "reconcile_execution_readiness",
     "install",
 ]

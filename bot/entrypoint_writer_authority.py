@@ -38,6 +38,7 @@ SCAN_STARTED_DEADLINE_EXCEEDED – scan did not start within the expected window
 from __future__ import annotations
 
 import hashlib
+import importlib
 import json
 import logging
 import os
@@ -636,6 +637,7 @@ class EntrypointWriterAuthority:
         self._write_metadata()
         self._start_heartbeat()
         self._start_scan_started_watchdog()
+        self._notify_runtime_reconciliation("writer_acquired")
 
         logger.critical(
             "LOCK_ACQUIRED marker=%s token_prefix=%s generation=%s instance=%s",
@@ -709,6 +711,7 @@ class EntrypointWriterAuthority:
             ),
             fallback=True,
         )
+        self._notify_runtime_reconciliation("writer_acquired_local_fallback")
         logger.critical(
             "ENTRYPOINT_WRITER_AUTHORITY_LOCAL_FALLBACK marker=%s reason=%s instance=%s",
             _MARKER,
@@ -753,6 +756,20 @@ class EntrypointWriterAuthority:
             os.environ.pop("NIJA_WRITER_FENCING_TOKEN_FALLBACK", None)
             os.environ.pop("NIJA_LOCK_BYPASS_MODE", None)
 
+    def _notify_runtime_reconciliation(self, trigger: str) -> None:
+        try:
+            readiness = importlib.import_module("three_venue_execution_readiness")
+            reconcile = getattr(readiness, "reconcile_execution_readiness", None)
+            if callable(reconcile):
+                reconcile(trigger=trigger, force=True)
+        except Exception:
+            logger.debug(
+                "ENTRYPOINT_WRITER_RUNTIME_RECONCILIATION_DEFERRED marker=%s trigger=%s",
+                _MARKER,
+                trigger,
+                exc_info=True,
+            )
+
     def _metadata_payload(self) -> str:
         core_alive = False
         core_heartbeat_at = self._core_thread_last_alive_at or 0.0
@@ -795,7 +812,9 @@ class EntrypointWriterAuthority:
         now = time.time()
         self._core_thread_started_at = now
         self._core_thread_last_alive_at = now if thread.is_alive() else 0.0
+        os.environ["NIJA_CORE_THREAD_ALIVE"] = "1" if thread.is_alive() else "0"
         self._write_metadata()
+        self._notify_runtime_reconciliation("core_thread_registered")
 
     def _write_metadata(self) -> None:
         if self._client is None or not self._meta_key:
@@ -1045,6 +1064,7 @@ class EntrypointWriterAuthority:
                     os.getpid(),
                     bool(self._core_thread and self._core_thread.is_alive()),
                 )
+                self._notify_runtime_reconciliation("heartbeat_renewed")
                 return True, ""
             if code == -1:
                 if self._stop.is_set():
@@ -1072,6 +1092,7 @@ class EntrypointWriterAuthority:
                         _MARKER,
                         self._token[:8],
                     )
+                    self._notify_runtime_reconciliation("heartbeat_reacquired")
                     return True, ""
                 return False, "lock_expired_and_reacquire_lost"
             return False, "lock_owned_by_different_writer"
@@ -1205,6 +1226,7 @@ class EntrypointWriterAuthority:
             _MARKER,
             reason,
         )
+        self._notify_runtime_reconciliation("writer_lost")
         callback = self._on_lost_callback
         if callback is not None:
             try:
@@ -1310,6 +1332,7 @@ class EntrypointWriterAuthority:
                 self._instance_id,
                 os.getpid(),
             )
+            self._notify_runtime_reconciliation("writer_released")
             return released or self._local_fallback
 
 

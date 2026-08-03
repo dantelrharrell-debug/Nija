@@ -101,6 +101,18 @@ def _heartbeat_healthy() -> bool:
 def _writer_ready() -> bool:
     if not _live():
         return True
+    try:
+        readiness = importlib.import_module("three_venue_execution_readiness")
+        probe = getattr(readiness, "writer_authority_ready", None)
+        if callable(probe):
+            return bool(probe())
+    except Exception:
+        pass
+    return (
+        _flag("NIJA_WRITER_LEASE_ACQUIRED", False)
+        and bool(os.environ.get("NIJA_WRITER_FENCING_TOKEN", "").strip())
+        and _flag("NIJA_WRITER_HEARTBEAT_ACTIVE", False)
+        and _flag("NIJA_CORE_THREAD_ALIVE", False)
     lease_acquired = _flag("NIJA_WRITER_LEASE_ACQUIRED", False)
     generation_published = bool(os.environ.get("NIJA_WRITER_LEASE_GENERATION", "").strip())
     fencing_token = bool(os.environ.get("NIJA_WRITER_FENCING_TOKEN", "").strip())
