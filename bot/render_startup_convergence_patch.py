@@ -107,9 +107,41 @@ def normalize_derived_runtime_state() -> dict[str, str]:
             changes["NIJA_RUNTIME_TRADING_STATE"] = f"{raw_state or 'missing'}->OFF"
         os.environ["NIJA_RUNTIME_TRADING_STATE"] = "OFF"
 
-        if str(os.environ.get("NIJA_WRITER_LEASE_ACQUIRED", "")).strip() != "0":
-            changes["NIJA_WRITER_LEASE_ACQUIRED"] = "reset->0"
-        os.environ["NIJA_WRITER_LEASE_ACQUIRED"] = "0"
+        # Guard: never clear NIJA_WRITER_LEASE_ACQUIRED if the canonical
+        # EntrypointWriterAuthority singleton actively holds the Redis lock.
+        # The singleton is the sole authority over that flag; clearing it here
+        # when lineage appears stale (e.g. a transient gap between lock
+        # acquisition and fencing-token publication) breaks the heartbeat and
+        # causes an unnecessary re-election.  Only reset the flag when the
+        # singleton itself does not hold authority.
+        _singleton_acquired = False
+        try:
+            _ewa_mod = (
+                sys.modules.get("bot.entrypoint_writer_authority")
+                or sys.modules.get("entrypoint_writer_authority")
+            )
+            if _ewa_mod is not None:
+                _get_singleton = getattr(_ewa_mod, "get_entrypoint_writer_authority", None)
+                if callable(_get_singleton):
+                    _singleton = _get_singleton()
+                    _singleton_acquired = bool(
+                        _singleton is not None
+                        and getattr(_singleton, "acquired", False)
+                    )
+        except Exception:
+            pass
+
+        if not _singleton_acquired:
+            if str(os.environ.get("NIJA_WRITER_LEASE_ACQUIRED", "")).strip() != "0":
+                changes["NIJA_WRITER_LEASE_ACQUIRED"] = "reset->0"
+            os.environ["NIJA_WRITER_LEASE_ACQUIRED"] = "0"
+        else:
+            logger.debug(
+                "RENDER_STARTUP_LEASE_RESET_SKIPPED marker=%s "
+                "reason=singleton_holds_lock lineage_reason=%s",
+                _MARKER,
+                _,
+            )
     else:
         if raw_auth in _TRUE:
             os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "1"

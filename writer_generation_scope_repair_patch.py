@@ -150,20 +150,30 @@ def _patch_generation_tracker(module: ModuleType) -> bool:
         return False
 
     def get_redis_generation() -> tuple[int, str]:
-        key_id = _platform_key_id()
-        if not key_id:
-            return 0, "platform_api_key_not_configured"
+        # Read the generation counter from the SAME Redis key that
+        # entrypoint_writer_authority increments atomically during lock
+        # acquisition: NIJA_LEASE_GENERATION_KEY (default "nija:lease:generation").
+        #
+        # The previous implementation read from the per-key nonce lease version
+        # ("nija:kraken:writer:lease_version:{key_id}"), which is only written by
+        # the Kraken nonce backend — not by entrypoint_writer_authority.  This
+        # caused validate_generation_for_heartbeat() to report
+        # "platform_lease_version_missing" even though the correct generation
+        # counter (nija:lease:generation) existed and matched the local env var.
+        redis_key = (
+            os.environ.get("NIJA_LEASE_GENERATION_KEY", "").strip()
+            or "nija:lease:generation"
+        )
         client, err = connector(timeout_s=2)
         if client is None:
             return 0, err or "redis_unavailable"
-        redis_key = f"nija:kraken:writer:lease_version:{key_id}"
         try:
             raw = client.get(redis_key)
             if raw is None:
-                return 0, f"platform_lease_version_missing:{key_id}"
+                return 0, f"generation_key_missing:{redis_key}"
             return max(0, int(str(raw).strip())), ""
         except Exception as exc:
-            return 0, f"platform_lease_version_read_error:{exc}"
+            return 0, f"platform_generation_read_error:{exc}"
 
     get_redis_generation._nija_platform_generation_scoped = True  # type: ignore[attr-defined]
     get_redis_generation.__wrapped__ = original  # type: ignore[attr-defined]

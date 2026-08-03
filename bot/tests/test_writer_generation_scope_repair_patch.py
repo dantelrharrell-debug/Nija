@@ -92,10 +92,19 @@ def test_user_nonce_publisher_never_exposes_user_generation(monkeypatch):
     assert os.environ["NIJA_WRITER_LEASE_GENERATION"] == "101"
 
 
-def test_tracker_reads_platform_per_key_version(monkeypatch):
+def test_tracker_reads_canonical_generation_key(monkeypatch):
+    """Patched get_redis_generation must read from NIJA_LEASE_GENERATION_KEY.
+
+    The previous implementation read from the per-key nonce lease version
+    ("nija:kraken:writer:lease_version:{key_id}"), which caused
+    ``platform_lease_version_missing`` even when the canonical generation
+    counter ("nija:lease:generation") was healthy.  The patch now reads from
+    the same key that entrypoint_writer_authority increments atomically.
+    """
     patch = _load_patch()
     monkeypatch.setenv("KRAKEN_PLATFORM_API_KEY", "platform-secret")
-    platform_id = hashlib.sha256(b"platform-secret").hexdigest()[:16]
+    # Use the default key (no NIJA_LEASE_GENERATION_KEY override).
+    monkeypatch.delenv("NIJA_LEASE_GENERATION_KEY", raising=False)
     requested = []
 
     class Client:
@@ -109,4 +118,34 @@ def test_tracker_reads_platform_per_key_version(monkeypatch):
 
     assert patch._patch_generation_tracker(tracker)
     assert tracker.get_redis_generation() == (404, "")
-    assert requested == [f"nija:kraken:writer:lease_version:{platform_id}"]
+    # Must use the canonical lease generation key, NOT the per-key nonce key.
+    assert requested == ["nija:lease:generation"], (
+        f"Expected ['nija:lease:generation'] but got {requested!r}. "
+        "The patched get_redis_generation must read from NIJA_LEASE_GENERATION_KEY "
+        "(default nija:lease:generation), not nija:kraken:writer:lease_version:..."
+    )
+
+
+def test_tracker_respects_nija_lease_generation_key_override(monkeypatch):
+    """NIJA_LEASE_GENERATION_KEY override must be honoured."""
+    patch = _load_patch()
+    monkeypatch.setenv("NIJA_LEASE_GENERATION_KEY", "nija:custom:gen")
+    requested = []
+
+    class Client:
+        def get(self, key):
+            requested.append(key)
+            return "7"
+
+    tracker = ModuleType("fake_tracker")
+    tracker.get_redis_generation = lambda: (999, "")
+    tracker._connect_redis = lambda timeout_s=2: (Client(), "")
+
+    assert patch._patch_generation_tracker(tracker)
+    gen, err = tracker.get_redis_generation()
+    assert err == "", f"Unexpected error: {err}"
+    assert gen == 7
+    assert requested == ["nija:custom:gen"], (
+        f"Expected ['nija:custom:gen'] but got {requested!r}"
+    )
+
