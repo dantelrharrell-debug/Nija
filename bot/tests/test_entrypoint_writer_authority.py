@@ -145,15 +145,23 @@ class EntrypointWriterAuthorityTests(unittest.TestCase):
         self.assertIsNone(runtime._heartbeat_thread)
         self.assertEqual(os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"], "0")
 
-    def test_release_keeps_lease_when_heartbeat_cannot_quiesce(self):
+    def test_release_proceeds_with_deletion_when_heartbeat_cannot_quiesce(self):
+        """release() must delete the lock even when the heartbeat thread survives the join.
+
+        The heartbeat sets _stop before the join; the daemon thread therefore
+        cannot reacquire the lock.  Skipping deletion would leave a live lock in
+        Redis and force the successor instance to wait a full TTL before it can
+        become the active writer.
+        """
         client = MagicMock()
+        client.eval.return_value = 1  # compare-and-delete succeeds
 
         class StuckHeartbeat:
             def is_alive(self):
                 return True
 
             def join(self, timeout):
-                self.assert_timeout = timeout
+                pass
 
         runtime = EntrypointWriterAuthority()
         runtime._client = client
@@ -162,8 +170,8 @@ class EntrypointWriterAuthorityTests(unittest.TestCase):
         runtime._lock_value = "17:local-owner"
         runtime._heartbeat_thread = StuckHeartbeat()
 
-        self.assertFalse(runtime.release())
-        client.eval.assert_not_called()
+        self.assertTrue(runtime.release())
+        client.eval.assert_called_once()
 
     def test_redis_unavailable_remains_fail_closed_without_explicit_fallback(self):
         runtime = EntrypointWriterAuthority()
