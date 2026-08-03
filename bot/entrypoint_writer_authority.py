@@ -838,6 +838,12 @@ class EntrypointWriterAuthority:
                 )
                 return True, ""
             if code == -1:
+                if self._stop.is_set():
+                    # Shutdown in progress: do not reacquire a lock the caller
+                    # is about to compare-and-delete.  Creating a new lease here
+                    # would leave a countdown-only lock that blocks the successor
+                    # instance for a full TTL with no further heartbeats.
+                    return False, "lock_expired_during_shutdown_reacquire_skipped"
                 reacquired = bool(
                     self._client.set(
                         self._lock_key,
@@ -901,12 +907,17 @@ class EntrypointWriterAuthority:
                     )
                 )
             if heartbeat.is_alive():
-                logger.error(
-                    "ENTRYPOINT_WRITER_AUTHORITY_RELEASE_DEFERRED marker=%s "
-                    "reason=heartbeat_thread_still_alive lock_delete_skipped=true",
+                logger.warning(
+                    "ENTRYPOINT_WRITER_AUTHORITY_RELEASE_HEARTBEAT_TIMEOUT marker=%s "
+                    "reason=heartbeat_thread_still_alive_after_join "
+                    "proceeding_with_deletion=true stop_already_set=true",
                     _MARKER,
                 )
-                return False
+                # _stop is already set and the heartbeat will not reacquire the
+                # lock on its next iteration (see _heartbeat_tick).  The daemon
+                # thread will be killed when this process exits.  Proceed with
+                # compare-and-delete now so the successor instance can acquire
+                # without waiting for the full TTL to expire.
 
         with self._state_lock:
             released = False
