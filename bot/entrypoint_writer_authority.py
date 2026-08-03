@@ -732,6 +732,7 @@ class EntrypointWriterAuthority:
         os.environ["NIJA_WRITER_OWNER_ID"] = self._owner
         os.environ["NIJA_WRITER_INSTANCE_ID"] = self._instance_id
         os.environ["NIJA_WRITER_LEASE_GENERATION"] = str(self._generation)
+        os.environ["NIJA_WRITER_GENERATION"] = str(self._generation)
         os.environ["NIJA_LEASE_GENERATION_KEY"] = str(generation_key)
         os.environ["NIJA_WRITER_LEASE_ACQUIRED"] = "1"
         os.environ["NIJA_LOCK_ACQUIRED"] = "true"
@@ -1123,6 +1124,7 @@ class EntrypointWriterAuthority:
         os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "0"
         os.environ["NIJA_EXECUTION_ACTIVE"] = "false"
         os.environ.pop("NIJA_WRITER_FENCING_TOKEN", None)
+        os.environ.pop("NIJA_WRITER_GENERATION", None)
         logger.critical(
             "ENTRYPOINT_WRITER_AUTHORITY_LOST marker=%s reason=%s",
             _MARKER,
@@ -1214,6 +1216,7 @@ class EntrypointWriterAuthority:
             # authoritative signal once the lease is explicitly released.
             os.environ.pop("NIJA_CORE_THREAD_ALIVE", None)
             os.environ.pop("NIJA_WRITER_FENCING_TOKEN", None)
+            os.environ.pop("NIJA_WRITER_GENERATION", None)
             os.environ.pop("NIJA_WRITER_FENCING_TOKEN_FALLBACK", None)
             logger.info(
                 "ENTRYPOINT_WRITER_AUTHORITY_RELEASED marker=%s released=%s "

@@ -23,6 +23,7 @@ _ENV_KEYS = (
     "NIJA_WRITER_OWNER_ID",
     "NIJA_WRITER_INSTANCE_ID",
     "NIJA_WRITER_LEASE_GENERATION",
+    "NIJA_WRITER_GENERATION",
     "NIJA_WRITER_LEASE_ACQUIRED",
     "NIJA_LOCK_ACQUIRED",
     "NIJA_WRITER_HEARTBEAT_ACTIVE",
@@ -86,6 +87,7 @@ class EntrypointWriterAuthorityTests(unittest.TestCase):
         self.assertEqual(result.generation, 23)
         self.assertEqual(os.environ["NIJA_WRITER_FENCING_TOKEN"], "17")
         self.assertEqual(os.environ["NIJA_WRITER_LEASE_GENERATION"], "23")
+        self.assertEqual(os.environ["NIJA_WRITER_GENERATION"], "23")
         self.assertEqual(os.environ["NIJA_WRITER_LEASE_ACQUIRED"], "1")
         self.assertEqual(os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"], "1")
         self.assertTrue(os.environ["NIJA_WRITER_LOCK_KEY"].startswith("nija:writer_lock:"))
@@ -241,6 +243,7 @@ class EntrypointWriterAuthorityTests(unittest.TestCase):
         release_call = client.eval.call_args_list[-1]
         self.assertIn("current ~= ARGV[1]", release_call.args[0])
         self.assertNotIn("NIJA_WRITER_FENCING_TOKEN", os.environ)
+        self.assertNotIn("NIJA_WRITER_GENERATION", os.environ)
 
 
 class BotMainAuthorityOrderingTests(unittest.TestCase):
