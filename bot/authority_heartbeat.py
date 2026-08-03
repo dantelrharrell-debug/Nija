@@ -797,6 +797,27 @@ class AuthorityHeartbeatMonitor:
                     "AUTHORITY_HEARTBEAT: coordinator record_authority failed: %s",
                     _coord_exc,
                 )
+
+            # Assert runtime_execution_authority immediately — do not wait for the
+            # periodic auto-repair cycle.  This fixes the state transition bug where
+            # the execution pipeline stalled after heartbeat + lease became healthy
+            # because converge_runtime_authority() was never triggered synchronously.
+            try:
+                try:
+                    from bot.runtime_authority_convergence_repair_patch import (
+                        converge_runtime_authority as _converge,
+                    )
+                except ImportError:
+                    from runtime_authority_convergence_repair_patch import (  # type: ignore[import]
+                        converge_runtime_authority as _converge,
+                    )
+                _converge("authority_heartbeat_tick")
+            except Exception as _conv_exc:
+                logger.debug(
+                    "AUTHORITY_HEARTBEAT: converge_runtime_authority failed: %s",
+                    _conv_exc,
+                )
+
             return
 
         # ── Failure path ─────────────────────────────────────────────────────
