@@ -270,7 +270,8 @@ class EmergencySymbolResolver:
             self._failure_counts.pop(standard_symbol, None)
 
         _now = time.time()
-        if self._registry.is_delisted(standard_symbol):
+        _known_delisted = self._registry.is_delisted(standard_symbol)
+        if _known_delisted:
             metadata = self._registry.get_metadata(standard_symbol) or {}
             last_checked = float(metadata.get("last_checked", metadata.get("detected_at", 0.0)) or 0.0)
             if (not force_recheck) and ((_now - last_checked) < self.DELISTED_CACHE_REFRESH_SECONDS):
@@ -298,11 +299,13 @@ class EmergencySymbolResolver:
         # All stages failed — increment failure counter
         count = self._increment_failure(standard_symbol)
 
-        if count >= self.FAILURES_BEFORE_DELISTED:
+        if _known_delisted or count >= self.FAILURES_BEFORE_DELISTED:
             self._registry.mark_delisted(
                 standard_symbol,
-                reason=f"Price fetch failed after {count} consecutive attempts "
-                       f"(all resolution stages exhausted)",
+                reason=(
+                    f"Price fetch failed after {count} consecutive attempts "
+                    f"(all resolution stages exhausted)"
+                ),
             )
             return ResolvedSymbol(
                 original_symbol=standard_symbol,
