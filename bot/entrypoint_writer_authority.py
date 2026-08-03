@@ -1193,6 +1193,7 @@ class EntrypointWriterAuthority:
         os.environ["NIJA_EXECUTION_ACTIVE"] = "false"
         os.environ.pop("NIJA_WRITER_FENCING_TOKEN", None)
         os.environ.pop("NIJA_WRITER_GENERATION", None)
+        os.environ.pop("NIJA_WRITER_LEASE_GENERATION", None)
         logger.critical(
             "ENTRYPOINT_WRITER_AUTHORITY_LOST marker=%s reason=%s",
             _MARKER,
@@ -1286,6 +1287,7 @@ class EntrypointWriterAuthority:
             os.environ.pop("NIJA_WRITER_FENCING_TOKEN", None)
             os.environ.pop("NIJA_WRITER_GENERATION", None)
             os.environ.pop("NIJA_WRITER_FENCING_TOKEN_FALLBACK", None)
+            os.environ.pop("NIJA_WRITER_LEASE_GENERATION", None)
             logger.info(
                 "ENTRYPOINT_WRITER_AUTHORITY_RELEASED marker=%s released=%s "
                 "local_fallback=%s heartbeat_quiesced=true",

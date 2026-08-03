@@ -2402,9 +2402,9 @@ _distributed_writer_fencing_token = 0
 _distributed_writer_lock_stop = threading.Event()
 _distributed_writer_lock_thread = None
 _running_in_degraded_mode = False  # True if bot runs without Redis distributed lock safety
-os.environ.setdefault("NIJA_WRITER_LEASE_ACQUIRED", "0")
-os.environ.setdefault("NIJA_WRITER_HEARTBEAT_ACTIVE", "0")
-os.environ.setdefault("NIJA_WRITER_HEARTBEAT_ALIVE_TS", "0")
+os.environ.setdefault("NIJA_WRITER_LEASE_ACQUIRED", "")
+os.environ.setdefault("NIJA_WRITER_HEARTBEAT_ACTIVE", "")
+os.environ.setdefault("NIJA_WRITER_HEARTBEAT_ALIVE_TS", "")
 
 
 def _writer_lineage_ready() -> tuple[bool, str]:
@@ -2547,6 +2547,9 @@ def _release_distributed_process_lock() -> None:
         os.environ["NIJA_WRITER_LEASE_ACQUIRED"] = "0"
         os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"] = "0"
         os.environ["NIJA_WRITER_HEARTBEAT_ALIVE_TS"] = "0"
+        os.environ.pop("NIJA_WRITER_FENCING_TOKEN", None)
+        os.environ.pop("NIJA_WRITER_FENCING_TOKEN_FALLBACK", None)
+        os.environ.pop("NIJA_WRITER_LEASE_GENERATION", None)
 
 
 def _release_nonce_writer_lease() -> None:
@@ -2766,6 +2769,9 @@ def _acquire_distributed_process_lock() -> None:
     os.environ["NIJA_WRITER_LEASE_ACQUIRED"] = "0"
     os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"] = "0"
     os.environ["NIJA_WRITER_HEARTBEAT_ALIVE_TS"] = "0"
+    os.environ.pop("NIJA_WRITER_FENCING_TOKEN", None)
+    os.environ.pop("NIJA_WRITER_FENCING_TOKEN_FALLBACK", None)
+    os.environ.pop("NIJA_WRITER_LEASE_GENERATION", None)
     _truthy = ("1", "true", "yes", "enabled", "on")
     _standby_retry_active = os.environ.get("NIJA_STANDBY_RETRY_ACTIVE", "0").strip() == "1"
     try:
@@ -3488,6 +3494,7 @@ def _acquire_distributed_process_lock() -> None:
                     _bypass_token = int(time.time() * 1000) % 1_000_000 or 1
                     os.environ["NIJA_WRITER_LEASE_ACQUIRED"] = "1"
                     os.environ["NIJA_WRITER_FENCING_TOKEN"] = str(_bypass_token)
+                    os.environ["NIJA_WRITER_FENCING_TOKEN_FALLBACK"] = "1"
                     os.environ["NIJA_WRITER_LEASE_GENERATION"] = str(_bypass_token)
                     os.environ["NIJA_WRITER_LOCK_ACQUIRED_AT"] = str(time.time())
                     os.environ["NIJA_LOCK_BYPASS_MODE"] = "NIJA_ALLOW_LOCAL_WRITER_LOCK_FALLBACK"
@@ -3590,6 +3597,7 @@ def _acquire_distributed_process_lock() -> None:
                     _bypass_token = int(time.time() * 1000) % 1_000_000 or 1
                     os.environ["NIJA_WRITER_LEASE_ACQUIRED"] = "1"
                     os.environ["NIJA_WRITER_FENCING_TOKEN"] = str(_bypass_token)
+                    os.environ["NIJA_WRITER_FENCING_TOKEN_FALLBACK"] = "1"
                     os.environ["NIJA_WRITER_LEASE_GENERATION"] = str(_bypass_token)
                     os.environ["NIJA_WRITER_LOCK_ACQUIRED_AT"] = str(time.time())
                     os.environ["NIJA_LOCK_BYPASS_MODE"] = "NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK"
@@ -3603,6 +3611,7 @@ def _acquire_distributed_process_lock() -> None:
                     _bypass_token = int(time.time() * 1000) % 1_000_000 or 1
                     os.environ["NIJA_WRITER_LEASE_ACQUIRED"] = "1"
                     os.environ["NIJA_WRITER_FENCING_TOKEN"] = str(_bypass_token)
+                    os.environ["NIJA_WRITER_FENCING_TOKEN_FALLBACK"] = "1"
                     os.environ["NIJA_WRITER_LEASE_GENERATION"] = str(_bypass_token)
                     os.environ["NIJA_WRITER_LOCK_ACQUIRED_AT"] = str(time.time())
                     os.environ["NIJA_LOCK_BYPASS_MODE"] = "NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK"
@@ -3941,6 +3950,7 @@ def _acquire_distributed_process_lock() -> None:
                 _bypass_token = int(time.time() * 1000) % 1_000_000 or 1
                 os.environ["NIJA_WRITER_LEASE_ACQUIRED"] = "1"
                 os.environ["NIJA_WRITER_FENCING_TOKEN"] = str(_bypass_token)
+                os.environ["NIJA_WRITER_FENCING_TOKEN_FALLBACK"] = "1"
                 os.environ["NIJA_WRITER_LEASE_GENERATION"] = str(_bypass_token)
                 os.environ["NIJA_WRITER_LOCK_ACQUIRED_AT"] = str(time.time())
                 os.environ["NIJA_LOCK_BYPASS_MODE"] = "NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK"
@@ -3959,6 +3969,7 @@ def _acquire_distributed_process_lock() -> None:
                 _bypass_token = int(time.time() * 1000) % 1_000_000 or 1
                 os.environ["NIJA_WRITER_LEASE_ACQUIRED"] = "1"
                 os.environ["NIJA_WRITER_FENCING_TOKEN"] = str(_bypass_token)
+                os.environ["NIJA_WRITER_FENCING_TOKEN_FALLBACK"] = "1"
                 os.environ["NIJA_WRITER_LEASE_GENERATION"] = str(_bypass_token)
                 os.environ["NIJA_WRITER_LOCK_ACQUIRED_AT"] = str(time.time())
                 os.environ["NIJA_LOCK_BYPASS_MODE"] = "NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK"
