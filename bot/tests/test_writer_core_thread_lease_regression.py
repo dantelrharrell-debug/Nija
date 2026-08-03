@@ -286,28 +286,28 @@ class TestValidateCoreThreadLivenessDeadline(_Base):
 
 class TestScanStartedWatchdogReelection(_Base):
 
-    def test_watchdog_calls_release_on_deadline_exceeded(self):
-        """_scan_started_watchdog_loop must call _release_owned_lock_for_reelection."""
+    def test_watchdog_does_not_release_on_deadline_exceeded(self):
+        """_scan_started_watchdog_loop must NOT release the writer lease when the
+        scan-start deadline is exceeded.  The bot should continue holding
+        authority so that the scan can still start once exchange connections
+        finish bootstrapping (e.g. after a slow Kraken reconnect)."""
         rt = self._make_runtime()
         _, client = self._acquire(rt)
 
         client.eval.return_value = 1
 
         # Set acquired_at far enough in the past that elapsed >= deadline_s
-        # on the very first poll.
+        # on the very first poll, then stop the event so the loop exits.
         rt._acquired_at = time.time() - 400.0
+        rt._stop.set()  # stop immediately after one iteration
 
         with self._mock_seak():
             with patch.object(
                 rt, "_release_owned_lock_for_reelection"
             ) as mock_release:
-                # Run with a 1-second deadline; acquired_at is 400 s ago
-                # so the deadline is immediately exceeded.
                 rt._scan_started_watchdog_loop(deadline_s=1.0)
 
-        mock_release.assert_called_once()
-        call_reason = mock_release.call_args[0][0]
-        self.assertIn("scan_started_deadline_exceeded", call_reason)
+        mock_release.assert_not_called()
 
     def test_watchdog_sets_scan_deadline_exceeded_flag(self):
         """_scan_deadline_exceeded must be True after the watchdog fires."""
@@ -316,6 +316,10 @@ class TestScanStartedWatchdogReelection(_Base):
 
         client.eval.return_value = 1
         rt._acquired_at = time.time() - 400.0
+        # Stop after the first iteration so the loop exits rather than
+        # spinning indefinitely (the watchdog no longer self-terminates on
+        # deadline; it keeps monitoring until stopped externally).
+        rt._stop.set()
 
         with self._mock_seak():
             rt._scan_started_watchdog_loop(deadline_s=1.0)
