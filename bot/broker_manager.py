@@ -8811,6 +8811,20 @@ class KrakenBroker(BaseBroker):
         if _already_done:
             logger.debug(f"[KrakenBroker:{_label}] Connection already established — skipping reconnect routine")
             return True
+
+        # Reset any previous hard-stop so reconnect attempts are never
+        # permanently blocked by a prior transient failure (e.g. the Redis
+        # writer lease being held by a previous container at startup).
+        # Any condition that should remain a hard-stop will re-trigger the
+        # flag within this same connect() call if still present.
+        if self._hard_stopped:
+            logger.info(
+                "[KrakenBroker:%s] Clearing hard-stop flag for reconnect attempt (was: %s)",
+                _label, self._hard_stop_reason,
+            )
+            self._hard_stopped = False
+            self._hard_stop_reason = ""
+
         if self.account_type == AccountType.PLATFORM:
             try:
                 from bot.multi_account_broker_manager import get_broker_manager
@@ -9261,9 +9275,21 @@ class KrakenBroker(BaseBroker):
                 )
                 return False
             except Exception as _ne:
-                self._trigger_hard_stop(
+                # Treat writer-lease acquisition failure as a retryable error,
+                # not a permanent hard-stop.  The lease may be held by a
+                # previous container that has not yet expired; the reconnect
+                # loop will retry and eventually succeed once the old TTL
+                # clears.  Calling _trigger_hard_stop here would permanently
+                # block Kraken even after the lease becomes available.
+                self.last_connection_error = (
                     "DistributedNonceManager unavailable — nonce authority cannot be established: "
                     f"{_ne}"
+                )
+                logger.error(
+                    "❌ [KrakenBroker:%s] Nonce authority unavailable (%s) — "
+                    "will retry on next reconnect attempt",
+                    cred_label,
+                    _ne,
                 )
                 return False
 

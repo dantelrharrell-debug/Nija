@@ -863,26 +863,32 @@ class EntrypointWriterAuthority:
     def _scan_started_watchdog_loop(self, deadline_s: float) -> None:
         acquired_at = self._acquired_at or time.time()
         poll_interval = min(10.0, max(1.0, deadline_s / 10.0))
+        _deadline_last_logged = 0.0
+        _deadline_rewarning_s = min(60.0, max(poll_interval, deadline_s / 5.0))
         while not self._stop.is_set():
             if self._scan_started_at:
                 return  # Scan started in time; watchdog duty fulfilled
             elapsed = time.time() - acquired_at
             if elapsed >= deadline_s:
-                logger.error(
-                    "SCAN_STARTED_DEADLINE_EXCEEDED marker=%s deadline_s=%.0f "
-                    "elapsed_since_acquisition=%.1fs writer_acquired=%s instance=%s",
-                    _MARKER,
-                    deadline_s,
-                    elapsed,
-                    self.acquired,
-                    self._instance_id,
-                )
-                # The core loop never entered its running state within the
-                # deadline window.  Release the lease immediately and trigger a
-                # fresh writer election so another instance can take over.
                 self._scan_deadline_exceeded = True
-                self._release_owned_lock_for_reelection("scan_started_deadline_exceeded")
-                return
+                now = time.time()
+                if now - _deadline_last_logged >= _deadline_rewarning_s:
+                    _deadline_last_logged = now
+                    logger.error(
+                        "SCAN_STARTED_DEADLINE_EXCEEDED marker=%s deadline_s=%.0f "
+                        "elapsed_since_acquisition=%.1fs writer_acquired=%s instance=%s",
+                        _MARKER,
+                        deadline_s,
+                        elapsed,
+                        self.acquired,
+                        self._instance_id,
+                    )
+                # Do not release the writer lease or trigger re-election.
+                # The scan may still start once exchange connections finish
+                # bootstrapping.  Keep monitoring until scan starts or the
+                # authority is stopped externally.
+                self._stop.wait(poll_interval)
+                continue
             remaining = (acquired_at + deadline_s) - time.time()
             self._stop.wait(min(poll_interval, max(0.1, remaining)))
 
