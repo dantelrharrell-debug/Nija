@@ -369,7 +369,7 @@ def _patch_core_loop_class(cls) -> bool:
             # Guard: if entries were blocked, top_reject must not be "none" — emit
             # the best available reason rather than masking the real block cause.
             if blocked > 0 and top_reject == "none":
-                top_reject = "blocked_no_reason_recorded"
+                top_reject = top_veto if top_veto != "none" else "entry_blocked_unspecified"
             if entered > 0:
                 status = "ORDER_PATH_ACTIVE"
                 reason = "entries_taken"
