@@ -46,6 +46,14 @@ def _set_credentials(monkeypatch) -> None:
         monkeypatch.setenv(key, value)
 
 
+def _set_writer_ready_env(monkeypatch) -> None:
+    monkeypatch.setenv("NIJA_WRITER_LEASE_ACQUIRED", "1")
+    monkeypatch.setenv("NIJA_WRITER_FENCING_TOKEN", "token")
+    monkeypatch.setenv("NIJA_WRITER_HEARTBEAT_ACTIVE", "1")
+    monkeypatch.setenv("NIJA_WRITER_HEARTBEAT_ALIVE_TS", "9999999999")
+    monkeypatch.setenv("NIJA_CORE_THREAD_ALIVE", "1")
+
+
 def test_all_three_venues_require_every_stage(monkeypatch) -> None:
     module = _module()
     _set_credentials(monkeypatch)
@@ -94,8 +102,7 @@ def test_missing_one_stage_keeps_only_that_venue_fail_closed(monkeypatch) -> Non
 def test_one_ready_venue_enables_execution_independently(monkeypatch) -> None:
     module = _module()
     _set_credentials(monkeypatch)
-    monkeypatch.setenv("NIJA_WRITER_LEASE_ACQUIRED", "1")
-    monkeypatch.setenv("NIJA_WRITER_FENCING_TOKEN", "token")
+    _set_writer_ready_env(monkeypatch)
     monkeypatch.setenv("CAPITAL_SYSTEM_READY", "1")
 
     kraken = FakeBroker(balance=116.09)
@@ -126,8 +133,7 @@ def test_hydrated_fresh_capital_authority_satisfies_capital_gate(monkeypatch) ->
     monkeypatch.delenv("CAPITAL_SYSTEM_READY", raising=False)
     monkeypatch.delenv("NIJA_CAPITAL_READY", raising=False)
     monkeypatch.setenv("NIJA_RUNTIME_TRADING_STATE", "LIVE_PENDING_CONFIRMATION")
-    monkeypatch.setenv("NIJA_WRITER_LEASE_ACQUIRED", "1")
-    monkeypatch.setenv("NIJA_WRITER_FENCING_TOKEN", "token")
+    _set_writer_ready_env(monkeypatch)
 
     authority = SimpleNamespace(
         is_hydrated=True,
@@ -159,8 +165,7 @@ def test_handoff_corroboration_clears_stale_capital_snapshot(monkeypatch) -> Non
     monkeypatch.delenv("CAPITAL_SYSTEM_READY", raising=False)
     monkeypatch.delenv("NIJA_CAPITAL_READY", raising=False)
     monkeypatch.setenv("NIJA_CAPITAL_READINESS_HANDOFF_V34", "1")
-    monkeypatch.setenv("NIJA_WRITER_LEASE_ACQUIRED", "1")
-    monkeypatch.setenv("NIJA_WRITER_FENCING_TOKEN", "token")
+    _set_writer_ready_env(monkeypatch)
 
     authority = SimpleNamespace(
         is_hydrated=lambda: True,
@@ -196,6 +201,58 @@ def test_live_active_state_does_not_substitute_for_capital_readiness(monkeypatch
     monkeypatch.delitem(sys.modules, "capital_authority", raising=False)
 
     assert module._capital_ready() is False
+
+
+def test_writer_authority_ready_requires_heartbeat_and_core_loop(monkeypatch) -> None:
+    module = _module()
+    _set_writer_ready_env(monkeypatch)
+
+    assert module.writer_authority_ready() is True
+
+    monkeypatch.setenv("NIJA_CORE_THREAD_ALIVE", "0")
+    assert module.writer_authority_ready() is False
+
+    monkeypatch.setenv("NIJA_CORE_THREAD_ALIVE", "1")
+    monkeypatch.setenv("NIJA_WRITER_HEARTBEAT_ACTIVE", "0")
+    assert module.writer_authority_ready() is False
+
+
+def test_reconcile_requests_runtime_repair_when_writer_and_venue_are_ready(monkeypatch) -> None:
+    module = _module()
+    calls = []
+    monkeypatch.setattr(
+        module,
+        "publish_once",
+        lambda force=False: {
+            "marker": module.MARKER,
+            "timestamp": 1.0,
+            "pid": 1,
+            "writer_ready": True,
+            "writer_state": {
+                "lease_acquired": True,
+                "fencing_token": True,
+                "heartbeat_healthy": True,
+                "core_loop_alive": True,
+            },
+            "capital_ready": True,
+            "any_venue_ready": True,
+            "all_venues_ready": False,
+            "execution_ready": True,
+            "three_venue_execution_ready": True,
+            "ready_venues": ["kraken"],
+            "degraded_venues": ["coinbase", "okx"],
+            "venues": {},
+        },
+    )
+
+    repair_module = ModuleType("bot.runtime_authority_convergence_repair_patch")
+    repair_module.converge_runtime_authority = lambda source: calls.append(source) or True
+    monkeypatch.setitem(sys.modules, "bot.runtime_authority_convergence_repair_patch", repair_module)
+    monkeypatch.delenv("NIJA_RUNTIME_EXECUTION_AUTHORITY", raising=False)
+
+    module.reconcile_execution_readiness(trigger="unit_test", force=True)
+
+    assert calls == ["three_venue_execution_readiness:unit_test"]
 
 
 def test_publish_sets_independent_compatibility_flags(monkeypatch) -> None:

@@ -34,6 +34,7 @@ _ENV_KEYS = (
     "NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK",
     "NIJA_CONFIRM_BYPASS_RISKS",
     "NIJA_WRITER_FENCING_TOKEN_FALLBACK",
+    "NIJA_CORE_THREAD_ALIVE",
 )
 
 
@@ -186,6 +187,29 @@ class EntrypointWriterAuthorityTests(unittest.TestCase):
         self.assertFalse(result.acquired)
         self.assertEqual(result.error, "redis_unavailable:test")
         self.assertNotIn("NIJA_WRITER_FENCING_TOKEN", os.environ)
+
+    def test_register_core_thread_publishes_liveness_and_reconciles_immediately(self):
+        runtime = EntrypointWriterAuthority()
+        calls = []
+        readiness = types.ModuleType("three_venue_execution_readiness")
+        readiness.reconcile_execution_readiness = lambda **kwargs: calls.append(kwargs)
+
+        class _Thread:
+            name = "nija-core-loop"
+            ident = 123
+
+            @staticmethod
+            def is_alive():
+                return True
+
+        with patch.dict(sys.modules, {"three_venue_execution_readiness": readiness}):
+            runtime.register_core_thread(_Thread())
+
+        self.assertEqual(os.environ["NIJA_CORE_THREAD_ALIVE"], "1")
+        self.assertEqual(
+            calls,
+            [{"trigger": "core_thread_registered", "force": True}],
+        )
 
     def test_local_fallback_requires_risk_confirmation(self):
         os.environ["NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK"] = "true"
