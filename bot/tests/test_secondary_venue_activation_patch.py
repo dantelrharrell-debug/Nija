@@ -164,6 +164,7 @@ def test_writer_ready_requires_heartbeat_and_core_via_global_probe(monkeypatch):
     monkeypatch.setenv("NIJA_WRITER_LEASE_ACQUIRED", "1")
     monkeypatch.setenv("NIJA_WRITER_FENCING_TOKEN", "token")
     monkeypatch.setenv("NIJA_WRITER_HEARTBEAT_ACTIVE", "1")
+    monkeypatch.setenv("NIJA_WRITER_HEARTBEAT_ALIVE_TS", "9999999999")
     monkeypatch.setenv("NIJA_CORE_THREAD_ALIVE", "0")
 
     assert patch._writer_ready() is False
