@@ -914,8 +914,76 @@ class EntrypointWriterAuthority:
                     return
             self._stop.wait(interval_s)
 
+    def _check_authority_invariant(self) -> tuple[bool, str]:
+        """Enforce the authority invariant before each lease renewal.
+
+        The invariant is:
+
+            lease_acquired == (fencing_token_active AND heartbeat_running AND core_ok)
+
+        Two asymmetric violations are actionable:
+
+        * ``NIJA_WRITER_LEASE_ACQUIRED == "1"`` but ``NIJA_WRITER_FENCING_TOKEN``
+          is absent — the token was externally cleared while the lease flag was
+          not.  Release immediately so execution gates never operate in a
+          half-initialized state.
+
+        * ``self.acquired`` is True (in-memory) but ``NIJA_WRITER_LEASE_ACQUIRED``
+          has been set to a non-truthy value by an external initialisation path
+          (e.g. ``render_startup_convergence_patch.normalize_derived_runtime_state``
+          running before it checked the singleton).  Release immediately so the
+          in-memory state converges with the environment.
+
+        Returns (ok, reason).  ok==False means the caller should stop the
+        heartbeat; the release has already been initiated here.
+        """
+        _truthy = {"1", "true", "yes", "on", "enabled"}
+        lease_flag = os.environ.get("NIJA_WRITER_LEASE_ACQUIRED", "").strip()
+        lease_set = lease_flag in _truthy
+        token = os.environ.get("NIJA_WRITER_FENCING_TOKEN", "").strip()
+
+        # Violation 1: env says lease held but fencing token is gone.
+        if lease_set and not token:
+            reason = (
+                "authority_invariant_violated:lease_acquired_but_fencing_token_missing "
+                f"NIJA_WRITER_LEASE_ACQUIRED={lease_flag!r}"
+            )
+            logger.critical(
+                "WRITER_AUTHORITY_INVARIANT_VIOLATED marker=%s %s",
+                _MARKER,
+                reason,
+            )
+            self._release_owned_lock_for_reelection(reason)
+            return False, reason
+
+        # Violation 2: in-memory singleton says acquired but env was externally
+        # cleared to a falsy value.
+        if self.acquired and lease_flag and not lease_set:
+            reason = (
+                "authority_invariant_violated:singleton_acquired_but_env_cleared "
+                f"NIJA_WRITER_LEASE_ACQUIRED={lease_flag!r}"
+            )
+            logger.critical(
+                "WRITER_AUTHORITY_INVARIANT_VIOLATED marker=%s %s",
+                _MARKER,
+                reason,
+            )
+            self._release_owned_lock_for_reelection(reason)
+            return False, reason
+
+        return True, ""
+
     def _heartbeat_tick(self) -> tuple[bool, str]:
         os.environ["NIJA_WRITER_HEARTBEAT_ALIVE_TS"] = str(time.time())
+
+        # Enforce the authority invariant before each renewal.  If the fencing
+        # token has been externally cleared or the lease flag was externally
+        # reset, release authority immediately rather than renewing a lease in
+        # a partial state.
+        inv_ok, inv_reason = self._check_authority_invariant()
+        if not inv_ok:
+            return False, inv_reason
+
         core_ok, core_reason = self._validate_core_thread_liveness()
         # Publish liveness state so the authority heartbeat monitor can also
         # gate on core_thread_alive (Fix 2).
