@@ -1118,6 +1118,9 @@ class NijaCoreLoop:
             "fills": 0,
             "execute_successes": 0,
         }
+        self._first_scan_started_logged: bool = False
+        self._first_signal_generated_logged: bool = False
+        self._first_order_submitted_logged: bool = False
 
         logger.info(
             "✅ NijaCoreLoop initialized (max_positions=%d, max_entries_per_cycle=%d)",
@@ -2042,6 +2045,19 @@ class NijaCoreLoop:
             0,
             _signals_generated - int(result.candidates_selected or 0),
         )
+        if not self._first_scan_started_logged:
+            self._first_scan_started_logged = True
+            logger.critical(
+                "FIRST_SCAN_STARTED symbols_scanned=%d markets_loaded=%d",
+                len(symbols),
+                _universe_tradeable,
+            )
+        if _signals_generated > 0 and not self._first_signal_generated_logged:
+            self._first_signal_generated_logged = True
+            logger.critical(
+                "FIRST_SIGNAL_GENERATED count=%d",
+                _signals_generated,
+            )
         logger.info(
             "SCAN_CYCLE",
             extra={
@@ -4400,6 +4416,14 @@ class NijaCoreLoop:
                     float(analysis.get("entry_price", 0.0) or 0.0),
                     sig.side,
                 )
+                if not self._first_order_submitted_logged:
+                    self._first_order_submitted_logged = True
+                    logger.critical(
+                        "FIRST_ORDER_SUBMITTED venue=%s symbol=%s side=%s",
+                        _broker_name,
+                        sig.symbol,
+                        sig.side,
+                    )
                 success = self.apex.execute_action(analysis, sig.symbol)
                 # Record orders_submitted AFTER execute_action returns so the counter
                 # only reflects exchange requests that were actually dispatched, not

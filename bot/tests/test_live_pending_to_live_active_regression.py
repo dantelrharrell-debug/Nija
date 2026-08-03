@@ -67,6 +67,8 @@ def _make_snapshot(**overrides) -> StartupConvergenceSnapshot:
         capital_version=1,
         readiness_version=1,
         readiness_table={k: True for k in readiness_table.KEYS},
+        global_gate_ready=False,
+        global_gate_detail="not_evaluated",
         capital_hydrated=True,
         capital_balance=3000.0,
         capital_stale=False,
