@@ -1936,6 +1936,7 @@ class TradingStateMachine:
 
         # Start authority heartbeat monitor when entering LIVE_ACTIVE.
         if new_state == TradingState.LIVE_ACTIVE:
+            logger.critical("LIVE_STATE_ENTERED state=%s reason=%s", new_state.value, reason or "")
             try:
                 try:
                     from bot.authority_heartbeat import start_authority_heartbeat
@@ -2615,6 +2616,12 @@ class TradingStateMachine:
             _heartbeat_trade,
             self._first_snap_accepted,
         )
+        logger.critical(
+            "STARTUP_STATE state=%s committed=%s first_snap=%s",
+            current.value,
+            self._activation_committed,
+            self._first_snap_accepted,
+        )
 
         if current == TradingState.LIVE_ACTIVE:
             # State was set externally (e.g. manual transition); sync the flag.
@@ -2773,6 +2780,13 @@ class TradingStateMachine:
             _mabm_gate,
             self,
         )
+        logger.critical(
+            "GLOBAL_GATE ready=%s kill_switch=%s capital_hydrated=%s detail=%s",
+            _barrier_ready,
+            kill_state,
+            _ca_hydrated_lcv,
+            _barrier_reason,
+        )
         if not _barrier_ready:
             _log_activation_diag_once(
                 "auto_activate_blocked",
@@ -2867,12 +2881,15 @@ class TradingStateMachine:
             nonce_detail=_nonce_detail,
             dispatch_health_ready=_dispatch_health_ready,
             dispatch_health_detail=_barrier_reason,
+            global_gate_ready=_barrier_ready,
+            global_gate_detail=_barrier_reason,
             activation_requested=_activation_requested,
             activation_source="commit_activation:operator_intent",
             kill_switch_active=kill_state,
             trading_state=current.value,
             activation_intent=_live_activation_intent,
         )
+        _global_gate_direct_live = bool(_barrier_ready and (not kill_state) and _ca_hydrated_lcv)
         _log_activation_diag_once(
             "startup_coordinator_decision",
             (
@@ -2881,105 +2898,116 @@ class TradingStateMachine:
                 _decision.reason,
                 _system_readiness_proof.first_blocking_gate,
                 _system_readiness_proof.passed,
+                _global_gate_direct_live,
                 _frozen_snapshot.bootstrap_state,
                 _frozen_snapshot.capital_state,
                 _frozen_snapshot.readiness_version,
             ),
             "STARTUP_COORDINATOR_DECISION version=%s state=%s reason=%s proof_first_blocker=%s proof_passed=%s "
-            "bootstrap=%s capital=%s readiness_v=%s",
+            "global_gate_direct_live=%s bootstrap=%s capital=%s readiness_v=%s",
             _decision.snapshot_version,
             _decision.target_state.value,
             _decision.reason,
             _system_readiness_proof.first_blocking_gate,
             _system_readiness_proof.passed,
+            _global_gate_direct_live,
             _frozen_snapshot.bootstrap_state,
             _frozen_snapshot.capital_state,
             _frozen_snapshot.readiness_version,
         )
 
         if not _system_readiness_proof.passed:
-            _block_reason = str(_system_readiness_proof.first_blocking_gate or _decision.reason or "UNKNOWN")
-            _block_detail = (
-                f"proof_reason={_system_readiness_proof.reason} "
-                f"failed_gates={','.join(_system_readiness_proof.failed_gates)}"
-            )
-            _log_activation_diag_once(
-                "auto_activate_blocked",
-                (_block_reason, _block_detail),
-                "[AUTO_ACTIVATE BLOCKED] reason=%s detail=%s",
-                _block_reason,
-                _block_detail or "n/a",
-            )
-            logger.warning(
-                "[ACTIVATION_FAILURE] coordinator proof blocked activation "
-                "first_gate=%s failed_gates=%s authority_ready=%s capital_stale=%s "
-                "runtime_authority_state=%s",
-                _system_readiness_proof.first_blocking_gate,
-                ",".join(_system_readiness_proof.failed_gates),
-                authority_ready,
-                not _cap_ready,
-                _frozen_snapshot.runtime_authority_state,
-            )
-
-            # ── 30-second watchdog ────────────────────────────────────────────
-            # If all outer activation gates have been satisfied (BROKER_INDEPENDENT_
-            # EXECUTION_READY was logged) and the coordinator proof is still
-            # blocking after 30 seconds, log every unsatisfied gate at CRITICAL
-            # level and trigger a forced re-evaluation via the convergence path.
-            _bier_at = _broker_execution_ready_at
-            if _bier_at is not None:
-                _watchdog_elapsed = time.monotonic() - _bier_at
-                _watchdog_timeout_s = max(
-                    30.0,
-                    float(
-                        os.environ.get(
-                            "NIJA_AUTHORITY_WATCHDOG_TIMEOUT_S", "30"
-                        ) or "30"
-                    ),
+            if _global_gate_direct_live:
+                logger.critical(
+                    "GLOBAL_GATE_DIRECT_LIVE override=true barrier=%s kill_switch=%s capital_hydrated=%s blocker=%s",
+                    _barrier_ready,
+                    kill_state,
+                    _ca_hydrated_lcv,
+                    _system_readiness_proof.first_blocking_gate,
                 )
-                if _watchdog_elapsed >= _watchdog_timeout_s:
-                    with self._lock:
-                        _state_for_watchdog = self._current_state
-                    if _state_for_watchdog == TradingState.LIVE_PENDING_CONFIRMATION:
-                        logger.critical(
-                            "[AUTHORITY_TIMEOUT] LIVE_PENDING_CONFIRMATION for %.1fs after "
-                            "BROKER_INDEPENDENT_EXECUTION_READY (threshold=%.1fs) — "
-                            "unsatisfied coordinator gates: %s  gate_results=%s",
-                            _watchdog_elapsed,
-                            _watchdog_timeout_s,
-                            ",".join(_system_readiness_proof.failed_gates),
-                            {
-                                k: v
-                                for k, v in (
-                                    getattr(_system_readiness_proof, "gate_results", None)
-                                    or {}
-                                ).items()
-                                if not v
-                            },
-                        )
-                        # Force a re-evaluation of the convergence path.
-                        try:
-                            try:
-                                from bot.runtime_authority_convergence_repair_patch import (
-                                    converge_runtime_authority,
-                                )
-                            except ImportError:
-                                from runtime_authority_convergence_repair_patch import (  # type: ignore[import]
-                                    converge_runtime_authority,
-                                )
-                            converge_runtime_authority(
-                                "authority_timeout_watchdog"
-                            )
+            else:
+                _block_reason = str(_system_readiness_proof.first_blocking_gate or _decision.reason or "UNKNOWN")
+                _block_detail = (
+                    f"proof_reason={_system_readiness_proof.reason} "
+                    f"failed_gates={','.join(_system_readiness_proof.failed_gates)}"
+                )
+                _log_activation_diag_once(
+                    "auto_activate_blocked",
+                    (_block_reason, _block_detail),
+                    "[AUTO_ACTIVATE BLOCKED] reason=%s detail=%s",
+                    _block_reason,
+                    _block_detail or "n/a",
+                )
+                logger.warning(
+                    "[ACTIVATION_FAILURE] coordinator proof blocked activation "
+                    "first_gate=%s failed_gates=%s authority_ready=%s capital_stale=%s "
+                    "runtime_authority_state=%s",
+                    _system_readiness_proof.first_blocking_gate,
+                    ",".join(_system_readiness_proof.failed_gates),
+                    authority_ready,
+                    not _cap_ready,
+                    _frozen_snapshot.runtime_authority_state,
+                )
+
+                # ── 30-second watchdog ────────────────────────────────────────────
+                # If all outer activation gates have been satisfied (BROKER_INDEPENDENT_
+                # EXECUTION_READY was logged) and the coordinator proof is still
+                # blocking after 30 seconds, log every unsatisfied gate at CRITICAL
+                # level and trigger a forced re-evaluation via the convergence path.
+                _bier_at = _broker_execution_ready_at
+                if _bier_at is not None:
+                    _watchdog_elapsed = time.monotonic() - _bier_at
+                    _watchdog_timeout_s = max(
+                        30.0,
+                        float(
+                            os.environ.get(
+                                "NIJA_AUTHORITY_WATCHDOG_TIMEOUT_S", "30"
+                            ) or "30"
+                        ),
+                    )
+                    if _watchdog_elapsed >= _watchdog_timeout_s:
+                        with self._lock:
+                            _state_for_watchdog = self._current_state
+                        if _state_for_watchdog == TradingState.LIVE_PENDING_CONFIRMATION:
                             logger.critical(
-                                "[AUTHORITY_TIMEOUT] watchdog triggered "
-                                "converge_runtime_authority — re-evaluation scheduled"
+                                "[AUTHORITY_TIMEOUT] LIVE_PENDING_CONFIRMATION for %.1fs after "
+                                "BROKER_INDEPENDENT_EXECUTION_READY (threshold=%.1fs) — "
+                                "unsatisfied coordinator gates: %s  gate_results=%s",
+                                _watchdog_elapsed,
+                                _watchdog_timeout_s,
+                                ",".join(_system_readiness_proof.failed_gates),
+                                {
+                                    k: v
+                                    for k, v in (
+                                        getattr(_system_readiness_proof, "gate_results", None)
+                                        or {}
+                                    ).items()
+                                    if not v
+                                },
                             )
-                        except Exception as _watch_err:
-                            logger.warning(
-                                "[AUTHORITY_TIMEOUT] watchdog convergence call failed: %s",
-                                _watch_err,
-                            )
-            return False
+                            # Force a re-evaluation of the convergence path.
+                            try:
+                                try:
+                                    from bot.runtime_authority_convergence_repair_patch import (
+                                        converge_runtime_authority,
+                                    )
+                                except ImportError:
+                                    from runtime_authority_convergence_repair_patch import (  # type: ignore[import]
+                                        converge_runtime_authority,
+                                    )
+                                converge_runtime_authority(
+                                    "authority_timeout_watchdog"
+                                )
+                                logger.critical(
+                                    "[AUTHORITY_TIMEOUT] watchdog triggered "
+                                    "converge_runtime_authority — re-evaluation scheduled"
+                                )
+                            except Exception as _watch_err:
+                                logger.warning(
+                                    "[AUTHORITY_TIMEOUT] watchdog convergence call failed: %s",
+                                    _watch_err,
+                                )
+                return False
 
         _coordinator_committed = False
         try:
@@ -3004,6 +3032,10 @@ class TradingStateMachine:
             )
             _coordinator.finalize_activation_commit(_frozen_snapshot)
             _coordinator_committed = True
+            logger.critical(
+                "ACTIVATION_COMMIT committed=true snapshot_version=%s",
+                _frozen_snapshot.snapshot_version,
+            )
             logger.critical("STATE AFTER ACTIVATION = %s", self._current_state)
             logger.critical("ACTIVATION_COMMITTED — LIVE_ACTIVE confirmed")
             logger.critical(

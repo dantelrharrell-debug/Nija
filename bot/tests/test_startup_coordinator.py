@@ -363,6 +363,101 @@ class TestStartupCoordinator(unittest.TestCase):
         self.assertEqual(snapshot.runtime_authority_reason, "capital_stale")
         self.assertEqual(snapshot.lifecycle_phase, "BOOT")
 
+    def test_readiness_cannot_regress_after_global_gate_success(self) -> None:
+        self.coordinator.record_bootstrap_state("RUNNING_SUPERVISED")
+        self.coordinator.record_capital_state(
+            state="RUNNING",
+            hydrated=True,
+            balance=250.0,
+            stale=False,
+        )
+        self.coordinator.record_global_gate(ready=True, detail="barrier_passed")
+        self.coordinator.record_readiness(
+            key="capital_ready",
+            value=True,
+            version=1,
+            table={"capital_ready": True, "strategy_ready": True},
+        )
+        self.coordinator.record_readiness(
+            key="capital_ready",
+            value=False,
+            version=2,
+            table={"capital_ready": False, "strategy_ready": False},
+        )
+        snapshot = self.coordinator.build_snapshot(
+            trading_state="LIVE_PENDING_CONFIRMATION",
+            activation_intent=True,
+        )
+        self.assertTrue(snapshot.readiness_table.get("capital_ready"))
+        self.assertTrue(snapshot.readiness_table.get("strategy_ready"))
+        self.assertTrue(snapshot.global_gate_ready)
+
+    def test_global_gate_override_eliminates_duplicate_readiness_block(self) -> None:
+        self.coordinator.record_bootstrap_state("RUNNING_SUPERVISED")
+        self.coordinator.record_capital_state(
+            state="RUNNING",
+            hydrated=True,
+            balance=250.0,
+            stale=False,
+        )
+        self.coordinator.record_threads_launched(1)
+        self.coordinator.record_threads_confirmed_running(bootstrap_state="RUNNING_SUPERVISED")
+        self.coordinator.record_authority(ready=False)
+        self.coordinator.record_nonce_status(ready=False)
+        self.coordinator.record_dispatch_health(ready=False)
+        self.coordinator.record_activation_requested(requested=True, source="test")
+        self.coordinator.record_global_gate(ready=True, detail="all gates passed")
+        self.coordinator.record_readiness(
+            key="bootstrap_ready",
+            value=False,
+            version=1,
+            table={"bootstrap_ready": False, "strategy_ready": False},
+        )
+
+        snapshot = self.coordinator.build_snapshot(
+            trading_state="LIVE_PENDING_CONFIRMATION",
+            activation_intent=True,
+        )
+        proof = self.coordinator.evaluate_system_readiness_proof(snapshot)
+        self.assertTrue(proof.passed)
+        self.assertEqual(proof.first_blocking_gate, "none")
+
+    def test_live_state_persists_after_commit_with_global_gate(self) -> None:
+        self._mark_all_readiness()
+        self.coordinator.record_bootstrap_state("RUNNING_SUPERVISED")
+        self.coordinator.record_capital_state(
+            state="RUNNING",
+            hydrated=True,
+            balance=300.0,
+            stale=False,
+        )
+        self.coordinator.record_threads_launched(1)
+        self.coordinator.record_threads_confirmed_running(bootstrap_state="RUNNING_SUPERVISED")
+        self.coordinator.record_authority(ready=True)
+        self.coordinator.record_nonce_status(ready=True)
+        self.coordinator.record_dispatch_health(ready=True)
+        self.coordinator.record_activation_requested(requested=True, source="test")
+        self.coordinator.record_global_gate(ready=True, detail="barrier_passed")
+
+        snapshot = self.coordinator.build_snapshot(
+            trading_state="LIVE_PENDING_CONFIRMATION",
+            activation_intent=True,
+        )
+        self.coordinator.finalize_activation_commit(snapshot)
+
+        self.coordinator.record_readiness(
+            key="strategy_ready",
+            value=False,
+            version=99,
+            table={"strategy_ready": False},
+        )
+        committed = self.coordinator.build_snapshot(
+            trading_state="LIVE_ACTIVE",
+            activation_intent=True,
+        )
+        self.assertEqual(committed.lifecycle_phase, "LIVE")
+        self.assertTrue(committed.dispatch_enabled)
+
 
 if __name__ == "__main__":
     unittest.main()
