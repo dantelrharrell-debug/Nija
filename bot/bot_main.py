@@ -35,6 +35,7 @@ _startup_complete = False
 _writer_authority_runtime = None
 _authority_heartbeat_monitor = None
 _writer_authority_last_error = ""
+_core_loop_thread: Optional[threading.Thread] = None
 
 
 def _signal_handler(signum: int, frame) -> None:
@@ -157,7 +158,7 @@ def _acquire_writer_authority_before_nonce() -> bool:
 def _release_writer_authority() -> None:
     """Stop authority monitors and compare-and-delete this process's lease."""
 
-    global _writer_authority_runtime, _authority_heartbeat_monitor
+    global _writer_authority_runtime, _authority_heartbeat_monitor, _core_loop_thread
 
     monitor = _authority_heartbeat_monitor
     _authority_heartbeat_monitor = None
@@ -169,6 +170,7 @@ def _release_writer_authority() -> None:
 
     runtime = _writer_authority_runtime
     _writer_authority_runtime = None
+    _core_loop_thread = None
     if runtime is not None:
         try:
             runtime.release()
@@ -486,9 +488,18 @@ def _keep_process_alive_after_loop_return() -> None:
     last_heartbeat = 0.0
     while not _shutdown_event.is_set():
         runtime = _writer_authority_runtime
+        core_thread = _core_loop_thread
         if runtime is not None and runtime.lost:
             logger.critical(
                 "BOT_MAIN_KEEPALIVE_EXIT reason=writer_authority_lost marker=20260710u"
+            )
+            _shutdown_event.set()
+            break
+        if core_thread is not None and not core_thread.is_alive():
+            logger.critical(
+                "CORE_LOOP_EXITED thread_name=%s ident=%s",
+                core_thread.name,
+                core_thread.ident,
             )
             _shutdown_event.set()
             break
@@ -511,7 +522,7 @@ def _keep_process_alive_after_loop_return() -> None:
 def main() -> int:
     """Run NIJA with writer authority established before nonce startup."""
 
-    global _startup_complete
+    global _startup_complete, _core_loop_thread
 
     logging.basicConfig(
         level=logging.INFO,
@@ -597,6 +608,7 @@ def main() -> int:
             logger.critical("CORE_LOOP_STARTING strategy_type=%s", type(strategy).__name__)
             trading_thread = start_trading_engine(strategy)
             logger.critical("CORE_LOOP_STARTED thread_name=%s", getattr(trading_thread, "name", "unknown"))
+            _core_loop_thread = trading_thread
 
             if trading_thread is None:
                 raise RuntimeError("Trading thread not created by start_trading_engine")

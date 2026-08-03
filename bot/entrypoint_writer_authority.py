@@ -1011,6 +1011,7 @@ class EntrypointWriterAuthority:
             # Keep renewing the lease and let stalled_writer_release_guard
             # handle the case where startup never completes.
             return True, ""
+            return False, "core_thread_missing"
         if not thread.is_alive():
             return (
                 False,
@@ -1024,6 +1025,14 @@ class EntrypointWriterAuthority:
         """Release this instance's lock when local writer runtime is stale/dead."""
         released = False
         self._stop.set()
+        if reason.startswith("core_thread_"):
+            logger.critical(
+                "CORE_THREAD_DIED marker=%s instance_id=%s pid=%d reason=%s",
+                _MARKER,
+                self._instance_id,
+                os.getpid(),
+                reason,
+            )
         if self._client is not None and self._lock_key and self._lock_value:
             script = """
             local current = redis.call('GET', KEYS[1])
@@ -1062,6 +1071,13 @@ class EntrypointWriterAuthority:
         )
         logger.critical(
             "WRITER_LOCK_REELECTED marker=%s trigger_instance_id=%s pid=%d reason=%s",
+            _MARKER,
+            self._instance_id,
+            os.getpid(),
+            reason,
+        )
+        logger.critical(
+            "WRITER_REELECTED marker=%s trigger_instance_id=%s pid=%d reason=%s",
             _MARKER,
             self._instance_id,
             os.getpid(),

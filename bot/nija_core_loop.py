@@ -1121,6 +1121,7 @@ class NijaCoreLoop:
         self._first_scan_started_logged: bool = False
         self._first_scan_completed_logged: bool = False
         self._first_signal_generated_logged: bool = False
+        self._first_signal_evaluated_logged: bool = False
         self._first_order_submitted_logged: bool = False
 
         logger.info(
@@ -2078,12 +2079,23 @@ class NijaCoreLoop:
                 len(symbols),
                 _universe_tradeable,
             )
+            logger.critical(
+                "FIRST_MARKET_SCAN symbols_scanned=%d markets_loaded=%d",
+                len(symbols),
+                _universe_tradeable,
+            )
             try:
                 from bot.entrypoint_writer_authority import get_entrypoint_writer_authority
 
                 get_entrypoint_writer_authority().record_scan_started()
             except Exception:
                 pass
+        if not self._first_signal_evaluated_logged:
+            self._first_signal_evaluated_logged = True
+            logger.critical(
+                "FIRST_SIGNAL_EVALUATED signals_generated=%d",
+                _signals_generated,
+            )
         if _signals_generated > 0 and not self._first_signal_generated_logged:
             self._first_signal_generated_logged = True
             logger.critical(
@@ -5622,7 +5634,28 @@ def start_trading_engine(strategy: Any) -> threading.Thread:
             daemon=True,
         )
         _engine_thread = thread
-        thread.start()
+        try:
+            thread.start()
+        except Exception as exc:
+            logger.critical(
+                "CORE_LOOP_THREAD_START_FAILED thread_name=%s err=%s:%s",
+                thread.name,
+                type(exc).__name__,
+                exc,
+                exc_info=True,
+            )
+            raise
+        if not thread.is_alive():
+            logger.critical(
+                "CORE_LOOP_THREAD_START_FAILED thread_name=%s reason=thread_not_alive_after_start",
+                thread.name,
+            )
+            raise RuntimeError("Core loop thread failed to start")
+        logger.critical(
+            "CORE_LOOP_THREAD_STARTED thread_name=%s ident=%s",
+            thread.name,
+            thread.ident,
+        )
         logger.critical("LIFECYCLE: entering live trading runtime")
         return thread
 
@@ -6875,6 +6908,7 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                 if cycle == 1:
                     logger.critical("🟢 TRADING LOOP ACTIVE — FIRST TICK REACHED")
                     logger.critical("✅ FIRST STRATEGY TICK")
+                    logger.critical("SCAN_LOOP_STARTED cycle=%d", cycle)
                     logger.critical("MARKET_SCAN_STARTED cycle=%d", cycle)
                     # Emit a clear operator diagnostic if LIVE_CAPITAL_VERIFIED is not set.
                     _runtime_mode_cycle = resolve_runtime_mode_safe(logger)
