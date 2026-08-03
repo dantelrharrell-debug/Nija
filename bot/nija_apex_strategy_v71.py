@@ -491,15 +491,10 @@ try:
     NIJA_CORE_LOOP_AVAILABLE = True
     logger.info("✅ Nija Core Loop loaded — clean single-pass loop active")
 except ImportError:
-    try:
-        from nija_core_loop import get_nija_core_loop, NijaCoreLoop
-        NIJA_CORE_LOOP_AVAILABLE = True
-        logger.info("✅ Nija Core Loop loaded — clean single-pass loop active")
-    except ImportError:
-        get_nija_core_loop = None  # type: ignore
-        NijaCoreLoop = None  # type: ignore
-        NIJA_CORE_LOOP_AVAILABLE = False
-        logger.warning("⚠️ Nija Core Loop not available — using legacy run_cycle dispatch")
+    get_nija_core_loop = None  # type: ignore
+    NijaCoreLoop = None  # type: ignore
+    NIJA_CORE_LOOP_AVAILABLE = False
+    logger.warning("⚠️ Nija Core Loop not available — using legacy run_cycle dispatch")
 
 # ── Signal Funnel Diagnostics — per-pair pass/fail counters + shadow-paper ────
 try:
