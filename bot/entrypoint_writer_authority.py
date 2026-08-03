@@ -622,6 +622,10 @@ class EntrypointWriterAuthority:
         self._lock_value = f"{token}:{owner}"
         self._ttl_s = ttl_s
         self._acquired_at = time.time()
+        # Preserve a previous confirmed scan-started timestamp across re-acquisitions
+        # so the watchdog does not fire SCAN_STARTED_DEADLINE_EXCEEDED when the scan
+        # loop is already running but _scan_started_at gets reset to 0.0 here.
+        _prior_scan_started_at = self._scan_started_at
         self._scan_started_at = 0.0
         self._scan_deadline_exceeded = False
         self._local_fallback = False
@@ -637,6 +641,11 @@ class EntrypointWriterAuthority:
         self._write_metadata()
         self._start_heartbeat()
         self._start_scan_started_watchdog()
+        # If scanning was already confirmed before this re-acquisition, immediately
+        # record it on the new watchdog so SCAN_STARTED_DEADLINE_EXCEEDED is not
+        # emitted while the scan loop is actively running.
+        if _prior_scan_started_at:
+            self.record_scan_started()
         self._notify_runtime_reconciliation("writer_acquired")
 
         logger.critical(
@@ -701,9 +710,13 @@ class EntrypointWriterAuthority:
             or f"nija:writer_lock_meta:{scope}"
         )
         self._lock_value = f"{token}:{owner}"
+        _prior_scan_started_at = self._scan_started_at
+        self._scan_started_at = 0.0
+        self._scan_deadline_exceeded = False
         self._acquired_at = time.time()
         self._local_fallback = True
         self._lost.clear()
+        self._stop.clear()
         self._publish_env(
             scope=scope,
             generation_key=os.environ.get(
@@ -711,6 +724,11 @@ class EntrypointWriterAuthority:
             ),
             fallback=True,
         )
+        self._start_scan_started_watchdog()
+        # If scanning was already confirmed before this fallback acquisition,
+        # immediately record it so the watchdog does not raise a false alarm.
+        if _prior_scan_started_at:
+            self.record_scan_started()
         self._notify_runtime_reconciliation("writer_acquired_local_fallback")
         logger.critical(
             "ENTRYPOINT_WRITER_AUTHORITY_LOCAL_FALLBACK marker=%s reason=%s instance=%s",
