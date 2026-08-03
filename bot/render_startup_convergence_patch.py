@@ -349,6 +349,9 @@ def _monitor() -> None:
     max_attempts = max(1, _int_env("NIJA_RENDER_STARTUP_RECOVERY_MAX_ATTEMPTS", 60))
     initial_delay = max(0.0, _float_env("NIJA_RENDER_STARTUP_RECOVERY_INITIAL_DELAY_S", 2.0))
     log_every = max(1, _int_env("NIJA_RENDER_STARTUP_RECOVERY_LOG_EVERY", 3))
+    maintenance_interval = max(
+        10.0, _float_env("NIJA_RENDER_STARTUP_MAINTENANCE_INTERVAL_S", 30.0)
+    )
 
     if initial_delay:
         time.sleep(initial_delay)
@@ -375,7 +378,7 @@ def _monitor() -> None:
                 max_attempts,
                 reason,
             )
-            return
+            break
 
         if reason != last_reason or attempt == 1 or attempt % log_every == 0:
             logger.warning(
@@ -388,14 +391,41 @@ def _monitor() -> None:
             last_reason = reason
 
         time.sleep(interval)
+    else:
+        logger.error(
+            "RENDER_STARTUP_RECOVERY_EXHAUSTED marker=%s attempts=%d last_reason=%s "
+            "trading_remains_fail_closed=true",
+            _MARKER,
+            max_attempts,
+            last_reason or "unknown",
+        )
+        return
 
-    logger.error(
-        "RENDER_STARTUP_RECOVERY_EXHAUSTED marker=%s attempts=%d last_reason=%s "
-        "trading_remains_fail_closed=true",
-        _MARKER,
-        max_attempts,
-        last_reason or "unknown",
-    )
+    # ── Maintenance loop ──────────────────────────────────────────────────────
+    # After initial convergence, keep running at a slower cadence.  If the
+    # capital snapshot becomes stale (e.g. Kraken reconnects, balance changes),
+    # _attempt_recovery_once() will trigger a refresh and re-publish authority.
+    maintenance_attempt = 0
+    while True:
+        time.sleep(maintenance_interval)
+        maintenance_attempt += 1
+        try:
+            _done, _reason = _attempt_recovery_once()
+        except Exception as _exc:  # pragma: no cover
+            logger.warning(
+                "RENDER_STARTUP_MAINTENANCE_ERROR marker=%s attempt=%d err=%s",
+                _MARKER,
+                maintenance_attempt,
+                _exc,
+            )
+            continue
+        if not _done:
+            logger.warning(
+                "RENDER_STARTUP_MAINTENANCE_RECOVERY marker=%s attempt=%d reason=%s",
+                _MARKER,
+                maintenance_attempt,
+                _reason,
+            )
 
 
 def install_import_hook() -> None:

@@ -3579,7 +3579,7 @@ class MultiAccountBrokerManager:
                     
             except Exception as connect_error:
                 # Connection attempt raised an exception - record failure
-                logger.error(f"❌ Exception connecting {broker_type.value} for {user_id}: {connect_error}")
+                logger.warning(f"⚠️ Exception connecting {broker_type.value} for {user_id}: {connect_error}")
                 
                 if self.isolation_manager:
                     # Determine failure type from exception
@@ -3604,8 +3604,8 @@ class MultiAccountBrokerManager:
 
         except Exception as e:
             # Top-level exception handler - ensures this account failure doesn't affect others
-            logger.error(f"❌ Error adding user broker {broker_type.value} for {user_id}: {e}")
-            logger.error(f"   ISOLATION: This failure is contained to {user_id} only")
+            logger.warning(f"⚠️ Error adding user broker {broker_type.value} for {user_id}: {e}")
+            logger.warning(f"   ISOLATION: This failure is contained to {user_id} only")
             
             if self.isolation_manager and FailureType:
                 self.isolation_manager.record_failure(
