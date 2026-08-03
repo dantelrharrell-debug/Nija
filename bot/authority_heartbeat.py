@@ -217,21 +217,34 @@ def _check_authority_once(timeout_s: float) -> tuple[bool, str]:
     """Perform a single authority heartbeat check.
 
     Verifies:
-    1. NIJA_WRITER_FENCING_TOKEN is present.
-    2. Redis is reachable (ping within timeout_s).
-    3. Distributed writer authority is valid (fencing token matches Redis lock),
+    1. Writer lease is still held by this process (NIJA_WRITER_LEASE_ACQUIRED == "1").
+    2. NIJA_WRITER_FENCING_TOKEN is present.
+    3. Redis is reachable (ping within timeout_s).
+    4. Distributed writer authority is valid (fencing token matches Redis lock),
        OR the Redis lease was not acquired (single-instance / fallback-token mode)
        in which case only Redis connectivity is verified.
-    4. Authority lineage generation number matches Redis (generation tracking).
+    5. Authority lineage generation number matches Redis (generation tracking).
 
     Returns (ok, error_message).
     """
-    # 1. Fencing token must be present.
+    _truthy = {"1", "true", "yes", "on", "enabled"}
+
+    # 1. If the lease was explicitly released, fail immediately.
+    # NIJA_WRITER_LEASE_ACQUIRED is absent during pre-acquisition startup
+    # (before _publish_env() runs) — that's handled below in the ping-only
+    # path.  Only fail hard when it has been set to a falsy value (i.e. it
+    # was once acquired and then explicitly released via _mark_lost() or
+    # release()).
+    _lease_raw = os.environ.get("NIJA_WRITER_LEASE_ACQUIRED", "")
+    if _lease_raw.strip() and _lease_raw.strip() not in _truthy:
+        return False, "writer lease released — NIJA_WRITER_LEASE_ACQUIRED is not set"
+
+    # 2. Fencing token must be present.
     token = os.environ.get("NIJA_WRITER_FENCING_TOKEN", "").strip()
     if not token:
         return False, "NIJA_WRITER_FENCING_TOKEN is not set — writer authority lost"
 
-    # 2. Redis URL must be configured.
+    # 3. Redis URL must be configured.
     try:
         from bot.redis_env import get_redis_url
     except ImportError:
@@ -242,7 +255,6 @@ def _check_authority_once(timeout_s: float) -> tuple[bool, str]:
         # Redis is not configured.  When a fallback token was generated
         # (single-instance / no-Redis mode) we still consider the authority
         # valid as long as the fencing token is present.
-        _truthy = {"1", "true", "yes", "on", "enabled"}
         is_fallback = os.environ.get("NIJA_WRITER_FENCING_TOKEN_FALLBACK", "").strip().lower() in _truthy
         if is_fallback:
             logger.debug(
@@ -252,12 +264,11 @@ def _check_authority_once(timeout_s: float) -> tuple[bool, str]:
             return True, ""
         return False, "Redis URL is not configured — cannot verify authority"
 
-    # 3. Verify Redis connectivity and fencing token.
+    # 4. Verify Redis connectivity and fencing token.
     # When a process-local fallback token was generated (Redis lock not
     # acquired), skip the fencing-token lock-key match check and only verify
     # that Redis is reachable.  When the Redis lease was properly acquired,
     # perform the full distributed authority check.
-    _truthy = {"1", "true", "yes", "on", "enabled"}
     is_fallback = os.environ.get("NIJA_WRITER_FENCING_TOKEN_FALLBACK", "").strip().lower() in _truthy
     # If the writer lease has not been acquired yet (startup phase before lock
     # acquisition completes), treat this as a ping-only check rather than a
