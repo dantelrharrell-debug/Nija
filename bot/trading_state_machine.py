@@ -3048,6 +3048,11 @@ class TradingStateMachine:
                 self._current_state.value,
                 self.is_live_trading_active(),
             )
+            logger.critical(
+                "LIVE_ACTIVATION_COMPLETE state=%s snapshot_version=%s",
+                self._current_state.value,
+                _frozen_snapshot.snapshot_version,
+            )
             return True
         except Exception as exc:
             if not _coordinator_committed:

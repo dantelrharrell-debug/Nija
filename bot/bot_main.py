@@ -579,9 +579,47 @@ def main() -> int:
         logger.info("\n[STEP 3] Starting Trading Loop")
         try:
             from bot.nija_core_loop import start_trading_engine
+            from bot.startup_coordinator import get_startup_coordinator
 
-            logger.info("🎯 Entering trading loop...")
-            start_trading_engine(strategy)
+            logger.critical("CORE_LOOP_STARTING strategy_type=%s", type(strategy).__name__)
+            trading_thread = start_trading_engine(strategy)
+            logger.critical("CORE_LOOP_STARTED thread_name=%s", getattr(trading_thread, "name", "unknown"))
+
+            if trading_thread is None:
+                raise RuntimeError("Trading thread not created by start_trading_engine")
+            if not trading_thread.is_alive():
+                raise RuntimeError("Trading thread not running after start_trading_engine")
+
+            logger.critical(
+                "CORE_LOOP_THREAD_ALIVE thread=%s ident=%s",
+                trading_thread.name,
+                trading_thread.ident,
+            )
+
+            # Publish verified thread evidence to the startup coordinator so that
+            # the threads.running gate passes in evaluate_system_readiness_proof().
+            try:
+                _coordinator = get_startup_coordinator()
+                live_workers = sum(
+                    1
+                    for worker in threading.enumerate()
+                    if worker is not threading.current_thread() and worker.is_alive()
+                )
+                worker_count = max(1, live_workers)
+                _coordinator.record_threads_supervised(
+                    worker_count,
+                    bootstrap_state="RUNNING_SUPERVISED",
+                )
+                logger.critical(
+                    "ACTIVATION_GATE_THREADS_RUNNING workers=%d threads_confirmed=true",
+                    worker_count,
+                )
+            except Exception as _tc_exc:
+                logger.warning(
+                    "ACTIVATION_GATE_THREADS_PUBLISH_FAILED err=%s (non-fatal)",
+                    _tc_exc,
+                )
+
             if not _shutdown_event.is_set():
                 _keep_process_alive_after_loop_return()
         except KeyboardInterrupt:
