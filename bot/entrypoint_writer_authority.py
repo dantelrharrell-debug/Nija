@@ -176,6 +176,7 @@ class EntrypointWriterAuthority:
         self._acquired_at = 0.0
         self._local_fallback = False
         self._scan_started_at = 0.0
+        self._scan_deadline_exceeded = False
         self._scan_started_watchdog_thread: Optional[threading.Thread] = None
         self._core_thread: Optional[threading.Thread] = None
         self._core_thread_started_at = 0.0
@@ -621,6 +622,7 @@ class EntrypointWriterAuthority:
         self._ttl_s = ttl_s
         self._acquired_at = time.time()
         self._scan_started_at = 0.0
+        self._scan_deadline_exceeded = False
         self._local_fallback = False
         self._lost.clear()
         self._stop.clear()
@@ -874,6 +876,11 @@ class EntrypointWriterAuthority:
                     self.acquired,
                     self._instance_id,
                 )
+                # The core loop never entered its running state within the
+                # deadline window.  Release the lease immediately and trigger a
+                # fresh writer election so another instance can take over.
+                self._scan_deadline_exceeded = True
+                self._release_owned_lock_for_reelection("scan_started_deadline_exceeded")
                 return
             remaining = (acquired_at + deadline_s) - time.time()
             self._stop.wait(min(poll_interval, max(0.1, remaining)))
@@ -910,6 +917,9 @@ class EntrypointWriterAuthority:
     def _heartbeat_tick(self) -> tuple[bool, str]:
         os.environ["NIJA_WRITER_HEARTBEAT_ALIVE_TS"] = str(time.time())
         core_ok, core_reason = self._validate_core_thread_liveness()
+        # Publish liveness state so the authority heartbeat monitor can also
+        # gate on core_thread_alive (Fix 2).
+        os.environ["NIJA_CORE_THREAD_ALIVE"] = "1" if core_ok else "0"
         if not core_ok:
             self._release_owned_lock_for_reelection(core_reason)
             return False, core_reason
@@ -1002,16 +1012,23 @@ class EntrypointWriterAuthority:
         the stalled_writer_release_guard owns the startup-timeout logic and
         this check must return True so the heartbeat keeps renewing the lease
         without prematurely clearing NIJA_WRITER_FENCING_TOKEN.
+
+        Exception: if the scan-started deadline has already been exceeded the
+        core loop is considered permanently stalled and (False, reason) is
+        returned so the heartbeat stops renewing the lease.
         """
         if self._local_fallback:
             return True, ""
         thread = self._core_thread
         if thread is None:
             # Core thread not yet registered — bot is still initialising.
-            # Keep renewing the lease and let stalled_writer_release_guard
-            # handle the case where startup never completes.
+            # If the scan deadline has been exceeded the runtime is stalled;
+            # fail the check so the heartbeat releases the lease immediately
+            # rather than continuing to renew it while reporting
+            # core_thread_alive=False.
+            if self._scan_deadline_exceeded:
+                return False, "core_thread_missing_deadline_exceeded"
             return True, ""
-            return False, "core_thread_missing"
         if not thread.is_alive():
             return (
                 False,
@@ -1098,6 +1115,11 @@ class EntrypointWriterAuthority:
         self._lost.set()
         os.environ["NIJA_WRITER_LEASE_ACQUIRED"] = "0"
         os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"] = "0"
+        # Pop rather than set-to-0: once the lease is lost,
+        # NIJA_WRITER_LEASE_ACQUIRED=0 is the authoritative signal.
+        # Leaving NIJA_CORE_THREAD_ALIVE=0 in the environment would
+        # cascade across subsequent test setUp/tearDown cycles.
+        os.environ.pop("NIJA_CORE_THREAD_ALIVE", None)
         os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "0"
         os.environ["NIJA_EXECUTION_ACTIVE"] = "false"
         os.environ.pop("NIJA_WRITER_FENCING_TOKEN", None)
@@ -1188,6 +1210,9 @@ class EntrypointWriterAuthority:
             os.environ["NIJA_WRITER_LEASE_ACQUIRED"] = "0"
             os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"] = "0"
             os.environ["NIJA_WRITER_HEARTBEAT_ALIVE_TS"] = "0"
+            # Pop rather than set-to-0: NIJA_WRITER_LEASE_ACQUIRED=0 is the
+            # authoritative signal once the lease is explicitly released.
+            os.environ.pop("NIJA_CORE_THREAD_ALIVE", None)
             os.environ.pop("NIJA_WRITER_FENCING_TOKEN", None)
             os.environ.pop("NIJA_WRITER_FENCING_TOKEN_FALLBACK", None)
             logger.info(

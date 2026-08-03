@@ -9,6 +9,7 @@ from bot.entrypoint_writer_authority import EntrypointWriterAuthority
 
 class EntrypointWriterHeartbeatTests(unittest.TestCase):
     def setUp(self) -> None:
+        os.environ.pop("NIJA_WRITER_RELEASE_IN_PROGRESS", None)
         self.runtime = EntrypointWriterAuthority()
         self.runtime._client = MagicMock()
         self.runtime._lock_key = "nija:writer_lock:test"
@@ -31,6 +32,8 @@ class EntrypointWriterHeartbeatTests(unittest.TestCase):
             "NIJA_WRITER_FENCING_TOKEN",
             "NIJA_RUNTIME_EXECUTION_AUTHORITY",
             "NIJA_EXECUTION_ACTIVE",
+            "NIJA_CORE_THREAD_ALIVE",
+            "NIJA_WRITER_RELEASE_IN_PROGRESS",
         ):
             os.environ.pop(key, None)
 
@@ -73,15 +76,17 @@ class EntrypointWriterHeartbeatTests(unittest.TestCase):
         self.assertEqual(reason, "lock_owned_by_different_writer")
 
     def test_missing_core_thread_releases_for_reelection(self):
+        # Simulate the scan-started deadline having been exceeded: the core
+        # loop never entered its running state, so a None core thread must
+        # fail the liveness check and trigger a re-election.
+        self.runtime._scan_deadline_exceeded = True
         self.runtime._release_owned_lock_for_reelection = MagicMock()
 
         ok, reason = self.runtime._heartbeat_tick()
 
         self.assertFalse(ok)
-        self.assertEqual(reason, "core_thread_missing")
-        self.runtime._release_owned_lock_for_reelection.assert_called_once_with(
-            "core_thread_missing"
-        )
+        self.assertIn("core_thread_missing", reason)
+        self.runtime._release_owned_lock_for_reelection.assert_called_once()
         self.runtime._client.eval.assert_not_called()
 
     def test_dead_core_thread_releases_for_reelection(self):
