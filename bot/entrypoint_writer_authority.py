@@ -994,33 +994,30 @@ class EntrypointWriterAuthority:
         """Ensure the lock owner is actively running the core trading thread."""
         if self._local_fallback:
             return True, ""
-        now = time.time()
-        grace_s = _cfg_float(
-            "NIJA_WRITER_CORE_THREAD_GRACE_S",
-            max(self._ttl_s * 2.0, 120.0),
-            minimum=5.0,
-        )
         thread = self._core_thread
         if thread is None:
-            if self._acquired_at > 0 and (now - self._acquired_at) >= grace_s:
-                return (
-                    False,
-                    f"core_thread_missing age={now - self._acquired_at:.1f}s grace={grace_s:.1f}s",
-                )
-            return True, ""
+            return False, "core_thread_missing"
         if not thread.is_alive():
             return (
                 False,
                 f"core_thread_dead name={self._core_thread_name or 'unknown'} "
                 f"ident={self._core_thread_ident}",
             )
-        self._core_thread_last_alive_at = now
+        self._core_thread_last_alive_at = time.time()
         return True, ""
 
     def _release_owned_lock_for_reelection(self, reason: str) -> None:
         """Release this instance's lock when local writer runtime is stale/dead."""
         released = False
         self._stop.set()
+        if reason.startswith("core_thread_"):
+            logger.critical(
+                "CORE_THREAD_DIED marker=%s instance_id=%s pid=%d reason=%s",
+                _MARKER,
+                self._instance_id,
+                os.getpid(),
+                reason,
+            )
         if self._client is not None and self._lock_key and self._lock_value:
             script = """
             local current = redis.call('GET', KEYS[1])
@@ -1059,6 +1056,13 @@ class EntrypointWriterAuthority:
         )
         logger.critical(
             "WRITER_LOCK_REELECTED marker=%s trigger_instance_id=%s pid=%d reason=%s",
+            _MARKER,
+            self._instance_id,
+            os.getpid(),
+            reason,
+        )
+        logger.critical(
+            "WRITER_REELECTED marker=%s trigger_instance_id=%s pid=%d reason=%s",
             _MARKER,
             self._instance_id,
             os.getpid(),
