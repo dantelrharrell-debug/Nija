@@ -899,6 +899,9 @@ class IndependentBrokerTrader:
         # Display Capital Scaling Protocol banner (once at startup)
         self._display_capital_scaling_banner()
 
+        logger.critical("SCAN_LOOP_STARTED broker=%s", broker_name)
+        print(f"[NIJA-PRINT] SCAN_LOOP_STARTED broker={broker_name}", flush=True)
+
         # ── OUTER RESTART GUARD ──────────────────────────────────────────────────
         # Re-enters the inner trading loop after any unexpected fatal crash.
         # Dead-broker checks inside use `continue` (never `break`) so the loop
@@ -912,6 +915,8 @@ class IndependentBrokerTrader:
                         broker_name,
                         cycle_count,
                     )
+                    logger.critical("SCAN_CYCLE %d broker=%s", cycle_count, broker_name)
+                    print(f"[NIJA-PRINT] SCAN_CYCLE {cycle_count} broker={broker_name}", flush=True)
 
                     # ─────────────────────────────────────────────────────────────
                     # 🔴 DEAD BROKER CHECK (failure_manager — retry with backoff)

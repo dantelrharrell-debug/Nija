@@ -1863,6 +1863,31 @@ class NijaCoreLoop:
         # Gate entries: user_mode OR not healthy
         _effective_user_mode = user_mode or not _md_new_entry_allowed
 
+        # ── ENTRY_GATE: consolidated diagnostic log (every cycle) ─────────────
+        _entry_gate_capital_ready = _canonical_balance > 0.0
+        _entry_gate_scan_ready = len(symbols) > 0
+        _entry_gate_entry_enabled = not _effective_user_mode
+        logger.critical(
+            "ENTRY_GATE cycle=%d "
+            "capital_ready=%s balance=$%.2f "
+            "risk_ready=%s safety_reason=%s "
+            "scan_ready=%s symbols=%d "
+            "entry_enabled=%s user_mode=%s md_healthy=%s",
+            self._total_cycles + 1,
+            _entry_gate_capital_ready, _canonical_balance,
+            can_enter, safety_reason,
+            _entry_gate_scan_ready, len(symbols),
+            _entry_gate_entry_enabled, user_mode, _md_healthy,
+        )
+        print(
+            f"[NIJA-PRINT] ENTRY_GATE cycle={self._total_cycles + 1} "
+            f"capital_ready={_entry_gate_capital_ready} balance=${_canonical_balance:.2f} "
+            f"risk_ready={can_enter} safety_reason={safety_reason} "
+            f"scan_ready={_entry_gate_scan_ready} symbols={len(symbols)} "
+            f"entry_enabled={_entry_gate_entry_enabled} user_mode={user_mode} md_healthy={_md_healthy}",
+            flush=True,
+        )
+
         if not _effective_user_mode:
             available_slots = max(0, self.max_positions - effective_open)
             if available_slots > 0:
@@ -3057,6 +3082,10 @@ class NijaCoreLoop:
                                 "pass",
                                 sig.composite_score, sig.threshold_used,
                             )
+                            logger.warning(
+                                "SCAN_RESULT symbol=%s signal=PASS confidence=%.2f reason=score_above_threshold",
+                                symbol, sig.composite_score,
+                            )
                             candidates.append(sig)
                     else:
                         self._log_pipeline_stage(
@@ -3108,6 +3137,10 @@ class NijaCoreLoop:
                             _diag_adx, _diag_vol_pct,
                             "n/a",
                             _reject_gate, _diag_confidence,
+                        )
+                        logger.warning(
+                            "SCAN_RESULT symbol=%s signal=FAIL confidence=%.2f reason=%s",
+                            symbol, _diag_confidence, _reject_gate,
                         )
                 elif _AISignal is not None:
                     # Fallback: use apex.analyze_market directly and wrap result
@@ -4424,6 +4457,20 @@ class NijaCoreLoop:
                         sig.symbol,
                         sig.side,
                     )
+                logger.critical(
+                    "ENTRY_APPROVED symbol=%s size=%.4f confidence=%.2f side=%s venue=%s",
+                    sig.symbol,
+                    _rounded_qty,
+                    sig.composite_score,
+                    sig.side,
+                    _broker_name,
+                )
+                print(
+                    f"[NIJA-PRINT] ENTRY_APPROVED symbol={sig.symbol} "
+                    f"size={_rounded_qty:.4f} confidence={sig.composite_score:.2f} "
+                    f"side={sig.side} venue={_broker_name}",
+                    flush=True,
+                )
                 success = self.apex.execute_action(analysis, sig.symbol)
                 # Record orders_submitted AFTER execute_action returns so the counter
                 # only reflects exchange requests that were actually dispatched, not
@@ -4455,6 +4502,18 @@ class NijaCoreLoop:
                     success,
                 )
                 if success:
+                    logger.critical(
+                        "ORDER_SUBMITTED broker=%s symbol=%s side=%s qty=%.4f",
+                        _broker_name,
+                        sig.symbol,
+                        sig.side,
+                        _rounded_qty,
+                    )
+                    print(
+                        f"[NIJA-PRINT] ORDER_SUBMITTED broker={_broker_name} "
+                        f"symbol={sig.symbol} side={sig.side} qty={_rounded_qty:.4f}",
+                        flush=True,
+                    )
                     self._log_pipeline_stage(
                         "exchange_adapter",
                         "passed",
