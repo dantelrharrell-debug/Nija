@@ -107,9 +107,41 @@ def normalize_derived_runtime_state() -> dict[str, str]:
             changes["NIJA_RUNTIME_TRADING_STATE"] = f"{raw_state or 'missing'}->OFF"
         os.environ["NIJA_RUNTIME_TRADING_STATE"] = "OFF"
 
-        if str(os.environ.get("NIJA_WRITER_LEASE_ACQUIRED", "")).strip() != "0":
-            changes["NIJA_WRITER_LEASE_ACQUIRED"] = "reset->0"
-        os.environ["NIJA_WRITER_LEASE_ACQUIRED"] = "0"
+        # Guard: never clear NIJA_WRITER_LEASE_ACQUIRED if the canonical
+        # EntrypointWriterAuthority singleton actively holds the Redis lock.
+        # The singleton is the sole authority over that flag; clearing it here
+        # when lineage appears stale (e.g. a transient gap between lock
+        # acquisition and fencing-token publication) breaks the heartbeat and
+        # causes an unnecessary re-election.  Only reset the flag when the
+        # singleton itself does not hold authority.
+        _singleton_acquired = False
+        try:
+            _ewa_mod = (
+                sys.modules.get("bot.entrypoint_writer_authority")
+                or sys.modules.get("entrypoint_writer_authority")
+            )
+            if _ewa_mod is not None:
+                _get_singleton = getattr(_ewa_mod, "get_entrypoint_writer_authority", None)
+                if callable(_get_singleton):
+                    _singleton = _get_singleton()
+                    _singleton_acquired = bool(
+                        _singleton is not None
+                        and getattr(_singleton, "acquired", False)
+                    )
+        except Exception:
+            pass
+
+        if not _singleton_acquired:
+            if str(os.environ.get("NIJA_WRITER_LEASE_ACQUIRED", "")).strip() != "0":
+                changes["NIJA_WRITER_LEASE_ACQUIRED"] = "reset->0"
+            os.environ["NIJA_WRITER_LEASE_ACQUIRED"] = "0"
+        else:
+            logger.debug(
+                "RENDER_STARTUP_LEASE_RESET_SKIPPED marker=%s "
+                "reason=singleton_holds_lock lineage_reason=%s",
+                _MARKER,
+                _,
+            )
     else:
         if raw_auth in _TRUE:
             os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "1"
@@ -317,6 +349,9 @@ def _monitor() -> None:
     max_attempts = max(1, _int_env("NIJA_RENDER_STARTUP_RECOVERY_MAX_ATTEMPTS", 60))
     initial_delay = max(0.0, _float_env("NIJA_RENDER_STARTUP_RECOVERY_INITIAL_DELAY_S", 2.0))
     log_every = max(1, _int_env("NIJA_RENDER_STARTUP_RECOVERY_LOG_EVERY", 3))
+    maintenance_interval = max(
+        10.0, _float_env("NIJA_RENDER_STARTUP_MAINTENANCE_INTERVAL_S", 30.0)
+    )
 
     if initial_delay:
         time.sleep(initial_delay)
@@ -343,7 +378,7 @@ def _monitor() -> None:
                 max_attempts,
                 reason,
             )
-            return
+            break
 
         if reason != last_reason or attempt == 1 or attempt % log_every == 0:
             logger.warning(
@@ -356,14 +391,41 @@ def _monitor() -> None:
             last_reason = reason
 
         time.sleep(interval)
+    else:
+        logger.error(
+            "RENDER_STARTUP_RECOVERY_EXHAUSTED marker=%s attempts=%d last_reason=%s "
+            "trading_remains_fail_closed=true",
+            _MARKER,
+            max_attempts,
+            last_reason or "unknown",
+        )
+        return
 
-    logger.error(
-        "RENDER_STARTUP_RECOVERY_EXHAUSTED marker=%s attempts=%d last_reason=%s "
-        "trading_remains_fail_closed=true",
-        _MARKER,
-        max_attempts,
-        last_reason or "unknown",
-    )
+    # ── Maintenance loop ──────────────────────────────────────────────────────
+    # After initial convergence, keep running at a slower cadence.  If the
+    # capital snapshot becomes stale (e.g. Kraken reconnects, balance changes),
+    # _attempt_recovery_once() will trigger a refresh and re-publish authority.
+    maintenance_attempt = 0
+    while True:
+        time.sleep(maintenance_interval)
+        maintenance_attempt += 1
+        try:
+            _done, _reason = _attempt_recovery_once()
+        except Exception as _exc:  # pragma: no cover
+            logger.warning(
+                "RENDER_STARTUP_MAINTENANCE_ERROR marker=%s attempt=%d err=%s",
+                _MARKER,
+                maintenance_attempt,
+                _exc,
+            )
+            continue
+        if not _done:
+            logger.warning(
+                "RENDER_STARTUP_MAINTENANCE_RECOVERY marker=%s attempt=%d reason=%s",
+                _MARKER,
+                maintenance_attempt,
+                _reason,
+            )
 
 
 def install_import_hook() -> None:

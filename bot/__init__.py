@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import builtins as _builtins
 import importlib
 import logging
 import os
@@ -284,11 +285,16 @@ _PATCH_HOOKS = () if _NIJA_BOT_PACKAGE_RUNTIME_HOOKS_DEFERRED else (
 )
 
 for _module_name, _label in _PATCH_HOOKS:
+    if getattr(_builtins, "_NIJA_BOT_PATCH_HOOKS_INSTALLED", False):
+        break
     try:
         _mod = importlib.import_module(f".{_module_name}", __name__)
         _mod.install_import_hook()
     except Exception as _exc:
         logger.warning("%s unavailable: %s", _label, _exc)
+
+if _PATCH_HOOKS:
+    setattr(_builtins, "_NIJA_BOT_PATCH_HOOKS_INSTALLED", True)
 
 __version__ = "7.2.17"
 logger.debug("NIJA Bot package initialized (v%s)", __version__)

@@ -14503,41 +14503,58 @@ class BrokerManager:
         # nonce to Kraken server time + safety offset BEFORE the first API call,
         # preventing "invalid nonce" / "Connection failed" errors caused by a
         # stale persisted nonce from a previous session or container restart.
-        try:
-            try:
-                from bot.distributed_nonce_manager import get_distributed_nonce_manager as _get_dnm_startup
-            except ImportError:
-                from distributed_nonce_manager import get_distributed_nonce_manager as _get_dnm_startup  # type: ignore[import]
-            _dnm_startup = _get_dnm_startup()
-            _all_kraken_brokers = list(self.brokers.values())
-            _resynced_keys: set = set()
-            for _b in _all_kraken_brokers:
-                _kid = getattr(_b, "api_key_id", None)
-                if _kid and _kid not in _resynced_keys:
-                    _probe_fn = getattr(_dnm_startup, "probe_server_sync", None)
-                    if callable(_probe_fn):
-                        try:
-                            _probe_fn(_kid)
-                            _resynced_keys.add(_kid)
-                            logger.info(
-                                "🔄 Startup nonce resync complete for key=%s account=%s",
-                                _kid,
-                                getattr(_b, "account_identifier", "unknown"),
-                            )
-                        except Exception as _resync_err:
-                            logger.warning(
-                                "⚠️ Startup nonce resync failed for key=%s: %s",
-                                _kid, _resync_err,
-                            )
-            if _resynced_keys:
-                logger.info(
-                    "✅ Startup nonce resync complete for %d Kraken key(s)", len(_resynced_keys)
-                )
-        except Exception as _nonce_startup_err:
-            logger.warning(
-                "⚠️ Startup nonce resync skipped (DistributedNonceManager unavailable): %s",
-                _nonce_startup_err,
+        #
+        # Guard: if the distributed writer lease is not yet acquired, skip the
+        # startup nonce resync entirely.  probe_server_sync() calls get_nonce()
+        # which calls _ensure_writer_lease(); running it before
+        # entrypoint_writer_authority has completed its own acquisition races
+        # the lease and can cause "nonce authority unavailable" at startup.
+        # Kraken will connect in degraded file-lock mode and the nonce will be
+        # re-synced automatically once the writer lease is established.
+        _writer_lease_ready = (
+            str(os.getenv("NIJA_WRITER_LEASE_ACQUIRED", "")).strip() == "1"
+        )
+        if not _writer_lease_ready:
+            logger.info(
+                "⏭️ Startup nonce resync deferred: NIJA_WRITER_LEASE_ACQUIRED not yet set. "
+                "Kraken will connect in degraded mode and resync when authority is established."
             )
+        else:
+            try:
+                try:
+                    from bot.distributed_nonce_manager import get_distributed_nonce_manager as _get_dnm_startup
+                except ImportError:
+                    from distributed_nonce_manager import get_distributed_nonce_manager as _get_dnm_startup  # type: ignore[import]
+                _dnm_startup = _get_dnm_startup()
+                _all_kraken_brokers = list(self.brokers.values())
+                _resynced_keys: set = set()
+                for _b in _all_kraken_brokers:
+                    _kid = getattr(_b, "api_key_id", None)
+                    if _kid and _kid not in _resynced_keys:
+                        _probe_fn = getattr(_dnm_startup, "probe_server_sync", None)
+                        if callable(_probe_fn):
+                            try:
+                                _probe_fn(_kid)
+                                _resynced_keys.add(_kid)
+                                logger.info(
+                                    "🔄 Startup nonce resync complete for key=%s account=%s",
+                                    _kid,
+                                    getattr(_b, "account_identifier", "unknown"),
+                                )
+                            except Exception as _resync_err:
+                                logger.warning(
+                                    "⚠️ Startup nonce resync failed for key=%s: %s",
+                                    _kid, _resync_err,
+                                )
+                if _resynced_keys:
+                    logger.info(
+                        "✅ Startup nonce resync complete for %d Kraken key(s)", len(_resynced_keys)
+                    )
+            except Exception as _nonce_startup_err:
+                logger.warning(
+                    "⚠️ Startup nonce resync skipped (DistributedNonceManager unavailable): %s",
+                    _nonce_startup_err,
+                )
 
         platform_brokers = [
             b for b in self.brokers.values()

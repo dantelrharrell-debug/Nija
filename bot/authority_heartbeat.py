@@ -300,8 +300,53 @@ def _check_authority_once(timeout_s: float) -> tuple[bool, str]:
             "using ping-only check during startup phase"
         )
         is_fallback = True
+
+    # Fix 2: defer the full Redis authority check to the entrypoint writer
+    # authority singleton when it is actively renewing the lease.
+    #
+    # The singleton's own heartbeat loop (entrypoint_writer_authority._heartbeat_tick)
+    # is the authoritative detector for Redis lease loss.  It runs on a short
+    # interval (≤5 s) and calls _release_owned_lock_for_reelection() the moment
+    # the EXPIRE or GET returns a mismatch — before this monitor has a chance
+    # to check Redis independently.  By trusting the singleton's in-memory
+    # state we avoid the race where this monitor discovers a transient Redis
+    # gap first and issues an EMERGENCY_STOP before the singleton can resign
+    # cleanly and set NIJA_WRITER_LEASE_ACQUIRED=0.
+    #
+    # The deference is skipped when:
+    #   • the singleton is not yet loaded (pre-boot),
+    #   • the singleton has already set its ``lost`` flag (it has resigned),
+    #   • is_fallback is True (local-fallback / single-instance mode, where
+    #     the singleton's heartbeat loop is not running).
+    _singleton_healthy = False
+    if not is_fallback and lease_acquired:
+        try:
+            import sys as _sys
+            _ewa_mod = (
+                _sys.modules.get("bot.entrypoint_writer_authority")
+                or _sys.modules.get("entrypoint_writer_authority")
+            )
+            if _ewa_mod is not None:
+                _get_singleton = getattr(_ewa_mod, "get_entrypoint_writer_authority", None)
+                if callable(_get_singleton):
+                    _singleton = _get_singleton()
+                    if (
+                        _singleton is not None
+                        and getattr(_singleton, "acquired", False)
+                        and not getattr(_singleton, "lost", True)
+                    ):
+                        # Singleton is actively managing the lease.  Trust it
+                        # and skip the full Redis authority round-trip.
+                        _singleton_healthy = True
+                        logger.debug(
+                            "AuthorityHeartbeatMonitor: deferring Redis check — "
+                            "entrypoint_writer_authority singleton reports acquired"
+                        )
+        except Exception:
+            pass
+
     try:
-        if not is_fallback:
+        if not is_fallback and not _singleton_healthy:
             try:
                 from bot.execution_authority_context import assert_distributed_writer_authority
             except ImportError:
@@ -326,7 +371,7 @@ def _check_authority_once(timeout_s: float) -> tuple[bool, str]:
 
             if result[0] is not None:
                 return False, str(result[0])
-        else:
+        elif not _singleton_healthy:
             # Fallback-token mode: verify Redis is reachable with a simple ping.
             import redis as _redis_lib
             _client = _redis_lib.from_url(redis_url, socket_connect_timeout=timeout_s)
