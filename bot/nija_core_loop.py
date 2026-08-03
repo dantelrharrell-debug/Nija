@@ -6529,34 +6529,45 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                     # gate above.  A hard assert here crashes the trading thread
                     # silently; instead, check for FORCE_TRADE / NIJA_FORCE_ACTIVATION /
                     # NIJA_SKIP_STARTUP_PHASE_GATE and grant authority when set.
+                    # NOTE: hasattr(_bfsm_sched, "_execution_authority") is False in this
+                    # else-branch (the outer elif already confirmed the positive case), so
+                    # checking hasattr here would be dead code.  Only the force-flag check
+                    # matters.
                     _force_flags_sched = (
                         os.environ.get("FORCE_TRADE", "").strip().lower() in ("1", "true", "yes", "on", "enabled")
                         or os.environ.get("NIJA_FORCE_ACTIVATION", "").strip().lower() in ("1", "true", "yes", "on", "enabled")
                         or os.environ.get("NIJA_SKIP_STARTUP_PHASE_GATE", "").strip().lower() in ("1", "true", "yes", "on", "enabled")
+                        or os.environ.get("NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK", "").strip().lower() in ("1", "true", "yes", "on", "enabled")
                     )
-                    if _force_flags_sched and hasattr(_bfsm_sched, "_execution_authority"):
+                    if _force_flags_sched:
                         logger.warning(
-                            "execution_authority not set and no fencing token — "
-                            "FORCE flag detected, granting execution_authority to unblock cycle scheduler"
+                            "⚡ execution_authority not set and BootstrapFSM has no "
+                            "_execution_authority attribute — force flag active, "
+                            "proceeding to cycle scheduler without bootstrap authority "
+                            "(FORCE_TRADE / NIJA_FORCE_ACTIVATION / NIJA_SKIP_STARTUP_PHASE_GATE "
+                            "/ NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK)"
                         )
-                        print("[NIJA] FORCE flag: granting execution_authority for cycle scheduler")
-                        _bfsm_sched._execution_authority = True
+                        print(
+                            "[NIJA] FORCE flag: proceeding to cycle scheduler despite missing "
+                            "_execution_authority attribute",
+                            flush=True,
+                        )
                     else:
                         logger.critical(
                             "execution_authority not set, no fencing token, and no FORCE flag — "
                             "cycle scheduler cannot start; set FORCE_TRADE=true to override"
                         )
                         print("[NIJA] ERROR: execution_authority missing — cycle scheduler blocked")
-                    logger.critical(
-                        "🚫 execution_authority not set and BootstrapFSM has no _execution_authority "
-                        "attribute — cycle scheduler cannot start safely."
-                    )
-                    if _loop_guard.acquire(timeout=5):
-                        try:
-                            _loop_running = False
-                        finally:
-                            _loop_guard.release()
-                    return
+                        logger.critical(
+                            "🚫 execution_authority not set and BootstrapFSM has no _execution_authority "
+                            "attribute — cycle scheduler cannot start safely."
+                        )
+                        if _loop_guard.acquire(timeout=5):
+                            try:
+                                _loop_running = False
+                            finally:
+                                _loop_guard.release()
+                        return
         logger.critical("LIFECYCLE: entering cycle scheduler")
         while _trading_active:
             try:

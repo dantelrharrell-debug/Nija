@@ -286,6 +286,13 @@ def _maybe_auto_enable_live_mode(real_capital: float, broker_count: int) -> None
     * ``PAPER_MODE``      is not set to a truthy value
     * ``LIVE_CAPITAL_VERIFIED`` is not already set to a truthy value
 
+    Additionally, when no Redis URL is configured (single-instance deployment),
+    also sets ``NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK=true`` so the bootstrap
+    FSM and trading state machine can complete activation without Redis
+    distributed locking.  This closes the gap where a deployment with confirmed
+    real capital never reaches LIVE_ACTIVE because the Redis writer-authority
+    gate permanently blocks activation.
+
     This closes the gap where a deployment with real capital never reaches
     LIVE_ACTIVE because the operator did not explicitly set the env var,
     while still respecting explicit simulation flags.
@@ -297,17 +304,43 @@ def _maybe_auto_enable_live_mode(real_capital: float, broker_count: int) -> None
         return
     if os.environ.get("PAPER_MODE", "").strip().lower() in _sim_values:
         return
-    if os.environ.get("LIVE_CAPITAL_VERIFIED", "").strip().lower() in _sim_values:
-        return
-    os.environ["LIVE_CAPITAL_VERIFIED"] = "true"
     _ca_logger = logging.getLogger("nija.capital_authority")
-    _ca_logger.critical(
-        "🟢 [CapitalAuthority] LIVE_CAPITAL_VERIFIED auto-enabled — "
-        "real_capital=$%.2f broker_count=%d (DRY_RUN_MODE/PAPER_MODE not set). "
-        "Set DRY_RUN_MODE=true to suppress this behaviour.",
-        real_capital,
-        broker_count,
-    )
+    if os.environ.get("LIVE_CAPITAL_VERIFIED", "").strip().lower() not in _sim_values:
+        os.environ["LIVE_CAPITAL_VERIFIED"] = "true"
+        _ca_logger.critical(
+            "🟢 [CapitalAuthority] LIVE_CAPITAL_VERIFIED auto-enabled — "
+            "real_capital=$%.2f broker_count=%d (DRY_RUN_MODE/PAPER_MODE not set). "
+            "Set DRY_RUN_MODE=true to suppress this behaviour.",
+            real_capital,
+            broker_count,
+        )
+    # When Redis is not configured, also enable the local writer lock fallback so
+    # that the distributed writer-authority gate (which hard-blocks LIVE_ACTIVE
+    # without a fencing token) does not permanently prevent activation in
+    # single-instance deployments.  Without this, `commit_activation()` and
+    # `finalize_boot()` both return False forever, keeping the scanner from ever
+    # entering the market-evaluation loop.
+    if os.environ.get("NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK", "").strip().lower() not in _sim_values:
+        _redis_url = ""
+        try:
+            try:
+                from bot.redis_env import get_redis_url as _get_redis_url
+            except ImportError:
+                from redis_env import get_redis_url as _get_redis_url  # type: ignore[import]
+            _redis_url = _get_redis_url()
+        except Exception:
+            pass
+        if not _redis_url:
+            os.environ["NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK"] = "true"
+            _ca_logger.critical(
+                "🟢 [CapitalAuthority] NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK auto-enabled — "
+                "no Redis URL configured; using local writer authority for single-instance deployment. "
+                "real_capital=$%.2f broker_count=%d. "
+                "Set NIJA_REDIS_URL to configure Redis, or set NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK=true "
+                "explicitly to suppress this auto-detection.",
+                real_capital,
+                broker_count,
+            )
 
 
 def get_startup_lock() -> threading.Event:
