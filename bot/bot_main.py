@@ -78,6 +78,19 @@ def _acquire_writer_authority_before_nonce() -> bool:
 
         _writer_authority_runtime = runtime
 
+        # Wire up the on-lost callback so _shutdown_event is set immediately
+        # when the lease is lost (e.g. core thread dies), without waiting for
+        # the _keep_process_alive_after_loop_return polling interval.
+        def _on_lease_lost(reason: str) -> None:
+            logger.critical(
+                "WRITER_AUTHORITY_LOST_SHUTDOWN_TRIGGERED marker=20260710u reason=%s",
+                reason,
+            )
+            _shutdown_event.set()
+
+        if callable(getattr(runtime, "set_on_lost_callback", None)):
+            runtime.set_on_lost_callback(_on_lease_lost)
+
         # Start the independent authority verifier only after the lock, token,
         # generation and lock-heartbeat timestamps have been published.
         try:

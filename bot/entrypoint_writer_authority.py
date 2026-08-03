@@ -182,6 +182,9 @@ class EntrypointWriterAuthority:
         self._core_thread_last_alive_at = 0.0
         self._core_thread_name = ""
         self._core_thread_ident: Optional[int] = None
+        # Optional callback invoked by _mark_lost() so callers (e.g. bot_main)
+        # can react immediately to lease loss without polling runtime.lost.
+        self._on_lost_callback: Optional[Any] = None
 
     @property
     def acquired(self) -> bool:
@@ -991,22 +994,22 @@ class EntrypointWriterAuthority:
             return False, f"redis_heartbeat_error:{type(exc).__name__}:{exc}"
 
     def _validate_core_thread_liveness(self) -> tuple[bool, str]:
-        """Ensure the lock owner is actively running the core trading thread."""
+        """Ensure the lock owner is actively running the core trading thread.
+
+        Returns (False, reason) only when a thread was explicitly registered
+        via register_core_thread() and has since died.  A None core thread
+        means startup has not yet reached the trading-loop phase; in that case
+        the stalled_writer_release_guard owns the startup-timeout logic and
+        this check must return True so the heartbeat keeps renewing the lease
+        without prematurely clearing NIJA_WRITER_FENCING_TOKEN.
+        """
         if self._local_fallback:
             return True, ""
-        now = time.time()
-        grace_s = _cfg_float(
-            "NIJA_WRITER_CORE_THREAD_GRACE_S",
-            max(self._ttl_s * 2.0, 120.0),
-            minimum=5.0,
-        )
         thread = self._core_thread
         if thread is None:
-            if self._acquired_at > 0 and (now - self._acquired_at) >= grace_s:
-                return (
-                    False,
-                    f"core_thread_missing age={now - self._acquired_at:.1f}s grace={grace_s:.1f}s",
-                )
+            # Core thread not yet registered — bot is still initialising.
+            # Keep renewing the lease and let stalled_writer_release_guard
+            # handle the case where startup never completes.
             return True, ""
         if not thread.is_alive():
             return (
@@ -1014,7 +1017,7 @@ class EntrypointWriterAuthority:
                 f"core_thread_dead name={self._core_thread_name or 'unknown'} "
                 f"ident={self._core_thread_ident}",
             )
-        self._core_thread_last_alive_at = now
+        self._core_thread_last_alive_at = time.time()
         return True, ""
 
     def _release_owned_lock_for_reelection(self, reason: str) -> None:
@@ -1066,6 +1069,15 @@ class EntrypointWriterAuthority:
         )
         self._mark_lost(f"writer_lock_released_for_reelection:{reason}")
 
+    def set_on_lost_callback(self, callback: Any) -> None:
+        """Register a callable invoked synchronously when the lease is lost.
+
+        The callback is called with a single positional argument: the reason
+        string.  It is invoked inside ``_mark_lost()`` on the heartbeat thread,
+        so it must be lightweight (e.g. ``event.set()``).
+        """
+        self._on_lost_callback = callback
+
     def _mark_lost(self, reason: str) -> None:
         self._lost.set()
         os.environ["NIJA_WRITER_LEASE_ACQUIRED"] = "0"
@@ -1078,6 +1090,16 @@ class EntrypointWriterAuthority:
             _MARKER,
             reason,
         )
+        callback = self._on_lost_callback
+        if callback is not None:
+            try:
+                callback(reason)
+            except Exception as cb_exc:
+                logger.error(
+                    "ENTRYPOINT_WRITER_AUTHORITY_LOST_CALLBACK_FAILED marker=%s err=%s",
+                    _MARKER,
+                    cb_exc,
+                )
         try:
             from bot.single_execution_authority_kernel import get_seak
 
