@@ -76,6 +76,28 @@ def _live() -> bool:
     return _flag("LIVE_CAPITAL_VERIFIED", False) and not _flag("DRY_RUN_MODE", False) and not _flag("PAPER_MODE", False)
 
 
+def _core_loop_running() -> bool:
+    state = str(os.environ.get("NIJA_RUNTIME_TRADING_STATE", "") or "").strip().upper()
+    return state in {"LIVE_ACTIVE", "LIVE_PENDING_CONFIRMATION"}
+
+
+def _heartbeat_healthy() -> bool:
+    if _flag("NIJA_WRITER_HEARTBEAT_ACTIVE", False):
+        return True
+    raw_ts = str(os.environ.get("NIJA_WRITER_HEARTBEAT_ALIVE_TS", "") or "").strip()
+    if not raw_ts:
+        return False
+    try:
+        alive_ts = float(raw_ts)
+    except (TypeError, ValueError, OverflowError):
+        return False
+    stale_after = max(
+        5.0,
+        float(os.environ.get("NIJA_WRITER_HEARTBEAT_STALE_THRESHOLD_S", "45") or "45"),
+    )
+    return (time.time() - alive_ts) <= stale_after
+
+
 def _writer_ready() -> bool:
     if not _live():
         return True
@@ -91,6 +113,14 @@ def _writer_ready() -> bool:
         and bool(os.environ.get("NIJA_WRITER_FENCING_TOKEN", "").strip())
         and _flag("NIJA_WRITER_HEARTBEAT_ACTIVE", False)
         and _flag("NIJA_CORE_THREAD_ALIVE", False)
+    lease_acquired = _flag("NIJA_WRITER_LEASE_ACQUIRED", False)
+    generation_published = bool(os.environ.get("NIJA_WRITER_LEASE_GENERATION", "").strip())
+    fencing_token = bool(os.environ.get("NIJA_WRITER_FENCING_TOKEN", "").strip())
+    operational_ready = _heartbeat_healthy() and _core_loop_running()
+    return (
+        lease_acquired
+        and generation_published
+        and (fencing_token or operational_ready)
     )
 
 

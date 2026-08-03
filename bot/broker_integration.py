@@ -1219,6 +1219,7 @@ class KrakenBrokerAdapter(BrokerInterface):
         self._distributed_nonce_manager = None
         self._nonce_key_id = ""
         self._nonce_generator = None
+        self._nonce_lease_version = 0
 
         # ── In-memory cache for entry prices fetched from Kraken order history
         # Once a price is successfully fetched it is never re-fetched until the
@@ -1230,6 +1231,25 @@ class KrakenBrokerAdapter(BrokerInterface):
         self._balance_cache: dict = {}           # last successful response dict
         self._balance_cache_time: float = 0.0    # unix timestamp of last fetch
         self._balance_cache_ttl: float = 45.0    # seconds before re-fetching
+
+    def _drop_nonce_authority(self, reason: str = "") -> None:
+        """Clear distributed nonce ownership after lease loss/change."""
+        manager = self._distributed_nonce_manager
+        key_id = self._nonce_key_id
+        if manager is not None and key_id:
+            release_fn = getattr(manager, "release_writer_lease", None)
+            if callable(release_fn):
+                try:
+                    release_fn(key_id)
+                except Exception:
+                    pass
+        self._distributed_nonce_manager = None
+        self._nonce_key_id = ""
+        self._nonce_generator = None
+        self._nonce_lease_version = 0
+        self._secondary_api = None
+        if reason:
+            logger.warning("Kraken nonce authority reset: %s", reason)
 
     def _kraken_api_call(self, method: str, params: Optional[Dict[str, Any]] = None):
         """
@@ -1320,6 +1340,7 @@ class KrakenBrokerAdapter(BrokerInterface):
         try:
             assert_distributed_writer_authority()
         except Exception as exc:
+            self._drop_nonce_authority(f"writer_authority_invalid:{exc}")
             raise RuntimeError(
                 f"Kraken nonce readiness gate blocked API call ({call_path}): "
                 f"writer authority is not valid: {exc}"
@@ -1330,6 +1351,31 @@ class KrakenBrokerAdapter(BrokerInterface):
                 "Kraken nonce readiness gate blocked API call: distributed nonce manager "
                 "is not initialized; wait for NONCE_READY / CONNECTED before broker API calls"
             )
+        try:
+            ensure_fn = getattr(self._distributed_nonce_manager, "ensure_writer_lock", None)
+            if callable(ensure_fn):
+                ensure_fn(self._nonce_key_id)
+            lease_version = int(
+                getattr(self._distributed_nonce_manager, "lease_version", 0) or 0
+            )
+            if (
+                self._nonce_lease_version > 0
+                and lease_version > 0
+                and lease_version != self._nonce_lease_version
+            ):
+                self._drop_nonce_authority(
+                    f"lease_version_changed:{self._nonce_lease_version}->{lease_version}"
+                )
+                raise RuntimeError(
+                    f"Redis writer lease changed (prev={self._nonce_lease_version}, new={lease_version})"
+                )
+            if lease_version > 0:
+                self._nonce_lease_version = lease_version
+        except Exception as exc:
+            self._drop_nonce_authority(f"lease_unavailable:{exc}")
+            raise RuntimeError(
+                f"Kraken nonce readiness gate blocked API call ({call_path}): lease unavailable: {exc}"
+            ) from exc
         can_issue_fn = getattr(self._distributed_nonce_manager, "can_issue_nonce", None)
         if not callable(can_issue_fn):
             raise RuntimeError(
@@ -1422,8 +1468,6 @@ class KrakenBrokerAdapter(BrokerInterface):
             except ImportError:
                 logger.debug("Kraken order validator not available, skipping per-API key verification")
 
-            self.api = krakenex.API(key=self.api_key, secret=self.api_secret)
-
             if (
                 _get_distributed_nonce_manager is None
                 or _make_distributed_nonce_key_id is None
@@ -1446,17 +1490,30 @@ class KrakenBrokerAdapter(BrokerInterface):
                 self._distributed_nonce_manager = _dnm
                 self._nonce_key_id = _nonce_key_id
                 self._nonce_generator = _distributed_nonce
+                self._nonce_lease_version = int(getattr(_dnm, "lease_version", 0) or 0)
                 logger.debug(
                     "✅ Distributed nonce authority installed for KrakenBrokerAdapter key_id=%s",
                     _nonce_key_id,
                 )
             except Exception as _dnm_err:
+                self._drop_nonce_authority(f"startup_lease_unavailable:{_dnm_err}")
+                self.api = None
+                self.kraken_api = None
                 logger.error(
-                    "❌ Distributed nonce authority unavailable for KrakenBrokerAdapter: %s",
+                    "❌ Distributed nonce authority unavailable for KrakenBrokerAdapter: %s "
+                    "(retry after writer lease election)",
                     _dnm_err,
                 )
                 return False
 
+            self.api = krakenex.API(key=self.api_key, secret=self.api_secret)
+            if self._nonce_generator is None:
+                self._drop_nonce_authority("nonce_generator_missing_after_lease_acquire")
+                self.api = None
+                self.kraken_api = None
+                logger.error("❌ Kraken nonce authority missing after lease acquisition")
+                return False
+            cast(Any, self.api)._nonce = self._nonce_generator
             self.kraken_api = KrakenAPI(self.api)
 
             # ── Connection probe via ExecutionStateController ─────────────

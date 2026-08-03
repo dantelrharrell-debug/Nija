@@ -70,6 +70,16 @@ def _reset(monkeypatch):
         "NIJA_OKX_LIVE_TRADING_ENABLED",
         "COINBASE_VENUE_THRESHOLD_USD",
         "OKX_MIN_ORDER_USD",
+        "LIVE_CAPITAL_VERIFIED",
+        "DRY_RUN_MODE",
+        "PAPER_MODE",
+        "NIJA_WRITER_LEASE_ACQUIRED",
+        "NIJA_WRITER_FENCING_TOKEN",
+        "NIJA_WRITER_LEASE_GENERATION",
+        "NIJA_WRITER_HEARTBEAT_ACTIVE",
+        "NIJA_WRITER_HEARTBEAT_ALIVE_TS",
+        "NIJA_WRITER_HEARTBEAT_STALE_THRESHOLD_S",
+        "NIJA_RUNTIME_TRADING_STATE",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -171,3 +181,23 @@ def test_writer_ready_requires_heartbeat_and_core_via_global_probe(monkeypatch):
 
     monkeypatch.setenv("NIJA_CORE_THREAD_ALIVE", "1")
     assert patch._writer_ready() is True
+def test_writer_ready_uses_heartbeat_and_core_loop_when_fencing_token_missing(monkeypatch):
+    _reset(monkeypatch)
+    monkeypatch.setenv("LIVE_CAPITAL_VERIFIED", "1")
+    monkeypatch.setenv("NIJA_WRITER_LEASE_ACQUIRED", "1")
+    monkeypatch.setenv("NIJA_WRITER_LEASE_GENERATION", "42")
+    monkeypatch.setenv("NIJA_WRITER_HEARTBEAT_ACTIVE", "1")
+    monkeypatch.setenv("NIJA_RUNTIME_TRADING_STATE", "LIVE_PENDING_CONFIRMATION")
+
+    assert patch._writer_ready() is True
+
+
+def test_writer_ready_remains_pending_without_fencing_or_operational_signals(monkeypatch):
+    _reset(monkeypatch)
+    monkeypatch.setenv("LIVE_CAPITAL_VERIFIED", "1")
+    monkeypatch.setenv("NIJA_WRITER_LEASE_ACQUIRED", "1")
+    monkeypatch.setenv("NIJA_WRITER_LEASE_GENERATION", "42")
+    monkeypatch.setenv("NIJA_RUNTIME_TRADING_STATE", "LIVE_PENDING_CONFIRMATION")
+    monkeypatch.setenv("NIJA_WRITER_HEARTBEAT_ACTIVE", "0")
+
+    assert patch._writer_ready() is False
