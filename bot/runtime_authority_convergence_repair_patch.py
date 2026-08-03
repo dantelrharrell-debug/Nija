@@ -359,13 +359,48 @@ def _capital_authority_ready() -> tuple[bool, str, dict[str, Any]]:
 
 def _heartbeat_ready() -> tuple[bool, str]:
     token = os.environ.get("NIJA_WRITER_FENCING_TOKEN", "").strip()
-    generation = os.environ.get("NIJA_WRITER_LEASE_GENERATION", "").strip()
+    generation = (
+        os.environ.get("NIJA_WRITER_LEASE_GENERATION", "").strip()
+        or os.environ.get("NIJA_WRITER_GENERATION", "").strip()
+    )
     active = os.environ.get("NIJA_WRITER_HEARTBEAT_ACTIVE", "").strip()
     alive_raw = os.environ.get("NIJA_WRITER_HEARTBEAT_ALIVE_TS", "").strip()
+    if not _truthy("NIJA_WRITER_LEASE_ACQUIRED"):
+        return False, "writer_lease_not_acquired"
+    if not token:
+        try:
+            try:
+                from bot.execution_authority_context import (
+                    get_distributed_writer_authority_status,
+                )
+            except ImportError:
+                from execution_authority_context import (  # type: ignore[import]
+                    get_distributed_writer_authority_status,
+                )
+            status = get_distributed_writer_authority_status(force_refresh=True) or {}
+            recovered_token = str(status.get("token_prefix", "") or "").strip()
+            if recovered_token:
+                token = os.environ.get("NIJA_WRITER_FENCING_TOKEN", "").strip()
+        except Exception:
+            pass
     if not token or not generation:
         return False, f"writer_token_or_generation_missing token={bool(token)} generation={generation or 'missing'}"
     if not _truthy("NIJA_WRITER_HEARTBEAT_ACTIVE"):
         return False, f"heartbeat_inactive active={active or 'missing'}"
+    if not _truthy("NIJA_CORE_THREAD_ALIVE"):
+        return False, "core_thread_not_alive"
+    kraken_nonce_required = _truthy("KRAKEN_NONCE_LEASE_REQUIRED")
+    if kraken_nonce_required:
+        try:
+            try:
+                from bot.execution_authority_context import _runtime_nonce_authority_status
+            except ImportError:
+                from execution_authority_context import _runtime_nonce_authority_status  # type: ignore[import]
+            nonce_ok, nonce_detail = _runtime_nonce_authority_status()
+            if not nonce_ok:
+                return False, f"nonce_manager_not_ready:{nonce_detail or 'blocked'}"
+        except Exception as exc:
+            return False, f"nonce_manager_status_unavailable:{exc}"
     alive_ts = _f(alive_raw, 0.0)
     if alive_ts <= 0.0:
         return False, "heartbeat_alive_ts_missing"

@@ -69,8 +69,11 @@ def _live_env(monkeypatch):
     monkeypatch.setenv("NIJA_RUNTIME_EXECUTION_AUTHORITY", "0")
     monkeypatch.setenv("NIJA_WRITER_FENCING_TOKEN", "1")
     monkeypatch.setenv("NIJA_WRITER_LEASE_GENERATION", "2257")
+    monkeypatch.setenv("NIJA_WRITER_LEASE_ACQUIRED", "1")
     monkeypatch.setenv("NIJA_WRITER_HEARTBEAT_ACTIVE", "1")
     monkeypatch.setenv("NIJA_WRITER_HEARTBEAT_ALIVE_TS", "9999999999")
+    monkeypatch.setenv("NIJA_CORE_THREAD_ALIVE", "1")
+    monkeypatch.setenv("KRAKEN_NONCE_LEASE_REQUIRED", "0")
 
 
 def test_capital_authority_ready_for_logged_579_case(monkeypatch):
@@ -136,6 +139,27 @@ def test_heartbeat_fails_closed_without_generation(monkeypatch):
 
     assert ready is False
     assert "writer_token_or_generation_missing" in reason
+
+
+def test_heartbeat_accepts_writer_generation_alias(monkeypatch):
+    _live_env(monkeypatch)
+    monkeypatch.delenv("NIJA_WRITER_LEASE_GENERATION", raising=False)
+    monkeypatch.setenv("NIJA_WRITER_GENERATION", "2257")
+
+    ready, reason = patch._heartbeat_ready()
+
+    assert ready is True
+    assert "heartbeat_ready" in reason
+
+
+def test_heartbeat_fails_closed_without_lease_acquired(monkeypatch):
+    _live_env(monkeypatch)
+    monkeypatch.setenv("NIJA_WRITER_LEASE_ACQUIRED", "0")
+
+    ready, reason = patch._heartbeat_ready()
+
+    assert ready is False
+    assert reason == "writer_lease_not_acquired"
 
 
 def test_unsafe_emergency_reason_blocks_recovery(monkeypatch):
@@ -217,4 +241,3 @@ def test_rejected_activation_commit_does_not_force_live_transition(monkeypatch):
     assert sm.commit_calls == 1
     assert sm.transitions == []
     assert sm.state == tsm.TradingState.OFF
-

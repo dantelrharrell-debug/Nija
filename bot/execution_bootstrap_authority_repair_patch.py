@@ -151,9 +151,15 @@ def _strict_writer_nonce_ready() -> tuple[bool, str]:
 
 def _writer_lease_present() -> tuple[bool, str]:
     token = str(os.environ.get("NIJA_WRITER_FENCING_TOKEN", "")).strip()
-    generation = str(os.environ.get("NIJA_WRITER_LEASE_GENERATION", "")).strip()
-    if token and generation:
+    generation = str(
+        os.environ.get("NIJA_WRITER_LEASE_GENERATION", "")
+        or os.environ.get("NIJA_WRITER_GENERATION", "")
+    ).strip()
+    lease = _truthy("NIJA_WRITER_LEASE_ACQUIRED")
+    if token and generation and lease:
         return True, f"writer_token_prefix={token[:8]} generation={generation}"
+    if not lease:
+        return False, "writer_lease_not_acquired"
     return False, "writer_token_or_generation_missing"
 
 
