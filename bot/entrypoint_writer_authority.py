@@ -884,7 +884,10 @@ class EntrypointWriterAuthority:
         poll_interval = min(10.0, max(1.0, deadline_s / 10.0))
         _deadline_last_logged = 0.0
         _deadline_rewarning_s = min(60.0, max(poll_interval, deadline_s / 5.0))
-        while not self._stop.is_set():
+        # Use a do-while pattern: perform the check on each iteration *before*
+        # waiting, so that setting _stop prior to the first iteration still
+        # allows the deadline flag to be evaluated at least once.
+        while True:
             if self._scan_started_at:
                 return  # Scan started in time; watchdog duty fulfilled
             elapsed = time.time() - acquired_at
@@ -906,8 +909,12 @@ class EntrypointWriterAuthority:
                 # The scan may still start once exchange connections finish
                 # bootstrapping.  Keep monitoring until scan starts or the
                 # authority is stopped externally.
+                if self._stop.is_set():
+                    return
                 self._stop.wait(poll_interval)
                 continue
+            if self._stop.is_set():
+                return
             remaining = (acquired_at + deadline_s) - time.time()
             self._stop.wait(min(poll_interval, max(0.1, remaining)))
 

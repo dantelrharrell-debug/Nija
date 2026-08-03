@@ -6923,6 +6923,19 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                     logger.critical("✅ FIRST STRATEGY TICK")
                     logger.critical("SCAN_LOOP_STARTED cycle=%d", cycle)
                     logger.critical("MARKET_SCAN_STARTED cycle=%d", cycle)
+                    # Notify the writer authority watchdog that the scan loop is
+                    # active.  This must be done at the *start* of cycle 1 (not
+                    # after the first scan completes) so that slow first-scan
+                    # startups — e.g. due to Kraken symbol resolution — do not
+                    # keep the watchdog logging SCAN_STARTED_DEADLINE_EXCEEDED
+                    # for the entire duration of the first market scan.
+                    try:
+                        from bot.entrypoint_writer_authority import (
+                            get_entrypoint_writer_authority,
+                        )
+                        get_entrypoint_writer_authority().record_scan_started()
+                    except Exception:
+                        pass
                     # Emit a clear operator diagnostic if LIVE_CAPITAL_VERIFIED is not set.
                     _runtime_mode_cycle = resolve_runtime_mode_safe(logger)
                     _lcv_val = (
