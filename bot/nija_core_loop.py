@@ -5634,7 +5634,28 @@ def start_trading_engine(strategy: Any) -> threading.Thread:
             daemon=True,
         )
         _engine_thread = thread
-        thread.start()
+        try:
+            thread.start()
+        except Exception as exc:
+            logger.critical(
+                "CORE_LOOP_THREAD_START_FAILED thread_name=%s err=%s:%s",
+                thread.name,
+                type(exc).__name__,
+                exc,
+                exc_info=True,
+            )
+            raise
+        if not thread.is_alive():
+            logger.critical(
+                "CORE_LOOP_THREAD_START_FAILED thread_name=%s reason=thread_not_alive_after_start",
+                thread.name,
+            )
+            raise RuntimeError("Core loop thread failed to start")
+        logger.critical(
+            "CORE_LOOP_THREAD_STARTED thread_name=%s ident=%s",
+            thread.name,
+            thread.ident,
+        )
         logger.critical("LIFECYCLE: entering live trading runtime")
         return thread
 

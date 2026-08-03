@@ -35,6 +35,8 @@ class EntrypointWriterHeartbeatTests(unittest.TestCase):
             os.environ.pop(key, None)
 
     def test_heartbeat_renews_only_exact_owned_value(self):
+        self.runtime._core_thread = MagicMock()
+        self.runtime._core_thread.is_alive.return_value = True
         self.runtime._client.eval.return_value = 1
 
         ok, reason = self.runtime._heartbeat_tick()
@@ -46,6 +48,8 @@ class EntrypointWriterHeartbeatTests(unittest.TestCase):
         self.assertEqual(os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"], "1")
 
     def test_missing_lock_reacquires_atomically_with_nx(self):
+        self.runtime._core_thread = MagicMock()
+        self.runtime._core_thread.is_alive.return_value = True
         self.runtime._client.eval.return_value = -1
         self.runtime._client.set.return_value = True
 
@@ -59,12 +63,40 @@ class EntrypointWriterHeartbeatTests(unittest.TestCase):
         self.assertTrue(reacquire.kwargs["nx"])
 
     def test_different_owner_is_rejected_fail_closed(self):
+        self.runtime._core_thread = MagicMock()
+        self.runtime._core_thread.is_alive.return_value = True
         self.runtime._client.eval.return_value = 0
 
         ok, reason = self.runtime._heartbeat_tick()
 
         self.assertFalse(ok)
         self.assertEqual(reason, "lock_owned_by_different_writer")
+
+    def test_missing_core_thread_releases_for_reelection(self):
+        self.runtime._release_owned_lock_for_reelection = MagicMock()
+
+        ok, reason = self.runtime._heartbeat_tick()
+
+        self.assertFalse(ok)
+        self.assertEqual(reason, "core_thread_missing")
+        self.runtime._release_owned_lock_for_reelection.assert_called_once_with(
+            "core_thread_missing"
+        )
+        self.runtime._client.eval.assert_not_called()
+
+    def test_dead_core_thread_releases_for_reelection(self):
+        self.runtime._core_thread = MagicMock()
+        self.runtime._core_thread.is_alive.return_value = False
+        self.runtime._core_thread_name = "nija-core-loop"
+        self.runtime._core_thread_ident = 1234
+        self.runtime._release_owned_lock_for_reelection = MagicMock()
+
+        ok, reason = self.runtime._heartbeat_tick()
+
+        self.assertFalse(ok)
+        self.assertIn("core_thread_dead", reason)
+        self.runtime._release_owned_lock_for_reelection.assert_called_once()
+        self.runtime._client.eval.assert_not_called()
 
 
 if __name__ == "__main__":
