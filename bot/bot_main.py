@@ -87,6 +87,14 @@ def _acquire_writer_authority_before_nonce() -> bool:
                 "WRITER_AUTHORITY_LOST_SHUTDOWN_TRIGGERED marker=20260710u reason=%s",
                 reason,
             )
+            # Stop the heartbeat monitor first so it cannot trigger a spurious
+            # lockdown while the lease-lost shutdown sequence is in progress.
+            _monitor = _authority_heartbeat_monitor
+            if _monitor is not None and callable(getattr(_monitor, "stop", None)):
+                try:
+                    _monitor.stop()
+                except Exception:
+                    pass
             _shutdown_event.set()
 
         if callable(getattr(runtime, "set_on_lost_callback", None)):

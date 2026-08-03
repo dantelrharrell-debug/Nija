@@ -840,6 +840,15 @@ class AuthorityHeartbeatMonitor:
         )
 
         if self._consecutive_failures >= self._max_failures:
+            # Do not trigger lockdown if stop() was called while a tick was in
+            # progress — the lease-lost shutdown sequence is already in motion and
+            # a spurious EMERGENCY_STOP would race with the clean shutdown path.
+            if self._stop_event.is_set():
+                logger.info(
+                    "AUTHORITY_HEARTBEAT: lockdown suppressed — stop event already set "
+                    "(lease-lost shutdown in progress)"
+                )
+                return
             self._trigger_lockdown(err)
             return
 
