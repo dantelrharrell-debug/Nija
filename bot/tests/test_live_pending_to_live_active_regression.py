@@ -527,6 +527,77 @@ class TestLivePendingToLiveActiveTransition(unittest.TestCase):
         self.assertNotIn("authority.ready", proof.failed_gates)
         self.assertNotIn("nonce.ready", proof.failed_gates)
 
+    def test_heartbeat_tick_triggers_immediate_convergence(self) -> None:
+        """Regression: heartbeat tick must call converge_runtime_authority() immediately.
+
+        Fix for the state transition bug: after heartbeat and lease become healthy,
+        runtime_execution_authority must be asserted without waiting for the next
+        periodic auto-repair cycle.  This test verifies that authority_heartbeat._tick()
+        calls converge_runtime_authority("authority_heartbeat_tick") synchronously on
+        every successful tick.
+        """
+        from bot.authority_heartbeat import AuthorityHeartbeatMonitor
+
+        monitor = AuthorityHeartbeatMonitor(interval_s=60.0, timeout_s=5.0, max_failures=3)
+        os.environ.pop("KRAKEN_NONCE_LEASE_REQUIRED", None)
+
+        converge_calls: list[str] = []
+
+        with patch(
+            "bot.authority_heartbeat._check_authority_once",
+            return_value=(True, ""),
+        ), patch(
+            "bot.authority_heartbeat._write_heartbeat_marker",
+        ), patch.object(
+            monitor, "_write_heartbeat_to_redis", return_value=None, create=True
+        ), patch(
+            "bot.runtime_authority_convergence_repair_patch.converge_runtime_authority",
+            side_effect=lambda source: converge_calls.append(source),
+        ):
+            monitor._tick()
+
+        self.assertEqual(
+            len(converge_calls),
+            1,
+            "converge_runtime_authority must be called exactly once per successful tick; "
+            f"got calls={converge_calls!r}",
+        )
+        self.assertEqual(
+            converge_calls[0],
+            "authority_heartbeat_tick",
+            f"converge_runtime_authority must be called with source='authority_heartbeat_tick'; "
+            f"got {converge_calls[0]!r}",
+        )
+
+    def test_heartbeat_tick_convergence_failure_does_not_raise(self) -> None:
+        """Convergence errors during heartbeat tick must be swallowed, not propagated.
+
+        The tick's primary job is checking heartbeat validity; convergence is a
+        best-effort side-effect.  A failing converge_runtime_authority must never
+        prevent the heartbeat tick from completing successfully.
+        """
+        from bot.authority_heartbeat import AuthorityHeartbeatMonitor
+
+        monitor = AuthorityHeartbeatMonitor(interval_s=60.0, timeout_s=5.0, max_failures=3)
+        os.environ.pop("KRAKEN_NONCE_LEASE_REQUIRED", None)
+
+        with patch(
+            "bot.authority_heartbeat._check_authority_once",
+            return_value=(True, ""),
+        ), patch(
+            "bot.authority_heartbeat._write_heartbeat_marker",
+        ), patch.object(
+            monitor, "_write_heartbeat_to_redis", return_value=None, create=True
+        ), patch(
+            "bot.runtime_authority_convergence_repair_patch.converge_runtime_authority",
+            side_effect=RuntimeError("simulated convergence failure"),
+        ):
+            # Must not raise.
+            monitor._tick()
+
+        # Heartbeat should still be considered active after a convergence failure.
+        self.assertEqual(monitor.consecutive_failures, 0)
+
 
 if __name__ == "__main__":
     unittest.main()
