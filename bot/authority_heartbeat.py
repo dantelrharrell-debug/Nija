@@ -239,6 +239,22 @@ def _check_authority_once(timeout_s: float) -> tuple[bool, str]:
     if _lease_raw.strip() and _lease_raw.strip() not in _truthy:
         return False, "writer lease released — NIJA_WRITER_LEASE_ACQUIRED is not set"
 
+    # 1b. When the lease IS held, additionally gate on core_thread_alive and
+    #     event_loop_running (Fix 2).  Both flags are set by
+    #     EntrypointWriterAuthority._heartbeat_tick / _mark_lost.  Treat an
+    #     absent value as "ok" (startup grace before the first heartbeat tick
+    #     has run).  Only fail hard when the flag has been explicitly set to a
+    #     falsy value by the writer authority itself.
+    lease_explicitly_held = _lease_raw.strip() in _truthy
+    if lease_explicitly_held:
+        _core_alive_raw = os.environ.get("NIJA_CORE_THREAD_ALIVE", "")
+        if _core_alive_raw.strip() and _core_alive_raw.strip() not in _truthy:
+            return False, "core_thread_dead — NIJA_CORE_THREAD_ALIVE is not set"
+
+        _heartbeat_raw = os.environ.get("NIJA_WRITER_HEARTBEAT_ACTIVE", "")
+        if _heartbeat_raw.strip() and _heartbeat_raw.strip() not in _truthy:
+            return False, "writer event loop stopped — NIJA_WRITER_HEARTBEAT_ACTIVE is not set"
+
     # 2. Fencing token must be present.
     token = os.environ.get("NIJA_WRITER_FENCING_TOKEN", "").strip()
     if not token:

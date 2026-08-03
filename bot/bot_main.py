@@ -612,6 +612,17 @@ def main() -> int:
 
             if trading_thread is None:
                 raise RuntimeError("Trading thread not created by start_trading_engine")
+
+            # Fix 4: Explicitly wait for the thread to enter its running state
+            # before registering it with the writer authority.  start_trading_engine
+            # returns a started Thread, but is_alive() may transiently return False
+            # in the brief window between Thread.start() and the OS scheduling the
+            # new thread.  Waiting here ensures register_core_thread sees a live
+            # thread instead of setting core_thread_last_alive_at=0.
+            _alive_deadline = time.time() + 5.0
+            while not trading_thread.is_alive() and time.time() < _alive_deadline:
+                time.sleep(0.05)
+
             if not trading_thread.is_alive():
                 raise RuntimeError("Trading thread not running after start_trading_engine")
 
