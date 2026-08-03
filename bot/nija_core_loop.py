@@ -685,12 +685,36 @@ def _supervisor_step_state_machine() -> None:
         # LIVE_PENDING_CONFIRMATION and eventually reach LIVE_ACTIVE via the
         # 5-minute auto-transition timeout even when LIVE_CAPITAL_VERIFIED is
         # not explicitly set in the environment.
+        #
+        # Capital-hydration auto-live: when CAPITAL_HYDRATED_EVENT is set and
+        # the cycle capital shows a real positive balance with at least one
+        # valid broker (and no simulation flags), treat this as live intent.
+        # This handles the window between _maybe_auto_enable_live_mode() in
+        # capital_authority setting the env var and the next resolve_runtime_mode
+        # call picking it up — or when the CA has hydrated but env propagation
+        # hasn't reached the current thread's cached runtime_mode yet.
+        _capital_auto_live = (
+            _ca_hydrated_sv
+            and _ca_capital_sv > 0.0
+            and _valid_brokers_sv > 0
+            and not _env_truthy("DRY_RUN_MODE")
+            and not _env_truthy("PAPER_MODE")
+        )
         _state_for_commit = sm.get_current_state()
         _attempt_commit = (
             _live_verified
             or _force_activation_sv
             or _state_for_commit == _TradingState.LIVE_PENDING_CONFIRMATION
+            or _capital_auto_live
         )
+        if _attempt_commit and _capital_auto_live and not _live_verified:
+            logger.critical(
+                "[SUPERVISOR] capital-hydration auto-live: attempting commit_activation "
+                "— real=$%.2f valid_brokers=%d source=%s (LIVE_CAPITAL_VERIFIED not yet set)",
+                _ca_capital_sv,
+                _valid_brokers_sv,
+                _snap_source_sv or "placeholder",
+            )
         if _attempt_commit:
             _committed = False
             try:
@@ -5778,6 +5802,29 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
         )
         TRADING_ENGINE_READY.set()
 
+    # ── Capital-hydration auto-start: when CAPITAL_HYDRATED_EVENT is already
+    # set (capital authority confirmed real funds before this thread started)
+    # and no simulation flags are present, release the gate immediately rather
+    # than waiting up to NIJA_START_GATE_TIMEOUT_S for the bootstrap FSM to
+    # fire it.  This closes the gap where a Coinbase-only deployment without
+    # LIVE_CAPITAL_VERIFIED in the environment would always stall for 120 s.
+    if (
+        not TRADING_ENGINE_READY.is_set()
+        and _CAPITAL_HYDRATED_EVENT is not None
+        and _CAPITAL_HYDRATED_EVENT.is_set()
+        and not _env_truthy("DRY_RUN_MODE")
+        and not _env_truthy("PAPER_MODE")
+    ):
+        logger.critical(
+            "CAPITAL_HYDRATED_EVENT is set and no simulation flags detected — "
+            "releasing TRADING_ENGINE_READY start gate (capital-hydration auto-start)"
+        )
+        print(
+            "[INIT STEP 1/6] CAPITAL_HYDRATED_EVENT auto-start: releasing TRADING_ENGINE_READY",
+            flush=True,
+        )
+        TRADING_ENGINE_READY.set()
+
     # ── FORCE_TRADE: set the start gate at runtime so the trading loop never
     # waits for the bootstrap FSM when an operator override flag is active.
     # Evaluated here (not at module load time) so the environment variable is
@@ -6583,14 +6630,30 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                     # and state to remain stuck at OFF.  Since we already guard with
                     # `_current_state_loop == _TradingState.OFF`, the extra check is
                     # redundant under correct behaviour and harmful under FORCE_TRADE.
+                    #
+                    # Capital-hydration arm: also arm when CAPITAL_HYDRATED_EVENT is
+                    # set with real capital and no simulation flags — this handles the
+                    # window between _maybe_auto_enable_live_mode() setting the env var
+                    # and _is_live_mode() picking up the new value.
+                    _loop_capital_auto_live = (
+                        _CAPITAL_HYDRATED_EVENT is not None
+                        and _CAPITAL_HYDRATED_EVENT.is_set()
+                        and not _env_truthy("DRY_RUN_MODE")
+                        and not _env_truthy("PAPER_MODE")
+                    )
                     if (
-                        _live_verified_loop
+                        (_live_verified_loop or _loop_capital_auto_live)
                         and _current_state_loop == _TradingState.OFF
                     ):
+                        _arm_reason = (
+                            "core loop arming: LIVE_CAPITAL_VERIFIED set"
+                            if _live_verified_loop
+                            else "core loop arming: capital-hydration auto-live"
+                        )
                         try:
                             _sm_loop.transition_to(
                                 _TradingState.LIVE_PENDING_CONFIRMATION,
-                                "core loop arming: LIVE_CAPITAL_VERIFIED set",
+                                _arm_reason,
                             )
                             logger.info("🟡 LIFECYCLE ARM: OFF -> LIVE_PENDING_CONFIRMATION")
                             _current_state_loop = _TradingState.LIVE_PENDING_CONFIRMATION
