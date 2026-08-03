@@ -1119,6 +1119,7 @@ class NijaCoreLoop:
             "execute_successes": 0,
         }
         self._first_scan_started_logged: bool = False
+        self._first_scan_completed_logged: bool = False
         self._first_signal_generated_logged: bool = False
         self._first_order_submitted_logged: bool = False
 
@@ -2077,6 +2078,12 @@ class NijaCoreLoop:
                 len(symbols),
                 _universe_tradeable,
             )
+            try:
+                from bot.entrypoint_writer_authority import get_entrypoint_writer_authority
+
+                get_entrypoint_writer_authority().record_scan_started()
+            except Exception:
+                pass
         if _signals_generated > 0 and not self._first_signal_generated_logged:
             self._first_signal_generated_logged = True
             logger.critical(
@@ -2113,6 +2120,16 @@ class NijaCoreLoop:
             max(0, int(result.orders_submitted or 0) - int(result.broker_acks or 0)),
             int(result.fills or 0),
         )
+        if not self._first_scan_completed_logged:
+            self._first_scan_completed_logged = True
+            logger.critical(
+                "FIRST_SCAN_COMPLETED symbols_scanned=%d markets_loaded=%d "
+                "scan_duration_ms=%.0f signals_generated=%d",
+                len(symbols),
+                _universe_tradeable,
+                elapsed_ms,
+                _signals_generated,
+            )
         logger.info(
             "SCANNER_DIAGNOSTICS symbols_loaded=%d symbols_after_filters=%d "
             "symbols_after_liquidity=%d symbols_after_spread=%d symbols_after_volatility=%d "
@@ -6858,6 +6875,7 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                 if cycle == 1:
                     logger.critical("🟢 TRADING LOOP ACTIVE — FIRST TICK REACHED")
                     logger.critical("✅ FIRST STRATEGY TICK")
+                    logger.critical("MARKET_SCAN_STARTED cycle=%d", cycle)
                     # Emit a clear operator diagnostic if LIVE_CAPITAL_VERIFIED is not set.
                     _runtime_mode_cycle = resolve_runtime_mode_safe(logger)
                     _lcv_val = (
@@ -7357,6 +7375,13 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                     "cycle=%d capital=$%.2f cycle_id=%s",
                     cycle, _cycle_cap, _current_cycle_id,
                 )
+                if cycle == 1:
+                    logger.critical(
+                        "SIGNAL_EVALUATION_STARTED cycle=%d capital=%.2f cycle_id=%s",
+                        cycle,
+                        float(_cycle_cap or 0.0),
+                        _current_cycle_id,
+                    )
 
                 # ── Fix 3: Pre-cycle wiring + symbol pre-warm ──────────────────
                 # Ensure strategy components are fully wired BEFORE entering

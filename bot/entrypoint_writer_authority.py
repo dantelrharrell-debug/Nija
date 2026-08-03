@@ -177,6 +177,11 @@ class EntrypointWriterAuthority:
         self._local_fallback = False
         self._scan_started_at = 0.0
         self._scan_started_watchdog_thread: Optional[threading.Thread] = None
+        self._core_thread: Optional[threading.Thread] = None
+        self._core_thread_started_at = 0.0
+        self._core_thread_last_alive_at = 0.0
+        self._core_thread_name = ""
+        self._core_thread_ident: Optional[int] = None
 
     @property
     def acquired(self) -> bool:
@@ -406,15 +411,38 @@ class EntrypointWriterAuthority:
                         pttl_ms,
                         instance_id,
                     )
+                    logger.critical(
+                        "WRITER_LOCK_STALE marker=%s holder=%s stale_detail=%s "
+                        "pttl_ms=%s contender_instance_id=%s contender_pid=%d",
+                        _MARKER,
+                        holder,
+                        stale_detail,
+                        pttl_ms,
+                        instance_id,
+                        os.getpid(),
+                    )
                     reclaimed = self._force_reclaim_stale_lock(
                         client, lock_key, meta_key, holder
                     )
                     if reclaimed:
                         logger.critical(
+                            "WRITER_LOCK_RELEASED marker=%s released=true holder=%s "
+                            "reason=stale_lock_reclaim",
+                            _MARKER,
+                            holder,
+                        )
+                        logger.critical(
                             "FORCED_RECOVERY marker=%s old_holder=%s instance=%s",
                             _MARKER,
                             holder,
                             instance_id,
+                        )
+                        logger.critical(
+                            "WRITER_LOCK_REELECTED marker=%s old_holder=%s new_instance_id=%s new_pid=%d",
+                            _MARKER,
+                            holder,
+                            instance_id,
+                            os.getpid(),
                         )
                         continue  # Retry acquire immediately after eviction
 
@@ -466,9 +494,46 @@ class EntrypointWriterAuthority:
         heartbeat_at = float(meta.get("heartbeat_at") or 0)
         if heartbeat_at <= 0:
             return False, "no_heartbeat_ts"
-        age_s = time.time() - heartbeat_at
+        now = time.time()
+        age_s = now - heartbeat_at
         if age_s >= threshold_s:
             return True, f"heartbeat_age={age_s:.1f}s threshold={threshold_s:.1f}s"
+        pid = self._as_int(meta.get("pid"), default=0)
+        instance_id = self._as_text(meta.get("instance_id"))
+        acquired_at = float(meta.get("acquired_at") or 0.0)
+        core_alive = bool(meta.get("core_thread_alive", False))
+        core_started_at = float(meta.get("core_thread_started_at") or 0.0)
+        core_heartbeat_at = float(meta.get("core_thread_heartbeat_at") or 0.0)
+        core_grace_s = _cfg_float(
+            "NIJA_WRITER_CORE_THREAD_GRACE_S",
+            max(threshold_s, 120.0),
+            minimum=5.0,
+        )
+        if core_started_at > 0 and not core_alive:
+            return (
+                True,
+                "core_thread_dead "
+                f"instance={instance_id or 'unknown'} pid={pid or 'unknown'} "
+                f"core_started_at={core_started_at:.3f}",
+            )
+        if core_heartbeat_at > 0:
+            core_age_s = now - core_heartbeat_at
+            if core_age_s >= threshold_s:
+                return (
+                    True,
+                    "core_thread_heartbeat_stale "
+                    f"instance={instance_id or 'unknown'} pid={pid or 'unknown'} "
+                    f"core_age={core_age_s:.1f}s threshold={threshold_s:.1f}s",
+                )
+        if acquired_at > 0 and core_started_at <= 0:
+            since_acquire_s = now - acquired_at
+            if since_acquire_s >= core_grace_s:
+                return (
+                    True,
+                    "core_thread_not_started "
+                    f"instance={instance_id or 'unknown'} pid={pid or 'unknown'} "
+                    f"age={since_acquire_s:.1f}s grace={core_grace_s:.1f}s",
+                )
         return False, f"heartbeat_fresh age={age_s:.1f}s"
 
     _STALE_RECLAIM_SCRIPT = """
@@ -556,6 +621,11 @@ class EntrypointWriterAuthority:
         self._local_fallback = False
         self._lost.clear()
         self._stop.clear()
+        self._core_thread = None
+        self._core_thread_started_at = 0.0
+        self._core_thread_last_alive_at = 0.0
+        self._core_thread_name = ""
+        self._core_thread_ident = None
 
         self._publish_env(scope=scope, generation_key=generation_key, fallback=False)
         self._write_metadata()
@@ -568,6 +638,14 @@ class EntrypointWriterAuthority:
             token[:8],
             generation,
             instance_id,
+        )
+        logger.critical(
+            "WRITER_LOCK_ACQUIRED marker=%s token_prefix=%s generation=%s instance_id=%s pid=%d",
+            _MARKER,
+            token[:8],
+            generation,
+            instance_id,
+            os.getpid(),
         )
         logger.critical(
             "ACTIVE_WRITER_TRANSITION marker=%s token_prefix=%s generation=%s "
@@ -670,19 +748,48 @@ class EntrypointWriterAuthority:
             os.environ.pop("NIJA_LOCK_BYPASS_MODE", None)
 
     def _metadata_payload(self) -> str:
+        core_alive = False
+        core_heartbeat_at = self._core_thread_last_alive_at or 0.0
+        thread = self._core_thread
+        if thread is not None and callable(getattr(thread, "is_alive", None)):
+            try:
+                core_alive = bool(thread.is_alive())
+                if core_alive:
+                    core_heartbeat_at = time.time()
+                    self._core_thread_last_alive_at = core_heartbeat_at
+            except Exception:
+                core_alive = False
         return json.dumps(
             {
                 "token": self._token,
                 "instance": self._identity,
                 "instance_id": self._instance_id,
+                "pid": os.getpid(),
                 "generation": self._generation,
                 "acquired_at": self._acquired_at,
                 "heartbeat_at": time.time(),
+                "core_thread_name": self._core_thread_name,
+                "core_thread_ident": self._core_thread_ident,
+                "core_thread_started_at": self._core_thread_started_at,
+                "core_thread_alive": core_alive,
+                "core_thread_heartbeat_at": core_heartbeat_at,
                 "lock_ttl_s": self._ttl_s,
                 "source": "entrypoint_writer_authority",
             },
             sort_keys=True,
         )
+
+    def register_core_thread(self, thread: Optional[threading.Thread]) -> None:
+        """Register the core trading thread so lock metadata can expose liveness."""
+        if thread is None:
+            return
+        self._core_thread = thread
+        self._core_thread_name = str(getattr(thread, "name", "") or "")
+        self._core_thread_ident = getattr(thread, "ident", None)
+        now = time.time()
+        self._core_thread_started_at = now
+        self._core_thread_last_alive_at = now if thread.is_alive() else 0.0
+        self._write_metadata()
 
     def _write_metadata(self) -> None:
         if self._client is None or not self._meta_key:
@@ -799,6 +906,10 @@ class EntrypointWriterAuthority:
 
     def _heartbeat_tick(self) -> tuple[bool, str]:
         os.environ["NIJA_WRITER_HEARTBEAT_ALIVE_TS"] = str(time.time())
+        core_ok, core_reason = self._validate_core_thread_liveness()
+        if not core_ok:
+            self._release_owned_lock_for_reelection(core_reason)
+            return False, core_reason
         if self._client is None:
             return False, "redis_client_missing"
 
@@ -836,6 +947,16 @@ class EntrypointWriterAuthority:
                     self._token[:8],
                     self._generation,
                 )
+                logger.info(
+                    "WRITER_LOCK_RENEWED marker=%s token_prefix=%s generation=%s "
+                    "instance_id=%s pid=%d core_thread_alive=%s",
+                    _MARKER,
+                    self._token[:8],
+                    self._generation,
+                    self._instance_id,
+                    os.getpid(),
+                    bool(self._core_thread and self._core_thread.is_alive()),
+                )
                 return True, ""
             if code == -1:
                 if self._stop.is_set():
@@ -868,6 +989,82 @@ class EntrypointWriterAuthority:
             return False, "lock_owned_by_different_writer"
         except Exception as exc:
             return False, f"redis_heartbeat_error:{type(exc).__name__}:{exc}"
+
+    def _validate_core_thread_liveness(self) -> tuple[bool, str]:
+        """Ensure the lock owner is actively running the core trading thread."""
+        if self._local_fallback:
+            return True, ""
+        now = time.time()
+        grace_s = _cfg_float(
+            "NIJA_WRITER_CORE_THREAD_GRACE_S",
+            max(self._ttl_s * 2.0, 120.0),
+            minimum=5.0,
+        )
+        thread = self._core_thread
+        if thread is None:
+            if self._acquired_at > 0 and (now - self._acquired_at) >= grace_s:
+                return (
+                    False,
+                    f"core_thread_missing age={now - self._acquired_at:.1f}s grace={grace_s:.1f}s",
+                )
+            return True, ""
+        if not thread.is_alive():
+            return (
+                False,
+                f"core_thread_dead name={self._core_thread_name or 'unknown'} "
+                f"ident={self._core_thread_ident}",
+            )
+        self._core_thread_last_alive_at = now
+        return True, ""
+
+    def _release_owned_lock_for_reelection(self, reason: str) -> None:
+        """Release this instance's lock when local writer runtime is stale/dead."""
+        released = False
+        self._stop.set()
+        if self._client is not None and self._lock_key and self._lock_value:
+            script = """
+            local current = redis.call('GET', KEYS[1])
+            if not current or current ~= ARGV[1] then return 0 end
+            redis.call('DEL', KEYS[1])
+            if KEYS[2] and KEYS[2] ~= '' then redis.call('DEL', KEYS[2]) end
+            return 1
+            """
+            try:
+                released = bool(
+                    int(
+                        self._client.eval(
+                            script,
+                            2,
+                            self._lock_key,
+                            self._meta_key,
+                            self._lock_value,
+                        )
+                        or 0
+                    )
+                )
+            except Exception as exc:
+                logger.warning(
+                    "WRITER_LOCK_RELEASE_FAILED marker=%s err=%s reason=%s",
+                    _MARKER,
+                    exc,
+                    reason,
+                )
+        logger.critical(
+            "WRITER_LOCK_RELEASED marker=%s released=%s instance_id=%s pid=%d reason=%s",
+            _MARKER,
+            released,
+            self._instance_id,
+            os.getpid(),
+            reason,
+        )
+        logger.critical(
+            "WRITER_LOCK_REELECTED marker=%s trigger_instance_id=%s pid=%d reason=%s",
+            _MARKER,
+            self._instance_id,
+            os.getpid(),
+            reason,
+        )
+        self._mark_lost(f"writer_lock_released_for_reelection:{reason}")
 
     def _mark_lost(self, reason: str) -> None:
         self._lost.set()
@@ -961,6 +1158,15 @@ class EntrypointWriterAuthority:
                 _MARKER,
                 released,
                 self._local_fallback,
+            )
+            logger.critical(
+                "WRITER_LOCK_RELEASED marker=%s released=%s local_fallback=%s "
+                "instance_id=%s pid=%d reason=release_called",
+                _MARKER,
+                released,
+                self._local_fallback,
+                self._instance_id,
+                os.getpid(),
             )
             return released or self._local_fallback
 

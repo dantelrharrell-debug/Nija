@@ -360,6 +360,57 @@ class TestStaleLockRecovery(unittest.TestCase):
         # Original lock must still be in place
         self.assertEqual(client.get(lock_key), live_holder)
 
+    def test_dead_writer_is_reelected_after_stale_timeout(self):
+        """If a writer dies without release, the next instance auto-reelects."""
+        import fakeredis
+
+        server = fakeredis.FakeServer()
+        client_a = _make_fake_redis(server)
+        client_b = _make_fake_redis(server)
+
+        lock_key = "nija:writer_lock:dead-writer"
+        meta_key = "nija:writer_lock_meta:dead-writer"
+        env = {
+            "NIJA_ENTRYPOINT_WRITER_STANDBY_MAX_S": "5",
+            "NIJA_ENTRYPOINT_WRITER_LOCK_WAIT_S": "5",
+            "NIJA_ENTRYPOINT_WRITER_LOCK_RETRY_S": "0.1",
+            "NIJA_WRITER_LOCK_KEY": lock_key,
+            "NIJA_WRITER_LOCK_META_KEY": meta_key,
+            "NIJA_WRITER_FENCING_KEY": "nija:writer_fence:dead-writer",
+            "NIJA_LEASE_GENERATION_KEY": "nija:lease:generation:dead-writer",
+            "NIJA_WRITER_LOCK_SCOPE": "dead-writer",
+            "NIJA_WRITER_LOCK_TTL_S": "60",
+            "NIJA_WRITER_STALE_LOCK_THRESHOLD_S": "30",
+        }
+
+        auth_a, _ = _build_authority(instance_id="inst-dead-A", client=client_a)
+        with patch.dict(os.environ, env):
+            result_a = auth_a.acquire_with_standby()
+        self.assertTrue(result_a.acquired, f"Instance A should acquire first, error={result_a.error}")
+
+        # Simulate a crashed writer: heartbeat stops and lock remains in Redis.
+        auth_a._stop.set()
+        heartbeat = getattr(auth_a, "_heartbeat_thread", None)
+        if heartbeat is not None and heartbeat.is_alive():
+            heartbeat.join(timeout=1.0)
+
+        stale_holder = str(client_a.get(lock_key) or "")
+        self.assertTrue(stale_holder, "Dead writer lock should still exist before failover")
+        _write_stale_metadata(client_a, meta_key, stale_holder, age_seconds=120.0)
+
+        auth_b, _ = _build_authority(instance_id="inst-recovery-B", client=client_b)
+        with patch.dict(os.environ, env):
+            result_b = auth_b.acquire_with_standby()
+
+        self.assertTrue(
+            result_b.acquired,
+            f"Instance B should auto-reelect after stale timeout, error={result_b.error}",
+        )
+        self.assertEqual(result_b.instance_id, "inst-recovery-B")
+        self.assertNotIn("inst-dead-A", str(client_b.get(lock_key) or ""))
+
+        auth_b.release()
+
 
 class TestSplitBrainPrevention(unittest.TestCase):
     """Two concurrent instances can never both hold the writer lock."""
