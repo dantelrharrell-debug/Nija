@@ -1984,6 +1984,24 @@ class TradingStrategy:
                     if not _symbols_to_scan:
                         self._maybe_refresh_symbols(force=True)
                         _symbols_to_scan = self._symbols_for_broker(_broker)
+                    # Last-resort fallback: if broker discovery and the
+                    # refresh both returned empty, fall back to the module-level
+                    # heartbeat candidates so the scan phase is always entered
+                    # with at least the core liquid pairs.  This prevents a
+                    # silent scan skip when the broker's get_available_markets()
+                    # call fails transiently on the first cycle.
+                    if not _symbols_to_scan:
+                        _symbols_to_scan = list(_HEARTBEAT_SYMBOL_CANDIDATES)
+                        logger.warning(
+                            "⚠️ [RUN_CYCLE_FALLBACK] broker symbol discovery returned empty — "
+                            "using heartbeat fallback candidates (%d symbols): %s",
+                            len(_symbols_to_scan),
+                            _symbols_to_scan,
+                        )
+                        print(
+                            f"[NIJA-PRINT] RUN_CYCLE_SYMBOL_FALLBACK candidates={_symbols_to_scan}",
+                            flush=True,
+                        )
                     if not _symbols_to_scan:
                         logger.warning(
                             "⚠️ [RUN_CYCLE_EXIT] symbol universe empty — "

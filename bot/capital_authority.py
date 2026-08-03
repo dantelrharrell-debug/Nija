@@ -273,6 +273,43 @@ def get_capital_hydrated_gate() -> threading.Event:
     return CAPITAL_HYDRATED_EVENT
 
 
+def _maybe_auto_enable_live_mode(real_capital: float, broker_count: int) -> None:
+    """Auto-set LIVE_CAPITAL_VERIFIED when a live broker confirms real capital.
+
+    Called internally whenever CAPITAL_HYDRATED_EVENT fires with a confirmed
+    positive balance.  Sets ``os.environ["LIVE_CAPITAL_VERIFIED"] = "true"``
+    when all of the following are true:
+
+    * *real_capital* > 0   — at least one broker reported funds
+    * *broker_count* >= 1  — at least one broker is registered
+    * ``DRY_RUN_MODE``   is not set to a truthy value
+    * ``PAPER_MODE``      is not set to a truthy value
+    * ``LIVE_CAPITAL_VERIFIED`` is not already set to a truthy value
+
+    This closes the gap where a deployment with real capital never reaches
+    LIVE_ACTIVE because the operator did not explicitly set the env var,
+    while still respecting explicit simulation flags.
+    """
+    if real_capital <= 0.0 or broker_count < 1:
+        return
+    _sim_values = {"1", "true", "yes", "on", "enabled"}
+    if os.environ.get("DRY_RUN_MODE", "").strip().lower() in _sim_values:
+        return
+    if os.environ.get("PAPER_MODE", "").strip().lower() in _sim_values:
+        return
+    if os.environ.get("LIVE_CAPITAL_VERIFIED", "").strip().lower() in _sim_values:
+        return
+    os.environ["LIVE_CAPITAL_VERIFIED"] = "true"
+    _ca_logger = logging.getLogger("nija.capital_authority")
+    _ca_logger.critical(
+        "🟢 [CapitalAuthority] LIVE_CAPITAL_VERIFIED auto-enabled — "
+        "real_capital=$%.2f broker_count=%d (DRY_RUN_MODE/PAPER_MODE not set). "
+        "Set DRY_RUN_MODE=true to suppress this behaviour.",
+        real_capital,
+        broker_count,
+    )
+
+
 def get_startup_lock() -> threading.Event:
     """Return the process-wide ``STARTUP_LOCK`` :class:`threading.Event`.
 
@@ -819,6 +856,7 @@ class CapitalAuthority:
         broker_threshold = 1 if self._opportunistic else max(1, self._expected_brokers)
         if real_capital > 0.0 and len(broker_balances) >= broker_threshold:
             CAPITAL_SYSTEM_READY.set()
+            _maybe_auto_enable_live_mode(real_capital, len(broker_balances))
             logger.info(
                 "⚡ [CapitalAuthority] CSM v3 WARM START — "
                 "restored real=$%.2f from cache (age=%.1fs, brokers=%s)",
@@ -1261,6 +1299,7 @@ class CapitalAuthority:
             broker_threshold = 1 if self._opportunistic else max(1, self._expected_brokers)
             if snapshot_real_capital > 0.0 and snapshot_broker_count >= broker_threshold:
                 CAPITAL_SYSTEM_READY.set()
+                _maybe_auto_enable_live_mode(snapshot_real_capital, snapshot_broker_count)
                 logger.info(
                     "[CapitalAuthority] refresh reached ACTIVE_CAPITAL; "
                     "CAPITAL_SYSTEM_READY=%s",
@@ -2157,6 +2196,7 @@ class CapitalAuthority:
                         self._expected_brokers,
                     )
                 CAPITAL_SYSTEM_READY.set()
+                _maybe_auto_enable_live_mode(snapshot_real_capital, snapshot_broker_count)
             # MONOTONIC SNAPSHOT PROGRESSION (no-failure activation contract).
             # Stamp _broker_feed_timestamps with computed_at for every broker
             # present in the accepted snapshot.  This closes the race where the
