@@ -255,6 +255,25 @@ def _start_kraken_authenticated_recovery(manager: Any) -> bool:
                             type(activation_exc).__name__,
                             activation_exc,
                         )
+                    # Publish the updated activation state immediately so the
+                    # three-venue readiness flags (NIJA_KRAKEN_ACTIVATED,
+                    # NIJA_KRAKEN_TRADING_READY) reflect CONNECTED without
+                    # waiting for the next periodic poll cycle.
+                    try:
+                        readiness_module = importlib.import_module(
+                            "three_venue_execution_readiness"
+                        )
+                        publish = getattr(readiness_module, "publish_once", None)
+                        if callable(publish):
+                            publish(force=True)
+                    except Exception as pub_exc:
+                        logger.warning(
+                            "KRAKEN_AUTHENTICATED_RECOVERY_READINESS_PUBLISH_PENDING "
+                            "marker=%s error=%s:%s",
+                            marker,
+                            type(pub_exc).__name__,
+                            pub_exc,
+                        )
                     os.environ["NIJA_KRAKEN_AUTHENTICATED_RECOVERY_READY"] = "1"
                     logger.critical(
                         "KRAKEN_AUTHENTICATED_RECOVERY_READY marker=%s "

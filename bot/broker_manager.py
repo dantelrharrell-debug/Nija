@@ -8802,9 +8802,15 @@ class KrakenBroker(BaseBroker):
         # has already been recorded.  For PLATFORM accounts the authoritative
         # guard is the FSM (event = truth); for USER accounts the per-instance
         # bool is sufficient.
+        #
+        # RECONNECT EXCEPTION: if the FSM says CONNECTED but broker.connected
+        # is False (the API link dropped after startup), allow the full handshake
+        # to run again so the live connection is re-established.  The FSM is a
+        # one-way startup latch and is NOT reset on reconnect; only broker.connected
+        # tracks live API health after the initial startup.
         _label = "PLATFORM" if self.account_type == AccountType.PLATFORM else f"USER:{self.user_id}"
         _already_done = (
-            _KRAKEN_STARTUP_FSM.is_connected
+            _KRAKEN_STARTUP_FSM.is_connected and self.connected
             if self.account_type == AccountType.PLATFORM
             else self._connection_already_complete
         )
@@ -9752,17 +9758,21 @@ class KrakenBroker(BaseBroker):
                             )
                             # Register reconnect hooks once so every subsequent
                             # DOWN→UP reconnect automatically:
-                            #   1. Resets _connection_already_complete so the full
-                            #      connect routine runs (pre-reconnect hook).
+                            #   1. Resets _connection_already_complete and broker.connected
+                            #      so the full connect routine runs (pre-reconnect hook).
                             #   2. Validates and resyncs nonce state after the
                             #      connection is re-established (post-reconnect hook).
                             if not getattr(self, "_nonce_resync_hook_registered", False):
                                 # Pre-reconnect: reset connection guard so connect()
                                 # runs the full handshake instead of returning early.
+                                # For PLATFORM accounts: also reset broker.connected so
+                                # the `_already_done` guard (FSM.is_connected AND
+                                # self.connected) allows the handshake to proceed.
                                 def _reset_connection_guard(
                                     _broker_ref=self,
                                 ) -> None:
                                     _broker_ref._connection_already_complete = False
+                                    _broker_ref.connected = False
                                     logger.info(
                                         "🔄 [NonceResync:%s] Connection guard reset — "
                                         "full reconnect handshake will run",
@@ -9812,6 +9822,29 @@ class KrakenBroker(BaseBroker):
                                 "✅ PLATFORM Kraken broker marked CONNECTED "
                                 "(private API succeeded — capital resolution follows)"
                             )
+                            # Advance MABM ConnectionState to CONNECTED immediately so
+                            # is_platform_connected() callers see the correct state without
+                            # waiting for the lazy _transition_platform_state sync.
+                            # _mark_platform_connected() also triggers _on_platform_ready()
+                            # which kicks off the capital bootstrap convergence pipeline.
+                            try:
+                                try:
+                                    from bot.multi_account_broker_manager import (
+                                        multi_account_broker_manager as _mabm_conn_adv,
+                                    )
+                                except ImportError:
+                                    from multi_account_broker_manager import (  # type: ignore[import]
+                                        multi_account_broker_manager as _mabm_conn_adv,
+                                    )
+                                if _mabm_conn_adv is not None:
+                                    _mabm_conn_adv._mark_platform_connected(BrokerType.KRAKEN)
+                                    logger.info(
+                                        "✅ PLATFORM Kraken: MABM ConnectionState advanced to CONNECTED"
+                                    )
+                            except Exception as _adv_err:
+                                logger.warning(
+                                    "⚠️ MABM ConnectionState advance non-fatal: %s", _adv_err
+                                )
 
                             _capital_ready = False
                             _capital_refresh_deferred = False
