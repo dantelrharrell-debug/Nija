@@ -268,6 +268,119 @@ def test_authenticated_recovery_retries_transient_lineage_gap(monkeypatch):
     assert module.os.environ["NIJA_KRAKEN_AUTHENTICATED_RECOVERY_READY"] == "1"
 
 
+def test_writer_lineage_accepts_operational_fallback_without_fencing_token(monkeypatch):
+    module = _module()
+    monkeypatch.delenv("NIJA_WRITER_FENCING_TOKEN", raising=False)
+    monkeypatch.setenv("NIJA_WRITER_LEASE_GENERATION", "8")
+    monkeypatch.setenv("NIJA_PREBOT_WRITER_AUTHORITY_READY", "1")
+    monkeypatch.setenv("NIJA_WRITER_HEARTBEAT_ACTIVE", "1")
+    monkeypatch.setenv("NIJA_CORE_THREAD_ALIVE", "1")
+
+    assert module._writer_lineage() == (True, "lineage_ready_without_token generation=8")
+
+
+def test_authenticated_recovery_promotes_connected_and_writer_ready(monkeypatch):
+    module = _module()
+    monkeypatch.setattr(module, "_KRAKEN_RECOVERY_STARTED", False)
+    monkeypatch.setattr(module, "_kraken_credentials_configured", lambda: True)
+    monkeypatch.setenv("NIJA_KRAKEN_RECOVERY_INTERVAL_S", "1")
+    monkeypatch.setenv("NIJA_KRAKEN_RECOVERY_WINDOW_S", "60")
+    monkeypatch.setenv("NIJA_WRITER_LEASE_GENERATION", "11")
+    monkeypatch.delenv("NIJA_WRITER_FENCING_TOKEN", raising=False)
+    monkeypatch.setattr(module, "_writer_lineage", lambda: (True, "lineage_ready_without_token generation=11"))
+
+    class Broker:
+        connected = True
+
+        @staticmethod
+        def get_account_balance():
+            return 25.0
+
+        @staticmethod
+        def get_all_products():
+            return ["BTC-USD"]
+
+    broker = Broker()
+    broker_type = object()
+
+    class ConnectionState:
+        CONNECTED = object()
+
+    manager_module = type("ManagerModule", (), {"ConnectionState": ConnectionState})
+    broker_module = type(
+        "BrokerModule",
+        (),
+        {
+            "_KRAKEN_STARTUP_FSM": type(
+                "FSM",
+                (),
+                {"is_connected": False, "is_connecting": False},
+            )(),
+            "register_platform_broker": staticmethod(lambda *_args, **_kwargs: True),
+        },
+    )
+
+    class Manager:
+        def _transition_platform_state(self, _broker_type, _state):
+            return None
+
+        def on_broker_ready(self, _name, _balance_fn):
+            return None
+
+        def refresh_capital_authority(self, **_kwargs):
+            return None
+
+        def register_platform_broker_instance(self, *_args, **_kwargs):
+            return None
+
+    manager = Manager()
+    monkeypatch.setattr(
+        module,
+        "_resolve_or_register_kraken_broker",
+        lambda _manager: (broker, broker_type, manager_module),
+    )
+
+    state_machine = type(
+        "StateMachine",
+        (),
+        {"maybe_auto_activate": lambda self: None},
+    )()
+    state_module = type(
+        "StateModule",
+        (),
+        {"get_state_machine": staticmethod(lambda: state_machine)},
+    )
+
+    def fake_import(name):
+        if name == "bot.broker_manager":
+            return broker_module
+        if name == "bot.trading_state_machine":
+            return state_module
+        if name == "three_venue_execution_readiness":
+            return type("ReadinessModule", (), {"publish_once": staticmethod(lambda **_kwargs: None)})
+        raise AssertionError(name)
+
+    monkeypatch.setattr(module.importlib, "import_module", fake_import)
+
+    class ImmediateThread:
+        def __init__(self, target, **_kwargs):
+            self.target = target
+
+        def start(self):
+            self.target()
+
+    monkeypatch.setattr(module.threading, "Thread", ImmediateThread)
+    monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
+
+    assert module._start_kraken_authenticated_recovery(manager) is True
+    assert module.os.environ["NIJA_KRAKEN_CONNECTED"] == "1"
+    assert module.os.environ["kraken_connected"] == "1"
+    assert module.os.environ["NIJA_WRITER_READY"] == "1"
+    assert module.os.environ["writer_ready"] == "1"
+    assert module.os.environ["NIJA_RUNTIME_TRADING_STATE"] == "LIVE_PENDING_CONFIRMATION"
+    assert module.os.environ["NIJA_WRITER_FENCING_TOKEN"] == "kraken-recovery-11"
+
+
 def test_kraken_permission_retry_reenables_detailed_logging(monkeypatch):
     from bot.broker_manager import KrakenBroker
 
