@@ -277,6 +277,15 @@ def _mark_proven_readiness(proofs: dict[str, bool]) -> tuple[bool, list[str]]:
             table.mark_ready(key)
         after = list(table.pending())
         os.environ["NIJA_PREACTIVATION_READINESS_V16_READY"] = "1" if not after else "0"
+        if not after:
+            os.environ["NIJA_AUTHORITY_READY"] = "1" if bool(proofs.get("authority_ready")) else "0"
+            os.environ["NIJA_NONCE_READY"] = "1" if bool(proofs.get("nonce_ready")) else "0"
+            os.environ["NIJA_RUNTIME_NONCE_READY"] = os.environ["NIJA_NONCE_READY"]
+            logger.critical(
+                "PREACTIVATION_READY authority_ready=%s nonce_ready=%s writer_authority=confirmed blockers_cleared=true",
+                bool(proofs.get("authority_ready")),
+                bool(proofs.get("nonce_ready")),
+            )
         logger.critical(
             "PREACTIVATION_READINESS_V16_RECONSTRUCTED marker=%s before=%s after=%s proofs=%s",
             _MARKER,
@@ -336,6 +345,13 @@ def _attempt_activation() -> tuple[bool, dict[str, Any]]:
         state_after = monitor._current_state_value(sm)
         details["state_after"] = state_after
         details["activation"] = "committed" if committed else "normal_commit_rejected"
+        if committed and state_after == "LIVE_ACTIVE":
+            logger.critical(
+                "LIVE_EXECUTION_ENABLED authority_ready=%s nonce_ready=%s activation=%s",
+                bool(proofs.get("authority_ready")),
+                bool(proofs.get("nonce_ready")),
+                details["activation"],
+            )
         return bool(committed and state_after == "LIVE_ACTIVE"), details
     except Exception as exc:
         details["activation"] = f"activation_attempt_failed:{type(exc).__name__}:{exc}"
