@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
+import threading
 
 from bot.nija_core_loop import _cached_broker_balances_for_log
 
@@ -258,6 +259,63 @@ def test_ai_engine_force_trade_emits_and_selects_below_floor_signal(monkeypatch)
     )
     engine = NijaAIEngine()
     engine.set_score_floor(80.0)
+
+
+def test_run_trading_loop_reaches_first_cycle_without_startup_barrier_waits(monkeypatch) -> None:
+    from bot import nija_core_loop as ncl
+
+    class _ReadyEvent:
+        def is_set(self):
+            return True
+
+        def wait(self, timeout=None):
+            return True
+
+        def set(self):
+            return None
+
+    class _CapEvent:
+        def is_set(self):
+            return True
+
+    class _StateMachine:
+        @staticmethod
+        def is_live_trading_active():
+            return False
+
+    class _Strategy:
+        broker = SimpleNamespace(connected=True)
+        symbols = ["BTC-USD"]
+        apex = object()
+        nija_core_loop = object()
+
+        def run_cycle(self):
+            raise StopIteration("first cycle reached")
+
+    monkeypatch.setattr(ncl, "TRADING_ENGINE_READY", _ReadyEvent())
+    monkeypatch.setattr(ncl, "_CAPITAL_HYDRATED_EVENT", _CapEvent())
+    monkeypatch.setattr(ncl, "_SM_AVAILABLE", False)
+    monkeypatch.setattr(ncl, "_get_state_machine", lambda: _StateMachine(), raising=False)
+    monkeypatch.setattr(ncl, "_loop_running", False)
+    monkeypatch.setattr(ncl, "_loop_guard", threading.Lock())
+    monkeypatch.setattr(ncl, "assert_runtime_contract_release_ready", lambda **kwargs: SimpleNamespace(as_dict=lambda: {}))
+    monkeypatch.setattr(ncl, "resolve_runtime_mode_safe", lambda logger: SimpleNamespace(raw={}))
+    monkeypatch.setattr(ncl, "_is_live_mode", lambda runtime_mode: False)
+
+    monkeypatch.setenv("NIJA_START_GATE_TIMEOUT_S", "1")
+    monkeypatch.setenv("NIJA_HYDRATION_BARRIER_TIMEOUT", "1")
+    monkeypatch.setenv("NIJA_CSM_READY_TIMEOUT", "1")
+    monkeypatch.setenv("SUPERVISOR_MODE", "false")
+
+    def _import_fail(*args, **kwargs):
+        raise ImportError("test bypass")
+
+    monkeypatch.setattr("builtins.__import__", _import_fail)
+
+    try:
+        ncl.run_trading_loop(_Strategy(), cycle_secs=0)
+    except StopIteration as exc:
+        assert str(exc) == "first cycle reached"
     monkeypatch.setenv("FORCE_TRADE", "true")
     monkeypatch.setattr(
         engine,
