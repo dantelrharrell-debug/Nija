@@ -831,6 +831,7 @@ class EntrypointWriterAuthority:
         self._core_thread_started_at = now
         self._core_thread_last_alive_at = now if thread.is_alive() else 0.0
         os.environ["NIJA_CORE_THREAD_ALIVE"] = "1" if thread.is_alive() else "0"
+        self._scan_deadline_exceeded = False
         self._write_metadata()
         self._notify_runtime_reconciliation("core_thread_registered")
 
