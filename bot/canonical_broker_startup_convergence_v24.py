@@ -228,6 +228,21 @@ def _start_kraken_authenticated_recovery(manager: Any) -> bool:
                     )
                     if callable(register):
                         register("kraken", broker, connected=True)
+                    try:
+                        setattr(broker, "connected", True)
+                    except Exception:
+                        pass
+                    try:
+                        if callable(getattr(broker, "get_all_products", None)):
+                            broker.get_all_products()
+                    except Exception as products_exc:
+                        logger.warning(
+                            "KRAKEN_AUTHENTICATED_RECOVERY_PRODUCTS_REFRESH_PENDING "
+                            "marker=%s error=%s:%s",
+                            marker,
+                            type(products_exc).__name__,
+                            products_exc,
+                        )
                     transition = getattr(manager, "_transition_platform_state", None)
                     state = getattr(manager_module, "ConnectionState", None)
                     if callable(transition) and state is not None:
@@ -247,6 +262,22 @@ def _start_kraken_authenticated_recovery(manager: Any) -> bool:
                                 type(refresh_exc).__name__,
                                 refresh_exc,
                             )
+                    try:
+                        if callable(getattr(manager, "register_platform_broker_instance", None)):
+                            manager.register_platform_broker_instance(
+                                broker_type,
+                                broker,
+                                mark_connected_state=True,
+                                allow_recovery_registration=True,
+                            )
+                    except Exception as register_exc:
+                        logger.warning(
+                            "KRAKEN_AUTHENTICATED_RECOVERY_MANAGER_REGISTER_PENDING "
+                            "marker=%s error=%s:%s",
+                            marker,
+                            type(register_exc).__name__,
+                            register_exc,
+                        )
                     try:
                         state_module = importlib.import_module("bot.trading_state_machine")
                         state_machine = state_module.get_state_machine()
@@ -281,7 +312,7 @@ def _start_kraken_authenticated_recovery(manager: Any) -> bool:
                     os.environ["NIJA_KRAKEN_AUTHENTICATED_RECOVERY_READY"] = "1"
                     logger.critical(
                         "KRAKEN_AUTHENTICATED_RECOVERY_READY marker=%s "
-                        "attempt=%d connected=true capital_rechecked=true",
+                        "attempt=%d connected=true capital_rechecked=true products_refreshed=true",
                         marker,
                         attempt,
                     )

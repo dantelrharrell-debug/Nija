@@ -241,6 +241,10 @@ class TestKrakenRecoveryRestart:
         )
 
         class _Manager:
+            def __init__(self):
+                self.register_calls = []
+                self.refresh_calls = []
+
             def _transition_platform_state(self, *_a):
                 pass
 
@@ -248,7 +252,10 @@ class TestKrakenRecoveryRestart:
                 pass
 
             def refresh_capital_authority(self, **_kw):
-                pass
+                self.refresh_calls.append(_kw)
+
+            def register_platform_broker_instance(self, *args, **kwargs):
+                self.register_calls.append((args, kwargs))
 
             def begin_platform_connection(self, *_a):
                 pass
@@ -299,3 +306,104 @@ class TestKrakenRecoveryRestart:
             "broker.connect() must be called when broker.connected=False even "
             "when FSM.is_connected=True (post-startup disconnect)"
         )
+
+        assert manager.refresh_calls, "CapitalAuthority should be refreshed after Kraken recovery"
+        assert manager.register_calls, "Recovered Kraken broker should be republished into the manager"
+
+    def test_recovery_refreshes_products_before_ready(self, monkeypatch):
+        module = _load_v24()
+
+        monkeypatch.setattr(module, "_KRAKEN_RECOVERY_STARTED", False)
+        monkeypatch.setattr(module, "_kraken_credentials_configured", lambda: True)
+        monkeypatch.setenv("NIJA_KRAKEN_RECOVERY_INTERVAL_S", "1")
+        monkeypatch.setenv("NIJA_KRAKEN_RECOVERY_WINDOW_S", "60")
+        monkeypatch.setattr(module, "_writer_lineage", lambda: (True, "lineage_ready generation=5"))
+
+        calls = []
+
+        class _FSM:
+            is_connected = True
+            is_connecting = False
+
+            def reset(self):
+                pass
+
+        class _Broker:
+            connected = True
+
+            def connect(self):
+                calls.append("connect")
+                return True
+
+            def get_account_balance(self):
+                calls.append("balance")
+                return 233.0
+
+            def get_all_products(self):
+                calls.append("products")
+                return ["BTC-USD"]
+
+        broker = _Broker()
+        broker_type = object()
+
+        class _ConnectionState:
+            CONNECTED = object()
+
+        manager_module_fake = types.SimpleNamespace(ConnectionState=_ConnectionState)
+        broker_module_fake = types.SimpleNamespace(
+            _KRAKEN_STARTUP_FSM=_FSM(),
+            register_platform_broker=lambda *_a, **_kw: calls.append("register_global"),
+        )
+
+        class _StateMachine:
+            def maybe_auto_activate(self):
+                calls.append("activate")
+
+        class _Manager:
+            def register_platform_broker_instance(self, *_a, **_kw):
+                calls.append("register_manager")
+
+            def _transition_platform_state(self, *_a):
+                calls.append("transition")
+
+            def on_broker_ready(self, *_a):
+                calls.append("ready_hook")
+
+            def refresh_capital_authority(self, **_kw):
+                calls.append("refresh_capital")
+
+        manager = _Manager()
+
+        monkeypatch.setattr(
+            module,
+            "_resolve_or_register_kraken_broker",
+            lambda _mgr: (broker, broker_type, manager_module_fake),
+        )
+
+        real_import = importlib.import_module
+
+        def _fake_import(name):
+            if name == "bot.broker_manager":
+                return broker_module_fake
+            if name == "bot.trading_state_machine":
+                return types.SimpleNamespace(get_state_machine=lambda: _StateMachine())
+            if name == "three_venue_execution_readiness":
+                return types.SimpleNamespace(publish_once=lambda **_: calls.append("publish"))
+            return real_import(name)
+
+        monkeypatch.setattr(module.importlib, "import_module", _fake_import)
+        monkeypatch.setattr(module.time, "sleep", lambda _s: None)
+
+        class _ImmediateThread:
+            def __init__(self, target, **_kwargs):
+                self.target = target
+
+            def start(self):
+                self.target()
+
+        monkeypatch.setattr(module.threading, "Thread", _ImmediateThread)
+
+        assert module._start_kraken_authenticated_recovery(manager) is True
+        assert calls[:2] == ["register_global", "products"], calls
+        assert "refresh_capital" in calls
+        assert "publish" in calls
