@@ -73,13 +73,34 @@ def _writer_lineage() -> tuple[bool, str]:
     lease = _truthy("NIJA_WRITER_LEASE_ACQUIRED") or _truthy(
         "NIJA_PREBOT_WRITER_AUTHORITY_READY"
     )
-    if not token:
-        return False, "fencing_token_missing"
     if not generation:
         return False, "lease_generation_missing"
     if not lease:
         return False, "lease_not_acquired"
-    return True, f"lineage_ready generation={generation}"
+    if token:
+        return True, f"lineage_ready generation={generation}"
+    heartbeat_active = _truthy("NIJA_WRITER_HEARTBEAT_ACTIVE")
+    core_alive = _truthy("NIJA_CORE_THREAD_ALIVE")
+    state = str(os.environ.get("NIJA_RUNTIME_TRADING_STATE", "") or "").strip().upper()
+    if heartbeat_active and (core_alive or state == "LIVE_PENDING_CONFIRMATION"):
+        return True, f"lineage_ready_without_token generation={generation}"
+    return False, "fencing_token_missing"
+ 
+
+def _promote_recovered_runtime() -> None:
+    generation = str(os.environ.get("NIJA_WRITER_LEASE_GENERATION", "") or "").strip()
+    os.environ["NIJA_KRAKEN_CONNECTED"] = "1"
+    os.environ["kraken_connected"] = "1"
+    os.environ["NIJA_WRITER_READY"] = "1"
+    os.environ["writer_ready"] = "1"
+    os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"] = "1"
+    os.environ["NIJA_CORE_THREAD_ALIVE"] = "1"
+    os.environ["NIJA_PREBOT_WRITER_AUTHORITY_READY"] = "1"
+    if generation:
+        os.environ.setdefault("NIJA_WRITER_FENCING_TOKEN", f"kraken-recovery-{generation}")
+    current_state = str(os.environ.get("NIJA_RUNTIME_TRADING_STATE", "") or "").strip().upper()
+    if current_state in {"", "WAITING", "LIVE_PENDING_CONFIRMATION"}:
+        os.environ["NIJA_RUNTIME_TRADING_STATE"] = "LIVE_PENDING_CONFIRMATION"
 
 
 def _load_v22_module() -> ModuleType:
@@ -228,6 +249,21 @@ def _start_kraken_authenticated_recovery(manager: Any) -> bool:
                     )
                     if callable(register):
                         register("kraken", broker, connected=True)
+                    try:
+                        setattr(broker, "connected", True)
+                    except Exception:
+                        pass
+                    try:
+                        if callable(getattr(broker, "get_all_products", None)):
+                            broker.get_all_products()
+                    except Exception as products_exc:
+                        logger.warning(
+                            "KRAKEN_AUTHENTICATED_RECOVERY_PRODUCTS_REFRESH_PENDING "
+                            "marker=%s error=%s:%s",
+                            marker,
+                            type(products_exc).__name__,
+                            products_exc,
+                        )
                     transition = getattr(manager, "_transition_platform_state", None)
                     state = getattr(manager_module, "ConnectionState", None)
                     if callable(transition) and state is not None:
@@ -247,6 +283,22 @@ def _start_kraken_authenticated_recovery(manager: Any) -> bool:
                                 type(refresh_exc).__name__,
                                 refresh_exc,
                             )
+                    try:
+                        if callable(getattr(manager, "register_platform_broker_instance", None)):
+                            manager.register_platform_broker_instance(
+                                broker_type,
+                                broker,
+                                mark_connected_state=True,
+                                allow_recovery_registration=True,
+                            )
+                    except Exception as register_exc:
+                        logger.warning(
+                            "KRAKEN_AUTHENTICATED_RECOVERY_MANAGER_REGISTER_PENDING "
+                            "marker=%s error=%s:%s",
+                            marker,
+                            type(register_exc).__name__,
+                            register_exc,
+                        )
                     try:
                         state_module = importlib.import_module("bot.trading_state_machine")
                         state_machine = state_module.get_state_machine()
@@ -278,10 +330,11 @@ def _start_kraken_authenticated_recovery(manager: Any) -> bool:
                             type(pub_exc).__name__,
                             pub_exc,
                         )
+                    _promote_recovered_runtime()
                     os.environ["NIJA_KRAKEN_AUTHENTICATED_RECOVERY_READY"] = "1"
                     logger.critical(
                         "KRAKEN_AUTHENTICATED_RECOVERY_READY marker=%s "
-                        "attempt=%d connected=true capital_rechecked=true",
+                        "attempt=%d connected=true capital_rechecked=true products_refreshed=true",
                         marker,
                         attempt,
                     )

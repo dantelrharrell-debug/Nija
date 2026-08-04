@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import importlib
 
 from bot.broker_manager import OKXBroker, _OKXRestClient, _okx_spendable_cash
 
@@ -169,3 +170,44 @@ def test_okx_application_error_is_bounded_and_omits_raw_payload(caplog):
     )
     assert all(raw_text not in message for message in messages)
     assert all("key_sample" not in message for message in messages)
+
+
+def test_exchange_normalizer_removes_generated_usdtt_suffix():
+    normalizer = importlib.import_module("bot.exchange_normalizer")
+
+    assert normalizer._clean_symbol("BTC-USDTT") == "BTC-USDT"
+    assert normalizer._clean_symbol("BTCUSDTT") == "BTCUSDT"
+
+
+def test_okx_get_candles_skips_unlisted_instrument_before_request(monkeypatch):
+    patch = importlib.import_module("bot.okx_runtime_patch")
+
+    class MarketAPI:
+        def __init__(self):
+            self.calls = []
+
+        def _request(self, method, path, params=None):
+            self.calls.append((method, path, params))
+            if path == "/api/v5/public/instruments":
+                return {"code": "0", "data": [{"instId": "ETH-USDT"}]}
+            raise AssertionError(f"unexpected request path: {path}")
+
+        def get_candles(self, **kwargs):
+            self.calls.append(("GET", "/api/v5/market/candles", kwargs))
+            raise AssertionError("candle request should not be sent for unlisted symbol")
+
+    broker = OKXBroker.__new__(OKXBroker)
+    broker.market_api = MarketAPI()
+    broker.account_api = None
+    broker.broker_type = type("BrokerType", (), {"value": "okx"})()
+
+    patch._PRODUCT_CACHE["loaded_at"] = 0.0
+    patch._PRODUCT_CACHE["symbols"] = set()
+    patch._INVALID_OKX_INST_IDS.clear()
+
+    result = patch._direct_get_candles(broker, "BTC-USD", timeframe="1m", limit=5)
+
+    assert result is None
+    assert ("GET", "/api/v5/public/instruments", {"instType": "SPOT"}) in broker.market_api.calls
+    assert all(call[1] != "/api/v5/market/candles" for call in broker.market_api.calls)
+    assert "BTC-USDT" in patch._INVALID_OKX_INST_IDS

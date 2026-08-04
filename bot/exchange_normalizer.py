@@ -13,6 +13,8 @@ def _clean_symbol(symbol: Any) -> str:
     text = str(symbol or "").strip().upper().replace("/", "-").replace("_", "-")
     while text.endswith("-USDTT"):
         text = text[:-1]
+    while text.endswith("USDTT") and "-" not in text:
+        text = text[:-1]
     return text
 
 

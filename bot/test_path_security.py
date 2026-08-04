@@ -158,6 +158,21 @@ class TestPathValidation:
         assert result.name == "report.json"
         assert "january" in str(result)
 
+    def test_validate_blocks_absolute_base_alias_with_relative_child(self):
+        """Test that absolute-looking aliases still resolve under the configured base."""
+        alias_base_dir = Path(self.temp_dir) / "alias-base"
+        alias_base_dir.mkdir(exist_ok=True)
+
+        safe_relative = Path(self.base_dir).resolve().relative_to(alias_base_dir.resolve().parent)
+        result = validate_output_path(alias_base_dir, safe_relative)
+
+        assert result == self.base_dir.resolve()
+
+    def test_validate_file_path_rejects_absolute_subdirectory_escape(self):
+        """Test file path validation rejects absolute subdirectory escapes."""
+        with pytest.raises(PathValidationError, match="outside allowed directory"):
+            validate_file_path(self.base_dir, "report.json", "/etc")
+
 
 class TestPerformanceDashboardSecurity:
     """Test security of performance dashboard export functions"""
@@ -194,6 +209,11 @@ class TestPerformanceDashboardSecurity:
         """Test that CSV export also blocks path traversal"""
         with pytest.raises(PathValidationError):
             self.dashboard.export_csv_report(output_dir="../../sensitive")
+
+    def test_export_rejects_absolute_path_even_if_followed_by_safe_leaf(self):
+        """Test that absolute escape attempts fail even with a harmless trailing segment."""
+        with pytest.raises(PathValidationError):
+            self.dashboard.export_investor_report(output_dir="/tmp/reports")
 
     def test_export_creates_nested_directories(self):
         """Test that nested directories are created safely"""
@@ -279,6 +299,17 @@ class TestDashboardAPI:
         assert response.status_code == 400
         data = response.get_json()
         assert data['success'] is False
+
+    def test_export_csv_blocks_absolute_escape_path(self):
+        """Test that CSV export endpoint rejects absolute path escapes."""
+        response = self.client.post(
+            '/api/dashboard/export/csv',
+            json={'output_dir': '/tmp/reports'}
+        )
+        assert response.status_code == 400
+        data = response.get_json()
+        assert data['success'] is False
+        assert 'Invalid output directory' in data['error']
 
     def test_export_with_default_path(self):
         """Test export with no output_dir specified (uses default)"""
