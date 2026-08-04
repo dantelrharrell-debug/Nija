@@ -225,3 +225,16 @@ def test_writer_ready_accepts_bridge_snapshot_when_readiness_probe_is_stricter(m
     monkeypatch.setattr(patch.importlib, "import_module", _fake_import)
 
     assert patch._writer_ready() is True
+
+
+def test_writer_ready_announces_confirmed_authority_once(monkeypatch, caplog):
+    _reset(monkeypatch)
+    monkeypatch.setenv("NIJA_WRITER_FENCING_TOKEN", "token")
+    monkeypatch.setenv("NIJA_WRITER_LEASE_GENERATION", "42")
+
+    with caplog.at_level("CRITICAL"):
+        patch._announce_writer_ready()
+        patch._announce_writer_ready()
+
+    assert patch.os.environ["NIJA_WRITER_AUTHORITY_CONFIRMED"] == "1"
+    assert caplog.text.count("writer_authority=confirmed") == 1

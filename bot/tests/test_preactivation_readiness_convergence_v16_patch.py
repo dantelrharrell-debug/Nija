@@ -5,6 +5,7 @@ import sys
 import threading
 import time
 from types import ModuleType, SimpleNamespace
+import logging
 
 
 def _module():
@@ -24,6 +25,9 @@ def test_marks_every_key_only_when_every_proof_passes(monkeypatch):
     assert ready is True
     assert pending == []
     assert set(marked) == set(patch._KEYS)
+    assert patch.os.environ["NIJA_PREACTIVATION_READINESS_V16_READY"] == "1"
+    assert patch.os.environ["NIJA_AUTHORITY_READY"] == "1"
+    assert patch.os.environ["NIJA_NONCE_READY"] == "1"
 
     marked.clear()
     proofs["nonce_ready"] = False
@@ -86,6 +90,32 @@ def test_activation_uses_normal_commit_path(monkeypatch):
     assert calls == ["commit"]
     assert details["state_after"] == "LIVE_ACTIVE"
 
+
+def test_logs_live_execution_enabled_on_successful_activation(monkeypatch, caplog):
+    patch = _module()
+    proofs = {key: True for key in patch._KEYS}
+    monkeypatch.setattr(patch, "_collect_proofs", lambda: (proofs, {"proof": "ok"}))
+    monkeypatch.setattr(patch, "_mark_proven_readiness", lambda value: (True, []))
+
+    class StateMachine:
+        def __init__(self):
+            self._lock = threading.RLock()
+            self.state = "LIVE_PENDING_CONFIRMATION"
+
+    sm = StateMachine()
+    monitor = ModuleType("bot.activation_pending_commit_monitor_patch")
+    monitor._state_machine = lambda: sm
+    monitor._current_state_value = lambda value: value.state
+    monitor._capital_ready_snapshot = lambda: (True, {"real_capital": 100.0})
+    monitor._commit_once = lambda value, meta: setattr(value, "state", "LIVE_ACTIVE") or True
+    monkeypatch.setitem(sys.modules, "bot.activation_pending_commit_monitor_patch", monitor)
+
+    with caplog.at_level(logging.CRITICAL):
+        active, _details = patch._attempt_activation()
+
+    assert active is True
+    assert "LIVE_EXECUTION_ENABLED authority_ready=True nonce_ready=True activation=committed" in caplog.text
+
 def test_starts_strategy_publication_monitor_once(monkeypatch):
     patch = _module()
     calls: list[str] = []
@@ -97,4 +127,3 @@ def test_starts_strategy_publication_monitor_once(monkeypatch):
     assert patch._ensure_strategy_publication_monitor() == (True, "started")
     assert patch._ensure_strategy_publication_monitor() == (True, "already_started")
     assert calls == ["start"]
-

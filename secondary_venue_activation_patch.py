@@ -138,6 +138,21 @@ def _writer_ready() -> bool:
     )
 
 
+def _announce_writer_ready() -> None:
+    if os.environ.get("NIJA_WRITER_AUTHORITY_CONFIRMED", "").strip() == "1":
+        return
+    token = os.environ.get("NIJA_WRITER_FENCING_TOKEN", "").strip()
+    generation = os.environ.get("NIJA_WRITER_LEASE_GENERATION", "").strip()
+    os.environ["NIJA_WRITER_AUTHORITY_CONFIRMED"] = "1"
+    logger.critical(
+        "writer_authority=confirmed token_present=%s generation=%s nonce_ready=%s authority_ready=%s",
+        bool(token),
+        generation or "missing",
+        os.environ.get("NIJA_RUNTIME_NONCE_READY", os.environ.get("NIJA_NONCE_READY", "unknown")),
+        os.environ.get("NIJA_AUTHORITY_READY", "unknown"),
+    )
+
+
 def _state(venue: Venue, state: str, **details: Any) -> None:
     previous = _LAST_STATE.get(venue.name)
     _LAST_STATE[venue.name] = state
@@ -484,6 +499,7 @@ def _loop(venue: Venue) -> None:
             _state(venue, "writer_authority_pending")
             time.sleep(2.0)
             continue
+        _announce_writer_ready()
         try:
             state = activate_once(venue)
             failures = 0 if state == "ready" else failures + 1
