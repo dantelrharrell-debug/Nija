@@ -201,3 +201,27 @@ def test_writer_ready_remains_pending_without_fencing_or_operational_signals(mon
     monkeypatch.setenv("NIJA_WRITER_HEARTBEAT_ACTIVE", "0")
 
     assert patch._writer_ready() is False
+
+
+def test_writer_ready_accepts_bridge_snapshot_when_readiness_probe_is_stricter(monkeypatch):
+    _reset(monkeypatch)
+    monkeypatch.setenv("LIVE_CAPITAL_VERIFIED", "1")
+    monkeypatch.setenv("NIJA_WRITER_LEASE_ACQUIRED", "1")
+    monkeypatch.setenv("NIJA_WRITER_LEASE_GENERATION", "42")
+    monkeypatch.setenv("NIJA_WRITER_HEARTBEAT_ACTIVE", "1")
+    monkeypatch.setenv("NIJA_RUNTIME_TRADING_STATE", "OFF")
+    monkeypatch.delenv("NIJA_WRITER_FENCING_TOKEN", raising=False)
+    monkeypatch.setenv("NIJA_CORE_THREAD_ALIVE", "0")
+
+    real_import = patch.importlib.import_module
+
+    def _fake_import(name: str):
+        if name == "three_venue_execution_readiness":
+            return SimpleNamespace(writer_authority_ready=lambda: False)
+        if name in {"bot.live_active_dispatch_bridge_patch", "live_active_dispatch_bridge_patch"}:
+            return SimpleNamespace(_writer_authority_snapshot=lambda: {"ready": True})
+        return real_import(name)
+
+    monkeypatch.setattr(patch.importlib, "import_module", _fake_import)
+
+    assert patch._writer_ready() is True
