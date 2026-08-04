@@ -2758,6 +2758,127 @@ def _distributed_writer_lock_heartbeat(ttl_s: int) -> None:
     os.environ["NIJA_WRITER_HEARTBEAT_ALIVE_TS"] = "0"
 
 
+def _adopt_prebot_writer_singleton() -> bool:
+    """Adopt an already-acquired pre-boot entrypoint_writer_authority singleton.
+
+    When ``source_runtime_guard_bootstrap`` (called from
+    ``_install_global_runtime_startup_guards`` in ``main.py``) has already
+    acquired the Redis writer lease via ``bot.entrypoint_writer_authority``
+    *before* the bot package is imported, ``_acquire_distributed_process_lock``
+    must **not** wipe and re-acquire that lease.  Re-acquiring would:
+
+    1. Increment the Redis fencing-counter and generation-counter a second time,
+       making the pre-boot singleton's local generation stale.
+    2. Cause the singleton's ``_check_authority_invariant`` heartbeat to detect
+       either a missing ``NIJA_WRITER_FENCING_TOKEN`` (cleared by the reset) or
+       a generation mismatch, triggering ``_mark_lost()`` which sets
+       ``NIJA_WRITER_HEARTBEAT_ACTIVE="0"`` and ``NIJA_WRITER_LEASE_ACQUIRED="0"``.
+    3. Leave the ``AuthorityHeartbeatMonitor`` permanently failing because
+       ``LEASE_ACQUIRED="0"`` causes ``_check_authority_once`` to return ``False``
+       immediately on every tick.
+    4. Keep ``NIJA_WRITER_HEARTBEAT_ACTIVE="0"`` forever, blocking the
+       ``_writer_heartbeat_gate`` and preventing
+       ``LIVE_PENDING_CONFIRMATION → LIVE_ACTIVE``.
+
+    When the singleton is healthy, this function populates ``bot.py``'s own
+    writer-lock globals from the singleton's published state so that
+    ``_release_distributed_process_lock`` and the monitoring helpers continue to
+    work correctly, then returns ``True`` to tell the caller to skip re-acquisition.
+    """
+    global _distributed_writer_lock_client
+    global _distributed_writer_lock_key, _distributed_writer_lock_meta_key, _distributed_writer_lock_token
+    global _distributed_writer_fencing_key, _distributed_writer_fencing_token
+    global _distributed_writer_lock_thread
+    global _running_in_degraded_mode
+
+    # Only adopt when NIJA_WRITER_AUTHORITY_SINGLETON_BRIDGED confirms the
+    # pre-boot module was installed AND the bridged module was registered.
+    _truthy_set = {"1", "true", "yes", "on", "enabled", "y"}
+    if os.environ.get("NIJA_WRITER_AUTHORITY_SINGLETON_BRIDGED", "").strip() not in _truthy_set:
+        return False
+
+    # Resolve the canonical module — may be registered under either name.
+    _ewa_mod = (
+        sys.modules.get("bot.entrypoint_writer_authority")
+        or sys.modules.get("entrypoint_writer_authority")
+    )
+    if _ewa_mod is None:
+        return False
+
+    _getter = getattr(_ewa_mod, "get_entrypoint_writer_authority", None)
+    if not callable(_getter):
+        return False
+
+    _singleton = _getter()
+    if _singleton is None:
+        return False
+
+    # Only adopt when the singleton actively holds the distributed Redis lease
+    # (not the local-fallback variant — that has no Redis client to bridge).
+    if not bool(getattr(_singleton, "acquired", False)):
+        return False
+    if bool(getattr(_singleton, "_local_fallback", False)):
+        return False
+    if bool(getattr(_singleton, "_lost", threading.Event()).is_set()):
+        return False
+
+    # Read the singleton's published env state.
+    _token_str = os.environ.get("NIJA_WRITER_FENCING_TOKEN", "").strip()
+    _lease_gen_str = os.environ.get("NIJA_WRITER_LEASE_GENERATION", "").strip()
+    _lock_key = os.environ.get("NIJA_WRITER_LOCK_KEY", "").strip()
+    _lease_acquired = os.environ.get("NIJA_WRITER_LEASE_ACQUIRED", "").strip()
+
+    if not _token_str or not _lock_key or _lease_acquired not in _truthy_set:
+        # Env not yet fully published — singleton is mid-acquisition; skip.
+        return False
+
+    try:
+        _fencing_token_int = int(_token_str)
+        if _fencing_token_int <= 0:
+            return False
+    except (TypeError, ValueError):
+        return False
+
+    # Populate bot.py globals so release/heartbeat helpers remain functional.
+    _client = getattr(_singleton, "_client", None)
+    _meta_key = os.environ.get("NIJA_WRITER_LOCK_META_KEY", "").strip()
+    _scope = os.environ.get("NIJA_WRITER_LOCK_SCOPE", "").strip()
+    _owner = os.environ.get("NIJA_WRITER_OWNER_ID", "").strip()
+    _fencing_key = os.environ.get("NIJA_LEASE_GENERATION_KEY", "nija:writer_fence:" + _scope).strip()
+
+    _distributed_writer_lock_client = _client
+    _distributed_writer_lock_key = _lock_key
+    _distributed_writer_lock_meta_key = _meta_key
+    _distributed_writer_lock_token = f"{_fencing_token_int}:{_owner}" if _owner else _token_str
+    _distributed_writer_fencing_key = _fencing_key
+    _distributed_writer_fencing_token = _fencing_token_int
+    _distributed_writer_lock_stop.clear()
+
+    # Register the singleton's heartbeat thread as bot.py's lock thread so
+    # the process-exit release path joins it correctly.
+    _hb_thread = getattr(_singleton, "_heartbeat_thread", None)
+    if isinstance(_hb_thread, threading.Thread) and _hb_thread.is_alive():
+        _distributed_writer_lock_thread = _hb_thread
+
+    logger.critical(
+        "PREBOT_WRITER_SINGLETON_ADOPTED token_prefix=%s generation=%s lock_key=%s "
+        "trading_authority_preserved=true double_acquisition_prevented=true",
+        _token_str[:8],
+        _lease_gen_str,
+        _lock_key,
+    )
+    print(
+        f"[NIJA-PRINT] PREBOT_WRITER_SINGLETON_ADOPTED token_prefix={_token_str[:8]} "
+        f"generation={_lease_gen_str} lock_key={_lock_key} "
+        "trading_authority_preserved=true double_acquisition_prevented=true",
+        flush=True,
+    )
+
+    # Start the authority heartbeat monitor now that writer lineage is confirmed.
+    _start_authority_heartbeat_after_writer_lineage("prebot_singleton_adopted")
+    return True
+
+
 def _acquire_distributed_process_lock() -> None:
     """Acquire cross-deployment fenced single-writer lock via Redis when configured."""
     global _distributed_writer_lock_client
@@ -2765,6 +2886,17 @@ def _acquire_distributed_process_lock() -> None:
     global _distributed_writer_fencing_key, _distributed_writer_fencing_token
     global _distributed_writer_lock_thread
     global _running_in_degraded_mode
+
+    # ── Pre-boot singleton adoption ──────────────────────────────────────────
+    # When source_runtime_guard_bootstrap has already acquired the Redis writer
+    # lease via entrypoint_writer_authority before bot package import, adopt
+    # that singleton rather than wiping its env state and re-acquiring.
+    # Re-acquiring increments the Redis generation counter a second time, which
+    # triggers a generation mismatch in the singleton's heartbeat invariant
+    # check, causing _mark_lost() to clear NIJA_WRITER_HEARTBEAT_ACTIVE and
+    # NIJA_WRITER_LEASE_ACQUIRED — permanently blocking LIVE_ACTIVE activation.
+    if _adopt_prebot_writer_singleton():
+        return
 
     os.environ["NIJA_WRITER_LEASE_ACQUIRED"] = "0"
     os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"] = "0"
