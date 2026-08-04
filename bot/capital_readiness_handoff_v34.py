@@ -45,7 +45,7 @@ def _publish_ready(source: str, snapshot: Any) -> None:
     os.environ["NIJA_CAPITAL_READY"] = "1"
     os.environ["NIJA_CAPITAL_READINESS_SOURCE"] = source
     os.environ["NIJA_CAPITAL_READINESS_HANDOFF_V34"] = "1"
-    LOGGER.critical(
+    LOGGER.info(
         "CAPITAL_READINESS_HANDOFF_V34_READY marker=%s source=%s capital=%.2f broker_count=%d fresh=true",
         MARKER,
         source,
@@ -119,7 +119,7 @@ def install() -> bool:
     if not _STARTED:
         return False
     os.environ["NIJA_CAPITAL_READINESS_HANDOFF_V34_INSTALLED"] = "1"
-    LOGGER.critical(
+    LOGGER.info(
         "CAPITAL_READINESS_HANDOFF_V34_INSTALLED marker=%s fail_closed=true",
         MARKER,
     )

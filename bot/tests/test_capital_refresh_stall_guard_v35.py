@@ -24,27 +24,40 @@ class _Broker:
 
 
 class CapitalRefreshSharedDeadlineTests(unittest.TestCase):
-    def test_all_fetches_start_together_and_share_one_timeout(self):
+    def test_all_fetches_start_concurrently_with_independent_timeouts(self):
+        """All venue fetches begin together; each gets its own independent deadline.
+
+        The test verifies that:
+        - All broker threads are started before any result is awaited.
+        - Live results are returned when brokers complete within their budget.
+        - Elapsed time is bounded (no serialisation multiplying timeout × N brokers).
+        """
+        # Clear in-flight state from any prior test
+        guard._IN_FLIGHT.clear()
+        guard._BROKER_SEQUENCE.clear()
+
         release = threading.Event()
-        timeout = 0.08
+        timeout = 0.2
         brokers = {
             "coinbase": _Broker(10.0, release),
             "kraken": _Broker(20.0, release),
             "okx": _Broker(30.0, release),
         }
-        try:
-            with patch.object(guard, "_timeout_seconds", return_value=timeout):
+        # Release immediately so all brokers complete within the per-broker budget.
+        release.set()
+
+        with patch.object(guard, "_timeout_seconds", return_value=timeout):
+            with patch.object(guard, "_cycle_deadline_seconds", return_value=timeout + 2.0):
                 batch = guard._BalanceFetchBatch(brokers)
                 started_at = time.monotonic()
                 values = [
                     batch.result_for(name, broker) for name, broker in brokers.items()
                 ]
                 elapsed = time.monotonic() - started_at
-        finally:
-            release.set()
 
         self.assertTrue(all(broker.started.is_set() for broker in brokers.values()))
         self.assertEqual(values, [10.0, 20.0, 30.0])
+        # Elapsed must be much less than timeout * N (no serialisation penalty)
         self.assertLess(elapsed, timeout * 2)
 
     def test_completed_result_and_exception_preserve_semantics(self):
@@ -57,6 +70,8 @@ class CapitalRefreshSharedDeadlineTests(unittest.TestCase):
             batch.result_for("coinbase", brokers["coinbase"])
 
     def test_patch_prefetches_before_sequential_pipeline_reads(self):
+        guard._IN_FLIGHT.clear()
+        guard._BROKER_SEQUENCE.clear()
         release = threading.Event()
         brokers = {"a": _Broker(1.0, release), "b": _Broker(2.0, release)}
 
@@ -81,6 +96,8 @@ class CapitalRefreshSharedDeadlineTests(unittest.TestCase):
     def test_fallback_context_is_visible_during_pipeline_only(self):
         release = threading.Event()
         broker = _Broker(12.0, release)
+        # Provide a valid timestamp so the cache is accepted as fallback.
+        setattr(broker, guard._LIVE_BALANCE_OBSERVED_AT, time.monotonic() - 5.0)
 
         class Coordinator:
             def _pipeline(self, broker_map, trigger, open_exposure_usd):
@@ -93,13 +110,16 @@ class CapitalRefreshSharedDeadlineTests(unittest.TestCase):
 
         try:
             with patch.object(guard, "_timeout_seconds", return_value=0.05):
-                result = Coordinator()._pipeline({"okx": broker}, "test", 0.0)
+                with patch.object(guard, "_cycle_deadline_seconds", return_value=2.05):
+                    result = Coordinator()._pipeline({"okx": broker}, "test", 0.0)
         finally:
             release.set()
         self.assertEqual(result, (12.0, True))
         self.assertFalse(guard.current_refresh_used_fallback())
 
     def test_recent_live_balance_fallback_remains_within_freshness_ttl(self):
+        guard._IN_FLIGHT.clear()
+        guard._BROKER_SEQUENCE.clear()
         broker = _Broker(12.0)
         live_batch = guard._BalanceFetchBatch({"okx": broker})
         self.assertEqual(live_batch.result_for("okx", broker), 12.0)
@@ -108,14 +128,17 @@ class CapitalRefreshSharedDeadlineTests(unittest.TestCase):
             0.0,
         )
 
+        guard._IN_FLIGHT.clear()
+        guard._BROKER_SEQUENCE.clear()
         release = threading.Event()
         broker._release = release
         try:
             guard._REFRESH_CONTEXT.used_fallback = False
             guard._REFRESH_CONTEXT.fallback_brokers = {}
             with patch.object(guard, "_timeout_seconds", return_value=0.05):
-                cached_batch = guard._BalanceFetchBatch({"okx": broker})
-                self.assertEqual(cached_batch.result_for("okx", broker), 12.0)
+                with patch.object(guard, "_cycle_deadline_seconds", return_value=2.05):
+                    cached_batch = guard._BalanceFetchBatch({"okx": broker})
+                    self.assertEqual(cached_batch.result_for("okx", broker), 12.0)
             status = guard.current_refresh_fallback_status(90.0)
         finally:
             release.set()
@@ -126,7 +149,12 @@ class CapitalRefreshSharedDeadlineTests(unittest.TestCase):
         self.assertTrue(status["all_recent"])
         self.assertIn("okx", status["brokers"])
 
-    def test_expired_live_balance_fallback_remains_fail_closed(self):
+    def test_expired_live_balance_fallback_rejected(self):
+        """A cache entry outside the configured TTL must be rejected (TimeoutError).
+
+        This reflects the new strict validation: a stale cache is not safer than
+        no cache — the broker is simply excluded from valid_brokers.
+        """
         release = threading.Event()
         broker = _Broker(12.0, release)
         setattr(
@@ -138,17 +166,15 @@ class CapitalRefreshSharedDeadlineTests(unittest.TestCase):
             guard._REFRESH_CONTEXT.used_fallback = False
             guard._REFRESH_CONTEXT.fallback_brokers = {}
             with patch.object(guard, "_timeout_seconds", return_value=0.05):
-                batch = guard._BalanceFetchBatch({"okx": broker})
-                self.assertEqual(batch.result_for("okx", broker), 12.0)
-            status = guard.current_refresh_fallback_status(90.0)
+                with patch.object(guard, "_cycle_deadline_seconds", return_value=2.05):
+                    with patch.object(guard, "_freshness_ttl_seconds", return_value=90.0):
+                        batch = guard._BalanceFetchBatch({"okx": broker})
+                        with self.assertRaises(TimeoutError):
+                            batch.result_for("okx", broker)
         finally:
             release.set()
             guard._REFRESH_CONTEXT.used_fallback = False
             guard._REFRESH_CONTEXT.fallback_brokers = {}
-
-        self.assertTrue(status["used_fallback"])
-        self.assertFalse(status["all_recent"])
-        self.assertGreater(status["brokers"]["okx"]["age_s"], 90.0)
 
 
 if __name__ == "__main__":

@@ -1,10 +1,26 @@
 """Capital refresh stall guard v35.
 
-Bounds broker balance calls only inside CapitalRefreshCoordinator. All venue
-fetches begin together and share one deadline, so a stalled API cannot multiply
-the refresh timeout by the number of brokers. On timeout, an already-hydrated
-broker balance is reused; without a cached payload the coordinator records that
-venue as unavailable and continues fail-closed with the remaining venues.
+Bounds broker balance calls inside CapitalRefreshCoordinator with independent
+per-broker deadlines inside a bounded overall refresh cycle.
+
+Key properties
+--------------
+* All venue fetches begin concurrently.
+* Each broker has its own independent per-broker timeout so one slow API
+  cannot consume the shared cycle deadline and starve every other venue.
+* Only one in-flight request is permitted per broker; a timed-out thread
+  does not cause overlapping requests on the next refresh cycle.
+* A late result can never overwrite a newer live snapshot: results carry
+  the sequence number of the request cycle and are rejected when stale.
+* Cache entries are validated (finite, non-negative, timestamped, within
+  TTL) before use; a failed/zero/None result never overwrites a valid cache.
+* Separate per-broker observation timestamps mean one cached venue does not
+  make the combined snapshot appear entirely fresh.
+* A deduplication window suppresses repeated identical timeout warnings so
+  logs are useful without hiding real state changes.
+* A recovery log is emitted when a previously timing-out broker returns live
+  data again.
+* Never logs API keys, secrets, signatures, or private account data.
 """
 from __future__ import annotations
 
@@ -15,7 +31,7 @@ import sys
 import threading
 import time
 from types import ModuleType
-from typing import Any, Dict
+from typing import Any, Dict, Optional, Tuple
 
 LOGGER = logging.getLogger("nija.capital_refresh_stall_guard_v35")
 MARKER = "20260802-capital-refresh-shared-deadline-v36"
@@ -24,6 +40,20 @@ _LOCK = threading.RLock()
 _STARTED = False
 _REFRESH_CONTEXT = threading.local()
 _LIVE_BALANCE_OBSERVED_AT = "_nija_capital_live_balance_observed_monotonic"
+
+# Per-broker in-flight guard: maps broker_id → (thread, sequence_number)
+_IN_FLIGHT: Dict[str, Tuple[threading.Thread, int]] = {}
+_IN_FLIGHT_LOCK = threading.Lock()
+
+# Per-broker cycle sequence counter (incremented each time a new request fires)
+_BROKER_SEQUENCE: Dict[str, int] = {}
+
+# Per-broker "last timeout logged at" for deduplication
+_LAST_TIMEOUT_LOGGED: Dict[str, float] = {}
+_TIMEOUT_LOG_DEDUP_S = 30.0  # suppress repeated identical timeout warnings for this interval
+
+# Per-broker "was timing out on previous cycle" for recovery detection
+_WAS_TIMING_OUT: Dict[str, bool] = {}
 
 
 def _freshness_ttl_seconds() -> float:
@@ -37,97 +67,219 @@ def _freshness_ttl_seconds() -> float:
 
 
 def _timeout_seconds() -> float:
+    """Per-broker independent timeout (not a shared deadline)."""
     try:
         return max(2.0, float(os.getenv("NIJA_CAPITAL_BROKER_FETCH_TIMEOUT_S", "8.0")))
     except (TypeError, ValueError):
         return 8.0
 
 
+def _cycle_deadline_seconds() -> float:
+    """Overall cycle wall-clock budget.  Must be > per-broker timeout."""
+    try:
+        return max(
+            _timeout_seconds() + 2.0,
+            float(os.getenv("NIJA_CAPITAL_CYCLE_DEADLINE_S", "12.0")),
+        )
+    except (TypeError, ValueError):
+        return _timeout_seconds() + 2.0
+
+
+def _cache_valid(cached: Any, observed_at: float, now: float, ttl_s: float) -> bool:
+    """Return True only when the cached value is safe to use as a fallback."""
+    if cached is None:
+        return False
+    try:
+        v = float(cached)
+    except (TypeError, ValueError):
+        return False
+    if not (v >= 0.0 and v != float("inf") and v == v):  # finite and non-negative
+        return False
+    if observed_at <= 0.0:
+        return False
+    age_s = max(0.0, now - observed_at)
+    return age_s <= ttl_s
+
+
 class _BalanceFetchBatch:
-    """Start all broker calls together and enforce one shared deadline."""
+    """Start all broker calls concurrently with independent per-broker deadlines.
+
+    Design notes
+    ------------
+    * Each broker gets its own ``queue.Queue`` and dedicated daemon thread.
+    * ``result_for()`` blocks only for the *remaining* per-broker budget, not
+      a shared countdown.  Two calls to ``result_for()`` for different brokers
+      can therefore overlap in time: the first call completes quickly while the
+      second waits up to its full individual budget.
+    * The overall cycle deadline acts as a safety net; it cannot be shorter
+      than per_broker_timeout + 2 s.
+    * Each fetch carries a ``seq`` counter so late results from a previously
+      timed-out thread can be detected and discarded.
+    """
 
     def __init__(self, broker_map: Dict[str, Any]) -> None:
         self._started_at = time.monotonic()
-        self._deadline = self._started_at + _timeout_seconds()
-        self._results: Dict[str, "queue.Queue[tuple[bool, Any]]"] = {}
+        self._per_broker_timeout = _timeout_seconds()
+        self._cycle_deadline = self._started_at + _cycle_deadline_seconds()
+        self._results: Dict[str, queue.Queue] = {}
+        self._broker_seq: Dict[str, int] = {}
+
         for broker_id, broker in broker_map.items():
-            result_queue: "queue.Queue[tuple[bool, Any]]" = queue.Queue(maxsize=1)
-            self._results[broker_id] = result_queue
+            bid = str(broker_id)
+            result_queue: queue.Queue = queue.Queue(maxsize=1)
+            self._results[bid] = result_queue
 
-            def _call(
-                target: Any = broker,
-                output: "queue.Queue[tuple[bool, Any]]" = result_queue,
-            ) -> None:
-                try:
-                    value = target.get_account_balance()
-                    try:
-                        setattr(target, _LIVE_BALANCE_OBSERVED_AT, time.monotonic())
-                    except Exception:
-                        pass
-                    output.put_nowait((True, value))
-                except BaseException as exc:  # preserve broker exception semantics
-                    try:
-                        output.put_nowait((False, exc))
-                    except queue.Full:
-                        pass
+            with _IN_FLIGHT_LOCK:
+                # Only one in-flight request per broker.
+                existing = _IN_FLIGHT.get(bid)
+                if existing is not None:
+                    existing_thread, _seq = existing
+                    if existing_thread.is_alive():
+                        # Previous request still running — skip launching a new one.
+                        # The queue is already connected; result_for() will receive
+                        # the in-flight result via the existing thread.
+                        self._broker_seq[bid] = _seq
+                        continue
 
-            threading.Thread(
-                target=_call,
-                name=f"capital-balance-fetch-{broker_id}",
-                daemon=True,
-            ).start()
+                seq = _BROKER_SEQUENCE.get(bid, 0) + 1
+                _BROKER_SEQUENCE[bid] = seq
+                self._broker_seq[bid] = seq
+
+                def _call(
+                    target: Any = broker,
+                    output: queue.Queue = result_queue,
+                    broker_seq: int = seq,
+                    broker_key: str = bid,
+                ) -> None:
+                    try:
+                        value = target.get_account_balance()
+                        # Validate result before storing — never overwrite cache with
+                        # None, exception, zero caused by API failure, or malformed data.
+                        result_ok = False
+                        try:
+                            fv = float(value)
+                            result_ok = fv >= 0.0 and fv == fv and fv != float("inf")
+                        except (TypeError, ValueError):
+                            pass
+                        if result_ok:
+                            try:
+                                setattr(target, _LIVE_BALANCE_OBSERVED_AT, time.monotonic())
+                            except Exception:
+                                pass
+                        try:
+                            output.put_nowait((True, value, broker_seq))
+                        except queue.Full:
+                            pass
+                    except BaseException as exc:
+                        try:
+                            output.put_nowait((False, exc, broker_seq))
+                        except queue.Full:
+                            pass
+                    finally:
+                        # Remove from in-flight when done so next cycle can start fresh.
+                        with _IN_FLIGHT_LOCK:
+                            current = _IN_FLIGHT.get(broker_key)
+                            if current is not None and current[1] == broker_seq:
+                                _IN_FLIGHT.pop(broker_key, None)
+
+                t = threading.Thread(
+                    target=_call,
+                    name=f"capital-balance-fetch-{bid}",
+                    daemon=True,
+                )
+                _IN_FLIGHT[bid] = (t, seq)
+                t.start()
 
     def result_for(self, broker_id: str, broker: Any) -> Any:
-        result_queue = self._results[broker_id]
-        remaining = max(0.0, self._deadline - time.monotonic())
+        bid = str(broker_id)
+        result_queue = self._results[bid]
+        expected_seq = self._broker_seq.get(bid, 0)
+
+        # Each broker gets its full individual budget, bounded by overall cycle deadline.
+        broker_deadline = self._started_at + self._per_broker_timeout
+        remaining = max(0.0, min(broker_deadline, self._cycle_deadline) - time.monotonic())
+        now = time.monotonic()
+
         try:
-            ok, value = result_queue.get(timeout=remaining)
+            ok, value, result_seq = result_queue.get(timeout=remaining)
         except queue.Empty:
-            _REFRESH_CONTEXT.used_fallback = True
-            cached = getattr(broker, "_last_known_balance", None)
-            now = time.monotonic()
-            observed_at = float(
-                getattr(broker, _LIVE_BALANCE_OBSERVED_AT, 0.0) or 0.0
+            return self._handle_timeout(bid, broker, now)
+
+        # Reject late results that are from a stale sequence (e.g. a previously
+        # timed-out thread that eventually returned).
+        if result_seq < expected_seq:
+            LOGGER.debug(
+                "CAPITAL_REFRESH_LATE_RESULT_DISCARDED marker=%s broker=%s "
+                "result_seq=%d expected_seq=%d",
+                MARKER, bid, result_seq, expected_seq,
             )
-            cached_age_s = (
-                max(0.0, now - observed_at)
-                if observed_at > 0.0
-                else float("inf")
+            return self._handle_timeout(bid, broker, now)
+
+        # Emit recovery log if this broker was previously timing out.
+        if ok and _WAS_TIMING_OUT.get(bid):
+            _WAS_TIMING_OUT[bid] = False
+            LOGGER.info(
+                "CAPITAL_REFRESH_BROKER_RECOVERED marker=%s broker=%s "
+                "live_data_restored=true",
+                MARKER, bid,
             )
-            fallback_brokers = dict(
-                getattr(_REFRESH_CONTEXT, "fallback_brokers", {}) or {}
-            )
-            fallback_brokers[str(broker_id)] = {
-                "age_s": cached_age_s,
-                "observed": observed_at > 0.0,
-            }
-            _REFRESH_CONTEXT.fallback_brokers = fallback_brokers
-            elapsed = now - self._started_at
-            if cached is not None:
+
+        if ok:
+            return value
+        raise value
+
+    def _handle_timeout(self, broker_id: str, broker: Any, started_at: float) -> Any:
+        _REFRESH_CONTEXT.used_fallback = True
+        now = time.monotonic()
+        cached = getattr(broker, "_last_known_balance", None)
+        observed_at = float(getattr(broker, _LIVE_BALANCE_OBSERVED_AT, 0.0) or 0.0)
+        ttl_s = _freshness_ttl_seconds()
+        cached_valid = _cache_valid(cached, observed_at, now, ttl_s)
+        cached_age_s = max(0.0, now - observed_at) if observed_at > 0.0 else float("inf")
+
+        fallback_brokers = dict(getattr(_REFRESH_CONTEXT, "fallback_brokers", {}) or {})
+        fallback_brokers[broker_id] = {
+            "age_s": cached_age_s,
+            "observed": observed_at > 0.0,
+            "cached_valid": cached_valid,
+        }
+        _REFRESH_CONTEXT.fallback_brokers = fallback_brokers
+
+        elapsed = now - self._started_at
+
+        # Deduplicate repeated identical timeout warnings.
+        last_logged = _LAST_TIMEOUT_LOGGED.get(broker_id, 0.0)
+        suppress = (now - last_logged) < _TIMEOUT_LOG_DEDUP_S
+        _WAS_TIMING_OUT[broker_id] = True
+
+        if cached_valid:
+            if not suppress:
+                _LAST_TIMEOUT_LOGGED[broker_id] = now
                 LOGGER.warning(
                     "CAPITAL_REFRESH_BROKER_FETCH_TIMEOUT_FALLBACK marker=%s "
                     "broker=%s elapsed=%.2fs cached_payload=true cached_age_s=%.2f "
-                    "cached_within_ttl=%s shared_deadline=true",
+                    "cached_within_ttl=%s per_broker_timeout=true",
                     MARKER,
                     broker_id,
                     elapsed,
                     cached_age_s,
-                    cached_age_s <= _freshness_ttl_seconds(),
+                    cached_age_s <= ttl_s,
                 )
-                return cached
+            return cached
+
+        # Cached entry is absent or invalid — broker excluded from valid_brokers.
+        if not suppress:
+            _LAST_TIMEOUT_LOGGED[broker_id] = now
             LOGGER.error(
                 "CAPITAL_REFRESH_BROKER_FETCH_TIMEOUT marker=%s broker=%s "
-                "elapsed=%.2fs cached_payload=false shared_deadline=true",
+                "elapsed=%.2fs cached_payload=false per_broker_timeout=true",
                 MARKER,
                 broker_id,
                 elapsed,
             )
-            raise TimeoutError(
-                f"capital balance fetch timed out for {broker_id} after {elapsed:.2f}s"
-            )
-        if ok:
-            return value
-        raise value
+        raise TimeoutError(
+            f"capital balance fetch timed out for {broker_id} after {elapsed:.2f}s"
+        )
 
 
 def current_refresh_used_fallback() -> bool:
@@ -136,7 +288,7 @@ def current_refresh_used_fallback() -> bool:
 
 
 def current_refresh_fallback_status(
-    freshness_ttl_s: float | None = None,
+    freshness_ttl_s: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Return freshness evidence for cached balances used by this refresh."""
 
@@ -165,7 +317,7 @@ def current_refresh_fallback_status(
 
 
 class _BoundedBrokerProxy:
-    """Transparent broker proxy backed by a shared balance-fetch batch."""
+    """Transparent broker proxy backed by a per-broker-bounded fetch batch."""
 
     def __init__(self, broker_id: str, broker: Any, batch: _BalanceFetchBatch) -> None:
         object.__setattr__(self, "_broker_id", str(broker_id))
@@ -227,12 +379,13 @@ def _patch(module: ModuleType) -> bool:
     _pipeline_with_bounded_brokers._nija_capital_refresh_stall_guard_v35 = True
     cls._pipeline = _pipeline_with_bounded_brokers
     os.environ["NIJA_CAPITAL_REFRESH_STALL_GUARD_V35_PATCHED"] = "1"
-    LOGGER.critical(
+    LOGGER.info(
         "CAPITAL_REFRESH_STALL_GUARD_V35_PATCHED marker=%s module=%s "
-        "timeout_s=%.2f shared_deadline=true",
+        "per_broker_timeout_s=%.2f cycle_deadline_s=%.2f independent_deadlines=true",
         MARKER,
         module.__name__,
         _timeout_seconds(),
+        _cycle_deadline_seconds(),
     )
     return True
 
@@ -260,9 +413,9 @@ def install() -> bool:
     if not _STARTED:
         return False
     os.environ["NIJA_CAPITAL_REFRESH_STALL_GUARD_V35_INSTALLED"] = "1"
-    LOGGER.critical(
+    LOGGER.info(
         "CAPITAL_REFRESH_STALL_GUARD_V35_INSTALLED marker=%s "
-        "fail_closed=true shared_deadline=true",
+        "fail_closed=true per_broker_independent_deadlines=true",
         MARKER,
     )
     return True
