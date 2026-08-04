@@ -192,6 +192,18 @@ def test_writer_ready_uses_heartbeat_and_core_loop_when_fencing_token_missing(mo
     assert patch._writer_ready() is True
 
 
+def test_writer_ready_requires_heartbeat_even_with_fencing_token(monkeypatch):
+    _reset(monkeypatch)
+    monkeypatch.setenv("LIVE_CAPITAL_VERIFIED", "1")
+    monkeypatch.setenv("NIJA_WRITER_LEASE_ACQUIRED", "1")
+    monkeypatch.setenv("NIJA_WRITER_LEASE_GENERATION", "42")
+    monkeypatch.setenv("NIJA_WRITER_FENCING_TOKEN", "token")
+    monkeypatch.setenv("NIJA_CORE_THREAD_ALIVE", "1")
+    monkeypatch.setenv("NIJA_WRITER_HEARTBEAT_ACTIVE", "0")
+
+    assert patch._writer_ready() is False
+
+
 def test_writer_ready_remains_pending_without_fencing_or_operational_signals(monkeypatch):
     _reset(monkeypatch)
     monkeypatch.setenv("LIVE_CAPITAL_VERIFIED", "1")

@@ -50,7 +50,20 @@ def _writer_ready() -> bool:
     lease = _truthy("NIJA_WRITER_LEASE_ACQUIRED") or _truthy(
         "NIJA_PREBOT_WRITER_AUTHORITY_READY"
     )
-    return bool(token and generation and lease)
+    heartbeat_active = _truthy("NIJA_WRITER_HEARTBEAT_ACTIVE")
+    core_alive = _truthy("NIJA_CORE_THREAD_ALIVE")
+    if token and generation and lease and heartbeat_active and core_alive:
+        return True
+    return bool(
+        generation
+        and lease
+        and heartbeat_active
+        and (
+            core_alive
+            or str(os.environ.get("NIJA_RUNTIME_TRADING_STATE", "") or "").strip().upper()
+            == "LIVE_PENDING_CONFIRMATION"
+        )
+    )
 
 
 def _unwrap_callable(fn: Callable[..., Any]) -> Callable[..., Any]:
