@@ -58,7 +58,7 @@ def _log_snapshot_trace_throttled(total_capital: Any, valid_brokers: int, source
             return
         _SNAPSHOT_TRACE_NEXT_AT = now + _SNAPSHOT_TRACE_LOG_INTERVAL_S
 
-    logger.critical(
+    logger.info(
         "SNAPSHOT TRACE | balances=%s | valid_brokers=%d | source=%s",
         total_capital,
         valid_brokers,

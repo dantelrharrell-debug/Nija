@@ -332,7 +332,7 @@ def _start_kraken_authenticated_recovery(manager: Any) -> bool:
                         )
                     _promote_recovered_runtime()
                     os.environ["NIJA_KRAKEN_AUTHENTICATED_RECOVERY_READY"] = "1"
-                    logger.critical(
+                    logger.info(
                         "KRAKEN_AUTHENTICATED_RECOVERY_READY marker=%s "
                         "attempt=%d connected=true capital_rechecked=true products_refreshed=true",
                         marker,
@@ -357,7 +357,47 @@ def _start_kraken_authenticated_recovery(manager: Any) -> bool:
                 begin = getattr(manager, "begin_platform_connection", None)
                 if callable(begin):
                     begin(broker_type)
-                connected = bool(broker.connect())
+
+                # Use the reconnect supervisor for bounded backoff and
+                # permanent-failure classification.  Falls back to direct
+                # broker.connect() if the supervisor module is unavailable.
+                _supervisor_used = False
+                try:
+                    from bot import kraken_reconnect_supervisor as _krs
+                    _krs_available = True
+                except ImportError:
+                    try:
+                        import kraken_reconnect_supervisor as _krs  # type: ignore[import]
+                        _krs_available = True
+                    except ImportError:
+                        _krs_available = False
+
+                if _krs_available:
+                    if _krs.is_permanent_failure_latched():
+                        logger.error(
+                            "KRAKEN_AUTHENTICATED_RECOVERY_PERM_FAILURE marker=%s "
+                            "action=stop_recovery coinbase_okx_unaffected=true",
+                            marker,
+                        )
+                        os.environ["NIJA_KRAKEN_AUTHENTICATED_RECOVERY_READY"] = "0"
+                        return
+                    _success, _err = _krs._attempt_authenticated_connect(broker)
+                    if _err and _krs._is_permanent_failure(_err):
+                        _krs._classify_and_log_permanent(_err, "auth_or_config")
+                        with _krs._LOCK:
+                            _krs._PERMANENT_FAILURE_SEEN = _err[:120]
+                        logger.error(
+                            "KRAKEN_AUTHENTICATED_RECOVERY_PERM_FAILURE marker=%s "
+                            "action=stop_recovery coinbase_okx_unaffected=true",
+                            marker,
+                        )
+                        os.environ["NIJA_KRAKEN_AUTHENTICATED_RECOVERY_READY"] = "0"
+                        return
+                    connected = _success
+                    _supervisor_used = True
+                else:
+                    connected = bool(broker.connect())
+
                 if connected:
                     continue
                 failed = getattr(manager, "mark_platform_failed", None)
@@ -453,7 +493,7 @@ def _start_kraken_recovery_coordinator() -> bool:
                     try:
                         _prepare_canonical_manager()
                         if _KRAKEN_RECOVERY_STARTED:
-                            logger.critical(
+                            logger.info(
                                 "KRAKEN_RECOVERY_COORDINATOR_HANDOFF marker=%s "
                                 "writer_lineage=true recovery_started=true",
                                 marker,

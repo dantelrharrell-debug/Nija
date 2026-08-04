@@ -185,7 +185,8 @@ def _publish(broker: Any) -> float:
             setattr(broker, "_last_confirmed_balance", authoritative_trading)
 
     if observed:
-        logger.critical(
+        _obs_emit = logger.info if status == "funded" else logger.warning
+        _obs_emit(
             "OKX_DUAL_WALLET_BALANCE_OBSERVED marker=%s trading_spendable=$%.2f trading_total=$%.2f funding_spendable=$%.2f funding_total=$%.2f total_observed=$%.2f status=%s minimum=$%.2f funding_probe=%s",
             _MARKER, trading_spendable, trading_total, funding_spendable, funding_total,
             total_observed, status, minimum, funding_reason,
