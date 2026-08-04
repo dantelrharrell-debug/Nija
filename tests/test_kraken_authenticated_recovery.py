@@ -266,3 +266,50 @@ def test_authenticated_recovery_retries_transient_lineage_gap(monkeypatch):
     assert module._start_kraken_authenticated_recovery(manager) is True
     assert sleeps == [30.0]
     assert module.os.environ["NIJA_KRAKEN_AUTHENTICATED_RECOVERY_READY"] == "1"
+
+
+def test_kraken_permission_retry_reenables_detailed_logging(monkeypatch):
+    from bot.broker_manager import KrakenBroker
+
+    KrakenBroker._permission_error_details_logged = True
+    KrakenBroker._permission_failed_accounts = {"PLATFORM"}
+
+    broker = object.__new__(KrakenBroker)
+    broker.account_type = KrakenBroker.__mro__[1].__dict__.get("account_type", None)
+    broker.user_id = None
+    broker.connected = False
+    broker._hard_stopped = False
+    broker._hard_stop_reason = ""
+    broker.register_broker = lambda *_args, **_kwargs: None
+
+    try:
+        from bot.broker_manager import AccountType, _KRAKEN_STARTUP_FSM
+        broker.account_type = AccountType.PLATFORM
+        _KRAKEN_STARTUP_FSM.begin_platform_boot = lambda: None
+    except Exception:
+        pass
+
+    monkeypatch.setenv("KRAKEN_PLATFORM_API_KEY", "key")
+    monkeypatch.setenv("KRAKEN_PLATFORM_API_SECRET", "secret")
+    monkeypatch.delenv("NIJA_KRAKEN_GATEWAY_ONLY", raising=False)
+    monkeypatch.setattr("bot.broker_manager.os.getenv", __import__("os").getenv)
+
+    class StopAfterCacheClear(Exception):
+        pass
+
+    real_import = __import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "krakenex":
+            raise StopAfterCacheClear()
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.__import__", fake_import)
+
+    try:
+        broker.connect()
+    except StopAfterCacheClear:
+        pass
+
+    assert "PLATFORM" not in KrakenBroker._permission_failed_accounts
+    assert KrakenBroker._permission_error_details_logged is False

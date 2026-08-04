@@ -9134,6 +9134,7 @@ class KrakenBroker(BaseBroker):
                         logger.info(f"🔄 Clearing previous permission error cache for {cred_label} - credentials now available")
                         logger.info(f"   Will retry connection with current credentials")
                         KrakenBroker._permission_failed_accounts.discard(cred_label)
+                    KrakenBroker._permission_error_details_logged = False
 
             if not api_key or not api_secret:
                 # Mark that credentials were not configured (not an error, just not set up)

@@ -109,6 +109,22 @@ def _writer_ready() -> bool:
             return True
     except Exception:
         pass
+    try:
+        bridge = importlib.import_module("bot.live_active_dispatch_bridge_patch")
+    except ImportError:
+        try:
+            bridge = importlib.import_module("live_active_dispatch_bridge_patch")
+        except Exception:
+            bridge = None
+    except Exception:
+        bridge = None
+    if bridge is not None:
+        try:
+            snapshot = getattr(bridge, "_writer_authority_snapshot", lambda: {})()
+            if bool(snapshot.get("ready")):
+                return True
+        except Exception:
+            pass
     # Fallback: external probe unavailable, returned False, or raised —
     # evaluate local environment signals directly.
     lease_acquired = _flag("NIJA_WRITER_LEASE_ACQUIRED", False)
