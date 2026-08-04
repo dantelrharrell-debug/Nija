@@ -562,7 +562,10 @@ class BotMainAuthorityOrderingTests(unittest.TestCase):
         )
         broker = types.SimpleNamespace(connected=True)
         strategy = types.SimpleNamespace(broker=broker, run_cycle=lambda: None)
-        runtime = types.SimpleNamespace(register_core_thread=MagicMock())
+        runtime = types.SimpleNamespace(
+            register_core_thread=MagicMock(),
+            record_scan_started=MagicMock(),
+        )
 
         class _TradingThread:
             name = "TradingLoop"
@@ -604,6 +607,7 @@ class BotMainAuthorityOrderingTests(unittest.TestCase):
                 ),
                 patch.object(self.bot_main, "_writer_authority_runtime", runtime),
                 patch.object(self.bot_main, "_release_writer_authority"),
+                patch.object(self.bot_main, "_keep_process_alive_after_loop_return"),
                 patch.object(self.bot_main.signal, "signal"),
             ):
                 code = self.bot_main.main()
@@ -615,6 +619,7 @@ class BotMainAuthorityOrderingTests(unittest.TestCase):
 
         self.assertEqual(code, 0)
         runtime.register_core_thread.assert_called_once()
+        runtime.record_scan_started.assert_called_once()
 
     def test_main_records_scan_started_immediately_after_core_thread_registration(self):
         core_loop = types.ModuleType("bot.nija_core_loop")
