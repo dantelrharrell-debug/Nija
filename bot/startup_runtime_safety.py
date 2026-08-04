@@ -356,8 +356,21 @@ def _patch_core_loop_class(cls) -> bool:
             entered = int(getattr(result, "entries_taken", 0) or 0)
             blocked = int(getattr(result, "entries_blocked", 0) or 0)
             exited = int(getattr(result, "exits_taken", 0) or 0)
-            veto_counts = getattr(self, "veto_reason_counts", {}) or {}
-            reject_counts = getattr(self, "reject_reason_counts", {}) or {}
+            # veto_reason_counts / reject_reason_counts live on NijaCoreLoop, not on
+            # TradingStrategy.  Walk the object hierarchy so the real per-signal
+            # rejection histogram is used instead of always falling back to the
+            # opaque "entry_blocked_unspecified" sentinel.
+            _reason_source = (
+                self
+                if getattr(self, "reject_reason_counts", None)
+                else (
+                    getattr(self, "core_loop", None)
+                    or getattr(self, "apex", None)
+                    or self
+                )
+            )
+            veto_counts = getattr(_reason_source, "veto_reason_counts", {}) or {}
+            reject_counts = getattr(_reason_source, "reject_reason_counts", {}) or {}
             top_veto = max(veto_counts.items(), key=lambda kv: kv[1])[0] if veto_counts else "none"
             top_reject = max(reject_counts.items(), key=lambda kv: kv[1])[0] if reject_counts else "none"
             top_reject_count = reject_counts.get(top_reject, 0) if top_reject != "none" else 0

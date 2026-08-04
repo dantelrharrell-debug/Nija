@@ -1276,10 +1276,14 @@ class IndependentBrokerTrader:
                                 logger.info("")
                                 stop_flag.wait(ADOPTION_FAILURE_BACKOFF_S)
                                 continue  # Skip to next iteration without executing run_cycle()
+                            # Verify after successful adoption — pass broker explicitly so the
+                            # base method (which requires it as a positional arg) and all
+                            # patched wrappers both receive it correctly.
                             if hasattr(self.trading_strategy, 'verify_position_adoption_status'):
                                 verified = self.trading_strategy.verify_position_adoption_status(
+                                    broker=broker,
+                                    broker_name=broker_name,
                                     account_id=account_id,
-                                    broker_name=broker_name
                                 )
                                 if not verified:
                                     logger.error(f"   🔒 GUARDRAIL FAILURE: Adoption verification failed for {account_id}")
@@ -1297,18 +1301,6 @@ class IndependentBrokerTrader:
                                     logger.info("")
                                     stop_flag.wait(ADOPTION_FAILURE_BACKOFF_S)
                                     continue  # Skip to next iteration without executing run_cycle()
-                            # Fallback for backward compatibility (should not happen with new code)
-                            logger.warning(f"   ⚠️  adopt_existing_positions() not available - using legacy method")
-                            user_positions = broker.get_positions()
-                            if user_positions:
-                                logger.info(f"   🔁 {broker_name}: Found {len(user_positions)} position(s)")
-                                for pos in user_positions:
-                                    symbol = pos.get('symbol', 'UNKNOWN')
-                                    size = pos.get('size', 0)
-                                    entry = pos.get('entry_price', 0)
-                                    logger.info(f"      • {symbol}: {size} @ ${entry:.4f}")
-                            else:
-                                logger.info(f"   🔁 {broker_name}: No open positions found")
                     except Exception as pos_err:
                         logger.error(f"   ❌ {broker_name}: Position adoption failed: {pos_err}")
                         logger.error(f"   🔒 GUARDRAIL: This is a CRITICAL failure - positions may be unmanaged!")
