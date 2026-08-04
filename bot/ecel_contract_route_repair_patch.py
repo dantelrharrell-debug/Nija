@@ -21,7 +21,7 @@ _BROKERS = ("kraken", "coinbase", "okx")
 def _sym(v: Any) -> str:
     symbol = str(v or "").strip().upper().replace("/", "-").replace("_", "-")
     if symbol.endswith("-USDTT"):
-        symbol = symbol[:-1]
+        symbol = symbol[:-6] + "-USDT"
     return symbol
 
 

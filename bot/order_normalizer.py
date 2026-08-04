@@ -44,7 +44,9 @@ logger = logging.getLogger("nija.order_normalizer")
 def _clean_symbol(symbol: str) -> str:
     text = str(symbol or "").strip().upper().replace("/", "-").replace("_", "-")
     while text.endswith("-USDTT"):
-        text = text[:-1]
+        text = text[:-6] + "-USDT"
+    while text.endswith("USDTT") and "-" not in text:
+        text = text[:-5] + "USDT"
     return text
 
 

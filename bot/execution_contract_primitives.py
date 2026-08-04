@@ -54,7 +54,7 @@ def broker_from_object(obj: Any) -> str:
 
 def normalize_symbol(value: Any) -> str:
     value = str(value or "").strip().upper().replace("/", "-").replace("_", "-")
-    return value[:-1] if value.endswith("-USDTT") else value
+    return value[:-6] + "-USDT" if value.endswith("-USDTT") else value
 
 
 def metadata(request: Any) -> dict[str, Any]:
