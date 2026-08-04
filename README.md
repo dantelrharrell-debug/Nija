@@ -463,6 +463,31 @@ UNIVERSAL_BROKER_EXIT_CONFIRMED
 
 The exit system must not invent entry prices or quantities. A position with unverified cost basis remains blocked until recovery supplies trustworthy data.
 
+At startup the bot automatically runs `CostBasisReconciler` for each connected
+broker to clear `auto_exit_blocked` on any position whose fill history can be
+recovered from the exchange.  A `CostBasisAudit` daemon thread then runs
+periodically (default every 3600 s) to repair any positions that were
+unresolvable at startup.
+
+For positions where fill history is **permanently** unavailable (e.g. positions
+opened before the bot was deployed), set the adoption policy:
+
+```bash
+# "block"  (default) — adopted positions remain auto_exit_blocked=True until
+#           fill history is recovered.
+# "alert"  — exits are allowed; a warning is logged on every exit attempt.
+# "allow"  — adopted positions are treated the same as verified ones (no warning).
+NIJA_ADOPTED_POSITION_POLICY=alert
+```
+
+The startup-watchdog deadline can be extended when infrastructure barriers
+(capital hydration, CSM ready) are expected to take longer than 5 minutes:
+
+```bash
+# Seconds to wait for SCAN_STARTED after writer lock acquisition (default 300).
+NIJA_SCAN_STARTED_DEADLINE_S=600
+```
+
 Default protection settings include:
 
 ```bash
