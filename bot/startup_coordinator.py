@@ -1228,11 +1228,26 @@ class StartupCoordinator:
             return ActivationDecision(target == StartupCoordinatorState.DISPATCH_ENABLED, target, reason, snapshot.snapshot_version)
 
     def finalize_activation_commit(self, snapshot: StartupConvergenceSnapshot) -> int:
-        proof = self.evaluate_system_readiness_proof(snapshot)
+        # Build a fresh snapshot to evaluate the readiness proof so that any
+        # bootstrap-state transitions that occurred after the caller's frozen
+        # snapshot was taken (e.g. BootstrapFSM reaching RUNNING_SUPERVISED via
+        # finalize_boot(), or record_threads_supervised() being called) are
+        # reflected in the proof.  The frozen snapshot's epoch / authority values
+        # are preserved by using its trading_state and activation_intent.
+        fresh_snapshot = self.build_snapshot(
+            trading_state=str(snapshot.trading_state),
+            activation_intent=bool(snapshot.activation_intent),
+        )
+        proof = self.evaluate_system_readiness_proof(fresh_snapshot)
+        # Use the fresh snapshot for the commit but fall back to the caller's
+        # snapshot version when the fresh one is still at version 0.
+        effective_snapshot = fresh_snapshot
+        if int(fresh_snapshot.snapshot_version) <= 0 and int(snapshot.snapshot_version) > 0:
+            effective_snapshot = snapshot
         proof_fingerprint = (
-            int(snapshot.global_epoch),
-            int(snapshot.activation_epoch),
-            str(snapshot.runtime_authority_state),
+            int(effective_snapshot.global_epoch),
+            int(effective_snapshot.activation_epoch),
+            str(effective_snapshot.runtime_authority_state),
             tuple(sorted((proof.gate_results or {}).items())),
         )
         with self._lock:
@@ -1247,7 +1262,7 @@ class StartupCoordinator:
             # cold-start paths that have not published prior events yet.  The
             # dispatch latch must still become strictly positive to unlock LIVE
             # execution gates.
-            commit_snapshot_version = int(snapshot.snapshot_version)
+            commit_snapshot_version = int(effective_snapshot.snapshot_version)
             if commit_snapshot_version <= 0:
                 commit_snapshot_version = max(1, int(self._runtime.event_version))
             proof_dict = proof.as_dict()
@@ -1264,12 +1279,12 @@ class StartupCoordinator:
             self._runtime.coordinator_state = StartupCoordinatorState.LIVE_COMMITTED
             self._publish_locked(
                 StartupEvent.DISPATCH_ENABLED,
-                {"snapshot_version": snapshot.snapshot_version, "phase": StartupCoordinatorState.LIVE_COMMITTED.value},
+                {"snapshot_version": effective_snapshot.snapshot_version, "phase": StartupCoordinatorState.LIVE_COMMITTED.value},
             )
             self._runtime.coordinator_state = StartupCoordinatorState.DISPATCH_ENABLED
             return self._publish_locked(
                 StartupEvent.DISPATCH_ENABLED,
-                {"snapshot_version": snapshot.snapshot_version, "phase": StartupCoordinatorState.DISPATCH_ENABLED.value},
+                {"snapshot_version": effective_snapshot.snapshot_version, "phase": StartupCoordinatorState.DISPATCH_ENABLED.value},
             )
 
     def force_activate_bypass(self, reason: str) -> None:
