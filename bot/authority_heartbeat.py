@@ -631,6 +631,19 @@ class AuthorityHeartbeatMonitor:
                 _iteration,
                 self._consecutive_failures,
             )
+            # Refresh ALIVE_TS at the top of every iteration so the writer-heartbeat
+            # gate (max_age=45 s) stays fresh even when the authority check inside
+            # _tick() temporarily fails (e.g. transient Redis hiccup).  This keeps
+            # ALIVE_TS at most interval_s seconds old regardless of authority state.
+            # NIJA_WRITER_HEARTBEAT_ACTIVE is still only set to "1" on authority-OK
+            # inside _tick(); ALIVE_TS here signals only that the loop is running.
+            _loop_ts = str(time.time())
+            os.environ["NIJA_WRITER_HEARTBEAT_ALIVE_TS"] = _loop_ts
+            logger.debug(
+                "AUTHORITY_HEARTBEAT: _loop heartbeat loop-alive ts refreshed iteration=%d ts=%s",
+                _iteration,
+                _loop_ts,
+            )
             try:
                 self._tick()
             except Exception as _iter_exc:

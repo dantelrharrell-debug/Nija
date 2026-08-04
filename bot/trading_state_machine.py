@@ -357,10 +357,10 @@ def _writer_heartbeat_gate() -> tuple[bool, str]:
     try:
         max_age_s = max(
             1.0,
-            float(os.environ.get("NIJA_WRITER_HEARTBEAT_MAX_AGE_S", "45") or 45.0),
+            float(os.environ.get("NIJA_WRITER_HEARTBEAT_MAX_AGE_S", "90") or 90.0),
         )
     except (TypeError, ValueError):
-        max_age_s = 45.0
+        max_age_s = 90.0
 
     age_s = max(0.0, time.time() - alive_ts)
     if age_s > max_age_s:
