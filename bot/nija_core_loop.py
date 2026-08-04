@@ -6140,6 +6140,26 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
     logger.critical("[INIT STEP 3/6] ✅ Bootstrap FSM execution authority check complete")
     print("[INIT STEP 3/6] ✅ Bootstrap FSM execution authority check complete", flush=True)
 
+    # ── Fix: record scan-started immediately after the FSM authority check ───
+    # The writer-authority watchdog fires SCAN_STARTED_DEADLINE_EXCEEDED when
+    # the scan loop does not call record_scan_started() within
+    # NIJA_SCAN_STARTED_DEADLINE_S (default 300 s) of lock acquisition.
+    # Capital hydration and CSM barriers (steps 4–5) can each consume tens of
+    # seconds, so signalling here — once it is known the loop is alive and the
+    # FSM has granted authority — prevents a false-positive watchdog alarm.
+    try:
+        from bot.entrypoint_writer_authority import get_entrypoint_writer_authority
+        get_entrypoint_writer_authority().record_scan_started()
+        logger.critical(
+            "[INIT STEP 3/6] SCAN_STARTED_RECORDED — watchdog deadline satisfied early "
+            "(loop alive, FSM authority confirmed; first cycle will follow after barriers)"
+        )
+    except Exception as _early_scan_started_err:
+        logger.debug(
+            "[INIT STEP 3/6] Early record_scan_started() failed (non-fatal): %s",
+            _early_scan_started_err,
+        )
+
     # Supervisor-mode hard gate: only block execution when supervisor mode is
     # enabled AND live trading is not active.
     _supervisor_mode = os.getenv("SUPERVISOR_MODE", "false").lower() in (
@@ -6595,6 +6615,66 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
         logger.critical("[INIT STEP 5.5] ✅ Capital snapshot pre-validation complete")
         print("[INIT STEP 5.5] ✅ Capital snapshot pre-validation complete", flush=True)
         # ── End Capital snapshot pre-validation ───────────────────────────────
+
+        # ── STEP 5.9: Cost-basis reconciliation ───────────────────────────────
+        # Run CostBasisReconciler once for each connected broker so that
+        # positions with auto_exit_blocked=True get cleared before the first
+        # trading cycle.  Then start CostBasisAudit as a daemon background
+        # thread for ongoing periodic repair.
+        # Both steps are fully non-blocking / best-effort: any exception is
+        # caught and logged so it can never prevent the loop from starting.
+        try:
+            from bot.cost_basis_reconciler import CostBasisReconciler
+            from bot.cost_basis_audit import CostBasisAudit
+            _cb_brokers = _get_all_platform_brokers(strategy)
+            for _cb_broker_name, _cb_broker in _cb_brokers.items():
+                _cb_tracker = getattr(_cb_broker, "position_tracker", None)
+                if _cb_tracker is None:
+                    logger.debug(
+                        "[COST_BASIS_STARTUP] No position_tracker on broker=%s — skipping",
+                        _cb_broker_name,
+                    )
+                    continue
+                # One-shot reconciliation to clear auto_exit_blocked on startup.
+                try:
+                    _cb_reconciler = CostBasisReconciler(
+                        _cb_tracker, _cb_broker, broker_name=_cb_broker_name
+                    )
+                    _cb_results = _cb_reconciler.run_sync()
+                    _cb_cleared = sum(
+                        1 for r in _cb_results
+                        if not r.auto_exit_blocked and r.status in ("verified", "adopted")
+                    )
+                    logger.critical(
+                        "[COST_BASIS_STARTUP] RECONCILER_COMPLETE broker=%s positions_checked=%d "
+                        "exit_blocks_cleared=%d",
+                        _cb_broker_name, len(_cb_results), _cb_cleared,
+                    )
+                except Exception as _cb_reconcile_err:
+                    logger.warning(
+                        "[COST_BASIS_STARTUP] Reconciler failed for broker=%s (non-fatal): %s",
+                        _cb_broker_name, _cb_reconcile_err,
+                    )
+                # Background audit for ongoing periodic repair.
+                try:
+                    _cb_audit = CostBasisAudit(
+                        _cb_tracker, _cb_broker, broker_name=_cb_broker_name, auto_repair=True
+                    )
+                    _cb_audit.start_background()
+                    logger.critical(
+                        "[COST_BASIS_STARTUP] AUDIT_BG_STARTED broker=%s", _cb_broker_name
+                    )
+                except Exception as _cb_audit_err:
+                    logger.warning(
+                        "[COST_BASIS_STARTUP] Audit background start failed for broker=%s (non-fatal): %s",
+                        _cb_broker_name, _cb_audit_err,
+                    )
+        except Exception as _cb_outer_err:
+            logger.warning(
+                "[COST_BASIS_STARTUP] Cost-basis startup step failed (non-fatal): %s",
+                _cb_outer_err,
+            )
+        # ── End Cost-basis reconciliation ─────────────────────────────────────
 
         # ── Trading Loop Entry Anchor (FIX 1) ─────────────────────────────────
         # Both hydration and CSM barriers have passed.  Arm the trading-active
