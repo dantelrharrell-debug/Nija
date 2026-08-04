@@ -210,7 +210,9 @@ def _adopt_broker_positions(broker: Any, broker_name: str, eps: Optional[Any]) -
             "EXCHANGE_POSITION_SYNC broker=%s reconciled=0 skipped_invalid=0 errors=0 reason=no_open_positions",
             broker_name,
         )
-        setattr(broker, "_startup_position_sync_adopted", False)
+        # Empty snapshots are a valid fully-reconciled state for connected brokers.
+        setattr(broker, "_startup_position_sync_adopted", True)
+        setattr(broker, "_startup_position_sync_symbols", tuple())
         return 0
 
     reconciled = 0
