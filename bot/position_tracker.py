@@ -260,6 +260,23 @@ class PositionTracker:
                     effective_entry = old_entry
                     effective_source = str((existing or {}).get("entry_price_source") or "execution")
                     verified = True
+                elif self._eps is not None:
+                    record = self._eps.get(symbol) if callable(getattr(self._eps, "get", None)) else None
+                    stored_entry = self._safe_float(getattr(record, "price", 0.0))
+                    stored_source = str(getattr(record, "source", "") or "")
+                    stored_qty = self._safe_float(getattr(record, "quantity", 0.0))
+                    qty_matches = (
+                        stored_qty <= 0
+                        or abs(stored_qty - quantity) <= max(1e-10, quantity * 0.05)
+                    )
+                    if stored_entry > 0 and qty_matches and self._source_verified(stored_source, stored_entry):
+                        effective_entry = stored_entry
+                        effective_source = stored_source
+                        verified = True
+                    else:
+                        effective_entry = 0.0
+                        effective_source = "reconciliation_required"
+                        verified = False
                 else:
                     # Current market value is visibility data, not cost basis.
                     # Keep the entry explicitly unresolved until broker-native

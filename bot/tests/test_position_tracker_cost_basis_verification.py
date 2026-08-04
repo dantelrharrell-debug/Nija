@@ -79,3 +79,67 @@ def test_unverified_old_market_mark_is_not_promoted_by_later_snapshot():
         assert row["cost_basis_verified"] is False
         assert row["entry_price_source"] == "estimated_from_adoption_mark"
         assert row["entry_price"] == 0.43
+
+
+def test_entry_price_store_record_restores_verified_cost_basis():
+    module = _load()
+
+    class _Record:
+        price = 132.75
+        source = "api"
+        quantity = 0.5
+
+    class _Store:
+        @staticmethod
+        def get(symbol):
+            assert symbol == "AAVE-USD"
+            return _Record()
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tracker = module.PositionTracker(str(Path(tmp) / "positions.json"))
+        tracker._eps = _Store()
+        assert tracker.sync_position_snapshot(
+            symbol="AAVE-USD",
+            quantity=0.5,
+            entry_price=0.0,
+            current_price=175.0,
+            size_usd=87.5,
+            entry_price_source="override",
+        )
+        row = tracker.get_position("AAVE-USD")
+        assert row["entry_price"] == 132.75
+        assert row["entry_price_source"] == "api"
+        assert row["cost_basis_verified"] is True
+        assert row["auto_exit_blocked"] is False
+
+
+def test_entry_price_store_quantity_mismatch_keeps_position_unverified():
+    module = _load()
+
+    class _Record:
+        price = 132.75
+        source = "api"
+        quantity = 9.0
+
+    class _Store:
+        @staticmethod
+        def get(symbol):
+            assert symbol == "AAVE-USD"
+            return _Record()
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tracker = module.PositionTracker(str(Path(tmp) / "positions.json"))
+        tracker._eps = _Store()
+        assert tracker.sync_position_snapshot(
+            symbol="AAVE-USD",
+            quantity=0.5,
+            entry_price=0.0,
+            current_price=175.0,
+            size_usd=87.5,
+            entry_price_source="override",
+        )
+        row = tracker.get_position("AAVE-USD")
+        assert row["entry_price"] == 0.0
+        assert row["entry_price_source"] == "reconciliation_required"
+        assert row["cost_basis_verified"] is False
+        assert row["auto_exit_blocked"] is True
