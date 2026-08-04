@@ -216,9 +216,13 @@ def _start_kraken_authenticated_recovery(manager: Any) -> bool:
                 )
 
                 fsm = getattr(broker_module, "_KRAKEN_STARTUP_FSM", None)
-                if bool(getattr(broker, "connected", False)) or bool(
-                    getattr(fsm, "is_connected", False)
-                ):
+                broker_connected = bool(getattr(broker, "connected", False))
+                # Use broker.connected as the authoritative live-connection check.
+                # fsm.is_connected is a startup-only latch and stays True after
+                # the initial handshake, so it must not be used alone — a broker
+                # that disconnected post-startup has connected=False but
+                # fsm.is_connected=True, and still needs reconnection.
+                if broker_connected:
                     register = getattr(
                         broker_module, "register_platform_broker", None
                     )
@@ -324,6 +328,16 @@ def _start_kraken_authenticated_recovery(manager: Any) -> bool:
             marker,
             attempt,
         )
+        # Reset the one-shot guard so a new recovery cycle can be triggered
+        # if Kraken disconnects again after this window expires.
+        global _KRAKEN_RECOVERY_STARTED
+        with _LOCK:
+            _KRAKEN_RECOVERY_STARTED = False
+        logger.warning(
+            "KRAKEN_AUTHENTICATED_RECOVERY_RESET marker=%s "
+            "recovery_restartable=true",
+            marker,
+        )
 
     threading.Thread(
         target=recover,
@@ -412,6 +426,15 @@ def _start_kraken_recovery_coordinator() -> bool:
             "recovery_started=%s trading_remains_fail_closed=true",
             marker,
             _KRAKEN_RECOVERY_STARTED,
+        )
+        # Reset the one-shot guard so a new coordinator cycle can be triggered
+        # if the deployment retries before the environment is fully ready.
+        with _LOCK:
+            _KRAKEN_RECOVERY_COORDINATOR_STARTED = False
+        logger.warning(
+            "KRAKEN_RECOVERY_COORDINATOR_RESET marker=%s "
+            "coordinator_restartable=true",
+            marker,
         )
 
     threading.Thread(
