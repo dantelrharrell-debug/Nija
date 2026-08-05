@@ -52,6 +52,11 @@ from typing import Callable, Optional
 
 logger = logging.getLogger("nija.authority_heartbeat")
 
+try:
+    from bot.heartbeat_state import get_heartbeat_state as _get_heartbeat_state
+except ImportError:
+    from heartbeat_state import get_heartbeat_state as _get_heartbeat_state  # type: ignore[import]
+
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
@@ -714,6 +719,17 @@ class AuthorityHeartbeatMonitor:
             _now_ts = str(time.time())
             os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"] = "1"
             os.environ["NIJA_WRITER_HEARTBEAT_ALIVE_TS"] = _now_ts
+            # Atomically update the canonical HeartbeatState so all modules
+            # reading heartbeat freshness use a consistent, lock-protected view.
+            try:
+                _gen = int(
+                    os.environ.get("NIJA_WRITER_LEASE_GENERATION", "")
+                    or os.environ.get("NIJA_WRITER_GENERATION", "")
+                    or "0"
+                )
+                _get_heartbeat_state().record_heartbeat(generation=_gen)
+            except Exception:
+                pass
             logger.info(
                 "AUTHORITY_HEARTBEAT: _tick set NIJA_WRITER_HEARTBEAT_ACTIVE=1 "
                 "NIJA_WRITER_HEARTBEAT_ALIVE_TS=%s",
@@ -737,9 +753,23 @@ class AuthorityHeartbeatMonitor:
                 "marker_path=%s",
                 _heartbeat_marker_path(),
             )
+            _marker_ts = 0.0
             try:
                 _write_heartbeat_marker()
+                _marker_ts = time.time()
                 logger.info("AUTHORITY_HEARTBEAT: _tick _write_heartbeat_marker returned successfully")
+                # Update canonical state with the marker timestamp.
+                try:
+                    _gen = int(
+                        os.environ.get("NIJA_WRITER_LEASE_GENERATION", "")
+                        or os.environ.get("NIJA_WRITER_GENERATION", "")
+                        or "0"
+                    )
+                    _get_heartbeat_state().record_heartbeat(
+                        generation=_gen, marker_timestamp=_marker_ts
+                    )
+                except Exception:
+                    pass
             except Exception as _write_exc:
                 logger.error(
                     "AUTHORITY_HEARTBEAT: _tick _write_heartbeat_marker raised exception: %s",

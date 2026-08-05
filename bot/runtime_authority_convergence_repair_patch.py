@@ -16,6 +16,11 @@ _MONITOR_STARTED = False
 _MONITOR_LOCK = threading.Lock()
 _CONVERGENCE_LOCAL = threading.local()
 _TRUE = {"1", "true", "yes", "on", "enabled", "y"}
+
+try:
+    from bot.heartbeat_state import get_heartbeat_state as _get_heartbeat_state
+except ImportError:
+    from heartbeat_state import get_heartbeat_state as _get_heartbeat_state  # type: ignore[import]
 _UNSAFE_REASON_TOKENS = (
     "manual",
     "operator",
@@ -364,7 +369,6 @@ def _heartbeat_ready() -> tuple[bool, str]:
         or os.environ.get("NIJA_WRITER_GENERATION", "").strip()
     )
     active = os.environ.get("NIJA_WRITER_HEARTBEAT_ACTIVE", "").strip()
-    alive_raw = os.environ.get("NIJA_WRITER_HEARTBEAT_ALIVE_TS", "").strip()
     if not _truthy("NIJA_WRITER_LEASE_ACQUIRED"):
         return False, "writer_lease_not_acquired"
     if not token:
@@ -401,10 +405,28 @@ def _heartbeat_ready() -> tuple[bool, str]:
                 return False, f"nonce_manager_not_ready:{nonce_detail or 'blocked'}"
         except Exception as exc:
             return False, f"nonce_manager_status_unavailable:{exc}"
+    # Freshness check: always read the canonical HeartbeatState to avoid
+    # consuming a cached / stale env-var timestamp.  If the canonical state
+    # reports healthy and the last beat is within max_age_s the check passes.
+    max_age = max(5.0, _f(os.environ.get("NIJA_RUNTIME_AUTHORITY_CONVERGENCE_HEARTBEAT_MAX_AGE_S"), 90.0))
+    try:
+        hs = _get_heartbeat_state()
+        snap = hs.snapshot()
+        if snap.healthy and snap.timestamp > 0.0:
+            age = max(0.0, time.time() - snap.timestamp)
+            if age > max_age:
+                return False, f"heartbeat_stale age_s={age:.1f} max_age_s={max_age:.1f}"
+            return True, f"heartbeat_ready age_s={age:.1f} generation={generation}"
+        # HeartbeatState not yet populated — fall back to env-var path so the
+        # check does not permanently fail in environments where heartbeat_state
+        # was never seeded (e.g. tests that only set env vars).
+    except Exception:
+        pass
+    # Env-var fallback
+    alive_raw = os.environ.get("NIJA_WRITER_HEARTBEAT_ALIVE_TS", "").strip()
     alive_ts = _f(alive_raw, 0.0)
     if alive_ts <= 0.0:
         return False, "heartbeat_alive_ts_missing"
-    max_age = max(5.0, _f(os.environ.get("NIJA_RUNTIME_AUTHORITY_CONVERGENCE_HEARTBEAT_MAX_AGE_S"), 90.0))
     age = max(0.0, time.time() - alive_ts)
     if age > max_age:
         return False, f"heartbeat_stale age_s={age:.1f} max_age_s={max_age:.1f}"
