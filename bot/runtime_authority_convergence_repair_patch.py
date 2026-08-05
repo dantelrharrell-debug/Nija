@@ -362,6 +362,43 @@ def _capital_authority_ready() -> tuple[bool, str, dict[str, Any]]:
     return False, f"capital_not_ready hydrated={hydrated} real={real:.2f} usable={usable:.2f} valid_brokers={valid_brokers} fresh={fresh} handoff={handoff_ready}", detail
 
 
+def _singleton_lease_acquired() -> bool:
+    """Return True when the EntrypointWriterAuthority singleton holds the lease.
+
+    Supplements the env-var check so that a transient lag between the
+    singleton acquiring the lock and ``NIJA_WRITER_LEASE_ACQUIRED=1`` being
+    visible (or the env var being externally reset to ``0`` before the
+    singleton's own heartbeat loop clears it) does not permanently block
+    the convergence path.
+
+    When the singleton is actively holding the lease we also re-publish
+    ``NIJA_WRITER_LEASE_ACQUIRED=1`` so subsequent env-var checks pass
+    without having to re-enter this function.
+    """
+    try:
+        _ewa_mod = (
+            sys.modules.get("bot.entrypoint_writer_authority")
+            or sys.modules.get("entrypoint_writer_authority")
+        )
+        if _ewa_mod is None:
+            return False
+        _get_singleton = getattr(_ewa_mod, "get_entrypoint_writer_authority", None)
+        if not callable(_get_singleton):
+            return False
+        _singleton = _get_singleton()
+        if (
+            _singleton is not None
+            and getattr(_singleton, "acquired", False)
+            and not getattr(_singleton, "lost", True)
+        ):
+            # Re-publish env var so the env-var-only check passes hereafter.
+            os.environ["NIJA_WRITER_LEASE_ACQUIRED"] = "1"
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def _heartbeat_ready() -> tuple[bool, str]:
     token = os.environ.get("NIJA_WRITER_FENCING_TOKEN", "").strip()
     generation = (
@@ -370,7 +407,21 @@ def _heartbeat_ready() -> tuple[bool, str]:
     )
     active = os.environ.get("NIJA_WRITER_HEARTBEAT_ACTIVE", "").strip()
     if not _truthy("NIJA_WRITER_LEASE_ACQUIRED"):
-        return False, "writer_lease_not_acquired"
+        # Env var not set — fall back to in-memory singleton as the ground
+        # truth before returning writer_lease_not_acquired.  This handles the
+        # race between the singleton acquiring the Redis lock and the env var
+        # becoming visible, as well as the case where an external normalisation
+        # path (render_startup_convergence_patch) temporarily reset the var to
+        # "0" while the singleton still holds the lease.
+        if not _singleton_lease_acquired():
+            return False, "writer_lease_not_acquired"
+        # Singleton holds the lease; re-read the env vars that _publish_env() sets.
+        token = os.environ.get("NIJA_WRITER_FENCING_TOKEN", "").strip()
+        generation = (
+            os.environ.get("NIJA_WRITER_LEASE_GENERATION", "").strip()
+            or os.environ.get("NIJA_WRITER_GENERATION", "").strip()
+        )
+        active = os.environ.get("NIJA_WRITER_HEARTBEAT_ACTIVE", "").strip()
     if not token:
         try:
             try:
@@ -479,6 +530,22 @@ def _converge_runtime_authority_once(source: str = "manual") -> bool:
             detail,
         )
         return False
+    # _safe_to_recover() already validated the distributed writer authority.
+    # Eagerly mark authority_ready=True in the readiness table so the startup
+    # coordinator's system_readiness_proof passes on the upcoming commit_activation()
+    # call.  Without this, commit_activation() → _is_authority_ready() would
+    # need to perform its own Redis round-trip, which can fail transiently even
+    # though _safe_to_recover() just confirmed the authority is healthy.
+    try:
+        try:
+            from bot.readiness_table import mark_ready as _rt_mark_ready
+        except ImportError:
+            from readiness_table import mark_ready as _rt_mark_ready  # type: ignore[import]
+        _rt_mark_ready("authority_ready")
+        if not os.environ.get("KRAKEN_NONCE_LEASE_REQUIRED", "").strip():
+            _rt_mark_ready("nonce_ready")
+    except Exception as _rt_exc:
+        logger.debug("RUNTIME_AUTHORITY_CONVERGENCE_READINESS_TABLE_UPDATE_FAILED marker=%s err=%s", _MARKER, _rt_exc)
     try:
         try:
             from bot.trading_state_machine import get_state_machine, TradingState
