@@ -635,10 +635,11 @@ class EntrypointWriterAuthority:
         self._lock_value = f"{token}:{owner}"
         self._ttl_s = ttl_s
         self._acquired_at = time.time()
-        # Preserve a previous confirmed scan-started timestamp across re-acquisitions
-        # so the watchdog does not fire SCAN_STARTED_DEADLINE_EXCEEDED when the scan
-        # loop is already running but _scan_started_at gets reset to 0.0 here.
+        # Preserve previous confirmed scan-started/complete timestamps across
+        # re-acquisitions so the watchdog does not fire SCAN_STARTED_DEADLINE_EXCEEDED
+        # when the scan loop is already running (or has already completed).
         _prior_scan_started_at = self._scan_started_at
+        _prior_scan_complete_at = self._scan_complete_at
         self._scan_started_at = 0.0
         self._scan_complete_at = 0.0
         self._scan_deadline_exceeded = False
@@ -656,10 +657,12 @@ class EntrypointWriterAuthority:
         self._write_metadata()
         self._start_heartbeat()
         self._start_scan_started_watchdog()
-        # If scanning was already confirmed before this re-acquisition, immediately
-        # record it on the new watchdog so SCAN_STARTED_DEADLINE_EXCEEDED is not
-        # emitted while the scan loop is actively running.
-        if _prior_scan_started_at:
+        # If the scan was already complete before this re-acquisition, immediately
+        # restore that state so the watchdog is cancelled and no false deadline
+        # alarms fire while the scan loop is actively running.
+        if _prior_scan_complete_at:
+            self.record_scan_complete()
+        elif _prior_scan_started_at:
             self.record_scan_started()
         self._notify_runtime_reconciliation("writer_acquired")
 
@@ -726,6 +729,7 @@ class EntrypointWriterAuthority:
         )
         self._lock_value = f"{token}:{owner}"
         _prior_scan_started_at = self._scan_started_at
+        _prior_scan_complete_at = self._scan_complete_at
         self._scan_started_at = 0.0
         self._scan_complete_at = 0.0
         self._scan_deadline_exceeded = False
@@ -742,9 +746,12 @@ class EntrypointWriterAuthority:
             fallback=True,
         )
         self._start_scan_started_watchdog()
-        # If scanning was already confirmed before this fallback acquisition,
-        # immediately record it so the watchdog does not raise a false alarm.
-        if _prior_scan_started_at:
+        # If the scan was already complete before this fallback acquisition,
+        # immediately restore that state so the watchdog is cancelled and no
+        # false deadline alarms fire.
+        if _prior_scan_complete_at:
+            self.record_scan_complete()
+        elif _prior_scan_started_at:
             self.record_scan_started()
         self._notify_runtime_reconciliation("writer_acquired_local_fallback")
         logger.critical(
@@ -976,7 +983,7 @@ class EntrypointWriterAuthority:
         # waiting, so that setting _stop prior to the first iteration still
         # allows the deadline flag to be evaluated at least once.
         while True:
-            if self._scan_started_at or self._scan_watchdog_cancel.is_set():
+            if self._scan_started_at or self._scan_complete_at or self._scan_watchdog_cancel.is_set():
                 # Scan started (or was explicitly cancelled after completion) —
                 # clear any previously set deadline flag and exit.  This handles
                 # the case where record_scan_started() was called after the

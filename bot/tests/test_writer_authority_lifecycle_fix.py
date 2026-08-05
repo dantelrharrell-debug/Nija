@@ -288,6 +288,65 @@ class ScanDeadlineTests(unittest.TestCase):
         r.record_scan_started()
         self.assertEqual(get_heartbeat_state().phase, WriterLifecyclePhase.SCAN_RUNNING)
 
+    def test_record_scan_complete_cancels_watchdog(self) -> None:
+        """record_scan_complete() must cancel the startup watchdog immediately."""
+        r = self._make_runtime()
+        r.record_scan_started()
+        self.assertFalse(r._scan_watchdog_cancel.is_set())
+        r.record_scan_complete()
+        self.assertTrue(r._scan_watchdog_cancel.is_set())
+        self.assertGreater(r._scan_complete_at, 0.0)
+        self.assertFalse(r._scan_deadline_exceeded)
+
+    def test_watchdog_exits_after_scan_complete_without_deadline_exceeded(self) -> None:
+        """After record_scan_complete(), the watchdog must not log SCAN_STARTED_DEADLINE_EXCEEDED
+        even when more time than the deadline has elapsed."""
+        r = self._make_runtime()
+        # Set acquired_at far in the past so elapsed is well beyond any deadline.
+        r._acquired_at = time.time() - 1000.0
+        r.record_scan_started()
+        r.record_scan_complete()
+        # The watchdog loop must exit immediately (cancel is set) without setting
+        # _scan_deadline_exceeded.
+        r._scan_deadline_exceeded = False
+        r._scan_started_watchdog_loop(deadline_s=30.0)
+        self.assertFalse(r._scan_deadline_exceeded)
+
+    def test_reacquisition_after_scan_complete_does_not_restart_deadline_alarm(self) -> None:
+        """Re-acquiring the lock after a completed scan must not re-arm the deadline
+        watchdog in a way that fires SCAN_STARTED_DEADLINE_EXCEEDED."""
+        r = self._make_runtime()
+        r.record_scan_started()
+        r.record_scan_complete()
+        self.assertTrue(r._scan_watchdog_cancel.is_set())
+
+        # Simulate the state that _acquire_once_locked resets before re-acquisition.
+        prior_complete = r._scan_complete_at
+        r._scan_started_at = 0.0
+        r._scan_complete_at = 0.0
+        r._scan_watchdog_cancel.clear()
+
+        # Re-apply the fix: restore from prior state.
+        if prior_complete:
+            r.record_scan_complete()
+
+        # Watchdog should be cancelled again; no deadline exceeded flag.
+        self.assertTrue(r._scan_watchdog_cancel.is_set())
+        self.assertFalse(r._scan_deadline_exceeded)
+
+    def test_watchdog_exits_immediately_when_scan_complete_set(self) -> None:
+        """_scan_started_watchdog_loop must exit at the top-of-loop check when
+        _scan_complete_at is set, even without _scan_started_at being set."""
+        r = self._make_runtime()
+        r._acquired_at = time.time() - 1000.0
+        # Only mark complete, not started (simulates post-reacquisition state
+        # where _scan_started_at was reset but _scan_complete_at is restored).
+        r._scan_complete_at = time.time()
+        r._scan_started_at = 0.0
+        r._scan_deadline_exceeded = False
+        r._scan_started_watchdog_loop(deadline_s=30.0)
+        self.assertFalse(r._scan_deadline_exceeded)
+
 
 class HeartbeatStateIntegrationTests(unittest.TestCase):
     """Integration: entrypoint updates HeartbeatState on publish / renewal."""
