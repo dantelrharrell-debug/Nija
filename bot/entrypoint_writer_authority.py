@@ -50,6 +50,17 @@ from typing import Any, Optional
 logger = logging.getLogger("nija.entrypoint_writer_authority")
 
 _MARKER = "20260710u"
+
+try:
+    from bot.heartbeat_state import (
+        WriterLifecyclePhase as _Phase,
+        get_heartbeat_state as _get_heartbeat_state,
+    )
+except ImportError:
+    from heartbeat_state import (  # type: ignore[import]
+        WriterLifecyclePhase as _Phase,
+        get_heartbeat_state as _get_heartbeat_state,
+    )
 _TRUE = {"1", "true", "yes", "on", "enabled", "y"}
 _GENERATION_KEY_DEFAULT = "nija:lease:generation"
 
@@ -773,6 +784,13 @@ class EntrypointWriterAuthority:
         else:
             os.environ.pop("NIJA_WRITER_FENCING_TOKEN_FALLBACK", None)
             os.environ.pop("NIJA_LOCK_BYPASS_MODE", None)
+        # Record initial heartbeat and advance lifecycle to LEASE_ACQUIRED.
+        try:
+            _hs = _get_heartbeat_state()
+            _hs.record_heartbeat(generation=self._generation)
+            _hs.advance_phase(_Phase.LEASE_ACQUIRED)
+        except Exception:
+            pass
 
     def _notify_runtime_reconciliation(self, trigger: str) -> None:
         try:
@@ -873,6 +891,11 @@ class EntrypointWriterAuthority:
         if self._scan_started_at:
             return
         self._scan_started_at = time.time()
+        # Clear the deadline flag so _validate_core_thread_liveness and the
+        # watchdog loop no longer treat an exceeded startup window as an error.
+        # The scan deadline is a startup-only timeout; it must never fire after
+        # initialization completes.
+        self._scan_deadline_exceeded = False
         elapsed = self._scan_started_at - self._acquired_at if self._acquired_at else 0.0
         logger.info(
             "SCAN_STARTED_RECORDED marker=%s elapsed_since_acquisition=%.1fs "
@@ -882,6 +905,11 @@ class EntrypointWriterAuthority:
             self._instance_id,
             self._generation,
         )
+        # Advance lifecycle phase
+        try:
+            _get_heartbeat_state().advance_phase(_Phase.SCAN_RUNNING)
+        except Exception:
+            pass
 
     def _start_scan_started_watchdog(self) -> None:
         """Start a daemon thread that warns if SCAN_STARTED is not recorded in time."""
@@ -908,7 +936,11 @@ class EntrypointWriterAuthority:
         # allows the deadline flag to be evaluated at least once.
         while True:
             if self._scan_started_at:
-                return  # Scan started in time; watchdog duty fulfilled
+                # Scan started — clear any previously set deadline flag and exit.
+                # This handles the case where record_scan_started() was called
+                # after the deadline had already been exceeded.
+                self._scan_deadline_exceeded = False
+                return  # Scan started; watchdog duty fulfilled
             elapsed = time.time() - acquired_at
             if elapsed >= deadline_s:
                 self._scan_deadline_exceeded = True
@@ -1074,6 +1106,10 @@ class EntrypointWriterAuthority:
                 os.environ["NIJA_WRITER_HEARTBEAT_LAST_TS"] = now
                 os.environ["NIJA_WRITER_HEARTBEAT_ALIVE_TS"] = now
                 os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"] = "1"
+                try:
+                    _get_heartbeat_state().record_heartbeat(generation=self._generation)
+                except Exception:
+                    pass
                 logger.debug(
                     "HEARTBEAT_RENEWED marker=%s token_prefix=%s generation=%s",
                     _MARKER,
@@ -1113,6 +1149,10 @@ class EntrypointWriterAuthority:
                     os.environ["NIJA_WRITER_HEARTBEAT_LAST_TS"] = now
                     os.environ["NIJA_WRITER_HEARTBEAT_ALIVE_TS"] = now
                     os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"] = "1"
+                    try:
+                        _get_heartbeat_state().record_heartbeat(generation=self._generation)
+                    except Exception:
+                        pass
                     logger.warning(
                         "ENTRYPOINT_WRITER_LOCK_REACQUIRED marker=%s token_prefix=%s",
                         _MARKER,
@@ -1135,20 +1175,24 @@ class EntrypointWriterAuthority:
         this check must return True so the heartbeat keeps renewing the lease
         without prematurely clearing NIJA_WRITER_FENCING_TOKEN.
 
-        Exception: if the scan-started deadline has already been exceeded the
+        Exception: if the scan-started deadline has already been exceeded AND
+        the scan has not yet started (i.e. _scan_started_at is still zero) the
         core loop is considered permanently stalled and (False, reason) is
-        returned so the heartbeat stops renewing the lease.
+        returned so the heartbeat stops renewing the lease.  Once the scan has
+        started (or the lifecycle phase has advanced past LEASE_ACQUIRED),
+        the deadline is no longer relevant and this check always returns True
+        for a None core thread.
         """
         if self._local_fallback:
             return True, ""
         thread = self._core_thread
         if thread is None:
             # Core thread not yet registered — bot is still initialising.
-            # If the scan deadline has been exceeded the runtime is stalled;
-            # fail the check so the heartbeat releases the lease immediately
-            # rather than continuing to renew it while reporting
-            # core_thread_alive=False.
-            if self._scan_deadline_exceeded:
+            # Only fail the check if the scan deadline was exceeded AND the scan
+            # has genuinely not started yet.  If record_scan_started() has been
+            # called (or the lifecycle advanced past startup), _scan_deadline_exceeded
+            # will already have been cleared to False.
+            if self._scan_deadline_exceeded and not self._scan_started_at:
                 return False, "core_thread_missing_deadline_exceeded"
             return True, ""
         if not thread.is_alive():
