@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import os
+import threading
+
 from bot import runtime_authority_convergence_repair_patch as patch
 
 
@@ -241,3 +244,207 @@ def test_rejected_activation_commit_does_not_force_live_transition(monkeypatch):
     assert sm.commit_calls == 1
     assert sm.transitions == []
     assert sm.state == tsm.TradingState.OFF
+
+
+# ---------------------------------------------------------------------------
+# Regression tests: writer lease acquisition → env_auth=1 → LIVE_ACTIVE
+# ---------------------------------------------------------------------------
+
+class _FakeSingleton:
+    """Minimal stand-in for EntrypointWriterAuthority singleton."""
+
+    def __init__(self, *, acquired: bool = True, lost: bool = False) -> None:
+        self.acquired = acquired
+        self.lost = lost
+
+
+def _make_ewa_module(singleton: "_FakeSingleton"):
+    """Return a fake module object exposing get_entrypoint_writer_authority."""
+    import types
+
+    mod = types.ModuleType("bot.entrypoint_writer_authority")
+    mod.get_entrypoint_writer_authority = lambda: singleton  # type: ignore[attr-defined]
+    return mod
+
+
+def test_singleton_lease_acquired_returns_true_and_publishes_env(monkeypatch):
+    """_singleton_lease_acquired() republishes NIJA_WRITER_LEASE_ACQUIRED=1
+    when the singleton holds the lease even if the env var was cleared."""
+    import sys
+
+    singleton = _FakeSingleton(acquired=True, lost=False)
+    fake_mod = _make_ewa_module(singleton)
+
+    monkeypatch.delenv("NIJA_WRITER_LEASE_ACQUIRED", raising=False)
+    monkeypatch.setitem(sys.modules, "bot.entrypoint_writer_authority", fake_mod)
+
+    result = patch._singleton_lease_acquired()
+
+    assert result is True
+    assert os.environ.get("NIJA_WRITER_LEASE_ACQUIRED") == "1"
+
+
+def test_singleton_lease_acquired_returns_false_when_lost(monkeypatch):
+    """_singleton_lease_acquired() returns False when the singleton is lost."""
+    import sys
+
+    singleton = _FakeSingleton(acquired=True, lost=True)
+    fake_mod = _make_ewa_module(singleton)
+
+    monkeypatch.delenv("NIJA_WRITER_LEASE_ACQUIRED", raising=False)
+    monkeypatch.setitem(sys.modules, "bot.entrypoint_writer_authority", fake_mod)
+
+    assert patch._singleton_lease_acquired() is False
+
+
+def test_singleton_lease_acquired_returns_false_when_not_acquired(monkeypatch):
+    """_singleton_lease_acquired() returns False when singleton.acquired is False."""
+    import sys
+
+    singleton = _FakeSingleton(acquired=False, lost=False)
+    fake_mod = _make_ewa_module(singleton)
+
+    monkeypatch.delenv("NIJA_WRITER_LEASE_ACQUIRED", raising=False)
+    monkeypatch.setitem(sys.modules, "bot.entrypoint_writer_authority", fake_mod)
+
+    assert patch._singleton_lease_acquired() is False
+
+
+def test_heartbeat_ready_passes_via_singleton_when_env_var_cleared(monkeypatch):
+    """_heartbeat_ready() passes when the singleton holds the lease even if
+    NIJA_WRITER_LEASE_ACQUIRED env var was reset to '0'.
+
+    This is the regression case: render_startup_convergence_patch can reset
+    the env var while the singleton still holds the lease; the convergence
+    repair must not report writer_lease_not_acquired in that window."""
+    import sys
+    import time
+
+    singleton = _FakeSingleton(acquired=True, lost=False)
+    fake_mod = _make_ewa_module(singleton)
+
+    monkeypatch.setenv("NIJA_WRITER_LEASE_ACQUIRED", "0")
+    monkeypatch.setenv("NIJA_WRITER_FENCING_TOKEN", "abc12345")
+    monkeypatch.setenv("NIJA_WRITER_LEASE_GENERATION", "2257")
+    monkeypatch.setenv("NIJA_WRITER_HEARTBEAT_ACTIVE", "1")
+    monkeypatch.setenv("NIJA_WRITER_HEARTBEAT_ALIVE_TS", str(time.time()))
+    monkeypatch.setenv("NIJA_CORE_THREAD_ALIVE", "1")
+    monkeypatch.setenv("KRAKEN_NONCE_LEASE_REQUIRED", "0")
+    monkeypatch.setitem(sys.modules, "bot.entrypoint_writer_authority", fake_mod)
+
+    ok, reason = patch._heartbeat_ready()
+
+    assert ok is True, f"Expected heartbeat_ready but got: {reason}"
+    assert "heartbeat_ready" in reason
+    # env var must have been republished
+    assert os.environ.get("NIJA_WRITER_LEASE_ACQUIRED") == "1"
+
+
+def test_heartbeat_ready_fails_when_env_cleared_and_singleton_lost(monkeypatch):
+    """_heartbeat_ready() still returns writer_lease_not_acquired when both
+    the env var is cleared AND the singleton has marked the lease lost."""
+    import sys
+
+    singleton = _FakeSingleton(acquired=True, lost=True)
+    fake_mod = _make_ewa_module(singleton)
+
+    monkeypatch.setenv("NIJA_WRITER_LEASE_ACQUIRED", "0")
+    monkeypatch.setitem(sys.modules, "bot.entrypoint_writer_authority", fake_mod)
+
+    ok, reason = patch._heartbeat_ready()
+
+    assert ok is False
+    assert reason == "writer_lease_not_acquired"
+
+
+def test_converge_marks_authority_ready_in_readiness_table(monkeypatch):
+    """When _safe_to_recover() passes, _converge_runtime_authority_once()
+    must mark authority_ready=True in the readiness table before calling
+    commit_activation(), so the coordinator proof unblocks."""
+    import bot.trading_state_machine as tsm
+    import bot.readiness_table as rt
+
+    class FakeSM:
+        def __init__(self):
+            self.state = tsm.TradingState.LIVE_PENDING_CONFIRMATION
+            self.commit_calls = 0
+
+        def get_current_state(self):
+            return self.state
+
+        def commit_activation(self, cycle_capital=None):
+            self.commit_calls += 1
+            # commit returns True to simulate success
+            self.state = tsm.TradingState.LIVE_ACTIVE
+            return True
+
+    sm = FakeSM()
+
+    monkeypatch.setenv("NIJA_RUNTIME_AUTHORITY_CONVERGENCE_REPAIR_ENABLED", "true")
+    monkeypatch.setenv("NIJA_RUNTIME_TRADING_STATE", "LIVE_PENDING_CONFIRMATION")
+    monkeypatch.setenv("NIJA_RUNTIME_EXECUTION_AUTHORITY", "0")
+    monkeypatch.setattr(
+        patch,
+        "_safe_to_recover",
+        lambda: (
+            True,
+            "all proofs passed",
+            {"valid_brokers": 3, "hydrated": True, "fresh": True, "real": 500.0},
+        ),
+    )
+    monkeypatch.setattr(tsm, "get_state_machine", lambda: sm)
+    monkeypatch.setattr(patch._CONVERGENCE_LOCAL, "active", False, raising=False)
+
+    # Confirm authority_ready starts as False
+    assert rt._TABLE.get("authority_ready", False) is False
+
+    result = patch.converge_runtime_authority("test")
+
+    # authority_ready must have been marked True during convergence
+    assert rt._TABLE.get("authority_ready", False) is True, (
+        "authority_ready should be marked True in readiness_table after _safe_to_recover() passes"
+    )
+    assert result is True
+
+
+def test_converge_sets_env_auth_to_1_after_successful_commit(monkeypatch):
+    """After commit_activation() succeeds, env_auth must be '1' and state LIVE_ACTIVE."""
+    import bot.trading_state_machine as tsm
+
+    class FakeSM:
+        def __init__(self):
+            self.state = tsm.TradingState.LIVE_PENDING_CONFIRMATION
+            self._activation_committed = False
+            self._execution_authority = False
+            self._core_loop_owns_execution = True
+            self._can_dispatch_trades = False
+            self._lock = threading.Lock()
+
+        def get_current_state(self):
+            return self.state
+
+        def commit_activation(self, cycle_capital=None):
+            self.state = tsm.TradingState.LIVE_ACTIVE
+            return True
+
+    sm = FakeSM()
+
+    monkeypatch.setenv("NIJA_RUNTIME_AUTHORITY_CONVERGENCE_REPAIR_ENABLED", "true")
+    monkeypatch.setenv("NIJA_RUNTIME_TRADING_STATE", "LIVE_PENDING_CONFIRMATION")
+    monkeypatch.setenv("NIJA_RUNTIME_EXECUTION_AUTHORITY", "0")
+    monkeypatch.setattr(
+        patch,
+        "_safe_to_recover",
+        lambda: (True, "ok", {"valid_brokers": 1, "hydrated": True, "fresh": True, "real": 100.0}),
+    )
+    monkeypatch.setattr(tsm, "get_state_machine", lambda: sm)
+    monkeypatch.setattr(patch._CONVERGENCE_LOCAL, "active", False, raising=False)
+
+    result = patch.converge_runtime_authority("test")
+
+    assert result is True
+    assert os.environ.get("NIJA_RUNTIME_EXECUTION_AUTHORITY") == "1"
+    assert os.environ.get("NIJA_RUNTIME_TRADING_STATE") == "LIVE_ACTIVE"
+    assert sm._activation_committed is True
+    assert sm._execution_authority is True
+    assert sm._can_dispatch_trades is True
