@@ -188,8 +188,10 @@ class EntrypointWriterAuthority:
         self._acquired_at = 0.0
         self._local_fallback = False
         self._scan_started_at = 0.0
+        self._scan_complete_at: float = 0.0
         self._scan_deadline_exceeded = False
         self._scan_started_watchdog_thread: Optional[threading.Thread] = None
+        self._scan_watchdog_cancel: threading.Event = threading.Event()
         self._core_thread: Optional[threading.Thread] = None
         self._core_thread_started_at = 0.0
         self._core_thread_last_alive_at = 0.0
@@ -638,7 +640,9 @@ class EntrypointWriterAuthority:
         # loop is already running but _scan_started_at gets reset to 0.0 here.
         _prior_scan_started_at = self._scan_started_at
         self._scan_started_at = 0.0
+        self._scan_complete_at = 0.0
         self._scan_deadline_exceeded = False
+        self._scan_watchdog_cancel.clear()
         self._local_fallback = False
         self._lost.clear()
         self._stop.clear()
@@ -723,7 +727,9 @@ class EntrypointWriterAuthority:
         self._lock_value = f"{token}:{owner}"
         _prior_scan_started_at = self._scan_started_at
         self._scan_started_at = 0.0
+        self._scan_complete_at = 0.0
         self._scan_deadline_exceeded = False
+        self._scan_watchdog_cancel.clear()
         self._acquired_at = time.time()
         self._local_fallback = True
         self._lost.clear()
@@ -911,11 +917,46 @@ class EntrypointWriterAuthority:
         except Exception:
             pass
 
+    def record_scan_complete(self) -> None:
+        """Record that the first full trading scan has completed.
+
+        Call this once the initial market-scan pass finishes so the
+        startup-only watchdog deadline is permanently retired and the
+        lifecycle advances to ``SCAN_COMPLETE``.  Idempotent — only the
+        first call is recorded.  Calling this without a prior call to
+        :meth:`record_scan_started` implicitly records scan-started first.
+        """
+        if not self._scan_started_at:
+            # Ensure scan-started is recorded before marking it complete.
+            self.record_scan_started()
+        if self._scan_complete_at:
+            return
+        self._scan_complete_at = time.time()
+        self._scan_deadline_exceeded = False
+        elapsed = self._scan_complete_at - self._acquired_at if self._acquired_at else 0.0
+        logger.info(
+            "SCAN_COMPLETE_RECORDED marker=%s elapsed_since_acquisition=%.1fs "
+            "instance=%s generation=%s",
+            _MARKER,
+            elapsed,
+            self._instance_id,
+            self._generation,
+        )
+        # Cancel the startup watchdog — the scan deadline is now permanently
+        # retired and the watchdog thread must not fire SCAN_STARTED_DEADLINE_EXCEEDED
+        # after a successful first scan.
+        self._scan_watchdog_cancel.set()
+        try:
+            _get_heartbeat_state().advance_phase(_Phase.SCAN_COMPLETE)
+        except Exception:
+            pass
+
     def _start_scan_started_watchdog(self) -> None:
         """Start a daemon thread that warns if SCAN_STARTED is not recorded in time."""
         if self._scan_started_watchdog_thread is not None and \
                 self._scan_started_watchdog_thread.is_alive():
             return
+        self._scan_watchdog_cancel.clear()
         deadline_s = _cfg_float("NIJA_SCAN_STARTED_DEADLINE_S", 300.0, minimum=30.0)
         t = threading.Thread(
             target=self._scan_started_watchdog_loop,
@@ -935,10 +976,11 @@ class EntrypointWriterAuthority:
         # waiting, so that setting _stop prior to the first iteration still
         # allows the deadline flag to be evaluated at least once.
         while True:
-            if self._scan_started_at:
-                # Scan started — clear any previously set deadline flag and exit.
-                # This handles the case where record_scan_started() was called
-                # after the deadline had already been exceeded.
+            if self._scan_started_at or self._scan_watchdog_cancel.is_set():
+                # Scan started (or was explicitly cancelled after completion) —
+                # clear any previously set deadline flag and exit.  This handles
+                # the case where record_scan_started() was called after the
+                # deadline had already been exceeded.
                 self._scan_deadline_exceeded = False
                 return  # Scan started; watchdog duty fulfilled
             elapsed = time.time() - acquired_at
@@ -962,12 +1004,16 @@ class EntrypointWriterAuthority:
                 # authority is stopped externally.
                 if self._stop.is_set():
                     return
-                self._stop.wait(poll_interval)
+                if self._scan_watchdog_cancel.wait(timeout=poll_interval):
+                    self._scan_deadline_exceeded = False
+                    return
                 continue
             if self._stop.is_set():
                 return
             remaining = (acquired_at + deadline_s) - time.time()
-            self._stop.wait(min(poll_interval, max(0.1, remaining)))
+            if self._scan_watchdog_cancel.wait(timeout=min(poll_interval, max(0.1, remaining))):
+                self._scan_deadline_exceeded = False
+                return
 
     def _heartbeat_loop(self) -> None:
         interval_s = _cfg_float(
