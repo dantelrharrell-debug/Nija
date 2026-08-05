@@ -6699,6 +6699,7 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
         # ── End Trading Loop Entry Anchor ──────────────────────────────────────
 
         cycle = 0
+        _startup_scan_complete_recorded = False  # True after record_scan_complete() is called once
         _skipped_cycles = 0          # consecutive cycles skipped due to no broker
         _MAX_SKIP_LOG_INTERVAL = 5   # log downtime banner every N skipped cycles
         _activation_idle_since = None
@@ -7829,6 +7830,19 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                         finally:
                             _stall_timer.cancel()
                             clear_runtime_correlation()
+                            # Guarantee record_scan_complete() is called exactly once
+                            # after the first run_cycle() finishes (success or exception).
+                            # This cancels the startup watchdog so it no longer believes
+                            # the startup scan is still in progress.
+                            if not _startup_scan_complete_recorded and cycle == 1:
+                                _startup_scan_complete_recorded = True
+                                try:
+                                    from bot.entrypoint_writer_authority import (
+                                        get_entrypoint_writer_authority,
+                                    )
+                                    get_entrypoint_writer_authority().record_scan_complete()
+                                except Exception:
+                                    pass
                 _cycle_elapsed = time.time() - _cycle_start_ts
                 # Retrieve symbol count from strategy for heartbeat diagnostics
                 _hb_symbols = 0
