@@ -1208,18 +1208,18 @@ class CapitalRefreshCoordinator:
                 ))
             except Exception as exc:
                 logger.warning(
-                    "[Coordinator] stage1_fetch broker=%s error=%s — recording 0.00 "
-                    "(previous=%.2f not reused to avoid stale balance coercion)",
+                    "[Coordinator] stage1_fetch broker=%s error=%s — broker excluded from "
+                    "fresh balances (previous=%.2f retained only via timeout/cache fallback)",
                     broker_key, exc, previous,
                 )
-                raw_balances[broker_key] = 0.0
                 self._bus.emit(CapitalEvent(
                     event_type=CapitalEventType.BROKER_BALANCE_COLLECTED,
                     trigger=trigger,
                     metadata={
                         "broker": broker_key,
-                        "balance": 0.0,
+                        "balance": None,
                         "error": str(exc),
+                        "excluded": True,
                     },
                 ))
 

@@ -1541,6 +1541,8 @@ class NijaCoreLoop:
         )
         _ca_hydrated = bool(_cap.get("ca_is_hydrated", False))
         _ca_total_capital = float(_cap.get("ca_total_capital", 0.0) or 0.0)
+        _ca_valid_brokers = int(_cap.get("ca_valid_brokers", 0) or 0)
+        _ca_snapshot_source = str(_cap.get("snapshot_source", "placeholder") or "placeholder")
 
         # ── Balance hydration waterfall ───────────────────────────────────
         # Priority order (highest → lowest):
@@ -1618,13 +1620,15 @@ class NijaCoreLoop:
         )
         logger.critical(
             "[NIJA] BALANCE SNAPSHOT | cycle_id=%s canonical=$%.2f source=%s "
-            "ca_hydrated=%s ca_total_capital=$%.2f caller_balance=$%.2f "
-            "NIJA_FORCE_TRADE_BALANCE=%s",
+            "ca_hydrated=%s ca_total_capital=$%.2f ca_valid_brokers=%d snapshot_source=%s "
+            "caller_balance=$%.2f NIJA_FORCE_TRADE_BALANCE=%s",
             _cid,
             _canonical_balance,
             _balance_source,
             _ca_hydrated,
             _ca_total_capital,
+            _ca_valid_brokers,
+            _ca_snapshot_source,
             _caller_balance,
             os.environ.get("NIJA_FORCE_TRADE_BALANCE", "unset"),
         )
