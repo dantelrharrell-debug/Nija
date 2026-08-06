@@ -266,6 +266,7 @@ class CapitalCSMv2:
         # still being built.  We read this non-blocking (is_set) so ingest
         # never blocks the coordinator pipeline.
         _broker_reg_complete: bool = False
+        _ca = None
         try:
             try:
                 from bot.capital_authority import get_capital_authority as _get_ca
@@ -294,10 +295,43 @@ class CapitalCSMv2:
         except (TypeError, ValueError):
             confidence_score = 0.0
 
+        ca_status = None
+        ca_status_accepted: Optional[bool] = None
+        ca_status_reason: str = "unavailable"
+        ca_status_timestamp_iso: str = "unknown"
+        ca_status_expiry_iso: str = "unknown"
         try:
-            is_stale: bool = bool(getattr(snapshot, "is_stale", False))
-        except (TypeError, ValueError):
-            is_stale = True
+            if _ca is not None and hasattr(_ca, "get_snapshot_publication_status"):
+                ca_status = _ca.get_snapshot_publication_status()
+        except Exception:
+            ca_status = None
+        if ca_status is not None:
+            try:
+                is_stale = bool(getattr(ca_status, "stale"))
+            except Exception:
+                is_stale = True
+            try:
+                ca_status_accepted = bool(getattr(ca_status, "accepted"))
+            except Exception:
+                ca_status_accepted = None
+            ca_status_reason = str(getattr(ca_status, "reason", "unknown"))
+            _ca_ts = getattr(ca_status, "timestamp", None)
+            _ca_expiry = getattr(ca_status, "expiry", None)
+            ca_status_timestamp_iso = (
+                _ca_ts.isoformat()
+                if _ca_ts is not None and hasattr(_ca_ts, "isoformat")
+                else "unknown"
+            )
+            ca_status_expiry_iso = (
+                _ca_expiry.isoformat()
+                if _ca_expiry is not None and hasattr(_ca_expiry, "isoformat")
+                else "unknown"
+            )
+        else:
+            try:
+                is_stale = bool(getattr(snapshot, "is_stale", False))
+            except (TypeError, ValueError):
+                is_stale = True
 
         # Extract broker_count for FIRST_SNAPSHOT_GATE evaluation.
         try:
@@ -332,15 +366,19 @@ class CapitalCSMv2:
         )
         _snap_source: str = "live_exchange" if _gate_has_valid_brokers else "placeholder"
 
+        _ca_publish_gate_ok: bool = ca_status_accepted is not False
         _all_gate_conditions_met: bool = (
             _gate_ca_hydrated
             and _gate_capital_positive
             and _gate_has_valid_brokers
             and _gate_not_stale
+            and _ca_publish_gate_ok
         )
 
         if _all_gate_conditions_met:
             _gate_reason = "all conditions met"
+        elif not _ca_publish_gate_ok:
+            _gate_reason = f"CA publish gate closed ({ca_status_reason})"
         elif not _gate_ca_hydrated:
             _gate_reason = "CA not hydrated"
         elif not _gate_capital_positive:
@@ -365,6 +403,9 @@ class CapitalCSMv2:
             "  broker_count: %d\n"
             "  snapshot_timestamp: %s\n"
             "  snapshot_source: %s\n"
+            "  ca_snapshot_timestamp: %s\n"
+            "  ca_snapshot_expiry: %s\n"
+            "  ca_publish_accepted: %s\n"
             "  accepted: %s\n"
             "  newly_accepted: %s\n"
             "  reason: %s",
@@ -373,6 +414,9 @@ class CapitalCSMv2:
             broker_count,
             _snap_timestamp_iso,
             _snap_source,
+            ca_status_timestamp_iso,
+            ca_status_expiry_iso,
+            ca_status_accepted,
             _accepted_latched,
             _newly_accepted,
             _gate_reason,

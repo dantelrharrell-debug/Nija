@@ -57,7 +57,8 @@ import threading
 import time
 from collections.abc import Mapping
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -229,6 +230,17 @@ class CapitalLifecycleState(str, Enum):
     INITIALIZING = "INITIALIZING"
     HYDRATED_ZERO_CAPITAL = "HYDRATED_ZERO_CAPITAL"
     ACTIVE_CAPITAL = "ACTIVE_CAPITAL"
+
+
+@dataclass(frozen=True)
+class SnapshotPublicationStatus:
+    """Authoritative publication status for the most recent snapshot."""
+
+    accepted: bool
+    stale: bool
+    reason: str
+    timestamp: Optional[datetime]
+    expiry: Optional[datetime]
 
 
 def get_capital_system_gate() -> threading.Event:
@@ -599,6 +611,14 @@ class CapitalAuthority:
         # This is the single source of truth for snapshot readiness and replaces
         # the duplicate CA_READY state tracking.
         self._first_snap_accepted: bool = False
+        # Single source of truth for latest snapshot publication status.
+        self._last_snapshot_publication: SnapshotPublicationStatus = SnapshotPublicationStatus(
+            accepted=False,
+            stale=True,
+            reason="no_snapshot_published",
+            timestamp=None,
+            expiry=None,
+        )
         # Per-broker timestamps for the feed_broker_balance push path.
         # Monotonic guard: only advance a broker's balance when the incoming
         # feed timestamp is strictly newer than the recorded one.
@@ -2140,6 +2160,14 @@ class CapitalAuthority:
                 writer_id,
                 self._AUTHORIZED_WRITER_ID,
             )
+            with self._lock:
+                self._last_snapshot_publication = SnapshotPublicationStatus(
+                    accepted=False,
+                    stale=True,
+                    reason="unauthorized_writer",
+                    timestamp=None,
+                    expiry=None,
+                )
             return False
 
         # Guard: reject snapshots that carry no broker data at all.  An empty
@@ -2158,6 +2186,14 @@ class CapitalAuthority:
                 "Returning False to prevent hollow hydration.",
                 writer_id,
             )
+            with self._lock:
+                self._last_snapshot_publication = SnapshotPublicationStatus(
+                    accepted=False,
+                    stale=True,
+                    reason="empty_broker_balances",
+                    timestamp=None,
+                    expiry=None,
+                )
             return False
 
         new_balances = dict(_snap_broker_balances)
@@ -2184,6 +2220,13 @@ class CapitalAuthority:
                     "snapshot not newer (computed_at=%s <= last_updated=%s)",
                     computed_at.isoformat(),
                     self.last_updated.isoformat(),
+                )
+                self._last_snapshot_publication = SnapshotPublicationStatus(
+                    accepted=False,
+                    stale=True,
+                    reason="snapshot_not_newer",
+                    timestamp=computed_at,
+                    expiry=computed_at + timedelta(seconds=_DEFAULT_FRESHNESS_TTL_S),
                 )
                 return False
 
@@ -2293,12 +2336,9 @@ class CapitalAuthority:
         # This replaces the duplicate CA_READY state tracking and becomes the
         # single source of truth for snapshot readiness.
         #
-        # NOTE: Do NOT read is_stale from the snapshot dataclass — CapitalSnapshot
-        # has no such attribute and getattr would always return the default (True).
-        # Call self.is_stale() instead: self.last_updated was just set to
-        # computed_at above, so this correctly reflects the freshness of the
-        # snapshot we just published.
-        _snap_is_stale: bool = self.is_stale()
+        _snap_expiry: datetime = computed_at + timedelta(seconds=_DEFAULT_FRESHNESS_TTL_S)
+        _expired_at_publish: bool = datetime.now(timezone.utc) >= _snap_expiry
+        _snap_is_stale: bool = _expired_at_publish
         _snap_valid_broker_count: int = sum(
             1 for bal in new_balances.values() if bal > 0.0
         )
@@ -2318,13 +2358,16 @@ class CapitalAuthority:
             and _gate_has_valid_brokers
             and _gate_not_stale
         )
+        _publication_accepted: bool = _all_conditions_met
 
         if _all_conditions_met:
-            _gate_reason = "all conditions met"
+            _gate_reason = "accepted"
         elif not _gate_capital_positive:
             _gate_reason = "capital is zero"
         elif not _gate_has_valid_brokers:
             _gate_reason = "no valid brokers"
+        elif _expired_at_publish:
+            _gate_reason = "snapshot expired at publish"
         elif _gate_not_stale is False:
             _gate_reason = "snapshot is stale"
         else:
@@ -2338,6 +2381,13 @@ class CapitalAuthority:
             if _all_conditions_met and not _was_already_accepted:
                 self._first_snap_accepted = True
             _accepted_latched = self._first_snap_accepted
+            self._last_snapshot_publication = SnapshotPublicationStatus(
+                accepted=_publication_accepted,
+                stale=_snap_is_stale,
+                reason=_gate_reason,
+                timestamp=computed_at,
+                expiry=_snap_expiry,
+            )
 
         _newly_accepted: bool = _all_conditions_met and not _was_already_accepted
 
@@ -2374,6 +2424,11 @@ class CapitalAuthority:
         """
         with self._lock:
             return self._last_typed_snapshot
+
+    def get_snapshot_publication_status(self) -> SnapshotPublicationStatus:
+        """Return authoritative status for the most recently published snapshot."""
+        with self._lock:
+            return self._last_snapshot_publication
 
     # ------------------------------------------------------------------
     # Diagnostics
@@ -2422,6 +2477,21 @@ class CapitalAuthority:
                 # explicit lifecycle state — consumers should read this instead
                 # of inferring the economic condition from individual fields
                 "capital_lifecycle_state": lifecycle.value,
+                "snapshot_publication": {
+                    "accepted": self._last_snapshot_publication.accepted,
+                    "stale": self._last_snapshot_publication.stale,
+                    "reason": self._last_snapshot_publication.reason,
+                    "timestamp": (
+                        self._last_snapshot_publication.timestamp.isoformat()
+                        if self._last_snapshot_publication.timestamp is not None
+                        else None
+                    ),
+                    "expiry": (
+                        self._last_snapshot_publication.expiry.isoformat()
+                        if self._last_snapshot_publication.expiry is not None
+                        else None
+                    ),
+                },
             }
 
 

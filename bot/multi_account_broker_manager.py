@@ -3371,6 +3371,14 @@ class MultiAccountBrokerManager:
                     authority = get_capital_authority() if get_capital_authority else None
                     # FSM is the authority on readiness — read via delegating method.
                     capital_ready = self.is_capital_authority_ready()
+                    if authority is not None and hasattr(authority, "get_snapshot_publication_status"):
+                        try:
+                            publication = authority.get_snapshot_publication_status()
+                            if bool(getattr(publication, "stale", False)):
+                                self.refresh_capital_authority(trigger=self.WATCHDOG_REFRESH_TRIGGER)
+                                continue
+                        except Exception:
+                            pass
                     needs_refresh = not capital_ready
                     if not needs_refresh and authority is not None:
                         needs_refresh = authority.is_stale(ttl_s=self.capital_stale_timeout_s)
