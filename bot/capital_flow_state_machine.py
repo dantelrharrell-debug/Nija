@@ -1207,21 +1207,43 @@ class CapitalRefreshCoordinator:
                     },
                 ))
             except Exception as exc:
-                logger.warning(
-                    "[Coordinator] stage1_fetch broker=%s error=%s — broker excluded from "
-                    "fresh balances (previous=%.2f retained only via timeout/cache fallback)",
-                    broker_key, exc, previous,
-                )
-                self._bus.emit(CapitalEvent(
-                    event_type=CapitalEventType.BROKER_BALANCE_COLLECTED,
-                    trigger=trigger,
-                    metadata={
-                        "broker": broker_key,
-                        "balance": None,
-                        "error": str(exc),
-                        "excluded": True,
-                    },
-                ))
+                # If a live fetch fails (e.g. timeout), fall back to the last
+                # known balance so the snapshot is not collapsed to zero/empty.
+                # This prevents EMPTY SNAPSHOT REJECTED when all brokers are
+                # independently timing out.
+                if previous > 0.0:
+                    raw_balances[broker_key] = previous
+                    logger.warning(
+                        "[Coordinator] stage1_fetch broker=%s error=%s — "
+                        "using previous balance %.2f as fallback (timeout/cache fallback)",
+                        broker_key, exc, previous,
+                    )
+                    self._bus.emit(CapitalEvent(
+                        event_type=CapitalEventType.BROKER_BALANCE_COLLECTED,
+                        trigger=trigger,
+                        metadata={
+                            "broker": broker_key,
+                            "balance": previous,
+                            "error": str(exc),
+                            "fallback": True,
+                        },
+                    ))
+                else:
+                    logger.warning(
+                        "[Coordinator] stage1_fetch broker=%s error=%s — broker excluded from "
+                        "fresh balances (no previous balance to fall back to)",
+                        broker_key, exc,
+                    )
+                    self._bus.emit(CapitalEvent(
+                        event_type=CapitalEventType.BROKER_BALANCE_COLLECTED,
+                        trigger=trigger,
+                        metadata={
+                            "broker": broker_key,
+                            "balance": None,
+                            "error": str(exc),
+                            "excluded": True,
+                        },
+                    ))
 
         # =================================================================
         # STAGE 2: NORMALIZE
