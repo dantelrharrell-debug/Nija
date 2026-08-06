@@ -708,8 +708,8 @@ class EntrypointWriterAuthority:
             self.record_scan_complete()
         elif _prior_scan_started_at:
             self.record_scan_started()
-        self._notify_runtime_reconciliation("writer_acquired")
         self._set_writer_state(WriterState.ACTIVE, reason="lease_acquired")
+        self._notify_runtime_reconciliation("writer_acquired")
 
         logger.critical(
             "LOCK_ACQUIRED marker=%s token_prefix=%s generation=%s instance=%s",
@@ -802,8 +802,8 @@ class EntrypointWriterAuthority:
             self.record_scan_complete()
         elif _prior_scan_started_at:
             self.record_scan_started()
-        self._notify_runtime_reconciliation("writer_acquired_local_fallback")
         self._set_writer_state(WriterState.ACTIVE, reason="local_fallback")
+        self._notify_runtime_reconciliation("writer_acquired_local_fallback")
         logger.critical(
             "ENTRYPOINT_WRITER_AUTHORITY_LOCAL_FALLBACK marker=%s reason=%s instance=%s",
             _MARKER,
@@ -1285,8 +1285,8 @@ class EntrypointWriterAuthority:
                         _MARKER,
                         self._token[:8],
                     )
-                self._notify_runtime_reconciliation("heartbeat_renewed")
                 self._set_writer_state(WriterState.ACTIVE, reason="heartbeat_renewed")
+                self._notify_runtime_reconciliation("heartbeat_renewed")
                 return True, ""
             if code == -1:
                 return False, "lock_missing_and_fencing_token_mismatch"
