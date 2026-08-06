@@ -14,7 +14,7 @@ import logging
 import os
 import sys
 import threading
-from typing import Any
+from typing import Any, Iterable
 
 logger = logging.getLogger("nija.current_capital_snapshot_freshness_repair")
 
@@ -49,6 +49,9 @@ def _broker_threshold(snapshot: Any) -> int:
     opportunistic = _truthy_env("NIJA_CAPITAL_OPPORTUNISTIC", "true")
     if opportunistic:
         return 1
+    eligible_brokers = _eligible_broker_names(snapshot)
+    if eligible_brokers:
+        return max(1, len(eligible_brokers))
     try:
         return max(1, int(getattr(snapshot, "expected_brokers", 1) or 1))
     except Exception:
@@ -66,7 +69,47 @@ def _capital_freshness_ttl_s() -> float:
         return 90.0
 
 
-def _current_refresh_fallback_status() -> dict[str, Any]:
+def _normalize_broker_name(broker: Any) -> str:
+    if broker is None:
+        return ""
+    if isinstance(broker, str):
+        return broker.strip().lower()
+    broker_type = getattr(broker, "broker_type", None)
+    broker_type_value = getattr(broker_type, "value", None)
+    if broker_type_value:
+        return str(broker_type_value).strip().lower()
+    name = getattr(broker, "name", None)
+    if name:
+        return str(name).strip().lower()
+    value = getattr(broker, "value", None)
+    if value:
+        return str(value).strip().lower()
+    return str(broker).strip().lower()
+
+
+def _normalize_broker_names(brokers: Iterable[Any] | None) -> set[str]:
+    if not brokers:
+        return set()
+    normalized = {_normalize_broker_name(broker) for broker in brokers}
+    return {name for name in normalized if name}
+
+
+def _eligible_broker_names(snapshot: Any) -> set[str]:
+    eligible = _normalize_broker_names(getattr(snapshot, "eligible_brokers", None))
+    if eligible:
+        return eligible
+    active = _normalize_broker_names(getattr(snapshot, "active_brokers", None))
+    if active:
+        return active
+    return _normalize_broker_names(dict(getattr(snapshot, "broker_balances", {}) or {}).keys())
+
+
+def _current_refresh_fallback_status(
+    *,
+    active_brokers: Iterable[Any] | None = None,
+    eligible_brokers: Iterable[Any] | None = None,
+) -> dict[str, Any]:
+    relevant_brokers = _normalize_broker_names(eligible_brokers) or _normalize_broker_names(active_brokers)
     for name in (
         "bot.capital_refresh_stall_guard_v35",
         "capital_refresh_stall_guard_v35",
@@ -75,29 +118,60 @@ def _current_refresh_fallback_status() -> dict[str, Any]:
         status_getter = getattr(module, "current_refresh_fallback_status", None)
         if callable(status_getter):
             try:
-                return dict(status_getter(_capital_freshness_ttl_s()))
+                status = dict(status_getter(_capital_freshness_ttl_s()))
             except Exception:
-                return {
+                status = {
                     "used_fallback": True,
                     "all_recent": False,
                     "brokers": {},
                 }
+            return _filter_fallback_status(status, relevant_brokers)
         checker = getattr(module, "current_refresh_used_fallback", None)
         if callable(checker):
             try:
                 used = bool(checker())
             except Exception:
                 used = True
-            return {
+            return _filter_fallback_status({
                 "used_fallback": used,
                 "all_recent": False,
                 "brokers": {},
-            }
-    return {
+            }, relevant_brokers)
+    return _filter_fallback_status({
         "used_fallback": False,
         "all_recent": True,
         "brokers": {},
-    }
+    }, relevant_brokers)
+
+
+def _filter_fallback_status(status: dict[str, Any], relevant_brokers: set[str]) -> dict[str, Any]:
+    brokers = dict(status.get("brokers", {}) or {})
+    if relevant_brokers:
+        brokers = {
+            broker_name: broker_status
+            for broker_name, broker_status in brokers.items()
+            if _normalize_broker_name(broker_name) in relevant_brokers
+        }
+        used_fallback = bool(status.get("used_fallback") and brokers)
+    else:
+        used_fallback = bool(status.get("used_fallback"))
+    ttl_s = _capital_freshness_ttl_s()
+    all_recent = bool(
+        not used_fallback
+        or (
+            brokers
+            and all(
+                bool(record.get("observed"))
+                and float(record.get("age_s", float("inf"))) <= ttl_s
+                for record in brokers.values()
+            )
+        )
+    )
+    filtered = dict(status)
+    filtered["used_fallback"] = used_fallback
+    filtered["all_recent"] = all_recent
+    filtered["brokers"] = brokers
+    return filtered
 
 
 def _current_refresh_requires_stale() -> bool:
@@ -154,7 +228,10 @@ def install_import_hook() -> bool:
             @functools.wraps(current_init)
             def _init_with_current_freshness(self: Any, *args: Any, **kwargs: Any) -> None:
                 current_init(self, *args, **kwargs)
-                fallback_status = _current_refresh_fallback_status()
+                fallback_status = _current_refresh_fallback_status(
+                    active_brokers=getattr(self, "active_brokers", None),
+                    eligible_brokers=getattr(self, "eligible_brokers", None),
+                )
                 if bool(
                     fallback_status.get("used_fallback")
                     and not fallback_status.get("all_recent")

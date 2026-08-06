@@ -90,6 +90,7 @@ def authority(hs):
     _state, hs_mod = hs
     ewa_mod = _load_ewa(hs_mod)
     inst = ewa_mod.EntrypointWriterAuthority()
+    inst._result = MagicMock(acquired=True)
     # Simulate a freshly acquired lease so timestamps are meaningful.
     inst._acquired_at = time.time()
     inst._instance_id = "test-instance-1"
@@ -237,6 +238,35 @@ class TestScanStartedWatchdogLoop:
         t.start()
         t.join(timeout=2.0)
         assert not t.is_alive(), "Watchdog should exit immediately when cancelled"
+
+    def test_exits_immediately_when_writer_not_acquired(self, authority):
+        inst, _ = authority
+        inst._acquired_at = time.time() - 1000.0
+        inst._scan_deadline_exceeded = True
+        inst._result = None
+        t = self._make_watchdog_thread(inst, deadline_s=30.0)
+        t.start()
+        t.join(timeout=2.0)
+        assert not t.is_alive(), "Watchdog should exit immediately when writer is not acquired"
+        assert inst._scan_deadline_exceeded is False
+
+    def test_timeout_while_scan_active_sets_deadline_flag(self, authority):
+        inst, _ = authority
+        inst._acquired_at = time.time() - 1000.0
+        inst._stop.set()
+        inst._scan_started_watchdog_loop(deadline_s=30.0)
+        assert inst._scan_deadline_exceeded is True
+
+    def test_exits_immediately_when_startup_already_completed(self, authority):
+        inst, hs_mod = authority
+        inst._acquired_at = time.time() - 1000.0
+        inst._scan_deadline_exceeded = True
+        hs_mod.get_heartbeat_state().advance_phase(hs_mod.WriterLifecyclePhase.SCAN_COMPLETE)
+        t = self._make_watchdog_thread(inst, deadline_s=30.0)
+        t.start()
+        t.join(timeout=2.0)
+        assert not t.is_alive(), "Watchdog should exit immediately when startup is completed"
+        assert inst._scan_deadline_exceeded is False
 
     def test_exits_and_clears_flag_when_cancel_fires_after_deadline(self, authority):
         """Watchdog should clear _scan_deadline_exceeded when cancelled after deadline."""
