@@ -1,3 +1,4 @@
+import logging
 from types import SimpleNamespace
 
 from bot.trading_strategy import TradingStrategy
@@ -33,6 +34,15 @@ class DummyBroker:
 
     def get_account_balance(self):
         return {"total_balance": 25.0}
+
+
+class CaptureHandler(logging.Handler):
+    def __init__(self):
+        super().__init__()
+        self.messages = []
+
+    def emit(self, record):
+        self.messages.append(self.format(record))
 
 
 def _strategy_for_run_cycle():
@@ -72,7 +82,7 @@ def test_run_cycle_without_broker_preserves_active_broker_selection():
     assert strategy.nija_core_loop.calls[0]["user_mode"] is False
 
 
-def test_run_cycle_logs_zero_trade_diagnostic(caplog):
+def test_run_cycle_logs_zero_trade_diagnostic():
     strategy = _strategy_for_run_cycle()
     broker = DummyBroker()
 
@@ -94,11 +104,21 @@ def test_run_cycle_logs_zero_trade_diagnostic(caplog):
         errors=[],
     )
 
-    with caplog.at_level("CRITICAL", logger="nija.trading_strategy"):
+    logger = logging.getLogger("nija.trading_strategy")
+    handler = CaptureHandler()
+    previous_level = logger.level
+    logger.addHandler(handler)
+    logger.setLevel(logging.CRITICAL)
+    try:
         next_interval = strategy.run_cycle(broker=broker)
+    finally:
+        logger.removeHandler(handler)
+        logger.setLevel(previous_level)
+
+    log_output = "\n".join(handler.messages)
 
     assert next_interval == 11
-    assert "RUN_CYCLE_SCAN_DIAGNOSTIC" in caplog.text
-    assert "outcome=no_candidates_selected" in caplog.text
-    assert "reason=volume_gate_rejected" in caplog.text
-    assert "gate_summary=risk_gate_rejected:1,volume_gate_rejected:3" in caplog.text
+    assert "RUN_CYCLE_SCAN_DIAGNOSTIC" in log_output
+    assert "outcome=no_candidates_selected" in log_output
+    assert "reason=volume_gate_rejected" in log_output
+    assert "gate_summary=risk_gate_rejected:1,volume_gate_rejected:3" in log_output
