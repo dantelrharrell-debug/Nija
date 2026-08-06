@@ -3895,30 +3895,80 @@ def _strategy_readiness_gate() -> tuple[bool, str]:
 
 def _execution_readiness_gate() -> tuple[bool, str]:
     """Check execution pipeline health independently from capital readiness."""
+    registered = 0
+    failed = 0
+    healthy = 0
+    router_registry_id = "unavailable"
+    manager_registry_id = "unavailable"
+    manager_brokers: list[str] = []
+
     try:
         try:
             from bot.execution_router import get_execution_router
         except ImportError:
             from execution_router import get_execution_router  # type: ignore[import]
         router = get_execution_router()
-        status = getattr(router, "get_status", lambda: {})()
+        status_reader = getattr(router, "get_status", None)
+        if not callable(status_reader):
+            status_reader = getattr(router, "get_report", None)
+        status = status_reader() if callable(status_reader) else {}
         registered = int(status.get("registered_venues", 0) or 0)
         failed = len(status.get("session_failed_venues", []))
         healthy = max(0, registered - failed)
-        logger.info(
-            "[TradingStateMachine] _execution_readiness_gate: "
-            "registered_venues=%d session_failed_venues=%d healthy_venues=%d",
-            registered,
-            failed,
-            healthy,
-        )
-        if registered > 0 and healthy <= 0:
-            return False, (
-                "EXECUTION_READY=false: all registered venues are session-failed "
-                f"(registered={registered} failed={failed})"
-            )
+        router_registry = getattr(router, "_venues", None)
+        if router_registry is not None:
+            router_registry_id = hex(id(router_registry))
     except (ImportError, AttributeError, Exception) as exc:
         logger.debug("_execution_readiness_gate: ExecutionRouter unavailable (%s) — skipping", exc)
+
+    try:
+        try:
+            from bot.multi_account_broker_manager import get_broker_manager
+        except ImportError:
+            from multi_account_broker_manager import get_broker_manager  # type: ignore[import]
+        manager = get_broker_manager()
+        platform_brokers = getattr(manager, "platform_brokers", {}) or {}
+        manager_registry_id = hex(id(platform_brokers))
+        manager_brokers = [str(getattr(broker_type, "value", broker_type)) for broker_type in platform_brokers.keys()]
+        manager_registered = len(platform_brokers)
+        manager_healthy = sum(
+            1 for broker in platform_brokers.values() if bool(getattr(broker, "connected", False))
+        )
+        if manager_registered > registered:
+            logger.critical(
+                "EXECUTION_VENUE_REGISTRY_MISMATCH router_registry_id=%s "
+                "manager_registry_id=%s router_registered_venues=%d "
+                "manager_registered_venues=%d manager_connected_brokers=%d "
+                "manager_brokers=%s",
+                router_registry_id,
+                manager_registry_id,
+                registered,
+                manager_registered,
+                manager_healthy,
+                ",".join(manager_brokers) or "none",
+            )
+            registered = manager_registered
+            healthy = manager_healthy
+            failed = max(0, registered - healthy)
+    except Exception as exc:
+        logger.debug("_execution_readiness_gate: broker registry unavailable (%s) — skipping", exc)
+
+    logger.info(
+        "[TradingStateMachine] _execution_readiness_gate: "
+        "registered_venues=%d session_failed_venues=%d healthy_venues=%d "
+        "router_registry_id=%s manager_registry_id=%s manager_brokers=%s",
+        registered,
+        failed,
+        healthy,
+        router_registry_id,
+        manager_registry_id,
+        ",".join(manager_brokers) or "none",
+    )
+    if registered > 0 and healthy <= 0:
+        return False, (
+            "EXECUTION_READY=false: no healthy registered venues "
+            f"(registered={registered} healthy={healthy} failed={failed})"
+        )
     strategy_ok, strategy_err = _strategy_readiness_gate()
     if not strategy_ok:
         return False, strategy_err
