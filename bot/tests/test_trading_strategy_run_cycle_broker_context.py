@@ -1,3 +1,4 @@
+import logging
 from types import SimpleNamespace
 
 from bot.trading_strategy import TradingStrategy
@@ -35,6 +36,15 @@ class DummyBroker:
         return {"total_balance": 25.0}
 
 
+class CaptureHandler(logging.Handler):
+    def __init__(self):
+        super().__init__()
+        self.messages = []
+
+    def emit(self, record):
+        self.messages.append(self.format(record))
+
+
 def _strategy_for_run_cycle():
     strategy = TradingStrategy.__new__(TradingStrategy)
     strategy.apex = DummyApex()
@@ -70,3 +80,45 @@ def test_run_cycle_without_broker_preserves_active_broker_selection():
 
     assert strategy.nija_core_loop.calls[0]["broker"] is broker
     assert strategy.nija_core_loop.calls[0]["user_mode"] is False
+
+
+def test_run_cycle_logs_zero_trade_diagnostic():
+    strategy = _strategy_for_run_cycle()
+    broker = DummyBroker()
+
+    strategy.nija_core_loop.run_scan_phase = lambda **kwargs: SimpleNamespace(
+        symbols_scored=4,
+        entries_taken=0,
+        entries_blocked=0,
+        exits_taken=0,
+        next_interval=11,
+        candidates_selected=0,
+        candidates_volume_blocked=3,
+        candidates_terminal_risk_blocked=1,
+        candidates_order_ready=0,
+        orders_submitted=0,
+        broker_acks=0,
+        fills=0,
+        execute_successes=0,
+        gate_rejections={"volume_gate_rejected": 3, "risk_gate_rejected": 1},
+        errors=[],
+    )
+
+    logger = logging.getLogger("nija.trading_strategy")
+    handler = CaptureHandler()
+    previous_level = logger.level
+    logger.addHandler(handler)
+    logger.setLevel(logging.CRITICAL)
+    try:
+        next_interval = strategy.run_cycle(broker=broker)
+    finally:
+        logger.removeHandler(handler)
+        logger.setLevel(previous_level)
+
+    log_output = "\n".join(handler.messages)
+
+    assert next_interval == 11
+    assert "RUN_CYCLE_SCAN_DIAGNOSTIC" in log_output
+    assert "outcome=no_candidates_selected" in log_output
+    assert "reason=volume_gate_rejected" in log_output
+    assert "gate_summary=risk_gate_rejected:1,volume_gate_rejected:3" in log_output
