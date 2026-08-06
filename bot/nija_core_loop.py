@@ -1060,6 +1060,7 @@ class CoreLoopResult:
     execute_successes: int = 0
     errors:           List[str] = field(default_factory=list)
     next_interval:    int = 150    # recommended seconds before next cycle
+    gate_rejections: Dict[str, int] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -1932,6 +1933,7 @@ class NijaCoreLoop:
                 result.broker_acks = int(_phase3_metrics.get("broker_acks", 0) or 0)
                 result.fills = int(_phase3_metrics.get("fills", 0) or 0)
                 result.execute_successes = int(_phase3_metrics.get("execute_successes", 0) or 0)
+                result.gate_rejections = dict(_gate_rejections)
 
                 # Update the zero-signal streak counter for the next cycle
                 if entries > 0:

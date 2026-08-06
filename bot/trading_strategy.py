@@ -1822,6 +1822,121 @@ class TradingStrategy:
             self.nija_core_loop.apex = self.apex
             logger.info("NijaCoreLoop apex reference re-synchronized")
 
+    def _log_run_cycle_core_result(
+        self,
+        *,
+        core_result: Any,
+        broker: Any,
+        user_mode: bool,
+        symbols_requested: int,
+        balance: float,
+        open_positions_count: int,
+    ) -> None:
+        """Emit a one-line diagnostic summary for the just-completed core-loop scan."""
+        gate_rejections = getattr(core_result, "gate_rejections", {}) or {}
+        if not isinstance(gate_rejections, dict):
+            gate_rejections = {}
+        normalized_gate_rejections: Dict[str, int] = {}
+        for key, value in gate_rejections.items():
+            try:
+                _count = int(value or 0)
+            except Exception:
+                continue
+            if _count > 0:
+                normalized_gate_rejections[str(key)] = _count
+
+        dominant_gate = "none"
+        dominant_gate_count = 0
+        if normalized_gate_rejections:
+            dominant_gate, dominant_gate_count = max(
+                normalized_gate_rejections.items(),
+                key=lambda item: (item[1], item[0]),
+            )
+        gate_summary = (
+            ",".join(
+                f"{key}:{normalized_gate_rejections[key]}"
+                for key in sorted(normalized_gate_rejections)
+            )
+            or "none"
+        )
+
+        symbols_scored = int(getattr(core_result, "symbols_scored", 0) or 0)
+        entries_taken = int(getattr(core_result, "entries_taken", 0) or 0)
+        entries_blocked = int(getattr(core_result, "entries_blocked", 0) or 0)
+        candidates_selected = int(getattr(core_result, "candidates_selected", 0) or 0)
+        candidates_volume_blocked = int(getattr(core_result, "candidates_volume_blocked", 0) or 0)
+        candidates_terminal_risk_blocked = int(
+            getattr(core_result, "candidates_terminal_risk_blocked", 0) or 0
+        )
+        candidates_order_ready = int(getattr(core_result, "candidates_order_ready", 0) or 0)
+        orders_submitted = int(getattr(core_result, "orders_submitted", 0) or 0)
+        broker_acks = int(getattr(core_result, "broker_acks", 0) or 0)
+        fills = int(getattr(core_result, "fills", 0) or 0)
+        execute_successes = int(getattr(core_result, "execute_successes", 0) or 0)
+        errors = list(getattr(core_result, "errors", []) or [])
+
+        if entries_taken > 0 or orders_submitted > 0:
+            outcome = "orders_attempted"
+            reason = dominant_gate if dominant_gate_count > 0 else "scan_progressed_to_execution"
+        elif entries_blocked > 0:
+            outcome = "entries_blocked"
+            reason = dominant_gate if dominant_gate_count > 0 else "entries_blocked_without_submission"
+        elif symbols_scored <= 0:
+            outcome = "no_symbols_scored"
+            reason = dominant_gate if dominant_gate_count > 0 else "no_symbols_survived_prechecks"
+        elif candidates_selected <= 0:
+            outcome = "no_candidates_selected"
+            reason = dominant_gate if dominant_gate_count > 0 else "all_scored_candidates_filtered"
+        elif candidates_order_ready <= 0:
+            outcome = "no_order_ready_candidates"
+            reason = dominant_gate if dominant_gate_count > 0 else "risk_or_order_readiness_block"
+        elif broker_acks <= 0:
+            outcome = "orders_unacked"
+            reason = "orders_submitted_without_broker_ack"
+        elif fills <= 0:
+            outcome = "orders_acked_waiting_fill"
+            reason = "orders_accepted_but_unfilled"
+        else:
+            outcome = "scan_completed"
+            reason = "fills_recorded"
+
+        logger.critical(
+            "RUN_CYCLE_SCAN_DIAGNOSTIC outcome=%s reason=%s broker=%s user_mode=%s "
+            "symbols_requested=%d balance=$%.2f open_positions=%d scored=%d entered=%d blocked=%d "
+            "selected=%d volume_blocked=%d terminal_risk_blocked=%d order_ready=%d "
+            "orders_submitted=%d broker_acks=%d fills=%d execute_successes=%d "
+            "dominant_gate=%s dominant_gate_count=%d gate_summary=%s errors=%s",
+            outcome,
+            reason,
+            type(broker).__name__ if broker is not None else "None",
+            bool(user_mode),
+            symbols_requested,
+            float(balance or 0.0),
+            open_positions_count,
+            symbols_scored,
+            entries_taken,
+            entries_blocked,
+            candidates_selected,
+            candidates_volume_blocked,
+            candidates_terminal_risk_blocked,
+            candidates_order_ready,
+            orders_submitted,
+            broker_acks,
+            fills,
+            execute_successes,
+            dominant_gate,
+            dominant_gate_count,
+            gate_summary,
+            json.dumps(errors[:3]),
+        )
+        print(
+            f"[NIJA-PRINT] RUN_CYCLE_SCAN_DIAGNOSTIC "
+            f"outcome={outcome} reason={reason} scored={symbols_scored} "
+            f"selected={candidates_selected} order_ready={candidates_order_ready} "
+            f"orders_submitted={orders_submitted} gate_summary={gate_summary}",
+            flush=True,
+        )
+
     def run_cycle(self, broker: Optional[Any] = None, user_mode: bool = False) -> int:
         """Execute one trading cycle and return the recommended next interval in seconds.
 
@@ -2036,6 +2151,14 @@ class TradingStrategy:
                         _core_result.entries_blocked,
                         _core_result.exits_taken,
                         _core_result.next_interval,
+                    )
+                    self._log_run_cycle_core_result(
+                        core_result=_core_result,
+                        broker=_broker,
+                        user_mode=bool(user_mode),
+                        symbols_requested=len(_symbols_to_scan),
+                        balance=_account_balance,
+                        open_positions_count=_open_positions_count,
                     )
                     print(
                         f"[NIJA-PRINT] RUN_CYCLE_PHASE3_COMPLETE | "

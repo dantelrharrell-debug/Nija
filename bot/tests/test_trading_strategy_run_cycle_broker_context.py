@@ -70,3 +70,35 @@ def test_run_cycle_without_broker_preserves_active_broker_selection():
 
     assert strategy.nija_core_loop.calls[0]["broker"] is broker
     assert strategy.nija_core_loop.calls[0]["user_mode"] is False
+
+
+def test_run_cycle_logs_zero_trade_diagnostic(caplog):
+    strategy = _strategy_for_run_cycle()
+    broker = DummyBroker()
+
+    strategy.nija_core_loop.run_scan_phase = lambda **kwargs: SimpleNamespace(
+        symbols_scored=4,
+        entries_taken=0,
+        entries_blocked=0,
+        exits_taken=0,
+        next_interval=11,
+        candidates_selected=0,
+        candidates_volume_blocked=3,
+        candidates_terminal_risk_blocked=1,
+        candidates_order_ready=0,
+        orders_submitted=0,
+        broker_acks=0,
+        fills=0,
+        execute_successes=0,
+        gate_rejections={"volume_gate_rejected": 3, "risk_gate_rejected": 1},
+        errors=[],
+    )
+
+    with caplog.at_level("CRITICAL", logger="nija.trading_strategy"):
+        next_interval = strategy.run_cycle(broker=broker)
+
+    assert next_interval == 11
+    assert "RUN_CYCLE_SCAN_DIAGNOSTIC" in caplog.text
+    assert "outcome=no_candidates_selected" in caplog.text
+    assert "reason=volume_gate_rejected" in caplog.text
+    assert "gate_summary=risk_gate_rejected:1,volume_gate_rejected:3" in caplog.text
