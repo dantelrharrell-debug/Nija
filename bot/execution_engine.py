@@ -849,6 +849,7 @@ class ExecutionEngine:
         account_type: Optional[str] = None,
         preferred_broker: Optional[str] = None,
         execution_route: Optional["ImmutableExecutionRoute"] = None,
+        decision_trace_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Canonical market-order submit through ExecutionPipeline/ECEL."""
         # Resolve account context for audit trail — fall back to user_id when
@@ -871,6 +872,7 @@ class ExecutionEngine:
             f"[NIJA-PRINT] _submit_market_order_via_pipeline CALLED | "
             f"account_id={_account_id} account_type={_account_type} "
             f"symbol={symbol} side={side} size_usd={float(size_usd or 0.0):.2f} "
+            f"trace_id={decision_trace_id or 'n/a'} "
             f"price_hint={float(price_hint_usd or 0.0):.6f} "
             f"current_exposure_usd={_exposure_usd:.2f} "
             f"available_balance_usd={float(_balance_snapshot or 0.0):.2f} "
@@ -881,7 +883,7 @@ class ExecutionEngine:
         logger.critical(
             "🔌 [BrokerAdapter] ORDER ATTEMPT | "
             "account_id=%s account_type=%s "
-            "symbol=%s side=%s size_usd=%.2f price_hint=%.6f strategy=%s "
+            "symbol=%s side=%s size_usd=%.2f trace_id=%s price_hint=%.6f strategy=%s "
             "current_exposure_usd=%.2f available_balance_usd=%.2f "
             "pipeline_available=%s force_trade=%s",
             _account_id,
@@ -889,6 +891,7 @@ class ExecutionEngine:
             symbol,
             side,
             float(size_usd or 0.0),
+            decision_trace_id or "n/a",
             float(price_hint_usd or 0.0),
             strategy_name,
             _exposure_usd,
@@ -975,6 +978,7 @@ class ExecutionEngine:
             f"[NIJA-PRINT] ORDER ACCEPTED ATTEMPT | "
             f"account_id={_account_id} account_type={_account_type} "
             f"symbol={symbol} side={side} size_usd={float(size_usd or 0.0):.2f} "
+            f"trace_id={decision_trace_id or 'n/a'} "
             f"broker={preferred_broker} price_hint={float(price_hint_usd or 0.0):.6f} "
             f"ack_timeout={os.getenv('NIJA_ACK_TIMEOUT_S', '30')}s",
             flush=True,
@@ -982,9 +986,9 @@ class ExecutionEngine:
         logger.critical(
             "🔌 [BrokerAdapter] ORDER ACCEPTED ATTEMPT | "
             "account_id=%s account_type=%s "
-            "symbol=%s side=%s size_usd=%.2f broker=%s price_hint=%.6f ack_timeout=%ss",
+            "symbol=%s side=%s size_usd=%.2f trace_id=%s broker=%s price_hint=%.6f ack_timeout=%ss",
             _account_id, _account_type,
-            symbol, side, float(size_usd or 0.0), preferred_broker,
+            symbol, side, float(size_usd or 0.0), decision_trace_id or "n/a", preferred_broker,
             float(price_hint_usd or 0.0), os.getenv("NIJA_ACK_TIMEOUT_S", "30"),
         )
         sys.stdout.flush()
@@ -1005,6 +1009,7 @@ class ExecutionEngine:
                 metadata={
                     "broker_client": broker_client,
                     "broker_name": preferred_broker,
+                    "decision_trace_id": decision_trace_id,
                     "price_hint_usd": price_hint_usd,
                     "account_id": _account_id,
                     "account_type": _account_type,
@@ -1023,6 +1028,7 @@ class ExecutionEngine:
         _ack_route_id = execution_route.route_id if execution_route is not None else "n/a"
         print(
             f"[NIJA-PRINT] BROKER_ORDER_ACK "
+            f"trace_id={decision_trace_id or 'n/a'} "
             f"accepted={res.success} "
             f"order_id={_ack_order_id!r} "
             f"broker={_ack_broker} "
@@ -1034,8 +1040,9 @@ class ExecutionEngine:
         )
         logger.critical(
             "🔌 [BrokerAdapter] BROKER_ORDER_ACK | "
-            "accepted=%s order_id=%s broker=%s route_id=%s "
+            "trace_id=%s accepted=%s order_id=%s broker=%s route_id=%s "
             "fill_price=%.6f filled_size_usd=%.2f latency_ms=%.0f",
+            decision_trace_id or "n/a",
             res.success,
             _ack_order_id,
             _ack_broker,
@@ -2362,6 +2369,7 @@ class ExecutionEngine:
             Position dictionary or None if failed
         """
         try:
+            _decision_trace_id = str((take_profit_levels or {}).get("decision_trace_id") or "")
             # ─── FIX 0: EARLY ZERO-SIZE GUARD ───────────────────────────────────────
             # Reject zero-dollar entries immediately before any gate processing.
             # A zero-size order can never satisfy any min-notional requirement and
@@ -2391,6 +2399,9 @@ class ExecutionEngine:
                 if not SIGNAL_FUNNEL_AVAILABLE or get_signal_funnel is None:
                     return
                 try:
+                    _extra = dict(extra or {})
+                    if _decision_trace_id and "trace_id" not in _extra:
+                        _extra["trace_id"] = _decision_trace_id
                     get_signal_funnel().record_execution_stage(
                         pair=symbol,
                         side=side,
@@ -2398,7 +2409,7 @@ class ExecutionEngine:
                         outcome=outcome,
                         reason=reason,
                         terminal=terminal,
-                        extra=extra or {},
+                        extra=_extra,
                     )
                 except Exception:
                     pass
@@ -3969,6 +3980,7 @@ class ExecutionEngine:
                                 account_type=_exec_account_type,
                                 preferred_broker=_selected_broker,
                                 execution_route=_exec_route,
+                                decision_trace_id=_decision_trace_id,
                             )
                         except Exception as _mk_exc:
                             _market_exc = _mk_exc

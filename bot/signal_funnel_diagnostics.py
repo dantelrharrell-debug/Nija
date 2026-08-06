@@ -198,6 +198,17 @@ class SignalFunnelDiagnostics:
         self._trace_gate_min_pass_probability: float = float(
             os.getenv("NIJA_EIL_TRACE_GATE_MIN_PASS_PROBABILITY", "0.35") or "0.35"
         )
+        self._entry_trace_enabled: bool = (
+            str(os.getenv("NIJA_ENTRY_EXECUTION_TRACE_ENABLED", "true")).lower() in ("1", "true", "yes")
+        )
+        self._entry_trace_verbose: bool = (
+            str(os.getenv("NIJA_ENTRY_EXECUTION_TRACE_VERBOSE", "true")).lower() in ("1", "true", "yes")
+        )
+        self._entry_trace_started: int = 0
+        self._entry_trace_terminal: int = 0
+        self._entry_trace_orphan_terminal: int = 0
+        self._entry_trace_duplicate_terminal: int = 0
+        self._entry_trace_terminal_ids: set[str] = set()
         try:
             from bot.trace_persistence import get_eil_trace_persistence_writer
             get_eil_trace_persistence_writer()
@@ -564,6 +575,7 @@ class SignalFunnelDiagnostics:
         with self._lock:
             self._trace_counter += 1
             trace_id = f"trace-{int(time.time() * 1000)}-{self._trace_counter}"
+            self._entry_trace_started += 1
             attempt = ExecutionTraceAttempt(
                 trace_id=trace_id,
                 pair=pair,
@@ -832,6 +844,25 @@ class SignalFunnelDiagnostics:
             shadow["avg_hyp_pnl_pct_executed"],
             shadow["avg_hyp_pnl_pct_shadow_only"],
         )
+        with self._lock:
+            _started = self._entry_trace_started
+            _terminal = self._entry_trace_terminal
+            _orphan = self._entry_trace_orphan_terminal
+            _duplicate = self._entry_trace_duplicate_terminal
+            _missing = max(0, _started - _terminal)
+            self._entry_trace_started = 0
+            self._entry_trace_terminal = 0
+            self._entry_trace_orphan_terminal = 0
+            self._entry_trace_duplicate_terminal = 0
+            self._entry_trace_terminal_ids.clear()
+        logger.info(
+            "ENTRY_EXECUTION_TRACE_SUMMARY started=%d terminal=%d missing=%d orphan_terminal=%d duplicate_terminal=%d",
+            _started,
+            _terminal,
+            _missing,
+            _orphan,
+            _duplicate,
+        )
 
     def get_pair_stats(self, pair: str) -> FunnelStats:
         """Return a copy of the current funnel stats for a pair (read-only snapshot)."""
@@ -975,12 +1006,15 @@ class SignalFunnelDiagnostics:
         adx = 0.0
         gate_score = 0.0
         ecel_decision = ""
+        broker = ""
         for event in attempt.events:
             extra = event.extra or {}
             regime = str(extra.get("regime") or extra.get("trend") or regime)
             confidence = confidence or self._safe_float(extra.get("confidence"), 0.0)
             adx = adx or self._safe_float(extra.get("adx"), 0.0)
             gate_score = gate_score or self._safe_float(extra.get("gate_score"), 0.0)
+            if not broker:
+                broker = str(extra.get("broker") or extra.get("selected_broker") or "")
             if event.stage == "ecel":
                 ecel_decision = event.reason or event.outcome
         return {
@@ -994,6 +1028,7 @@ class SignalFunnelDiagnostics:
             "adx": adx,
             "gate_score": gate_score,
             "ecel_decision": ecel_decision,
+            "broker": broker,
             "trace_path": trace_path,
             "created_at": attempt.created_at,
             "updated_at": attempt.updated_at,
@@ -1062,7 +1097,81 @@ class SignalFunnelDiagnostics:
             return
 
     @staticmethod
-    def _publish_terminal_trace(payload: Dict[str, Any]) -> None:
+    def _normalize_reason_code(reason: str) -> str:
+        text = str(reason or "").strip().lower()
+        if not text:
+            return "unknown"
+        for sep in ("\n", "(", ":", "|"):
+            if sep in text:
+                text = text.split(sep)[0]
+        chars: List[str] = []
+        last_sep = False
+        for ch in text:
+            if ch.isalnum():
+                chars.append(ch)
+                last_sep = False
+            elif not last_sep:
+                chars.append("_")
+                last_sep = True
+        return "".join(chars).strip("_") or "unknown"
+
+    @staticmethod
+    def _classify_terminal_outcome(status: str, reason: str) -> str:
+        _status = str(status or "").strip().lower()
+        _reason = str(reason or "").strip().lower()
+        if _status == "filled":
+            return "traded"
+        if any(token in _reason for token in ("no_entry", "no_signal", "no_candidate", "neutral")):
+            return "no_candidate"
+        if any(token in _reason for token in (
+            "drawdown", "risk", "cooldown", "capital", "min_notional", "min notional",
+            "position size = 0", "trade_eligibility", "trade_validation", "safe profit",
+        )):
+            return "blocked_by_risk_gate"
+        if any(token in _reason for token in ("route", "venue", "broker_not_registered", "execution_venue")):
+            return "blocked_by_broker_selection"
+        if any(token in _reason for token in ("order", "submit", "ecel", "rejected", "failed", "error")):
+            return "blocked_by_order_submit"
+        return "blocked_by_signal"
+
+    def _publish_terminal_trace(self, payload: Dict[str, Any]) -> None:
+        if self._entry_trace_enabled:
+            _trace_id = str(payload.get("trace_id") or "")
+            _terminal_reason = str(payload.get("terminal_reason") or "")
+            _status = str(payload.get("status") or "")
+            _outcome = self._classify_terminal_outcome(_status, _terminal_reason)
+            _reason_code = self._normalize_reason_code(_terminal_reason)
+            _path = payload.get("trace_path") or []
+            _has_signal_stage = any(str(s).startswith("signal:") for s in _path)
+            with self._lock:
+                if _trace_id in self._entry_trace_terminal_ids:
+                    self._entry_trace_duplicate_terminal += 1
+                else:
+                    self._entry_trace_terminal_ids.add(_trace_id)
+                    self._entry_trace_terminal += 1
+                if not _has_signal_stage:
+                    self._entry_trace_orphan_terminal += 1
+            logger.info(
+                "ENTRY_EXECUTION_TRACE trace_id=%s pair=%s side=%s outcome=%s reason_code=%s "
+                "terminal_reason=%r broker=%s confidence=%.3f adx=%.2f gate_score=%.2f path=%s",
+                _trace_id,
+                payload.get("pair"),
+                str(payload.get("side") or "").upper(),
+                _outcome,
+                _reason_code,
+                _terminal_reason,
+                payload.get("broker") or "",
+                float(payload.get("confidence") or 0.0),
+                float(payload.get("adx") or 0.0),
+                float(payload.get("gate_score") or 0.0),
+                " > ".join(str(p) for p in _path),
+            )
+            if self._entry_trace_verbose:
+                logger.info(
+                    "ENTRY_EXECUTION_TRACE_PAYLOAD trace_id=%s payload=%r",
+                    _trace_id,
+                    payload,
+                )
         try:
             from bot.trace_persistence import get_eil_trace_publisher
 

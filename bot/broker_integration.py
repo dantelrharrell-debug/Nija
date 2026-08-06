@@ -3328,8 +3328,16 @@ class OKXBrokerAdapter(BrokerInterface):
             return None
 
     def place_market_order(self, symbol: str, side: str, size: float,
-                          size_type: str = 'quote') -> Optional[Dict]:
+                          size_type: str = 'quote', decision_trace_id: Optional[str] = None) -> Optional[Dict]:
         """Place market order on OKX."""
+        logger.critical(
+            "OKX_PLACE_MARKET_ORDER_ENTER trace_id=%s symbol=%s side=%s size=%s size_type=%s",
+            decision_trace_id or "n/a",
+            symbol,
+            side,
+            size,
+            size_type,
+        )
         # Defense-in-depth guard: block live OKX orders until the adapter
         # dispatch path is repaired.
         _okx_exec_vars = (
@@ -3344,14 +3352,16 @@ class OKXBrokerAdapter(BrokerInterface):
         )
         if not _okx_live_enabled:
             logger.warning(
-                "OKX_ORDER_BLOCKED symbol=%s side=%s size=%s — OKX live execution "
+                "OKX_ORDER_BLOCKED trace_id=%s symbol=%s side=%s size=%s — OKX live execution "
                 "is disabled (set one of %s to enable)",
+                decision_trace_id or "n/a",
                 symbol, side, size, ", ".join(_okx_exec_vars),
             )
             return {
                 "status": "error",
                 "error": "OKX live execution is disabled — adapter dispatch path not yet repaired",
                 "blocked_by": "okx_live_execution_guard",
+                "decision_trace_id": decision_trace_id,
             }
         _auth_block = _reject_if_unauthorized_order_submit('okx', symbol, side, size)
         if _auth_block is not None:
@@ -3408,6 +3418,15 @@ class OKXBrokerAdapter(BrokerInterface):
             if okx_side == "buy":
                 order_payload["tgtCcy"] = "quote_ccy"
             result = okx_submit(**order_payload)
+            logger.critical(
+                "OKX_PLACE_MARKET_ORDER_RESPONSE trace_id=%s symbol=%s side=%s code=%r msg=%r payload=%r",
+                decision_trace_id or "n/a",
+                okx_symbol,
+                okx_side,
+                (result or {}).get("code") if isinstance(result, dict) else None,
+                (result or {}).get("msg") if isinstance(result, dict) else None,
+                result,
+            )
 
             if result and result.get('code') == '0':
                 data = result.get('data', [])
@@ -3422,7 +3441,8 @@ class OKXBrokerAdapter(BrokerInterface):
                         'size': sz_to_submit,
                         'filled_price': fill_price_hint or 0.0,
                         'status': 'filled',
-                        'timestamp': datetime.now()
+                        'timestamp': datetime.now(),
+                        'decision_trace_id': decision_trace_id,
                     }
 
             error_msg = result.get('msg', 'Unknown error') if result else 'No response'
