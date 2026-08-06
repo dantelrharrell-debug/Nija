@@ -61,9 +61,15 @@ def _is_three_venue_ready() -> bool:
         _truthy_env("NIJA_EXECUTION_ENABLED", True)
         or _truthy_env("EXECUTION_ENABLED", True)
     )
-    writer_ready = (
-        _truthy_env("NIJA_WRITER_READY", True)
-        or _truthy_env("WRITER_READY", True)
+    try:
+        from bot.writer_authority import WriterAuthority
+    except ImportError:
+        from writer_authority import WriterAuthority  # type: ignore[import]
+    writer_ready = bool(
+        WriterAuthority.get_status(
+            force_refresh=False,
+            enforce_active_invariant=True,
+        ).ready
     )
     return bool(ready and execution_enabled and writer_ready)
 

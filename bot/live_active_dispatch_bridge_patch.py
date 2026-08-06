@@ -106,6 +106,14 @@ def _local_entrypoint_writer_authority() -> dict[str, Any]:
 
 
 def _writer_authority_snapshot() -> dict[str, Any]:
+    try:
+        from bot.writer_authority import WriterAuthority
+    except ImportError:
+        from writer_authority import WriterAuthority  # type: ignore[import]
+    status = WriterAuthority.get_status(
+        force_refresh=False,
+        enforce_active_invariant=True,
+    )
     token = str(os.environ.get("NIJA_WRITER_FENCING_TOKEN", "")).strip()
     generation = str(os.environ.get("NIJA_WRITER_LEASE_GENERATION", "")).strip()
     lease_flag = _truthy("NIJA_WRITER_LEASE_ACQUIRED", False)
@@ -126,10 +134,15 @@ def _writer_authority_snapshot() -> dict[str, Any]:
         "local_authority_acquired": local["acquired"],
         "local_authority_lost": local["lost"],
         "local_instance_id": local["instance_id"],
+        "state": status.state,
+        "checks": status.checks,
+        "missing": list(status.missing),
+        "source": status.source,
+        "reason": status.reason,
         "ready": bool(
-            token
+            status.ready
+            and token
             and generation
-            and lease
             and local["observed"]
             and local["acquired"]
             and not local["lost"]

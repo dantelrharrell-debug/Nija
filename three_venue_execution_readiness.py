@@ -163,13 +163,15 @@ def _writer_core_loop_alive() -> bool:
 
 
 def writer_authority_snapshot(*, now: float | None = None) -> dict[str, Any]:
+    try:
+        from bot.writer_authority import WriterAuthority
+    except ImportError:
+        from writer_authority import WriterAuthority  # type: ignore[import]
+    status = WriterAuthority.get_status(
+        force_refresh=False,
+        enforce_active_invariant=False,
+    )
     current = time.time() if now is None else now
-    writer_state = str(os.getenv("NIJA_WRITER_STATE", "") or "").strip().upper()
-    state_allows_execution = writer_state in {"ACTIVE", "REFRESHING"}
-    lease_acquired = _truthy("NIJA_WRITER_LEASE_ACQUIRED")
-    fencing_token = bool(str(os.getenv("NIJA_WRITER_FENCING_TOKEN", "") or "").strip())
-    lease_effective = lease_acquired or (state_allows_execution and fencing_token)
-    heartbeat_active = _truthy("NIJA_WRITER_HEARTBEAT_ACTIVE")
     heartbeat_alive_ts = _float_env("NIJA_WRITER_HEARTBEAT_ALIVE_TS", 0.0)
     heartbeat_max_age_s = max(
         5.0,
@@ -178,23 +180,22 @@ def writer_authority_snapshot(*, now: float | None = None) -> dict[str, Any]:
     heartbeat_age_s = (
         max(0.0, current - heartbeat_alive_ts) if heartbeat_alive_ts > 0.0 else float("inf")
     )
-    heartbeat_healthy = (
-        heartbeat_active
-        and heartbeat_alive_ts > 0.0
-        and heartbeat_age_s <= heartbeat_max_age_s
-    )
+    writer_state = status.state
+    state_allows_execution = writer_state in {"ACTIVE", "REFRESHING"}
+    checks = status.checks
     core_loop_alive = _writer_core_loop_alive()
-    heartbeat_effective = heartbeat_healthy or writer_state == "REFRESHING"
-    ready = (
-        lease_effective
-        and fencing_token
-        and core_loop_alive
-        and state_allows_execution
-        and heartbeat_effective
+    heartbeat_active = bool(checks.get("heartbeat_active", _truthy("NIJA_WRITER_HEARTBEAT_ACTIVE")))
+    heartbeat_healthy = heartbeat_active and heartbeat_age_s <= heartbeat_max_age_s
+    lease_effective = bool(checks.get("lease_acquired", _truthy("NIJA_WRITER_LEASE_ACQUIRED")))
+    fencing_token = bool(
+        checks.get(
+            "fencing_token_active",
+            bool(str(os.getenv("NIJA_WRITER_FENCING_TOKEN", "") or "").strip()),
+        )
     )
     return {
         "lease_acquired": lease_effective,
-        "lease_acquired_raw": lease_acquired,
+        "lease_acquired_raw": _truthy("NIJA_WRITER_LEASE_ACQUIRED"),
         "fencing_token": fencing_token,
         "writer_state": writer_state or "UNKNOWN",
         "state_allows_execution": state_allows_execution,
@@ -203,9 +204,15 @@ def writer_authority_snapshot(*, now: float | None = None) -> dict[str, Any]:
         "heartbeat_age_s": heartbeat_age_s,
         "heartbeat_max_age_s": heartbeat_max_age_s,
         "heartbeat_healthy": heartbeat_healthy,
-        "heartbeat_effective": heartbeat_effective,
+        "heartbeat_effective": heartbeat_healthy or writer_state == "REFRESHING",
         "core_loop_alive": core_loop_alive,
-        "ready": ready,
+        "authority_verified": bool(checks.get("authority_verified", False)),
+        "redis_reachable": bool(checks.get("redis_reachable", False)),
+        "checks": checks,
+        "missing": list(status.missing),
+        "source": status.source,
+        "reason": status.reason,
+        "ready": bool(status.ready),
     }
 
 
@@ -566,6 +573,11 @@ def evaluate_venue(
 
 
 def evaluate_all() -> dict[str, Any]:
+    try:
+        from bot.writer_authority import WriterAuthority
+    except ImportError:
+        from writer_authority import WriterAuthority  # type: ignore[import]
+    WriterAuthority.get_status(force_refresh=False, enforce_active_invariant=True)
     broker_module, manager = _runtime()
     rows = [evaluate_venue(name, broker_module, manager) for name in VENUES]
     ready_venues = [row.venue for row in rows if row.ready]
