@@ -2,6 +2,7 @@ import threading
 import time
 import types
 import unittest
+import os
 from unittest.mock import patch
 
 from bot import capital_refresh_stall_guard_v35 as guard
@@ -24,6 +25,14 @@ class _Broker:
 
 
 class CapitalRefreshSharedDeadlineTests(unittest.TestCase):
+    def test_okx_timeout_override_can_be_longer(self):
+        with patch.dict(os.environ, {
+            "NIJA_CAPITAL_BROKER_FETCH_TIMEOUT_S": "8.0",
+            "NIJA_CAPITAL_OKX_FETCH_TIMEOUT_S": "10.0",
+        }, clear=False):
+            self.assertEqual(10.0, guard._broker_timeout_seconds("okx"))
+            self.assertEqual(8.0, guard._broker_timeout_seconds("coinbase"))
+
     def test_all_fetches_start_concurrently_with_independent_timeouts(self):
         """All venue fetches begin together; each gets its own independent deadline.
 

@@ -1,15 +1,11 @@
-"""Repair freshness only for confirmed current live-broker snapshots.
+"""Diagnostic telemetry for current-snapshot freshness signals.
 
-The coordinator historically derives a new snapshot's freshness from the prior
-authority snapshot age. This patch repairs that inherited stale flag when the
-current refresh uses live values or a cached value backed by a successful live
-observation inside the configured freshness TTL. Unknown or expired cached
-capital remains explicitly stale and cannot be promoted.
+This module no longer mutates ``CapitalSnapshot`` freshness fields.  CapitalAuthority
+is the only source of truth for accepted/stale/expired publication status.
 """
 from __future__ import annotations
 
 from datetime import datetime, timezone
-import functools
 import logging
 import os
 import sys
@@ -18,11 +14,10 @@ from typing import Any, Iterable
 
 logger = logging.getLogger("nija.current_capital_snapshot_freshness_repair")
 
-_MARKER = "20260802-current-capital-snapshot-freshness-v3"
+_MARKER = "20260806-current-capital-snapshot-freshness-diagnostic-v1"
 _TRUE = {"1", "true", "yes", "on", "enabled", "y"}
 _LOCK = threading.RLock()
 _INSTALLED = False
-_ORIGINAL_INIT = None
 
 
 def _truthy_env(name: str, default: str = "false") -> bool:
@@ -180,6 +175,10 @@ def _current_refresh_requires_stale() -> bool:
 
 
 def _should_repair(snapshot: Any) -> bool:
+    """Return a telemetry signal for legacy repair criteria.
+
+    This does not modify snapshot freshness.
+    """
     if _current_refresh_requires_stale():
         return False
     try:
@@ -202,83 +201,18 @@ def _should_repair(snapshot: Any) -> bool:
 
 
 def install_import_hook() -> bool:
-    global _INSTALLED, _ORIGINAL_INIT
+    global _INSTALLED
     with _LOCK:
         if _INSTALLED:
             return True
-
-        try:
-            try:
-                from bot import capital_flow_state_machine as cfsm
-            except ImportError:
-                import capital_flow_state_machine as cfsm  # type: ignore[import]
-
-            cls = getattr(cfsm, "CapitalSnapshot", None)
-            if cls is None:
-                return False
-            current_init = getattr(cls, "__init__", None)
-            if current_init is None:
-                return False
-            if bool(getattr(current_init, "_nija_current_snapshot_freshness_repair", False)):
-                _INSTALLED = True
-                return True
-
-            _ORIGINAL_INIT = current_init
-
-            @functools.wraps(current_init)
-            def _init_with_current_freshness(self: Any, *args: Any, **kwargs: Any) -> None:
-                current_init(self, *args, **kwargs)
-                fallback_status = _current_refresh_fallback_status(
-                    active_brokers=getattr(self, "active_brokers", None),
-                    eligible_brokers=getattr(self, "eligible_brokers", None),
-                )
-                if bool(
-                    fallback_status.get("used_fallback")
-                    and not fallback_status.get("all_recent")
-                ):
-                    object.__setattr__(self, "is_fresh", False)
-                    object.__setattr__(self, "is_stale", True)
-                    logger.warning(
-                        "CURRENT_CAPITAL_SNAPSHOT_CACHE_FALLBACK_STALE marker=%s "
-                        "real=%.2f broker_count=%s fallback_brokers=%s",
-                        _MARKER,
-                        float(getattr(self, "real_capital", 0.0) or 0.0),
-                        getattr(self, "broker_count", "unknown"),
-                        fallback_status.get("brokers", {}),
-                    )
-                    return
-                if not _should_repair(self):
-                    return
-                object.__setattr__(self, "is_fresh", True)
-                object.__setattr__(self, "is_stale", False)
-                object.__setattr__(self, "snapshot_age_s", 0.0)
-                logger.warning(
-                    "CURRENT_CAPITAL_SNAPSHOT_FRESHNESS_REPAIRED marker=%s "
-                    "real=%.2f broker_count=%s confidence=%s fallback_recent=%s",
-                    _MARKER,
-                    float(getattr(self, "real_capital", 0.0) or 0.0),
-                    getattr(self, "broker_count", "unknown"),
-                    getattr(getattr(self, "confidence", None), "band", "unknown"),
-                    bool(fallback_status.get("used_fallback")),
-                )
-
-            setattr(_init_with_current_freshness, "_nija_current_snapshot_freshness_repair", True)
-            cls.__init__ = _init_with_current_freshness
-            os.environ["NIJA_CURRENT_CAPITAL_SNAPSHOT_FRESHNESS_REPAIR"] = "1"
-            _INSTALLED = True
-            logger.warning(
-                "CURRENT_CAPITAL_SNAPSHOT_FRESHNESS_REPAIR_INSTALLED marker=%s",
-                _MARKER,
-            )
-            return True
-        except Exception as exc:
-            logger.warning(
-                "CURRENT_CAPITAL_SNAPSHOT_FRESHNESS_REPAIR_FAILED marker=%s err=%s",
-                _MARKER,
-                exc,
-                exc_info=True,
-            )
-            return False
+        _INSTALLED = True
+        os.environ["NIJA_CURRENT_CAPITAL_SNAPSHOT_FRESHNESS_REPAIR"] = "diagnostic_only"
+        os.environ["NIJA_CURRENT_CAPITAL_SNAPSHOT_FRESHNESS_REPAIR_DIAGNOSTIC"] = "1"
+        logger.warning(
+            "CURRENT_CAPITAL_SNAPSHOT_FRESHNESS_REPAIR_DIAGNOSTIC_ONLY marker=%s",
+            _MARKER,
+        )
+        return True
 
 
 def install() -> bool:
