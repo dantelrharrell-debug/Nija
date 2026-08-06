@@ -9,6 +9,11 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
+try:
+    from bot.heartbeat_state import get_heartbeat_state
+except ImportError:
+    from heartbeat_state import get_heartbeat_state  # type: ignore[import]
+
 logger = logging.getLogger("nija.writer_authority")
 _TRUTHY = {"1", "true", "yes", "on", "enabled", "y"}
 
@@ -41,6 +46,24 @@ def _fallback_status() -> WriterAuthorityStatus:
         source="env_fallback",
         reason=reason,
     )
+
+
+def _canonical_heartbeat_health(*, generation: str, max_age_s: float) -> tuple[bool, float]:
+    """Return canonical heartbeat health when the shared state matches generation."""
+    try:
+        expected_generation = int(str(generation or "").strip() or "0")
+    except (TypeError, ValueError):
+        expected_generation = 0
+    if expected_generation <= 0:
+        return False, float("inf")
+    try:
+        snapshot = get_heartbeat_state().snapshot()
+    except Exception:
+        return False, float("inf")
+    if snapshot.generation != expected_generation or snapshot.timestamp <= 0.0:
+        return False, float("inf")
+    age_s = max(0.0, time.time() - snapshot.timestamp)
+    return bool(snapshot.healthy and age_s <= max_age_s), age_s
 
 
 class WriterAuthority:
@@ -77,10 +100,17 @@ class WriterAuthority:
             )
         except (TypeError, ValueError):
             heartbeat_max_age_s = 90.0
+        canonical_heartbeat_healthy, canonical_heartbeat_age_s = _canonical_heartbeat_health(
+            generation=generation,
+            max_age_s=heartbeat_max_age_s,
+        )
         heartbeat_age_s = max(0.0, time.time() - heartbeat_alive_ts) if heartbeat_alive_ts > 0.0 else float("inf")
-        heartbeat_healthy = bool(
+        env_heartbeat_healthy = bool(
             heartbeat_active and heartbeat_alive_ts > 0.0 and heartbeat_age_s <= heartbeat_max_age_s
         )
+        heartbeat_healthy = canonical_heartbeat_healthy or env_heartbeat_healthy
+        if canonical_heartbeat_healthy:
+            heartbeat_age_s = canonical_heartbeat_age_s
         heartbeat_effective = bool(heartbeat_healthy or writer_state == "REFRESHING")
         core_thread_alive = _env_truthy("NIJA_CORE_THREAD_ALIVE")
         local_authority_observed = False

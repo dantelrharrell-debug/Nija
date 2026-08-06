@@ -1097,6 +1097,10 @@ class EntrypointWriterAuthority:
                 first_failure_at = 0.0
                 self._set_writer_state(WriterState.ACTIVE, reason="heartbeat_ok")
             else:
+                try:
+                    _get_heartbeat_state().record_heartbeat_failure()
+                except Exception:
+                    pass
                 failures += 1
                 now = time.time()
                 if first_failure_at <= 0.0:
@@ -1409,6 +1413,10 @@ class EntrypointWriterAuthority:
     def _mark_lost(self, reason: str) -> None:
         self._set_writer_state(WriterState.LOST, reason=reason)
         self._lost.set()
+        try:
+            _get_heartbeat_state().reset()
+        except Exception:
+            pass
         os.environ["NIJA_WRITER_LEASE_ACQUIRED"] = "0"
         os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"] = "0"
         # Pop rather than set-to-0: once the lease is lost,
@@ -1507,6 +1515,10 @@ class EntrypointWriterAuthority:
                     )
 
             self._heartbeat_thread = None
+            try:
+                _get_heartbeat_state().reset()
+            except Exception:
+                pass
             os.environ["NIJA_WRITER_LEASE_ACQUIRED"] = "0"
             os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"] = "0"
             os.environ["NIJA_WRITER_HEARTBEAT_ALIVE_TS"] = "0"

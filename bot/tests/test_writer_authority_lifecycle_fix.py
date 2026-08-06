@@ -594,6 +594,55 @@ class LeaseLifecycleTests(unittest.TestCase):
             ok, reason = rt._heartbeat_tick()
         self.assertFalse(ok)
 
+    def test_mark_lost_resets_heartbeat_state(self) -> None:
+        client = MagicMock()
+        client.eval.return_value = [10, "10:owner", 60000, 2]
+        client.set.return_value = True
+        rt = EntrypointWriterAuthority()
+        with (
+            patch("bot.entrypoint_writer_authority._connect_redis", return_value=(client, "rediss://x", "")),
+            patch("bot.entrypoint_writer_authority._instance_identity", side_effect=self._identity),
+            patch.object(rt, "_start_heartbeat"),
+        ):
+            rt.acquire_once()
+
+        snap_before = get_heartbeat_state().snapshot()
+        self.assertTrue(snap_before.healthy)
+
+        with patch.dict(
+            sys.modules,
+            {"bot.single_execution_authority_kernel": types.SimpleNamespace(get_seak=lambda: MagicMock())},
+        ):
+            rt._mark_lost("unit_test")
+
+        snap_after = get_heartbeat_state().snapshot()
+        self.assertFalse(snap_after.healthy)
+        self.assertEqual(snap_after.timestamp, 0.0)
+        self.assertEqual(snap_after.phase, WriterLifecyclePhase.BOOT)
+
+    def test_release_resets_heartbeat_state(self) -> None:
+        client = MagicMock()
+        client.eval.return_value = [10, "10:owner", 60000, 2]
+        client.set.return_value = True
+        rt = EntrypointWriterAuthority()
+        with (
+            patch("bot.entrypoint_writer_authority._connect_redis", return_value=(client, "rediss://x", "")),
+            patch("bot.entrypoint_writer_authority._instance_identity", side_effect=self._identity),
+            patch.object(rt, "_start_heartbeat"),
+        ):
+            rt.acquire_once()
+
+        snap_before = get_heartbeat_state().snapshot()
+        self.assertTrue(snap_before.healthy)
+        client.eval.return_value = 1
+
+        rt.release()
+
+        snap_after = get_heartbeat_state().snapshot()
+        self.assertFalse(snap_after.healthy)
+        self.assertEqual(snap_after.timestamp, 0.0)
+        self.assertEqual(snap_after.phase, WriterLifecyclePhase.BOOT)
+
     def test_lease_refresh_after_expiry_updates_heartbeat_state(self) -> None:
         client = MagicMock()
         client.eval.return_value = [10, "10:owner", 60000, 3]
