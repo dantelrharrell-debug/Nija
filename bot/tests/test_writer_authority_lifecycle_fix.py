@@ -609,7 +609,10 @@ class LeaseLifecycleTests(unittest.TestCase):
         snap_before = get_heartbeat_state().snapshot()
         self.assertTrue(snap_before.healthy)
 
-        with self._mock_seak():
+        with patch.dict(
+            sys.modules,
+            {"bot.single_execution_authority_kernel": types.SimpleNamespace(get_seak=lambda: MagicMock())},
+        ):
             rt._mark_lost("unit_test")
 
         snap_after = get_heartbeat_state().snapshot()
