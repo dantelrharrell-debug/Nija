@@ -456,7 +456,16 @@ def _patch_capital_authority_class(cls) -> bool:
         try:
             real_capital = float(getattr(snapshot, "real_capital", 0.0) or 0.0)
             broker_count = int(getattr(snapshot, "broker_count", 0) or 0)
-            is_stale = bool(getattr(snapshot, "is_stale", True))
+            status = None
+            if hasattr(self, "get_snapshot_publication_status"):
+                status = self.get_snapshot_publication_status()
+            is_stale = bool(getattr(status, "stale", True)) if status is not None else True
+            status_accepted = (
+                bool(getattr(status, "accepted", False))
+                if status is not None
+                else False
+            )
+            status_reason = str(getattr(status, "reason", "unknown")) if status is not None else "unknown"
             valid_broker_count = 0
             for value in (getattr(snapshot, "broker_balances", {}) or {}).values():
                 try:
@@ -473,15 +482,18 @@ def _patch_capital_authority_class(cls) -> bool:
             )
             latch = bool(getattr(self, "first_snap_accepted", False))
             logger.info(
-                "FIRST_SNAPSHOT_GATE_LATCH accepted_by_publish=%s accepted_conditions=%s "
-                "accepted_latched=%s capital=$%.2f broker_count=%d valid_brokers=%d stale=%s",
+                "FIRST_SNAPSHOT_GATE_LATCH accepted_by_publish=%s ca_status_accepted=%s "
+                "accepted_conditions=%s accepted_latched=%s capital=$%.2f "
+                "broker_count=%d valid_brokers=%d stale=%s reason=%s",
                 accepted_by_publish,
+                status_accepted,
                 conditions_met,
                 latch,
                 real_capital,
                 broker_count,
                 valid_broker_count,
                 is_stale,
+                status_reason,
             )
         except Exception as exc:
             logger.debug("FIRST_SNAPSHOT_GATE_LATCH log failed: %s", exc)
@@ -507,14 +519,26 @@ def _patch_capital_csm_class(cls) -> bool:
             real_capital = float(getattr(snapshot, "real_capital", 0.0) or 0.0)
             broker_count = int(getattr(snapshot, "broker_count", 0) or 0)
             is_stale = bool(getattr(snapshot, "is_stale", True))
+            ca_status = None
+            try:
+                from bot.capital_authority import get_capital_authority as _get_ca
+            except ImportError:
+                from capital_authority import get_capital_authority as _get_ca  # type: ignore[import]
+            ca = _get_ca()
+            if hasattr(ca, "get_snapshot_publication_status"):
+                ca_status = ca.get_snapshot_publication_status()
+                is_stale = bool(getattr(ca_status, "stale", is_stale))
+            ca_reason = str(getattr(ca_status, "reason", "unknown")) if ca_status is not None else "unknown"
             latch = bool(getattr(self, "first_snap_accepted", False))
             logger.info(
-                "FIRST_SNAPSHOT_GATE_CSM_LATCH accepted_latched=%s state=%s capital=$%.2f broker_count=%d stale=%s",
+                "FIRST_SNAPSHOT_GATE_CSM_LATCH accepted_latched=%s state=%s capital=$%.2f "
+                "broker_count=%d stale=%s reason=%s",
                 latch,
                 getattr(state, "value", state),
                 real_capital,
                 broker_count,
                 is_stale,
+                ca_reason,
             )
         except Exception as exc:
             logger.debug("FIRST_SNAPSHOT_GATE_CSM_LATCH log failed: %s", exc)

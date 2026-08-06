@@ -71,7 +71,7 @@ import queue
 import sys
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional
@@ -870,7 +870,21 @@ class CapitalRuntimeStateMachine:
             return self.state
 
         # ── RUN_READY → stale check ───────────────────────────────────────────
-        if current == CapitalRuntimeState.RUN_READY and snapshot.is_stale:
+        snapshot_stale = bool(getattr(snapshot, "is_stale", False))
+        try:
+            from bot.capital_authority import get_capital_authority as _get_ca
+        except ImportError:
+            try:
+                from capital_authority import get_capital_authority as _get_ca  # type: ignore[import]
+            except ImportError:
+                _get_ca = None  # type: ignore[assignment]
+        if _get_ca is not None:
+            try:
+                _status = _get_ca().get_snapshot_publication_status()
+                snapshot_stale = bool(getattr(_status, "stale", snapshot_stale))
+            except Exception:
+                pass
+        if current == CapitalRuntimeState.RUN_READY and snapshot_stale:
             self.transition(CapitalRuntimeState.RUN_STALE, "snapshot_stale")
             if bus:
                 bus.emit(CapitalEvent(
@@ -1117,7 +1131,6 @@ class CapitalRefreshCoordinator:
         raw_balances: Dict[str, float] = {}   # broker_id → fetched scalar
         balance_fetched_successfully = False
         kraken_present = False
-        kraken_balance_fetched_successfully = False
         kraken_fetch_ts: Optional[float] = None
         kraken_response_age_s: float = FRESHNESS_TTL_S   # default = maximally stale
         assets_priced_success_pct: float = 1.0
@@ -1166,8 +1179,6 @@ class CapitalRefreshCoordinator:
                 raw = broker.get_account_balance()
                 if raw is not None:
                     balance_fetched_successfully = True
-                    if is_kraken:
-                        kraken_balance_fetched_successfully = True
                 if is_kraken and hasattr(broker, "get_balance_fetch_timestamp"):
                     # Use the broker's own timestamp for accuracy (it may have
                     # served a TTL-cached result rather than hitting the API).
@@ -1328,29 +1339,6 @@ class CapitalRefreshCoordinator:
             api_error_count=api_error_count,
         )
 
-        # Freshness belongs to the snapshot built by this refresh, not to the
-        # previously published authority snapshot. Preserve fail-closed behavior
-        # for an expired/unknown timeout fallback and for a configured Kraken
-        # venue whose current balance observation was not successful.
-        fallback_requires_stale = _current_refresh_requires_stale()
-        current_fetch_fresh = bool(
-            balance_fetched_successfully
-            and (
-                not kraken_present
-                or (
-                    kraken_balance_fetched_successfully
-                    and kraken_response_age_s < FRESHNESS_TTL_S
-                )
-            )
-        )
-        is_fresh = (
-            len(new_balances) >= broker_threshold
-            and current_fetch_fresh
-            and not fallback_requires_stale
-            and real > 0.0
-        )
-        current_snapshot_age_s = 0.0 if is_fresh else prior_age_s
-
         snapshot = CapitalSnapshot(
             real_capital=real,
             usable_capital=usable,
@@ -1361,13 +1349,13 @@ class CapitalRefreshCoordinator:
             broker_count=len(new_balances),
             expected_brokers=expected,
             computed_at=now,
-            snapshot_age_s=current_snapshot_age_s,
+            snapshot_age_s=prior_age_s,
             kraken_response_age_s=kraken_response_age_s,
             assets_priced_success_pct=float(assets_priced_success_pct),
             api_error_count=int(api_error_count),
             confidence=confidence,
-            is_fresh=is_fresh,
-            is_stale=not is_fresh,
+            is_fresh=True,
+            is_stale=False,
         )
 
         _log_snapshot_trace_throttled(
@@ -1398,6 +1386,23 @@ class CapitalRefreshCoordinator:
                 snapshot=snapshot,
             ))
             return None
+
+        _publication = None
+        if hasattr(authority, "get_snapshot_publication_status"):
+            try:
+                _publication = authority.get_snapshot_publication_status()
+            except Exception:
+                _publication = None
+        if _publication is not None:
+            authoritative_stale = bool(getattr(_publication, "stale", False))
+            snapshot = replace(
+                snapshot,
+                is_fresh=not authoritative_stale,
+                is_stale=authoritative_stale,
+            )
+            if authoritative_stale:
+                self._bus.request_refresh("stale_snapshot_post_publish")
+                return None
 
         self._bus.emit(CapitalEvent(
             event_type=CapitalEventType.SNAPSHOT_PUBLISHED,
