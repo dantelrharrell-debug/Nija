@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import sys
+import types
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -74,6 +76,27 @@ class EntrypointWriterHeartbeatTests(unittest.TestCase):
         self.runtime._client.set.assert_not_called()
         self.assertEqual(os.environ.get("NIJA_WRITER_FENCING_TOKEN"), self.runtime._token)
         self.assertEqual(os.environ["NIJA_WRITER_STATE"], "ACTIVE")
+
+    def test_heartbeat_reconciles_only_after_writer_state_becomes_active(self):
+        self.runtime._core_thread = MagicMock()
+        self.runtime._core_thread.is_alive.return_value = True
+        self.runtime._client.eval.return_value = 1
+        self.runtime._set_writer_state(WriterState.ACTIVE, reason="test_setup")
+        calls = []
+        readiness = types.ModuleType("three_venue_execution_readiness")
+        readiness.reconcile_execution_readiness = lambda **kwargs: calls.append(
+            (kwargs, os.environ.get("NIJA_WRITER_STATE"))
+        )
+
+        with patch.dict(sys.modules, {"three_venue_execution_readiness": readiness}):
+            ok, reason = self.runtime._heartbeat_tick()
+
+        self.assertTrue(ok)
+        self.assertEqual(reason, "")
+        self.assertEqual(
+            calls,
+            [({"trigger": "heartbeat_renewed", "force": True}, "ACTIVE")],
+        )
 
     def test_brief_redis_interruption_keeps_execution_enabled(self):
         self.runtime._set_writer_state(WriterState.ACTIVE, reason="test_setup")
