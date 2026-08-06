@@ -2306,6 +2306,33 @@ class NIJAApexStrategyV71:
         except Exception:
             pass
 
+    def _emit_terminal_execution_trace(
+        self,
+        symbol: str,
+        side: str,
+        outcome: str,
+        reason: str,
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Emit canonical terminal execution trace for one symbol decision path."""
+        if not SIGNAL_FUNNEL_AVAILABLE or get_signal_funnel is None:
+            return
+        try:
+            payload = dict(extra or {})
+            payload.setdefault("broker", self._get_broker_name())
+            payload.setdefault("outcome", outcome)
+            get_signal_funnel().record_execution_stage(
+                pair=symbol,
+                side=side,
+                stage="terminal",
+                outcome=outcome,
+                reason=reason,
+                terminal=True,
+                extra=payload,
+            )
+        except Exception:
+            pass
+
     @staticmethod
     def _resolve_broker_min_notional_usd(broker_name: str) -> float:
         broker_key = str(broker_name or "").strip().lower()
@@ -3235,6 +3262,13 @@ class NIJAApexStrategyV71:
                             reason=_risk_result.reason,
                         )
                         self._record_rejection("drawdown_risk", _risk_result.reason[:80])
+                        self._emit_terminal_execution_trace(
+                            symbol=symbol,
+                            side="unknown",
+                            outcome="blocked_by_risk_gate",
+                            reason=_risk_result.reason,
+                            extra={"gate": "drawdown_risk"},
+                        )
                         return {'action': 'hold', 'reason': _risk_result.reason}
                 except Exception as _drc_check_err:
                     logger.debug("DrawdownRiskController check error: %s", _drc_check_err)
@@ -3257,11 +3291,17 @@ class NIJAApexStrategyV71:
                             "   ⏳ %s: Cooldown active (%.0fs remaining, window=%ds)",
                             symbol, _cooldown_s - _elapsed, _cooldown_s,
                         )
+                        _cooldown_reason = f"Re-entry cooldown: {_cooldown_s - _elapsed:.0f}s remaining"
+                        self._emit_terminal_execution_trace(
+                            symbol=symbol,
+                            side="unknown",
+                            outcome="blocked_by_risk_gate",
+                            reason=_cooldown_reason,
+                            extra={"gate": "cooldown", "cooldown_seconds": float(_cooldown_s)},
+                        )
                         return {
                             'action': 'hold',
-                            'reason': (
-                                f"Re-entry cooldown: {_cooldown_s - _elapsed:.0f}s remaining"
-                            ),
+                            'reason': _cooldown_reason,
                         }
 
             # Check if we have an existing position
@@ -3384,6 +3424,13 @@ class NIJAApexStrategyV71:
                 self.safe_profit_mode.record_blocked_attempt()
                 block_reason = self.safe_profit_mode.get_block_reason()
                 logger.info(f"   🔒 {symbol}: {block_reason}")
+                self._emit_terminal_execution_trace(
+                    symbol=symbol,
+                    side="unknown",
+                    outcome="blocked_by_risk_gate",
+                    reason=block_reason,
+                    extra={"gate": "safe_profit_mode"},
+                )
                 return {
                     'action': 'hold',
                     'reason': block_reason,
@@ -3423,6 +3470,18 @@ class NIJAApexStrategyV71:
                     reason=block_reason,
                 )
                 self._record_rejection("min_notional", "insufficient_capital")
+                self._emit_terminal_execution_trace(
+                    symbol=symbol,
+                    side="unknown",
+                    outcome="blocked_by_risk_gate",
+                    reason=block_reason,
+                    extra={
+                        "gate": "min_notional",
+                        "broker": broker_name,
+                        "min_notional": float(min_required_balance),
+                        "computed_min_size": float(min_position_size),
+                    },
+                )
                 if min_position_pct > 0:
                     min_balance_needed = min_required_balance / min_position_pct
                     logger.info(
@@ -3487,14 +3546,15 @@ class NIJAApexStrategyV71:
                     reason = f"{reason} | {anchor_reason}"
                     logger.info("   ✅ %s: %s", symbol, anchor_reason)
 
+                _decision_trace_id_l = ""
                 if long_signal:
                     if SIGNAL_FUNNEL_AVAILABLE and get_signal_funnel is not None:
                         try:
-                            get_signal_funnel().start_execution_trace(
+                            _decision_trace_id_l = get_signal_funnel().start_execution_trace(
                                 pair=symbol,
                                 side='long',
                                 reason=reason,
-                                extra={"trend": trend},
+                                extra={"trend": trend, "broker": broker_name, "signal_score": float(score)},
                             )
                         except Exception:
                             pass
@@ -3593,9 +3653,9 @@ class NIJAApexStrategyV71:
                                     pair=symbol,
                                     side='long',
                                     stage='ai_gate',
-                                    outcome='rejected',
+                                    outcome='advisory_rejected_proceeding',
                                     reason=reject_reason,
-                                    terminal=True,
+                                    terminal=False,
                                     extra={"gate_score": _gate_score, "gate_min": _min_gate_score_l},
                                 )
                             except Exception:
@@ -4237,12 +4297,26 @@ class NIJAApexStrategyV71:
                         ask_price=ask_price,
                     )
                     if not validation['valid']:
+                        self._emit_terminal_execution_trace(
+                            symbol=symbol,
+                            side='long',
+                            outcome='blocked_by_risk_gate',
+                            reason=validation['reason'],
+                            extra={"gate": "trade_validation", "broker": broker_name},
+                        )
                         return {
                             'action': 'hold',
                             'reason': validation['reason'],
                             'filter_stage': 'trade_validation',
                         }
                     if not eligibility['eligible']:
+                        self._emit_terminal_execution_trace(
+                            symbol=symbol,
+                            side='long',
+                            outcome='blocked_by_risk_gate',
+                            reason=eligibility['reason'],
+                            extra={"gate": "trade_eligibility", "broker": broker_name},
+                        )
                         return {
                             'action': 'hold',
                             'reason': eligibility['reason'],
@@ -4434,6 +4508,7 @@ class NIJAApexStrategyV71:
                     result = {
                         'action': 'enter_long',
                         'reason': reason,
+                        'decision_trace_id': _decision_trace_id_l,
                         'entry_price': current_price,
                         'position_size': position_size,
                         'order_notional': position_size,
@@ -4453,6 +4528,9 @@ class NIJAApexStrategyV71:
                     # Add metadata if available
                     if metadata:
                         result['metadata'] = metadata
+                    if _decision_trace_id_l:
+                        result.setdefault('metadata', {})
+                        result['metadata']['decision_trace_id'] = _decision_trace_id_l
 
                     # Record trade for frequency controller (drought safeguard)
                     if self._freq_ctrl is not None:
@@ -4489,7 +4567,11 @@ class NIJAApexStrategyV71:
                                 stage='position_sizing',
                                 outcome='pass',
                                 reason='position_size_approved',
-                                extra={"position_size": float(position_size)},
+                                extra={
+                                    "position_size": float(position_size),
+                                    "broker": broker_name,
+                                    "trace_id": _decision_trace_id_l,
+                                },
                             )
                             _funnel_exec_l.record_execution_pass(symbol)
                             _funnel_exec_l.mark_shadow_executed(symbol)
@@ -4506,6 +4588,13 @@ class NIJAApexStrategyV71:
                     if not can_short(broker_name, symbol):
                         logger.debug(f"   {symbol}: Skipping SHORT analysis - {broker_name} does not support shorting for {symbol}")
                         logger.debug(f"      Market mode: SPOT (long-only) | For shorting use FUTURES/PERPS")
+                        self._emit_terminal_execution_trace(
+                            symbol=symbol,
+                            side='short',
+                            outcome='blocked_by_signal',
+                            reason=f'{broker_name} does not support shorting for {symbol} (SPOT market - long-only)',
+                            extra={"gate": "broker_capability", "broker": broker_name},
+                        )
                         return {
                             'action': 'hold',
                             'reason': f'{broker_name} does not support shorting for {symbol} (SPOT market - long-only)'
@@ -4562,14 +4651,15 @@ class NIJAApexStrategyV71:
                     reason = f"{reason} | {anchor_reason}"
                     logger.info("   ✅ %s: %s", symbol, anchor_reason)
 
+                _decision_trace_id_s = ""
                 if short_signal:
                     if SIGNAL_FUNNEL_AVAILABLE and get_signal_funnel is not None:
                         try:
-                            get_signal_funnel().start_execution_trace(
+                            _decision_trace_id_s = get_signal_funnel().start_execution_trace(
                                 pair=symbol,
                                 side='short',
                                 reason=reason,
-                                extra={"trend": trend},
+                                extra={"trend": trend, "broker": broker_name, "signal_score": float(score)},
                             )
                         except Exception:
                             pass
@@ -4664,9 +4754,9 @@ class NIJAApexStrategyV71:
                                     pair=symbol,
                                     side='short',
                                     stage='ai_gate',
-                                    outcome='rejected',
+                                    outcome='advisory_rejected_proceeding',
                                     reason=reject_reason,
-                                    terminal=True,
+                                    terminal=False,
                                     extra={"gate_score": _gate_score, "gate_min": _min_gate_score_s},
                                 )
                             except Exception:
@@ -5310,6 +5400,13 @@ class NIJAApexStrategyV71:
                         ask_price=ask_price,
                     )
                     if not eligibility['eligible']:
+                        self._emit_terminal_execution_trace(
+                            symbol=symbol,
+                            side='short',
+                            outcome='blocked_by_risk_gate',
+                            reason=eligibility['reason'],
+                            extra={"gate": "trade_eligibility", "broker": broker_name},
+                        )
                         return {
                             'action': 'hold',
                             'reason': eligibility['reason'],
@@ -5496,6 +5593,7 @@ class NIJAApexStrategyV71:
                     result = {
                         'action': 'enter_short',
                         'reason': reason,
+                        'decision_trace_id': _decision_trace_id_s,
                         'entry_price': current_price,
                         'position_size': position_size,
                         'order_notional': position_size,
@@ -5515,6 +5613,9 @@ class NIJAApexStrategyV71:
                     # Add metadata if available
                     if metadata:
                         result['metadata'] = metadata
+                    if _decision_trace_id_s:
+                        result.setdefault('metadata', {})
+                        result['metadata']['decision_trace_id'] = _decision_trace_id_s
 
                     # Record trade for frequency controller (drought safeguard)
                     if self._freq_ctrl is not None:
@@ -5551,7 +5652,11 @@ class NIJAApexStrategyV71:
                                 stage='position_sizing',
                                 outcome='pass',
                                 reason='position_size_approved',
-                                extra={"position_size": float(position_size)},
+                                extra={
+                                    "position_size": float(position_size),
+                                    "broker": broker_name,
+                                    "trace_id": _decision_trace_id_s,
+                                },
                             )
                             _funnel_exec_s.record_execution_pass(symbol)
                             _funnel_exec_s.mark_shadow_executed(symbol)
@@ -5569,6 +5674,13 @@ class NIJAApexStrategyV71:
                 decision='SKIP',
                 reason=no_entry_reason,
             )
+            self._emit_terminal_execution_trace(
+                symbol=symbol,
+                side="unknown",
+                outcome="no_candidate",
+                reason=no_entry_reason,
+                extra={"gate": "no_entry"},
+            )
             return {
                 'action': 'hold',
                 'reason': no_entry_reason,
@@ -5577,6 +5689,13 @@ class NIJAApexStrategyV71:
 
         except Exception as e:
             logger.error(f"Analysis error: {e}")
+            self._emit_terminal_execution_trace(
+                symbol=symbol if 'symbol' in locals() else "unknown",
+                side="unknown",
+                outcome="blocked_by_signal",
+                reason=f"analysis_error:{e}",
+                extra={"gate": "analysis_exception"},
+            )
             return {
                 'action': 'hold',
                 'reason': f'Error: {str(e)}'
@@ -5749,6 +5868,7 @@ class NIJAApexStrategyV71:
                     'fees_pct', 'spread_pct', 'market_regime',
                     'adx', 'confidence', 'volume_quality',
                     'actual_volume_ratio', 'required_volume_ratio', 'slippage_pct',
+                    'decision_trace_id',
                 ):
                     if key in action_data and action_data[key] is not None:
                         levels.setdefault(key, action_data[key])
@@ -5764,6 +5884,9 @@ class NIJAApexStrategyV71:
                 return levels
 
             if action == 'enter_long':
+                _meta = action_data.get("metadata") if isinstance(action_data.get("metadata"), dict) else {}
+                _trace_id = str(action_data.get("decision_trace_id") or _meta.get("decision_trace_id") or "")
+                _broker_for_trace = self._get_broker_name() if hasattr(self, "_get_broker_name") else "unknown"
                 logger.critical(
                     "📤 [execute_action] Calling execute_entry | symbol=%s side=long "
                     "position_size=$%.2f entry_price=%.6f",
@@ -5786,6 +5909,13 @@ class NIJAApexStrategyV71:
                 )
                 if position:
                     logger.info(f"Long entry executed: {symbol} @ {action_data['entry_price']:.2f}")
+                    self._emit_terminal_execution_trace(
+                        symbol=symbol,
+                        side="long",
+                        outcome="traded",
+                        reason="order_filled",
+                        extra={"broker": _broker_for_trace, "trace_id": _trace_id},
+                    )
                     # Register with profit harvest layer so ratchet-tier tracking begins
                     if self.profit_harvest_layer is not None:
                         try:
@@ -5819,12 +5949,21 @@ class NIJAApexStrategyV71:
                         f"execute_entry=None",
                         flush=True,
                     )
+                    self._emit_terminal_execution_trace(
+                        symbol=symbol,
+                        side="long",
+                        outcome="blocked_by_order_submit",
+                        reason="execute_entry_returned_none",
+                        extra={"broker": _broker_for_trace, "trace_id": _trace_id},
+                    )
                     return False
 
             elif action == 'enter_short':
                 # EXCHANGE CAPABILITY CHECK: Verify broker supports shorting for this symbol
                 # This prevents SHORT entries on exchanges that don't support them (e.g., Kraken spot)
                 broker_name = self._get_broker_name()
+                _meta = action_data.get("metadata") if isinstance(action_data.get("metadata"), dict) else {}
+                _trace_id = str(action_data.get("decision_trace_id") or _meta.get("decision_trace_id") or "")
 
                 # Check if this broker/symbol combination supports shorting
                 if EXCHANGE_CAPABILITIES_AVAILABLE:
@@ -5841,6 +5980,13 @@ class NIJAApexStrategyV71:
                             f"price={float(action_data.get('entry_price', 0.0) or 0.0):.6f} "
                             f"size=${float(action_data.get('position_size', 0.0) or 0.0):.2f}",
                             flush=True,
+                        )
+                        self._emit_terminal_execution_trace(
+                            symbol=symbol,
+                            side="short",
+                            outcome="blocked_by_signal",
+                            reason="broker_does_not_support_shorting",
+                            extra={"broker": broker_name, "trace_id": _trace_id},
                         )
                         return False
                 else:
@@ -5869,6 +6015,13 @@ class NIJAApexStrategyV71:
                 )
                 if position:
                     logger.info(f"✅ Short entry executed: {symbol} @ {action_data['entry_price']:.2f} (broker: {broker_name})")
+                    self._emit_terminal_execution_trace(
+                        symbol=symbol,
+                        side="short",
+                        outcome="traded",
+                        reason="order_filled",
+                        extra={"broker": broker_name, "trace_id": _trace_id},
+                    )
                     # Register with profit harvest layer so ratchet-tier tracking begins
                     if self.profit_harvest_layer is not None:
                         try:
@@ -5902,6 +6055,13 @@ class NIJAApexStrategyV71:
                         f"sl={float(action_data.get('stop_loss', 0.0) or 0.0):.6f} "
                         f"execute_entry=None",
                         flush=True,
+                    )
+                    self._emit_terminal_execution_trace(
+                        symbol=symbol,
+                        side="short",
+                        outcome="blocked_by_order_submit",
+                        reason="execute_entry_returned_none",
+                        extra={"broker": broker_name, "trace_id": _trace_id},
                     )
                     return False
 

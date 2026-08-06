@@ -60,6 +60,7 @@ import re
 import sys
 import threading
 import time
+import inspect
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -514,14 +515,21 @@ class MultiBrokerExecutionRouter:
         Returns a :class:`RouteResult` describing success or failure.
         """
         t0 = time.monotonic()
+        _meta = dict(getattr(request, "metadata", {}) or {})
+        _decision_trace_id = str(
+            _meta.get("decision_trace_id")
+            or _meta.get("trace_id")
+            or ""
+        )
+        self._pending_decision_trace_id = _decision_trace_id
 
         # 1. Determine asset class
         ac = _asset_class_for_request(request)
 
         logger.info(
-            "Routing %s %s %s (size=%.2f, asset_class=%s)",
+            "Routing %s %s %s (size=%.2f, asset_class=%s, trace_id=%s)",
             request.side.upper(), request.symbol, request.strategy,
-            request.size_usd, ac.value,
+            request.size_usd, ac.value, _decision_trace_id or "n/a",
         )
 
         # Coinbase Capital Markets and Kraken Securities are separate from the
@@ -533,9 +541,10 @@ class MultiBrokerExecutionRouter:
             surface, error = surface_error
             elapsed_ms = (time.monotonic() - t0) * 1000
             logger.error(
-                "BROKER_ASSET_CLASS_API_UNAVAILABLE | broker=%s symbol=%s error=%s",
+                "BROKER_ASSET_CLASS_API_UNAVAILABLE | broker=%s symbol=%s trace_id=%s error=%s",
                 surface,
                 request.symbol,
+                _decision_trace_id or "n/a",
                 error,
             )
             return self._make_result(
@@ -598,8 +607,9 @@ class MultiBrokerExecutionRouter:
                     f"rebuild order for {_norm_selected} venue"
                 )
                 logger.error(
-                    "🚫 BROKER_ROUTE_ENFORCEMENT_BLOCKED | "
+                    "🚫 BROKER_ROUTE_ENFORCEMENT_BLOCKED | trace_id=%s "
                     "preferred=%s selected=%s symbol=%s side=%s size=$%.2f",
+                    _decision_trace_id or "n/a",
                     _norm_preferred,
                     _norm_selected,
                     request.symbol,
@@ -887,6 +897,7 @@ class MultiBrokerExecutionRouter:
                 "asset_class": asset_class.value,
                 "side": request.side,
                 "size_usd": float(request.size_usd or 0.0),
+                "decision_trace_id": getattr(self, "_pending_decision_trace_id", ""),
                 "selected_broker": profile.name,
                 "reason": "direct_broker_client",
                 "preferred_broker": request.preferred_broker,
@@ -897,8 +908,9 @@ class MultiBrokerExecutionRouter:
                 }],
             }
         logger.info(
-            "🎯 ROUTING DECISION → %s | reason=direct_broker_client | symbol=%s side=%s size=$%.2f",
+            "🎯 ROUTING DECISION → %s | trace_id=%s | reason=direct_broker_client | symbol=%s side=%s size=$%.2f",
             profile.name,
+            getattr(self, "_pending_decision_trace_id", "") or "n/a",
             request.symbol,
             request.side,
             float(request.size_usd or 0.0),
@@ -1113,15 +1125,17 @@ class MultiBrokerExecutionRouter:
         for profile in candidates:
             score = self._score_broker_candidate(profile, asset_class, side, size_usd)
             logger.info(
-                "🎯 ROUTING CANDIDATE → %s | USD=$%.2f | eligible=%s | capital=%.2f | "
-                "latency=%.2f | fee=%.2f | health=%.2f | reason=%s",
+                "🎯 ROUTING CANDIDATE → %s | trace_id=%s | USD=$%.2f | eligible=%s | capital=%.2f | "
+                "latency=%.2f | fee=%.2f | health=%.2f | total=%.2f | reason=%s",
                 profile.name,
+                getattr(self, "_pending_decision_trace_id", "") or "n/a",
                 score.usd_balance,
                 score.eligible,
                 score.capital_score,
                 score.latency_score,
                 score.fee_score,
                 score.health_score,
+                score.total_score,
                 score.reason,
             )
             ranked.append((profile, score))
@@ -1189,6 +1203,7 @@ class MultiBrokerExecutionRouter:
                     "asset_class": asset_class.value,
                     "side": side,
                     "size_usd": float(size_usd or 0.0),
+                    "decision_trace_id": getattr(self, "_pending_decision_trace_id", ""),
                     "selected_broker": None,
                     "reason": "NO_EXECUTION_VENUE_AVAILABLE",
                     "preferred_broker": preferred,
@@ -1212,15 +1227,17 @@ class MultiBrokerExecutionRouter:
                             "asset_class": asset_class.value,
                             "side": side,
                             "size_usd": float(size_usd or 0.0),
+                            "decision_trace_id": getattr(self, "_pending_decision_trace_id", ""),
                             "selected_broker": profile.name,
                             "reason": "preferred",
                             "preferred_broker": preferred,
                             "candidates": candidate_snapshot,
                         }
                     logger.info(
-                        "🎯 ROUTING DECISION → %s | USD=$%.2f | eligible=%s | reason=preferred | "
+                        "🎯 ROUTING DECISION → %s | trace_id=%s | USD=$%.2f | eligible=%s | reason=preferred | "
                         "capital=%.2f | latency=%.2f | fee=%.2f | health=%.2f",
                         profile.name,
+                        getattr(self, "_pending_decision_trace_id", "") or "n/a",
                         score.usd_balance,
                         score.eligible,
                         score.capital_score,
@@ -1249,15 +1266,17 @@ class MultiBrokerExecutionRouter:
                 "asset_class": asset_class.value,
                 "side": side,
                 "size_usd": float(size_usd or 0.0),
+                "decision_trace_id": getattr(self, "_pending_decision_trace_id", ""),
                 "selected_broker": selected_profile.name,
                 "reason": "highest_score",
                 "preferred_broker": preferred,
                 "candidates": candidate_snapshot,
             }
         logger.info(
-            "🎯 ROUTING DECISION → %s | USD=$%.2f | eligible=%s | capital=%.2f | "
+            "🎯 ROUTING DECISION → %s | trace_id=%s | USD=$%.2f | eligible=%s | capital=%.2f | "
             "latency=%.2f | fee=%.2f | health=%.2f | total=%.2f",
             selected_profile.name,
+            getattr(self, "_pending_decision_trace_id", "") or "n/a",
             selected_score.usd_balance,
             selected_score.eligible,
             selected_score.capital_score,
@@ -1437,10 +1456,32 @@ class MultiBrokerExecutionRouter:
             raise RuntimeError(f"Broker {broker!r} has no market-order submit method")
 
         try:
-            result = submit(symbol, side, float(size_usd), size_type="quote")
+            _trace_id = str(metadata.get("decision_trace_id") or metadata.get("trace_id") or "")
+            _broker_label = str(
+                getattr(getattr(broker, "broker_type", None), "value", None)
+                or getattr(broker, "NAME", None)
+                or type(broker).__name__
+            ).lower()
+            logger.critical(
+                "BROKER_SUBMIT_ATTEMPT trace_id=%s broker=%s symbol=%s side=%s size_usd=%.2f submit=place_market_order",
+                _trace_id or "n/a",
+                _broker_label,
+                symbol,
+                side,
+                float(size_usd or 0.0),
+            )
+            submit_kwargs = {"size_type": "quote"}
+            if _trace_id:
+                try:
+                    _sig = inspect.signature(submit)
+                    if "decision_trace_id" in _sig.parameters:
+                        submit_kwargs["decision_trace_id"] = _trace_id
+                except (TypeError, ValueError):
+                    pass
+            result = submit(symbol, side, float(size_usd), **submit_kwargs)
         except TypeError:
             try:
-                result = submit(symbol=symbol, side=side, quantity=float(size_usd), size_type="quote")
+                result = submit(symbol=symbol, side=side, quantity=float(size_usd), **submit_kwargs)
             except TypeError:
                 result = submit(symbol, side, float(size_usd))
 
@@ -1461,6 +1502,16 @@ class MultiBrokerExecutionRouter:
             "unfilled",
         }:
             raise RuntimeError(str(result.get("error") or result.get("message") or status))
+        logger.critical(
+            "BROKER_SUBMIT_RESPONSE trace_id=%s broker=%s symbol=%s side=%s status=%s order_id=%r payload=%r",
+            _trace_id or "n/a",
+            _broker_label,
+            symbol,
+            side,
+            status or "unknown",
+            result.get("order_id") or result.get("id") or result.get("exchange_order_id"),
+            result,
+        )
 
         fill_price = float(
             result.get("filled_price")
