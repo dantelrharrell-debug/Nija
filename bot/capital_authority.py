@@ -2428,7 +2428,17 @@ class CapitalAuthority:
     def get_snapshot_publication_status(self) -> SnapshotPublicationStatus:
         """Return authoritative status for the most recently published snapshot."""
         with self._lock:
-            return self._last_snapshot_publication
+            return getattr(
+                self,
+                "_last_snapshot_publication",
+                SnapshotPublicationStatus(
+                    accepted=False,
+                    stale=True,
+                    reason="unavailable",
+                    timestamp=None,
+                    expiry=None,
+                ),
+            )
 
     # ------------------------------------------------------------------
     # Diagnostics
@@ -2438,6 +2448,17 @@ class CapitalAuthority:
         """Return a plain-dict snapshot suitable for dashboards and logging."""
         with self._lock:
             real = sum(self._broker_balances.values())
+            publication = getattr(
+                self,
+                "_last_snapshot_publication",
+                SnapshotPublicationStatus(
+                    accepted=False,
+                    stale=True,
+                    reason="unavailable",
+                    timestamp=None,
+                    expiry=None,
+                ),
+            )
             age = (
                 (datetime.now(timezone.utc) - self.last_updated).total_seconds()
                 if self.last_updated is not None
@@ -2478,17 +2499,17 @@ class CapitalAuthority:
                 # of inferring the economic condition from individual fields
                 "capital_lifecycle_state": lifecycle.value,
                 "snapshot_publication": {
-                    "accepted": self._last_snapshot_publication.accepted,
-                    "stale": self._last_snapshot_publication.stale,
-                    "reason": self._last_snapshot_publication.reason,
+                    "accepted": publication.accepted,
+                    "stale": publication.stale,
+                    "reason": publication.reason,
                     "timestamp": (
-                        self._last_snapshot_publication.timestamp.isoformat()
-                        if self._last_snapshot_publication.timestamp is not None
+                        publication.timestamp.isoformat()
+                        if publication.timestamp is not None
                         else None
                     ),
                     "expiry": (
-                        self._last_snapshot_publication.expiry.isoformat()
-                        if self._last_snapshot_publication.expiry is not None
+                        publication.expiry.isoformat()
+                        if publication.expiry is not None
                         else None
                     ),
                 },
