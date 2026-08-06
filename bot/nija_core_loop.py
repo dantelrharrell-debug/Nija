@@ -7766,6 +7766,18 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
 
                     if _seq_skip:
                         clear_runtime_correlation()
+                        # Even when cycle 1 is skipped (independent trader active),
+                        # we must still retire the startup-scan watchdog deadline so
+                        # SCAN_STARTED_DEADLINE_EXCEEDED does not fire indefinitely.
+                        if not _startup_scan_complete_recorded and cycle == 1:
+                            _startup_scan_complete_recorded = True
+                            try:
+                                from bot.entrypoint_writer_authority import (
+                                    get_entrypoint_writer_authority,
+                                )
+                                get_entrypoint_writer_authority().record_scan_complete()
+                            except Exception:
+                                pass
                     else:
                         # Fix 6: Hard stall watchdog around run_cycle()
                         # Fire RUN_CYCLE_STALLED if run_cycle() does not return (or does
