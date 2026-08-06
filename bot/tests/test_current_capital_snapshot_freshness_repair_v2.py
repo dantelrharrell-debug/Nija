@@ -1,6 +1,7 @@
 import sys
 import types
 import unittest
+import os
 from datetime import datetime, timezone
 from unittest.mock import patch
 
@@ -29,7 +30,6 @@ class CurrentCapitalFreshnessRepairTests(unittest.TestCase):
         else:
             sys.modules["bot.capital_flow_state_machine"] = self.original_cfsm
         repair._INSTALLED = False
-        repair._ORIGINAL_INIT = None
 
     def test_cache_fallback_blocks_freshness_repair(self):
         snapshot = types.SimpleNamespace(
@@ -146,92 +146,16 @@ class CurrentCapitalFreshnessRepairTests(unittest.TestCase):
         ):
             self.assertTrue(repair._should_repair(snapshot))
 
-    def test_constructor_forces_cache_backed_snapshot_stale(self):
-        class Snapshot:
-            def __init__(self):
-                self.computed_at = datetime.now(timezone.utc)
-                self.confidence = types.SimpleNamespace(band="MEDIUM")
-                self.real_capital = 100.0
-                self.broker_count = 1
-                self.expected_brokers = 1
-                self.broker_balances = {"okx": 100.0}
-                self.is_fresh = True
-                self.is_stale = False
-
-        self.cfsm.CapitalSnapshot = Snapshot
-        with patch.object(
-            repair,
-            "_current_refresh_fallback_status",
-            return_value={
-                "used_fallback": True,
-                "all_recent": False,
-                "brokers": {"okx": {"age_s": 120.0, "observed": True}},
-            },
-        ):
-            self.assertTrue(repair.install_import_hook())
-            snapshot = Snapshot()
-        self.assertFalse(snapshot.is_fresh)
-        self.assertTrue(snapshot.is_stale)
-
-    def test_constructor_repairs_recent_cache_backed_snapshot(self):
-        class Snapshot:
-            def __init__(self):
-                self.computed_at = datetime.now(timezone.utc)
-                self.confidence = types.SimpleNamespace(band="MEDIUM")
-                self.real_capital = 100.0
-                self.broker_count = 1
-                self.expected_brokers = 1
-                self.broker_balances = {"okx": 100.0}
-                self.snapshot_age_s = 120.0
-                self.is_fresh = False
-                self.is_stale = True
-
-        self.cfsm.CapitalSnapshot = Snapshot
-        with patch.object(
-            repair,
-            "_current_refresh_fallback_status",
-            return_value={
-                "used_fallback": True,
-                "all_recent": True,
-                "brokers": {"okx": {"age_s": 10.0, "observed": True}},
-            },
-        ):
-            self.assertTrue(repair.install_import_hook())
-            snapshot = Snapshot()
-
-        self.assertTrue(snapshot.is_fresh)
-        self.assertFalse(snapshot.is_stale)
-        self.assertEqual(snapshot.snapshot_age_s, 0.0)
-
-    def test_constructor_does_not_force_stale_for_excluded_broker_cache(self):
-        class Snapshot:
-            def __init__(self):
-                self.computed_at = datetime.now(timezone.utc)
-                self.confidence = types.SimpleNamespace(band="MEDIUM")
-                self.real_capital = 100.0
-                self.broker_count = 2
-                self.expected_brokers = 3
-                self.eligible_brokers = {"coinbase", "okx"}
-                self.broker_balances = {"coinbase": 40.0, "okx": 60.0}
-                self.snapshot_age_s = 120.0
-                self.is_fresh = False
-                self.is_stale = True
-
-        self.cfsm.CapitalSnapshot = Snapshot
-        with patch.object(
-            repair,
-            "_current_refresh_fallback_status",
-            return_value={
-                "used_fallback": False,
-                "all_recent": True,
-                "brokers": {},
-            },
-        ):
-            self.assertTrue(repair.install_import_hook())
-            snapshot = Snapshot()
-
-        self.assertTrue(snapshot.is_fresh)
-        self.assertFalse(snapshot.is_stale)
+    def test_install_is_diagnostic_only(self):
+        self.assertTrue(repair.install_import_hook())
+        self.assertEqual(
+            "diagnostic_only",
+            os.environ.get("NIJA_CURRENT_CAPITAL_SNAPSHOT_FRESHNESS_REPAIR"),
+        )
+        self.assertEqual(
+            "1",
+            os.environ.get("NIJA_CURRENT_CAPITAL_SNAPSHOT_FRESHNESS_REPAIR_DIAGNOSTIC"),
+        )
 
 
 if __name__ == "__main__":

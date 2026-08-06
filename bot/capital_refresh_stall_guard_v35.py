@@ -74,6 +74,19 @@ def _timeout_seconds() -> float:
         return 8.0
 
 
+def _broker_timeout_seconds(broker_id: str) -> float:
+    """Return broker-specific timeout with optional OKX override."""
+    base_timeout = _timeout_seconds()
+    broker_key = str(broker_id).strip().lower()
+    if broker_key != "okx":
+        return base_timeout
+    try:
+        okx_timeout = float(os.getenv("NIJA_CAPITAL_OKX_FETCH_TIMEOUT_S", str(base_timeout)) or base_timeout)
+    except (TypeError, ValueError):
+        return base_timeout
+    return max(base_timeout, okx_timeout)
+
+
 def _cycle_deadline_seconds() -> float:
     """Overall cycle wall-clock budget.  Must be > per-broker timeout."""
     try:
@@ -119,15 +132,17 @@ class _BalanceFetchBatch:
 
     def __init__(self, broker_map: Dict[str, Any]) -> None:
         self._started_at = time.monotonic()
-        self._per_broker_timeout = _timeout_seconds()
+        self._base_timeout = _timeout_seconds()
         self._cycle_deadline = self._started_at + _cycle_deadline_seconds()
         self._results: Dict[str, queue.Queue] = {}
         self._broker_seq: Dict[str, int] = {}
+        self._broker_timeout: Dict[str, float] = {}
 
         for broker_id, broker in broker_map.items():
             bid = str(broker_id)
             result_queue: queue.Queue = queue.Queue(maxsize=1)
             self._results[bid] = result_queue
+            self._broker_timeout[bid] = _broker_timeout_seconds(bid)
 
             with _IN_FLIGHT_LOCK:
                 # Only one in-flight request per broker.
@@ -196,7 +211,8 @@ class _BalanceFetchBatch:
         expected_seq = self._broker_seq.get(bid, 0)
 
         # Each broker gets its full individual budget, bounded by overall cycle deadline.
-        broker_deadline = self._started_at + self._per_broker_timeout
+        per_broker_timeout = self._broker_timeout.get(bid, self._base_timeout)
+        broker_deadline = self._started_at + per_broker_timeout
         remaining = max(0.0, min(broker_deadline, self._cycle_deadline) - time.monotonic())
         now = time.monotonic()
 
