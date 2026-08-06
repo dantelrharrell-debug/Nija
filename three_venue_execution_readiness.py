@@ -164,8 +164,11 @@ def _writer_core_loop_alive() -> bool:
 
 def writer_authority_snapshot(*, now: float | None = None) -> dict[str, Any]:
     current = time.time() if now is None else now
+    writer_state = str(os.getenv("NIJA_WRITER_STATE", "") or "").strip().upper()
+    state_allows_execution = writer_state in {"ACTIVE", "REFRESHING"}
     lease_acquired = _truthy("NIJA_WRITER_LEASE_ACQUIRED")
     fencing_token = bool(str(os.getenv("NIJA_WRITER_FENCING_TOKEN", "") or "").strip())
+    lease_effective = lease_acquired or (state_allows_execution and fencing_token)
     heartbeat_active = _truthy("NIJA_WRITER_HEARTBEAT_ACTIVE")
     heartbeat_alive_ts = _float_env("NIJA_WRITER_HEARTBEAT_ALIVE_TS", 0.0)
     heartbeat_max_age_s = max(
@@ -181,15 +184,26 @@ def writer_authority_snapshot(*, now: float | None = None) -> dict[str, Any]:
         and heartbeat_age_s <= heartbeat_max_age_s
     )
     core_loop_alive = _writer_core_loop_alive()
-    ready = lease_acquired and fencing_token and heartbeat_healthy and core_loop_alive
+    heartbeat_effective = heartbeat_healthy or writer_state == "REFRESHING"
+    ready = (
+        lease_effective
+        and fencing_token
+        and core_loop_alive
+        and state_allows_execution
+        and heartbeat_effective
+    )
     return {
-        "lease_acquired": lease_acquired,
+        "lease_acquired": lease_effective,
+        "lease_acquired_raw": lease_acquired,
         "fencing_token": fencing_token,
+        "writer_state": writer_state or "UNKNOWN",
+        "state_allows_execution": state_allows_execution,
         "heartbeat_active": heartbeat_active,
         "heartbeat_alive_ts": heartbeat_alive_ts,
         "heartbeat_age_s": heartbeat_age_s,
         "heartbeat_max_age_s": heartbeat_max_age_s,
         "heartbeat_healthy": heartbeat_healthy,
+        "heartbeat_effective": heartbeat_effective,
         "core_loop_alive": core_loop_alive,
         "ready": ready,
     }

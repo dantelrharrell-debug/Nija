@@ -49,6 +49,7 @@ def _set_credentials(monkeypatch) -> None:
 def _set_writer_ready_env(monkeypatch) -> None:
     monkeypatch.setenv("NIJA_WRITER_LEASE_ACQUIRED", "1")
     monkeypatch.setenv("NIJA_WRITER_FENCING_TOKEN", "token")
+    monkeypatch.setenv("NIJA_WRITER_STATE", "ACTIVE")
     monkeypatch.setenv("NIJA_WRITER_HEARTBEAT_ACTIVE", "1")
     monkeypatch.setenv("NIJA_WRITER_HEARTBEAT_ALIVE_TS", "9999999999")
     monkeypatch.setenv("NIJA_CORE_THREAD_ALIVE", "1")
@@ -215,6 +216,15 @@ def test_writer_authority_ready_requires_heartbeat_and_core_loop(monkeypatch) ->
     monkeypatch.setenv("NIJA_CORE_THREAD_ALIVE", "1")
     monkeypatch.setenv("NIJA_WRITER_HEARTBEAT_ACTIVE", "0")
     assert module.writer_authority_ready() is False
+
+
+def test_writer_authority_refreshing_state_keeps_ready(monkeypatch) -> None:
+    module = _module()
+    _set_writer_ready_env(monkeypatch)
+    monkeypatch.setenv("NIJA_WRITER_STATE", "REFRESHING")
+    monkeypatch.setenv("NIJA_WRITER_HEARTBEAT_ACTIVE", "0")
+
+    assert module.writer_authority_ready() is True
 
 
 def test_reconcile_requests_runtime_repair_when_writer_and_venue_are_ready(monkeypatch) -> None:

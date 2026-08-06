@@ -594,7 +594,7 @@ class LeaseLifecycleTests(unittest.TestCase):
             ok, reason = rt._heartbeat_tick()
         self.assertFalse(ok)
 
-    def test_lease_reacquisition_after_expiry_updates_heartbeat_state(self) -> None:
+    def test_lease_refresh_after_expiry_updates_heartbeat_state(self) -> None:
         client = MagicMock()
         client.eval.return_value = [10, "10:owner", 60000, 3]
         client.set.return_value = True
@@ -609,16 +609,15 @@ class LeaseLifecycleTests(unittest.TestCase):
         snap_before = get_heartbeat_state().snapshot()
         time.sleep(0.02)
 
-        # Simulate: lock expired (code == -1), reacquire succeeds
-        client.eval.return_value = -1
-        client.set.return_value = True  # NX set succeeds
+        # Simulate: lock key was absent but fencing ownership still matched.
+        client.eval.return_value = 2
         with (
             patch.object(rt, "_validate_core_thread_liveness", return_value=(True, "")),
             patch.object(rt, "_write_metadata"),
         ):
             ok, reason = rt._heartbeat_tick()
 
-        self.assertTrue(ok, f"Reacquisition should succeed, got: {reason}")
+        self.assertTrue(ok, f"Refresh should succeed, got: {reason}")
         snap_after = get_heartbeat_state().snapshot()
         self.assertTrue(snap_after.healthy)
         self.assertGreater(snap_after.timestamp, snap_before.timestamp)
