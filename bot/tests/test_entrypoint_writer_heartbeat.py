@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import os
 import unittest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
-from bot.entrypoint_writer_authority import EntrypointWriterAuthority
+from bot.entrypoint_writer_authority import EntrypointWriterAuthority, WriterState
 
 
 class EntrypointWriterHeartbeatTests(unittest.TestCase):
@@ -14,6 +14,7 @@ class EntrypointWriterHeartbeatTests(unittest.TestCase):
         self.runtime._client = MagicMock()
         self.runtime._lock_key = "nija:writer_lock:test"
         self.runtime._meta_key = "nija:writer_lock_meta:test"
+        self.runtime._fencing_key = "nija:writer_fence:test"
         self.runtime._lock_value = "11:instance=test"
         self.runtime._token = "11"
         self.runtime._generation = 7
@@ -34,36 +35,99 @@ class EntrypointWriterHeartbeatTests(unittest.TestCase):
             "NIJA_EXECUTION_ACTIVE",
             "NIJA_CORE_THREAD_ALIVE",
             "NIJA_WRITER_RELEASE_IN_PROGRESS",
+            "NIJA_WRITER_STATE",
+            "NIJA_WRITER_STATE_SINCE_TS",
+            "NIJA_WRITER_LOSS_GRACE_S",
         ):
             os.environ.pop(key, None)
 
-    def test_heartbeat_renews_only_exact_owned_value(self):
+    def test_ttl_refresh_never_disables_execution(self):
         self.runtime._core_thread = MagicMock()
         self.runtime._core_thread.is_alive.return_value = True
         self.runtime._client.eval.return_value = 1
+        self.runtime._set_writer_state(WriterState.ACTIVE, reason="test_setup")
+        os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "1"
+        os.environ["NIJA_EXECUTION_ACTIVE"] = "true"
 
         ok, reason = self.runtime._heartbeat_tick()
 
         self.assertTrue(ok)
         self.assertEqual(reason, "")
         call = self.runtime._client.eval.call_args
-        self.assertEqual(call.args[4], self.runtime._lock_value)
+        self.assertEqual(call.args[5], self.runtime._lock_value)
         self.assertEqual(os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"], "1")
+        self.assertEqual(os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"], "1")
+        self.assertEqual(os.environ["NIJA_EXECUTION_ACTIVE"], "true")
+        self.assertEqual(os.environ["NIJA_WRITER_STATE"], "ACTIVE")
 
-    def test_missing_lock_reacquires_atomically_with_nx(self):
+    def test_lock_refresh_preserves_fencing_token(self):
         self.runtime._core_thread = MagicMock()
         self.runtime._core_thread.is_alive.return_value = True
-        self.runtime._client.eval.return_value = -1
-        self.runtime._client.set.return_value = True
+        self.runtime._client.eval.return_value = 2
+        self.runtime._set_writer_state(WriterState.ACTIVE, reason="test_setup")
+        os.environ["NIJA_WRITER_FENCING_TOKEN"] = self.runtime._token
 
         ok, reason = self.runtime._heartbeat_tick()
 
         self.assertTrue(ok)
         self.assertEqual(reason, "")
-        reacquire = self.runtime._client.set.call_args_list[0]
-        self.assertEqual(reacquire.args[0], self.runtime._lock_key)
-        self.assertEqual(reacquire.args[1], self.runtime._lock_value)
-        self.assertTrue(reacquire.kwargs["nx"])
+        self.runtime._client.set.assert_not_called()
+        self.assertEqual(os.environ.get("NIJA_WRITER_FENCING_TOKEN"), self.runtime._token)
+        self.assertEqual(os.environ["NIJA_WRITER_STATE"], "ACTIVE")
+
+    def test_brief_redis_interruption_keeps_execution_enabled(self):
+        self.runtime._set_writer_state(WriterState.ACTIVE, reason="test_setup")
+        os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "1"
+        os.environ["NIJA_EXECUTION_ACTIVE"] = "true"
+        os.environ["NIJA_WRITER_LOSS_GRACE_S"] = "15"
+
+        sequence = iter(
+            [
+                (False, "redis_heartbeat_error:TimeoutError:test"),
+                (False, "redis_heartbeat_error:TimeoutError:test"),
+                (True, ""),
+            ]
+        )
+
+        def _next_tick():
+            result = next(sequence)
+            if result[0]:
+                self.runtime._stop.set()
+            return result
+
+        with (
+            patch.object(self.runtime, "_heartbeat_tick", side_effect=_next_tick),
+            patch.object(self.runtime._stop, "wait", return_value=False),
+            patch.object(self.runtime, "_mark_lost") as mark_lost,
+        ):
+            self.runtime._heartbeat_loop()
+
+        mark_lost.assert_not_called()
+        self.assertEqual(os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"], "1")
+        self.assertEqual(os.environ["NIJA_EXECUTION_ACTIVE"], "true")
+        self.assertEqual(os.environ["NIJA_WRITER_STATE"], "ACTIVE")
+
+    def test_genuine_ownership_loss_demotes_and_disables_execution(self):
+        self.runtime._set_writer_state(WriterState.ACTIVE, reason="test_setup")
+        os.environ["NIJA_WRITER_LEASE_ACQUIRED"] = "1"
+        os.environ["NIJA_WRITER_FENCING_TOKEN"] = self.runtime._token
+        os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "1"
+        os.environ["NIJA_EXECUTION_ACTIVE"] = "true"
+
+        with (
+            patch.object(
+                self.runtime,
+                "_heartbeat_tick",
+                return_value=(False, "lock_owned_by_different_writer"),
+            ),
+            patch.object(self.runtime._stop, "wait", return_value=False),
+        ):
+            self.runtime._heartbeat_loop()
+
+        self.assertTrue(self.runtime.lost)
+        self.assertEqual(os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"], "0")
+        self.assertEqual(os.environ["NIJA_EXECUTION_ACTIVE"], "false")
+        self.assertEqual(os.environ["NIJA_WRITER_STATE"], "LOST")
 
     def test_different_owner_is_rejected_fail_closed(self):
         self.runtime._core_thread = MagicMock()

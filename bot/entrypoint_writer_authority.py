@@ -45,6 +45,7 @@ import os
 import threading
 import time
 from dataclasses import dataclass
+from enum import Enum
 from typing import Any, Optional
 
 logger = logging.getLogger("nija.entrypoint_writer_authority")
@@ -166,6 +167,14 @@ class EntrypointWriterAuthorityResult:
     local_fallback: bool = False
 
 
+class WriterState(str, Enum):
+    ACQUIRING = "ACQUIRING"
+    VERIFYING = "VERIFYING"
+    ACTIVE = "ACTIVE"
+    REFRESHING = "REFRESHING"
+    LOST = "LOST"
+
+
 class EntrypointWriterAuthority:
     """Own and maintain the Redis writer lease for ``bot_main``."""
 
@@ -178,6 +187,7 @@ class EntrypointWriterAuthority:
         self._result: Optional[EntrypointWriterAuthorityResult] = None
         self._lock_key = ""
         self._meta_key = ""
+        self._fencing_key = ""
         self._lock_value = ""
         self._token = ""
         self._generation = 0
@@ -200,6 +210,10 @@ class EntrypointWriterAuthority:
         # Optional callback invoked by _mark_lost() so callers (e.g. bot_main)
         # can react immediately to lease loss without polling runtime.lost.
         self._on_lost_callback: Optional[Any] = None
+        self._writer_state: WriterState = WriterState.ACQUIRING
+        self._writer_state_since: float = time.time()
+        os.environ["NIJA_WRITER_STATE"] = self._writer_state.value
+        os.environ["NIJA_WRITER_STATE_SINCE_TS"] = str(self._writer_state_since)
 
     @property
     def acquired(self) -> bool:
@@ -212,6 +226,32 @@ class EntrypointWriterAuthority:
     @property
     def result(self) -> Optional[EntrypointWriterAuthorityResult]:
         return self._result
+
+    @property
+    def writer_state(self) -> WriterState:
+        return self._writer_state
+
+    def _set_writer_state(self, state: WriterState, *, reason: str = "") -> None:
+        with self._state_lock:
+            if self._writer_state == state:
+                os.environ["NIJA_WRITER_STATE"] = state.value
+                os.environ.setdefault(
+                    "NIJA_WRITER_STATE_SINCE_TS", str(self._writer_state_since)
+                )
+                return
+            self._writer_state = state
+            self._writer_state_since = time.time()
+            os.environ["NIJA_WRITER_STATE"] = state.value
+            os.environ["NIJA_WRITER_STATE_SINCE_TS"] = str(self._writer_state_since)
+        logger.info(
+            "WRITER_STATE_TRANSITION marker=%s state=%s reason=%s",
+            _MARKER,
+            state.value,
+            reason or "unspecified",
+        )
+
+    def _resolve_loss_grace_s(self) -> float:
+        return _cfg_float("NIJA_WRITER_LOSS_GRACE_S", 12.0, minimum=1.0)
 
     def acquire_with_standby(
         self,
@@ -308,6 +348,7 @@ class EntrypointWriterAuthority:
 
     def acquire_once(self) -> EntrypointWriterAuthorityResult:
         with self._state_lock:
+            self._set_writer_state(WriterState.ACQUIRING, reason="acquire_once")
             if self.acquired:
                 assert self._result is not None
                 return self._result
@@ -410,6 +451,7 @@ class EntrypointWriterAuthority:
                         scope=scope,
                         lock_key=lock_key,
                         meta_key=meta_key,
+                        fencing_key=fencing_key,
                         generation_key=generation_key,
                         ttl_s=ttl_s,
                     )
@@ -621,6 +663,7 @@ class EntrypointWriterAuthority:
         scope: str,
         lock_key: str,
         meta_key: str,
+        fencing_key: str,
         generation_key: str,
         ttl_s: int,
     ) -> EntrypointWriterAuthorityResult:
@@ -632,6 +675,7 @@ class EntrypointWriterAuthority:
         self._instance_id = instance_id
         self._lock_key = lock_key
         self._meta_key = meta_key
+        self._fencing_key = fencing_key
         self._lock_value = f"{token}:{owner}"
         self._ttl_s = ttl_s
         self._acquired_at = time.time()
@@ -665,6 +709,7 @@ class EntrypointWriterAuthority:
         elif _prior_scan_started_at:
             self.record_scan_started()
         self._notify_runtime_reconciliation("writer_acquired")
+        self._set_writer_state(WriterState.ACTIVE, reason="lease_acquired")
 
         logger.critical(
             "LOCK_ACQUIRED marker=%s token_prefix=%s generation=%s instance=%s",
@@ -727,6 +772,10 @@ class EntrypointWriterAuthority:
             os.environ.get("NIJA_WRITER_LOCK_META_KEY", "").strip()
             or f"nija:writer_lock_meta:{scope}"
         )
+        self._fencing_key = (
+            os.environ.get("NIJA_WRITER_FENCING_KEY", "").strip()
+            or f"nija:writer_fence:{scope}"
+        )
         self._lock_value = f"{token}:{owner}"
         _prior_scan_started_at = self._scan_started_at
         _prior_scan_complete_at = self._scan_complete_at
@@ -754,6 +803,7 @@ class EntrypointWriterAuthority:
         elif _prior_scan_started_at:
             self.record_scan_started()
         self._notify_runtime_reconciliation("writer_acquired_local_fallback")
+        self._set_writer_state(WriterState.ACTIVE, reason="local_fallback")
         logger.critical(
             "ENTRYPOINT_WRITER_AUTHORITY_LOCAL_FALLBACK marker=%s reason=%s instance=%s",
             _MARKER,
@@ -1036,26 +1086,52 @@ class EntrypointWriterAuthority:
             min(5.0, max(1.0, self._ttl_s / 3.0)),
             minimum=1.0,
         )
-        max_failures = _cfg_int(
-            "NIJA_WRITER_LOCK_HEARTBEAT_MAX_FAILURES", 12, minimum=3
-        )
+        grace_s = self._resolve_loss_grace_s()
         failures = 0
+        first_failure_at = 0.0
 
         while not self._stop.is_set():
             ok, reason = self._heartbeat_tick()
             if ok:
                 failures = 0
+                first_failure_at = 0.0
+                self._set_writer_state(WriterState.ACTIVE, reason="heartbeat_ok")
             else:
                 failures += 1
+                now = time.time()
+                if first_failure_at <= 0.0:
+                    first_failure_at = now
+                elapsed = max(0.0, now - first_failure_at)
+                ownership_lost = reason in {
+                    "lock_owned_by_different_writer",
+                    "lock_missing_and_fencing_token_mismatch",
+                }
+                if ownership_lost:
+                    self._set_writer_state(
+                        WriterState.LOST,
+                        reason=f"ownership_lost:{reason}",
+                    )
+                    self._mark_lost(reason)
+                    return
+                self._set_writer_state(
+                    WriterState.REFRESHING,
+                    reason=f"heartbeat_failure:{reason}",
+                )
                 logger.warning(
-                    "ENTRYPOINT_WRITER_HEARTBEAT_FAILED marker=%s failures=%d/%d reason=%s",
+                    "ENTRYPOINT_WRITER_HEARTBEAT_FAILED marker=%s failures=%d grace_s=%.1f "
+                    "elapsed_s=%.1f reason=%s",
                     _MARKER,
                     failures,
-                    max_failures,
+                    grace_s,
+                    elapsed,
                     reason,
                 )
-                if failures >= max_failures:
-                    self._mark_lost(reason)
+                if elapsed >= grace_s:
+                    self._set_writer_state(
+                        WriterState.LOST,
+                        reason=f"heartbeat_grace_expired:{reason}",
+                    )
+                    self._mark_lost(f"heartbeat_grace_expired:{reason}")
                     return
             self._stop.wait(interval_s)
 
@@ -1120,6 +1196,7 @@ class EntrypointWriterAuthority:
 
     def _heartbeat_tick(self) -> tuple[bool, str]:
         os.environ["NIJA_WRITER_HEARTBEAT_ALIVE_TS"] = str(time.time())
+        self._set_writer_state(WriterState.VERIFYING, reason="heartbeat_tick")
 
         # Enforce the authority invariant before each renewal.  If the fencing
         # token has been externally cleared or the lease flag was externally
@@ -1141,7 +1218,20 @@ class EntrypointWriterAuthority:
 
         script = """
         local current = redis.call('GET', KEYS[1])
-        if not current then return -1 end
+        if not current then
+            local fence = ''
+            if KEYS[3] and KEYS[3] ~= '' then
+                fence = tostring(redis.call('GET', KEYS[3]) or '')
+            end
+            if fence ~= '' and fence == tostring(ARGV[4]) then
+                redis.call('SET', KEYS[1], ARGV[1], 'EX', tonumber(ARGV[2]))
+                if KEYS[2] and KEYS[2] ~= '' then
+                    redis.call('SET', KEYS[2], ARGV[3], 'EX', tonumber(ARGV[2]))
+                end
+                return 2
+            end
+            return -1
+        end
         if current ~= ARGV[1] then return 0 end
         redis.call('EXPIRE', KEYS[1], tonumber(ARGV[2]))
         if KEYS[2] and KEYS[2] ~= '' then
@@ -1153,16 +1243,18 @@ class EntrypointWriterAuthority:
             code = int(
                 self._client.eval(
                     script,
-                    2,
+                    3,
                     self._lock_key,
                     self._meta_key,
+                    self._fencing_key,
                     self._lock_value,
                     str(self._ttl_s),
                     self._metadata_payload(),
+                    self._token,
                 )
                 or 0
             )
-            if code == 1:
+            if code in {1, 2}:
                 now = str(time.time())
                 os.environ["NIJA_WRITER_HEARTBEAT_LAST_TS"] = now
                 os.environ["NIJA_WRITER_HEARTBEAT_ALIVE_TS"] = now
@@ -1187,41 +1279,17 @@ class EntrypointWriterAuthority:
                     os.getpid(),
                     bool(self._core_thread and self._core_thread.is_alive()),
                 )
-                self._notify_runtime_reconciliation("heartbeat_renewed")
-                return True, ""
-            if code == -1:
-                if self._stop.is_set():
-                    # Shutdown in progress: do not reacquire a lock the caller
-                    # is about to compare-and-delete.  Creating a new lease here
-                    # would leave a countdown-only lock that blocks the successor
-                    # instance for a full TTL with no further heartbeats.
-                    return False, "lock_expired_during_shutdown_reacquire_skipped"
-                reacquired = bool(
-                    self._client.set(
-                        self._lock_key,
-                        self._lock_value,
-                        ex=self._ttl_s,
-                        nx=True,
-                    )
-                )
-                if reacquired:
-                    self._write_metadata()
-                    now = str(time.time())
-                    os.environ["NIJA_WRITER_HEARTBEAT_LAST_TS"] = now
-                    os.environ["NIJA_WRITER_HEARTBEAT_ALIVE_TS"] = now
-                    os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"] = "1"
-                    try:
-                        _get_heartbeat_state().record_heartbeat(generation=self._generation)
-                    except Exception:
-                        pass
+                if code == 2:
                     logger.warning(
-                        "ENTRYPOINT_WRITER_LOCK_REACQUIRED marker=%s token_prefix=%s",
+                        "WRITER_LOCK_REFRESHED_FROM_FENCING marker=%s token_prefix=%s",
                         _MARKER,
                         self._token[:8],
                     )
-                    self._notify_runtime_reconciliation("heartbeat_reacquired")
-                    return True, ""
-                return False, "lock_expired_and_reacquire_lost"
+                self._notify_runtime_reconciliation("heartbeat_renewed")
+                self._set_writer_state(WriterState.ACTIVE, reason="heartbeat_renewed")
+                return True, ""
+            if code == -1:
+                return False, "lock_missing_and_fencing_token_mismatch"
             return False, "lock_owned_by_different_writer"
         except Exception as exc:
             return False, f"redis_heartbeat_error:{type(exc).__name__}:{exc}"
@@ -1339,6 +1407,7 @@ class EntrypointWriterAuthority:
         self._on_lost_callback = callback
 
     def _mark_lost(self, reason: str) -> None:
+        self._set_writer_state(WriterState.LOST, reason=reason)
         self._lost.set()
         os.environ["NIJA_WRITER_LEASE_ACQUIRED"] = "0"
         os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"] = "0"
@@ -1383,6 +1452,7 @@ class EntrypointWriterAuthority:
         """Quiesce heartbeat, then compare-delete only this process's lock."""
 
         self._stop.set()
+        self._set_writer_state(WriterState.LOST, reason="release_called")
         heartbeat = self._heartbeat_thread
         if heartbeat is not None and heartbeat is not threading.current_thread():
             if heartbeat.is_alive():
