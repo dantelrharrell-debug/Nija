@@ -1,4 +1,6 @@
 from types import SimpleNamespace
+import sys
+from types import ModuleType
 
 from bot import decision_pipeline_runtime_patch as patch
 
@@ -61,3 +63,23 @@ def test_rejection_summary_emits_every_sixty_seconds(caplog) -> None:
     assert "REJECTION_SUMMARY" in caplog.text
     assert "min_notional:2" in caplog.text
     assert "spread_too_high:1" in caplog.text
+
+
+def test_three_venue_ready_uses_canonical_writer_status(monkeypatch) -> None:
+    authority_module = ModuleType("bot.writer_authority")
+
+    class _Status:
+        ready = False
+
+    class _WriterAuthority:
+        @staticmethod
+        def get_status(*_args, **_kwargs):
+            return _Status()
+
+    authority_module.WriterAuthority = _WriterAuthority
+    monkeypatch.setitem(sys.modules, "bot.writer_authority", authority_module)
+    monkeypatch.delenv("NIJA_WRITER_READY", raising=False)
+    monkeypatch.setenv("NIJA_THREE_VENUE_EXECUTION_READY", "1")
+    monkeypatch.setenv("NIJA_EXECUTION_ENABLED", "1")
+
+    assert patch._is_three_venue_ready() is False

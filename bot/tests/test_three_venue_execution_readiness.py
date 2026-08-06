@@ -49,6 +49,7 @@ def _set_credentials(monkeypatch) -> None:
 def _set_writer_ready_env(monkeypatch) -> None:
     monkeypatch.setenv("NIJA_WRITER_LEASE_ACQUIRED", "1")
     monkeypatch.setenv("NIJA_WRITER_FENCING_TOKEN", "token")
+    monkeypatch.setenv("NIJA_WRITER_LEASE_GENERATION", "7")
     monkeypatch.setenv("NIJA_WRITER_STATE", "ACTIVE")
     monkeypatch.setenv("NIJA_WRITER_HEARTBEAT_ACTIVE", "1")
     monkeypatch.setenv("NIJA_WRITER_HEARTBEAT_ALIVE_TS", "9999999999")
