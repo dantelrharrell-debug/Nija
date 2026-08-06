@@ -899,6 +899,20 @@ class ExecutionEngine:
             get_execution_pipeline is not None and PipelineRequest is not None,
             os.getenv("FORCE_TRADE", "false"),
         )
+        logger.critical(
+            "ORDER_SENT broker=%s symbol=%s side=%s size_usd=%.2f",
+            str(preferred_broker or "unknown"),
+            symbol,
+            side,
+            float(size_usd or 0.0),
+        )
+        print(
+            f"[NIJA-PRINT] ORDER_SENT "
+            f"broker={str(preferred_broker or 'unknown')} "
+            f"symbol={symbol} side={side} "
+            f"size_usd={float(size_usd or 0.0):.2f}",
+            flush=True,
+        )
         if get_execution_pipeline is None or PipelineRequest is None:
             logger.critical(
                 "🚫 [BrokerAdapter] ORDER DROPPED — ExecutionPipeline unavailable "
@@ -3650,7 +3664,22 @@ class ExecutionEngine:
                     f"broker_client_type={_exec_route.broker_client_type}",
                     flush=True,
                 )
-
+                logger.critical(
+                    "ORDER_ROUTED broker=%s symbol=%s side=%s size=%.2f route_id=%s",
+                    _exec_route.selected_broker,
+                    symbol,
+                    side,
+                    position_size,
+                    _exec_route.route_id,
+                )
+                print(
+                    f"[NIJA-PRINT] ORDER_ROUTED "
+                    f"broker={_exec_route.selected_broker} "
+                    f"symbol={symbol} side={side} "
+                    f"size={position_size:.2f} "
+                    f"route_id={_exec_route.route_id}",
+                    flush=True,
+                )
 
                 # Dynamic order type: use limit when the execution plan recommends it
                 # and the broker supports place_limit_order.  Falls back to market on
@@ -4370,6 +4399,22 @@ class ExecutionEngine:
 
                 self.positions[symbol] = position
                 logger.info(f"Position opened: {symbol} {side} @ {final_entry_price:.2f}")
+                logger.critical(
+                    "POSITION_OPEN symbol=%s side=%s size=%.2f fill_price=%.6f order_id=%s",
+                    symbol,
+                    side,
+                    float(position_size or 0.0),
+                    float(final_entry_price or 0.0),
+                    str(order_id),
+                )
+                print(
+                    f"[NIJA-PRINT] POSITION_OPEN "
+                    f"symbol={symbol} side={side} "
+                    f"size={float(position_size or 0.0):.2f} "
+                    f"fill_price={float(final_entry_price or 0.0):.6f} "
+                    f"order_id={order_id}",
+                    flush=True,
+                )
                 logger.info(f"   Order ID: {order_id}, Status: {order_status}")
                 print(
                     f"[NIJA-PRINT] execute_entry SUCCESS | "

@@ -2331,6 +2331,25 @@ class NijaCoreLoop:
             f"orders_submitted={int(result.orders_submitted or 0)} fills={int(result.fills or 0)}",
             flush=True,
         )
+        logger.critical(
+            "SCAN_FINISHED cycle=%d entries_taken=%d exits_taken=%d "
+            "orders_submitted=%d symbols_scored=%d duration_ms=%.0f",
+            self._total_cycles,
+            int(result.entries_taken or 0),
+            int(result.exits_taken or 0),
+            int(result.orders_submitted or 0),
+            int(result.symbols_scored or 0),
+            elapsed_ms,
+        )
+        print(
+            f"[NIJA-PRINT] SCAN_FINISHED cycle={self._total_cycles} "
+            f"entries_taken={int(result.entries_taken or 0)} "
+            f"exits_taken={int(result.exits_taken or 0)} "
+            f"orders_submitted={int(result.orders_submitted or 0)} "
+            f"symbols_scored={int(result.symbols_scored or 0)} "
+            f"duration_ms={elapsed_ms:.0f}",
+            flush=True,
+        )
 
         return result
 
@@ -2454,9 +2473,25 @@ class NijaCoreLoop:
                     action = analysis.get("action", "hold")
                     if action in ("exit", "partial_exit", "take_profit_tp1",
                                   "take_profit_tp2", "take_profit_tp3"):
+                        logger.critical(
+                            "EXIT_SIGNAL symbol=%s action=%s",
+                            symbol, action,
+                        )
+                        print(
+                            f"[NIJA-PRINT] EXIT_SIGNAL symbol={symbol} action={action}",
+                            flush=True,
+                        )
                         try:
                             apex.execute_action(analysis, symbol)
                             exits += 1
+                            logger.critical(
+                                "POSITION_CLOSED symbol=%s action=%s",
+                                symbol, action,
+                            )
+                            print(
+                                f"[NIJA-PRINT] POSITION_CLOSED symbol={symbol} action={action}",
+                                flush=True,
+                            )
                         except Exception as exec_err:
                             logger.warning("Phase2 execute_action error for %s: %s", symbol, exec_err)
                 except Exception as sym_err:
@@ -3467,6 +3502,38 @@ class NijaCoreLoop:
                     f"{getattr(s, 'symbol', '?')}({getattr(s, 'side', '?')} score={getattr(s, 'composite_score', 0):.1f})"
                     for s in candidates
                 ),
+            )
+
+        # ── Structured pipeline markers for observability ─────────────────
+        _best_cand = candidates[0] if candidates else None
+        logger.critical(
+            "CANDIDATE_COUNT=%d scored=%d best_candidate=%s best_score=%.1f best_side=%s",
+            len(candidates),
+            scored,
+            getattr(_best_cand, "symbol", "none") if _best_cand is not None else "none",
+            getattr(_best_cand, "composite_score", 0.0) if _best_cand is not None else 0.0,
+            getattr(_best_cand, "side", "none") if _best_cand is not None else "none",
+        )
+        print(
+            f"[NIJA-PRINT] CANDIDATE_COUNT={len(candidates)} scored={scored} "
+            f"best_candidate={getattr(_best_cand, 'symbol', 'none') if _best_cand is not None else 'none'} "
+            f"best_score={getattr(_best_cand, 'composite_score', 0.0) if _best_cand is not None else 0.0:.1f} "
+            f"best_side={getattr(_best_cand, 'side', 'none') if _best_cand is not None else 'none'}",
+            flush=True,
+        )
+        if _best_cand is not None:
+            logger.critical(
+                "BEST_CANDIDATE=%s score=%.1f side=%s entry_type=%s",
+                getattr(_best_cand, "symbol", "?"),
+                getattr(_best_cand, "composite_score", 0.0),
+                getattr(_best_cand, "side", "?"),
+                getattr(_best_cand, "entry_type", "?"),
+            )
+            print(
+                f"[NIJA-PRINT] BEST_CANDIDATE={getattr(_best_cand, 'symbol', '?')} "
+                f"score={getattr(_best_cand, 'composite_score', 0.0):.1f} "
+                f"side={getattr(_best_cand, 'side', '?')}",
+                flush=True,
             )
 
         # ── Record scan-cycle result in funnel tracker ────────────────────
@@ -4950,6 +5017,30 @@ class NijaCoreLoop:
             flush=True,
         )
         self._last_phase3_metrics = dict(_phase3_metrics)
+        _total_filtered = sum(_gate_rejections.values())
+        logger.critical(
+            "FILTER_COUNT=%d "
+            "(confidence=%d volume=%d mkt_filter=%d adx=%d risk=%d capital=%d notional=%d data=%d)",
+            _total_filtered,
+            _gate_rejections.get("confidence_gate_rejected", 0),
+            _gate_rejections.get("volume_gate_rejected", 0),
+            _gate_rejections.get("market_filter_rejected", 0),
+            _gate_rejections.get("adx_gate_rejected", 0),
+            _gate_rejections.get("risk_gate_rejected", 0),
+            _gate_rejections.get("capital_gate_rejected", 0),
+            _gate_rejections.get("notional_gate_rejected", 0),
+            _gate_rejections.get("data_insufficient", 0),
+        )
+        print(
+            f"[NIJA-PRINT] FILTER_COUNT={_total_filtered} "
+            f"confidence={_gate_rejections.get('confidence_gate_rejected', 0)} "
+            f"volume={_gate_rejections.get('volume_gate_rejected', 0)} "
+            f"mkt_filter={_gate_rejections.get('market_filter_rejected', 0)} "
+            f"adx={_gate_rejections.get('adx_gate_rejected', 0)} "
+            f"risk={_gate_rejections.get('risk_gate_rejected', 0)} "
+            f"data={_gate_rejections.get('data_insufficient', 0)}",
+            flush=True,
+        )
         return entries, blocked, scored, _gate_rejections
 
     # ------------------------------------------------------------------
@@ -5937,6 +6028,19 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
 
     logger.critical("🔥 ENTERED RUN_TRADING_LOOP FUNCTION")
     print("🔥 ENTERED RUN_TRADING_LOOP FUNCTION", flush=True)
+    logger.critical(
+        "ENGINE_STARTED strategy_type=%s broker_type=%s",
+        type(strategy).__name__,
+        type(getattr(strategy, "broker", None)).__name__
+        if getattr(strategy, "broker", None) is not None
+        else "none",
+    )
+    print(
+        f"[NIJA-PRINT] ENGINE_STARTED "
+        f"strategy_type={type(strategy).__name__} "
+        f"broker_type={type(getattr(strategy, 'broker', None)).__name__ if getattr(strategy, 'broker', None) is not None else 'none'}",
+        flush=True,
+    )
 
     # ── STEP 1: Resolve runtime mode ──────────────────────────────────────────
     logger.critical("[INIT STEP 1/6] Resolving runtime mode")
