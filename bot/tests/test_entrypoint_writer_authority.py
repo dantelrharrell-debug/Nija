@@ -93,6 +93,38 @@ class EntrypointWriterAuthorityTests(unittest.TestCase):
         self.assertEqual(os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"], "1")
         self.assertTrue(os.environ["NIJA_WRITER_LOCK_KEY"].startswith("nija:writer_lock:"))
 
+    def test_acquire_reconciles_only_after_writer_state_becomes_active(self):
+        client = MagicMock()
+        client.eval.return_value = [17, "17:owner", 60000, 23]
+        client.set.return_value = True
+        runtime = EntrypointWriterAuthority()
+        calls = []
+        readiness = types.ModuleType("three_venue_execution_readiness")
+        readiness.reconcile_execution_readiness = lambda **kwargs: calls.append(
+            (kwargs, os.environ.get("NIJA_WRITER_STATE"))
+        )
+
+        with (
+            patch.dict(sys.modules, {"three_venue_execution_readiness": readiness}),
+            patch(
+                "bot.entrypoint_writer_authority._connect_redis",
+                return_value=(client, "rediss://example", ""),
+            ),
+            patch(
+                "bot.entrypoint_writer_authority._instance_identity",
+                side_effect=self._identity,
+            ),
+            patch.object(runtime, "_start_heartbeat"),
+            patch.object(runtime, "_start_scan_started_watchdog"),
+        ):
+            result = runtime.acquire_once()
+
+        self.assertTrue(result.acquired)
+        self.assertEqual(
+            calls,
+            [({"trigger": "writer_acquired", "force": True}, "ACTIVE")],
+        )
+
     def test_active_writer_is_never_force_deleted(self):
         client = MagicMock()
         client.eval.return_value = [0, "9:other-instance", 42000, 8]
