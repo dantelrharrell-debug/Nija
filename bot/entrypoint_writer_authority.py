@@ -983,7 +983,15 @@ class EntrypointWriterAuthority:
         # waiting, so that setting _stop prior to the first iteration still
         # allows the deadline flag to be evaluated at least once.
         while True:
-            if self._scan_started_at or self._scan_complete_at or self._scan_watchdog_cancel.is_set():
+            lifecycle_phase = _get_heartbeat_state().phase
+            startup_completed = lifecycle_phase in {_Phase.SCAN_COMPLETE, _Phase.LIVE}
+            if (
+                not self.acquired
+                or self._scan_started_at
+                or self._scan_complete_at
+                or startup_completed
+                or self._scan_watchdog_cancel.is_set()
+            ):
                 # Scan started (or was explicitly cancelled after completion) —
                 # clear any previously set deadline flag and exit.  This handles
                 # the case where record_scan_started() was called after the

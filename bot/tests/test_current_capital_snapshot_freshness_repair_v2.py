@@ -79,6 +79,73 @@ class CurrentCapitalFreshnessRepairTests(unittest.TestCase):
         self.assertEqual(status, expected)
         status_getter.assert_called_once_with(90.0)
 
+    def test_fallback_status_filters_to_eligible_brokers(self):
+        expected = {
+            "used_fallback": True,
+            "all_recent": False,
+            "brokers": {
+                "coinbase": {"age_s": 10.0, "observed": True},
+                "okx": {"age_s": 15.0, "observed": True},
+                "kraken": {"age_s": 120.0, "observed": True},
+            },
+        }
+        with patch.object(
+            guard,
+            "current_refresh_fallback_status",
+            return_value=expected,
+        ):
+            status = repair._current_refresh_fallback_status(
+                eligible_brokers={"coinbase", "okx"},
+            )
+
+        self.assertTrue(status["used_fallback"])
+        self.assertTrue(status["all_recent"])
+        self.assertEqual(set(status["brokers"].keys()), {"coinbase", "okx"})
+
+    def test_fallback_status_ignores_excluded_stale_broker(self):
+        expected = {
+            "used_fallback": True,
+            "all_recent": False,
+            "brokers": {
+                "kraken": {"age_s": 120.0, "observed": True},
+            },
+        }
+        with patch.object(
+            guard,
+            "current_refresh_fallback_status",
+            return_value=expected,
+        ):
+            status = repair._current_refresh_fallback_status(
+                active_brokers={"coinbase", "okx"},
+            )
+
+        self.assertFalse(status["used_fallback"])
+        self.assertTrue(status["all_recent"])
+        self.assertEqual(status["brokers"], {})
+
+    def test_should_repair_uses_eligible_broker_count_instead_of_configured(self):
+        snapshot = types.SimpleNamespace(
+            computed_at=datetime.now(timezone.utc),
+            confidence=types.SimpleNamespace(band="MEDIUM"),
+            real_capital=100.0,
+            broker_count=2,
+            expected_brokers=3,
+            eligible_brokers={"coinbase", "okx"},
+            broker_balances={"coinbase": 40.0, "okx": 60.0},
+            is_fresh=False,
+            is_stale=True,
+        )
+        with patch.object(
+            repair,
+            "_current_refresh_fallback_status",
+            return_value={
+                "used_fallback": False,
+                "all_recent": True,
+                "brokers": {},
+            },
+        ):
+            self.assertTrue(repair._should_repair(snapshot))
+
     def test_constructor_forces_cache_backed_snapshot_stale(self):
         class Snapshot:
             def __init__(self):
@@ -135,6 +202,36 @@ class CurrentCapitalFreshnessRepairTests(unittest.TestCase):
         self.assertTrue(snapshot.is_fresh)
         self.assertFalse(snapshot.is_stale)
         self.assertEqual(snapshot.snapshot_age_s, 0.0)
+
+    def test_constructor_does_not_force_stale_for_excluded_broker_cache(self):
+        class Snapshot:
+            def __init__(self):
+                self.computed_at = datetime.now(timezone.utc)
+                self.confidence = types.SimpleNamespace(band="MEDIUM")
+                self.real_capital = 100.0
+                self.broker_count = 2
+                self.expected_brokers = 3
+                self.eligible_brokers = {"coinbase", "okx"}
+                self.broker_balances = {"coinbase": 40.0, "okx": 60.0}
+                self.snapshot_age_s = 120.0
+                self.is_fresh = False
+                self.is_stale = True
+
+        self.cfsm.CapitalSnapshot = Snapshot
+        with patch.object(
+            repair,
+            "_current_refresh_fallback_status",
+            return_value={
+                "used_fallback": False,
+                "all_recent": True,
+                "brokers": {},
+            },
+        ):
+            self.assertTrue(repair.install_import_hook())
+            snapshot = Snapshot()
+
+        self.assertTrue(snapshot.is_fresh)
+        self.assertFalse(snapshot.is_stale)
 
 
 if __name__ == "__main__":
