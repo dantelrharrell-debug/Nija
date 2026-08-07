@@ -1,8 +1,8 @@
 """Prevent soft authority probe timeouts from forcing emergency stop.
 
 The authority heartbeat can time out while the process still owns the Redis
-writer lock and the local writer generation matches Redis.  In that case the
-failure is a slow status probe, not lost writer authority.  This repair wraps the
+writer lock and the local writer generation matches Redis. In that case the
+failure is a slow status probe, not lost writer authority. This repair wraps the
 lockdown trigger and grants a bounded grace only when the current process proves
 it still owns the fencing token in Redis.
 
@@ -15,7 +15,6 @@ import functools
 import logging
 import os
 import threading
-import time
 from typing import Any
 
 logger = logging.getLogger("nija.authority_heartbeat_timeout_grace")
@@ -112,20 +111,28 @@ def _verified_current_writer(timeout_s: float) -> tuple[bool, str]:
 
 
 def _refresh_healthy_heartbeat(module: Any, monitor: Any) -> None:
-    now = str(time.time())
-    os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"] = "1"
-    os.environ["NIJA_WRITER_HEARTBEAT_ALIVE_TS"] = now
-
-    writer = getattr(module, "_write_heartbeat_marker", None)
-    if callable(writer):
+    """Refresh all heartbeat surfaces after independently proving authority."""
+    try:
         try:
-            writer()
-        except Exception as exc:
-            logger.warning(
-                "AUTHORITY_HEARTBEAT_TIMEOUT_GRACE_MARKER_REFRESH_FAILED marker=%s err=%s",
-                _MARKER,
-                exc,
-            )
+            from bot.heartbeat_authority_single_source_patch import refresh_heartbeat
+        except ImportError:
+            from heartbeat_authority_single_source_patch import refresh_heartbeat  # type: ignore[import]
+
+        heartbeat_ts = refresh_heartbeat(
+            source="authority_heartbeat_timeout_grace",
+        )
+        if heartbeat_ts <= 0.0:
+            raise RuntimeError("canonical heartbeat refresh skipped")
+    except Exception as exc:
+        # Do not fabricate a partial env-only refresh. If the canonical publisher
+        # cannot update marker + env + canonical state together, leave freshness
+        # unchanged and let the next real heartbeat cycle retry.
+        logger.error(
+            "AUTHORITY_HEARTBEAT_TIMEOUT_GRACE_REFRESH_FAILED marker=%s err=%s",
+            _MARKER,
+            exc,
+            exc_info=True,
+        )
 
     redis_writer = getattr(monitor, "_write_heartbeat_to_redis", None)
     if callable(redis_writer):

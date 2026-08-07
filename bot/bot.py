@@ -24,6 +24,7 @@ _FAST_PATH_MARKER = "20260725-canonical-fast-entrypoint-v28"
 # Each tuple is (module, success log label).  Names remain explicit so startup
 # attestation and source audits can prove which guards are eligible.
 _FAST_PATH_INSTALLERS = (
+    ("bot.heartbeat_authority_single_source_patch", "HEARTBEAT_AUTHORITY_SINGLE_SOURCE"),
     ("bot.okx_patch_churn_guard_patch", "OKX_PATCH_CHURN_GUARD"),
     ("bot.disconnected_coinbase_balance_guard_patch", "COINBASE_BALANCE_DISCONNECTED_GUARD"),
     ("bot.live_capital_first_snapshot_latch_patch", "LIVE_CAPITAL_FIRST_SNAPSHOT_LATCH"),

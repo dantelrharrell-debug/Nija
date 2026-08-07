@@ -11,6 +11,7 @@ from typing import Any
 
 logger = logging.getLogger("nija.writer_heartbeat_stale_repair")
 _PATCHED_ATTR = "_NIJA_WRITER_HEARTBEAT_STALE_REPAIR_PATCHED"
+_CANONICAL_PATCHED_ATTR = "_NIJA_HEARTBEAT_SINGLE_SOURCE_PATCHED"
 _TRUE = {"1", "true", "yes", "on", "enabled", "y"}
 
 
@@ -46,8 +47,6 @@ def _authority_env_present() -> bool:
 
 
 def _strict_writer_checks_pass(tsm: ModuleType) -> tuple[bool, str]:
-    # Do not treat the stale heartbeat timestamp itself as authority.  Require
-    # the independent distributed-writer and nonce-lease checks to pass first.
     lease_gate = getattr(tsm, "_distributed_writer_authority_gate", None)
     if callable(lease_gate):
         ok, detail = lease_gate()
@@ -70,6 +69,11 @@ def _strict_writer_checks_pass(tsm: ModuleType) -> tuple[bool, str]:
 
 
 def _refresh_writer_heartbeat_timestamp(reason: str) -> None:
+    """Legacy-only timestamp repair.
+
+    The canonical single-source patch never calls this function. It is retained
+    only for old launchers that do not install the canonical heartbeat gate.
+    """
     now = time.time()
     os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"] = "1"
     os.environ["NIJA_WRITER_HEARTBEAT_ALIVE_TS"] = f"{now:.6f}"
@@ -92,6 +96,17 @@ def _refresh_writer_heartbeat_timestamp(reason: str) -> None:
 
 def _patch_module(tsm: ModuleType) -> bool:
     if getattr(tsm, _PATCHED_ATTR, False):
+        return True
+
+    # The canonical heartbeat gate owns freshness when installed. Do not wrap it
+    # with the historical env-only repair because that would recreate a second
+    # source of truth and could let a stopped heartbeat thread appear healthy.
+    if getattr(tsm, _CANONICAL_PATCHED_ATTR, False):
+        setattr(tsm, _PATCHED_ATTR, True)
+        logger.warning(
+            "WRITER_HEARTBEAT_STALE_REPAIR_SUPERSEDED module=%s source=canonical_single_source",
+            tsm.__name__,
+        )
         return True
 
     original_gate = getattr(tsm, "_writer_heartbeat_gate", None)
