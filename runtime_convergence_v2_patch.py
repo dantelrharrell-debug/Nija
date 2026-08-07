@@ -240,6 +240,12 @@ def _patch_core_loop(module: ModuleType) -> bool:
 
         # Become the authoritative scan owner.
         if state.lock.acquire(timeout=owner_timeout):
+            logger.info(
+                "SCAN_GUARD_ACQUIRED marker=%s identity=%s thread=%d",
+                MARKER,
+                key,
+                current_thread_id,
+            )
             try:
                 state.owner_thread_id = current_thread_id
                 state.started_at = time.monotonic()
@@ -249,33 +255,77 @@ def _patch_core_loop(module: ModuleType) -> bool:
                 state.result = result
                 return result
             finally:
+                elapsed = max(0.0, time.monotonic() - state.started_at)
+                logger.info(
+                    "SCAN_GUARD_RELEASED marker=%s identity=%s thread=%d elapsed_s=%.2f",
+                    MARKER,
+                    key,
+                    current_thread_id,
+                    elapsed,
+                )
                 state.owner_thread_id = None
                 state.complete.set()
                 state.lock.release()
 
         # Another legitimate scan is active.
-        # Wait for it and reuse its result rather than reporting a blocked cycle.
-        wait_timeout = max(
-            5.0,
-            float(os.getenv("NIJA_DUPLICATE_SCAN_RESULT_WAIT_S", "45") or 45),
+        owner_age = max(0.0, time.monotonic() - state.started_at)
+        logger.info(
+            "SCAN_GUARD_WAITING marker=%s identity=%s thread=%d owner_thread=%s age_s=%.2f",
+            MARKER,
+            key,
+            current_thread_id,
+            state.owner_thread_id,
+            owner_age,
         )
 
-        if state.complete.wait(timeout=wait_timeout) and state.result is not None:
-            logger.info(
-                "DUPLICATE_SCAN_RESULT_REUSED marker=%s identity=%s",
-                MARKER,
-                key,
-            )
-            return state.result
+        wait_timeout = max(5.0, float(os.getenv("NIJA_DUPLICATE_SCAN_RESULT_WAIT_S", "300") or 300))
+        stall_threshold = max(60.0, float(os.getenv("NIJA_SCAN_STALL_TIMEOUT_S", "3600") or 3600))
+        poll_interval = 5.0
+        waited = 0.0
+
+        while waited < wait_timeout:
+            chunk = min(poll_interval, wait_timeout - waited)
+            if state.complete.wait(timeout=chunk):
+                if state.result is not None:
+                    logger.info(
+                        "DUPLICATE_SCAN_RESULT_REUSED marker=%s identity=%s thread=%d waited_s=%.2f",
+                        MARKER,
+                        key,
+                        current_thread_id,
+                        waited,
+                    )
+                    return state.result
+                break
+            waited += chunk
+
+            # Detect scans that have been holding the lock longer than the stall
+            # threshold.  Reset their state so future callers are not permanently
+            # blocked by a single hung cycle.
+            current_age = max(0.0, time.monotonic() - state.started_at)
+            if current_age > stall_threshold:
+                logger.critical(
+                    "SCAN_STALE_STATE_RESET marker=%s identity=%s thread=%d "
+                    "owner_thread=%s age_s=%.2f stall_threshold_s=%.2f",
+                    MARKER,
+                    key,
+                    current_thread_id,
+                    state.owner_thread_id,
+                    current_age,
+                    stall_threshold,
+                )
+                with _SCAN_STATES_GUARD:
+                    _SCAN_STATES[key] = ScanState()
+                return _duplicate_result()
 
         # The owner appears stalled. Fail closed without crashing or pretending
         # that the strategy evaluated the market.
         logger.error(
-            "SCAN_OWNER_TIMEOUT marker=%s identity=%s owner_thread=%s age_s=%.2f",
+            "SCAN_OWNER_TIMEOUT marker=%s identity=%s owner_thread=%s age_s=%.2f waited_s=%.2f",
             MARKER,
             key,
             state.owner_thread_id,
             max(0.0, time.monotonic() - state.started_at),
+            waited,
         )
         return _duplicate_result()
 

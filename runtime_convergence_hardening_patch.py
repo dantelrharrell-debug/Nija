@@ -166,6 +166,44 @@ def _duplicate_result() -> SimpleNamespace:
     )
 
 
+def _chain_has_scan_owner(func: Any, *, limit: int = 256) -> bool:
+    """Return True if *func* or any wrapper it delegates to is a known scan owner."""
+    _SCAN_OWNER_ATTRS = (
+        "_nija_account_scan_serialized_e",
+        "_nija_final_result_contract_e",
+        "_nija_account_scan_serialized",
+        "_nija_final_result_contract",
+        "_nija_scan_wrapper_canonical_h",
+        "_nija_scan_wrapper_canonical_v2",
+        "_nija_scan_owner_result_reuse_20260713b",
+        "_nija_scan_identity_lock_v2",
+    )
+    current: Any = func
+    seen: set[int] = set()
+    for _ in range(limit):
+        if not callable(current) or id(current) in seen:
+            break
+        seen.add(id(current))
+        if any(bool(getattr(current, attr, False)) for attr in _SCAN_OWNER_ATTRS):
+            return True
+        wrapped = getattr(current, "__wrapped__", None)
+        if not callable(wrapped):
+            try:
+                code = getattr(current, "__code__", None)
+                closure = tuple(getattr(current, "__closure__", ()) or ())
+                freevars = tuple(getattr(code, "co_freevars", ()) or ())
+                values = {name: cell.cell_contents for name, cell in zip(freevars, closure)}
+                wrapped = next(
+                    (values.get(name) for name in ("original", "original_scan", "original_run_scan_phase", "base")
+                     if callable(values.get(name))),
+                    None,
+                )
+            except Exception:
+                wrapped = None
+        current = wrapped
+    return False
+
+
 def _patch_core_loop(module: ModuleType) -> bool:
     cls = getattr(module, "NijaCoreLoop", None)
     if not isinstance(cls, type):
@@ -187,20 +225,33 @@ def _patch_core_loop(module: ModuleType) -> bool:
         patched = True
 
     original_scan = getattr(cls, "run_scan_phase", None)
-    if callable(original_scan) and not getattr(original_scan, "_nija_account_scan_serialized_e", False):
+    if callable(original_scan) and not _chain_has_scan_owner(original_scan):
         def run_scan_phase(self: Any, *args: Any, **kwargs: Any) -> Any:
             broker = kwargs.get("broker") or (args[0] if args else None)
             key = _broker_identity(broker)
             with _SCAN_LOCKS_GUARD:
                 lock = _SCAN_LOCKS.setdefault(key, threading.RLock())
-            timeout = max(0.01, float(os.getenv("NIJA_ACCOUNT_SCAN_LOCK_TIMEOUT_S", "0.25") or 0.25))
+            # Use the same wait-timeout as the canonical scan owners so a long
+            # scan does not immediately suppress concurrent callers.
+            timeout = max(0.01, float(os.getenv("NIJA_ACCOUNT_SCAN_LOCK_TIMEOUT_S", "1.0") or 1.0))
             if not lock.acquire(timeout=timeout):
-                logger.critical("DUPLICATE_SCAN_BLOCKED marker=%s key=%s timeout_s=%.2f", _MARKER, key, timeout)
+                logger.critical(
+                    "DUPLICATE_SCAN_BLOCKED marker=%s key=%s timeout_s=%.2f thread=%d",
+                    _MARKER, key, timeout, threading.get_ident(),
+                )
                 return _duplicate_result()
+            logger.info(
+                "SCAN_GUARD_ACQUIRED marker=%s key=%s thread=%d",
+                _MARKER, key, threading.get_ident(),
+            )
             try:
                 result = original_scan(self, *args, **kwargs)
                 return _duplicate_result() if result is None else result
             finally:
+                logger.info(
+                    "SCAN_GUARD_RELEASED marker=%s key=%s thread=%d",
+                    _MARKER, key, threading.get_ident(),
+                )
                 lock.release()
         run_scan_phase._nija_account_scan_serialized_e = True  # type: ignore[attr-defined]
         run_scan_phase.__wrapped__ = original_scan  # type: ignore[attr-defined]
