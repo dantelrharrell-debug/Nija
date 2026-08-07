@@ -49,12 +49,13 @@ def _generation() -> int:
 
 
 def heartbeat_max_age_s() -> float:
-    """Return the single freshness policy used by authority and SAFE_START."""
+    """Return the single freshness policy used by every authority reader."""
     raw = os.environ.get("NIJA_WRITER_HEARTBEAT_MAX_AGE_S", "120")
     try:
         value = max(5.0, float(raw or 120.0))
     except (TypeError, ValueError):
         value = 120.0
+    # Keep the legacy knob synchronized for diagnostics/backward compatibility.
     os.environ["NIJA_RUNTIME_AUTHORITY_CONVERGENCE_HEARTBEAT_MAX_AGE_S"] = str(value)
     return value
 
@@ -287,6 +288,182 @@ def _patch_trading_state_machine(module: ModuleType) -> None:
     )
 
 
+def _patch_runtime_authority_convergence(module: ModuleType) -> None:
+    """Replace the legacy env/wall-clock convergence freshness reader."""
+    if getattr(module, _PATCHED, False):
+        return
+
+    def _heartbeat_ready() -> tuple[bool, str]:
+        token = os.environ.get("NIJA_WRITER_FENCING_TOKEN", "").strip()
+        generation = (
+            os.environ.get("NIJA_WRITER_LEASE_GENERATION", "").strip()
+            or os.environ.get("NIJA_WRITER_GENERATION", "").strip()
+        )
+        truthy = getattr(module, "_truthy")
+        if not truthy("NIJA_WRITER_LEASE_ACQUIRED"):
+            singleton_probe = getattr(module, "_singleton_lease_acquired", None)
+            if not callable(singleton_probe) or not singleton_probe():
+                return False, "writer_lease_not_acquired"
+            token = os.environ.get("NIJA_WRITER_FENCING_TOKEN", "").strip()
+            generation = (
+                os.environ.get("NIJA_WRITER_LEASE_GENERATION", "").strip()
+                or os.environ.get("NIJA_WRITER_GENERATION", "").strip()
+            )
+        if not token:
+            try:
+                try:
+                    from bot.execution_authority_context import get_distributed_writer_authority_status
+                except ImportError:
+                    from execution_authority_context import get_distributed_writer_authority_status  # type: ignore[import]
+                get_distributed_writer_authority_status(force_refresh=True)
+                token = os.environ.get("NIJA_WRITER_FENCING_TOKEN", "").strip()
+            except Exception:
+                pass
+        if not token or not generation:
+            return False, f"writer_token_or_generation_missing token={bool(token)} generation={generation or 'missing'}"
+        if not truthy("NIJA_WRITER_HEARTBEAT_ACTIVE"):
+            return False, "heartbeat_inactive"
+        if not truthy("NIJA_CORE_THREAD_ALIVE"):
+            return False, "core_thread_not_alive"
+        if truthy("KRAKEN_NONCE_LEASE_REQUIRED"):
+            try:
+                try:
+                    from bot.execution_authority_context import _runtime_nonce_authority_status
+                except ImportError:
+                    from execution_authority_context import _runtime_nonce_authority_status  # type: ignore[import]
+                nonce_ok, nonce_detail = _runtime_nonce_authority_status()
+                if not nonce_ok:
+                    return False, f"nonce_manager_not_ready:{nonce_detail or 'blocked'}"
+            except Exception as exc:
+                return False, f"nonce_manager_status_unavailable:{exc}"
+
+        healthy, _now, _ts, age_s, authoritative = heartbeat_check(
+            source="runtime_authority_convergence"
+        )
+        max_age = heartbeat_max_age_s()
+        if not authoritative:
+            return False, "heartbeat_uninitialized"
+        if not healthy:
+            return False, f"heartbeat_stale age_s={age_s:.1f} max_age_s={max_age:.1f}"
+        return True, f"heartbeat_ready age_s={age_s:.1f} generation={generation}"
+
+    module._heartbeat_ready = _heartbeat_ready
+    setattr(module, _PATCHED, True)
+    logger.warning("HEARTBEAT_SINGLE_SOURCE_RUNTIME_CONVERGENCE_PATCHED module=%s", module.__name__)
+
+
+def _patch_execution_contract_authority(module: ModuleType) -> None:
+    """Make execution-contract proof consume canonical heartbeat freshness."""
+    if getattr(module, _PATCHED, False):
+        return
+
+    def authority_proof() -> tuple[bool, str]:
+        generation = str(os.environ.get("NIJA_WRITER_LEASE_GENERATION", "") or "").strip()
+        required = {
+            "live_capital": bool(module.truthy("LIVE_CAPITAL_VERIFIED")),
+            "runtime_authority": bool(module.truthy("NIJA_RUNTIME_EXECUTION_AUTHORITY")),
+            "heartbeat_active": _truthy("NIJA_WRITER_HEARTBEAT_ACTIVE"),
+            "fencing_token": bool(str(os.environ.get("NIJA_WRITER_FENCING_TOKEN", "")).strip()),
+            "lease_generation": bool(generation and generation != "0"),
+        }
+        if module.truthy("DRY_RUN_MODE") or module.truthy("PAPER_MODE"):
+            return False, "simulation_mode"
+        missing = [name for name, ok in required.items() if not ok]
+        if missing:
+            return False, "missing:" + ",".join(missing)
+
+        healthy, _now, _ts, age_s, authoritative = heartbeat_check(
+            source="execution_contract.authority_proof"
+        )
+        max_age = heartbeat_max_age_s()
+        if not authoritative:
+            return False, "heartbeat_uninitialized"
+        if not healthy:
+            return False, f"heartbeat_stale:age_s={age_s:.1f}:max_age_s={max_age:.1f}"
+        try:
+            from bot.kill_switch import get_kill_switch
+            if bool(get_kill_switch().is_active()):
+                return False, "kill_switch_active"
+        except Exception as exc:
+            return False, f"kill_switch_probe_failed:{exc}"
+        try:
+            from bot.bootstrap_state_machine import get_bootstrap_fsm
+            fsm = get_bootstrap_fsm()
+            has_auth = fsm.has_execution_authority() if hasattr(fsm, "has_execution_authority") else bool(getattr(fsm, "execution_authority", False))
+            if not has_auth:
+                return False, "bootstrap_execution_authority_false"
+        except Exception as exc:
+            return False, f"bootstrap_authority_unavailable:{exc}"
+        try:
+            from bot.execution_authority_context import assert_distributed_writer_authority
+            assert_distributed_writer_authority()
+        except Exception as exc:
+            return False, f"distributed_writer_not_ready:{exc}"
+        return True, f"writer_lineage_verified:generation={generation}:heartbeat_age_s={age_s:.1f}"
+
+    module.authority_proof = authority_proof
+    setattr(module, _PATCHED, True)
+    logger.warning("HEARTBEAT_SINGLE_SOURCE_EXECUTION_CONTRACT_PATCHED module=%s", module.__name__)
+
+
+def _patch_three_venue_execution_readiness(module: ModuleType) -> None:
+    """Make venue readiness report the same heartbeat decision as WriterAuthority."""
+    if getattr(module, _PATCHED, False):
+        return
+
+    def writer_authority_snapshot(*, now: float | None = None) -> dict[str, Any]:
+        try:
+            from bot.writer_authority import WriterAuthority
+        except ImportError:
+            from writer_authority import WriterAuthority  # type: ignore[import]
+        status = WriterAuthority.get_status(
+            force_refresh=False,
+            enforce_active_invariant=False,
+        )
+        checks = status.checks
+        writer_state = status.state
+        state_allows_execution = writer_state in {"ACTIVE", "REFRESHING"}
+        core_loop_alive = bool(module._writer_core_loop_alive())
+        heartbeat_active = bool(checks.get("heartbeat_active", _truthy("NIJA_WRITER_HEARTBEAT_ACTIVE")))
+        healthy, _now, heartbeat_ts, age_s, authoritative = heartbeat_check(
+            source="three_venue_execution_readiness"
+        )
+        heartbeat_healthy = bool(heartbeat_active and healthy and authoritative)
+        heartbeat_effective = bool(heartbeat_healthy or writer_state == "REFRESHING")
+        lease_effective = bool(checks.get("lease_acquired", _truthy("NIJA_WRITER_LEASE_ACQUIRED")))
+        fencing_token = bool(
+            checks.get(
+                "fencing_token_active",
+                bool(str(os.getenv("NIJA_WRITER_FENCING_TOKEN", "") or "").strip()),
+            )
+        )
+        return {
+            "lease_acquired": lease_effective,
+            "lease_acquired_raw": _truthy("NIJA_WRITER_LEASE_ACQUIRED"),
+            "fencing_token": fencing_token,
+            "writer_state": writer_state or "UNKNOWN",
+            "state_allows_execution": state_allows_execution,
+            "heartbeat_active": heartbeat_active,
+            "heartbeat_alive_ts": heartbeat_ts,
+            "heartbeat_age_s": age_s,
+            "heartbeat_max_age_s": heartbeat_max_age_s(),
+            "heartbeat_healthy": heartbeat_healthy,
+            "heartbeat_effective": heartbeat_effective,
+            "core_loop_alive": core_loop_alive,
+            "authority_verified": bool(checks.get("authority_verified", False)),
+            "redis_reachable": bool(checks.get("redis_reachable", False)),
+            "checks": checks,
+            "missing": list(status.missing),
+            "source": status.source,
+            "reason": status.reason,
+            "ready": bool(status.ready),
+        }
+
+    module.writer_authority_snapshot = writer_authority_snapshot
+    setattr(module, _PATCHED, True)
+    logger.warning("HEARTBEAT_SINGLE_SOURCE_THREE_VENUE_PATCHED module=%s", module.__name__)
+
+
 def _patch_loaded_modules() -> None:
     import sys
 
@@ -299,6 +476,12 @@ def _patch_loaded_modules() -> None:
         ("writer_authority", _patch_writer_authority),
         ("bot.trading_state_machine", _patch_trading_state_machine),
         ("trading_state_machine", _patch_trading_state_machine),
+        ("bot.runtime_authority_convergence_repair_patch", _patch_runtime_authority_convergence),
+        ("runtime_authority_convergence_repair_patch", _patch_runtime_authority_convergence),
+        ("bot.execution_contract_authority", _patch_execution_contract_authority),
+        ("execution_contract_authority", _patch_execution_contract_authority),
+        ("three_venue_execution_readiness", _patch_three_venue_execution_readiness),
+        ("bot.three_venue_execution_readiness", _patch_three_venue_execution_readiness),
     )
     for name, patcher in targets:
         module = sys.modules.get(name)
@@ -318,11 +501,17 @@ def install_import_hook() -> None:
 
     def guarded_import(name: str, globals: Any = None, locals: Any = None, fromlist: Any = (), level: int = 0):
         module = original_import(name, globals, locals, fromlist, level)
-        if (
-            name.endswith("entrypoint_writer_authority")
-            or name.endswith("authority_heartbeat")
-            or name.endswith("writer_authority")
-            or name.endswith("trading_state_machine")
+        if any(
+            name.endswith(target)
+            for target in (
+                "entrypoint_writer_authority",
+                "authority_heartbeat",
+                "writer_authority",
+                "trading_state_machine",
+                "runtime_authority_convergence_repair_patch",
+                "execution_contract_authority",
+                "three_venue_execution_readiness",
+            )
         ):
             try:
                 _patch_loaded_modules()
