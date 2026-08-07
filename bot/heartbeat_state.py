@@ -36,7 +36,7 @@ class HeartbeatSnapshot(NamedTuple):
     """Authority lineage generation number at time of heartbeat."""
 
     healthy: bool
-    """True when the most recent heartbeat completed without error."""
+    """True when a successful heartbeat has established current authority."""
 
     marker_timestamp: float
     """Unix timestamp of the most recent file-marker write (0.0 if never written)."""
@@ -88,9 +88,14 @@ class HeartbeatState:
         return snap
 
     def record_heartbeat_failure(self) -> HeartbeatSnapshot:
-        """Mark the heartbeat unhealthy without changing its success timestamp."""
+        """Record a failed probe without invalidating a still-fresh success.
+
+        A transient Redis/probe error is not the same event as authority loss.
+        Freshness expires naturally from the monotonic timestamp, while genuine
+        lease loss calls :meth:`reset` immediately. This prevents the invalid
+        state ``heartbeat_active=True`` + recent success + ``healthy=False``.
+        """
         with self._lock:
-            self._healthy = False
             snap = self._snapshot()
         return snap
 
