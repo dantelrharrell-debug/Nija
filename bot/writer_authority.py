@@ -140,6 +140,7 @@ class WriterAuthority:
         local_authority_observed = False
         local_authority_acquired = False
         local_authority_lost = False
+        local_authority_known_state = False
         local_instance_id = ""
         try:
             try:
@@ -158,15 +159,26 @@ class WriterAuthority:
                     or getattr(authority, "_instance_id", "")
                     or ""
                 )
+                local_authority_known_state = bool(
+                    local_authority_acquired
+                    or local_authority_lost
+                    or local_instance_id
+                )
                 if not core_thread_alive:
                     runtime_core = getattr(authority, "_core_thread", None)
-                    alive_reader = getattr(runtime_core, "is_alive", None)
-                    core_thread_alive = bool(alive_reader()) if callable(alive_reader) else False
+                    if runtime_core is None and local_authority_acquired and not local_authority_lost:
+                        # Startup grace: lease is active but the core thread has
+                        # not yet been registered by bot_main.
+                        core_thread_alive = True
+                    else:
+                        alive_reader = getattr(runtime_core, "is_alive", None)
+                        core_thread_alive = bool(alive_reader()) if callable(alive_reader) else False
         except Exception:
             pass
 
         local_authority_gate = bool(
             (not local_authority_observed)
+            or (not local_authority_known_state)
             or (local_authority_acquired and not local_authority_lost)
         )
         try:
@@ -226,6 +238,7 @@ class WriterAuthority:
                 "local_authority_observed": local_authority_observed,
                 "local_authority_acquired": local_authority_acquired,
                 "local_authority_lost": local_authority_lost,
+                "local_authority_known_state": local_authority_known_state,
                 "local_instance_id_present": bool(local_instance_id),
             },
             missing=missing,
