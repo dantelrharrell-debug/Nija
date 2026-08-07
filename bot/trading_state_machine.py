@@ -357,10 +357,10 @@ def _writer_heartbeat_gate() -> tuple[bool, str]:
     try:
         max_age_s = max(
             1.0,
-            float(os.environ.get("NIJA_WRITER_HEARTBEAT_MAX_AGE_S", "90") or 90.0),
+            float(os.environ.get("NIJA_WRITER_HEARTBEAT_MAX_AGE_S", "120") or 120.0),
         )
     except (TypeError, ValueError):
-        max_age_s = 90.0
+        max_age_s = 120.0
 
     age_s = max(0.0, time.time() - alive_ts)
     if age_s > max_age_s:
@@ -2992,6 +2992,30 @@ class TradingStateMachine:
                                 },
                             )
                             # Force a re-evaluation of the convergence path.
+                            # First attempt to restart the heartbeat monitor if it
+                            # is locked down but the writer-authority singleton still
+                            # holds the lease.  A locked-down monitor is the primary
+                            # reason converge_runtime_authority() fails even when all
+                            # semantic gates (capital, kill-switch, etc.) are satisfied:
+                            # _heartbeat_ready() checks NIJA_WRITER_HEARTBEAT_ACTIVE
+                            # which lockdown sets to "0", and the monitor loop has
+                            # exited so ALIVE_TS is never refreshed.
+                            try:
+                                try:
+                                    from bot.authority_heartbeat import start_authority_heartbeat
+                                except ImportError:
+                                    from authority_heartbeat import start_authority_heartbeat  # type: ignore[import]
+                                _hb_mon = start_authority_heartbeat()
+                                logger.critical(
+                                    "[AUTHORITY_TIMEOUT] watchdog restarted heartbeat monitor "
+                                    "locked_down=%s",
+                                    getattr(_hb_mon, "is_locked_down", "?"),
+                                )
+                            except Exception as _hb_restart_err:
+                                logger.warning(
+                                    "[AUTHORITY_TIMEOUT] watchdog heartbeat restart failed: %s",
+                                    _hb_restart_err,
+                                )
                             try:
                                 try:
                                     from bot.runtime_authority_convergence_repair_patch import (
