@@ -1,20 +1,14 @@
 """Canonical shared HeartbeatState for the NIJA writer-authority lifecycle.
 
 All modules that need to publish or read the current heartbeat health MUST
-use this singleton.  No module may maintain an independent heartbeat cache.
+use this singleton. No module may maintain an independent heartbeat cache.
 
-Lifecycle phases
-----------------
-BOOT             – process started, no lease held
-LEASE_ACQUIRED   – Redis writer lease successfully acquired
-SCAN_RUNNING     – first trading scan has been initiated
-SCAN_COMPLETE    – initial scan completed (startup-only deadline retired)
-LIVE             – steady-state; no startup timeouts apply
-
-Thread safety
--------------
-All public methods acquire ``_lock`` internally so callers never need to
-synchronise externally.
+Freshness contract
+------------------
+``timestamp`` remains a Unix epoch timestamp for telemetry and persisted
+markers. Freshness is measured only from the process-local monotonic clock so
+wall-clock adjustments cannot make a live heartbeat appear stale (or make a
+stale heartbeat appear fresh).
 """
 from __future__ import annotations
 
@@ -52,14 +46,12 @@ class HeartbeatSnapshot(NamedTuple):
 
 
 class HeartbeatState:
-    """Thread-safe, canonical heartbeat state shared across all authority modules.
-
-    Singleton access: use :func:`get_heartbeat_state`.
-    """
+    """Thread-safe, canonical heartbeat state shared across all authority modules."""
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._timestamp: float = 0.0
+        self._monotonic_timestamp: float = 0.0
         self._generation: int = 0
         self._healthy: bool = False
         self._marker_timestamp: float = 0.0
@@ -74,25 +66,20 @@ class HeartbeatState:
         *,
         generation: int,
         marker_timestamp: float = 0.0,
+        timestamp: float = 0.0,
+        monotonic_timestamp: float = 0.0,
     ) -> HeartbeatSnapshot:
-        """Atomically record a *successful* heartbeat.
+        """Atomically record a successful heartbeat.
 
-        Parameters
-        ----------
-        generation:
-            The authority-lineage generation number as of this beat.
-        marker_timestamp:
-            Unix timestamp of the associated file-marker write, or 0.0 if no
-            marker was written during this beat.
-
-        Returns
-        -------
-        HeartbeatSnapshot
-            The new canonical state immediately after the update.
+        ``timestamp`` is the epoch value exported to logs/env/marker state.
+        ``monotonic_timestamp`` is the freshness origin. Callers normally omit
+        both and let this method sample the two clocks together.
         """
-        now = time.time()
+        epoch_now = float(timestamp or time.time())
+        mono_now = float(monotonic_timestamp or time.monotonic())
         with self._lock:
-            self._timestamp = now
+            self._timestamp = epoch_now
+            self._monotonic_timestamp = mono_now
             self._generation = generation
             self._healthy = True
             if marker_timestamp > 0.0:
@@ -101,44 +88,32 @@ class HeartbeatState:
         return snap
 
     def record_heartbeat_failure(self) -> HeartbeatSnapshot:
-        """Mark the heartbeat as unhealthy without changing the timestamp."""
+        """Mark the heartbeat unhealthy without changing its success timestamp."""
         with self._lock:
             self._healthy = False
             snap = self._snapshot()
         return snap
 
     def advance_phase(self, phase: WriterLifecyclePhase) -> None:
-        """Advance the lifecycle phase.
-
-        Phases must progress forward; attempts to regress are silently ignored.
-        """
-        _order = list(WriterLifecyclePhase)
+        """Advance the lifecycle phase; regressions are ignored."""
+        order = list(WriterLifecyclePhase)
         with self._lock:
-            if _order.index(phase) > _order.index(self._phase):
+            if order.index(phase) > order.index(self._phase):
                 self._phase = phase
 
     def recover_health(self, *, max_age_s: float = 180.0) -> bool:
-        """Restore ``healthy=True`` when the last heartbeat timestamp is recent.
-
-        Called when external authority evidence (e.g. a live Redis lease and a
-        running heartbeat loop) confirms liveness even though a previous
-        :meth:`record_heartbeat_failure` set ``healthy=False``.  Only repairs
-        when the stored timestamp is within *max_age_s* seconds, so a genuinely
-        stale or never-initialised state is never falsely healed.
-
-        Returns ``True`` when the repair was applied, ``False`` when skipped
-        (either ``_healthy`` was already ``True``, or the timestamp is too old /
-        not set).
-        """
-        now = time.time()
+        """Restore healthy=True only when the last success is still fresh."""
+        mono_now = time.monotonic()
+        epoch_now = time.time()
         with self._lock:
             if self._healthy:
                 return False
-            if self._timestamp <= 0.0:
+            if self._timestamp <= 0.0 or self._monotonic_timestamp <= 0.0:
                 return False
-            if (now - self._timestamp) > max_age_s:
+            if (mono_now - self._monotonic_timestamp) > max_age_s:
                 return False
-            self._timestamp = now
+            self._timestamp = epoch_now
+            self._monotonic_timestamp = mono_now
             self._healthy = True
         return True
 
@@ -146,6 +121,7 @@ class HeartbeatState:
         """Reset all state to BOOT (used when writer lease is released)."""
         with self._lock:
             self._timestamp = 0.0
+            self._monotonic_timestamp = 0.0
             self._generation = 0
             self._healthy = False
             self._marker_timestamp = 0.0
@@ -156,23 +132,56 @@ class HeartbeatState:
     # ------------------------------------------------------------------ #
 
     def snapshot(self) -> HeartbeatSnapshot:
-        """Return a consistent point-in-time view of all heartbeat fields."""
+        """Return a consistent point-in-time view of all public fields."""
         with self._lock:
             return self._snapshot()
 
-    def is_fresh(self, max_age_s: float = 90.0) -> bool:
-        """Return True when the last successful heartbeat is within *max_age_s*."""
+    def health_for_generation(
+        self,
+        *,
+        expected_generation: int,
+        max_age_s: float,
+    ) -> tuple[bool, float, bool, float]:
+        """Return the one canonical heartbeat freshness decision.
+
+        Returns ``(healthy, age_s, authoritative, heartbeat_ts)``. The result is
+        authoritative only after a successful heartbeat for the expected
+        generation has been recorded. Age is always calculated with monotonic
+        time; ``heartbeat_ts`` is the corresponding epoch timestamp for logs.
+        """
+        mono_now = time.monotonic()
         with self._lock:
-            if not self._healthy or self._timestamp <= 0.0:
+            authoritative = bool(
+                expected_generation > 0
+                and self._generation == expected_generation
+                and self._timestamp > 0.0
+                and self._monotonic_timestamp > 0.0
+            )
+            if not authoritative:
+                return False, float("inf"), False, self._timestamp
+            age_s = max(0.0, mono_now - self._monotonic_timestamp)
+            healthy = bool(self._healthy and age_s <= max_age_s)
+            return healthy, age_s, True, self._timestamp
+
+    def is_fresh(self, max_age_s: float = 90.0) -> bool:
+        """Return True when the last successful heartbeat is fresh and healthy."""
+        mono_now = time.monotonic()
+        with self._lock:
+            if (
+                not self._healthy
+                or self._timestamp <= 0.0
+                or self._monotonic_timestamp <= 0.0
+            ):
                 return False
-            return (time.time() - self._timestamp) <= max_age_s
+            return (mono_now - self._monotonic_timestamp) <= max_age_s
 
     def age_s(self) -> float:
         """Seconds since the last successful heartbeat (inf when never beaten)."""
+        mono_now = time.monotonic()
         with self._lock:
-            if self._timestamp <= 0.0:
+            if self._monotonic_timestamp <= 0.0:
                 return float("inf")
-            return max(0.0, time.time() - self._timestamp)
+            return max(0.0, mono_now - self._monotonic_timestamp)
 
     @property
     def phase(self) -> WriterLifecyclePhase:
@@ -181,13 +190,8 @@ class HeartbeatState:
 
     @property
     def is_live(self) -> bool:
-        """True when lifecycle has reached the LIVE steady-state phase."""
         with self._lock:
             return self._phase == WriterLifecyclePhase.LIVE
-
-    # ------------------------------------------------------------------ #
-    # Internal helpers                                                     #
-    # ------------------------------------------------------------------ #
 
     def _snapshot(self) -> HeartbeatSnapshot:
         """Must be called with ``_lock`` held."""
@@ -199,10 +203,6 @@ class HeartbeatState:
             phase=self._phase,
         )
 
-
-# ------------------------------------------------------------------ #
-# Module-level singleton                                               #
-# ------------------------------------------------------------------ #
 
 _SINGLETON_LOCK = threading.Lock()
 _SINGLETON: Optional[HeartbeatState] = None
