@@ -6,6 +6,7 @@ import unittest
 from unittest.mock import patch
 
 from bot import trading_state_machine as module
+from bot.execution_router import ExecutionRouter
 
 
 class _Broker:
@@ -80,3 +81,39 @@ class ExecutionReadinessRegistryFallbackTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ExecutionRouterCanonicalRegistryTests(unittest.TestCase):
+    def test_report_uses_canonical_broker_registry_when_router_registry_is_empty(self):
+        manager = types.SimpleNamespace(
+            get_all_brokers=lambda: {
+                "coinbase": types.SimpleNamespace(
+                    broker_type=types.SimpleNamespace(value="coinbase"),
+                    connected=True,
+                ),
+                "kraken": types.SimpleNamespace(
+                    broker_type=types.SimpleNamespace(value="kraken"),
+                    connected=True,
+                ),
+                "okx": types.SimpleNamespace(
+                    broker_type=types.SimpleNamespace(value="okx"),
+                    connected=False,
+                ),
+            }
+        )
+        manager_module = types.ModuleType("bot.multi_account_broker_manager")
+        manager_module.get_broker_manager = lambda: manager
+
+        router = ExecutionRouter()
+        with patch.dict(sys.modules, {"bot.multi_account_broker_manager": manager_module}):
+            report = router.get_report()
+
+        self.assertEqual(report["registered_venues"], 3)
+        self.assertEqual(
+            sorted(venue["name"] for venue in report["venues"]),
+            ["coinbase", "kraken", "okx"],
+        )
+        self.assertEqual(
+            {venue["name"]: venue["available"] for venue in report["venues"]},
+            {"coinbase": True, "kraken": True, "okx": False},
+        )

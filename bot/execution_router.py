@@ -56,6 +56,7 @@ Date: March 2026
 from __future__ import annotations
 
 import logging
+import sys
 import threading
 import time
 from dataclasses import dataclass, field
@@ -287,6 +288,59 @@ class ExecutionRouter:
                 self._venues[venue_name].available = available
                 status = "✅" if available else "⛔"
                 logger.info("%s Venue availability changed: %s → %s", status, venue_name, available)
+
+    def _canonical_manager_venues_locked(self) -> Dict[str, VenueProfile]:
+        """Build canonical venue profiles from the live broker manager when available."""
+        manager = None
+        for mod_name in (
+            "bot.multi_account_broker_manager",
+            "multi_account_broker_manager",
+            "bot.broker_manager",
+            "broker_manager",
+        ):
+            mod = sys.modules.get(mod_name)
+            if mod is None:
+                continue
+            getter = getattr(mod, "get_broker_manager", None)
+            if callable(getter):
+                try:
+                    manager = getter()
+                except Exception:
+                    manager = None
+            if manager is None:
+                manager = getattr(mod, "broker_manager", None)
+            if manager is not None:
+                break
+
+        if manager is None:
+            return {}
+
+        get_all_brokers = getattr(manager, "get_all_brokers", None)
+        if not callable(get_all_brokers):
+            return {}
+
+        try:
+            brokers = dict(get_all_brokers() or {})
+        except Exception:
+            return {}
+
+        canonical: Dict[str, VenueProfile] = {}
+        for broker in brokers.values():
+            broker_type = getattr(broker, "broker_type", None)
+            venue_name = str(getattr(broker_type, "value", broker_type) or "").strip().lower()
+            if not venue_name:
+                continue
+            canonical[venue_name] = VenueProfile(
+                name=venue_name,
+                available=bool(getattr(broker, "connected", False)),
+            )
+        return canonical
+
+    def _reportable_venues_locked(self) -> Dict[str, VenueProfile]:
+        """Return the canonical venue registry for reporting and readiness checks."""
+        if self._venues:
+            return dict(self._venues)
+        return self._canonical_manager_venues_locked()
 
     # ------------------------------------------------------------------
     # Core execution
@@ -754,6 +808,7 @@ class ExecutionRouter:
     def get_report(self) -> Dict[str, Any]:
         """Return a serialisable status snapshot."""
         with self._lock:
+            venues = self._reportable_venues_locked()
             avg_slippage = (
                 self._total_slippage_bps / (self._total_orders - self._failed_orders)
                 if (self._total_orders - self._failed_orders) > 0
@@ -767,7 +822,7 @@ class ExecutionRouter:
                     "latency_ms": v.latency_ms,
                     "liquidity_score": v.liquidity_score,
                 }
-                for v in self._venues.values()
+                for v in venues.values()
             ]
             return {
                 "engine": "ExecutionRouter",
@@ -779,7 +834,7 @@ class ExecutionRouter:
                     (1 - self._failed_orders / max(self._total_orders, 1)) * 100, 1
                 ),
                 "avg_slippage_bps": round(avg_slippage, 2),
-                "registered_venues": len(self._venues),
+                "registered_venues": len(venues),
                 "session_failed_venues": sorted(self._session_failed_venues),
                 "venues": venues_info,
                 "subsystems": {
