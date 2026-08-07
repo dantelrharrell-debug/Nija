@@ -1275,13 +1275,16 @@ class EntrypointWriterAuthority:
                 )
                 logger.info(
                     "WRITER_LOCK_RENEWED marker=%s token_prefix=%s generation=%s "
-                    "instance_id=%s pid=%d core_thread_alive=%s",
+                    "instance_id=%s pid=%d core_thread_alive=%s "
+                    "core_thread_registered=%s core_thread_reason=%s",
                     _MARKER,
                     self._token[:8],
                     self._generation,
                     self._instance_id,
                     os.getpid(),
-                    bool(self._core_thread and self._core_thread.is_alive()),
+                    core_ok,
+                    bool(self._core_thread is not None),
+                    "ok" if core_ok else core_reason,
                 )
                 if code == 2:
                     logger.warning(
