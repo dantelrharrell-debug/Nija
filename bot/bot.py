@@ -26,6 +26,7 @@ _FAST_PATH_MARKER = "20260725-canonical-fast-entrypoint-v28"
 _FAST_PATH_INSTALLERS = (
     ("bot.heartbeat_authority_single_source_patch", "HEARTBEAT_AUTHORITY_SINGLE_SOURCE"),
     ("bot.activation_convergence_v17_patch", "ACTIVATION_CONVERGENCE_V17"),
+    ("bot.activation_convergence_v17_importlib_bridge", "ACTIVATION_CONVERGENCE_V17_IMPORTLIB_BRIDGE"),
     ("bot.okx_patch_churn_guard_patch", "OKX_PATCH_CHURN_GUARD"),
     ("bot.disconnected_coinbase_balance_guard_patch", "COINBASE_BALANCE_DISCONNECTED_GUARD"),
     ("bot.live_capital_first_snapshot_latch_patch", "LIVE_CAPITAL_FIRST_SNAPSHOT_LATCH"),
