@@ -537,6 +537,116 @@ class TestHeartbeatSafetyGating(unittest.TestCase):
             self.assertFalse(second_ok)
             self.assertEqual(second_reason, "writer_heartbeat_inactive")
 
+
+class TestCoordinatorCommitOrdering(unittest.TestCase):
+    def test_commit_activation_finalizes_coordinator_before_live_transition(self) -> None:
+        import tempfile
+
+        from bot.startup_coordinator import get_startup_coordinator
+        from bot.trading_state_machine import TradingStateMachine
+
+        coordinator = get_startup_coordinator()
+        coordinator.reset_for_testing()
+        coordinator.record_threads_supervised(1, bootstrap_state="RUNNING_SUPERVISED")
+
+        class _ReadyCA:
+            is_hydrated = True
+
+            @staticmethod
+            def get_real_capital() -> float:
+                return 131.11
+
+            @staticmethod
+            def is_stale(ttl_s: float = 90.0) -> bool:
+                return False
+
+        order: list[str] = []
+        original_finalize = coordinator.finalize_activation_commit
+
+        def _finalize(snapshot):
+            order.append("finalize")
+            return original_finalize(snapshot)
+
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(
+            os.environ,
+            {
+                "LIVE_CAPITAL_VERIFIED": "true",
+                "DRY_RUN_MODE": "false",
+                "AUTO_ACTIVATE": "false",
+                "HEARTBEAT_TRADE": "false",
+                "HEARTBEAT_REQUIRED_FIRST_ACTIVATION": "false",
+                "NIJA_FORCE_ACTIVATION": "false",
+            },
+            clear=False,
+        ), patch(
+            "bot.authority_heartbeat.start_authority_heartbeat",
+            return_value=None,
+        ), patch(
+            "bot.trading_state_machine._collect_live_gate_status",
+            return_value={
+                "safe_ok": True,
+                "safe_err": "",
+                "recon_ok": True,
+                "recon_err": "",
+                "nonce_ok": True,
+                "nonce_err": "",
+                "lease_ok": True,
+                "lease_err": "",
+                "heartbeat_ok": True,
+                "heartbeat_err": "",
+                "strategy_ok": True,
+                "strategy_err": "",
+                "breaker_ok": True,
+                "breaker_err": "",
+            },
+        ), patch(
+            "bot.trading_state_machine._is_authority_ready",
+            return_value=True,
+        ), patch(
+            "bot.trading_state_machine._nonce_writer_lease_gate",
+            return_value=(True, ""),
+        ), patch(
+            "bot.trading_state_machine._get_capital_authority_instance",
+            return_value=_ReadyCA(),
+        ), patch(
+            "bot.trading_state_machine._capital_bootstrap_state_value",
+            return_value="RUNNING",
+        ), patch(
+            "bot.trading_state_machine._bootstrap_state_value",
+            return_value="RUNNING_SUPERVISED",
+        ), patch(
+            "bot.trading_state_machine._readiness_snapshot_with_version",
+            return_value=(1, {"bootstrap_ready": True, "broker_connected": True}),
+        ), patch(
+            "bot.trading_state_machine._global_activation_barrier",
+            return_value=(True, "ok", True, True, True, True),
+        ), patch(
+            "bot.trading_state_machine._distributed_writer_authority_gate",
+            return_value=(True, ""),
+        ), patch(
+            "bot.revocation_guard.check_revocation_or_raise",
+            return_value=None,
+        ), patch.object(
+            coordinator,
+            "finalize_activation_commit",
+            side_effect=_finalize,
+        ):
+            sm = TradingStateMachine(state_file=os.path.join(tmp, "state.json"))
+            original_transition = sm.transition_to
+
+            def _transition(*args, **kwargs):
+                order.append("transition")
+                return original_transition(*args, **kwargs)
+
+            with patch.object(sm, "transition_to", side_effect=_transition):
+                self.assertTrue(
+                    sm.commit_activation(
+                        cycle_capital={"ca_valid_brokers": 1, "snapshot_source": "live_exchange"}
+                    )
+                )
+
+        self.assertEqual(order[:2], ["finalize", "transition"])
+
     def test_heartbeat_verification_required_when_heartbeat_trade_enabled(self) -> None:
         with patch.dict(
             os.environ,

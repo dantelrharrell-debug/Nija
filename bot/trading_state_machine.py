@@ -1764,7 +1764,13 @@ class TradingStateMachine:
         )
         return False
 
-    def transition_to(self, new_state: TradingState, reason: str = "") -> bool:
+    def transition_to(
+        self,
+        new_state: TradingState,
+        reason: str = "",
+        *,
+        _skip_live_preflight: bool = False,
+    ) -> bool:
         """
         Attempt to transition to a new state.
 
@@ -1790,7 +1796,7 @@ class TradingStateMachine:
         # ── Pre-flight safety checks (I/O outside the lock) ──────────────────
         # These gates do not depend on the current FSM state; they are safety
         # invariants that must pass before any LIVE_ACTIVE transition.
-        if new_state == TradingState.LIVE_ACTIVE:
+        if new_state == TradingState.LIVE_ACTIVE and not _skip_live_preflight:
             # Enforce distributed writer authority before ANY LIVE_ACTIVE transition.
             _writer_ok, _writer_err = _distributed_writer_authority_gate()
             if not _writer_ok:
@@ -3011,6 +3017,8 @@ class TradingStateMachine:
 
         _coordinator_committed = False
         try:
+            _coordinator.finalize_activation_commit(_frozen_snapshot)
+            _coordinator_committed = True
             self._first_snap_accepted = True
             logger.critical("🚀 ACTIVATING TRADING ENGINE")
             logger.critical(
@@ -3022,6 +3030,7 @@ class TradingStateMachine:
             self.transition_to(
                 TradingState.LIVE_ACTIVE,
                 f"STARTUP_COORDINATOR_COMMIT version={_frozen_snapshot.snapshot_version}",
+                _skip_live_preflight=True,
             )
             # transition_to() atomically sets _activation_committed, _execution_authority,
             # _core_loop_owns_execution, _can_dispatch_trades, and
@@ -3030,8 +3039,6 @@ class TradingStateMachine:
             assert self._current_state == TradingState.LIVE_ACTIVE, (
                 f"FSM state must be LIVE_ACTIVE after activation, got {self._current_state}"
             )
-            _coordinator.finalize_activation_commit(_frozen_snapshot)
-            _coordinator_committed = True
             logger.critical(
                 "ACTIVATION_COMMIT committed=true snapshot_version=%s",
                 _frozen_snapshot.snapshot_version,
@@ -3082,6 +3089,17 @@ class TradingStateMachine:
                         "ACTIVATION_ROLLED_BACK reason=coordinator_commit_failed "
                         "state=LIVE_PENDING_CONFIRMATION execution_authority=false"
                     )
+            else:
+                with self._lock:
+                    _committed_live_state = self._current_state == TradingState.LIVE_ACTIVE
+                logger.critical(
+                    "ACTIVATION_COMMIT_FINALIZED coordinator_committed=true "
+                    "rollback_suppressed=true live_state=%s error=%s",
+                    _committed_live_state,
+                    exc,
+                )
+                if _committed_live_state:
+                    return True
             logger.error(
                 "[AUTO_ACTIVATE BLOCKED] reason=COMMIT_TRANSITION_FAILED error=%s",
                 exc,
