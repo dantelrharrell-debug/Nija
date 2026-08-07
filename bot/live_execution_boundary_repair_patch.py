@@ -13,6 +13,11 @@ from datetime import datetime, timezone
 from types import ModuleType
 from typing import Any, Callable, Optional
 
+try:
+    from bot.execution_chain_guard import chain_has_attr as _chain_has_attr
+except ImportError:
+    from execution_chain_guard import chain_has_attr as _chain_has_attr  # type: ignore[import]
+
 logger = logging.getLogger("nija.live_execution_boundary_repair")
 
 _TRUTHY = {"1", "true", "yes", "on", "enabled", "y"}
@@ -349,7 +354,7 @@ def _patch_execution_pipeline(module: ModuleType) -> bool:
         setattr(cls, "_on_order_rejected", _patched_on_order_rejected)
 
     original_execute = getattr(cls, "execute", None)
-    if callable(original_execute) and not getattr(original_execute, "_nija_boundary_execute_wrapped", False):
+    if callable(original_execute) and not _chain_has_attr(original_execute, "_nija_boundary_execute_wrapped"):
         def _patched_execute(self: Any, request: Any):
             symbol = _norm_symbol(getattr(request, "symbol", ""))
             side = str(getattr(request, "side", "") or "")
@@ -381,6 +386,7 @@ def _patch_execution_pipeline(module: ModuleType) -> bool:
             return result
 
         setattr(_patched_execute, "_nija_boundary_execute_wrapped", True)
+        setattr(_patched_execute, "__wrapped__", original_execute)
         setattr(cls, "execute", _patched_execute)
 
     logger.warning("LIVE_EXECUTION_BOUNDARY_REPAIR_PATCHED execution_pipeline module=%s", getattr(module, "__name__", "<unknown>"))

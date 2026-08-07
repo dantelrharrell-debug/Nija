@@ -8,6 +8,11 @@ from functools import wraps
 from types import ModuleType
 from typing import Any
 
+try:
+    from bot.execution_chain_guard import chain_has_attr as _chain_has_attr
+except ImportError:
+    from execution_chain_guard import chain_has_attr as _chain_has_attr  # type: ignore[import]
+
 logger = logging.getLogger("nija.live_execution_terminal_guard")
 
 _MARKER = "LIVE_EXECUTION_TERMINAL_GUARD marker=20260707k"
@@ -230,7 +235,7 @@ def _patch_trade_permission_engine(module: ModuleType) -> bool:
     if not isinstance(cls, type):
         return False
     original = getattr(cls, "evaluate", None)
-    if not callable(original) or getattr(original, "_nija_terminal_guard_wrapped", False):
+    if not callable(original) or _chain_has_attr(original, "_nija_terminal_guard_wrapped"):
         return False
 
     @wraps(original)
@@ -331,7 +336,7 @@ def _patch_execution_pipeline(module: ModuleType) -> bool:
     if not isinstance(cls, type) or PipelineResult is None:
         return False
     original = getattr(cls, "execute", None)
-    if not callable(original) or getattr(original, "_nija_terminal_guard_wrapped", False):
+    if not callable(original) or _chain_has_attr(original, "_nija_terminal_guard_wrapped"):
         return False
 
     @wraps(original)
@@ -407,7 +412,7 @@ def _patch_multi_broker_router(module: ModuleType) -> bool:
     if not isinstance(cls, type) or RouteResult is None:
         return False
     original = getattr(cls, "route", None)
-    if not callable(original) or getattr(original, "_nija_terminal_guard_wrapped", False):
+    if not callable(original) or _chain_has_attr(original, "_nija_terminal_guard_wrapped"):
         return False
 
     @wraps(original)
@@ -449,7 +454,7 @@ def _patch_ai_hub(module: ModuleType) -> bool:
     if not isinstance(cls, type):
         return False
     original = getattr(cls, "evaluate_trade", None)
-    if not callable(original) or getattr(original, "_nija_terminal_guard_wrapped", False):
+    if not callable(original) or _chain_has_attr(original, "_nija_terminal_guard_wrapped"):
         return False
 
     @wraps(original)

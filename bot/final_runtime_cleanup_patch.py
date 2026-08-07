@@ -20,6 +20,11 @@ import time
 from types import ModuleType
 from typing import Any, Callable
 
+try:
+    from bot.execution_chain_guard import chain_has_attr as _chain_has_attr
+except ImportError:
+    from execution_chain_guard import chain_has_attr as _chain_has_attr  # type: ignore[import]
+
 logger = logging.getLogger("nija.final_runtime_cleanup")
 _MARKER = "20260717-final-runtime-cleanup-v1"
 _LOCK = threading.RLock()
@@ -177,8 +182,8 @@ def _make_denial(module: ModuleType, request: Any, reason: str, started: float) 
 def _patch_execution_pipeline(module: ModuleType) -> bool:
     cls = getattr(module, "ExecutionPipeline", None)
     current = getattr(cls, "execute", None) if isinstance(cls, type) else None
-    if not callable(current) or getattr(current, _PIPELINE_ATTR, False):
-        return bool(callable(current) and getattr(current, _PIPELINE_ATTR, False))
+    if not callable(current) or _chain_has_attr(current, _PIPELINE_ATTR):
+        return bool(callable(current) and _chain_has_attr(current, _PIPELINE_ATTR))
     original = current
 
     def execute(self: Any, request: Any, *args: Any, **kwargs: Any) -> Any:
