@@ -1,36 +1,47 @@
-"""Keep platform writer lineage isolated from user Kraken nonce leases.
+"""Separate Kraken nonce-lease generations from process writer authority.
 
-Each Kraken API key owns an independent Redis nonce lease.  The legacy backend
-published every per-key lease version into the process-wide
-NIJA_WRITER_LEASE_GENERATION variable and validated it against one global Redis
-counter.  Connecting user accounts therefore advanced the global counter and
-made the platform writer appear stale even though its own lease was healthy.
+The process writer lock and per-key Kraken nonce leases are distinct fencing
+systems.  They must never share a Redis generation counter or publish into the
+same environment variables.
 
-This repair makes the platform key's per-key lease version authoritative for
-process writer lineage and prevents user-key leases from mutating platform
-writer-generation state.
+Process writer authority is owned exclusively by EntrypointWriterAuthority:
+- Redis generation key: NIJA_LEASE_GENERATION_KEY (default nija:lease:generation)
+- Env generation: NIJA_WRITER_LEASE_GENERATION / NIJA_WRITER_GENERATION
+- Fencing token: NIJA_WRITER_FENCING_TOKEN
+
+Kraken nonce leases use their own generation domain:
+- Redis generation key: NIJA_KRAKEN_NONCE_LEASE_GENERATION_KEY
+  (default nija:kraken:writer:generation)
+- Platform telemetry env: NIJA_PLATFORM_NONCE_LEASE_GENERATION
+
+This compatibility patch is installed before nonce-manager construction on the
+canonical production path.  It never grants process writer authority and never
+copies a nonce lease version into process-writer lineage.
 """
 from __future__ import annotations
 
 import hashlib
+import importlib
 import logging
 import os
 import threading
 from types import ModuleType
-from typing import Any, Callable
+from typing import Any
 
 logger = logging.getLogger("nija.writer_generation_scope_repair")
-MARKER = "20260712f"
+MARKER = "20260807-writer-generation-domain-v2"
 _LOCK = threading.RLock()
 _LEASE_SCOPE = threading.local()
 _INSTALLED = False
-_LAST_PLATFORM_GENERATION: int | None = None
+_LAST_PLATFORM_NONCE_GENERATION: int | None = None
 
-_GENERATION_ENV_KEYS = (
-    "NIJA_WRITER_LEASE_GENERATION",
-    "NIJA_WRITER_LEASE_GENERATION_LAST",
-    "NIJA_WRITER_LEASE_GENERATION_EXPECTED",
-)
+_TRUE = {"1", "true", "yes", "on", "enabled", "y"}
+_PROCESS_GENERATION_REDIS_KEY_DEFAULT = "nija:lease:generation"
+_NONCE_GENERATION_REDIS_KEY_DEFAULT = "nija:kraken:writer:generation"
+
+
+def _truthy(name: str) -> bool:
+    return str(os.environ.get(name, "") or "").strip().lower() in _TRUE
 
 
 def _platform_api_key() -> str:
@@ -45,70 +56,188 @@ def _platform_key_id() -> str:
     return hashlib.sha256(raw.encode()).hexdigest()[:16] if raw else ""
 
 
-def _snapshot_generation_env() -> dict[str, str | None]:
-    return {name: os.environ.get(name) for name in _GENERATION_ENV_KEYS}
+def _process_generation_key() -> str:
+    return (
+        str(os.environ.get("NIJA_LEASE_GENERATION_KEY", "") or "").strip()
+        or _PROCESS_GENERATION_REDIS_KEY_DEFAULT
+    )
 
 
-def _restore_generation_env(snapshot: dict[str, str | None]) -> None:
-    for name, value in snapshot.items():
-        if value is None:
-            os.environ.pop(name, None)
-        else:
-            os.environ[name] = value
+def _nonce_generation_key() -> str:
+    requested = (
+        str(os.environ.get("NIJA_KRAKEN_NONCE_LEASE_GENERATION_KEY", "") or "").strip()
+        or _NONCE_GENERATION_REDIS_KEY_DEFAULT
+    )
+    process_key = _process_generation_key()
+    if requested == process_key:
+        logger.critical(
+            "NONCE_GENERATION_DOMAIN_COLLISION_REJECTED marker=%s requested=%s process_key=%s fallback=%s",
+            MARKER,
+            requested,
+            process_key,
+            _NONCE_GENERATION_REDIS_KEY_DEFAULT,
+        )
+        requested = _NONCE_GENERATION_REDIS_KEY_DEFAULT
+    os.environ["NIJA_KRAKEN_NONCE_LEASE_GENERATION_KEY"] = requested
+    return requested
+
+
+def _process_writer_established() -> bool:
+    generation = str(os.environ.get("NIJA_WRITER_LEASE_GENERATION", "") or "").strip()
+    token = str(os.environ.get("NIJA_WRITER_FENCING_TOKEN", "") or "").strip()
+    return bool(_truthy("NIJA_WRITER_LEASE_ACQUIRED") and generation and token)
+
+
+def _process_writer_snapshot() -> tuple[str, str, str, str]:
+    return (
+        str(os.environ.get("NIJA_WRITER_LEASE_GENERATION", "") or ""),
+        str(os.environ.get("NIJA_WRITER_LEASE_GENERATION_LAST", "") or ""),
+        str(os.environ.get("NIJA_WRITER_GENERATION", "") or ""),
+        str(os.environ.get("NIJA_WRITER_FENCING_TOKEN", "") or ""),
+    )
+
+
+def _restore_nonce_pollution_if_detected(
+    before: tuple[str, str, str, str],
+    lease_version: int,
+) -> None:
+    """Repair only a provable nonce overwrite without clobbering real re-election.
+
+    The replacement publisher below prevents the overwrite in normal operation.
+    This guard exists for copied/legacy backend wrappers.  It restores the prior
+    writer generation only when the fencing token is unchanged and the current
+    generation equals the nonce lease version that just returned.
+    """
+    before_gen, before_last, before_alias, before_token = before
+    after_token = str(os.environ.get("NIJA_WRITER_FENCING_TOKEN", "") or "")
+    after_gen = str(os.environ.get("NIJA_WRITER_LEASE_GENERATION", "") or "")
+    if not before_gen or not before_token or after_token != before_token:
+        return
+    if after_gen != str(int(lease_version)) or after_gen == before_gen:
+        return
+    os.environ["NIJA_WRITER_LEASE_GENERATION"] = before_gen
+    if before_last:
+        os.environ["NIJA_WRITER_LEASE_GENERATION_LAST"] = before_last
+    else:
+        os.environ.pop("NIJA_WRITER_LEASE_GENERATION_LAST", None)
+    if before_alias:
+        os.environ["NIJA_WRITER_GENERATION"] = before_alias
+    else:
+        os.environ.pop("NIJA_WRITER_GENERATION", None)
+    logger.critical(
+        "NONCE_GENERATION_PROCESS_WRITER_POLLUTION_REPAIRED marker=%s nonce_generation=%s restored_writer_generation=%s",
+        MARKER,
+        lease_version,
+        before_gen,
+    )
+
+
+def _publish_nonce_generation(key_id: str, lease_version: int) -> None:
+    global _LAST_PLATFORM_NONCE_GENERATION
+    os.environ["NIJA_NONCE_LEASE_ACQUIRED"] = "1"
+    os.environ["NIJA_NONCE_LEASE_GENERATION_KEY"] = _nonce_generation_key()
+    platform_id = _platform_key_id()
+    if platform_id and str(key_id) == platform_id:
+        os.environ["NIJA_PLATFORM_NONCE_LEASE_GENERATION"] = str(int(lease_version))
+        if _LAST_PLATFORM_NONCE_GENERATION != int(lease_version):
+            _LAST_PLATFORM_NONCE_GENERATION = int(lease_version)
+            logger.info(
+                "PLATFORM_NONCE_GENERATION_PUBLISHED marker=%s key_id=%s nonce_generation=%d process_writer_generation=%s",
+                MARKER,
+                key_id,
+                int(lease_version),
+                os.environ.get("NIJA_WRITER_LEASE_GENERATION", "unset"),
+            )
+
+
+def _advance_bootstrap_after_nonce_lease() -> None:
+    """Preserve the legacy bootstrap handoff only after process authority exists."""
+    if not _process_writer_established():
+        logger.warning(
+            "NONCE_LEASE_BOOTSTRAP_HANDOFF_DEFERRED marker=%s reason=process_writer_not_established",
+            MARKER,
+        )
+        return
+    try:
+        bootstrap_state = None
+        bootstrap_enum = None
+        for module_name in ("bot.bootstrap_state_machine", "bootstrap_state_machine"):
+            try:
+                module = importlib.import_module(module_name)
+                bootstrap_state = getattr(module, "get_bootstrap_fsm", lambda: None)()
+                bootstrap_enum = getattr(module, "BootstrapState", None)
+                if bootstrap_state is not None:
+                    break
+            except Exception:
+                continue
+        if bootstrap_state is None:
+            return
+        current_state = getattr(getattr(bootstrap_state, "state", None), "value", None)
+        if current_state is None:
+            current_state = getattr(bootstrap_state, "current_state", None)
+            current_state = getattr(current_state, "value", current_state)
+        if str(current_state) != "BOOT_INIT":
+            return
+        target = (
+            getattr(bootstrap_enum, "LOCK_ACQUIRED", None)
+            if bootstrap_enum is not None
+            else "LOCK_ACQUIRED"
+        )
+        transition = getattr(bootstrap_state, "transition", None)
+        if callable(transition):
+            try:
+                transition(target, reason="redis_nonce_lease_acquired_after_process_writer")
+            except TypeError:
+                transition(target, "redis_nonce_lease_acquired_after_process_writer")
+            logger.critical(
+                "[BOOTSTRAP FSM] BOOT_INIT -> LOCK_ACQUIRED reason=redis_nonce_lease_acquired_after_process_writer"
+            )
+    except Exception as exc:
+        logger.warning(
+            "NONCE_LEASE_BOOTSTRAP_HANDOFF_FAILED marker=%s err=%s",
+            MARKER,
+            exc,
+        )
 
 
 def _patch_nonce_backend(module: ModuleType) -> bool:
     backend = getattr(module, "_PerKeyRedisBackend", None)
     if not isinstance(backend, type):
         return False
-    original = getattr(backend, "_ensure_writer_lease", None)
-    if not callable(original) or getattr(original, "_nija_platform_generation_scoped", False):
-        return False
 
-    # The legacy repair restored process-wide generation variables only after
-    # ``_ensure_writer_lease`` returned.  The underlying method publishes its
-    # lease version before returning, so other threads could observe a user
-    # account's nonce-lease generation during that window and revoke platform
-    # execution authority.  Scope the publisher itself with thread-local key
-    # identity so a user lease never mutates platform lineage, even transiently.
-    publish_original = getattr(backend, "_publish_lock_acquired_state", None)
-    if callable(publish_original) and not getattr(
-        publish_original,
-        "_nija_platform_generation_scoped",
-        False,
+    # Separate the Redis counters before any lease script executes.  The Lua
+    # scripts receive this key at call time, so this also fixes existing backend
+    # instances that have not yet acquired/renewed a lease.
+    setattr(backend, "_LEASE_GENERATION_KEY", _nonce_generation_key())
+
+    publish_current = getattr(backend, "_publish_lock_acquired_state", None)
+    if callable(publish_current) and not getattr(
+        publish_current, "_nija_nonce_generation_domain_v2", False
     ):
-        def _publish_lock_acquired_state(
-            self: Any,
-            lease_version: int,
-            *args: Any,
-            **kwargs: Any,
-        ) -> Any:
+        def _publish_lock_acquired_state(self: Any, lease_version: int) -> None:
             key_id = str(getattr(_LEASE_SCOPE, "key_id", "") or "")
-            platform_id = _platform_key_id()
-            if key_id and platform_id and key_id != platform_id:
-                logger.debug(
-                    "USER_NONCE_LEASE_GLOBAL_PUBLICATION_SUPPRESSED "
-                    "marker=%s key_id=%s lease_version=%d",
-                    MARKER,
-                    key_id,
-                    lease_version,
-                )
-                return None
-            return publish_original(self, lease_version, *args, **kwargs)
+            _publish_nonce_generation(key_id, int(lease_version))
+            _advance_bootstrap_after_nonce_lease()
 
-        _publish_lock_acquired_state._nija_platform_generation_scoped = True  # type: ignore[attr-defined]
-        _publish_lock_acquired_state.__wrapped__ = publish_original  # type: ignore[attr-defined]
+        _publish_lock_acquired_state._nija_nonce_generation_domain_v2 = True  # type: ignore[attr-defined]
+        _publish_lock_acquired_state.__wrapped__ = publish_current  # type: ignore[attr-defined]
         setattr(backend, "_publish_lock_acquired_state", _publish_lock_acquired_state)
 
+    ensure_current = getattr(backend, "_ensure_writer_lease", None)
+    if not callable(ensure_current):
+        return False
+    if getattr(ensure_current, "_nija_nonce_generation_domain_v2", False):
+        return True
+
     def _ensure_writer_lease(self: Any, key_id: str, *args: Any, **kwargs: Any) -> int:
-        global _LAST_PLATFORM_GENERATION
-        platform_id = _platform_key_id()
-        is_platform = bool(platform_id and str(key_id) == platform_id)
-        before = _snapshot_generation_env()
+        before = _process_writer_snapshot()
         previous_key_id = getattr(_LEASE_SCOPE, "key_id", None)
         _LEASE_SCOPE.key_id = str(key_id)
         try:
-            version = int(original(self, key_id, *args, **kwargs))
+            # Re-assert the separated key in case another compatibility layer
+            # modified the class/instance attribute after installation.
+            setattr(self, "_LEASE_GENERATION_KEY", _nonce_generation_key())
+            version = int(ensure_current(self, key_id, *args, **kwargs))
         finally:
             if previous_key_id is None:
                 try:
@@ -117,68 +246,37 @@ def _patch_nonce_backend(module: ModuleType) -> bool:
                     pass
             else:
                 _LEASE_SCOPE.key_id = previous_key_id
-        if is_platform:
-            os.environ["NIJA_WRITER_LEASE_GENERATION"] = str(version)
-            os.environ["NIJA_WRITER_LEASE_GENERATION_LAST"] = str(version)
-            if _LAST_PLATFORM_GENERATION != version:
-                _LAST_PLATFORM_GENERATION = version
-                logger.info(
-                    "PLATFORM_WRITER_GENERATION_PUBLISHED marker=%s key_id=%s generation=%d",
-                    MARKER, key_id, version,
-                )
-        else:
-            _restore_generation_env(before)
-            logger.debug(
-                "USER_NONCE_LEASE_GENERATION_ISOLATED marker=%s key_id=%s lease_version=%d",
-                MARKER, key_id, version,
-            )
+        _restore_nonce_pollution_if_detected(before, version)
+        _publish_nonce_generation(str(key_id), version)
         return version
 
-    _ensure_writer_lease._nija_platform_generation_scoped = True  # type: ignore[attr-defined]
-    _ensure_writer_lease.__wrapped__ = original  # type: ignore[attr-defined]
+    _ensure_writer_lease._nija_nonce_generation_domain_v2 = True  # type: ignore[attr-defined]
+    _ensure_writer_lease.__wrapped__ = ensure_current  # type: ignore[attr-defined]
     setattr(backend, "_ensure_writer_lease", _ensure_writer_lease)
-    logger.warning("NONCE_LEASE_GENERATION_SCOPE_PATCHED marker=%s", MARKER)
+    logger.warning(
+        "NONCE_WRITER_GENERATION_DOMAIN_SEPARATED marker=%s nonce_key=%s process_key=%s",
+        MARKER,
+        _nonce_generation_key(),
+        _process_generation_key(),
+    )
     return True
 
 
 def _patch_generation_tracker(module: ModuleType) -> bool:
-    original = getattr(module, "get_redis_generation", None)
-    connector = getattr(module, "_connect_redis", None)
-    if not callable(original) or not callable(connector):
+    """Compatibility no-op: process writer tracker must remain process-scoped."""
+    getter = getattr(module, "get_redis_generation", None)
+    if not callable(getter):
         return False
-    if getattr(original, "_nija_platform_generation_scoped", False):
-        return False
-
-    def get_redis_generation() -> tuple[int, str]:
-        # Read the generation counter from the SAME Redis key that
-        # entrypoint_writer_authority increments atomically during lock
-        # acquisition: NIJA_LEASE_GENERATION_KEY (default "nija:lease:generation").
-        #
-        # The previous implementation read from the per-key nonce lease version
-        # ("nija:kraken:writer:lease_version:{key_id}"), which is only written by
-        # the Kraken nonce backend — not by entrypoint_writer_authority.  This
-        # caused validate_generation_for_heartbeat() to report
-        # "platform_lease_version_missing" even though the correct generation
-        # counter (nija:lease:generation) existed and matched the local env var.
-        redis_key = (
-            os.environ.get("NIJA_LEASE_GENERATION_KEY", "").strip()
-            or "nija:lease:generation"
-        )
-        client, err = connector(timeout_s=2)
-        if client is None:
-            return 0, err or "redis_unavailable"
+    if not getattr(getter, "_nija_process_writer_generation_domain_v2", False):
         try:
-            raw = client.get(redis_key)
-            if raw is None:
-                return 0, f"generation_key_missing:{redis_key}"
-            return max(0, int(str(raw).strip())), ""
-        except Exception as exc:
-            return 0, f"platform_generation_read_error:{exc}"
-
-    get_redis_generation._nija_platform_generation_scoped = True  # type: ignore[attr-defined]
-    get_redis_generation.__wrapped__ = original  # type: ignore[attr-defined]
-    setattr(module, "get_redis_generation", get_redis_generation)
-    logger.warning("WRITER_GENERATION_TRACKER_PLATFORM_SCOPED marker=%s", MARKER)
+            setattr(getter, "_nija_process_writer_generation_domain_v2", True)
+        except Exception:
+            pass
+        logger.warning(
+            "PROCESS_WRITER_GENERATION_TRACKER_PRESERVED marker=%s process_key=%s",
+            MARKER,
+            _process_generation_key(),
+        )
     return True
 
 
@@ -196,13 +294,17 @@ def install() -> bool:
 
         nonce_ok = _patch_nonce_backend(nonce_module)
         tracker_ok = _patch_generation_tracker(tracker_module)
-        already_nonce = bool(getattr(getattr(nonce_module, "_PerKeyRedisBackend", None), "_ensure_writer_lease", None) and getattr(getattr(nonce_module._PerKeyRedisBackend, "_ensure_writer_lease"), "_nija_platform_generation_scoped", False))
-        already_tracker = bool(getattr(getattr(tracker_module, "get_redis_generation", None), "_nija_platform_generation_scoped", False))
-        _INSTALLED = (nonce_ok or already_nonce) and (tracker_ok or already_tracker)
+        _INSTALLED = bool(nonce_ok and tracker_ok)
         if not _INSTALLED:
-            raise RuntimeError("platform writer generation scope patch did not attach")
+            raise RuntimeError("writer generation domain separation did not attach")
         os.environ["NIJA_WRITER_GENERATION_SCOPE_REPAIR_INSTALLED"] = "1"
-        logger.warning("WRITER_GENERATION_SCOPE_REPAIR_INSTALLED marker=%s", MARKER)
+        os.environ["NIJA_WRITER_GENERATION_DOMAIN_SEPARATED"] = "1"
+        logger.warning(
+            "WRITER_GENERATION_SCOPE_REPAIR_INSTALLED marker=%s nonce_key=%s process_key=%s",
+            MARKER,
+            _nonce_generation_key(),
+            _process_generation_key(),
+        )
         return True
 
 
@@ -210,4 +312,12 @@ def installed() -> bool:
     return _INSTALLED
 
 
-__all__ = ["install", "installed", "_platform_key_id"]
+__all__ = [
+    "install",
+    "installed",
+    "_platform_key_id",
+    "_nonce_generation_key",
+    "_process_generation_key",
+    "_patch_nonce_backend",
+    "_patch_generation_tracker",
+]
