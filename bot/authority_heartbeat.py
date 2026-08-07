@@ -539,7 +539,15 @@ class AuthorityHeartbeatMonitor:
         )
 
     def start(self) -> None:
-        """Start the heartbeat monitor in a background daemon thread."""
+        """Start the heartbeat monitor in a background daemon thread.
+
+        If the monitor previously entered lockdown due to transient probe
+        failures (i.e. the entrypoint-writer-authority singleton still holds
+        the Redis lease), this method resets the locked-down state so the loop
+        can run again.  Recovery is only granted when the in-process singleton
+        confirms the lease is still active — it is never granted after a
+        genuine authority loss (singleton.lost=True).
+        """
         logger.info(
             "AUTHORITY_HEARTBEAT: AuthorityHeartbeatMonitor.start() called "
             "pid=%d caller_thread=%s",
@@ -555,6 +563,51 @@ class AuthorityHeartbeatMonitor:
                     self._thread.is_alive(),
                 )
                 return
+
+            # If the monitor is locked down but the entrypoint-writer-authority
+            # singleton still holds the Redis lease, the lockdown was caused by
+            # transient probe failures (e.g. a brief Redis blip or timeout).
+            # Reset the locked-down flag so the loop can attempt recovery.
+            if self._locked_down:
+                _singleton_acquired = False
+                try:
+                    import sys as _sys2
+                    _ewa = (
+                        _sys2.modules.get("bot.entrypoint_writer_authority")
+                        or _sys2.modules.get("entrypoint_writer_authority")
+                    )
+                    if _ewa is not None:
+                        _gs = getattr(_ewa, "get_entrypoint_writer_authority", None)
+                        if callable(_gs):
+                            _s = _gs()
+                            if (
+                                _s is not None
+                                and getattr(_s, "acquired", False)
+                                and not getattr(_s, "lost", True)
+                            ):
+                                _singleton_acquired = True
+                except Exception:
+                    pass
+                if _singleton_acquired:
+                    logger.critical(
+                        "AUTHORITY_HEARTBEAT: locked-down monitor recovering — "
+                        "entrypoint_writer_authority singleton still holds lease; "
+                        "resetting locked_down=False and restarting loop"
+                    )
+                    self._locked_down = False
+                    self._consecutive_failures = 0
+                    self._last_failure_reason = ""
+                    self._last_failure_is_generation_mismatch = False
+                    # Restore heartbeat signals so gates pass during recovery.
+                    os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"] = "1"
+                    os.environ["NIJA_WRITER_HEARTBEAT_ALIVE_TS"] = str(time.time())
+                else:
+                    logger.warning(
+                        "AUTHORITY_HEARTBEAT: start() called on locked-down monitor "
+                        "but singleton does not confirm lease — recovery suppressed"
+                    )
+                    return
+
             self._stop_event.clear()
             logger.info("AUTHORITY_HEARTBEAT: creating daemon thread authority-heartbeat-monitor")
             self._thread = threading.Thread(
@@ -919,6 +972,13 @@ class AuthorityHeartbeatMonitor:
         # Apply exponential backoff before the next retry attempt.
         # This gives transient failures (network blips, Redis restarts) time
         # to resolve before the failure counter reaches the lockdown threshold.
+        #
+        # Refresh NIJA_WRITER_HEARTBEAT_ALIVE_TS in _BACKOFF_ALIVE_TS_REFRESH_S chunks
+        # so that a long backoff (up to 60 s) never makes the timestamp appear stale
+        # to _writer_heartbeat_gate() (max_age_s default = 120 s).  Without chunking,
+        # backoff_cap (60 s) + loop_interval (30 s) = 90 s could exceed the old 90 s
+        # max_age, causing spurious "writer_heartbeat_stale" gate failures.
+        _BACKOFF_ALIVE_TS_REFRESH_S: float = 10.0
         if backoff_s > 0 and not self._stop_event.is_set():
             logger.info(
                 "AUTHORITY_HEARTBEAT: applying backoff wait %.1fs before next retry "
@@ -927,7 +987,13 @@ class AuthorityHeartbeatMonitor:
                 self._consecutive_failures,
                 self._max_failures,
             )
-            self._stop_event.wait(timeout=backoff_s)
+            _remaining = backoff_s
+            while _remaining > 0 and not self._stop_event.is_set():
+                _chunk = min(_remaining, _BACKOFF_ALIVE_TS_REFRESH_S)
+                self._stop_event.wait(timeout=_chunk)
+                _remaining -= _chunk
+                if not self._stop_event.is_set() and not self._locked_down:
+                    os.environ["NIJA_WRITER_HEARTBEAT_ALIVE_TS"] = str(time.time())
 
     def _write_heartbeat_to_redis(self) -> None:
         """Write heartbeat to Redis with generation sync.
