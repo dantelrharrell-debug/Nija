@@ -260,6 +260,8 @@ def _watchdog() -> None:
     while True:
         try:
             ready, details = audit()
+            if _live():
+                os.environ["NIJA_LIVE_TRADING_BLOCKED_BY_MODULE_IDENTITY"] = "0" if ready else "1"
             signature = f"{ready}:{details}"
             if signature != last:
                 last = signature
@@ -272,6 +274,8 @@ def _watchdog() -> None:
                 )
         except Exception as exc:
             os.environ["NIJA_RUNTIME_MODULE_IDENTITY_READY"] = "0"
+            if _live():
+                os.environ["NIJA_LIVE_TRADING_BLOCKED_BY_MODULE_IDENTITY"] = "1"
             logger.critical("RUNTIME_MODULE_IDENTITY_AUDIT_FAILED marker=%s error=%s", _MARKER, exc)
         time.sleep(max(2.0, float(os.environ.get("NIJA_MODULE_IDENTITY_AUDIT_S", "10") or 10)))
 
@@ -281,13 +285,20 @@ def install() -> None:
     with _LOCK:
         ready, details = audit()
         os.environ["NIJA_RUNTIME_MODULE_IDENTITY_GUARD_INSTALLED"] = "1"
+        # Enforce ready=true as mandatory gate before live trading.
+        # NIJA_LIVE_TRADING_BLOCKED_BY_MODULE_IDENTITY is checked by
+        # execution_contract_pipeline and execution_telemetry before
+        # any order is submitted.
+        if _live():
+            os.environ["NIJA_LIVE_TRADING_BLOCKED_BY_MODULE_IDENTITY"] = "0" if ready else "1"
         if not _STARTED:
             _STARTED = True
             threading.Thread(target=_watchdog, name="RuntimeModuleIdentityGuard", daemon=True).start()
         logger.critical(
-            "RUNTIME_MODULE_IDENTITY_GUARD_INSTALLED marker=%s ready=%s details=%s",
+            "RUNTIME_MODULE_IDENTITY_GUARD_INSTALLED marker=%s ready=%s live_trading_blocked=%s details=%s",
             _MARKER,
             str(ready).lower(),
+            os.environ.get("NIJA_LIVE_TRADING_BLOCKED_BY_MODULE_IDENTITY", "n/a"),
             details,
         )
         if _live() and not ready and isinstance(sys.modules.get("bot.execution_pipeline"), ModuleType):

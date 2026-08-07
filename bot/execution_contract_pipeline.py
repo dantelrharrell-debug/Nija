@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 from functools import wraps
 from types import ModuleType
@@ -12,6 +13,10 @@ from .execution_contract_primitives import (
     LAST_ACK, MARKER, PINNED_AUTHORITY, broker_name, extract_order_id,
     freeze_request, normalize_symbol, number, pop_ack, store_ack,
 )
+try:
+    from .execution_chain_guard import chain_has_attr as _chain_has_attr
+except ImportError:
+    from bot.execution_chain_guard import chain_has_attr as _chain_has_attr  # type: ignore[import]
 
 logger = logging.getLogger("nija.execution_contract_pipeline")
 
@@ -45,10 +50,21 @@ def patch_pipeline(module: ModuleType) -> bool:
         original_reader = getattr(reader, "_nija_original", reader)
 
     current_execute = getattr(cls, "execute", None)
-    if callable(current_execute) and not getattr(current_execute, "_nija_contract_20260710a", False):
+    if callable(current_execute) and not _chain_has_attr(current_execute, "_nija_contract_20260710a"):
         @wraps(current_execute)
         def execute(self: Any, request: Any, *args: Any, **kwargs: Any):
             started = time.monotonic()
+            # Enforce RUNTIME_MODULE_IDENTITY_AUDIT ready=true before any live order.
+            _blocked = os.environ.get("NIJA_LIVE_TRADING_BLOCKED_BY_MODULE_IDENTITY", "")
+            _dry_run = str(os.environ.get("DRY_RUN_MODE", "") or "").strip().lower() in {"1", "true", "yes", "on", "y", "enabled"}
+            _paper = str(os.environ.get("PAPER_MODE", "") or "").strip().lower() in {"1", "true", "yes", "on", "y", "enabled"}
+            if str(_blocked).strip() == "1" and not _dry_run and not _paper:
+                _reason = "RUNTIME_MODULE_IDENTITY_AUDIT_NOT_READY"
+                logger.critical(
+                    "FINAL_EXECUTION_CONTRACT_BLOCK marker=%s stage=module_identity_gate reason=%s",
+                    MARKER, _reason,
+                )
+                return _failure(module, request, started, _reason, "")
             frozen, broker, error = freeze_request(request)
             if error:
                 logger.critical("FINAL_EXECUTION_CONTRACT_BLOCK marker=%s stage=freeze broker=%s reason=%s", MARKER, broker or "unknown", error)
@@ -68,7 +84,7 @@ def patch_pipeline(module: ModuleType) -> bool:
         cls.execute = execute
 
     current_dispatch = getattr(cls, "_dispatch", None)
-    if callable(current_dispatch) and not getattr(current_dispatch, "_nija_dispatch_contract_20260710a", False):
+    if callable(current_dispatch) and not _chain_has_attr(current_dispatch, "_nija_dispatch_contract_20260710a"):
         @wraps(current_dispatch)
         def dispatch(self: Any, request: Any, started: float, *args: Any, **kwargs: Any):
             frozen, broker, error = freeze_request(request)
