@@ -894,29 +894,43 @@ class IndependentBrokerTrader:
 
         if stop_flag.is_set():
             logger.info(f"🛑 {broker_name} stopped before first cycle")
+            # Guard cleanup: discard from active set so the broker can be re-started
+            # by the connection monitor or a future call to run_trading_loop.
+            with self.active_threads_lock:
+                self.active_trading_threads.discard(broker_name)
+                logger.info(
+                    "SCAN_GUARD_CLEARED_EARLY_EXIT broker=%s thread=%d",
+                    broker_name, threading.get_ident(),
+                )
             return
 
         # Display Capital Scaling Protocol banner (once at startup)
         self._display_capital_scaling_banner()
 
-        logger.critical("SCAN_LOOP_STARTED broker=%s", broker_name)
+        logger.critical("SCAN_LOOP_STARTED broker=%s thread=%d", broker_name, threading.get_ident())
         print(f"[NIJA-PRINT] SCAN_LOOP_STARTED broker={broker_name}", flush=True)
 
         # ── OUTER RESTART GUARD ──────────────────────────────────────────────────
         # Re-enters the inner trading loop after any unexpected fatal crash.
         # Dead-broker checks inside use `continue` (never `break`) so the loop
         # keeps retrying. A fatal exception triggers a 5 s back-off then restart.
-        while not stop_flag.is_set():
-            try:
-                while not stop_flag.is_set():
-                    cycle_count += 1
-                    logger.info(
-                        "🧠 [%s] Trading loop tick #%d — scanning markets...",
-                        broker_name,
-                        cycle_count,
-                    )
-                    logger.critical("SCAN_CYCLE %d broker=%s", cycle_count, broker_name)
-                    print(f"[NIJA-PRINT] SCAN_CYCLE {cycle_count} broker={broker_name}", flush=True)
+        try:
+            while not stop_flag.is_set():
+                try:
+                    while not stop_flag.is_set():
+                        cycle_count += 1
+                        _cycle_start = time.monotonic()
+                        logger.info(
+                            "🧠 [%s] Trading loop tick #%d — scanning markets... thread=%d",
+                            broker_name,
+                            cycle_count,
+                            threading.get_ident(),
+                        )
+                        logger.critical(
+                            "SCAN_CYCLE_START %d broker=%s thread=%d",
+                            cycle_count, broker_name, threading.get_ident(),
+                        )
+                        print(f"[NIJA-PRINT] SCAN_CYCLE {cycle_count} broker={broker_name}", flush=True)
 
                     # ─────────────────────────────────────────────────────────────
                     # 🔴 DEAD BROKER CHECK (failure_manager — retry with backoff)
@@ -1082,24 +1096,32 @@ class IndependentBrokerTrader:
                         )
                         stop_flag.wait(delay)
 
-            except Exception as fatal_err:
-                if stop_flag.is_set():
-                    break
-                logger.critical(
-                    "💥 FATAL: %s trader loop crashed unexpectedly (restarting in 5s): %s",
-                    broker_name,
-                    fatal_err,
-                    exc_info=True,
-                )
-                stop_flag.wait(5)  # brief back-off before restarting inner loop
-        # Cleanup: runs when stop_flag is set and outer loop exits normally
-        with self.active_threads_lock:
-            self.active_trading_threads.discard(broker_name)
-        # Remove stale dead thread reference so broker_threads stays clean and
-        # the dedup guards in run_trading_loop see accurate is_alive() state.
-        self.broker_threads.pop(broker_name, None)
-        logger.info(f"🛑 {broker_name} trading loop stopped (total cycles: {cycle_count})")
-        logger.info(f"   Thread removed from active trading threads")
+                except Exception as fatal_err:
+                    if stop_flag.is_set():
+                        break
+                    logger.critical(
+                        "💥 FATAL: %s trader loop crashed unexpectedly (restarting in 5s): %s",
+                        broker_name,
+                        fatal_err,
+                        exc_info=True,
+                    )
+                    stop_flag.wait(5)  # brief back-off before restarting inner loop
+        finally:
+            # Unconditional cleanup: clear the active-threads guard so the broker
+            # can be restarted by the connection monitor or a future call to
+            # run_trading_loop.  This runs on every exit path: normal stop, fatal
+            # exception, or early return — guaranteeing the guard is never left set.
+            with self.active_threads_lock:
+                self.active_trading_threads.discard(broker_name)
+            # Remove stale dead thread reference so broker_threads stays clean and
+            # the dedup guards in run_trading_loop see accurate is_alive() state.
+            self.broker_threads.pop(broker_name, None)
+            logger.info(
+                "🛑 %s trading loop stopped (total cycles: %d) — SCAN_GUARD_CLEARED thread=%d",
+                broker_name,
+                cycle_count,
+                threading.get_ident(),
+            )
 
     def run_user_broker_trading_loop(self, user_id: str, broker_type, broker, stop_flag: threading.Event):
         """
