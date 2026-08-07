@@ -5397,12 +5397,7 @@ def _try_recover_state_machine() -> None:
 
 def _start_trader_thread(independent_trader, broker_type, broker):
     """
-    Wrap a single broker's trading loop in a self-healing daemon thread.
-
-    The inner runner calls ``run_broker_trading_loop`` in a loop so that if
-    the function ever returns unexpectedly (fatal crash escaping the inner
-    guard), the thread automatically restarts after a 5-second back-off.
-    The stop_flag is the single clean-shutdown mechanism.
+    Start a single broker's trading loop in one daemon thread.
 
     Returns:
         tuple: (threading.Thread, threading.Event) – thread and its stop flag.
@@ -5412,22 +5407,16 @@ def _start_trader_thread(independent_trader, broker_type, broker):
 
     def _runner():
         logger.info("🚀 [Orchestrator] Trader thread started for %s", broker_name.upper())
-        cycle = 0
-        while not stop_flag.is_set():
-            try:
-                cycle += 1
-                logger.info("💓 CYCLE_HEARTBEAT mode=platform broker=%s cycle=%d", broker_name.upper(), cycle)
-                independent_trader.run_broker_trading_loop(broker_type, broker, stop_flag)
-            except Exception as _loop_err:
-                if stop_flag.is_set():
-                    break
+        try:
+            independent_trader.run_broker_trading_loop(broker_type, broker, stop_flag)
+        except Exception as _loop_err:
+            if not stop_flag.is_set():
                 logger.error(
-                    "💥 [Orchestrator] Trader crashed for %s: %s — restarting in 5s",
+                    "💥 [Orchestrator] Trader crashed for %s: %s",
                     broker_name.upper(),
                     _loop_err,
                     exc_info=True,
                 )
-                stop_flag.wait(5)
         logger.info("🛑 [Orchestrator] Trader thread stopped for %s", broker_name.upper())
 
     t = threading.Thread(target=_runner, daemon=True, name=f"Trader-{broker_name}")
