@@ -55,7 +55,6 @@ def heartbeat_max_age_s() -> float:
         value = max(5.0, float(raw or 120.0))
     except (TypeError, ValueError):
         value = 120.0
-    # Keep the legacy convergence knob synchronized for diagnostics only.
     os.environ["NIJA_RUNTIME_AUTHORITY_CONVERGENCE_HEARTBEAT_MAX_AGE_S"] = str(value)
     return value
 
@@ -86,7 +85,13 @@ def _write_marker(epoch_ts: float) -> None:
 
 
 def refresh_heartbeat(*, source: str, generation: int | None = None) -> float:
-    """Refresh every heartbeat surface from one successful heartbeat event."""
+    """Refresh every heartbeat surface from one successful heartbeat event.
+
+    Publication is all-or-nothing from the authority readers' point of view:
+    the marker is written first, then env telemetry and canonical state receive
+    the exact same epoch timestamp. If marker publication fails, no new
+    canonical heartbeat is recorded and callers retry on the next cycle.
+    """
     gen = _generation() if generation is None else int(generation)
     if gen <= 0:
         logger.debug("HEARTBEAT_REFRESH skipped source=%s reason=generation_missing", source)
@@ -114,6 +119,22 @@ def refresh_heartbeat(*, source: str, generation: int | None = None) -> float:
         _marker_path(),
     )
     return epoch_ts
+
+
+def _safe_refresh(*, source: str, generation: int | None = None) -> bool:
+    """Publish one heartbeat without terminating the owning renewal thread."""
+    try:
+        return refresh_heartbeat(source=source, generation=generation) > 0.0
+    except Exception as exc:
+        logger.error(
+            "HEARTBEAT_REFRESH_FAILED source=%s generation=%s marker=%s err=%s",
+            source,
+            generation if generation is not None else _generation(),
+            _marker_path(),
+            exc,
+            exc_info=True,
+        )
+        return False
 
 
 def heartbeat_check(*, source: str) -> tuple[bool, float, float, float, bool]:
@@ -148,7 +169,7 @@ def _patch_entrypoint_writer_authority(module: ModuleType) -> None:
     if callable(original_publish):
         def _publish_env(self: Any, *args: Any, **kwargs: Any) -> Any:
             result = original_publish(self, *args, **kwargs)
-            refresh_heartbeat(
+            _safe_refresh(
                 source="entrypoint_writer_authority.publish_env",
                 generation=int(getattr(self, "_generation", 0) or _generation()),
             )
@@ -164,7 +185,7 @@ def _patch_entrypoint_writer_authority(module: ModuleType) -> None:
             except Exception:
                 ok = False
             if ok:
-                refresh_heartbeat(
+                _safe_refresh(
                     source="entrypoint_writer_authority.heartbeat_tick",
                     generation=int(getattr(self, "_generation", 0) or _generation()),
                 )
@@ -188,7 +209,7 @@ def _patch_authority_heartbeat(module: ModuleType) -> None:
                 and int(getattr(self, "_consecutive_failures", 0) or 0) == 0
                 and _truthy("NIJA_WRITER_HEARTBEAT_ACTIVE")
             ):
-                refresh_heartbeat(source="authority_heartbeat.tick")
+                _safe_refresh(source="authority_heartbeat.tick")
             return result
         cls._tick = _tick
     setattr(cls, _PATCHED, True)
@@ -204,7 +225,6 @@ def _patch_writer_authority(module: ModuleType) -> None:
             gen = int(str(generation or "").strip() or "0")
         except (TypeError, ValueError):
             gen = 0
-        # Ignore the caller's legacy max-age knob. One policy owns freshness.
         healthy, age_s, authoritative, _ts = get_heartbeat_state().health_for_generation(
             expected_generation=gen,
             max_age_s=heartbeat_max_age_s(),
@@ -228,8 +248,6 @@ def _patch_trading_state_machine(module: ModuleType) -> None:
         ):
             return True, ""
 
-        # Preserve the existing eager-start behavior before evaluating the
-        # canonical state, but never seed freshness from an env timestamp.
         if not _truthy("NIJA_WRITER_HEARTBEAT_ACTIVE"):
             try:
                 try:
