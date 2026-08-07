@@ -48,22 +48,36 @@ def _fallback_status() -> WriterAuthorityStatus:
     )
 
 
-def _canonical_heartbeat_health(*, generation: str, max_age_s: float) -> tuple[bool, float]:
-    """Return canonical heartbeat health when the shared state matches generation."""
+def _canonical_heartbeat_health(*, generation: str, max_age_s: float) -> tuple[bool, float, bool]:
+    """Return ``(healthy, age_s, is_authoritative)`` for the canonical heartbeat.
+
+    *is_authoritative* is ``True`` when the shared ``HeartbeatState`` has been
+    initialised for the expected generation (generation matches AND a timestamp
+    has been recorded).  When authoritative the result is definitive — callers
+    **must not** override it with an env-variable timing fallback, because doing
+    so would mask genuine failures signalled by
+    :meth:`~HeartbeatState.record_heartbeat_failure`.
+
+    When *not* authoritative (state never initialised for this generation) the
+    env-variable fallback remains available as a last resort.
+    """
     try:
         expected_generation = int(str(generation or "").strip() or "0")
     except (TypeError, ValueError):
         expected_generation = 0
     if expected_generation <= 0:
-        return False, float("inf")
+        return False, float("inf"), False
     try:
         snapshot = get_heartbeat_state().snapshot()
     except Exception:
-        return False, float("inf")
+        return False, float("inf"), False
     if snapshot.generation != expected_generation or snapshot.timestamp <= 0.0:
-        return False, float("inf")
+        # Canonical state not yet initialised for this generation.
+        return False, float("inf"), False
+    # Canonical state is initialised for the expected generation — authoritative.
     age_s = max(0.0, time.time() - snapshot.timestamp)
-    return bool(snapshot.healthy and age_s <= max_age_s), age_s
+    healthy = bool(snapshot.healthy and age_s <= max_age_s)
+    return healthy, age_s, True
 
 
 class WriterAuthority:
@@ -100,7 +114,7 @@ class WriterAuthority:
             )
         except (TypeError, ValueError):
             heartbeat_max_age_s = 90.0
-        canonical_heartbeat_healthy, canonical_heartbeat_age_s = _canonical_heartbeat_health(
+        canonical_heartbeat_healthy, canonical_heartbeat_age_s, canonical_is_authoritative = _canonical_heartbeat_health(
             generation=generation,
             max_age_s=heartbeat_max_age_s,
         )
@@ -108,9 +122,19 @@ class WriterAuthority:
         env_heartbeat_healthy = bool(
             heartbeat_active and heartbeat_alive_ts > 0.0 and heartbeat_age_s <= heartbeat_max_age_s
         )
-        heartbeat_healthy = canonical_heartbeat_healthy or env_heartbeat_healthy
-        if canonical_heartbeat_healthy:
+        # When the canonical HeartbeatState has been initialised for the current
+        # generation it is the authoritative source of truth.  Do NOT let the
+        # env-variable timing fallback override it: the env ALIVE_TS is refreshed
+        # at every loop iteration regardless of whether the authority check
+        # succeeded, so a stale-but-running loop would otherwise mask a genuine
+        # record_heartbeat_failure() signal.
+        if canonical_is_authoritative:
+            heartbeat_healthy = canonical_heartbeat_healthy
             heartbeat_age_s = canonical_heartbeat_age_s
+        else:
+            heartbeat_healthy = canonical_heartbeat_healthy or env_heartbeat_healthy
+            if canonical_heartbeat_healthy:
+                heartbeat_age_s = canonical_heartbeat_age_s
         heartbeat_effective = bool(heartbeat_healthy or writer_state == "REFRESHING")
         core_thread_alive = _env_truthy("NIJA_CORE_THREAD_ALIVE")
         local_authority_observed = False
@@ -217,6 +241,39 @@ class WriterAuthority:
             status = _fallback_status()
 
         if status.state == "ACTIVE" and not status.ready:
+            _missing_set = set(status.missing)
+            # ── Heartbeat self-healing ──────────────────────────────────────────
+            # When the writer is ACTIVE and the *only* failing check is
+            # heartbeat_healthy, attempt an automatic repair before logging the
+            # inconsistency.  This covers the scenario where:
+            #   • the lease expired transiently and was successfully reacquired
+            #     (entrypoint_writer_authority._heartbeat_tick returned code 2), and
+            #   • record_heartbeat_failure() was called during the gap, leaving
+            #     _healthy=False even though the heartbeat loop is still alive.
+            # We use recover_health() which only repairs when the stored timestamp
+            # is recent, so a genuinely stale / never-initialised state is not
+            # falsely healed.
+            if _missing_set == {"heartbeat_healthy"}:
+                try:
+                    _repaired = get_heartbeat_state().recover_health(
+                        max_age_s=heartbeat_max_age_s * 2
+                    )
+                    if _repaired:
+                        logger.warning(
+                            "WRITER_HEARTBEAT_SELF_HEALED state=ACTIVE "
+                            "heartbeat_healthy repaired via recover_health "
+                            "generation=%s max_age_s=%.1f",
+                            generation,
+                            heartbeat_max_age_s * 2,
+                        )
+                        return WriterAuthority.get_status(
+                            force_refresh=force_refresh,
+                            enforce_active_invariant=enforce_active_invariant,
+                        )
+                except Exception as _heal_exc:
+                    logger.debug(
+                        "WRITER_HEARTBEAT_SELF_HEAL_ERROR: %s", _heal_exc
+                    )
             logger.critical(
                 "WRITER_STATE_INCONSISTENT state=ACTIVE writer_ready=False missing=%s checks=%s",
                 ",".join(status.missing) if status.missing else "unknown",

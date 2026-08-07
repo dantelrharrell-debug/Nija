@@ -117,6 +117,31 @@ class HeartbeatState:
             if _order.index(phase) > _order.index(self._phase):
                 self._phase = phase
 
+    def recover_health(self, *, max_age_s: float = 180.0) -> bool:
+        """Restore ``healthy=True`` when the last heartbeat timestamp is recent.
+
+        Called when external authority evidence (e.g. a live Redis lease and a
+        running heartbeat loop) confirms liveness even though a previous
+        :meth:`record_heartbeat_failure` set ``healthy=False``.  Only repairs
+        when the stored timestamp is within *max_age_s* seconds, so a genuinely
+        stale or never-initialised state is never falsely healed.
+
+        Returns ``True`` when the repair was applied, ``False`` when skipped
+        (either ``_healthy`` was already ``True``, or the timestamp is too old /
+        not set).
+        """
+        now = time.time()
+        with self._lock:
+            if self._healthy:
+                return False
+            if self._timestamp <= 0.0:
+                return False
+            if (now - self._timestamp) > max_age_s:
+                return False
+            self._timestamp = now
+            self._healthy = True
+        return True
+
     def reset(self) -> None:
         """Reset all state to BOOT (used when writer lease is released)."""
         with self._lock:
