@@ -11,6 +11,15 @@ Redis writer authority is acquired and synchronously verified, the existing
 canonical manager singleton is initialized on the main bootstrap thread before
 SelfHealingStartup runs. A failed prebootstrap releases only this process's own
 lease and returns startup failure; no order, authority, or state gate is bypassed.
+
+Wrapper-order safety
+--------------------
+The writer-acquisition function is also wrapped by authority/recovery convergence
+layers (notably production_readiness_v39 and runtime_execution_convergence_v32).
+This module must preserve those wrappers. Repatching therefore detects an existing
+v22 layer anywhere in the __wrapped__ chain instead of unwrapping the chain to the
+base function. Stripping those layers disables bounded fresh-epoch writer recovery
+when a Redis writer lock disappears.
 """
 from __future__ import annotations
 
@@ -25,6 +34,7 @@ from typing import Any, Callable
 logger = logging.getLogger("nija.canonical_broker_prebootstrap")
 
 _MARKER = "20260723-canonical-broker-prebootstrap-v22"
+_WRAPPER_PRESERVATION_MARKER = "20260808-v22-writer-wrapper-preservation-v1"
 _LOCK = threading.RLock()
 _READY = False
 _INSTALLED = False
@@ -202,30 +212,38 @@ def prepare_canonical_broker_runtime() -> Any:
         return manager
 
 
-def _unwrap(current: Callable[..., Any]) -> Callable[..., Any]:
+def _wrapper_chain_has_marker(current: Callable[..., Any], marker_attr: str) -> bool:
+    """Return True when any callable in ``current``'s wrapper chain has marker_attr."""
     seen: set[int] = set()
-    base = current
-    while callable(getattr(base, "__wrapped__", None)) and id(base) not in seen:
-        seen.add(id(base))
-        candidate = getattr(base, "__wrapped__")
-        if not callable(candidate):
+    candidate: Any = current
+    while callable(candidate) and id(candidate) not in seen:
+        seen.add(id(candidate))
+        if bool(getattr(candidate, marker_attr, False)):
+            return True
+        wrapped = getattr(candidate, "__wrapped__", None)
+        if not callable(wrapped):
             break
-        base = candidate
-    return base
+        candidate = wrapped
+    return False
 
 
 def _patch_writer_acquire(module: ModuleType) -> bool:
     current = getattr(module, "_acquire_writer_authority_before_nonce", None)
     if not callable(current):
         return False
-    if bool(getattr(current, _ACQUIRE_WRAP_ATTR, False)):
+
+    # Do not strip or duplicate layers. v39/v32 and later convergence wrappers
+    # must remain callable because they arm writer-loss recovery and post-acquire
+    # reconciliation. If v22 is already present anywhere in the chain, leave the
+    # entire current chain untouched.
+    if _wrapper_chain_has_marker(current, _ACQUIRE_WRAP_ATTR):
         return True
 
-    base = _unwrap(current)
+    preserved_existing_layers = callable(getattr(current, "__wrapped__", None))
 
-    @wraps(base)
+    @wraps(current)
     def guarded_acquire(*args: Any, **kwargs: Any) -> bool:
-        acquired = bool(base(*args, **kwargs))
+        acquired = bool(current(*args, **kwargs))
         if not acquired:
             return False
         try:
@@ -255,13 +273,15 @@ def _patch_writer_acquire(module: ModuleType) -> bool:
             return False
 
     setattr(guarded_acquire, _ACQUIRE_WRAP_ATTR, True)
-    setattr(guarded_acquire, "__wrapped__", base)
+    setattr(guarded_acquire, "__wrapped__", current)
     setattr(module, "_acquire_writer_authority_before_nonce", guarded_acquire)
+    os.environ["NIJA_CANONICAL_BROKER_PREBOOTSTRAP_WRAPPER_PRESERVATION"] = "1"
     logger.critical(
-        "CANONICAL_BROKER_PREBOOTSTRAP_V22_ACQUIRE_PATCHED marker=%s module=%s legacy_layers_unwrapped=%s",
+        "CANONICAL_BROKER_PREBOOTSTRAP_V22_ACQUIRE_PATCHED marker=%s wrapper_preservation_marker=%s module=%s existing_layers_preserved=%s",
         _MARKER,
+        _WRAPPER_PRESERVATION_MARKER,
         module.__name__,
-        base is not current,
+        preserved_existing_layers,
     )
     return True
 
@@ -270,7 +290,7 @@ def _patch_main(module: ModuleType) -> bool:
     current = getattr(module, "main", None)
     if not callable(current):
         return False
-    if bool(getattr(current, _MAIN_WRAP_ATTR, False)):
+    if _wrapper_chain_has_marker(current, _MAIN_WRAP_ATTR):
         return True
 
     @wraps(current)
@@ -304,9 +324,12 @@ def install_import_hook() -> bool:
         os.environ["NIJA_CANONICAL_BROKER_PREBOOTSTRAP_V22_INSTALLED"] = (
             "1" if _INSTALLED else "0"
         )
+        if _INSTALLED:
+            os.environ["NIJA_CANONICAL_BROKER_PREBOOTSTRAP_WRAPPER_PRESERVATION"] = "1"
         logger.critical(
-            "CANONICAL_BROKER_PREBOOTSTRAP_V22_INSTALLED marker=%s acquire_patched=%s main_patched=%s",
+            "CANONICAL_BROKER_PREBOOTSTRAP_V22_INSTALLED marker=%s wrapper_preservation_marker=%s acquire_patched=%s main_patched=%s",
             _MARKER,
+            _WRAPPER_PRESERVATION_MARKER,
             acquire_patched,
             main_patched,
         )
@@ -325,6 +348,7 @@ __all__ = [
     "_manager_contract",
     "_initialize_manager",
     "_platform_counts",
+    "_wrapper_chain_has_marker",
     "_patch_writer_acquire",
     "_patch_main",
 ]
