@@ -19,7 +19,7 @@ import sys
 from typing import Iterable
 
 logger = logging.getLogger("nija.bot_entrypoint")
-_FAST_PATH_MARKER = "20260808-canonical-fast-entrypoint-v56-v34"
+_FAST_PATH_MARKER = "20260808-canonical-fast-entrypoint-v57-v34"
 
 # Each tuple is (module, success log label). Names remain explicit so startup
 # attestation and source audits can prove which guards are eligible.
@@ -31,6 +31,7 @@ _FAST_PATH_INSTALLERS = (
     ("bot.writer_runtime_lifecycle_supervisor_v54_patch", "WRITER_RUNTIME_LIFECYCLE_V54"),
     ("bot.writer_recovery_callback_guard_v55_patch", "WRITER_RECOVERY_CALLBACK_V55"),
     ("bot.writer_runtime_core_thread_backstop_v56_patch", "WRITER_RUNTIME_CORE_THREAD_BACKSTOP_V56"),
+    ("bot.writer_authority_generation_convergence_v57_patch", "WRITER_AUTHORITY_GENERATION_CONVERGENCE_V57"),
     ("bot.zero_signal_streak_cap_repair_v51_patch", "ZERO_SIGNAL_STREAK_CAP_V51"),
     ("bot.heartbeat_authority_single_source_patch", "HEARTBEAT_AUTHORITY_SINGLE_SOURCE"),
     ("bot.activation_convergence_v17_patch", "ACTIVATION_CONVERGENCE_V17"),
