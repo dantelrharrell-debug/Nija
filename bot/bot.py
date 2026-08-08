@@ -3,8 +3,7 @@
 The canonical Render launcher keeps package-wide runtime hooks deferred while
 ``main.py`` installs the audited safety set explicitly.  Replaying every
 historical compatibility installer here delayed ``bot_main.main()`` for many
-minutes while the health server reported the service as live.  The canonical
-fast path therefore installs only narrow guards that are not already owned by
+minutes while the health server reported the service as live.  The canonical fast path therefore installs only narrow guards that are not already owned by
 ``main.py``, then hands off immediately.
 
 Direct/non-canonical launches retain the legacy installer set for compatibility.
@@ -19,13 +18,14 @@ import sys
 from typing import Iterable
 
 logger = logging.getLogger("nija.bot_entrypoint")
-_FAST_PATH_MARKER = "20260808-canonical-fast-entrypoint-v50-v29"
+_FAST_PATH_MARKER = "20260808-canonical-fast-entrypoint-v51-v30"
 
 # Each tuple is (module, success log label).  Names remain explicit so startup
 # attestation and source audits can prove which guards are eligible.
 _FAST_PATH_INSTALLERS = (
     ("bot.writer_reelection_loss_reason_v46_patch", "WRITER_REELECTION_LOSS_REASON_V46"),
     ("bot.writer_generation_state_gate_v50_patch", "WRITER_GENERATION_STATE_GATE_V50"),
+    ("bot.zero_signal_streak_cap_repair_v51_patch", "ZERO_SIGNAL_STREAK_CAP_V51"),
     ("bot.heartbeat_authority_single_source_patch", "HEARTBEAT_AUTHORITY_SINGLE_SOURCE"),
     ("bot.activation_convergence_v17_patch", "ACTIVATION_CONVERGENCE_V17"),
     ("bot.activation_convergence_v17_importlib_bridge", "ACTIVATION_CONVERGENCE_V17_IMPORTLIB_BRIDGE"),
