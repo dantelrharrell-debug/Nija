@@ -12,6 +12,7 @@ LAUNCHER = ROOT / "scripts" / "canonical_runtime_launcher_v26.py"
 BOT_ENTRYPOINT = ROOT / "bot" / "bot.py"
 ATTESTATION = ROOT / "scripts" / "runtime_entrypoint_attestation.py"
 V51 = ROOT / "bot" / "zero_signal_streak_cap_repair_v51_patch.py"
+V52 = ROOT / "bot" / "writer_distributed_loss_watchdog_v52_patch.py"
 
 
 def _load(name: str, path: Path):
@@ -68,6 +69,8 @@ def test_bot_entrypoint_fast_path_is_small_and_fail_closed() -> None:
     assert "WRITER_REELECTION_LOSS_REASON_V46" in fast_block
     assert "writer_generation_state_gate_v50_patch" in fast_block
     assert "WRITER_GENERATION_STATE_GATE_V50" in fast_block
+    assert "writer_distributed_loss_watchdog_v52_patch" in fast_block
+    assert "WRITER_DISTRIBUTED_LOSS_WATCHDOG_V52" in fast_block
     assert "zero_signal_streak_cap_repair_v51_patch" in fast_block
     assert "ZERO_SIGNAL_STREAK_CAP_V51" in fast_block
     assert "okx_final_order_submission_bridge_patch" in fast_block
@@ -108,6 +111,44 @@ def test_v51_restores_missing_cap_guard_without_removing_state_repair(monkeypatc
     assert cap_cycle is False
     assert state_cycle is False
     assert current(object(), None, None, None, None, 99) == 12
+
+
+def test_v52_missing_distributed_lock_marks_existing_runtime_lost(monkeypatch) -> None:
+    v52 = _load("test_writer_distributed_loss_v52_fast_path", V52)
+
+    class Client:
+        def get(self, _key):
+            return None
+
+    class Runtime:
+        acquired = True
+        lost = False
+        _local_fallback = False
+        _client = Client()
+        _lock_key = "nija:writer_lock:process"
+        _lock_value = "2044:owner"
+        _token = "2044"
+        _generation = 18
+
+        def __init__(self):
+            self.marked = []
+
+        def _mark_lost(self, reason):
+            self.marked.append(reason)
+            self.lost = True
+
+    runtime = Runtime()
+    monkeypatch.setenv("NIJA_RUNTIME_EXECUTION_AUTHORITY", "1")
+    monkeypatch.setenv("NIJA_EXECUTION_ACTIVE", "true")
+
+    result = v52.reconcile_once(runtime)
+
+    assert result["state"] == "missing"
+    assert result["action"] == "mark_lost_recoverable"
+    assert runtime.marked == ["lock_missing_and_fencing_token_mismatch"]
+    assert runtime.lost is True
+    assert os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] == "0"
+    assert os.environ["NIJA_EXECUTION_ACTIVE"] == "false"
 
 
 def test_runtime_attestation_requires_fast_path_and_strategy_handoff() -> None:
