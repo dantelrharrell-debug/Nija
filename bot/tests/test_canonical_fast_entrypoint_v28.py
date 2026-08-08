@@ -4,12 +4,14 @@ import importlib.util
 import os
 from pathlib import Path
 import sys
+from types import ModuleType
 
 
 ROOT = Path(__file__).resolve().parents[2]
 LAUNCHER = ROOT / "scripts" / "canonical_runtime_launcher_v26.py"
 BOT_ENTRYPOINT = ROOT / "bot" / "bot.py"
 ATTESTATION = ROOT / "scripts" / "runtime_entrypoint_attestation.py"
+V51 = ROOT / "bot" / "zero_signal_streak_cap_repair_v51_patch.py"
 
 
 def _load(name: str, path: Path):
@@ -73,6 +75,39 @@ def test_bot_entrypoint_fast_path_is_small_and_fail_closed() -> None:
     assert "stalled_writer_release_guard_v22" in fast_block
     assert "trading_engine_strategy_wrapper_patch" not in fast_block
     assert "canonical_broker_main_entry_guard_v20" not in fast_block
+
+
+def test_v51_restores_missing_cap_guard_without_removing_state_repair(monkeypatch) -> None:
+    v51 = _load("test_zero_signal_streak_cap_v51_fast_path", V51)
+    core = ModuleType("bot.nija_core_loop")
+
+    def leaf(self, broker, snapshot, symbols, slots, streak=0):
+        return streak
+
+    def state_repair(self, broker, snapshot, symbols, slots, streak=0):
+        return leaf(self, broker, snapshot, symbols, slots, streak)
+
+    state_repair.__wrapped__ = leaf
+    setattr(state_repair, v51._STATE_ATTR, True)
+    core.NijaCoreLoop = type(
+        "NijaCoreLoop",
+        (),
+        {"_phase3_scan_and_enter": state_repair},
+    )
+    monkeypatch.setitem(sys.modules, "bot.nija_core_loop", core)
+    monkeypatch.delitem(sys.modules, "nija_core_loop", raising=False)
+    monkeypatch.setenv("NIJA_ZERO_SIGNAL_STREAK_CAP", "12")
+
+    assert v51._install_on_core_loop(core) is True
+    current = core.NijaCoreLoop._phase3_scan_and_enter
+    cap_found, cap_cycle, _ = v51._chain_contains(current)
+    state_found, state_cycle, _ = v51._chain_contains(current, v51._STATE_ATTR)
+
+    assert cap_found is True
+    assert state_found is True
+    assert cap_cycle is False
+    assert state_cycle is False
+    assert current(object(), None, None, None, None, 99) == 12
 
 
 def test_runtime_attestation_requires_fast_path_and_strategy_handoff() -> None:
