@@ -64,6 +64,8 @@ def test_bot_entrypoint_fast_path_is_small_and_fail_closed() -> None:
     )[0]
     assert "writer_reelection_loss_reason_v46_patch" in fast_block
     assert "WRITER_REELECTION_LOSS_REASON_V46" in fast_block
+    assert "writer_generation_state_gate_v50_patch" in fast_block
+    assert "WRITER_GENERATION_STATE_GATE_V50" in fast_block
     assert "okx_final_order_submission_bridge_patch" in fast_block
     assert "startup_authority_prereq_repair_patch" in fast_block
     assert "stalled_writer_release_guard_v22" in fast_block
