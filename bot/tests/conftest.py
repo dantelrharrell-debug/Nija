@@ -35,16 +35,29 @@ def _remove_kill_switch_artifacts() -> None:
             pass  # best-effort cleanup
 
 
+def _reset_readiness_authority_state() -> None:
+    """Keep process-global readiness publication from leaking across tests."""
+    try:
+        readiness_module = sys.modules.get("bot.readiness_table")
+        table = getattr(readiness_module, "_TABLE", None) if readiness_module else None
+        if isinstance(table, dict):
+            table["authority_ready"] = False
+    except Exception:
+        pass
+
+
 @pytest.fixture(autouse=True)
 def _clean_kill_switch_state():
     """
-    Auto-use fixture: remove kill-switch state files before and after every
-    test so that a test that activates the real KillSwitch does not bleed
-    EMERGENCY_STOP or triggered-protector state into unrelated tests.
+    Auto-use fixture: remove kill-switch state files and reset process-global
+    readiness authority before and after every test so runtime state does not
+    bleed into unrelated tests.
     """
     _remove_kill_switch_artifacts()
+    _reset_readiness_authority_state()
     yield
     _remove_kill_switch_artifacts()
+    _reset_readiness_authority_state()
 
     # Also reset the module-level KillSwitch singleton so its in-memory
     # is_active flag doesn't persist across tests.
