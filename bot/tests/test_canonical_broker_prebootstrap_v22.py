@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import types
+from functools import wraps
 
 import bot.canonical_broker_prebootstrap_v22 as guard
 
@@ -62,7 +63,6 @@ def test_initialize_retries_only_missing_fsm_latch():
 
     assert calls == ["initialize", "repair", "initialize"]
     assert manager._fsm_initialized is True
-
 
 
 def test_initialize_repairs_silent_missing_fsm_latch():
@@ -164,3 +164,71 @@ def test_writer_wrapper_releases_own_lease_on_prebootstrap_failure(monkeypatch):
     assert guard._patch_writer_acquire(module)
     assert module._acquire_writer_authority_before_nonce() is False
     assert sequence == ["authority", "prebootstrap", "release"]
+
+
+def test_writer_wrapper_preserves_existing_recovery_layer(monkeypatch):
+    sequence = []
+
+    def base():
+        sequence.append("base")
+        return True
+
+    @wraps(base)
+    def recovery_layer():
+        sequence.append("recovery")
+        return base()
+
+    recovery_layer._nija_writer_reelection_v39 = True
+
+    module = types.SimpleNamespace(
+        __name__="bot.bot_main",
+        _acquire_writer_authority_before_nonce=recovery_layer,
+        _release_writer_authority=lambda: sequence.append("release"),
+    )
+    monkeypatch.setattr(
+        guard,
+        "prepare_canonical_broker_runtime",
+        lambda: sequence.append("prebootstrap"),
+    )
+
+    assert guard._patch_writer_acquire(module)
+    wrapped = module._acquire_writer_authority_before_nonce
+    assert wrapped() is True
+    assert sequence == ["recovery", "base", "prebootstrap"]
+    assert getattr(wrapped.__wrapped__, "_nija_writer_reelection_v39", False) is True
+
+
+def test_writer_wrapper_repatch_does_not_duplicate_or_unwrap_layers(monkeypatch):
+    sequence = []
+
+    def base():
+        sequence.append("base")
+        return True
+
+    @wraps(base)
+    def recovery_layer():
+        sequence.append("recovery")
+        return base()
+
+    recovery_layer._nija_writer_reelection_v39 = True
+
+    module = types.SimpleNamespace(
+        __name__="bot.bot_main",
+        _acquire_writer_authority_before_nonce=recovery_layer,
+        _release_writer_authority=lambda: sequence.append("release"),
+    )
+    monkeypatch.setattr(
+        guard,
+        "prepare_canonical_broker_runtime",
+        lambda: sequence.append("prebootstrap"),
+    )
+
+    assert guard._patch_writer_acquire(module)
+    first = module._acquire_writer_authority_before_nonce
+    assert guard._patch_writer_acquire(module)
+    second = module._acquire_writer_authority_before_nonce
+
+    assert second is first
+    assert guard._wrapper_chain_has_marker(second, guard._ACQUIRE_WRAP_ATTR)
+    assert second() is True
+    assert sequence == ["recovery", "base", "prebootstrap"]

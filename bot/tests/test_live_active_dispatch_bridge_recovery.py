@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import sys
 import threading
+import time
 from pathlib import Path
 from types import ModuleType
 
@@ -36,6 +37,20 @@ def _install_local_authority(
     )
     monkeypatch.delitem(sys.modules, "entrypoint_writer_authority", raising=False)
     return authority
+
+
+def _prime_writer_ready_env(
+    monkeypatch, *, token: str, generation: str, runtime_auth: str
+) -> None:
+    """Publish the canonical writer proofs expected by WriterAuthority."""
+    monkeypatch.setenv("NIJA_WRITER_STATE", "ACTIVE")
+    monkeypatch.setenv("NIJA_WRITER_FENCING_TOKEN", token)
+    monkeypatch.setenv("NIJA_WRITER_LEASE_GENERATION", generation)
+    monkeypatch.setenv("NIJA_WRITER_LEASE_ACQUIRED", "1")
+    monkeypatch.setenv("NIJA_WRITER_HEARTBEAT_ACTIVE", "1")
+    monkeypatch.setenv("NIJA_WRITER_HEARTBEAT_ALIVE_TS", str(time.time()))
+    monkeypatch.setenv("NIJA_CORE_THREAD_ALIVE", "1")
+    monkeypatch.setenv("NIJA_RUNTIME_EXECUTION_AUTHORITY", runtime_auth)
 
 
 def test_broker_bootstrap_accepts_active_broker_manager_alias(monkeypatch) -> None:
@@ -89,11 +104,12 @@ def test_writer_authority_is_separate_from_runtime_authority(monkeypatch) -> Non
     monkeypatch.setenv("LIVE_CAPITAL_VERIFIED", "true")
     monkeypatch.setenv("DRY_RUN_MODE", "false")
     monkeypatch.setenv("PAPER_MODE", "false")
-    monkeypatch.setenv("NIJA_WRITER_FENCING_TOKEN", "123")
-    monkeypatch.setenv("NIJA_WRITER_LEASE_GENERATION", "9")
-    monkeypatch.setenv("NIJA_WRITER_LEASE_ACQUIRED", "1")
-    monkeypatch.setenv("NIJA_WRITER_HEARTBEAT_ACTIVE", "1")
-    monkeypatch.setenv("NIJA_RUNTIME_EXECUTION_AUTHORITY", "0")
+    _prime_writer_ready_env(
+        monkeypatch,
+        token="123",
+        generation="9",
+        runtime_auth="0",
+    )
     monkeypatch.setenv("NIJA_RUNTIME_TRADING_STATE", "OFF")
     monkeypatch.setattr(module, "_loop_thread_running", lambda: False)
     monkeypatch.setattr(module, "_state_machine_live_active", lambda: False)
@@ -110,10 +126,12 @@ def test_writer_authority_is_separate_from_runtime_authority(monkeypatch) -> Non
 def test_runtime_convergence_uses_existing_fail_closed_repair(monkeypatch) -> None:
     module = _load_module()
     _install_local_authority(monkeypatch)
-    monkeypatch.setenv("NIJA_WRITER_FENCING_TOKEN", "123")
-    monkeypatch.setenv("NIJA_WRITER_LEASE_GENERATION", "9")
-    monkeypatch.setenv("NIJA_WRITER_LEASE_ACQUIRED", "1")
-    monkeypatch.setenv("NIJA_RUNTIME_EXECUTION_AUTHORITY", "0")
+    _prime_writer_ready_env(
+        monkeypatch,
+        token="123",
+        generation="9",
+        runtime_auth="0",
+    )
     monkeypatch.setenv("NIJA_RUNTIME_TRADING_STATE", "OFF")
 
     convergence = ModuleType("bot.runtime_authority_convergence_repair_patch")
@@ -328,10 +346,12 @@ def test_writer_snapshot_accepts_only_locally_acquired_authority(monkeypatch) ->
         authority_module,
     )
     monkeypatch.delitem(sys.modules, "entrypoint_writer_authority", raising=False)
-    monkeypatch.setenv("NIJA_WRITER_FENCING_TOKEN", "1140")
-    monkeypatch.setenv("NIJA_WRITER_LEASE_GENERATION", "1801")
-    monkeypatch.setenv("NIJA_WRITER_LEASE_ACQUIRED", "1")
-    monkeypatch.setenv("NIJA_RUNTIME_EXECUTION_AUTHORITY", "1")
+    _prime_writer_ready_env(
+        monkeypatch,
+        token="1140",
+        generation="1801",
+        runtime_auth="1",
+    )
 
     snapshot = module._writer_authority_snapshot()
 
