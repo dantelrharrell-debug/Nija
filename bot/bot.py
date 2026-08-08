@@ -1,9 +1,10 @@
 """Compatibility entrypoint for Railway/main.py.
 
 The canonical Render launcher keeps package-wide runtime hooks deferred while
-``main.py`` installs the audited safety set explicitly.  Replaying every
+``main.py`` installs the audited safety set explicitly. Replaying every
 historical compatibility installer here delayed ``bot_main.main()`` for many
-minutes while the health server reported the service as live.  The canonical fast path therefore installs only narrow guards that are not already owned by
+minutes while the health server reported the service as live. The canonical
+fast path therefore installs only narrow guards that are not already owned by
 ``main.py``, then hands off immediately.
 
 Direct/non-canonical launches retain the legacy installer set for compatibility.
@@ -18,9 +19,9 @@ import sys
 from typing import Iterable
 
 logger = logging.getLogger("nija.bot_entrypoint")
-_FAST_PATH_MARKER = "20260808-canonical-fast-entrypoint-v54-v33"
+_FAST_PATH_MARKER = "20260808-canonical-fast-entrypoint-v55-v34"
 
-# Each tuple is (module, success log label).  Names remain explicit so startup
+# Each tuple is (module, success log label). Names remain explicit so startup
 # attestation and source audits can prove which guards are eligible.
 _FAST_PATH_INSTALLERS = (
     ("bot.writer_reelection_loss_reason_v46_patch", "WRITER_REELECTION_LOSS_REASON_V46"),
@@ -28,6 +29,7 @@ _FAST_PATH_INSTALLERS = (
     ("bot.writer_distributed_loss_watchdog_v52_patch", "WRITER_DISTRIBUTED_LOSS_WATCHDOG_V52"),
     ("bot.writer_release_state_consistency_v53_patch", "WRITER_RELEASE_STATE_V53"),
     ("bot.writer_runtime_lifecycle_supervisor_v54_patch", "WRITER_RUNTIME_LIFECYCLE_V54"),
+    ("bot.writer_recovery_callback_guard_v55_patch", "WRITER_RECOVERY_CALLBACK_V55"),
     ("bot.zero_signal_streak_cap_repair_v51_patch", "ZERO_SIGNAL_STREAK_CAP_V51"),
     ("bot.heartbeat_authority_single_source_patch", "HEARTBEAT_AUTHORITY_SINGLE_SOURCE"),
     ("bot.activation_convergence_v17_patch", "ACTIVATION_CONVERGENCE_V17"),
