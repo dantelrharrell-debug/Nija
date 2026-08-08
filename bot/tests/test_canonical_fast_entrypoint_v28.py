@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import sys
 from types import ModuleType
+import threading
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -13,6 +14,7 @@ BOT_ENTRYPOINT = ROOT / "bot" / "bot.py"
 ATTESTATION = ROOT / "scripts" / "runtime_entrypoint_attestation.py"
 V51 = ROOT / "bot" / "zero_signal_streak_cap_repair_v51_patch.py"
 V52 = ROOT / "bot" / "writer_distributed_loss_watchdog_v52_patch.py"
+V53 = ROOT / "bot" / "writer_release_state_consistency_v53_patch.py"
 
 
 def _load(name: str, path: Path):
@@ -24,9 +26,7 @@ def _load(name: str, path: Path):
     return module
 
 
-def test_launcher_preserves_defer_flag_through_main_handoff(
-    monkeypatch, tmp_path
-) -> None:
+def test_launcher_preserves_defer_flag_through_main_handoff(monkeypatch, tmp_path) -> None:
     launcher = _load("test_canonical_fast_entrypoint_v28", LAUNCHER)
     fake_main = tmp_path / "main.py"
     fake_main.write_text("pass\n", encoding="utf-8")
@@ -71,6 +71,8 @@ def test_bot_entrypoint_fast_path_is_small_and_fail_closed() -> None:
     assert "WRITER_GENERATION_STATE_GATE_V50" in fast_block
     assert "writer_distributed_loss_watchdog_v52_patch" in fast_block
     assert "WRITER_DISTRIBUTED_LOSS_WATCHDOG_V52" in fast_block
+    assert "writer_release_state_consistency_v53_patch" in fast_block
+    assert "WRITER_RELEASE_STATE_V53" in fast_block
     assert "zero_signal_streak_cap_repair_v51_patch" in fast_block
     assert "ZERO_SIGNAL_STREAK_CAP_V51" in fast_block
     assert "okx_final_order_submission_bridge_patch" in fast_block
@@ -92,11 +94,7 @@ def test_v51_restores_missing_cap_guard_without_removing_state_repair(monkeypatc
 
     state_repair.__wrapped__ = leaf
     setattr(state_repair, v51._STATE_ATTR, True)
-    core.NijaCoreLoop = type(
-        "NijaCoreLoop",
-        (),
-        {"_phase3_scan_and_enter": state_repair},
-    )
+    core.NijaCoreLoop = type("NijaCoreLoop", (), {"_phase3_scan_and_enter": state_repair})
     monkeypatch.setitem(sys.modules, "bot.nija_core_loop", core)
     monkeypatch.delitem(sys.modules, "nija_core_loop", raising=False)
     monkeypatch.setenv("NIJA_ZERO_SIGNAL_STREAK_CAP", "12")
@@ -147,6 +145,44 @@ def test_v52_missing_distributed_lock_marks_existing_runtime_lost(monkeypatch) -
     assert result["action"] == "mark_lost_recoverable"
     assert runtime.marked == ["lock_missing_and_fencing_token_mismatch"]
     assert runtime.lost is True
+    assert os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] == "0"
+    assert os.environ["NIJA_EXECUTION_ACTIVE"] == "false"
+
+
+def test_v53_release_invalidates_stale_local_acquisition_without_callback(monkeypatch) -> None:
+    v53 = _load("test_writer_release_state_v53_fast_path", V53)
+    calls = []
+
+    class Runtime:
+        def __init__(self):
+            self._lost = threading.Event()
+            self._result = type("Result", (), {"acquired": True})()
+            self._on_lost_callback = lambda reason: calls.append(reason)
+
+        @property
+        def acquired(self):
+            return bool(self._result and self._result.acquired and not self._lost.is_set())
+
+        @property
+        def lost(self):
+            return self._lost.is_set()
+
+        def release(self):
+            return True
+
+    module = ModuleType("bot.entrypoint_writer_authority")
+    module.EntrypointWriterAuthority = Runtime
+    assert v53._patch_entrypoint_writer_authority(module) is True
+
+    runtime = Runtime()
+    monkeypatch.setenv("NIJA_RUNTIME_EXECUTION_AUTHORITY", "1")
+    monkeypatch.setenv("NIJA_EXECUTION_ACTIVE", "true")
+
+    assert runtime.acquired is True
+    assert runtime.release() is True
+    assert runtime.acquired is False
+    assert runtime.lost is True
+    assert calls == []
     assert os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] == "0"
     assert os.environ["NIJA_EXECUTION_ACTIVE"] == "false"
 
