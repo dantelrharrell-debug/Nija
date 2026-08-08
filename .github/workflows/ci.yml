@@ -24,7 +24,7 @@ jobs:
 
       - name: Start SSH agent and add private key
         if: ${{ env.SSH_PRIVATE_KEY != '' }}
-        uses: webfactory/ssh-agent@v0.9.1
+        uses: webfactory/ssh-agent@v0.10.0
         with:
           ssh-private-key: ${{ env.SSH_PRIVATE_KEY }}
 
