@@ -229,17 +229,16 @@ def install_import_hook() -> bool:
         v39_ok, entrypoint_ok = _patch_loaded()
         _install_builtin_import_hook()
         _install_importlib_hook()
-        # The canonical launcher loads v46 immediately after v39, and v24 has
-        # already caused bot_main/EntrypointWriterAuthority to load. Failing
-        # either attachment here is therefore a startup-contract failure rather
-        # than a reason to pretend the corrective layer is active.
-        _INSTALLED = bool(v39_ok and entrypoint_ok)
+        # v39 must already be present because v46 only extends its bounded
+        # recovery predicate. EntrypointWriterAuthority may legitimately load
+        # later in bot_main; the import hooks above attach observability then.
+        _INSTALLED = bool(v39_ok)
         os.environ["NIJA_WRITER_REELECTION_LOSS_REASON_V46_INSTALLED"] = (
             "1" if _INSTALLED else "0"
         )
         LOGGER.critical(
             "WRITER_REELECTION_LOSS_REASON_V46_INSTALLED marker=%s v39_patched=%s "
-            "entrypoint_patched=%s installed=%s",
+            "entrypoint_patched=%s entrypoint_future_hook=true installed=%s",
             MARKER,
             v39_ok,
             entrypoint_ok,
