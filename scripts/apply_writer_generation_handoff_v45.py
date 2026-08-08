@@ -1,0 +1,74 @@
+#!/usr/bin/env python3
+"""Idempotently wire writer-generation handoff v45 into canonical launcher v26."""
+from __future__ import annotations
+
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+LAUNCHER = ROOT / "scripts" / "canonical_runtime_launcher_v26.py"
+MARKER = "20260807-writer-generation-handoff-v45"
+
+
+def _replace_once(text: str, old: str, new: str, label: str) -> str:
+    if new in text:
+        return text
+    if old not in text:
+        raise RuntimeError(f"v45 launcher patch anchor missing: {label}")
+    return text.replace(old, new, 1)
+
+
+def apply() -> bool:
+    text = LAUNCHER.read_text(encoding="utf-8")
+    original = text
+
+    text = _replace_once(
+        text,
+        'MARKER = "20260807-canonical-runtime-launcher-v26-v44-v43-v42-v41-v40-v39-v38-v37-v18"',
+        'MARKER = "20260807-canonical-runtime-launcher-v26-v45-v44-v43-v42-v41-v40-v39-v38-v37-v18"',
+        "launcher marker",
+    )
+    text = _replace_once(
+        text,
+        'V44_PATH = ROOT / "bot" / "kraken_connection_convergence_v44_patch.py"\nV18_PATH',
+        'V44_PATH = ROOT / "bot" / "kraken_connection_convergence_v44_patch.py"\nV45_PATH = ROOT / "bot" / "writer_generation_handoff_v45_patch.py"\nV18_PATH',
+        "v45 path",
+    )
+
+    function = '''\n\ndef _install_writer_generation_handoff_v45() -> ModuleType:\n    if not V45_PATH.is_file():\n        raise RuntimeError(f"writer generation handoff v45 missing: {V45_PATH}")\n    module = _load_module_by_path("nija_writer_generation_handoff_v45_prebot", V45_PATH)\n    installer: Any = getattr(module, "install_import_hook", None) or getattr(module, "install", None)\n    if not callable(installer) or not bool(installer()):\n        raise RuntimeError("writer generation handoff v45 installer failed")\n    if os.environ.get("NIJA_WRITER_GENERATION_HANDOFF_V45_INSTALLED") != "1":\n        raise RuntimeError("writer generation handoff v45 did not attest installed")\n    return module\n'''
+    text = _replace_once(
+        text,
+        '\n\ndef _install_production_corrective_set() -> ModuleType:',
+        function + '\n\ndef _install_production_corrective_set() -> ModuleType:',
+        "v45 installer function",
+    )
+    text = _replace_once(
+        text,
+        '    _install_runtime_execution_convergence()\n',
+        '    _install_writer_generation_handoff_v45()\n    _install_runtime_execution_convergence()\n',
+        "v45 install order",
+    )
+    text = _replace_once(
+        text,
+        'v43_installed=true v44_installed=true v18_installed=true',
+        'v43_installed=true v44_installed=true v45_installed=true v18_installed=true',
+        "ready attestation",
+    )
+    text = _replace_once(
+        text,
+        'CANONICAL_ENTRYPOINT_FAST_PATH_ARMED marker=20260807-canonical-fast-entrypoint-v44-v43-v42-v41-v40-v39-v38-v37-v18',
+        'CANONICAL_ENTRYPOINT_FAST_PATH_ARMED marker=20260807-canonical-fast-entrypoint-v45-v44-v43-v42-v41-v40-v39-v38-v37-v18',
+        "fast marker",
+    )
+
+    if text != original:
+        LAUNCHER.write_text(text, encoding="utf-8")
+    if 'V45_PATH = ROOT / "bot" / "writer_generation_handoff_v45_patch.py"' not in text:
+        raise RuntimeError("v45 path attestation missing after patch")
+    if '_install_writer_generation_handoff_v45()' not in text:
+        raise RuntimeError("v45 install call missing after patch")
+    print(f"WRITER_GENERATION_HANDOFF_V45_LAUNCHER_PATCHED marker={MARKER}", flush=True)
+    return True
+
+
+if __name__ == "__main__":
+    apply()
