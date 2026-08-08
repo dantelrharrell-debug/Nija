@@ -18,13 +18,14 @@ import sys
 from typing import Iterable
 
 logger = logging.getLogger("nija.bot_entrypoint")
-_FAST_PATH_MARKER = "20260808-canonical-fast-entrypoint-v51-v30"
+_FAST_PATH_MARKER = "20260808-canonical-fast-entrypoint-v52-v31"
 
 # Each tuple is (module, success log label).  Names remain explicit so startup
 # attestation and source audits can prove which guards are eligible.
 _FAST_PATH_INSTALLERS = (
     ("bot.writer_reelection_loss_reason_v46_patch", "WRITER_REELECTION_LOSS_REASON_V46"),
     ("bot.writer_generation_state_gate_v50_patch", "WRITER_GENERATION_STATE_GATE_V50"),
+    ("bot.writer_distributed_loss_watchdog_v52_patch", "WRITER_DISTRIBUTED_LOSS_WATCHDOG_V52"),
     ("bot.zero_signal_streak_cap_repair_v51_patch", "ZERO_SIGNAL_STREAK_CAP_V51"),
     ("bot.heartbeat_authority_single_source_patch", "HEARTBEAT_AUTHORITY_SINGLE_SOURCE"),
     ("bot.activation_convergence_v17_patch", "ACTIVATION_CONVERGENCE_V17"),
