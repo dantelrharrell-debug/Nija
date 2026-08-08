@@ -8,6 +8,8 @@ on:
       - "secondary_venue_runtime_diagnostics.py"
       - "bot/tests/test_critical_runtime_repairs_v10.py"
       - "bot/bot.py"
+      - "bot/writer_reelection_loss_reason_v46_patch.py"
+      - "bot/tests/test_writer_reelection_loss_reason_v46.py"
       - "kraken_equity_freshness_v3_patch.py"
       - "bot/activation_pending_commit_monitor_patch.py"
       - "bot/okx_funding_wallet_readiness_patch.py"
@@ -58,6 +60,8 @@ on:
       - "secondary_venue_runtime_diagnostics.py"
       - "bot/tests/test_critical_runtime_repairs_v10.py"
       - "bot/bot.py"
+      - "bot/writer_reelection_loss_reason_v46_patch.py"
+      - "bot/tests/test_writer_reelection_loss_reason_v46.py"
       - "kraken_equity_freshness_v3_patch.py"
       - "bot/activation_pending_commit_monitor_patch.py"
       - "bot/okx_funding_wallet_readiness_patch.py"
@@ -143,6 +147,7 @@ jobs:
             bot/stalled_writer_release_guard_v21.py \
             bot/canonical_broker_prebootstrap_v22.py \
             bot/stalled_writer_release_guard_v22.py \
+            bot/writer_reelection_loss_reason_v46_patch.py \
             scripts/apply_startup_handoff_fix.py \
             scripts/canonical_runtime_launcher_v26.py \
             scripts/runtime_entrypoint_attestation.py \
@@ -179,6 +184,7 @@ jobs:
             bot/tests/test_stalled_writer_release_guard_v21.py \
             bot/tests/test_canonical_broker_prebootstrap_v22.py \
             bot/tests/test_stalled_writer_release_guard_v22.py \
+            bot/tests/test_writer_reelection_loss_reason_v46.py \
             bot/tests/test_secondary_venue_runtime_diagnostics.py \
             bot/tests/test_startup_handoff_all_fixes.py \
             bot/tests/test_canonical_fast_entrypoint_v28.py \
