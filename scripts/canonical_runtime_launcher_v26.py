@@ -22,7 +22,7 @@ import sys
 from types import ModuleType
 from typing import Any
 
-MARKER = "20260807-canonical-runtime-launcher-v26-v38-v37-v18"
+MARKER = "20260807-canonical-runtime-launcher-v26-v39-v38-v37-v18"
 ROOT = Path(__file__).resolve().parents[1]
 V24_PATH = ROOT / "bot" / "canonical_broker_startup_convergence_v24.py"
 V32_PATH = ROOT / "bot" / "runtime_execution_convergence_v32.py"
@@ -31,6 +31,7 @@ V34_PATH = ROOT / "bot" / "capital_readiness_handoff_v34.py"
 V35_PATH = ROOT / "bot" / "capital_refresh_stall_guard_v35.py"
 V37_PATH = ROOT / "bot" / "capital_refresh_sticky_success_v37_patch.py"
 V38_PATH = ROOT / "bot" / "heartbeat_authority_identity_v38_patch.py"
+V39_PATH = ROOT / "bot" / "production_readiness_v39_patch.py"
 V18_PATH = ROOT / "bot" / "production_corrective_set_v18_patch.py"
 V19_PATH = ROOT / "bot" / "entrypoint_writer_epoch_recovery_v19_patch.py"
 MAIN_PATH = ROOT / "main.py"
@@ -127,6 +128,18 @@ def _install_writer_epoch_recovery() -> ModuleType:
     return module
 
 
+def _install_production_readiness_v39() -> ModuleType:
+    if not V39_PATH.is_file():
+        raise RuntimeError(f"production readiness v39 missing: {V39_PATH}")
+    module = _load_module_by_path("nija_production_readiness_v39_prebot", V39_PATH)
+    installer: Any = getattr(module, "install_import_hook", None) or getattr(module, "install", None)
+    if not callable(installer) or not bool(installer()):
+        raise RuntimeError("production readiness v39 installer failed")
+    if os.environ.get("NIJA_PRODUCTION_READINESS_V39_INSTALLED") != "1":
+        raise RuntimeError("production readiness v39 did not attest installed")
+    return module
+
+
 def _install_production_corrective_set() -> ModuleType:
     if not V18_PATH.is_file():
         raise RuntimeError(f"production corrective set missing: {V18_PATH}")
@@ -154,10 +167,11 @@ def install_canonical_startup_guard() -> ModuleType:
     _install_capital_refresh_sticky_success()
     _install_heartbeat_authority_identity()
     _install_writer_epoch_recovery()
+    _install_production_readiness_v39()
     _install_production_corrective_set()
     os.environ["NIJA_CANONICAL_RUNTIME_LAUNCHER_V26_READY"] = "1"
     os.environ["NIJA_CANONICAL_RUNTIME_LAUNCHER_V26_MARKER"] = MARKER
-    LOGGER.critical("CANONICAL_RUNTIME_LAUNCHER_V26_READY marker=%s bot_main_preloaded=false v24_installed=true v32_installed=true v33_installed=true v34_installed=true v36_installed=true v37_installed=true v38_installed=true v19_installed=true v18_installed=true", MARKER)
+    LOGGER.critical("CANONICAL_RUNTIME_LAUNCHER_V26_READY marker=%s bot_main_preloaded=false v24_installed=true v32_installed=true v33_installed=true v34_installed=true v36_installed=true v37_installed=true v38_installed=true v19_installed=true v39_installed=true v18_installed=true", MARKER)
     return module
 
 
@@ -167,7 +181,7 @@ def main() -> int:
     if not MAIN_PATH.is_file():
         raise RuntimeError(f"canonical main.py missing: {MAIN_PATH}")
     install_canonical_startup_guard()
-    print("CANONICAL_ENTRYPOINT_FAST_PATH_ARMED marker=20260807-canonical-fast-entrypoint-v38-v37-v18 package_hook_fanout=deferred", flush=True)
+    print("CANONICAL_ENTRYPOINT_FAST_PATH_ARMED marker=20260807-canonical-fast-entrypoint-v39-v38-v37-v18 package_hook_fanout=deferred", flush=True)
     runpy.run_path(str(MAIN_PATH), run_name="__main__")
     return 0
 
