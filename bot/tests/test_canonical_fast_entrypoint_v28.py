@@ -15,6 +15,7 @@ ATTESTATION = ROOT / "scripts" / "runtime_entrypoint_attestation.py"
 V51 = ROOT / "bot" / "zero_signal_streak_cap_repair_v51_patch.py"
 V52 = ROOT / "bot" / "writer_distributed_loss_watchdog_v52_patch.py"
 V53 = ROOT / "bot" / "writer_release_state_consistency_v53_patch.py"
+V54 = ROOT / "bot" / "writer_runtime_lifecycle_supervisor_v54_patch.py"
 
 
 def _load(name: str, path: Path):
@@ -73,6 +74,8 @@ def test_bot_entrypoint_fast_path_is_small_and_fail_closed() -> None:
     assert "WRITER_DISTRIBUTED_LOSS_WATCHDOG_V52" in fast_block
     assert "writer_release_state_consistency_v53_patch" in fast_block
     assert "WRITER_RELEASE_STATE_V53" in fast_block
+    assert "writer_runtime_lifecycle_supervisor_v54_patch" in fast_block
+    assert "WRITER_RUNTIME_LIFECYCLE_V54" in fast_block
     assert "zero_signal_streak_cap_repair_v51_patch" in fast_block
     assert "ZERO_SIGNAL_STREAK_CAP_V51" in fast_block
     assert "okx_final_order_submission_bridge_patch" in fast_block
@@ -183,6 +186,48 @@ def test_v53_release_invalidates_stale_local_acquisition_without_callback(monkey
     assert runtime.acquired is False
     assert runtime.lost is True
     assert calls == []
+    assert os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] == "0"
+    assert os.environ["NIJA_EXECUTION_ACTIVE"] == "false"
+
+
+def test_v54_blocks_core_start_without_exact_writer_proof(monkeypatch) -> None:
+    v54 = _load("test_writer_runtime_v54_fast_path", V54)
+    core = ModuleType("bot.nija_core_loop")
+    called = []
+
+    def start_trading_engine(strategy):
+        called.append(strategy)
+        return object()
+
+    core.start_trading_engine = start_trading_engine
+    monkeypatch.setattr(v54, "_writer_proof", lambda: (False, "writer_lease_not_acquired", 0))
+    monkeypatch.setenv("NIJA_RUNTIME_EXECUTION_AUTHORITY", "1")
+    monkeypatch.setenv("NIJA_EXECUTION_ACTIVE", "true")
+
+    assert v54._patch_core_loop(core) is True
+    try:
+        core.start_trading_engine(object())
+        assert False, "core start should be blocked"
+    except RuntimeError as exc:
+        assert "writer_runtime_v54_core_start_blocked" in str(exc)
+
+    assert called == []
+    assert os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] == "0"
+    assert os.environ["NIJA_EXECUTION_ACTIVE"] == "false"
+
+
+def test_v54_requests_normal_shutdown_when_live_core_loses_writer(monkeypatch) -> None:
+    v54 = _load("test_writer_runtime_v54_shutdown", V54)
+    shutdown = threading.Event()
+    bot_main = ModuleType("bot.bot_main")
+    bot_main._shutdown_event = shutdown
+    bot_main._core_loop_thread = type("Thread", (), {"is_alive": lambda self: True})()
+    monkeypatch.setitem(sys.modules, "bot.bot_main", bot_main)
+    monkeypatch.setenv("NIJA_RUNTIME_EXECUTION_AUTHORITY", "1")
+    monkeypatch.setenv("NIJA_EXECUTION_ACTIVE", "true")
+
+    assert v54._request_canonical_shutdown("writer_lease_not_acquired") is True
+    assert shutdown.is_set() is True
     assert os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] == "0"
     assert os.environ["NIJA_EXECUTION_ACTIVE"] == "false"
 
