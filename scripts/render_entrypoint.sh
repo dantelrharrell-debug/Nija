@@ -47,6 +47,7 @@ _promote_secret_alias KRAKEN_PLATFORM_API_SECRET \
 export NIJA_DEFER_RUNTIME_SITE_HOOKS=1
 python3 -S scripts/apply_startup_handoff_fix.py
 python3 -S scripts/apply_canonical_launcher_v26.py
+python3 -S scripts/apply_writer_generation_handoff_v45.py
 bash -n start.sh
 python3 -S -m py_compile \
     main.py \
@@ -58,8 +59,11 @@ python3 -S -m py_compile \
     bot/live_engine_profit_exit_convergence_v25.py \
     bot/live_exit_reconciliation_safety_v25.py \
     bot/stalled_writer_release_guard_v22.py \
+    bot/writer_generation_handoff_v45_patch.py \
+    bot/tests/test_writer_generation_handoff_v45.py \
     scripts/canonical_runtime_launcher_v26.py \
     scripts/apply_canonical_launcher_v26.py \
+    scripts/apply_writer_generation_handoff_v45.py \
     scripts/apply_direct_broker_prebootstrap_v27.py \
     scripts/runtime_entrypoint_attestation.py
 
@@ -69,8 +73,10 @@ if grep -Fq '$PY -u main.py' start.sh; then
     exit 78
 fi
 grep -Fq 'DIRECT_CANONICAL_BROKER_PREBOOTSTRAP_V27_READY' bot/bot_main.py
+grep -Fq 'V45_PATH = ROOT / "bot" / "writer_generation_handoff_v45_patch.py"' scripts/canonical_runtime_launcher_v26.py
+grep -Fq '_install_writer_generation_handoff_v45()' scripts/canonical_runtime_launcher_v26.py
 
-echo "🧭 RENDER_ENTRYPOINT_CANONICAL_HANDOFF_READY marker=20260724-render-entrypoint-v27 launcher=canonical_runtime_launcher_v26 direct_broker_prebootstrap=v27"
+echo "🧭 RENDER_ENTRYPOINT_CANONICAL_HANDOFF_READY marker=20260807-render-entrypoint-v45 launcher=canonical_runtime_launcher_v26 writer_generation_handoff=v45 direct_broker_prebootstrap=v27"
 unset NIJA_DEFER_RUNTIME_SITE_HOOKS
 
 exec bash scripts/production_bootstrap.sh "$@"
