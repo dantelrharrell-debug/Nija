@@ -30,6 +30,47 @@ _BROKER_METHODS = _MARKET_METHODS + (
 )
 
 
+def _truthy_env(name: str, default: str = "false") -> bool:
+    return str(os.environ.get(name, default)).strip().lower() in {"1", "true", "yes", "on", "enabled", "y"}
+
+
+def _float_env(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, str(default)) or default)
+    except Exception:
+        return default
+
+
+def _norm(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    compact = text.replace("-", "").replace("_", "").replace(" ", "")
+    aliases = {
+        "coinbasebrokeradapter": "coinbase",
+        "coinbasebroker": "coinbase",
+        "coinbaseadvancedtradebroker": "coinbase",
+        "coinbase": "coinbase",
+        "coinbasecapitalmarkets": "coinbase_capital_markets",
+        "coinbasecapitalmarketsbroker": "coinbase_capital_markets",
+        "krakenbrokeradapter": "kraken",
+        "krakenbroker": "kraken",
+        "kraken": "kraken",
+        "krakensecurities": "kraken_securities",
+        "krakensecuritiesbroker": "kraken_securities",
+        "okxbrokeradapter": "okx",
+        "okxbroker": "okx",
+        "okxrestclient": "okx",
+        "okx": "okx",
+        "binancebrokeradapter": "binance",
+        "binancebroker": "binance",
+        "binanceclient": "binance",
+        "binance": "binance",
+        "alpacabrokeradapter": "alpaca",
+        "alpacabroker": "alpaca",
+        "alpaca": "alpaca",
+    }
+    return aliases.get(compact, text)
+
+
 def _name(value: Any) -> str:
     raw = getattr(value, "value", value)
     text = str(raw or "").strip().lower()
@@ -182,18 +223,10 @@ def _patch_core_loop(module: ModuleType) -> bool:
     return patched
 
 
-def _try_patch_loaded() -> bool:
-    patched = False
-    for name in ("bot.nija_core_loop", "nija_core_loop"):
-        module = sys.modules.get(name)
-        if isinstance(module, ModuleType):
-            patched = _patch_core_loop(module) or patched
-    return patched
-
-
 def _install_live_terminal_guards() -> None:
     """Install chained runtime guards alongside the broker guard."""
     for module_name in (
+        "bot.broker_account_isolation_v64_patch",
         "bot.capital_authority_live_total_patch",
         "bot.execution_route_integrity_import_guard_patch",
         "bot.market_data_stability_import_guard_patch",
