@@ -49,3 +49,33 @@ def test_stale_observation_is_excluded_not_revived(monkeypatch):
     assert "kraken" in status["excluded_brokers"]
     assert status["all_recent"] is False
     assert status["source"] == "partial_or_excluded_fallback"
+
+
+def test_v62_broker_specific_defaults_cover_observed_live_latency(monkeypatch):
+    monkeypatch.delenv("NIJA_CAPITAL_BROKER_FETCH_TIMEOUT_S", raising=False)
+    monkeypatch.delenv("NIJA_CAPITAL_COINBASE_FETCH_TIMEOUT_S", raising=False)
+    monkeypatch.delenv("NIJA_CAPITAL_OKX_FETCH_TIMEOUT_S", raising=False)
+    monkeypatch.delenv("NIJA_CAPITAL_KRAKEN_FETCH_TIMEOUT_S", raising=False)
+    assert cap._broker_timeout_seconds("coinbase") >= 180.0
+    assert cap._broker_timeout_seconds("okx") >= 75.0
+    assert cap._broker_timeout_seconds("kraken") >= 75.0
+
+
+def test_v62_cycle_deadline_cannot_undercut_slowest_broker(monkeypatch):
+    monkeypatch.setenv("NIJA_CAPITAL_CYCLE_DEADLINE_S", "12")
+    monkeypatch.delenv("NIJA_CAPITAL_COINBASE_FETCH_TIMEOUT_S", raising=False)
+    monkeypatch.delenv("NIJA_CAPITAL_OKX_FETCH_TIMEOUT_S", raising=False)
+    deadline = cap._cycle_deadline_seconds(("coinbase", "okx"))
+    assert deadline >= cap._broker_timeout_seconds("coinbase") + 5.0
+
+
+def test_v62_operator_can_raise_or_lower_dedicated_broker_timeout(monkeypatch):
+    monkeypatch.setenv("NIJA_CAPITAL_COINBASE_FETCH_TIMEOUT_S", "210")
+    monkeypatch.setenv("NIJA_CAPITAL_OKX_FETCH_TIMEOUT_S", "60")
+    assert cap._broker_timeout_seconds("coinbase") == 210.0
+    assert cap._broker_timeout_seconds("okx") == 60.0
+
+
+def test_v62_unknown_broker_still_uses_generic_bound(monkeypatch):
+    monkeypatch.setenv("NIJA_CAPITAL_BROKER_FETCH_TIMEOUT_S", "9")
+    assert cap._broker_timeout_seconds("alpaca") == 9.0
