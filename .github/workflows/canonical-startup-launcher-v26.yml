@@ -12,6 +12,7 @@ on:
       - "bot/canonical_broker_prebootstrap_v22.py"
       - "bot/tests/test_canonical_runtime_launcher_v26.py"
       - "bot/tests/test_canonical_fast_entrypoint_v28.py"
+      - "bot/tests/test_canonical_writer_first_v59.py"
       - ".github/workflows/canonical-startup-launcher-v26.yml"
   workflow_dispatch:
 
@@ -33,7 +34,8 @@ jobs:
             scripts/canonical_runtime_launcher_v26.py \
             scripts/apply_canonical_launcher_v26.py \
             bot/canonical_broker_startup_convergence_v24.py \
-            bot/canonical_broker_prebootstrap_v22.py
+            bot/canonical_broker_prebootstrap_v22.py \
+            bot/tests/test_canonical_writer_first_v59.py
           bash -n scripts/render_entrypoint.sh
       - name: Verify source-runtime rewrite
         run: |
@@ -48,4 +50,5 @@ jobs:
           python -m pip install --disable-pip-version-check pytest
           NIJA_DEFER_RUNTIME_SITE_HOOKS=1 PYTHONNOUSERSITE=1 pytest -q \
             bot/tests/test_canonical_runtime_launcher_v26.py \
-            bot/tests/test_canonical_fast_entrypoint_v28.py
+            bot/tests/test_canonical_fast_entrypoint_v28.py \
+            bot/tests/test_canonical_writer_first_v59.py

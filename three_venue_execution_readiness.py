@@ -643,6 +643,19 @@ def publish_once(*, force: bool = False) -> dict[str, Any]:
     os.environ["NIJA_ANY_VENUE_EXECUTION_READY"] = "1" if enabled else "0"
     os.environ["NIJA_EXECUTION_READY_VENUES"] = ready_csv
     os.environ["NIJA_EXECUTION_DEGRADED_VENUES"] = degraded_csv
+
+    # Export the already-verified Kraken free quote snapshot for broker-independent
+    # readiness/diagnostics. This is telemetry only: no additional private Kraken
+    # request is made here and this value does not grant execution readiness.
+    try:
+        kraken_spendable = max(
+            0.0,
+            float(payload["venues"]["kraken"].get("spendable_quote", 0.0) or 0.0),
+        )
+    except (TypeError, ValueError, OverflowError, KeyError):
+        kraken_spendable = 0.0
+    os.environ["NIJA_KRAKEN_SPENDABLE_QUOTE"] = f"{kraken_spendable:.8f}"
+
     kraken_ready = bool(payload["venues"]["kraken"]["ready"])
     os.environ["NIJA_KRAKEN_ACTIVATION_STATE"] = "ready" if kraken_ready else "not_ready"
     os.environ["NIJA_KRAKEN_TRADING_READY"] = "1" if kraken_ready else "0"

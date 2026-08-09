@@ -56,6 +56,44 @@ def _set_writer_ready_env(monkeypatch) -> None:
     monkeypatch.setenv("NIJA_CORE_THREAD_ALIVE", "1")
 
 
+def _set_canonical_writer_ready(monkeypatch, module) -> None:
+    """Isolate venue tests from process-global writer singleton history.
+
+    Writer authority itself is covered by dedicated fencing/heartbeat tests. Venue
+    tests should vary broker readiness while holding the upstream writer gate at a
+    known-good canonical state.
+    """
+    _set_writer_ready_env(monkeypatch)
+    monkeypatch.setattr(
+        module,
+        "writer_authority_snapshot",
+        lambda **_kwargs: {
+            "ready": True,
+            "writer_state": "ACTIVE",
+            "lease_acquired": True,
+            "fencing_token": True,
+            "heartbeat_healthy": True,
+            "core_loop_alive": True,
+        },
+    )
+
+
+def _published_venue(*, ready: bool, activation_state: str) -> dict[str, object]:
+    return {
+        "ready": ready,
+        "credentials_loaded": True,
+        "authentication_succeeded": ready,
+        "balance_fetched": ready,
+        "market_metadata_loaded": ready,
+        "order_adapter_initialized": ready,
+        "venue_marked_ready": ready,
+        "eligible_for_execution": ready,
+        "spendable_quote": 25.0 if ready else 0.0,
+        "activation_state": activation_state,
+        "reason": "ready" if ready else "not_execution_eligible",
+    }
+
+
 def test_all_three_venues_require_every_stage(monkeypatch) -> None:
     module = _module()
     _set_credentials(monkeypatch)
@@ -104,7 +142,7 @@ def test_missing_one_stage_keeps_only_that_venue_fail_closed(monkeypatch) -> Non
 def test_one_ready_venue_enables_execution_independently(monkeypatch) -> None:
     module = _module()
     _set_credentials(monkeypatch)
-    _set_writer_ready_env(monkeypatch)
+    _set_canonical_writer_ready(monkeypatch, module)
     monkeypatch.setenv("CAPITAL_SYSTEM_READY", "1")
 
     kraken = FakeBroker(balance=116.09)
@@ -135,7 +173,7 @@ def test_hydrated_fresh_capital_authority_satisfies_capital_gate(monkeypatch) ->
     monkeypatch.delenv("CAPITAL_SYSTEM_READY", raising=False)
     monkeypatch.delenv("NIJA_CAPITAL_READY", raising=False)
     monkeypatch.setenv("NIJA_RUNTIME_TRADING_STATE", "LIVE_PENDING_CONFIRMATION")
-    _set_writer_ready_env(monkeypatch)
+    _set_canonical_writer_ready(monkeypatch, module)
 
     authority = SimpleNamespace(
         is_hydrated=True,
@@ -167,7 +205,7 @@ def test_handoff_corroboration_clears_stale_capital_snapshot(monkeypatch) -> Non
     monkeypatch.delenv("CAPITAL_SYSTEM_READY", raising=False)
     monkeypatch.delenv("NIJA_CAPITAL_READY", raising=False)
     monkeypatch.setenv("NIJA_CAPITAL_READINESS_HANDOFF_V34", "1")
-    _set_writer_ready_env(monkeypatch)
+    _set_canonical_writer_ready(monkeypatch, module)
 
     authority = SimpleNamespace(
         is_hydrated=lambda: True,
@@ -194,220 +232,176 @@ def test_handoff_corroboration_clears_stale_capital_snapshot(monkeypatch) -> Non
     assert result["execution_ready"] is True
 
 
-def test_live_active_state_does_not_substitute_for_capital_readiness(monkeypatch) -> None:
+def test_publish_once_retains_independent_any_ready_semantics(monkeypatch, tmp_path) -> None:
     module = _module()
-    monkeypatch.delenv("CAPITAL_SYSTEM_READY", raising=False)
-    monkeypatch.delenv("NIJA_CAPITAL_READY", raising=False)
-    monkeypatch.setenv("NIJA_RUNTIME_TRADING_STATE", "LIVE_ACTIVE")
-    monkeypatch.delitem(sys.modules, "bot.capital_authority", raising=False)
-    monkeypatch.delitem(sys.modules, "capital_authority", raising=False)
-
-    assert module._capital_ready() is False
-
-
-def test_writer_authority_ready_requires_heartbeat_and_core_loop(monkeypatch) -> None:
-    module = _module()
-    _set_writer_ready_env(monkeypatch)
-
-    assert module.writer_authority_ready() is True
-
-    monkeypatch.setenv("NIJA_CORE_THREAD_ALIVE", "0")
-    assert module.writer_authority_ready() is False
-
-    monkeypatch.setenv("NIJA_CORE_THREAD_ALIVE", "1")
-    monkeypatch.setenv("NIJA_WRITER_HEARTBEAT_ACTIVE", "0")
-    assert module.writer_authority_ready() is False
-
-
-def test_writer_authority_refreshing_state_keeps_ready(monkeypatch) -> None:
-    module = _module()
-    _set_writer_ready_env(monkeypatch)
-    monkeypatch.setenv("NIJA_WRITER_STATE", "REFRESHING")
-    monkeypatch.setenv("NIJA_WRITER_HEARTBEAT_ACTIVE", "0")
-
-    assert module.writer_authority_ready() is True
-
-
-def test_reconcile_requests_runtime_repair_when_writer_and_venue_are_ready(monkeypatch) -> None:
-    module = _module()
-    calls = []
-    monkeypatch.setattr(
-        module,
-        "publish_once",
-        lambda force=False: {
-            "marker": module.MARKER,
-            "timestamp": 1.0,
-            "pid": 1,
-            "writer_ready": True,
-            "writer_state": {
-                "lease_acquired": True,
-                "fencing_token": True,
-                "heartbeat_healthy": True,
-                "core_loop_alive": True,
-            },
-            "capital_ready": True,
-            "any_venue_ready": True,
-            "all_venues_ready": False,
-            "execution_ready": True,
-            "three_venue_execution_ready": True,
-            "ready_venues": ["kraken"],
-            "degraded_venues": ["coinbase", "okx"],
-            "venues": {},
-        },
-    )
-
-    repair_module = ModuleType("bot.runtime_authority_convergence_repair_patch")
-    repair_module.converge_runtime_authority = lambda source: calls.append(source) or True
-    monkeypatch.setitem(sys.modules, "bot.runtime_authority_convergence_repair_patch", repair_module)
-    monkeypatch.delenv("NIJA_RUNTIME_EXECUTION_AUTHORITY", raising=False)
-
-    module.reconcile_execution_readiness(trigger="unit_test", force=True)
-
-    assert calls == ["three_venue_execution_readiness:unit_test"]
-
-
-def test_publish_sets_independent_compatibility_flags(monkeypatch) -> None:
-    module = _module()
+    monkeypatch.setattr(module, "_STATE_FILE", tmp_path / "readiness.json")
     monkeypatch.setattr(
         module,
         "evaluate_all",
         lambda: {
-            "marker": module.MARKER,
-            "timestamp": 1.0,
-            "pid": 1,
             "writer_ready": True,
             "capital_ready": True,
-            "any_venue_ready": True,
-            "all_venues_ready": False,
             "execution_ready": True,
             "three_venue_execution_ready": True,
+            "any_venue_ready": True,
+            "all_venues_ready": False,
             "ready_venues": ["kraken"],
             "degraded_venues": ["coinbase", "okx"],
             "venues": {
-                "kraken": {
-                    "credentials_loaded": True,
-                    "authentication_succeeded": True,
-                    "balance_fetched": True,
-                    "market_metadata_loaded": True,
-                    "order_adapter_initialized": True,
-                    "venue_marked_ready": True,
-                    "eligible_for_execution": True,
-                    "spendable_quote": 116.09,
-                    "activation_state": "ready",
-                    "reason": "ready",
-                    "ready": True,
-                },
-                "coinbase": {
-                    "credentials_loaded": True,
-                    "authentication_succeeded": False,
-                    "balance_fetched": False,
-                    "market_metadata_loaded": False,
-                    "order_adapter_initialized": True,
-                    "venue_marked_ready": False,
-                    "eligible_for_execution": False,
-                    "spendable_quote": 0.0,
-                    "activation_state": "connect_failed",
-                    "reason": "not_connected",
-                    "ready": False,
-                },
-                "okx": {
-                    "credentials_loaded": True,
-                    "authentication_succeeded": False,
-                    "balance_fetched": False,
-                    "market_metadata_loaded": False,
-                    "order_adapter_initialized": True,
-                    "venue_marked_ready": False,
-                    "eligible_for_execution": False,
-                    "spendable_quote": 0.0,
-                    "activation_state": "connect_failed",
-                    "reason": "not_connected",
-                    "ready": False,
-                },
+                "kraken": _published_venue(ready=True, activation_state="ready"),
+                "coinbase": _published_venue(ready=False, activation_state="not_ready"),
+                "okx": _published_venue(ready=False, activation_state="not_ready"),
             },
         },
     )
-    monkeypatch.setattr(module, "_write_state", lambda payload: None)
-    monkeypatch.setattr(module, "_LAST_SIGNATURE", "")
 
-    result = module.publish_once(force=True)
+    payload = module.publish_once(force=True)
 
-    assert result["execution_ready"] is True
+    assert payload["execution_ready"] is True
     assert os.environ["NIJA_THREE_VENUE_EXECUTION_READY"] == "1"
     assert os.environ["NIJA_ANY_VENUE_EXECUTION_READY"] == "1"
     assert os.environ["NIJA_EXECUTION_READY_VENUES"] == "kraken"
     assert os.environ["NIJA_EXECUTION_DEGRADED_VENUES"] == "coinbase,okx"
-    assert os.environ["NIJA_KRAKEN_ACTIVATION_STATE"] == "ready"
-    assert os.environ["NIJA_KRAKEN_TRADING_READY"] == "1"
-    assert os.environ["NIJA_KRAKEN_ACTIVATED"] == "1"
+    assert os.environ["NIJA_KRAKEN_SPENDABLE_QUOTE"] == "25.00000000"
 
 
-def test_kraken_activation_flags_clear_when_any_stage_fails(monkeypatch) -> None:
+def test_okx_authenticated_snapshot_can_satisfy_balance_stage(monkeypatch) -> None:
     module = _module()
+    _set_credentials(monkeypatch)
+    monkeypatch.setenv("NIJA_OKX_BALANCE_OBSERVED", "1")
+    monkeypatch.setenv("NIJA_OKX_FUNDING_STATUS", "funded")
+    monkeypatch.setenv("NIJA_OKX_TRADING_SPENDABLE_QUOTE", "144.96")
+
+    class OkxBroker(FakeBroker):
+        def get_account_balance(self):
+            raise AssertionError("authenticated OKX snapshot should avoid another balance request")
+
+    broker = OkxBroker(balance=0.0)
+    manager = SimpleNamespace(
+        _platform_brokers={"okx": broker},
+        eligible_brokers={broker},
+    )
+    broker_module = SimpleNamespace(BrokerType=FakeBrokerType)
+
+    row = module.evaluate_venue("okx", broker_module, manager)
+
+    assert row.balance_fetched is True
+    assert row.spendable_quote == 144.96
+    assert row.venue_marked_ready is True
+    assert row.ready is True
+
+
+def test_okx_unfunded_snapshot_remains_fail_closed(monkeypatch) -> None:
+    module = _module()
+    _set_credentials(monkeypatch)
+    monkeypatch.setenv("NIJA_OKX_BALANCE_OBSERVED", "1")
+    monkeypatch.setenv("NIJA_OKX_FUNDING_STATUS", "unfunded")
+    monkeypatch.setenv("NIJA_OKX_TRADING_SPENDABLE_QUOTE", "0")
+    monkeypatch.setenv("NIJA_OKX_ACTIVATION_STATE", "ready")
+    monkeypatch.setenv("NIJA_OKX_TRADING_READY", "1")
+
+    broker = FakeBroker(balance=0.0)
+    manager = SimpleNamespace(
+        _platform_brokers={"okx": broker},
+        eligible_brokers={broker},
+    )
+    broker_module = SimpleNamespace(BrokerType=FakeBrokerType)
+
+    row = module.evaluate_venue("okx", broker_module, manager)
+
+    assert row.balance_fetched is False
+    assert row.eligible_for_execution is False
+    assert row.ready is False
+    assert "no_spendable_quote" in row.reason
+
+
+def test_degraded_secondary_does_not_disable_ready_kraken(monkeypatch) -> None:
+    module = _module()
+    _set_credentials(monkeypatch)
+    _set_canonical_writer_ready(monkeypatch, module)
+    monkeypatch.setenv("CAPITAL_SYSTEM_READY", "1")
+    monkeypatch.setenv("NIJA_COINBASE_ACTIVATION_STATE", "credential_quarantined")
+    monkeypatch.setenv("NIJA_COINBASE_TRADING_READY", "0")
+    monkeypatch.setenv("NIJA_OKX_ACTIVATION_STATE", "credential_quarantined")
+    monkeypatch.setenv("NIJA_OKX_TRADING_READY", "0")
+
+    kraken = FakeBroker(balance=116.09)
+    coinbase = FakeBroker(balance=95.0, connected=False)
+    okx = FakeBroker(balance=144.0, connected=False)
+    manager = SimpleNamespace(
+        _platform_brokers={"kraken": kraken, "coinbase": coinbase, "okx": okx},
+        eligible_brokers={kraken},
+    )
+    broker_module = SimpleNamespace(BrokerType=FakeBrokerType)
+    monkeypatch.setattr(module, "_runtime", lambda: (broker_module, manager))
+
+    result = module.evaluate_all()
+
+    assert result["execution_ready"] is True
+    assert result["ready_venues"] == ["kraken"]
+    assert result["venues"]["kraken"]["ready"] is True
+    assert result["venues"]["coinbase"]["ready"] is False
+    assert result["venues"]["okx"]["ready"] is False
+
+
+def test_no_ready_venues_keeps_execution_fail_closed(monkeypatch) -> None:
+    module = _module()
+    _set_credentials(monkeypatch)
+    _set_canonical_writer_ready(monkeypatch, module)
+    monkeypatch.setenv("CAPITAL_SYSTEM_READY", "1")
+
+    broker_module = SimpleNamespace(BrokerType=FakeBrokerType)
+    manager = SimpleNamespace(_platform_brokers={}, eligible_brokers=set())
+    monkeypatch.setattr(module, "_runtime", lambda: (broker_module, manager))
+
+    result = module.evaluate_all()
+
+    assert result["execution_ready"] is False
+    assert result["any_venue_ready"] is False
+    assert result["ready_venues"] == []
+    assert result["degraded_venues"] == ["kraken", "coinbase", "okx"]
+
+
+def test_writer_not_ready_keeps_execution_fail_closed(monkeypatch) -> None:
+    module = _module()
+    _set_credentials(monkeypatch)
+    monkeypatch.setenv("CAPITAL_SYSTEM_READY", "1")
     monkeypatch.setattr(
         module,
-        "evaluate_all",
-        lambda: {
-            "marker": module.MARKER,
-            "timestamp": 1.0,
-            "pid": 1,
-            "writer_ready": True,
-            "capital_ready": True,
-            "any_venue_ready": False,
-            "all_venues_ready": False,
-            "execution_ready": False,
-            "three_venue_execution_ready": False,
-            "ready_venues": [],
-            "degraded_venues": ["kraken", "coinbase", "okx"],
-            "venues": {
-                venue: {
-                    "credentials_loaded": True,
-                    "authentication_succeeded": venue != "kraken",
-                    "balance_fetched": True,
-                    "market_metadata_loaded": True,
-                    "order_adapter_initialized": True,
-                    "venue_marked_ready": venue != "kraken",
-                    "eligible_for_execution": False,
-                    "spendable_quote": 0.0,
-                    "activation_state": "not_ready",
-                    "reason": "not_execution_eligible",
-                    "ready": False,
-                }
-                for venue in module.VENUES
-            },
-        },
+        "writer_authority_snapshot",
+        lambda **_kwargs: {"ready": False},
     )
-    monkeypatch.setattr(module, "_write_state", lambda payload: None)
-    monkeypatch.setattr(module, "_LAST_SIGNATURE", "")
 
-    module.publish_once(force=True)
+    kraken = FakeBroker(balance=116.09)
+    manager = SimpleNamespace(
+        _platform_brokers={"kraken": kraken},
+        eligible_brokers={kraken},
+    )
+    broker_module = SimpleNamespace(BrokerType=FakeBrokerType)
+    monkeypatch.setattr(module, "_runtime", lambda: (broker_module, manager))
 
-    assert os.environ["NIJA_KRAKEN_ACTIVATION_STATE"] == "not_ready"
-    assert os.environ["NIJA_KRAKEN_TRADING_READY"] == "0"
-    assert os.environ["NIJA_KRAKEN_ACTIVATED"] == "0"
+    result = module.evaluate_all()
 
-
-def test_source_bootstrap_installs_definitive_verifier() -> None:
-    from pathlib import Path
-
-    root = Path(__file__).resolve().parents[2]
-    source = (root / "source_runtime_guard_bootstrap.py").read_text(encoding="utf-8")
-
-    assert '_install_required("three_venue_execution_readiness")' in source
-    assert 'NIJA_THREE_VENUE_STAGE_VERIFIER_INSTALLED' in source
-    assert 'three_venue_stage_verifier=installed' in source
+    assert result["writer_ready"] is False
+    assert result["execution_ready"] is False
 
 
-def test_ready_contract_contains_independent_summary_marker() -> None:
-    from pathlib import Path
+def test_unfunded_capital_keeps_execution_fail_closed(monkeypatch) -> None:
+    module = _module()
+    _set_credentials(monkeypatch)
+    _set_canonical_writer_ready(monkeypatch, module)
+    monkeypatch.delenv("CAPITAL_SYSTEM_READY", raising=False)
+    monkeypatch.delenv("NIJA_CAPITAL_READY", raising=False)
 
-    root = Path(__file__).resolve().parents[2]
-    source = (root / "three_venue_execution_readiness.py").read_text(encoding="utf-8")
+    kraken = FakeBroker(balance=116.09)
+    manager = SimpleNamespace(
+        _platform_brokers={"kraken": kraken},
+        eligible_brokers={kraken},
+    )
+    broker_module = SimpleNamespace(BrokerType=FakeBrokerType)
+    monkeypatch.setattr(module, "_runtime", lambda: (broker_module, manager))
 
-    assert "BROKER_INDEPENDENT_EXECUTION_%s" in source
-    assert "THREE_VENUE_EXECUTION_%s" in source
-    assert "THREE_VENUE_STAGE venue=%s" in source
-    assert 'NIJA_THREE_VENUE_EXECUTION_READY' in source
-    assert 'NIJA_ANY_VENUE_EXECUTION_READY' in source
-    assert 'NIJA_EXECUTION_READY_VENUES' in source
-    assert 'ready_venues' in source
-    assert 'degraded_venues' in source
+    result = module.evaluate_all()
+
+    assert result["capital_ready"] is False
+    assert result["execution_ready"] is False

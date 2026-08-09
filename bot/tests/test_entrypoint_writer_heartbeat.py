@@ -130,7 +130,7 @@ class EntrypointWriterHeartbeatTests(unittest.TestCase):
         self.assertEqual(os.environ["NIJA_EXECUTION_ACTIVE"], "true")
         self.assertEqual(os.environ["NIJA_WRITER_STATE"], "ACTIVE")
 
-    def test_genuine_ownership_loss_demotes_and_disables_execution(self):
+    def test_genuine_ownership_loss_demotes_disables_and_may_begin_recovery(self):
         self.runtime._set_writer_state(WriterState.ACTIVE, reason="test_setup")
         os.environ["NIJA_WRITER_LEASE_ACQUIRED"] = "1"
         os.environ["NIJA_WRITER_FENCING_TOKEN"] = self.runtime._token
@@ -147,10 +147,14 @@ class EntrypointWriterHeartbeatTests(unittest.TestCase):
         ):
             self.runtime._heartbeat_loop()
 
+        # Ownership loss must always demote the canonical runtime and fail-close
+        # execution. The v55/v39 bounded recovery handoff is allowed to advance
+        # published telemetry from LOST to ACQUIRING immediately afterward; that
+        # transition does not restore execution authority.
         self.assertTrue(self.runtime.lost)
         self.assertEqual(os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"], "0")
         self.assertEqual(os.environ["NIJA_EXECUTION_ACTIVE"], "false")
-        self.assertEqual(os.environ["NIJA_WRITER_STATE"], "LOST")
+        self.assertIn(os.environ["NIJA_WRITER_STATE"], {"LOST", "ACQUIRING"})
 
     def test_different_owner_is_rejected_fail_closed(self):
         self.runtime._core_thread = MagicMock()
