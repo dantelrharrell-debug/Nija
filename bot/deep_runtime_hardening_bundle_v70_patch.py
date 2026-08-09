@@ -1,7 +1,7 @@
 """NIJA deep runtime hardening bundle v70.
 
 Single idempotent installer for the cross-cutting production hardening introduced
-while preparing NIJA for additional brokerages and user accounts.  Individual
+while preparing NIJA for additional brokerages and user accounts. Individual
 modules retain their own markers/tests and remain independently installable.
 """
 from __future__ import annotations
@@ -26,6 +26,8 @@ _MODULES = (
     "bot.live_exchange_base_minimum_v73_patch",
     "bot.adaptive_profit_exit_v74_patch",
     "bot.held_position_exit_bootstrap_v75_patch",
+    "bot.writer_authority_reconstitution_v77_patch",
+    "bot.capital_refresh_live_continuity_v78_patch",
 )
 
 
@@ -63,8 +65,8 @@ def install_import_hook() -> bool:
             "DEEP_RUNTIME_HARDENING_V70_READY marker=%s components=%d "
             "broker_account_isolation=true exit_fill_confirmation=true net_profit_floor=true "
             "live_entry_expectancy=true realized_profit_proof=true account_scoped_profit_state=true "
-            "live_symbol_constraints=true post_rounding_base_minimum=true "
-            "adaptive_profit_exit=true held_positions_connected=true",
+            "live_symbol_constraints=true post_rounding_base_minimum=true adaptive_profit_exit=true "
+            "held_positions_connected=true writer_reconstitution=true slow_broker_capital_continuity=true",
             MARKER,
             len(installed),
         )
