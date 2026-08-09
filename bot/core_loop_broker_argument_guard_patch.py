@@ -58,7 +58,7 @@ def _is_broker_adapter(obj: Any) -> bool:
         return False
     if any(callable(getattr(obj, method, None)) for method in _BROKER_METHODS):
         return True
-    return _broker_name(obj) != "unknown" and _broker_name(obj) != "invalid"
+    return _broker_name(obj) not in {"unknown", "invalid"}
 
 
 def _candidate_brokers_from_owner(owner: Any) -> list[Any]:
@@ -98,7 +98,10 @@ def _resolve_broker(core_loop: Any, incoming: Any) -> Optional[Any]:
     if _is_broker_adapter(incoming):
         return incoming
     apex = getattr(core_loop, "apex", None)
-    selected = _name(os.environ.get("NIJA_SELECTED_EXECUTION_BROKER") or os.environ.get("NIJA_PRIMARY_EXECUTION_BROKER"))
+    selected = _name(
+        os.environ.get("NIJA_SELECTED_EXECUTION_BROKER")
+        or os.environ.get("NIJA_PRIMARY_EXECUTION_BROKER")
+    )
     candidates: list[Any] = []
     for owner in (apex, getattr(apex, "strategy", None), getattr(apex, "trading_strategy", None)):
         candidates.extend([b for b in _candidate_brokers_from_owner(owner) if b not in candidates])
@@ -123,23 +126,30 @@ def _patch_core_loop(module: ModuleType) -> bool:
                 broker = kwargs.get("broker")
                 resolved = _resolve_broker(self, broker)
                 if resolved is None:
-                    logger.error("CORE_LOOP_BROKER_ARGUMENT_GUARD_BLOCKED marker=20260705d reason=no_real_broker incoming_type=%s", type(broker).__name__)
+                    logger.error(
+                        "CORE_LOOP_BROKER_ARGUMENT_GUARD_BLOCKED marker=20260705d "
+                        "reason=no_real_broker incoming_type=%s",
+                        type(broker).__name__,
+                    )
                     return original_run(self, *args, **kwargs)
                 if resolved is not broker:
                     logger.warning(
-                        "CORE_LOOP_BROKER_ARGUMENT_GUARD_REPLACED marker=20260705d incoming_type=%s resolved=%s resolved_type=%s",
+                        "CORE_LOOP_BROKER_ARGUMENT_GUARD_REPLACED marker=20260705d "
+                        "incoming_type=%s resolved=%s resolved_type=%s",
                         type(broker).__name__,
                         _broker_name(resolved),
                         type(resolved).__name__,
                     )
                     kwargs["broker"] = resolved
                 return original_run(self, *args, **kwargs)
+
             args_list = list(args)
             broker = args_list[0] if args_list else None
             resolved = _resolve_broker(self, broker)
             if resolved is not None and resolved is not broker:
                 logger.warning(
-                    "CORE_LOOP_BROKER_ARGUMENT_GUARD_REPLACED marker=20260705d incoming_type=%s resolved=%s resolved_type=%s",
+                    "CORE_LOOP_BROKER_ARGUMENT_GUARD_REPLACED marker=20260705d "
+                    "incoming_type=%s resolved=%s resolved_type=%s",
                     type(broker).__name__,
                     _broker_name(resolved),
                     type(resolved).__name__,
@@ -160,11 +170,16 @@ def _patch_core_loop(module: ModuleType) -> bool:
         def fetch_df_guarded(self: Any, broker: Any, symbol: Any, *args: Any, **kwargs: Any):
             resolved = _resolve_broker(self, broker)
             if resolved is None:
-                logger.error("CORE_LOOP_FETCH_BROKER_GUARD_BLOCKED marker=20260705d symbol=%s incoming_type=%s", symbol, type(broker).__name__)
+                logger.error(
+                    "CORE_LOOP_FETCH_BROKER_GUARD_BLOCKED marker=20260705d symbol=%s incoming_type=%s",
+                    symbol,
+                    type(broker).__name__,
+                )
                 return original_fetch(self, broker, symbol, *args, **kwargs)
             if resolved is not broker:
                 logger.warning(
-                    "CORE_LOOP_FETCH_BROKER_GUARD_REPLACED marker=20260705d symbol=%s incoming_type=%s resolved=%s resolved_type=%s",
+                    "CORE_LOOP_FETCH_BROKER_GUARD_REPLACED marker=20260705d symbol=%s "
+                    "incoming_type=%s resolved=%s resolved_type=%s",
                     symbol,
                     type(broker).__name__,
                     _broker_name(resolved),
@@ -194,6 +209,11 @@ def _try_patch_loaded() -> bool:
 def _install_live_terminal_guards() -> None:
     """Install chained runtime guards alongside the broker guard."""
     for module_name in (
+        "bot.deep_runtime_hardening_bundle_v70_patch",
+        "bot.broker_account_isolation_v64_patch",
+        "bot.profit_harvest_realization_guard_v66_patch",
+        "bot.universal_exit_fill_reconciliation_v67_patch",
+        "bot.universal_net_profit_exit_floor_v68_patch",
         "bot.capital_authority_live_total_patch",
         "bot.execution_route_integrity_import_guard_patch",
         "bot.market_data_stability_import_guard_patch",
@@ -225,13 +245,11 @@ def install_import_hook() -> None:
         return
     original_import = builtins.__import__
 
+    @wraps(original_import)
     def guarded_import(name: str, globals=None, locals=None, fromlist=(), level: int = 0):
         module = original_import(name, globals, locals, fromlist, level)
         try:
-            if name.endswith("nija_core_loop"):
-                _try_patch_loaded()
-            else:
-                _try_patch_loaded()
+            _try_patch_loaded()
         except Exception as exc:
             logger.warning("CORE_LOOP_BROKER_ARGUMENT_GUARD hook failed: %s", exc)
         return module
