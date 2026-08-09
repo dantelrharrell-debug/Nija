@@ -262,6 +262,7 @@ def test_publish_once_retains_independent_any_ready_semantics(monkeypatch, tmp_p
     assert os.environ["NIJA_ANY_VENUE_EXECUTION_READY"] == "1"
     assert os.environ["NIJA_EXECUTION_READY_VENUES"] == "kraken"
     assert os.environ["NIJA_EXECUTION_DEGRADED_VENUES"] == "coinbase,okx"
+    assert os.environ["NIJA_KRAKEN_SPENDABLE_QUOTE"] == "25.00000000"
 
 
 def test_okx_authenticated_snapshot_can_satisfy_balance_stage(monkeypatch) -> None:
