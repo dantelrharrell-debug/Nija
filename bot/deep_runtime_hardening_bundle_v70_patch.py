@@ -24,6 +24,8 @@ _MODULES = (
     "bot.account_scoped_profit_state_v71_patch",
     "bot.live_exchange_constraints_authority_v72_patch",
     "bot.live_exchange_base_minimum_v73_patch",
+    "bot.adaptive_profit_exit_v74_patch",
+    "bot.held_position_exit_bootstrap_v75_patch",
 )
 
 
@@ -61,7 +63,8 @@ def install_import_hook() -> bool:
             "DEEP_RUNTIME_HARDENING_V70_READY marker=%s components=%d "
             "broker_account_isolation=true exit_fill_confirmation=true net_profit_floor=true "
             "live_entry_expectancy=true realized_profit_proof=true account_scoped_profit_state=true "
-            "live_symbol_constraints=true post_rounding_base_minimum=true",
+            "live_symbol_constraints=true post_rounding_base_minimum=true "
+            "adaptive_profit_exit=true held_positions_connected=true",
             MARKER,
             len(installed),
         )
