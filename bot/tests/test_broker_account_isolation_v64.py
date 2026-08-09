@@ -79,7 +79,7 @@ class BrokerAccountIsolationV64Tests(unittest.TestCase):
         self.assertEqual(self.mod._PLATFORM_BREAKER.initialized, 240.08)
         self.assertEqual(self.mod._PLATFORM_BREAKER.updated, [240.08])
 
-    def test_scope_for_user_and_platform_brokers(self) -> None:
+    def test_scope_for_user_and_platform_accounts(self) -> None:
         scope, platform = self.mod._scope_for_broker(_Broker("okx", 145.0))
         self.assertEqual(scope, "platform")
         self.assertTrue(platform)
