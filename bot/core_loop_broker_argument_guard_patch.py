@@ -212,6 +212,7 @@ def _install_live_terminal_guards() -> None:
         "bot.broker_account_isolation_v64_patch",
         "bot.profit_harvest_realization_guard_v66_patch",
         "bot.universal_exit_fill_reconciliation_v67_patch",
+        "bot.universal_net_profit_exit_floor_v68_patch",
         "bot.capital_authority_live_total_patch",
         "bot.execution_route_integrity_import_guard_patch",
         "bot.market_data_stability_import_guard_patch",
