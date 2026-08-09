@@ -118,21 +118,10 @@ def _normalize_okx() -> None:
 
 
 def _normalize_coinbase_pem() -> None:
-    """Convert Coinbase PEM credential from escape-sequence form to true multiline.
-
-    Railway and other platforms encode newlines as the two-character sequence
-    ``\\n`` when storing multi-line secrets as env vars.  The Coinbase Advanced
-    Trade SDK (and the JWT signing code) require a real PEM with actual newline
-    characters.  This normalizes the env vars once at startup so every code
-    path that reads them gets a usable key without having to do its own
-    ``replace('\\\\n', '\\n')`` everywhere.
-    """
-    for name in ("COINBASE_API_SECRET", "COINBASE_PEM_CONTENT",
-                 "COINBASE_PLATFORM_API_SECRET", "COINBASE_ADVANCED_API_SECRET"):
+    for name in ("COINBASE_API_SECRET", "COINBASE_PEM_CONTENT", "COINBASE_PLATFORM_API_SECRET", "COINBASE_ADVANCED_API_SECRET"):
         raw = os.environ.get(name)
         if not raw:
             continue
-        # Convert literal \n (backslash-n, 2 chars) to a real newline.
         normalized = raw.replace("\\n", "\n").strip()
         if normalized != raw:
             os.environ[name] = normalized
@@ -220,6 +209,7 @@ def _runtime_defaults() -> None:
         "NIJA_STALE_LOCK_HEARTBEAT_THRESHOLD_S": "120",
         "NIJA_WRITER_LOCK_STALE_HEARTBEAT_THRESHOLD_S": "120",
         "NIJA_RAILWAY_STALE_LOCK_HEARTBEAT_THRESHOLD_S": "120",
+        "NIJA_RUNTIME_CONVERGENCE_V80_POLL_S": "5",
     }
     for key, value in defaults.items():
         os.environ.setdefault(key, value)
@@ -270,6 +260,10 @@ def _install_exchange_kill_switch_internal_reject_guard() -> None:
 
 def _install_kraken_ohlc_thread_guard() -> None:
     _install_patch_module(filename="kraken_ohlc_thread_guard_patch.py", module_name="nija_kraken_ohlc_thread_guard_patch", success_log="KRAKEN_OHLC_THREAD_GUARD_INSTALL_REQUESTED", error_prefix="Kraken OHLC thread guard")
+
+
+def _install_writer_kraken_runtime_convergence_v80() -> None:
+    _install_patch_module(filename="writer_kraken_runtime_convergence_v80_patch.py", module_name="nija_writer_kraken_runtime_convergence_v80_patch", success_log="WRITER_KRAKEN_RUNTIME_CONVERGENCE_V80_INSTALL_REQUESTED", error_prefix="Writer/Kraken runtime convergence v80")
 
 
 def _install_activation_snapshot_bridge() -> None:
@@ -385,6 +379,7 @@ _runtime_defaults()
 _install_stale_exchange_kill_switch_recovery()
 _install_exchange_kill_switch_internal_reject_guard()
 _install_kraken_ohlc_thread_guard()
+_install_writer_kraken_runtime_convergence_v80()
 _install_okx_min_notional_prefilter_repair()
 _install_okx_final_order_submission_bridge()
 _install_ecel_min_notional_rounding_repair()
