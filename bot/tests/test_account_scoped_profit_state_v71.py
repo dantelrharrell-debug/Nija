@@ -19,7 +19,7 @@ class AccountScopedProfitStateV71Tests(unittest.TestCase):
         self.assertIn("broker=coinbase", alpha)
         self.assertIn("symbol=BTC-USD", alpha)
 
-    def test_scoped_key_requires_identity_fields(self) -> None:
+    def test_scoped_key_requires_identity_validation(self) -> None:
         with self.assertRaises(ValueError):
             self.mod.scoped_position_key("", "coinbase", "BTC-USD")
         with self.assertRaises(ValueError):
