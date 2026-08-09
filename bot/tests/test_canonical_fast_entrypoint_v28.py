@@ -32,11 +32,18 @@ def test_launcher_preserves_defer_flag_through_main_handoff(monkeypatch, tmp_pat
     fake_main = tmp_path / "main.py"
     fake_main.write_text("pass\n", encoding="utf-8")
     observed: dict[str, str] = {}
+    bot_entry = ModuleType("bot.bot")
+    bot_main = ModuleType("bot.bot_main")
 
     monkeypatch.delenv("NIJA_DEFER_RUNTIME_SITE_HOOKS", raising=False)
     monkeypatch.delenv("NIJA_CANONICAL_ENTRYPOINT_FAST_PATH", raising=False)
     monkeypatch.setattr(launcher, "MAIN_PATH", fake_main)
     monkeypatch.setattr(launcher, "install_canonical_startup_guard", lambda: object())
+    monkeypatch.setattr(
+        launcher,
+        "_bootstrap_writer_first",
+        lambda: (bot_entry, bot_main),
+    )
 
     def _run_path(path: str, *, run_name: str) -> None:
         observed["path"] = path
@@ -45,6 +52,11 @@ def test_launcher_preserves_defer_flag_through_main_handoff(monkeypatch, tmp_pat
         observed["fast"] = os.environ.get("NIJA_CANONICAL_ENTRYPOINT_FAST_PATH", "")
 
     monkeypatch.setattr(launcher.runpy, "run_path", _run_path)
+    monkeypatch.setattr(
+        launcher,
+        "_run_main_single_identity",
+        lambda entry, main: launcher.runpy.run_path(str(launcher.MAIN_PATH), run_name="__main__"),
+    )
 
     assert launcher.main() == 0
     assert observed == {

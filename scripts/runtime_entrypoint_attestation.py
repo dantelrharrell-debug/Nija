@@ -3,8 +3,8 @@
 This script intentionally uses only the Python standard library and never imports the
 ``bot`` package. It is safe to run with ``python -S`` while runtime site hooks are
 deferred. The goal is to prove that the deployed image contains the canonical path
-and the current broker-prebootstrap and fill-confirmed exit safeguards before the
-live Python process starts.
+and the current broker-prebootstrap, writer-first, single-identity, and fill-confirmed
+exit safeguards before the live Python process starts.
 """
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-_MARKER = "20260723-runtime-entrypoint-attestation-v25"
+_MARKER = "20260809-runtime-entrypoint-attestation-v59"
 _CANONICAL_PATH = "main.py->bot.bot->bot.bot_main"
 _PLACEHOLDERS = {"", "unknown", "none", "null", "unset", "n/a", "na"}
 _PROVIDER_LITERAL = re.compile(
@@ -44,6 +44,11 @@ _CONTRACTS = (
             "NIJA_DEFER_RUNTIME_SITE_HOOKS",
             "NIJA_CANONICAL_ENTRYPOINT_FAST_PATH",
             "CANONICAL_ENTRYPOINT_FAST_PATH_ARMED",
+            "CANONICAL_EARLY_WRITER_BOOTSTRAP_VERIFIED",
+            "CANONICAL_BOT_SINGLE_IDENTITY_HANDOFF",
+            "NIJA_CANONICAL_WRITER_FIRST_V59_READY",
+            "exact_redis_proof=true",
+            "local_fallback=false",
         ),
     ),
     FileContract(

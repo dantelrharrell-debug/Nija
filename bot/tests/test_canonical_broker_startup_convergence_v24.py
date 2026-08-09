@@ -36,6 +36,8 @@ def _clear_runtime(monkeypatch):
         "NIJA_WRITER_LEASE_GENERATION",
         "NIJA_WRITER_LEASE_ACQUIRED",
         "NIJA_PREBOT_WRITER_AUTHORITY_READY",
+        "NIJA_WRITER_HEARTBEAT_ACTIVE",
+        "NIJA_CORE_THREAD_ALIVE",
         "NIJA_CANONICAL_BROKER_STARTUP_CONVERGENCE_V24_READY",
     ):
         monkeypatch.delenv(name, raising=False)
@@ -60,16 +62,16 @@ def test_loader_imports_importlib_util_explicitly():
     assert module.importlib.util is importlib.util
 
 
-def test_writer_lineage_requires_token_generation_and_lease(monkeypatch):
+def test_writer_lineage_requires_generation_lease_then_token(monkeypatch):
     module = _load_module()
     _clear_runtime(monkeypatch)
 
-    assert module._writer_lineage() == (False, "fencing_token_missing")
-    monkeypatch.setenv("NIJA_WRITER_FENCING_TOKEN", "token")
     assert module._writer_lineage() == (False, "lease_generation_missing")
     monkeypatch.setenv("NIJA_WRITER_LEASE_GENERATION", "42")
     assert module._writer_lineage() == (False, "lease_not_acquired")
     monkeypatch.setenv("NIJA_WRITER_LEASE_ACQUIRED", "1")
+    assert module._writer_lineage() == (False, "fencing_token_missing")
+    monkeypatch.setenv("NIJA_WRITER_FENCING_TOKEN", "token")
     assert module._writer_lineage() == (True, "lineage_ready generation=42")
 
 
@@ -117,7 +119,7 @@ def test_self_healing_live_path_fails_closed_without_lineage(monkeypatch):
     fake.SelfHealingStartup = SelfHealingStartup
     assert module._patch_self_healing_module(fake) is True
 
-    with pytest.raises(RuntimeError, match="fencing_token_missing"):
+    with pytest.raises(RuntimeError, match="lease_generation_missing"):
         SelfHealingStartup().run()
     assert called is False
     assert (

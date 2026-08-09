@@ -60,11 +60,13 @@ jobs:
             bot/live_exit_reconciliation_safety_v25.py \
             bot/auto_exit_sl_tp_runtime_patch.py \
             bot/universal_broker_exit_supervisor_patch.py
-      - name: Verify Docker v25 inclusion
+      - name: Verify Docker v25 inclusion and current attestation
         run: |
           grep -Fq 'bot/live_broker_profit_exit_convergence_v25.py' Dockerfile
           grep -Fq 'bot/live_engine_profit_exit_convergence_v25.py' Dockerfile
-          grep -Fq '20260723-runtime-entrypoint-attestation-v25' scripts/runtime_entrypoint_attestation.py
+          grep -Fq '20260809-runtime-entrypoint-attestation-v59' scripts/runtime_entrypoint_attestation.py
+          grep -Fq 'CANONICAL_EARLY_WRITER_BOOTSTRAP_VERIFIED' scripts/runtime_entrypoint_attestation.py
+          grep -Fq 'CANONICAL_BOT_SINGLE_IDENTITY_HANDOFF' scripts/runtime_entrypoint_attestation.py
           grep -Fq '_install_live_broker_profit_exit_v25' main.py
       - name: Test broker fill-confirmed fee-aware exits
         run: python -m pytest -q bot/tests/test_live_broker_profit_exit_convergence_v25.py

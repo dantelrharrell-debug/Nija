@@ -61,6 +61,7 @@ python3 -S -m py_compile \
     bot/stalled_writer_release_guard_v22.py \
     bot/writer_generation_handoff_v45_patch.py \
     bot/tests/test_writer_generation_handoff_v45.py \
+    bot/tests/test_canonical_writer_first_v59.py \
     scripts/canonical_runtime_launcher_v26.py \
     scripts/apply_canonical_launcher_v26.py \
     scripts/apply_writer_generation_handoff_v45.py \
@@ -75,8 +76,11 @@ fi
 grep -Fq 'DIRECT_CANONICAL_BROKER_PREBOOTSTRAP_V27_READY' bot/bot_main.py
 grep -Fq 'V45_PATH = ROOT / "bot" / "writer_generation_handoff_v45_patch.py"' scripts/canonical_runtime_launcher_v26.py
 grep -Fq '_install_writer_generation_handoff_v45()' scripts/canonical_runtime_launcher_v26.py
+grep -Fq 'CANONICAL_EARLY_WRITER_BOOTSTRAP_VERIFIED' scripts/canonical_runtime_launcher_v26.py
+grep -Fq 'CANONICAL_BOT_SINGLE_IDENTITY_HANDOFF' scripts/canonical_runtime_launcher_v26.py
+grep -Fq 'NIJA_CANONICAL_WRITER_FIRST_V59_READY' scripts/canonical_runtime_launcher_v26.py
 
-echo "🧭 RENDER_ENTRYPOINT_CANONICAL_HANDOFF_READY marker=20260807-render-entrypoint-v45 launcher=canonical_runtime_launcher_v26 writer_generation_handoff=v45 direct_broker_prebootstrap=v27"
+echo "🧭 RENDER_ENTRYPOINT_CANONICAL_HANDOFF_READY marker=20260809-render-entrypoint-v59 launcher=canonical_runtime_launcher_v26 writer_generation_handoff=v45 writer_first=v59 single_identity=true direct_broker_prebootstrap=v27"
 unset NIJA_DEFER_RUNTIME_SITE_HOOKS
 
 exec bash scripts/production_bootstrap.sh "$@"

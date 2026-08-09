@@ -6,13 +6,16 @@ canonical broker-startup convergence hook before importing ``main.py`` or the
 execute ``bot.__init__`` and load ``bot.bot_main`` before a late hook has a
 chance to wrap writer acquisition.
 
-The launcher does not acquire writer authority, connect brokers, synthesize
-capital, force activation, or submit orders. It installs the existing
-fail-closed startup, reconnect, capital-readiness, and production-corrective
-contracts before application imports.
+The launcher now also establishes the canonical writer before ``main.py`` runs
+its compatibility/runtime installer fanout. The acquisition is performed only
+through ``bot.bot_main._acquire_writer_authority_before_nonce()``, which keeps
+the existing exact Redis fencing/generation proof and fail-closed behavior. The
+final ``bot.bot`` handoff reuses the already-imported canonical module instead
+of executing it a second time under ``__main__``.
 """
 from __future__ import annotations
 
+import importlib
 import importlib.util
 import logging
 import os
@@ -23,6 +26,7 @@ from types import ModuleType
 from typing import Any
 
 MARKER = "20260807-canonical-runtime-launcher-v26-v44-v43-v42-v41-v40-v39-v38-v37-v18"
+WRITER_FIRST_MARKER = "20260809-canonical-writer-first-v59"
 ROOT = Path(__file__).resolve().parents[1]
 V24_PATH = ROOT / "bot" / "canonical_broker_startup_convergence_v24.py"
 V32_PATH = ROOT / "bot" / "runtime_execution_convergence_v32.py"
@@ -245,14 +249,134 @@ def install_canonical_startup_guard() -> ModuleType:
     return module
 
 
+def _release_early_writer(bot_main: ModuleType, *, reason: str) -> None:
+    release = getattr(bot_main, "_release_writer_authority", None)
+    if callable(release):
+        try:
+            release()
+        except Exception as exc:
+            LOGGER.warning(
+                "CANONICAL_EARLY_WRITER_RELEASE_FAILED marker=%s reason=%s err=%s:%s",
+                WRITER_FIRST_MARKER,
+                reason,
+                type(exc).__name__,
+                exc,
+            )
+
+
+def _bootstrap_writer_first() -> tuple[ModuleType, ModuleType]:
+    """Import the canonical entrypoint and prove Redis writer authority first."""
+
+    bot_entry = importlib.import_module("bot.bot")
+    bot_main = importlib.import_module("bot.bot_main")
+    acquire = getattr(bot_main, "_acquire_writer_authority_before_nonce", None)
+    if not callable(acquire):
+        raise RuntimeError("canonical writer bootstrap function unavailable")
+
+    if not bool(acquire()):
+        error = str(getattr(bot_main, "_writer_authority_last_error", "") or "unknown")
+        raise RuntimeError(f"canonical writer bootstrap failed:{error}")
+
+    runtime = getattr(bot_main, "_writer_authority_runtime", None)
+    generation_text = str(os.environ.get("NIJA_WRITER_LEASE_GENERATION", "") or "").strip()
+    token = str(os.environ.get("NIJA_WRITER_FENCING_TOKEN", "") or "").strip()
+    try:
+        generation = int(generation_text or "0")
+    except (TypeError, ValueError):
+        generation = 0
+
+    exact_runtime = bool(
+        runtime is not None
+        and bool(getattr(runtime, "acquired", False))
+        and not bool(getattr(runtime, "lost", True))
+        and not bool(getattr(runtime, "_local_fallback", False))
+        and generation > 0
+        and token
+    )
+    if not exact_runtime:
+        _release_early_writer(bot_main, reason="runtime_lineage_incomplete")
+        raise RuntimeError(
+            "canonical writer bootstrap did not establish exact distributed lineage"
+        )
+
+    try:
+        authority = importlib.import_module("bot.execution_authority_context")
+        verify = getattr(authority, "assert_distributed_writer_authority", None)
+        if not callable(verify):
+            raise RuntimeError("distributed authority verifier unavailable")
+        verify()
+    except Exception:
+        _release_early_writer(bot_main, reason="exact_authority_reverify_failed")
+        raise
+
+    os.environ["NIJA_CANONICAL_WRITER_FIRST_V59_READY"] = "1"
+    LOGGER.critical(
+        "CANONICAL_EARLY_WRITER_BOOTSTRAP_VERIFIED marker=%s generation=%s "
+        "token_prefix=%s exact_redis_proof=true local_fallback=false "
+        "runtime_fanout_started=false",
+        WRITER_FIRST_MARKER,
+        generation,
+        token[:8],
+    )
+    return bot_entry, bot_main
+
+
+def _run_main_single_identity(bot_entry: ModuleType, bot_main: ModuleType) -> None:
+    """Run ``main.py`` while reusing the canonical ``bot.bot`` module once."""
+
+    original_run_module = runpy.run_module
+    handoff_started = False
+
+    def run_module_once(
+        mod_name: str,
+        init_globals: dict[str, Any] | None = None,
+        run_name: str | None = None,
+        alter_sys: bool = False,
+    ) -> dict[str, Any]:
+        nonlocal handoff_started
+        if mod_name != "bot.bot":
+            return original_run_module(
+                mod_name,
+                init_globals=init_globals,
+                run_name=run_name,
+                alter_sys=alter_sys,
+            )
+
+        canonical = sys.modules.get("bot.bot")
+        if canonical is None or canonical is not bot_entry:
+            raise RuntimeError("canonical bot.bot module identity changed before handoff")
+        entry_main = getattr(canonical, "main", None)
+        if not callable(entry_main):
+            raise RuntimeError("canonical bot.bot main callable unavailable")
+
+        handoff_started = True
+        LOGGER.critical(
+            "CANONICAL_BOT_SINGLE_IDENTITY_HANDOFF marker=%s "
+            "module=bot.bot reused_module=true run_name=%s",
+            WRITER_FIRST_MARKER,
+            run_name or "unset",
+        )
+        result = entry_main()
+        raise SystemExit(int(result or 0))
+
+    runpy.run_module = run_module_once
+    try:
+        runpy.run_path(str(MAIN_PATH), run_name="__main__")
+    finally:
+        runpy.run_module = original_run_module
+        if not handoff_started:
+            _release_early_writer(bot_main, reason="main_wrapper_failed_before_handoff")
+
+
 def main() -> int:
     os.environ["NIJA_DEFER_RUNTIME_SITE_HOOKS"] = "1"
     os.environ["NIJA_CANONICAL_ENTRYPOINT_FAST_PATH"] = "1"
     if not MAIN_PATH.is_file():
         raise RuntimeError(f"canonical main.py missing: {MAIN_PATH}")
     install_canonical_startup_guard()
+    bot_entry, bot_main = _bootstrap_writer_first()
     print("CANONICAL_ENTRYPOINT_FAST_PATH_ARMED marker=20260807-canonical-fast-entrypoint-v44-v43-v42-v41-v40-v39-v38-v37-v18 package_hook_fanout=deferred", flush=True)
-    runpy.run_path(str(MAIN_PATH), run_name="__main__")
+    _run_main_single_identity(bot_entry, bot_main)
     return 0
 
 

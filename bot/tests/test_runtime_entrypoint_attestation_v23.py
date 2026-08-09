@@ -10,7 +10,7 @@ MODULE_PATH = ROOT / "scripts" / "runtime_entrypoint_attestation.py"
 
 
 def _load_module():
-    name = "runtime_entrypoint_attestation_v25_test"
+    name = "runtime_entrypoint_attestation_v59_test"
     spec = importlib.util.spec_from_file_location(name, MODULE_PATH)
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
@@ -48,7 +48,7 @@ def test_repository_canonical_runtime_contract_passes(monkeypatch):
 
     report = module.validate_runtime(ROOT)
 
-    assert report["marker"] == "20260723-runtime-entrypoint-attestation-v25"
+    assert report["marker"] == "20260809-runtime-entrypoint-attestation-v59"
     assert report["canonical"] == "main.py->bot.bot->bot.bot_main"
     assert report["commit"].startswith("91570b0")
     assert "bot/canonical_broker_prebootstrap_v22.py:" in report["hashes"]
