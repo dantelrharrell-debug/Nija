@@ -21,6 +21,7 @@ _MODULES = (
     "bot.universal_exit_fill_reconciliation_v67_patch",
     "bot.universal_net_profit_exit_floor_v68_patch",
     "bot.live_entry_expectancy_authority_v69_patch",
+    "bot.account_scoped_profit_state_v71_patch",
 )
 
 
@@ -57,7 +58,7 @@ def install_import_hook() -> bool:
         LOGGER.critical(
             "DEEP_RUNTIME_HARDENING_V70_READY marker=%s components=%d "
             "broker_account_isolation=true exit_fill_confirmation=true net_profit_floor=true "
-            "live_entry_expectancy=true realized_profit_proof=true",
+            "live_entry_expectancy=true realized_profit_proof=true account_scoped_profit_state=true",
             MARKER,
             len(installed),
         )
