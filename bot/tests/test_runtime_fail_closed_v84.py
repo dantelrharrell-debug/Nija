@@ -82,42 +82,34 @@ class RuntimeFailClosedV84Tests(unittest.TestCase):
         self.assertIn("return False", repair_source)
 
     def test_raw_running_transition_requires_startup_authority(self):
-        from bot.bootstrap_state_machine import BootstrapState, get_bootstrap_fsm
+        from bot.bootstrap_state_machine import BootstrapState, BootstrapStateMachine
 
-        fsm = get_bootstrap_fsm()
-        with fsm._lock:
-            saved_state = fsm._state
-            saved_owner = fsm._owner_thread_id
-            saved_authority = fsm._execution_authority
-            saved_history = list(fsm._history)
-            fsm._state = BootstrapState.THREADS_STARTING
-            fsm._owner_thread_id = threading.get_ident()
-            fsm._execution_authority = False
+        # Build an isolated unit under test without touching the process-wide
+        # singleton guard or shared bootstrap state used by other test modules.
+        fsm = object.__new__(BootstrapStateMachine)
+        fsm._lock = threading.Lock()
+        fsm._history = []
+        fsm._state = BootstrapState.THREADS_STARTING
+        fsm._owner_thread_id = threading.get_ident()
+        fsm._execution_authority = False
         authority = types.SimpleNamespace(
             require_startup_execution_authority=lambda **_: {
                 "ready": False,
                 "missing": ["writer.lock.exact"],
             }
         )
-        try:
-            with patch.dict(
-                "sys.modules",
-                {"bot.execution_authority_context": authority},
-            ):
-                transitioned = fsm.transition(
-                    BootstrapState.RUNNING_SUPERVISED,
-                    "test must fail closed",
-                )
+        with patch.dict(
+            "sys.modules",
+            {"bot.execution_authority_context": authority},
+        ):
+            transitioned = fsm.transition(
+                BootstrapState.RUNNING_SUPERVISED,
+                "test must fail closed",
+            )
 
-            self.assertFalse(transitioned)
-            self.assertEqual(fsm.state, BootstrapState.THREADS_STARTING)
-            self.assertFalse(fsm.execution_authority)
-        finally:
-            with fsm._lock:
-                fsm._state = saved_state
-                fsm._owner_thread_id = saved_owner
-                fsm._execution_authority = saved_authority
-                fsm._history[:] = saved_history
+        self.assertFalse(transitioned)
+        self.assertEqual(fsm.state, BootstrapState.THREADS_STARTING)
+        self.assertFalse(fsm.execution_authority)
 
     def test_scan_wrapper_blocks_before_base_scan(self):
         import scan_wrapper_convergence_repair_patch as wrapper
