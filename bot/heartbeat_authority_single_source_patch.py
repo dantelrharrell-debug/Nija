@@ -437,6 +437,14 @@ def _patch_three_venue_execution_readiness(module: ModuleType) -> None:
                 bool(str(os.getenv("NIJA_WRITER_FENCING_TOKEN", "") or "").strip()),
             )
         )
+        strict_ready = bool(
+            status.ready
+            and state_allows_execution
+            and lease_effective
+            and fencing_token
+            and heartbeat_effective
+            and core_loop_alive
+        )
         return {
             "lease_acquired": lease_effective,
             "lease_acquired_raw": _truthy("NIJA_WRITER_LEASE_ACQUIRED"),
@@ -456,7 +464,7 @@ def _patch_three_venue_execution_readiness(module: ModuleType) -> None:
             "missing": list(status.missing),
             "source": status.source,
             "reason": status.reason,
-            "ready": bool(status.ready),
+            "ready": strict_ready,
         }
 
     module.writer_authority_snapshot = writer_authority_snapshot

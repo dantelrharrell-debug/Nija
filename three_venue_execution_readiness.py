@@ -193,6 +193,15 @@ def writer_authority_snapshot(*, now: float | None = None) -> dict[str, Any]:
             bool(str(os.getenv("NIJA_WRITER_FENCING_TOKEN", "") or "").strip()),
         )
     )
+    heartbeat_effective = bool(heartbeat_healthy or writer_state == "REFRESHING")
+    strict_ready = bool(
+        status.ready
+        and state_allows_execution
+        and lease_effective
+        and fencing_token
+        and heartbeat_effective
+        and core_loop_alive
+    )
     return {
         "lease_acquired": lease_effective,
         "lease_acquired_raw": _truthy("NIJA_WRITER_LEASE_ACQUIRED"),
@@ -204,7 +213,7 @@ def writer_authority_snapshot(*, now: float | None = None) -> dict[str, Any]:
         "heartbeat_age_s": heartbeat_age_s,
         "heartbeat_max_age_s": heartbeat_max_age_s,
         "heartbeat_healthy": heartbeat_healthy,
-        "heartbeat_effective": heartbeat_healthy or writer_state == "REFRESHING",
+        "heartbeat_effective": heartbeat_effective,
         "core_loop_alive": core_loop_alive,
         "authority_verified": bool(checks.get("authority_verified", False)),
         "redis_reachable": bool(checks.get("redis_reachable", False)),
@@ -212,7 +221,7 @@ def writer_authority_snapshot(*, now: float | None = None) -> dict[str, Any]:
         "missing": list(status.missing),
         "source": status.source,
         "reason": status.reason,
-        "ready": bool(status.ready),
+        "ready": strict_ready,
     }
 
 

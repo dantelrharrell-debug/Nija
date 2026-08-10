@@ -127,6 +127,22 @@ class RuntimeStartupHandoffV87Tests(unittest.TestCase):
         runtime._release_owned_lock_for_reelection.assert_called_once_with(reason)
         runtime._client.eval.assert_not_called()
 
+    def test_writer_loss_revokes_dynamic_readiness_truth(self) -> None:
+        from bot import readiness_table
+
+        runtime = EntrypointWriterAuthority()
+        runtime._notify_runtime_reconciliation = MagicMock()
+        for component in ("authority_ready", "nonce_ready", "execution_ready"):
+            readiness_table.mark_ready(component)
+        self.addCleanup(readiness_table.reset)
+
+        runtime._mark_lost("core_thread_registration_deadline_exceeded")
+
+        table = readiness_table.snapshot()
+        self.assertFalse(table["authority_ready"])
+        self.assertFalse(table["nonce_ready"])
+        self.assertFalse(table["execution_ready"])
+
     def test_core_registration_restart_is_bounded_and_nonzero(self) -> None:
         from bot import bot_main
 
