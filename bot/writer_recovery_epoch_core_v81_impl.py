@@ -220,12 +220,6 @@ def _register_real_core(bot_main: ModuleType, runtime: Any, thread: Any, source:
         os.environ["NIJA_CORE_THREAD_ALIVE"] = "0"
         return False
     os.environ["NIJA_CORE_THREAD_ALIVE"] = "1"
-    record = getattr(runtime, "record_scan_started", None)
-    if callable(record):
-        try:
-            record()
-        except Exception:
-            pass
     LOGGER.critical(
         "WRITER_V81_CORE_THREAD_BOUND marker=%s source=%s thread=%s ident=%s alive=true",
         MARKER,

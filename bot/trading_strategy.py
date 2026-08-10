@@ -1999,19 +1999,76 @@ class TradingStrategy:
                 # broker and every user cycle silently scans/executes the wrong
                 # account.
                 _broker = broker if broker is not None else self._get_active_broker()
+
+                # The exact writer proof is the first live broker-cycle boundary.
+                # Block before symbol discovery, balance probes, position reads,
+                # pending-order reconciliation, or any other exchange I/O.
+                try:
+                    try:
+                        from bot import nija_core_loop as _core_loop_module
+                    except ImportError:
+                        import nija_core_loop as _core_loop_module  # type: ignore[import]
+                    _authority_ok, _authority_reason = (
+                        _core_loop_module._require_exact_runtime_cycle_authority(
+                            "trading_strategy.run_cycle"
+                        )
+                    )
+                except Exception as _authority_exc:
+                    _authority_ok = False
+                    _authority_reason = (
+                        f"authority_guard_unavailable:{type(_authority_exc).__name__}:"
+                        f"{_authority_exc}"
+                    )
+                if not _authority_ok:
+                    logger.critical(
+                        "RUN_CYCLE_AUTHORITY_BLOCKED reason=%s broker_io=false",
+                        _authority_reason,
+                    )
+                    return next_interval_s
+
+                _cycle_capital = getattr(_core_loop_module, "_current_cycle_capital", {})
+                _entry_scan_capital_ready = bool(
+                    _cycle_capital.get("ca_is_hydrated", False)
+                    and _cycle_capital.get("ca_is_fresh", False)
+                    and float(_cycle_capital.get("ca_total_capital", 0.0) or 0.0) > 0.0
+                    and int(_cycle_capital.get("ca_valid_brokers", 0) or 0) > 0
+                    and _cycle_capital.get("is_post_hydration", False)
+                    and _cycle_capital.get("aggregation_normalized", False)
+                    and not _cycle_capital.get("sync_failed", True)
+                    and str(_cycle_capital.get("snapshot_source", "placeholder"))
+                    in {"live_exchange", "capital_authority"}
+                )
+                if self.nija_core_loop is None and _core_loop_module._is_live_mode():
+                    logger.critical(
+                        "RUN_CYCLE_BLOCKED reason=canonical_core_loop_unavailable "
+                        "legacy_execution_refused=true"
+                    )
+                    return next_interval_s
+
                 if _broker is not None and self.broker != _broker:
                     self.broker = _broker
                     if hasattr(self.apex, "update_broker_client"):
                         self.apex.update_broker_client(_broker)
 
-                self._maybe_refresh_symbols()
-                _symbols_to_scan = self._symbols_for_broker(
-                    _broker,
-                    max_symbols=20 if self.nija_core_loop is None else None,
-                )
+                if _entry_scan_capital_ready:
+                    self._maybe_refresh_symbols()
+                    _symbols_to_scan = self._symbols_for_broker(
+                        _broker,
+                        max_symbols=20 if self.nija_core_loop is None else None,
+                    )
+                else:
+                    _symbols_to_scan = []
+                    logger.critical(
+                        "RUN_CYCLE_ENTRY_UNIVERSE_SKIPPED "
+                        "reason=capital_authority_not_ready exits_preserved=true"
+                    )
 
                 _account_balance = float(getattr(self.apex, "_last_account_balance", 0.0) or 0.0)
-                if _account_balance <= 0.0 and _broker is not None:
+                if (
+                    _entry_scan_capital_ready
+                    and _account_balance <= 0.0
+                    and _broker is not None
+                ):
                     _balance_method = getattr(_broker, "get_account_balance", None)
                     if callable(_balance_method):
                         try:
@@ -2096,7 +2153,7 @@ class TradingStrategy:
                             )
                     # ── End reconcile stale pending orders ───────────────────
 
-                    if not _symbols_to_scan:
+                    if not _symbols_to_scan and _entry_scan_capital_ready:
                         self._maybe_refresh_symbols(force=True)
                         _symbols_to_scan = self._symbols_for_broker(_broker)
                     # Last-resort fallback: if broker discovery and the
@@ -2105,7 +2162,7 @@ class TradingStrategy:
                     # with at least the core liquid pairs.  This prevents a
                     # silent scan skip when the broker's get_available_markets()
                     # call fails transiently on the first cycle.
-                    if not _symbols_to_scan:
+                    if not _symbols_to_scan and _entry_scan_capital_ready:
                         _symbols_to_scan = list(_HEARTBEAT_SYMBOL_CANDIDATES)
                         logger.warning(
                             "⚠️ [RUN_CYCLE_FALLBACK] broker symbol discovery returned empty — "
@@ -2117,7 +2174,7 @@ class TradingStrategy:
                             f"[NIJA-PRINT] RUN_CYCLE_SYMBOL_FALLBACK candidates={_symbols_to_scan}",
                             flush=True,
                         )
-                    if not _symbols_to_scan:
+                    if not _symbols_to_scan and _entry_scan_capital_ready:
                         logger.warning(
                             "⚠️ [RUN_CYCLE_EXIT] symbol universe empty — "
                             "skipping scan. RUN_CYCLE_PHASE3_START will not be reached."

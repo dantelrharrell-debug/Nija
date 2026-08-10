@@ -18,6 +18,8 @@ REDIS_URL_FLAGS = (
     "REDIS_PUBLIC_URL",
 )
 LIVE_BYPASS_FLAGS = (
+    "FORCE_TRADE",
+    "FORCE_TRADE_MODE",
     "NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK",
     "NIJA_DISABLE_WRITER_LOCK",
     "NIJA_FORCE_ACTIVATION",
@@ -110,30 +112,14 @@ def _redis_lock_emergency_enabled(env: MutableMapping[str, str]) -> bool:
 
 
 def _apply_redis_lock_emergency_fallback(env: MutableMapping[str, str], notes: list[str]) -> None:
-    """Handle legacy emergency fallback flags without creating a live Redis race."""
+    """Refuse legacy emergency fallback flags in every live deployment."""
 
     if not _redis_lock_emergency_enabled(env):
         return
 
-    if redis_configured(env):
-        notes.append("blocked:REDIS_LOCK_EMERGENCY_FALLBACK_LIVE_REDIS")
-        _enforce_strict_live_redis_authority(env, notes)
-        return
-    # Non-Redis live recovery remains explicit/operator-confirmed.  This path is
-    # kept only for deployments that truly have no Redis endpoint configured.
-    env["NIJA_CONFIRM_BYPASS_RISKS"] = "true"
-    env["NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK"] = "true"
-    env["NIJA_DISABLE_WRITER_LOCK"] = "true"
-    env["NIJA_STRICT_REDIS_LEASE"] = "0"
-    env["NIJA_REQUIRE_DISTRIBUTED_LOCK"] = "false"
-    env["NIJA_STRICT_WRITER_LOCK"] = "false"
-    env["NIJA_FAIL_CLOSED_EXIT_ON_UNREACHABLE_REDIS"] = "false"
-    env["NIJA_FAIL_CLOSED_RETRY_ON_LOCK_FAILURE"] = "false"
-    env["NIJA_FAIL_CLOSED_MAX_RETRY_ATTEMPTS"] = "0"
-    env["NIJA_RUNTIME_DEGRADED_MODE"] = "true"
-    env["NIJA_ALLOW_DEGRADED_WRITER_AUTHORITY"] = "true"
-    env["NIJA_ALLOW_LOCAL_WRITER_LOCK_FALLBACK"] = "true"
-    notes.append("enabled:REDIS_LOCK_EMERGENCY_FALLBACK")
+    notes.append("blocked:REDIS_LOCK_EMERGENCY_FALLBACK")
+    _enforce_strict_live_redis_authority(env, notes)
+    env["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "0"
 
 
 def _resolve_class(module_names: tuple[str, ...], class_name: str):
@@ -310,6 +296,42 @@ def _patch_core_loop_class(cls) -> bool:
         return True
 
     def _run_scan_phase_broker_scoped(self, *args, **kwargs):
+        owner_module = sys.modules.get(cls.__module__)
+        authority_guard = getattr(
+            owner_module,
+            "_require_exact_runtime_cycle_authority",
+            None,
+        )
+        if callable(authority_guard):
+            try:
+                authority_ok, authority_reason = authority_guard(
+                    "startup_runtime_safety.run_scan_phase"
+                )
+            except Exception as exc:
+                authority_ok = False
+                authority_reason = f"authority_guard_error:{type(exc).__name__}:{exc}"
+        else:
+            authority_ok = not live_mode_enabled(os.environ)
+            authority_reason = "authority_guard_unavailable"
+        if not authority_ok:
+            logger.critical(
+                "BROKER_SLOT_SCOPE_AUTHORITY_BLOCKED reason=%s broker_io=false",
+                authority_reason,
+            )
+            try:
+                from types import SimpleNamespace
+
+                return SimpleNamespace(
+                    symbols_scored=0,
+                    entries_taken=0,
+                    entries_blocked=1,
+                    exits_taken=0,
+                    next_interval=15,
+                    errors=[f"runtime_authority_blocked:{authority_reason}"],
+                )
+            except Exception:
+                return None
+
         broker = kwargs.get("broker") if "broker" in kwargs else (args[0] if args else None)
         broker_name = _broker_name_for_log(broker)
         broker_count = _broker_tracker_position_count(broker)
@@ -734,13 +756,14 @@ def normalize_runtime_startup_env(env: MutableMapping[str, str]) -> list[str]:
     if not live_mode_enabled(env):
         return notes
 
-    if redis_configured(env):
-        _enforce_strict_live_redis_authority(env, notes)
-    else:
+    _enforce_strict_live_redis_authority(env, notes)
+    if env.get("NIJA_FORCE_TRADE_BALANCE") != "0":
+        env["NIJA_FORCE_TRADE_BALANCE"] = "0"
+        notes.append("set:NIJA_FORCE_TRADE_BALANCE=0")
+    if not redis_configured(env):
         _apply_redis_lock_emergency_fallback(env, notes)
-        bypass_confirmed = env_truthy(env.get("NIJA_CONFIRM_BYPASS_RISKS"))
-        if not bypass_confirmed:
-            _clear_truthy_flags(env, LIVE_BYPASS_FLAGS, notes)
+        env["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "0"
+        notes.append("blocked:LIVE_RUNTIME_WITHOUT_REDIS")
 
     hf_flip_mode = env_truthy(env.get("HF_FLIP_MODE"))
     hf_scalp_mode = env_truthy(env.get("HF_SCALP_MODE"))

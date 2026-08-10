@@ -44,12 +44,13 @@ class WriterRecoveryEpochCoreV81Tests(unittest.TestCase):
 
             def __init__(self) -> None:
                 self.registered = None
+                self.scan_started_calls = 0
 
             def register_core_thread(self, thread):
                 self.registered = thread
 
             def record_scan_started(self):
-                return None
+                self.scan_started_calls += 1
 
         stop = threading.Event()
         thread = threading.Thread(target=lambda: stop.wait(2.0), name="real-core", daemon=True)
@@ -70,6 +71,7 @@ class WriterRecoveryEpochCoreV81Tests(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual(reason, "existing_live_thread")
         self.assertIs(runtime.registered, thread)
+        self.assertEqual(runtime.scan_started_calls, 0)
         strategy.assert_not_called()
 
     def test_dead_core_restarts_only_from_canonical_strategy(self) -> None:
@@ -80,12 +82,13 @@ class WriterRecoveryEpochCoreV81Tests(unittest.TestCase):
 
             def __init__(self) -> None:
                 self.registered = None
+                self.scan_started_calls = 0
 
             def register_core_thread(self, thread):
                 self.registered = thread
 
             def record_scan_started(self):
-                return None
+                self.scan_started_calls += 1
 
         class Strategy:
             def run_cycle(self):
@@ -128,6 +131,7 @@ class WriterRecoveryEpochCoreV81Tests(unittest.TestCase):
         self.assertEqual(reason, "canonical_strategy_restart")
         self.assertIs(runtime.registered, created[0])
         self.assertIs(bot_main._core_loop_thread, created[0])
+        self.assertEqual(runtime.scan_started_calls, 0)
 
     def test_no_restart_without_writer_authority(self) -> None:
         runtime = types.SimpleNamespace(acquired=False, lost=True, _core_thread=None)

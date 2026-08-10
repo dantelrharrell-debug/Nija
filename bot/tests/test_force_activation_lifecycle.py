@@ -204,8 +204,8 @@ class TestForceActivationEndToEnd(unittest.TestCase):
         self.assertEqual(snap.runtime_authority_state, RuntimeAuthorityState.EXECUTING.value)
         self.assertEqual(snap.runtime_authority_reason, "committed_live_dispatch")
 
-    def test_can_execute_repairs_stale_live_dispatch_commit(self) -> None:
-        """Gate 0 repairs the coordinator latch when TSM is already LIVE_ACTIVE."""
+    def test_can_execute_fails_closed_on_stale_live_dispatch_commit(self) -> None:
+        """Gate 0 must not manufacture a coordinator commit from downstream state."""
         from bot.execution_authority_context import RuntimeAuthoritySnapshot, can_execute, execution_authority_scope
 
         class _KillSwitch:
@@ -293,8 +293,10 @@ class TestForceActivationEndToEnd(unittest.TestCase):
         ):
             decision = can_execute()
 
-        self.assertNotEqual(decision.reason, "lifecycle_phase:WARM")
-        self.assertEqual(decision.lifecycle_phase, LifecyclePhase.LIVE.value)
+        self.assertFalse(decision.allowed)
+        self.assertEqual(decision.reason, "lifecycle_phase:WARM")
+        self.assertEqual(decision.lifecycle_phase, LifecyclePhase.WARM.value)
+        self.assertEqual(snapshots["calls"], 1)
 
 
 if __name__ == "__main__":

@@ -476,300 +476,39 @@ def _recover_fencing_token_from_lock(redis_url: str, lock_key: str) -> str:
 
 
 def assert_distributed_writer_authority() -> None:
-    """Fail closed when this process no longer owns the distributed writer lock.
+    """Require the exact canonical Redis process-writer proof.
 
-    Validation source:
-    - ``NIJA_WRITER_FENCING_TOKEN`` (set at startup when lock acquired)
-    - ``NIJA_WRITER_LOCK_KEY`` (or scoped default)
-    - Redis value at lock key must begin with the same token
-
-    Runtime cost is bounded by a short verification cache to avoid a Redis
-    round-trip on every order.
-
-    SAFETY CONTRACT
-    ---------------
-    This function enforces strict distributed fencing by default.  Three
-    operator-controlled bypass flags can override this behaviour when stale
-    locks from a previous Railway deployment are blocking startup:
-
-    - ``NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK=true``  — skip the check entirely
-      and proceed as the writer.  Use only when you are certain no other live
-      instance is running.
-    - ``NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK=true`` — fall back to local
-      writer authority when the distributed lock cannot be verified (missing
-      token, Redis unreachable, or fencing mismatch).
-    - ``NIJA_AUTO_CLEAR_STALE_RAILWAY_LOCK=true`` — attempt to delete the
-      stale Redis lock key before falling back, allowing this instance to
-      re-acquire it on the next heartbeat cycle.
-
-    All bypass paths emit a WARNING-level log so the operator is aware that
-    strict single-writer enforcement is not active.
+    This function is intentionally read-only with respect to Redis authority.
+    It never creates, renews, deletes, steals, or locally fabricates a writer
+    lease.  Missing or mismatched proof remains fail-closed.
     """
     global _FENCE_LAST_CHECK_TS, _FENCE_LAST_OK, _FENCE_LAST_ERR
 
-    import hashlib
-
-    # ── Operator bypass: skip the entire distributed check ────────────────────
-    if _env_truthy("NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK"):
-        logger.warning(
-            "STARTUP_OBSERVER_STANDBY: NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK=true — "
-            "skipping distributed writer authority check. "
-            "Proceeding as local writer. Ensure no other live instance is running."
-        )
-        with _FENCE_VERIFY_LOCK:
-            _FENCE_LAST_CHECK_TS = time.monotonic()
-            _FENCE_LAST_OK = True
-            _FENCE_LAST_ERR = ""
-        return
-
-    redis_url = get_redis_url()
-    scope = os.getenv("NIJA_WRITER_LOCK_SCOPE", "").strip()
-    if not scope:
-        raw = (
-            os.environ.get("KRAKEN_PLATFORM_API_KEY", "").strip()
-            or os.environ.get("KRAKEN_API_KEY", "").strip()
-            or "default"
-        )
-        scope = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
-
-    lock_key = os.getenv("NIJA_WRITER_LOCK_KEY", "").strip() or f"nija:writer_lock:{scope}"
-
-    # Fencing token is mandatory unless the local-fallback bypass is active.
-    token = os.getenv("NIJA_WRITER_FENCING_TOKEN", "").strip()
-    if not token:
-        if _env_truthy("NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK"):
-            logger.warning(
-                "STARTUP_OBSERVER_STANDBY: STRICT_SINGLE_WRITER_REQUIRED: "
-                "NIJA_WRITER_FENCING_TOKEN is not set but "
-                "NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK=true — "
-                "using local writer fallback. Trading will proceed without "
-                "distributed lock verification."
-            )
-            with _FENCE_VERIFY_LOCK:
-                _FENCE_LAST_CHECK_TS = time.monotonic()
-                _FENCE_LAST_OK = True
-                _FENCE_LAST_ERR = ""
-            return
-        _err = (
-            "STARTUP_OBSERVER_STANDBY: STRICT_SINGLE_WRITER_REQUIRED: "
-            "NIJA_WRITER_FENCING_TOKEN is not set. "
-            "Distributed writer authority requires a valid fencing token. "
-            "Ensure the bot acquired a Redis writer lease at startup. "
-            "Set NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK=true to use local fallback."
-        )
-        with _FENCE_VERIFY_LOCK:
-            _FENCE_LAST_CHECK_TS = time.monotonic()
-            _FENCE_LAST_OK = False
-            _FENCE_LAST_ERR = _err
-        raise RuntimeError(_err)
-
-    # Redis URL is mandatory unless the local-fallback bypass is active.
-    if not redis_url:
-        if _env_truthy("NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK"):
-            logger.warning(
-                "STARTUP_OBSERVER_STANDBY: STRICT_SINGLE_WRITER_REQUIRED: "
-                "Redis URL is not configured but "
-                "NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK=true — "
-                "using local writer fallback. Trading will proceed without "
-                "distributed lock verification."
-            )
-            with _FENCE_VERIFY_LOCK:
-                _FENCE_LAST_CHECK_TS = time.monotonic()
-                _FENCE_LAST_OK = True
-                _FENCE_LAST_ERR = ""
-            return
-        _err = (
-            "STARTUP_OBSERVER_STANDBY: STRICT_SINGLE_WRITER_REQUIRED: "
-            "Redis URL is not configured. "
-            "Distributed writer authority requires Redis connectivity. "
-            "Set NIJA_REDIS_URL to a valid rediss:// endpoint or set "
-            "NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK=true to use local fallback."
-        )
-        with _FENCE_VERIFY_LOCK:
-            _FENCE_LAST_CHECK_TS = time.monotonic()
-            _FENCE_LAST_OK = False
-            _FENCE_LAST_ERR = _err
-        raise RuntimeError(_err)
-
     try:
-        verify_ttl_s = max(0.0, float(os.getenv("NIJA_WRITER_RUNTIME_VERIFY_TTL_S", "1.5") or 1.5))
-    except (TypeError, ValueError):
-        verify_ttl_s = 1.5
-        logger.warning(
-            "Invalid NIJA_WRITER_RUNTIME_VERIFY_TTL_S value; using default %.1fs",
-            verify_ttl_s,
-        )
-    now = time.monotonic()
-    with _FENCE_VERIFY_LOCK:
-        if verify_ttl_s > 0 and (now - _FENCE_LAST_CHECK_TS) <= verify_ttl_s:
-            if _FENCE_LAST_OK:
-                return
-            cached_err = _FENCE_LAST_ERR or "distributed writer fence verification cached failure"
-            # Honour bypass flags even for cached failures so a flag change
-            # takes effect without waiting for the TTL to expire.
-            if _env_truthy("NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK"):
-                logger.warning(
-                    "STARTUP_OBSERVER_STANDBY: STRICT_SINGLE_WRITER_REQUIRED: "
-                    "cached authority failure but NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK=true — "
-                    "using local writer fallback (cached_err=%s)",
-                    cached_err,
-                )
-                _FENCE_LAST_OK = True
-                _FENCE_LAST_ERR = ""
-                return
-            raise RuntimeError(cached_err)
-
-    try:
-        client = _connect_redis_for_authority(redis_url, timeout_s=2)
-        current = client.get(lock_key)
-        current_token = ""
-        if current is not None:
-            # decode_responses=True should give str, but guard against bytes
-            # in case a connection with different settings is reused.
-            if isinstance(current, bytes):
-                current = current.decode("utf-8", errors="replace")
-            if isinstance(current, str) and current:
-                current_token = current.split(":", 1)[0]
-
-        # ── Missing-key recovery ──────────────────────────────────────────────
-        # When the lock key is absent (expired TTL or transient Redis flush) but
-        # this process still holds the correct fencing token, attempt a one-shot
-        # atomic re-acquisition using SET NX.  This mirrors the heartbeat's own
-        # re-acquisition path and prevents a spurious hard-stop when the key
-        # simply expired between heartbeat renewals.
-        #
-        # Safety: SET NX is atomic — if another process wins the race it holds a
-        # different token and the subsequent comparison will still fail closed.
-        if current is None and token:
-            try:
-                # Use the same extended TTL as the heartbeat refresh (3× the base)
-                # so the lock stays alive until the next heartbeat cycle even if
-                # there is a brief gap between heartbeats.
-                ttl_s = max(
-                    60,
-                    int(os.getenv("NIJA_WRITER_LOCK_TTL_S", "30") or 30) * 3,
-                )
-                owner_id = os.getenv("NIJA_WRITER_OWNER_ID", "recovered")
-                lock_value = f"{token}:{owner_id}"
-                reacquired = client.set(lock_key, lock_value, ex=ttl_s, nx=True)
-                if reacquired:
-                    current_token = token
-                    logger.info(
-                        "assert_distributed_writer_authority: lock key was missing; "
-                        "re-acquired atomically with same fencing token "
-                        "(lock_key=%s token_prefix=%s ttl_s=%d) — likely TTL expiry, "
-                        "heartbeat will refresh TTL on next cycle",
-                        lock_key,
-                        token[:8],
-                        ttl_s,
-                    )
-                else:
-                    # Another process won the NX race — read back the new holder.
-                    new_current = client.get(lock_key)
-                    if new_current is not None:
-                        if isinstance(new_current, bytes):
-                            new_current = new_current.decode("utf-8", errors="replace")
-                        if isinstance(new_current, str) and new_current:
-                            current_token = new_current.split(":", 1)[0]
-            except Exception as _reacq_exc:
-                logger.warning(
-                    "assert_distributed_writer_authority: lock re-acquisition attempt failed: %s",
-                    _reacq_exc,
-                )
-
-        ok = (current_token == token)
-        err = ""
-        if not ok:
-            err = (
-                "STARTUP_OBSERVER_STANDBY: STRICT_SINGLE_WRITER_REQUIRED: "
-                "another instance owns writer authority — "
-                f"expected_token={token} current_token={current_token or '<missing>'} "
-                f"lock_key={lock_key}"
+        try:
+            from bot.writer_authority_generation_convergence_v57_patch import (
+                _exact_process_writer,
             )
-
-            # ── Auto-clear stale lock ─────────────────────────────────────────
-            # When NIJA_AUTO_CLEAR_STALE_RAILWAY_LOCK=true, attempt to delete
-            # the stale lock so this instance can re-acquire it on the next
-            # heartbeat cycle.  Only safe when the operator is certain the
-            # previous holder is no longer running (e.g. after a Railway redeploy).
-            if _env_truthy("NIJA_AUTO_CLEAR_STALE_RAILWAY_LOCK"):
-                try:
-                    deleted = client.delete(lock_key)
-                    if deleted:
-                        logger.warning(
-                            "STARTUP_OBSERVER_STANDBY: NIJA_AUTO_CLEAR_STALE_RAILWAY_LOCK=true — "
-                            "deleted stale writer lock (lock_key=%s previous_token=%s). "
-                            "This instance will re-acquire the lock on the next heartbeat cycle.",
-                            lock_key,
-                            current_token or "<missing>",
-                        )
-                        # Treat as ok so this cycle can proceed; the heartbeat
-                        # will write a fresh lock entry with the current token.
-                        ok = True
-                        err = ""
-                    else:
-                        logger.warning(
-                            "STARTUP_OBSERVER_STANDBY: NIJA_AUTO_CLEAR_STALE_RAILWAY_LOCK=true — "
-                            "lock key already absent (lock_key=%s); proceeding.",
-                            lock_key,
-                        )
-                        ok = True
-                        err = ""
-                except Exception as _del_exc:
-                    logger.warning(
-                        "STARTUP_OBSERVER_STANDBY: NIJA_AUTO_CLEAR_STALE_RAILWAY_LOCK=true — "
-                        "failed to delete stale lock (lock_key=%s): %s",
-                        lock_key,
-                        _del_exc,
-                    )
-
-            # ── Local-fallback bypass ─────────────────────────────────────────
-            if not ok and _env_truthy("NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK"):
-                logger.warning(
-                    "STARTUP_OBSERVER_STANDBY: STRICT_SINGLE_WRITER_REQUIRED: "
-                    "another instance owns writer authority but "
-                    "NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK=true — "
-                    "using local writer fallback. "
-                    "Trading will proceed without distributed lock verification. "
-                    "(lock_key=%s expected_token=%s current_token=%s)",
-                    lock_key,
-                    token,
-                    current_token or "<missing>",
-                )
-                ok = True
-                err = ""
-
-        with _FENCE_VERIFY_LOCK:
-            _FENCE_LAST_CHECK_TS = time.monotonic()
-            _FENCE_LAST_OK = ok
-            _FENCE_LAST_ERR = err
-
-        if not ok:
-            raise RuntimeError(err)
-
-    except RuntimeError:
-        raise
+        except ImportError:
+            from writer_authority_generation_convergence_v57_patch import (  # type: ignore[import]
+                _exact_process_writer,
+            )
+        proof, reason = _exact_process_writer("execution_authority_context")
     except Exception as exc:
-        _err = (
-            "STARTUP_OBSERVER_STANDBY: STRICT_SINGLE_WRITER_REQUIRED: "
-            f"Redis execution authority unavailable — {exc}"
-        )
-        if _env_truthy("NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK"):
-            logger.warning(
-                "%s — NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK=true, using local writer fallback.",
-                _err,
-            )
-            with _FENCE_VERIFY_LOCK:
-                _FENCE_LAST_CHECK_TS = time.monotonic()
-                _FENCE_LAST_OK = True
-                _FENCE_LAST_ERR = ""
-            return
-        with _FENCE_VERIFY_LOCK:
-            _FENCE_LAST_CHECK_TS = time.monotonic()
-            _FENCE_LAST_OK = False
-            _FENCE_LAST_ERR = _err
-        raise RuntimeError(_err) from exc
+        proof = None
+        reason = f"exact_process_writer_error:{type(exc).__name__}:{exc}"
 
+    ok = proof is not None
+    error = "" if ok else (
+        "STRICT_SINGLE_WRITER_REQUIRED: exact process writer proof failed:"
+        f"{reason or 'unknown'}"
+    )
+    with _FENCE_VERIFY_LOCK:
+        _FENCE_LAST_CHECK_TS = time.monotonic()
+        _FENCE_LAST_OK = ok
+        _FENCE_LAST_ERR = error
+    if not ok:
+        raise RuntimeError(error)
 
 def get_distributed_writer_authority_status(force_refresh: bool = False) -> dict:
     """Return current distributed-writer ownership status for diagnostics.
@@ -1146,109 +885,16 @@ def _emit_trade_admission_telemetry(
 
 
 def _attempt_live_dispatch_commit_repair(reason: str) -> bool:
-    """Repair a stale startup-coordinator dispatch latch after LIVE activation.
-
-    A crash/exception between TradingStateMachine.transition_to(LIVE_ACTIVE) and
-    StartupCoordinator.finalize_activation_commit() can leave the runtime trading
-    FSM live while the coordinator still reports BOOT/WARM.  That makes the
-    lifecycle gate reject every order even though activation was already
-    committed.  Repair only when independent live-safety indicators agree that
-    the process is already live; the normal per-order gates below still validate
-    writer lease, nonce, heartbeat, broker health and circuit state.
-    """
-    trading_state = str(os.getenv("NIJA_RUNTIME_TRADING_STATE", "")).strip().upper()
-    runtime_exec = _env_truthy("NIJA_RUNTIME_EXECUTION_AUTHORITY")
-    live_verified = _env_truthy("LIVE_CAPITAL_VERIFIED")
-    dry_run = _env_truthy("DRY_RUN_MODE") or _env_truthy("PAPER_MODE")
-    if trading_state != "LIVE_ACTIVE" or not runtime_exec or not live_verified or dry_run:
-        return False
-
-    try:
-        try:
-            from bot.kill_switch import get_kill_switch
-        except ImportError:
-            from kill_switch import get_kill_switch  # type: ignore[import]
-        if bool(get_kill_switch().is_active()):
-            return False
-    except Exception:
-        # If kill-switch state cannot be proven safe, do not repair the latch.
-        return False
-
-    try:
-        try:
-            from bot.startup_coordinator import get_startup_coordinator
-        except ImportError:
-            from startup_coordinator import get_startup_coordinator  # type: ignore[import]
-        coordinator = get_startup_coordinator()
-        before = coordinator.build_snapshot(
-            trading_state="LIVE_ACTIVE",
-            activation_intent=True,
-        )
-        if getattr(before, "lifecycle_phase", "") == "LIVE" and bool(getattr(before, "dispatch_enabled", False)):
-            return False
-        coordinator.force_activate_bypass(
-            f"live_dispatch_commit_repair:{reason}:previous_phase={getattr(before, 'lifecycle_phase', '<unknown>')}"
-        )
-        after = coordinator.build_snapshot(
-            trading_state="LIVE_ACTIVE",
-            activation_intent=True,
-        )
-        repaired = getattr(after, "lifecycle_phase", "") == "LIVE" and bool(getattr(after, "dispatch_enabled", False))
-        if repaired:
-            logger.critical(
-                "ExecutionAuthority: repaired stale startup-coordinator dispatch latch "
-                "after LIVE_ACTIVE commit (reason=%s previous_phase=%s)",
-                reason,
-                getattr(before, "lifecycle_phase", "<unknown>"),
-            )
-        return bool(repaired)
-    except Exception as exc:
-        logger.warning("ExecutionAuthority: live dispatch latch repair failed: %s", exc)
-        return False
+    """Do not manufacture lifecycle dispatch state from a downstream gate."""
+    logger.warning(
+        "ExecutionAuthority: dispatch latch remains fail-closed reason=%s "
+        "forced_activation=false",
+        reason,
+    )
+    return False
 
 def can_execute() -> ExecutionDecision:
     """Canonical execution authority decision for all order-dispatch paths."""
-    # ── FORCE_TRADE bypass: skip all authority gates ──────────────────────────
-    # When FORCE_TRADE=true or FORCE_TRADE_MODE=true, bypass the entire
-    # lifecycle/authority gate stack so orders can reach the exchange even when
-    # the startup coordinator has not yet committed to LIVE_ACTIVE.  This is the
-    # operator escape hatch for the "bot running but zero trades" deadlock caused
-    # by missing Redis fencing tokens or incomplete activation sequences.
-    _force_trade = (
-        _env_truthy("FORCE_TRADE") or _env_truthy("FORCE_TRADE_MODE")
-    )
-    if _force_trade:
-        logger.warning(
-            "[FORCE_TRADE] can_execute: bypassing all authority gates — "
-            "FORCE_TRADE/FORCE_TRADE_MODE=true. All lifecycle/lease/nonce/heartbeat "
-            "checks skipped. Orders will be submitted directly to exchange."
-        )
-        return ExecutionDecision(
-            allowed=True,
-            reason="force_trade_bypass",
-            circuit_state="CLOSED",
-            state_live_active=True,
-            lease_valid=True,
-            lease_generation_current=True,
-            nonce_ready=True,
-            heartbeat_fresh=True,
-            heartbeat_stage_sufficient=True,
-            broker_health_ok=True,
-            circuit_breaker_closed=True,
-            dispatch_enabled=True,
-            stability_allowed=True,
-            stability_halt_state="NORMAL",
-            stability_throttle=1.0,
-            stability_size_multiplier=1.0,
-            stability_stress_score=0.0,
-            stability_collapsed_risk_score=0.0,
-            stability_reason="force_trade_bypass",
-            first_failed_gate="",
-            reason_code="allowed",
-            reason_detail="force_trade_bypass",
-            lifecycle_phase="LIVE",
-        )
-
 
     runtime_snapshot = runtime_authority_snapshot()
 

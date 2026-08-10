@@ -259,6 +259,34 @@ def _patch_core_loop(module: ModuleType) -> bool:
         )
 
     def run_scan_phase(self: Any, *args: Any, **kwargs: Any) -> Any:
+        authority_guard = getattr(module, "_require_exact_runtime_cycle_authority", None)
+        if callable(authority_guard):
+            try:
+                authority_ok, authority_reason = authority_guard(
+                    "scan_wrapper_convergence.run_scan_phase"
+                )
+            except Exception as exc:
+                authority_ok = False
+                authority_reason = f"authority_guard_error:{type(exc).__name__}:{exc}"
+        else:
+            live_mode = (
+                str(os.environ.get("LIVE_CAPITAL_VERIFIED", "")).strip().lower()
+                in {"1", "true", "yes", "on", "enabled"}
+                and str(os.environ.get("DRY_RUN_MODE", "")).strip().lower()
+                not in {"1", "true", "yes", "on", "enabled"}
+                and str(os.environ.get("PAPER_MODE", "")).strip().lower()
+                not in {"1", "true", "yes", "on", "enabled"}
+            )
+            authority_ok = not live_mode
+            authority_reason = "authority_guard_unavailable"
+        if not authority_ok:
+            logger.critical(
+                "SCAN_GUARD_AUTHORITY_BLOCKED marker=%s reason=%s broker_io=false",
+                _MARKER,
+                authority_reason,
+            )
+            return _duplicate_result(f"runtime_authority_blocked:{authority_reason}")
+
         broker = (
             kwargs.get("broker")
             or getattr(self, "broker", None)

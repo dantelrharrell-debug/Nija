@@ -69,10 +69,21 @@ def _extract_crypto_positions(payload: Any) -> list[Dict[str, Any]]:
 
 
 def _call_possible_balance_methods(instance: Any) -> dict:
+    # Prefer already-hydrated data.  Position discovery must not serially invoke
+    # several rate-limited balance endpoints during startup.
+    for attr in ("_last_raw_balances", "last_raw_balances", "_portfolio_breakdown", "portfolio_breakdown"):
+        cached = getattr(instance, attr, None)
+        if isinstance(cached, dict) and cached:
+            return cached
+
+    attempted_live_probe = False
     for method_name in ("get_portfolio_breakdown", "get_account_balance", "get_balance_snapshot", "get_balances"):
         method = getattr(instance, method_name, None)
         if not callable(method):
             continue
+        if attempted_live_probe:
+            break
+        attempted_live_probe = True
         try:
             try:
                 value = method(verbose=False)
@@ -134,6 +145,8 @@ def _patch_coinbase_class(cls: type) -> bool:
                     existing.extend(result)
             except Exception as exc:
                 logger.warning("COINBASE_POSITION_CLASSIFICATION original get_positions failed: %s", exc)
+        if existing:
+            return existing
         payload = _call_possible_balance_methods(self)
         crypto_positions = _extract_crypto_positions(payload)
         seen = {str(p.get("symbol", "")).upper() for p in existing if isinstance(p, dict)}
