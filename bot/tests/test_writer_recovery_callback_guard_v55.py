@@ -188,6 +188,18 @@ def test_core_thread_loss_is_never_recoverable(monkeypatch) -> None:
     assert started == []
 
 
+def test_fallback_shutdown_schedules_bounded_process_restart(monkeypatch) -> None:
+    v55 = _load("test_writer_recovery_v55_bounded_fallback")
+    bot_main = _install_fake_bot_main(monkeypatch)
+    restart_reasons: list[str] = []
+    bot_main._schedule_writer_authority_restart = restart_reasons.append
+
+    v55._fallback_shutdown("v39_reelection_exhausted:test")
+
+    assert bot_main._shutdown_event.is_set() is True
+    assert restart_reasons == ["v39_reelection_exhausted:test"]
+
+
 def test_canonical_fast_path_installs_v55() -> None:
     source = BOT_ENTRYPOINT.read_text(encoding="utf-8")
     fast_block = source.split("_FAST_PATH_INSTALLERS = (", 1)[1].split(

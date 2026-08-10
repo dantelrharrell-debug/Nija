@@ -124,12 +124,30 @@ def _request_canonical_shutdown(reason: str) -> bool:
         )
         return False
     setter()
+    scheduler = getattr(module, "_schedule_writer_authority_restart", None)
+    if not callable(scheduler):
+        scheduler = getattr(module, "_schedule_core_registration_restart", None)
+    restart_scheduled = False
+    if callable(scheduler):
+        try:
+            scheduler(f"v54_writer_proof_lost:{reason}")
+            restart_scheduled = True
+        except Exception as exc:
+            LOGGER.error(
+                "WRITER_RUNTIME_V54_RESTART_SCHEDULE_FAILED marker=%s "
+                "reason=%s err=%s:%s",
+                MARKER,
+                reason,
+                type(exc).__name__,
+                exc,
+            )
     LOGGER.critical(
         "WRITER_RUNTIME_V54_SHUTDOWN_REQUESTED marker=%s reason=%s core_thread_alive=%s "
-        "execution_fail_closed=true normal_cleanup=true",
+        "execution_fail_closed=true normal_cleanup=true restart_scheduled=%s",
         MARKER,
         reason,
         _core_thread_alive(module),
+        restart_scheduled,
     )
     return True
 

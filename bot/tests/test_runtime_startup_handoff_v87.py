@@ -157,6 +157,35 @@ class RuntimeStartupHandoffV87Tests(unittest.TestCase):
         timer.start.assert_called_once_with()
         force_exit.assert_called_once_with(75)
 
+    def test_terminal_writer_loss_restart_uses_general_bound(self) -> None:
+        from bot import bot_main
+
+        timer = MagicMock()
+        bot_main._core_registration_restart_timer = None
+        self.addCleanup(
+            setattr,
+            bot_main,
+            "_core_registration_restart_timer",
+            None,
+        )
+        with (
+            patch.dict(
+                os.environ,
+                {"NIJA_WRITER_AUTHORITY_RESTART_GRACE_S": "4"},
+                clear=False,
+            ),
+            patch.object(bot_main.threading, "Timer", return_value=timer) as factory,
+        ):
+            bot_main._schedule_writer_authority_restart(
+                "lock_owned_by_different_writer"
+            )
+
+        factory.assert_called_once()
+        self.assertEqual(factory.call_args.args[0], 4.0)
+        self.assertEqual(timer.name, "writer-authority-forced-restart")
+        self.assertTrue(timer.daemon)
+        timer.start.assert_called_once_with()
+
     def test_account_status_uses_actual_platform_and_user_registries(self) -> None:
         manager = object.__new__(MultiAccountBrokerManager)
         manager._platform_brokers = {

@@ -8241,6 +8241,40 @@ class KrakenBroker(BaseBroker):
         self.connected = False
         logger.critical("⛔ Kraken HARD STOP (%s): %s", self.account_identifier, reason)
 
+    def _demote_on_writer_authority_failure(self, error: BaseException) -> bool:
+        """Demote stale Kraken connectivity when private nonce authority is lost.
+
+        A broker that completed an earlier handshake is not operationally
+        connected once the canonical process writer can no longer issue its
+        nonces.  Keep the condition retryable (not a permanent hard-stop), but
+        make every registry/readiness consumer observe the real disconnected
+        state immediately.
+        """
+
+        message = str(error or "")
+        normalized = message.lower()
+        authority_failure = bool(
+            "canonical process writer authority unavailable" in normalized
+            or "nonce issuance blocked (pid lock not held)" in normalized
+            or "writer authority unavailable for kraken nonce lease" in normalized
+        )
+        if not authority_failure:
+            return False
+
+        self.connected = False
+        self._connection_already_complete = False
+        self._is_available = False
+        self.exit_only_mode = True
+        self.kraken_health = "ERROR"
+        self.last_connection_error = f"WRITER_AUTHORITY_UNAVAILABLE: {message}"
+        logger.critical(
+            "KRAKEN_PRIVATE_RUNTIME_DEMOTED account=%s "
+            "reason=writer_authority_unavailable connected=false "
+            "execution_eligible=false reconnect_required=true",
+            self.account_identifier,
+        )
+        return True
+
     def _initialize_nonce_manager(self) -> bool:
         """Initialize the DistributedNonceManager with heartbeat authority.
 
@@ -8854,7 +8888,7 @@ class KrakenBroker(BaseBroker):
         _already_done = (
             _KRAKEN_STARTUP_FSM.is_connected and self.connected
             if self.account_type == AccountType.PLATFORM
-            else self._connection_already_complete
+            else self._connection_already_complete and self.connected
         )
         if _already_done:
             logger.debug(f"[KrakenBroker:{_label}] Connection already established — skipping reconnect routine")
@@ -10563,6 +10597,8 @@ class KrakenBroker(BaseBroker):
             return 0.0
 
         except Exception as e:
+            if self._demote_on_writer_authority_failure(e):
+                return 0.0
             _nonce_rebuild_cooldown_s = self._get_nonce_rebuild_retry_cooldown_seconds(e)
             if _nonce_rebuild_cooldown_s > 0.0:
                 _cached_balance = self._activate_nonce_rebuild_cooldown_recovery(
@@ -10813,6 +10849,14 @@ class KrakenBroker(BaseBroker):
             return {**default_balance, 'error_message': 'Unexpected API response format'}
 
         except Exception as e:
+            if self._demote_on_writer_authority_failure(e):
+                error_msg = str(e)
+                logger.error(
+                    "❌ Exception fetching Kraken detailed balance (%s): %s",
+                    self.account_identifier,
+                    error_msg,
+                )
+                return {**default_balance, 'error_message': error_msg}
             _nonce_rebuild_cooldown_s = self._get_nonce_rebuild_retry_cooldown_seconds(e)
             if _nonce_rebuild_cooldown_s > 0.0:
                 _cached_balance = self._activate_nonce_rebuild_cooldown_recovery(

@@ -127,11 +127,33 @@ def _fallback_shutdown(reason: str) -> None:
     setter = getattr(shutdown, "set", None)
     if callable(setter):
         setter()
+    scheduler = (
+        getattr(bot_main, "_schedule_writer_authority_restart", None)
+        if bot_main is not None
+        else None
+    )
+    if not callable(scheduler) and bot_main is not None:
+        scheduler = getattr(bot_main, "_schedule_core_registration_restart", None)
+    restart_scheduled = False
+    if callable(scheduler):
+        try:
+            scheduler(str(reason or "v55_writer_recovery_failed"))
+            restart_scheduled = True
+        except Exception as exc:
+            LOGGER.error(
+                "WRITER_RECOVERY_V55_RESTART_SCHEDULE_FAILED marker=%s "
+                "reason=%s err=%s:%s",
+                MARKER,
+                str(reason or "unknown"),
+                type(exc).__name__,
+                exc,
+            )
     LOGGER.critical(
         "WRITER_RECOVERY_V55_SHUTDOWN marker=%s reason=%s "
-        "execution_fail_closed=true",
+        "execution_fail_closed=true restart_scheduled=%s",
         MARKER,
         str(reason or "unknown"),
+        restart_scheduled,
     )
 
 

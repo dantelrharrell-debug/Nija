@@ -231,15 +231,18 @@ def test_v54_blocks_core_start_without_exact_writer_proof(monkeypatch) -> None:
 def test_v54_requests_normal_shutdown_when_live_core_loses_writer(monkeypatch) -> None:
     v54 = _load("test_writer_runtime_v54_shutdown", V54)
     shutdown = threading.Event()
+    restart_reasons = []
     bot_main = ModuleType("bot.bot_main")
     bot_main._shutdown_event = shutdown
     bot_main._core_loop_thread = type("Thread", (), {"is_alive": lambda self: True})()
+    bot_main._schedule_writer_authority_restart = restart_reasons.append
     monkeypatch.setitem(sys.modules, "bot.bot_main", bot_main)
     monkeypatch.setenv("NIJA_RUNTIME_EXECUTION_AUTHORITY", "1")
     monkeypatch.setenv("NIJA_EXECUTION_ACTIVE", "true")
 
     assert v54._request_canonical_shutdown("writer_lease_not_acquired") is True
     assert shutdown.is_set() is True
+    assert restart_reasons == ["v54_writer_proof_lost:writer_lease_not_acquired"]
     assert os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] == "0"
     assert os.environ["NIJA_EXECUTION_ACTIVE"] == "false"
 
