@@ -81,6 +81,19 @@ class RuntimeFailClosedV84Tests(unittest.TestCase):
         self.assertNotIn("force_activate_bypass", repair_source)
         self.assertIn("return False", repair_source)
 
+    def test_kraken_nonce_is_not_a_global_execution_gate(self):
+        from bot import execution_authority_context as authority
+
+        ready, reason = authority._runtime_nonce_authority_status()
+        self.assertTrue(ready)
+        self.assertEqual(reason, "venue_scoped_to_order_adapter")
+        execute_source = inspect.getsource(authority.can_execute)
+        self.assertIn("nonce_ready = bool(runtime_nonce_ready)", execute_source)
+        self.assertNotIn(
+            "nonce_ready = bool(startup_nonce_ready and runtime_nonce_ready)",
+            execute_source,
+        )
+
     def test_raw_running_transition_requires_startup_authority(self):
         from bot.bootstrap_state_machine import BootstrapState, BootstrapStateMachine
 
