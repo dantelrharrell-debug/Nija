@@ -18,9 +18,7 @@ Safety properties
   recreate a countdown-only lease after deletion.
 * Release is compare-and-delete; a process can never delete another writer's
   lock.
-* Local fallback is available only through the explicit operator flags
-  ``NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK`` and
-  ``NIJA_CONFIRM_BYPASS_RISKS``.
+* Local fallback is refused; Redis-backed exact ownership is mandatory.
 
 Structured log events emitted
 ------------------------------
@@ -749,77 +747,14 @@ class EntrypointWriterAuthority:
     def _maybe_grant_local_fallback(
         self, reason: str
     ) -> Optional[EntrypointWriterAuthorityResult]:
-        if not (
-            _truthy("NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK")
-            and _truthy("NIJA_CONFIRM_BYPASS_RISKS")
-        ):
-            return None
-
-        identity, owner, instance_id = _instance_identity()
-        token = str(int(time.time() * 1000))
-        generation = int(token)
-        scope = _writer_scope()
-        self._token = token
-        self._generation = generation
-        self._identity = identity
-        self._owner = owner
-        self._instance_id = instance_id
-        self._lock_key = (
-            os.environ.get("NIJA_WRITER_LOCK_KEY", "").strip()
-            or f"nija:writer_lock:{scope}"
-        )
-        self._meta_key = (
-            os.environ.get("NIJA_WRITER_LOCK_META_KEY", "").strip()
-            or f"nija:writer_lock_meta:{scope}"
-        )
-        self._fencing_key = (
-            os.environ.get("NIJA_WRITER_FENCING_KEY", "").strip()
-            or f"nija:writer_fence:{scope}"
-        )
-        self._lock_value = f"{token}:{owner}"
-        _prior_scan_started_at = self._scan_started_at
-        _prior_scan_complete_at = self._scan_complete_at
-        self._scan_started_at = 0.0
-        self._scan_complete_at = 0.0
-        self._scan_deadline_exceeded = False
-        self._scan_watchdog_cancel.clear()
-        self._acquired_at = time.time()
-        self._local_fallback = True
-        self._lost.clear()
-        self._stop.clear()
-        self._publish_env(
-            scope=scope,
-            generation_key=os.environ.get(
-                "NIJA_LEASE_GENERATION_KEY", _GENERATION_KEY_DEFAULT
-            ),
-            fallback=True,
-        )
-        self._start_scan_started_watchdog()
-        # If the scan was already complete before this fallback acquisition,
-        # immediately restore that state so the watchdog is cancelled and no
-        # false deadline alarms fire.
-        if _prior_scan_complete_at:
-            self.record_scan_complete()
-        elif _prior_scan_started_at:
-            self.record_scan_started()
-        self._set_writer_state(WriterState.ACTIVE, reason="local_fallback")
-        self._notify_runtime_reconciliation("writer_acquired_local_fallback")
-        logger.critical(
-            "ENTRYPOINT_WRITER_AUTHORITY_LOCAL_FALLBACK marker=%s reason=%s instance=%s",
-            _MARKER,
-            reason,
-            instance_id,
-        )
-        result = EntrypointWriterAuthorityResult(
-            acquired=True,
-            token=token,
-            generation=generation,
-            instance_id=instance_id,
-            lock_key=self._lock_key,
-            local_fallback=True,
-        )
-        self._result = result
-        return result
+        if _truthy("NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK"):
+            logger.critical(
+                "ENTRYPOINT_WRITER_AUTHORITY_LOCAL_FALLBACK_REFUSED marker=%s "
+                "reason=%s strict_redis_writer_required=true",
+                _MARKER,
+                reason,
+            )
+        return None
 
     def _publish_env(self, *, scope: str, generation_key: str, fallback: bool) -> None:
         now = str(time.time())
@@ -1475,17 +1410,26 @@ class EntrypointWriterAuthority:
                     )
                 )
             if heartbeat.is_alive():
-                logger.warning(
+                logger.critical(
                     "ENTRYPOINT_WRITER_AUTHORITY_RELEASE_HEARTBEAT_TIMEOUT marker=%s "
                     "reason=heartbeat_thread_still_alive_after_join "
-                    "proceeding_with_deletion=true stop_already_set=true",
+                    "deletion_skipped=true stop_already_set=true",
                     _MARKER,
                 )
-                # _stop is already set and the heartbeat will not reacquire the
-                # lock on its next iteration (see _heartbeat_tick).  The daemon
-                # thread will be killed when this process exits.  Proceed with
-                # compare-and-delete now so the successor instance can acquire
-                # without waiting for the full TTL to expire.
+                # Never delete a lease while its renewal thread may still be in
+                # flight.  Revoke local authority immediately and leave the
+                # Redis key to its TTL (or a later release after quiescence).
+                with self._state_lock:
+                    os.environ["NIJA_WRITER_LEASE_ACQUIRED"] = "0"
+                    os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"] = "0"
+                    os.environ["NIJA_WRITER_HEARTBEAT_ALIVE_TS"] = "0"
+                    os.environ.pop("NIJA_CORE_THREAD_ALIVE", None)
+                    os.environ.pop("NIJA_WRITER_FENCING_TOKEN", None)
+                    os.environ.pop("NIJA_WRITER_GENERATION", None)
+                    os.environ.pop("NIJA_WRITER_FENCING_TOKEN_FALLBACK", None)
+                    os.environ.pop("NIJA_WRITER_LEASE_GENERATION", None)
+                self._notify_runtime_reconciliation("writer_release_heartbeat_not_quiesced")
+                return False
 
         with self._state_lock:
             released = False
