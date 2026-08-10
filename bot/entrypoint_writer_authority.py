@@ -210,6 +210,12 @@ class EntrypointWriterAuthority:
         self._on_lost_callback: Optional[Any] = None
         self._writer_state: WriterState = WriterState.ACQUIRING
         self._writer_state_since: float = time.time()
+        # Canonical proof of the most recent successful Redis lease operation.
+        # The stale-renewal watchdog consumes this value.  Keep it on the
+        # authority itself so later runtime patch/canonicalization passes cannot
+        # detach proof publication from the actual Redis renewal.
+        self._nija_last_lease_renewal_monotonic: float = 0.0
+        self._nija_last_lease_renewal_epoch: float = 0.0
         os.environ["NIJA_WRITER_STATE"] = self._writer_state.value
         os.environ["NIJA_WRITER_STATE_SINCE_TS"] = str(self._writer_state_since)
 
@@ -756,6 +762,58 @@ class EntrypointWriterAuthority:
             )
         return None
 
+    def _record_successful_lease_renewal(self) -> None:
+        """Publish proof only after acquisition or exact Redis renewal succeeds."""
+        now_epoch = time.time()
+        self._nija_last_lease_renewal_monotonic = time.monotonic()
+        self._nija_last_lease_renewal_epoch = now_epoch
+        os.environ["NIJA_WRITER_LEASE_RENEWAL_ACTIVE"] = "1"
+        os.environ["NIJA_WRITER_LEASE_RENEWED_TS"] = f"{now_epoch:.6f}"
+
+    def _nija_lease_renewal_health(self) -> tuple[bool, str, float, float]:
+        """Return fail-closed freshness for the canonical renewal proof."""
+        if self._local_fallback:
+            return True, "local_fallback", 0.0, float("inf")
+        if not self.acquired:
+            return False, "writer_not_acquired", float("inf"), 0.0
+        if self.lost:
+            return False, "writer_lost", float("inf"), 0.0
+        if self._stop.is_set():
+            return False, "renewal_stop_requested", float("inf"), 0.0
+        thread = self._heartbeat_thread
+        if thread is None:
+            return False, "renewal_thread_missing", float("inf"), 0.0
+        try:
+            if not thread.is_alive():
+                return False, "renewal_thread_not_alive", float("inf"), 0.0
+        except Exception:
+            return False, "renewal_thread_state_unavailable", float("inf"), 0.0
+
+        try:
+            ttl_s = max(15.0, float(self._ttl_s or 60.0))
+        except (TypeError, ValueError):
+            ttl_s = 60.0
+        raw_interval = str(
+            os.environ.get("NIJA_WRITER_HEARTBEAT_INTERVAL_S", "") or ""
+        ).strip()
+        try:
+            interval_s = max(1.0, float(raw_interval)) if raw_interval else min(
+                5.0, max(1.0, ttl_s / 3.0)
+            )
+        except (TypeError, ValueError):
+            interval_s = min(5.0, max(1.0, ttl_s / 3.0))
+        max_age_s = min(
+            max(10.0, interval_s * 3.0),
+            max(interval_s * 2.0, ttl_s * 0.75),
+        )
+        last = float(self._nija_last_lease_renewal_monotonic or 0.0)
+        if last <= 0.0:
+            return False, "renewal_success_uninitialized", float("inf"), max_age_s
+        age_s = max(0.0, time.monotonic() - last)
+        if age_s > max_age_s:
+            return False, "renewal_success_stale", age_s, max_age_s
+        return True, "renewal_healthy", age_s, max_age_s
+
     def _publish_env(self, *, scope: str, generation_key: str, fallback: bool) -> None:
         now = str(time.time())
         os.environ["NIJA_WRITER_FENCING_TOKEN"] = self._token
@@ -774,6 +832,7 @@ class EntrypointWriterAuthority:
         os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"] = "1"
         os.environ["NIJA_WRITER_HEARTBEAT_LAST_TS"] = now
         os.environ["NIJA_WRITER_HEARTBEAT_ALIVE_TS"] = now
+        self._record_successful_lease_renewal()
         if fallback:
             os.environ["NIJA_WRITER_FENCING_TOKEN_FALLBACK"] = "1"
             os.environ["NIJA_LOCK_BYPASS_MODE"] = (
@@ -1198,6 +1257,7 @@ class EntrypointWriterAuthority:
                 os.environ["NIJA_WRITER_HEARTBEAT_LAST_TS"] = now
                 os.environ["NIJA_WRITER_HEARTBEAT_ALIVE_TS"] = now
                 os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"] = "1"
+                self._record_successful_lease_renewal()
                 try:
                     _get_heartbeat_state().record_heartbeat(generation=self._generation)
                 except Exception:
