@@ -1736,7 +1736,8 @@ class TradingStateMachine:
             if not _live_ok:
                 logger.critical(
                     "[FORCE_ACTIVATE BLOCKED] reason=SAFE_START detail=%s requested_reason=%s | "
-                    "TIP: Set FORCE_TRADE=1 or NIJA_FORCE_ACTIVATION=1 to bypass distributed authority gates.",
+                    "ACTION: restore canonical writer authority and wait for a healthy heartbeat; "
+                    "activation remains fail closed.",
                     _live_err,
                     reason,
                 )
@@ -2322,7 +2323,8 @@ class TradingStateMachine:
                     "[ACTIVATION MONITOR] state=LIVE_PENDING_CONFIRMATION elapsed=%.1fs — "
                     "bot is waiting for activation gates to pass. "
                     "LIVE_CAPITAL_VERIFIED=%s DRY_RUN_MODE=%s "
-                    "Set NIJA_FORCE_ACTIVATION=1 to bypass all gates immediately.",
+                    "Restore canonical writer authority and wait for a healthy heartbeat; "
+                    "activation remains fail closed.",
                     _elapsed_pending,
                     _lcv_quick,
                     _dry_run_quick,
@@ -2505,7 +2507,8 @@ class TradingStateMachine:
                 f"NIJA_WRITER_FENCING_TOKEN={'set' if os.environ.get('NIJA_WRITER_FENCING_TOKEN') else 'unset'} "
                 f"NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK={os.environ.get('NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK', 'unset')} "
                 f"NIJA_WRITER_HEARTBEAT_ACTIVE={os.environ.get('NIJA_WRITER_HEARTBEAT_ACTIVE', 'unset')} "
-                f"— FIX: set NIJA_FORCE_ACTIVATION=1 to bypass all gates immediately",
+                f"— ACTION: restore the canonical writer lease and heartbeat; "
+                f"production activation remains fail closed",
                 flush=True,
             )
             _log_activation_diag_once(
@@ -2514,7 +2517,8 @@ class TradingStateMachine:
                 "[AUTO_ACTIVATE BLOCKED] reason=SAFE_START detail=%s "
                 "state=%s LIVE_CAPITAL_VERIFIED=%s FORCE_TRADE=%s NIJA_FORCE_ACTIVATION=%s "
                 "fencing_token=%s local_fallback=%s heartbeat_active=%s "
-                "— FIX: set NIJA_FORCE_ACTIVATION=1 to bypass all gates immediately",
+                "— ACTION: restore the canonical writer lease and heartbeat; "
+                "production activation remains fail closed",
                 _live_err,
                 _diag_state,
                 os.environ.get("LIVE_CAPITAL_VERIFIED", "unset"),

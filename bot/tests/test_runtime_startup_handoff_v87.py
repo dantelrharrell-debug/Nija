@@ -338,6 +338,49 @@ class RuntimeStartupHandoffV87Tests(unittest.TestCase):
             },
         )
 
+    def test_kraken_connectivity_counts_users_without_broker_objects(self) -> None:
+        kraken = _BrokerType("kraken")
+        connected_user = SimpleNamespace(connected=True)
+        manager = SimpleNamespace(
+            _all_user_brokers={
+                ("connected_customer", kraken): connected_user,
+            },
+            user_brokers={
+                "connected_customer": {kraken: connected_user},
+            },
+            _user_metadata={
+                "connected_customer": {"brokers": {kraken: True}},
+                "failed_customer": {"brokers": {kraken: False}},
+                "missing_credentials_customer": {"brokers": {kraken: False}},
+            },
+            _failed_user_connections={
+                ("failed_customer", kraken): "connection_failed",
+            },
+            _users_without_credentials={
+                ("missing_credentials_customer", kraken): True,
+            },
+        )
+
+        users = connectivity._kraken_user_connectivity(manager)
+
+        self.assertEqual(
+            users,
+            {
+                "registered": 3,
+                "connected": 1,
+                "disconnected": 2,
+                "all_connected": False,
+            },
+        )
+
+    def test_activation_diagnostics_do_not_recommend_authority_bypass(self) -> None:
+        source = (
+            Path(__file__).resolve().parents[1] / "trading_state_machine.py"
+        ).read_text(encoding="utf-8")
+
+        self.assertNotIn("to bypass all gates immediately", source)
+        self.assertNotIn("TIP: Set FORCE_TRADE=1", source)
+
     def test_kraken_supervision_uses_canonical_manager_singleton(self) -> None:
         target = "bot.multi_account_broker_manager"
         previous = sys.modules.get(target)
