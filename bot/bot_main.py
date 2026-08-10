@@ -39,12 +39,14 @@ _core_loop_thread: Optional[threading.Thread] = None
 _core_registration_restart_timer: Optional[threading.Timer] = None
 
 
-def _schedule_core_registration_restart(reason: str) -> None:
-    """Force a non-zero restart if graceful shutdown cannot leave startup.
+def _schedule_writer_authority_restart(reason: str) -> None:
+    """Force a non-zero restart if writer-loss shutdown cannot exit.
 
-    The writer lease has already been compare-deleted before this callback is
-    invoked.  A short grace period lets the canonical stack unwind normally;
-    ``os._exit(75)`` is the final bound for broker calls that never return.
+    The writer lease has already been lost or compare-deleted before this
+    callback is invoked.  A short grace period lets the canonical stack unwind
+    normally; ``os._exit(75)`` is the final bound for non-daemon broker and
+    reconciliation workers that would otherwise keep a fail-closed process
+    alive forever.
     """
 
     global _core_registration_restart_timer
@@ -53,14 +55,20 @@ def _schedule_core_registration_restart(reason: str) -> None:
     try:
         grace_s = max(
             1.0,
-            float(os.environ.get("NIJA_CORE_REGISTRATION_RESTART_GRACE_S", "15") or 15),
+            float(
+                os.environ.get(
+                    "NIJA_WRITER_AUTHORITY_RESTART_GRACE_S",
+                    os.environ.get("NIJA_CORE_REGISTRATION_RESTART_GRACE_S", "15"),
+                )
+                or 15
+            ),
         )
     except (TypeError, ValueError):
         grace_s = 15.0
 
     def _force_restart() -> None:
         logger.critical(
-            "CANONICAL_CORE_REGISTRATION_FORCED_RESTART reason=%s exit_code=75",
+            "WRITER_AUTHORITY_FORCED_RESTART reason=%s exit_code=75",
             reason,
         )
         for handler in logging.getLogger().handlers:
@@ -71,16 +79,22 @@ def _schedule_core_registration_restart(reason: str) -> None:
         os._exit(75)
 
     timer = threading.Timer(grace_s, _force_restart)
-    timer.name = "canonical-core-registration-forced-restart"
+    timer.name = "writer-authority-forced-restart"
     timer.daemon = True
     _core_registration_restart_timer = timer
     logger.critical(
-        "CANONICAL_CORE_REGISTRATION_RESTART_SCHEDULED reason=%s grace_s=%.1f "
-        "writer_released=true",
+        "WRITER_AUTHORITY_RESTART_SCHEDULED reason=%s grace_s=%.1f "
+        "writer_unavailable=true",
         reason,
         grace_s,
     )
     timer.start()
+
+
+def _schedule_core_registration_restart(reason: str) -> None:
+    """Backward-compatible wrapper for the original registration watchdog."""
+
+    _schedule_writer_authority_restart(reason)
 
 
 def _signal_handler(signum: int, frame) -> None:
@@ -141,8 +155,11 @@ def _acquire_writer_authority_before_nonce() -> bool:
                 except Exception:
                     pass
             _shutdown_event.set()
-            if "core_thread_registration_deadline_exceeded" in reason:
-                _schedule_core_registration_restart(reason)
+            # Every terminal writer-loss callback must have a process-lifetime
+            # bound.  Recoverable lock-missing events are intercepted by the
+            # v39/v55 re-election path before reaching this callback; all
+            # reasons that arrive here are terminal for the current process.
+            _schedule_writer_authority_restart(reason)
 
         if callable(getattr(runtime, "set_on_lost_callback", None)):
             runtime.set_on_lost_callback(_on_lease_lost)
