@@ -231,7 +231,7 @@ class PortfolioSuperStateMachine:
             portfolio_manager: Portfolio state manager instance
             state_file: Path to state persistence file
         """
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         
         # Initialize subsystems
         self.trading_state = trading_state_machine or get_state_machine()
