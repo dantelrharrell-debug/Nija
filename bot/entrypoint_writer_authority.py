@@ -1384,12 +1384,12 @@ class EntrypointWriterAuthority:
     def _validate_core_thread_liveness(self) -> tuple[bool, str]:
         """Ensure the lock owner is actively running the core trading thread.
 
-        Returns (False, reason) only when a thread was explicitly registered
-        via register_core_thread() and has since died.  A None core thread
-        means startup has not yet reached the trading-loop phase; in that case
-        the stalled_writer_release_guard owns the startup-timeout logic and
-        this check must return True so the heartbeat keeps renewing the lease
-        without prematurely clearing NIJA_WRITER_FENCING_TOKEN.
+        A missing core thread is allowed only for a bounded startup window.
+        The bound is measured from writer acquisition, independently of the
+        later scan-start deadline, so a startup that never reaches the engine
+        handoff cannot renew the writer lease forever.  Once the bound expires
+        the heartbeat releases the exact owned lease and bot_main schedules a
+        controlled non-zero process restart.
 
         Exception: if the scan-started deadline has already been exceeded AND
         the scan has not yet started (i.e. _scan_started_at is still zero) the
@@ -1403,11 +1403,34 @@ class EntrypointWriterAuthority:
             return True, ""
         thread = self._core_thread
         if thread is None:
-            # Core thread not yet registered — bot is still initialising.
-            # Only fail the check if the scan deadline was exceeded AND the scan
-            # has genuinely not started yet.  If record_scan_started() has been
-            # called (or the lifecycle advanced past startup), _scan_deadline_exceeded
-            # will already have been cleared to False.
+            registration_deadline_s = _cfg_float(
+                "NIJA_CORE_REGISTRATION_DEADLINE_S",
+                600.0,
+                minimum=60.0,
+            )
+            if self._acquired_at > 0.0:
+                elapsed_s = max(0.0, time.time() - self._acquired_at)
+                if elapsed_s >= registration_deadline_s:
+                    reason = (
+                        "core_thread_missing core_thread_registration_deadline_exceeded "
+                        f"elapsed_s={elapsed_s:.1f} "
+                        f"deadline_s={registration_deadline_s:.1f}"
+                    )
+                    logger.critical(
+                        "CANONICAL_CORE_REGISTRATION_DEADLINE_EXCEEDED marker=%s "
+                        "elapsed_s=%.1f deadline_s=%.1f instance=%s generation=%s "
+                        "action=release_writer_and_restart",
+                        _MARKER,
+                        elapsed_s,
+                        registration_deadline_s,
+                        self._instance_id,
+                        self._generation,
+                    )
+                    return False, reason
+
+            # The engine handoff has its own shorter scan-start deadline.  It
+            # remains authoritative once armed, but it can no longer be the
+            # only bound on pre-handoff startup.
             if self._scan_deadline_exceeded and not self._scan_started_at:
                 return False, "core_thread_missing_deadline_exceeded"
             return True, ""

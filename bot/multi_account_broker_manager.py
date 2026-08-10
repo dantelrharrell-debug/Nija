@@ -5895,6 +5895,24 @@ class MultiAccountBrokerManager:
                 logger.warning(f"⚠️  Unknown broker type in connected users: {brokerage}")
                 continue
 
+        registry_status = self._account_registry_status(connected_users)
+        logger.info(
+            "ACCOUNT_REGISTRY_STATUS platform_registered=%d platform_connected=%d "
+            "platform_disconnected=%d user_registered=%d user_connected=%d "
+            "user_trading_eligible=%d user_disconnected=%d user_failures=%d "
+            "user_without_credentials=%d all_registered_trading=%s",
+            registry_status["platform_registered"],
+            registry_status["platform_connected"],
+            registry_status["platform_disconnected"],
+            registry_status["user_registered"],
+            registry_status["user_connected"],
+            registry_status["user_trading_eligible"],
+            registry_status["user_disconnected"],
+            registry_status["user_failures"],
+            registry_status["user_without_credentials"],
+            str(registry_status["all_registered_trading"]).lower(),
+        )
+
         if users_without_platform:
             # Step 5: Standalone mode is blocked — trading requires a platform account.
             # Users without a matching platform account were skipped during connection above
@@ -5916,10 +5934,28 @@ class MultiAccountBrokerManager:
             except Exception as e:
                 logger.error(f"⚠️  Error logging account configuration: {e}")
                 logger.debug(traceback.format_exc())
-        else:
-            # All accounts connected and trading
+        elif registry_status["all_registered_trading"]:
             logger.info("✅ ACCOUNT STATUS:")
-            logger.info("   ✅ Platform and User accounts connected - all trading independently")
+            logger.info(
+                "   ✅ All registered accounts connected and trading independently "
+                "(platform=%d/%d users=%d/%d)",
+                registry_status["platform_connected"],
+                registry_status["platform_registered"],
+                registry_status["user_trading_eligible"],
+                registry_status["user_registered"],
+            )
+        else:
+            logger.warning("⚠️  ACCOUNT STATUS: DEGRADED")
+            logger.warning(
+                "   Platform connected=%d/%d; users connected=%d/%d; "
+                "users trading-eligible=%d/%d",
+                registry_status["platform_connected"],
+                registry_status["platform_registered"],
+                registry_status["user_connected"],
+                registry_status["user_registered"],
+                registry_status["user_trading_eligible"],
+                registry_status["user_registered"],
+            )
 
         logger.info("=" * 70)
         # Flush final separator
@@ -5927,6 +5963,93 @@ class MultiAccountBrokerManager:
             handler.flush()
 
         return connected_users
+
+    def _account_registry_status(
+        self,
+        connected_users: Dict[str, List[str]],
+    ) -> Dict[str, Any]:
+        """Return deduplicated live platform/user registry counts.
+
+        This is the single source for the startup account-status banner.  It
+        counts failed platform registrations and disconnected user broker
+        objects, so a partial registry can never be reported as fully trading.
+        """
+
+        platform_records: Dict[str, Any] = {}
+        for broker_type, broker in getattr(self, "_platform_brokers", {}).items():
+            label = str(getattr(broker_type, "value", broker_type) or "").lower()
+            if label:
+                platform_records[label] = broker
+        for broker_type in getattr(self, "_platform_failed_types", set()):
+            label = str(getattr(broker_type, "value", broker_type) or "").lower()
+            if label:
+                platform_records.setdefault(label, None)
+
+        platform_registered = len(platform_records)
+        platform_connected = sum(
+            1
+            for broker in platform_records.values()
+            if broker is not None and bool(getattr(broker, "connected", False))
+        )
+
+        user_records: Dict[Tuple[str, str], Any] = {}
+        for key, broker in getattr(self, "_all_user_brokers", {}).items():
+            if not isinstance(key, tuple) or len(key) != 2 or broker is None:
+                continue
+            user_id, broker_type = key
+            label = str(getattr(broker_type, "value", broker_type) or "").lower()
+            user_records[(str(user_id), label)] = broker
+        for user_id, broker_map in getattr(self, "user_brokers", {}).items():
+            for broker_type, broker in getattr(broker_map, "items", lambda: [])():
+                if broker is None:
+                    continue
+                label = str(getattr(broker_type, "value", broker_type) or "").lower()
+                user_records[(str(user_id), label)] = broker
+        # Creation failures and missing credentials are still registrations.
+        # Include metadata and failure registries so the denominator never
+        # shrinks merely because no broker object could be constructed.
+        for user_id, metadata in getattr(self, "_user_metadata", {}).items():
+            for broker_type in (metadata.get("brokers", {}) if metadata else {}):
+                label = str(getattr(broker_type, "value", broker_type) or "").lower()
+                user_records.setdefault((str(user_id), label), None)
+        for registry_name in ("_failed_user_connections", "_users_without_credentials"):
+            for key in getattr(self, registry_name, {}):
+                if not isinstance(key, tuple) or len(key) != 2:
+                    continue
+                user_id, broker_type = key
+                label = str(getattr(broker_type, "value", broker_type) or "").lower()
+                user_records.setdefault((str(user_id), label), None)
+
+        user_registered = len(user_records)
+        user_connected = sum(
+            1 for broker in user_records.values() if bool(getattr(broker, "connected", False))
+        )
+        eligible_records = {
+            (str(user_id), str(brokerage).lower())
+            for brokerage, user_ids in (connected_users or {}).items()
+            for user_id in user_ids
+        }
+        user_trading_eligible = len(eligible_records)
+        user_failures = len(getattr(self, "_failed_user_connections", {}))
+        user_without_credentials = len(getattr(self, "_users_without_credentials", {}))
+        all_registered_trading = bool(
+            platform_registered > 0
+            and platform_connected == platform_registered
+            and user_connected == user_registered
+            and user_trading_eligible == user_registered
+        )
+        return {
+            "platform_registered": platform_registered,
+            "platform_connected": platform_connected,
+            "platform_disconnected": platform_registered - platform_connected,
+            "user_registered": user_registered,
+            "user_connected": user_connected,
+            "user_disconnected": user_registered - user_connected,
+            "user_trading_eligible": user_trading_eligible,
+            "user_failures": user_failures,
+            "user_without_credentials": user_without_credentials,
+            "all_registered_trading": all_registered_trading,
+        }
 
     def verify_account_hierarchy(self) -> Dict:
         """

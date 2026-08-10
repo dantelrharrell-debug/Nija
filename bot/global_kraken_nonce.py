@@ -846,12 +846,27 @@ def check_ntp_sync() -> dict:
         import ntplib
         client = ntplib.NTPClient()
         response = client.request(_NTP_SERVER, version=3, timeout=_NTP_TIMEOUT_S)
-        result["offset_s"] = response.offset
-        result["ok"] = abs(response.offset) <= _NTP_STRICT_OFFSET_S
-    except ImportError:
-        result["error"] = "ntplib not installed — run: pip install ntplib==0.4.0"
+        # ntplib reports reference-minus-local.  NIJA's documented contract is
+        # local-minus-reference (positive means the container clock is ahead).
+        result["offset_s"] = -float(response.offset)
+        result["ok"] = abs(result["offset_s"]) <= _NTP_STRICT_OFFSET_S
     except Exception as exc:
-        result["error"] = str(exc)
+        # Managed platforms commonly block UDP/123.  Fall back to Kraken's
+        # authenticated-domain HTTPS clock so deployed clock drift remains
+        # observable and the nonce correction uses the right sign.
+        started = time.time()
+        server_ms = _fetch_kraken_server_time_ms()
+        finished = time.time()
+        if server_ms is None:
+            result["error"] = str(exc)
+            return result
+        local_midpoint_s = (started + finished) / 2.0
+        # Kraken publishes integer seconds.  Compare against the centre of the
+        # reported second to avoid a systematic +0..1 s quantisation bias.
+        reference_midpoint_s = (float(server_ms) / 1000.0) + 0.5
+        result["offset_s"] = local_midpoint_s - reference_midpoint_s
+        result["server"] = "api.kraken.com/0/public/Time"
+        result["ok"] = abs(result["offset_s"]) <= _NTP_STRICT_OFFSET_S
     return result
 
 
@@ -880,20 +895,20 @@ def log_ntp_clock_status() -> bool:
             "❌ CLOCK DRIFT: system clock is %+.3f s (%+.0f ms) vs NTP (%s). "
             "Kraken requires ±1 s — nonce errors WILL occur on ALL accounts. "
             "Fix NOW: sudo ntpdate %s",
-            r["offset_s"], offset_ms, _NTP_SERVER, _NTP_SERVER,
+            r["offset_s"], offset_ms, r["server"], _NTP_SERVER,
         )
         return False
     elif abs_s > _NTP_WARN_OFFSET_S:
         _logger.warning(
             "⚠️  Clock drift: %+.3f s (%+.0f ms) vs NTP (%s). "
             "Within ±1 s Kraken window but drifting. Recommend: sudo ntpdate %s",
-            r["offset_s"], offset_ms, _NTP_SERVER, _NTP_SERVER,
+            r["offset_s"], offset_ms, r["server"], _NTP_SERVER,
         )
         return True
     else:
         _logger.info(
             "✅ NTP clock OK: %+.3f s vs %s (within Kraken ±1 s tolerance).",
-            r["offset_s"], _NTP_SERVER,
+            r["offset_s"], r["server"],
         )
         return True
 

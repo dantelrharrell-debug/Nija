@@ -137,6 +137,10 @@ services:
       # fresh authoritative broker is sufficient to initialize the manager.
       - key: NIJA_RUNTIME_AUTHORITY_CONVERGENCE_MIN_BROKERS
         value: "1"
+      - key: NIJA_CORE_REGISTRATION_DEADLINE_S
+        value: "600"
+      - key: NIJA_CORE_REGISTRATION_RESTART_GRACE_S
+        value: "15"
       - key: NIJA_RENDER_STARTUP_RECOVERY_ENABLED
         value: "true"
       - key: NIJA_RENDER_STARTUP_RECOVERY_INTERVAL_S

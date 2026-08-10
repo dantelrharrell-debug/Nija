@@ -16,7 +16,7 @@ _INSTALL_LOCK = threading.Lock()
 _MONITOR_STARTED = False
 _PATCHED_MODULES: set[str] = set()
 _WRITER_PATCHED_MODULES: set[str] = set()
-_WRITER_PATCH_ATTR = "_nija_scan_deadline_warning_only_v61"
+_WRITER_PATCH_ATTR = "_nija_bounded_core_registration_v88"
 
 
 def _is_target_module(name: str, module: Any) -> bool:
@@ -104,19 +104,12 @@ def _patch_target_module(module: ModuleType) -> bool:
 
 
 def _patch_writer_module(module: ModuleType) -> bool:
-    """Keep the scan-start deadline diagnostic-only while startup is still running.
+    """Preserve the canonical bounded core-registration decision.
 
-    The canonical writer module already documents SCAN_STARTED_DEADLINE_EXCEEDED
-    as a warning that must not release the writer lease.  Production showed a
-    contradictory branch in ``_validate_core_thread_liveness``: when no core
-    thread had been registered yet, the scan deadline flag returned False and
-    the heartbeat then called ``_release_owned_lock_for_reelection``.  That
-    intentionally deleted a healthy Redis lock during slow broker/capital
-    bootstrap and caused the exact ``redis_lock_missing`` / fencing cascade.
-
-    v61 changes only that pre-core-thread case.  Once a core thread has actually
-    been registered, the original liveness method remains authoritative and a
-    dead thread still fails closed and releases writer authority as designed.
+    The former v61 wrapper converted an exceeded pre-core deadline into
+    ``(True, ...)`` and therefore allowed an authority-less process to renew
+    its Redis lease forever.  v88 keeps the import compatibility hook but no
+    longer changes the writer's fail-closed result.
     """
     cls = getattr(module, "EntrypointWriterAuthority", None)
     if not isinstance(cls, type):
@@ -129,27 +122,16 @@ def _patch_writer_module(module: ModuleType) -> bool:
         return True
 
     @wraps(original)
-    def _warning_only_scan_deadline(self: Any) -> tuple[bool, str]:
-        thread = getattr(self, "_core_thread", None)
-        scan_started = float(getattr(self, "_scan_started_at", 0.0) or 0.0)
-        scan_deadline_exceeded = bool(getattr(self, "_scan_deadline_exceeded", False))
-        if thread is None and scan_deadline_exceeded and scan_started <= 0.0:
-            logger.critical(
-                "WRITER_V61_SCAN_DEADLINE_WARNING_ONLY marker=%s "
-                "core_thread_registered=false scan_started=false action=keep_renewing_writer "
-                "lease_release=false fail_closed_execution=true",
-                _WRITER_V61_MARKER,
-            )
-            return True, "scan_start_deadline_warning_only"
+    def _bounded_core_registration(self: Any) -> tuple[bool, str]:
         return original(self)
 
-    setattr(_warning_only_scan_deadline, _WRITER_PATCH_ATTR, True)
-    setattr(_warning_only_scan_deadline, "__wrapped__", original)
-    setattr(cls, "_validate_core_thread_liveness", _warning_only_scan_deadline)
+    setattr(_bounded_core_registration, _WRITER_PATCH_ATTR, True)
+    setattr(_bounded_core_registration, "__wrapped__", original)
+    setattr(cls, "_validate_core_thread_liveness", _bounded_core_registration)
     _WRITER_PATCHED_MODULES.add(str(getattr(module, "__name__", "<unknown>")))
     logger.critical(
-        "WRITER_V61_SCAN_DEADLINE_LEASE_GUARD_PATCHED marker=%s module=%s "
-        "pre_core_deadline_releases_lease=false registered_dead_core_still_fail_closed=true",
+        "WRITER_V88_BOUNDED_CORE_REGISTRATION_PRESERVED marker=%s module=%s "
+        "pre_core_deadline_releases_lease=true registered_dead_core_fail_closed=true",
         _WRITER_V61_MARKER,
         getattr(module, "__name__", "<unknown>"),
     )
