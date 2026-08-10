@@ -27,6 +27,8 @@ RUN NIJA_DEFER_RUNTIME_SITE_HOOKS=1 python -S -m py_compile \
         /app/bot/canonical_broker_startup_convergence_v24.py \
         /app/bot/live_broker_profit_exit_convergence_v25.py \
         /app/bot/live_engine_profit_exit_convergence_v25.py \
+        /app/bot/kraken_connection_convergence_v44_patch.py \
+        /app/bot/kraken_all_account_supervision_v86.py \
         /app/bot/stalled_writer_release_guard_v22.py \
         /app/bot/writer_generation_handoff_v45_patch.py \
         /app/apply_bot_package_defer_fix.py \

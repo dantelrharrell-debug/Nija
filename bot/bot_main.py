@@ -567,6 +567,29 @@ def main() -> int:
             connected_brokers = _connected_platform_broker_count(manager)
             if connected_brokers < 1:
                 raise RuntimeError("No connected platform broker")
+            from bot.kraken_all_account_supervision_v86 import (
+                install as install_kraken_all_account_supervision,
+                reconcile_once as reconcile_kraken_users_once,
+            )
+
+            if not install_kraken_all_account_supervision():
+                raise RuntimeError("Kraken all-account supervision did not install")
+            kraken_user_state = reconcile_kraken_users_once(manager)
+            if not kraken_user_state.get("ok") and kraken_user_state.get(
+                "reason"
+            ) != "recovery_active":
+                raise RuntimeError(
+                    "Kraken user supervision unavailable: "
+                    f"{kraken_user_state.get('reason', 'unknown')}"
+                )
+            logger.critical(
+                "KRAKEN_ALL_ACCOUNT_SUPERVISION_READY registered=%s connected=%s "
+                "disconnected=%s reason=%s continuous=true",
+                kraken_user_state.get("registered", 0),
+                kraken_user_state.get("connected", 0),
+                kraken_user_state.get("disconnected", 0),
+                kraken_user_state.get("reason", "unknown"),
+            )
             logger.critical(
                 "DIRECT_CANONICAL_BROKER_PREBOOTSTRAP_V27_READY "
                 "fsm_initialized=true connected_brokers=%d thread=%s",
@@ -613,6 +636,11 @@ def main() -> int:
             from bot.nija_core_loop import start_trading_engine
             from bot.startup_coordinator import get_startup_coordinator
 
+            runtime = _writer_authority_runtime
+            arm_deadline = getattr(runtime, "arm_scan_start_deadline", None)
+            if not callable(arm_deadline):
+                raise RuntimeError("Writer runtime cannot arm the scan-start deadline")
+            arm_deadline("bot_main_step3")
             logger.critical("CORE_LOOP_STARTING strategy_type=%s", type(strategy).__name__)
             trading_thread = start_trading_engine(strategy)
             logger.critical("CORE_LOOP_STARTED thread_name=%s", getattr(trading_thread, "name", "unknown"))
@@ -639,7 +667,6 @@ def main() -> int:
                 trading_thread.name,
                 trading_thread.ident,
             )
-            runtime = _writer_authority_runtime
             if runtime is not None and callable(getattr(runtime, "register_core_thread", None)):
                 runtime.register_core_thread(trading_thread)
 

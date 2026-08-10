@@ -328,16 +328,24 @@ def _scan_broker(broker: Any) -> int:
     return closed
 
 
-def _iter_manager_brokers() -> list[Any]:
+def _manager() -> Any:
+    """Return the canonical multi-account manager without creating a mirror."""
+    manager_module = sys.modules.get("bot.multi_account_broker_manager")
+    if manager_module is None:
+        return None
+    getter = getattr(manager_module, "get_broker_manager", None)
+    if callable(getter):
+        try:
+            return getter()
+        except Exception:
+            pass
+    return getattr(manager_module, "multi_account_broker_manager", None)
+
+
+def _iter_manager_brokers(manager: Any = None) -> list[Any]:
     brokers: list[Any] = []
     try:
-        manager_module = sys.modules.get("bot.multi_account_broker_manager")
-        if manager_module is None:
-            return brokers
-        manager = getattr(manager_module, "multi_account_broker_manager", None)
-        if manager is None:
-            getter = getattr(manager_module, "get_broker_manager", None)
-            manager = getter() if callable(getter) else None
+        manager = manager if manager is not None else _manager()
         if manager is None:
             return brokers
         platform = getattr(manager, "_platform_brokers", {})
@@ -356,6 +364,67 @@ def _iter_manager_brokers() -> list[Any]:
     return [broker for broker in brokers if broker is not None]
 
 
+def _platform_connectivity(manager: Any) -> dict[str, bool]:
+    """Return platform-only connection truth for each configured venue.
+
+    User brokers intentionally do not satisfy platform readiness.  Counting a
+    connected Kraken user as ``kraken_connected`` caused the global snapshot to
+    contradict TradingStateMachine's platform nonce gate.
+    """
+    connected = {"kraken": False, "coinbase": False, "okx": False}
+    mapping = getattr(manager, "_platform_brokers", {}) if manager is not None else {}
+    try:
+        items = list(mapping.items())
+    except Exception:
+        items = []
+    for broker_type, broker in items:
+        label = str(getattr(broker_type, "value", broker_type) or "").strip().lower()
+        if label in connected and broker is not None:
+            connected[label] = bool(getattr(broker, "connected", False))
+    return connected
+
+
+def _kraken_user_connectivity(manager: Any) -> dict[str, int | bool]:
+    """Return deduplicated registered/connected Kraken user counts."""
+    records: dict[str, Any] = {}
+    all_users = getattr(manager, "_all_user_brokers", {}) if manager is not None else {}
+    try:
+        all_items = list(all_users.items())
+    except Exception:
+        all_items = []
+    for key, broker in all_items:
+        if not isinstance(key, tuple) or len(key) != 2:
+            continue
+        user_id, broker_type = key
+        label = str(getattr(broker_type, "value", broker_type) or "").strip().lower()
+        if label == "kraken" and broker is not None:
+            records[str(user_id)] = broker
+
+    users = getattr(manager, "user_brokers", {}) if manager is not None else {}
+    try:
+        user_items = list(users.items())
+    except Exception:
+        user_items = []
+    for user_id, mapping in user_items:
+        try:
+            broker_items = list(mapping.items())
+        except Exception:
+            continue
+        for broker_type, broker in broker_items:
+            label = str(getattr(broker_type, "value", broker_type) or "").strip().lower()
+            if label == "kraken" and broker is not None:
+                records[str(user_id)] = broker
+
+    registered = len(records)
+    connected = sum(1 for broker in records.values() if bool(getattr(broker, "connected", False)))
+    return {
+        "registered": registered,
+        "connected": connected,
+        "disconnected": registered - connected,
+        "all_connected": connected == registered,
+    }
+
+
 def _configured_venues() -> dict[str, bool]:
     return {
         "kraken": bool((os.environ.get("KRAKEN_PLATFORM_API_KEY") or os.environ.get("KRAKEN_API_KEY")) and (os.environ.get("KRAKEN_PLATFORM_API_SECRET") or os.environ.get("KRAKEN_API_SECRET"))),
@@ -370,24 +439,29 @@ def _optional_policy_enabled() -> bool:
 
 
 def _reconcile_brokers_once() -> dict[str, bool]:
-    for broker in _iter_manager_brokers():
+    manager = _manager()
+    for broker in _iter_manager_brokers(manager):
         supervisor._register_broker(broker)
-    connected = {"kraken": False, "coinbase": False, "okx": False}
-    for broker in supervisor._snapshot():
-        label = auto_exit._broker_label(broker)
-        for venue in connected:
-            if venue in label and bool(getattr(broker, "connected", False)):
-                connected[venue] = True
+    connected = _platform_connectivity(manager)
+    kraken_users = _kraken_user_connectivity(manager)
     configured = _configured_venues()
     all_configured_connected = all((not configured[name]) or connected[name] for name in configured)
     emit = logger.info if (_optional_policy_enabled() and not all_configured_connected) else logger.warning
     emit(
-        "LIVE_BROKER_CONNECTIVITY_SNAPSHOT marker=%s kraken_configured=%s kraken_connected=%s coinbase_configured=%s coinbase_connected=%s okx_configured=%s okx_connected=%s all_configured_connected=%s",
+        "LIVE_BROKER_CONNECTIVITY_SNAPSHOT marker=%s kraken_configured=%s "
+        "kraken_connected=%s coinbase_configured=%s coinbase_connected=%s "
+        "okx_configured=%s okx_connected=%s all_configured_connected=%s "
+        "kraken_users_registered=%s kraken_users_connected=%s "
+        "kraken_users_disconnected=%s kraken_users_all_connected=%s",
         _MARKER,
         configured["kraken"], connected["kraken"],
         configured["coinbase"], connected["coinbase"],
         configured["okx"], connected["okx"],
         all_configured_connected,
+        kraken_users["registered"],
+        kraken_users["connected"],
+        kraken_users["disconnected"],
+        kraken_users["all_connected"],
     )
     return connected
 

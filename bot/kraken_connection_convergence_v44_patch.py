@@ -149,25 +149,17 @@ def _patch_manager_module(module: ModuleType) -> bool:
 
 
 def _manager() -> Any:
+    """Return the loaded canonical manager without initiating runtime imports."""
     for name in ("bot.multi_account_broker_manager", "multi_account_broker_manager"):
         module = sys.modules.get(name)
         if isinstance(module, ModuleType):
             _patch_manager_module(module)
-            getter = getattr(module, "get_multi_account_broker_manager", None)
+            getter = getattr(module, "get_broker_manager", None)
             if callable(getter):
                 try:
                     return getter()
                 except Exception:
                     pass
-    try:
-        module = importlib.import_module("bot.multi_account_broker_manager")
-        if isinstance(module, ModuleType):
-            _patch_manager_module(module)
-        getter = getattr(module, "get_multi_account_broker_manager", None)
-        if callable(getter):
-            return getter()
-    except Exception:
-        pass
     return None
 
 
@@ -178,7 +170,7 @@ def _loaded_manager() -> Any:
         if not isinstance(module, ModuleType):
             continue
         _patch_manager_module(module)
-        getter = getattr(module, "get_multi_account_broker_manager", None)
+        getter = getattr(module, "get_broker_manager", None)
         if callable(getter):
             try:
                 return getter()

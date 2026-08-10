@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 import threading
 import time
 from typing import Any
@@ -28,6 +29,8 @@ _CONNECT_SERIAL_LOCK = threading.Lock()
 _INFLIGHT: set[str] = set()
 _FAILURES: dict[str, int] = {}
 _NEXT_RETRY: dict[str, float] = {}
+_WATCHDOG_STARTED = False
+_WATCHDOG_STOP = threading.Event()
 
 
 def _label(value: Any) -> str:
@@ -221,8 +224,15 @@ def _schedule(manager: Any, record: tuple[str, str, Any, Any]) -> str:
 def reconcile_once(manager: Any = None) -> dict[str, Any]:
     if manager is None:
         try:
-            from bot.multi_account_broker_manager import get_multi_account_broker_manager
-            manager = get_multi_account_broker_manager()
+            # ``get_broker_manager`` is the canonical singleton accessor in
+            # multi_account_broker_manager.  Observe only an already-loaded
+            # module: importing the broker graph from this watchdog would race
+            # the canonical main-thread startup handoff.
+            module = sys.modules.get("bot.multi_account_broker_manager")
+            get_broker_manager = getattr(module, "get_broker_manager", None)
+            if not callable(get_broker_manager):
+                raise RuntimeError("canonical_manager_not_loaded")
+            manager = get_broker_manager()
         except Exception as exc:
             return {"ok": False, "reason": f"manager_unavailable:{type(exc).__name__}:{exc}"}
     records = _user_records(manager)
@@ -238,11 +248,60 @@ def reconcile_once(manager: Any = None) -> dict[str, Any]:
     }
 
 
+def _watchdog() -> None:
+    """Continuously supervise registered Kraken users after canonical handoff."""
+    try:
+        interval = max(
+            2.0,
+            float(os.environ.get("NIJA_KRAKEN_USER_SUPERVISION_POLL_S", "5") or 5),
+        )
+    except (TypeError, ValueError):
+        interval = 5.0
+    last_signature = ""
+    while not _WATCHDOG_STOP.wait(interval):
+        try:
+            state = reconcile_once()
+            signature = (
+                f"{state.get('registered')}:{state.get('connected')}:"
+                f"{state.get('disconnected')}:{state.get('reason')}"
+            )
+            if signature == last_signature:
+                continue
+            log = LOGGER.info if state.get("ok") else LOGGER.warning
+            log(
+                "KRAKEN_USER_SUPERVISION marker=%s registered=%s connected=%s "
+                "disconnected=%s reason=%s authenticated_reconnect_only=true",
+                MARKER,
+                state.get("registered", 0),
+                state.get("connected", 0),
+                state.get("disconnected", 0),
+                state.get("reason", "unknown"),
+            )
+            last_signature = signature
+        except Exception as exc:
+            LOGGER.warning(
+                "KRAKEN_USER_SUPERVISION_ERROR marker=%s error=%s:%s isolated=true",
+                MARKER,
+                type(exc).__name__,
+                exc,
+            )
+
+
 def install() -> bool:
+    global _WATCHDOG_STARTED
+    with _LOCK:
+        if not _WATCHDOG_STARTED:
+            _WATCHDOG_STARTED = True
+            threading.Thread(
+                target=_watchdog,
+                name="KrakenAllAccountSupervisionV86",
+                daemon=True,
+            ).start()
     os.environ["NIJA_KRAKEN_ALL_ACCOUNT_SUPERVISION_V86_INSTALLED"] = "1"
     LOGGER.critical(
         "KRAKEN_ALL_ACCOUNT_SUPERVISION_V86_INSTALLED marker=%s "
-        "platform=v44 users=authenticated_per_account writer_scoped=true",
+        "platform=v44 users=authenticated_per_account writer_scoped=true "
+        "continuous_supervision=true",
         MARKER,
     )
     return True
