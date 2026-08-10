@@ -210,6 +210,7 @@ def _runtime_defaults() -> None:
         "NIJA_WRITER_LOCK_STALE_HEARTBEAT_THRESHOLD_S": "120",
         "NIJA_RAILWAY_STALE_LOCK_HEARTBEAT_THRESHOLD_S": "120",
         "NIJA_RUNTIME_CONVERGENCE_V80_POLL_S": "5",
+        "NIJA_WRITER_V81_POLL_S": "5",
     }
     for key, value in defaults.items():
         os.environ.setdefault(key, value)
@@ -264,6 +265,10 @@ def _install_kraken_ohlc_thread_guard() -> None:
 
 def _install_writer_kraken_runtime_convergence_v80() -> None:
     _install_patch_module(filename="writer_kraken_runtime_convergence_v80_patch.py", module_name="nija_writer_kraken_runtime_convergence_v80_patch", success_log="WRITER_KRAKEN_RUNTIME_CONVERGENCE_V80_INSTALL_REQUESTED", error_prefix="Writer/Kraken runtime convergence v80")
+
+
+def _install_writer_recovery_epoch_core_v81() -> None:
+    _install_patch_module(filename="writer_recovery_epoch_core_v81_patch.py", module_name="nija_writer_recovery_epoch_core_v81_patch", success_log="WRITER_RECOVERY_EPOCH_CORE_V81_INSTALL_REQUESTED", error_prefix="Writer recovery epoch/core v81")
 
 
 def _install_activation_snapshot_bridge() -> None:
@@ -380,6 +385,7 @@ _install_stale_exchange_kill_switch_recovery()
 _install_exchange_kill_switch_internal_reject_guard()
 _install_kraken_ohlc_thread_guard()
 _install_writer_kraken_runtime_convergence_v80()
+_install_writer_recovery_epoch_core_v81()
 _install_okx_min_notional_prefilter_repair()
 _install_okx_final_order_submission_bridge()
 _install_ecel_min_notional_rounding_repair()
