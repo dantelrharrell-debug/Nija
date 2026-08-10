@@ -60,7 +60,9 @@ class WriterRenewalProofV85Tests(unittest.TestCase):
         runtime._nija_last_lease_renewal_monotonic = 11.5
         runtime._heartbeat_thread = MagicMock()
         runtime._heartbeat_thread.is_alive.return_value = True
-        with patch.object(runtime, "_notify_runtime_reconciliation"), patch(
+        with patch.object(
+            runtime, "_check_authority_invariant", return_value=(True, "")
+        ), patch.object(runtime, "_notify_runtime_reconciliation"), patch(
             "bot.entrypoint_writer_authority.time.monotonic", return_value=42.0
         ), patch("bot.entrypoint_writer_authority.time.time", return_value=202.5):
             ok, reason = runtime._heartbeat_tick()
@@ -81,7 +83,9 @@ class WriterRenewalProofV85Tests(unittest.TestCase):
         runtime._nija_last_lease_renewal_monotonic = 11.5
         runtime._nija_last_lease_renewal_epoch = 101.25
 
-        with patch("bot.entrypoint_writer_authority.time.monotonic", return_value=42.0), patch(
+        with patch.object(
+            runtime, "_check_authority_invariant", return_value=(True, "")
+        ), patch("bot.entrypoint_writer_authority.time.monotonic", return_value=42.0), patch(
             "bot.entrypoint_writer_authority.time.time", return_value=202.5
         ):
             ok, reason = runtime._heartbeat_tick()
