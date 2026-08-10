@@ -12201,6 +12201,7 @@ class KrakenBroker(BaseBroker):
             return positions
 
         except Exception as e:
+            self._demote_on_writer_authority_failure(e)
             logger.error(f"Error fetching Kraken positions: {e}")
             return []
 
