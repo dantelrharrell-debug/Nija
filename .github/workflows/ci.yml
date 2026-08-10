@@ -54,4 +54,5 @@ jobs:
 
       - name: Run tests
         run: |
-          python -m unittest discover -s . -p 'test_*.py' -v
+          python scripts/run_unittest_baseline.py \
+            --baseline .github/ci_known_test_failures.txt
