@@ -2205,7 +2205,49 @@ class CapitalAuthority:
             else datetime.now(timezone.utc)
         )
 
-        with self._lock:
+        # Reject an expired snapshot before it can mutate capital or readiness.
+        # A coordinator may finish its broker fetches and then wait behind another
+        # capital writer.  Applying that now-stale result first and only labelling
+        # it stale afterwards creates a contradictory state: positive capital and
+        # CAPITAL_SYSTEM_READY alongside a rejected first-snapshot gate.
+        _preflight_expiry = computed_at + timedelta(seconds=_DEFAULT_FRESHNESS_TTL_S)
+        if datetime.now(timezone.utc) >= _preflight_expiry:
+            with self._timed_lock(timeout=5.0):
+                self._last_snapshot_publication = SnapshotPublicationStatus(
+                    accepted=False,
+                    stale=True,
+                    reason="snapshot expired before publish",
+                    timestamp=computed_at,
+                    expiry=_preflight_expiry,
+                )
+            logger.warning(
+                "[CapitalAuthority] publish_snapshot REJECTED before mutation — "
+                "snapshot expired (computed_at=%s expiry=%s)",
+                computed_at.isoformat(),
+                _preflight_expiry.isoformat(),
+            )
+            return False
+
+        # Bound lock acquisition so a live snapshot cannot wait indefinitely and
+        # age beyond its freshness TTL.  The RLock is re-entrant, so downstream
+        # accessors used inside this block remain safe.
+        with self._timed_lock(timeout=5.0):
+            if datetime.now(timezone.utc) >= _preflight_expiry:
+                self._last_snapshot_publication = SnapshotPublicationStatus(
+                    accepted=False,
+                    stale=True,
+                    reason="snapshot expired while waiting to publish",
+                    timestamp=computed_at,
+                    expiry=_preflight_expiry,
+                )
+                logger.warning(
+                    "[CapitalAuthority] publish_snapshot REJECTED before mutation — "
+                    "snapshot expired while waiting for authority lock "
+                    "(computed_at=%s expiry=%s)",
+                    computed_at.isoformat(),
+                    _preflight_expiry.isoformat(),
+                )
+                return False
             # Monotonic-timestamp guard: reject snapshots whose computed_at is
             # not strictly newer than the current authority state.  This prevents
             # an in-flight coordinator run that started *before* a faster one from
