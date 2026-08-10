@@ -92,6 +92,7 @@ try:
         rebuild_nonce_manager,
         clear_broker_quarantine,
         is_nonce_issuance_authorized,
+        check_ntp_sync,
     )
 except ImportError:
     try:
@@ -112,6 +113,7 @@ except ImportError:
             rebuild_nonce_manager,
             clear_broker_quarantine,
             is_nonce_issuance_authorized,
+            check_ntp_sync,
         )
     except ImportError:
         NonceManager = None  # type: ignore[assignment]
@@ -130,6 +132,7 @@ except ImportError:
         rebuild_nonce_manager = None  # type: ignore[assignment]
         clear_broker_quarantine = None  # type: ignore[assignment]
         is_nonce_issuance_authorized = None  # type: ignore[assignment]
+        check_ntp_sync = None  # type: ignore[assignment]
 
 try:
     from bot.execution_authority_context import (
@@ -298,6 +301,40 @@ def _user_env_prefix(user_id: str) -> tuple:
     short = normalized.split('_')[0].upper() if '_' in normalized else normalized.upper()
     full = normalized.upper()
     return short, full
+
+
+def _kraken_user_credentials_configured(user_id: str) -> bool:
+    """Return credential presence for a Kraken user without exposing values."""
+
+    short, full = _user_env_prefix(user_id)
+    raw_full = (user_id or "").strip().upper().replace("-", "_")
+    prefixes = tuple(dict.fromkeys(prefix for prefix in (short, full, raw_full) if prefix))
+    key_present = any(
+        bool(os.environ.get(f"KRAKEN_USER_{prefix}_API_KEY", "").strip())
+        for prefix in prefixes
+    )
+    secret_present = any(
+        bool(os.environ.get(f"KRAKEN_USER_{prefix}_API_SECRET", "").strip())
+        for prefix in prefixes
+    )
+    return key_present and secret_present
+
+
+def _kraken_clock_readiness() -> Tuple[bool, str, Dict[str, Any]]:
+    """Verify direct Kraken authentication can use the current host clock."""
+
+    if not callable(check_ntp_sync):
+        return False, "clock_verifier_unavailable", {}
+    try:
+        status = dict(check_ntp_sync())
+    except Exception as exc:
+        return False, f"clock_verification_exception:{type(exc).__name__}", {}
+    if status.get("error"):
+        return False, "clock_reference_unavailable", status
+    if not bool(status.get("ok")):
+        offset_s = float(status.get("offset_s", 0.0) or 0.0)
+        return False, f"clock_drift_out_of_tolerance:{offset_s:+.3f}s", status
+    return True, "clock_verified", status
 
 
 class NoncePauseActive(Exception):
@@ -8852,6 +8889,14 @@ class KrakenBroker(BaseBroker):
         # windows from multiple API keys are the #1 source of "EAPI:Invalid nonce"
         # errors on multi-account deployments.
         if self.account_type == AccountType.USER:
+            # The platform-first wait happens before the full credential loader
+            # below.  Publish credential presence now so the continuous user
+            # supervisor does not mistake a platform-gated account for an
+            # unconfigured account and permanently skip authenticated retries.
+            self.credentials_configured = bool(
+                self._gateway_only_mode
+                or _kraken_user_credentials_configured(self.user_id or "")
+            )
             if not _KRAKEN_STARTUP_FSM.is_connected:
                 if _USER_PLATFORM_WAIT_S is None:
                     logger.info(
@@ -8870,9 +8915,9 @@ class KrakenBroker(BaseBroker):
                 if not ready:
                     if _KRAKEN_STARTUP_FSM.is_failed:
                         logger.error(
-                            "⛔ USER %s: PLATFORM Kraken connection failed permanently. "
+                            "⛔ USER %s: PLATFORM Kraken startup is currently FAILED. "
                             "Refusing USER connection to protect nonce integrity. "
-                            "Fix platform credentials/clock, then restart the bot.",
+                            "Authenticated platform recovery will retry before this user.",
                             self.user_id,
                         )
                     else:
@@ -9167,6 +9212,32 @@ class KrakenBroker(BaseBroker):
                     logger.info(f"   📖 Each user must create their own API key at: https://www.kraken.com/u/security/api")
                     logger.info("   📖 Setup guide: KRAKEN_QUICK_START.md")
                 return False
+
+            # Direct authenticated Kraken I/O must not proceed on an
+            # unverified or out-of-tolerance host clock.  UDP NTP may be
+            # unavailable on managed hosts; check_ntp_sync safely falls back
+            # to Kraken's public HTTPS time endpoint.  This gate does not
+            # fabricate connection success or bypass nonce safety.
+            clock_ready, clock_reason, clock_status = _kraken_clock_readiness()
+            if not clock_ready:
+                self.credentials_configured = True
+                self.connected = False
+                self.last_connection_error = clock_reason
+                logger.error(
+                    "KRAKEN_CLOCK_GATE_BLOCKED account=%s reason=%s "
+                    "offset_s=%s reference=%s broker_io=false",
+                    cred_label,
+                    clock_reason,
+                    clock_status.get("offset_s", "unknown"),
+                    clock_status.get("server", "unavailable"),
+                )
+                return False
+            logger.info(
+                "KRAKEN_CLOCK_GATE_VERIFIED account=%s offset_s=%+.3f reference=%s",
+                cred_label,
+                float(clock_status.get("offset_s", 0.0) or 0.0),
+                clock_status.get("server", "unknown"),
+            )
 
             # Initialize Kraken API with custom nonce generator to fix "Invalid nonce" errors
             # CRITICAL FIX: Override default nonce generation to guarantee strict monotonic increase

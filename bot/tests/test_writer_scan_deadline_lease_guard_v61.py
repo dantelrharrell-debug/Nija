@@ -50,8 +50,8 @@ class _WriterModule:
     EntrypointWriterAuthority = _Runtime
 
 
-def test_scan_deadline_is_warning_only_before_core_thread_registration():
-    patch = _load_patch("v61_scan_deadline_warning_only")
+def test_scan_deadline_remains_fail_closed_before_core_thread_registration():
+    patch = _load_patch("v88_scan_deadline_fail_closed")
     module = _WriterModule()
 
     assert patch._patch_writer_module(module) is True
@@ -63,8 +63,8 @@ def test_scan_deadline_is_warning_only_before_core_thread_registration():
 
     ok, reason = runtime._validate_core_thread_liveness()
 
-    assert ok is True
-    assert reason == "scan_start_deadline_warning_only"
+    assert ok is False
+    assert reason == "core_thread_missing_deadline_exceeded"
 
 
 def test_registered_dead_core_thread_remains_fail_closed():

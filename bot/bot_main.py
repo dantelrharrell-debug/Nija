@@ -36,6 +36,51 @@ _writer_authority_runtime = None
 _authority_heartbeat_monitor = None
 _writer_authority_last_error = ""
 _core_loop_thread: Optional[threading.Thread] = None
+_core_registration_restart_timer: Optional[threading.Timer] = None
+
+
+def _schedule_core_registration_restart(reason: str) -> None:
+    """Force a non-zero restart if graceful shutdown cannot leave startup.
+
+    The writer lease has already been compare-deleted before this callback is
+    invoked.  A short grace period lets the canonical stack unwind normally;
+    ``os._exit(75)`` is the final bound for broker calls that never return.
+    """
+
+    global _core_registration_restart_timer
+    if _core_registration_restart_timer is not None:
+        return
+    try:
+        grace_s = max(
+            1.0,
+            float(os.environ.get("NIJA_CORE_REGISTRATION_RESTART_GRACE_S", "15") or 15),
+        )
+    except (TypeError, ValueError):
+        grace_s = 15.0
+
+    def _force_restart() -> None:
+        logger.critical(
+            "CANONICAL_CORE_REGISTRATION_FORCED_RESTART reason=%s exit_code=75",
+            reason,
+        )
+        for handler in logging.getLogger().handlers:
+            try:
+                handler.flush()
+            except Exception:
+                pass
+        os._exit(75)
+
+    timer = threading.Timer(grace_s, _force_restart)
+    timer.name = "canonical-core-registration-forced-restart"
+    timer.daemon = True
+    _core_registration_restart_timer = timer
+    logger.critical(
+        "CANONICAL_CORE_REGISTRATION_RESTART_SCHEDULED reason=%s grace_s=%.1f "
+        "writer_released=true",
+        reason,
+        grace_s,
+    )
+    timer.start()
 
 
 def _signal_handler(signum: int, frame) -> None:
@@ -96,6 +141,8 @@ def _acquire_writer_authority_before_nonce() -> bool:
                 except Exception:
                     pass
             _shutdown_event.set()
+            if "core_thread_registration_deadline_exceeded" in reason:
+                _schedule_core_registration_restart(reason)
 
         if callable(getattr(runtime, "set_on_lost_callback", None)):
             runtime.set_on_lost_callback(_on_lease_lost)
