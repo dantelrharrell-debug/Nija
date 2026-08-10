@@ -216,6 +216,13 @@ class EntrypointWriterAuthority:
         # detach proof publication from the actual Redis renewal.
         self._nija_last_lease_renewal_monotonic: float = 0.0
         self._nija_last_lease_renewal_epoch: float = 0.0
+        # Readiness reconciliation may perform slow broker I/O. It must never
+        # run on the canonical Redis renewal thread or metadata/TTL refreshes
+        # can stall behind an exchange timeout. Keep at most one deduplicated
+        # reconciliation worker in flight; the heartbeat remains the sole
+        # writer-lease renewer.
+        self._runtime_reconcile_lock = threading.Lock()
+        self._runtime_reconcile_thread: Optional[threading.Thread] = None
         os.environ["NIJA_WRITER_STATE"] = self._writer_state.value
         os.environ["NIJA_WRITER_STATE_SINCE_TS"] = str(self._writer_state_since)
 
@@ -849,7 +856,7 @@ class EntrypointWriterAuthority:
         except Exception:
             pass
 
-    def _notify_runtime_reconciliation(self, trigger: str) -> None:
+    def _run_runtime_reconciliation(self, trigger: str) -> None:
         try:
             readiness = importlib.import_module("three_venue_execution_readiness")
             reconcile = getattr(readiness, "reconcile_execution_readiness", None)
@@ -862,6 +869,33 @@ class EntrypointWriterAuthority:
                 trigger,
                 exc_info=True,
             )
+
+    def _notify_runtime_reconciliation(self, trigger: str) -> None:
+        """Notify readiness without allowing broker I/O to stall lease renewal."""
+        if trigger != "heartbeat_renewed":
+            self._run_runtime_reconciliation(trigger)
+            return
+
+        with self._runtime_reconcile_lock:
+            worker = self._runtime_reconcile_thread
+            if worker is not None and worker.is_alive():
+                return
+
+            def _worker() -> None:
+                try:
+                    self._run_runtime_reconciliation(trigger)
+                finally:
+                    with self._runtime_reconcile_lock:
+                        if self._runtime_reconcile_thread is threading.current_thread():
+                            self._runtime_reconcile_thread = None
+
+            worker = threading.Thread(
+                target=_worker,
+                name="writer-readiness-reconciliation",
+                daemon=True,
+            )
+            self._runtime_reconcile_thread = worker
+            worker.start()
 
     def _metadata_payload(self) -> str:
         core_alive = False

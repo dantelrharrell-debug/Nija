@@ -71,7 +71,7 @@ def test_heartbeat_writer_uses_platform_generation_not_global_counter(monkeypatc
     payload = json.loads(heartbeat_call[1])
     assert payload["generation"] == "439"
     assert payload["generation_scope"] == "platform_kraken_key"
-    assert client.expire_calls == [("nija:writer_lock:platform", 90)]
+    assert client.expire_calls == []
 
 
 def test_heartbeat_writer_fails_closed_when_platform_generation_missing(monkeypatch):

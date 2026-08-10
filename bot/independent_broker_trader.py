@@ -916,6 +916,18 @@ class IndependentBrokerTrader:
         logger.info("✅ %s: nonce resync reconnect succeeded", broker_name)
         return True
 
+    @staticmethod
+    def _require_exact_cycle_authority(source: str) -> tuple[bool, str]:
+        try:
+            try:
+                from bot import nija_core_loop as core_loop
+            except ImportError:
+                import nija_core_loop as core_loop  # type: ignore[import]
+            ok, reason = core_loop._require_exact_runtime_cycle_authority(source)
+            return bool(ok), str(reason or "")
+        except Exception as exc:
+            return False, f"authority_guard_unavailable:{type(exc).__name__}:{exc}"
+
     def _execute_trading_cycle(
         self,
         broker_type,
@@ -923,7 +935,7 @@ class IndependentBrokerTrader:
         broker_name: str,
         cycle_count: int,
         balance: float,
-    ) -> None:
+    ) -> bool:
         """
         Execute a single platform trading cycle for the given broker.
 
@@ -938,6 +950,18 @@ class IndependentBrokerTrader:
             cycle_count: Current cycle number (for logging)
             balance: Account balance fetched before this cycle (USD)
         """
+        authority_ok, authority_reason = self._require_exact_cycle_authority(
+            "independent_broker_trader.platform_execute"
+        )
+        if not authority_ok:
+            logger.critical(
+                "PLATFORM_CYCLE_AUTHORITY_BLOCKED broker=%s cycle=%d reason=%s broker_io=false",
+                broker_name,
+                cycle_count,
+                authority_reason,
+            )
+            return False
+
         logger.info(f"   {'═' * 55}")
         logger.info(f"   🎯 {broker_name.upper()} PLATFORM TRADING CYCLE #{cycle_count}")
         logger.info(f"   {'═' * 55}")
@@ -990,9 +1014,22 @@ class IndependentBrokerTrader:
 
         logger.info(f"   ✅ {broker_name.upper()} cycle completed successfully")
         logger.info("")
+        return True
 
     def _run_platform_cycle(self, broker_type, broker, broker_name: str, cycle_count: int) -> float:
         """Run exactly one platform broker scan cycle and return the next sleep interval."""
+        authority_ok, authority_reason = self._require_exact_cycle_authority(
+            "independent_broker_trader.platform_scan"
+        )
+        if not authority_ok:
+            logger.critical(
+                "SCAN_CYCLE_AUTHORITY_BLOCKED broker=%s cycle=%d reason=%s broker_io=false",
+                broker_name,
+                cycle_count,
+                authority_reason,
+            )
+            return 5.0
+
         with self._scan_guard(broker_name, cycle_count):
             logger.critical(
                 "SCAN_CYCLE_START %d broker=%s thread=%d",
@@ -1076,7 +1113,11 @@ class IndependentBrokerTrader:
             with self._phase_marker(broker_name, cycle_count, "PHASE3"):
                 try:
                     start_time = time.time()
-                    self._execute_trading_cycle(broker_type, broker, broker_name, cycle_count, balance)
+                    executed = self._execute_trading_cycle(
+                        broker_type, broker, broker_name, cycle_count, balance
+                    )
+                    if not executed:
+                        return 5.0
                     elapsed = time.time() - start_time
                     logger.info(f"✅ {broker_name.upper()} cycle completed in {elapsed:.2f}s")
                     if self.failure_manager:
@@ -1272,6 +1313,21 @@ class IndependentBrokerTrader:
                     try:
                         cycle_count += 1
                         logger.info(f"🔄 {broker_name} (USER) - Cycle #{cycle_count}")
+
+                        authority_ok, authority_reason = self._require_exact_cycle_authority(
+                            "independent_broker_trader.user_scan"
+                        )
+                        if not authority_ok:
+                            logger.critical(
+                                "USER_SCAN_AUTHORITY_BLOCKED user=%s broker=%s cycle=%d "
+                                "reason=%s broker_io=false",
+                                user_id,
+                                broker_type.value,
+                                cycle_count,
+                                authority_reason,
+                            )
+                            stop_flag.wait(5)
+                            continue
 
                         # Guard: ensure the platform broker is still CONNECTED before user trades,
                         # but allow trading if the user broker itself is directly connected
@@ -1475,6 +1531,21 @@ class IndependentBrokerTrader:
                             # configured with "independent_trading": true.
                             # When independent_trading is disabled the account runs in position-management
                             # mode only (user_mode=True) and relies on copy-trade signals from the platform.
+                            authority_ok, authority_reason = self._require_exact_cycle_authority(
+                                "independent_broker_trader.user_execute"
+                            )
+                            if not authority_ok:
+                                logger.critical(
+                                    "USER_CYCLE_AUTHORITY_BLOCKED user=%s broker=%s cycle=%d "
+                                    "reason=%s broker_io=false",
+                                    user_id,
+                                    broker_type.value,
+                                    cycle_count,
+                                    authority_reason,
+                                )
+                                stop_flag.wait(5)
+                                continue
+
                             if is_independent:
                                 logger.info(f"   {broker_name} (USER): Running INDEPENDENT strategy (APEX signal generation)...")
                                 self.trading_strategy.run_cycle(broker=broker, user_mode=False)

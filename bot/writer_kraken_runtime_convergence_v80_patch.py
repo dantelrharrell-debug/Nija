@@ -23,6 +23,7 @@ import threading
 from typing import Any
 
 from bot import kraken_connection_convergence_v44_patch as v44
+from bot import kraken_all_account_supervision_v86 as v86
 from bot import writer_authority_reconstitution_v77_patch as v77
 
 LOGGER = logging.getLogger("nija.writer_kraken_runtime_convergence_v80")
@@ -119,7 +120,8 @@ def reconcile_once() -> dict[str, Any]:
         if not writer.get("ok"):
             return {"writer": writer, "kraken": {"ok": False, "reason": "writer_not_ready"}}
         kraken = dict(v44.reconcile_once() or {})
-        return {"writer": writer, "kraken": kraken}
+        kraken_users = dict(v86.reconcile_once() or {})
+        return {"writer": writer, "kraken": kraken, "kraken_users": kraken_users}
 
 
 def _watchdog() -> None:
@@ -133,17 +135,26 @@ def _watchdog() -> None:
             state = reconcile_once()
             writer = state.get("writer", {})
             kraken = state.get("kraken", {})
-            signature = f"{writer.get('ok')}:{writer.get('reason')}:{kraken.get('connected')}:{kraken.get('reason')}"
+            users = state.get("kraken_users", {})
+            signature = (
+                f"{writer.get('ok')}:{writer.get('reason')}:"
+                f"{kraken.get('connected')}:{kraken.get('reason')}:"
+                f"{users.get('connected')}:{users.get('disconnected')}:{users.get('reason')}"
+            )
             if signature != last:
                 log = LOGGER.info if writer.get("ok") and kraken.get("connected") else LOGGER.warning
                 log(
-                    "RUNTIME_V80_STATE marker=%s writer_ok=%s writer_reason=%s kraken_connected=%s kraken_action=%s kraken_reason=%s",
+                    "RUNTIME_V80_STATE marker=%s writer_ok=%s writer_reason=%s "
+                    "kraken_connected=%s kraken_action=%s kraken_reason=%s "
+                    "kraken_users_connected=%s kraken_users_disconnected=%s",
                     MARKER,
                     str(bool(writer.get("ok"))).lower(),
                     writer.get("reason"),
                     str(bool(kraken.get("connected"))).lower(),
                     kraken.get("action"),
                     kraken.get("reason"),
+                    users.get("connected", 0),
+                    users.get("disconnected", 0),
                 )
                 last = signature
         except Exception as exc:
@@ -155,6 +166,7 @@ def install_import_hook() -> bool:
     with _LOCK:
         v77.install_import_hook()
         v44.install_import_hook()
+        v86.install()
         if not _STARTED:
             _STARTED = True
             threading.Thread(target=_watchdog, name="WriterKrakenRuntimeConvergenceV80", daemon=True).start()
@@ -165,7 +177,9 @@ def install_import_hook() -> bool:
     except Exception as exc:
         LOGGER.warning("RUNTIME_V80_INITIAL_RECONCILE_FAILED marker=%s error=%s:%s", MARKER, type(exc).__name__, exc)
     LOGGER.critical(
-        "WRITER_KRAKEN_RUNTIME_CONVERGENCE_V80_INSTALLED marker=%s writer_exact_or_reacquire=true kraken_authenticated_recovery=true fail_closed=true",
+        "WRITER_KRAKEN_RUNTIME_CONVERGENCE_V80_INSTALLED marker=%s "
+        "writer_exact_or_reacquire=true kraken_platform_authenticated_recovery=true "
+        "kraken_users_authenticated_recovery=true fail_closed=true",
         MARKER,
     )
     return True

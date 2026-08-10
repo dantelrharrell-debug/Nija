@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 import time
 from types import ModuleType
@@ -26,13 +27,29 @@ def test_status_reentry_guard_returns_cached_result(monkeypatch):
     assert "cache" in result
 
 
-def test_status_reentry_guard_accepts_fresh_writer_proof(monkeypatch):
+def test_status_reentry_guard_accepts_fresh_exact_writer_proof(monkeypatch):
     monkeypatch.setenv("LIVE_CAPITAL_VERIFIED", "true")
     monkeypatch.setenv("NIJA_REDIS_URL", "redis://example")
     monkeypatch.setenv("NIJA_WRITER_FENCING_TOKEN", "tok-123")
     monkeypatch.setenv("NIJA_WRITER_LEASE_GENERATION", "42")
     monkeypatch.setenv("NIJA_WRITER_HEARTBEAT_ACTIVE", "1")
-    monkeypatch.setenv("NIJA_WRITER_HEARTBEAT_ALIVE_TS", str(time.time()))
+
+    class Client:
+        def get(self, key):
+            assert key == "meta"
+            return json.dumps(
+                {"token": "tok-123", "generation": 42, "heartbeat_at": time.time()}
+            )
+
+    runtime = type("Runtime", (), {"_client": Client(), "_meta_key": "meta", "_ttl_s": 60})()
+    exact = {
+        "runtime": runtime,
+        "client": runtime._client,
+        "token": "tok-123",
+        "generation": 42,
+        "pttl_ms": 55000,
+    }
+    monkeypatch.setattr(patch, "_exact_process_writer_proof", lambda: (exact, ""))
 
     module = ModuleType("bot.execution_authority_context")
     module._FENCE_LAST_OK = False
@@ -44,18 +61,20 @@ def test_status_reentry_guard_accepts_fresh_writer_proof(monkeypatch):
 
     module.get_distributed_writer_authority_status = recursive_status
     assert patch._patch_execution_authority_context(module) is True
-
     result = module.get_distributed_writer_authority_status()
 
     assert result["ok"] is True
     assert result["redis_reachable"] is True
     assert result["authority_verified"] is True
-    assert result["token_present"] is True
     assert result["lease_generation"] == "42"
     assert result["cache"]["reentry_proof_ok"] is True
 
-
 def test_status_reentry_guard_fails_closed_without_fresh_writer_proof(monkeypatch):
+    monkeypatch.setattr(
+        patch,
+        "_exact_process_writer_proof",
+        lambda: (None, "metadata_heartbeat_stale"),
+    )
     monkeypatch.setenv("LIVE_CAPITAL_VERIFIED", "true")
     monkeypatch.setenv("NIJA_REDIS_URL", "redis://example")
     monkeypatch.setenv("NIJA_WRITER_FENCING_TOKEN", "tok-123")

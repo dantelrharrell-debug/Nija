@@ -99,51 +99,8 @@ def _patch_module(module: ModuleType) -> bool:
             }
             client.set("nija:writer_heartbeat_active", json.dumps(heartbeat_data), ex=30)
 
-            lock_scope = os.environ.get("NIJA_WRITER_SCOPE", "platform")
-            lock_key = (
-                os.environ.get("NIJA_WRITER_LOCK_KEY", "").strip()
-                or f"nija:writer_lock:{lock_scope}"
-            )
-            lock_ttl_s = max(
-                60,
-                int(os.environ.get("NIJA_WRITER_LOCK_TTL_S", "30") or 30) * 3,
-            )
-            expected_token = os.environ.get("NIJA_WRITER_FENCING_TOKEN", "").strip()
-            if expected_token:
-                current_lock = client.get(lock_key)
-                if current_lock is not None:
-                    if isinstance(current_lock, bytes):
-                        current_lock = current_lock.decode("utf-8", errors="replace")
-                    current_prefix = str(current_lock or "").split(":", 1)[0]
-                    if current_prefix == expected_token:
-                        client.expire(lock_key, lock_ttl_s)
-                    else:
-                        logger.critical(
-                            "AUTHORITY_HEARTBEAT_LOCK_OWNER_MISMATCH marker=%s lock_key=%s expected=%s actual=%s",
-                            MARKER,
-                            lock_key,
-                            expected_token[:8],
-                            current_prefix[:8],
-                        )
-                else:
-                    owner_id = os.environ.get("NIJA_WRITER_OWNER_ID", "heartbeat_recovered")
-                    lock_value = f"{expected_token}:{owner_id}"
-                    reacquired = client.set(lock_key, lock_value, ex=lock_ttl_s, nx=True)
-                    if reacquired:
-                        logger.warning(
-                            "AUTHORITY_HEARTBEAT_LOCK_REACQUIRED marker=%s lock_key=%s token_prefix=%s",
-                            MARKER,
-                            lock_key,
-                            expected_token[:8],
-                        )
-                    else:
-                        logger.critical(
-                            "AUTHORITY_HEARTBEAT_LOCK_REACQUIRE_FAILED marker=%s lock_key=%s token_prefix=%s",
-                            MARKER,
-                            lock_key,
-                            expected_token[:8],
-                        )
-
+            # Telemetry only. The canonical EntrypointWriterAuthority heartbeat
+            # owns writer-lock renewal and updates lock metadata atomically.
             logger.info(
                 "AUTHORITY_HEARTBEAT_PLATFORM_GENERATION_PUBLISHED marker=%s generation=%s",
                 MARKER,
