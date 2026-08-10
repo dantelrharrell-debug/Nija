@@ -149,6 +149,22 @@ def test_heartbeat_never_recreates_missing_lock(monkeypatch):
     assert redis.expires == []
 
 
+def test_heartbeat_telemetry_never_extends_owned_process_lock(monkeypatch):
+    _, redis = install_runtime(monkeypatch)
+    module = types.ModuleType("bot.authority_heartbeat")
+
+    class Monitor:
+        pass
+
+    Monitor._write_heartbeat_to_redis = lambda self: None
+    module.AuthorityHeartbeatMonitor = Monitor
+    assert v45._patch_heartbeat_module(module) is True
+    Monitor()._write_heartbeat_to_redis()
+    assert len(redis.sets) == 1
+    assert redis.sets[0][0][0] == "nija:writer_heartbeat_active"
+    assert redis.expires == []
+
+
 def test_v42_expected_generation_prefers_proven_runtime(monkeypatch):
     install_runtime(monkeypatch)
     monkeypatch.setenv("NIJA_WRITER_LEASE_GENERATION", "10")

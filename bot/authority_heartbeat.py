@@ -1062,63 +1062,10 @@ class AuthorityHeartbeatMonitor:
                 ex=30,  # 30 second TTL
             )
 
-            # Refresh the writer lock key TTL so it does not expire between
-            # heartbeat cycles.  Use EXPIRE (not SET NX) so we only refresh an
-            # existing lock that this instance already holds — we never overwrite
-            # a lock that belongs to a different instance.
-            _lock_scope = os.environ.get("NIJA_WRITER_SCOPE", "platform")
-            _lock_key = (
-                os.environ.get("NIJA_WRITER_LOCK_KEY", "").strip()
-                or f"nija:writer_lock:{_lock_scope}"
-            )
-            _lock_ttl_s = max(
-                60,
-                int(os.environ.get("NIJA_WRITER_LOCK_TTL_S", "30") or 30) * 3,
-            )
-            try:
-                # Only refresh if the lock exists AND belongs to this instance.
-                # If the lock is MISSING (expired TTL gap), re-acquire it now
-                # rather than waiting for the next execute_entry path to do it,
-                # preventing repeated re-acquisition log noise.
-                _expected_token = os.environ.get("NIJA_WRITER_FENCING_TOKEN", "").strip()
-                if _expected_token:
-                    _current_lock = self._redis_client.get(_lock_key)
-                    if _current_lock is not None:
-                        if isinstance(_current_lock, bytes):
-                            _current_lock = _current_lock.decode("utf-8", errors="replace")
-                        _current_prefix = str(_current_lock or "").split(":", 1)[0]
-                        if _current_prefix == _expected_token:
-                            self._redis_client.expire(_lock_key, _lock_ttl_s)
-                            logger.debug(
-                                "AuthorityHeartbeat: refreshed writer lock TTL "
-                                "lock_key=%s ttl_s=%d token_prefix=%s",
-                                _lock_key, _lock_ttl_s, _expected_token[:8],
-                            )
-                        # else: lock is held by a different token — do not touch it
-                    else:
-                        # Lock is MISSING — re-acquire it proactively before the
-                        # authority check path encounters the gap and logs warnings.
-                        _owner_id = os.environ.get("NIJA_WRITER_OWNER_ID", "heartbeat_recovered")
-                        _lock_value = f"{_expected_token}:{_owner_id}"
-                        _reacquired = self._redis_client.set(_lock_key, _lock_value, ex=_lock_ttl_s, nx=True)
-                        if _reacquired:
-                            logger.warning(
-                                "AuthorityHeartbeat: writer lock key was MISSING — proactively "
-                                "re-acquired (lock_key=%s ttl_s=%d token_prefix=%s). "
-                                "This is expected after a TTL expiry gap between heartbeat cycles.",
-                                _lock_key, _lock_ttl_s, _expected_token[:8],
-                            )
-                        else:
-                            logger.warning(
-                                "AuthorityHeartbeat: writer lock key was missing but NX SET "
-                                "failed — another process may now hold the lock "
-                                "(lock_key=%s token_prefix=%s). "
-                                "Single-writer safety may be compromised.",
-                                _lock_key, _expected_token[:8],
-                            )
-            except Exception as _lock_refresh_exc:
-                logger.debug("AuthorityHeartbeat: writer lock TTL refresh failed: %s", _lock_refresh_exc)
-
+            # EntrypointWriterAuthority is the sole process-writer lease
+            # renewer. This monitor publishes telemetry only; it must never
+            # extend or recreate the writer lock without refreshing canonical
+            # metadata in the same atomic renewal.
             logger.debug("AuthorityHeartbeat: wrote heartbeat with generation=%s", local_gen)
         except Exception as e:
             logger.error("AuthorityHeartbeat: failed to write heartbeat: %s", e)

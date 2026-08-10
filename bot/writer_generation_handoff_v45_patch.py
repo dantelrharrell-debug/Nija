@@ -349,7 +349,6 @@ def _safe_heartbeat_writer(self: Any) -> None:
     lock_key = str(proof["lock_key"])
     lock_value = str(proof["lock_value"])
     generation = int(proof["generation"])
-    runtime = proof["runtime"]
     try:
         current_lock = _text(client.get(lock_key))
         if current_lock != lock_value:
@@ -359,7 +358,6 @@ def _safe_heartbeat_writer(self: Any) -> None:
                 lock_key,
             )
             return
-        ttl_s = max(15, _integer(getattr(runtime, "_ttl_s", 60), 60))
         heartbeat_data = {
             "timestamp": time.time(),
             "generation": str(generation),
@@ -367,9 +365,9 @@ def _safe_heartbeat_writer(self: Any) -> None:
             "instance_id": os.environ.get("NIJA_WRITER_INSTANCE_ID", "unknown"),
         }
         client.set("nija:writer_heartbeat_active", json.dumps(heartbeat_data), ex=30)
-        client.expire(lock_key, ttl_s)
         LOGGER.info(
-            "WRITER_GENERATION_V45_HEARTBEAT_PUBLISHED marker=%s generation=%s token_prefix=%s",
+            "WRITER_GENERATION_V45_HEARTBEAT_PUBLISHED marker=%s generation=%s "
+            "token_prefix=%s lock_mutation=false",
             MARKER,
             generation,
             str(proof["token"])[:8],
