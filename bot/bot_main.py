@@ -642,8 +642,6 @@ def main() -> int:
             runtime = _writer_authority_runtime
             if runtime is not None and callable(getattr(runtime, "register_core_thread", None)):
                 runtime.register_core_thread(trading_thread)
-            if runtime is not None and callable(getattr(runtime, "record_scan_started", None)):
-                runtime.record_scan_started()
 
             # Publish verified thread evidence to the startup coordinator so that
             # the threads.running gate passes in evaluate_system_readiness_proof().
