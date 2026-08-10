@@ -467,10 +467,16 @@ def _capture_cycle_capital_state() -> _types.MappingProxyType:
         try:
             _ca = _get_ca()
             result["ca_is_hydrated"] = bool(_ca.is_hydrated)
-            result["ca_is_fresh"] = bool(_ca.is_fresh())
             result["ca_total_capital"] = float(getattr(_ca, "total_capital", 0.0) or 0.0)
             result["ca_valid_brokers"] = int(
                 getattr(_ca, "valid_broker_count", 0) or 0
+            )
+            # Freshness is an entry-admission gate, but older/read-only CA
+            # facades may not expose it. Preserve their diagnostic capital
+            # fields while treating freshness as false.
+            _freshness_probe = getattr(_ca, "is_fresh", None)
+            result["ca_is_fresh"] = bool(
+                _freshness_probe() if callable(_freshness_probe) else False
             )
         except Exception as _ce:
             result["sync_failed"] = True
