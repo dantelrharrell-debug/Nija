@@ -249,7 +249,10 @@ def _collect_proofs() -> tuple[dict[str, bool], dict[str, Any]]:
         "capital_ready": bool(_live_mode() and hydrated and funded),
         "risk_ready": risk,
         "strategy_ready": strategy,
-        "execution_ready": bool(execution and risk),
+        # Execution wiring is not execution readiness.  Keep reporting false
+        # until the same strict writer/nonce and kill-switch proof required by
+        # activation is present.
+        "execution_ready": bool(execution and risk and authority),
         "nonce_ready": strict_ok,
         "bootstrap_ready": bootstrap_ok,
     }
@@ -259,6 +262,7 @@ def _collect_proofs() -> tuple[dict[str, bool], dict[str, Any]]:
         "kill_switch": kill_detail or "clear",
         "bootstrap_missing": bootstrap_missing,
         "live_mode": _live_mode(),
+        "execution_pipeline_wired": execution,
     }
     return proofs, details
 

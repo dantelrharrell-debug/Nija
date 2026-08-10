@@ -8276,74 +8276,52 @@ class KrakenBroker(BaseBroker):
         return True
 
     def _initialize_nonce_manager(self) -> bool:
-        """Initialize the DistributedNonceManager with heartbeat authority.
+        """Initialize nonce state only after exact process-writer proof.
 
-        Sets the ``nija:writer_heartbeat_active`` flag in Redis **before**
-        attempting any nonce operations.  The authority heartbeat monitor
-        (``bot/authority_heartbeat.py``) normally writes this flag via the
-        ``NIJA_WRITER_HEARTBEAT_ACTIVE`` environment variable, but on a fresh
-        deployment the heartbeat thread may not have completed its first tick
-        yet.  Pre-seeding the Redis key here ensures the nonce authority gate
-        passes immediately on startup rather than waiting up to one full
-        heartbeat interval.
-
-        Returns ``True`` on success, ``False`` if the nonce manager could not
-        be initialised (caller should treat this as a hard-stop condition).
+        The authority-heartbeat monitor owns its telemetry key and performs an
+        immediate startup tick.  Kraken startup must never pre-seed that key or
+        set the process heartbeat flag itself: either action can make an
+        unowned process look nonce-authorized.  Missing writer proof is a
+        retryable, fail-closed broker condition.
         """
         try:
             try:
+                from bot.execution_authority_context import (
+                    assert_distributed_writer_authority,
+                )
+            except ImportError:
+                from execution_authority_context import (  # type: ignore[import]
+                    assert_distributed_writer_authority,
+                )
+
+            assert_distributed_writer_authority()
+            try:
                 from bot.distributed_nonce_manager import (
                     get_distributed_nonce_manager as _get_dnm,
-                    make_api_key_id as _make_key_id,
                 )
             except ImportError:
                 from distributed_nonce_manager import (  # type: ignore[import]
                     get_distributed_nonce_manager as _get_dnm,
-                    make_api_key_id as _make_key_id,
                 )
 
-            # Obtain the singleton (connects to Redis if NIJA_REDIS_URL is set).
+            # Obtaining the singleton performs its own startup-authority check.
             _dnm = _get_dnm()
-
-            # Pre-seed the heartbeat_active flag in Redis so the nonce authority
-            # gate passes immediately.  Use a 30-second TTL so the flag expires
-            # naturally if the authority heartbeat thread never starts (e.g. in
-            # test environments).  The heartbeat thread will refresh it every
-            # NIJA_AUTHORITY_HEARTBEAT_INTERVAL_S seconds once running.
-            if _dnm._redis is not None:
-                try:
-                    _dnm._redis._client.set(  # type: ignore[attr-defined]
-                        "nija:writer_heartbeat_active", "true", ex=30
-                    )
-                    logger.info(
-                        "   ✅ Kraken nonce manager: heartbeat_active flag seeded in Redis "
-                        "(account=%s)",
-                        self.account_identifier,
-                    )
-                except Exception as _hb_exc:
-                    # Non-fatal: the heartbeat thread will set the flag shortly.
-                    logger.warning(
-                        "   ⚠️  Could not seed heartbeat_active in Redis (%s) — "
-                        "authority heartbeat thread will set it on first tick",
-                        _hb_exc,
-                    )
-
-            # Also set the environment variable so in-process checks pass.
-            import os as _os
-            _os.environ.setdefault("NIJA_WRITER_HEARTBEAT_ACTIVE", "1")
-
             logger.info(
-                "   ✅ Kraken nonce manager initialized with heartbeat authority "
-                "(account=%s backend=%s)",
+                "   ✅ Kraken nonce manager initialized after exact writer proof "
+                "(account=%s backend=%s heartbeat_telemetry_mutation=false)",
                 self.account_identifier,
                 "redis" if _dnm._redis is not None else "file/fcntl",
             )
             return True
         except Exception as exc:
-            logger.error(
-                "   ❌ Failed to initialize Kraken nonce manager: %s (account=%s)",
-                exc,
+            self.connected = False
+            self._connection_already_complete = False
+            self.last_connection_error = f"WRITER_AUTHORITY_UNAVAILABLE: {exc}"
+            logger.critical(
+                "KRAKEN_NONCE_STARTUP_BLOCKED account=%s reason=%s "
+                "broker_io=false heartbeat_telemetry_mutation=false fail_closed=true",
                 self.account_identifier,
+                exc,
             )
             return False
 
@@ -9325,15 +9303,11 @@ class KrakenBroker(BaseBroker):
             # Mark that credentials were configured (we have API key and secret)
             self.credentials_configured = True
 
-            # ── Heartbeat authority pre-seed ──────────────────────────────────
-            # Ensure the nonce authority heartbeat flag is set in Redis BEFORE
-            # any nonce operations are attempted.  On a fresh deployment the
-            # authority heartbeat thread may not have completed its first tick,
-            # which would cause _get_nonce_auth() to block or the writer-lease
-            # acquire to fail with "nonce authority cannot be established".
-            # _initialize_nonce_manager() is non-fatal: if it cannot reach Redis
-            # the nonce init block below will still attempt the file/fcntl path.
-            self._initialize_nonce_manager()
+            # Prove the exact canonical process writer before constructing or
+            # inspecting per-key nonce state.  A failed proof is retryable but
+            # this connection attempt performs no private Kraken I/O.
+            if not self._initialize_nonce_manager():
+                return False
 
             # ── Nonce generator: DistributedNonceManager (unified path) ──────
             # ONE authority per API key — routes to Redis when available
@@ -14685,20 +14659,30 @@ class BrokerManager:
         # preventing "invalid nonce" / "Connection failed" errors caused by a
         # stale persisted nonce from a previous session or container restart.
         #
-        # Guard: if the distributed writer lease is not yet acquired, skip the
-        # startup nonce resync entirely.  probe_server_sync() calls get_nonce()
-        # which calls _ensure_writer_lease(); running it before
-        # entrypoint_writer_authority has completed its own acquisition races
-        # the lease and can cause "nonce authority unavailable" at startup.
-        # Kraken will connect in degraded file-lock mode and the nonce will be
-        # re-synced automatically once the writer lease is established.
-        _writer_lease_ready = (
-            str(os.getenv("NIJA_WRITER_LEASE_ACQUIRED", "")).strip() == "1"
-        )
+        # Guard: require exact distributed process-writer proof, not the
+        # mutable NIJA_WRITER_LEASE_ACQUIRED environment alias.  A failed proof
+        # skips all nonce I/O and remains fail-closed until a later supervised
+        # reconnect proves the canonical writer.
+        _writer_lease_error = ""
+        try:
+            try:
+                from bot.execution_authority_context import (
+                    assert_distributed_writer_authority as _assert_writer_startup,
+                )
+            except ImportError:
+                from execution_authority_context import (  # type: ignore[import]
+                    assert_distributed_writer_authority as _assert_writer_startup,
+                )
+            _assert_writer_startup()
+            _writer_lease_ready = True
+        except Exception as _writer_exc:
+            _writer_lease_ready = False
+            _writer_lease_error = str(_writer_exc)
         if not _writer_lease_ready:
-            logger.info(
-                "⏭️ Startup nonce resync deferred: NIJA_WRITER_LEASE_ACQUIRED not yet set. "
-                "Kraken will connect in degraded mode and resync when authority is established."
+            logger.warning(
+                "KRAKEN_STARTUP_NONCE_RESYNC_BLOCKED reason=%s "
+                "broker_io=false env_flag_only=false fail_closed=true",
+                _writer_lease_error or "exact_writer_proof_unavailable",
             )
         else:
             try:

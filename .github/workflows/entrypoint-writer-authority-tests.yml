@@ -34,6 +34,13 @@ on:
       - 'bot/writer_lock_release_guard.py'
       - 'bot/entrypoint_writer_authority.py'
       - 'bot/bot_main.py'
+      - 'bot/broker_manager.py'
+      - 'bot/writer_authority_reconstitution_v77_patch.py'
+      - 'bot/writer_generation_handoff_v45_patch.py'
+      - 'bot/writer_single_owner_convergence_v82_patch.py'
+      - 'bot/kraken_all_account_supervision_v86.py'
+      - 'bot/live_broker_profit_exit_convergence_v25.py'
+      - 'preactivation_readiness_convergence_v16_patch.py'
       - 'bot/tests/test_bot_package_defer_fix.py'
       - 'bot/tests/test_startup_handoff_all_fixes.py'
       - 'bot/tests/test_runtime_entrypoint_attestation_v23.py'
@@ -50,6 +57,12 @@ on:
       - 'bot/tests/test_writer_lock_release_guard.py'
       - 'bot/tests/test_writer_release_heartbeat_quiesce.py'
       - 'bot/tests/test_entrypoint_writer_authority.py'
+      - 'bot/tests/test_writer_*_v*.py'
+      - 'bot/tests/test_writer_generation_handoff_v45.py'
+      - 'bot/tests/test_kraken_all_account_supervision_v86.py'
+      - 'bot/tests/test_kraken_writer_authority_gate_v91.py'
+      - 'bot/tests/test_runtime_startup_handoff_v87.py'
+      - 'bot/tests/test_preactivation_readiness_convergence_v16_patch.py'
       - 'bot/tests/test_entrypoint_writer_heartbeat.py'
       - 'bot/tests/test_prebot_writer_authority_bootstrap.py'
       - 'bot/tests/test_render_prebot_writer_handoff.py'
@@ -91,6 +104,13 @@ on:
       - 'bot/writer_lock_release_guard.py'
       - 'bot/entrypoint_writer_authority.py'
       - 'bot/bot_main.py'
+      - 'bot/broker_manager.py'
+      - 'bot/writer_authority_reconstitution_v77_patch.py'
+      - 'bot/writer_generation_handoff_v45_patch.py'
+      - 'bot/writer_single_owner_convergence_v82_patch.py'
+      - 'bot/kraken_all_account_supervision_v86.py'
+      - 'bot/live_broker_profit_exit_convergence_v25.py'
+      - 'preactivation_readiness_convergence_v16_patch.py'
       - 'bot/tests/test_bot_package_defer_fix.py'
       - 'bot/tests/test_startup_handoff_all_fixes.py'
       - 'bot/tests/test_runtime_entrypoint_attestation_v23.py'
@@ -107,6 +127,12 @@ on:
       - 'bot/tests/test_writer_lock_release_guard.py'
       - 'bot/tests/test_writer_release_heartbeat_quiesce.py'
       - 'bot/tests/test_entrypoint_writer_authority.py'
+      - 'bot/tests/test_writer_*_v*.py'
+      - 'bot/tests/test_writer_generation_handoff_v45.py'
+      - 'bot/tests/test_kraken_all_account_supervision_v86.py'
+      - 'bot/tests/test_kraken_writer_authority_gate_v91.py'
+      - 'bot/tests/test_runtime_startup_handoff_v87.py'
+      - 'bot/tests/test_preactivation_readiness_convergence_v16_patch.py'
       - 'bot/tests/test_entrypoint_writer_heartbeat.py'
       - 'bot/tests/test_prebot_writer_authority_bootstrap.py'
       - 'bot/tests/test_render_prebot_writer_handoff.py'
@@ -206,6 +232,13 @@ jobs:
             bot/writer_lock_release_guard.py \
             bot/entrypoint_writer_authority.py \
             bot/bot_main.py \
+            bot/broker_manager.py \
+            bot/writer_authority_reconstitution_v77_patch.py \
+            bot/writer_generation_handoff_v45_patch.py \
+            bot/writer_single_owner_convergence_v82_patch.py \
+            bot/kraken_all_account_supervision_v86.py \
+            bot/live_broker_profit_exit_convergence_v25.py \
+            preactivation_readiness_convergence_v16_patch.py \
             scripts/three_venue_config_check.py
 
       - name: Test bot package runtime defer
@@ -239,6 +272,16 @@ jobs:
         run: python -m pytest -q bot/tests/test_writer_release_heartbeat_quiesce.py
       - name: Test entrypoint writer authority
         run: python -m pytest -q bot/tests/test_entrypoint_writer_authority.py
+      - name: Test canonical writer and Kraken convergence
+        run: |
+          python -m pytest -q \
+            bot/tests/test_writer_"authority_reconstitution_v77.py" \
+            bot/tests/test_writer_generation_handoff_v45.py \
+            bot/tests/test_writer_"single_owner_convergence_v82.py" \
+            bot/tests/test_kraken_all_account_supervision_v86.py \
+            bot/tests/test_kraken_writer_authority_gate_v91.py \
+            bot/tests/test_runtime_startup_handoff_v87.py \
+            bot/tests/test_preactivation_readiness_convergence_v16_patch.py
       - name: Test entrypoint writer heartbeat
         run: python -m pytest -q bot/tests/test_entrypoint_writer_heartbeat.py
       - name: Test prebot writer authority

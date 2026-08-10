@@ -39,6 +39,29 @@ _core_loop_thread: Optional[threading.Thread] = None
 _core_registration_restart_timer: Optional[threading.Timer] = None
 
 
+def _revoke_writer_dependent_readiness(reason: str) -> None:
+    """Publish fail-closed process truth after writer bootstrap failure."""
+
+    os.environ["NIJA_WRITER_LEASE_ACQUIRED"] = "0"
+    os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"] = "0"
+    os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "0"
+    os.environ["NIJA_EXECUTION_ACTIVE"] = "false"
+    os.environ.pop("NIJA_WRITER_FENCING_TOKEN", None)
+    os.environ.pop("NIJA_WRITER_GENERATION", None)
+    os.environ.pop("NIJA_WRITER_LEASE_GENERATION", None)
+    try:
+        from bot.readiness_table import revoke_ready
+
+        for component in ("authority_ready", "nonce_ready", "execution_ready"):
+            revoke_ready(component, reason=f"writer_bootstrap_unavailable:{reason}")
+    except Exception:
+        logger.debug(
+            "WRITER_BOOTSTRAP_READINESS_REVOKE_FAILED reason=%s",
+            reason,
+            exc_info=True,
+        )
+
+
 def _schedule_writer_authority_restart(reason: str) -> None:
     """Force a non-zero restart if writer-loss shutdown cannot exit.
 
@@ -110,13 +133,20 @@ def _acquire_writer_authority_before_nonce() -> bool:
 
     global _writer_authority_runtime, _authority_heartbeat_monitor, _writer_authority_last_error
 
+    runtime = None
     try:
-        from bot.entrypoint_writer_authority import get_entrypoint_writer_authority
+        from bot.entrypoint_writer_authority import (
+            bind_entrypoint_writer_authority_aliases,
+            get_entrypoint_writer_authority,
+        )
 
         runtime = get_entrypoint_writer_authority()
         result = runtime.acquire_with_standby(shutdown_event=_shutdown_event)
         _writer_authority_last_error = str(getattr(result, "error", "") or "")
         if not result.acquired:
+            _revoke_writer_dependent_readiness(
+                str(result.error or "writer_acquisition_failed")
+            )
             if result.error == "shutdown_requested":
                 logger.info("Writer-authority standby interrupted by shutdown")
             elif result.error == "active_writer_lock_held":
@@ -137,6 +167,21 @@ def _acquire_writer_authority_before_nonce() -> bool:
             return False
 
         _writer_authority_runtime = runtime
+        bound_runtime = bind_entrypoint_writer_authority_aliases(runtime)
+        if bound_runtime is not runtime:
+            logger.critical(
+                "ENTRYPOINT_WRITER_AUTHORITY_IDENTITY_BIND_FAILED marker=20260710u "
+                "trading_remains_fail_closed=true"
+            )
+            runtime.release()
+            _writer_authority_runtime = None
+            _revoke_writer_dependent_readiness("module_identity_bind_failed")
+            return False
+        logger.critical(
+            "ENTRYPOINT_WRITER_AUTHORITY_IDENTITY_CONVERGED marker=20260810-v91 "
+            "package_alias=true compatibility_alias=true singleton_exact=true generation=%s",
+            getattr(runtime, "_generation", 0),
+        )
 
         # Wire up the on-lost callback so _shutdown_event is set immediately
         # when the lease is lost (e.g. core thread dies), without waiting for
@@ -182,6 +227,7 @@ def _acquire_writer_authority_before_nonce() -> bool:
             )
             runtime.release()
             _writer_authority_runtime = None
+            _revoke_writer_dependent_readiness("authority_heartbeat_start_failed")
             return False
 
         # Synchronous proof closes the race between heartbeat-thread launch and
@@ -203,6 +249,7 @@ def _acquire_writer_authority_before_nonce() -> bool:
             runtime.release()
             _writer_authority_runtime = None
             _authority_heartbeat_monitor = None
+            _revoke_writer_dependent_readiness("exact_authority_verify_failed")
             return False
 
         logger.critical(
@@ -224,6 +271,24 @@ def _acquire_writer_authority_before_nonce() -> bool:
             exc,
             exc_info=True,
         )
+        monitor = _authority_heartbeat_monitor
+        _authority_heartbeat_monitor = None
+        if monitor is not None:
+            try:
+                monitor.stop()
+            except Exception:
+                pass
+        runtime_to_release = _writer_authority_runtime or runtime
+        _writer_authority_runtime = None
+        if runtime_to_release is not None:
+            try:
+                runtime_to_release.release()
+            except Exception:
+                logger.warning(
+                    "WRITER_AUTHORITY_EXCEPTION_RELEASE_FAILED",
+                    exc_info=True,
+                )
+        _revoke_writer_dependent_readiness("bootstrap_exception")
         return False
 
 

@@ -37,6 +37,33 @@ def test_marks_every_key_only_when_every_proof_passes(monkeypatch):
     assert marked == []
 
 
+def test_execution_readiness_requires_live_writer_and_nonce_authority(monkeypatch):
+    patch = _module()
+    monkeypatch.setattr(
+        patch,
+        "_capital_snapshot",
+        lambda: {"hydrated": True, "stale": False, "real": 100.0, "registered": 1},
+    )
+    monkeypatch.setattr(
+        patch, "_strict_authority_ready", lambda: (False, "runtime_not_acquired")
+    )
+    monkeypatch.setattr(patch, "_kill_switch_clear", lambda: (True, ""))
+    monkeypatch.setattr(patch, "_bootstrap_ready", lambda: (True, []))
+    monkeypatch.setattr(patch, "_strategy_published", lambda: True)
+    monkeypatch.setattr(patch, "_execution_pipeline_ready", lambda: True)
+    monkeypatch.setattr(patch, "_live_mode", lambda: True)
+    monkeypatch.setenv("NIJA_PRE_DISPATCH_RISK_SIZING_READY", "1")
+    monkeypatch.setenv("NIJA_PRE_DISPATCH_RISK_SIZING_FAIL_CLOSED", "1")
+    monkeypatch.setenv("NIJA_DOWNSTREAM_RISK_GOVERNOR_V2_INSTALLED", "1")
+
+    proofs, details = patch._collect_proofs()
+
+    assert proofs["authority_ready"] is False
+    assert proofs["nonce_ready"] is False
+    assert proofs["execution_ready"] is False
+    assert details["execution_pipeline_wired"] is True
+
+
 def test_rearms_pending_timeout_without_force_transition(monkeypatch):
     patch = _module()
     monkeypatch.delenv("NIJA_ALLOW_PENDING_CONFIRMATION_FORCE_TIMEOUT", raising=False)

@@ -52,6 +52,31 @@ class KrakenAllAccountSupervisionV86Tests(unittest.TestCase):
             [("user:alice:kraken", "alice", _BrokerType, broker)],
         )
 
+    def test_records_include_failed_users_without_broker_objects(self) -> None:
+        manager = SimpleNamespace(
+            _all_user_brokers={},
+            user_brokers={},
+            _user_metadata={
+                "alice": {"brokers": {_BrokerType: False}},
+            },
+            _failed_user_connections={
+                ("alice", _BrokerType): "broker_creation_failed",
+            },
+            _users_without_credentials={},
+        )
+
+        records = v86._user_records(manager)
+        state = v86.reconcile_once(manager)
+
+        self.assertEqual(
+            records,
+            [("user:alice:kraken", "alice", _BrokerType, None)],
+        )
+        self.assertEqual(state["registered"], 1)
+        self.assertEqual(state["connected"], 0)
+        self.assertEqual(state["states"]["user:alice:kraken"], "broker_unavailable")
+        self.assertEqual(state["reason"], "recovery_active")
+
     def test_reconnect_uses_exact_writer_proof_and_canonical_connect(self) -> None:
         broker = _Broker()
         user = SimpleNamespace(user_id="alice", broker_type="KRAKEN")
@@ -110,4 +135,19 @@ class KrakenAllAccountSupervisionV86Tests(unittest.TestCase):
 
         self.assertEqual(state, "credentials_not_configured")
         self.assertEqual(broker.connect_calls, 0)
+        self.assertEqual(v86._INFLIGHT, set())
+
+    def test_missing_broker_object_never_schedules_broker_io(self) -> None:
+        manager = SimpleNamespace(
+            user_brokers={},
+            _failed_user_connections={("alice", _BrokerType): "create_failed"},
+            _users_without_credentials={},
+        )
+
+        state = v86._schedule(
+            manager,
+            ("user:alice:kraken", "alice", _BrokerType, None),
+        )
+
+        self.assertEqual(state, "broker_unavailable")
         self.assertEqual(v86._INFLIGHT, set())

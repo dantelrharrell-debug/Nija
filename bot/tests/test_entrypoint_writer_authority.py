@@ -93,6 +93,53 @@ class EntrypointWriterAuthorityTests(unittest.TestCase):
         self.assertEqual(os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"], "1")
         self.assertTrue(os.environ["NIJA_WRITER_LOCK_KEY"].startswith("nija:writer_lock:"))
 
+    def test_package_and_compatibility_imports_share_one_singleton(self):
+        import importlib
+
+        package_module = importlib.import_module("bot.entrypoint_writer_authority")
+        compatibility_module = importlib.import_module("entrypoint_writer_authority")
+
+        self.assertIs(compatibility_module, package_module)
+        self.assertIs(
+            compatibility_module.get_entrypoint_writer_authority(),
+            package_module.get_entrypoint_writer_authority(),
+        )
+
+    def test_explicit_canonical_runtime_replaces_split_compatibility_singleton(self):
+        import bot.entrypoint_writer_authority as authority
+
+        original_runtime = authority.get_entrypoint_writer_authority()
+        stale_runtime = types.SimpleNamespace(
+            acquired=False,
+            lost=False,
+            _local_fallback=False,
+            _generation=0,
+        )
+        legacy_module = types.ModuleType("entrypoint_writer_authority")
+        legacy_module._SINGLETON = stale_runtime
+        legacy_module.get_entrypoint_writer_authority = lambda: legacy_module._SINGLETON
+        canonical_runtime = types.SimpleNamespace(
+            acquired=True,
+            lost=False,
+            _local_fallback=False,
+            _generation=91,
+        )
+        try:
+            sys.modules["entrypoint_writer_authority"] = legacy_module
+            selected = authority.bind_entrypoint_writer_authority_aliases(
+                canonical_runtime
+            )
+            self.assertIs(selected, canonical_runtime)
+            self.assertIs(
+                sys.modules["entrypoint_writer_authority"],
+                sys.modules["bot.entrypoint_writer_authority"],
+            )
+            self.assertIs(
+                authority.get_entrypoint_writer_authority(), canonical_runtime
+            )
+        finally:
+            authority.bind_entrypoint_writer_authority_aliases(original_runtime)
+
     def test_acquire_reconciles_only_after_writer_state_becomes_active(self):
         client = MagicMock()
         client.eval.return_value = [17, "17:owner", 60000, 23]
@@ -361,6 +408,117 @@ class BotMainAuthorityOrderingTests(unittest.TestCase):
             1,
             bootstrap_state="RUNNING_SUPERVISED",
         )
+
+    def test_writer_acquisition_pins_exact_runtime_before_heartbeat_start(self):
+        import bot.entrypoint_writer_authority as authority
+
+        order: list[str] = []
+        previous_monitor = self.bot_main._authority_heartbeat_monitor
+        self.addCleanup(
+            setattr,
+            self.bot_main,
+            "_authority_heartbeat_monitor",
+            previous_monitor,
+        )
+        runtime = MagicMock()
+        runtime.acquire_with_standby.return_value = types.SimpleNamespace(
+            acquired=True,
+            error="",
+            holder="",
+            pttl_ms=60000,
+            token="writer-token-91",
+            generation=91,
+            instance_id="instance-91",
+            local_fallback=False,
+        )
+        runtime._generation = 91
+        monitor = MagicMock()
+
+        def bind(value):
+            self.assertIs(value, runtime)
+            order.append("bind")
+            return value
+
+        def start_heartbeat():
+            order.append("heartbeat")
+            return monitor
+
+        with (
+            patch.object(
+                authority,
+                "get_entrypoint_writer_authority",
+                return_value=runtime,
+            ),
+            patch.object(
+                authority,
+                "bind_entrypoint_writer_authority_aliases",
+                side_effect=bind,
+            ),
+            patch(
+                "bot.authority_heartbeat.start_authority_heartbeat",
+                side_effect=start_heartbeat,
+            ),
+            patch(
+                "bot.execution_authority_context.assert_distributed_writer_authority"
+            ) as assert_writer,
+        ):
+            self.assertTrue(
+                self.bot_main._acquire_writer_authority_before_nonce()
+            )
+
+        self.assertEqual(order, ["bind", "heartbeat"])
+        assert_writer.assert_called_once_with()
+        runtime.set_on_lost_callback.assert_called_once()
+
+    def test_post_acquisition_exception_releases_writer_and_revokes_readiness(self):
+        import bot.entrypoint_writer_authority as authority
+
+        runtime = MagicMock()
+        runtime.acquire_with_standby.return_value = types.SimpleNamespace(
+            acquired=True,
+            error="",
+            holder="",
+            pttl_ms=60000,
+            token="writer-token-91",
+            generation=91,
+            instance_id="instance-91",
+            local_fallback=False,
+        )
+        previous_runtime = self.bot_main._writer_authority_runtime
+        previous_monitor = self.bot_main._authority_heartbeat_monitor
+        self.addCleanup(
+            setattr,
+            self.bot_main,
+            "_writer_authority_runtime",
+            previous_runtime,
+        )
+        self.addCleanup(
+            setattr,
+            self.bot_main,
+            "_authority_heartbeat_monitor",
+            previous_monitor,
+        )
+
+        with (
+            patch.object(
+                authority,
+                "get_entrypoint_writer_authority",
+                return_value=runtime,
+            ),
+            patch.object(
+                authority,
+                "bind_entrypoint_writer_authority_aliases",
+                side_effect=RuntimeError("identity_bind_crashed"),
+            ),
+        ):
+            self.assertFalse(
+                self.bot_main._acquire_writer_authority_before_nonce()
+            )
+
+        runtime.release.assert_called_once_with()
+        self.assertIsNone(self.bot_main._writer_authority_runtime)
+        self.assertEqual(os.environ["NIJA_WRITER_LEASE_ACQUIRED"], "0")
+        self.assertEqual(os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"], "0")
 
     def test_supervised_thread_evidence_blocks_without_live_heartbeat(self):
         runtime = types.SimpleNamespace(

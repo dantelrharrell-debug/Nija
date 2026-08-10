@@ -459,7 +459,8 @@ def _kraken_user_connectivity(manager: Any) -> dict[str, int | bool]:
         "registered": registered,
         "connected": connected,
         "disconnected": registered - connected,
-        "all_connected": connected == registered,
+        # 0/0 means no registered users, not "all users connected".
+        "all_connected": bool(registered > 0 and connected == registered),
     }
 
 
