@@ -386,6 +386,41 @@ def test_writer_not_ready_keeps_execution_fail_closed(monkeypatch) -> None:
     assert result["execution_ready"] is False
 
 
+def test_writer_status_cannot_override_dead_core_or_unhealthy_heartbeat(
+    monkeypatch,
+) -> None:
+    module = _module()
+    status = SimpleNamespace(
+        state="ACTIVE",
+        checks={
+            "heartbeat_active": True,
+            "lease_acquired": True,
+            "fencing_token_active": True,
+            "authority_verified": True,
+            "redis_reachable": True,
+        },
+        missing=(),
+        source="test",
+        reason="cached_ready",
+        ready=True,
+    )
+    monkeypatch.setattr(
+        "bot.writer_authority.WriterAuthority.get_status",
+        lambda **_kwargs: status,
+    )
+    monkeypatch.setattr(module, "_writer_core_loop_alive", lambda: False)
+    monkeypatch.setenv("NIJA_WRITER_HEARTBEAT_ACTIVE", "1")
+    monkeypatch.setenv("NIJA_WRITER_HEARTBEAT_ALIVE_TS", "1")
+
+    snapshot = module.writer_authority_snapshot(now=1000.0)
+
+    assert snapshot["lease_acquired"] is True
+    assert snapshot["fencing_token"] is True
+    assert snapshot["heartbeat_healthy"] is False
+    assert snapshot["core_loop_alive"] is False
+    assert snapshot["ready"] is False
+
+
 def test_unfunded_capital_keeps_execution_fail_closed(monkeypatch) -> None:
     module = _module()
     _set_credentials(monkeypatch)

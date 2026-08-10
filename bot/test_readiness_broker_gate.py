@@ -54,6 +54,16 @@ class TestReadinessBrokerGate(unittest.TestCase):
         readiness_table.set_ready("broker_connected", False)
         self.assertTrue(readiness_table.snapshot()["broker_connected"])
 
+    def test_runtime_readiness_can_be_explicitly_revoked(self):
+        readiness_table.mark_ready("authority_ready")
+
+        readiness_table.revoke_ready(
+            "authority_ready",
+            reason="writer_authority_lost:test",
+        )
+
+        self.assertFalse(readiness_table.snapshot()["authority_ready"])
+
     def test_is_ready_requires_all_keys(self):
         self._mark_all_except_broker()
         self.assertFalse(readiness_table.is_ready())

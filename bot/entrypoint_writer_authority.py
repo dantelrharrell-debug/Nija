@@ -1535,6 +1535,17 @@ class EntrypointWriterAuthority:
         os.environ.pop("NIJA_WRITER_FENCING_TOKEN", None)
         os.environ.pop("NIJA_WRITER_GENERATION", None)
         os.environ.pop("NIJA_WRITER_LEASE_GENERATION", None)
+        try:
+            from bot.readiness_table import revoke_ready
+
+            for component in ("authority_ready", "nonce_ready", "execution_ready"):
+                revoke_ready(component, reason=f"writer_authority_lost:{reason}")
+        except Exception:
+            logger.debug(
+                "ENTRYPOINT_WRITER_AUTHORITY_READINESS_REVOKE_FAILED marker=%s",
+                _MARKER,
+                exc_info=True,
+            )
         logger.critical(
             "ENTRYPOINT_WRITER_AUTHORITY_LOST marker=%s reason=%s",
             _MARKER,
@@ -1567,6 +1578,17 @@ class EntrypointWriterAuthority:
 
         self._stop.set()
         self._set_writer_state(WriterState.LOST, reason="release_called")
+        try:
+            from bot.readiness_table import revoke_ready
+
+            for component in ("authority_ready", "nonce_ready", "execution_ready"):
+                revoke_ready(component, reason="writer_authority_release_called")
+        except Exception:
+            logger.debug(
+                "ENTRYPOINT_WRITER_AUTHORITY_READINESS_REVOKE_FAILED marker=%s",
+                _MARKER,
+                exc_info=True,
+            )
         heartbeat = self._heartbeat_thread
         if heartbeat is not None and heartbeat is not threading.current_thread():
             if heartbeat.is_alive():

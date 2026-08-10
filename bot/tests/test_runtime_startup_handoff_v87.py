@@ -127,6 +127,22 @@ class RuntimeStartupHandoffV87Tests(unittest.TestCase):
         runtime._release_owned_lock_for_reelection.assert_called_once_with(reason)
         runtime._client.eval.assert_not_called()
 
+    def test_writer_loss_revokes_dynamic_readiness_truth(self) -> None:
+        from bot import readiness_table
+
+        runtime = EntrypointWriterAuthority()
+        runtime._notify_runtime_reconciliation = MagicMock()
+        for component in ("authority_ready", "nonce_ready", "execution_ready"):
+            readiness_table.mark_ready(component)
+        self.addCleanup(readiness_table.reset)
+
+        runtime._mark_lost("core_thread_registration_deadline_exceeded")
+
+        table = readiness_table.snapshot()
+        self.assertFalse(table["authority_ready"])
+        self.assertFalse(table["nonce_ready"])
+        self.assertFalse(table["execution_ready"])
+
     def test_core_registration_restart_is_bounded_and_nonzero(self) -> None:
         from bot import bot_main
 
@@ -337,6 +353,49 @@ class RuntimeStartupHandoffV87Tests(unittest.TestCase):
                 "all_connected": True,
             },
         )
+
+    def test_kraken_connectivity_counts_users_without_broker_objects(self) -> None:
+        kraken = _BrokerType("kraken")
+        connected_user = SimpleNamespace(connected=True)
+        manager = SimpleNamespace(
+            _all_user_brokers={
+                ("connected_customer", kraken): connected_user,
+            },
+            user_brokers={
+                "connected_customer": {kraken: connected_user},
+            },
+            _user_metadata={
+                "connected_customer": {"brokers": {kraken: True}},
+                "failed_customer": {"brokers": {kraken: False}},
+                "missing_credentials_customer": {"brokers": {kraken: False}},
+            },
+            _failed_user_connections={
+                ("failed_customer", kraken): "connection_failed",
+            },
+            _users_without_credentials={
+                ("missing_credentials_customer", kraken): True,
+            },
+        )
+
+        users = connectivity._kraken_user_connectivity(manager)
+
+        self.assertEqual(
+            users,
+            {
+                "registered": 3,
+                "connected": 1,
+                "disconnected": 2,
+                "all_connected": False,
+            },
+        )
+
+    def test_activation_diagnostics_do_not_recommend_authority_bypass(self) -> None:
+        source = (
+            Path(__file__).resolve().parents[1] / "trading_state_machine.py"
+        ).read_text(encoding="utf-8")
+
+        self.assertNotIn("to bypass all gates immediately", source)
+        self.assertNotIn("TIP: Set FORCE_TRADE=1", source)
 
     def test_kraken_supervision_uses_canonical_manager_singleton(self) -> None:
         target = "bot.multi_account_broker_manager"

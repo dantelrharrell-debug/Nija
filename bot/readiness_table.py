@@ -71,8 +71,18 @@ _VERSION = 0
 # Write API
 # ---------------------------------------------------------------------------
 
-def set_ready(component: str, value: bool) -> None:
-    """Set *component* readiness while preventing normal true-to-false regressions."""
+def set_ready(
+    component: str,
+    value: bool,
+    *,
+    allow_regression: bool = False,
+) -> None:
+    """Set readiness while preventing ordinary true-to-false regressions.
+
+    Runtime authority loss is intentionally different from an ordinary startup
+    update: a previously valid writer/nonce proof must be revocable.  Callers
+    should use :func:`revoke_ready` for that explicit terminal transition.
+    """
     global _VERSION
     _snapshot = None
     _changed = False
@@ -82,7 +92,7 @@ def set_ready(component: str, value: bool) -> None:
             _TABLE[component] = False
             _changed = True
         current = _TABLE.get(component)
-        if current is True and value is False:
+        if current is True and value is False and not allow_regression:
             logger.warning("Prevented readiness regression | %s", component)
             return
         if current != bool(value):
@@ -117,6 +127,18 @@ def mark_ready(component: str) -> None:
     logger.critical(
         "✅ READINESS_TABLE mark_ready=%s table=%s",
         component,
+        _TABLE,
+    )
+
+
+def revoke_ready(component: str, *, reason: str) -> None:
+    """Revoke a dynamic readiness proof after terminal runtime invalidation."""
+
+    set_ready(component, False, allow_regression=True)
+    logger.critical(
+        "READINESS_TABLE_REVOKED component=%s reason=%s table=%s",
+        component,
+        reason,
         _TABLE,
     )
 

@@ -56,6 +56,22 @@ class TestKrakenBalanceCooldown(unittest.TestCase):
         self.assertFalse(broker._connection_already_complete)
         self.assertFalse(broker.is_available())
 
+    def test_position_writer_authority_loss_demotes_stale_connection(self) -> None:
+        broker = self._build_broker()
+        broker._kraken_private_call = lambda *args, **kwargs: (_ for _ in ()).throw(
+            RuntimeError(
+                "Canonical process writer authority unavailable for Kraken nonce lease"
+            )
+        )
+
+        positions = broker.get_positions()
+
+        self.assertEqual(positions, [])
+        self.assertFalse(broker.connected)
+        self.assertFalse(broker._connection_already_complete)
+        self.assertFalse(broker.is_available())
+        self.assertTrue(broker.exit_only_mode)
+
     def test_balance_fetch_does_not_count_retry_suppressed_nonce_rebuilds(self) -> None:
         broker = self._build_broker()
         broker._kraken_private_call = lambda *args, **kwargs: (_ for _ in ()).throw(
