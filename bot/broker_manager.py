@@ -1306,8 +1306,13 @@ class KrakenStartupFSM:
         """
         with self._lock:
             self._connecting = False
+            # A successful authenticated reconnect supersedes a prior FAILED
+            # attempt.  Clear the failure latch atomically with the nonce-ready
+            # transition so capital_ready and USER waiters observe one coherent
+            # CONNECTED state.
+            self._failed.clear()
             self._nonce_ready.set()
-        self._connected.set()
+            self._connected.set()
 
     def mark_failed(self) -> None:
         """Atomically signal FAILED — wakes all waiting USER threads instantly."""
