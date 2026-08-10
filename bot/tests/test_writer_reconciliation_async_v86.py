@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 import threading
 import types
@@ -43,26 +44,37 @@ class WriterReconciliationAsyncV86Tests(unittest.TestCase):
             release.wait(2.0)
 
         readiness.reconcile_execution_readiness = reconcile
-        with patch.dict(sys.modules, {"three_venue_execution_readiness": readiness}):
-            ok, reason = runtime._heartbeat_tick()
-            self.assertTrue(ok)
-            self.assertEqual(reason, "")
-            self.assertTrue(started.wait(1.0))
+        writer_env = {
+            "NIJA_WRITER_LEASE_ACQUIRED": "1",
+            "NIJA_WRITER_FENCING_TOKEN": "11",
+            "NIJA_WRITER_LEASE_GENERATION": "7",
+        }
+        with (
+            patch.dict(os.environ, writer_env, clear=False),
+            patch("bot.entrypoint_writer_authority._get_heartbeat_state"),
+            patch.dict(sys.modules, {"three_venue_execution_readiness": readiness}),
+        ):
+            try:
+                ok, reason = runtime._heartbeat_tick()
+                self.assertTrue(ok, reason)
+                self.assertEqual(reason, "")
+                self.assertTrue(started.wait(1.0))
 
-            # A second renewal succeeds while the first readiness pass is
-            # blocked, and it does not create another broker-I/O worker.
-            ok, reason = runtime._heartbeat_tick()
-            self.assertTrue(ok)
-            self.assertEqual(reason, "")
-            self.assertEqual(
-                calls,
-                [{"trigger": "heartbeat_renewed", "force": True}],
-            )
-            self.assertEqual(runtime._client.eval.call_count, 2)
-            release.set()
-            worker = runtime._runtime_reconcile_thread
-            if worker is not None:
-                worker.join(1.0)
+                # A second renewal succeeds while the first readiness pass is
+                # blocked, and it does not create another broker-I/O worker.
+                ok, reason = runtime._heartbeat_tick()
+                self.assertTrue(ok, reason)
+                self.assertEqual(reason, "")
+                self.assertEqual(
+                    calls,
+                    [{"trigger": "heartbeat_renewed", "force": True}],
+                )
+                self.assertEqual(runtime._client.eval.call_count, 2)
+            finally:
+                release.set()
+                worker = runtime._runtime_reconcile_thread
+                if worker is not None:
+                    worker.join(1.0)
             self.assertIsNone(runtime._runtime_reconcile_thread)
 
     def test_non_heartbeat_reconciliation_remains_synchronous(self) -> None:
