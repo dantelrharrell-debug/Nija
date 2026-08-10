@@ -232,6 +232,24 @@ _REDIS_NONCE_RESET_BUFFER_MS = max(
 )
 
 
+def _assert_canonical_writer_for_nonce_lease(key_id: str) -> None:
+    """Require exact process-writer authority before touching a nonce lease.
+
+    The per-key Kraken lease is subordinate to the canonical process writer.
+    A superseded container must therefore stop renewing its nonce lease as
+    soon as it loses the process writer, even if its broker thread remains
+    alive during a rolling deployment.
+    """
+
+    try:
+        assert_startup_write_authority()
+    except Exception as exc:
+        raise RuntimeError(
+            "Canonical process writer authority unavailable for Kraken nonce "
+            f"lease (key_id={key_id})"
+        ) from exc
+
+
 def _startup_nonce_resync_future_ms() -> int:
     """Return how far ahead startup nonce recovery should advance Redis counters.
 
@@ -487,7 +505,13 @@ class _PerKeyRedisBackend:
     _LEASE_VERSION_PREFIX = "nija:kraken:writer:lease_version:"
     _LEASE_VERSION_COUNTER_PREFIX = "nija:kraken:writer:version_counter:"
     _LEASE_FINGERPRINT_PREFIX = "nija:kraken:writer:fingerprint:"
-    _LEASE_GENERATION_KEY = "nija:lease:generation"
+    # Kraken nonce fencing has a separate lineage from the canonical process
+    # writer.  Sharing the process generation key here would let a per-account
+    # handoff invalidate the process writer that authorized it.
+    _LEASE_GENERATION_KEY = os.environ.get(
+        "NIJA_KRAKEN_NONCE_LEASE_GENERATION_KEY",
+        "nija:kraken:writer:generation",
+    ).strip() or "nija:kraken:writer:generation"
 
     # Lua scripts execute atomically on Redis; internal read/write sequences do not interleave.
     # Renewal logic is duplicated across lease scripts to keep each Lua script self-contained.
@@ -774,8 +798,20 @@ class _PerKeyRedisBackend:
         stop_event: threading.Event,
         interval_s: float,
     ) -> None:
-        """Heartbeat loop that renews the Redis writer lease periodically."""
+        """Renew only while this process remains the canonical writer."""
         while not stop_event.wait(interval_s):
+            try:
+                _assert_canonical_writer_for_nonce_lease(key_id)
+            except RuntimeError as exc:
+                released = self.release_writer_lease(key_id)
+                _logger.critical(
+                    "KRAKEN_NONCE_LEASE_RELEASED_ON_CANONICAL_AUTHORITY_LOSS "
+                    "key=%s released=%s reason=%s",
+                    key_id,
+                    released,
+                    exc,
+                )
+                return
             try:
                 self._ensure_writer_lease(key_id)
             except Exception as exc:
@@ -996,6 +1032,8 @@ class _PerKeyRedisBackend:
         Fail closed when lease ownership changes or when fencing token rotates
         within the same process lifetime.
         """
+        _assert_canonical_writer_for_nonce_lease(key_id)
+
         owner_key = self._LEASE_OWNER_PREFIX + key_id
         version_key = self._LEASE_VERSION_PREFIX + key_id
         counter_key = self._LEASE_VERSION_COUNTER_PREFIX + key_id
@@ -1027,6 +1065,25 @@ class _PerKeyRedisBackend:
             return _granted, _lease_version, _prev_owner
 
         granted, lease_version, current_owner = _run_lease_script()
+        if not granted and prev is None and current_owner:
+            # The exact canonical process writer is the parent authority for
+            # every Kraken nonce writer.  If another process still renews this
+            # per-key lease after canonical re-election, fence it immediately
+            # instead of deadlocking a rolling deployment until the old
+            # container becomes healthy or exits.
+            _assert_canonical_writer_for_nonce_lease(key_id)
+            previous_owner = current_owner
+            granted, lease_version, _force_previous_owner = _force_takeover()
+            if granted:
+                current_owner = self._owner_id
+                _logger.critical(
+                    "KRAKEN_NONCE_LEASE_CANONICAL_HANDOFF key=%s lease_version=%d "
+                    "previous_owner=%s canonical_writer_verified=true "
+                    "action=fence_superseded_holder",
+                    key_id,
+                    lease_version,
+                    previous_owner,
+                )
         if not granted:
             # Startup safety: if this process has not held the lease yet, wait
             # through the observed holder TTL for the current holder to

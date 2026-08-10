@@ -13,6 +13,7 @@ from bot.distributed_nonce_manager import (
     DistributedNonceManager,
     _PerKeyRedisBackend,
     _REDIS_NONCE_RESET_BUFFER_MS,
+    _assert_canonical_writer_for_nonce_lease,
     _emit_nonce_debug_hook,
 )
 from bot import global_kraken_nonce as gkn
@@ -147,6 +148,94 @@ class TestPerKeyRedisBackendReset(unittest.TestCase):
         self.assertEqual(before, 9_000_000)
         self.assertEqual(after, 9_000_000)
         backend._client.set.assert_called_once_with("nija:kraken:nonce:kid", "9000000")
+
+
+class TestCanonicalWriterNonceLeaseHandoff(unittest.TestCase):
+    def _make_backend(self) -> "_PerKeyRedisBackend":
+        backend = _PerKeyRedisBackend.__new__(_PerKeyRedisBackend)
+        backend._client = Mock()
+        backend._owner_id = "new-owner"
+        backend._owner_fingerprint = "new-instance"
+        backend._owner_instance_id = "new-instance"
+        backend._lease_ttl_ms = 60_000
+        backend._strict_lease = True
+        backend._lease_by_key = {}
+        backend._startup_backoff_done = {"kid"}
+        backend._lease_heartbeat_threads = {}
+        backend._lease_heartbeat_stop = {}
+        backend._lease_status_last_log = {}
+        backend._wait_log_next_at = {}
+        backend._wait_log_lock = Mock()
+        backend._ensure_lease_heartbeat = Mock()
+        backend._log_lease_status = Mock()
+        backend._publish_lock_acquired_state = Mock()
+        backend._clear_wait_log_gate = Mock()
+        return backend
+
+    def test_nonce_generation_domain_is_separate_from_process_writer(self) -> None:
+        self.assertEqual(
+            _PerKeyRedisBackend._LEASE_GENERATION_KEY,
+            "nija:kraken:writer:generation",
+        )
+
+    def test_canonical_writer_fences_superseded_nonce_holder(self) -> None:
+        backend = self._make_backend()
+        backend._lease_script = Mock(return_value=[0, 119, "old-owner"])
+        backend._lease_force_script = Mock(return_value=[1, 120, "old-owner"])
+
+        with patch(
+            "bot.distributed_nonce_manager.assert_startup_write_authority",
+            return_value=None,
+        ) as authority:
+            version = backend._ensure_writer_lease("kid")
+
+        self.assertEqual(version, 120)
+        self.assertGreaterEqual(authority.call_count, 2)
+        backend._lease_force_script.assert_called_once()
+        self.assertEqual(backend._lease_force_script.call_args.kwargs["args"][-1], 1)
+        self.assertEqual(backend._lease_by_key["kid"].owner_id, "new-owner")
+        backend._ensure_lease_heartbeat.assert_called_once_with("kid")
+
+    def test_nonce_lease_touch_fails_before_redis_without_canonical_writer(self) -> None:
+        backend = self._make_backend()
+        backend._lease_script = Mock()
+        backend._lease_force_script = Mock()
+
+        with patch(
+            "bot.distributed_nonce_manager.assert_startup_write_authority",
+            side_effect=RuntimeError("not canonical"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "Canonical process writer"):
+                backend._ensure_writer_lease("kid")
+
+        backend._lease_script.assert_not_called()
+        backend._lease_force_script.assert_not_called()
+
+    def test_heartbeat_releases_lease_after_canonical_authority_loss(self) -> None:
+        backend = self._make_backend()
+        backend.release_writer_lease = Mock(return_value=True)
+        backend._ensure_writer_lease = Mock()
+        stop_event = Mock()
+        stop_event.wait.return_value = False
+
+        with patch(
+            "bot.distributed_nonce_manager.assert_startup_write_authority",
+            side_effect=RuntimeError("superseded"),
+        ):
+            backend._lease_heartbeat_loop("kid", stop_event, 20.0)
+
+        backend.release_writer_lease.assert_called_once_with("kid")
+        backend._ensure_writer_lease.assert_not_called()
+
+    def test_authority_helper_redacts_underlying_proof_details(self) -> None:
+        with patch(
+            "bot.distributed_nonce_manager.assert_startup_write_authority",
+            side_effect=RuntimeError("redis lock payload"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "key_id=kid") as ctx:
+                _assert_canonical_writer_for_nonce_lease("kid")
+
+        self.assertNotIn("redis lock payload", str(ctx.exception))
 
 
 class TestDistributedNonceProbeServerSync(unittest.TestCase):
