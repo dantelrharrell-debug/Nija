@@ -563,12 +563,37 @@ class BootstrapStateMachine:
                 return False
 
             if new_state == BootstrapState.RUNNING_SUPERVISED:
-                # NOTE: execution authority check disabled — was blocking bootstrap
-                # progression to RUNNING_SUPERVISED even with a 5-second timeout,
-                # preventing the trading loop from ever starting. Authority is
-                # granted unconditionally here; per-order runtime gates enforce
-                # safety independently of this bootstrap-phase check.
-                pass
+                try:
+                    try:
+                        from bot.execution_authority_context import (
+                            require_startup_execution_authority,
+                        )
+                    except ImportError:
+                        from execution_authority_context import (  # type: ignore[import]
+                            require_startup_execution_authority,
+                        )
+                    authority_status = require_startup_execution_authority(
+                        context=f"bootstrap_transition:{reason or 'unspecified'}",
+                        force_refresh=True,
+                    )
+                except Exception as exc:
+                    msg = (
+                        "RUNNING_SUPERVISED blocked: exact startup execution "
+                        f"authority unavailable ({exc})"
+                    )
+                    logger.error("❌ [BootstrapFSM] %s", msg)
+                    if raise_on_invalid:
+                        raise BootstrapInvariantError("EXECUTION_AUTHORITY", msg) from exc
+                    return False
+                if not bool(authority_status.get("ready", False)):
+                    msg = (
+                        "RUNNING_SUPERVISED blocked: startup authority not ready "
+                        f"missing={authority_status.get('missing', [])}"
+                    )
+                    logger.error("❌ [BootstrapFSM] %s", msg)
+                    if raise_on_invalid:
+                        raise BootstrapInvariantError("EXECUTION_AUTHORITY", msg)
+                    return False
 
 
             record: Dict[str, Any] = {
