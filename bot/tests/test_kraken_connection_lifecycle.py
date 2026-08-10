@@ -17,6 +17,7 @@ import os
 import sys
 import threading
 import types
+import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -288,6 +289,22 @@ class TestKrakenStartupFSM:
     def test_mark_connecting_is_alias_for_begin_platform_boot(self):
         self.fsm.mark_connecting()
         assert self.fsm.is_connecting
+
+
+class TestKrakenReconnectFailureLatch(unittest.TestCase):
+    def test_successful_reconnect_clears_failure_and_allows_capital_ready(self) -> None:
+        fsm = _make_fsm()()
+        fsm.begin_platform_boot()
+        fsm.mark_failed()
+        self.assertTrue(fsm.is_failed)
+
+        fsm.mark_connected()
+        fsm.mark_capital_ready()
+
+        self.assertTrue(fsm.is_connected)
+        self.assertFalse(fsm.is_failed)
+        self.assertTrue(fsm.is_nonce_ready)
+        self.assertTrue(fsm.is_capital_ready)
 
 
 # ---------------------------------------------------------------------------
