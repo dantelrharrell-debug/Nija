@@ -211,8 +211,8 @@ class TestCoreThreadDeathTriggersReelection(_Base):
         rt = self._make_runtime()
         _, client = self._acquire(rt)
 
-        # With no core thread registered, _validate_core_thread_liveness returns
-        # True (startup phase) → NIJA_CORE_THREAD_ALIVE should be "1".
+        # The writer remains healthy during startup, but no core thread exists
+        # yet, so the published thread-liveness signal must remain truthful.
         client.eval.return_value = 1  # heartbeat renewal succeeds
         os.environ.pop("NIJA_CORE_THREAD_ALIVE", None)
 
@@ -220,8 +220,8 @@ class TestCoreThreadDeathTriggersReelection(_Base):
 
         self.assertEqual(
             os.environ.get("NIJA_CORE_THREAD_ALIVE"),
-            "1",
-            "NIJA_CORE_THREAD_ALIVE must be set to '1' when core thread is ok (startup phase)",
+            "0",
+            "NIJA_CORE_THREAD_ALIVE must be '0' until a core thread is registered",
         )
 
     def test_heartbeat_tick_clears_core_thread_alive_on_dead_thread(self):
@@ -296,9 +296,10 @@ class TestScanStartedWatchdogReelection(_Base):
 
         client.eval.return_value = 1
 
-        # Set acquired_at far enough in the past that elapsed >= deadline_s
-        # on the very first poll, then stop the event so the loop exits.
+        # Set the engine-handoff arm time far enough in the past that elapsed >=
+        # deadline_s on the very first poll, then stop so the loop exits.
         rt._acquired_at = time.time() - 400.0
+        rt._scan_deadline_armed_at = time.time() - 2.0
         rt._stop.set()  # stop immediately after one iteration
 
         with self._mock_seak():
@@ -316,6 +317,7 @@ class TestScanStartedWatchdogReelection(_Base):
 
         client.eval.return_value = 1
         rt._acquired_at = time.time() - 400.0
+        rt._scan_deadline_armed_at = time.time() - 2.0
         # Stop after the first iteration so the loop exits rather than
         # spinning indefinitely (the watchdog no longer self-terminates on
         # deadline; it keeps monitoring until stopped externally).

@@ -58,6 +58,8 @@ python3 -S -m py_compile \
     bot/live_broker_profit_exit_convergence_v25.py \
     bot/live_engine_profit_exit_convergence_v25.py \
     bot/live_exit_reconciliation_safety_v25.py \
+    bot/kraken_connection_convergence_v44_patch.py \
+    bot/kraken_all_account_supervision_v86.py \
     bot/stalled_writer_release_guard_v22.py \
     bot/writer_generation_handoff_v45_patch.py \
     bot/tests/test_writer_generation_handoff_v45.py \

@@ -319,11 +319,17 @@ class BotMainAuthorityOrderingTests(unittest.TestCase):
         import bot.bot_main as bot_main
 
         self.bot_main = bot_main
+        self._previous_writer_runtime = bot_main._writer_authority_runtime
+        bot_main._writer_authority_runtime = types.SimpleNamespace(
+            arm_scan_start_deadline=MagicMock(),
+            register_core_thread=MagicMock(),
+        )
         bot_main._shutdown_event.clear()
         bot_main._startup_complete = False
         bot_main._core_loop_thread = None
 
     def tearDown(self) -> None:
+        self.bot_main._writer_authority_runtime = self._previous_writer_runtime
         self.bot_main._shutdown_event.clear()
         self.bot_main._startup_complete = False
         self.bot_main._core_loop_thread = None
@@ -591,6 +597,7 @@ class BotMainAuthorityOrderingTests(unittest.TestCase):
         broker = types.SimpleNamespace(connected=True)
         strategy = types.SimpleNamespace(broker=broker, run_cycle=lambda: None)
         runtime = types.SimpleNamespace(
+            arm_scan_start_deadline=MagicMock(),
             register_core_thread=MagicMock(),
             record_scan_started=MagicMock(),
         )
@@ -646,6 +653,7 @@ class BotMainAuthorityOrderingTests(unittest.TestCase):
                 sys.modules["bot.nija_core_loop"] = previous
 
         self.assertEqual(code, 0)
+        runtime.arm_scan_start_deadline.assert_called_once_with("bot_main_step3")
         runtime.register_core_thread.assert_called_once()
         runtime.record_scan_started.assert_not_called()
 
@@ -658,6 +666,7 @@ class BotMainAuthorityOrderingTests(unittest.TestCase):
         broker = types.SimpleNamespace(connected=True)
         strategy = types.SimpleNamespace(broker=broker, run_cycle=lambda: None)
         runtime = types.SimpleNamespace(
+            arm_scan_start_deadline=MagicMock(),
             register_core_thread=MagicMock(),
             record_scan_started=MagicMock(),
         )
@@ -713,6 +722,7 @@ class BotMainAuthorityOrderingTests(unittest.TestCase):
                 sys.modules["bot.nija_core_loop"] = previous
 
         self.assertEqual(code, 0)
+        runtime.arm_scan_start_deadline.assert_called_once_with("bot_main_step3")
         runtime.register_core_thread.assert_called_once()
         runtime.record_scan_started.assert_not_called()
 

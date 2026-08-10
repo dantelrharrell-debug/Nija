@@ -62,12 +62,31 @@ _CONTRACTS = (
         ),
     ),
     FileContract(
+        "bot/kraken_connection_convergence_v44_patch.py",
+        (
+            "20260807-kraken-connection-convergence-v44",
+            "get_broker_manager",
+            "KRAKEN_CONNECTION_CONVERGENCE_V44_INSTALLED",
+        ),
+    ),
+    FileContract(
+        "bot/kraken_all_account_supervision_v86.py",
+        (
+            "20260810-kraken-all-account-supervision-v86",
+            "KRAKEN_USER_SUPERVISION",
+            "authenticated_reconnect_only=true",
+            "continuous_supervision=true",
+        ),
+    ),
+    FileContract(
         "bot/bot_main.py",
         (
             "_acquire_writer_authority_before_nonce",
             "_run_self_healing_startup",
             "_publish_canonical_strategy_for_runtime",
             "CANONICAL_STRATEGY_HANDOFF_READY",
+            "kraken_all_account_supervision_v86",
+            "KRAKEN_ALL_ACCOUNT_SUPERVISION_READY",
             "_release_writer_authority",
         ),
     ),

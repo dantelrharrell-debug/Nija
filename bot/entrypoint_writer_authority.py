@@ -197,6 +197,12 @@ class EntrypointWriterAuthority:
         self._local_fallback = False
         self._scan_started_at = 0.0
         self._scan_complete_at: float = 0.0
+        # The process writer is acquired before main.py completes its guarded
+        # import/handoff phase.  A scan deadline measured from acquisition is
+        # therefore not a core-loop deadline.  bot_main explicitly arms this
+        # timer immediately before starting the trading engine.
+        self._scan_deadline_armed_at = 0.0
+        self._scan_deadline_arm_source = ""
         self._scan_deadline_exceeded = False
         self._scan_started_watchdog_thread: Optional[threading.Thread] = None
         self._scan_watchdog_cancel: threading.Event = threading.Event()
@@ -697,6 +703,10 @@ class EntrypointWriterAuthority:
         _prior_scan_complete_at = self._scan_complete_at
         self._scan_started_at = 0.0
         self._scan_complete_at = 0.0
+        self._scan_deadline_armed_at = 0.0
+        self._scan_deadline_arm_source = ""
+        os.environ.pop("NIJA_SCAN_START_DEADLINE_ARMED_AT", None)
+        os.environ.pop("NIJA_SCAN_START_DEADLINE_SOURCE", None)
         self._scan_deadline_exceeded = False
         self._scan_watchdog_cancel.clear()
         self._local_fallback = False
@@ -933,6 +943,7 @@ class EntrypointWriterAuthority:
         """Register the core trading thread so lock metadata can expose liveness."""
         if thread is None:
             return
+        self.arm_scan_start_deadline("core_thread_registered")
         self._core_thread = thread
         self._core_thread_name = str(getattr(thread, "name", "") or "")
         self._core_thread_ident = getattr(thread, "ident", None)
@@ -943,6 +954,35 @@ class EntrypointWriterAuthority:
         self._scan_deadline_exceeded = False
         self._write_metadata()
         self._notify_runtime_reconciliation("core_thread_registered")
+
+    def arm_scan_start_deadline(self, source: str = "runtime_handoff") -> None:
+        """Arm the scan-start watchdog when the trading engine is expected.
+
+        Writer acquisition intentionally precedes guarded runtime imports.  The
+        startup scan deadline must begin at the actual engine handoff, not while
+        the process is still installing fail-closed controls.
+        """
+        if self._scan_started_at or self._scan_complete_at:
+            return
+        with self._state_lock:
+            if self._scan_deadline_armed_at:
+                return
+            self._scan_deadline_armed_at = time.time()
+            self._scan_deadline_arm_source = str(source or "runtime_handoff")
+            os.environ["NIJA_SCAN_START_DEADLINE_ARMED_AT"] = str(
+                self._scan_deadline_armed_at
+            )
+            os.environ["NIJA_SCAN_START_DEADLINE_SOURCE"] = (
+                self._scan_deadline_arm_source
+            )
+        logger.critical(
+            "SCAN_START_DEADLINE_ARMED marker=%s source=%s instance=%s generation=%s",
+            _MARKER,
+            self._scan_deadline_arm_source,
+            self._instance_id,
+            self._generation,
+        )
+        self._start_scan_started_watchdog()
 
     def _write_metadata(self) -> None:
         if self._client is None or not self._meta_key:
@@ -981,6 +1021,8 @@ class EntrypointWriterAuthority:
         """
         if self._scan_started_at:
             return
+        if not self._scan_deadline_armed_at:
+            self.arm_scan_start_deadline("scan_started")
         self._scan_started_at = time.time()
         # Clear the deadline flag so _validate_core_thread_liveness and the
         # watchdog loop no longer treat an exceeded startup window as an error.
@@ -1053,7 +1095,6 @@ class EntrypointWriterAuthority:
         self._scan_started_watchdog_thread = t
 
     def _scan_started_watchdog_loop(self, deadline_s: float) -> None:
-        acquired_at = self._acquired_at or time.time()
         poll_interval = min(10.0, max(1.0, deadline_s / 10.0))
         _deadline_last_logged = 0.0
         _deadline_rewarning_s = min(60.0, max(poll_interval, deadline_s / 5.0))
@@ -1061,13 +1102,10 @@ class EntrypointWriterAuthority:
         # waiting, so that setting _stop prior to the first iteration still
         # allows the deadline flag to be evaluated at least once.
         while True:
-            lifecycle_phase = _get_heartbeat_state().phase
-            startup_completed = lifecycle_phase in {_Phase.SCAN_COMPLETE, _Phase.LIVE}
             if (
                 not self.acquired
                 or self._scan_started_at
                 or self._scan_complete_at
-                or startup_completed
                 or self._scan_watchdog_cancel.is_set()
             ):
                 # Scan started (or was explicitly cancelled after completion) —
@@ -1076,7 +1114,15 @@ class EntrypointWriterAuthority:
                 # deadline had already been exceeded.
                 self._scan_deadline_exceeded = False
                 return  # Scan started; watchdog duty fulfilled
-            elapsed = time.time() - acquired_at
+            armed_at = self._scan_deadline_armed_at
+            if armed_at <= 0.0:
+                if self._stop.is_set():
+                    return
+                if self._scan_watchdog_cancel.wait(timeout=poll_interval):
+                    self._scan_deadline_exceeded = False
+                    return
+                continue
+            elapsed = time.time() - armed_at
             if elapsed >= deadline_s:
                 self._scan_deadline_exceeded = True
                 now = time.time()
@@ -1084,10 +1130,13 @@ class EntrypointWriterAuthority:
                     _deadline_last_logged = now
                     logger.error(
                         "SCAN_STARTED_DEADLINE_EXCEEDED marker=%s deadline_s=%.0f "
-                        "elapsed_since_acquisition=%.1fs writer_acquired=%s instance=%s",
+                        "elapsed_since_deadline_arm=%.1fs elapsed_since_acquisition=%.1fs "
+                        "arm_source=%s writer_acquired=%s instance=%s",
                         _MARKER,
                         deadline_s,
                         elapsed,
+                        time.time() - (self._acquired_at or time.time()),
+                        self._scan_deadline_arm_source or "unknown",
                         self.acquired,
                         self._instance_id,
                     )
@@ -1103,7 +1152,7 @@ class EntrypointWriterAuthority:
                 continue
             if self._stop.is_set():
                 return
-            remaining = (acquired_at + deadline_s) - time.time()
+            remaining = (armed_at + deadline_s) - time.time()
             if self._scan_watchdog_cancel.wait(timeout=min(poll_interval, max(0.1, remaining))):
                 self._scan_deadline_exceeded = False
                 return
@@ -1239,9 +1288,11 @@ class EntrypointWriterAuthority:
             return False, inv_reason
 
         core_ok, core_reason = self._validate_core_thread_liveness()
+        core_registered = self._core_thread is not None
+        core_alive = bool(core_registered and core_ok)
         # Publish liveness state so the authority heartbeat monitor can also
         # gate on core_thread_alive (Fix 2).
-        os.environ["NIJA_CORE_THREAD_ALIVE"] = "1" if core_ok else "0"
+        os.environ["NIJA_CORE_THREAD_ALIVE"] = "1" if core_alive else "0"
         if not core_ok:
             self._release_owned_lock_for_reelection(core_reason)
             return False, core_reason
@@ -1311,9 +1362,9 @@ class EntrypointWriterAuthority:
                     self._generation,
                     self._instance_id,
                     os.getpid(),
-                    core_ok,
-                    bool(self._core_thread is not None),
-                    "ok" if core_ok else core_reason,
+                    core_alive,
+                    core_registered,
+                    core_reason or ("ok" if core_registered else "startup_not_registered"),
                 )
                 if code == 2:
                     logger.warning(
@@ -1345,8 +1396,8 @@ class EntrypointWriterAuthority:
         core loop is considered permanently stalled and (False, reason) is
         returned so the heartbeat stops renewing the lease.  Once the scan has
         started (or the lifecycle phase has advanced past LEASE_ACQUIRED),
-        the deadline is no longer relevant and this check always returns True
-        for a None core thread.
+        the deadline is no longer relevant and this check remains healthy for
+        an unregistered startup thread while reporting that state truthfully.
         """
         if self._local_fallback:
             return True, ""
@@ -1570,6 +1621,8 @@ class EntrypointWriterAuthority:
             os.environ.pop("NIJA_WRITER_GENERATION", None)
             os.environ.pop("NIJA_WRITER_FENCING_TOKEN_FALLBACK", None)
             os.environ.pop("NIJA_WRITER_LEASE_GENERATION", None)
+            os.environ.pop("NIJA_SCAN_START_DEADLINE_ARMED_AT", None)
+            os.environ.pop("NIJA_SCAN_START_DEADLINE_SOURCE", None)
             logger.info(
                 "ENTRYPOINT_WRITER_AUTHORITY_RELEASED marker=%s released=%s "
                 "local_fallback=%s heartbeat_quiesced=true",

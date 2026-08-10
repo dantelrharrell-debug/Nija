@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import MutableMapping
-import importlib
 import logging
 import os
 import sys
@@ -123,13 +122,13 @@ def _apply_redis_lock_emergency_fallback(env: MutableMapping[str, str], notes: l
 
 
 def _resolve_class(module_names: tuple[str, ...], class_name: str):
-    """Resolve a runtime class from loaded modules, then by safe import.
+    """Resolve a runtime class without importing the live runtime graph.
 
-    The previous autowire workers only inspected ``sys.modules``.  In Railway
-    starts where ``startup_runtime_safety`` ran before the core modules loaded,
-    this produced false timeouts even though the classes existed on disk.  This
-    helper preserves the cheap loaded-module fast path, then imports the target
-    module if it has not appeared yet.
+    These callers are background autowire workers.  Importing a missing target
+    from one of those workers races the canonical main-thread handoff, triggers
+    broker/capital side effects early, and can hold Python's import locks for
+    minutes.  Polling already-loaded modules keeps startup deterministic; each
+    worker patches the class immediately after its canonical owner imports it.
     """
 
     for module_name in module_names:
@@ -138,20 +137,6 @@ def _resolve_class(module_names: tuple[str, ...], class_name: str):
         if cls is not None:
             return cls
 
-    for module_name in module_names:
-        try:
-            module = importlib.import_module(module_name)
-        except Exception as exc:
-            logger.debug(
-                "runtime class import probe failed module=%s class=%s error=%s",
-                module_name,
-                class_name,
-                exc,
-            )
-            continue
-        cls = getattr(module, class_name, None)
-        if cls is not None:
-            return cls
     return None
 
 

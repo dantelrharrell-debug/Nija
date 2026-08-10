@@ -12,7 +12,6 @@ sizing layer unchanged.
 """
 from __future__ import annotations
 
-import importlib
 import logging
 import os
 import sys
@@ -499,15 +498,11 @@ def _try_patch_loaded() -> bool:
             if isinstance(module, ModuleType):
                 loaded_module = module
                 break
-        if loaded_module is None and installer is _install_on_pre_trade_risk_engine:
-            for name in names:
-                try:
-                    module = importlib.import_module(name)
-                except Exception:
-                    continue
-                if isinstance(module, ModuleType):
-                    loaded_module = module
-                    break
+        # Never import an unloaded runtime target from the startup installer.
+        # Importing pre_trade_risk_engine pulls the strategy/broker graph into
+        # the canonical pre-handoff path and can block for minutes on broker
+        # hydration.  The monitor below patches the class as soon as its normal
+        # owner imports it; until then the execution authority remains closed.
         if isinstance(loaded_module, ModuleType):
             changed = installer(loaded_module) or changed
     return changed

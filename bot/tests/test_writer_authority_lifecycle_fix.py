@@ -106,11 +106,11 @@ class HeartbeatStateUnitTests(unittest.TestCase):
         snap2 = self.hs.record_heartbeat(generation=1)
         self.assertEqual(snap2.marker_timestamp, marker_ts)
 
-    def test_record_heartbeat_failure_marks_unhealthy(self) -> None:
+    def test_record_heartbeat_failure_preserves_fresh_success(self) -> None:
         self.hs.record_heartbeat(generation=1)
         self.hs.record_heartbeat_failure()
         snap = self.hs.snapshot()
-        self.assertFalse(snap.healthy)
+        self.assertTrue(snap.healthy)
 
     def test_is_fresh_requires_healthy_and_recent_timestamp(self) -> None:
         self.assertFalse(self.hs.is_fresh(max_age_s=90.0))
@@ -119,8 +119,10 @@ class HeartbeatStateUnitTests(unittest.TestCase):
 
     def test_is_fresh_returns_false_after_max_age_elapsed(self) -> None:
         self.hs.record_heartbeat(generation=1)
-        with patch("bot.heartbeat_state.time") as mock_time:
-            mock_time.time.return_value = time.time() + 200
+        with patch(
+            "bot.heartbeat_state.time.monotonic",
+            return_value=time.monotonic() + 200,
+        ):
             self.assertFalse(self.hs.is_fresh(max_age_s=90.0))
 
     def test_advance_phase_forward_only(self) -> None:
@@ -254,6 +256,7 @@ class ScanDeadlineTests(unittest.TestCase):
         r = self._make_runtime()
         # Simulate deadline already elapsed
         r._acquired_at = time.time() - 400.0
+        r._scan_deadline_armed_at = time.time() - 2.0
         r._scan_deadline_exceeded = True
 
         # Background: set scan_started_at after a short delay
