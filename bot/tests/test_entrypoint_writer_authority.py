@@ -180,14 +180,8 @@ class EntrypointWriterAuthorityTests(unittest.TestCase):
         self.assertIsNone(runtime._heartbeat_thread)
         self.assertEqual(os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"], "0")
 
-    def test_release_proceeds_with_deletion_when_heartbeat_cannot_quiesce(self):
-        """release() must delete the lock even when the heartbeat thread survives the join.
-
-        The heartbeat sets _stop before the join; the daemon thread therefore
-        cannot reacquire the lock.  Skipping deletion would leave a live lock in
-        Redis and force the successor instance to wait a full TTL before it can
-        become the active writer.
-        """
+    def test_release_skips_deletion_when_heartbeat_cannot_quiesce(self):
+        """An in-flight renewal must never race compare-and-delete."""
         client = MagicMock()
         client.eval.return_value = 1  # compare-and-delete succeeds
 
@@ -205,8 +199,10 @@ class EntrypointWriterAuthorityTests(unittest.TestCase):
         runtime._lock_value = "17:local-owner"
         runtime._heartbeat_thread = StuckHeartbeat()
 
-        self.assertTrue(runtime.release())
-        client.eval.assert_called_once()
+        self.assertFalse(runtime.release())
+        client.eval.assert_not_called()
+        self.assertIsNotNone(runtime._heartbeat_thread)
+        self.assertEqual(os.environ["NIJA_WRITER_LEASE_ACQUIRED"], "0")
 
     def test_redis_unavailable_remains_fail_closed_without_explicit_fallback(self):
         runtime = EntrypointWriterAuthority()
@@ -259,7 +255,7 @@ class EntrypointWriterAuthorityTests(unittest.TestCase):
 
         self.assertFalse(runtime._scan_deadline_exceeded)
 
-    def test_local_fallback_requires_risk_confirmation(self):
+    def test_local_fallback_is_always_refused(self):
         os.environ["NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK"] = "true"
         runtime = EntrypointWriterAuthority()
         with patch(
@@ -283,9 +279,9 @@ class EntrypointWriterAuthorityTests(unittest.TestCase):
         ):
             granted = runtime.acquire_once()
 
-        self.assertTrue(granted.acquired)
-        self.assertTrue(granted.local_fallback)
-        self.assertEqual(os.environ["NIJA_WRITER_FENCING_TOKEN_FALLBACK"], "1")
+        self.assertFalse(granted.acquired)
+        self.assertFalse(granted.local_fallback)
+        self.assertNotIn("NIJA_WRITER_FENCING_TOKEN_FALLBACK", os.environ)
 
     def test_release_uses_compare_and_delete_script(self):
         client = MagicMock()
@@ -586,7 +582,7 @@ class BotMainAuthorityOrderingTests(unittest.TestCase):
             ],
         )
 
-    def test_main_registers_core_thread_before_waiting_for_scan_started(self):
+    def test_main_registers_core_thread_without_fabricating_scan_started(self):
         core_loop = types.ModuleType("bot.nija_core_loop")
         manager = types.SimpleNamespace(
             _fsm_initialized=True,
@@ -651,9 +647,9 @@ class BotMainAuthorityOrderingTests(unittest.TestCase):
 
         self.assertEqual(code, 0)
         runtime.register_core_thread.assert_called_once()
-        runtime.record_scan_started.assert_called_once()
+        runtime.record_scan_started.assert_not_called()
 
-    def test_main_records_scan_started_immediately_after_core_thread_registration(self):
+    def test_main_does_not_record_scan_started_before_real_scan(self):
         core_loop = types.ModuleType("bot.nija_core_loop")
         manager = types.SimpleNamespace(
             _fsm_initialized=True,
@@ -718,7 +714,7 @@ class BotMainAuthorityOrderingTests(unittest.TestCase):
 
         self.assertEqual(code, 0)
         runtime.register_core_thread.assert_called_once()
-        runtime.record_scan_started.assert_called_once()
+        runtime.record_scan_started.assert_not_called()
 
     def test_thread_start_failure_still_releases_writer_authority(self):
         core_loop = types.ModuleType("bot.nija_core_loop")
