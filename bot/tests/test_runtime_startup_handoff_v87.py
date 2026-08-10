@@ -112,6 +112,7 @@ class RuntimeStartupHandoffV87Tests(unittest.TestCase):
         runtime._release_owned_lock_for_reelection = MagicMock()
 
         with (
+            patch.dict(os.environ, {}, clear=False),
             patch.object(runtime, "_check_authority_invariant", return_value=(True, "")),
             patch.object(
                 runtime,
