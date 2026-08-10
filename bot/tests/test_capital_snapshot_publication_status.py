@@ -208,6 +208,48 @@ class CapitalSnapshotPublicationStatusTests(unittest.TestCase):
         self.assertNotIn(CapitalEventType.SNAPSHOT_PUBLISHED, bus_events)
         self.assertEqual(authority.publish_calls, 1)
 
+    def test_publish_lock_timeout_queues_fresh_refresh(self) -> None:
+        status = SnapshotPublicationStatus(
+            accepted=False,
+            stale=True,
+            reason="capital authority lock timeout",
+            timestamp=None,
+            expiry=None,
+        )
+        authority = _AuthorityForCoordinator(status)
+
+        def _timeout(_snapshot, writer_id: str) -> bool:
+            _ = writer_id
+            raise RuntimeError(
+                "CapitalAuthority lock acquisition timed out after 5.0s — possible deadlock"
+            )
+
+        authority.publish_snapshot = _timeout
+        bootstrap = get_capital_bootstrap_fsm()
+        bootstrap.claim_bootstrap_ownership()
+        bootstrap.force_transition(CapitalBootstrapState.BOOT_IDLE, "test reset")
+        bus_events = []
+        bus = CapitalEventBus()
+        coordinator = CapitalRefreshCoordinator(
+            event_bus=bus,
+            runtime_fsm=CapitalRuntimeStateMachine(),
+            bootstrap_fsm=bootstrap,
+        )
+        bus.subscribe(lambda event: bus_events.append(event.event_type))
+        with patch(
+            "bot.capital_authority.get_capital_authority",
+            return_value=authority,
+        ):
+            snapshot = coordinator.execute_refresh(
+                broker_map={"kraken": _PositiveBroker(100.0)},
+                trigger="watchdog",
+                open_exposure_usd=0.0,
+            )
+        bus.dispatch_pending()
+        self.assertIsNone(snapshot)
+        self.assertIn(CapitalEventType.REFRESH_REQUESTED, bus_events)
+        self.assertIn(CapitalEventType.SNAPSHOT_REJECTED, bus_events)
+
     def test_cache_timestamps_updated_on_publish(self) -> None:
         ca = _make_bare_ca()
         t1 = datetime.now(timezone.utc) - timedelta(seconds=10)
@@ -222,10 +264,14 @@ class CapitalSnapshotPublicationStatusTests(unittest.TestCase):
         ca = _make_bare_ca()
         stale_computed_at = datetime.now(timezone.utc) - timedelta(seconds=300)
         stale_snapshot = _FakeSnapshot({"kraken": 50.0}, stale_computed_at)
-        self.assertTrue(ca.publish_snapshot(stale_snapshot, writer_id="mabm_capital_refresh_coordinator"))
+        self.assertFalse(ca.publish_snapshot(stale_snapshot, writer_id="mabm_capital_refresh_coordinator"))
         status = ca.get_snapshot_publication_status()
         self.assertFalse(status.accepted)
         self.assertTrue(status.stale)
+        self.assertEqual(status.reason, "snapshot expired before publish")
+        self.assertEqual(ca._broker_balances, {})
+        self.assertIsNone(ca._last_typed_snapshot)
+        self.assertFalse(ca._hydrated)
         self.assertFalse(status.accepted and status.stale)
 
 

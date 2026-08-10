@@ -44,6 +44,7 @@ _IMPORTLIB_FLAG = "_NIJA_STALE_RENEWAL_RECOVERY_V40_IMPORTLIB_HOOK"
 _PATCH_ATTR = "_nija_stale_renewal_recovery_v40"
 _WATCHDOG_ATTR = "_nija_stale_renewal_watchdog_v40"
 _WATCHDOG_STOP_ATTR = "_nija_stale_renewal_watchdog_stop_v40"
+_WATCHDOG_GENERATION_ATTR = "_nija_stale_renewal_watchdog_generation_v40"
 _PATCH_LOCK = threading.RLock()
 
 
@@ -123,6 +124,7 @@ def _watchdog_loop(runtime: Any, stop_event: threading.Event) -> None:
     stale_confirmations = max(1, int(_cfg_float("NIJA_STALE_RENEWAL_CONFIRMATIONS", 2.0, 1.0)))
     stale_seen = 0
     last_log = 0.0
+    watched_generation = int(getattr(runtime, "_generation", 0) or 0)
 
     LOGGER.critical(
         "STALE_RENEWAL_V40_WATCHDOG_STARTED marker=%s generation=%s poll_s=%.2f confirmations=%d",
@@ -133,6 +135,15 @@ def _watchdog_loop(runtime: Any, stop_event: threading.Event) -> None:
     )
 
     while not stop_event.is_set():
+        current_generation = int(getattr(runtime, "_generation", 0) or 0)
+        if current_generation != watched_generation:
+            LOGGER.info(
+                "STALE_RENEWAL_V40_STALE_EPOCH_EXIT marker=%s watched_generation=%s current_generation=%s",
+                MARKER,
+                watched_generation,
+                current_generation,
+            )
+            return
         if bool(getattr(runtime, "lost", False)):
             return
         if not bool(getattr(runtime, "acquired", False)):
@@ -141,6 +152,14 @@ def _watchdog_loop(runtime: Any, stop_event: threading.Event) -> None:
             continue
 
         ok, reason, age_s, max_age_s = _runtime_health(runtime)
+        if int(getattr(runtime, "_generation", 0) or 0) != watched_generation:
+            LOGGER.info(
+                "STALE_RENEWAL_V40_STALE_EPOCH_EXIT marker=%s watched_generation=%s current_generation=%s",
+                MARKER,
+                watched_generation,
+                getattr(runtime, "_generation", 0),
+            )
+            return
         if ok:
             stale_seen = 0
             stop_event.wait(poll_s)
@@ -190,16 +209,36 @@ def _watchdog_loop(runtime: Any, stop_event: threading.Event) -> None:
 
 
 def _start_watchdog(runtime: Any) -> bool:
+    generation = int(getattr(runtime, "_generation", 0) or 0)
     existing = getattr(runtime, _WATCHDOG_ATTR, None)
     if existing is not None and callable(getattr(existing, "is_alive", None)) and existing.is_alive():
-        return True
+        existing_generation = int(getattr(existing, _WATCHDOG_GENERATION_ATTR, 0) or 0)
+        if existing_generation == generation:
+            return True
+        old_stop = getattr(runtime, _WATCHDOG_STOP_ATTR, None)
+        if old_stop is not None and callable(getattr(old_stop, "set", None)):
+            old_stop.set()
+        if existing is not threading.current_thread():
+            existing.join(timeout=3.0)
+        if existing.is_alive():
+            LOGGER.error(
+                "STALE_RENEWAL_V40_OLD_EPOCH_STILL_ALIVE marker=%s "
+                "old_generation=%s new_generation=%s action=fail_closed",
+                MARKER,
+                existing_generation,
+                generation,
+            )
+            os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "0"
+            os.environ["NIJA_EXECUTION_ACTIVE"] = "false"
+            return False
     stop_event = threading.Event()
     thread = threading.Thread(
         target=_watchdog_loop,
         args=(runtime, stop_event),
-        name="writer-stale-renewal-watchdog-v40",
+        name=f"writer-stale-renewal-watchdog-v40-g{generation}",
         daemon=True,
     )
+    setattr(thread, _WATCHDOG_GENERATION_ATTR, generation)
     setattr(runtime, _WATCHDOG_STOP_ATTR, stop_event)
     setattr(runtime, _WATCHDOG_ATTR, thread)
     thread.start()

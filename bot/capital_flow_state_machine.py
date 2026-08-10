@@ -1377,9 +1377,36 @@ class CapitalRefreshCoordinator:
         # Single atomic write to CapitalAuthority.  Rejected if writer_id
         # does not match the authorised constant.
         # =================================================================
-        accepted = authority.publish_snapshot(snapshot, writer_id=self.WRITER_ID)
+        try:
+            accepted = authority.publish_snapshot(snapshot, writer_id=self.WRITER_ID)
+        except RuntimeError as exc:
+            if "lock acquisition timed out" not in str(exc):
+                raise
+            logger.warning(
+                "[Coordinator] capital authority publish lock timed out — "
+                "queuing a fresh non-recursive refresh: %s",
+                exc,
+            )
+            self._bus.request_refresh("capital_authority_publish_lock_timeout")
+            self._bus.emit(CapitalEvent(
+                event_type=CapitalEventType.SNAPSHOT_REJECTED,
+                trigger=trigger,
+                snapshot=snapshot,
+                metadata={"error": str(exc), "retry_queued": True},
+            ))
+            return None
 
         if not accepted:
+            # A snapshot that aged out while waiting for the authority lock must
+            # be retried with fresh broker observations.  Queue the refresh on the
+            # event bus rather than recursing into the coordinator while this run
+            # still owns its in-flight guard.
+            try:
+                _rejected_status = authority.get_snapshot_publication_status()
+            except Exception:
+                _rejected_status = None
+            if _rejected_status is not None and bool(getattr(_rejected_status, "stale", False)):
+                self._bus.request_refresh("stale_snapshot_rejected_before_publish")
             self._bus.emit(CapitalEvent(
                 event_type=CapitalEventType.SNAPSHOT_REJECTED,
                 trigger=trigger,
