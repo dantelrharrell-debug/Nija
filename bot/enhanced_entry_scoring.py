@@ -32,6 +32,14 @@ from typing import Dict, Optional, Tuple
 import logging
 
 try:
+    from deterministic_pattern_recognition import DeterministicPatternRecognizer
+except ImportError:
+    try:
+        from bot.deterministic_pattern_recognition import DeterministicPatternRecognizer
+    except ImportError:
+        DeterministicPatternRecognizer = None  # type: ignore
+
+try:
     from indicators import scalar
 except ImportError:
     def scalar(x):
@@ -124,6 +132,11 @@ class EnhancedEntryScorer:
 
     def __init__(self, config: Optional[Dict] = None) -> None:
         self.config = config or {}
+        self._pattern_recognizer = (
+            DeterministicPatternRecognizer(self.config)
+            if DeterministicPatternRecognizer is not None
+            else None
+        )
 
         # Legacy threshold attrs (kept for backward-compat callers)
         self.min_score_threshold = self.config.get("min_score_threshold", MIN_SCORE_THRESHOLD)
@@ -147,6 +160,7 @@ class EnhancedEntryScorer:
         df: pd.DataFrame,
         indicators: Dict,
         side: str,
+        regime: Optional[str] = None,
     ) -> Tuple[float, Dict]:
         """
         Calculate comprehensive six-dimension entry score (0-100).
@@ -161,13 +175,35 @@ class EnhancedEntryScorer:
         """
         w = self.weights
 
+        pattern_context = {
+            "patterns": [],
+            "confirmed_patterns": [],
+            "score_adjustment": 0.0,
+            "regime": str(regime or "unknown"),
+            "rejection_reason": "pattern_module_unavailable",
+            "exit_plan": None,
+        }
+        if self._pattern_recognizer is not None:
+            try:
+                pattern_context = self._pattern_recognizer.analyze(
+                    df=df,
+                    indicators=indicators,
+                    side=side,
+                    regime=regime,
+                )
+            except Exception as exc:
+                logger.debug("Pattern recognizer error: %s", exc)
+
+        base_price_action = self._score_price_action(df, indicators, side, w["price_action"])
+        pattern_adjustment = float(pattern_context.get("score_adjustment", 0.0) or 0.0)
+
         scores = {
             "trend_strength": self._score_trend_strength(df, indicators, side, w["trend_strength"]),
             "dual_rsi":       self._score_dual_rsi(df, indicators, side, w["dual_rsi"]),
             "macd_momentum":  self._score_macd(df, indicators, side, w["macd_momentum"]),
             "volume":         self._score_volume(df, w["volume"]),
             "volatility":     self._score_volatility(df, indicators, w["volatility"]),
-            "price_action":   self._score_price_action(df, indicators, side, w["price_action"]),
+            "price_action":   float(np.clip(base_price_action + pattern_adjustment, 0.0, float(w["price_action"]))),
         }
 
         total = float(np.clip(sum(scores.values()), 0.0, 100.0))
@@ -177,6 +213,9 @@ class EnhancedEntryScorer:
             **scores,
             "total": total,
             "quality": self._classify_score(total),
+            "pattern_score_adjustment": pattern_adjustment,
+            "pattern_context": pattern_context,
+            "pattern_exit_plan": pattern_context.get("exit_plan"),
         }
 
         logger.debug(
@@ -186,6 +225,16 @@ class EnhancedEntryScorer:
             scores["trend_strength"], scores["dual_rsi"], scores["macd_momentum"],
             scores["volume"], scores["volatility"], scores["price_action"],
         )
+        if pattern_context.get("patterns"):
+            logger.info(
+                "PATTERN_SCORE side=%s regime=%s confirmed=%d total=%d adj=%.2f reason=%s",
+                side,
+                pattern_context.get("regime"),
+                len(pattern_context.get("confirmed_patterns", [])),
+                len(pattern_context.get("patterns", [])),
+                pattern_adjustment,
+                pattern_context.get("rejection_reason", ""),
+            )
         return total, breakdown
 
     def should_enter_trade(self, score: float) -> bool:

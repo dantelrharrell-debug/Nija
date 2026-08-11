@@ -653,6 +653,25 @@ class NijaAIEngine:
                 float(breakdown.get("wrss_factor", 1.0)),
                 self._force_trade_signal_enabled(),
             )
+            _pattern_ctx = breakdown.get("pattern_context", {}) if isinstance(breakdown, dict) else {}
+            if isinstance(_pattern_ctx, dict) and _pattern_ctx.get("patterns"):
+                _confirmed = _pattern_ctx.get("confirmed_patterns", [])
+                _names = ",".join(
+                    p.get("pattern_name", "?") for p in _confirmed[:4]
+                    if isinstance(p, dict)
+                )
+                logger.info(
+                    "PATTERN_SIGNAL symbol=%s side=%s regime=%s confirmed=%d contribution=%.2f "
+                    "rejection_reason=%s reached_execution_gate=%s names=%s",
+                    symbol,
+                    side.upper(),
+                    _pattern_ctx.get("regime", regime),
+                    len(_confirmed) if isinstance(_confirmed, list) else 0,
+                    float(_pattern_ctx.get("score_adjustment", 0.0) or 0.0),
+                    _pattern_ctx.get("rejection_reason", ""),
+                    "pending",
+                    _names or "none",
+                )
             _sb = breakdown.get("score_breakdown", {}) if isinstance(breakdown, dict) else {}
             _trend = float((_sb.get("trend_strength", _sb.get("trend", 0.0)) or 0.0))
             _momentum = float((_sb.get("dual_rsi", _sb.get("momentum", 0.0)) or 0.0))
@@ -867,12 +886,29 @@ class NijaAIEngine:
         breakdown: Dict[str, Any] = {}
 
         # ── Component 1: Enhanced scorer ─────────────────────────────────
+        # Live-path wiring (startup -> nija_core_loop phase3 -> evaluate_symbol ->
+        # _compute_composite -> EnhancedEntryScorer -> deterministic patterns):
+        # pattern context and exit geometry are attached to ``breakdown`` and
+        # propagated in AIEngineSignal.metadata for execution-time gates.
         scorer = self._get_scorer()
         if scorer is not None:
             try:
-                raw_score, score_breakdown = scorer.calculate_entry_score(df, indicators, side)
+                try:
+                    raw_score, score_breakdown = scorer.calculate_entry_score(
+                        df,
+                        indicators,
+                        side,
+                        regime=str(regime.value) if hasattr(regime, "value") else regime,
+                    )
+                except TypeError:
+                    # Backward-compat for injected/mocked scorers that still
+                    # expose the old 3-arg signature in tests.
+                    raw_score, score_breakdown = scorer.calculate_entry_score(df, indicators, side)
                 breakdown["enhanced_score"] = raw_score
                 breakdown["score_breakdown"] = score_breakdown
+                if isinstance(score_breakdown, dict):
+                    breakdown["pattern_context"] = score_breakdown.get("pattern_context", {})
+                    breakdown["pattern_exit_plan"] = score_breakdown.get("pattern_exit_plan")
             except Exception as exc:
                 logger.debug("EnhancedEntryScorer error: %s", exc)
                 raw_score = 50.0
