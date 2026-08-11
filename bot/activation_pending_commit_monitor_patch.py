@@ -61,6 +61,14 @@ _STARTUP_REPAIRS_READY: threading.Event = _process_object(
 _STARTUP_REPAIRS_INSTALLED: set[str] = _process_object(
     "_NIJA_STARTUP_EXECUTION_REPAIRS_INSTALLED_20260711c", set
 )
+_BROKER_RUNTIME_MODULES = (
+    "bot.multi_account_broker_manager",
+    "multi_account_broker_manager",
+    "bot.broker_manager",
+    "broker_manager",
+    "bot.broker_integration",
+    "broker_integration",
+)
 
 
 class _VenueBindDuplicateFilter(logging.Filter):
@@ -130,9 +138,27 @@ def _import_repair_module(*names: str) -> Any:
 
 
 def _broker_manager_module_loaded() -> bool:
-    return _loaded_module(
-        "bot.multi_account_broker_manager", "multi_account_broker_manager"
-    ) is not None
+    for module_name in _BROKER_RUNTIME_MODULES:
+        module = _loaded_module(module_name)
+        if module is None:
+            continue
+        if callable(getattr(module, "get_broker_manager", None)):
+            return True
+        if getattr(module, "_PLATFORM_BROKER_INSTANCES", None) is not None:
+            return True
+        if any(
+            hasattr(module, attr)
+            for attr in (
+                "BrokerManager",
+                "MultiAccountBrokerManager",
+                "CoinbaseBroker",
+                "CoinbaseBrokerAdapter",
+                "KrakenBroker",
+                "OKXBroker",
+            )
+        ):
+            return True
+    return False
 
 
 def _install_startup_execution_repairs() -> bool:
@@ -380,7 +406,10 @@ def _broker_manager_snapshot() -> tuple[bool, dict[str, Any]]:
     """
 
     mabm_mod = _loaded_module(
-        "bot.multi_account_broker_manager", "multi_account_broker_manager"
+        "bot.multi_account_broker_manager",
+        "multi_account_broker_manager",
+        "bot.broker_manager",
+        "broker_manager",
     )
     if mabm_mod is None:
         return False, {"reason": "broker_manager_module_not_loaded"}
@@ -706,7 +735,7 @@ def _monitor(stop_event: threading.Event | None = None) -> None:
                         state,
                     )
                     last_log = now
-                time.sleep(interval)
+                _readiness_sleep(interval)
                 continue
             accepted, meta = _capital_ready_snapshot()
             if not accepted:
@@ -722,7 +751,7 @@ def _monitor(stop_event: threading.Event | None = None) -> None:
                         meta.get("registered_brokers"),
                     )
                     last_log = now
-                time.sleep(interval)
+                _readiness_sleep(interval)
                 continue
             if _commit_once(sm, meta):
                 return

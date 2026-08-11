@@ -2049,8 +2049,8 @@ class NijaCoreLoop:
             0,
             _signals_generated - int(result.candidates_selected or 0),
         )
-        if not self._first_scan_completed_logged:
-            self._first_scan_completed_logged = True
+        if not self._first_scan_started_logged:
+            self._first_scan_started_logged = True
             logger.critical(
                 "FIRST_MARKET_SCAN symbols_scanned=%d markets_loaded=%d",
                 len(symbols),

@@ -35,6 +35,7 @@ _LOCK = threading.RLock()
 _STARTED = False
 _LAST_SIGNATURE = ""
 _STRATEGY_PUBLICATION_MONITOR_STARTED = False
+_LAST_STRATEGY_PUBLISHED = False
 
 
 def _truthy(name: str, default: str = "false") -> bool:
@@ -317,6 +318,62 @@ def _rearm_unsafe_timeout(sm: Any) -> None:
         pass
 
 
+def _retry_activation_after_publication() -> tuple[bool, dict[str, Any]]:
+    """Perform a short bounded retry burst after strategy publication lands."""
+
+    max_attempts = max(
+        1,
+        _int(os.environ.get("NIJA_POST_PUBLICATION_ACTIVATION_MAX_ATTEMPTS"), 3),
+    )
+    delay_s = max(
+        0.0,
+        _float(os.environ.get("NIJA_POST_PUBLICATION_ACTIVATION_INITIAL_DELAY_S"), 0.25),
+    )
+    max_delay_s = max(
+        delay_s,
+        _float(os.environ.get("NIJA_POST_PUBLICATION_ACTIVATION_MAX_DELAY_S"), 1.5),
+    )
+    backoff = max(
+        1.0,
+        _float(os.environ.get("NIJA_POST_PUBLICATION_ACTIVATION_BACKOFF"), 2.0),
+    )
+    last_details: dict[str, Any] = {
+        "activation": "post_publication_retry_not_attempted",
+    }
+
+    for attempt in range(1, max_attempts + 1):
+        active, details = _attempt_activation()
+        last_details = details
+        blockers = details.get("pending") or details.get("activation") or "none"
+        logger.warning(
+            "POST_PUBLICATION_ACTIVATION_RETRY attempt=%d/%d active=%s delay_s=%.2f blockers=%s",
+            attempt,
+            max_attempts,
+            str(active).lower(),
+            delay_s if attempt < max_attempts else 0.0,
+            blockers,
+        )
+        if active:
+            logger.critical(
+                "POST_PUBLICATION_ACTIVATION_RETRY_SUCCESS attempts=%d state=%s",
+                attempt,
+                details.get("state_after") or details.get("state_before") or "unknown",
+            )
+            details["post_publication_retry_attempts"] = attempt
+            return True, details
+        if attempt < max_attempts:
+            time.sleep(delay_s)
+            delay_s = min(max_delay_s, delay_s * backoff if delay_s > 0.0 else max_delay_s)
+
+    logger.warning(
+        "POST_PUBLICATION_ACTIVATION_RETRY_EXHAUSTED attempts=%d blockers=%s",
+        max_attempts,
+        last_details.get("pending") or last_details.get("activation") or "unknown",
+    )
+    last_details["post_publication_retry_attempts"] = max_attempts
+    return False, last_details
+
+
 def _attempt_activation() -> tuple[bool, dict[str, Any]]:
     proofs, details = _collect_proofs()
     ready, pending = _mark_proven_readiness(proofs)
@@ -363,6 +420,7 @@ def _attempt_activation() -> tuple[bool, dict[str, Any]]:
 
 
 def _cycle() -> tuple[bool, dict[str, Any]]:
+    global _LAST_STRATEGY_PUBLISHED
     try:
         v15 = importlib.import_module("runtime_convergence_v15_patch")
         installer = getattr(v15, "install", None)
@@ -374,6 +432,22 @@ def _cycle() -> tuple[bool, dict[str, Any]]:
         return False, {"live_mode": False}
     publisher_started, publisher_detail = _ensure_strategy_publication_monitor()
     active, details = _attempt_activation()
+    strategy_published = bool(
+        (details.get("proofs") or {}).get("strategy_ready") or _strategy_published()
+    )
+    if strategy_published and not _LAST_STRATEGY_PUBLISHED and not active:
+        retry_active, retry_details = _retry_activation_after_publication()
+        details["post_publication_retry"] = {
+            "attempted": True,
+            "active": retry_active,
+            "attempts": retry_details.get("post_publication_retry_attempts"),
+        }
+        if retry_active:
+            active = True
+            details = retry_details
+    else:
+        details["post_publication_retry"] = {"attempted": False}
+    _LAST_STRATEGY_PUBLISHED = strategy_published
     details["strategy_publication_monitor"] = {
         "started": publisher_started,
         "detail": publisher_detail,
