@@ -186,7 +186,7 @@ def _acquire_writer_authority_before_nonce() -> bool:
         # Wire up the on-lost callback so _shutdown_event is set immediately
         # when the lease is lost (e.g. core thread dies), without waiting for
         # the _keep_process_alive_after_loop_return polling interval.
-        def _on_lease_lost(reason: str) -> None:
+        def _on_lease_lost(reason: str) -> bool:
             logger.critical(
                 "WRITER_AUTHORITY_LOST_SHUTDOWN_TRIGGERED marker=20260710u reason=%s",
                 reason,
@@ -205,6 +205,7 @@ def _acquire_writer_authority_before_nonce() -> bool:
             # v39/v55 re-election path before reaching this callback; all
             # reasons that arrive here are terminal for the current process.
             _schedule_writer_authority_restart(reason)
+            return True
 
         if callable(getattr(runtime, "set_on_lost_callback", None)):
             runtime.set_on_lost_callback(_on_lease_lost)

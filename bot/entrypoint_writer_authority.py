@@ -1521,20 +1521,27 @@ class EntrypointWriterAuthority:
 
         The callback is called with a single positional argument: the reason
         string.  It is invoked inside ``_mark_lost()`` on the heartbeat thread,
-        so it must be lightweight (e.g. ``event.set()``).
+        so it must be lightweight (e.g. ``event.set()``).  Returning a truthy
+        value confirms that the callback installed its own bounded process
+        restart; false/``None`` leaves the runtime fallback responsible.
         """
         self._on_lost_callback = callback
 
-    def _schedule_unhandled_loss_restart(self, reason: str) -> None:
-        """Bound a live writer process when no external loss handler exists.
+    def _schedule_unhandled_loss_restart(
+        self,
+        reason: str,
+        *,
+        handler_confirmed: bool = False,
+    ) -> None:
+        """Bound a live writer process unless a callback confirmed handoff.
 
         The Redis lease is already released before this method is reached.
         Restarting cannot grant authority; it only prevents a callback-free
-        bootstrap process from continuing broker/readiness monitors forever
-        with generation zero.
+        or stale-callback bootstrap process from continuing broker/readiness
+        monitors forever with generation zero.
         """
 
-        if not _live_mode() or self._on_lost_callback is not None:
+        if not _live_mode() or handler_confirmed:
             return
         # Only a runtime that actually started the canonical renewal worker can
         # become the production zombie this guard targets.  This also keeps
@@ -1558,7 +1565,7 @@ class EntrypointWriterAuthority:
         def _force_restart() -> None:
             logger.critical(
                 "ENTRYPOINT_WRITER_AUTHORITY_FALLBACK_RESTART marker=%s "
-                "reason=%s exit_code=75 callback_installed=false",
+                "reason=%s exit_code=75 callback_handoff_confirmed=false",
                 _MARKER,
                 reason,
             )
@@ -1575,7 +1582,7 @@ class EntrypointWriterAuthority:
         self._unhandled_loss_restart_timer = timer
         logger.critical(
             "ENTRYPOINT_WRITER_AUTHORITY_FALLBACK_RESTART_SCHEDULED marker=%s "
-            "reason=%s grace_s=%.1f callback_installed=false",
+            "reason=%s grace_s=%.1f callback_handoff_confirmed=false",
             _MARKER,
             reason,
             grace_s,
@@ -1619,17 +1626,27 @@ class EntrypointWriterAuthority:
         )
         self._notify_runtime_reconciliation("writer_lost")
         callback = self._on_lost_callback
+        callback_handled = False
         if callback is not None:
             try:
-                callback(reason)
+                callback_handled = bool(callback(reason))
             except Exception as cb_exc:
                 logger.error(
                     "ENTRYPOINT_WRITER_AUTHORITY_LOST_CALLBACK_FAILED marker=%s err=%s",
                     _MARKER,
                     cb_exc,
                 )
-        else:
-            self._schedule_unhandled_loss_restart(reason)
+        logger.critical(
+            "ENTRYPOINT_WRITER_AUTHORITY_LOST_CALLBACK_HANDOFF marker=%s "
+            "callback_present=%s restart_confirmed=%s",
+            _MARKER,
+            callback is not None,
+            callback_handled,
+        )
+        self._schedule_unhandled_loss_restart(
+            reason,
+            handler_confirmed=callback_handled,
+        )
         try:
             from bot.single_execution_authority_kernel import get_seak
 

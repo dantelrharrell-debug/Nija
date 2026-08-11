@@ -332,14 +332,31 @@ class EntrypointWriterAuthorityTests(unittest.TestCase):
         timer.start.assert_called_once_with()
         force_exit.assert_called_once_with(75)
 
-    def test_installed_loss_callback_owns_restart_scheduling(self):
+    def test_confirmed_loss_callback_owns_restart_scheduling(self):
         runtime = EntrypointWriterAuthority()
-        runtime.set_on_lost_callback(lambda _reason: None)
 
         with patch("bot.entrypoint_writer_authority.threading.Timer") as factory:
-            runtime._schedule_unhandled_loss_restart("writer_lost")
+            runtime._schedule_unhandled_loss_restart(
+                "writer_lost",
+                handler_confirmed=True,
+            )
 
         factory.assert_not_called()
+
+    def test_unconfirmed_loss_callback_falls_back_to_runtime_restart(self):
+        runtime = EntrypointWriterAuthority()
+        runtime._heartbeat_thread = MagicMock(is_alive=MagicMock(return_value=True))
+        runtime.set_on_lost_callback(lambda _reason: None)
+        timer = MagicMock()
+
+        with patch(
+            "bot.entrypoint_writer_authority.threading.Timer",
+            return_value=timer,
+        ) as factory:
+            runtime._mark_lost("core_thread_registration_deadline_exceeded")
+
+        factory.assert_called_once()
+        timer.start.assert_called_once_with()
 
     def test_local_fallback_is_always_refused(self):
         os.environ["NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK"] = "true"
@@ -508,6 +525,17 @@ class BotMainAuthorityOrderingTests(unittest.TestCase):
         self.assertEqual(order, ["bind", "heartbeat"])
         assert_writer.assert_called_once_with()
         runtime.set_on_lost_callback.assert_called_once()
+        callback = runtime.set_on_lost_callback.call_args.args[0]
+        self.addCleanup(self.bot_main._shutdown_event.clear)
+        with patch.object(
+            self.bot_main,
+            "_schedule_writer_authority_restart",
+        ) as schedule_restart:
+            handled = callback("core_thread_registration_deadline_exceeded")
+        self.assertTrue(handled)
+        schedule_restart.assert_called_once_with(
+            "core_thread_registration_deadline_exceeded"
+        )
 
     def test_post_acquisition_exception_releases_writer_and_revokes_readiness(self):
         import bot.entrypoint_writer_authority as authority
