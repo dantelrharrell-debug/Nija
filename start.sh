@@ -1,5 +1,8 @@
 #!/bin/bash
 set -e  # Exit on error
+export NIJA_DEFER_RUNTIME_SITE_HOOKS=1
+echo "🧭 STARTUP_HANDOFF_PREFLIGHT_BEGIN runtime_site_hooks=deferred"
+
 
 echo "🔥 PYTHON ENTRYPOINT HIT (start.sh)"
 
@@ -777,6 +780,7 @@ fi
 
 _validate_redis_url_or_exit
 _log_redis_lock_source_hint
+echo "🧭 STARTUP_HANDOFF_REDIS_VALIDATION_COMPLETE"
 
 _validate_redis_not_http_endpoint() {
     local _redis_url
@@ -1565,52 +1569,33 @@ export NIJA_STARTUP_VALIDATED=1
 echo "✅ STARTUP_VALIDATION_ATTESTED source=start.sh"
 echo "🔄 Starting live trading bot..."
 echo "Working directory: $(pwd)"
-echo "Bot file exists: $(test -f ./bot.py && echo 'YES' || echo 'NO')"
-
-if [ ! -f "./bot.py" ]; then
-    echo "❌ Entrypoint file missing: ./bot.py"
-    echo "   Verify Railway start command and repository working directory."
-    exit 1
-fi
-
-# Runtime syntax guard: fail fast with explicit diagnostics if the deployed
-# entrypoint files are malformed (prevents opaque restart loops).
-if ! $PY -m py_compile ./main.py ./bot.py 2>/tmp/nija_syntax_check.err; then
-    echo "❌ Python syntax preflight failed for main.py/bot.py"
-    cat /tmp/nija_syntax_check.err || true
-    echo "   This usually indicates a stale/corrupted deployment artifact."
-    exit 1
-fi
-
-# Sleep briefly to ensure all bash output is flushed before Python starts
-# This prevents log message interleaving between bash and Python stdout
-sleep 0.1
-
-# Startup guard: show first lines of bot.py to detect stale images
-if [ -f bot.py ]; then
-    echo "--- bot.py (head) ---"
-    head -n 10 bot.py || true
-    echo "----------------------"
-
-    # Fail-fast: detect stale cached images
-    if head -n 1 bot.py | grep -q "NEW BOT.PY IS RUNNING"; then
-        echo "❌ Detected stale cached image: RuntimeError banner present in bot.py"
-        echo "👉 Delete the Render service and redeploy from the main branch."
-        exit 2
+echo "🧭 CANONICAL_ENTRYPOINT_DIAGNOSTICS path=launcher-v26->main.py->bot.bot->bot.bot_main release=v26"
+for _runtime_file in main.py bot/bot.py bot/bot_main.py bot/entrypoint_writer_authority.py bot/broker_manager.py bot/canonical_broker_prebootstrap_v22.py bot/canonical_broker_startup_convergence_v24.py bot/kraken_connection_convergence_v44_patch.py bot/kraken_all_account_supervision_v86.py bot/stalled_writer_release_guard_v22.py scripts/canonical_runtime_launcher_v26.py scripts/runtime_entrypoint_attestation.py; do
+    if [ ! -f "${_runtime_file}" ]; then
+        echo "❌ Canonical runtime file missing: ${_runtime_file}"
+        exit 78
     fi
-    if head -n 10 bot.py | grep -q "from nija_strategy"; then
-        echo "❌ Detected stale cached image: old import 'nija_strategy' in bot.py"
-        echo "👉 Delete the Render service and redeploy from the main branch."
-        exit 2
-    fi
+done
+NIJA_DEFER_RUNTIME_SITE_HOOKS=1 $PY -S -m py_compile main.py bot/bot.py bot/bot_main.py bot/entrypoint_writer_authority.py bot/broker_manager.py bot/canonical_broker_prebootstrap_v22.py bot/canonical_broker_startup_convergence_v24.py bot/kraken_connection_convergence_v44_patch.py bot/kraken_all_account_supervision_v86.py bot/stalled_writer_release_guard_v22.py scripts/canonical_runtime_launcher_v26.py scripts/runtime_entrypoint_attestation.py
+echo "--- canonical bot/bot.py (head) ---"
+head -n 14 bot/bot.py || true
+echo "-----------------------------------"
+if ! grep -q "canonical_broker_prebootstrap_v22" bot/bot.py || ! grep -q "stalled_writer_release_guard_v22" bot/bot.py || ! grep -q "canonical_broker_startup_convergence_v24" bot/logging_format_guard_patch.py; then
+    echo "❌ Canonical v22/v24 entrypoint guards are missing"
+    exit 78
 fi
 
 # Start the canonical Python entrypoint with unbuffered output.
 # `set -e` would terminate the script immediately on non-zero exit, so
 # temporarily disable it to capture and classify the bot exit status.
+echo "🧾 STARTUP_HANDOFF_ENTRYPOINT_ATTESTATION_BEGIN canonical=launcher-v26->main.py->bot.bot->bot.bot_main release=v26"
+NIJA_DEFER_RUNTIME_SITE_HOOKS=1 $PY -S scripts/runtime_entrypoint_attestation.py
+echo "🧾 STARTUP_HANDOFF_ENTRYPOINT_ATTESTATION_COMPLETE release=v26"
+echo "🚀 STARTUP_HANDOFF_RUNTIME_BEGIN entrypoint=canonical_runtime_launcher_v26.py canonical=launcher-v26->main.py->bot.bot->bot.bot_main runtime_site_hooks=deferred release=v26 commit=${GIT_COMMIT_SHORT:-${GIT_COMMIT:-unknown}}"
 set +e
-$PY -u main.py
+NIJA_DEFER_RUNTIME_SITE_HOOKS=1 $PY -u scripts/canonical_runtime_launcher_v26.py
 status=$?
+echo "🧭 STARTUP_HANDOFF_RUNTIME_EXIT status=${status}"
 set -e
 
 # Treat SIGTERM (143) as graceful to avoid restart loops during platform stop/redeploy

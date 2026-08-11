@@ -302,6 +302,45 @@ class EntrypointWriterAuthorityTests(unittest.TestCase):
 
         self.assertFalse(runtime._scan_deadline_exceeded)
 
+    def test_callback_free_live_writer_loss_schedules_bounded_restart(self):
+        runtime = EntrypointWriterAuthority()
+        timer = MagicMock()
+        runtime._heartbeat_thread = MagicMock(is_alive=MagicMock(return_value=True))
+
+        with (
+            patch.dict(
+                os.environ,
+                {"NIJA_WRITER_AUTHORITY_FALLBACK_RESTART_GRACE_S": "4"},
+                clear=False,
+            ),
+            patch(
+                "bot.entrypoint_writer_authority.threading.Timer",
+                return_value=timer,
+            ) as factory,
+            patch("bot.entrypoint_writer_authority.os._exit") as force_exit,
+        ):
+            runtime._schedule_unhandled_loss_restart(
+                "core_thread_registration_deadline_exceeded"
+            )
+            callback = factory.call_args.args[1]
+            callback()
+
+        factory.assert_called_once()
+        self.assertEqual(factory.call_args.args[0], 4.0)
+        self.assertEqual(timer.name, "entrypoint-writer-unhandled-loss-restart")
+        self.assertTrue(timer.daemon)
+        timer.start.assert_called_once_with()
+        force_exit.assert_called_once_with(75)
+
+    def test_installed_loss_callback_owns_restart_scheduling(self):
+        runtime = EntrypointWriterAuthority()
+        runtime.set_on_lost_callback(lambda _reason: None)
+
+        with patch("bot.entrypoint_writer_authority.threading.Timer") as factory:
+            runtime._schedule_unhandled_loss_restart("writer_lost")
+
+        factory.assert_not_called()
+
     def test_local_fallback_is_always_refused(self):
         os.environ["NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK"] = "true"
         runtime = EntrypointWriterAuthority()
