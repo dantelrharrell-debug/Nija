@@ -5752,8 +5752,20 @@ def _register_canonical_core_thread(thread: threading.Thread, *, source: str) ->
         return
 
     try:
-        from bot.entrypoint_writer_authority import get_entrypoint_writer_authority
+        from bot.entrypoint_writer_authority import (
+            bind_entrypoint_writer_authority_aliases,
+            get_entrypoint_writer_authority,
+        )
 
+        # Explicitly re-converge module aliases before retrieving the singleton.
+        # In some launch contexts (e.g. compatibility import paths) both
+        # ``bot.entrypoint_writer_authority`` and ``entrypoint_writer_authority``
+        # can be loaded as separate module objects, producing two independent
+        # ``_SINGLETON`` instances.  bind_entrypoint_writer_authority_aliases()
+        # with no argument selects the best candidate and pins it across all
+        # aliases so the next get_entrypoint_writer_authority() call returns
+        # the acquired runtime rather than a duplicate.
+        bind_entrypoint_writer_authority_aliases()
         runtime = get_entrypoint_writer_authority()
         if not bool(getattr(runtime, "acquired", False)) or bool(getattr(runtime, "lost", True)):
             logger.critical(

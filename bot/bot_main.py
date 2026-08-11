@@ -38,6 +38,11 @@ _writer_authority_last_error = ""
 _core_loop_thread: Optional[threading.Thread] = None
 _core_registration_restart_timer: Optional[threading.Timer] = None
 
+# Per-step startup timestamps used by the watchdog and diagnostics.
+_startup_stage_ts: dict[str, float] = {}
+# Set to True once the watchdog should stop polling.
+_startup_registration_done = threading.Event()
+
 
 def _revoke_writer_dependent_readiness(reason: str) -> None:
     """Publish fail-closed process truth after writer bootstrap failure."""
@@ -62,6 +67,53 @@ def _revoke_writer_dependent_readiness(reason: str) -> None:
             reason,
             exc_info=True,
         )
+
+
+def _startup_registration_watchdog(
+    deadline_s: float,
+    poll_interval_s: float = 10.0,
+) -> None:
+    """Watchdog that dumps stack traces if startup registration is blocked.
+
+    Runs in a daemon thread started just before Step 3.  If
+    ``_startup_registration_done`` is not set within *deadline_s* seconds the
+    watchdog emits a critical log with a per-thread stack trace so the blocking
+    site can be identified from production logs.  The watchdog exits silently
+    once registration completes or the shutdown event fires.
+    """
+    import traceback as _traceback
+
+    watchdog_start = time.time()
+    while not _startup_registration_done.wait(timeout=min(poll_interval_s, deadline_s)):
+        elapsed = time.time() - watchdog_start
+        if _shutdown_event.is_set():
+            return
+        if elapsed < deadline_s:
+            continue
+        # Deadline exceeded — emit stack dump so the blocking site is visible
+        # in production logs.  We emit one dump then continue polling so that
+        # a second dump can be emitted if the block persists.
+        frames = []
+        for tid, frame in sys._current_frames().items():
+            thread_name = "unknown"
+            for t in threading.enumerate():
+                if t.ident == tid:
+                    thread_name = t.name
+                    break
+            stack = "".join(_traceback.format_stack(frame))
+            frames.append(
+                f"Thread ident={tid} name={thread_name!r}:\n{stack}"
+            )
+        logger.critical(
+            "STARTUP_REGISTRATION_BLOCKED_STACK_DUMP marker=20260811-startup-watchdog "
+            "elapsed_s=%.1f deadline_s=%.1f stage_ts=%s\n%s",
+            elapsed,
+            deadline_s,
+            _startup_stage_ts,
+            "\n---\n".join(frames),
+        )
+        # Reset timer so a second dump fires after another deadline_s if still stuck.
+        watchdog_start = time.time()
 
 
 def _schedule_writer_authority_restart(reason: str) -> None:
@@ -755,15 +807,34 @@ def main() -> int:
         logger.info("✅ FSM is RUNNING_SUPERVISED")
 
         logger.info("\n[STEP 2.5] Publishing Canonical Trading Strategy")
+        _startup_stage_ts["step2.5_start"] = time.time()
         strategy = _publish_canonical_strategy_for_runtime(broker)
         if strategy is None:
             logger.critical(
                 "❌ Canonical TradingStrategy unavailable — exiting fail closed"
             )
             return 1
-        _startup_complete = True
+        _startup_stage_ts["step2.5_done"] = time.time()
+        logger.critical(
+            "STARTUP_STAGE_TIMING marker=20260811-startup-watchdog "
+            "step=2.5_strategy_published elapsed_s=%.2f",
+            _startup_stage_ts["step2.5_done"] - _startup_stage_ts.get("step2.5_start", _startup_stage_ts["step2.5_done"]),
+        )
 
         logger.info("\n[STEP 3] Starting Trading Loop")
+        # Arm the startup watchdog.  It will dump per-thread stacks if
+        # CANONICAL_CORE_THREAD_REGISTERED is not reached within the deadline.
+        _watchdog_deadline_s = float(
+            os.environ.get("NIJA_STARTUP_WATCHDOG_DEADLINE_S", "120")
+        )
+        _watchdog_thread = threading.Thread(
+            target=_startup_registration_watchdog,
+            args=(_watchdog_deadline_s,),
+            name="StartupRegistrationWatchdog",
+            daemon=True,
+        )
+        _watchdog_thread.start()
+        _startup_stage_ts["step3_start"] = time.time()
         try:
             from bot.nija_core_loop import start_trading_engine
             from bot.startup_coordinator import get_startup_coordinator
@@ -778,8 +849,11 @@ def main() -> int:
                 raise RuntimeError("Writer runtime cannot arm the scan-start deadline")
             arm_deadline("bot_main_step3")
             logger.critical("CORE_LOOP_STARTING strategy_type=%s", type(strategy).__name__)
+            _startup_stage_ts["start_trading_engine_call"] = time.time()
             trading_thread = start_trading_engine(strategy)
-            logger.critical("CORE_LOOP_STARTED thread_name=%s", getattr(trading_thread, "name", "unknown"))
+            _startup_stage_ts["start_trading_engine_done"] = time.time()
+            logger.critical("CORE_LOOP_STARTED thread_name=%s elapsed_s=%.2f", getattr(trading_thread, "name", "unknown"),
+                _startup_stage_ts["start_trading_engine_done"] - _startup_stage_ts["start_trading_engine_call"])
 
             if trading_thread is None:
                 raise RuntimeError("Trading thread not created by start_trading_engine")
@@ -802,6 +876,24 @@ def main() -> int:
                 trading_thread.name,
                 trading_thread.ident,
             )
+            # Identity guard: ensure the canonical singleton that owns the
+            # heartbeat is the same object used for registration.
+            from bot.entrypoint_writer_authority import (
+                EntrypointWriterAuthority,
+                bind_entrypoint_writer_authority_aliases,
+                get_entrypoint_writer_authority,
+            )
+            if isinstance(runtime, EntrypointWriterAuthority):
+                bind_entrypoint_writer_authority_aliases(runtime)
+                canonical_runtime = get_entrypoint_writer_authority()
+                if canonical_runtime is not runtime:
+                    logger.critical(
+                        "STARTUP_SINGLETON_IDENTITY_DRIFT marker=20260811-startup-watchdog "
+                        "runtime_id=%d canonical_id=%d — forcing canonical binding",
+                        id(runtime),
+                        id(canonical_runtime),
+                    )
+                    bind_entrypoint_writer_authority_aliases(runtime)
             register_core_thread = getattr(runtime, "register_core_thread", None)
             if not callable(register_core_thread):
                 raise RuntimeError(
@@ -815,7 +907,15 @@ def main() -> int:
                 raise RuntimeError(
                     "Canonical writer runtime rejected the core-thread handoff"
                 )
+            # Identity invariant: all three handles must point at the same thread.
+            if _core_loop_thread is not None and _core_loop_thread is not trading_thread:
+                raise RuntimeError(
+                    "Core-loop thread identity mismatch: "
+                    f"bot_main._core_loop_thread={_core_loop_thread!r} "
+                    f"trading_thread={trading_thread!r}"
+                )
             _core_loop_thread = trading_thread
+            _startup_stage_ts["canonical_core_registered"] = time.time()
             logger.critical(
                 "CANONICAL_CORE_THREAD_REGISTERED thread=%s ident=%s "
                 "writer_generation=%s",
@@ -823,6 +923,11 @@ def main() -> int:
                 trading_thread.ident,
                 getattr(runtime, "_generation", "unknown"),
             )
+            # Signal the watchdog that registration is complete.
+            _startup_registration_done.set()
+            # _startup_complete is now set only after verified registration,
+            # not before start_trading_engine is called.
+            _startup_complete = True
             logger.critical(
                 "EXECUTION_AUTHORITY_READY writer_generation=%s core_thread=%s ident=%s",
                 getattr(runtime, "_generation", "unknown"),
