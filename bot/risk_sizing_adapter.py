@@ -8,8 +8,8 @@ Adapters are the single point where broker-specific rules are applied
 
 Adapters
 --------
-CoinbaseRiskSizingAdapter   micro-cap bypass + $1 floor sizing
-KrakenRiskSizingAdapter     isolated mode — log risk, no sizing enforcement
+CoinbaseRiskSizingAdapter   micro-cap sizing + active risk evaluation
+KrakenRiskSizingAdapter     minimum-notional sizing + active risk evaluation
 DefaultRiskSizingAdapter    full risk evaluation + standard sizing
 
 Factory
@@ -85,7 +85,7 @@ class RiskSizingAdapter(ABC):
 
 
 # ---------------------------------------------------------------------------
-# Coinbase adapter — micro-cap, $1 floor, bypass risk gate
+# Coinbase adapter — micro-cap sizing with active risk
 # ---------------------------------------------------------------------------
 
 class CoinbaseRiskSizingAdapter(RiskSizingAdapter):
@@ -119,40 +119,60 @@ class CoinbaseRiskSizingAdapter(RiskSizingAdapter):
 
     def evaluate_risk(self, context) -> "RiskResult":
         try:
-            from bot.risk_plugin_base import BypassRiskPlugin
+            from bot.risk_plugin_base import ActiveRiskPlugin
         except ImportError:
-            from risk_plugin_base import BypassRiskPlugin  # type: ignore
-        return BypassRiskPlugin().evaluate(context)
+            from risk_plugin_base import ActiveRiskPlugin  # type: ignore
+        return ActiveRiskPlugin().evaluate(context)
 
 
 # ---------------------------------------------------------------------------
-# Kraken adapter — isolated; risk logged only; sizing blocked for entries
+# Kraken adapter — exchange-minimum sizing with active risk
 # ---------------------------------------------------------------------------
 
 class KrakenRiskSizingAdapter(RiskSizingAdapter):
-    """Isolated broker: entries sized at zero (blocked), exits allowed."""
+    """Kraken sizing constrained by exchange minimum and portfolio cap."""
 
     @property
     def broker_name(self) -> str:
         return "kraken"
 
     def size_order(self, raw_usd: float, balance: float, symbol: str = "") -> SizingResult:
-        # Entries never allocated capital in isolated mode
-        logger.warning(
-            "KrakenAdapter: isolated mode — sizing blocked (no new entries)"
-        )
-        return SizingResult(
-            approved=False,
-            sized_usd=0.0,
-            reason="KRAKEN_ISOLATED: no new entries",
-        )
+        if balance <= 0:
+            return SizingResult(
+                approved=False,
+                sized_usd=0.0,
+                reason="KRAKEN: positive broker balance required",
+            )
+        if raw_usd < _KRAKEN_MIN_ORDER:
+            return SizingResult(
+                approved=False,
+                sized_usd=0.0,
+                reason=(
+                    f"KRAKEN: size ${raw_usd:.2f} below "
+                    f"${_KRAKEN_MIN_ORDER:.2f} minimum"
+                ),
+            )
+        max_usd = balance * _DEFAULT_MAX_PCT
+        if max_usd < _KRAKEN_MIN_ORDER:
+            return SizingResult(
+                approved=False,
+                sized_usd=0.0,
+                reason="KRAKEN: risk cap is below exchange minimum",
+            )
+        if raw_usd > max_usd:
+            return SizingResult(
+                approved=True,
+                sized_usd=max_usd,
+                clamped=True,
+            )
+        return SizingResult(approved=True, sized_usd=raw_usd)
 
     def evaluate_risk(self, context) -> "RiskResult":
         try:
-            from bot.risk_plugin_base import IsolatedRiskPlugin
+            from bot.risk_plugin_base import ActiveRiskPlugin
         except ImportError:
-            from risk_plugin_base import IsolatedRiskPlugin  # type: ignore
-        return IsolatedRiskPlugin().evaluate(context)
+            from risk_plugin_base import ActiveRiskPlugin  # type: ignore
+        return ActiveRiskPlugin().evaluate(context)
 
 
 # ---------------------------------------------------------------------------

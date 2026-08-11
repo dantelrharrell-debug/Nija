@@ -99,13 +99,16 @@ def test_redis_error_fails_closed_without_inferred_loss(monkeypatch):
     assert os.environ["NIJA_EXECUTION_ACTIVE"] == "false"
 
 
-def test_local_fallback_does_not_probe_distributed_lock():
+def test_local_fallback_is_revoked_instead_of_accepted():
     mod = _load()
     runtime = _Runtime(redis_value=None)
     runtime._local_fallback = True
 
     result = mod.reconcile_once(runtime)
 
-    assert result["ok"] is True
-    assert result["state"] == "local_fallback"
-    assert runtime.marked == []
+    assert result["ok"] is False
+    assert result["state"] == "local_fallback_forbidden"
+    assert result["action"] == "mark_lost_nonrecoverable"
+    assert runtime.marked == ["local_writer_fallback_forbidden"]
+    assert os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] == "0"
+    assert os.environ["NIJA_EXECUTION_ACTIVE"] == "false"

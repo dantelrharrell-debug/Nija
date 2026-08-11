@@ -20,6 +20,11 @@ KRAKEN_MIN_ORDER      — minimum USD order size on Kraken (default 20.0)
 
 import os
 
+_SIMULATION_MODE: bool = (
+    os.getenv("DRY_RUN_MODE", "false").strip().lower() in ("1", "true", "yes", "on")
+    or os.getenv("PAPER_MODE", "false").strip().lower() in ("1", "true", "yes", "on")
+)
+
 # ---------------------------------------------------------------------------
 # Exchange-scoped capital constants (Steps 2 & 5)
 # Coinbase uses its own floors — it must NOT inherit Kraken conservatism.
@@ -39,7 +44,8 @@ COINBASE_MICRO_CAP_MODE: bool = (
 
 #: When true, Coinbase ignores the system-wide global capital floor (Step 5).
 COINBASE_IGNORE_GLOBAL_CAPITAL_FLOOR: bool = (
-    os.getenv("COINBASE_IGNORE_GLOBAL_CAPITAL_FLOOR", "false").strip().lower()
+    _SIMULATION_MODE
+    and os.getenv("COINBASE_IGNORE_GLOBAL_CAPITAL_FLOOR", "false").strip().lower()
     in ("1", "true", "yes")
 )
 
@@ -97,9 +103,8 @@ BROKER_PROFILES: dict = {
         # Active execution: Coinbase is the live execution path
         "execution_mode": "active",
 
-        # Risk mode: bypass global risk gating for micro-cap Coinbase trades
-        # (global risk still logs; it does not block)
-        "risk_mode": "bypass",
+        # Micro-cap sizing is broker-specific; live risk evaluation is not.
+        "risk_mode": "active",
 
         # Coinbase is included in execution capital weighting
         "include_in_execution_capital": True,

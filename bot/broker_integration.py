@@ -268,13 +268,13 @@ except ImportError:
             pass
 
         def assert_distributed_writer_authority() -> None:
-            return
+            raise ExecutionBlocked("execution authority module unavailable")
 
         def assert_execution_dispatch_permitted() -> None:
-            return
+            raise ExecutionBlocked("execution authority module unavailable")
 
         def assert_startup_write_authority() -> None:
-            return
+            raise ExecutionBlocked("execution authority module unavailable")
 
         def emit_pretrade_execution_validator_trace(*args, **kwargs):
             return None

@@ -7,9 +7,9 @@ Plugins are pure functions with no side effects beyond logging.
 
 Built-in plugins
 ----------------
-ActiveRiskPlugin    Full risk evaluation (delegates to existing risk engine)
-BypassRiskPlugin    Always passes — Coinbase micro-cap bypass
-IsolatedRiskPlugin  Log-only — Kraken; records but never blocks
+ActiveRiskPlugin    Full fail-closed evaluation via the existing risk engine
+BypassRiskPlugin    Compatibility alias that preserves active evaluation
+IsolatedRiskPlugin  Compatibility alias that preserves active evaluation
 DisabledRiskPlugin  Always fails entry — PASSIVE / DISABLED brokers
 
 Factory
@@ -68,74 +68,64 @@ class RiskPlugin(ABC):
 # ---------------------------------------------------------------------------
 
 class ActiveRiskPlugin(RiskPlugin):
-    """Full risk evaluation — delegates to the existing RiskEngine gate.
-
-    Falls back to a permissive pass if the risk engine is unavailable
-    so that missing imports never silently block trades.
-    """
+    """Full risk evaluation that fails closed for new entries."""
 
     def evaluate(self, context: RiskContext) -> RiskResult:
         try:
             from bot.risk_engine import get_risk_engine
             engine = get_risk_engine()
-            if engine and context.balance > 0 and context.size_usd > 0:
-                result = engine.gate_trade(
-                    symbol=context.symbol,
-                    side=context.side,
-                    raw_size_usd=context.size_usd,
-                    portfolio_value=context.balance,
+            if engine is None:
+                raise RuntimeError("risk engine unavailable")
+            if context.balance <= 0 or context.size_usd <= 0:
+                raise RuntimeError("positive balance and order size are required")
+            result = engine.gate_trade(
+                symbol=context.symbol,
+                side=context.side,
+                raw_size_usd=context.size_usd,
+                portfolio_value=context.balance,
+            )
+            if not result.approved:
+                return RiskResult(
+                    passed=False,
+                    score=context.score,
+                    reason=f"RISK_ENGINE: {result.reason}",
                 )
-                if not result.approved:
-                    return RiskResult(
-                        passed=False,
-                        score=context.score,
-                        reason=f"RISK_ENGINE: {result.reason}",
-                    )
         except Exception as exc:
-            logger.debug("ActiveRiskPlugin: risk engine unavailable (%s) — pass", exc)
+            if str(context.side or "").lower() in {"sell", "exit", "close"}:
+                logger.warning(
+                    "ActiveRiskPlugin: protective exit allowed while risk engine "
+                    "is unavailable (%s)",
+                    exc,
+                )
+                return RiskResult(
+                    passed=True,
+                    score=context.score,
+                    reason="PROTECTIVE_EXIT_RISK_ENGINE_UNAVAILABLE",
+                )
+            logger.error("ActiveRiskPlugin: entry rejected (%s)", exc)
+            return RiskResult(
+                passed=False,
+                score=context.score,
+                reason=f"RISK_ENGINE_UNAVAILABLE: {exc}",
+            )
 
         return RiskResult(passed=True, score=context.score, reason="ACTIVE_PASS")
 
 
 class BypassRiskPlugin(RiskPlugin):
-    """Always passes — used for Coinbase micro-cap mode.
-
-    The global risk engine is bypassed completely; the trade is approved
-    on the strength of the entry signal alone.
-    """
+    """Backward-compatible name that no longer bypasses live risk."""
 
     def evaluate(self, context: RiskContext) -> RiskResult:
-        logger.debug(
-            "BypassRiskPlugin: Coinbase micro-cap bypass "
-            "(score=%.2f symbol=%s size=$%.2f)",
-            context.score, context.symbol, context.size_usd,
-        )
-        return RiskResult(
-            passed=True,
-            score=context.score,
-            reason="MICRO_CAP_COINBASE_BYPASS",
-        )
+        logger.warning("BypassRiskPlugin compatibility path uses active risk")
+        return ActiveRiskPlugin().evaluate(context)
 
 
 class IsolatedRiskPlugin(RiskPlugin):
-    """Log-only risk evaluation — used for Kraken isolated mode.
-
-    Risk metrics are computed and logged but the result is always
-    ``passed=True`` so Kraken risk events never cascade to or block
-    other brokers.
-    """
+    """Backward-compatible name that no longer makes risk log-only."""
 
     def evaluate(self, context: RiskContext) -> RiskResult:
-        logger.warning(
-            "⚠️  IsolatedRiskPlugin [%s]: risk evaluation (isolated mode) "
-            "score=%.2f symbol=%s size=$%.2f — logging only, not blocking",
-            context.broker_name, context.score, context.symbol, context.size_usd,
-        )
-        return RiskResult(
-            passed=True,
-            score=context.score,
-            reason="KRAKEN_ISOLATED",
-        )
+        logger.warning("IsolatedRiskPlugin compatibility path uses active risk")
+        return ActiveRiskPlugin().evaluate(context)
 
 
 class DisabledRiskPlugin(RiskPlugin):
@@ -167,9 +157,9 @@ class RiskPluginFactory:
 
     _MAP = {
         "active":    ActiveRiskPlugin,
-        "micro_cap": BypassRiskPlugin,
-        "bypass":    BypassRiskPlugin,
-        "isolated":  IsolatedRiskPlugin,
+        "micro_cap": ActiveRiskPlugin,
+        "bypass":    ActiveRiskPlugin,
+        "isolated":  ActiveRiskPlugin,
         "passive":   DisabledRiskPlugin,
         "disabled":  DisabledRiskPlugin,
     }

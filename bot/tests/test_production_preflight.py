@@ -4,7 +4,11 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from bot.production_preflight import _step5_clear_stale_locks
+from bot.production_preflight import (
+    _credential_status,
+    _step5_clear_stale_locks,
+    _step7_exchange_clock_sync,
+)
 
 
 class _FakeRedis:
@@ -91,6 +95,115 @@ class ProductionPreflightStep5Tests(unittest.TestCase):
             _step5_clear_stale_locks(redis_client)
 
         self.assertIn("nija:writer_fence:old", redis_client.deleted)
+
+
+class ProductionPreflightCredentialAndClockTests(unittest.TestCase):
+    def test_partial_platform_credentials_fail_as_one_incomplete_venue(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {"KRAKEN_PLATFORM_API_KEY": "configured"},
+            clear=True,
+        ):
+            complete, incomplete = _credential_status()
+
+        self.assertEqual(complete, [])
+        self.assertEqual(
+            incomplete,
+            {"kraken": ["KRAKEN_PLATFORM_API_SECRET"]},
+        )
+
+    def test_complete_legacy_kraken_credentials_are_accepted(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {
+                "KRAKEN_API_KEY": "configured",
+                "KRAKEN_API_SECRET": "configured",
+            },
+            clear=True,
+        ):
+            complete, incomplete = _credential_status()
+
+        self.assertEqual(complete, ["kraken"])
+        self.assertEqual(incomplete, {})
+
+    def test_exchange_clock_accepts_bounded_skew(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {
+                "COINBASE_API_KEY": "configured",
+                "COINBASE_API_SECRET": "configured",
+                "NIJA_PREFLIGHT_MAX_CLOCK_SKEW_S": "2",
+            },
+            clear=True,
+        ), patch(
+            "bot.production_preflight._fetch_exchange_epoch",
+            return_value=100.0,
+        ), patch(
+            "bot.production_preflight.time.time",
+            return_value=100.0,
+        ):
+            _step7_exchange_clock_sync()
+
+    def test_exchange_clock_rejects_excessive_skew(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {
+                "COINBASE_API_KEY": "configured",
+                "COINBASE_API_SECRET": "configured",
+                "NIJA_PREFLIGHT_MAX_CLOCK_SKEW_S": "2",
+            },
+            clear=True,
+        ), patch(
+            "bot.production_preflight._fetch_exchange_epoch",
+            return_value=80.0,
+        ), patch(
+            "bot.production_preflight.time.time",
+            return_value=100.0,
+        ):
+            with self.assertRaises(SystemExit):
+                _step7_exchange_clock_sync()
+
+    def test_exchange_clock_requires_at_least_one_exchange_sample(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {
+                "OKX_API_KEY": "configured",
+                "OKX_API_SECRET": "configured",
+                "OKX_PASSPHRASE": "configured",
+            },
+            clear=True,
+        ), patch(
+            "bot.production_preflight._fetch_exchange_epoch",
+            side_effect=TimeoutError("clock unavailable"),
+        ):
+            with self.assertRaises(SystemExit):
+                _step7_exchange_clock_sync()
+
+    def test_exchange_clock_requires_every_configured_venue_sample(self) -> None:
+        def _clock(venue: str, **_kwargs) -> float:
+            if venue == "coinbase":
+                return 100.0
+            raise TimeoutError("configured venue clock unavailable")
+
+        with patch.dict(
+            "os.environ",
+            {
+                "COINBASE_API_KEY": "configured",
+                "COINBASE_API_SECRET": "configured",
+                "OKX_API_KEY": "configured",
+                "OKX_API_SECRET": "configured",
+                "OKX_PASSPHRASE": "configured",
+            },
+            clear=True,
+        ), patch(
+            "bot.production_preflight._fetch_exchange_epoch",
+            side_effect=_clock,
+        ), patch(
+            "bot.production_preflight.time.time",
+            return_value=100.0,
+        ):
+            with self.assertRaises(SystemExit):
+                _step7_exchange_clock_sync()
 
 
 if __name__ == "__main__":

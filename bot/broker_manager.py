@@ -1002,32 +1002,52 @@ COINBASE_MINIMUM_BALANCE = float(os.getenv('COINBASE_MINIMUM_BALANCE', STANDARD_
 COINBASE_MIN_CAPITAL: float = float(os.getenv('COINBASE_MIN_CAPITAL', '10.0'))
 COINBASE_MIN_ORDER: float = float(os.getenv('COINBASE_MIN_ORDER_USD', os.getenv('COINBASE_MIN_ORDER', '10.0')))
 COINBASE_MICRO_CAP_MODE: bool = os.getenv('COINBASE_MICRO_CAP_MODE', 'true').strip().lower() in ('1', 'true', 'yes')
-COINBASE_IGNORE_GLOBAL_CAPITAL_FLOOR: bool = os.getenv('COINBASE_IGNORE_GLOBAL_CAPITAL_FLOOR', 'false').strip().lower() in ('1', 'true', 'yes')
+_SIMULATION_MODE: bool = (
+    os.getenv('DRY_RUN_MODE', 'false').strip().lower() in ('1', 'true', 'yes', 'on')
+    or os.getenv('PAPER_MODE', 'false').strip().lower() in ('1', 'true', 'yes', 'on')
+)
+COINBASE_IGNORE_GLOBAL_CAPITAL_FLOOR: bool = (
+    _SIMULATION_MODE
+    and os.getenv('COINBASE_IGNORE_GLOBAL_CAPITAL_FLOOR', 'false').strip().lower() in ('1', 'true', 'yes')
+)
 KRAKEN_EXECUTION_DISABLED: bool = os.getenv('KRAKEN_EXECUTION_DISABLED', 'false').strip().lower() in ('1', 'true', 'yes')
 # Opt-in emergency test mode: force routing to Kraken while validating live order flow.
 # Default OFF to preserve normal multi-broker safety behavior.
-NIJA_FORCE_KRAKEN_ONLY_TEST: bool = os.getenv('NIJA_FORCE_KRAKEN_ONLY_TEST', '0').strip().lower() in ('1', 'true', 'yes', 'on')
+NIJA_FORCE_KRAKEN_ONLY_TEST: bool = (
+    _SIMULATION_MODE
+    and os.getenv('NIJA_FORCE_KRAKEN_ONLY_TEST', '0').strip().lower() in ('1', 'true', 'yes', 'on')
+)
 # Optional companion flag for tiny-balance validation runs: bypass Kraken BUY capital gates.
 # Default OFF so production capital protections remain intact.
-NIJA_KRAKEN_TEST_LIFT_CAPITAL_GATES: bool = os.getenv('NIJA_KRAKEN_TEST_LIFT_CAPITAL_GATES', '0').strip().lower() in ('1', 'true', 'yes', 'on')
+NIJA_KRAKEN_TEST_LIFT_CAPITAL_GATES: bool = (
+    _SIMULATION_MODE
+    and os.getenv('NIJA_KRAKEN_TEST_LIFT_CAPITAL_GATES', '0').strip().lower() in ('1', 'true', 'yes', 'on')
+)
 
 # ── Platform account active trading flags ───────────────────────────────────
 # NIJA_PLATFORM_ONLY_MODE: when true, platform account is the sole active trader.
 # NIJA_PLATFORM_TRADING_ENABLED: when true (default), platform account opens new positions.
-# NIJA_PLATFORM_LIFT_CAPITAL_GATES: when true, bypass the minimum-balance capital gate
-#   for PLATFORM-type brokers so that holdings (ADA, ACH, AB) count toward tradeable
-#   capital even when USD cash alone is below KRAKEN_MINIMUM_BALANCE.
-#   Defaults to true so the platform account is never silently blocked by a cash-only
-#   balance check when it holds crypto assets worth more than the minimum.
+# NIJA_PLATFORM_LIFT_CAPITAL_GATES is a simulation-only diagnostic override.
+# Live platform accounts must satisfy the same broker-reported capital floor as
+# every other account; portfolio holdings already contribute to total_funds.
 NIJA_PLATFORM_ONLY_MODE: bool = os.getenv('NIJA_PLATFORM_ONLY_MODE', 'false').strip().lower() in ('1', 'true', 'yes', 'on')
 NIJA_PLATFORM_TRADING_ENABLED: bool = os.getenv('NIJA_PLATFORM_TRADING_ENABLED', 'true').strip().lower() in ('1', 'true', 'yes', 'on')
-NIJA_PLATFORM_LIFT_CAPITAL_GATES: bool = os.getenv('NIJA_PLATFORM_LIFT_CAPITAL_GATES', 'true').strip().lower() in ('1', 'true', 'yes', 'on')
+NIJA_PLATFORM_LIFT_CAPITAL_GATES: bool = (
+    _SIMULATION_MODE
+    and os.getenv('NIJA_PLATFORM_LIFT_CAPITAL_GATES', 'false').strip().lower() in ('1', 'true', 'yes', 'on')
+)
 
 # ── Small account / small order flags (Apr 2026) ────────────────────────────
 # Allow trading with small account balances (~$174) and small order sizes (~$10).
 # Both default to True to enable HF scalp mode with limited capital.
-ALLOW_SMALL_ORDERS: bool = os.getenv('ALLOW_SMALL_ORDERS', 'true').strip().lower() in ('1', 'true', 'yes', 'on')
-ALLOW_SMALL_ACCOUNT_TRADING: bool = os.getenv('ALLOW_SMALL_ACCOUNT_TRADING', 'true').strip().lower() in ('1', 'true', 'yes', 'on')
+ALLOW_SMALL_ORDERS: bool = (
+    _SIMULATION_MODE
+    and os.getenv('ALLOW_SMALL_ORDERS', 'false').strip().lower() in ('1', 'true', 'yes', 'on')
+)
+ALLOW_SMALL_ACCOUNT_TRADING: bool = (
+    _SIMULATION_MODE
+    and os.getenv('ALLOW_SMALL_ACCOUNT_TRADING', 'false').strip().lower() in ('1', 'true', 'yes', 'on')
+)
 
 # When micro-cap mode is active, Coinbase minimum balance matches COINBASE_MIN_CAPITAL ($1)
 if COINBASE_MICRO_CAP_MODE:
@@ -9769,18 +9789,12 @@ class KrakenBroker(BaseBroker):
                         # This enables emergency sells to close losing positions
                         # FIX (Jan 23, 2026): Use total_funds (available + held) for minimum check
                         #
-                        # PLATFORM ACCOUNT GATE LIFT: When NIJA_PLATFORM_LIFT_CAPITAL_GATES=true
-                        # (default) and this is a PLATFORM account, bypass the minimum-balance
-                        # EXIT-ONLY gate.  Platform holdings (ADA, ACH, AB) are priced into
-                        # total_funds via compute_total_usd_balance(), so the gate should never
-                        # fire for a funded platform account.  The explicit bypass ensures that
-                        # a cold-start pricing miss never silently locks the platform out of
-                        # new entries.
+                        # Diagnostic capital-gate lifts are simulation-only.  In live mode a
+                        # pricing miss or sub-minimum balance must remain EXIT-ONLY.
                         _is_platform_acct = getattr(self, 'account_type', None) == AccountType.PLATFORM
                         _lift_gate = (
                             NIJA_KRAKEN_TEST_LIFT_CAPITAL_GATES
                             or (NIJA_PLATFORM_LIFT_CAPITAL_GATES and _is_platform_acct)
-                            or (NIJA_PLATFORM_TRADING_ENABLED and _is_platform_acct)
                         )
                         if total_funds < KRAKEN_MINIMUM_BALANCE and not _lift_gate:
                             logger.warning("=" * 70)
@@ -11365,7 +11379,6 @@ class KrakenBroker(BaseBroker):
             _platform_gate_lifted = (
                 NIJA_KRAKEN_TEST_LIFT_CAPITAL_GATES
                 or (NIJA_PLATFORM_LIFT_CAPITAL_GATES and _is_platform_order)
-                or (NIJA_PLATFORM_TRADING_ENABLED and _is_platform_order)
             )
             if (side.lower() == 'buy'
                     and getattr(self, 'exit_only_mode', False)
@@ -14062,18 +14075,6 @@ class BrokerManager:
         # force capital gate closed regardless of prior readiness state.
         if platform_brokers and stale_count == len(platform_brokers):
             capital_ok = False
-
-        _force_ready = str(os.getenv("FORCE_SYSTEM_READY", "")).strip().lower() in {
-            "1", "true", "yes", "on", "enabled"
-        }
-        if _force_ready:
-            logger.warning(
-                "FORCE_SYSTEM_READY enabled: overriding readiness gates "
-                "(nonce/platform/capital=True) for debug run"
-            )
-            nonce_ok = True
-            platform_ok = True
-            capital_ok = True
 
         logger.info(
             f"[SYSTEM READY CHECK] "

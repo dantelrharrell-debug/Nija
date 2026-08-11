@@ -3,8 +3,6 @@
 
 from __future__ import annotations
 
-import builtins as _builtins
-import importlib
 import logging
 import os
 
@@ -68,7 +66,7 @@ def _normalize_credential_aliases(label: str) -> None:
 
 
 def _strict_live_cleanup(label: str) -> None:
-    if not _redis_configured():
+    if _truthy("DRY_RUN_MODE") or _truthy("PAPER_MODE"):
         return
     tails = [
         ("UNSAFE", "BYPASS", "DISTRIBUTED", "LOCK"),
@@ -81,15 +79,38 @@ def _strict_live_cleanup(label: str) -> None:
         ("CONFIRM", "BYPASS", "RISKS"),
     ]
     cleared: list[str] = []
+    for key in (
+        "FORCE_TRADE",
+        "FORCE_TRADE_MODE",
+        "FORCE_LIVE_TRANSITION",
+        "FORCE_SYSTEM_READY",
+        "NIJA_FORCE_ACTIVATION",
+        "NIJA_FORCE_KRAKEN_ONLY_TEST",
+        "NIJA_KRAKEN_TEST_LIFT_CAPITAL_GATES",
+        "NIJA_PLATFORM_LIFT_CAPITAL_GATES",
+        "COINBASE_IGNORE_GLOBAL_CAPITAL_FLOOR",
+        "NIJA_CAPITAL_OPPORTUNISTIC",
+        "FORCE_FIRST_TRADE",
+        "FORCE_TRADE_ON_FIRST_VALID_SIGNAL",
+        "ALLOW_SMALL_ORDERS",
+        "ALLOW_SMALL_ACCOUNT_TRADING",
+        "NIJA_AUTO_CLEAR_EMERGENCY_STOP",
+    ):
+        if _truthy(key):
+            os.environ[key] = "false"
+            cleared.append(key)
     for tail in tails:
         key = _env_name("NIJA", *tail)
         if _truthy(key):
             os.environ[key] = "false"
             cleared.append(key)
     os.environ[_env_name("NIJA", "REQUIRE", "DISTRIBUTED", "LOCK")] = "true"
+    os.environ["NIJA_ECEL_REQUIRED"] = "true"
+    os.environ["NIJA_ECEL_FAIL_CLOSED"] = "true"
     os.environ[_env_name("NIJA", "STRICT", "REDIS", "LEASE")] = "1"
     os.environ[_env_name("NIJA", "STRICT", "WRITER", "LOCK")] = "true"
     os.environ[_env_name("NIJA", "FAIL", "CLOSED", "EXIT", "ON", "UNREACHABLE", "REDIS")] = "true"
+    os.environ["NIJA_REDIS_CONFIGURED"] = "1" if _redis_configured() else "0"
     try:
         retries = int(float(os.environ.get(_env_name("NIJA", "FAIL", "CLOSED", "MAX", "RETRY", "ATTEMPTS"), "0") or "0"))
     except Exception:
@@ -118,8 +139,9 @@ def _set_float_ceiling(key: str, value: str) -> None:
 
 _normalize_credential_aliases("bot_init_first")
 try:
-    _strict_sanitizer = importlib.import_module(".strict_live_startup_sanitizer", __name__)
-    _strict_sanitizer.sanitize("bot_init_first")
+    from .strict_live_startup_sanitizer import sanitize as _sanitize_live_startup
+
+    _sanitize_live_startup("bot_init_first")
 except Exception as _exc:
     logger.warning("Strict live startup sanitizer unavailable: %s", _exc)
 _strict_live_cleanup("bot_init_pre_defaults")
@@ -209,16 +231,8 @@ for _key, _value in {
 }.items():
     os.environ.setdefault(_key, _value)
 
-_NIJA_BOT_PACKAGE_RUNTIME_HOOKS_DEFERRED = _truthy("NIJA_DEFER_RUNTIME_SITE_HOOKS")
-if _NIJA_BOT_PACKAGE_RUNTIME_HOOKS_DEFERRED:
-    logger.info("NIJA_BOT_PACKAGE_RUNTIME_HOOKS_DEFERRED runtime_site_hooks=deferred")
-else:
-    try:
-        importlib.import_module("sitecustomize")
-    except Exception as _exc:
-        logger.warning("NIJA startup patch unavailable: %s", _exc)
-_normalize_credential_aliases("bot_init_after_sitecustomize")
-_strict_live_cleanup("bot_init_after_sitecustomize")
+_normalize_credential_aliases("bot_init_after_defaults")
+_strict_live_cleanup("bot_init_after_defaults")
 
 for _key, _value in (
     ("MIN_TRADE_USD", "10.00"),
@@ -243,58 +257,11 @@ for _key, _value in (
 ):
     _set_float_floor(_key, _value)
 
-_PATCH_HOOKS = () if _NIJA_BOT_PACKAGE_RUNTIME_HOOKS_DEFERRED else (
-    ("strict_live_startup_sanitizer", "Strict live startup sanitizer"),
-    ("live_redis_execution_bypass_guard", "Live Redis execution bypass guard"),
-    ("writer_lock_release_guard", "Writer lock release guard"),
-    ("min_notional_runtime_patch", "Adaptive min-notional runtime patch"),
-    ("kraken_equity_runtime_patch", "Kraken equity hydration patch"),
-    ("capital_balance_propagation_patch", "Capital balance propagation patch"),
-    ("render_startup_convergence_patch", "Render startup authority/capital convergence repair"),
-    ("post_lock_capital_refresh_patch", "Post-lock capital refresh patch"),
-    ("full_execution_observability_patch", "Full execution observability"),
-    ("decision_pipeline_runtime_patch", "Decision pipeline telemetry"),
-    ("generation_sync_timing_patch", "Generation sync timing patch"),
-    ("execution_entry_tp_geometry_patch", "Execution entry TP geometry patch"),
-    ("risk_gate_execution_bridge_patch", "Risk gate and held-position exit bridge"),
-    ("held_position_execution_mirror_patch", "Held-position execution mirror"),
-    ("live_execution_authority_blocker_patch", "Live execution authority blocker patch"),
-    ("no_trade_watchdog_runtime_patch", "Runtime scan diagnostics"),
-    ("market_data_stability_runtime_patch", "Market data stability runtime patch"),
-    ("live_entry_runtime_fixes", "Live entry runtime fixes"),
-    ("phase3_sector_headroom_prefilter_patch", "Phase 3 sector headroom prefilter"),
-    ("executable_trade_runtime_patch", "Executable trade runtime repair"),
-    ("kraken_live_order_size_repair_patch", "Kraken live order-size repair"),
-    ("kraken_execution_floor_guard_patch", "Kraken final execution-floor guard"),
-    ("broker_independent_live_execution_patch", "Independent broker live execution routing"),
-    ("broker_bool_guard_patch", "Broker bool guard for independent routing"),
-    ("core_loop_broker_argument_guard_patch", "Core loop broker argument guard"),
-    ("execution_route_integrity_patch", "Execution route integrity guard"),
-    ("okx_runtime_patch", "OKX runtime patch"),
-    ("okx_final_submit_callshape_patch", "OKX final submit callshape patch"),
-    ("broker_native_quote_routing_patch", "Broker-native quote routing repair"),
-    ("approved_trade_liquidity_reroute_patch", "Approved trade liquidity reroute patch"),
-    ("expectancy_win_rate_calibration_patch", "Expectancy win-rate calibration patch"),
-    ("execution_pipeline_runtime_patch", "Execution pipeline runtime patch"),
-    ("broker_venue_cash_guard_patch", "Broker venue cash guard"),
-    ("position_close_pnl_runtime_patch", "Position close P&L runtime patch"),
-    ("auto_exit_sl_tp_runtime_patch", "Automatic stop-loss/take-profit exit monitor"),
-    ("universal_broker_exit_supervisor_patch", "Universal broker-native exit supervisor"),
-    ("coinbase_position_runtime_patch", "Coinbase position runtime patch"),
-    ("live_execution_runtime_hardening_patch", "Live execution runtime hardening"),
-)
-
-for _module_name, _label in _PATCH_HOOKS:
-    if getattr(_builtins, "_NIJA_BOT_PATCH_HOOKS_INSTALLED", False):
-        break
-    try:
-        _mod = importlib.import_module(f".{_module_name}", __name__)
-        _mod.install_import_hook()
-    except Exception as _exc:
-        logger.warning("%s unavailable: %s", _label, _exc)
-
-if _PATCH_HOOKS:
-    setattr(_builtins, "_NIJA_BOT_PATCH_HOOKS_INSTALLED", True)
+# Importing the package must remain side-effect bounded. Runtime components are
+# started explicitly by the canonical launcher; package import never installs
+# meta-path hooks or monkeypatches process-wide classes. This prevents startup
+# import churn from indefinitely delaying canonical-core registration.
+logger.info("BOT_PACKAGE_STARTUP_BOUNDED runtime_import_hooks=false")
 
 __version__ = "7.2.17"
 logger.debug("NIJA Bot package initialized (v%s)", __version__)

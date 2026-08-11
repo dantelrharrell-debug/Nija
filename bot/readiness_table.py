@@ -38,7 +38,7 @@ from __future__ import annotations
 
 import logging
 import threading
-from typing import Dict
+from typing import Dict, Iterable
 
 logger = logging.getLogger("nija.readiness_table")
 
@@ -140,6 +140,58 @@ def revoke_ready(component: str, *, reason: str) -> None:
         component,
         reason,
         _TABLE,
+    )
+
+
+def revoke_many(components: Iterable[str], *, reason: str) -> None:
+    """Atomically revoke several runtime readiness proofs.
+
+    Writer loss invalidates authority, nonce, and execution as one event.  A
+    sequence of individual writes exposes impossible intermediate snapshots
+    (for example ``authority_ready=False`` while ``execution_ready=True``) to
+    coordinator readers.  This bulk API publishes one versioned snapshot so
+    every consumer observes the same fail-closed transition.
+    """
+
+    global _VERSION
+    normalized = tuple(dict.fromkeys(str(name) for name in components if str(name)))
+    if not normalized:
+        return
+
+    with _LOCK:
+        changed = False
+        for component in normalized:
+            if component not in _TABLE:
+                _TABLE[component] = False
+                changed = True
+            elif _TABLE[component]:
+                _TABLE[component] = False
+                changed = True
+        if changed:
+            _VERSION += 1
+        version = int(_VERSION)
+        table = dict(_TABLE)
+
+    try:
+        try:
+            from bot.startup_coordinator import get_startup_coordinator
+        except ImportError:
+            from startup_coordinator import get_startup_coordinator  # type: ignore[import]
+        get_startup_coordinator().record_readiness(
+            key="__bulk_revoke__",
+            value=False,
+            version=version,
+            table=table,
+        )
+    except Exception:
+        logger.debug("readiness_table: coordinator bulk revoke skipped", exc_info=True)
+
+    logger.critical(
+        "READINESS_TABLE_BULK_REVOKED components=%s reason=%s version=%d table=%s",
+        ",".join(normalized),
+        reason,
+        version,
+        table,
     )
 
 

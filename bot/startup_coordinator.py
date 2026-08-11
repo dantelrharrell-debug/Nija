@@ -571,20 +571,31 @@ class StartupCoordinator:
     ) -> int:
         with self._lock:
             self._runtime.readiness_version = max(int(version or 0), self._runtime.readiness_version)
-            incoming = dict(table or {})
-            if self._runtime.global_gate_ready:
-                merged: Dict[str, bool] = dict(self._runtime.readiness_table)
-                for _k, _v in incoming.items():
-                    merged[_k] = bool(merged.get(_k, False) or bool(_v))
-                self._runtime.readiness_table = merged
-            else:
-                self._runtime.readiness_table = incoming
+            incoming = {str(name): bool(value) for name, value in dict(table or {}).items()}
+            previous = dict(self._runtime.readiness_table)
+            merged: Dict[str, bool] = dict(previous)
+            merged.update(incoming)
+            regressed = sorted(
+                name
+                for name, was_ready in previous.items()
+                if was_ready and not bool(merged.get(name, False))
+            )
+            self._runtime.readiness_table = merged
+            if regressed and self._reconcile_permitted_locked():
+                self._runtime.global_epoch += 1
+                self._revoke_activation_commit_locked()
             event_version = self._publish_locked(
                 StartupEvent.READINESS_CHANGED,
-                {"key": key, "value": bool(value), "readiness_version": self._runtime.readiness_version},
+                {
+                    "key": key,
+                    "value": bool(value),
+                    "readiness_version": self._runtime.readiness_version,
+                    "regressed": regressed,
+                    "global_epoch": self._runtime.global_epoch,
+                },
             )
             if not self._reconcile_permitted_locked():
-                if table.get("bootstrap_ready"):
+                if incoming.get("bootstrap_ready"):
                     self._runtime.coordinator_state = StartupCoordinatorState.INIT_COMMITTED
                 if key == "broker_connected" and value:
                     self._runtime.coordinator_state = StartupCoordinatorState.BROKER_READY
@@ -593,13 +604,17 @@ class StartupCoordinator:
     def record_global_gate(self, *, ready: bool, detail: str = "") -> int:
         with self._lock:
             was_ready = bool(self._runtime.global_gate_ready)
-            self._runtime.global_gate_ready = bool(ready or was_ready)
-            self._runtime.global_gate_detail = str(detail or self._runtime.global_gate_detail or "unknown")
+            self._runtime.global_gate_ready = bool(ready)
+            self._runtime.global_gate_detail = str(detail or "unknown")
+            if was_ready and not self._runtime.global_gate_ready and self._reconcile_permitted_locked():
+                self._runtime.global_epoch += 1
+                self._revoke_activation_commit_locked()
             return self._publish_locked(
                 StartupEvent.SYSTEM_READINESS_PROOF_EVALUATED,
                 {
                     "global_gate_ready": self._runtime.global_gate_ready,
                     "global_gate_detail": self._runtime.global_gate_detail,
+                    "global_epoch": self._runtime.global_epoch,
                 },
             )
 
@@ -637,7 +652,7 @@ class StartupCoordinator:
             if not self._reconcile_permitted_locked():
                 self._runtime.coordinator_state = (
                     StartupCoordinatorState.CAPITAL_READY
-                    if self._runtime.capital_state == "RUNNING"
+                    if self._runtime.capital_state in {"READY", "RUNNING"}
                     and self._runtime.capital_hydrated
                     and not self._runtime.capital_stale
                     else StartupCoordinatorState.CAPITAL_PENDING
@@ -804,15 +819,12 @@ class StartupCoordinator:
         capital_state = str(self._runtime.capital_state or "unknown")
         trading_state = str(trading_state or "").strip() or "OFF"
         activation_intent = bool(activation_intent or self._runtime.activation_requested)
-        force_activation = os.getenv("NIJA_FORCE_ACTIVATION", "0") == "1"
         kill_switch_active = self._runtime.kill_switch_active
         logger.critical(
             "[RECONCILE] "
-            "force_activation=%s "
             "trading_state=%s "
             "commit_version=%s "
             "kill_switch=%s",
-            force_activation,
             trading_state,
             self._runtime.last_committed_snapshot_version,
             kill_switch_active,
@@ -827,7 +839,6 @@ class StartupCoordinator:
         _inputs = (
             trading_state,
             activation_intent,
-            force_activation,
             bootstrap_state,
             capital_state,
             self._runtime.capital_hydrated,
@@ -849,42 +860,18 @@ class StartupCoordinator:
         if _inputs == self._runtime._last_reconcile_inputs:
             return self._runtime.runtime_authority_state, self._runtime.runtime_authority_reason
         self._runtime._last_reconcile_inputs = _inputs
-        # ── Committed LIVE dispatch preservation ───────────────────────────────
-        # Once TradingStateMachine has reached LIVE_ACTIVE and the coordinator has
-        # a positive dispatch commit version, lifecycle_phase must remain LIVE.
-        # Per-order execution_authority_context.can_execute() still validates the
-        # writer lease, lease generation, nonce, heartbeat, broker health, and
-        # circuit breaker on every dispatch; downgrading the coarse lifecycle phase
-        # here creates a deadlock where valid signals can never reach those gates.
-        # Kill-switch and emergency-stop always take precedence.
-        if (
-            trading_state == "LIVE_ACTIVE"
-            and self._runtime.last_committed_snapshot_version > 0
-            and not kill_switch_active
-        ):
-            reason = "force_activation_bypass" if force_activation else "committed_live_dispatch"
-            if force_activation:
-                logger.critical("[RECONCILE] FORCE EXECUTING BYPASS ACTIVE")
-            self._runtime.runtime_authority_state = RuntimeAuthorityState.EXECUTING
-            self._runtime.runtime_authority_reason = reason
-            return RuntimeAuthorityState.EXECUTING, reason
         # ── Full reconcile ────────────────────────────────────────────────────
         pending_readiness = sorted(
             key for key, value in self._runtime.readiness_table.items() if not value
         )
-        gate_override_live = bool(
-            self._runtime.global_gate_ready
-            and not kill_switch_active
-            and self._runtime.capital_hydrated
-        )
-        readiness_complete = bool(not pending_readiness or gate_override_live)
+        readiness_complete = not pending_readiness
         capital_hard_gate_ready = bool(
             self._runtime.capital_hydrated
             and self._runtime.capital_balance is not None
         )
         prereqs_ready = bool(
             bootstrap_state == "RUNNING_SUPERVISED"
-            and capital_state == "RUNNING"
+            and capital_state in {"READY", "RUNNING"}
             and self._runtime.threads_launched > 0
             and self._runtime.threads_confirmed_running
             and self._runtime.capital_hydrated
@@ -988,11 +975,11 @@ class StartupCoordinator:
             target_state = RuntimeAuthorityState.STANDBY
             if bootstrap_state != "RUNNING_SUPERVISED":
                 reason = f"bootstrap_state={bootstrap_state}"
-            elif capital_state != "RUNNING":
+            elif capital_state not in {"READY", "RUNNING"}:
                 reason = f"capital_state={capital_state}"
             elif self._runtime.threads_launched <= 0 or not self._runtime.threads_confirmed_running:
                 reason = "threads_not_running"
-            elif pending_readiness and not gate_override_live:
+            elif pending_readiness:
                 reason = f"readiness_pending={','.join(pending_readiness)}"
             elif not self._runtime.capital_hydrated:
                 reason = "capital_not_hydrated"
@@ -1144,15 +1131,13 @@ class StartupCoordinator:
 
     def evaluate_system_readiness_proof(self, snapshot: StartupConvergenceSnapshot) -> SystemReadinessProof:
         """Evaluate canonical pre-LIVE readiness proof from one immutable snapshot."""
-        global_gate_live_override = bool(
-            snapshot.global_gate_ready
-            and not bool(snapshot.kill_switch_active)
-            and bool(snapshot.capital_hydrated)
-        )
         gate_results: Dict[str, bool] = {
-            "readiness.complete": bool((not snapshot.pending_readiness) or global_gate_live_override),
-            "global_gate.ready": True,
-            "global_gate.override_active": bool(global_gate_live_override),
+            "readiness.complete": not snapshot.pending_readiness,
+            # The legacy global gate is retained for observability only.  It
+            # must never override current authority, nonce, dispatch, or
+            # readiness truth.
+            "global_gate.ready": bool(snapshot.global_gate_ready),
+            "global_gate.override_active": False,
             "bootstrap.supervised": snapshot.bootstrap_state == "RUNNING_SUPERVISED",
             "capital.running": snapshot.capital_state in ("READY", "RUNNING"),
             "capital.hydrated": bool(snapshot.capital_hydrated),
@@ -1170,12 +1155,6 @@ class StartupCoordinator:
                 RuntimeAuthorityState.EXECUTING.value,
             },
         }
-        if global_gate_live_override:
-            gate_results["activation.intent_present"] = True
-            gate_results["authority.ready"] = True
-            gate_results["nonce.ready"] = True
-            gate_results["dispatch_health.ready"] = True
-            gate_results["runtime_authority.authorized"] = True
         informational_gates = {"global_gate.ready", "global_gate.override_active"}
         failed_gates = [
             name for name, ok in gate_results.items() if (not ok and name not in informational_gates)
@@ -1287,76 +1266,48 @@ class StartupCoordinator:
                 {"snapshot_version": effective_snapshot.snapshot_version, "phase": StartupCoordinatorState.DISPATCH_ENABLED.value},
             )
 
-    def force_activate_bypass(self, reason: str) -> None:
-        """Directly commit force-activation state, bypassing readiness-proof gates.
+    def force_activate_bypass(self, reason: str) -> int:
+        """Compatibility wrapper that requests a canonical activation commit.
 
-        Called exclusively by :meth:`TradingStateMachine._force_live_active_transition`
-        when ``NIJA_FORCE_ACTIVATION=1`` is set.  Sets the coordinator runtime to
-        ``EXECUTING`` and records a non-zero commit version so that subsequent
-        calls to :meth:`_reconcile_runtime_authority_locked` treat this as a valid
-        LIVE dispatch (via the force-activation early-return guard in reconcile).
-
-        The method is idempotent: if the coordinator is already ``EXECUTING`` with a
-        committed version it is a no-op.  Kill-switch and emergency-stop are NOT
-        bypassed; those must be cleared before calling this method.
+        Historical callers used this method to manufacture ``EXECUTING`` state.
+        It now preserves the public name while refusing to bypass any readiness,
+        authority, nonce, dispatch-health, capital, epoch, or kill-switch gate.
         """
-        with self._lock:
-            before_version = self._runtime.last_committed_snapshot_version
-            before_state = self._runtime.runtime_authority_state
-            before_coord = self._runtime.coordinator_state
-            logger.critical(
-                "[FORCE_ACTIVATION] entering "
-                "reason=%s "
-                "before_version=%s "
-                "before_runtime_state=%s "
-                "before_coord_state=%s",
-                reason,
-                before_version,
-                before_state,
-                before_coord,
-            )
-            if (
-                self._runtime.runtime_authority_state == RuntimeAuthorityState.EXECUTING
-                and self._runtime.last_committed_snapshot_version > 0
-            ):
-                logger.critical(
-                    "[FORCE_ACTIVATION] applied "
-                    "version=%s "
-                    "runtime_state=%s "
-                    "coord_state=%s",
-                    self._runtime.last_committed_snapshot_version,
-                    self._runtime.runtime_authority_state,
-                    self._runtime.coordinator_state,
-                )
-                return  # already committed; idempotent
 
-            self._runtime.event_version += 1
-            new_version = self._runtime.event_version
-            self._runtime.last_committed_snapshot_version = new_version
-            self._runtime._activation_committed = True
-            self._runtime.coordinator_state = StartupCoordinatorState.DISPATCH_ENABLED
-            self._runtime.runtime_authority_state = RuntimeAuthorityState.EXECUTING
-            self._runtime.runtime_authority_reason = reason or "force_activation_bypass"
-            # Invalidate edge-trigger cache so the next reconcile re-evaluates and
-            # writes back EXECUTING via the force-activation early-return guard.
-            self._runtime._last_reconcile_inputs = None
-            self._history.append(
-                {
-                    "version": new_version,
-                    "event": "FORCE_ACTIVATION_BYPASS",
-                    "payload": {"reason": reason},
-                    "state": StartupCoordinatorState.DISPATCH_ENABLED.value,
-                }
+        logger.warning(
+            "FORCE_ACTIVATION_COMPAT_REQUEST reason=%s bypass=false "
+            "canonical_readiness_proof_required=true",
+            reason,
+        )
+        with self._lock:
+            already_committed = bool(
+                self._runtime._activation_committed
+                and self._runtime.last_committed_snapshot_version > 0
             )
-            logger.critical(
-                "[FORCE_ACTIVATION] applied "
-                "version=%s "
-                "runtime_state=%s "
-                "coord_state=%s",
-                self._runtime.last_committed_snapshot_version,
-                self._runtime.runtime_authority_state,
-                self._runtime.coordinator_state,
+        if already_committed:
+            committed = self.build_snapshot(
+                trading_state="LIVE_ACTIVE",
+                activation_intent=True,
             )
+            proof = self.evaluate_system_readiness_proof(committed)
+            if proof.passed and committed.dispatch_enabled:
+                with self._lock:
+                    return self._runtime.event_version
+        self.record_activation_requested(
+            requested=True,
+            source=f"force_activation_compat:{reason or 'unspecified'}",
+        )
+        snapshot = self.build_snapshot(
+            trading_state="LIVE_PENDING_CONFIRMATION",
+            activation_intent=True,
+        )
+        proof = self.evaluate_system_readiness_proof(snapshot)
+        if not proof.passed:
+            raise RuntimeError(
+                "Force activation compatibility request refused: "
+                f"{proof.first_blocking_gate}"
+            )
+        return self.finalize_activation_commit(snapshot)
 
     def record_fail_safe(self, tier: "FailSafeTier", reason: str = "") -> int:
         """Enter a FAIL_SAFE state at the specified *tier*.

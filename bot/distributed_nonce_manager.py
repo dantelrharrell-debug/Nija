@@ -173,7 +173,7 @@ except ImportError:
         from execution_authority_context import assert_startup_write_authority  # type: ignore[import]
     except ImportError:
         def assert_startup_write_authority() -> None:
-            return
+            raise RuntimeError("startup write authority module unavailable")
 
 _logger = logging.getLogger(__name__)
 

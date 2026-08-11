@@ -64,7 +64,7 @@ except ImportError:
             return False
 
         def assert_distributed_writer_authority() -> None:
-            return
+            raise RuntimeError("execution authority module unavailable")
 
 
 # ---------------------------------------------------------------------------

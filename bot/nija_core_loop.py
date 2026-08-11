@@ -692,37 +692,6 @@ def _supervisor_step_state_machine() -> None:
                     "[SUPERVISOR] set_first_snap_accepted failed: %s", _snap_accept_err
                 )
 
-        # ── FORCE_TRADE: bypass _first_snap_accepted gate when snapshot_source
-        # is "placeholder" (Redis/capital pipeline unavailable).  Without this,
-        # NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK=true deployments never produce a
-        # "live_exchange" snapshot, so _first_snap_accepted stays False forever
-        # and commit_activation() is permanently blocked even with real capital.
-        _force_activation_sv = (
-            _env_truthy("FORCE_TRADE")
-            or _env_truthy("NIJA_FORCE_ACTIVATION")
-            or _env_truthy("FORCE_TRADE_MODE")
-            or _env_truthy("NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK")
-        )
-        if (
-            _force_activation_sv
-            and not sm.get_first_snap_accepted()
-            and _ca_capital_sv > 0.0
-        ):
-            try:
-                sm.set_first_snap_accepted(True)
-                logger.warning(
-                    "⚡ [SUPERVISOR] FORCE_TRADE: _first_snap_accepted forced True — "
-                    "snapshot_source=%s ca_capital=$%.2f (bypassing live_exchange requirement). "
-                    "This unblocks commit_activation() when Redis/capital pipeline is unavailable.",
-                    _snap_source_sv or "placeholder",
-                    _ca_capital_sv,
-                )
-            except Exception as _snap_force_err:
-                logger.warning(
-                    "[SUPERVISOR] FORCE_TRADE _first_snap_accepted force-set failed: %s",
-                    _snap_force_err,
-                )
-
         # Missing trigger fix: the supervisor attempts activation every cycle
         # while in OFF/LIVE_PENDING_CONFIRMATION, using the same frozen
         # cycle capital snapshot.
@@ -755,7 +724,6 @@ def _supervisor_step_state_machine() -> None:
         _state_for_commit = sm.get_current_state()
         _attempt_commit = (
             _live_verified
-            or _force_activation_sv
             or _state_for_commit == _TradingState.LIVE_PENDING_CONFIRMATION
             or _capital_auto_live
         )
@@ -775,72 +743,13 @@ def _supervisor_step_state_machine() -> None:
             except Exception as _commit_err:
                 logger.warning("Supervisor commit_activation failed: %s", _commit_err)
 
-            # ── FORCE_TRADE hard-activation fallback ─────────────────────────
-            # When commit_activation() fails (e.g. startup coordinator gates not
-            # yet converged) but FORCE_TRADE is set, call _force_live_active_transition()
-            # directly to bypass all distributed-authority pre-flight checks.
-            # This is the final escape hatch for the "6000+ cycles, zero trades"
-            # condition where the FSM is permanently stuck in LIVE_PENDING_CONFIRMATION
-            # because Redis/capital-pipeline infrastructure is unavailable.
-            if not _committed and _force_activation_sv and _live_verified:
-                _state_after_commit = sm.get_current_state()
-                if _state_after_commit != _TradingState.LIVE_ACTIVE:
-                    logger.warning(
-                        "⚡ [SUPERVISOR] FORCE_TRADE hard-activation: commit_activation() failed "
-                        "(state=%s) — calling _force_live_active_transition() to bypass "
-                        "distributed-authority gates. LIVE_CAPITAL_VERIFIED=true + FORCE_TRADE=true.",
-                        _state_after_commit.value,
-                    )
-                    try:
-                        if hasattr(sm, "_force_live_active_transition"):
-                            _force_ok = sm._force_live_active_transition(
-                                "FORCE_TRADE+LIVE_CAPITAL_VERIFIED: supervisor hard-activation bypass"
-                            )
-                            if _force_ok:
-                                # Check that hard controls also agree before claiming orders will
-                                # be submitted — hard controls (EMERGENCY_STOP, INITIALIZING,
-                                # writer_not_ready) may still block even if the FSM reached
-                                # LIVE_ACTIVE.  A False here is informational; the order attempt
-                                # will happen and get a clear rejection log from execute_entry().
-                                _hc_ok = True
-                                _hc_reason = ""
-                                try:
-                                    from controls import get_hard_controls
-                                    _hc = get_hard_controls() if callable(get_hard_controls) else None
-                                    if _hc is not None:
-                                        _hc_ok, _hc_reason = _hc.can_trade(None)  # type: ignore[arg-type]
-                                except Exception:
-                                    _hc_ok = True  # unknown → optimistic
-                                if _hc_ok:
-                                    logger.critical(
-                                        "⚡ [SUPERVISOR] FORCE_TRADE hard-activation SUCCESS — "
-                                        "FSM is now LIVE_ACTIVE. Orders will be submitted this cycle."
-                                    )
-                                else:
-                                    logger.critical(
-                                        "⚡ [SUPERVISOR] FORCE_TRADE hard-activation SUCCESS — "
-                                        "FSM is now LIVE_ACTIVE, but hard controls still report: %s — "
-                                        "orders will be attempted; execution engine will log rejections.",
-                                        _hc_reason or "BLOCKED",
-                                    )
-                            else:
-                                logger.warning(
-                                    "⚡ [SUPERVISOR] FORCE_TRADE hard-activation returned False — "
-                                    "FSM transition may have failed; check state machine logs."
-                                )
-                    except Exception as _force_act_err:
-                        logger.warning(
-                            "[SUPERVISOR] FORCE_TRADE _force_live_active_transition failed: %s",
-                            _force_act_err,
-                        )
-
             if not _committed and _sufficient_balance and sm.get_current_state() == _TradingState.OFF:
                 try:
                     sm.transition_to(
                         _TradingState.LIVE_PENDING_CONFIRMATION,
                         "supervisor arming: LIVE_CAPITAL_VERIFIED + sufficient balance"
                         if _live_verified
-                        else "supervisor arming: FORCE_TRADE override",
+                        else "supervisor arming: verified capital intent",
                     )
                     logger.critical("🟡 SUPERVISOR ARMING: OFF -> LIVE_PENDING_CONFIRMATION")
                 except Exception as _arm_err:
@@ -848,8 +757,8 @@ def _supervisor_step_state_machine() -> None:
         elif _balance > 0.0:
             logger.warning(
                 "⚠️ Supervisor activation blocked: LIVE_CAPITAL_VERIFIED is false and "
-                "FORCE_TRADE/NIJA_FORCE_ACTIVATION not set, while balance is %.2f. "
-                "Set LIVE_CAPITAL_VERIFIED=true or FORCE_TRADE=true to enable activation.",
+                "canonical live activation intent is absent, while balance is %.2f. "
+                "Set LIVE_CAPITAL_VERIFIED=true after production preflight succeeds.",
                 _balance,
             )
     except Exception as _sm_err:

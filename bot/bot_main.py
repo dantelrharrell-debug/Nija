@@ -50,10 +50,12 @@ def _revoke_writer_dependent_readiness(reason: str) -> None:
     os.environ.pop("NIJA_WRITER_GENERATION", None)
     os.environ.pop("NIJA_WRITER_LEASE_GENERATION", None)
     try:
-        from bot.readiness_table import revoke_ready
+        from bot.readiness_table import revoke_many
 
-        for component in ("authority_ready", "nonce_ready", "execution_ready"):
-            revoke_ready(component, reason=f"writer_bootstrap_unavailable:{reason}")
+        revoke_many(
+            ("authority_ready", "nonce_ready", "execution_ready"),
+            reason=f"writer_bootstrap_unavailable:{reason}",
+        )
     except Exception:
         logger.debug(
             "WRITER_BOOTSTRAP_READINESS_REVOKE_FAILED reason=%s",
@@ -767,6 +769,10 @@ def main() -> int:
             from bot.startup_coordinator import get_startup_coordinator
 
             runtime = _writer_authority_runtime
+            if runtime is None:
+                raise RuntimeError(
+                    "Canonical writer runtime missing before core-loop handoff"
+                )
             arm_deadline = getattr(runtime, "arm_scan_start_deadline", None)
             if not callable(arm_deadline):
                 raise RuntimeError("Writer runtime cannot arm the scan-start deadline")
@@ -797,8 +803,24 @@ def main() -> int:
                 trading_thread.name,
                 trading_thread.ident,
             )
-            if runtime is not None and callable(getattr(runtime, "register_core_thread", None)):
-                runtime.register_core_thread(trading_thread)
+            register_core_thread = getattr(runtime, "register_core_thread", None)
+            if not callable(register_core_thread):
+                raise RuntimeError(
+                    "Canonical writer runtime cannot register the core thread"
+                )
+            register_core_thread(trading_thread)
+            registered_thread = getattr(runtime, "_core_thread", trading_thread)
+            if registered_thread is not trading_thread:
+                raise RuntimeError(
+                    "Canonical writer runtime rejected the core-thread handoff"
+                )
+            logger.critical(
+                "CANONICAL_CORE_THREAD_REGISTERED thread=%s ident=%s "
+                "writer_generation=%s",
+                trading_thread.name,
+                trading_thread.ident,
+                getattr(runtime, "_generation", "unknown"),
+            )
 
             # Publish verified thread evidence to the startup coordinator so that
             # the threads.running gate passes in evaluate_system_readiness_proof().

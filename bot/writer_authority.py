@@ -197,11 +197,9 @@ class WriterAuthority:
 
         distributed_required = bool(distributed_status.get("effective_strict_required", False))
         distributed_ok = bool(distributed_status.get("ok", False))
-        distributed_override = _env_truthy("NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK")
         distributed_gate_ok = bool(
             (not distributed_required)
             or distributed_ok
-            or distributed_override
             or (local_authority_observed and local_authority_acquired and not local_authority_lost)
         )
 

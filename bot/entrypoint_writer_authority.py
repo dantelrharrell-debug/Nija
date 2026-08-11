@@ -799,7 +799,7 @@ class EntrypointWriterAuthority:
     def _nija_lease_renewal_health(self) -> tuple[bool, str, float, float]:
         """Return fail-closed freshness for the canonical renewal proof."""
         if self._local_fallback:
-            return True, "local_fallback", 0.0, float("inf")
+            return False, "local_fallback_forbidden", float("inf"), 0.0
         if not self.acquired:
             return False, "writer_not_acquired", float("inf"), 0.0
         if self.lost:
@@ -1409,7 +1409,7 @@ class EntrypointWriterAuthority:
         an unregistered startup thread while reporting that state truthfully.
         """
         if self._local_fallback:
-            return True, ""
+            return False, "core_thread_local_fallback_forbidden"
         thread = self._core_thread
         if thread is None:
             registration_deadline_s = _cfg_float(
@@ -1609,10 +1609,12 @@ class EntrypointWriterAuthority:
         os.environ.pop("NIJA_WRITER_GENERATION", None)
         os.environ.pop("NIJA_WRITER_LEASE_GENERATION", None)
         try:
-            from bot.readiness_table import revoke_ready
+            from bot.readiness_table import revoke_many
 
-            for component in ("authority_ready", "nonce_ready", "execution_ready"):
-                revoke_ready(component, reason=f"writer_authority_lost:{reason}")
+            revoke_many(
+                ("authority_ready", "nonce_ready", "execution_ready"),
+                reason=f"writer_authority_lost:{reason}",
+            )
         except Exception:
             logger.debug(
                 "ENTRYPOINT_WRITER_AUTHORITY_READINESS_REVOKE_FAILED marker=%s",
@@ -1664,10 +1666,12 @@ class EntrypointWriterAuthority:
         self._stop.set()
         self._set_writer_state(WriterState.LOST, reason="release_called")
         try:
-            from bot.readiness_table import revoke_ready
+            from bot.readiness_table import revoke_many
 
-            for component in ("authority_ready", "nonce_ready", "execution_ready"):
-                revoke_ready(component, reason="writer_authority_release_called")
+            revoke_many(
+                ("authority_ready", "nonce_ready", "execution_ready"),
+                reason="writer_authority_release_called",
+            )
         except Exception:
             logger.debug(
                 "ENTRYPOINT_WRITER_AUTHORITY_READINESS_REVOKE_FAILED marker=%s",

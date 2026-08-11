@@ -519,14 +519,18 @@ class NijaAIEngine:
 
     @staticmethod
     def _force_trade_signal_enabled() -> bool:
-        """Return True when operators explicitly request forced/probe entries.
+        """Return True for explicit forced/probe entries in simulation only.
 
-        This is intentionally opt-in.  It does not bypass broker, capital,
-        liquidity, lifecycle, or exchange submission gates; it only prevents
-        the AI signal layer from returning an empty candidate list when the
-        live deployment has FORCE_TRADE-style controls enabled.
+        Production candidates must satisfy the real signal floor.  Forced
+        exploratory signals remain available to paper/dry-run test harnesses.
         """
         truthy = {"1", "true", "yes", "on", "y", "enabled"}
+        simulated = any(
+            str(os.getenv(key, "")).strip().lower() in truthy
+            for key in ("DRY_RUN_MODE", "PAPER_MODE")
+        )
+        if not simulated:
+            return False
         for key in (
             "FORCE_TRADE",
             "FORCE_TRADE_MODE",
