@@ -80,9 +80,10 @@ def _make_fsm():
         def mark_failed(self) -> None:
             with self._lock:
                 self._connecting = False
+                self._connected.clear()
                 self._nonce_ready.clear()
                 self._capital_ready.clear()
-            self._failed.set()
+                self._failed.set()
 
         def reset(self) -> None:
             with self._lock:
@@ -239,6 +240,17 @@ class TestKrakenStartupFSM:
         self.fsm.begin_platform_boot()
         self.fsm.mark_connected()
         assert not self.fsm.is_failed
+
+    def test_runtime_failure_revokes_connected_latch(self):
+        self.fsm.begin_platform_boot()
+        self.fsm.mark_connected()
+
+        self.fsm.mark_failed()
+
+        assert not self.fsm.is_connected
+        assert self.fsm.is_failed
+        assert not self.fsm.is_nonce_ready
+        assert not self.fsm.is_capital_ready
 
     def test_successful_reconnect_clears_prior_failure_latch(self):
         self.fsm.begin_platform_boot()
