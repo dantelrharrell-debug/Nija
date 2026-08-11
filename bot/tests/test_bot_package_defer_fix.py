@@ -3,6 +3,8 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[2]
 PATCHER = ROOT / "apply_bot_package_defer_fix.py"
@@ -57,6 +59,55 @@ def test_bot_package_patch_detects_bounded_startup_marker() -> None:
         'logger.info("BOT_PACKAGE_STARTUP_BOUNDED runtime_import_hooks=false")\n'
     )
     assert module.patch_text(source) == source
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "# Importing the package must remain side-effect bounded.\n",
+        'logger.info("BOT_PACKAGE_STARTUP_BOUNDED runtime_import_hooks=false")\n',
+        (
+            "# Importing the package must remain side-effect bounded.\n"
+            'logger.info("BOT_PACKAGE_STARTUP_BOUNDED runtime_import_hooks=false")\n'
+            "_PATCH_HOOKS = (\n)\n"
+        ),
+    ],
+)
+def test_bot_package_patch_rejects_partial_bounded_markers(source: str) -> None:
+    module = _load_patcher()
+
+    with pytest.raises(RuntimeError, match="sitecustomize anchor not found"):
+        module.patch_text(source)
+
+
+def test_bot_package_patch_rejects_partial_legacy_patch() -> None:
+    module = _load_patcher()
+    partially_patched = module.patch_text(_sample()).replace(
+        "_PATCH_HOOKS = () if _NIJA_BOT_PACKAGE_RUNTIME_HOOKS_DEFERRED else (",
+        "_PATCH_HOOKS = (",
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="bot package patch-hook defer guard count invalid",
+    ):
+        module.patch_text(partially_patched)
+
+
+def test_main_writes_changed_file_once(monkeypatch, tmp_path, capsys) -> None:
+    module = _load_patcher()
+    target = tmp_path / "__init__.py"
+    target.write_text(_sample(), encoding="utf-8")
+    monkeypatch.setattr(module, "BOT_INIT_PATH", target)
+
+    module.main()
+
+    output = capsys.readouterr().out
+    assert output.count("NIJA_BOT_PACKAGE_DEFER_PATCH_APPLIED") == 1
+    assert "changed=true" in output
+    assert module.patch_text(target.read_text(encoding="utf-8")) == target.read_text(
+        encoding="utf-8"
+    )
 
 
 def test_repository_bot_init_is_already_patch_safe() -> None:

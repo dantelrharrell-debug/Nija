@@ -45,14 +45,13 @@ _BOUNDED_STARTUP_COMMENT_MARKER = "side-effect bounded"
 _BOUNDED_STARTUP_LOG_MARKER = "BOT_PACKAGE_STARTUP_BOUNDED"
 
 
-def _is_already_patched(text: str) -> bool:
-    has_defer_assignment = f"{DEFER_NAME} =" in text
-    has_deferred_log_marker = MARKER in text
-    has_bounded_startup_comment = _BOUNDED_STARTUP_COMMENT_MARKER in text
-    has_bounded_startup_log_marker = _BOUNDED_STARTUP_LOG_MARKER in text
-
-    return (has_defer_assignment and has_deferred_log_marker) or (
-        has_bounded_startup_comment and has_bounded_startup_log_marker
+def _has_bounded_startup_contract(text: str) -> bool:
+    """Return whether the post-PR-2474 initializer needs no legacy patch."""
+    return bool(
+        _BOUNDED_STARTUP_COMMENT_MARKER in text
+        and _BOUNDED_STARTUP_LOG_MARKER in text
+        and "sitecustomize" not in text
+        and "_PATCH_HOOKS" not in text
     )
 
 
@@ -68,25 +67,25 @@ def _validate(text: str) -> None:
 
 
 def _is_already_patched(text: str) -> bool:
-    """Detect if the patch has already been applied to the file.
-    
-    Idempotency detection: recognize markers that indicate the file has
-    already been patched in a previous run:
-    
-    1. _NIJA_BOT_PACKAGE_RUNTIME_HOOKS_DEFERRED = assignment
-    2. Log marker for deferred startup
-    3. Bounded startup comment (added in PR #2474)
-    4. Runtime startup bounded marker
-    """
-    return bool(
-        f"{DEFER_NAME} =" in text
-        or "side-effect bounded" in text
-        or "BOT_PACKAGE_STARTUP_BOUNDED" in text
+    """Recognize only a complete legacy patch or the bounded initializer."""
+    if _has_bounded_startup_contract(text):
+        return True
+
+    legacy_markers = (
+        f"{DEFER_NAME} =" in text,
+        MARKER_LOG_LITERAL in text,
+        _HOOKS_REPLACEMENT in text,
     )
+    if not any(legacy_markers):
+        return False
+
+    # A partially patched legacy initializer is unsafe to accept as a no-op.
+    # Validation raises a specific error instead of silently shipping it.
+    _validate(text)
+    return True
 
 
 def patch_text(text: str) -> str:
-    # Idempotency: if already patched, return unchanged
     if _is_already_patched(text):
         return text
 
@@ -107,15 +106,13 @@ def patch_text(text: str) -> str:
 def main() -> None:
     original = BOT_INIT_PATH.read_text(encoding="utf-8")
     patched = patch_text(original)
-    if patched == original:
-        print("NIJA_BOT_PACKAGE_DEFER_PATCH_ALREADY_APPLIED idempotent=true no_changes=true")
-    else:
-        BOT_INIT_PATH.write_text(patched, encoding="utf-8")
-        print("NIJA_BOT_PACKAGE_DEFER_PATCH_APPLIED idempotent=true")
     changed = patched != original
     if changed:
         BOT_INIT_PATH.write_text(patched, encoding="utf-8")
-    print(f"NIJA_BOT_PACKAGE_DEFER_PATCH_APPLIED idempotent=true changed={str(changed).lower()}")
+        event = "NIJA_BOT_PACKAGE_DEFER_PATCH_APPLIED"
+    else:
+        event = "NIJA_BOT_PACKAGE_DEFER_PATCH_ALREADY_APPLIED"
+    print(f"{event} idempotent=true changed={str(changed).lower()}")
 
 
 if __name__ == "__main__":

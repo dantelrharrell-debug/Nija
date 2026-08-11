@@ -39,7 +39,7 @@ def _request() -> PipelineRequest:
 
 
 class TestPr2009ReviewComments(unittest.TestCase):
-    def test_force_trade_bypasses_monitor_safety_denial(self) -> None:
+    def test_force_trade_does_not_bypass_monitor_safety_denial(self) -> None:
         safety = _FakeSafetyController(_TradingMode.MONITOR, allowed=False, reason="monitor mode")
         fake_mod = types.SimpleNamespace(
             get_safety_controller=lambda: safety,
@@ -51,7 +51,9 @@ class TestPr2009ReviewComments(unittest.TestCase):
             with patch.dict(os.environ, {"FORCE_TRADE": "true", "FORCE_TRADE_MODE": ""}, clear=False):
                 result = ExecutionPipeline._enforce_execution_gate(fake_self, _request(), time.monotonic())
 
-        self.assertIsNone(result)
+        self.assertIsInstance(result, PipelineResult)
+        self.assertFalse(result.success)
+        self.assertIn("monitor mode", result.error)
 
     def test_without_force_trade_monitor_mode_remains_blocked(self) -> None:
         safety = _FakeSafetyController(_TradingMode.MONITOR, allowed=False, reason="monitor mode")

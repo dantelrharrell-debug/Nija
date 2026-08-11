@@ -64,6 +64,16 @@ def _set_canonical_writer_ready(monkeypatch, module) -> None:
     known-good canonical state.
     """
     _set_writer_ready_env(monkeypatch)
+    authority_context = importlib.import_module("bot.execution_authority_context")
+    monkeypatch.setattr(
+        authority_context,
+        "get_distributed_writer_authority_status",
+        lambda force_refresh=False: {
+            "effective_strict_required": True,
+            "ok": True,
+            "redis_reachable": True,
+        },
+    )
     monkeypatch.setattr(
         module,
         "writer_authority_snapshot",

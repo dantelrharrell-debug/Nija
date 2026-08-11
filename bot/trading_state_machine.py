@@ -2186,7 +2186,9 @@ class TradingStateMachine:
         # LPC state is safe: it does NOT execute trades.
         with self._lock:
             _early_arm_state = self._current_state
-        if _early_arm_state == TradingState.OFF and (_live_activation_intent or _force):
+        if _early_arm_state == TradingState.OFF and (
+            _live_activation_intent or _compat_activation_request
+        ):
             try:
                 self.transition_to(
                     TradingState.LIVE_PENDING_CONFIRMATION,
@@ -2322,7 +2324,7 @@ class TradingStateMachine:
                 self._activation_committed,
                 _lcv_quick,
                 _dry_run_quick,
-                _force,
+                _compat_activation_request,
                 _heartbeat_required_first,
                 _heartbeat_ok,
                 _heartbeat_err or "",
@@ -2335,7 +2337,7 @@ class TradingStateMachine:
             self._activation_committed,
             _lcv_quick,
             _dry_run_quick,
-            _force,
+            _compat_activation_request,
             _heartbeat_required_first,
             _heartbeat_ok,
             _heartbeat_err or "",
@@ -2369,12 +2371,12 @@ class TradingStateMachine:
 
         # Ensure explicit activation intent is reflected in FSM state even when
         # downstream commit gates are still converging.
-        # _force covers FORCE_TRADE / FORCE_TRADE_MODE / FORCE_LIVE_TRANSITION:
-        # when any of these operator override flags is set, treat it the same as
-        # live activation intent so the FSM arms to LIVE_PENDING_CONFIRMATION and
-        # the 5-minute auto-transition timeout can fire even without
-        # LIVE_CAPITAL_VERIFIED being explicitly set.
-        if current == TradingState.OFF and (_live_activation_intent or _force):
+        # A legacy force flag is only a compatibility activation request. It may
+        # arm LIVE_PENDING_CONFIRMATION, but it never bypasses canonical safety
+        # or ownership gates.
+        if current == TradingState.OFF and (
+            _live_activation_intent or _compat_activation_request
+        ):
             try:
                 self.transition_to(
                     TradingState.LIVE_PENDING_CONFIRMATION,
@@ -2394,7 +2396,7 @@ class TradingStateMachine:
         if (
             not authority_ready
             and current == TradingState.OFF
-            and (_live_activation_intent or _force)
+            and (_live_activation_intent or _compat_activation_request)
         ):
             try:
                 self.transition_to(
@@ -2563,7 +2565,9 @@ class TradingStateMachine:
             kill_state,
         )
 
-        _activation_requested = bool(_lcv_quick or _force or _live_activation_intent)
+        _activation_requested = bool(
+            _lcv_quick or _compat_activation_request or _live_activation_intent
+        )
 
         # Final consolidated gate diagnostic — single source of truth for activation state.
         _live_verified_bool = bool(_live_activation_intent)
