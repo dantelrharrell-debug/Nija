@@ -5727,6 +5727,79 @@ def _exec_test_probe(strategy: Any) -> Dict:
     return result
 
 
+def _register_canonical_core_thread(thread: threading.Thread, *, source: str) -> None:
+    """Register a verified live TradingLoop thread with writer authority."""
+
+    try:
+        if not thread.is_alive():
+            logger.critical(
+                "CANONICAL_CORE_THREAD_REGISTRATION_SKIPPED reason=thread_not_alive "
+                "source=%s thread_name=%s ident=%s",
+                source,
+                getattr(thread, "name", "unknown"),
+                getattr(thread, "ident", None),
+            )
+            return
+    except Exception as exc:
+        logger.critical(
+            "CANONICAL_CORE_THREAD_REGISTRATION_SKIPPED reason=thread_liveness_probe_failed "
+            "source=%s err=%s:%s",
+            source,
+            type(exc).__name__,
+            exc,
+            exc_info=True,
+        )
+        return
+
+    try:
+        from bot.entrypoint_writer_authority import get_entrypoint_writer_authority
+
+        runtime = get_entrypoint_writer_authority()
+        if not bool(getattr(runtime, "acquired", False)) or bool(getattr(runtime, "lost", True)):
+            logger.critical(
+                "CANONICAL_CORE_THREAD_REGISTRATION_SKIPPED reason=writer_not_active "
+                "source=%s thread_name=%s ident=%s",
+                source,
+                thread.name,
+                thread.ident,
+            )
+            return
+        register_core_thread = getattr(runtime, "register_core_thread", None)
+        if not callable(register_core_thread):
+            logger.critical(
+                "CANONICAL_CORE_THREAD_REGISTRATION_SKIPPED "
+                "reason=writer_register_core_thread_missing source=%s",
+                source,
+            )
+            return
+        if getattr(runtime, "_core_thread", None) is thread:
+            logger.critical(
+                "CANONICAL_CORE_THREAD_ALREADY_REGISTERED thread=%s ident=%s source=%s writer_generation=%s",
+                thread.name,
+                thread.ident,
+                source,
+                getattr(runtime, "_generation", "unknown"),
+            )
+            return
+        register_core_thread(thread)
+        logger.critical(
+            "CANONICAL_CORE_THREAD_REGISTERED thread=%s ident=%s source=%s writer_generation=%s",
+            thread.name,
+            thread.ident,
+            source,
+            getattr(runtime, "_generation", "unknown"),
+        )
+    except Exception as exc:
+        logger.critical(
+            "CANONICAL_CORE_THREAD_REGISTRATION_FAILED reason=writer_registration_exception "
+            "source=%s err=%s:%s",
+            source,
+            type(exc).__name__,
+            exc,
+            exc_info=True,
+        )
+
+
 def start_trading_engine(strategy: Any) -> threading.Thread:
     """Start the one canonical trading-loop thread for a TradingStrategy."""
 
@@ -5747,6 +5820,7 @@ def start_trading_engine(strategy: Any) -> threading.Thread:
 
     with _engine_start_guard:
         if _engine_thread is not None and _engine_thread.is_alive():
+            _register_canonical_core_thread(_engine_thread, source="start_dedup_existing")
             logger.warning(
                 "TRADING_ENGINE_START_DEDUP existing_thread=%s ident=%s",
                 _engine_thread.name,
@@ -5758,6 +5832,7 @@ def start_trading_engine(strategy: Any) -> threading.Thread:
             try:
                 if existing.is_alive() and existing.name == "TradingLoop":
                     _engine_thread = existing
+                    _register_canonical_core_thread(existing, source="start_adopt_existing")
                     logger.warning(
                         "TRADING_ENGINE_START_ADOPTED existing_thread=%s ident=%s",
                         existing.name,
@@ -5819,6 +5894,7 @@ def start_trading_engine(strategy: Any) -> threading.Thread:
             thread.name,
             thread.ident,
         )
+        _register_canonical_core_thread(thread, source="start_new_thread")
         logger.critical("LIFECYCLE: entering live trading runtime")
         return thread
 
@@ -6976,6 +7052,7 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                 if cycle == 1:
                     logger.critical("🟢 TRADING LOOP ACTIVE — FIRST TICK REACHED")
                     logger.critical("✅ FIRST STRATEGY TICK")
+                    logger.critical("SCAN_CYCLE_STARTED cycle=%d", cycle)
                     logger.critical("SCAN_LOOP_STARTED cycle=%d", cycle)
                     logger.critical("MARKET_SCAN_STARTED cycle=%d", cycle)
                     # Emit a clear operator diagnostic if LIVE_CAPITAL_VERIFIED is not set.
@@ -7721,6 +7798,7 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                                     get_entrypoint_writer_authority,
                                 )
                                 get_entrypoint_writer_authority().record_scan_complete()
+                                logger.critical("SCAN_CYCLE_COMPLETED cycle=%d", cycle)
                             except Exception:
                                 pass
                     else:
@@ -7798,6 +7876,7 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                                         get_entrypoint_writer_authority,
                                     )
                                     get_entrypoint_writer_authority().record_scan_complete()
+                                    logger.critical("SCAN_CYCLE_COMPLETED cycle=%d", cycle)
                                 except Exception:
                                     pass
                 _cycle_elapsed = time.time() - _cycle_start_ts

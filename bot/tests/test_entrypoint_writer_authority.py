@@ -951,6 +951,142 @@ class BotMainAuthorityOrderingTests(unittest.TestCase):
         runtime.register_core_thread.assert_called_once()
         runtime.record_scan_started.assert_not_called()
 
+    def test_main_skips_duplicate_registration_for_pre_registered_core_thread(self):
+        core_loop = types.ModuleType("bot.nija_core_loop")
+        manager = types.SimpleNamespace(
+            _fsm_initialized=True,
+            _platform_brokers={"kraken": types.SimpleNamespace(connected=True)},
+        )
+        broker = types.SimpleNamespace(connected=True)
+        strategy = types.SimpleNamespace(broker=broker, run_cycle=lambda: None)
+
+        class _TradingThread:
+            name = "TradingLoop"
+            ident = 777
+
+            @staticmethod
+            def is_alive():
+                return True
+
+        trading_thread = _TradingThread()
+        runtime = types.SimpleNamespace(
+            arm_scan_start_deadline=MagicMock(),
+            register_core_thread=MagicMock(),
+            record_scan_started=MagicMock(),
+            _core_thread=trading_thread,
+            _generation=91,
+        )
+        core_loop.start_trading_engine = lambda _strategy: trading_thread
+
+        previous = sys.modules.get("bot.nija_core_loop")
+        sys.modules["bot.nija_core_loop"] = core_loop
+        try:
+            with (
+                patch.object(
+                    self.bot_main,
+                    "_acquire_writer_authority_before_nonce",
+                    return_value=True,
+                ),
+                patch(
+                    "bot.canonical_broker_prebootstrap_v22.prepare_canonical_broker_runtime",
+                    return_value=manager,
+                ),
+                patch.object(
+                    self.bot_main,
+                    "_run_self_healing_startup",
+                    return_value=(True, broker, "kraken"),
+                ),
+                patch.object(
+                    self.bot_main,
+                    "_advance_bootstrap_fsm_to_running_supervised",
+                    return_value=True,
+                ),
+                patch.object(
+                    self.bot_main,
+                    "_publish_canonical_strategy_for_runtime",
+                    return_value=strategy,
+                ),
+                patch.object(self.bot_main, "_writer_authority_runtime", runtime),
+                patch.object(self.bot_main, "_release_writer_authority"),
+                patch.object(self.bot_main, "_keep_process_alive_after_loop_return"),
+                patch.object(self.bot_main.signal, "signal"),
+            ):
+                code = self.bot_main.main()
+        finally:
+            if previous is None:
+                sys.modules.pop("bot.nija_core_loop", None)
+            else:
+                sys.modules["bot.nija_core_loop"] = previous
+
+        self.assertEqual(code, 0)
+        runtime.register_core_thread.assert_not_called()
+
+    def test_main_fail_closed_when_trading_thread_not_alive(self):
+        core_loop = types.ModuleType("bot.nija_core_loop")
+        manager = types.SimpleNamespace(
+            _fsm_initialized=True,
+            _platform_brokers={"kraken": types.SimpleNamespace(connected=True)},
+        )
+        broker = types.SimpleNamespace(connected=True)
+        strategy = types.SimpleNamespace(broker=broker, run_cycle=lambda: None)
+        runtime = types.SimpleNamespace(
+            arm_scan_start_deadline=MagicMock(),
+            register_core_thread=MagicMock(),
+            record_scan_started=MagicMock(),
+        )
+
+        class _DeadTradingThread:
+            name = "TradingLoop"
+            ident = 999
+
+            @staticmethod
+            def is_alive():
+                return False
+
+        core_loop.start_trading_engine = lambda _strategy: _DeadTradingThread()
+        previous = sys.modules.get("bot.nija_core_loop")
+        sys.modules["bot.nija_core_loop"] = core_loop
+        try:
+            with (
+                patch.object(
+                    self.bot_main,
+                    "_acquire_writer_authority_before_nonce",
+                    return_value=True,
+                ),
+                patch(
+                    "bot.canonical_broker_prebootstrap_v22.prepare_canonical_broker_runtime",
+                    return_value=manager,
+                ),
+                patch.object(
+                    self.bot_main,
+                    "_run_self_healing_startup",
+                    return_value=(True, broker, "kraken"),
+                ),
+                patch.object(
+                    self.bot_main,
+                    "_advance_bootstrap_fsm_to_running_supervised",
+                    return_value=True,
+                ),
+                patch.object(
+                    self.bot_main,
+                    "_publish_canonical_strategy_for_runtime",
+                    return_value=strategy,
+                ),
+                patch.object(self.bot_main, "_writer_authority_runtime", runtime),
+                patch.object(self.bot_main, "_release_writer_authority") as release,
+                patch.object(self.bot_main.signal, "signal"),
+            ):
+                code = self.bot_main.main()
+        finally:
+            if previous is None:
+                sys.modules.pop("bot.nija_core_loop", None)
+            else:
+                sys.modules["bot.nija_core_loop"] = previous
+
+        self.assertEqual(code, 1)
+        runtime.register_core_thread.assert_not_called()
+        release.assert_called_once_with()
+
     def test_thread_start_failure_still_releases_writer_authority(self):
         core_loop = types.ModuleType("bot.nija_core_loop")
         manager = types.SimpleNamespace(
