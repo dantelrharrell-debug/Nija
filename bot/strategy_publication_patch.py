@@ -417,6 +417,34 @@ def _publish(strategy: Any) -> None:
         bool(getattr(strategy, "nija_core_loop", None)),
         len(getattr(strategy, "symbols", []) or []),
     )
+    # Publish readiness-table keys so the startup coordinator sees strategy and
+    # execution as live evidence rather than waiting for a TradingStrategy.__init__
+    # re-run (which never fires for an existing hydrated strategy).
+    try:
+        try:
+            from bot.readiness_table import mark_ready as _rt_mark
+        except ImportError:
+            from readiness_table import mark_ready as _rt_mark  # type: ignore[import]
+        _rt_mark("strategy_ready")
+        if _strategy_has_entry_broker(strategy):
+            _rt_mark("execution_ready")
+        logger.debug(
+            "STRATEGY_PUBLICATION_READINESS_PUBLISHED "
+            "strategy_ready=true execution_ready=%s",
+            _strategy_has_entry_broker(strategy),
+        )
+    except Exception as _rt_exc:
+        logger.debug("STRATEGY_PUBLICATION_READINESS_MARK_FAILED err=%s", _rt_exc)
+    # Trigger bootstrap_ready check: if all other required keys are now True,
+    # _maybe_mark_bootstrap() will set bootstrap_ready automatically.
+    try:
+        try:
+            from bot.post_lock_capital_refresh_patch import _maybe_mark_bootstrap
+        except ImportError:
+            from post_lock_capital_refresh_patch import _maybe_mark_bootstrap  # type: ignore[import]
+        _maybe_mark_bootstrap("strategy_publication")
+    except Exception as _bs_exc:
+        logger.debug("STRATEGY_PUBLICATION_BOOTSTRAP_CHECK_FAILED err=%s", _bs_exc)
 
 
 def _build_strategy(cls: type, brokers: dict[Any, dict[str, Any]]) -> Any:

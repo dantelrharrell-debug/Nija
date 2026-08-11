@@ -649,6 +649,32 @@ def _monitor(stop_event: threading.Event | None = None) -> None:
         interval,
         timeout_s,
     )
+
+    # Lazily resolved readiness-change event — allows the monitor to wake
+    # immediately when any readiness-table key flips rather than waiting the
+    # full `interval`.  Resolved once on first use; falls back to plain sleep
+    # when the module is unavailable (e.g. very early in test isolation).
+    _rt_event: threading.Event | None = None
+
+    def _readiness_sleep(seconds: float) -> None:
+        """Sleep for *seconds* but wake early if the readiness-table version changes."""
+        nonlocal _rt_event
+        if _rt_event is None:
+            try:
+                for _mod_name in ("bot.readiness_table", "readiness_table"):
+                    _rt_mod = sys.modules.get(_mod_name)
+                    if _rt_mod is not None:
+                        _evt = getattr(_rt_mod, "READINESS_CHANGED_EVENT", None)
+                        if isinstance(_evt, threading.Event):
+                            _rt_event = _evt
+                            break
+            except Exception:
+                pass
+        if _rt_event is not None:
+            _rt_event.wait(timeout=seconds)
+        else:
+            time.sleep(seconds)
+
     while stop_event is None or not stop_event.is_set():
         now_monotonic = time.monotonic()
         if now_monotonic >= deadline:
@@ -700,7 +726,11 @@ def _monitor(stop_event: threading.Event | None = None) -> None:
                 continue
             if _commit_once(sm, meta):
                 return
-            time.sleep(interval)
+            # Commit attempt failed (readiness proof incomplete). Sleep up to
+            # `interval` seconds but wake immediately if any readiness-table
+            # key changes — this satisfies the "retry when version advances"
+            # requirement without busy-polling.
+            _readiness_sleep(interval)
         except Exception as exc:
             logger.exception(
                 "ACTIVATION_PENDING_COMMIT_MONITOR_ERROR err=%s", exc
