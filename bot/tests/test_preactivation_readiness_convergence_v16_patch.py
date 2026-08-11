@@ -154,3 +154,64 @@ def test_starts_strategy_publication_monitor_once(monkeypatch):
     assert patch._ensure_strategy_publication_monitor() == (True, "started")
     assert patch._ensure_strategy_publication_monitor() == (True, "already_started")
     assert calls == ["start"]
+
+
+def test_retries_activation_after_strategy_publication(monkeypatch, caplog):
+    patch = _module()
+    patch._LAST_STRATEGY_PUBLISHED = False
+    monkeypatch.setattr(patch, "_live_mode", lambda: True)
+    monkeypatch.setattr(
+        patch, "_ensure_strategy_publication_monitor", lambda: (True, "started")
+    )
+    monkeypatch.setenv("NIJA_POST_PUBLICATION_ACTIVATION_MAX_ATTEMPTS", "3")
+    monkeypatch.setenv("NIJA_POST_PUBLICATION_ACTIVATION_INITIAL_DELAY_S", "0")
+    monkeypatch.setenv("NIJA_POST_PUBLICATION_ACTIVATION_MAX_DELAY_S", "0")
+    monkeypatch.setenv("NIJA_POST_PUBLICATION_ACTIVATION_BACKOFF", "1")
+
+    attempts: list[int] = []
+    results = iter(
+        (
+            (
+                False,
+                {
+                    "proofs": {"strategy_ready": True},
+                    "pending": ["bootstrap_ready"],
+                    "activation": "capital_snapshot_not_accepted",
+                },
+            ),
+            (
+                False,
+                {
+                    "proofs": {"strategy_ready": True},
+                    "pending": ["bootstrap_ready"],
+                    "activation": "capital_snapshot_not_accepted",
+                },
+            ),
+            (
+                True,
+                {
+                    "proofs": {"strategy_ready": True},
+                    "pending": [],
+                    "activation": "committed",
+                    "state_after": "LIVE_ACTIVE",
+                },
+            ),
+        )
+    )
+
+    def fake_attempt():
+        attempts.append(len(attempts) + 1)
+        return next(results)
+
+    monkeypatch.setattr(patch, "_attempt_activation", fake_attempt)
+    monkeypatch.setattr(patch.time, "sleep", lambda _seconds: None)
+
+    with caplog.at_level(logging.WARNING):
+        active, details = patch._cycle()
+
+    assert active is True
+    assert attempts == [1, 2, 3]
+    assert details["state_after"] == "LIVE_ACTIVE"
+    assert details["post_publication_retry_attempts"] == 2
+    assert "POST_PUBLICATION_ACTIVATION_RETRY attempt=1/3 active=false" in caplog.text
+    assert "POST_PUBLICATION_ACTIVATION_RETRY_SUCCESS attempts=2 state=LIVE_ACTIVE" in caplog.text

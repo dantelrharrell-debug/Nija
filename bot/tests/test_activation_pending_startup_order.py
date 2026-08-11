@@ -6,6 +6,7 @@ import logging
 import sys
 import threading
 from pathlib import Path
+from types import ModuleType, SimpleNamespace
 
 
 def test_activation_monitor_has_no_synchronous_startup_repair_install() -> None:
@@ -100,6 +101,36 @@ def test_startup_repairs_wait_for_broker_manager(monkeypatch) -> None:
 
     assert module.ensure_startup_execution_repairs_ready(timeout_s=0.0) is False
     assert called == []
+
+
+def test_broker_manager_loaded_accepts_canonical_broker_manager(monkeypatch) -> None:
+    module = importlib.import_module("bot.activation_pending_commit_monitor_patch")
+    broker_manager = ModuleType("bot.broker_manager")
+    broker_manager.get_broker_manager = lambda: object()
+    monkeypatch.setitem(sys.modules, "bot.broker_manager", broker_manager)
+    monkeypatch.delitem(sys.modules, "bot.multi_account_broker_manager", raising=False)
+
+    assert module._broker_manager_module_loaded() is True
+
+
+def test_broker_manager_snapshot_accepts_coinbase_without_multi_account_manager(
+    monkeypatch,
+) -> None:
+    module = importlib.import_module("bot.activation_pending_commit_monitor_patch")
+    broker = SimpleNamespace(connected=True, _last_known_balance=25.0)
+    manager = SimpleNamespace(_platform_brokers={"coinbase": broker})
+    broker_manager = ModuleType("bot.broker_manager")
+    broker_manager.get_broker_manager = lambda: manager
+    monkeypatch.setitem(sys.modules, "bot.broker_manager", broker_manager)
+    monkeypatch.delitem(sys.modules, "bot.multi_account_broker_manager", raising=False)
+    monkeypatch.delitem(sys.modules, "bot.capital_authority", raising=False)
+
+    accepted, meta = module._broker_manager_snapshot()
+
+    assert accepted is True
+    assert meta["registered_brokers"] == 1
+    assert meta["per_broker"] == {"coinbase": 25.0}
+    assert meta["reason"] == "broker_manager_cached_ok"
 
 
 def test_activation_monitor_continues_after_diagnostic_deadline(
