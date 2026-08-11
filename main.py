@@ -17,6 +17,20 @@ if _ROOT not in _sys.path:
     _sys.path.insert(0, _ROOT)
 
 logger = logging.getLogger(__name__)
+_TRUTHY_ENV_VALUES = {"1", "true", "yes", "on", "enabled", "y"}
+_CANONICAL_PREHANDOFF_MARKER = "20260811-main-canonical-prehandoff-v60"
+
+
+def _truthy(name: str) -> bool:
+    return str(os.environ.get(name, "")).strip().lower() in _TRUTHY_ENV_VALUES
+
+
+def _canonical_fast_path_enabled() -> bool:
+    return bool(
+        _truthy("NIJA_CANONICAL_ENTRYPOINT_FAST_PATH")
+        and _truthy("NIJA_DEFER_RUNTIME_SITE_HOOKS")
+        and os.environ.get("NIJA_CANONICAL_RUNTIME_LAUNCHER_V26_READY") == "1"
+    )
 
 
 def _load_repo_module_by_path(module_name: str, relative_path: str):
@@ -331,52 +345,91 @@ def _install_live_entry_completion_repair() -> None:
         logger.warning("LIVE_ENTRY_COMPLETION_REPAIR_FAILED err=%s", exc)
 
 
-_install_global_runtime_startup_guards()
-_install_preactivation_runtime_identity_guard_v36()
-_install_logging_format_guard()
-_install_runtime_auth_endpoint_repair()
-_install_current_capital_snapshot_freshness_repair()
-_install_authority_heartbeat_timeout_grace_repair()
-_install_live_broker_profit_exit_v25()
-_run_pre_startup_sanitization()
-_install_strategy_publication()
-_install_authority_readiness_repair()
-_install_execution_bootstrap_authority_repair()
-_install_forced_fallback_payload_repair()
-_install_execution_pipeline_gate_repair()
-_install_hard_controls_csm_repair()
-_install_trading_state_dispatch_latch_repair()
-_install_downstream_risk_governor_equity_repair()
-_install_usdt_kraken_ecel_routing_repair()
-_install_live_entry_completion_repair()
-from bot.startup_runtime_safety import normalize_runtime_startup_env
+def _normalize_runtime_startup_env() -> None:
+    module = importlib.import_module("bot.startup_runtime_safety")
+    normalize_runtime_startup_env = getattr(module, "normalize_runtime_startup_env", None)
+    if not callable(normalize_runtime_startup_env):
+        raise RuntimeError("startup_runtime_safety.normalize_runtime_startup_env unavailable")
+    startup_notes = normalize_runtime_startup_env(os.environ)
+    if startup_notes:
+        logger.warning("STARTUP_RUNTIME_SAFETY_NORMALIZED notes=%s", ",".join(startup_notes))
 
-startup_notes = normalize_runtime_startup_env(os.environ)
-if startup_notes:
-    logger.warning("STARTUP_RUNTIME_SAFETY_NORMALIZED notes=%s", ",".join(startup_notes))
 
-# Re-apply strict sanitizer after runtime startup normalization so unsafe flags
-# cannot be reintroduced by startup defaults.
-_run_pre_startup_sanitization()
+def _install_generation_sync_timing_patch() -> None:
+    try:
+        module = importlib.import_module("bot.generation_sync_timing_patch")
+        installer = getattr(module, "install_import_hook", None)
+        if callable(installer):
+            installer()
+            print("GENERATION_SYNC_TIMING_PATCH_INSTALL_REQUESTED", flush=True)
+            logger.warning("GENERATION_SYNC_TIMING_PATCH_INSTALL_REQUESTED")
+        else:
+            logger.warning("GENERATION_SYNC_TIMING_PATCH_INSTALL_SKIPPED installer_missing")
+    except Exception as exc:
+        logger.warning("GENERATION_SYNC_TIMING_PATCH_INSTALL_FAILED err=%s", exc)
 
-try:
-    from bot.generation_sync_timing_patch import install_import_hook as _install_generation_sync_timing_patch
+
+def _install_live_execution_authority_blocker_patch() -> None:
+    """Install the live execution-authority blocker before the legacy handoff."""
+
+    try:
+        module = importlib.import_module("bot.live_execution_authority_blocker_patch")
+        installer = getattr(module, "install_import_hook", None)
+        if callable(installer):
+            installer()
+            print("LIVE_EXECUTION_AUTHORITY_BLOCKER_INSTALL_REQUESTED", flush=True)
+            logger.warning("LIVE_EXECUTION_AUTHORITY_BLOCKER_INSTALL_REQUESTED")
+        else:
+            logger.warning("LIVE_EXECUTION_AUTHORITY_BLOCKER_INSTALL_SKIPPED installer_missing")
+    except Exception as exc:
+        logger.warning("LIVE_EXECUTION_AUTHORITY_BLOCKER_INSTALL_FAILED err=%s", exc)
+
+
+def _run_legacy_preactivation_fanout() -> None:
+    """Preserve the historical ``main.py`` fanout for direct/non-canonical runs."""
+
+    _install_global_runtime_startup_guards()
+    _install_preactivation_runtime_identity_guard_v36()
+    _install_logging_format_guard()
+    _install_runtime_auth_endpoint_repair()
+    _install_current_capital_snapshot_freshness_repair()
+    _install_authority_heartbeat_timeout_grace_repair()
+    _install_live_broker_profit_exit_v25()
+    _run_pre_startup_sanitization()
+    _install_strategy_publication()
+    _install_authority_readiness_repair()
+    _install_execution_bootstrap_authority_repair()
+    _install_forced_fallback_payload_repair()
+    _install_execution_pipeline_gate_repair()
+    _install_hard_controls_csm_repair()
+    _install_trading_state_dispatch_latch_repair()
+    _install_downstream_risk_governor_equity_repair()
+    _install_usdt_kraken_ecel_routing_repair()
+    _install_live_entry_completion_repair()
+    _normalize_runtime_startup_env()
+
+    # Re-apply strict sanitizer after runtime startup normalization so unsafe flags
+    # cannot be reintroduced by startup defaults.
+    _run_pre_startup_sanitization()
     _install_generation_sync_timing_patch()
-    print("GENERATION_SYNC_TIMING_PATCH_INSTALL_REQUESTED", flush=True)
-    logger.warning("GENERATION_SYNC_TIMING_PATCH_INSTALL_REQUESTED")
-except Exception as _gen_sync_exc:
-    logger.warning("GENERATION_SYNC_TIMING_PATCH_INSTALL_FAILED err=%s", _gen_sync_exc)
-
-# Ensure the live execution authority blocker patch is loaded before bot.py creates
-# or checks the TradingStateMachine.  It removes stale heartbeat-stage assumptions
-# and makes dispatch authority depend on the live writer-lock generation.
-try:
-    from bot.live_execution_authority_blocker_patch import install_import_hook as _install_live_execution_authority_blocker_patch
     _install_live_execution_authority_blocker_patch()
-    print("LIVE_EXECUTION_AUTHORITY_BLOCKER_INSTALL_REQUESTED", flush=True)
-    logger.warning("LIVE_EXECUTION_AUTHORITY_BLOCKER_INSTALL_REQUESTED")
-except Exception as _live_auth_exc:
-    logger.warning("LIVE_EXECUTION_AUTHORITY_BLOCKER_INSTALL_FAILED err=%s", _live_auth_exc)
+
+
+def _run_canonical_preactivation_handoff() -> None:
+    """Keep the canonical writer-first path side-effect bounded before handoff."""
+
+    os.environ["NIJA_MAIN_CANONICAL_PREHANDOFF_BOUNDED"] = "1"
+    logger.critical(
+        "MAIN_CANONICAL_PREHANDOFF_BOUNDED marker=%s duplicated_compatibility_fanout=false "
+        "startup_runtime_safety_deferred=true handoff=bot.bot",
+        _CANONICAL_PREHANDOFF_MARKER,
+    )
+
+
+if _canonical_fast_path_enabled():
+    _run_canonical_preactivation_handoff()
+else:
+    _run_legacy_preactivation_fanout()
 
 # Execute the real bot module as if it were run directly.  This preserves the
 # normal __main__ startup path while allowing Railway to use ``python main.py``.
