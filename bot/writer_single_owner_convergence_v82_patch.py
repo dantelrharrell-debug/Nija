@@ -54,12 +54,14 @@ def _as_text(value: Any) -> str:
 
 def _as_int(value: Any, default: int = 0) -> int:
     try:
-        return int(str(value).strip())
+        return int(_as_text(value).strip())
     except (TypeError, ValueError):
         return default
 
 
 def _entrypoint_runtime() -> Any:
+    candidates: list[Any] = []
+    seen: set[int] = set()
     for name in ("bot.entrypoint_writer_authority", "entrypoint_writer_authority"):
         module = sys.modules.get(name)
         if not isinstance(module, ModuleType):
@@ -67,6 +69,9 @@ def _entrypoint_runtime() -> Any:
                 module = importlib.import_module(name)
             except Exception:
                 continue
+        if id(module) in seen:
+            continue
+        seen.add(id(module))
         getter = getattr(module, "get_entrypoint_writer_authority", None)
         if callable(getter):
             try:
@@ -74,8 +79,21 @@ def _entrypoint_runtime() -> Any:
             except Exception:
                 continue
             if runtime is not None:
-                return runtime
-    return None
+                candidates.append(runtime)
+    if not candidates:
+        return None
+    return max(
+        candidates,
+        key=lambda value: (
+            bool(getattr(value, "acquired", False))
+            and not bool(getattr(value, "lost", True))
+            and not bool(getattr(value, "_local_fallback", False)),
+            bool(getattr(value, "acquired", False))
+            and not bool(getattr(value, "lost", True)),
+            not bool(getattr(value, "lost", True)),
+            _as_int(getattr(value, "_generation", 0)),
+        ),
+    )
 
 
 def _exact_runtime_owner(runtime: Any = None) -> tuple[bool, str, int]:

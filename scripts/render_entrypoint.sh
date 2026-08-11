@@ -53,6 +53,8 @@ python3 -S -m py_compile \
     main.py \
     bot/bot.py \
     bot/bot_main.py \
+    bot/entrypoint_writer_authority.py \
+    bot/broker_manager.py \
     bot/canonical_broker_prebootstrap_v22.py \
     bot/canonical_broker_startup_convergence_v24.py \
     bot/live_broker_profit_exit_convergence_v25.py \
@@ -60,6 +62,8 @@ python3 -S -m py_compile \
     bot/live_exit_reconciliation_safety_v25.py \
     bot/kraken_connection_convergence_v44_patch.py \
     bot/kraken_all_account_supervision_v86.py \
+    bot/writer_authority_reconstitution_v77_patch.py \
+    bot/writer_single_owner_convergence_v82_patch.py \
     bot/stalled_writer_release_guard_v22.py \
     bot/writer_generation_handoff_v45_patch.py \
     bot/tests/test_writer_generation_handoff_v45.py \
@@ -81,8 +85,11 @@ grep -Fq '_install_writer_generation_handoff_v45()' scripts/canonical_runtime_la
 grep -Fq 'CANONICAL_EARLY_WRITER_BOOTSTRAP_VERIFIED' scripts/canonical_runtime_launcher_v26.py
 grep -Fq 'CANONICAL_BOT_SINGLE_IDENTITY_HANDOFF' scripts/canonical_runtime_launcher_v26.py
 grep -Fq 'NIJA_CANONICAL_WRITER_FIRST_V59_READY' scripts/canonical_runtime_launcher_v26.py
+grep -Fq 'bind_entrypoint_writer_authority_aliases(runtime)' bot/bot_main.py
+grep -Fq 'NIJA_ENTRYPOINT_WRITER_MODULE_IDENTITY_CONVERGED' bot/entrypoint_writer_authority.py
+grep -Fq 'heartbeat_telemetry_mutation=false' bot/broker_manager.py
 
-echo "🧭 RENDER_ENTRYPOINT_CANONICAL_HANDOFF_READY marker=20260809-render-entrypoint-v59 launcher=canonical_runtime_launcher_v26 writer_generation_handoff=v45 writer_first=v59 single_identity=true direct_broker_prebootstrap=v27"
+echo "🧭 RENDER_ENTRYPOINT_CANONICAL_HANDOFF_READY marker=20260810-render-entrypoint-v91 launcher=canonical_runtime_launcher_v26 writer_generation_handoff=v45 writer_first=v59 single_identity=true singleton_alias_convergence=v91 kraken_nonce_authority_gate=v91 direct_broker_prebootstrap=v27"
 unset NIJA_DEFER_RUNTIME_SITE_HOOKS
 
 exec bash scripts/production_bootstrap.sh "$@"

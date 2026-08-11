@@ -87,6 +87,42 @@ def _user_records(manager: Any) -> list[tuple[str, str, Any, Any]]:
                 continue
             account_id = f"user:{user_id}:kraken"
             records[account_id] = (account_id, str(user_id), broker_type, broker)
+
+    # Registry truth includes users whose broker could not be constructed,
+    # whose authenticated connection failed, or whose credentials are absent.
+    # Preserve those records with broker=None so reporting cannot silently
+    # shrink the denominator.  _schedule() never performs broker I/O for them.
+    metadata = getattr(manager, "_user_metadata", {})
+    try:
+        metadata_items = list(metadata.items())
+    except Exception:
+        metadata_items = []
+    for user_id, user_metadata in metadata_items:
+        broker_map = user_metadata.get("brokers", {}) if isinstance(user_metadata, dict) else {}
+        try:
+            broker_types = list(broker_map)
+        except Exception:
+            broker_types = []
+        for broker_type in broker_types:
+            if _label(broker_type) != "kraken":
+                continue
+            account_id = f"user:{user_id}:kraken"
+            records.setdefault(account_id, (account_id, str(user_id), broker_type, None))
+
+    for registry_name in ("_failed_user_connections", "_users_without_credentials"):
+        registry = getattr(manager, registry_name, {})
+        try:
+            registry_keys = list(registry)
+        except Exception:
+            registry_keys = []
+        for key in registry_keys:
+            if not isinstance(key, tuple) or len(key) != 2:
+                continue
+            user_id, broker_type = key
+            if _label(broker_type) != "kraken":
+                continue
+            account_id = f"user:{user_id}:kraken"
+            records.setdefault(account_id, (account_id, str(user_id), broker_type, None))
     return [records[key] for key in sorted(records)]
 
 
@@ -196,6 +232,11 @@ def _connect_account(
 
 def _schedule(manager: Any, record: tuple[str, str, Any, Any]) -> str:
     account_id, user_id, broker_type, broker = record
+    if broker is None:
+        missing = getattr(manager, "_users_without_credentials", {})
+        if (user_id, broker_type) in missing:
+            return "credentials_not_configured"
+        return "broker_unavailable"
     if bool(getattr(broker, "connected", False)):
         _mark_connected(manager, user_id, broker_type, broker)
         with _LOCK:
@@ -238,11 +279,18 @@ def reconcile_once(manager: Any = None) -> dict[str, Any]:
     records = _user_records(manager)
     states = {account_id: _schedule(manager, record) for record in records for account_id in [record[0]]}
     disconnected = sum(1 for state in states.values() if state != "connected")
+    registered = len(records)
     return {
-        "ok": disconnected == 0,
-        "reason": "all_registered_kraken_users_connected" if disconnected == 0 else "recovery_active",
-        "registered": len(records),
-        "connected": len(records) - disconnected,
+        "ok": registered == 0 or disconnected == 0,
+        "reason": (
+            "no_registered_kraken_users"
+            if registered == 0
+            else "all_registered_kraken_users_connected"
+            if disconnected == 0
+            else "recovery_active"
+        ),
+        "registered": registered,
+        "connected": registered - disconnected,
         "disconnected": disconnected,
         "states": states,
     }

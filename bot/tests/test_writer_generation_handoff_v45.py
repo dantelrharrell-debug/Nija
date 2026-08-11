@@ -181,3 +181,24 @@ def test_env_token_mismatch_rejected(monkeypatch):
     ok, _, reason = v45.repair_process_generation("test")
     assert ok is False
     assert reason == "env_fencing_token_mismatch"
+
+
+def test_runtime_resolver_prefers_acquired_candidate_across_import_aliases(monkeypatch):
+    stale = types.SimpleNamespace(
+        acquired=False,
+        lost=False,
+        _local_fallback=False,
+        _generation=0,
+    )
+    active = Runtime(Redis())
+    package_module = types.ModuleType("bot.entrypoint_writer_authority")
+    package_module.get_entrypoint_writer_authority = lambda: stale
+    compatibility_module = types.ModuleType("entrypoint_writer_authority")
+    compatibility_module.get_entrypoint_writer_authority = lambda: active
+    monkeypatch.setitem(sys.modules, "bot.entrypoint_writer_authority", package_module)
+    monkeypatch.setitem(sys.modules, "entrypoint_writer_authority", compatibility_module)
+
+    runtime, error = v45._runtime()
+
+    assert runtime is active
+    assert error == ""

@@ -84,6 +84,8 @@ def _integer(value: Any, default: int = 0) -> int:
 
 def _runtime() -> tuple[Any, str]:
     seen: set[int] = set()
+    candidates: list[Any] = []
+    errors: list[str] = []
     for name in _ENTRYPOINT_NAMES:
         module = sys.modules.get(name)
         if not isinstance(module, ModuleType) or id(module) in seen:
@@ -95,10 +97,24 @@ def _runtime() -> tuple[Any, str]:
         try:
             runtime = getter()
         except Exception as exc:
-            return None, f"runtime_getter_error:{type(exc).__name__}:{exc}"
+            errors.append(f"runtime_getter_error:{name}:{type(exc).__name__}:{exc}")
+            continue
         if runtime is not None:
-            return runtime, ""
-    return None, "entrypoint_runtime_unavailable"
+            candidates.append(runtime)
+    if candidates:
+        return max(
+            candidates,
+            key=lambda value: (
+                bool(getattr(value, "acquired", False))
+                and not bool(getattr(value, "lost", True))
+                and not bool(getattr(value, "_local_fallback", False)),
+                bool(getattr(value, "acquired", False))
+                and not bool(getattr(value, "lost", True)),
+                not bool(getattr(value, "lost", True)),
+                _integer(getattr(value, "_generation", 0)),
+            ),
+        ), ""
+    return None, errors[0] if errors else "entrypoint_runtime_unavailable"
 
 
 def _process_generation_key() -> str:

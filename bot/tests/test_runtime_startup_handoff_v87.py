@@ -143,6 +143,22 @@ class RuntimeStartupHandoffV87Tests(unittest.TestCase):
         self.assertFalse(table["nonce_ready"])
         self.assertFalse(table["execution_ready"])
 
+    def test_writer_bootstrap_failure_revokes_dynamic_readiness_truth(self) -> None:
+        from bot import bot_main, readiness_table
+
+        for component in ("authority_ready", "nonce_ready", "execution_ready"):
+            readiness_table.mark_ready(component)
+        self.addCleanup(readiness_table.reset)
+
+        bot_main._revoke_writer_dependent_readiness("runtime_not_acquired")
+
+        table = readiness_table.snapshot()
+        self.assertFalse(table["authority_ready"])
+        self.assertFalse(table["nonce_ready"])
+        self.assertFalse(table["execution_ready"])
+        self.assertEqual(os.environ["NIJA_WRITER_LEASE_ACQUIRED"], "0")
+        self.assertEqual(os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"], "0")
+
     def test_core_registration_restart_is_bounded_and_nonzero(self) -> None:
         from bot import bot_main
 
@@ -415,7 +431,22 @@ class RuntimeStartupHandoffV87Tests(unittest.TestCase):
                 sys.modules[target] = previous
 
         get_broker_manager.assert_called_once_with()
-        self.assertEqual(state["reason"], "all_registered_kraken_users_connected")
+        self.assertEqual(state["reason"], "no_registered_kraken_users")
+
+    def test_empty_kraken_user_registry_is_not_reported_all_connected(self) -> None:
+        manager = SimpleNamespace(
+            _all_user_brokers={},
+            user_brokers={},
+            _user_metadata={},
+            _failed_user_connections={},
+            _users_without_credentials={},
+        )
+
+        users = connectivity._kraken_user_connectivity(manager)
+
+        self.assertEqual(users["registered"], 0)
+        self.assertEqual(users["connected"], 0)
+        self.assertFalse(users["all_connected"])
 
     def test_platform_kraken_recovery_uses_canonical_manager_singleton(self) -> None:
         target = "bot.multi_account_broker_manager"

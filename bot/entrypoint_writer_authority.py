@@ -35,15 +35,18 @@ SCAN_STARTED_DEADLINE_EXCEEDED – scan did not start within the expected window
 
 from __future__ import annotations
 
+import builtins
 import hashlib
 import importlib
 import json
 import logging
 import os
+import sys
 import threading
 import time
 from dataclasses import dataclass
 from enum import Enum
+from types import ModuleType
 from typing import Any, Optional
 
 logger = logging.getLogger("nija.entrypoint_writer_authority")
@@ -1690,6 +1693,92 @@ class EntrypointWriterAuthority:
 
 _SINGLETON: Optional[EntrypointWriterAuthority] = None
 _SINGLETON_LOCK = threading.Lock()
+_MODULE_ALIASES = ("bot.entrypoint_writer_authority", "entrypoint_writer_authority")
+_CANONICAL_MODULE_ATTR = "_NIJA_CANONICAL_ENTRYPOINT_WRITER_MODULE"
+_LEGACY_MODULE_ATTR = "_NIJA_ENTRYPOINT_WRITER_AUTHORITY_MODULE"
+_CANONICAL_RUNTIME_ATTR = "_NIJA_CANONICAL_ENTRYPOINT_WRITER_RUNTIME"
+
+
+def _runtime_preference(runtime: Any) -> tuple[int, int]:
+    """Rank process-local runtime candidates without granting authority."""
+
+    if runtime is None:
+        return (0, 0)
+    acquired = bool(getattr(runtime, "acquired", False))
+    lost = bool(getattr(runtime, "lost", True))
+    local = bool(getattr(runtime, "_local_fallback", False))
+    generation = 0
+    try:
+        generation = int(getattr(runtime, "_generation", 0) or 0)
+    except (TypeError, ValueError):
+        pass
+    if acquired and not lost and not local:
+        return (4, generation)
+    if acquired and not lost:
+        return (3, generation)
+    if not lost:
+        return (2, generation)
+    return (1, generation)
+
+
+def bind_entrypoint_writer_authority_aliases(
+    runtime: Optional[EntrypointWriterAuthority] = None,
+) -> Optional[EntrypointWriterAuthority]:
+    """Converge both supported import names onto one module and singleton.
+
+    Production still contains compatibility imports for both the package and
+    top-level module names.  Importing this file twice under those names used
+    to create two independent ``_SINGLETON`` objects.  Later exact-owner guards
+    could therefore inspect an unacquired duplicate while the real runtime was
+    renewing the Redis lease.
+
+    This function only converges process-local object identity.  It never
+    acquires, renews, releases, or reconstructs Redis authority.  When called
+    with an explicit runtime (the canonical post-acquisition path), that exact
+    object wins.  Otherwise the best already-existing candidate is retained.
+    """
+
+    global _SINGLETON
+
+    current_module = sys.modules.get(__name__)
+    if not isinstance(current_module, ModuleType):
+        return runtime
+
+    modules: list[ModuleType] = [current_module]
+    for name in _MODULE_ALIASES:
+        module = sys.modules.get(name)
+        if isinstance(module, ModuleType) and module not in modules:
+            modules.append(module)
+    for module_attr in (_CANONICAL_MODULE_ATTR, _LEGACY_MODULE_ATTR):
+        prior_module = getattr(builtins, module_attr, None)
+        if isinstance(prior_module, ModuleType) and prior_module not in modules:
+            modules.append(prior_module)
+
+    selected: Any = runtime
+    if selected is None:
+        candidates = [getattr(module, "_SINGLETON", None) for module in modules]
+        candidates.extend(
+            (
+                getattr(builtins, _CANONICAL_RUNTIME_ATTR, None),
+                getattr(builtins, "_NIJA_PREBOT_WRITER_AUTHORITY_RUNTIME", None),
+            )
+        )
+        selected = max(candidates, key=_runtime_preference, default=None)
+
+    _SINGLETON = selected
+    for module in modules:
+        try:
+            module._SINGLETON = selected
+        except Exception:
+            pass
+    for name in _MODULE_ALIASES:
+        sys.modules[name] = current_module
+    setattr(builtins, _CANONICAL_MODULE_ATTR, current_module)
+    setattr(builtins, _LEGACY_MODULE_ATTR, current_module)
+    if selected is not None:
+        setattr(builtins, _CANONICAL_RUNTIME_ATTR, selected)
+    os.environ["NIJA_ENTRYPOINT_WRITER_MODULE_IDENTITY_CONVERGED"] = "1"
+    return selected
 
 
 def get_entrypoint_writer_authority() -> EntrypointWriterAuthority:
@@ -1697,4 +1786,12 @@ def get_entrypoint_writer_authority() -> EntrypointWriterAuthority:
     with _SINGLETON_LOCK:
         if _SINGLETON is None:
             _SINGLETON = EntrypointWriterAuthority()
-        return _SINGLETON
+        runtime = _SINGLETON
+    bind_entrypoint_writer_authority_aliases(runtime)
+    return runtime
+
+
+# Bind the module names before any caller can create a compatibility-path
+# singleton.  The explicit post-acquisition bind in bot_main then pins the
+# exact acquired runtime for the rest of the process.
+bind_entrypoint_writer_authority_aliases()

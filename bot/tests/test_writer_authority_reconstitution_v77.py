@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import importlib
 import os
+import sys
 import types
 import unittest
+from unittest import mock
 
 
 class FakeRedis:
@@ -58,7 +60,7 @@ class WriterAuthorityReconstitutionV77Tests(unittest.TestCase):
         self.assertEqual(proof["generation"], 3405)
         self.assertEqual(reason, "exact_runtime_redis_owner")
 
-    def test_foreign_redis_lock_is_never_adopted(self):
+    def test_foreign_redis_lock_is_never_adopted_case(self):
         runtime = self.runtime()
         runtime._client.values[runtime._lock_key] = "different-owner"
         proof, reason = self.mod.exact_owner_proof(runtime)
@@ -72,7 +74,7 @@ class WriterAuthorityReconstitutionV77Tests(unittest.TestCase):
         self.assertIsNone(proof)
         self.assertIn("redis_generation_mismatch", reason)
 
-    def test_expired_lock_is_never_reconstituted(self):
+    def test_expired_lock_is_never_reconstituted_case(self):
         proof, reason = self.mod.exact_owner_proof(self.runtime(pttl=0))
         self.assertIsNone(proof)
         self.assertIn("ttl_not_positive", reason)
@@ -90,6 +92,28 @@ class WriterAuthorityReconstitutionV77Tests(unittest.TestCase):
         self.assertEqual(os.environ["NIJA_WRITER_LEASE_GENERATION"], "3405")
         self.assertEqual(os.environ["NIJA_WRITER_GENERATION"], "3405")
         self.assertEqual(os.environ["NIJA_WRITER_FENCING_TOKEN"], "fence-3405")
+
+    def test_runtime_resolver_prefers_acquired_canonical_candidate(self):
+        stale = types.SimpleNamespace(
+            acquired=False, lost=False, _local_fallback=False, _generation=0
+        )
+        active = self.runtime(generation=91)
+        stale_module = types.ModuleType("bot.entrypoint_writer_authority")
+        stale_module.get_entrypoint_writer_authority = lambda: stale
+        active_module = types.ModuleType("entrypoint_writer_authority")
+        active_module.get_entrypoint_writer_authority = lambda: active
+
+        with mock.patch.dict(
+            sys.modules,
+            {
+                "bot.entrypoint_writer_authority": stale_module,
+                "entrypoint_writer_authority": active_module,
+            },
+        ):
+            runtime, error = self.mod._runtime()
+
+        self.assertIs(runtime, active)
+        self.assertEqual(error, "")
 
 
 if __name__ == "__main__":
