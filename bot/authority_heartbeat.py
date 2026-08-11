@@ -225,9 +225,7 @@ def _check_authority_once(timeout_s: float) -> tuple[bool, str]:
     1. Writer lease is still held by this process (NIJA_WRITER_LEASE_ACQUIRED == "1").
     2. NIJA_WRITER_FENCING_TOKEN is present.
     3. Redis is reachable (ping within timeout_s).
-    4. Distributed writer authority is valid (fencing token matches Redis lock),
-       OR the Redis lease was not acquired (single-instance / fallback-token mode)
-       in which case only Redis connectivity is verified.
+    4. Distributed writer authority is valid (fencing token matches Redis lock).
     5. Authority lineage generation number matches Redis (generation tracking).
 
     Returns (ok, error_message).
@@ -273,38 +271,16 @@ def _check_authority_once(timeout_s: float) -> tuple[bool, str]:
 
     redis_url = get_redis_url()
     if not redis_url:
-        # Redis is not configured.  When a fallback token was generated
-        # (single-instance / no-Redis mode) we still consider the authority
-        # valid as long as the fencing token is present.
-        is_fallback = os.environ.get("NIJA_WRITER_FENCING_TOKEN_FALLBACK", "").strip().lower() in _truthy
-        if is_fallback:
-            logger.debug(
-                "AuthorityHeartbeatMonitor: Redis not configured; "
-                "accepting fallback-token authority (single-instance mode)"
-            )
-            return True, ""
         return False, "Redis URL is not configured — cannot verify authority"
 
     # 4. Verify Redis connectivity and fencing token.
-    # When a process-local fallback token was generated (Redis lock not
-    # acquired), skip the fencing-token lock-key match check and only verify
-    # that Redis is reachable.  When the Redis lease was properly acquired,
-    # perform the full distributed authority check.
     is_fallback = os.environ.get("NIJA_WRITER_FENCING_TOKEN_FALLBACK", "").strip().lower() in _truthy
-    # If the writer lease has not been acquired yet (startup phase before lock
-    # acquisition completes), treat this as a ping-only check rather than a
-    # full distributed authority verification.  This prevents false
-    # "fencing mismatch" failures when the heartbeat fires at module-level
-    # before _acquire_distributed_writer_lock() has run and set the lock key
-    # in Redis.  Once the lease is acquired (NIJA_WRITER_LEASE_ACQUIRED=1),
-    # subsequent ticks perform the full token match check.
+    if is_fallback:
+        return False, "process-local writer fallback cannot satisfy live authority"
+
     lease_acquired = os.environ.get("NIJA_WRITER_LEASE_ACQUIRED", "").strip() in _truthy
-    if not lease_acquired and not is_fallback:
-        logger.debug(
-            "AuthorityHeartbeatMonitor: writer lease not yet acquired — "
-            "using ping-only check during startup phase"
-        )
-        is_fallback = True
+    if not lease_acquired:
+        return False, "distributed writer lease has not been acquired"
 
     # Fix 2: defer the full Redis authority check to the entrypoint writer
     # authority singleton when it is actively renewing the lease.
@@ -318,13 +294,10 @@ def _check_authority_once(timeout_s: float) -> tuple[bool, str]:
     # gap first and issues an EMERGENCY_STOP before the singleton can resign
     # cleanly and set NIJA_WRITER_LEASE_ACQUIRED=0.
     #
-    # The deference is skipped when:
-    #   • the singleton is not yet loaded (pre-boot),
-    #   • the singleton has already set its ``lost`` flag (it has resigned),
-    #   • is_fallback is True (local-fallback / single-instance mode, where
-    #     the singleton's heartbeat loop is not running).
+    # A loaded singleton must provide fresh renewal proof. Its acquired bit
+    # alone is never sufficient.
     _singleton_healthy = False
-    if not is_fallback and lease_acquired:
+    if lease_acquired:
         try:
             import sys as _sys
             _ewa_mod = (
@@ -335,23 +308,25 @@ def _check_authority_once(timeout_s: float) -> tuple[bool, str]:
                 _get_singleton = getattr(_ewa_mod, "get_entrypoint_writer_authority", None)
                 if callable(_get_singleton):
                     _singleton = _get_singleton()
-                    if (
-                        _singleton is not None
-                        and getattr(_singleton, "acquired", False)
-                        and not getattr(_singleton, "lost", True)
-                    ):
-                        # Singleton is actively managing the lease.  Trust it
-                        # and skip the full Redis authority round-trip.
+                    if _singleton is not None:
+                        health = getattr(_singleton, "_nija_lease_renewal_health", None)
+                        if not callable(health):
+                            return False, "entrypoint writer renewal health proof unavailable"
+                        healthy, reason, age_s, max_age_s = health()
+                        if not healthy:
+                            return False, (
+                                "entrypoint writer renewal unhealthy: "
+                                f"reason={reason} age_s={age_s:.1f} max_age_s={max_age_s:.1f}"
+                            )
                         _singleton_healthy = True
                         logger.debug(
-                            "AuthorityHeartbeatMonitor: deferring Redis check — "
-                            "entrypoint_writer_authority singleton reports acquired"
+                            "AuthorityHeartbeatMonitor: fresh entrypoint writer renewal proof"
                         )
-        except Exception:
-            pass
+        except Exception as exc:
+            return False, f"entrypoint writer renewal proof failed: {exc}"
 
     try:
-        if not is_fallback and not _singleton_healthy:
+        if not _singleton_healthy:
             try:
                 from bot.execution_authority_context import assert_distributed_writer_authority
             except ImportError:
@@ -376,36 +351,11 @@ def _check_authority_once(timeout_s: float) -> tuple[bool, str]:
 
             if result[0] is not None:
                 return False, str(result[0])
-        elif not _singleton_healthy:
-            # Fallback-token mode: verify Redis is reachable with a simple ping.
-            import redis as _redis_lib
-            _client = _redis_lib.from_url(redis_url, socket_connect_timeout=timeout_s)
-            ping_result: list[Optional[Exception]] = [None]
-            ping_done = threading.Event()
-
-            def _ping() -> None:
-                try:
-                    _client.ping()
-                except Exception as exc:
-                    ping_result[0] = exc
-                finally:
-                    ping_done.set()
-
-            _pt = threading.Thread(target=_ping, daemon=True, name="authority-heartbeat-ping")
-            _pt.start()
-            if not ping_done.wait(timeout=timeout_s):
-                return False, f"Redis ping timed out after {timeout_s:.1f}s"
-            if ping_result[0] is not None:
-                return False, f"Redis ping failed: {ping_result[0]}"
-            logger.debug(
-                "AuthorityHeartbeatMonitor: Redis reachable; "
-                "accepting fallback-token authority (single-instance mode)"
-            )
-
         # 4. Validate authority lineage generation number.
         # This check runs after the fencing-token check so that generation
         # mismatches are only reported when the token itself is valid.
-        # Skipped in fallback/single-instance mode (no Redis lease to track).
+        # Local fallback was rejected above, so every accepted heartbeat has a
+        # distributed generation to validate.
         if not is_fallback:
             try:
                 try:

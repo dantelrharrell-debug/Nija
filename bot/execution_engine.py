@@ -337,11 +337,20 @@ MIN_EDGE_MULTIPLIER: float = float(os.getenv("MIN_EDGE_MULTIPLIER", "1.5"))
 BALANCE_BUFFER_PCT: float = float(os.getenv("BALANCE_BUFFER_PCT", "0.10"))
 
 # One-shot probe controls for end-to-end execution validation.
-FORCE_FIRST_TRADE: bool = os.getenv("FORCE_FIRST_TRADE", "false").lower() in ("1", "true", "yes", "enabled")
+_SIMULATION_MODE: bool = (
+    os.getenv("DRY_RUN_MODE", "false").lower() in ("1", "true", "yes", "on")
+    or os.getenv("PAPER_MODE", "false").lower() in ("1", "true", "yes", "on")
+)
+FORCE_FIRST_TRADE: bool = (
+    _SIMULATION_MODE
+    and os.getenv("FORCE_FIRST_TRADE", "false").lower() in ("1", "true", "yes", "enabled")
+)
 FORCE_TRADE_NOTIONAL: float = float(os.getenv("FORCE_TRADE_NOTIONAL", "10.0"))
-FORCE_TRADE_ON_FIRST_VALID_SIGNAL: bool = os.getenv(
-    "FORCE_TRADE_ON_FIRST_VALID_SIGNAL", "false"
-).lower() in ("1", "true", "yes", "enabled")
+FORCE_TRADE_ON_FIRST_VALID_SIGNAL: bool = (
+    _SIMULATION_MODE
+    and os.getenv("FORCE_TRADE_ON_FIRST_VALID_SIGNAL", "false").lower()
+    in ("1", "true", "yes", "enabled")
+)
 
 # ─── FIX 4: Live mode enforcement ───────────────────────────────────────────
 LIVE_CAPITAL_VERIFIED: bool = os.getenv("LIVE_CAPITAL_VERIFIED", "false").lower() == "true"
@@ -350,17 +359,18 @@ DRY_RUN_MODE: bool = os.getenv("DRY_RUN_MODE", "false").lower() == "true"
 # ── Small account / small order flags (Apr 2026) ────────────────────────────
 # Allow trading with small account balances (~$174) and small order sizes (~$10).
 # Both default to True to enable HF scalp mode with limited capital.
-ALLOW_SMALL_ORDERS: bool = os.getenv("ALLOW_SMALL_ORDERS", "true").lower() in ("1", "true", "yes", "on")
-ALLOW_SMALL_ACCOUNT_TRADING: bool = os.getenv("ALLOW_SMALL_ACCOUNT_TRADING", "true").lower() in ("1", "true", "yes", "on")
-
-# ─── FIX 5: Force trade mode — bypasses all signal filters to confirm pipeline
-# Supports both FORCE_TRADE and FORCE_TRADE_MODE for compatibility.
-# FORCE_TRADE bypasses expectancy/edge/regime gates — keep false in production
-# to avoid rapid order spam that triggers exchange rate limiting.
-FORCE_TRADE_MODE: bool = (
-    os.getenv("FORCE_TRADE", "false").lower() == "true"
-    or os.getenv("FORCE_TRADE_MODE", "false").lower() == "true"
+ALLOW_SMALL_ORDERS: bool = (
+    _SIMULATION_MODE
+    and os.getenv("ALLOW_SMALL_ORDERS", "false").lower() in ("1", "true", "yes", "on")
 )
+ALLOW_SMALL_ACCOUNT_TRADING: bool = (
+    _SIMULATION_MODE
+    and os.getenv("ALLOW_SMALL_ACCOUNT_TRADING", "false").lower() in ("1", "true", "yes", "on")
+)
+
+# Force-trade compatibility flags are diagnostics only and never weaken the
+# execution engine's signal, expectancy, fee, sizing, or risk gates.
+FORCE_TRADE_MODE: bool = False
 
 # Positive expectancy gate (true E>0 model)
 # E = p(win)*net_win - (1-p(win))*net_loss must be > threshold.
@@ -2291,61 +2301,19 @@ class ExecutionEngine:
         bool
         """
         if not ACTIVE_CAPITAL_AVAILABLE or get_active_capital is None:
-            logger.warning("⚠️ ActiveCapital not available — capital gate skipped (fail-open)")
-            return True  # fail-open when capital layer is absent (legacy compatibility)
-
-        # ── FORCE_TRADE bypass: when operator override flags are active and
-        # ActiveCapital raises CapitalIntegrityError (authority not yet hydrated),
-        # fail-open so the order can proceed.  The broker adapter enforces the
-        # real account balance before any exchange interaction, so this bypass
-        # only skips the capital-pipeline gate — not the actual balance check.
-        # This is the second half of the "7000+ cycles, zero trades" fix:
-        # active_capital.py now returns a fallback value under FORCE_TRADE, but
-        # this catch ensures any residual CapitalIntegrityError is also bypassed.
-        _force_trade_bypass_cet = (
-            os.getenv("FORCE_TRADE", "").strip().lower()
-            in ("1", "true", "yes", "on", "enabled")
-            or os.getenv("FORCE_TRADE_MODE", "").strip().lower()
-            in ("1", "true", "yes", "on", "enabled")
-            or os.getenv("NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK", "").strip().lower()
-            in ("1", "true", "yes", "on", "enabled")
-            or os.getenv("NIJA_FORCE_ACTIVATION", "").strip().lower()
-            in ("1", "true", "yes", "on", "enabled")
-        )
+            logger.warning("⚠️ ActiveCapital not available — capital gate blocked")
+            return False
 
         try:
             balance = get_active_capital().get_total_available_balance()
         except CapitalIntegrityError as exc:
-            if _force_trade_bypass_cet:
-                logger.warning(
-                    "⚡ [can_execute_trade] FORCE_TRADE bypass: CapitalIntegrityError suppressed — "
-                    "failing open so order can proceed. error=%s "
-                    "(FORCE_TRADE / NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK active)",
-                    exc,
-                )
-                return True
             logger.warning("🚫 CAPITAL INTEGRITY ERROR — trade blocked: %s", exc)
             return False
         except Exception as exc:
-            if _force_trade_bypass_cet:
-                logger.warning(
-                    "⚡ [can_execute_trade] FORCE_TRADE bypass: capital check exception suppressed — "
-                    "failing open so order can proceed. error=%s",
-                    exc,
-                )
-                return True
             logger.warning("🚫 CAPITAL CHECK FAILED — trade blocked: %s", exc)
             return False
 
         if balance <= 0:
-            if _force_trade_bypass_cet:
-                logger.warning(
-                    "⚡ [can_execute_trade] FORCE_TRADE bypass: balance=$%.2f ≤ 0 — "
-                    "failing open so order can proceed. "
-                    "Broker adapter will enforce real balance limits.",
-                    balance,
-                )
-                return True
             logger.warning(
                 "🚫 NO CAPITAL AVAILABLE — trade blocked "
                 "(balance=$%.2f, order_size=$%.2f)",
@@ -2482,49 +2450,49 @@ class ExecutionEngine:
                     getattr(_bfsm, "state", getattr(_bfsm, "_state", "unknown")),
                 )
                 if not _has_auth:
-                    _force_trade_now_bootstrap = (
-                        os.getenv("FORCE_TRADE", "false").lower() in ("true", "1", "yes")
-                        or os.getenv("FORCE_TRADE_MODE", "false").lower() in ("true", "1", "yes")
-                        or os.getenv("NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK", "false").lower() in ("true", "1", "yes", "on", "enabled")
+                    logger.error(
+                        "🚫 EXECUTION AUTHORITY BLOCK: %s rejected — bootstrap "
+                        "execution_authority=false (BootstrapFSM state=%s).",
+                        symbol,
+                        getattr(_bfsm, "state", getattr(_bfsm, "_state", "unknown")),
                     )
-                    if _force_trade_now_bootstrap:
-                        logger.warning(
-                            "⚠️  EXECUTION AUTHORITY BLOCK bypassed for %s — bootstrap execution_authority=false "
-                            "(BootstrapFSM state=%s) but FORCE_TRADE / FORCE_TRADE_MODE / NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK "
-                            "is set to a truthy value overriding this gate.",
-                            symbol,
-                            getattr(_bfsm, "state", getattr(_bfsm, "_state", "unknown")),
-                        )
-                    else:
-                        logger.error(
-                            "🚫 EXECUTION AUTHORITY BLOCK: %s rejected — bootstrap execution_authority=false "
-                            "(BootstrapFSM state=%s). Set FORCE_TRADE, FORCE_TRADE_MODE, or "
-                            "NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK to a truthy value to bypass, "
-                            "or wait for bootstrap to complete.",
-                            symbol,
-                            getattr(_bfsm, "state", getattr(_bfsm, "_state", "unknown")),
-                        )
-                        _trace("ecel", "rejected", "bootstrap_execution_authority_false", terminal=True)
-                        self._log_execute_entry_rejection(
-                            symbol=symbol,
-                            side=side,
-                            position_size=position_size,
-                            entry_price=entry_price,
-                            stop_loss=stop_loss,
-                            stage="bootstrap_authority",
-                            reason="bootstrap_execution_authority_false",
-                            detail=getattr(_bfsm, "state", getattr(_bfsm, "_state", "unknown")),
-                        )
-                        return None
+                    _trace("ecel", "rejected", "bootstrap_execution_authority_false", terminal=True)
+                    self._log_execute_entry_rejection(
+                        symbol=symbol,
+                        side=side,
+                        position_size=position_size,
+                        entry_price=entry_price,
+                        stop_loss=stop_loss,
+                        stage="bootstrap_authority",
+                        reason="bootstrap_execution_authority_false",
+                        detail=getattr(_bfsm, "state", getattr(_bfsm, "_state", "unknown")),
+                    )
+                    return None
             except Exception as _auth_exc:
-                logger.warning("Bootstrap execution authority check skipped (non-fatal): %s", _auth_exc)
+                logger.error(
+                    "🚫 EXECUTION AUTHORITY BLOCK: bootstrap authority check failed "
+                    "for %s: %s",
+                    symbol,
+                    _auth_exc,
+                )
+                _trace("ecel", "rejected", "bootstrap_authority_check_failed", terminal=True)
+                self._log_execute_entry_rejection(
+                    symbol=symbol,
+                    side=side,
+                    position_size=position_size,
+                    entry_price=entry_price,
+                    stop_loss=stop_loss,
+                    stage="bootstrap_authority",
+                    reason="bootstrap_authority_check_failed",
+                    detail=str(_auth_exc),
+                )
+                return None
 
             _balance_available, _balance_total, _ = self._get_cached_balance_snapshot()
 
             # ─── FIX 1: MINIMUM BALANCE GATE ────────────────────────────────────────
             # Skip accounts that cannot meet the minimum trading balance.
-            # In FORCE_TRADE_MODE (micro test mode), bypass this gate.
-            if self.broker_client is not None and not FORCE_TRADE_MODE:
+            if self.broker_client is not None:
                 _scalar_balance = _balance_total if _balance_total is not None else _balance_available
                 if _scalar_balance is None:
                     logger.debug("Balance gate skipped: no cached balance snapshot for %s", symbol)
@@ -2668,20 +2636,6 @@ class ExecutionEngine:
             _regime = self._normalize_regime(take_profit_levels)
             _expectancy_bucket = self._build_expectancy_bucket_key(symbol, _regime)
 
-            # ─── FIX 5: FORCE TRADE MODE — bypasses all downstream filters ─────────
-            # Re-read from env so runtime changes take effect without restart.
-            _force_trade_now = (
-                os.getenv("FORCE_TRADE", "false").lower() in ("true", "1", "yes")
-                or os.getenv("FORCE_TRADE_MODE", "false").lower() in ("true", "1", "yes")
-            )
-            if _force_trade_now or FORCE_TRADE_MODE:
-                logger.warning(
-                    "⚠️  FIX5 FORCE_TRADE_MODE=true — bypassing expectancy/edge/regime gates for %s",
-                    symbol,
-                )
-            else:
-                pass  # normal gate path continues below
-
             # Hard stop for buckets auto-disabled due to persistently negative expectancy.
             if self._is_expectancy_bucket_blocked(symbol, _expectancy_bucket):
                 _until_ts = self._disabled_until.get(_expectancy_bucket)
@@ -2752,47 +2706,28 @@ class ExecutionEngine:
                 )
 
                 if not can_trade:
-                    # ── FORCE_TRADE fallback: if RecoveryController still blocks despite
-                    # the bypass in can_trade() itself (e.g. EMERGENCY_HALT), log and
-                    # return None.  The bypass inside can_trade() handles all other states.
-                    _rc_force_bypass = (
-                        os.getenv("FORCE_TRADE", "").strip().lower()
-                        in ("1", "true", "yes", "on", "enabled")
-                        or os.getenv("FORCE_TRADE_MODE", "").strip().lower()
-                        in ("1", "true", "yes", "on", "enabled")
-                        or os.getenv("NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK", "").strip().lower()
-                        in ("1", "true", "yes", "on", "enabled")
+                    logger.error("=" * 80)
+                    logger.error("🛡️  RECOVERY CONTROLLER BLOCKED ENTRY")
+                    logger.error("=" * 80)
+                    logger.error(f"   Symbol: {symbol}")
+                    logger.error(f"   Side: {side}")
+                    logger.error(f"   Position Size: ${position_size:.2f}")
+                    logger.error(f"   Reason: {reason}")
+                    logger.error(f"   Controller State: {recovery_controller.current_state.value}")
+                    logger.error(f"   Capital Safety: {recovery_controller.capital_safety_level.value}")
+                    logger.error("=" * 80)
+                    _trace("ecel", "rejected", f"recovery_controller:{reason}", terminal=True)
+                    self._log_execute_entry_rejection(
+                        symbol=symbol,
+                        side=side,
+                        position_size=position_size,
+                        entry_price=entry_price,
+                        stop_loss=stop_loss,
+                        stage="recovery_controller",
+                        reason="recovery_controller_blocked_entry",
+                        detail=reason,
                     )
-                    if _rc_force_bypass:
-                        logger.critical(
-                            "⚡ [ExecutionEngine] FORCE_TRADE: RecoveryController blocked %s %s "
-                            "(reason=%s state=%s) — FORCE_TRADE active, proceeding to order submission.",
-                            symbol, side, reason, recovery_controller.current_state.value,
-                        )
-                        # Fall through to order submission — do NOT return None.
-                    else:
-                        logger.error("=" * 80)
-                        logger.error("🛡️  RECOVERY CONTROLLER BLOCKED ENTRY")
-                        logger.error("=" * 80)
-                        logger.error(f"   Symbol: {symbol}")
-                        logger.error(f"   Side: {side}")
-                        logger.error(f"   Position Size: ${position_size:.2f}")
-                        logger.error(f"   Reason: {reason}")
-                        logger.error(f"   Controller State: {recovery_controller.current_state.value}")
-                        logger.error(f"   Capital Safety: {recovery_controller.capital_safety_level.value}")
-                        logger.error("=" * 80)
-                        _trace("ecel", "rejected", f"recovery_controller:{reason}", terminal=True)
-                        self._log_execute_entry_rejection(
-                            symbol=symbol,
-                            side=side,
-                            position_size=position_size,
-                            entry_price=entry_price,
-                            stop_loss=stop_loss,
-                            stage="recovery_controller",
-                            reason="recovery_controller_blocked_entry",
-                            detail=reason,
-                        )
-                        return None
+                    return None
             
             # ✅ CRITICAL SAFETY CHECK #1: LIVE CAPITAL VERIFIED
             # This is the MASTER kill-switch that prevents accidental live trading
@@ -2809,46 +2744,28 @@ class ExecutionEngine:
                 )
 
                 if not can_trade:
-                    # Allow bypass when NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK is set —
-                    # consistent with how the execution pipeline handles this flag for
-                    # single-instance Railway deployments without Redis fencing tokens.
-                    _hc_bypass = (
-                        os.getenv("FORCE_TRADE", "false").lower() in ("true", "1", "yes")
-                        or os.getenv("FORCE_TRADE_MODE", "false").lower() in ("true", "1", "yes")
-                        or os.getenv("NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK", "false").lower() in ("true", "1", "yes", "on", "enabled")
+                    logger.error("=" * 80)
+                    logger.error("🔴 TRADE EXECUTION BLOCKED")
+                    logger.error("=" * 80)
+                    logger.error(f"   Symbol: {symbol}")
+                    logger.error(f"   Side: {side}")
+                    logger.error(f"   Position Size: ${position_size:.2f}")
+                    logger.error(f"   User ID: {self.user_id}")
+                    logger.error(f"   Reason: {error_msg}")
+                    logger.error("   Restore canonical live authority and hard-control readiness.")
+                    logger.error("=" * 80)
+                    _trace("ecel", "rejected", f"hard_controls:{error_msg}", terminal=True)
+                    self._log_execute_entry_rejection(
+                        symbol=symbol,
+                        side=side,
+                        position_size=position_size,
+                        entry_price=entry_price,
+                        stop_loss=stop_loss,
+                        stage="hard_controls",
+                        reason="hard_controls_blocked_entry",
+                        detail=error_msg,
                     )
-                    if _hc_bypass:
-                        logger.warning(
-                            "⚠️  [ExecutionEngine] Hard controls block bypassed for %s — "
-                            "FORCE_TRADE / FORCE_TRADE_MODE / NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK "
-                            "is set. reason=%s",
-                            symbol,
-                            error_msg,
-                        )
-                    else:
-                        logger.error("=" * 80)
-                        logger.error("🔴 TRADE EXECUTION BLOCKED")
-                        logger.error("=" * 80)
-                        logger.error(f"   Symbol: {symbol}")
-                        logger.error(f"   Side: {side}")
-                        logger.error(f"   Position Size: ${position_size:.2f}")
-                        logger.error(f"   User ID: {self.user_id}")
-                        logger.error(f"   Reason: {error_msg}")
-                        logger.error(f"   Tip: Set LIVE_CAPITAL_VERIFIED=true, FORCE_TRADE=true, or")
-                        logger.error(f"        NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK=true to enable trading.")
-                        logger.error("=" * 80)
-                        _trace("ecel", "rejected", f"hard_controls:{error_msg}", terminal=True)
-                        self._log_execute_entry_rejection(
-                            symbol=symbol,
-                            side=side,
-                            position_size=position_size,
-                            entry_price=entry_price,
-                            stop_loss=stop_loss,
-                            stage="hard_controls",
-                            reason="hard_controls_blocked_entry",
-                            detail=error_msg,
-                        )
-                        return None
+                    return None
 
             # FIX #3 (Jan 19, 2026): Check if broker supports this symbol before attempting trade
             if self.broker_client and hasattr(self.broker_client, 'supports_symbol'):
@@ -2990,7 +2907,12 @@ class ExecutionEngine:
                             )
                             return None
                 except Exception as _constraint_exc:
-                    logger.debug("Exchange constraint validation skipped: %s", _constraint_exc)
+                    logger.error(
+                        "Exchange constraint validation failed closed: %s",
+                        _constraint_exc,
+                    )
+                    _trace("ecel", "rejected", "exchange_constraint_validation_error", terminal=True)
+                    return None
 
             # Capture selected_broker at approval time and carry it through
             # to order submission so the same broker is used end-to-end.
@@ -3091,7 +3013,7 @@ class ExecutionEngine:
             if entry_price > 0 and tp1_price > 0:
                 # Market quality skip-cycle gate to avoid always-on trading.
                 _market_quality = float(take_profit_levels.get('market_quality', 1.0) or 1.0)
-                if not FORCE_TRADE_MODE and _market_quality < MARKET_QUALITY_THRESHOLD:
+                if _market_quality < MARKET_QUALITY_THRESHOLD:
                     logger.info(
                         "⏭️ MARKET QUALITY GATE: skipping %s | quality=%.3f < %.3f",
                         symbol,
@@ -3112,7 +3034,7 @@ class ExecutionEngine:
                     return None
 
                 # Regime-specific suppression and threshold tuning.
-                if not FORCE_TRADE_MODE and _regime in {"low_vol", "low_volatility", "dead", "chop"}:
+                if _regime in {"low_vol", "low_volatility", "dead", "chop"}:
                     logger.info("⏭️ REGIME GATE: skipping %s due to low-opportunity regime (%s)", symbol, _regime)
                     _trace("ecel", "rejected", f"regime_gate:{_regime}", terminal=True)
                     self._log_execute_entry_rejection(
@@ -3156,7 +3078,7 @@ class ExecutionEngine:
                 else:
                     _reward_move = (tp1_price - entry_price) / entry_price
 
-                if not FORCE_TRADE_MODE and not trade_is_economical(
+                if not trade_is_economical(
                     position_size,
                     max(0.0, _reward_move),
                     fee_rate=_fee_rate,
@@ -3189,7 +3111,7 @@ class ExecutionEngine:
                 _net_edge = _gross_win_usd - _win_costs_usd
                 _net_edge_pct = _net_edge / position_size if position_size > 0 else 0.0
 
-                if not FORCE_TRADE_MODE and _net_edge_pct < MIN_EDGE_THRESHOLD:
+                if _net_edge_pct < MIN_EDGE_THRESHOLD:
                     logger.warning("=" * 70)
                     logger.warning("🚫 NET EDGE GATE: Trade rejected — insufficient net profit")
                     logger.warning("=" * 70)
@@ -3270,7 +3192,7 @@ class ExecutionEngine:
                     float(os.getenv("NIJA_MIN_EDGE_BUFFER_PCT", "0.002")),
                 )
                 _fee_aware_min_tp = _risk_move + _round_trip_fee_pct + _min_edge_buffer_pct
-                if not FORCE_TRADE_MODE and _reward_move < _fee_aware_min_tp:
+                if _reward_move < _fee_aware_min_tp:
                     _shortage_pct = (_fee_aware_min_tp - _reward_move) * 100.0
                     logger.warning(
                         "🚫 FEE-AWARE TP GATE: %s TP %.4f%% < fee-aware minimum %.4f%% "
@@ -3356,7 +3278,7 @@ class ExecutionEngine:
                 _denom = (_net_edge + _net_loss_usd)
                 _breakeven_win_rate = (_net_loss_usd / _denom) if _denom > 0 else 1.0
 
-                if not FORCE_TRADE_MODE and _edge_score <= MIN_EDGE_SCORE_THRESHOLD:
+                if _edge_score <= MIN_EDGE_SCORE_THRESHOLD:
                     logger.warning("=" * 70)
                     logger.warning("🚫 EDGE SCORE GATE: Trade rejected — weak expected profitability")
                     logger.warning("=" * 70)
@@ -3379,7 +3301,7 @@ class ExecutionEngine:
                     )
                     return None
 
-                if not FORCE_TRADE_MODE and _expectancy_pct <= _regime_expectancy_floor:
+                if _expectancy_pct <= _regime_expectancy_floor:
                     _tp1_val = float((take_profit_levels or {}).get('tp1', 0.0) or 0.0)
                     _reward_pct = _reward_move * 100.0
                     _risk_pct = _risk_move * 100.0
@@ -3447,7 +3369,7 @@ class ExecutionEngine:
 
                 # Kelly-lite sizing clamp to avoid oversized allocations.
                 _kelly_fraction = self._compute_kelly_fraction(_p_win, _reward_risk)
-                if _kelly_fraction <= 0 and not FORCE_TRADE_MODE:
+                if _kelly_fraction <= 0:
                     logger.warning(
                         "🚫 KELLY GATE: %s rejected (kelly fraction <= 0; p_win=%.2f%%, rr=%.3f)",
                         symbol,
@@ -3466,10 +3388,6 @@ class ExecutionEngine:
                         detail=f"p_win_pct={_p_win * 100.0:.2f} reward_risk={_reward_risk:.3f}",
                     )
                     return None
-                # In FORCE_TRADE_MODE, clamp kelly to 1.0 so sizing is unchanged
-                if _kelly_fraction <= 0:
-                    _kelly_fraction = 1.0
-
                 _pre_kelly_size = position_size
                 position_size = max(position_size * _kelly_fraction, 0.0)
                 if position_size <= 0:
@@ -5534,8 +5452,7 @@ class ExecutionEngine:
 
         except Exception as e:
             logger.error(f"Error validating entry price: {e}")
-            # On error, accept the trade to avoid blocking legitimate entries
-            return True
+            return False
 
     def force_exit_position(self, broker_client, symbol: str, quantity: float,
                            reason: str = "Emergency exit", max_retries: int = 1) -> bool:

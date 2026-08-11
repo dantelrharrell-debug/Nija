@@ -15,24 +15,22 @@ Architecture
         ┌──────────────────┴──────────────────┐
         ↓                                     ↓
   COINBASE CONTROLLER                 KRAKEN CONTROLLER
-  (micro-cap enabled)               (risk isolated / passive)
+  (micro-cap sizing)                (active when configured)
         ↓                                     ↓
-  EXECUTION PATH                    NO EXECUTION / STRICT MODE
+  EXECUTION PATH                    EXECUTION PATH / STRICT MODE
 
 Key APIs
 --------
 risk_check(broker, context)
-    Per-broker risk gate (Step 3).  Coinbase micro-cap trades bypass the
-    global risk engine.  Kraken risk events are logged only — never block.
+    Per-broker active risk gate. Broker-specific sizing never bypasses it.
 
 execute_trade(broker, order)
-    Execution router (Step 4 / Step 1).  Coinbase orders are forwarded to
-    the broker.  Kraken orders are skipped and return a sentinel result.
+    Execution router (Step 4 / Step 1). Active broker orders are forwarded
+    through the canonical execution pipeline.
 
 get_execution_capital(broker_manager)
-    Capital aggregation (Step 4).  Returns only brokers flagged
-    ``include_in_execution_capital=True`` (Coinbase).  Kraken balance is
-    excluded from execution weighting.
+    Capital aggregation (Step 4). Returns brokers flagged
+    ``include_in_execution_capital=True``.
 
 filter_symbols(broker_name, candidates)
     Symbol filtering delegated to the appropriate controller.
@@ -97,6 +95,7 @@ class RiskContext:
     side: str = "buy"
     size_usd: float = 0.0
     broker_name: str = ""
+    balance: float = 0.0
 
 
 @dataclass
@@ -162,55 +161,27 @@ class GlobalController:
     # ------------------------------------------------------------------
 
     def risk_check(self, broker, context: RiskContext) -> RiskResult:
-        """Evaluate risk for *broker* using its per-broker profile.
-
-        Coinbase (micro-cap enabled)
-            Bypasses the global risk engine.  The trade is approved
-            with reason ``MICRO_CAP_COINBASE_BYPASS``.
-
-        Kraken (isolated)
-            Risk is evaluated in log-only mode.  The check always
-            passes with reason ``KRAKEN_ISOLATED`` so Kraken risk
-            events never cascade to or block other brokers.
-
-        All other brokers
-            Delegates to :meth:`_default_risk_check`.
-        """
+        """Evaluate every broker through the active fail-closed risk gate."""
         broker_name: str = self._broker_name(broker)
-        profile: dict = get_broker_profile(broker_name)
-
-        if broker_name == "coinbase" and profile.get("micro_cap_enabled"):
-            logger.debug(
-                "🟢 risk_check: Coinbase micro-cap bypass (score=%.2f, symbol=%s)",
-                context.score, context.symbol,
-            )
-            return RiskResult(
-                passed=True,
+        try:
+            from bot.risk_plugin_base import ActiveRiskPlugin, RiskContext as PluginRiskContext
+        except ImportError:
+            from risk_plugin_base import ActiveRiskPlugin, RiskContext as PluginRiskContext  # type: ignore
+        result = ActiveRiskPlugin().evaluate(
+            PluginRiskContext(
                 score=context.score,
-                reason="MICRO_CAP_COINBASE_BYPASS",
+                symbol=context.symbol,
+                side=context.side,
+                size_usd=context.size_usd,
+                broker_name=broker_name,
+                balance=context.balance,
             )
-
-        if broker_name == "kraken":
-            logger.warning(
-                "⚠️  risk_check: Kraken risk evaluation (isolated mode) "
-                "score=%.2f symbol=%s — logging only, not blocking",
-                context.score, context.symbol,
-            )
-            return RiskResult(
-                passed=True,
-                score=context.score,
-                reason="KRAKEN_ISOLATED",
-            )
-
-        return self._default_risk_check(context)
+        )
+        return RiskResult(result.passed, result.score, result.reason)
 
     def _default_risk_check(self, context: RiskContext) -> RiskResult:
-        """Permissive fallback risk check for unknown brokers."""
-        return RiskResult(
-            passed=True,
-            score=context.score,
-            reason="DEFAULT_PASS",
-        )
+        """Unknown brokers use the same active risk evaluation."""
+        return self.risk_check(context.broker_name or "unknown", context)
 
     # ------------------------------------------------------------------
     # Step 1 / 4: Execution router
@@ -223,9 +194,9 @@ class GlobalController:
             Order is forwarded to ``ExecutionPipeline.execute()``.
             Sub-minimum order sizes are logged then allowed (micro-cap).
 
-        Kraken (isolated)
-            Order is **not forwarded**.  Returns :data:`KRAKEN_ISOLATED_SKIP`
-            immediately so callers can handle the skip without an exception.
+        Kraken
+            Active profiles are forwarded. Disabled/passive profiles reject
+            entries without bypassing the pipeline.
 
         Other brokers
             Order is forwarded unchanged.
@@ -242,9 +213,9 @@ class GlobalController:
                 )
             return self._forward_order(broker, order)
 
-        if broker_name == "kraken":
+        if broker_name == "kraken" and profile.get("execution_mode") != "active":
             logger.info(
-                "🔴 execute_trade: Kraken isolated mode — NO EXECUTION "
+                "🔴 execute_trade: Kraken is not active — NO ENTRY "
                 "(symbol=%s side=%s size=$%.2f)",
                 order.symbol, order.side, order.usd_size,
             )
@@ -300,14 +271,14 @@ class GlobalController:
             return {"status": "error", "error": str(exc)}
 
     # ------------------------------------------------------------------
-    # Step 4: Execution capital (Kraken excluded)
+    # Step 4: Execution capital
     # ------------------------------------------------------------------
 
     def get_execution_capital(self, broker_manager=None) -> Dict[str, float]:
         """Return a mapping of broker→balance for execution weighting.
 
         Only brokers flagged ``include_in_execution_capital=True`` in
-        :data:`BROKER_PROFILES` are included.  **Kraken is excluded.**
+        :data:`BROKER_PROFILES` are included.
 
         Parameters
         ----------
@@ -346,7 +317,7 @@ class GlobalController:
                     result[name] = 0.0
 
         logger.info(
-            "💰 Execution capital (Kraken excluded): %s",
+            "💰 Execution capital: %s",
             {k: f"${v:,.2f}" for k, v in result.items()},
         )
         return result
@@ -359,7 +330,7 @@ class GlobalController:
         """Return the subset of *candidates* allowed for *broker_name*.
 
         Coinbase — restricted to the micro-cap universe.
-        Kraken   — returns an empty list (no new entries).
+        Kraken   — candidates pass through to normal exchange/risk gates.
         Others   — candidates passed through unchanged.
         """
         name = broker_name.lower()
@@ -370,9 +341,6 @@ class GlobalController:
                 len(filtered), len(candidates),
             )
             return filtered
-        if name == "kraken":
-            logger.debug("filter_symbols: Kraken isolated — all symbols blocked")
-            return []
         return candidates
 
     def is_entry_allowed(self, broker_name: str, balance: float = 0.0) -> bool:
@@ -381,7 +349,11 @@ class GlobalController:
         if name == "coinbase":
             return self._coinbase.can_execute_entry(balance)
         if name == "kraken":
-            return False
+            profile = get_broker_profile(name)
+            return bool(
+                profile.get("execution_mode") == "active"
+                and balance >= float(profile.get("min_capital_usd", 0.0) or 0.0)
+            )
         return True
 
     # ------------------------------------------------------------------
@@ -411,7 +383,7 @@ class GlobalController:
             elif name == "kraken":
                 self._kraken.apply_to_broker(broker)
                 logger.info(
-                    "✅ GlobalController: Kraken policy applied (isolated, exit-only)"
+                    "✅ GlobalController: Kraken policy applied from active profile"
                 )
 
     # ------------------------------------------------------------------

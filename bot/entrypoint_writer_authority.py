@@ -799,7 +799,7 @@ class EntrypointWriterAuthority:
     def _nija_lease_renewal_health(self) -> tuple[bool, str, float, float]:
         """Return fail-closed freshness for the canonical renewal proof."""
         if self._local_fallback:
-            return True, "local_fallback", 0.0, float("inf")
+            return False, "local_fallback_forbidden", float("inf"), 0.0
         if not self.acquired:
             return False, "writer_not_acquired", float("inf"), 0.0
         if self.lost:
@@ -1409,7 +1409,7 @@ class EntrypointWriterAuthority:
         an unregistered startup thread while reporting that state truthfully.
         """
         if self._local_fallback:
-            return True, ""
+            return False, "core_thread_local_fallback_forbidden"
         thread = self._core_thread
         if thread is None:
             registration_deadline_s = _cfg_float(

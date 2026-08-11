@@ -1,9 +1,9 @@
 """Strict live startup sanitizer.
 
 This module runs before the trading runtime imports authority/execution modules.
-In live mode with Redis configured, no local-writer, degraded-authority, or
-operator force-trade flag may remain truthy. These flags previously allowed
-startup code to re-open live execution gates after capital was already healthy.
+In every live mode, no local-writer, degraded-authority, or operator force-trade
+flag may remain truthy. Redis being absent is a blocker, never permission to
+replace distributed ownership with a process-local assertion.
 """
 
 from __future__ import annotations
@@ -17,7 +17,18 @@ _FORBIDDEN_LIVE_FLAGS = (
     "FORCE_TRADE",
     "FORCE_TRADE_MODE",
     "FORCE_LIVE_TRANSITION",
+    "FORCE_SYSTEM_READY",
     "NIJA_FORCE_ACTIVATION",
+    "NIJA_FORCE_KRAKEN_ONLY_TEST",
+    "NIJA_KRAKEN_TEST_LIFT_CAPITAL_GATES",
+    "NIJA_PLATFORM_LIFT_CAPITAL_GATES",
+    "COINBASE_IGNORE_GLOBAL_CAPITAL_FLOOR",
+    "NIJA_CAPITAL_OPPORTUNISTIC",
+    "FORCE_FIRST_TRADE",
+    "FORCE_TRADE_ON_FIRST_VALID_SIGNAL",
+    "ALLOW_SMALL_ORDERS",
+    "ALLOW_SMALL_ACCOUNT_TRADING",
+    "NIJA_AUTO_CLEAR_EMERGENCY_STOP",
     "NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK",
     "NIJA_DISABLE_WRITER_LOCK",
     "NIJA_CONFIRM_BYPASS_RISKS",
@@ -78,7 +89,7 @@ def _normalize_fallback_score_floor() -> None:
 
 
 def sanitize(reason: str = "package_import") -> None:
-    if not (_live_mode() and _redis_configured()):
+    if not _live_mode():
         return
     cleared: list[str] = []
     for key in _FORBIDDEN_LIVE_FLAGS:
@@ -86,6 +97,8 @@ def sanitize(reason: str = "package_import") -> None:
             os.environ[key] = "false"
             cleared.append(key)
     os.environ["NIJA_REQUIRE_DISTRIBUTED_LOCK"] = "true"
+    os.environ["NIJA_ECEL_REQUIRED"] = "true"
+    os.environ["NIJA_ECEL_FAIL_CLOSED"] = "true"
     os.environ["NIJA_STRICT_REDIS_LEASE"] = "1"
     os.environ["NIJA_STRICT_WRITER_LOCK"] = "true"
     os.environ["NIJA_FAIL_CLOSED_EXIT_ON_UNREACHABLE_REDIS"] = "true"
@@ -97,6 +110,7 @@ def sanitize(reason: str = "package_import") -> None:
     if attempts <= 0:
         os.environ["NIJA_FAIL_CLOSED_MAX_RETRY_ATTEMPTS"] = "12"
     os.environ["NIJA_RUNTIME_DEGRADED_MODE"] = "false"
+    os.environ["NIJA_REDIS_CONFIGURED"] = "1" if _redis_configured() else "0"
     _normalize_fallback_score_floor()
     if cleared:
         logger.warning("STRICT_LIVE_STARTUP_SANITIZED reason=%s cleared=%s", reason, ",".join(cleared))

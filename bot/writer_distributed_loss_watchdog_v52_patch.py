@@ -140,7 +140,14 @@ def reconcile_once(runtime: Any | None = None) -> dict[str, Any]:
         result.update(ok=True, state="standby", reason="runtime_not_acquired")
         return result
     if bool(getattr(runtime, "_local_fallback", False)):
-        result.update(ok=True, state="local_fallback", reason="distributed_probe_not_applicable")
+        _mark_lost(runtime, "local_writer_fallback_forbidden")
+        os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "0"
+        os.environ["NIJA_EXECUTION_ACTIVE"] = "false"
+        result.update(
+            state="local_fallback_forbidden",
+            action="mark_lost_nonrecoverable",
+            reason="distributed_writer_proof_required",
+        )
         return result
 
     state, detail = classify_distributed_ownership(runtime)

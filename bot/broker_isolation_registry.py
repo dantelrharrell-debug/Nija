@@ -114,12 +114,12 @@ class IsolationEntry:
         return self.policy in IsolationPolicy.execution_blocked()
 
     def skip_risk_gate(self) -> bool:
-        """True → bypass the global risk engine entirely (MICRO_CAP)."""
-        return self.policy == IsolationPolicy.MICRO_CAP
+        """Risk evaluation is mandatory for every entry-capable policy."""
+        return False
 
     def log_risk_only(self) -> bool:
-        """True → evaluate risk but only log; never block (ISOLATED)."""
-        return self.policy == IsolationPolicy.ISOLATED
+        """No production policy converts a failed risk result to a pass."""
+        return False
 
     def filter_symbols(self, candidates: List[str]) -> List[str]:
         if self.symbol_filter is None:

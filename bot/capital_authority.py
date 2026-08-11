@@ -285,76 +285,6 @@ def get_capital_hydrated_gate() -> threading.Event:
     return CAPITAL_HYDRATED_EVENT
 
 
-def _maybe_auto_enable_live_mode(real_capital: float, broker_count: int) -> None:
-    """Auto-set LIVE_CAPITAL_VERIFIED when a live broker confirms real capital.
-
-    Called internally whenever CAPITAL_HYDRATED_EVENT fires with a confirmed
-    positive balance.  Sets ``os.environ["LIVE_CAPITAL_VERIFIED"] = "true"``
-    when all of the following are true:
-
-    * *real_capital* > 0   — at least one broker reported funds
-    * *broker_count* >= 1  — at least one broker is registered
-    * ``DRY_RUN_MODE``   is not set to a truthy value
-    * ``PAPER_MODE``      is not set to a truthy value
-    * ``LIVE_CAPITAL_VERIFIED`` is not already set to a truthy value
-
-    Additionally, when no Redis URL is configured (single-instance deployment),
-    also sets ``NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK=true`` so the bootstrap
-    FSM and trading state machine can complete activation without Redis
-    distributed locking.  This closes the gap where a deployment with confirmed
-    real capital never reaches LIVE_ACTIVE because the Redis writer-authority
-    gate permanently blocks activation.
-
-    This closes the gap where a deployment with real capital never reaches
-    LIVE_ACTIVE because the operator did not explicitly set the env var,
-    while still respecting explicit simulation flags.
-    """
-    if real_capital <= 0.0 or broker_count < 1:
-        return
-    _sim_values = {"1", "true", "yes", "on", "enabled"}
-    if os.environ.get("DRY_RUN_MODE", "").strip().lower() in _sim_values:
-        return
-    if os.environ.get("PAPER_MODE", "").strip().lower() in _sim_values:
-        return
-    _ca_logger = logging.getLogger("nija.capital_authority")
-    if os.environ.get("LIVE_CAPITAL_VERIFIED", "").strip().lower() not in _sim_values:
-        os.environ["LIVE_CAPITAL_VERIFIED"] = "true"
-        _ca_logger.critical(
-            "🟢 [CapitalAuthority] LIVE_CAPITAL_VERIFIED auto-enabled — "
-            "real_capital=$%.2f broker_count=%d (DRY_RUN_MODE/PAPER_MODE not set). "
-            "Set DRY_RUN_MODE=true to suppress this behaviour.",
-            real_capital,
-            broker_count,
-        )
-    # When Redis is not configured, also enable the local writer lock fallback so
-    # that the distributed writer-authority gate (which hard-blocks LIVE_ACTIVE
-    # without a fencing token) does not permanently prevent activation in
-    # single-instance deployments.  Without this, `commit_activation()` and
-    # `finalize_boot()` both return False forever, keeping the scanner from ever
-    # entering the market-evaluation loop.
-    if os.environ.get("NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK", "").strip().lower() not in _sim_values:
-        _redis_url = ""
-        try:
-            try:
-                from bot.redis_env import get_redis_url as _get_redis_url
-            except ImportError:
-                from redis_env import get_redis_url as _get_redis_url  # type: ignore[import]
-            _redis_url = _get_redis_url()
-        except Exception:
-            pass
-        if not _redis_url:
-            os.environ["NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK"] = "true"
-            _ca_logger.critical(
-                "🟢 [CapitalAuthority] NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK auto-enabled — "
-                "no Redis URL configured; using local writer authority for single-instance deployment. "
-                "real_capital=$%.2f broker_count=%d. "
-                "Set NIJA_REDIS_URL to configure Redis, or set NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK=true "
-                "explicitly to suppress this auto-detection.",
-                real_capital,
-                broker_count,
-            )
-
-
 def get_startup_lock() -> threading.Event:
     """Return the process-wide ``STARTUP_LOCK`` :class:`threading.Event`.
 
@@ -402,17 +332,6 @@ def wait_for_hydration(timeout_s: float = 30.0) -> None:
         If :data:`CAPITAL_HYDRATED_EVENT` is not set within *timeout_s*
         seconds.  The trading loop must not start until this barrier clears.
     """
-    _force_ready = str(os.getenv("FORCE_SYSTEM_READY", "")).strip().lower() in {
-        "1", "true", "yes", "on", "enabled"
-    }
-    if _force_ready:
-        CAPITAL_HYDRATED_EVENT.set()
-        CAPITAL_SYSTEM_READY.set()
-        logger.warning(
-            "FORCE_SYSTEM_READY enabled: bypassing capital hydration barrier for debug run"
-        )
-        return
-
     acquired = CAPITAL_HYDRATED_EVENT.wait(timeout=timeout_s)
     if not acquired:
         logger.critical("TIMEOUT_WAITING_FOR_CAPITAL_HYDRATION")
@@ -567,10 +486,9 @@ class CapitalAuthority:
         # derived at runtime and this env var should not be needed.
         # Default: require at least 2 brokers before signalling ACTIVE_CAPITAL,
         # preventing a false-positive READY when only one broker has connected.
-        # Override: set NIJA_SINGLE_BROKER_MODE=true (or NIJA_CAPITAL_EXPECTED_BROKERS=1)
-        # to allow a single-broker deployment to reach READY.
+        # An intentionally single-broker deployment must opt in explicitly.
         _single_broker_mode: bool = os.environ.get(
-            "NIJA_SINGLE_BROKER_MODE", "true"  # default ON for micro-capital (was "")
+            "NIJA_SINGLE_BROKER_MODE", "false"
         ).strip().lower() in {"1", "true", "yes", "on"}
         _explicit_expected: str = os.environ.get("NIJA_CAPITAL_EXPECTED_BROKERS", "").strip()
         if _explicit_expected:
@@ -578,7 +496,7 @@ class CapitalAuthority:
         elif _single_broker_mode:
             self._expected_brokers: int = 1
         else:
-            self._expected_brokers: int = 1  # relaxed: 1 broker sufficient (was 2)
+            self._expected_brokers: int = 2
         # Opportunistic mode: when True, ACTIVE_CAPITAL is reached (and
         # CAPITAL_SYSTEM_READY is set) as soon as ≥1 broker reports a positive
         # balance, without waiting for all expected_brokers to connect.
@@ -587,8 +505,18 @@ class CapitalAuthority:
         # Set via env var NIJA_CAPITAL_OPPORTUNISTIC (accepted: "1", "true", "yes")
         # or programmatically via set_opportunistic().
         self._opportunistic: bool = os.environ.get(
-            "NIJA_CAPITAL_OPPORTUNISTIC", "true"  # default ON for micro-capital (was "false")
+            "NIJA_CAPITAL_OPPORTUNISTIC", "false"
         ).strip().lower() in ("1", "true", "yes")
+        _simulation_mode = any(
+            os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+            for name in ("DRY_RUN_MODE", "PAPER_MODE")
+        )
+        if self._opportunistic and not _simulation_mode:
+            logger.critical(
+                "[CapitalAuthority] NIJA_CAPITAL_OPPORTUNISTIC ignored in live mode; "
+                "complete broker capital is required"
+            )
+            self._opportunistic = False
         # Maximum age for retaining a previous non-zero balance when a refresh
         # call returns zero/errors (prevents indefinite stale-capital retention).
         self._preserve_nonzero_ttl_s: float = float(
@@ -909,7 +837,6 @@ class CapitalAuthority:
         broker_threshold = 1 if self._opportunistic else max(1, self._expected_brokers)
         if real_capital > 0.0 and len(broker_balances) >= broker_threshold:
             CAPITAL_SYSTEM_READY.set()
-            _maybe_auto_enable_live_mode(real_capital, len(broker_balances))
             logger.info(
                 "⚡ [CapitalAuthority] CSM v3 WARM START — "
                 "restored real=$%.2f from cache (age=%.1fs, brokers=%s)",
@@ -1352,7 +1279,6 @@ class CapitalAuthority:
             broker_threshold = 1 if self._opportunistic else max(1, self._expected_brokers)
             if snapshot_real_capital > 0.0 and snapshot_broker_count >= broker_threshold:
                 CAPITAL_SYSTEM_READY.set()
-                _maybe_auto_enable_live_mode(snapshot_real_capital, snapshot_broker_count)
                 logger.info(
                     "[CapitalAuthority] refresh reached ACTIVE_CAPITAL; "
                     "CAPITAL_SYSTEM_READY=%s",
@@ -2101,7 +2027,7 @@ class CapitalAuthority:
         return self._opportunistic
 
     def set_opportunistic(self, enabled: bool) -> None:
-        """Enable or disable opportunistic mode at runtime.
+        """Enable opportunistic mode only for dry-run or paper simulation.
 
         Parameters
         ----------
@@ -2110,7 +2036,17 @@ class CapitalAuthority:
             with only 1 connected broker; ``False`` to restore strict
             ``expected_brokers`` enforcement.
         """
-        self._opportunistic = bool(enabled)
+        simulation_mode = any(
+            os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+            for name in ("DRY_RUN_MODE", "PAPER_MODE")
+        )
+        requested = bool(enabled)
+        self._opportunistic = bool(requested and simulation_mode)
+        if requested and not simulation_mode:
+            logger.critical(
+                "[CapitalAuthority] opportunistic mode rejected in live mode; "
+                "complete broker capital is required"
+            )
         logger.info(
             "[CapitalAuthority] opportunistic mode %s",
             "ENABLED" if self._opportunistic else "DISABLED",
@@ -2314,7 +2250,6 @@ class CapitalAuthority:
                         self._expected_brokers,
                     )
                 CAPITAL_SYSTEM_READY.set()
-                _maybe_auto_enable_live_mode(snapshot_real_capital, snapshot_broker_count)
             # MONOTONIC SNAPSHOT PROGRESSION (no-failure activation contract).
             # Stamp _broker_feed_timestamps with computed_at for every broker
             # present in the accepted snapshot.  This closes the race where the

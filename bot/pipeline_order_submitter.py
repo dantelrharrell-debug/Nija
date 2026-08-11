@@ -30,7 +30,7 @@ except ImportError:
         from execution_authority_context import assert_distributed_writer_authority
     except ImportError:
         def assert_distributed_writer_authority() -> None:
-            return None
+            raise RuntimeError("execution authority module unavailable")
 
 
 def _truthy(name: str, default: bool = False) -> bool:
@@ -253,16 +253,15 @@ def submit_market_order_via_pipeline(
     if get_execution_pipeline is None or PipelineRequest is None:
         return {"status": "error", "error": "ExecutionPipeline unavailable", "symbol": symbol, "side": side}
 
-    if not (_truthy("FORCE_TRADE") or _truthy("FORCE_TRADE_MODE")):
-        try:
-            assert_distributed_writer_authority()
-        except Exception as exc:
-            return {
-                "status": "error",
-                "error": f"DistributedWriterFence reject: {exc}",
-                "symbol": symbol,
-                "side": side,
-            }
+    try:
+        assert_distributed_writer_authority()
+    except Exception as exc:
+        return {
+            "status": "error",
+            "error": f"DistributedWriterFence reject: {exc}",
+            "symbol": symbol,
+            "side": side,
+        }
 
     side_norm = str(side or "buy").strip().lower()
     preferred_broker = _resolve_preferred_broker(broker)

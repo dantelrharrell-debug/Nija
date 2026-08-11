@@ -229,7 +229,6 @@ def _patch_trading_state_machine(module: ModuleType) -> bool:
         return False
 
     def distributed_writer_authority_gate_guarded() -> tuple[bool, str]:
-        local_fallback = _truthy("NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK")
         writer_lease_manager = None
         try:
             try:
@@ -242,19 +241,13 @@ def _patch_trading_state_machine(module: ModuleType) -> bool:
 
         fencing_token = str(resolve_token(writer_lease_manager) or "").strip()
         if not fencing_token:
-            if local_fallback:
-                logger.warning(
-                    "WRITER_AUTHORITY_RECURSION_GUARD_LOCAL_FALLBACK marker=%s reason=missing_fencing_token",
-                    _MARKER,
-                )
-            else:
-                err = (
-                    "LIVE TRADING BLOCKED: NIJA_WRITER_FENCING_TOKEN is not set. "
-                    "Redis distributed writer authority is required for LIVE_ACTIVE. "
-                    "Ensure the bot acquired a Redis writer lease at startup."
-                )
-                logger.critical("[WRITER AUTHORITY HARD FAIL] %s", err)
-                return False, err
+            err = (
+                "LIVE TRADING BLOCKED: NIJA_WRITER_FENCING_TOKEN is not set. "
+                "Redis distributed writer authority is required for LIVE_ACTIVE. "
+                "Ensure the bot acquired a Redis writer lease at startup."
+            )
+            logger.critical("[WRITER AUTHORITY HARD FAIL] %s", err)
+            return False, err
 
         retries = max(1, int(os.environ.get("NIJA_REDIS_LOCK_RETRIES", "3") or "3"))
         retry_delay_s = max(0.0, float(os.environ.get("NIJA_REDIS_LOCK_RETRY_DELAY_S", "0.20") or "0.20"))
@@ -275,14 +268,6 @@ def _patch_trading_state_machine(module: ModuleType) -> bool:
                 last_err = str(exc)
                 if attempt < retries - 1 and retry_delay_s > 0:
                     time.sleep(retry_delay_s)
-
-        if local_fallback:
-            logger.warning(
-                "[WRITER AUTHORITY] distributed authority verification failed after %d attempt(s) but local fallback is enabled. last_error=%s",
-                retries,
-                last_err,
-            )
-            return True, ""
 
         err = (
             "LIVE TRADING BLOCKED: distributed writer authority verification failed "

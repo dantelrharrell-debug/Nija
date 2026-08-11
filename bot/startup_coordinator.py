@@ -652,7 +652,7 @@ class StartupCoordinator:
             if not self._reconcile_permitted_locked():
                 self._runtime.coordinator_state = (
                     StartupCoordinatorState.CAPITAL_READY
-                    if self._runtime.capital_state == "RUNNING"
+                    if self._runtime.capital_state in {"READY", "RUNNING"}
                     and self._runtime.capital_hydrated
                     and not self._runtime.capital_stale
                     else StartupCoordinatorState.CAPITAL_PENDING
@@ -819,15 +819,12 @@ class StartupCoordinator:
         capital_state = str(self._runtime.capital_state or "unknown")
         trading_state = str(trading_state or "").strip() or "OFF"
         activation_intent = bool(activation_intent or self._runtime.activation_requested)
-        force_activation = os.getenv("NIJA_FORCE_ACTIVATION", "0") == "1"
         kill_switch_active = self._runtime.kill_switch_active
         logger.critical(
             "[RECONCILE] "
-            "force_activation=%s "
             "trading_state=%s "
             "commit_version=%s "
             "kill_switch=%s",
-            force_activation,
             trading_state,
             self._runtime.last_committed_snapshot_version,
             kill_switch_active,
@@ -842,7 +839,6 @@ class StartupCoordinator:
         _inputs = (
             trading_state,
             activation_intent,
-            force_activation,
             bootstrap_state,
             capital_state,
             self._runtime.capital_hydrated,
@@ -875,7 +871,7 @@ class StartupCoordinator:
         )
         prereqs_ready = bool(
             bootstrap_state == "RUNNING_SUPERVISED"
-            and capital_state == "RUNNING"
+            and capital_state in {"READY", "RUNNING"}
             and self._runtime.threads_launched > 0
             and self._runtime.threads_confirmed_running
             and self._runtime.capital_hydrated
@@ -979,7 +975,7 @@ class StartupCoordinator:
             target_state = RuntimeAuthorityState.STANDBY
             if bootstrap_state != "RUNNING_SUPERVISED":
                 reason = f"bootstrap_state={bootstrap_state}"
-            elif capital_state != "RUNNING":
+            elif capital_state not in {"READY", "RUNNING"}:
                 reason = f"capital_state={capital_state}"
             elif self._runtime.threads_launched <= 0 or not self._runtime.threads_confirmed_running:
                 reason = "threads_not_running"
