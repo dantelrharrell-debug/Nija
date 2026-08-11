@@ -46,6 +46,13 @@ _FAST_PATH_INSTALLERS = (
     ("bot.stalled_writer_release_guard_v22", "STALLED_WRITER_RELEASE_GUARD_V22"),
 )
 
+_FAST_PATH_COMPAT_OPTIONAL_GUARDS = frozenset(
+    {
+        "WRITER_REELECTION_LOSS_REASON_V46",
+        "ACTIVATION_CONVERGENCE_V17_IMPORTLIB_BRIDGE",
+    }
+)
+
 _LEGACY_INSTALLERS = (
     *_FAST_PATH_INSTALLERS,
     ("bot.bootstrap_i12_capital_authority_repair_patch", "BOOTSTRAP_I12_CAPITAL_AUTHORITY_REPAIR"),
@@ -79,9 +86,15 @@ def _canonical_fast_path_enabled() -> bool:
     )
 
 
-def _install_guards(specs: Iterable[tuple[str, str]], *, mode: str) -> bool:
+def _install_guards(
+    specs: Iterable[tuple[str, str]],
+    *,
+    mode: str,
+    optional_labels: frozenset[str] | None = None,
+) -> bool:
     ready = True
     installed: list[str] = []
+    optional_labels = optional_labels or frozenset()
     for module_name, label in specs:
         try:
             module = importlib.import_module(module_name)
@@ -100,6 +113,14 @@ def _install_guards(specs: Iterable[tuple[str, str]], *, mode: str) -> bool:
                 mode,
             )
         except Exception as exc:
+            if label in optional_labels:
+                logger.warning(
+                    "%s_INSTALL_SKIPPED_OPTIONAL source=bot_entrypoint mode=%s err=%s",
+                    label,
+                    mode,
+                    exc,
+                )
+                continue
             ready = False
             logger.critical(
                 "%s_INSTALL_FAILED source=bot_entrypoint mode=%s err=%s",
@@ -120,7 +141,11 @@ def _install_guards(specs: Iterable[tuple[str, str]], *, mode: str) -> bool:
 
 
 if _canonical_fast_path_enabled():
-    if not _install_guards(_FAST_PATH_INSTALLERS, mode="canonical_fast"):
+    if not _install_guards(
+        _FAST_PATH_INSTALLERS,
+        mode="canonical_fast",
+        optional_labels=_FAST_PATH_COMPAT_OPTIONAL_GUARDS,
+    ):
         os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "0"
         os.environ["NIJA_RUNTIME_TRADING_STATE"] = "OFF"
         raise RuntimeError(

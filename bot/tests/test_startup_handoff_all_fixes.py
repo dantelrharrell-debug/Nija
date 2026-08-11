@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 from pathlib import Path
+import subprocess
+import sys
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -149,3 +152,63 @@ def test_defer_guard_blocks_sitecustomize_and_usercustomize() -> None:
     assert 'sys.modules.setdefault("sitecustomize"' in content
     assert 'sys.modules.setdefault("usercustomize"' in content
     assert "NIJA_DEFER_RUNTIME_SITE_HOOKS" in content
+
+
+def test_canonical_fast_path_import_tolerates_optional_guard_failures() -> None:
+    env = os.environ.copy()
+    env["NIJA_CANONICAL_ENTRYPOINT_FAST_PATH"] = "1"
+    env["NIJA_DEFER_RUNTIME_SITE_HOOKS"] = "1"
+    env["NIJA_CANONICAL_RUNTIME_LAUNCHER_V26_READY"] = "1"
+
+    result = subprocess.run(
+        [sys.executable, "-c", "import bot.bot; print('IMPORT_OK')"],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+
+    assert result.returncode == 0, result.stderr or result.stdout
+    assert "IMPORT_OK" in result.stdout
+    assert "canonical fast-path safety guards failed" not in (result.stdout + result.stderr)
+
+
+def test_canonical_fast_path_remains_fail_closed_for_required_guard_failure() -> None:
+    env = os.environ.copy()
+    env["NIJA_CANONICAL_ENTRYPOINT_FAST_PATH"] = "1"
+    env["NIJA_DEFER_RUNTIME_SITE_HOOKS"] = "1"
+    env["NIJA_CANONICAL_RUNTIME_LAUNCHER_V26_READY"] = "1"
+
+    script = """
+import importlib
+import types
+
+_original = importlib.import_module
+
+def _patched(name, package=None):
+    if name == "bot.writer_generation_state_gate_v50_patch":
+        return types.SimpleNamespace(install_import_hook=lambda: False)
+    return _original(name, package)
+
+importlib.import_module = _patched
+
+try:
+    import bot.bot  # noqa: F401
+except RuntimeError as exc:
+    if "canonical fast-path safety guards failed" in str(exc):
+        raise SystemExit(0)
+    raise
+
+raise SystemExit(1)
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+
+    assert result.returncode == 0, result.stderr or result.stdout
