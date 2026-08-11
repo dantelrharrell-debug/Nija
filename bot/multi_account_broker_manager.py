@@ -4206,11 +4206,26 @@ class MultiAccountBrokerManager:
 
         # ── Kraken: single FSM wait — zero dual-representation drift ──────────
         if broker_type == BrokerType.KRAKEN:
-            # Fast path: already connected.
+            # Fast path: startup FSM and the live broker must agree.  The FSM
+            # is cleared by writer-authority demotion, but keep this defensive
+            # convergence here so a stale historical latch can never publish a
+            # false platform-ready result.
             if _KRAKEN_STARTUP_FSM.is_connected:
-                logger.info(f"✅ Platform {broker_name} ready (FSM fast-path)")
-                self._mark_platform_connected(broker_type)
-                return True
+                broker = self._platform_brokers.get(broker_type)
+                if broker is not None and bool(getattr(broker, "connected", False)):
+                    logger.info(
+                        f"✅ Platform {broker_name} ready "
+                        "(FSM + live broker fast-path)"
+                    )
+                    self._mark_platform_connected(broker_type)
+                    return True
+                _KRAKEN_STARTUP_FSM.mark_failed()
+                logger.error(
+                    "KRAKEN_PLATFORM_STALE_FSM_REVOKED "
+                    "fsm_connected=true broker_connected=false "
+                    "platform_ready=false user_connections_deferred=true"
+                )
+                return False
             # Fast path: already failed.
             if _KRAKEN_STARTUP_FSM.is_failed:
                 logger.error(f"❌ Platform {broker_name} connection failed (FSM)")
@@ -5666,6 +5681,26 @@ class MultiAccountBrokerManager:
                     if not _has_platform:
                         logger.warning("⚠️ Falling back to USER-ONLY mode")
                         allow_user_trading = True
+                    else:
+                        connection_key = (user.user_id, broker_type)
+                        self._failed_user_connections[connection_key] = (
+                            "platform_account_not_connected"
+                        )
+                        if user.user_id not in self._user_metadata:
+                            self._user_metadata[user.user_id] = {
+                                "name": user.name,
+                                "enabled": user.enabled,
+                                "brokers": {},
+                            }
+                        self._user_metadata[user.user_id]["brokers"][broker_type] = False
+                        logger.warning(
+                            "KRAKEN_USER_CONNECTION_DEFERRED user=%s broker=%s "
+                            "reason=platform_account_not_connected "
+                            "user_broker_io=false",
+                            user.user_id,
+                            broker_type.value,
+                        )
+                        continue
 
             # Add delay between sequential connections to the same broker type
             # This helps prevent nonce conflicts and API rate limiting, especially for Kraken

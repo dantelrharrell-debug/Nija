@@ -143,6 +143,23 @@ class RuntimeStartupHandoffV87Tests(unittest.TestCase):
         self.assertFalse(table["nonce_ready"])
         self.assertFalse(table["execution_ready"])
 
+    def test_writer_loss_callback_must_confirm_bounded_restart_handoff(self) -> None:
+        runtime = EntrypointWriterAuthority()
+        runtime._heartbeat_thread = MagicMock(is_alive=MagicMock(return_value=True))
+        runtime._notify_runtime_reconciliation = MagicMock()
+        runtime.set_on_lost_callback(MagicMock(return_value=None))
+
+        with patch.object(
+            runtime,
+            "_schedule_unhandled_loss_restart",
+        ) as fallback:
+            runtime._mark_lost("core_thread_registration_deadline_exceeded")
+
+        fallback.assert_called_once_with(
+            "core_thread_registration_deadline_exceeded",
+            handler_confirmed=False,
+        )
+
     def test_writer_bootstrap_failure_revokes_dynamic_readiness_truth(self) -> None:
         from bot import bot_main, readiness_table
 

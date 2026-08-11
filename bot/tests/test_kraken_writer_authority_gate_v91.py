@@ -6,15 +6,23 @@ from types import ModuleType, SimpleNamespace
 import unittest
 from unittest.mock import MagicMock, patch
 
-from bot.broker_manager import KrakenBroker
+from bot.broker_manager import AccountType, KrakenBroker, KrakenStartupFSM
+from bot.multi_account_broker_manager import (
+    BrokerType,
+    MultiAccountBrokerManager,
+)
 
 
 class KrakenWriterAuthorityGateV91Tests(unittest.TestCase):
     def _broker(self) -> KrakenBroker:
         broker = object.__new__(KrakenBroker)
         broker.account_identifier = "PLATFORM"
+        broker.account_type = AccountType.PLATFORM
         broker.connected = True
         broker._connection_already_complete = True
+        broker._is_available = True
+        broker.exit_only_mode = False
+        broker.kraken_health = "HEALTHY"
         broker.last_connection_error = ""
         return broker
 
@@ -80,6 +88,96 @@ class KrakenWriterAuthorityGateV91Tests(unittest.TestCase):
         source = __import__("inspect").getsource(KrakenBroker.connect)
         self.assertIn("if not self._initialize_nonce_manager():", source)
         self.assertIn("return False", source)
+
+    def test_runtime_authority_demotion_revokes_platform_fsm(self) -> None:
+        broker = self._broker()
+        fsm = KrakenStartupFSM()
+        fsm.begin_platform_boot()
+        fsm.mark_connected()
+
+        with patch("bot.broker_manager._KRAKEN_STARTUP_FSM", fsm):
+            demoted = broker._demote_on_writer_authority_failure(
+                RuntimeError(
+                    "Canonical process writer authority unavailable for Kraken nonce lease"
+                )
+            )
+
+        self.assertTrue(demoted)
+        self.assertFalse(broker.connected)
+        self.assertFalse(fsm.is_connected)
+        self.assertTrue(fsm.is_failed)
+
+    def test_platform_wait_rejects_stale_connected_fsm(self) -> None:
+        fsm = KrakenStartupFSM()
+        fsm.begin_platform_boot()
+        fsm.mark_connected()
+        manager = object.__new__(MultiAccountBrokerManager)
+        manager._platform_brokers = {
+            BrokerType.KRAKEN: SimpleNamespace(connected=False)
+        }
+        manager._mark_platform_connected = MagicMock()
+
+        with patch("bot.multi_account_broker_manager._KRAKEN_STARTUP_FSM", fsm):
+            ready = manager.wait_for_platform_ready(BrokerType.KRAKEN, timeout=1)
+
+        self.assertFalse(ready)
+        self.assertFalse(fsm.is_connected)
+        self.assertTrue(fsm.is_failed)
+        manager._mark_platform_connected.assert_not_called()
+
+    def test_configured_platform_disconnect_defers_user_broker_io(self) -> None:
+        manager = object.__new__(MultiAccountBrokerManager)
+        manager._platform_brokers = {
+            BrokerType.KRAKEN: SimpleNamespace(connected=False)
+        }
+        manager._platform_failed_types = set()
+        manager._all_user_brokers = {}
+        manager.user_brokers = {}
+        manager.user_configs = {}
+        manager.kraken_copy_trading_active = False
+        manager._failed_user_connections = {}
+        manager._users_without_credentials = {}
+        manager._capital_blocked_users = {}
+        manager._user_metadata = {}
+        manager._should_skip_user_connections = MagicMock(return_value=False)
+        manager.is_platform_connected = MagicMock(return_value=False)
+        manager.wait_for_platform_ready = MagicMock(return_value=False)
+        manager.add_user_broker = MagicMock()
+        manager._format_platform_broker_status = MagicMock(
+            return_value="DISCONNECTED"
+        )
+        user = SimpleNamespace(
+            user_id="user-1",
+            name="User One",
+            broker_type="KRAKEN",
+            enabled=True,
+        )
+        loader = SimpleNamespace(get_all_enabled_users=lambda: [user])
+        platform_layer = SimpleNamespace(
+            has_platform_account=lambda _venue: True
+        )
+
+        with (
+            patch(
+                "config.user_loader.get_user_config_loader",
+                return_value=loader,
+            ),
+            patch(
+                "bot.multi_account_broker_manager.get_platform_account_layer",
+                return_value=platform_layer,
+            ),
+        ):
+            connected = manager.connect_users_from_config()
+
+        self.assertEqual(connected, {})
+        manager.add_user_broker.assert_not_called()
+        self.assertEqual(
+            manager._failed_user_connections[("user-1", BrokerType.KRAKEN)],
+            "platform_account_not_connected",
+        )
+        self.assertFalse(
+            manager._user_metadata["user-1"]["brokers"][BrokerType.KRAKEN]
+        )
 
 
 if __name__ == "__main__":

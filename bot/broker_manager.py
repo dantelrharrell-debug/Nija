@@ -1270,10 +1270,11 @@ _KRAKEN_CONNECT_PROBE_FALLBACK_MS: int = 300_000   # 5 min
 class KrakenStartupFSM:
     """Single source of truth for the Kraken platform startup sequence.
 
-    States (strictly linear — no backward transitions once CONNECTED):
+    States (startup is linear; runtime authority loss may demote CONNECTED):
 
         IDLE → CONNECTING → NONCE_READY → CAPITAL_READY → CONNECTED   (success path)
         IDLE → CONNECTING → FAILED                    (failure path)
+        CONNECTED → FAILED → CONNECTING               (runtime recovery path)
 
     Principle: **event = truth, state = derived.**
 
@@ -1352,12 +1353,19 @@ class KrakenStartupFSM:
             self._connected.set()
 
     def mark_failed(self) -> None:
-        """Atomically signal FAILED — wakes all waiting USER threads instantly."""
+        """Atomically signal FAILED and revoke any stale CONNECTED latch.
+
+        Startup CONNECTED is a stable success latch only while the live broker
+        retains private writer/nonce authority.  Runtime authority loss must
+        clear it so platform waiters and USER accounts cannot proceed from a
+        historical handshake after the platform broker has been demoted.
+        """
         with self._lock:
             self._connecting = False
+            self._connected.clear()
             self._nonce_ready.clear()
             self._capital_ready.clear()
-        self._failed.set()
+            self._failed.set()
 
     def reset(self) -> None:
         """Reset to IDLE so a retry can start fresh.
@@ -8267,10 +8275,13 @@ class KrakenBroker(BaseBroker):
         self.exit_only_mode = True
         self.kraken_health = "ERROR"
         self.last_connection_error = f"WRITER_AUTHORITY_UNAVAILABLE: {message}"
+        if getattr(self, "account_type", AccountType.PLATFORM) == AccountType.PLATFORM:
+            _KRAKEN_STARTUP_FSM.mark_failed()
         logger.critical(
             "KRAKEN_PRIVATE_RUNTIME_DEMOTED account=%s "
             "reason=writer_authority_unavailable connected=false "
-            "execution_eligible=false reconnect_required=true",
+            "execution_eligible=false reconnect_required=true "
+            "platform_fsm_connected=false",
             self.account_identifier,
         )
         return True
