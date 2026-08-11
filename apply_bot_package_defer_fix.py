@@ -46,6 +46,13 @@ _BOUNDED_STARTUP_LOG_MARKER = "BOT_PACKAGE_STARTUP_BOUNDED"
 
 
 def _is_already_patched(text: str) -> bool:
+    """Return ``True`` when either known patch marker pair is present.
+
+    Detection supports two patch styles:
+    1. Legacy defer markers: ``DEFER_NAME =`` and ``MARKER``
+    2. Bounded-startup markers: ``side-effect bounded`` and
+       ``BOT_PACKAGE_STARTUP_BOUNDED``
+    """
     has_defer_assignment = f"{DEFER_NAME} =" in text
     has_deferred_log_marker = MARKER in text
     has_bounded_startup_comment = _BOUNDED_STARTUP_COMMENT_MARKER in text
