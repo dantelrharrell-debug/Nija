@@ -2810,10 +2810,40 @@ class TradingStateMachine:
             )
             return True
         except Exception as exc:
+            _exc_str = str(exc)
+            # Distinguish a "readiness proof pending" block (expected during startup
+            # while subsystems converge) from a hard gate failure (authority lost,
+            # kill-switch active, etc.).  Pending states must not produce a terminal
+            # ERROR traceback on every retry — that floods logs and obscures real
+            # failures.  Hard gate failures keep the full ERROR with traceback.
+            _is_pending_readiness = (
+                "readiness.complete" in _exc_str
+                or "system readiness proof failed" in _exc_str
+            )
             if not _coordinator_committed:
                 rolled_back = False
                 with self._lock:
+                    _state_before_rollback = self._current_state
                     if self._current_state == TradingState.LIVE_ACTIVE:
+                        # Standard LIVE_ACTIVE → LIVE_PENDING_CONFIRMATION rollback.
+                        self._current_state = TradingState.LIVE_PENDING_CONFIRMATION
+                        self._activation_committed = False
+                        self._execution_authority = False
+                        self._core_loop_owns_execution = True
+                        self._can_dispatch_trades = False
+                        self._pending_confirmation_since = time.monotonic()
+                        self._last_pending_log_time = None
+                        os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "0"
+                        os.environ["NIJA_RUNTIME_TRADING_STATE"] = (
+                            TradingState.LIVE_PENDING_CONFIRMATION.value
+                        )
+                        rolled_back = True
+                    elif self._current_state == TradingState.OFF and _is_pending_readiness:
+                        # OFF + readiness proof pending: arm LIVE_PENDING_CONFIRMATION so
+                        # the activation monitor can find this attempt and retry when the
+                        # readiness-table version advances (e.g. after strategy publication).
+                        # This is not a rollback — activation never reached LIVE_ACTIVE —
+                        # but the state transition signals supervised-pending to observers.
                         self._current_state = TradingState.LIVE_PENDING_CONFIRMATION
                         self._activation_committed = False
                         self._execution_authority = False
@@ -2833,10 +2863,19 @@ class TradingStateMachine:
                         logger.exception(
                             "ACTIVATION_ROLLBACK_PERSIST_FAILED trading_remains_fail_closed=true"
                         )
-                    logger.error(
-                        "ACTIVATION_ROLLED_BACK reason=coordinator_commit_failed "
-                        "state=LIVE_PENDING_CONFIRMATION execution_authority=false"
-                    )
+                    if _is_pending_readiness and _state_before_rollback == TradingState.OFF:
+                        logger.warning(
+                            "ACTIVATION_PENDING state=LIVE_PENDING_CONFIRMATION "
+                            "reason=readiness_incomplete "
+                            "pending_keys=%s "
+                            "(will retry automatically when readiness-table version advances)",
+                            _exc_str,
+                        )
+                    else:
+                        logger.error(
+                            "ACTIVATION_ROLLED_BACK reason=coordinator_commit_failed "
+                            "state=LIVE_PENDING_CONFIRMATION execution_authority=false"
+                        )
             else:
                 with self._lock:
                     _committed_live_state = self._current_state == TradingState.LIVE_ACTIVE
@@ -2848,11 +2887,40 @@ class TradingStateMachine:
                 )
                 if _committed_live_state:
                     return True
-            logger.error(
-                "[AUTO_ACTIVATE BLOCKED] reason=COMMIT_TRANSITION_FAILED error=%s",
-                exc,
-                exc_info=True,
-            )
+            # Log pending readiness at WARNING (no traceback) to avoid flooding logs
+            # on every retry cycle; reserve ERROR+traceback for hard gate failures.
+            if _is_pending_readiness:
+                _rt_version = 0
+                try:
+                    try:
+                        from bot.readiness_table import get_version as _rt_get_version, pending as _rt_pending
+                    except ImportError:
+                        from readiness_table import get_version as _rt_get_version, pending as _rt_pending  # type: ignore[import]
+                    _rt_version = _rt_get_version()
+                    _pending_keys = _rt_pending()
+                except Exception:
+                    _pending_keys = []
+                _last_version = getattr(self, "_last_pending_log_rt_version", None)
+                if _last_version != _rt_version:
+                    self._last_pending_log_rt_version: int = _rt_version
+                    logger.warning(
+                        "[AUTO_ACTIVATE PENDING] readiness_incomplete "
+                        "pending_keys=%s rt_version=%d "
+                        "(activation will retry automatically when remaining keys become ready)",
+                        _pending_keys,
+                        _rt_version,
+                    )
+                else:
+                    logger.debug(
+                        "[AUTO_ACTIVATE PENDING] readiness_incomplete rt_version=%d (suppressed duplicate)",
+                        _rt_version,
+                    )
+            else:
+                logger.error(
+                    "[AUTO_ACTIVATE BLOCKED] reason=COMMIT_TRANSITION_FAILED error=%s",
+                    exc,
+                    exc_info=True,
+                )
             return False
 
     def get_activation_committed(self) -> bool:

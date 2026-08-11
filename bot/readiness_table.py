@@ -66,6 +66,12 @@ _TABLE: Dict[str, bool] = {k: False for k in KEYS}
 _LOCK = threading.Lock()
 _VERSION = 0
 
+# A threading.Event that is set (and immediately cleared) whenever _VERSION
+# increments.  Consumers that want an immediate retry on readiness change
+# (e.g. the activation-pending commit monitor) can wait on this event with a
+# bounded timeout instead of sleeping a full polling interval.
+READINESS_CHANGED_EVENT: threading.Event = threading.Event()
+
 
 # ---------------------------------------------------------------------------
 # Write API
@@ -101,6 +107,14 @@ def set_ready(
         if _changed:
             _VERSION += 1
         _snapshot = dict(_TABLE)
+
+    # Notify any waiter (e.g. activation monitor) that the version changed.
+    # The event is a fire-and-forget pulse: set immediately then clear so that
+    # a consumer polling `wait(timeout=T)` wakes up once per version increment
+    # rather than staying set across multiple later polls.
+    if _changed:
+        READINESS_CHANGED_EVENT.set()
+        READINESS_CHANGED_EVENT.clear()
 
     try:
         try:
@@ -171,6 +185,10 @@ def revoke_many(components: Iterable[str], *, reason: str) -> None:
             _VERSION += 1
         version = int(_VERSION)
         table = dict(_TABLE)
+
+    if changed:
+        READINESS_CHANGED_EVENT.set()
+        READINESS_CHANGED_EVENT.clear()
 
     try:
         try:
