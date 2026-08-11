@@ -780,7 +780,6 @@ def main() -> int:
             logger.critical("CORE_LOOP_STARTING strategy_type=%s", type(strategy).__name__)
             trading_thread = start_trading_engine(strategy)
             logger.critical("CORE_LOOP_STARTED thread_name=%s", getattr(trading_thread, "name", "unknown"))
-            _core_loop_thread = trading_thread
 
             if trading_thread is None:
                 raise RuntimeError("Trading thread not created by start_trading_engine")
@@ -808,18 +807,27 @@ def main() -> int:
                 raise RuntimeError(
                     "Canonical writer runtime cannot register the core thread"
                 )
-            register_core_thread(trading_thread)
+            registered_thread = getattr(runtime, "_core_thread", None)
+            if registered_thread is not trading_thread:
+                register_core_thread(trading_thread)
             registered_thread = getattr(runtime, "_core_thread", trading_thread)
             if registered_thread is not trading_thread:
                 raise RuntimeError(
                     "Canonical writer runtime rejected the core-thread handoff"
                 )
+            _core_loop_thread = trading_thread
             logger.critical(
                 "CANONICAL_CORE_THREAD_REGISTERED thread=%s ident=%s "
                 "writer_generation=%s",
                 trading_thread.name,
                 trading_thread.ident,
                 getattr(runtime, "_generation", "unknown"),
+            )
+            logger.critical(
+                "EXECUTION_AUTHORITY_READY writer_generation=%s core_thread=%s ident=%s",
+                getattr(runtime, "_generation", "unknown"),
+                trading_thread.name,
+                trading_thread.ident,
             )
 
             # Publish verified thread evidence to the startup coordinator so that
@@ -847,13 +855,19 @@ def main() -> int:
                 )
 
             if not _shutdown_event.is_set():
+                logger.critical(
+                    "EXIT_SUPERVISION_ACTIVE core_thread=%s ident=%s",
+                    trading_thread.name,
+                    trading_thread.ident,
+                )
                 _keep_process_alive_after_loop_return()
         except KeyboardInterrupt:
             logger.info("⏸️ Keyboard interrupt received")
             return 0
         except Exception as exc:
             logger.critical(
-                "❌ Trading loop exception: %s: %s",
+                "CANONICAL_STARTUP_EXCEPTION reason=core_loop_startup_or_registration_failed "
+                "type=%s err=%s",
                 type(exc).__name__,
                 exc,
                 exc_info=True,
