@@ -29,10 +29,9 @@ import queue
 import sys
 import threading
 import time
-from dataclasses import dataclass
 from functools import wraps
 from types import ModuleType
-from typing import Any, Dict, Iterable, Optional
+from typing import Any, Dict, Iterable, NamedTuple, Optional
 
 LOGGER = logging.getLogger("nija.capital_refresh_stall_guard_v35")
 MARKER = "20260807-capital-refresh-provenance-v36"
@@ -48,16 +47,14 @@ if __name__ == "nija_capital_refresh_stall_guard_v35_prebot":
     sys.modules.setdefault("capital_refresh_stall_guard_v35", sys.modules[__name__])
 
 
-@dataclass
-class _Observation:
+class _Observation(NamedTuple):
     value: float
     observed_monotonic: float
     observed_epoch: float
     sequence: int
 
 
-@dataclass
-class _Flight:
+class _Flight(NamedTuple):
     thread: threading.Thread
     result_queue: queue.Queue
     sequence: int
