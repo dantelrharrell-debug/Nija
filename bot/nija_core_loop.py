@@ -4367,6 +4367,22 @@ class NijaCoreLoop:
                         fallback_active,
                         _force_trade_bypass,
                     )
+                    try:
+                        _pattern_ctx = dict(getattr(sig, "metadata", {}).get("pattern_context", {}) or {})
+                        if _pattern_ctx:
+                            logger.info(
+                                "PATTERN_GATE symbol=%s timeframe=%s regime=%s confirmed=%d contribution=%.2f "
+                                "rejection_reason=%s reached_execution_gate=%s",
+                                sig.symbol,
+                                _pattern_ctx.get("timeframe", "unknown"),
+                                _pattern_ctx.get("regime", "unknown"),
+                                len(_pattern_ctx.get("confirmed_patterns", []) or []),
+                                float(_pattern_ctx.get("score_adjustment", 0.0) or 0.0),
+                                _reject_key,
+                                False,
+                            )
+                    except Exception:
+                        pass
                     continue
                 _funnel["profitability"] = ("PASS", "")
                 logger.critical(
@@ -4376,6 +4392,23 @@ class NijaCoreLoop:
                     action,
                     fallback_active,
                 )
+                _pattern_ctx = {}
+                try:
+                    _pattern_ctx = dict(getattr(sig, "metadata", {}).get("pattern_context", {}) or {})
+                except Exception:
+                    _pattern_ctx = {}
+                if _pattern_ctx:
+                    logger.info(
+                        "PATTERN_GATE symbol=%s timeframe=%s regime=%s confirmed=%d contribution=%.2f "
+                        "rejection_reason=%s reached_execution_gate=%s",
+                        sig.symbol,
+                        _pattern_ctx.get("timeframe", "unknown"),
+                        _pattern_ctx.get("regime", "unknown"),
+                        len(_pattern_ctx.get("confirmed_patterns", []) or []),
+                        float(_pattern_ctx.get("score_adjustment", 0.0) or 0.0),
+                        _pattern_ctx.get("rejection_reason", ""),
+                        True,
+                    )
 
                 # Apply AI engine position multiplier to analysis size hint
                 if "position_size" in analysis and sig.position_multiplier != 1.0:
@@ -4425,6 +4458,8 @@ class NijaCoreLoop:
                     analysis["spread_pct"] = 0.001
                 if "slippage_pct" not in analysis:
                     analysis["slippage_pct"] = 0.001
+
+                analysis = self._apply_pattern_exit_plan(analysis=analysis, sig=sig, df=df)
 
                 logger.critical(
                     "🚀 [CoreLoop] SUBMITTING ORDER | symbol=%s side=%s action=%s "
@@ -5012,6 +5047,60 @@ class NijaCoreLoop:
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    def _apply_pattern_exit_plan(
+        self,
+        *,
+        analysis: Dict[str, Any],
+        sig: Any,
+        df: pd.DataFrame,
+    ) -> Dict[str, Any]:
+        """
+        Apply deterministic pattern exit geometry without loosening existing stops.
+        """
+        try:
+            if analysis.get("action") not in ("enter_long", "enter_short"):
+                return analysis
+            metadata = getattr(sig, "metadata", {}) or {}
+            plan = metadata.get("pattern_exit_plan")
+            if not isinstance(plan, dict) or not plan.get("confirmed"):
+                return analysis
+
+            side = "long" if analysis.get("action") == "enter_long" else "short"
+            if str(plan.get("direction", "")).lower() != side:
+                return analysis
+
+            entry = float(analysis.get("entry_price") or df["close"].iloc[-1])
+            existing_stop = self._safe_float(analysis.get("stop_loss", 0.0), 0.0)
+            proposed_stop = self._safe_float(plan.get("stop_loss", 0.0), 0.0)
+
+            if proposed_stop > 0:
+                if existing_stop <= 0:
+                    analysis["stop_loss"] = proposed_stop
+                elif side == "long":
+                    # Never widen long stop (lower stop = wider risk).
+                    analysis["stop_loss"] = max(existing_stop, proposed_stop)
+                else:
+                    # Never widen short stop (higher stop = wider risk).
+                    analysis["stop_loss"] = min(existing_stop, proposed_stop)
+
+            targets = plan.get("targets", [])
+            if isinstance(targets, (list, tuple)) and targets:
+                parsed_targets = [self._safe_float(x, 0.0) for x in targets]
+                parsed_targets = [x for x in parsed_targets if x > 0.0]
+                if parsed_targets and "take_profit" not in analysis:
+                    analysis["take_profit"] = parsed_targets[:3]
+
+            analysis["pattern_exit_applied"] = True
+            analysis["pattern_exit_source"] = str(plan.get("source_pattern", "unknown"))
+            analysis["pattern_invalidation_price"] = self._safe_float(
+                plan.get("invalidation_price", 0.0),
+                0.0,
+            )
+            analysis["pattern_entry_price"] = entry
+        except Exception as exc:
+            logger.debug("Pattern exit plan application failed for %s: %s", getattr(sig, "symbol", "?"), exc)
+        return analysis
 
     def _build_forced_fallback_entry_analysis(
         self,

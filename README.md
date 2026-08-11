@@ -180,6 +180,29 @@ Safety-critical order:
 
 No deployment variable may pre-grant writer authority or `LIVE_ACTIVE`.
 
+## Deterministic Pattern Recognition (Technical) vs ML
+
+NIJA now wires deterministic chart-pattern recognition into the live production entry path:
+
+`main.py -> bot.bot -> bot.nija_core_loop (Phase 3 scan) -> bot.nija_ai_engine -> bot.enhanced_entry_scoring -> bot.deterministic_pattern_recognition`
+
+- Deterministic technical-pattern logic uses completed OHLCV candles only and returns explicit pattern structure (name, direction, confidence, levels, confirmation state, invalidation price).
+- ML/AI modules remain separate and do not replace deterministic technical confirmation.
+
+Example configuration (via scorer/config dict):
+
+```python
+{
+    "enabled": True,
+    "pattern_lookback": 120,
+    "min_pattern_confidence": 0.65,
+    "breakout_lookback": 20,
+    "min_volume_ratio": 1.1,
+    "stale_bars": 8,
+    "atr_stop_buffer": 0.35,
+}
+```
+
 ## Authority Heartbeat Hardening
 
 The authority heartbeat is a safety system, not a trading signal. It protects the single-writer lease and must remain fail-closed when authority is genuinely lost.
