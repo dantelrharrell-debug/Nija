@@ -721,11 +721,37 @@ class EntrypointWriterAuthority:
         self._local_fallback = False
         self._lost.clear()
         self._stop.clear()
-        self._core_thread = None
-        self._core_thread_started_at = 0.0
-        self._core_thread_last_alive_at = 0.0
-        self._core_thread_name = ""
-        self._core_thread_ident = None
+        # Preserve a live core thread across re-acquisitions.  Clearing
+        # _core_thread on every re-acquisition (e.g. after a transient Redis
+        # gap) caused the registration deadline to restart from zero even
+        # though the trading thread was still running, eventually triggering an
+        # unnecessary re-election and process restart.  If the previously
+        # registered thread is still alive we carry it forward and immediately
+        # re-arm the scan deadline so the watchdog does not fire.
+        _prior_core_thread = self._core_thread
+        _prior_core_thread_alive = (
+            _prior_core_thread is not None
+            and callable(getattr(_prior_core_thread, "is_alive", None))
+            and _prior_core_thread.is_alive()
+        )
+        if _prior_core_thread_alive:
+            # Keep all fields; they will be refreshed by register_core_thread
+            # below if the caller explicitly re-registers.
+            logger.critical(
+                "CORE_THREAD_PRESERVED_ACROSS_REACQUISITION marker=%s "
+                "thread=%s ident=%s new_generation=%s",
+                _MARKER,
+                getattr(_prior_core_thread, "name", "unknown"),
+                getattr(_prior_core_thread, "ident", None),
+                generation,
+            )
+            os.environ["NIJA_CORE_THREAD_ALIVE"] = "1"
+        else:
+            self._core_thread = None
+            self._core_thread_started_at = 0.0
+            self._core_thread_last_alive_at = 0.0
+            self._core_thread_name = ""
+            self._core_thread_ident = None
 
         self._publish_env(scope=scope, generation_key=generation_key, fallback=False)
         self._write_metadata()
