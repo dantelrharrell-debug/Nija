@@ -303,6 +303,13 @@ class TestRunFallbackCycleIdWarning(unittest.TestCase):
         pipeline._emit_execution_rejection_telemetry = lambda **kwargs: None
         return pipeline
 
+    @staticmethod
+    def _allowing_capital_manager():
+        return SimpleNamespace(
+            can_open_trade=lambda _requested_risk: True,
+            update_account_risk=lambda _account_id, _requested_risk: None,
+        )
+
     def test_warning_logged_when_signal_missing_cycle_id(self):
         """A WARNING should fire when signal dict lacks cycle_id."""
         import bot.execution_pipeline as ep_mod
@@ -330,7 +337,11 @@ class TestRunFallbackCycleIdWarning(unittest.TestCase):
         log.setLevel(logging.DEBUG)
         try:
             with patch.object(ep_mod, "get_execution_integrity_layer", None), \
-                 patch.object(ep_mod, "get_global_capital_manager", None), \
+                 patch.object(
+                     ep_mod,
+                     "get_global_capital_manager",
+                     return_value=self._allowing_capital_manager(),
+                 ), \
                  patch.object(ep_mod, "get_master_strategy_router", None), \
                  patch.object(ep_mod, "get_signal_broadcaster", None), \
                  patch.object(ep_mod, "get_account_performance_dashboard", None), \
@@ -377,7 +388,11 @@ class TestRunFallbackCycleIdWarning(unittest.TestCase):
         log.setLevel(logging.DEBUG)
         try:
             with patch.object(ep_mod, "get_execution_integrity_layer", None), \
-                 patch.object(ep_mod, "get_global_capital_manager", None), \
+                 patch.object(
+                     ep_mod,
+                     "get_global_capital_manager",
+                     return_value=self._allowing_capital_manager(),
+                 ), \
                  patch.object(ep_mod, "get_master_strategy_router", None), \
                  patch.object(ep_mod, "get_signal_broadcaster", None), \
                  patch.object(ep_mod, "get_account_performance_dashboard", None), \

@@ -327,6 +327,7 @@ class TestHeartbeatGenerationIntegration(unittest.TestCase):
             "NIJA_WRITER_FENCING_TOKEN_FALLBACK": "0",
         }, clear=False), \
              patch("bot.redis_env.get_redis_url", return_value="redis://localhost:6379"), \
+             patch("bot.entrypoint_writer_authority.get_entrypoint_writer_authority", return_value=None), \
              patch("bot.execution_authority_context.assert_distributed_writer_authority", return_value=None), \
              patch("bot.writer_generation_tracker.validate_generation_for_heartbeat",
                    return_value=(False, "generation_mismatch:local=3 redis=7")):
@@ -343,6 +344,7 @@ class TestHeartbeatGenerationIntegration(unittest.TestCase):
             "NIJA_WRITER_FENCING_TOKEN_FALLBACK": "0",
         }, clear=False), \
              patch("bot.redis_env.get_redis_url", return_value="redis://localhost:6379"), \
+             patch("bot.entrypoint_writer_authority.get_entrypoint_writer_authority", return_value=None), \
              patch("bot.execution_authority_context.assert_distributed_writer_authority", return_value=None), \
              patch("bot.writer_generation_tracker.validate_generation_for_heartbeat",
                    return_value=(True, "")):
@@ -351,11 +353,11 @@ class TestHeartbeatGenerationIntegration(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual(err, "")
 
-    def test_heartbeat_skips_generation_check_in_fallback_mode(self) -> None:
-        """Generation check must be skipped when is_fallback=True."""
+    def test_heartbeat_rejects_process_local_fallback_mode(self) -> None:
+        """Process-local fallback cannot satisfy distributed live authority."""
         with patch.dict(os.environ, {
             "NIJA_WRITER_FENCING_TOKEN": "test-token",
-            "NIJA_WRITER_LEASE_ACQUIRED": "0",
+            "NIJA_WRITER_LEASE_ACQUIRED": "1",
             "NIJA_WRITER_FENCING_TOKEN_FALLBACK": "1",
         }, clear=False), \
              patch("bot.redis_env.get_redis_url", return_value="redis://localhost:6379"):
@@ -367,9 +369,10 @@ class TestHeartbeatGenerationIntegration(unittest.TestCase):
                        return_value=(False, "generation_mismatch:local=0 redis=5")) as mock_gen_check:
                 from bot.authority_heartbeat import _check_authority_once
                 ok, err = _check_authority_once(timeout_s=2.0)
-            # Generation check should NOT have been called in fallback mode.
+            # The fallback is rejected before generation validation.
             mock_gen_check.assert_not_called()
-        self.assertTrue(ok)
+        self.assertFalse(ok)
+        self.assertIn("process-local writer fallback", err)
 
     def test_heartbeat_generation_exception_is_non_fatal(self) -> None:
         """A generation validation exception must not crash the heartbeat check."""
@@ -379,6 +382,7 @@ class TestHeartbeatGenerationIntegration(unittest.TestCase):
             "NIJA_WRITER_FENCING_TOKEN_FALLBACK": "0",
         }, clear=False), \
              patch("bot.redis_env.get_redis_url", return_value="redis://localhost:6379"), \
+             patch("bot.entrypoint_writer_authority.get_entrypoint_writer_authority", return_value=None), \
              patch("bot.execution_authority_context.assert_distributed_writer_authority", return_value=None), \
              patch("bot.writer_generation_tracker.validate_generation_for_heartbeat",
                    side_effect=RuntimeError("unexpected tracker error")):
