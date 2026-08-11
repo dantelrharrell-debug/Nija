@@ -1609,10 +1609,12 @@ class EntrypointWriterAuthority:
         os.environ.pop("NIJA_WRITER_GENERATION", None)
         os.environ.pop("NIJA_WRITER_LEASE_GENERATION", None)
         try:
-            from bot.readiness_table import revoke_ready
+            from bot.readiness_table import revoke_many
 
-            for component in ("authority_ready", "nonce_ready", "execution_ready"):
-                revoke_ready(component, reason=f"writer_authority_lost:{reason}")
+            revoke_many(
+                ("authority_ready", "nonce_ready", "execution_ready"),
+                reason=f"writer_authority_lost:{reason}",
+            )
         except Exception:
             logger.debug(
                 "ENTRYPOINT_WRITER_AUTHORITY_READINESS_REVOKE_FAILED marker=%s",
@@ -1664,10 +1666,12 @@ class EntrypointWriterAuthority:
         self._stop.set()
         self._set_writer_state(WriterState.LOST, reason="release_called")
         try:
-            from bot.readiness_table import revoke_ready
+            from bot.readiness_table import revoke_many
 
-            for component in ("authority_ready", "nonce_ready", "execution_ready"):
-                revoke_ready(component, reason="writer_authority_release_called")
+            revoke_many(
+                ("authority_ready", "nonce_ready", "execution_ready"),
+                reason="writer_authority_release_called",
+            )
         except Exception:
             logger.debug(
                 "ENTRYPOINT_WRITER_AUTHORITY_READINESS_REVOKE_FAILED marker=%s",

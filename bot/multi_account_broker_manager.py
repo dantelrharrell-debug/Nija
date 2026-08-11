@@ -1031,6 +1031,58 @@ class MultiAccountBrokerManager:
             "[MABM.initialize] pre-activation hydration complete: total_usd=%.2f",
             _total_usd,
         )
+        try:
+            from bot.broker_runtime_preflight import evaluate_broker_runtime_preflight
+
+            _broker_preflight = evaluate_broker_runtime_preflight(
+                self,
+                total_balance_usd=_total_usd,
+            )
+            os.environ["NIJA_BROKER_RUNTIME_PREFLIGHT_READY"] = (
+                "1" if _broker_preflight.passed else "0"
+            )
+            os.environ["NIJA_EXECUTION_LIFECYCLE_CANARY_PASSED"] = (
+                "1"
+                if _broker_preflight.checks.get("lifecycle.canary_passed", False)
+                else "0"
+            )
+            logger.log(
+                logging.INFO if _broker_preflight.passed else logging.CRITICAL,
+                "BROKER_RUNTIME_PREFLIGHT passed=%s first_blocker=%s "
+                "connected_venues=%s checks=%s platform=%d/%d users=%d/%d "
+                "users_trading_eligible=%d/%d minimum_notionals=%s",
+                str(_broker_preflight.passed).lower(),
+                _broker_preflight.first_blocker,
+                ",".join(_broker_preflight.connected_venues) or "none",
+                _broker_preflight.checks,
+                _broker_preflight.accounts.platform_connected,
+                _broker_preflight.accounts.platform_registered,
+                _broker_preflight.accounts.user_connected,
+                _broker_preflight.accounts.user_registered,
+                _broker_preflight.accounts.user_trading_eligible,
+                _broker_preflight.accounts.user_registered,
+                _broker_preflight.minimum_notionals,
+            )
+            if _is_live and not _broker_preflight.passed:
+                raise RuntimeError(
+                    "Broker runtime preflight failed "
+                    f"(reason={_broker_preflight.first_blocker})"
+                )
+        except RuntimeError:
+            raise
+        except Exception as _broker_preflight_error:
+            os.environ["NIJA_BROKER_RUNTIME_PREFLIGHT_READY"] = "0"
+            os.environ["NIJA_EXECUTION_LIFECYCLE_CANARY_PASSED"] = "0"
+            if _is_live:
+                raise RuntimeError(
+                    "Broker runtime preflight unavailable "
+                    f"({type(_broker_preflight_error).__name__}:"
+                    f"{_broker_preflight_error})"
+                ) from _broker_preflight_error
+            logger.warning(
+                "BROKER_RUNTIME_PREFLIGHT unavailable in non-live mode: %s",
+                _broker_preflight_error,
+            )
         return _total_usd
 
     def _init_portfolio(self) -> None:
@@ -6010,81 +6062,9 @@ class MultiAccountBrokerManager:
         objects, so a partial registry can never be reported as fully trading.
         """
 
-        platform_records: Dict[str, Any] = {}
-        for broker_type, broker in getattr(self, "_platform_brokers", {}).items():
-            label = str(getattr(broker_type, "value", broker_type) or "").lower()
-            if label:
-                platform_records[label] = broker
-        for broker_type in getattr(self, "_platform_failed_types", set()):
-            label = str(getattr(broker_type, "value", broker_type) or "").lower()
-            if label:
-                platform_records.setdefault(label, None)
+        from bot.account_registry_snapshot import build_account_registry_snapshot
 
-        platform_registered = len(platform_records)
-        platform_connected = sum(
-            1
-            for broker in platform_records.values()
-            if broker is not None and bool(getattr(broker, "connected", False))
-        )
-
-        user_records: Dict[Tuple[str, str], Any] = {}
-        for key, broker in getattr(self, "_all_user_brokers", {}).items():
-            if not isinstance(key, tuple) or len(key) != 2 or broker is None:
-                continue
-            user_id, broker_type = key
-            label = str(getattr(broker_type, "value", broker_type) or "").lower()
-            user_records[(str(user_id), label)] = broker
-        for user_id, broker_map in getattr(self, "user_brokers", {}).items():
-            for broker_type, broker in getattr(broker_map, "items", lambda: [])():
-                if broker is None:
-                    continue
-                label = str(getattr(broker_type, "value", broker_type) or "").lower()
-                user_records[(str(user_id), label)] = broker
-        # Creation failures and missing credentials are still registrations.
-        # Include metadata and failure registries so the denominator never
-        # shrinks merely because no broker object could be constructed.
-        for user_id, metadata in getattr(self, "_user_metadata", {}).items():
-            for broker_type in (metadata.get("brokers", {}) if metadata else {}):
-                label = str(getattr(broker_type, "value", broker_type) or "").lower()
-                user_records.setdefault((str(user_id), label), None)
-        for registry_name in ("_failed_user_connections", "_users_without_credentials"):
-            for key in getattr(self, registry_name, {}):
-                if not isinstance(key, tuple) or len(key) != 2:
-                    continue
-                user_id, broker_type = key
-                label = str(getattr(broker_type, "value", broker_type) or "").lower()
-                user_records.setdefault((str(user_id), label), None)
-
-        user_registered = len(user_records)
-        user_connected = sum(
-            1 for broker in user_records.values() if bool(getattr(broker, "connected", False))
-        )
-        eligible_records = {
-            (str(user_id), str(brokerage).lower())
-            for brokerage, user_ids in (connected_users or {}).items()
-            for user_id in user_ids
-        }
-        user_trading_eligible = len(eligible_records)
-        user_failures = len(getattr(self, "_failed_user_connections", {}))
-        user_without_credentials = len(getattr(self, "_users_without_credentials", {}))
-        all_registered_trading = bool(
-            platform_registered > 0
-            and platform_connected == platform_registered
-            and user_connected == user_registered
-            and user_trading_eligible == user_registered
-        )
-        return {
-            "platform_registered": platform_registered,
-            "platform_connected": platform_connected,
-            "platform_disconnected": platform_registered - platform_connected,
-            "user_registered": user_registered,
-            "user_connected": user_connected,
-            "user_disconnected": user_registered - user_connected,
-            "user_trading_eligible": user_trading_eligible,
-            "user_failures": user_failures,
-            "user_without_credentials": user_without_credentials,
-            "all_registered_trading": all_registered_trading,
-        }
+        return build_account_registry_snapshot(self, connected_users).as_dict()
 
     def verify_account_hierarchy(self) -> Dict:
         """

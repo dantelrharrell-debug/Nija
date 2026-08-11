@@ -50,10 +50,12 @@ def _revoke_writer_dependent_readiness(reason: str) -> None:
     os.environ.pop("NIJA_WRITER_GENERATION", None)
     os.environ.pop("NIJA_WRITER_LEASE_GENERATION", None)
     try:
-        from bot.readiness_table import revoke_ready
+        from bot.readiness_table import revoke_many
 
-        for component in ("authority_ready", "nonce_ready", "execution_ready"):
-            revoke_ready(component, reason=f"writer_bootstrap_unavailable:{reason}")
+        revoke_many(
+            ("authority_ready", "nonce_ready", "execution_ready"),
+            reason=f"writer_bootstrap_unavailable:{reason}",
+        )
     except Exception:
         logger.debug(
             "WRITER_BOOTSTRAP_READINESS_REVOKE_FAILED reason=%s",

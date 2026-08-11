@@ -67,6 +67,24 @@ def _ready(env: Mapping[str, str] | None = None) -> tuple[bool, list[str]]:
         not in _TRUE
     ):
         missing.append("NIJA_RUNTIME_EXECUTION_AUTHORITY")
+    if (
+        str(source.get("NIJA_RUNTIME_TRADING_STATE", "") or "").strip().upper()
+        == "LIVE_ACTIVE"
+        and str(source.get("NIJA_BROKER_RUNTIME_PREFLIGHT_READY", "") or "")
+        .strip()
+        .lower()
+        not in _TRUE
+    ):
+        missing.append("NIJA_BROKER_RUNTIME_PREFLIGHT_READY")
+    if (
+        str(source.get("NIJA_RUNTIME_TRADING_STATE", "") or "").strip().upper()
+        == "LIVE_ACTIVE"
+        and str(source.get("NIJA_EXECUTION_LIFECYCLE_CANARY_PASSED", "") or "")
+        .strip()
+        .lower()
+        not in _TRUE
+    ):
+        missing.append("NIJA_EXECUTION_LIFECYCLE_CANARY_PASSED")
     return not missing, missing
 
 
@@ -80,7 +98,8 @@ def _emit() -> bool:
         "authority_policy=%s authority_min_brokers=%s okx_balance_observed=%s okx_funding_status=%s "
         "okx_trading_spendable=%s okx_funding_spendable=%s "
         "writer_lease=%s writer_heartbeat=%s execution_authority=%s runtime_state=%s "
-        "missing=%s",
+        "broker_runtime_preflight=%s lifecycle_canary=%s "
+        "first_blocker=%s missing=%s",
         _MARKER,
         str(ready).lower(),
         commit,
@@ -100,6 +119,9 @@ def _emit() -> bool:
         os.environ.get("NIJA_WRITER_HEARTBEAT_ACTIVE", "uninitialized"),
         os.environ.get("NIJA_RUNTIME_EXECUTION_AUTHORITY", "uninitialized"),
         os.environ.get("NIJA_RUNTIME_TRADING_STATE", "uninitialized"),
+        os.environ.get("NIJA_BROKER_RUNTIME_PREFLIGHT_READY", "uninitialized"),
+        os.environ.get("NIJA_EXECUTION_LIFECYCLE_CANARY_PASSED", "uninitialized"),
+        missing[0] if missing else "none",
         ",".join(missing) or "none",
     )
     dynamic_writer_missing = any(name in missing for name in _DYNAMIC_WRITER_REQUIRED)

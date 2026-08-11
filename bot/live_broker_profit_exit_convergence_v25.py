@@ -392,75 +392,27 @@ def _kraken_user_connectivity(manager: Any) -> dict[str, int | bool]:
     incorrectly claim every user is connected by silently dropping the users
     for which no broker object could be constructed.
     """
-    records: dict[str, Any] = {}
-    all_users = getattr(manager, "_all_user_brokers", {}) if manager is not None else {}
-    try:
-        all_items = list(all_users.items())
-    except Exception:
-        all_items = []
-    for key, broker in all_items:
-        if not isinstance(key, tuple) or len(key) != 2:
-            continue
-        user_id, broker_type = key
-        label = str(getattr(broker_type, "value", broker_type) or "").strip().lower()
-        if label == "kraken" and broker is not None:
-            records[str(user_id)] = broker
+    if manager is None:
+        registered = 0
+        connected = 0
+        all_connected = False
+    else:
+        from bot.account_registry_snapshot import build_account_registry_snapshot
 
-    users = getattr(manager, "user_brokers", {}) if manager is not None else {}
-    try:
-        user_items = list(users.items())
-    except Exception:
-        user_items = []
-    for user_id, mapping in user_items:
-        try:
-            broker_items = list(mapping.items())
-        except Exception:
-            continue
-        for broker_type, broker in broker_items:
-            label = str(getattr(broker_type, "value", broker_type) or "").strip().lower()
-            if label == "kraken" and broker is not None:
-                records[str(user_id)] = broker
-
-    metadata = getattr(manager, "_user_metadata", {}) if manager is not None else {}
-    try:
-        metadata_items = list(metadata.items())
-    except Exception:
-        metadata_items = []
-    for user_id, user_metadata in metadata_items:
-        broker_map = user_metadata.get("brokers", {}) if isinstance(user_metadata, dict) else {}
-        try:
-            broker_types = list(broker_map)
-        except Exception:
-            broker_types = []
-        for broker_type in broker_types:
-            label = str(getattr(broker_type, "value", broker_type) or "").strip().lower()
-            if label == "kraken":
-                records.setdefault(str(user_id), None)
-
-    # Failed connection attempts and missing credentials are registrations,
-    # even though neither path necessarily creates a broker object.
-    for registry_name in ("_failed_user_connections", "_users_without_credentials"):
-        registry = getattr(manager, registry_name, {}) if manager is not None else {}
-        try:
-            registry_keys = list(registry)
-        except Exception:
-            registry_keys = []
-        for key in registry_keys:
-            if not isinstance(key, tuple) or len(key) != 2:
-                continue
-            user_id, broker_type = key
-            label = str(getattr(broker_type, "value", broker_type) or "").strip().lower()
-            if label == "kraken":
-                records.setdefault(str(user_id), None)
-
-    registered = len(records)
-    connected = sum(1 for broker in records.values() if bool(getattr(broker, "connected", False)))
+        status = build_account_registry_snapshot(manager).venue("kraken")
+        registered = status.user_registered
+        connected = status.user_connected
+        all_connected = bool(
+            registered > 0
+            and connected == registered
+            and status.user_trading_eligible == registered
+        )
     return {
         "registered": registered,
         "connected": connected,
         "disconnected": registered - connected,
         # 0/0 means no registered users, not "all users connected".
-        "all_connected": bool(registered > 0 and connected == registered),
+        "all_connected": all_connected,
     }
 
 
@@ -481,6 +433,9 @@ def _reconcile_brokers_once() -> dict[str, bool]:
     manager = _manager()
     for broker in _iter_manager_brokers(manager):
         supervisor._register_broker(broker)
+    from bot.account_registry_snapshot import build_account_registry_snapshot
+
+    accounts = build_account_registry_snapshot(manager)
     connected = _platform_connectivity(manager)
     kraken_users = _kraken_user_connectivity(manager)
     configured = _configured_venues()
@@ -491,7 +446,10 @@ def _reconcile_brokers_once() -> dict[str, bool]:
         "kraken_connected=%s coinbase_configured=%s coinbase_connected=%s "
         "okx_configured=%s okx_connected=%s all_configured_connected=%s "
         "kraken_users_registered=%s kraken_users_connected=%s "
-        "kraken_users_disconnected=%s kraken_users_all_connected=%s",
+        "kraken_users_disconnected=%s kraken_users_all_connected=%s "
+        "platform_accounts_connected=%s platform_accounts_registered=%s "
+        "user_accounts_connected=%s user_accounts_registered=%s "
+        "user_accounts_trading_eligible=%s registry_all_connected=%s",
         _MARKER,
         configured["kraken"], connected["kraken"],
         configured["coinbase"], connected["coinbase"],
@@ -501,6 +459,12 @@ def _reconcile_brokers_once() -> dict[str, bool]:
         kraken_users["connected"],
         kraken_users["disconnected"],
         kraken_users["all_connected"],
+        accounts.platform_connected,
+        accounts.platform_registered,
+        accounts.user_connected,
+        accounts.user_registered,
+        accounts.user_trading_eligible,
+        accounts.all_registered_trading,
     )
     return connected
 

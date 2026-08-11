@@ -363,7 +363,7 @@ class TestStartupCoordinator(unittest.TestCase):
         self.assertEqual(snapshot.runtime_authority_reason, "capital_stale")
         self.assertEqual(snapshot.lifecycle_phase, "BOOT")
 
-    def test_readiness_cannot_regress_after_global_gate_success(self) -> None:
+    def test_readiness_regression_revokes_after_global_gate_success(self) -> None:
         self.coordinator.record_bootstrap_state("RUNNING_SUPERVISED")
         self.coordinator.record_capital_state(
             state="RUNNING",
@@ -388,11 +388,11 @@ class TestStartupCoordinator(unittest.TestCase):
             trading_state="LIVE_PENDING_CONFIRMATION",
             activation_intent=True,
         )
-        self.assertTrue(snapshot.readiness_table.get("capital_ready"))
-        self.assertTrue(snapshot.readiness_table.get("strategy_ready"))
+        self.assertFalse(snapshot.readiness_table.get("capital_ready"))
+        self.assertFalse(snapshot.readiness_table.get("strategy_ready"))
         self.assertTrue(snapshot.global_gate_ready)
 
-    def test_global_gate_override_eliminates_duplicate_readiness_block(self) -> None:
+    def test_global_gate_cannot_override_canonical_readiness(self) -> None:
         self.coordinator.record_bootstrap_state("RUNNING_SUPERVISED")
         self.coordinator.record_capital_state(
             state="RUNNING",
@@ -419,10 +419,13 @@ class TestStartupCoordinator(unittest.TestCase):
             activation_intent=True,
         )
         proof = self.coordinator.evaluate_system_readiness_proof(snapshot)
-        self.assertTrue(proof.passed)
-        self.assertEqual(proof.first_blocking_gate, "none")
+        self.assertFalse(proof.passed)
+        self.assertEqual(proof.first_blocking_gate, "readiness.complete")
+        self.assertIn("authority.ready", proof.failed_gates)
+        self.assertIn("nonce.ready", proof.failed_gates)
+        self.assertIn("dispatch_health.ready", proof.failed_gates)
 
-    def test_live_state_persists_after_commit_with_global_gate(self) -> None:
+    def test_live_state_is_revoked_when_readiness_regresses(self) -> None:
         self._mark_all_readiness()
         self.coordinator.record_bootstrap_state("RUNNING_SUPERVISED")
         self.coordinator.record_capital_state(
@@ -455,8 +458,44 @@ class TestStartupCoordinator(unittest.TestCase):
             trading_state="LIVE_ACTIVE",
             activation_intent=True,
         )
-        self.assertEqual(committed.lifecycle_phase, "LIVE")
-        self.assertTrue(committed.dispatch_enabled)
+        self.assertEqual(committed.runtime_authority_state, RuntimeAuthorityState.DEGRADED.value)
+        self.assertEqual(committed.lifecycle_phase, "BOOT")
+        self.assertFalse(committed.dispatch_enabled)
+        self.assertEqual(committed.last_committed_snapshot_version, 0)
+
+    def test_global_gate_regression_revokes_dispatch_commit(self) -> None:
+        self._mark_all_readiness()
+        self.coordinator.record_bootstrap_state("RUNNING_SUPERVISED")
+        self.coordinator.record_capital_state(
+            state="RUNNING",
+            hydrated=True,
+            balance=300.0,
+            stale=False,
+        )
+        self.coordinator.record_threads_launched(1)
+        self.coordinator.record_threads_confirmed_running(
+            bootstrap_state="RUNNING_SUPERVISED"
+        )
+        self.coordinator.record_authority(ready=True)
+        self.coordinator.record_nonce_status(ready=True)
+        self.coordinator.record_dispatch_health(ready=True)
+        self.coordinator.record_global_gate(ready=True, detail="barrier_passed")
+        self.coordinator.record_activation_requested(requested=True, source="test")
+        snapshot = self.coordinator.build_snapshot(
+            trading_state="LIVE_PENDING_CONFIRMATION",
+            activation_intent=True,
+        )
+        self.coordinator.finalize_activation_commit(snapshot)
+
+        self.coordinator.record_global_gate(ready=False, detail="writer_lost")
+        revoked = self.coordinator.build_snapshot(
+            trading_state="LIVE_ACTIVE",
+            activation_intent=True,
+        )
+
+        self.assertFalse(revoked.global_gate_ready)
+        self.assertFalse(revoked.dispatch_enabled)
+        self.assertEqual(revoked.last_committed_snapshot_version, 0)
 
 
 if __name__ == "__main__":

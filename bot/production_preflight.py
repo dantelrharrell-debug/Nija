@@ -10,7 +10,9 @@ Executes the mandatory checks before the bot enters live mode:
   Step 4 — Single-instance enforcement
   Step 5 — Stale lock clearance
   Step 6 — Live-mode verification
-  Step 7 — Adversarial validation (optional: multi-instance + failure injection)
+  Step 7 — Public exchange clock synchronization
+  Step 8 — Adversarial validation (optional: multi-instance + failure injection)
+  Step 9 — Graceful handoff lock acquisition
 
 Run directly::
 
@@ -37,6 +39,8 @@ import sys
 import time
 import uuid
 from pathlib import Path
+from typing import Dict, List, Tuple
+from urllib.request import Request, urlopen
 
 # ── logging ──────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -53,6 +57,11 @@ log = logging.getLogger("nija.preflight")
 SEPARATOR = "=" * 72
 _TRUTHY = {"1", "true", "yes", "on", "enabled"}
 _RECOMMENDED_LEASE_TTL_MS = 60_000  # 60s baseline for lock stability across startup and live failover.
+_CLOCK_ENDPOINTS = {
+    "kraken": "https://api.kraken.com/0/public/Time",
+    "coinbase": "https://api.coinbase.com/v2/time",
+    "okx": "https://www.okx.com/api/v5/public/time",
+}
 
 
 def _env_truthy(name: str, default: str = "false") -> bool:
@@ -114,6 +123,73 @@ def _resolve_writer_lock_meta_key() -> str:
 
 def _resolve_writer_fence_key() -> str:
     return os.getenv("NIJA_WRITER_FENCING_KEY", "").strip() or f"nija:writer_fence:{_resolve_writer_lock_scope()}"
+
+
+def _credential_status() -> Tuple[List[str], Dict[str, List[str]]]:
+    """Return complete venues and incomplete configured credential sets.
+
+    Values are never returned or logged.  A venue is considered configured as
+    soon as any credential field is present; partial sets are hard failures so
+    startup cannot silently fall back to a different account or venue.
+    """
+
+    specifications = {
+        "coinbase": (
+            ("COINBASE_API_KEY", "COINBASE_API_SECRET"),
+        ),
+        "kraken": (
+            ("KRAKEN_PLATFORM_API_KEY", "KRAKEN_PLATFORM_API_SECRET"),
+            ("KRAKEN_API_KEY", "KRAKEN_API_SECRET"),
+        ),
+        "okx": (
+            ("OKX_API_KEY", "OKX_API_SECRET", "OKX_PASSPHRASE"),
+        ),
+    }
+    complete: List[str] = []
+    incomplete: Dict[str, List[str]] = {}
+    for venue, alternatives in specifications.items():
+        present_any = any(
+            os.getenv(name, "").strip()
+            for alternative in alternatives
+            for name in alternative
+        )
+        matching = next(
+            (
+                alternative
+                for alternative in alternatives
+                if all(os.getenv(name, "").strip() for name in alternative)
+            ),
+            None,
+        )
+        if matching is not None:
+            complete.append(venue)
+        elif present_any:
+            closest = max(
+                alternatives,
+                key=lambda alternative: sum(
+                    bool(os.getenv(name, "").strip()) for name in alternative
+                ),
+            )
+            incomplete[venue] = sorted(
+                name for name in closest if not os.getenv(name, "").strip()
+            )
+    return sorted(complete), incomplete
+
+
+def _fetch_exchange_epoch(venue: str, *, timeout_s: float) -> float:
+    """Fetch one public exchange clock without sending credentials."""
+
+    endpoint = _CLOCK_ENDPOINTS[venue]
+    request = Request(endpoint, headers={"User-Agent": "NIJA-production-preflight/1"})
+    with urlopen(request, timeout=timeout_s) as response:  # nosec B310 - fixed HTTPS allowlist
+        payload = json.loads(response.read().decode("utf-8"))
+    if venue == "kraken":
+        return float(payload["result"]["unixtime"])
+    if venue == "coinbase":
+        return float(payload["data"]["epoch"])
+    if venue == "okx":
+        return float(payload["data"][0]["ts"]) / 1000.0
+    raise ValueError(f"unsupported_clock_venue:{venue}")
 
 
 def _parse_lock_token(raw_value: str) -> int:
@@ -716,20 +792,95 @@ def _step6_live_mode_check() -> None:
         )
         sys.exit(1)
 
-    # Confirm required API credentials are present (values are not logged)
-    missing = [
-        name for name in ("COINBASE_API_KEY", "COINBASE_API_SECRET")
-        if not os.getenv(name, "").strip()
-    ]
-    if missing:
-        _fail(f"Missing Coinbase credentials: {', '.join(missing)}")
+    complete_venues, incomplete = _credential_status()
+    if incomplete:
+        detail = "; ".join(
+            f"{venue}:missing={','.join(names)}"
+            for venue, names in sorted(incomplete.items())
+        )
+        _fail(f"Incomplete exchange credential configuration ({detail})")
+        sys.exit(1)
+    if not complete_venues:
+        _fail("No complete platform exchange credential set is configured")
         sys.exit(1)
 
-    _ok("Live mode confirmed — DRY_RUN_MODE=false, PAPER_MODE=false, LIVE_CAPITAL_VERIFIED=true")
+    _ok(
+        "Live mode confirmed — DRY_RUN_MODE=false, PAPER_MODE=false, "
+        "LIVE_CAPITAL_VERIFIED=true, complete_venues=%s" % ",".join(complete_venues)
+    )
+
+
+def _step7_exchange_clock_sync() -> None:
+    """Verify local clock skew against configured public exchange clocks.
+
+    No credentials or private nonces are used.  Every configured venue must
+    answer and remain within the configured skew bound.  Private API access is
+    subsequently proven by each broker's authenticated connection/balance
+    hydration under writer authority.
+    """
+
+    _step(7, "Exchange clock synchronization")
+    complete_venues, _incomplete = _credential_status()
+    try:
+        timeout_s = max(
+            0.5,
+            float(os.getenv("NIJA_PREFLIGHT_CLOCK_TIMEOUT_S", "3") or "3"),
+        )
+        max_skew_s = max(
+            1.0,
+            float(os.getenv("NIJA_PREFLIGHT_MAX_CLOCK_SKEW_S", "5") or "5"),
+        )
+    except (TypeError, ValueError):
+        timeout_s = 3.0
+        max_skew_s = 5.0
+
+    successes = 0
+    failures: List[str] = []
+    for venue in complete_venues:
+        try:
+            before = time.time()
+            remote_epoch = _fetch_exchange_epoch(venue, timeout_s=timeout_s)
+            after = time.time()
+            local_midpoint = (before + after) / 2.0
+            skew_s = abs(local_midpoint - remote_epoch)
+            if skew_s > max_skew_s:
+                _fail(
+                    f"{venue} clock skew {skew_s:.3f}s exceeds {max_skew_s:.3f}s"
+                )
+                sys.exit(1)
+            successes += 1
+            log.info(
+                "Exchange clock sample venue=%s skew_s=%.3f round_trip_s=%.3f",
+                venue,
+                skew_s,
+                max(0.0, after - before),
+            )
+        except SystemExit:
+            raise
+        except Exception as exc:
+            failures.append(f"{venue}:{type(exc).__name__}")
+            log.warning("Exchange clock sample failed venue=%s error=%s", venue, exc)
+
+    if failures:
+        _fail(
+            "Configured exchange clock sample(s) failed "
+            f"(failures={','.join(failures)})"
+        )
+        sys.exit(1)
+    if successes <= 0:
+        _fail(
+            "No configured exchange clock could be sampled "
+            f"(failures={','.join(failures) or 'none'})"
+        )
+        sys.exit(1)
+    _ok(
+        "Clock synchronized within %.3fs using %d exchange source(s)"
+        % (max_skew_s, successes)
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Step 7 — Adversarial validation (optional)
+# Step 8 — Adversarial validation (optional)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _step7_adversarial_validation() -> None:
@@ -738,7 +889,7 @@ def _step7_adversarial_validation() -> None:
         log.info("ℹ️  Adversarial validation disabled (NIJA_ADVERSARIAL_VALIDATION=false)")
         return
 
-    _step(7, "Adversarial validation (multi-instance + failure injection)")
+    _step(8, "Adversarial validation (multi-instance + failure injection)")
 
     try:
         from bot.execution_authority_context import (
@@ -814,7 +965,7 @@ def _step8_graceful_handoff_lock() -> None:
     truthy value so existing deployments are not affected until operators
     explicitly opt in.
     """
-    _step(8, "Graceful handoff lock acquisition")
+    _step(9, "Graceful handoff lock acquisition")
 
     if not _env_truthy("NIJA_GRACEFUL_HANDOFF_ENABLED"):
         log.info(
@@ -866,6 +1017,7 @@ def run_preflight() -> None:
     _step4_single_instance()
     _step5_clear_stale_locks(redis_client)
     _step6_live_mode_check()
+    _step7_exchange_clock_sync()
     _step7_adversarial_validation()
     _step8_graceful_handoff_lock()
 
