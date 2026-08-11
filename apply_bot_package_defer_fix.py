@@ -41,6 +41,19 @@ _SITE_REPLACEMENT = (
 )
 _HOOKS_ANCHOR = "_PATCH_HOOKS = (\n"
 _HOOKS_REPLACEMENT = f"_PATCH_HOOKS = () if {DEFER_NAME} else (\n"
+_BOUNDED_STARTUP_COMMENT_MARKER = "side-effect bounded"
+_BOUNDED_STARTUP_LOG_MARKER = "BOT_PACKAGE_STARTUP_BOUNDED"
+
+
+def _is_already_patched(text: str) -> bool:
+    has_defer_assignment = f"{DEFER_NAME} =" in text
+    has_deferred_log_marker = MARKER in text
+    has_bounded_startup_comment = _BOUNDED_STARTUP_COMMENT_MARKER in text
+    has_bounded_startup_log_marker = _BOUNDED_STARTUP_LOG_MARKER in text
+
+    return (has_defer_assignment and has_deferred_log_marker) or (
+        has_bounded_startup_comment and has_bounded_startup_log_marker
+    )
 
 
 def _validate(text: str) -> None:
@@ -55,6 +68,9 @@ def _validate(text: str) -> None:
 
 
 def patch_text(text: str) -> str:
+    if _is_already_patched(text):
+        return text
+
     if f"{DEFER_NAME} =" not in text:
         if _SITE_ANCHOR not in text:
             raise RuntimeError("bot/__init__.py sitecustomize anchor not found")
@@ -72,8 +88,10 @@ def patch_text(text: str) -> str:
 def main() -> None:
     original = BOT_INIT_PATH.read_text(encoding="utf-8")
     patched = patch_text(original)
-    BOT_INIT_PATH.write_text(patched, encoding="utf-8")
-    print("NIJA_BOT_PACKAGE_DEFER_PATCH_APPLIED idempotent=true")
+    changed = patched != original
+    if changed:
+        BOT_INIT_PATH.write_text(patched, encoding="utf-8")
+    print(f"NIJA_BOT_PACKAGE_DEFER_PATCH_APPLIED idempotent=true changed={str(changed).lower()}")
 
 
 if __name__ == "__main__":

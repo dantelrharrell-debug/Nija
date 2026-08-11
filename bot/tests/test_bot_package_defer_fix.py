@@ -50,8 +50,16 @@ def test_bot_package_patch_is_idempotent() -> None:
     assert second == first
 
 
-def test_repository_bot_init_is_patchable() -> None:
+def test_bot_package_patch_detects_bounded_startup_marker() -> None:
+    module = _load_patcher()
+    source = (
+        "# Importing the package must remain side-effect bounded.\n"
+        'logger.info("BOT_PACKAGE_STARTUP_BOUNDED runtime_import_hooks=false")\n'
+    )
+    assert module.patch_text(source) == source
+
+
+def test_repository_bot_init_is_already_patch_safe() -> None:
     module = _load_patcher()
     source = BOT_INIT.read_text(encoding="utf-8")
-    patched = module.patch_text(source)
-    assert "_PATCH_HOOKS = () if _NIJA_BOT_PACKAGE_RUNTIME_HOOKS_DEFERRED else (" in patched
+    assert module.patch_text(source) == source
