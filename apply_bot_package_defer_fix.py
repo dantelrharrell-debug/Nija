@@ -41,6 +41,19 @@ _SITE_REPLACEMENT = (
 )
 _HOOKS_ANCHOR = "_PATCH_HOOKS = (\n"
 _HOOKS_REPLACEMENT = f"_PATCH_HOOKS = () if {DEFER_NAME} else (\n"
+_BOUNDED_STARTUP_COMMENT_MARKER = "side-effect bounded"
+_BOUNDED_STARTUP_LOG_MARKER = "BOT_PACKAGE_STARTUP_BOUNDED"
+
+
+def _is_already_patched(text: str) -> bool:
+    has_defer_assignment = f"{DEFER_NAME} =" in text
+    has_deferred_log_marker = MARKER in text
+    has_bounded_startup_comment = _BOUNDED_STARTUP_COMMENT_MARKER in text
+    has_bounded_startup_log_marker = _BOUNDED_STARTUP_LOG_MARKER in text
+
+    return (has_defer_assignment and has_deferred_log_marker) or (
+        has_bounded_startup_comment and has_bounded_startup_log_marker
+    )
 
 
 def _validate(text: str) -> None:
@@ -99,6 +112,10 @@ def main() -> None:
     else:
         BOT_INIT_PATH.write_text(patched, encoding="utf-8")
         print("NIJA_BOT_PACKAGE_DEFER_PATCH_APPLIED idempotent=true")
+    changed = patched != original
+    if changed:
+        BOT_INIT_PATH.write_text(patched, encoding="utf-8")
+    print(f"NIJA_BOT_PACKAGE_DEFER_PATCH_APPLIED idempotent=true changed={str(changed).lower()}")
 
 
 if __name__ == "__main__":
