@@ -84,6 +84,75 @@ class KrakenWriterAuthorityGateV91Tests(unittest.TestCase):
         assert_writer.assert_called_once_with()
         redis_client.set.assert_not_called()
 
+    def test_nonce_initialization_succeeds_after_writer_recovery(self) -> None:
+        broker = self._broker()
+        redis_client = MagicMock()
+        nonce_manager = SimpleNamespace(
+            _redis=SimpleNamespace(_client=redis_client)
+        )
+        nonce_module = ModuleType("bot.distributed_nonce_manager")
+        nonce_module.get_distributed_nonce_manager = MagicMock(
+            return_value=nonce_manager
+        )
+
+        with (
+            patch(
+                "bot.execution_authority_context.assert_distributed_writer_authority",
+                side_effect=[
+                    RuntimeError("core_thread_not_alive"),
+                    None,
+                ],
+            ) as assert_writer,
+            patch.dict(
+                sys.modules,
+                {"bot.distributed_nonce_manager": nonce_module},
+            ),
+            patch.object(
+                broker,
+                "_recover_nonce_authority",
+                return_value=(True, "existing_live_thread"),
+            ) as recover,
+        ):
+            ready = broker._initialize_nonce_manager()
+
+        self.assertTrue(ready)
+        self.assertEqual(assert_writer.call_count, 2)
+        recover.assert_called_once_with("kraken_nonce_startup_gate")
+
+    def test_persistent_nonce_authority_failure_requests_process_exit(self) -> None:
+        broker = self._broker()
+        nonce_module = ModuleType("bot.distributed_nonce_manager")
+        nonce_module.get_distributed_nonce_manager = MagicMock()
+        bot_main = ModuleType("bot.bot_main")
+        request_process_exit = MagicMock(return_value=75)
+        bot_main.request_process_exit = request_process_exit
+
+        with (
+            patch(
+                "bot.execution_authority_context.assert_distributed_writer_authority",
+                side_effect=RuntimeError(
+                    "core_thread_registration_deadline_exceeded"
+                ),
+            ),
+            patch.dict(
+                sys.modules,
+                {
+                    "bot.distributed_nonce_manager": nonce_module,
+                    "bot.bot_main": bot_main,
+                },
+            ),
+            patch.object(
+                broker,
+                "_recover_nonce_authority",
+                return_value=(False, "writer_not_acquired"),
+            ) as recover,
+        ):
+            ready = broker._initialize_nonce_manager()
+
+        self.assertFalse(ready)
+        recover.assert_any_call("kraken_nonce_startup_gate")
+        request_process_exit.assert_called_once()
+
     def test_connect_treats_nonce_authority_initialization_as_mandatory(self) -> None:
         source = __import__("inspect").getsource(KrakenBroker.connect)
         self.assertIn("if not self._initialize_nonce_manager():", source)

@@ -8306,6 +8306,46 @@ class KrakenBroker(BaseBroker):
         )
         return True
 
+    def _recover_nonce_authority(self, source: str) -> tuple[bool, str]:
+        try:
+            try:
+                from bot.writer_recovery_epoch_core_v81_patch import (
+                    repair_core_thread_once,
+                )
+            except ImportError:
+                from writer_recovery_epoch_core_v81_patch import (  # type: ignore[import]
+                    repair_core_thread_once,
+                )
+        except Exception as exc:
+            return False, f"recovery_hook_unavailable:{type(exc).__name__}:{exc}"
+        try:
+            ok, detail = repair_core_thread_once()
+        except Exception as exc:
+            return False, f"recovery_exception:{type(exc).__name__}:{exc}"
+        logger.warning(
+            "KRAKEN_NONCE_AUTHORITY_RECOVERY marker=20260811-kraken-nonce-authority "
+            "account=%s source=%s recovered=%s detail=%s",
+            self.account_identifier,
+            source,
+            ok,
+            detail,
+        )
+        return bool(ok), str(detail or "unknown")
+
+    @staticmethod
+    def _classify_nonce_authority_failure(authority_error: str, recovery_detail: str) -> str:
+        detail = f"{authority_error} {recovery_detail}".lower()
+        if any(
+            token in detail
+            for token in (
+                "registration_deadline_exceeded",
+                "terminal_startup_failure",
+                "shutdown_requested",
+            )
+        ):
+            return "persistent"
+        return "transient"
+
     def _initialize_nonce_manager(self) -> bool:
         """Initialize nonce state only after exact process-writer proof.
 
@@ -8325,7 +8365,18 @@ class KrakenBroker(BaseBroker):
                     assert_distributed_writer_authority,
                 )
 
-            assert_distributed_writer_authority()
+            try:
+                assert_distributed_writer_authority()
+            except Exception as exc:
+                repaired, repair_detail = self._recover_nonce_authority(
+                    "kraken_nonce_startup_gate"
+                )
+                if repaired:
+                    assert_distributed_writer_authority()
+                else:
+                    raise RuntimeError(
+                        f"{exc} | recovery={repair_detail}"
+                    ) from exc
             try:
                 from bot.distributed_nonce_manager import (
                     get_distributed_nonce_manager as _get_dnm,
@@ -8348,11 +8399,35 @@ class KrakenBroker(BaseBroker):
             self.connected = False
             self._connection_already_complete = False
             self.last_connection_error = f"WRITER_AUTHORITY_UNAVAILABLE: {exc}"
+            repaired, repair_detail = self._recover_nonce_authority(
+                "kraken_nonce_startup_failure"
+            )
+            classification = self._classify_nonce_authority_failure(
+                str(exc),
+                repair_detail,
+            )
+            action = "retry_next_reconnect_attempt"
+            if classification == "persistent":
+                try:
+                    from bot.bot_main import request_process_exit
+
+                    request_process_exit(
+                        f"kraken_nonce_authority_unavailable:{exc}",
+                        exit_code=75,
+                        terminal_startup_failure=True,
+                    )
+                    action = "process_exit_requested"
+                except Exception:
+                    action = "process_exit_request_failed"
             logger.critical(
                 "KRAKEN_NONCE_STARTUP_BLOCKED account=%s reason=%s "
+                "classification=%s recovery_detail=%s action=%s "
                 "broker_io=false heartbeat_telemetry_mutation=false fail_closed=true",
                 self.account_identifier,
                 exc,
+                classification,
+                repair_detail,
+                action,
             )
             return False
 

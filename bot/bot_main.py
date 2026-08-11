@@ -37,6 +37,8 @@ _authority_heartbeat_monitor = None
 _writer_authority_last_error = ""
 _core_loop_thread: Optional[threading.Thread] = None
 _core_registration_restart_timer: Optional[threading.Timer] = None
+_process_exit_code = 0
+_process_exit_reason = ""
 
 # Per-step startup timestamps used by the watchdog and diagnostics.
 _startup_stage_ts: dict[str, float] = {}
@@ -67,6 +69,63 @@ def _revoke_writer_dependent_readiness(reason: str) -> None:
             reason,
             exc_info=True,
         )
+
+
+def request_process_exit(
+    reason: str,
+    *,
+    exit_code: int = 75,
+    terminal_startup_failure: bool = False,
+) -> int:
+    """Request a fail-closed process exit through the canonical entrypoint."""
+
+    global _process_exit_code, _process_exit_reason, _writer_authority_last_error
+
+    final_reason = str(reason or "process_exit_requested")
+    if _process_exit_code and _process_exit_reason == final_reason:
+        return _process_exit_code
+
+    _process_exit_code = int(exit_code or 75)
+    _process_exit_reason = final_reason
+    _writer_authority_last_error = final_reason
+    os.environ["NIJA_PROCESS_EXIT_REQUESTED"] = "1"
+    os.environ["NIJA_PROCESS_EXIT_CODE"] = str(_process_exit_code)
+    os.environ["NIJA_PROCESS_EXIT_REASON"] = final_reason
+    os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "0"
+    os.environ["NIJA_EXECUTION_ACTIVE"] = "false"
+    _revoke_writer_dependent_readiness(final_reason)
+    try:
+        from bot.bootstrap_utils import signal_shutdown
+
+        signal_shutdown()
+    except Exception:
+        logger.debug(
+            "PROCESS_EXIT_REQUESTED bootstrap_utils.signal_shutdown unavailable",
+            exc_info=True,
+        )
+    runtime = _writer_authority_runtime
+    if terminal_startup_failure and runtime is not None:
+        marker = getattr(runtime, "mark_terminal_startup_failure", None)
+        if callable(marker):
+            try:
+                marker(final_reason)
+            except Exception:
+                logger.debug(
+                    "PROCESS_EXIT_REQUESTED runtime terminal marker failed",
+                    exc_info=True,
+                )
+    _shutdown_event.set()
+    logger.critical(
+        "PROCESS_EXIT_REQUESTED reason=%s exit_code=%d generation=%s "
+        "instance_id=%s token_prefix=%s terminal_startup_failure=%s",
+        final_reason,
+        _process_exit_code,
+        os.environ.get("NIJA_WRITER_LEASE_GENERATION", "") or "0",
+        getattr(runtime, "_instance_id", "") or "unknown",
+        str(os.environ.get("NIJA_WRITER_FENCING_TOKEN", "") or "")[:8],
+        terminal_startup_failure,
+    )
+    return _process_exit_code
 
 
 def _startup_registration_watchdog(
@@ -179,6 +238,12 @@ def _signal_handler(signum: int, frame) -> None:
 
     sig_name = signal.Signals(signum).name
     logger.critical("🛑 Received signal %s — initiating graceful shutdown", sig_name)
+    try:
+        from bot.bootstrap_utils import signal_shutdown
+
+        signal_shutdown()
+    except Exception:
+        logger.debug("bootstrap shutdown signal unavailable", exc_info=True)
     _shutdown_event.set()
 
 
@@ -186,6 +251,16 @@ def _acquire_writer_authority_before_nonce() -> bool:
     """Establish Redis fencing lineage before any nonce-manager access."""
 
     global _writer_authority_runtime, _authority_heartbeat_monitor, _writer_authority_last_error
+
+    if _process_exit_code:
+        _writer_authority_last_error = _process_exit_reason or "process_exit_requested"
+        logger.critical(
+            "ENTRYPOINT_WRITER_AUTHORITY_REACQUIRE_BLOCKED reason=%s exit_code=%d",
+            _writer_authority_last_error,
+            _process_exit_code,
+        )
+        _revoke_writer_dependent_readiness(_writer_authority_last_error)
+        return False
 
     runtime = None
     try:
@@ -253,7 +328,14 @@ def _acquire_writer_authority_before_nonce() -> bool:
                     _monitor.stop()
                 except Exception:
                     pass
-            _shutdown_event.set()
+            terminal_startup_failure = "registration_deadline_exceeded" in str(
+                reason or ""
+            ) or "terminal_shutdown" in str(reason or "")
+            request_process_exit(
+                str(reason or "writer_authority_lost"),
+                exit_code=75,
+                terminal_startup_failure=terminal_startup_failure,
+            )
             # Every terminal writer-loss callback must have a process-lifetime
             # bound.  Recoverable lock-missing events are intercepted by the
             # v39/v55 re-election path before reaching this callback; all
@@ -714,7 +796,13 @@ def _keep_process_alive_after_loop_return() -> None:
 def main() -> int:
     """Run NIJA with writer authority established before nonce startup."""
 
-    global _startup_complete, _core_loop_thread
+    global _startup_complete, _core_loop_thread, _process_exit_code, _process_exit_reason
+
+    _process_exit_code = 0
+    _process_exit_reason = ""
+    os.environ.pop("NIJA_PROCESS_EXIT_REQUESTED", None)
+    os.environ.pop("NIJA_PROCESS_EXIT_CODE", None)
+    os.environ.pop("NIJA_PROCESS_EXIT_REASON", None)
 
     logging.basicConfig(
         level=logging.INFO,
@@ -731,12 +819,12 @@ def main() -> int:
     if not _acquire_writer_authority_before_nonce():
         if _shutdown_event.is_set():
             logger.info("Startup stopped while waiting for writer authority")
-            return 0
+            return _process_exit_code or 0
         if _writer_authority_last_error == "active_writer_lock_held":
             logger.info("Writer authority held elsewhere; remaining safe standby")
             return 0
         logger.critical("❌ Writer authority unavailable — trading remains blocked")
-        return 1
+        return _process_exit_code or 1
 
     try:
         logger.info("\n[STEP 0.5] Canonical Broker Prebootstrap")
@@ -977,10 +1065,10 @@ def main() -> int:
                 exc,
                 exc_info=True,
             )
-            return 1
+            return _process_exit_code or 1
 
         logger.info("✅ Bot shutdown complete")
-        return 0
+        return _process_exit_code or 0
     finally:
         _shutdown_event.set()
         _release_writer_authority()

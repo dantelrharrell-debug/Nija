@@ -7,7 +7,7 @@ import types
 import unittest
 from unittest.mock import MagicMock, patch
 
-from bot.entrypoint_writer_authority import EntrypointWriterAuthority
+from bot.entrypoint_writer_authority import EntrypointWriterAuthority, WriterState
 
 
 _ENV_KEYS = (
@@ -169,8 +169,118 @@ class EntrypointWriterAuthorityTests(unittest.TestCase):
         self.assertTrue(result.acquired)
         self.assertEqual(
             calls,
-            [({"trigger": "writer_acquired", "force": True}, "ACTIVE")],
+            [({"trigger": "writer_acquired", "force": True}, "VERIFYING")],
         )
+
+    def test_writer_does_not_enter_active_before_core_registration(self):
+        client = MagicMock()
+        client.eval.return_value = [17, "17:owner", 60000, 23]
+        client.set.return_value = True
+        runtime = EntrypointWriterAuthority()
+
+        with (
+            patch(
+                "bot.entrypoint_writer_authority._connect_redis",
+                return_value=(client, "rediss://example", ""),
+            ),
+            patch(
+                "bot.entrypoint_writer_authority._instance_identity",
+                side_effect=self._identity,
+            ),
+            patch.object(runtime, "_start_heartbeat"),
+            patch.object(runtime, "_start_scan_started_watchdog"),
+        ):
+            result = runtime.acquire_once()
+
+        self.assertTrue(result.acquired)
+        self.assertEqual(runtime.writer_state, WriterState.VERIFYING)
+        self.assertEqual(os.environ["NIJA_WRITER_STATE"], "VERIFYING")
+
+        class _Thread:
+            name = "nija-core-loop"
+            ident = 321
+
+            @staticmethod
+            def is_alive():
+                return True
+
+        runtime.register_core_thread(_Thread())
+        self.assertEqual(runtime.writer_state, WriterState.ACTIVE)
+        self.assertEqual(os.environ["NIJA_WRITER_STATE"], "ACTIVE")
+
+    def test_terminal_startup_failure_blocks_same_runtime_reacquire(self):
+        runtime = EntrypointWriterAuthority()
+        runtime.mark_terminal_startup_failure(
+            "core_thread_registration_deadline_exceeded"
+        )
+
+        blocked = runtime.acquire_with_standby()
+
+        self.assertFalse(blocked.acquired)
+        self.assertIn("terminal_startup_failure", blocked.error)
+
+    def test_deadline_release_marks_terminal_failure_and_blocks_reacquire(self):
+        client = MagicMock()
+        client.eval.return_value = [17, "17:owner", 60000, 23]
+        client.set.return_value = True
+        runtime = EntrypointWriterAuthority()
+
+        with (
+            patch(
+                "bot.entrypoint_writer_authority._connect_redis",
+                return_value=(client, "rediss://example", ""),
+            ),
+            patch(
+                "bot.entrypoint_writer_authority._instance_identity",
+                side_effect=self._identity,
+            ),
+            patch.object(runtime, "_start_heartbeat"),
+            patch.object(runtime, "_start_scan_started_watchdog"),
+        ):
+            acquired = runtime.acquire_once()
+
+        self.assertTrue(acquired.acquired)
+        client.eval.return_value = 1
+        runtime._release_owned_lock_for_reelection(
+            "core_thread_missing core_thread_registration_deadline_exceeded elapsed_s=600.6 deadline_s=600.0"
+        )
+
+        self.assertIn(
+            "core_thread_registration_deadline_exceeded",
+            runtime.terminal_startup_failure_reason,
+        )
+        blocked = runtime.acquire_once()
+        self.assertFalse(blocked.acquired)
+        self.assertIn("terminal_startup_failure", blocked.error)
+
+    def test_new_runtime_can_acquire_after_terminal_failure_in_prior_process(self):
+        old_runtime = EntrypointWriterAuthority()
+        old_runtime.mark_terminal_startup_failure(
+            "core_thread_registration_deadline_exceeded"
+        )
+        self.assertFalse(old_runtime.acquire_once().acquired)
+
+        client = MagicMock()
+        client.eval.return_value = [18, "18:owner", 60000, 24]
+        client.set.return_value = True
+        new_runtime = EntrypointWriterAuthority()
+
+        with (
+            patch(
+                "bot.entrypoint_writer_authority._connect_redis",
+                return_value=(client, "rediss://example", ""),
+            ),
+            patch(
+                "bot.entrypoint_writer_authority._instance_identity",
+                side_effect=self._identity,
+            ),
+            patch.object(new_runtime, "_start_heartbeat"),
+            patch.object(new_runtime, "_start_scan_started_watchdog"),
+        ):
+            acquired = new_runtime.acquire_once()
+
+        self.assertTrue(acquired.acquired)
+        self.assertEqual(acquired.generation, 24)
 
     def test_active_writer_is_never_force_deleted(self):
         client = MagicMock()
@@ -420,8 +530,10 @@ class EntrypointWriterAuthorityTests(unittest.TestCase):
 class BotMainAuthorityOrderingTests(unittest.TestCase):
     def setUp(self) -> None:
         import bot.bot_main as bot_main
+        from bot import bootstrap_utils
 
         self.bot_main = bot_main
+        self.bootstrap_utils = bootstrap_utils
         self._previous_writer_runtime = bot_main._writer_authority_runtime
         bot_main._writer_authority_runtime = types.SimpleNamespace(
             arm_scan_start_deadline=MagicMock(),
@@ -430,12 +542,32 @@ class BotMainAuthorityOrderingTests(unittest.TestCase):
         bot_main._shutdown_event.clear()
         bot_main._startup_complete = False
         bot_main._core_loop_thread = None
+        self._previous_exit_code = bot_main._process_exit_code
+        self._previous_exit_reason = bot_main._process_exit_reason
+        bot_main._process_exit_code = 0
+        bot_main._process_exit_reason = ""
+        self.bootstrap_utils.get_shutdown_event().clear()
+        for key in (
+            "NIJA_PROCESS_EXIT_REQUESTED",
+            "NIJA_PROCESS_EXIT_CODE",
+            "NIJA_PROCESS_EXIT_REASON",
+        ):
+            os.environ.pop(key, None)
 
     def tearDown(self) -> None:
         self.bot_main._writer_authority_runtime = self._previous_writer_runtime
         self.bot_main._shutdown_event.clear()
         self.bot_main._startup_complete = False
         self.bot_main._core_loop_thread = None
+        self.bot_main._process_exit_code = self._previous_exit_code
+        self.bot_main._process_exit_reason = self._previous_exit_reason
+        self.bootstrap_utils.get_shutdown_event().clear()
+        for key in (
+            "NIJA_PROCESS_EXIT_REQUESTED",
+            "NIJA_PROCESS_EXIT_CODE",
+            "NIJA_PROCESS_EXIT_REASON",
+        ):
+            os.environ.pop(key, None)
 
     def test_supervised_thread_evidence_publishes_only_from_live_writer(self):
         heartbeat = types.SimpleNamespace(is_alive=lambda: True)
@@ -533,9 +665,126 @@ class BotMainAuthorityOrderingTests(unittest.TestCase):
         ) as schedule_restart:
             handled = callback("core_thread_registration_deadline_exceeded")
         self.assertTrue(handled)
+        self.assertEqual(self.bot_main._process_exit_code, 75)
+        self.assertTrue(self.bot_main._shutdown_event.is_set())
         schedule_restart.assert_called_once_with(
             "core_thread_registration_deadline_exceeded"
         )
+
+    def test_process_exit_request_blocks_same_process_reacquire(self):
+        import bot.entrypoint_writer_authority as authority
+
+        self.bot_main.request_process_exit(
+            "core_thread_registration_deadline_exceeded",
+            exit_code=75,
+            terminal_startup_failure=True,
+        )
+
+        with patch.object(
+            authority,
+            "get_entrypoint_writer_authority",
+        ) as getter:
+            ready = self.bot_main._acquire_writer_authority_before_nonce()
+
+        self.assertFalse(ready)
+        getter.assert_not_called()
+
+    def test_process_exit_request_revokes_writer_nonce_and_execution_readiness(self):
+        import bot.readiness_table as readiness_table
+
+        readiness_table._TABLE["authority_ready"] = True
+        readiness_table._TABLE["nonce_ready"] = True
+        readiness_table._TABLE["execution_ready"] = True
+
+        code = self.bot_main.request_process_exit(
+            "core_thread_registration_deadline_exceeded",
+            exit_code=75,
+            terminal_startup_failure=True,
+        )
+
+        self.assertEqual(code, 75)
+        self.assertEqual(os.environ["NIJA_WRITER_LEASE_ACQUIRED"], "0")
+        self.assertEqual(os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"], "0")
+        self.assertEqual(os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"], "0")
+        self.assertFalse(readiness_table._TABLE.get("authority_ready", False))
+        self.assertFalse(readiness_table._TABLE.get("nonce_ready", False))
+        self.assertFalse(readiness_table._TABLE.get("execution_ready", False))
+
+    def test_main_returns_nonzero_after_terminal_writer_loss(self):
+        core_loop = types.ModuleType("bot.nija_core_loop")
+        manager = types.SimpleNamespace(
+            _fsm_initialized=True,
+            _platform_brokers={"kraken": types.SimpleNamespace(connected=True)},
+        )
+        broker = types.SimpleNamespace(connected=True)
+        strategy = types.SimpleNamespace(broker=broker, run_cycle=lambda: None)
+        runtime = types.SimpleNamespace(
+            arm_scan_start_deadline=MagicMock(),
+            register_core_thread=MagicMock(),
+            record_scan_started=MagicMock(),
+            _generation=91,
+            _instance_id="instance-91",
+        )
+
+        class _TradingThread:
+            name = "TradingLoop"
+            ident = 777
+
+            @staticmethod
+            def is_alive():
+                return True
+
+        trading_thread = _TradingThread()
+        core_loop.start_trading_engine = lambda _strategy: trading_thread
+        previous = sys.modules.get("bot.nija_core_loop")
+        sys.modules["bot.nija_core_loop"] = core_loop
+        try:
+            with (
+                patch.object(
+                    self.bot_main,
+                    "_acquire_writer_authority_before_nonce",
+                    return_value=True,
+                ),
+                patch(
+                    "bot.canonical_broker_prebootstrap_v22.prepare_canonical_broker_runtime",
+                    return_value=manager,
+                ),
+                patch.object(
+                    self.bot_main,
+                    "_run_self_healing_startup",
+                    return_value=(True, broker, "kraken"),
+                ),
+                patch.object(
+                    self.bot_main,
+                    "_advance_bootstrap_fsm_to_running_supervised",
+                    return_value=True,
+                ),
+                patch.object(
+                    self.bot_main,
+                    "_publish_canonical_strategy_for_runtime",
+                    return_value=strategy,
+                ),
+                patch.object(self.bot_main, "_writer_authority_runtime", runtime),
+                patch.object(self.bot_main, "_release_writer_authority"),
+                patch.object(self.bot_main.signal, "signal"),
+                patch.object(
+                    self.bot_main,
+                    "_keep_process_alive_after_loop_return",
+                    side_effect=lambda: self.bot_main.request_process_exit(
+                        "writer_lock_released_for_terminal_shutdown:core_thread_registration_deadline_exceeded",
+                        exit_code=75,
+                        terminal_startup_failure=True,
+                    ),
+                ),
+            ):
+                code = self.bot_main.main()
+        finally:
+            if previous is None:
+                sys.modules.pop("bot.nija_core_loop", None)
+            else:
+                sys.modules["bot.nija_core_loop"] = previous
+
+        self.assertEqual(code, 75)
 
     def test_post_acquisition_exception_releases_writer_and_revokes_readiness(self):
         import bot.entrypoint_writer_authority as authority
