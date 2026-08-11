@@ -95,3 +95,55 @@ def test_deferred_python_does_not_execute_real_sitecustomize(tmp_path: Path) -> 
     )
     assert result.stdout.strip() == "stub_before=0"
     assert marker.read_text(encoding="utf-8") == "ran"
+
+
+def test_source_sitecustomize_itself_honors_defer_flag() -> None:
+    source_sitecustomize = ROOT / "sitecustomize.py"
+    env = os.environ.copy()
+    env["NIJA_DEFER_RUNTIME_SITE_HOOKS"] = "1"
+    env.pop("NIJA_WRITER_LOCK_ACQUIRE_TIMEOUT_S", None)
+    code = (
+        "import importlib.util,os,sys; "
+        f"spec=importlib.util.spec_from_file_location('deferred_sitecustomize_source', {str(source_sitecustomize)!r}); "
+        "module=importlib.util.module_from_spec(spec); "
+        "spec.loader.exec_module(module); "
+        "print(os.environ.get('NIJA_WRITER_LOCK_ACQUIRE_TIMEOUT_S', 'missing')); "
+        "print('1' if any(name.startswith('nija_') for name in sys.modules) else '0')"
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-S", "-c", code],
+        env=env,
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.stdout.splitlines() == ["missing", "0"]
+
+
+def test_source_usercustomize_itself_honors_defer_flag() -> None:
+    source_usercustomize = ROOT / "usercustomize.py"
+    env = os.environ.copy()
+    env["NIJA_DEFER_RUNTIME_SITE_HOOKS"] = "1"
+    code = (
+        "import importlib.util,sys,threading; "
+        f"spec=importlib.util.spec_from_file_location('deferred_usercustomize_source', {str(source_usercustomize)!r}); "
+        "module=importlib.util.module_from_spec(spec); "
+        "spec.loader.exec_module(module); "
+        "print('1' if module._ORIGINAL_IMPORT is None else '0'); "
+        "print('1' if not any(t.name == 'position-sync-hook' for t in threading.enumerate()) else '0'); "
+        "print('1' if not any(name.startswith('bot.') for name in sys.modules) else '0')"
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-S", "-c", code],
+        env=env,
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.stdout.splitlines() == ["1", "1", "1"]

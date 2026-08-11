@@ -61,6 +61,8 @@ def test_repository_start_script_uses_canonical_entrypoint_diagnostics() -> None
     source = START_SCRIPT.read_text(encoding="utf-8")
     patched = module.patch_text(source)
 
+    assert source == patched
+
     export_pos = patched.index("export NIJA_DEFER_RUNTIME_SITE_HOOKS=1")
     first_python_candidates = [
         position
@@ -81,6 +83,11 @@ def test_repository_start_script_uses_canonical_entrypoint_diagnostics() -> None
     assert "--- canonical bot/bot.py (head) ---" in patched
     assert "--- bot.py (head) ---" not in patched
     assert "py_compile ./main.py ./bot.py" not in patched
+    assert "$PY -u main.py" not in source
+    assert (
+        "NIJA_DEFER_RUNTIME_SITE_HOOKS=1 "
+        "$PY -u scripts/canonical_runtime_launcher_v26.py"
+    ) in source
 
 
 def test_patcher_is_idempotent() -> None:

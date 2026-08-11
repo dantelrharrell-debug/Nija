@@ -14,6 +14,18 @@ from types import ModuleType, SimpleNamespace
 from typing import Any, Callable
 
 logger = logging.getLogger("nija.usercustomize")
+_TRUE = {"1", "true", "yes", "on", "enabled", "y"}
+
+
+def _runtime_hooks_deferred() -> bool:
+    """Return whether this interpreter is a pre-canonical validation process."""
+
+    return (
+        str(os.environ.get("NIJA_DEFER_RUNTIME_SITE_HOOKS", "") or "")
+        .strip()
+        .lower()
+        in _TRUE
+    )
 
 # US OKX accounts require the US regional API host. Keep an explicit Railway
 # OKX_BASE_URL override if one is provided; otherwise default to us.okx.com.
@@ -377,14 +389,25 @@ def _install_runtime_import_hook() -> None:
     logger.critical("USERCUSTOMIZE_RUNTIME_IMPORT_HOOK_INSTALLED")
 
 
-threading.Thread(target=_position_sync_hook_watchdog, name="position-sync-hook", daemon=True).start()
+# Mirror the source-level sitecustomize guard.  The Docker .pth stub normally
+# suppresses this module entirely, but a stale or provider-specific image must
+# still keep validation interpreters free of broker/runtime import hooks.
+if not _runtime_hooks_deferred():
+    threading.Thread(
+        target=_position_sync_hook_watchdog,
+        name="position-sync-hook",
+        daemon=True,
+    ).start()
 
-try:
-    from bot.strategy_publication_patch import install_import_hook as _install_strategy_publication
-    _install_strategy_publication()
-    logger.warning("STRATEGY_PUBLICATION_INSTALL_REQUESTED")
-except Exception as exc:
-    logger.warning("STRATEGY_PUBLICATION_INSTALL_FAILED err=%s", exc)
+    try:
+        from bot.strategy_publication_patch import (
+            install_import_hook as _install_strategy_publication,
+        )
 
-_install_runtime_import_hook()
-_normalize_live_execution_env()
+        _install_strategy_publication()
+        logger.warning("STRATEGY_PUBLICATION_INSTALL_REQUESTED")
+    except Exception as exc:
+        logger.warning("STRATEGY_PUBLICATION_INSTALL_FAILED err=%s", exc)
+
+    _install_runtime_import_hook()
+    _normalize_live_execution_env()

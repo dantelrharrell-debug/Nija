@@ -139,6 +139,33 @@ def test_missing_one_stage_keeps_only_that_venue_fail_closed(monkeypatch) -> Non
     assert "no_spendable_quote" in result.reason
 
 
+def test_platform_registry_truth_wins_over_compatibility_global(monkeypatch) -> None:
+    module = _module()
+    _set_credentials(monkeypatch)
+
+    class CompatibilityBrokerType:
+        value = "kraken"
+
+    registry_broker = FakeBroker(balance=116.09, connected=False)
+    manager = SimpleNamespace(
+        _platform_brokers={CompatibilityBrokerType(): registry_broker},
+        eligible_brokers=set(),
+    )
+    broker_module = SimpleNamespace(
+        BrokerType=FakeBrokerType,
+        get_platform_broker=lambda _venue: (_ for _ in ()).throw(
+            AssertionError("compatibility global must not override manager registry")
+        ),
+    )
+
+    result = module.evaluate_venue("kraken", broker_module, manager)
+
+    assert result.connected is False
+    assert result.authentication_succeeded is False
+    assert result.ready is False
+    assert "not_connected" in result.reason
+
+
 def test_one_ready_venue_enables_execution_independently(monkeypatch) -> None:
     module = _module()
     _set_credentials(monkeypatch)

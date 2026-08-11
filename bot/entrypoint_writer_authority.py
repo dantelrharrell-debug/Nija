@@ -232,6 +232,12 @@ class EntrypointWriterAuthority:
         # writer-lease renewer.
         self._runtime_reconcile_lock = threading.Lock()
         self._runtime_reconcile_thread: Optional[threading.Thread] = None
+        # bot_main normally installs a terminal-loss callback immediately after
+        # acquisition.  Pre-bootstrap compatibility paths can acquire earlier,
+        # though, and must not become generation-0 zombie processes if core
+        # registration later times out.  This timer is the authority owner's
+        # final process-lifetime bound for that callback-free path.
+        self._unhandled_loss_restart_timer: Optional[threading.Timer] = None
         os.environ["NIJA_WRITER_STATE"] = self._writer_state.value
         os.environ["NIJA_WRITER_STATE_SINCE_TS"] = str(self._writer_state_since)
 
@@ -1519,6 +1525,63 @@ class EntrypointWriterAuthority:
         """
         self._on_lost_callback = callback
 
+    def _schedule_unhandled_loss_restart(self, reason: str) -> None:
+        """Bound a live writer process when no external loss handler exists.
+
+        The Redis lease is already released before this method is reached.
+        Restarting cannot grant authority; it only prevents a callback-free
+        bootstrap process from continuing broker/readiness monitors forever
+        with generation zero.
+        """
+
+        if not _live_mode() or self._on_lost_callback is not None:
+            return
+        # Only a runtime that actually started the canonical renewal worker can
+        # become the production zombie this guard targets.  This also keeps
+        # isolated proof objects and direct unit-test helpers side-effect free.
+        heartbeat = self._heartbeat_thread
+        if heartbeat is None or not heartbeat.is_alive():
+            return
+        timer = self._unhandled_loss_restart_timer
+        if timer is not None and timer.is_alive():
+            return
+        grace_s = _cfg_float(
+            "NIJA_WRITER_AUTHORITY_FALLBACK_RESTART_GRACE_S",
+            _cfg_float(
+                "NIJA_WRITER_AUTHORITY_RESTART_GRACE_S",
+                _cfg_float("NIJA_CORE_REGISTRATION_RESTART_GRACE_S", 15.0, minimum=1.0),
+                minimum=1.0,
+            ),
+            minimum=1.0,
+        )
+
+        def _force_restart() -> None:
+            logger.critical(
+                "ENTRYPOINT_WRITER_AUTHORITY_FALLBACK_RESTART marker=%s "
+                "reason=%s exit_code=75 callback_installed=false",
+                _MARKER,
+                reason,
+            )
+            for handler in logging.getLogger().handlers:
+                try:
+                    handler.flush()
+                except Exception:
+                    pass
+            os._exit(75)
+
+        timer = threading.Timer(grace_s, _force_restart)
+        timer.name = "entrypoint-writer-unhandled-loss-restart"
+        timer.daemon = True
+        self._unhandled_loss_restart_timer = timer
+        logger.critical(
+            "ENTRYPOINT_WRITER_AUTHORITY_FALLBACK_RESTART_SCHEDULED marker=%s "
+            "reason=%s grace_s=%.1f callback_installed=false",
+            _MARKER,
+            reason,
+            grace_s,
+        )
+        timer.start()
+
     def _mark_lost(self, reason: str) -> None:
         self._set_writer_state(WriterState.LOST, reason=reason)
         self._lost.set()
@@ -1565,6 +1628,8 @@ class EntrypointWriterAuthority:
                     _MARKER,
                     cb_exc,
                 )
+        else:
+            self._schedule_unhandled_loss_restart(reason)
         try:
             from bot.single_execution_authority_kernel import get_seak
 

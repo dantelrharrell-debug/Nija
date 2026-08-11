@@ -326,6 +326,15 @@ def _runtime() -> tuple[Optional[ModuleType], Any]:
 
 
 def _broker(manager: Any, broker_module: ModuleType, venue: str) -> Any:
+    """Resolve a platform broker from the canonical manager registry only.
+
+    Compatibility imports can create a BrokerType enum with different object
+    identity.  Direct ``mapping.get(enum_value)`` then misses the real registry
+    entry and the historical fallback returned a broker from a second global
+    registry.  That produced contradictory reports such as Kraken platform
+    connected in this observer but disconnected in the account registry.
+    """
+
     enum_name = venue.upper()
     enum_value = getattr(getattr(broker_module, "BrokerType", None), enum_name, None)
     for attr in ("_platform_brokers", "platform_brokers", "brokers"):
@@ -338,12 +347,10 @@ def _broker(manager: Any, broker_module: ModuleType, venue: str) -> Any:
             )
             if candidate is not None:
                 return candidate
-    getter = getattr(broker_module, "get_platform_broker", None)
-    if callable(getter):
-        try:
-            return getter(venue)
-        except Exception:
-            return None
+            for key, value in mapping.items():
+                label = str(getattr(key, "value", key) or "").strip().lower()
+                if label == venue and value is not None:
+                    return value
     return None
 
 
