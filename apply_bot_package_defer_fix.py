@@ -67,7 +67,26 @@ def _validate(text: str) -> None:
         raise RuntimeError("bot package defer guard ordering invalid")
 
 
+def _is_already_patched(text: str) -> bool:
+    """Detect if the patch has already been applied to the file.
+    
+    Idempotency detection: recognize markers that indicate the file has
+    already been patched in a previous run:
+    
+    1. _NIJA_BOT_PACKAGE_RUNTIME_HOOKS_DEFERRED = assignment
+    2. Log marker for deferred startup
+    3. Bounded startup comment (added in PR #2474)
+    4. Runtime startup bounded marker
+    """
+    return bool(
+        f"{DEFER_NAME} =" in text
+        or "side-effect bounded" in text
+        or "BOT_PACKAGE_STARTUP_BOUNDED" in text
+    )
+
+
 def patch_text(text: str) -> str:
+    # Idempotency: if already patched, return unchanged
     if _is_already_patched(text):
         return text
 
@@ -88,6 +107,11 @@ def patch_text(text: str) -> str:
 def main() -> None:
     original = BOT_INIT_PATH.read_text(encoding="utf-8")
     patched = patch_text(original)
+    if patched == original:
+        print("NIJA_BOT_PACKAGE_DEFER_PATCH_ALREADY_APPLIED idempotent=true no_changes=true")
+    else:
+        BOT_INIT_PATH.write_text(patched, encoding="utf-8")
+        print("NIJA_BOT_PACKAGE_DEFER_PATCH_APPLIED idempotent=true")
     changed = patched != original
     if changed:
         BOT_INIT_PATH.write_text(patched, encoding="utf-8")
