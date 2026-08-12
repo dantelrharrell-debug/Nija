@@ -443,7 +443,6 @@ def _patch_three_venue_execution_readiness(module: ModuleType) -> None:
             and lease_effective
             and fencing_token
             and heartbeat_effective
-            and core_loop_alive
         )
         return {
             "lease_acquired": lease_effective,
@@ -458,6 +457,13 @@ def _patch_three_venue_execution_readiness(module: ModuleType) -> None:
             "heartbeat_healthy": heartbeat_healthy,
             "heartbeat_effective": heartbeat_effective,
             "core_loop_alive": core_loop_alive,
+            # Granular writer readiness (spec item AX): writer lease ≠ core readiness.
+            "writer_lease_ready": strict_ready,
+            "writer_heartbeat_ready": heartbeat_healthy,
+            "writer_generation_ready": bool(
+                str(os.getenv("NIJA_WRITER_LEASE_GENERATION", "") or "").strip()
+            ),
+            "core_thread_ready": core_loop_alive,
             "authority_verified": bool(checks.get("authority_verified", False)),
             "redis_reachable": bool(checks.get("redis_reachable", False)),
             "checks": checks,

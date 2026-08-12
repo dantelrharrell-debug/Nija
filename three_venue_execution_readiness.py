@@ -194,14 +194,22 @@ def writer_authority_snapshot(*, now: float | None = None) -> dict[str, Any]:
         )
     )
     heartbeat_effective = bool(heartbeat_healthy or writer_state == "REFRESHING")
-    strict_ready = bool(
+    # writer_lease_ready: does this process own the canonical Redis writer lease?
+    # This is TRUE as soon as the lease + heartbeat + fencing are confirmed.
+    # It must NOT require the core thread to be alive — the writer lease is
+    # valid from the moment it is acquired, which happens BEFORE the core is
+    # started (spec item AX).
+    writer_lease_ready = bool(
         status.ready
         and state_allows_execution
         and lease_effective
         and fencing_token
         and heartbeat_effective
-        and core_loop_alive
     )
+    # strict_ready (legacy: previously required core_loop_alive) is kept for
+    # backward compatibility but now equals writer_lease_ready.  Callers that
+    # need core readiness must check core_loop_alive separately.
+    strict_ready = writer_lease_ready
     return {
         "lease_acquired": lease_effective,
         "lease_acquired_raw": _truthy("NIJA_WRITER_LEASE_ACQUIRED"),
@@ -215,6 +223,13 @@ def writer_authority_snapshot(*, now: float | None = None) -> dict[str, Any]:
         "heartbeat_healthy": heartbeat_healthy,
         "heartbeat_effective": heartbeat_effective,
         "core_loop_alive": core_loop_alive,
+        # Granular writer readiness fields (spec item AX):
+        "writer_lease_ready": writer_lease_ready,
+        "writer_heartbeat_ready": heartbeat_healthy,
+        "writer_generation_ready": bool(
+            str(os.getenv("NIJA_WRITER_LEASE_GENERATION", "") or "").strip()
+        ),
+        "core_thread_ready": core_loop_alive,
         "authority_verified": bool(checks.get("authority_verified", False)),
         "redis_reachable": bool(checks.get("redis_reachable", False)),
         "checks": checks,

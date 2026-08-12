@@ -45,25 +45,22 @@ def _truthy(name: str) -> bool:
 
 
 def _writer_ready() -> bool:
+    """Return True when this process owns the canonical Redis writer lease.
+
+    Writer lease readiness is based on lease acquisition, heartbeat, and
+    fencing token alone.  The core thread is a separate concept — a healthy
+    writer lease does NOT require the core to be alive (spec item AX).
+    Use NIJA_CORE_THREAD_ALIVE to check core readiness independently.
+    """
     token = str(os.environ.get("NIJA_WRITER_FENCING_TOKEN", "") or "").strip()
     generation = str(os.environ.get("NIJA_WRITER_LEASE_GENERATION", "") or "").strip()
     lease = _truthy("NIJA_WRITER_LEASE_ACQUIRED") or _truthy(
         "NIJA_PREBOT_WRITER_AUTHORITY_READY"
     )
     heartbeat_active = _truthy("NIJA_WRITER_HEARTBEAT_ACTIVE")
-    core_alive = _truthy("NIJA_CORE_THREAD_ALIVE")
-    if token and generation and lease and heartbeat_active and core_alive:
+    if token and generation and lease and heartbeat_active:
         return True
-    return bool(
-        generation
-        and lease
-        and heartbeat_active
-        and (
-            core_alive
-            or str(os.environ.get("NIJA_RUNTIME_TRADING_STATE", "") or "").strip().upper()
-            == "LIVE_PENDING_CONFIRMATION"
-        )
-    )
+    return bool(generation and lease and heartbeat_active)
 
 
 def _unwrap_callable(fn: Callable[..., Any]) -> Callable[..., Any]:
