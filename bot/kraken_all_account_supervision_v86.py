@@ -158,6 +158,18 @@ def _connect_account(
 ) -> None:
     try:
         with _CONNECT_SERIAL_LOCK:
+            # Spec AZ: no private broker I/O after shutdown is signalled.
+            if _WATCHDOG_STOP.is_set():
+                LOGGER.info(
+                    "KRAKEN_USER_RECONNECT_SKIPPED_SHUTDOWN marker=%s account=%s "
+                    "reason=watchdog_stopped private_io=false",
+                    MARKER,
+                    account_id,
+                )
+                with _LOCK:
+                    _INFLIGHT.discard(account_id)
+                return
+
             if bool(getattr(broker, "connected", False)):
                 _mark_connected(manager, user_id, broker_type, broker)
                 with _LOCK:
@@ -335,6 +347,16 @@ def _watchdog() -> None:
             )
 
 
+def stop() -> None:
+    """Signal the v86 watchdog to stop and prevent new connection attempts."""
+    _WATCHDOG_STOP.set()
+    LOGGER.info(
+        "KRAKEN_ALL_ACCOUNT_SUPERVISION_V86_STOP marker=%s "
+        "new_connections=prevented watchdog_stop=signalled",
+        MARKER,
+    )
+
+
 def install() -> bool:
     global _WATCHDOG_STARTED
     with _LOCK:
@@ -355,4 +377,4 @@ def install() -> bool:
     return True
 
 
-__all__ = ["MARKER", "install", "reconcile_once", "_user_records", "_writer_proof"]
+__all__ = ["MARKER", "install", "stop", "reconcile_once", "_user_records", "_writer_proof"]

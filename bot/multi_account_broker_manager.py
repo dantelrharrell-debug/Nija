@@ -620,87 +620,19 @@ class MultiAccountBrokerManager:
                 _bootstrap_balance_err,
             )
 
-        # ── POST-INITIALIZE: Force activation (BULLETPROOF) ──────────────────
-        # This is the TRUE final point — all subsystems have been wired.
-        # Explicitly trigger activation now before returning to bootstrap.
-        logger.info("[MABM.initialize] All subsystems wired — triggering post-init activation")
-        try:
-            from bot.trading_state_machine import get_state_machine as _get_tsm_finalize
-            _tsm_finalize = _get_tsm_finalize()
-
-            # Check readiness conditions
-            capital_fsm_ready = (
-                self._capital_bootstrap_fsm is not None
-                and hasattr(self._capital_bootstrap_fsm, "state")
-            )
-            coordinator_ready = (
-                self._capital_coordinator is not None
-            )
-
-            if capital_fsm_ready and coordinator_ready:
-                _state_live_active = _tsm_finalize.get_current_state().value == "LIVE_ACTIVE"
-                if not _state_live_active:
-                    _finalize_activated = _tsm_finalize.maybe_auto_activate()
-                    _state_live_active = _tsm_finalize.get_current_state().value == "LIVE_ACTIVE"
-                    if _finalize_activated or _state_live_active:
-                        logger.critical(
-                            "🚀 POST-INIT ACTIVATION SUCCESS: state=%s is_live=%s",
-                            _tsm_finalize.get_current_state().value,
-                            _state_live_active,
-                        )
-                    else:
-                        _state_name = _tsm_finalize.get_current_state().value
-                        logger.critical(
-                            "❌ POST-INIT ACTIVATION BLOCKED (state=%s) — retrying commit_activation gate",
-                            _state_name,
-                        )
-
-                        # Safe retry window: when bootstrap just completed, capital/health
-                        # gates may turn green a moment later in the same startup.
-                        _retry_attempts = max(1, int(os.getenv("NIJA_POST_INIT_ACTIVATION_RETRIES", "5")))
-                        _retry_sleep_s = max(
-                            0.2, float(os.getenv("NIJA_POST_INIT_ACTIVATION_RETRY_SLEEP_S", "1.0"))
-                        )
-                        _retry_activated = False
-                        for _attempt in range(1, _retry_attempts + 1):
-                            _state_live_active = _tsm_finalize.get_current_state().value == "LIVE_ACTIVE"
-                            if _state_live_active:
-                                _retry_activated = True
-                                break
-                            _retry_activated = bool(_tsm_finalize.maybe_auto_activate())
-                            _state_live_active = _tsm_finalize.get_current_state().value == "LIVE_ACTIVE"
-                            if _retry_activated or _state_live_active:
-                                logger.critical(
-                                    "🚀 POST-INIT ACTIVATION SUCCESS AFTER RETRY %d/%d: state=%s is_live=%s",
-                                    _attempt,
-                                    _retry_attempts,
-                                    _tsm_finalize.get_current_state().value,
-                                    _state_live_active,
-                                )
-                                break
-                            if _attempt < _retry_attempts:
-                                time.sleep(_retry_sleep_s)
-
-                        if not _retry_activated:
-                            logger.critical(
-                                "❌ POST-INIT ACTIVATION STILL BLOCKED AFTER %d RETRIES — "
-                                "leaving startup blocked (no forced activation override)",
-                                _retry_attempts,
-                            )
-                            self._enforce_trading_activation(_tsm_finalize)
-                else:
-                    logger.info("[MABM.initialize] Trading already active — no post-init activation needed")
-            else:
-                logger.warning(
-                    "[MABM.initialize] FSM not ready for activation (capital_fsm=%s coordinator=%s) — skipping",
-                    capital_fsm_ready,
-                    coordinator_ready,
-                )
-        except Exception as _finalize_activation_err:
-            logger.warning(
-                "[MABM.initialize] Post-init activation attempt failed: %s",
-                _finalize_activation_err,
-            )
+        # ── POST-INITIALIZE: runtime activation is owned by bot_main ────────
+        # MABM is responsible for broker init, capital hydration, and user
+        # registration only.  The canonical activation sequence
+        # (TradingStateMachine, BootstrapFSM → RUNNING_SUPERVISED,
+        # StartupCoordinator EXECUTING) is driven by bot_main *after* the real
+        # core thread has been created and registered.  Attempting activation
+        # here — before the core thread exists — blocks SEAK and creates a
+        # circular dependency between nonce readiness and execution authority.
+        logger.info(
+            "[MABM.initialize] All subsystems wired — "
+            "runtime activation deferred to bot_main after core registration "
+            "(MABM_ACTIVATION_DEFERRED_TO_BOT_MAIN)"
+        )
 
     def _bootstrap_hydrate_balance_before_activation(self) -> float:
         """Hydrate exchange balances before any live activation attempts.
@@ -770,35 +702,48 @@ class MultiAccountBrokerManager:
             ", ".join(_connected_platforms) if _connected_platforms else "none",
         )
 
-        # Connect configured user accounts before the first aggregate balance
-        # snapshot so startup hydration reflects the full visible account set.
+        # In independent-account mode (NIJA_AGGREGATE_USER_CAPITAL_IN_AUTHORITY=false,
+        # the production default), user accounts are registered without any
+        # synchronous exchange I/O.  v86 watchdog owns async connection/hydration.
+        # In aggregate-capital mode, the original synchronous connect path is
+        # preserved so global CapitalAuthority includes user balances at startup.
         try:
-            _connected_users = self.connect_users_from_config()
-            _connected_user_count = sum(len(_users) for _users in (_connected_users or {}).values())
-            _registered_user_broker_count = sum(
-                len(_broker_dict) for _broker_dict in self.user_brokers.values()
-            )
-            logger.info(
-                "[MABM.initialize] user broker registry after init: connected=%d registered=%d "
-                "tracked=%d total_brokers=%d",
-                _connected_user_count,
-                _registered_user_broker_count,
-                len(self._all_user_brokers),
-                len(self.get_all_brokers()),
-            )
-            if _connected_user_count > 0:
+            if not _aggregate_user_capital_enabled():
+                _registered_user_count = self.prepare_users_from_config()
                 logger.info(
-                    "[MABM.initialize] user init complete before hydration: connected=%d (%s)",
-                    _connected_user_count,
-                    ", ".join(
-                        f"{_broker}:{len(_users)}"
-                        for _broker, _users in sorted((_connected_users or {}).items())
-                    ),
+                    "[MABM.initialize] user broker registry after init: "
+                    "connected=0 registered=%d tracked=%d total_brokers=%d",
+                    _registered_user_count,
+                    len(self._all_user_brokers),
+                    len(self.get_all_brokers()),
                 )
             else:
-                logger.info(
-                    "[MABM.initialize] user init complete before hydration: connected=0"
+                _connected_users = self.connect_users_from_config()
+                _connected_user_count = sum(len(_users) for _users in (_connected_users or {}).values())
+                _registered_user_broker_count = sum(
+                    len(_broker_dict) for _broker_dict in self.user_brokers.values()
                 )
+                logger.info(
+                    "[MABM.initialize] user broker registry after init: connected=%d registered=%d "
+                    "tracked=%d total_brokers=%d",
+                    _connected_user_count,
+                    _registered_user_broker_count,
+                    len(self._all_user_brokers),
+                    len(self.get_all_brokers()),
+                )
+                if _connected_user_count > 0:
+                    logger.info(
+                        "[MABM.initialize] user init complete before hydration: connected=%d (%s)",
+                        _connected_user_count,
+                        ", ".join(
+                            f"{_broker}:{len(_users)}"
+                            for _broker, _users in sorted((_connected_users or {}).items())
+                        ),
+                    )
+                else:
+                    logger.info(
+                        "[MABM.initialize] user init complete before hydration: connected=0"
+                    )
         except Exception as _user_init_err:
             logger.warning(
                 "[MABM.initialize] user init before hydration failed: %s",
@@ -5604,6 +5549,136 @@ class MultiAccountBrokerManager:
             "(waiting for at least one platform to connect)."
         )
         return True
+
+    def prepare_users_from_config(self) -> int:
+        """Registration-only user account setup — no synchronous exchange I/O.
+
+        Loads user configuration files, validates schema, creates broker objects
+        (construction only, no ``connect()`` call), and registers account metadata
+        so that ``kraken_all_account_supervision_v86`` (and equivalent async
+        supervisors) can discover and connect accounts asynchronously.
+
+        This method MUST NOT perform:
+        - Kraken nonce resync / Redis nonce lease acquisition
+        - ``broker.connect()`` / any authenticated exchange API call
+        - Account balance / position / order fetches
+        - Asset valuation
+        - Sleep, retry, or backoff
+
+        Returns:
+            Number of user account metadata records registered.
+        """
+        # Import user loader
+        try:
+            from config.user_loader import get_user_config_loader
+        except ImportError:
+            try:
+                sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+                from config.user_loader import get_user_config_loader
+            except ImportError:
+                logger.warning(
+                    "[MABM.prepare_users] user_loader unavailable — "
+                    "MABM_USER_CONNECTIONS_DEFERRED registered_users=0 startup_blocked=false"
+                )
+                return 0
+
+        user_loader = get_user_config_loader()
+        enabled_users = user_loader.get_all_enabled_users()
+
+        if not enabled_users:
+            logger.info(
+                "MABM_USER_CONNECTIONS_DEFERRED reason=independent_account_isolation "
+                "registered_users=0 startup_blocked=false"
+            )
+            return 0
+
+        registered = 0
+        for user in enabled_users:
+            # Always store config so async supervisors can read it.
+            self.user_configs[user.user_id] = user
+
+            # Map broker type string to enum.
+            try:
+                bt_str = user.broker_type.upper()
+                if bt_str == "KRAKEN":
+                    broker_type = BrokerType.KRAKEN
+                elif bt_str == "COINBASE":
+                    broker_type = BrokerType.COINBASE
+                elif bt_str == "OKX":
+                    broker_type = BrokerType.OKX
+                elif bt_str == "ALPACA":
+                    broker_type = BrokerType.ALPACA
+                else:
+                    logger.warning(
+                        "[MABM.prepare_users] unsupported broker_type=%s user=%s — skipping",
+                        user.broker_type,
+                        user.user_id,
+                    )
+                    continue
+            except Exception as _bt_err:
+                logger.warning(
+                    "[MABM.prepare_users] broker_type mapping failed user=%s err=%s — skipping",
+                    user.user_id,
+                    _bt_err,
+                )
+                continue
+
+            connection_key = (user.user_id, broker_type)
+
+            # Register metadata — done before any broker object construction so
+            # reporting always has a denominator even if construction fails.
+            if user.user_id not in self._user_metadata:
+                self._user_metadata[user.user_id] = {"brokers": {}}
+            self._user_metadata[user.user_id]["name"] = user.name
+            self._user_metadata[user.user_id]["enabled"] = user.enabled
+            self._user_metadata[user.user_id]["brokers"].setdefault(broker_type, False)
+
+            # Create broker object without connecting.  Construction must not
+            # perform any authenticated exchange I/O; the connect() call is
+            # deliberately omitted here and left to the async supervisor.
+            try:
+                broker: Optional[BaseBroker] = None
+                if broker_type == BrokerType.KRAKEN:
+                    broker = KrakenBroker(account_type=AccountType.USER, user_id=user.user_id)
+                elif broker_type == BrokerType.COINBASE:
+                    broker = CoinbaseBroker(account_type=AccountType.USER, user_id=user.user_id)
+                elif broker_type == BrokerType.OKX:
+                    broker = OKXBroker(account_type=AccountType.USER, user_id=user.user_id)
+                elif broker_type == BrokerType.ALPACA:
+                    broker = AlpacaBroker(account_type=AccountType.USER, user_id=user.user_id)
+
+                if broker is not None:
+                    # Record in _all_user_brokers so v86 and other supervisors
+                    # can discover this account even though it is disconnected.
+                    self._all_user_brokers[connection_key] = broker
+                    registered += 1
+                    logger.debug(
+                        "[MABM.prepare_users] registered account user=%s broker=%s "
+                        "connected=false async_connect_pending=true",
+                        user.user_id,
+                        broker_type.value,
+                    )
+            except Exception as _broker_ctor_err:
+                # Construction failure — record a sentinel so supervisors know
+                # this account exists but its broker object could not be created.
+                self._failed_user_connections[connection_key] = (
+                    f"broker_construction_failed:{_broker_ctor_err}"
+                )
+                registered += 1
+                logger.warning(
+                    "[MABM.prepare_users] broker construction failed user=%s broker=%s err=%s "
+                    "recorded_for_async_retry=true",
+                    user.user_id,
+                    broker_type.value,
+                    _broker_ctor_err,
+                )
+
+        logger.critical(
+            "MABM_USER_CONNECTIONS_DEFERRED reason=independent_account_isolation "
+            "registered_users=%d startup_blocked=false",
+            registered,
+        )
+        return registered
 
     def connect_users_from_config(self) -> Dict[str, List[str]]:
         """

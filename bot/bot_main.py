@@ -586,6 +586,91 @@ def _publish_supervised_thread_evidence() -> bool:
         return False
 
 
+def _advance_bootstrap_fsm_to_threads_starting() -> bool:
+    """Advance BootstrapFSM to THREADS_STARTING only.
+
+    Called at STEP 2 — before the real core thread exists.  The final
+    THREADS_STARTING → RUNNING_SUPERVISED transition is deferred until after
+    the core thread is created and registered (spec item J).
+    """
+    logger.info("🚀 Advancing bootstrap FSM to THREADS_STARTING (pre-core)...")
+    try:
+        import bot.bootstrap_state_machine as bootstrap_module
+
+        _apply_bootstrap_i12_repair_direct(bootstrap_module)
+        from bot.bootstrap_state_machine import BootstrapState, get_bootstrap_fsm
+
+        fsm = get_bootstrap_fsm()
+        if fsm.state in {
+            BootstrapState.THREADS_STARTING,
+            BootstrapState.RUNNING_SUPERVISED,
+        }:
+            logger.info(
+                "BOOTSTRAP_FSM_PRECORE_READY state=%s (already past THREADS_STARTING)",
+                fsm.state.value,
+            )
+            return True
+
+        fsm.claim_bootstrap_ownership()
+        logger.info("BootstrapFSM pre-core state=%s", fsm.state.value)
+
+        if fsm.state not in {
+            BootstrapState.CAPITAL_READY,
+            BootstrapState.INIT_COMPLETE,
+            BootstrapState.DEGRADED_READY,
+        }:
+            advance = getattr(fsm, "advance_to_capital_ready", None)
+            if callable(advance):
+                if not advance(reason="bot_main_pre_core_advancement"):
+                    logger.error(
+                        "❌ FSM advance_to_capital_ready failed; state=%s",
+                        fsm.state.value,
+                    )
+                    return False
+
+        if fsm.state == BootstrapState.CAPITAL_READY:
+            if not _transition_if_current_allows(
+                fsm,
+                BootstrapState,
+                BootstrapState.INIT_COMPLETE,
+                "bot_main_pre_core_advancement",
+            ):
+                return False
+
+        if fsm.state == BootstrapState.DEGRADED_READY:
+            if not _transition_if_current_allows(
+                fsm,
+                BootstrapState,
+                BootstrapState.THREADS_STARTING,
+                "bot_main_degraded_handoff",
+            ):
+                return False
+
+        if fsm.state == BootstrapState.INIT_COMPLETE:
+            if not _transition_if_current_allows(
+                fsm,
+                BootstrapState,
+                BootstrapState.THREADS_STARTING,
+                "bot_main_pre_core_advancement",
+            ):
+                return False
+
+        if fsm.state == BootstrapState.THREADS_STARTING:
+            logger.critical(
+                "BOOTSTRAP_FSM_PRECORE_READY state=THREADS_STARTING core_not_yet_started=true"
+            )
+            return True
+
+        logger.error(
+            "❌ FSM pre-core advancement ended at %s, expected THREADS_STARTING",
+            fsm.state.value,
+        )
+        return False
+    except Exception as exc:
+        logger.error("❌ FSM pre-core advancement failed: %s", exc, exc_info=True)
+        return False
+
+
 def _advance_bootstrap_fsm_to_running_supervised() -> bool:
     """Advance BootstrapFSM using only legal transitions."""
 
@@ -677,6 +762,9 @@ def _advance_bootstrap_fsm_to_running_supervised() -> bool:
                     "FSM reached RUNNING_SUPERVISED without supervised thread proof"
                 )
                 return False
+            logger.critical(
+                "BOOTSTRAP_FSM_RUNTIME_FINALIZED state=RUNNING_SUPERVISED core_registered=true"
+            )
             logger.info("✅ FSM is RUNNING_SUPERVISED")
             return True
 
@@ -815,6 +903,7 @@ def main() -> int:
     signal.signal(signal.SIGTERM, _signal_handler)
     signal.signal(signal.SIGINT, _signal_handler)
 
+    _startup_stage_ts["process_main_start"] = time.time()
     logger.info("\n[STEP 0] Redis Writer Authority")
     if not _acquire_writer_authority_before_nonce():
         if _shutdown_event.is_set():
@@ -826,6 +915,7 @@ def main() -> int:
         logger.critical("❌ Writer authority unavailable — trading remains blocked")
         return _process_exit_code or 1
 
+    _startup_stage_ts["writer_acquired"] = time.time()
     try:
         logger.info("\n[STEP 0.5] Canonical Broker Prebootstrap")
         try:
@@ -869,6 +959,7 @@ def main() -> int:
                 threading.current_thread().name,
             )
             os.environ["NIJA_DIRECT_CANONICAL_BROKER_PREBOOTSTRAP_V27_READY"] = "1"
+            _startup_stage_ts["broker_prebootstrap_done"] = time.time()
         except Exception as broker_exc:
             os.environ["NIJA_DIRECT_CANONICAL_BROKER_PREBOOTSTRAP_V27_READY"] = "0"
             logger.critical(
@@ -886,13 +977,15 @@ def main() -> int:
             logger.critical("❌ Bootstrap failed — exiting")
             return 1
         logger.info("✅ Connected to %s", broker_name)
+        _startup_stage_ts["self_healing_done"] = time.time()
 
-        logger.info("\n[STEP 2] Advancing Bootstrap FSM")
-        if not _advance_bootstrap_fsm_to_running_supervised():
-            logger.critical("❌ FSM advancement failed — exiting")
+        logger.info("\n[STEP 2] Advancing Bootstrap FSM to THREADS_STARTING (pre-core)")
+        if not _advance_bootstrap_fsm_to_threads_starting():
+            logger.critical("❌ FSM pre-core advancement failed — exiting")
             return 1
 
-        logger.info("✅ FSM is RUNNING_SUPERVISED")
+        logger.info("✅ FSM is THREADS_STARTING (core not yet started)")
+        _startup_stage_ts["fsm_threads_starting_done"] = time.time()
 
         logger.info("\n[STEP 2.5] Publishing Canonical Trading Strategy")
         _startup_stage_ts["step2.5_start"] = time.time()
@@ -1013,9 +1106,41 @@ def main() -> int:
             )
             # Signal the watchdog that registration is complete.
             _startup_registration_done.set()
+            # Spec item J: advance BootstrapFSM from THREADS_STARTING to
+            # RUNNING_SUPERVISED now that the real core thread is registered.
+            # This finalizes the canonical startup handoff sequence.
+            if not _advance_bootstrap_fsm_to_running_supervised():
+                logger.warning(
+                    "BOOTSTRAP_FSM_RUNNING_SUPERVISED_ADVANCEMENT_FAILED — "
+                    "continuing (non-fatal; core is registered)"
+                )
             # _startup_complete is now set only after verified registration,
             # not before start_trading_engine is called.
             _startup_complete = True
+            # Emit complete startup timing summary (spec item BA).
+            _t0 = _startup_stage_ts.get("process_main_start", _startup_stage_ts.get("canonical_core_registered", time.time()))
+            def _ms(key: str) -> str:
+                ts = _startup_stage_ts.get(key)
+                return f"{(ts - _t0) * 1000:.0f}" if ts is not None else "n/a"
+            logger.critical(
+                "STARTUP_TIMING "
+                "writer_acquired_ms=%s "
+                "platform_init_ms=%s "
+                "self_healing_ms=%s "
+                "fsm_threads_starting_ms=%s "
+                "strategy_published_ms=%s "
+                "core_start_ms=%s "
+                "core_registration_ms=%s "
+                "total_to_core_registered_ms=%s",
+                _ms("writer_acquired"),
+                _ms("broker_prebootstrap_done"),
+                _ms("self_healing_done"),
+                _ms("fsm_threads_starting_done"),
+                _ms("step2.5_done"),
+                _ms("start_trading_engine_done"),
+                _ms("canonical_core_registered"),
+                _ms("canonical_core_registered"),
+            )
             logger.critical(
                 "EXECUTION_AUTHORITY_READY writer_generation=%s core_thread=%s ident=%s",
                 getattr(runtime, "_generation", "unknown"),
@@ -1071,6 +1196,38 @@ def main() -> int:
         return _process_exit_code or 0
     finally:
         _shutdown_event.set()
+        # Spec AZ: quiesce all workers that can issue private exchange API calls
+        # BEFORE releasing the writer authority.  This prevents Kraken private
+        # API calls (balance, positions, nonce) from occurring after the writer
+        # lease is released.
+        #
+        # Shutdown order:
+        # 1. signal all workers to stop (already done via _shutdown_event.set() above)
+        # 2. stop v86 Kraken user supervision (prevents new reconnect jobs)
+        # 3. join canonical core thread if it was started
+        # 4. release writer authority LAST
+        try:
+            from bot.kraken_all_account_supervision_v86 import (
+                stop as _stop_kraken_v86,
+                _WATCHDOG_STOP as _v86_stop_event,
+            )
+            _stop_kraken_v86()
+        except Exception as _v86_stop_err:
+            logger.warning("v86 stop failed (non-fatal): %s", _v86_stop_err)
+
+        _join_thread = _core_loop_thread
+        if _join_thread is not None and _join_thread.is_alive():
+            logger.info(
+                "SHUTDOWN_JOINING_CORE_THREAD thread=%s timeout=10s",
+                _join_thread.name,
+            )
+            _join_thread.join(timeout=10.0)
+            if _join_thread.is_alive():
+                logger.warning(
+                    "SHUTDOWN_CORE_THREAD_JOIN_TIMEOUT thread=%s — proceeding with writer release",
+                    _join_thread.name,
+                )
+
         _release_writer_authority()
 
 
