@@ -14,6 +14,7 @@ _MARKER = "20260709d"
 _ORDER_WRAP_ATTR = "_nija_okx_final_order_submission_bridge_order_v20260709d"
 _ROUTER_PATCH_ATTR = "_nija_okx_final_order_submission_bridge_router_v20260709d"
 _INSTALL_LOCK = threading.Lock()
+_PATCH_LOCK = threading.Lock()
 _PATCHED_ORDER_CLASSES: set[str] = set()
 _ROUTER_PATCHED = False
 _MONITOR_STARTED = False
@@ -172,13 +173,35 @@ def _call_base(
     raise RuntimeError("OKX_CALLSHAPE_BLOCK no submit attempt executed")
 
 
+def _has_marker_chain(fn: Any, marker: str, max_depth: int = 32) -> bool:
+    seen: set[int] = set()
+    current = fn
+    for _ in range(max_depth):
+        if not callable(current) or id(current) in seen:
+            return False
+        seen.add(id(current))
+        if bool(getattr(current, marker, False)):
+            return True
+        current = getattr(current, "__wrapped__", None)
+    return False
+
+
 def _wrap_order_class(okx_cls: type, module_name: str) -> bool:
     patched = False
     for method_name in ("place_market_order", "execute_order", "place_order"):
         current = getattr(okx_cls, method_name, None)
-        if not callable(current) or getattr(current, _ORDER_WRAP_ATTR, False):
+        if not callable(current):
             continue
-        base = getattr(current, "__wrapped__", current)
+        if _has_marker_chain(current, _ORDER_WRAP_ATTR):
+            logger.debug(
+                "OKX_FINAL_ORDER_METHOD_PATCH_SKIPPED marker=%s module=%s class=%s method=%s already_patched=true",
+                _MARKER,
+                module_name,
+                getattr(okx_cls, "__name__", "<unknown>"),
+                method_name,
+            )
+            continue
+        base = current
 
         @wraps(base)
         def _patched_order(self: Any, *args: Any, __fn: Callable[..., Any] = base, __method: str = method_name, **kwargs: Any) -> Any:
@@ -261,7 +284,14 @@ def _patch_router_module(module: ModuleType) -> bool:
     if not isinstance(cls, type):
         return False
     current = getattr(cls, "_dispatch_direct_broker_market_order", None)
-    if not callable(current) or getattr(current, _ROUTER_PATCH_ATTR, False):
+    if not callable(current):
+        return False
+    if _has_marker_chain(current, _ROUTER_PATCH_ATTR):
+        logger.debug(
+            "OKX_FINAL_ORDER_ROUTER_PATCH_SKIPPED marker=%s module=%s already_patched=true",
+            _MARKER,
+            getattr(module, "__name__", "<unknown>"),
+        )
         return False
     original = getattr(current, "__wrapped__", current)
 
@@ -328,17 +358,18 @@ def _interesting_module(name: str) -> bool:
 
 
 def _patch_module(module: ModuleType) -> bool:
-    patched = False
-    for cls in _candidate_order_classes(module):
+    with _PATCH_LOCK:
+        patched = False
+        for cls in _candidate_order_classes(module):
+            try:
+                patched = _wrap_order_class(cls, getattr(module, "__name__", "<unknown>")) or patched
+            except Exception as exc:
+                logger.warning("OKX_FINAL_ORDER_CLASS_PATCH_FAILED marker=%s module=%s class=%s err=%s", _MARKER, getattr(module, "__name__", "<unknown>"), getattr(cls, "__name__", "<unknown>"), exc)
         try:
-            patched = _wrap_order_class(cls, getattr(module, "__name__", "<unknown>")) or patched
+            patched = _patch_router_module(module) or patched
         except Exception as exc:
-            logger.warning("OKX_FINAL_ORDER_CLASS_PATCH_FAILED marker=%s module=%s class=%s err=%s", _MARKER, getattr(module, "__name__", "<unknown>"), getattr(cls, "__name__", "<unknown>"), exc)
-    try:
-        patched = _patch_router_module(module) or patched
-    except Exception as exc:
-        logger.warning("OKX_FINAL_ORDER_ROUTER_PATCH_FAILED marker=%s module=%s err=%s", _MARKER, getattr(module, "__name__", "<unknown>"), exc)
-    return patched
+            logger.warning("OKX_FINAL_ORDER_ROUTER_PATCH_FAILED marker=%s module=%s err=%s", _MARKER, getattr(module, "__name__", "<unknown>"), exc)
+        return patched
 
 
 def _snapshot_modules() -> list[tuple[str, ModuleType]]:
@@ -384,7 +415,7 @@ def install_import_hook() -> None:
         _try_patch_loaded()
         _start_monitor()
         if getattr(builtins, "_NIJA_OKX_FINAL_ORDER_SUBMISSION_BRIDGE_HOOK_V20260709D", False):
-            logger.warning("OKX_FINAL_ORDER_SUBMISSION_BRIDGE_INSTALL_COMPLETE marker=%s already_installed=True router_patched=%s order_classes=%s", _MARKER, _ROUTER_PATCHED, sorted(_PATCHED_ORDER_CLASSES))
+            logger.debug("OKX_FINAL_ORDER_SUBMISSION_BRIDGE_INSTALL_COMPLETE marker=%s already_installed=true router_patched=%s order_classes=%s", _MARKER, _ROUTER_PATCHED, sorted(_PATCHED_ORDER_CLASSES))
             return
         original_import = builtins.__import__
 
