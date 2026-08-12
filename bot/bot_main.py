@@ -328,20 +328,16 @@ def _acquire_writer_authority_before_nonce() -> bool:
                     _monitor.stop()
                 except Exception:
                     pass
-            terminal_startup_failure = "registration_deadline_exceeded" in str(
-                reason or ""
-            ) or "terminal_shutdown" in str(reason or "")
-            request_process_exit(
+            try:
+                from bot.terminal_writer_loss_latch import report_terminal_writer_loss
+            except ImportError:
+                from terminal_writer_loss_latch import (  # type: ignore[import]
+                    report_terminal_writer_loss,
+                )
+            return report_terminal_writer_loss(
                 str(reason or "writer_authority_lost"),
-                exit_code=75,
-                terminal_startup_failure=terminal_startup_failure,
+                source="on_lease_lost",
             )
-            # Every terminal writer-loss callback must have a process-lifetime
-            # bound.  Recoverable lock-missing events are intercepted by the
-            # v39/v55 re-election path before reaching this callback; all
-            # reasons that arrive here are terminal for the current process.
-            _schedule_writer_authority_restart(reason)
-            return True
 
         if callable(getattr(runtime, "set_on_lost_callback", None)):
             runtime.set_on_lost_callback(_on_lease_lost)
@@ -778,6 +774,270 @@ def _advance_bootstrap_fsm_to_running_supervised() -> bool:
         return False
 
 
+def _perform_post_core_activation_convergence(
+    runtime: object,
+    trading_thread: threading.Thread,
+    *,
+    timeout_s: float = 60.0,
+) -> bool:
+    """Synchronous post-core activation convergence.
+
+    Called after the canonical core thread is registered. Performs every
+    required convergence step in order and returns True only when ALL are
+    satisfied. On failure, logs the failing gate and returns False so the
+    caller can treat the result as fatal pre-dispatch.
+    """
+    _t0 = time.time()
+
+    registered_thread = getattr(runtime, "_core_thread", None)
+    if registered_thread is not trading_thread:
+        logger.critical(
+            "POST_CORE_CONVERGENCE_FAILED gate=core_identity_mismatch "
+            "registered=%r expected=%r",
+            registered_thread,
+            trading_thread,
+        )
+        return False
+    if not trading_thread.is_alive():
+        logger.critical(
+            "POST_CORE_CONVERGENCE_FAILED gate=core_thread_not_alive "
+            "thread=%s",
+            trading_thread.name,
+        )
+        return False
+
+    try:
+        try:
+            from bot.preactivation_runtime_identity_guard_v36 import (
+                run_preactivation_readiness_convergence,
+            )
+        except (ImportError, AttributeError):
+            run_preactivation_readiness_convergence = None  # type: ignore[assignment]
+        if callable(run_preactivation_readiness_convergence):
+            run_preactivation_readiness_convergence()
+    except Exception as _conv_exc:
+        logger.warning(
+            "POST_CORE_CONVERGENCE runtime_convergence_optional_failed err=%s",
+            _conv_exc,
+        )
+
+    try:
+        try:
+            from bot.readiness_table import snapshot as _rt_snapshot
+        except ImportError:
+            from readiness_table import snapshot as _rt_snapshot  # type: ignore[import]
+        _rt = _rt_snapshot()
+        _nonce_ready = _rt.get("nonce_ready", False)
+        _authority_ready = _rt.get("authority_ready", False)
+        logger.critical(
+            "POST_CORE_CONVERGENCE_READINESS_SNAPSHOT nonce_ready=%s "
+            "authority_ready=%s execution_ready=%s balance_hydrated=%s "
+            "capital_ready=%s bootstrap_ready=%s",
+            _nonce_ready,
+            _authority_ready,
+            _rt.get("execution_ready", False),
+            _rt.get("balance_hydrated", False),
+            _rt.get("capital_ready", False),
+            _rt.get("bootstrap_ready", False),
+        )
+    except Exception as _rt_exc:
+        logger.warning(
+            "POST_CORE_CONVERGENCE readiness_snapshot_failed err=%s", _rt_exc
+        )
+
+    activation_committed = False
+    is_live_active = False
+    _can_dispatch = False
+    try:
+        try:
+            from bot.trading_state_machine import get_state_machine
+        except ImportError:
+            from trading_state_machine import get_state_machine  # type: ignore[import]
+        sm = get_state_machine()
+        if sm is not None:
+            _act_deadline = time.time() + min(timeout_s, 30.0)
+            _act_attempts = 0
+            while time.time() < _act_deadline:
+                _act_attempts += 1
+                try:
+                    committed = sm.commit_activation()
+                except Exception as _ca_exc:
+                    logger.warning(
+                        "POST_CORE_CONVERGENCE commit_activation_exception "
+                        "attempt=%d err=%s",
+                        _act_attempts,
+                        _ca_exc,
+                    )
+                    committed = False
+                if committed:
+                    activation_committed = True
+                    break
+                time.sleep(1.0)
+            is_live_active = sm.is_live_trading_active()
+            _can_dispatch_fn = getattr(sm, "can_dispatch_trades", None)
+            _can_dispatch = bool(callable(_can_dispatch_fn) and _can_dispatch_fn())
+            logger.critical(
+                "POST_CORE_CONVERGENCE_ACTIVATION "
+                "activation_committed=%s is_live_active=%s "
+                "can_dispatch_trades=%s attempts=%d",
+                activation_committed,
+                is_live_active,
+                _can_dispatch,
+                _act_attempts,
+            )
+    except Exception as _sm_exc:
+        logger.critical(
+            "POST_CORE_CONVERGENCE state_machine_unavailable err=%s — "
+            "treating as non-fatal for non-live deployments",
+            _sm_exc,
+            exc_info=True,
+        )
+
+    _runtime_authority_state = ""
+    _lifecycle_phase = ""
+    _dispatch_enabled = False
+    _execution_permitted = False
+    try:
+        try:
+            from bot.startup_coordinator import get_startup_coordinator
+        except ImportError:
+            from startup_coordinator import get_startup_coordinator  # type: ignore[import]
+        coordinator = get_startup_coordinator()
+        if coordinator is not None:
+            live_workers = sum(
+                1
+                for worker in threading.enumerate()
+                if worker is not threading.current_thread() and worker.is_alive()
+            )
+            coordinator.record_threads_supervised(
+                max(1, live_workers),
+                bootstrap_state="RUNNING_SUPERVISED",
+            )
+            try:
+                try:
+                    from bot.trading_state_machine import get_state_machine as _get_sm
+                    from bot.trading_state_machine import (
+                        resolve_runtime_mode_safe as _rms,
+                    )
+                except ImportError:
+                    from trading_state_machine import get_state_machine as _get_sm  # type: ignore[import]
+                    from trading_state_machine import resolve_runtime_mode_safe as _rms  # type: ignore[import]
+                _sm2 = _get_sm()
+                _rm = _rms(logger)
+                _intent = bool(_rm is not None and getattr(_rm, "is_live", False))
+                try:
+                    from bot.startup_coordinator import get_global_state
+                except ImportError:
+                    from startup_coordinator import get_global_state  # type: ignore[import]
+                _gs = get_global_state()
+                _snap = _gs.capture(
+                    trading_state=(
+                        _sm2.get_current_state().value if _sm2 else "UNKNOWN"
+                    ),
+                    activation_intent=_intent,
+                )
+                _runtime_authority_state = _snap.startup.runtime_authority_state
+                _lifecycle_phase = _snap.startup.lifecycle_phase
+                _dispatch_enabled = _snap.startup.dispatch_enabled
+                _execution_permitted = _snap.startup.execution_permitted
+                logger.critical(
+                    "POST_CORE_CONVERGENCE_COORDINATOR "
+                    "runtime_authority_state=%s lifecycle_phase=%s "
+                    "dispatch_enabled=%s execution_permitted=%s",
+                    _runtime_authority_state,
+                    _lifecycle_phase,
+                    _dispatch_enabled,
+                    _execution_permitted,
+                )
+            except Exception as _snap_exc:
+                logger.warning(
+                    "POST_CORE_CONVERGENCE coordinator_snapshot_failed err=%s",
+                    _snap_exc,
+                )
+    except Exception as _coord_exc:
+        logger.warning(
+            "POST_CORE_CONVERGENCE coordinator_unavailable err=%s — non-fatal",
+            _coord_exc,
+        )
+
+    _can_execute_result = False
+    _can_execute_reason = "not_evaluated"
+    try:
+        try:
+            from bot.trading_state_machine import get_state_machine as _get_sm_ce
+        except ImportError:
+            from trading_state_machine import get_state_machine as _get_sm_ce  # type: ignore[import]
+        _sm_ce = _get_sm_ce()
+        if _sm_ce is not None:
+            _can_execute_result = bool(_sm_ce.can_execute())
+            _can_execute_reason = "allowed" if _can_execute_result else "denied"
+    except Exception as _ce_exc:
+        _can_execute_reason = f"exception:{_ce_exc}"
+        logger.warning("POST_CORE_CONVERGENCE can_execute_failed err=%s", _ce_exc)
+
+    try:
+        _rt_final = {}
+        try:
+            from bot.readiness_table import snapshot as _rts
+        except ImportError:
+            from readiness_table import snapshot as _rts  # type: ignore[import]
+        _rt_final = _rts()
+    except Exception:
+        _rt_final = {}
+
+    logger.critical(
+        "POST_CORE_ACTIVATION_READINESS "
+        "writer_acquired=%s core_alive=%s "
+        "bootstrap_state=RUNNING_SUPERVISED "
+        "balance_hydrated=%s capital_ready=%s "
+        "nonce_ready=%s execution_ready=%s authority_ready=%s "
+        "activation_committed=%s is_live_active=%s can_dispatch_trades=%s "
+        "runtime_authority_state=%s lifecycle_phase=%s dispatch_enabled=%s "
+        "can_execute=%s can_execute_reason=%s "
+        "elapsed_ms=%.0f",
+        bool(runtime and getattr(runtime, "acquired", False)),
+        trading_thread.is_alive(),
+        _rt_final.get("balance_hydrated", False),
+        _rt_final.get("capital_ready", False),
+        _rt_final.get("nonce_ready", False),
+        _rt_final.get("execution_ready", False),
+        _rt_final.get("authority_ready", False),
+        activation_committed,
+        is_live_active,
+        _can_dispatch,
+        _runtime_authority_state or "unknown",
+        _lifecycle_phase or "unknown",
+        _dispatch_enabled,
+        _can_execute_result,
+        _can_execute_reason,
+        (time.time() - _t0) * 1000,
+    )
+
+    import os as _os
+
+    _is_live_env = (
+        _os.environ.get("LIVE_CAPITAL_VERIFIED", "").lower() in {"true", "1", "yes"}
+    )
+    if _is_live_env and not _can_execute_result:
+        logger.critical(
+            "EXECUTION_READINESS_FINAL allow=false "
+            "first_failed_gate=can_execute reason=%s "
+            "trading_remains_fail_closed=true",
+            _can_execute_reason,
+        )
+        return False
+
+    logger.critical(
+        "EXECUTION_READINESS_FINAL allow=%s "
+        "can_execute=%s activation_committed=%s is_live_active=%s",
+        _can_execute_result,
+        _can_execute_result,
+        activation_committed,
+        is_live_active,
+    )
+    return True
+
+
 def _fail_closed_strategy_publication(detail: str) -> None:
     """Revoke process-local runtime claims when no executable strategy exists."""
 
@@ -1106,22 +1366,56 @@ def main() -> int:
             )
             # Signal the watchdog that registration is complete.
             _startup_registration_done.set()
+            logger.critical(
+                "CORE_RUNTIME_REGISTERED thread=%s ident=%s writer_generation=%s "
+                "marker=post_core_handoff_v1",
+                trading_thread.name,
+                trading_thread.ident,
+                getattr(runtime, "_generation", "unknown"),
+            )
             # Spec item J: advance BootstrapFSM from THREADS_STARTING to
             # RUNNING_SUPERVISED now that the real core thread is registered.
             # This finalizes the canonical startup handoff sequence.
             if not _advance_bootstrap_fsm_to_running_supervised():
-                logger.warning(
+                logger.critical(
                     "BOOTSTRAP_FSM_RUNNING_SUPERVISED_ADVANCEMENT_FAILED — "
-                    "continuing (non-fatal; core is registered)"
+                    "treating as fatal pre-dispatch per spec §A.2"
                 )
-            # _startup_complete is now set only after verified registration,
-            # not before start_trading_engine is called.
+                raise RuntimeError(
+                    "BootstrapFSM failed to reach RUNNING_SUPERVISED after core registration"
+                )
+            _convergence_ok = _perform_post_core_activation_convergence(
+                runtime,
+                trading_thread,
+            )
+            if not _convergence_ok:
+                raise RuntimeError(
+                    "Post-core activation convergence failed before dispatch enablement"
+                )
             _startup_complete = True
+            try:
+                from bot.nija_core_loop import TRADING_ENGINE_READY
+
+                if hasattr(TRADING_ENGINE_READY, "set"):
+                    TRADING_ENGINE_READY.set()
+                    logger.critical(
+                        "TRADING_ENGINE_READY_SET source=bot_main_post_core_convergence"
+                    )
+            except Exception as _ready_exc:
+                logger.warning(
+                    "TRADING_ENGINE_READY_SET_FAILED err=%s (non-fatal)",
+                    _ready_exc,
+                )
             # Emit complete startup timing summary (spec item BA).
-            _t0 = _startup_stage_ts.get("process_main_start", _startup_stage_ts.get("canonical_core_registered", time.time()))
+            _t0 = _startup_stage_ts.get(
+                "process_main_start",
+                _startup_stage_ts.get("canonical_core_registered", time.time()),
+            )
+
             def _ms(key: str) -> str:
                 ts = _startup_stage_ts.get(key)
                 return f"{(ts - _t0) * 1000:.0f}" if ts is not None else "n/a"
+
             logger.critical(
                 "STARTUP_TIMING "
                 "writer_acquired_ms=%s "
@@ -1142,10 +1436,12 @@ def main() -> int:
                 _ms("canonical_core_registered"),
             )
             logger.critical(
-                "EXECUTION_AUTHORITY_READY writer_generation=%s core_thread=%s ident=%s",
+                "EXECUTION_AUTHORITY_READY writer_generation=%s core_thread=%s "
+                "ident=%s convergence_ok=%s",
                 getattr(runtime, "_generation", "unknown"),
                 trading_thread.name,
                 trading_thread.ident,
+                _convergence_ok,
             )
 
             # Publish verified thread evidence to the startup coordinator so that
