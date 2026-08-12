@@ -114,6 +114,28 @@ def report_terminal_writer_loss(reason: str, source: str) -> bool:
         _latch_writer_generation,
     )
 
+    # ── Step 1b: Emit canonical WRITER_EPOCH_ENDED event ──────────────────
+    # This must occur before any component observes expected_generation=0.
+    try:
+        _generation_before_int = int(_latch_writer_generation or "0")
+    except (TypeError, ValueError):
+        _generation_before_int = 0
+    try:
+        try:
+            from bot.writer_epoch_telemetry import emit_writer_epoch_ended
+        except ImportError:
+            from writer_epoch_telemetry import emit_writer_epoch_ended  # type: ignore[import]
+        emit_writer_epoch_ended(
+            reason=_latch_reason,
+            source=f"terminal_writer_loss_latch:{_latch_source}",
+            generation_before=_generation_before_int,
+        )
+    except Exception as _epoch_exc:
+        logger.critical(
+            "WRITER_EPOCH_ENDED_EMIT_FAILED err=%s — continuing with latch sequence",
+            _epoch_exc,
+        )
+
     # ── Step 2: Revoke execution/nonce/authority readiness atomically ──────
     _revoke_readiness_on_terminal_loss(_latch_reason)
 

@@ -1301,9 +1301,94 @@ class CapitalAuthority:
             len(new_balances),
             dict(new_balances),
         )
+        # ── Capital broker classification telemetry ───────────────────────────
+        self._emit_capital_broker_classification(
+            new_balances=new_balances,
+            broker_map=effective_broker_map,
+        )
         # CSM v3 — persist live-refreshed state to disk.
         self._warm_start = False
         self._save_cached_state()
+
+    def _emit_capital_broker_classification(
+        self,
+        new_balances: "Dict[str, float]",
+        broker_map: "Dict[str, Any]",
+    ) -> None:
+        """Emit CAPITAL_BROKER_CLASSIFICATION telemetry for each broker."""
+        try:
+            try:
+                from bot.capital_broker_telemetry import (
+                    emit_capital_broker_classification,
+                    emit_capital_balance_observation,
+                    classify_observation_source,
+                )
+            except ImportError:
+                from capital_broker_telemetry import (  # type: ignore[import]
+                    emit_capital_broker_classification,
+                    emit_capital_balance_observation,
+                    classify_observation_source,
+                )
+            import os as _os
+
+            writer_gen_str = str(_os.environ.get("NIJA_WRITER_LEASE_GENERATION", "") or "0").strip()
+            try:
+                writer_generation = int(writer_gen_str or "0")
+            except (TypeError, ValueError):
+                writer_generation = 0
+
+            now = time.time()
+            for broker_key, equity_usd in new_balances.items():
+                broker_obj = broker_map.get(broker_key)
+                connected = bool(getattr(broker_obj, "connected", True) if broker_obj else True)
+                # A broker is execution-eligible only when connected AND the
+                # writer has a positive generation.
+                execution_eligible = connected and writer_generation > 0
+                # Portfolio equity may include disconnected brokers when balance
+                # is still fresh (age below preserve TTL).
+                with self._timed_lock():
+                    prev_ts = self.last_updated
+                if prev_ts is not None:
+                    age_s = (datetime.now(timezone.utc) - prev_ts).total_seconds()
+                else:
+                    age_s = float("inf")
+                may_count_in_portfolio_equity = equity_usd > 0.0 and (
+                    connected or age_s <= self._preserve_nonzero_ttl_s
+                )
+                may_fund_new_orders = execution_eligible and equity_usd > 0.0
+
+                obs_source = classify_observation_source(
+                    network_success=connected,
+                    is_cached=False,
+                    is_sticky_preserved=not connected and equity_usd > 0.0,
+                    observation_generation=writer_generation,
+                    current_writer_generation=writer_generation,
+                )
+
+                emit_capital_broker_classification(
+                    broker=broker_key,
+                    equity_usd=equity_usd,
+                    observation_age_s=max(0.0, age_s) if age_s != float("inf") else -1.0,
+                    observation_source=obs_source,
+                    connected=connected,
+                    execution_eligible=execution_eligible,
+                    may_count_in_portfolio_equity=may_count_in_portfolio_equity,
+                    may_fund_new_orders=may_fund_new_orders,
+                )
+                emit_capital_balance_observation(
+                    broker=broker_key,
+                    value=equity_usd,
+                    source=obs_source,
+                    network_request_started=True,
+                    network_response_received=connected,
+                    writer_generation=writer_generation,
+                    observation_generation=writer_generation,
+                    age_s=max(0.0, age_s) if age_s != float("inf") else -1.0,
+                )
+        except Exception as _tel_exc:
+            logger.debug(
+                "[CapitalAuthority] capital broker telemetry emit failed: %s", _tel_exc
+            )
 
     def update(self, total_capital: float) -> None:
         """
