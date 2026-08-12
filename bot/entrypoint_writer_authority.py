@@ -210,6 +210,7 @@ class EntrypointWriterAuthority:
         self._scan_started_watchdog_thread: Optional[threading.Thread] = None
         self._scan_watchdog_cancel: threading.Event = threading.Event()
         self._core_thread: Optional[threading.Thread] = None
+        self._core_thread_registered = False
         self._core_thread_started_at = 0.0
         self._core_thread_last_alive_at = 0.0
         self._core_thread_name = ""
@@ -337,6 +338,8 @@ class EntrypointWriterAuthority:
         thread = self._core_thread
         if thread is None:
             return False, False, "startup_not_registered"
+        if not self._core_thread_registered:
+            return False, False, "registration_pending"
         alive_reader = getattr(thread, "is_alive", None)
         try:
             alive = bool(alive_reader()) if callable(alive_reader) else False
@@ -389,6 +392,7 @@ class EntrypointWriterAuthority:
         if thread is not None and callable(getattr(thread, "is_alive", None)):
             try:
                 if thread.is_alive():
+                    self._core_thread_registered = True
                     return True, "already_registered"
             except Exception:
                 pass
@@ -396,6 +400,82 @@ class EntrypointWriterAuthority:
         if now < self._core_recovery_next_attempt_monotonic:
             wait_s = max(0.0, self._core_recovery_next_attempt_monotonic - now)
             return False, f"recovery_backoff_active wait_s={wait_s:.2f}"
+        startup_complete = True
+        shutdown_requested = False
+        try:
+            bot_main = importlib.import_module("bot.bot_main")
+            startup_complete = bool(getattr(bot_main, "_startup_complete", False))
+            shutdown = getattr(bot_main, "_shutdown_event", None)
+            shutdown_requested = bool(
+                shutdown is not None
+                and callable(getattr(shutdown, "is_set", None))
+                and shutdown.is_set()
+            )
+        except Exception:
+            startup_complete = True
+            shutdown_requested = False
+        if shutdown_requested:
+            logger.warning(
+                "CORE_THREAD_REGISTRATION_PRECONDITION_FAILED marker=%s source=%s "
+                "detail=shutdown_requested generation=%s instance_id=%s token_prefix=%s",
+                _MARKER,
+                source,
+                self._generation,
+                self._instance_id or "unknown",
+                self._token[:8],
+            )
+            return False, "shutdown_requested"
+        if not startup_complete:
+            self._core_recovery_attempts += 1
+            base_s = _cfg_float(
+                "NIJA_CORE_REGISTRATION_RECOVERY_BASE_S",
+                2.0,
+                minimum=0.5,
+            )
+            max_s = _cfg_float(
+                "NIJA_CORE_REGISTRATION_RECOVERY_MAX_S",
+                30.0,
+                minimum=1.0,
+            )
+            exponential = min(
+                max_s,
+                base_s * (2 ** min(self._core_recovery_attempts - 1, 4)),
+            )
+            jitter_seed = (
+                f"{self._instance_id}:{self._generation}:"
+                f"{self._core_recovery_attempts}:startup_incomplete"
+            )
+            jitter_ratio = (
+                int(hashlib.sha256(jitter_seed.encode("utf-8")).hexdigest()[:4], 16)
+                / 0xFFFF
+            )
+            delay_s = min(max_s, exponential + (exponential * 0.25 * jitter_ratio))
+            self._core_recovery_next_attempt_monotonic = now + delay_s
+            logger.warning(
+                "CORE_THREAD_REGISTRATION_PRECONDITION_FAILED marker=%s source=%s "
+                "detail=startup_not_complete attempt=%d delay_s=%.2f generation=%s "
+                "instance_id=%s token_prefix=%s",
+                _MARKER,
+                source,
+                self._core_recovery_attempts,
+                delay_s,
+                self._generation,
+                self._instance_id or "unknown",
+                self._token[:8],
+            )
+            logger.warning(
+                "CORE_THREAD_REGISTRATION_RECOVERY_BACKOFF marker=%s source=%s "
+                "attempt=%d delay_s=%.2f generation=%s instance_id=%s token_prefix=%s "
+                "detail=startup_not_complete",
+                _MARKER,
+                source,
+                self._core_recovery_attempts,
+                delay_s,
+                self._generation,
+                self._instance_id or "unknown",
+                self._token[:8],
+            )
+            return False, "startup_not_complete"
         try:
             try:
                 from bot.writer_recovery_epoch_core_v81_patch import (
@@ -975,9 +1055,11 @@ class EntrypointWriterAuthority:
                 getattr(_prior_core_thread, "ident", None),
                 generation,
             )
+            self._core_thread_registered = True
             os.environ["NIJA_CORE_THREAD_ALIVE"] = "1"
         else:
             self._core_thread = None
+            self._core_thread_registered = False
             self._core_thread_started_at = 0.0
             self._core_thread_last_alive_at = 0.0
             self._core_thread_name = ""
@@ -994,7 +1076,10 @@ class EntrypointWriterAuthority:
             self.record_scan_complete()
         elif _prior_scan_started_at:
             self.record_scan_started()
-        self._set_writer_state(WriterState.ACTIVE, reason="lease_acquired")
+        self._set_writer_state(
+            WriterState.VERIFYING,
+            reason="lease_acquired_registration_pending",
+        )
         self._notify_runtime_reconciliation("writer_acquired")
 
         logger.critical(
@@ -1198,6 +1283,7 @@ class EntrypointWriterAuthority:
                 "core_thread_ident": self._core_thread_ident,
                 "core_thread_started_at": self._core_thread_started_at,
                 "core_thread_alive": core_alive,
+                "core_thread_registered": bool(self._core_thread_registered),
                 "core_thread_heartbeat_at": core_heartbeat_at,
                 "lock_ttl_s": self._ttl_s,
                 "source": "entrypoint_writer_authority",
@@ -1208,19 +1294,84 @@ class EntrypointWriterAuthority:
     def register_core_thread(self, thread: Optional[threading.Thread]) -> None:
         """Register the core trading thread so lock metadata can expose liveness."""
         if thread is None:
+            logger.warning(
+                "CORE_THREAD_REGISTRATION_PRECONDITION_FAILED marker=%s source=register_core_thread "
+                "detail=thread_missing generation=%s instance_id=%s token_prefix=%s",
+                _MARKER,
+                self._generation,
+                self._instance_id or "unknown",
+                self._token[:8],
+            )
             return
         self.arm_scan_start_deadline("core_thread_registered")
-        self._core_thread = thread
-        self._core_thread_name = str(getattr(thread, "name", "") or "")
-        self._core_thread_ident = getattr(thread, "ident", None)
-        now = time.time()
-        self._core_thread_started_at = now
-        self._core_thread_last_alive_at = now if thread.is_alive() else 0.0
-        self._core_recovery_attempts = 0
-        self._core_recovery_next_attempt_monotonic = 0.0
-        os.environ["NIJA_CORE_THREAD_ALIVE"] = "1" if thread.is_alive() else "0"
-        self._scan_deadline_exceeded = False
+        name = str(getattr(thread, "name", "") or "")
+        ident = getattr(thread, "ident", None)
+        try:
+            alive = bool(thread.is_alive())
+        except Exception:
+            alive = False
+        with self._state_lock:
+            if self._core_thread is thread and self._core_thread_registered and alive:
+                logger.info(
+                    "CORE_THREAD_REGISTRATION_ALREADY_CONFIRMED marker=%s source=register_core_thread "
+                    "thread=%s ident=%s generation=%s instance_id=%s token_prefix=%s",
+                    _MARKER,
+                    name or "unknown",
+                    ident,
+                    self._generation,
+                    self._instance_id or "unknown",
+                    self._token[:8],
+                )
+                return
+            logger.info(
+                "CORE_THREAD_REGISTRATION_ATTEMPT_START marker=%s source=register_core_thread "
+                "thread=%s ident=%s alive=%s generation=%s instance_id=%s token_prefix=%s",
+                _MARKER,
+                name or "unknown",
+                ident,
+                alive,
+                self._generation,
+                self._instance_id or "unknown",
+                self._token[:8],
+            )
+            self._core_thread = thread
+            self._core_thread_name = name
+            self._core_thread_ident = ident
+            now = time.time()
+            self._core_thread_started_at = now
+            self._core_thread_last_alive_at = now if alive else 0.0
+            self._core_thread_registered = alive
+            self._core_recovery_attempts = 0
+            self._core_recovery_next_attempt_monotonic = 0.0
+            self._scan_deadline_exceeded = False
+            os.environ["NIJA_CORE_THREAD_ALIVE"] = "1" if alive else "0"
         self._write_metadata()
+        if not alive:
+            logger.warning(
+                "CORE_THREAD_REGISTRATION_PRECONDITION_FAILED marker=%s source=register_core_thread "
+                "detail=thread_not_alive thread=%s ident=%s generation=%s instance_id=%s token_prefix=%s",
+                _MARKER,
+                name or "unknown",
+                ident,
+                self._generation,
+                self._instance_id or "unknown",
+                self._token[:8],
+            )
+            self._set_writer_state(
+                WriterState.VERIFYING,
+                reason="core_thread_registration_pending_not_alive",
+            )
+            return
+        logger.critical(
+            "CORE_THREAD_REGISTRATION_SUCCEEDED marker=%s source=register_core_thread "
+            "thread=%s ident=%s generation=%s instance_id=%s token_prefix=%s",
+            _MARKER,
+            name or "unknown",
+            ident,
+            self._generation,
+            self._instance_id or "unknown",
+            self._token[:8],
+        )
         self._set_writer_state(WriterState.ACTIVE, reason="core_thread_registered")
         self._notify_runtime_reconciliation("core_thread_registered")
 
@@ -1441,7 +1592,17 @@ class EntrypointWriterAuthority:
             if ok:
                 failures = 0
                 first_failure_at = 0.0
-                self._set_writer_state(WriterState.ACTIVE, reason="heartbeat_ok")
+                core_registered, core_alive, core_reason = self._core_thread_status()
+                if core_registered and core_alive:
+                    self._set_writer_state(WriterState.ACTIVE, reason="heartbeat_ok")
+                else:
+                    self._set_writer_state(
+                        WriterState.VERIFYING,
+                        reason=(
+                            "heartbeat_ok_registration_pending:"
+                            f"{core_reason or 'startup_not_registered'}"
+                        ),
+                    )
             else:
                 try:
                     _get_heartbeat_state().record_heartbeat_failure()
@@ -1557,8 +1718,11 @@ class EntrypointWriterAuthority:
             return False, inv_reason
 
         core_ok, core_reason = self._validate_core_thread_liveness()
-        core_registered = self._core_thread is not None
-        core_alive = bool(core_registered and core_ok)
+        core_registered, core_alive, status_reason = self._core_thread_status()
+        if not core_registered and core_reason == "":
+            core_reason = status_reason
+        elif core_registered and not core_alive and not core_reason:
+            core_reason = status_reason
         # Publish liveness state so the authority heartbeat monitor can also
         # gate on core_thread_alive (Fix 2).
         os.environ["NIJA_CORE_THREAD_ALIVE"] = "1" if core_alive else "0"
@@ -1641,7 +1805,16 @@ class EntrypointWriterAuthority:
                         _MARKER,
                         self._token[:8],
                     )
-                self._set_writer_state(WriterState.ACTIVE, reason="heartbeat_renewed")
+                if core_registered and core_alive:
+                    self._set_writer_state(WriterState.ACTIVE, reason="heartbeat_renewed")
+                else:
+                    self._set_writer_state(
+                        WriterState.VERIFYING,
+                        reason=(
+                            "heartbeat_renewed_registration_pending:"
+                            f"{core_reason or 'startup_not_registered'}"
+                        ),
+                    )
                 self._notify_runtime_reconciliation("heartbeat_renewed")
                 return True, ""
             if code == -1:
