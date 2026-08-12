@@ -14,6 +14,7 @@ _MARKER = "20260705f"
 _PATCHED = False
 _MONITOR_STARTED = False
 _INSTALL_LOCK = threading.Lock()
+_PATCH_LOCK = threading.Lock()
 _REST_WRAP_ATTR = "_nija_okx_order_instid_payload_repair_rest_v20260705f"
 _ORDER_WRAP_ATTR = "_nija_okx_order_instid_payload_repair_order_v20260705f"
 _VALID_QUOTES = ("USDT", "USDC", "USD")
@@ -168,9 +169,30 @@ def _nested_scode(payload: Any) -> tuple[str, str]:
     return "", ""
 
 
+def _has_marker_chain(fn: Any, marker: str, max_depth: int = 32) -> bool:
+    seen: set[int] = set()
+    current = fn
+    for _ in range(max_depth):
+        if not callable(current) or id(current) in seen:
+            return False
+        seen.add(id(current))
+        if bool(getattr(current, marker, False)):
+            return True
+        current = getattr(current, "__wrapped__", None)
+    return False
+
+
 def _wrap_rest_class(rest_cls: type, module_name: str) -> bool:
     original_request = getattr(rest_cls, "_request", None)
-    if not callable(original_request) or getattr(original_request, _REST_WRAP_ATTR, False):
+    if not callable(original_request):
+        return False
+    if _has_marker_chain(original_request, _REST_WRAP_ATTR):
+        logger.debug(
+            "OKX_ORDER_INSTID_REST_PATCH_SKIPPED marker=%s module=%s class=%s already_patched=true",
+            _MARKER,
+            module_name,
+            getattr(rest_cls, "__name__", "<unknown>"),
+        )
         return False
 
     def _patched_request(self: Any, method: str, path: str, *, params: Optional[dict[str, Any]] = None, payload: Optional[dict[str, Any]] = None, private: bool = False) -> dict[str, Any]:
@@ -220,7 +242,16 @@ def _wrap_order_class(okx_cls: type, module_name: str) -> bool:
     patched = False
     for method_name in ("place_market_order", "execute_order", "place_order"):
         original = getattr(okx_cls, method_name, None)
-        if not callable(original) or getattr(original, _ORDER_WRAP_ATTR, False):
+        if not callable(original):
+            continue
+        if _has_marker_chain(original, _ORDER_WRAP_ATTR):
+            logger.debug(
+                "OKX_ORDER_SYMBOL_METHOD_PATCH_SKIPPED marker=%s module=%s class=%s method=%s already_patched=true",
+                _MARKER,
+                module_name,
+                getattr(okx_cls, "__name__", "<unknown>"),
+                method_name,
+            )
             continue
 
         def _make_wrapper(fn: Any, name: str):
@@ -243,15 +274,16 @@ def _wrap_order_class(okx_cls: type, module_name: str) -> bool:
 
 def _patch_module(module: ModuleType) -> bool:
     global _PATCHED
-    patched = False
-    for rest_cls in _candidate_rest_classes(module):
-        patched = _wrap_rest_class(rest_cls, getattr(module, "__name__", "<unknown>")) or patched
-    for okx_cls in _candidate_order_classes(module):
-        patched = _wrap_order_class(okx_cls, getattr(module, "__name__", "<unknown>")) or patched
-    if patched:
-        _PATCHED = True
-        print(f"[NIJA-PRINT] OKX_ORDER_INSTID_PAYLOAD_REPAIR_PATCHED marker={_MARKER} module={getattr(module, '__name__', '<unknown>')}", flush=True)
-    return patched
+    with _PATCH_LOCK:
+        patched = False
+        for rest_cls in _candidate_rest_classes(module):
+            patched = _wrap_rest_class(rest_cls, getattr(module, "__name__", "<unknown>")) or patched
+        for okx_cls in _candidate_order_classes(module):
+            patched = _wrap_order_class(okx_cls, getattr(module, "__name__", "<unknown>")) or patched
+        if patched:
+            _PATCHED = True
+            print(f"[NIJA-PRINT] OKX_ORDER_INSTID_PAYLOAD_REPAIR_PATCHED marker={_MARKER} module={getattr(module, '__name__', '<unknown>')}", flush=True)
+        return patched
 
 
 def _interesting_module(name: str) -> bool:
@@ -294,7 +326,7 @@ def install_import_hook() -> None:
         _try_patch_loaded()
         _start_monitor()
         if getattr(builtins, "_NIJA_OKX_ORDER_INSTID_PAYLOAD_REPAIR_IMPORT_HOOK_V20260705F", False):
-            logger.warning("OKX_ORDER_INSTID_PAYLOAD_REPAIR_INSTALL_COMPLETE marker=%s already_installed=True patched=%s", _MARKER, _PATCHED)
+            logger.debug("OKX_ORDER_INSTID_PAYLOAD_REPAIR_INSTALL_COMPLETE marker=%s already_installed=true patched=%s", _MARKER, _PATCHED)
             return
         original_import = builtins.__import__
 
