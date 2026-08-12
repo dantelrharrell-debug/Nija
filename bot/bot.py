@@ -44,6 +44,9 @@ _FAST_PATH_INSTALLERS = (
     ("bot.okx_order_instid_payload_repair_patch", "OKX_ORDER_INSTID_PAYLOAD_REPAIR"),
     ("bot.okx_final_order_submission_bridge_patch", "OKX_FINAL_ORDER_SUBMISSION_BRIDGE"),
     ("bot.stalled_writer_release_guard_v22", "STALLED_WRITER_RELEASE_GUARD_V22"),
+    # v58 must install after the legacy guard modules so it can narrow their
+    # canonical-production ownership without bypassing any safety gate.
+    ("bot.final_production_activation_repair_v58_patch", "FINAL_PRODUCTION_ACTIVATION_V58"),
 )
 
 _FAST_PATH_COMPAT_OPTIONAL_GUARDS = frozenset(
