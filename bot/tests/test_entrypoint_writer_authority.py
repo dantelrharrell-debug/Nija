@@ -412,6 +412,95 @@ class EntrypointWriterAuthorityTests(unittest.TestCase):
 
         self.assertFalse(runtime._scan_deadline_exceeded)
 
+    def test_register_core_thread_is_idempotent_for_same_live_thread(self):
+        runtime = EntrypointWriterAuthority()
+
+        class _Thread:
+            name = "nija-core-loop"
+            ident = 123
+
+            @staticmethod
+            def is_alive():
+                return True
+
+        thread = _Thread()
+
+        with (
+            patch.object(runtime, "_write_metadata") as write_metadata,
+            patch.object(runtime, "_notify_runtime_reconciliation") as notify,
+        ):
+            runtime.register_core_thread(thread)
+            runtime.register_core_thread(thread)
+
+        self.assertTrue(runtime._core_thread_registered)
+        self.assertEqual(runtime.writer_state, WriterState.ACTIVE)
+        write_metadata.assert_called_once()
+        notify.assert_called_once_with("core_thread_registered")
+
+    def test_heartbeat_tick_keeps_verifying_when_core_not_registered(self):
+        runtime = EntrypointWriterAuthority()
+        runtime._client = MagicMock()
+        runtime._client.eval.return_value = 1
+        runtime._lock_key = "nija:writer_lock:test"
+        runtime._meta_key = "nija:writer_lock_meta:test"
+        runtime._fencing_key = "nija:writer_fence:test"
+        runtime._lock_value = "17:owner"
+        runtime._token = "17"
+        runtime._ttl_s = 30
+        runtime._result = types.SimpleNamespace(acquired=True)
+
+        with (
+            patch.object(runtime, "_check_authority_invariant", return_value=(True, "")),
+            patch.object(runtime, "_validate_core_thread_liveness", return_value=(True, "")),
+            patch.object(runtime, "_notify_runtime_reconciliation"),
+        ):
+            ok, reason = runtime._heartbeat_tick()
+
+        self.assertTrue(ok)
+        self.assertEqual(reason, "")
+        self.assertEqual(runtime.writer_state, WriterState.VERIFYING)
+
+    def test_validate_core_thread_liveness_recovers_registration_from_startup_not_registered(self):
+        runtime = EntrypointWriterAuthority()
+
+        class _Thread:
+            name = "nija-core-loop"
+            ident = 777
+
+            @staticmethod
+            def is_alive():
+                return True
+
+        def _recover(_source):
+            runtime._core_thread = _Thread()
+            runtime._core_thread_registered = True
+            return True, "existing_live_thread"
+
+        with patch.object(runtime, "_recover_core_thread_registration", side_effect=_recover):
+            ok, reason = runtime._validate_core_thread_liveness()
+
+        self.assertTrue(ok)
+        self.assertEqual(reason, "existing_live_thread")
+        self.assertEqual(runtime._core_thread_status(), (True, True, "ok"))
+
+    def test_recovery_skips_attempt_when_startup_not_complete(self):
+        runtime = EntrypointWriterAuthority()
+        runtime._core_thread = None
+        runtime._instance_id = "instance"
+        runtime._token = "token1234"
+        runtime._generation = 42
+        bot_main = types.ModuleType("bot.bot_main")
+        bot_main._startup_complete = False
+        bot_main._shutdown_event = threading.Event()
+
+        with patch.dict(sys.modules, {"bot.bot_main": bot_main}):
+            ok, reason = runtime._recover_core_thread_registration("startup_not_registered")
+
+        self.assertFalse(ok)
+        self.assertEqual(reason, "startup_not_complete")
+        self.assertEqual(runtime._core_recovery_attempts, 1)
+        self.assertGreater(runtime._core_recovery_next_attempt_monotonic, 0.0)
+
     def test_callback_free_live_writer_loss_schedules_bounded_restart(self):
         runtime = EntrypointWriterAuthority()
         timer = MagicMock()
