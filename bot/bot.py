@@ -43,9 +43,10 @@ _FAST_PATH_INSTALLERS = (
     ("bot.okx_final_order_submission_bridge_patch", "OKX_FINAL_ORDER_SUBMISSION_BRIDGE"),
     ("bot.stalled_writer_release_guard_v22", "STALLED_WRITER_RELEASE_GUARD_V22"),
     ("bot.final_production_activation_repair_v58_patch", "FINAL_PRODUCTION_ACTIVATION_V58"),
-    # v59 must install last: it corrects post-merge ownership/monitor wiring
-    # observed in production after v58 without weakening any safety proof.
     ("bot.final_production_activation_repair_v59_patch", "FINAL_PRODUCTION_ACTIVATION_V59"),
+    # v60 installs last so activation callers and execution/exit repair wiring
+    # converge after all earlier writer/readiness compatibility layers.
+    ("bot.final_production_activation_repair_v60_patch", "FINAL_PRODUCTION_ACTIVATION_V60"),
 )
 
 _FAST_PATH_COMPAT_OPTIONAL_GUARDS = frozenset(
