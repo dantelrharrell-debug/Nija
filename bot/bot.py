@@ -21,8 +21,6 @@ from typing import Iterable
 logger = logging.getLogger("nija.bot_entrypoint")
 _FAST_PATH_MARKER = "20260808-canonical-fast-entrypoint-v57-v34"
 
-# Each tuple is (module, success log label). Names remain explicit so startup
-# attestation and source audits can prove which guards are eligible.
 _FAST_PATH_INSTALLERS = (
     ("bot.writer_reelection_loss_reason_v46_patch", "WRITER_REELECTION_LOSS_REASON_V46"),
     ("bot.writer_generation_state_gate_v50_patch", "WRITER_GENERATION_STATE_GATE_V50"),
@@ -44,9 +42,10 @@ _FAST_PATH_INSTALLERS = (
     ("bot.okx_order_instid_payload_repair_patch", "OKX_ORDER_INSTID_PAYLOAD_REPAIR"),
     ("bot.okx_final_order_submission_bridge_patch", "OKX_FINAL_ORDER_SUBMISSION_BRIDGE"),
     ("bot.stalled_writer_release_guard_v22", "STALLED_WRITER_RELEASE_GUARD_V22"),
-    # v58 must install after the legacy guard modules so it can narrow their
-    # canonical-production ownership without bypassing any safety gate.
     ("bot.final_production_activation_repair_v58_patch", "FINAL_PRODUCTION_ACTIVATION_V58"),
+    # v59 must install last: it corrects post-merge ownership/monitor wiring
+    # observed in production after v58 without weakening any safety proof.
+    ("bot.final_production_activation_repair_v59_patch", "FINAL_PRODUCTION_ACTIVATION_V59"),
 )
 
 _FAST_PATH_COMPAT_OPTIONAL_GUARDS = frozenset(
@@ -72,12 +71,7 @@ _LEGACY_INSTALLERS = (
 
 def _truthy(name: str) -> bool:
     return str(os.environ.get(name, "")).strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-        "enabled",
-        "y",
+        "1", "true", "yes", "on", "enabled", "y",
     }
 
 
@@ -101,44 +95,29 @@ def _install_guards(
     for module_name, label in specs:
         try:
             module = importlib.import_module(module_name)
-            installer = getattr(module, "install_import_hook", None) or getattr(
-                module, "install", None
-            )
+            installer = getattr(module, "install_import_hook", None) or getattr(module, "install", None)
             if not callable(installer):
                 raise RuntimeError("installer_missing")
             result = installer()
             if result is False:
                 raise RuntimeError("installer_returned_false")
             installed.append(label)
-            logger.warning(
-                "%s_INSTALL_REQUESTED source=bot_entrypoint mode=%s",
-                label,
-                mode,
-            )
+            logger.warning("%s_INSTALL_REQUESTED source=bot_entrypoint mode=%s", label, mode)
         except Exception as exc:
             if label in optional_labels:
                 logger.warning(
                     "%s_INSTALL_SKIPPED_OPTIONAL source=bot_entrypoint mode=%s err=%s",
-                    label,
-                    mode,
-                    exc,
+                    label, mode, exc,
                 )
                 continue
             ready = False
             logger.critical(
                 "%s_INSTALL_FAILED source=bot_entrypoint mode=%s err=%s",
-                label,
-                mode,
-                exc,
-                exc_info=True,
+                label, mode, exc, exc_info=True,
             )
     logger.critical(
-        "BOT_ENTRYPOINT_GUARD_BUNDLE_COMPLETE marker=%s mode=%s ready=%s "
-        "installed=%s",
-        _FAST_PATH_MARKER,
-        mode,
-        ready,
-        ",".join(installed) or "none",
+        "BOT_ENTRYPOINT_GUARD_BUNDLE_COMPLETE marker=%s mode=%s ready=%s installed=%s",
+        _FAST_PATH_MARKER, mode, ready, ",".join(installed) or "none",
     )
     return ready
 
@@ -151,18 +130,14 @@ if _canonical_fast_path_enabled():
     ):
         os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "0"
         os.environ["NIJA_RUNTIME_TRADING_STATE"] = "OFF"
-        raise RuntimeError(
-            "canonical fast-path safety guards failed; trading remains fail closed"
-        )
+        raise RuntimeError("canonical fast-path safety guards failed; trading remains fail closed")
     logger.critical(
-        "CANONICAL_ENTRYPOINT_FAST_PATH_READY marker=%s "
-        "package_hook_fanout=deferred handoff=bot.bot_main",
+        "CANONICAL_ENTRYPOINT_FAST_PATH_READY marker=%s package_hook_fanout=deferred handoff=bot.bot_main",
         _FAST_PATH_MARKER,
     )
 else:
     logger.warning(
-        "BOT_ENTRYPOINT_LEGACY_COMPATIBILITY_PATH marker=%s "
-        "canonical_fast_path=false",
+        "BOT_ENTRYPOINT_LEGACY_COMPATIBILITY_PATH marker=%s canonical_fast_path=false",
         _FAST_PATH_MARKER,
     )
     _install_guards(_LEGACY_INSTALLERS, mode="legacy_compatibility")
