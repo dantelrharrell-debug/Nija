@@ -167,11 +167,20 @@ from bot.redis_env import get_redis_url
 from bot.redis_runtime import connect_redis_with_fallback
 
 try:
-    from bot.execution_authority_context import assert_startup_write_authority
+    from bot.execution_authority_context import (
+        assert_distributed_writer_authority,
+        assert_startup_write_authority,
+    )
 except ImportError:
     try:
-        from execution_authority_context import assert_startup_write_authority  # type: ignore[import]
+        from execution_authority_context import (  # type: ignore[import]
+            assert_distributed_writer_authority,
+            assert_startup_write_authority,
+        )
     except ImportError:
+        def assert_distributed_writer_authority() -> None:
+            raise RuntimeError("distributed writer authority module unavailable")
+
         def assert_startup_write_authority() -> None:
             raise RuntimeError("startup write authority module unavailable")
 
@@ -239,10 +248,17 @@ def _assert_canonical_writer_for_nonce_lease(key_id: str) -> None:
     A superseded container must therefore stop renewing its nonce lease as
     soon as it loses the process writer, even if its broker thread remains
     alive during a rolling deployment.
+
+    Nonce prebootstrap (which runs before the core thread and heartbeat are
+    established) requires only that this process owns the exact Redis writer
+    lease (``assert_distributed_writer_authority``).  Requiring full execution
+    prerequisites such as heartbeat freshness or core liveness would block
+    Kraken authentication during the early bootstrap window where the writer
+    lease is valid but the heartbeat has not yet started.
     """
 
     try:
-        assert_startup_write_authority()
+        assert_distributed_writer_authority()
     except Exception as exc:
         raise RuntimeError(
             "Canonical process writer authority unavailable for Kraken nonce "

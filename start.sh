@@ -47,7 +47,7 @@ fi
 # Patterns that identify a running NIJA bot process in /proc/<pid>/cmdline.
 # These match the main entry-points of the bot so we never kill unrelated PIDs
 # that happen to share the same numeric PID after a container restart.
-_NIJA_PROCESS_PATTERN="bot\.py|trading_strategy|nija_core_loop|tradingview_webhook"
+_NIJA_PROCESS_PATTERN="bot\.py|trading_strategy|nija_core_loop|tradingview_webhook|canonical_runtime_launcher_v26|bot_main"
 
 _terminate_duplicate_bot() {
     local _pid="$1"
@@ -1592,6 +1592,26 @@ echo "🧾 STARTUP_HANDOFF_ENTRYPOINT_ATTESTATION_BEGIN canonical=launcher-v26->
 NIJA_DEFER_RUNTIME_SITE_HOOKS=1 $PY -S scripts/runtime_entrypoint_attestation.py
 echo "🧾 STARTUP_HANDOFF_ENTRYPOINT_ATTESTATION_COMPLETE release=v26"
 echo "🚀 STARTUP_HANDOFF_RUNTIME_BEGIN entrypoint=canonical_runtime_launcher_v26.py canonical=launcher-v26->main.py->bot.bot->bot.bot_main runtime_site_hooks=deferred release=v26 commit=${GIT_COMMIT_SHORT:-${GIT_COMMIT:-unknown}}"
+
+# ── Write atomic PID lock file so the singleton guard works on re-entry ──────
+# We write: PID|ISO8601_timestamp|startup_uuid|command
+_STARTUP_UUID="${NIJA_STARTUP_UUID:-$(cat /proc/sys/kernel/random/uuid 2>/dev/null || printf '%s-%s' "$(date +%s)" "$$")}"
+_STARTUP_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date +%s)"
+mkdir -p "$(dirname "$_PID_FILE")"
+printf '%s|%s|%s|%s\n' "$$" "${_STARTUP_TS}" "${_STARTUP_UUID}" "start.sh->canonical_runtime_launcher_v26.py" > "${_PID_FILE}"
+echo "🔒 PID_LOCK_WRITTEN pid=$$ file=${_PID_FILE} ts=${_STARTUP_TS} uuid=${_STARTUP_UUID}"
+
+# Remove the lock file on exit only when this process owns it.
+_cleanup_pid_lock() {
+    local _recorded_pid
+    _recorded_pid=$(head -1 "$_PID_FILE" 2>/dev/null | cut -d'|' -f1 | tr -d '[:space:]' || echo "")
+    if [ "${_recorded_pid}" = "$$" ]; then
+        rm -f "$_PID_FILE"
+        echo "🔓 PID_LOCK_RELEASED pid=$$"
+    fi
+}
+trap '_cleanup_pid_lock' EXIT INT TERM
+
 set +e
 NIJA_DEFER_RUNTIME_SITE_HOOKS=1 $PY -u scripts/canonical_runtime_launcher_v26.py
 status=$?
