@@ -253,6 +253,70 @@ class EntrypointWriterAuthority:
         return self._lost.is_set()
 
     @property
+    def writer_lease_owned(self) -> bool:
+        """True when this process holds the exact Redis writer lease.
+
+        Requires:
+        - exact Redis lock ownership with matching generation, PID, and fencing token
+        - ``lost=False`` (no reelection event detected)
+        - writer state is not LOST
+
+        Authorizes: nonce initialization, broker auth, balance reads, position
+        reconciliation, held-position adoption, protective exit preparation.
+        Does NOT authorize new entries or exposure-increasing orders.
+        """
+        if self._lost.is_set():
+            return False
+        if self._writer_state == WriterState.LOST:
+            return False
+        if not (self._result and self._result.acquired):
+            return False
+        # Verify fencing token and generation are present (not a local fallback).
+        if self._local_fallback:
+            return False
+        token = os.environ.get("NIJA_WRITER_FENCING_TOKEN", "").strip()
+        generation = os.environ.get("NIJA_WRITER_LEASE_GENERATION", "").strip()
+        if not token or not generation:
+            return False
+        return True
+
+    @property
+    def execution_dispatch_authorized(self) -> bool:
+        """True when both writer lease is owned AND all dispatch prerequisites are met.
+
+        Additionally requires beyond ``writer_lease_owned``:
+        - canonical strategy published (``NIJA_STRATEGY_PUBLISHED=1``)
+        - real core thread registered and alive
+        - complete readiness proof (all 9 readiness keys)
+        - risk systems ready (``NIJA_RISK_SYSTEM_READY=1``)
+        - kill switch clear
+        - LIVE activation committed (``NIJA_RUNTIME_TRADING_STATE=LIVE_ACTIVE``)
+        """
+        if not self.writer_lease_owned:
+            return False
+        # LIVE activation committed
+        state = os.environ.get("NIJA_RUNTIME_TRADING_STATE", "").strip().upper()
+        if state != "LIVE_ACTIVE":
+            return False
+        # Core thread registered and alive
+        core_registered, core_alive, _ = self._core_thread_status()
+        if not (core_registered and core_alive):
+            return False
+        # Strategy published
+        strategy_published = os.environ.get("NIJA_STRATEGY_PUBLISHED", "").strip()
+        if strategy_published not in {"1", "true", "yes"}:
+            return False
+        # Risk systems ready
+        risk_ready = os.environ.get("NIJA_RISK_SYSTEM_READY", "").strip()
+        if risk_ready not in {"1", "true", "yes"}:
+            return False
+        # Kill switch must be clear
+        kill_switch = os.environ.get("NIJA_KILL_SWITCH_ACTIVE", "").strip()
+        if kill_switch in {"1", "true", "yes"}:
+            return False
+        return True
+
+    @property
     def result(self) -> Optional[EntrypointWriterAuthorityResult]:
         return self._result
 

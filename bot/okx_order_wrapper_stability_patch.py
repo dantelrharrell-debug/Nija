@@ -374,6 +374,9 @@ def _monitor() -> None:
 def install() -> bool:
     global _INSTALLED, _MONITOR_STARTED
     with _LOCK:
+        if _INSTALLED:
+            # Already installed; return current readiness without re-applying.
+            return _LAST_STATE.startswith("True:") if _LAST_STATE else False
         ready, details = _apply()
         _publish_state(ready, details)
         if not _MONITOR_STARTED:
