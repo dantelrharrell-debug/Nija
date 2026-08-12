@@ -443,7 +443,24 @@ def _heartbeat_ready() -> tuple[bool, str]:
     if not _truthy("NIJA_WRITER_HEARTBEAT_ACTIVE"):
         return False, f"heartbeat_inactive active={active or 'missing'}"
     if not _truthy("NIJA_CORE_THREAD_ALIVE"):
-        return False, "core_thread_not_alive"
+        repair_ok = False
+        repair_detail = "repair_unavailable"
+        try:
+            try:
+                from bot.writer_recovery_epoch_core_v81_patch import repair_core_thread_once
+            except ImportError:
+                from writer_recovery_epoch_core_v81_patch import repair_core_thread_once  # type: ignore[import]
+            repair_ok, repair_detail = repair_core_thread_once()
+        except Exception as exc:
+            repair_detail = f"repair_exception:{type(exc).__name__}:{exc}"
+        if repair_ok and _truthy("NIJA_CORE_THREAD_ALIVE"):
+            logger.critical(
+                "RUNTIME_AUTHORITY_CONVERGENCE_CORE_RECOVERED marker=%s detail=%s",
+                _MARKER,
+                repair_detail,
+            )
+        else:
+            return False, f"core_thread_not_alive:{repair_detail}"
     kraken_nonce_required = _truthy("KRAKEN_NONCE_LEASE_REQUIRED")
     if kraken_nonce_required:
         try:

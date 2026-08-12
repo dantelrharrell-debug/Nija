@@ -238,6 +238,9 @@ class EntrypointWriterAuthority:
         # registration later times out.  This timer is the authority owner's
         # final process-lifetime bound for that callback-free path.
         self._unhandled_loss_restart_timer: Optional[threading.Timer] = None
+        self._core_recovery_attempts = 0
+        self._core_recovery_next_attempt_monotonic = 0.0
+        self._terminal_startup_failure_reason = ""
         os.environ["NIJA_WRITER_STATE"] = self._writer_state.value
         os.environ["NIJA_WRITER_STATE_SINCE_TS"] = str(self._writer_state_since)
 
@@ -257,7 +260,156 @@ class EntrypointWriterAuthority:
     def writer_state(self) -> WriterState:
         return self._writer_state
 
+    @property
+    def terminal_startup_failure_reason(self) -> str:
+        return self._terminal_startup_failure_reason
+
+    def mark_terminal_startup_failure(self, reason: str) -> None:
+        self._terminal_startup_failure_reason = str(
+            reason or "terminal_startup_failure"
+        ).strip()
+
+    def _core_thread_status(self) -> tuple[bool, bool, str]:
+        thread = self._core_thread
+        if thread is None:
+            return False, False, "startup_not_registered"
+        alive_reader = getattr(thread, "is_alive", None)
+        try:
+            alive = bool(alive_reader()) if callable(alive_reader) else False
+        except Exception:
+            alive = False
+        if alive:
+            return True, True, "ok"
+        return (
+            True,
+            False,
+            f"core_thread_dead name={self._core_thread_name or 'unknown'} "
+            f"ident={self._core_thread_ident}",
+        )
+
+    def _prevent_active_without_registered_core(
+        self,
+        state: WriterState,
+        *,
+        reason: str,
+    ) -> tuple[WriterState, str]:
+        if state != WriterState.ACTIVE:
+            return state, reason
+        core_registered, core_alive, core_reason = self._core_thread_status()
+        if core_registered and core_alive:
+            return state, reason
+        logger.warning(
+            "ACTIVE_WITHOUT_REGISTRATION_PREVENTED marker=%s requested_state=%s "
+            "fallback_state=%s reason=%s generation=%s instance_id=%s token_prefix=%s "
+            "core_thread_alive=%s core_thread_registered=%s core_thread_reason=%s",
+            _MARKER,
+            state.value,
+            WriterState.VERIFYING.value,
+            reason or "unspecified",
+            self._generation,
+            self._instance_id or "unknown",
+            self._token[:8],
+            core_alive,
+            core_registered,
+            core_reason,
+        )
+        return (
+            WriterState.VERIFYING,
+            f"active_blocked:{reason or 'unspecified'}:{core_reason}",
+        )
+
+    def _recover_core_thread_registration(self, source: str) -> tuple[bool, str]:
+        if self._terminal_startup_failure_reason:
+            return False, "terminal_startup_failure"
+        thread = self._core_thread
+        if thread is not None and callable(getattr(thread, "is_alive", None)):
+            try:
+                if thread.is_alive():
+                    return True, "already_registered"
+            except Exception:
+                pass
+        now = time.monotonic()
+        if now < self._core_recovery_next_attempt_monotonic:
+            wait_s = max(0.0, self._core_recovery_next_attempt_monotonic - now)
+            return False, f"recovery_backoff_active wait_s={wait_s:.2f}"
+        try:
+            try:
+                from bot.writer_recovery_epoch_core_v81_patch import (
+                    repair_core_thread_once,
+                )
+            except ImportError:
+                from writer_recovery_epoch_core_v81_patch import (  # type: ignore[import]
+                    repair_core_thread_once,
+                )
+        except Exception as exc:
+            return False, f"recovery_hook_unavailable:{type(exc).__name__}:{exc}"
+
+        self._core_recovery_attempts += 1
+        logger.warning(
+            "CORE_THREAD_REGISTRATION_RECOVERY_ATTEMPT marker=%s source=%s "
+            "attempt=%d generation=%s instance_id=%s token_prefix=%s",
+            _MARKER,
+            source,
+            self._core_recovery_attempts,
+            self._generation,
+            self._instance_id or "unknown",
+            self._token[:8],
+        )
+        ok = False
+        detail = "unknown"
+        try:
+            ok, detail = repair_core_thread_once()
+        except Exception as exc:
+            detail = f"repair_exception:{type(exc).__name__}:{exc}"
+        if ok:
+            self._core_recovery_attempts = 0
+            self._core_recovery_next_attempt_monotonic = 0.0
+            logger.critical(
+                "CORE_THREAD_REGISTRATION_RECOVERY_SUCCEEDED marker=%s source=%s "
+                "generation=%s instance_id=%s token_prefix=%s detail=%s",
+                _MARKER,
+                source,
+                self._generation,
+                self._instance_id or "unknown",
+                self._token[:8],
+                detail,
+            )
+            return True, str(detail or "recovered")
+
+        base_s = _cfg_float(
+            "NIJA_CORE_REGISTRATION_RECOVERY_BASE_S",
+            2.0,
+            minimum=0.5,
+        )
+        max_s = _cfg_float(
+            "NIJA_CORE_REGISTRATION_RECOVERY_MAX_S",
+            30.0,
+            minimum=1.0,
+        )
+        exponential = min(max_s, base_s * (2 ** min(self._core_recovery_attempts - 1, 4)))
+        jitter_seed = f"{self._instance_id}:{self._generation}:{self._core_recovery_attempts}"
+        jitter_ratio = int(hashlib.sha256(jitter_seed.encode("utf-8")).hexdigest()[:4], 16) / 0xFFFF
+        delay_s = min(max_s, exponential + (exponential * 0.25 * jitter_ratio))
+        self._core_recovery_next_attempt_monotonic = now + delay_s
+        logger.warning(
+            "CORE_THREAD_REGISTRATION_RECOVERY_BACKOFF marker=%s source=%s "
+            "attempt=%d delay_s=%.2f generation=%s instance_id=%s token_prefix=%s detail=%s",
+            _MARKER,
+            source,
+            self._core_recovery_attempts,
+            delay_s,
+            self._generation,
+            self._instance_id or "unknown",
+            self._token[:8],
+            detail,
+        )
+        return False, str(detail or "recovery_failed")
+
     def _set_writer_state(self, state: WriterState, *, reason: str = "") -> None:
+        state, reason = self._prevent_active_without_registered_core(
+            state,
+            reason=reason,
+        )
         with self._state_lock:
             if self._writer_state == state:
                 os.environ["NIJA_WRITER_STATE"] = state.value
@@ -291,6 +443,11 @@ class EntrypointWriterAuthority:
         value to request a bounded standby window.
         """
 
+        if self._terminal_startup_failure_reason:
+            return EntrypointWriterAuthorityResult(
+                acquired=False,
+                error=f"terminal_startup_failure:{self._terminal_startup_failure_reason}",
+            )
         if self.acquired:
             assert self._result is not None
             return self._result
@@ -373,6 +530,11 @@ class EntrypointWriterAuthority:
                 time.sleep(retry_s)
 
     def acquire_once(self) -> EntrypointWriterAuthorityResult:
+        if self._terminal_startup_failure_reason:
+            return EntrypointWriterAuthorityResult(
+                acquired=False,
+                error=f"terminal_startup_failure:{self._terminal_startup_failure_reason}",
+            )
         with self._state_lock:
             self._set_writer_state(WriterState.ACQUIRING, reason="acquire_once")
             if self.acquired:
@@ -524,7 +686,8 @@ class EntrypointWriterAuthority:
                             instance_id,
                         )
                         logger.critical(
-                            "WRITER_LOCK_REELECTED marker=%s old_holder=%s new_instance_id=%s new_pid=%d",
+                            "WRITER_REELECTION_REQUESTED marker=%s old_holder=%s "
+                            "new_instance_id=%s new_pid=%d reason=stale_lock_reclaim",
                             _MARKER,
                             holder,
                             instance_id,
@@ -721,6 +884,9 @@ class EntrypointWriterAuthority:
         self._local_fallback = False
         self._lost.clear()
         self._stop.clear()
+        self._terminal_startup_failure_reason = ""
+        self._core_recovery_attempts = 0
+        self._core_recovery_next_attempt_monotonic = 0.0
         # Preserve a live core thread across re-acquisitions.  Clearing
         # _core_thread on every re-acquisition (e.g. after a transient Redis
         # gap) caused the registration deadline to restart from zero even
@@ -783,13 +949,14 @@ class EntrypointWriterAuthority:
             os.getpid(),
         )
         logger.critical(
-            "ACTIVE_WRITER_TRANSITION marker=%s token_prefix=%s generation=%s "
-            "instance=%s acquired_at=%.3f",
+            "WRITER_ACQUIRED marker=%s token_prefix=%s generation=%s "
+            "instance=%s acquired_at=%.3f writer_state=%s",
             _MARKER,
             token[:8],
             generation,
             instance_id,
             self._acquired_at,
+            self._writer_state.value,
         )
 
         result = EntrypointWriterAuthorityResult(
@@ -985,9 +1152,12 @@ class EntrypointWriterAuthority:
         now = time.time()
         self._core_thread_started_at = now
         self._core_thread_last_alive_at = now if thread.is_alive() else 0.0
+        self._core_recovery_attempts = 0
+        self._core_recovery_next_attempt_monotonic = 0.0
         os.environ["NIJA_CORE_THREAD_ALIVE"] = "1" if thread.is_alive() else "0"
         self._scan_deadline_exceeded = False
         self._write_metadata()
+        self._set_writer_state(WriterState.ACTIVE, reason="core_thread_registered")
         self._notify_runtime_reconciliation("core_thread_registered")
 
     def arm_scan_start_deadline(self, source: str = "runtime_handoff") -> None:
@@ -1438,6 +1608,18 @@ class EntrypointWriterAuthority:
             return False, "core_thread_local_fallback_forbidden"
         thread = self._core_thread
         if thread is None:
+            recovery_ok, recovery_reason = self._recover_core_thread_registration(
+                "startup_not_registered"
+            )
+            if recovery_ok:
+                thread = self._core_thread
+                if thread is not None and callable(getattr(thread, "is_alive", None)):
+                    try:
+                        if thread.is_alive():
+                            self._core_thread_last_alive_at = time.time()
+                            return True, recovery_reason
+                    except Exception:
+                        pass
             registration_deadline_s = _cfg_float(
                 "NIJA_CORE_REGISTRATION_DEADLINE_S",
                 600.0,
@@ -1461,6 +1643,7 @@ class EntrypointWriterAuthority:
                         self._instance_id,
                         self._generation,
                     )
+                    self.mark_terminal_startup_failure(reason)
                     return False, reason
 
             # The engine handoff has its own shorter scan-start deadline.  It
@@ -1481,6 +1664,12 @@ class EntrypointWriterAuthority:
     def _release_owned_lock_for_reelection(self, reason: str) -> None:
         """Release this instance's lock when local writer runtime is stale/dead."""
         released = False
+        terminal_failure = bool(
+            self._terminal_startup_failure_reason
+            or "registration_deadline_exceeded" in str(reason or "")
+        )
+        if terminal_failure and not self._terminal_startup_failure_reason:
+            self.mark_terminal_startup_failure(reason)
         self._stop.set()
         if reason.startswith("core_thread_"):
             logger.critical(
@@ -1527,20 +1716,20 @@ class EntrypointWriterAuthority:
             reason,
         )
         logger.critical(
-            "WRITER_LOCK_REELECTED marker=%s trigger_instance_id=%s pid=%d reason=%s",
+            "WRITER_REELECTION_REQUESTED marker=%s trigger_instance_id=%s pid=%d "
+            "reason=%s terminal_startup_failure=%s",
             _MARKER,
             self._instance_id,
             os.getpid(),
             reason,
+            terminal_failure,
         )
-        logger.critical(
-            "WRITER_REELECTED marker=%s trigger_instance_id=%s pid=%d reason=%s",
-            _MARKER,
-            self._instance_id,
-            os.getpid(),
-            reason,
+        loss_reason_prefix = (
+            "writer_lock_released_for_terminal_shutdown"
+            if terminal_failure
+            else "writer_lock_released_for_reelection"
         )
-        self._mark_lost(f"writer_lock_released_for_reelection:{reason}")
+        self._mark_lost(f"{loss_reason_prefix}:{reason}")
 
     def set_on_lost_callback(self, callback: Any) -> None:
         """Register a callable invoked synchronously when the lease is lost.

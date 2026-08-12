@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import os
+import sys
 import threading
+import types
 
 from bot import runtime_authority_convergence_repair_patch as patch
 
@@ -142,6 +144,42 @@ def test_heartbeat_fails_closed_without_generation(monkeypatch):
 
     assert ready is False
     assert "writer_token_or_generation_missing" in reason
+
+
+def test_heartbeat_ready_recovers_core_thread_before_failing_closed(monkeypatch):
+    _live_env(monkeypatch)
+    monkeypatch.setenv("NIJA_CORE_THREAD_ALIVE", "0")
+
+    def _recover():
+        os.environ["NIJA_CORE_THREAD_ALIVE"] = "1"
+        return True, "existing_live_thread"
+
+    monkeypatch.setitem(
+        sys.modules,
+        "bot.writer_recovery_epoch_core_v81_patch",
+        types.SimpleNamespace(repair_core_thread_once=_recover),
+    )
+    ready, reason = patch._heartbeat_ready()
+
+    assert ready is True
+    assert "heartbeat_ready" in reason
+
+
+def test_heartbeat_ready_reports_recovery_detail_when_core_stays_dead(monkeypatch):
+    _live_env(monkeypatch)
+    monkeypatch.setenv("NIJA_CORE_THREAD_ALIVE", "0")
+    monkeypatch.setitem(
+        sys.modules,
+        "bot.writer_recovery_epoch_core_v81_patch",
+        types.SimpleNamespace(
+            repair_core_thread_once=lambda: (False, "startup_not_complete")
+        ),
+    )
+
+    ready, reason = patch._heartbeat_ready()
+
+    assert ready is False
+    assert reason == "core_thread_not_alive:startup_not_complete"
 
 
 def test_heartbeat_accepts_writer_generation_alias(monkeypatch):
