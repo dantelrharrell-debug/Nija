@@ -43,9 +43,11 @@ _FAST_PATH_INSTALLERS = (
     ("bot.okx_final_order_submission_bridge_patch", "OKX_FINAL_ORDER_SUBMISSION_BRIDGE"),
     ("bot.stalled_writer_release_guard_v22", "STALLED_WRITER_RELEASE_GUARD_V22"),
     ("bot.final_production_activation_repair_v58_patch", "FINAL_PRODUCTION_ACTIVATION_V58"),
+    # v61 must install before v59/v60 start their reconciliation/activation
+    # monitors. It guards v60's request boundary and makes v16 readiness reflect
+    # current proof truth before any activation attempt is permitted.
+    ("bot.final_production_activation_repair_v61_patch", "FINAL_PRODUCTION_ACTIVATION_V61"),
     ("bot.final_production_activation_repair_v59_patch", "FINAL_PRODUCTION_ACTIVATION_V59"),
-    # v60 installs last so activation callers and execution/exit repair wiring
-    # converge after all earlier writer/readiness compatibility layers.
     ("bot.final_production_activation_repair_v60_patch", "FINAL_PRODUCTION_ACTIVATION_V60"),
 )
 
