@@ -19,7 +19,7 @@ import sys
 from typing import Iterable
 
 logger = logging.getLogger("nija.bot_entrypoint")
-_FAST_PATH_MARKER = "20260808-canonical-fast-entrypoint-v57-v34"
+_FAST_PATH_MARKER = "20260812-canonical-fast-entrypoint-v62"
 
 _FAST_PATH_INSTALLERS = (
     ("bot.writer_reelection_loss_reason_v46_patch", "WRITER_REELECTION_LOSS_REASON_V46"),
@@ -42,6 +42,14 @@ _FAST_PATH_INSTALLERS = (
     ("bot.okx_order_instid_payload_repair_patch", "OKX_ORDER_INSTID_PAYLOAD_REPAIR"),
     ("bot.okx_final_order_submission_bridge_patch", "OKX_FINAL_ORDER_SUBMISSION_BRIDGE"),
     ("bot.stalled_writer_release_guard_v22", "STALLED_WRITER_RELEASE_GUARD_V22"),
+    # Keep synchronous capital publication inside the canonical freshness TTL.
+    # Slow venue workers continue asynchronously and can contribute on a later
+    # refresh once their observations are still fresh.
+    ("bot.capital_refresh_live_continuity_v78_patch", "CAPITAL_REFRESH_FRESHNESS_BOUNDED_V78"),
+    # Synchronize canonical bootstrap/capital/readiness state before any
+    # compatibility activation proof is evaluated. This is state convergence,
+    # not a bypass; all writer/nonce/risk/kill-switch gates remain authoritative.
+    ("bot.activation_capital_convergence_v62_patch", "ACTIVATION_CAPITAL_CONVERGENCE_V62"),
     ("bot.final_production_activation_repair_v58_patch", "FINAL_PRODUCTION_ACTIVATION_V58"),
     # v61 must install before v59/v60 start their reconciliation/activation
     # monitors. It guards v60's request boundary and makes v16 readiness reflect
