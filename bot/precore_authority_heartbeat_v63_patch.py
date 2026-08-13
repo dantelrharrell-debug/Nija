@@ -217,15 +217,18 @@ def _recover_heartbeat_owned_stop(module: ModuleType, monitor: Any = None) -> tu
                 TradingState.OFF,
                 f"authority heartbeat recovered; reactivation required marker={MARKER}",
             )
+            state = sm.get_current_state()
+            state_value = str(getattr(state, "value", state) or "").strip().upper()
         except Exception as exc:
             return False, f"fsm_recovery_failed:{type(exc).__name__}:{exc}"
-    elif state_value not in {"OFF", "LIVE_PENDING_CONFIRMATION", "LIVE_ACTIVE"}:
-        # Unknown/nonstandard states are not rewritten by this recovery path.
-        return False, f"fsm_state_not_recoverable:{state_value or 'unknown'}"
 
-    # Resume SEAK only after the FSM is safely OFF (or already left the stale
-    # emergency state).  This keeps order dispatch closed while normal activation
-    # proofs reconverge.
+    # SEAK may only be resumed after the heartbeat-owned emergency latch has
+    # definitively landed in OFF.  LIVE_PENDING_CONFIRMATION/LIVE_ACTIVE (or any
+    # other state) must keep the halt in place until normal activation code
+    # explicitly re-establishes the full execution contract.
+    if state_value != "OFF":
+        return False, f"fsm_not_off_after_recovery:{state_value or 'unknown'}"
+
     if seak_halted:
         resume = getattr(seak, "resume", None)
         if not callable(resume):
