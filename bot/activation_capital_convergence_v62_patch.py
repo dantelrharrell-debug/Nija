@@ -11,8 +11,8 @@ This repair closes two fail-closed startup races without manufacturing authority
 
 2. ``three_venue_execution_readiness`` historically allowed environment handoff
    flags to override CapitalAuthority staleness. Replace that observer with a
-   canonical check: hydrated authority, positive real capital, and a current
-   non-stale publication are all required.
+   canonical check: hydrated authority, positive real capital, and a currently
+   accepted, non-stale publication are all required.
 
 No writer, nonce, kill-switch, dispatch-health, risk, or freshness gate is
 bypassed. The coordinator's existing readiness proof remains the final authority.
@@ -47,7 +47,7 @@ def _state_value(module_name: str, getter_name: str) -> str:
 
 
 def _authority_snapshot() -> tuple[bool, float | None, bool]:
-    """Return (hydrated, real_capital, stale) from canonical CapitalAuthority."""
+    """Return (hydrated, real_capital, stale_or_unaccepted) from CapitalAuthority."""
     try:
         try:
             from bot.capital_authority import get_capital_authority
@@ -72,7 +72,11 @@ def _authority_snapshot() -> tuple[bool, float | None, bool]:
         if callable(publication_reader):
             try:
                 publication = publication_reader()
-                stale = bool(getattr(publication, "stale", True))
+                publication_stale = bool(getattr(publication, "stale", True))
+                publication_accepted = bool(
+                    getattr(publication, "accepted", not publication_stale)
+                )
+                stale = bool(publication_stale or not publication_accepted)
             except Exception:
                 stale = True
         else:
@@ -120,11 +124,19 @@ def _sync_coordinator_inputs(coordinator: Any) -> None:
         balance=capital,
         stale=stale,
     )
+    if readiness:
+        readiness_table = readiness
+        readiness_complete = bool(all(readiness.values()))
+    else:
+        # An empty/unavailable table must never satisfy
+        # StartupConvergenceSnapshot.pending_readiness by vacuous truth.
+        readiness_table = {"canonical_sync_available": False}
+        readiness_complete = False
     coordinator.record_readiness(
         key="__canonical_sync__",
-        value=bool(readiness and all(readiness.values())),
+        value=readiness_complete,
         version=readiness_version,
-        table=readiness,
+        table=readiness_table,
     )
     LOGGER.info(
         "ACTIVATION_CAPITAL_CANONICAL_SYNC marker=%s bootstrap=%s capital=%s "
@@ -136,7 +148,7 @@ def _sync_coordinator_inputs(coordinator: Any) -> None:
         capital,
         stale,
         readiness_version,
-        sorted(key for key, value in readiness.items() if not value),
+        sorted(key for key, value in readiness_table.items() if not value),
     )
 
 
@@ -183,7 +195,7 @@ def _patch_three_venue(module: ModuleType) -> bool:
             hydrated, capital, stale = _authority_snapshot()
             LOGGER.warning(
                 "THREE_VENUE_CANONICAL_CAPITAL_NOT_READY marker=%s hydrated=%s "
-                "capital=%s stale=%s env_handoff_ignored=true",
+                "capital=%s stale_or_unaccepted=%s env_handoff_ignored=true",
                 MARKER,
                 hydrated,
                 capital,
