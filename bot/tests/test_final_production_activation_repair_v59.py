@@ -47,6 +47,49 @@ def test_writer_registration_reconciliation_dispatches_async(monkeypatch):
         assert elapsed < 0.25
         assert started.wait(timeout=1.0)
         release.set()
+        worker = runtime._runtime_reconcile_thread
+        if worker is not None:
+            worker.join(timeout=1.0)
+    finally:
+        module.EntrypointWriterAuthority._notify_runtime_reconciliation = original
+
+
+def test_writer_reconciliation_coalesces_and_replays_latest_trigger(monkeypatch):
+    import bot.entrypoint_writer_authority as module
+
+    original = module.EntrypointWriterAuthority._notify_runtime_reconciliation
+    try:
+        assert repair._patch_writer_reconciliation_async() is True
+        runtime = module.EntrypointWriterAuthority()
+        first_started = threading.Event()
+        release_first = threading.Event()
+        replay_finished = threading.Event()
+        calls: list[str] = []
+
+        def reconcile(trigger: str) -> None:
+            calls.append(trigger)
+            if len(calls) == 1:
+                first_started.set()
+                release_first.wait(timeout=2.0)
+            else:
+                replay_finished.set()
+
+        runtime._run_runtime_reconciliation = reconcile
+        runtime._notify_runtime_reconciliation("watchdog")
+        assert first_started.wait(timeout=1.0)
+
+        runtime._notify_runtime_reconciliation("heartbeat_renewed")
+        runtime._notify_runtime_reconciliation("writer_authority_active")
+        release_first.set()
+
+        assert replay_finished.wait(timeout=1.0)
+        worker = runtime._runtime_reconcile_thread
+        if worker is not None:
+            worker.join(timeout=1.0)
+
+        assert calls == ["watchdog", "writer_authority_active"]
+        assert runtime._runtime_reconcile_thread is None
+        assert getattr(runtime, "_runtime_reconcile_pending_trigger", None) is None
     finally:
         module.EntrypointWriterAuthority._notify_runtime_reconciliation = original
 
