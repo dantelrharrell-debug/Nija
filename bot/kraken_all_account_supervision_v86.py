@@ -88,10 +88,6 @@ def _user_records(manager: Any) -> list[tuple[str, str, Any, Any]]:
             account_id = f"user:{user_id}:kraken"
             records[account_id] = (account_id, str(user_id), broker_type, broker)
 
-    # Registry truth includes users whose broker could not be constructed,
-    # whose authenticated connection failed, or whose credentials are absent.
-    # Preserve those records with broker=None so reporting cannot silently
-    # shrink the denominator.  _schedule() never performs broker I/O for them.
     metadata = getattr(manager, "_user_metadata", {})
     try:
         metadata_items = list(metadata.items())
@@ -138,15 +134,96 @@ def _retry_delay(failures: int) -> float:
     return min(ceiling, base * (2 ** max(0, min(failures - 1, 8))))
 
 
-def _mark_connected(manager: Any, user_id: str, broker_type: Any, broker: Any) -> None:
+def _recover_user_config(manager: Any, user_id: str) -> Any:
+    """Return current user config even when startup only prepared broker objects."""
+    configs = getattr(manager, "user_configs", None)
+    if isinstance(configs, dict) and configs.get(user_id) is not None:
+        return configs[user_id]
+    try:
+        from config.user_loader import get_user_config_loader
+
+        loader = get_user_config_loader()
+        for config in loader.get_all_enabled_users() or []:
+            if str(getattr(config, "user_id", "")) == str(user_id):
+                if isinstance(configs, dict):
+                    configs[user_id] = config
+                LOGGER.info(
+                    "KRAKEN_USER_CONFIG_RECOVERED marker=%s account=user:%s:kraken source=user_loader",
+                    MARKER,
+                    user_id,
+                )
+                return config
+    except Exception as exc:
+        LOGGER.warning(
+            "KRAKEN_USER_CONFIG_RECOVERY_FAILED marker=%s account=user:%s:kraken error=%s:%s",
+            MARKER,
+            user_id,
+            type(exc).__name__,
+            exc,
+        )
+    return None
+
+
+def _reconcile_post_connect(manager: Any, user_id: str, broker_type: Any, broker: Any) -> None:
+    """Converge registry and capital eligibility after a real authenticated connect."""
     if not bool(getattr(broker, "connected", False)):
         return
+    key = (user_id, broker_type)
     user_map = getattr(manager, "user_brokers", None)
     if isinstance(user_map, dict):
         user_map.setdefault(user_id, {})[broker_type] = broker
-    failed = getattr(manager, "_failed_user_connections", None)
-    if isinstance(failed, dict):
-        failed.pop((user_id, broker_type), None)
+
+    for registry_name in ("_failed_user_connections", "_users_without_credentials"):
+        registry = getattr(manager, registry_name, None)
+        if isinstance(registry, dict):
+            registry.pop(key, None)
+
+    metadata = getattr(manager, "_user_metadata", None)
+    capital_blocked = getattr(manager, "_capital_blocked_users", None)
+    audit = getattr(manager, "_audit_user_trading_capital", None)
+    if callable(audit):
+        try:
+            tradable, _diag, reason = audit(user_id, broker_type, broker)
+            if isinstance(capital_blocked, dict):
+                if tradable:
+                    capital_blocked.pop(key, None)
+                else:
+                    capital_blocked[key] = str(reason or "capital_not_trading_eligible")
+            if isinstance(metadata, dict):
+                metadata.setdefault(user_id, {}).setdefault("brokers", {})[broker_type] = bool(tradable)
+            LOGGER.critical(
+                "KRAKEN_USER_POST_CONNECT_RECONCILED marker=%s account=user:%s:kraken "
+                "connected=true trading_eligible=%s fabricated_eligibility=false",
+                MARKER,
+                user_id,
+                str(bool(tradable)).lower(),
+            )
+            return
+        except Exception as exc:
+            if isinstance(capital_blocked, dict):
+                capital_blocked[key] = f"capital_audit_failed:{type(exc).__name__}:{exc}"
+            if isinstance(metadata, dict):
+                metadata.setdefault(user_id, {}).setdefault("brokers", {})[broker_type] = False
+            LOGGER.warning(
+                "KRAKEN_USER_POST_CONNECT_CAPITAL_AUDIT_FAILED marker=%s account=user:%s:kraken "
+                "error=%s:%s entries_fail_closed=true",
+                MARKER,
+                user_id,
+                type(exc).__name__,
+                exc,
+            )
+            return
+
+    LOGGER.critical(
+        "KRAKEN_USER_POST_CONNECT_RECONCILED marker=%s account=user:%s:kraken "
+        "connected=true trading_eligibility=unchanged reason=capital_audit_unavailable",
+        MARKER,
+        user_id,
+    )
+
+
+def _mark_connected(manager: Any, user_id: str, broker_type: Any, broker: Any) -> None:
+    _reconcile_post_connect(manager, user_id, broker_type, broker)
 
 
 def _connect_account(
@@ -158,7 +235,6 @@ def _connect_account(
 ) -> None:
     try:
         with _CONNECT_SERIAL_LOCK:
-            # Spec AZ: no private broker I/O after shutdown is signalled.
             if _WATCHDOG_STOP.is_set():
                 LOGGER.info(
                     "KRAKEN_USER_RECONNECT_SKIPPED_SHUTDOWN marker=%s account=%s "
@@ -190,7 +266,7 @@ def _connect_account(
                 )
                 return
 
-            user_config = getattr(manager, "user_configs", {}).get(user_id)
+            user_config = _recover_user_config(manager, user_id)
             resync = getattr(manager, "_resync_single_user_kraken_nonce", None)
             if user_config is not None and callable(resync):
                 try:
@@ -277,10 +353,6 @@ def _schedule(manager: Any, record: tuple[str, str, Any, Any]) -> str:
 def reconcile_once(manager: Any = None) -> dict[str, Any]:
     if manager is None:
         try:
-            # ``get_broker_manager`` is the canonical singleton accessor in
-            # multi_account_broker_manager.  Observe only an already-loaded
-            # module: importing the broker graph from this watchdog would race
-            # the canonical main-thread startup handoff.
             module = sys.modules.get("bot.multi_account_broker_manager")
             get_broker_manager = getattr(module, "get_broker_manager", None)
             if not callable(get_broker_manager):
@@ -309,7 +381,6 @@ def reconcile_once(manager: Any = None) -> dict[str, Any]:
 
 
 def _watchdog() -> None:
-    """Continuously supervise registered Kraken users after canonical handoff."""
     try:
         interval = max(
             2.0,
@@ -348,7 +419,6 @@ def _watchdog() -> None:
 
 
 def stop() -> None:
-    """Signal the v86 watchdog to stop and prevent new connection attempts."""
     _WATCHDOG_STOP.set()
     LOGGER.info(
         "KRAKEN_ALL_ACCOUNT_SUPERVISION_V86_STOP marker=%s "
@@ -371,10 +441,18 @@ def install() -> bool:
     LOGGER.critical(
         "KRAKEN_ALL_ACCOUNT_SUPERVISION_V86_INSTALLED marker=%s "
         "platform=v44 users=authenticated_per_account writer_scoped=true "
-        "continuous_supervision=true",
+        "continuous_supervision=true reconnect_state_convergence=true",
         MARKER,
     )
     return True
 
 
-__all__ = ["MARKER", "install", "stop", "reconcile_once", "_user_records", "_writer_proof"]
+__all__ = [
+    "MARKER",
+    "install",
+    "stop",
+    "reconcile_once",
+    "_user_records",
+    "_writer_proof",
+    "_recover_user_config",
+]
