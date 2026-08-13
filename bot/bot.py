@@ -19,7 +19,7 @@ import sys
 from typing import Iterable
 
 logger = logging.getLogger("nija.bot_entrypoint")
-_FAST_PATH_MARKER = "20260812-canonical-fast-entrypoint-v63"
+_FAST_PATH_MARKER = "20260812-canonical-fast-entrypoint-v64"
 
 _FAST_PATH_INSTALLERS = (
     ("bot.writer_reelection_loss_reason_v46_patch", "WRITER_REELECTION_LOSS_REASON_V46"),
@@ -55,6 +55,10 @@ _FAST_PATH_INSTALLERS = (
     # compatibility activation proof is evaluated. This is state convergence,
     # not a bypass; all writer/nonce/risk/kill-switch gates remain authoritative.
     ("bot.activation_capital_convergence_v62_patch", "ACTIVATION_CAPITAL_CONVERGENCE_V62"),
+    # Keep every post-activation observer and new-risk dispatch path on the same
+    # canonical CapitalAuthority freshness contract. Protective reduce/exit
+    # intents remain available when freshness is lost.
+    ("bot.live_capital_freshness_v64_patch", "LIVE_CAPITAL_FRESHNESS_V64"),
     ("bot.final_production_activation_repair_v58_patch", "FINAL_PRODUCTION_ACTIVATION_V58"),
     # v61 must install before v59/v60 start their reconciliation/activation
     # monitors. It guards v60's request boundary and makes v16 readiness reflect
