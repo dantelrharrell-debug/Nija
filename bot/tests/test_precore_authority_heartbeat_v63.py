@@ -139,8 +139,6 @@ class PrecoreAuthorityHeartbeatV63Tests(unittest.TestCase):
         fake = types.ModuleType("authority_heartbeat_v64_concurrent_fake")
 
         def original(_timeout_s: float):
-            # Simulate register_core_thread publishing a newer liveness signal
-            # while the v64 heartbeat wrapper has temporarily hidden pre-core 0.
             os.environ["NIJA_CORE_THREAD_ALIVE"] = "1"
             return True, ""
 
@@ -171,7 +169,7 @@ class PrecoreAuthorityHeartbeatV63Tests(unittest.TestCase):
         self.assertEqual(reason, "core_thread_dead")
         self.assertEqual(seen, ["0"])
 
-    def _install_recovery_dependencies(self, *, seak_reason: str):
+    def _install_recovery_dependencies(self, *, seak_reason: str, initial_state: str = "EMERGENCY_STOP"):
         self._install_runtime(core=_AliveThread(), registered=True)
 
         kill = types.ModuleType("bot.kill_switch")
@@ -207,7 +205,7 @@ class PrecoreAuthorityHeartbeatV63Tests(unittest.TestCase):
 
         class FakeStateMachine:
             def __init__(self):
-                self.state = FakeTradingState.EMERGENCY_STOP
+                self.state = initial_state
                 self.transitions = []
 
             def get_current_state(self):
@@ -243,7 +241,6 @@ class PrecoreAuthorityHeartbeatV63Tests(unittest.TestCase):
         self.assertTrue(seak.resumed)
         self.assertFalse(seak.is_halted)
         self.assertNotIn("NIJA_AUTHORITY_HEARTBEAT_OWNED_STOP", os.environ)
-        # Recovery never force-activates trading.
         self.assertNotEqual(os.environ.get("NIJA_RUNTIME_TRADING_STATE"), "LIVE_ACTIVE")
 
     def test_recovery_does_not_resume_nonheartbeat_seak_halt(self) -> None:
@@ -257,6 +254,23 @@ class PrecoreAuthorityHeartbeatV63Tests(unittest.TestCase):
         self.assertTrue(reason.startswith("seak_halt_not_heartbeat_owned:"))
         self.assertTrue(seak.is_halted)
         self.assertEqual(sm.state, "EMERGENCY_STOP")
+
+    def test_recovery_does_not_resume_seak_until_fsm_is_off(self) -> None:
+        seak, sm = self._install_recovery_dependencies(
+            seak_reason="AUTHORITY_HEARTBEAT_EXPIRED: recovered monitor",
+            initial_state="LIVE_PENDING_CONFIRMATION",
+        )
+        fake = types.ModuleType("authority_heartbeat_v64_fsm_not_off_fake")
+        fake._check_authority_once = lambda _timeout_s: (True, "")
+        os.environ["NIJA_AUTHORITY_HEARTBEAT_OWNED_STOP"] = "1"
+
+        recovered, reason = self.mod._recover_heartbeat_owned_stop(fake)
+        self.assertFalse(recovered)
+        self.assertEqual(reason, "fsm_not_off_after_recovery:LIVE_PENDING_CONFIRMATION")
+        self.assertTrue(seak.is_halted)
+        self.assertFalse(seak.resumed)
+        self.assertEqual(sm.state, "LIVE_PENDING_CONFIRMATION")
+        self.assertIn("NIJA_AUTHORITY_HEARTBEAT_OWNED_STOP", os.environ)
 
 
 if __name__ == "__main__":
