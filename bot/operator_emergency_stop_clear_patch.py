@@ -5,13 +5,18 @@ import json
 import logging
 import os
 import shutil
+import sys
 import time
+from functools import wraps
 from pathlib import Path
+from types import ModuleType
 from typing import Iterable
 
 logger = logging.getLogger("nija.operator_emergency_stop_clear")
-_MARKER = "20260710s"
-_INSTALL_SENTINEL = "_NIJA_OPERATOR_EMERGENCY_STOP_CLEAR_INSTALLED_20260710S"
+_MARKER = "20260813-authority-stop-recovery-v90"
+_INSTALL_SENTINEL = "_NIJA_OPERATOR_EMERGENCY_STOP_CLEAR_INSTALLED_20260813V90"
+_HEARTBEAT_PATCH_SENTINEL = "_NIJA_AUTHORITY_HEARTBEAT_STOP_RECOVERY_PATCHED_20260813V90"
+_IMPORT_HOOK_SENTINEL = "_NIJA_AUTHORITY_HEARTBEAT_STOP_RECOVERY_IMPORT_HOOK_20260813V90"
 _TRUTHY = {"1", "true", "yes", "on", "y", "enabled"}
 _APPROVAL_PHRASE = "CLEAR_EMERGENCY_STOP_FOR_LIVE_TRADING"
 _DEFAULT_KILL_FILES = (
@@ -175,13 +180,6 @@ def _safe_to_clear(all_paths: Iterable[Path]) -> tuple[bool, str]:
 
 
 def _env_only_stop_present() -> tuple[bool, str]:
-    """Detect an actual environment-only emergency stop latch.
-
-    ``NIJA_RUNTIME_EXECUTION_AUTHORITY=0`` is the normal fail-closed startup
-    state before writer lineage, heartbeat, and capital proof. It is never, by
-    itself, evidence of an emergency stop.
-    """
-
     text = _combined_stop_text(())
     env_state = os.environ.get("NIJA_RUNTIME_TRADING_STATE", "").strip().upper()
     env_auth = os.environ.get("NIJA_RUNTIME_EXECUTION_AUTHORITY", "").strip()
@@ -243,9 +241,6 @@ def _clear_runtime_env() -> None:
     os.environ.pop("NIJA_OPERATOR_CLEAR_EMERGENCY_STOP", None)
     os.environ.pop("NIJA_OPERATOR_CLEAR_EMERGENCY_STOP_ACK", None)
     os.environ.pop("NIJA_OPERATOR_CLEAR_EMERGENCY_STOP_REASON", None)
-    # Clearing an operator stop returns the process only to a neutral state.
-    # Normal writer/capital/heartbeat convergence must independently grant live
-    # execution authority.
     if os.environ.get("NIJA_RUNTIME_TRADING_STATE", "").strip().upper() == "EMERGENCY_STOP":
         os.environ["NIJA_RUNTIME_TRADING_STATE"] = "OFF"
     os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "0"
@@ -315,13 +310,205 @@ def run_once() -> int:
     return len(cleared)
 
 
-def install_import_hook() -> None:
-    """Run startup clear logic once even if sitecustomize reloads the module."""
+def _exact_writer_recovery_proof() -> tuple[bool, str]:
+    try:
+        module = sys.modules.get("bot.entrypoint_writer_authority") or sys.modules.get("entrypoint_writer_authority")
+        getter = getattr(module, "get_entrypoint_writer_authority", None) if module is not None else None
+        if not callable(getter):
+            return False, "writer_runtime_missing"
+        runtime = getter()
+        if runtime is None or not bool(getattr(runtime, "acquired", False)) or bool(getattr(runtime, "lost", True)):
+            return False, "writer_not_acquired_or_lost"
+        health = getattr(runtime, "_nija_lease_renewal_health", None)
+        if not callable(health):
+            return False, "writer_renewal_health_unavailable"
+        healthy, reason, age_s, max_age_s = health()
+        if not bool(healthy):
+            return False, f"writer_renewal_unhealthy:{reason}:age={age_s}:max={max_age_s}"
+        return True, "exact_writer_renewal_proof"
+    except Exception as exc:
+        return False, f"writer_proof_error:{type(exc).__name__}:{exc}"
 
+
+def _kill_switch_explicitly_clear() -> tuple[bool, str]:
+    try:
+        try:
+            from bot.kill_switch import get_kill_switch
+        except ImportError:
+            from kill_switch import get_kill_switch  # type: ignore[import]
+        active = bool(get_kill_switch().is_active())
+        return (not active), "kill_switch_clear" if not active else "kill_switch_active"
+    except Exception as exc:
+        return False, f"kill_switch_probe_failed:{type(exc).__name__}:{exc}"
+
+
+def _last_stop_reason(sm: object) -> str:
+    try:
+        lock = getattr(sm, "_lock", None)
+        if lock is None:
+            return ""
+        with lock:
+            history = list(getattr(sm, "_state_history", []) or [])
+        if not history:
+            return ""
+        last = history[-1]
+        if not isinstance(last, dict):
+            return ""
+        if str(last.get("to", "")) != "EMERGENCY_STOP":
+            return ""
+        return str(last.get("reason", "") or "")
+    except Exception:
+        return ""
+
+
+def _recover_authority_heartbeat_stop() -> bool:
+    try:
+        try:
+            from bot.trading_state_machine import get_state_machine, TradingState
+        except ImportError:
+            from trading_state_machine import get_state_machine, TradingState  # type: ignore[import]
+        sm = get_state_machine()
+        with sm._lock:
+            current = sm._current_state
+        if current != TradingState.EMERGENCY_STOP:
+            return False
+        reason = _last_stop_reason(sm)
+        if "AUTHORITY_HEARTBEAT_EXPIRED" not in reason:
+            return False
+        kill_clear, kill_reason = _kill_switch_explicitly_clear()
+        if not kill_clear:
+            logger.critical(
+                "AUTHORITY_HEARTBEAT_STOP_RECOVERY_BLOCKED marker=%s reason=%s original_stop=%s",
+                _MARKER,
+                kill_reason,
+                reason,
+            )
+            return False
+        writer_ok, writer_reason = _exact_writer_recovery_proof()
+        if not writer_ok:
+            logger.warning(
+                "AUTHORITY_HEARTBEAT_STOP_RECOVERY_BLOCKED marker=%s reason=%s original_stop=%s",
+                _MARKER,
+                writer_reason,
+                reason,
+            )
+            return False
+        sm.transition_to(
+            TradingState.OFF,
+            "Recovered stale AUTHORITY_HEARTBEAT_EXPIRED after exact writer renewal proof",
+        )
+        logger.critical(
+            "AUTHORITY_HEARTBEAT_STOP_RECOVERED marker=%s prior_state=EMERGENCY_STOP new_state=OFF kill_switch=clear writer_proof=exact force_live=false",
+            _MARKER,
+        )
+        try:
+            from bot import kraken_all_account_supervision_v86 as v86
+            state = dict(v86.reconcile_once() or {})
+            logger.info(
+                "KRAKEN_USER_RECONCILE_AFTER_AUTHORITY_RECOVERY marker=%s registered=%s connected=%s disconnected=%s reason=%s",
+                _MARKER,
+                state.get("registered", 0),
+                state.get("connected", 0),
+                state.get("disconnected", 0),
+                state.get("reason", "unknown"),
+            )
+        except Exception as exc:
+            logger.warning(
+                "KRAKEN_USER_RECONCILE_AFTER_AUTHORITY_RECOVERY_FAILED marker=%s error=%s:%s",
+                _MARKER,
+                type(exc).__name__,
+                exc,
+            )
+        return True
+    except Exception as exc:
+        logger.warning(
+            "AUTHORITY_HEARTBEAT_STOP_RECOVERY_ERROR marker=%s error=%s:%s",
+            _MARKER,
+            type(exc).__name__,
+            exc,
+        )
+        return False
+
+
+def _patch_authority_heartbeat_module(module: ModuleType) -> bool:
+    cls = getattr(module, "AuthorityHeartbeatMonitor", None)
+    if not isinstance(cls, type):
+        return False
+    original_tick = getattr(cls, "_tick", None)
+    if not callable(original_tick) or getattr(original_tick, _HEARTBEAT_PATCH_SENTINEL, False):
+        return False
+
+    @wraps(original_tick)
+    def _tick(self, *args, **kwargs):
+        result = original_tick(self, *args, **kwargs)
+        try:
+            healthy = (
+                not bool(getattr(self, "_locked_down", False))
+                and int(getattr(self, "_consecutive_failures", 0) or 0) == 0
+                and os.environ.get("NIJA_WRITER_HEARTBEAT_ACTIVE", "").strip().lower() in _TRUTHY
+            )
+            if healthy:
+                _recover_authority_heartbeat_stop()
+        except Exception as exc:
+            logger.warning(
+                "AUTHORITY_HEARTBEAT_STOP_RECOVERY_TICK_ERROR marker=%s error=%s:%s",
+                _MARKER,
+                type(exc).__name__,
+                exc,
+            )
+        return result
+
+    setattr(_tick, _HEARTBEAT_PATCH_SENTINEL, True)
+    setattr(cls, "_tick", _tick)
+    logger.critical(
+        "AUTHORITY_HEARTBEAT_STOP_RECOVERY_PATCHED marker=%s module=%s exact_writer_proof=true kill_switch_clear_required=true heartbeat_origin_only=true",
+        _MARKER,
+        getattr(module, "__name__", "unknown"),
+    )
+    return True
+
+
+def _patch_loaded_authority_heartbeat() -> None:
+    for name in ("bot.authority_heartbeat", "authority_heartbeat"):
+        module = sys.modules.get(name)
+        if isinstance(module, ModuleType):
+            try:
+                _patch_authority_heartbeat_module(module)
+            except Exception as exc:
+                logger.warning(
+                    "AUTHORITY_HEARTBEAT_STOP_RECOVERY_PATCH_FAILED marker=%s module=%s error=%s:%s",
+                    _MARKER,
+                    name,
+                    type(exc).__name__,
+                    exc,
+                )
+
+
+def _install_authority_heartbeat_import_hook() -> None:
+    _patch_loaded_authority_heartbeat()
+    if getattr(builtins, _IMPORT_HOOK_SENTINEL, False):
+        return
+    original_import = builtins.__import__
+
+    @wraps(original_import)
+    def guarded_import(name, globals=None, locals=None, fromlist=(), level=0):
+        module = original_import(name, globals, locals, fromlist, level)
+        if str(name).endswith("authority_heartbeat") or name in {"bot.authority_heartbeat", "authority_heartbeat"}:
+            _patch_loaded_authority_heartbeat()
+        return module
+
+    builtins.__import__ = guarded_import
+    setattr(builtins, _IMPORT_HOOK_SENTINEL, True)
+    logger.info("AUTHORITY_HEARTBEAT_STOP_RECOVERY_IMPORT_HOOK marker=%s", _MARKER)
+
+
+def install_import_hook() -> None:
     if getattr(builtins, _INSTALL_SENTINEL, False):
+        _install_authority_heartbeat_import_hook()
         return
     setattr(builtins, _INSTALL_SENTINEL, True)
     run_once()
+    _install_authority_heartbeat_import_hook()
 
 
 def install() -> None:
