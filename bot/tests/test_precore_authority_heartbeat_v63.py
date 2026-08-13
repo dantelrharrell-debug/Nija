@@ -8,11 +8,22 @@ import unittest
 from types import SimpleNamespace
 
 
+class _AliveThread:
+    def is_alive(self) -> bool:
+        return True
+
+
 class PrecoreAuthorityHeartbeatV63Tests(unittest.TestCase):
     def setUp(self) -> None:
         self.mod = importlib.import_module("bot.precore_authority_heartbeat_v63_patch")
         self.saved_env = {
-            "NIJA_CORE_THREAD_ALIVE": os.environ.get("NIJA_CORE_THREAD_ALIVE"),
+            name: os.environ.get(name)
+            for name in (
+                "NIJA_CORE_THREAD_ALIVE",
+                "NIJA_AUTHORITY_HEARTBEAT_OWNED_STOP",
+                "NIJA_AUTHORITY_HEARTBEAT_OWNED_STOP_REASON",
+                "NIJA_RUNTIME_TRADING_STATE",
+            )
         }
         self.saved_modules = {
             name: sys.modules.get(name)
@@ -21,13 +32,20 @@ class PrecoreAuthorityHeartbeatV63Tests(unittest.TestCase):
                 "entrypoint_writer_authority",
                 "bot.bot_main",
                 "bot_main",
+                "bot.kill_switch",
+                "kill_switch",
+                "bot.single_execution_authority_kernel",
+                "single_execution_authority_kernel",
+                "bot.trading_state_machine",
+                "trading_state_machine",
             )
         }
 
     def tearDown(self) -> None:
-        os.environ.pop("NIJA_CORE_THREAD_ALIVE", None)
-        if self.saved_env["NIJA_CORE_THREAD_ALIVE"] is not None:
-            os.environ["NIJA_CORE_THREAD_ALIVE"] = self.saved_env["NIJA_CORE_THREAD_ALIVE"]
+        for name, value in self.saved_env.items():
+            os.environ.pop(name, None)
+            if value is not None:
+                os.environ[name] = value
         for name, module in self.saved_modules.items():
             if module is None:
                 sys.modules.pop(name, None)
@@ -37,6 +55,7 @@ class PrecoreAuthorityHeartbeatV63Tests(unittest.TestCase):
     def _install_runtime(
         self,
         *,
+        acquired: bool = True,
         core=None,
         registered: bool = False,
         lost: bool = False,
@@ -46,6 +65,7 @@ class PrecoreAuthorityHeartbeatV63Tests(unittest.TestCase):
         shutdown: bool = False,
     ):
         runtime = SimpleNamespace(
+            acquired=acquired,
             lost=lost,
             terminal_startup_failure_reason=terminal_reason,
             _scan_deadline_exceeded=deadline_exceeded,
@@ -70,6 +90,12 @@ class PrecoreAuthorityHeartbeatV63Tests(unittest.TestCase):
         active, reason = self.mod._precore_grace_active()
         self.assertTrue(active)
         self.assertEqual(reason, "startup_not_registered")
+
+    def test_precore_grace_requires_acquired_writer(self) -> None:
+        self._install_runtime(acquired=False)
+        active, reason = self.mod._precore_grace_active()
+        self.assertFalse(active)
+        self.assertEqual(reason, "writer_not_acquired")
 
     def test_grace_ends_when_core_handoff_has_started(self) -> None:
         self._install_runtime(core=object())
@@ -108,8 +134,25 @@ class PrecoreAuthorityHeartbeatV63Tests(unittest.TestCase):
         self.assertEqual(seen, [(1.25, None)])
         self.assertEqual(os.environ.get("NIJA_CORE_THREAD_ALIVE"), "0")
 
+    def test_wrapper_preserves_concurrent_core_registration_signal(self) -> None:
+        self._install_runtime()
+        fake = types.ModuleType("authority_heartbeat_v64_concurrent_fake")
+
+        def original(_timeout_s: float):
+            os.environ["NIJA_CORE_THREAD_ALIVE"] = "1"
+            return True, ""
+
+        fake._check_authority_once = original
+        os.environ["NIJA_CORE_THREAD_ALIVE"] = "0"
+        self.assertTrue(self.mod._patch_authority_heartbeat(fake))
+
+        ok, reason = fake._check_authority_once(1.0)
+        self.assertTrue(ok)
+        self.assertEqual(reason, "")
+        self.assertEqual(os.environ.get("NIJA_CORE_THREAD_ALIVE"), "1")
+
     def test_wrapper_keeps_postcore_zero_fail_closed(self) -> None:
-        self._install_runtime(core=object(), registered=True)
+        self._install_runtime(core=_AliveThread(), registered=True)
         fake = types.ModuleType("authority_heartbeat_v63_postcore_fake")
         seen = []
 
@@ -125,6 +168,109 @@ class PrecoreAuthorityHeartbeatV63Tests(unittest.TestCase):
         self.assertFalse(ok)
         self.assertEqual(reason, "core_thread_dead")
         self.assertEqual(seen, ["0"])
+
+    def _install_recovery_dependencies(self, *, seak_reason: str, initial_state: str = "EMERGENCY_STOP"):
+        self._install_runtime(core=_AliveThread(), registered=True)
+
+        kill = types.ModuleType("bot.kill_switch")
+        kill.get_kill_switch = lambda: SimpleNamespace(is_active=lambda: False)
+        sys.modules["bot.kill_switch"] = kill
+        sys.modules.pop("kill_switch", None)
+
+        class FakeSeak:
+            def __init__(self):
+                self.is_halted = True
+                self._halt_reason = seak_reason
+                self.resumed = False
+
+            def snapshot(self):
+                return {"halted": self.is_halted, "halt_reason": self._halt_reason}
+
+            def resume(self, caller: str = "operator"):
+                self.is_halted = False
+                self._halt_reason = ""
+                self.resumed = caller == "authority_heartbeat_recovery_v64"
+
+        seak = FakeSeak()
+        seak_mod = types.ModuleType("bot.single_execution_authority_kernel")
+        seak_mod.get_seak = lambda: seak
+        sys.modules["bot.single_execution_authority_kernel"] = seak_mod
+        sys.modules.pop("single_execution_authority_kernel", None)
+
+        class FakeTradingState:
+            EMERGENCY_STOP = "EMERGENCY_STOP"
+            OFF = "OFF"
+            LIVE_PENDING_CONFIRMATION = "LIVE_PENDING_CONFIRMATION"
+            LIVE_ACTIVE = "LIVE_ACTIVE"
+
+        class FakeStateMachine:
+            def __init__(self):
+                self.state = initial_state
+                self.transitions = []
+
+            def get_current_state(self):
+                return self.state
+
+            def transition_to(self, target, reason: str):
+                self.transitions.append((target, reason))
+                self.state = target
+
+        sm = FakeStateMachine()
+        tsm = types.ModuleType("bot.trading_state_machine")
+        tsm.get_state_machine = lambda: sm
+        tsm.TradingState = FakeTradingState
+        sys.modules["bot.trading_state_machine"] = tsm
+        sys.modules.pop("trading_state_machine", None)
+        return seak, sm
+
+    def test_recovery_releases_only_heartbeat_owned_emergency_stop(self) -> None:
+        seak, sm = self._install_recovery_dependencies(
+            seak_reason="AUTHORITY_HEARTBEAT_EXPIRED: transient core startup race"
+        )
+        fake = types.ModuleType("authority_heartbeat_v64_recovery_fake")
+        fake._check_authority_once = lambda _timeout_s: (True, "")
+
+        os.environ["NIJA_AUTHORITY_HEARTBEAT_OWNED_STOP"] = "1"
+        os.environ["NIJA_AUTHORITY_HEARTBEAT_OWNED_STOP_REASON"] = "transient core startup race"
+        os.environ["NIJA_RUNTIME_TRADING_STATE"] = "EMERGENCY_STOP"
+
+        recovered, reason = self.mod._recover_heartbeat_owned_stop(fake)
+        self.assertTrue(recovered)
+        self.assertEqual(reason, "heartbeat_owned_stop_recovered_to_fail_closed_off")
+        self.assertEqual(sm.state, "OFF")
+        self.assertTrue(seak.resumed)
+        self.assertFalse(seak.is_halted)
+        self.assertNotIn("NIJA_AUTHORITY_HEARTBEAT_OWNED_STOP", os.environ)
+        self.assertNotEqual(os.environ.get("NIJA_RUNTIME_TRADING_STATE"), "LIVE_ACTIVE")
+
+    def test_recovery_does_not_resume_nonheartbeat_seak_halt(self) -> None:
+        seak, sm = self._install_recovery_dependencies(seak_reason="operator emergency halt")
+        fake = types.ModuleType("authority_heartbeat_v64_nonowned_fake")
+        fake._check_authority_once = lambda _timeout_s: (True, "")
+        os.environ["NIJA_AUTHORITY_HEARTBEAT_OWNED_STOP"] = "1"
+
+        recovered, reason = self.mod._recover_heartbeat_owned_stop(fake)
+        self.assertFalse(recovered)
+        self.assertTrue(reason.startswith("seak_halt_not_heartbeat_owned:"))
+        self.assertTrue(seak.is_halted)
+        self.assertEqual(sm.state, "EMERGENCY_STOP")
+
+    def test_recovery_does_not_resume_seak_until_fsm_is_off(self) -> None:
+        seak, sm = self._install_recovery_dependencies(
+            seak_reason="AUTHORITY_HEARTBEAT_EXPIRED: recovered monitor",
+            initial_state="LIVE_PENDING_CONFIRMATION",
+        )
+        fake = types.ModuleType("authority_heartbeat_v64_fsm_not_off_fake")
+        fake._check_authority_once = lambda _timeout_s: (True, "")
+        os.environ["NIJA_AUTHORITY_HEARTBEAT_OWNED_STOP"] = "1"
+
+        recovered, reason = self.mod._recover_heartbeat_owned_stop(fake)
+        self.assertFalse(recovered)
+        self.assertEqual(reason, "fsm_not_off_after_recovery:LIVE_PENDING_CONFIRMATION")
+        self.assertTrue(seak.is_halted)
+        self.assertFalse(seak.resumed)
+        self.assertEqual(sm.state, "LIVE_PENDING_CONFIRMATION")
+        self.assertIn("NIJA_AUTHORITY_HEARTBEAT_OWNED_STOP", os.environ)
 
 
 if __name__ == "__main__":
