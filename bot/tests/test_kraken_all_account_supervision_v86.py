@@ -85,7 +85,15 @@ class KrakenAllAccountSupervisionV86Tests(unittest.TestCase):
             user_brokers={},
             user_configs={"alice": user},
             _failed_user_connections={("alice", _BrokerType): "timeout"},
+            _users_without_credentials={("alice", _BrokerType): True},
+            _capital_blocked_users={("alice", _BrokerType): "stale"},
+            _user_metadata={"alice": {"brokers": {_BrokerType: False}}},
             _resync_single_user_kraken_nonce=lambda config: resync_calls.append(config),
+            _audit_user_trading_capital=lambda *args: (
+                True,
+                {"usable_balance": 100.0},
+                "",
+            ),
         )
         with patch.object(v86, "_writer_proof", return_value=(True, "exact")):
             v86._connect_account(
@@ -100,7 +108,66 @@ class KrakenAllAccountSupervisionV86Tests(unittest.TestCase):
         self.assertTrue(broker.connected)
         self.assertIs(manager.user_brokers["alice"][_BrokerType], broker)
         self.assertEqual(manager._failed_user_connections, {})
+        self.assertEqual(manager._users_without_credentials, {})
+        self.assertEqual(manager._capital_blocked_users, {})
+        self.assertTrue(manager._user_metadata["alice"]["brokers"][_BrokerType])
         self.assertEqual(resync_calls, [user])
+
+    def test_reconnect_recovers_missing_user_config_for_nonce_resync(self) -> None:
+        broker = _Broker()
+        user = SimpleNamespace(user_id="alice", broker_type="KRAKEN")
+        resync_calls: list[object] = []
+        manager = SimpleNamespace(
+            user_brokers={},
+            user_configs={},
+            _failed_user_connections={},
+            _users_without_credentials={},
+            _capital_blocked_users={},
+            _user_metadata={"alice": {"brokers": {_BrokerType: False}}},
+            _resync_single_user_kraken_nonce=lambda config: resync_calls.append(config),
+            _audit_user_trading_capital=lambda *args: (True, {}, ""),
+        )
+        loader = SimpleNamespace(get_all_enabled_users=lambda: [user])
+        with patch.object(v86, "_writer_proof", return_value=(True, "exact")), patch(
+            "config.user_loader.get_user_config_loader",
+            return_value=loader,
+        ):
+            v86._connect_account(
+                manager,
+                "user:alice:kraken",
+                "alice",
+                _BrokerType,
+                broker,
+            )
+
+        self.assertEqual(resync_calls, [user])
+        self.assertIs(manager.user_configs["alice"], user)
+        self.assertTrue(manager.user_brokers["alice"][_BrokerType].connected)
+
+    def test_connected_but_capital_blocked_remains_ineligible(self) -> None:
+        broker = _Broker(connected=True)
+        manager = SimpleNamespace(
+            user_brokers={},
+            _failed_user_connections={},
+            _users_without_credentials={},
+            _capital_blocked_users={},
+            _user_metadata={"alice": {"brokers": {_BrokerType: False}}},
+            _audit_user_trading_capital=lambda *args: (
+                False,
+                {"usable_balance": 0.25},
+                "usable below required trading floor",
+            ),
+        )
+
+        state = v86._schedule(
+            manager,
+            ("user:alice:kraken", "alice", _BrokerType, broker),
+        )
+
+        self.assertEqual(state, "connected")
+        self.assertTrue(broker.connected)
+        self.assertIn(("alice", _BrokerType), manager._capital_blocked_users)
+        self.assertFalse(manager._user_metadata["alice"]["brokers"][_BrokerType])
 
     def test_reconnect_fails_closed_without_writer_proof(self) -> None:
         broker = _Broker()
