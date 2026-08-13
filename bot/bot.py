@@ -19,7 +19,7 @@ import sys
 from typing import Iterable
 
 logger = logging.getLogger("nija.bot_entrypoint")
-_FAST_PATH_MARKER = "20260812-canonical-fast-entrypoint-v62"
+_FAST_PATH_MARKER = "20260812-canonical-fast-entrypoint-v63"
 
 _FAST_PATH_INSTALLERS = (
     ("bot.writer_reelection_loss_reason_v46_patch", "WRITER_REELECTION_LOSS_REASON_V46"),
@@ -32,6 +32,11 @@ _FAST_PATH_INSTALLERS = (
     ("bot.writer_authority_generation_convergence_v57_patch", "WRITER_AUTHORITY_GENERATION_CONVERGENCE_V57"),
     ("bot.zero_signal_streak_cap_repair_v51_patch", "ZERO_SIGNAL_STREAK_CAP_V51"),
     ("bot.heartbeat_authority_single_source_patch", "HEARTBEAT_AUTHORITY_SINGLE_SOURCE"),
+    # The writer heartbeat truthfully publishes CORE_THREAD_ALIVE=0 before the
+    # real core is launched. Keep the independent authority heartbeat aligned
+    # with that documented startup grace while preserving post-core fail-closed
+    # liveness checks.
+    ("bot.precore_authority_heartbeat_v63_patch", "PRECORE_AUTHORITY_HEARTBEAT_V63"),
     ("bot.activation_convergence_v17_patch", "ACTIVATION_CONVERGENCE_V17"),
     ("bot.activation_convergence_v17_importlib_bridge", "ACTIVATION_CONVERGENCE_V17_IMPORTLIB_BRIDGE"),
     ("bot.okx_patch_churn_guard_patch", "OKX_PATCH_CHURN_GUARD"),
