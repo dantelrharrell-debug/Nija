@@ -3,6 +3,8 @@
 Addresses regressions observed after PR #2494:
 - canonical stalled-writer monitor must never own BootstrapFSM/runtime authority;
 - writer core registration must not synchronously wait on broker readiness I/O;
+- readiness triggers that arrive during an in-flight reconciliation must be
+  coalesced and replayed instead of being silently dropped;
 - v16 proof monitor must actually run on the canonical fast path;
 - accepted fresh CapitalAuthority snapshot must reach TradingStateMachine's
   first-snapshot latch through the existing fail-closed activation bridge.
@@ -91,37 +93,64 @@ def _patch_writer_reconciliation_async() -> bool:
         return True
 
     def notify_async(self: Any, trigger: str) -> None:
-        """Never block lease/core registration on exchange/readiness I/O."""
+        """Never block lease/core registration and never drop a readiness edge.
+
+        Reconciliation can contain slow broker I/O, so there is still at most
+        one worker. If a new trigger arrives while that worker is active, retain
+        the latest trigger and replay one follow-up pass before the worker exits.
+        This preserves single-flight behavior without losing the heartbeat or
+        authority transition that may make the v61 current-proof table ready.
+        """
         lock = getattr(self, "_runtime_reconcile_lock", None)
         if lock is None:
             lock = threading.Lock()
             self._runtime_reconcile_lock = lock
 
+        trigger = str(trigger or "unspecified")
         with lock:
             worker = getattr(self, "_runtime_reconcile_thread", None)
             if worker is not None and worker.is_alive():
+                self._runtime_reconcile_pending_trigger = trigger
                 logger.info(
-                    "WRITER_READINESS_RECONCILE_DEDUPED marker=%s trigger=%s existing_worker=true",
+                    "WRITER_READINESS_RECONCILE_COALESCED marker=%s trigger=%s "
+                    "existing_worker=true replay_pending=true",
                     MARKER,
                     trigger,
                 )
                 return
 
+            self._runtime_reconcile_pending_trigger = None
+
             def _worker() -> None:
-                try:
-                    runner = getattr(self, "_run_runtime_reconciliation", None)
-                    if callable(runner):
-                        runner(trigger)
-                except Exception:
-                    logger.exception(
-                        "WRITER_READINESS_RECONCILE_ASYNC_FAILED marker=%s trigger=%s",
-                        MARKER,
-                        trigger,
-                    )
-                finally:
+                next_trigger = trigger
+                while next_trigger:
+                    try:
+                        runner = getattr(self, "_run_runtime_reconciliation", None)
+                        if callable(runner):
+                            runner(next_trigger)
+                    except Exception:
+                        logger.exception(
+                            "WRITER_READINESS_RECONCILE_ASYNC_FAILED marker=%s trigger=%s",
+                            MARKER,
+                            next_trigger,
+                        )
+
                     with lock:
-                        if getattr(self, "_runtime_reconcile_thread", None) is threading.current_thread():
-                            self._runtime_reconcile_thread = None
+                        pending = str(
+                            getattr(self, "_runtime_reconcile_pending_trigger", "") or ""
+                        ).strip()
+                        self._runtime_reconcile_pending_trigger = None
+                        if not pending:
+                            if getattr(self, "_runtime_reconcile_thread", None) is threading.current_thread():
+                                self._runtime_reconcile_thread = None
+                            return
+                        next_trigger = pending
+                        logger.critical(
+                            "WRITER_READINESS_RECONCILE_REPLAY marker=%s trigger=%s "
+                            "reason=coalesced_trigger single_flight=true",
+                            MARKER,
+                            next_trigger,
+                        )
 
             worker = threading.Thread(
                 target=_worker,
@@ -132,7 +161,7 @@ def _patch_writer_reconciliation_async() -> bool:
             worker.start()
             logger.critical(
                 "WRITER_READINESS_RECONCILE_ASYNC_DISPATCHED marker=%s trigger=%s "
-                "core_registration_blocked=false",
+                "core_registration_blocked=false coalescing=true",
                 MARKER,
                 trigger,
             )
@@ -141,7 +170,8 @@ def _patch_writer_reconciliation_async() -> bool:
     notify_async.__wrapped__ = current  # type: ignore[attr-defined]
     cls._notify_runtime_reconciliation = notify_async
     logger.critical(
-        "FINAL_ACTIVATION_V59_WRITER_RECONCILE_PATCHED marker=%s all_triggers_async=true",
+        "FINAL_ACTIVATION_V59_WRITER_RECONCILE_PATCHED marker=%s "
+        "all_triggers_async=true coalescing=true dropped_triggers=false",
         MARKER,
     )
     return True
