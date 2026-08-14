@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import os
+import threading
 import types
 from functools import wraps
+
+import pytest
 
 import bot.canonical_broker_prebootstrap_v22 as guard
 
@@ -30,10 +34,38 @@ class _ReadyManager:
         return True
 
 
+def _set_writer_proof(monkeypatch):
+    monkeypatch.setenv("NIJA_WRITER_LEASE_ACQUIRED", "1")
+    monkeypatch.setenv("NIJA_WRITER_FENCING_TOKEN", "fence-token")
+    monkeypatch.setenv("NIJA_WRITER_LEASE_GENERATION", "3774")
+
+
+def _set_live_mode(monkeypatch):
+    monkeypatch.setenv("DRY_RUN_MODE", "false")
+    monkeypatch.setenv("PAPER_MODE", "false")
+    monkeypatch.setenv("LIVE_CAPITAL_VERIFIED", "false")
+    monkeypatch.setenv("LIVE_TRADING", "true")
+
+
+def _ready_snapshot():
+    return {
+        "broker_connected": True,
+        "balance_hydrated": True,
+        "authority_ready": False,
+        "capital_ready": True,
+        "risk_ready": True,
+        "strategy_ready": False,
+        "execution_ready": False,
+        "nonce_ready": False,
+        "bootstrap_ready": False,
+    }
+
+
 def test_prepare_initializes_canonical_manager_before_self_healing(monkeypatch):
     manager = _ReadyManager()
     monkeypatch.setattr(guard, "_canonical_manager", lambda: manager)
     monkeypatch.setattr(guard, "_READY", False)
+    monkeypatch.setattr(guard, "_is_live_mode", lambda: False)
 
     result = guard.prepare_canonical_broker_runtime()
 
@@ -101,12 +133,8 @@ def test_initialize_fails_closed_when_silent_latch_cannot_be_repaired():
 
     manager = Manager()
 
-    try:
+    with pytest.raises(RuntimeError, match="without initializing the capital FSM"):
         guard._initialize_manager(manager)
-    except RuntimeError as exc:
-        assert "without initializing the capital FSM" in str(exc)
-    else:
-        raise AssertionError("unrepaired capital FSM must remain fail-closed")
 
 
 def test_initialize_does_not_retry_real_broker_failure():
@@ -119,14 +147,169 @@ def test_initialize_does_not_retry_real_broker_failure():
 
     manager = Manager()
 
-    try:
+    with pytest.raises(RuntimeError, match="no exchange balance"):
         guard._initialize_manager(manager)
-    except RuntimeError as exc:
-        assert "no exchange balance" in str(exc)
-    else:
-        raise AssertionError("real broker failure must remain fail-closed")
 
     assert calls == ["initialize"]
+
+
+def test_live_initialization_hands_off_after_strict_current_proof(monkeypatch):
+    release = threading.Event()
+
+    class Manager(_ReadyManager):
+        def initialize(self):
+            self.initialize_calls += 1
+            release.wait(timeout=5)
+
+    manager = Manager()
+    _set_writer_proof(monkeypatch)
+    monkeypatch.setattr(
+        guard,
+        "_readiness_handoff_proof",
+        lambda: (True, "readiness_ready", _ready_snapshot()),
+    )
+
+    try:
+        assert guard._live_initialize_with_handoff(manager) is True
+        assert manager.initialize_calls == 1
+    finally:
+        release.set()
+
+
+def test_missing_fencing_token_prevents_early_handoff(monkeypatch):
+    monkeypatch.setenv("NIJA_WRITER_LEASE_ACQUIRED", "1")
+    monkeypatch.delenv("NIJA_WRITER_FENCING_TOKEN", raising=False)
+    monkeypatch.setenv("NIJA_WRITER_LEASE_GENERATION", "3774")
+
+    ok, reason = guard._writer_handoff_proof()
+
+    assert ok is False
+    assert reason == "writer_fencing_token_missing"
+
+
+def test_generation_zero_prevents_early_handoff(monkeypatch):
+    monkeypatch.setenv("NIJA_WRITER_LEASE_ACQUIRED", "1")
+    monkeypatch.setenv("NIJA_WRITER_FENCING_TOKEN", "fence-token")
+    monkeypatch.setenv("NIJA_WRITER_LEASE_GENERATION", "0")
+
+    ok, reason = guard._writer_handoff_proof()
+
+    assert ok is False
+    assert reason == "writer_generation_not_positive"
+
+
+def test_missing_manager_contract_prevents_early_handoff(monkeypatch):
+    manager = _ReadyManager()
+    manager._fsm_initialized = False
+    _set_writer_proof(monkeypatch)
+
+    ok, reason, _ = guard._prebootstrap_handoff_proof(manager)
+
+    assert ok is False
+    assert reason == "fsm_not_initialized"
+
+
+def test_no_connected_platform_broker_prevents_early_handoff(monkeypatch):
+    manager = _ReadyManager()
+    manager._platform_brokers = {_BrokerType(): types.SimpleNamespace(connected=False)}
+    _set_writer_proof(monkeypatch)
+
+    ok, reason, _ = guard._prebootstrap_handoff_proof(manager)
+
+    assert ok is False
+    assert reason == "no_connected_platform_broker"
+
+
+@pytest.mark.parametrize(
+    "false_key",
+    ["broker_connected", "balance_hydrated", "capital_ready", "risk_ready"],
+)
+def test_any_required_readiness_false_prevents_early_handoff(monkeypatch, false_key):
+    snapshot = _ready_snapshot()
+    snapshot[false_key] = False
+    monkeypatch.setattr(
+        guard,
+        "importlib",
+        types.SimpleNamespace(
+            import_module=lambda name: types.SimpleNamespace(snapshot=lambda: snapshot)
+            if name == "bot.readiness_table"
+            else __import__(name, fromlist=["*"])
+        ),
+    )
+
+    ok, reason, returned = guard._readiness_handoff_proof()
+
+    assert ok is False
+    assert false_key in reason
+    assert returned[false_key] is False
+
+
+def test_live_initialization_exception_propagates_and_remains_fail_closed():
+    class Manager(_ReadyManager):
+        def initialize(self):
+            raise RuntimeError("exchange authentication failed")
+
+    manager = Manager()
+
+    with pytest.raises(RuntimeError, match="exchange authentication failed"):
+        guard._live_initialize_with_handoff(manager)
+
+
+def test_live_handoff_timeout_fails_closed(monkeypatch):
+    release = threading.Event()
+
+    class Manager(_ReadyManager):
+        def initialize(self):
+            release.wait(timeout=5)
+
+    manager = Manager()
+    monkeypatch.setenv("NIJA_PREBOOTSTRAP_HANDOFF_TIMEOUT_S", "1")
+    monkeypatch.setattr(guard, "_prebootstrap_handoff_proof", lambda manager: (False, "not_ready", {}))
+    monotonic_values = iter([0.0, 2.0])
+    monkeypatch.setattr(guard.time, "monotonic", lambda: next(monotonic_values))
+
+    try:
+        with pytest.raises(RuntimeError, match="live handoff timed out"):
+            guard._live_initialize_with_handoff(manager)
+    finally:
+        release.set()
+
+
+def test_early_handoff_does_not_grant_execution_or_other_activation_readiness(monkeypatch):
+    release = threading.Event()
+
+    class Manager(_ReadyManager):
+        def initialize(self):
+            release.wait(timeout=5)
+
+    manager = Manager()
+    _set_live_mode(monkeypatch)
+    _set_writer_proof(monkeypatch)
+    snapshot = _ready_snapshot()
+    monkeypatch.setattr(
+        guard,
+        "_readiness_handoff_proof",
+        lambda: (True, "readiness_ready", dict(snapshot)),
+    )
+    guarded_env = (
+        "NIJA_RUNTIME_EXECUTION_AUTHORITY",
+        "NIJA_LIVE_ACTIVE",
+        "NIJA_EXECUTION_READY",
+        "NIJA_NONCE_READY",
+        "NIJA_STRATEGY_READY",
+        "NIJA_BOOTSTRAP_READY",
+    )
+    for name in guarded_env:
+        monkeypatch.delenv(name, raising=False)
+
+    before = dict(snapshot)
+    try:
+        assert guard._live_initialize_with_handoff(manager) is True
+        assert snapshot == before
+        for name in guarded_env:
+            assert os.getenv(name) is None
+    finally:
+        release.set()
 
 
 def test_writer_wrapper_runs_prebootstrap_after_authority(monkeypatch):
