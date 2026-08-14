@@ -59,6 +59,11 @@ _FAST_PATH_INSTALLERS = (
     # canonical CapitalAuthority freshness contract. Protective reduce/exit
     # intents remain available when freshness is lost.
     ("bot.live_capital_freshness_v64_patch", "LIVE_CAPITAL_FRESHNESS_V64"),
+    # Close the remaining production liveness gaps without weakening execution:
+    # bound watchdog-driven refresh completion inside freshness, bridge v64
+    # across importlib, expose publication expiry dynamically, and reclaim scan
+    # ownership only when the recorded owner thread is actually gone.
+    ("bot.production_freshness_scan_convergence_v93_patch", "PRODUCTION_FRESHNESS_SCAN_V93"),
     ("bot.final_production_activation_repair_v58_patch", "FINAL_PRODUCTION_ACTIVATION_V58"),
     # v61 must install before v59/v60 start their reconciliation/activation
     # monitors. It guards v60's request boundary and makes v16 readiness reflect
