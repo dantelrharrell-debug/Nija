@@ -64,6 +64,10 @@ _FAST_PATH_INSTALLERS = (
     # across importlib, expose publication expiry dynamically, and reclaim scan
     # ownership only when the recorded owner thread is actually gone.
     ("bot.production_freshness_scan_convergence_v93_patch", "PRODUCTION_FRESHNESS_SCAN_V93"),
+    # Bound startup position snapshots so a slow venue cannot hold the main
+    # startup thread indefinitely. v95 also makes position-sync completion a
+    # fail-closed activation prerequisite rather than pre-latching success.
+    ("bot.position_sync_core_handoff_v95_patch", "POSITION_SYNC_CORE_HANDOFF_V95"),
     ("bot.final_production_activation_repair_v58_patch", "FINAL_PRODUCTION_ACTIVATION_V58"),
     # v61 must install before v59/v60 start their reconciliation/activation
     # monitors. It guards v60's request boundary and makes v16 readiness reflect
