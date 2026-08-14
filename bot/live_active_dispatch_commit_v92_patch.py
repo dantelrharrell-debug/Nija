@@ -8,8 +8,11 @@ dispatch orders.
 
 v92 does not force activation or weaken any gate. It only treats LIVE_ACTIVE as
 complete after StartupCoordinator.finalize_activation_commit() accepts the current
-canonical readiness proof. Failed or stale proofs remain fail closed and are
-retried by the existing v60 single-flight activation loop.
+canonical readiness proof. When the sole substantive blocker is a stale activation
+epoch, v92 re-records the canonical activation request to align activation_epoch to
+global_epoch, rebuilds the immutable readiness proof, and commits only if that
+fresh proof passes. Failed capital, readiness, authority, nonce, dispatch-health,
+or kill-switch gates remain fail closed.
 """
 from __future__ import annotations
 
@@ -31,6 +34,7 @@ _INSTALLED = False
 _HOOK_FLAG = "_NIJA_LIVE_ACTIVE_DISPATCH_COMMIT_V92_IMPORT_HOOK"
 _TSM_ATTR = "_nija_live_active_dispatch_commit_v92"
 _V60_ATTR = "_nija_live_active_dispatch_commit_v92"
+_EPOCH_RECOVERABLE_GATES = frozenset({"epoch.current", "runtime_authority.authorized"})
 
 
 def _truthy(name: str, default: str = "false") -> bool:
@@ -59,9 +63,100 @@ def _snapshot_details(snapshot: Any) -> dict[str, Any]:
         "runtime_authority_state": str(getattr(snapshot, "runtime_authority_state", "") or ""),
         "runtime_authority_reason": str(getattr(snapshot, "runtime_authority_reason", "") or ""),
         "execution_permitted": bool(getattr(snapshot, "execution_permitted", False)),
+        "activation_epoch": int(getattr(snapshot, "activation_epoch", 0) or 0),
+        "global_epoch": int(getattr(snapshot, "global_epoch", 0) or 0),
         "capital_stale": bool(getattr(snapshot, "capital_stale", False)),
+        "kill_switch_active": bool(getattr(snapshot, "kill_switch_active", False)),
+        "authority_ready": bool(getattr(snapshot, "authority_ready", False)),
+        "nonce_ready": bool(getattr(snapshot, "nonce_ready", False)),
+        "dispatch_health_ready": bool(getattr(snapshot, "dispatch_health_ready", False)),
         "pending_readiness": list(getattr(snapshot, "pending_readiness", []) or []),
     }
+
+
+def _proof_details(proof: Any) -> dict[str, Any]:
+    return {
+        "passed": bool(getattr(proof, "passed", False)),
+        "first_blocking_gate": str(getattr(proof, "first_blocking_gate", "") or ""),
+        "failed_gates": list(getattr(proof, "failed_gates", []) or []),
+        "gate_results": dict(getattr(proof, "gate_results", {}) or {}),
+    }
+
+
+def _maybe_reanchor_activation_epoch(
+    coordinator: Any,
+    snapshot: Any,
+    *,
+    source: str,
+) -> tuple[Any, bool, str, dict[str, Any]]:
+    """Re-anchor only the canonical activation request when epoch is stale.
+
+    This is intentionally narrow. It may run only when:
+    - no dispatch commit exists,
+    - the coordinator reports global_epoch_stale,
+    - epoch.current is failed,
+    - every failed gate is either epoch.current or the derived
+      runtime_authority.authorized gate.
+
+    The coordinator then rebuilds and re-evaluates the full readiness proof.
+    No other failed gate is repaired, marked ready, or bypassed here.
+    """
+    details: dict[str, Any] = {"attempted": False}
+    evaluator = getattr(coordinator, "evaluate_system_readiness_proof", None)
+    recorder = getattr(coordinator, "record_activation_requested", None)
+    if not callable(evaluator) or not callable(recorder):
+        return snapshot, False, "canonical_epoch_api_unavailable", details
+
+    try:
+        proof = evaluator(snapshot)
+    except Exception as exc:
+        details["proof_error"] = f"{type(exc).__name__}:{exc}"
+        return snapshot, False, "readiness_proof_unavailable", details
+
+    proof_info = _proof_details(proof)
+    details["before_proof"] = proof_info
+    if proof_info["passed"]:
+        return snapshot, False, "readiness_proof_already_passed", details
+
+    failed = set(proof_info["failed_gates"])
+    if "epoch.current" not in failed:
+        return snapshot, False, "epoch_not_blocking", details
+    if not failed.issubset(_EPOCH_RECOVERABLE_GATES):
+        details["non_epoch_blockers"] = sorted(failed - _EPOCH_RECOVERABLE_GATES)
+        return snapshot, False, "non_epoch_blockers_present", details
+    if int(getattr(snapshot, "last_committed_snapshot_version", 0) or 0) > 0:
+        return snapshot, False, "dispatch_commit_already_present", details
+    if str(getattr(snapshot, "runtime_authority_reason", "") or "") != "global_epoch_stale":
+        return snapshot, False, "epoch_failure_not_global_epoch_stale", details
+    if bool(getattr(snapshot, "kill_switch_active", False)):
+        return snapshot, False, "kill_switch_active", details
+
+    details["attempted"] = True
+    recorder(
+        requested=True,
+        source=f"{MARKER}:{source}:epoch_reanchor",
+    )
+    refreshed = coordinator.build_snapshot(
+        trading_state="LIVE_ACTIVE",
+        activation_intent=True,
+    )
+    refreshed_proof = evaluator(refreshed)
+    details["after_snapshot"] = _snapshot_details(refreshed)
+    details["after_proof"] = _proof_details(refreshed_proof)
+    if not bool(getattr(refreshed_proof, "passed", False)):
+        first = str(getattr(refreshed_proof, "first_blocking_gate", "unknown") or "unknown")
+        return refreshed, False, f"epoch_reanchor_proof_failed:{first}", details
+
+    LOGGER.critical(
+        "LIVE_ACTIVE_ACTIVATION_EPOCH_REANCHORED marker=%s source=%s "
+        "activation_epoch=%s global_epoch=%s canonical_proof_passed=true "
+        "safety_gates_preserved=true",
+        MARKER,
+        source,
+        getattr(refreshed, "activation_epoch", 0),
+        getattr(refreshed, "global_epoch", 0),
+    )
+    return refreshed, True, "activation_epoch_reanchored", details
 
 
 def _ensure_coordinator_dispatch_commit(
@@ -73,7 +168,7 @@ def _ensure_coordinator_dispatch_commit(
 
     The coordinator's own readiness proof remains the authority. This helper
     never mutates trading state, readiness keys, risk thresholds, nonce state,
-    or kill-switch state.
+    dispatch-health state, or kill-switch state.
     """
     state = _state_value(sm)
     details: dict[str, Any] = {"state": state, "source": source}
@@ -100,7 +195,20 @@ def _ensure_coordinator_dispatch_commit(
         ):
             return True, "dispatch_commit_already_current", details
 
-        coordinator.finalize_activation_commit(before)
+        commit_snapshot, reanchored, reanchor_reason, reanchor_details = (
+            _maybe_reanchor_activation_epoch(
+                coordinator,
+                before,
+                source=source,
+            )
+        )
+        details["epoch_reanchor"] = {
+            "reanchored": bool(reanchored),
+            "reason": reanchor_reason,
+            **reanchor_details,
+        }
+
+        coordinator.finalize_activation_commit(commit_snapshot)
         after = coordinator.build_snapshot(
             trading_state="LIVE_ACTIVE",
             activation_intent=True,
@@ -111,11 +219,13 @@ def _ensure_coordinator_dispatch_commit(
         if committed and permitted:
             LOGGER.critical(
                 "LIVE_ACTIVE_DISPATCH_COMMIT_REPAIRED marker=%s source=%s "
-                "commit_version=%s runtime_authority=%s safety_gates_preserved=true",
+                "commit_version=%s runtime_authority=%s epoch_reanchored=%s "
+                "safety_gates_preserved=true",
                 MARKER,
                 source,
                 getattr(after, "last_committed_snapshot_version", 0),
                 getattr(after, "runtime_authority_state", "unknown"),
+                bool(reanchored),
             )
             return True, "dispatch_commit_repaired", details
         return False, "dispatch_commit_not_executing_after_finalize", details
@@ -309,6 +419,7 @@ __all__ = [
     "install",
     "install_import_hook",
     "_ensure_coordinator_dispatch_commit",
+    "_maybe_reanchor_activation_epoch",
     "_patch_trading_state_machine",
     "_patch_v60_worker",
 ]
