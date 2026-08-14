@@ -66,6 +66,10 @@ _FAST_PATH_INSTALLERS = (
     ("bot.final_production_activation_repair_v61_patch", "FINAL_PRODUCTION_ACTIVATION_V61"),
     ("bot.final_production_activation_repair_v59_patch", "FINAL_PRODUCTION_ACTIVATION_V59"),
     ("bot.final_production_activation_repair_v60_patch", "FINAL_PRODUCTION_ACTIVATION_V60"),
+    # A local LIVE_ACTIVE state is not sufficient for broker order dispatch.
+    # Require the canonical StartupCoordinator dispatch commit as well; v92
+    # repairs only that commit after the existing readiness proof passes.
+    ("bot.live_active_dispatch_commit_v92_patch", "LIVE_ACTIVE_DISPATCH_COMMIT_V92"),
 )
 
 _FAST_PATH_COMPAT_OPTIONAL_GUARDS = frozenset(
@@ -132,8 +136,7 @@ def _install_guards(
                 continue
             ready = False
             logger.critical(
-                "%s_INSTALL_FAILED source=bot_entrypoint mode=%s err=%s",
-                label, mode, exc, exc_info=True,
+                "%s_INSTALL_FAILED source=bot_entrypoint mode=%s err=%s", label, mode, exc, exc_info=True,
             )
     logger.critical(
         "BOT_ENTRYPOINT_GUARD_BUNDLE_COMPLETE marker=%s mode=%s ready=%s installed=%s",
