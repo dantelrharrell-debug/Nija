@@ -8,9 +8,12 @@ with no manager, no capital snapshot, and no scan cycles.
 
 This module patches the canonical bot_main writer-acquisition function. After
 Redis writer authority is acquired and synchronously verified, the existing
-canonical manager singleton is initialized on the main bootstrap thread before
-SelfHealingStartup runs. A failed prebootstrap releases only this process's own
-lease and returns startup failure; no order, authority, or state gate is bypassed.
+canonical manager singleton is initialized before SelfHealingStartup runs. In
+live mode initialization may continue in a daemon worker after a strict liveness
+handoff proof is satisfied, allowing bot_main to start and register the real core
+thread without granting execution authority. A failed prebootstrap releases only
+this process's own lease and returns startup failure; no order, authority, nonce,
+kill-switch, risk, or state gate is bypassed.
 
 Wrapper-order safety
 --------------------
@@ -27,6 +30,7 @@ import importlib
 import logging
 import os
 import threading
+import time
 from functools import wraps
 from types import ModuleType
 from typing import Any, Callable
@@ -34,12 +38,20 @@ from typing import Any, Callable
 logger = logging.getLogger("nija.canonical_broker_prebootstrap")
 
 _MARKER = "20260723-canonical-broker-prebootstrap-v22"
+_HANDOFF_MARKER = "20260814-prebootstrap-core-handoff-v94"
 _WRAPPER_PRESERVATION_MARKER = "20260808-v22-writer-wrapper-preservation-v1"
 _LOCK = threading.RLock()
 _READY = False
 _INSTALLED = False
 _ACQUIRE_WRAP_ATTR = "_nija_canonical_broker_prebootstrap_acquire_v22"
 _MAIN_WRAP_ATTR = "_nija_canonical_broker_prebootstrap_main_v22"
+_TRUTHY = {"1", "true", "yes", "enabled"}
+_HANDOFF_READINESS_KEYS = (
+    "broker_connected",
+    "balance_hydrated",
+    "capital_ready",
+    "risk_ready",
+)
 
 
 def _canonical_manager() -> Any:
@@ -163,8 +175,155 @@ def _platform_counts(manager: Any) -> tuple[int, int, list[str]]:
     return len(items), len(connected_names), sorted(set(connected_names))
 
 
+def _is_live_mode() -> bool:
+    try:
+        runtime_mode = importlib.import_module("bot.runtime_mode")
+        resolve = getattr(runtime_mode, "resolve_runtime_mode", None)
+        if not callable(resolve):
+            return False
+        return bool(resolve().is_live)
+    except Exception:
+        logger.debug("v94 runtime-mode resolution failed; using synchronous path", exc_info=True)
+        return False
+
+
+def _writer_handoff_proof() -> tuple[bool, str]:
+    acquired = os.getenv("NIJA_WRITER_LEASE_ACQUIRED", "").strip().lower() in _TRUTHY
+    if not acquired:
+        return False, "writer_lease_not_acquired"
+
+    token = os.getenv("NIJA_WRITER_FENCING_TOKEN", "").strip()
+    if not token:
+        return False, "writer_fencing_token_missing"
+
+    raw_generation = os.getenv("NIJA_WRITER_LEASE_GENERATION", "").strip()
+    try:
+        generation = int(raw_generation)
+    except (TypeError, ValueError):
+        return False, "writer_generation_invalid"
+    if generation <= 0:
+        return False, "writer_generation_not_positive"
+
+    return True, "writer_fenced"
+
+
+def _readiness_handoff_proof() -> tuple[bool, str, dict[str, bool]]:
+    try:
+        readiness = importlib.import_module("bot.readiness_table")
+        snapshot_fn = getattr(readiness, "snapshot", None)
+        if not callable(snapshot_fn):
+            return False, "readiness_snapshot_unavailable", {}
+        snapshot = dict(snapshot_fn() or {})
+    except Exception as exc:
+        return False, f"readiness_snapshot_error:{type(exc).__name__}:{exc}", {}
+
+    missing = [key for key in _HANDOFF_READINESS_KEYS if not bool(snapshot.get(key, False))]
+    if missing:
+        return False, "readiness_false:" + ",".join(missing), snapshot
+    return True, "readiness_ready", snapshot
+
+
+def _prebootstrap_handoff_proof(manager: Any) -> tuple[bool, str, dict[str, Any]]:
+    writer_ok, writer_reason = _writer_handoff_proof()
+    if not writer_ok:
+        return False, writer_reason, {}
+
+    contract_ok, contract_reason = _manager_contract(manager)
+    if not contract_ok:
+        return False, contract_reason, {}
+
+    registered, connected, names = _platform_counts(manager)
+    if connected < 1:
+        return False, "no_connected_platform_broker", {
+            "registered": registered,
+            "connected": connected,
+            "brokers": names,
+        }
+
+    readiness_ok, readiness_reason, snapshot = _readiness_handoff_proof()
+    if not readiness_ok:
+        return False, readiness_reason, {
+            "registered": registered,
+            "connected": connected,
+            "brokers": names,
+            "readiness": snapshot,
+        }
+
+    return True, "handoff_ready", {
+        "registered": registered,
+        "connected": connected,
+        "brokers": names,
+        "readiness": snapshot,
+    }
+
+
+def _live_initialize_with_handoff(manager: Any) -> bool:
+    """Initialize in a daemon worker and return True only for an early v94 handoff."""
+
+    try:
+        timeout_s = float(os.getenv("NIJA_PREBOOTSTRAP_HANDOFF_TIMEOUT_S", "45"))
+    except (TypeError, ValueError):
+        timeout_s = 45.0
+    timeout_s = max(1.0, timeout_s)
+
+    done = threading.Event()
+    errors: list[BaseException] = []
+
+    def worker() -> None:
+        try:
+            _initialize_manager(manager)
+        except BaseException as exc:
+            errors.append(exc)
+        finally:
+            done.set()
+
+    thread = threading.Thread(
+        target=worker,
+        name="nija-canonical-broker-init-v94",
+        daemon=True,
+    )
+    thread.start()
+
+    deadline = time.monotonic() + timeout_s
+    last_reason = "initializing"
+    while True:
+        if done.is_set():
+            if errors:
+                raise errors[0]
+            return False
+
+        proof_ok, proof_reason, detail = _prebootstrap_handoff_proof(manager)
+        last_reason = proof_reason
+        if proof_ok:
+            logger.critical(
+                "CANONICAL_BROKER_PREBOOTSTRAP_V94_EARLY_HANDOFF marker=%s registered=%d connected=%d brokers=%s writer_generation=%s readiness=%s initializer_alive=%s execution_authority_granted=false",
+                _HANDOFF_MARKER,
+                int(detail.get("registered", 0)),
+                int(detail.get("connected", 0)),
+                ",".join(detail.get("brokers", [])),
+                os.getenv("NIJA_WRITER_LEASE_GENERATION", ""),
+                detail.get("readiness", {}),
+                thread.is_alive(),
+            )
+            return True
+
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise RuntimeError(
+                "canonical broker prebootstrap live handoff timed out "
+                f"after {timeout_s:.1f}s (last_blocker={last_reason})"
+            )
+        done.wait(timeout=min(0.05, remaining))
+
+
 def prepare_canonical_broker_runtime() -> Any:
-    """Synchronously prepare the canonical manager after writer verification."""
+    """Prepare the canonical manager after writer verification.
+
+    Non-live modes retain the original synchronous behavior. In live mode the
+    manager initializer may continue in one daemon worker only after the strict
+    v94 liveness proof succeeds. This function never marks authority, nonce,
+    strategy, execution, or bootstrap readiness.
+    """
 
     global _READY
     with _LOCK:
@@ -181,12 +340,19 @@ def prepare_canonical_broker_runtime() -> Any:
             )
             return manager
 
+        live_mode = _is_live_mode()
         logger.critical(
-            "CANONICAL_BROKER_PREBOOTSTRAP_V22_BEGIN marker=%s thread=%s",
+            "CANONICAL_BROKER_PREBOOTSTRAP_V22_BEGIN marker=%s thread=%s live_mode=%s",
             _MARKER,
             threading.current_thread().name,
+            live_mode,
         )
-        _initialize_manager(manager)
+
+        early_handoff = False
+        if live_mode:
+            early_handoff = _live_initialize_with_handoff(manager)
+        else:
+            _initialize_manager(manager)
 
         contract_ok, contract_reason = _manager_contract(manager)
         registered, connected, names = _platform_counts(manager)
@@ -200,14 +366,23 @@ def prepare_canonical_broker_runtime() -> Any:
                 f"(registered={registered}, connected={connected})"
             )
 
+        if early_handoff:
+            proof_ok, proof_reason, _ = _prebootstrap_handoff_proof(manager)
+            if not proof_ok:
+                raise RuntimeError(
+                    "canonical broker prebootstrap handoff proof regressed before return: "
+                    f"{proof_reason}"
+                )
+
         _READY = True
         os.environ["NIJA_CANONICAL_BROKER_PREBOOTSTRAP_V22_READY"] = "1"
         logger.critical(
-            "CANONICAL_BROKER_PREBOOTSTRAP_V22_READY marker=%s fsm_initialized=true registered=%d connected=%d brokers=%s",
+            "CANONICAL_BROKER_PREBOOTSTRAP_V22_READY marker=%s fsm_initialized=true registered=%d connected=%d brokers=%s early_handoff=%s",
             _MARKER,
             registered,
             connected,
             ",".join(names),
+            early_handoff,
         )
         return manager
 
@@ -232,10 +407,6 @@ def _patch_writer_acquire(module: ModuleType) -> bool:
     if not callable(current):
         return False
 
-    # Do not strip or duplicate layers. v39/v32 and later convergence wrappers
-    # must remain callable because they arm writer-loss recovery and post-acquire
-    # reconciliation. If v22 is already present anywhere in the chain, leave the
-    # entire current chain untouched.
     if _wrapper_chain_has_marker(current, _ACQUIRE_WRAP_ATTR):
         return True
 
@@ -348,6 +519,11 @@ __all__ = [
     "_manager_contract",
     "_initialize_manager",
     "_platform_counts",
+    "_is_live_mode",
+    "_writer_handoff_proof",
+    "_readiness_handoff_proof",
+    "_prebootstrap_handoff_proof",
+    "_live_initialize_with_handoff",
     "_wrapper_chain_has_marker",
     "_patch_writer_acquire",
     "_patch_main",
