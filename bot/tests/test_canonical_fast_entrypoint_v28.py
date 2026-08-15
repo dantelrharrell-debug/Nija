@@ -93,7 +93,17 @@ def test_bot_entrypoint_fast_path_is_small_and_fail_closed() -> None:
     assert "okx_final_order_submission_bridge_patch" in fast_block
     assert "startup_authority_prereq_repair_patch" in fast_block
     assert "stalled_writer_release_guard_v22" in fast_block
-    assert "trading_engine_strategy_wrapper_patch" not in fast_block
+
+    # The canonical production core now invokes TradingStrategy directly, so
+    # the wrapper/wiring guards belong on the fast path. Preserve the safety
+    # ordering that prevents a partial APEX module from falling into recursive
+    # flat-module imports: runtime-truth recovery must be active before wiring.
+    assert "trading_engine_strategy_wrapper_patch" in fast_block
+    assert "trading_strategy_apex_wiring_patch" in fast_block
+    assert "runtime_truth_convergence_v97_patch" in fast_block
+    assert fast_block.index("runtime_truth_convergence_v97_patch") < fast_block.index(
+        "trading_strategy_apex_wiring_patch"
+    )
     assert "canonical_broker_main_entry_guard_v20" not in fast_block
 
 

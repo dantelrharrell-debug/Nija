@@ -19,6 +19,7 @@ import sys
 from typing import Iterable
 
 logger = logging.getLogger("nija.bot_entrypoint")
+_FAST_PATH_MARKER = "20260815-canonical-fast-entrypoint-v68"
 _FAST_PATH_MARKER = "20260815-canonical-fast-entrypoint-v67"
 
 _FAST_PATH_INSTALLERS = (
@@ -68,12 +69,19 @@ _FAST_PATH_INSTALLERS = (
     # startup thread indefinitely. v95 also makes position-sync completion a
     # fail-closed activation prerequisite rather than pre-latching success.
     ("bot.position_sync_core_handoff_v95_patch", "POSITION_SYNC_CORE_HANDOFF_V95"),
+    # Production Kraken snapshots exceeded the historical five-second default.
+    # v98 raises only the default wait budget; explicit env overrides and all
+    # fail-closed position/readiness/dispatch gates remain authoritative.
+    ("bot.position_sync_timeout_v98_patch", "POSITION_SYNC_TIMEOUT_V98"),
     # Publish position-sync truth into canonical readiness so an unsynced
     # connected broker also revokes any stale coordinator dispatch commit.
     ("bot.position_sync_dispatch_authority_v96_patch", "POSITION_SYNC_DISPATCH_AUTHORITY_V96"),
+    # Install v97 before the legacy APEX wiring module. v97 owns the import hooks
+    # that recover a partial APEX module directly from canonical source and
+    # prevent the flat-module fallback from recursing during startup.
+    ("bot.runtime_truth_convergence_v97_patch", "RUNTIME_TRUTH_CONVERGENCE_V97"),
     # The production core invokes TradingStrategy directly. These guards must be
-    # present on the canonical fast path. v97 additionally repairs partial APEX
-    # module truth, position-sync failure latches, and scan lifecycle handoff.
+    # present on the canonical fast path after v97's recovery hooks are active.
     ("bot.trading_engine_strategy_wrapper_patch", "TRADING_ENGINE_STRATEGY_WRAPPER"),
     ("bot.trading_strategy_apex_wiring_patch", "TRADING_STRATEGY_APEX_WIRING"),
     ("bot.runtime_truth_convergence_v97_patch", "RUNTIME_TRUTH_CONVERGENCE_V97"),
