@@ -1,8 +1,11 @@
-"""Mark a connected broker with a successful empty snapshot as synchronized.
+"""Preserve successful empty-position snapshots without refetching brokers.
 
-Zero open positions is a valid broker state, not a synchronization failure. The
-legacy startup reconciler left ``_startup_position_sync_adopted=False`` whenever
-``get_positions()`` returned an empty list, causing perpetual ``all_synced=False``.
+The canonical startup reconciler already marks a connected broker synchronized
+when its authoritative ``get_positions()`` call succeeds with an empty list.
+This compatibility patch therefore must not issue a second broker fetch: an
+outer runtime wrapper may intentionally convert a failed inner fetch to ``[]``
+for balance/equity classification, and treating that fallback as authoritative
+would incorrectly turn a timeout into synchronization success.
 """
 from __future__ import annotations
 
@@ -14,8 +17,8 @@ from types import ModuleType
 from typing import Any
 
 logger = logging.getLogger("nija.empty_position_sync_success")
-_MARKER = "20260715-empty-position-sync-v1"
-_ATTR = "_nija_empty_position_sync_success_v1"
+_MARKER = "20260815-empty-position-sync-v2"
+_ATTR = "_nija_empty_position_sync_success_v2"
 _LOCK = threading.RLock()
 
 
@@ -28,25 +31,19 @@ def _patch(module: ModuleType) -> bool:
 
     @wraps(current)
     def adopt(broker: Any, broker_name: str, eps: Any) -> int:
+        # Delegate exactly once to the canonical reconciler. It owns the
+        # authoritative fetch and already treats a genuine empty snapshot as
+        # synchronized. Never refetch here and never manufacture success from
+        # a compatibility-layer empty fallback.
         result = int(current(broker, broker_name, eps) or 0)
-        if bool(getattr(broker, "_startup_position_sync_adopted", False)):
-            return result
-        if not bool(getattr(broker, "connected", False)):
-            return result
-        getter = getattr(broker, "get_positions", None)
-        if not callable(getter):
-            return result
-        try:
-            snapshot = getter()
-        except Exception:
-            return result
-        if isinstance(snapshot, list) and not snapshot:
-            setattr(broker, "_startup_position_sync_adopted", True)
-            setattr(broker, "_startup_position_sync_symbols", tuple())
-            logger.info(
-                "EMPTY_POSITION_SNAPSHOT_SYNCED marker=%s broker=%s connected=true positions=0",
+        fetch_ok = getattr(broker, "_startup_position_sync_fetch_ok", None)
+        if fetch_ok is False:
+            setattr(broker, "_startup_position_sync_adopted", False)
+            logger.warning(
+                "EMPTY_POSITION_SYNC_FAILURE_PRESERVED marker=%s broker=%s error=%s authoritative_empty=false",
                 _MARKER,
                 broker_name,
+                getattr(broker, "_startup_position_sync_error", "position_fetch_failed"),
             )
         return result
 
@@ -54,7 +51,10 @@ def _patch(module: ModuleType) -> bool:
     adopt.__wrapped__ = current
     module._adopt_broker_positions = adopt
     os.environ["NIJA_EMPTY_POSITION_SYNC_READY"] = "1"
-    logger.critical("EMPTY_POSITION_SYNC_SUCCESS_PATCHED marker=%s", _MARKER)
+    logger.critical(
+        "EMPTY_POSITION_SYNC_SUCCESS_PATCHED marker=%s refetch=false masked_failure_preserved=true",
+        _MARKER,
+    )
     return True
 
 
