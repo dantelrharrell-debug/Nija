@@ -9,9 +9,9 @@ v98 changes only the *default* timeout to 12 seconds. An explicit
 NIJA_POSITION_FETCH_TIMEOUT_S value remains authoritative. v99 is installed
 from the same canonical slot so platform readiness is isolated from slow user
 position snapshots while each user execution path remains fail closed. v100
-adds bounded canonical TradingStrategy class recovery, and v102 supersedes the
-active-import retry behavior with a passive observer that never re-enters the
-canonical module import while it is still initializing.
+adds bounded canonical TradingStrategy class recovery, v102 supersedes the
+active-import retry behavior with a passive observer, and v103 extends that
+passive convergence window while preventing recursive runtime reconciliation.
 """
 from __future__ import annotations
 
@@ -68,6 +68,17 @@ def _install_v102() -> bool:
     return installer() is not False
 
 
+def _install_v103() -> bool:
+    try:
+        from bot import startup_convergence_v103_patch as v103
+    except ImportError:
+        import startup_convergence_v103_patch as v103  # type: ignore[import]
+    installer = getattr(v103, "install_import_hook", None) or getattr(v103, "install", None)
+    if not callable(installer):
+        return False
+    return installer() is not False
+
+
 def install() -> bool:
     global _INSTALLED
 
@@ -95,6 +106,12 @@ def install() -> bool:
             MARKER,
         )
         return False
+    if not _install_v103():
+        LOGGER.critical(
+            "POSITION_SYNC_TIMEOUT_V98_V103_INSTALL_FAILED marker=%s trading_fail_closed=true",
+            MARKER,
+        )
+        return False
 
     if _INSTALLED:
         return True
@@ -105,7 +122,7 @@ def install() -> bool:
         "POSITION_SYNC_TIMEOUT_V98_INSTALLED marker=%s default_timeout_s=%.1f "
         "explicit_env_override_preserved=true account_isolation_v99=true "
         "strategy_class_recovery_v100=true passive_strategy_recovery_v102=true "
-        "safety_gates_unchanged=true",
+        "startup_convergence_v103=true safety_gates_unchanged=true",
         MARKER,
         _DEFAULT_TIMEOUT_S,
     )
