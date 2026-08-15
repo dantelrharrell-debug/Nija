@@ -4,7 +4,24 @@ RUN apt-get update && apt-get install -y git redis-tools && rm -rf /var/lib/apt/
 RUN groupadd -r nija && useradd -r -g nija -u 1000 nija
 WORKDIR /app
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# PyPI/CDN 5xx responses are transient infrastructure failures, not dependency
+# resolution failures. Retry the exact locked requirements with bounded
+# exponential backoff while keeping the official index and TLS verification.
+RUN set -eu; \
+    attempt=1; \
+    while [ "$attempt" -le 4 ]; do \
+        if pip install --disable-pip-version-check --no-cache-dir --retries 10 --timeout 30 -r requirements.txt; then \
+            break; \
+        fi; \
+        if [ "$attempt" -eq 4 ]; then \
+            echo "pip install failed after $attempt attempts" >&2; \
+            exit 1; \
+        fi; \
+        sleep_seconds=$((attempt * 5)); \
+        echo "pip install attempt $attempt failed; retrying in ${sleep_seconds}s" >&2; \
+        sleep "$sleep_seconds"; \
+        attempt=$((attempt + 1)); \
+    done
 COPY scripts/ scripts/
 COPY . .
 RUN python -S /app/scripts/install_sitecustomize_defer_guard.py && \
