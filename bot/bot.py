@@ -19,7 +19,7 @@ import sys
 from typing import Iterable
 
 logger = logging.getLogger("nija.bot_entrypoint")
-_FAST_PATH_MARKER = "20260812-canonical-fast-entrypoint-v64"
+_FAST_PATH_MARKER = "20260815-canonical-fast-entrypoint-v65"
 
 _FAST_PATH_INSTALLERS = (
     ("bot.writer_reelection_loss_reason_v46_patch", "WRITER_REELECTION_LOSS_REASON_V46"),
@@ -71,6 +71,13 @@ _FAST_PATH_INSTALLERS = (
     # Publish position-sync truth into canonical readiness so an unsynced
     # connected broker also revokes any stale coordinator dispatch commit.
     ("bot.position_sync_dispatch_authority_v96_patch", "POSITION_SYNC_DISPATCH_AUTHORITY_V96"),
+    # The production core invokes TradingStrategy directly. These three guards
+    # must be present on the canonical fast path, not only the legacy path:
+    # wrapper creates the runtime, APEX wiring repairs missing backrefs, and
+    # integrity refuses to publish an incomplete live strategy.
+    ("bot.trading_engine_strategy_wrapper_patch", "TRADING_ENGINE_STRATEGY_WRAPPER"),
+    ("bot.trading_strategy_apex_wiring_patch", "TRADING_STRATEGY_APEX_WIRING"),
+    ("bot.strategy_runtime_integrity_patch", "STRATEGY_RUNTIME_INTEGRITY"),
     ("bot.final_production_activation_repair_v58_patch", "FINAL_PRODUCTION_ACTIVATION_V58"),
     # v61 must install before v59/v60 start their reconciliation/activation
     # monitors. It guards v60's request boundary and makes v16 readiness reflect
@@ -94,8 +101,6 @@ _FAST_PATH_COMPAT_OPTIONAL_GUARDS = frozenset(
 _LEGACY_INSTALLERS = (
     *_FAST_PATH_INSTALLERS,
     ("bot.bootstrap_i12_capital_authority_repair_patch", "BOOTSTRAP_I12_CAPITAL_AUTHORITY_REPAIR"),
-    ("bot.trading_engine_strategy_wrapper_patch", "TRADING_ENGINE_STRATEGY_WRAPPER"),
-    ("bot.strategy_runtime_integrity_patch", "STRATEGY_RUNTIME_INTEGRITY"),
     ("bot.live_entry_scan_adoption_timeout_patch", "SCAN_POSITION_ADOPTION_TIMEOUT"),
     ("bot.writer_heartbeat_stale_repair_patch", "WRITER_HEARTBEAT_STALE_REPAIR"),
     ("bot.ecel_okx_synthetic_contract_patch", "ECEL_OKX_SYNTHETIC_CONTRACT"),
