@@ -32,6 +32,10 @@ _FAST_PATH_INSTALLERS = (
     ("bot.writer_authority_generation_convergence_v57_patch", "WRITER_AUTHORITY_GENERATION_CONVERGENCE_V57"),
     ("bot.zero_signal_streak_cap_repair_v51_patch", "ZERO_SIGNAL_STREAK_CAP_V51"),
     ("bot.heartbeat_authority_single_source_patch", "HEARTBEAT_AUTHORITY_SINGLE_SOURCE"),
+    # The writer heartbeat truthfully publishes CORE_THREAD_ALIVE=0 before the
+    # real core is launched. Keep the independent authority heartbeat aligned
+    # with that documented startup grace while preserving post-core fail-closed
+    # liveness checks.
     ("bot.precore_authority_heartbeat_v63_patch", "PRECORE_AUTHORITY_HEARTBEAT_V63"),
     ("bot.activation_convergence_v17_patch", "ACTIVATION_CONVERGENCE_V17"),
     ("bot.activation_convergence_v17_importlib_bridge", "ACTIVATION_CONVERGENCE_V17_IMPORTLIB_BRIDGE"),
@@ -43,11 +47,29 @@ _FAST_PATH_INSTALLERS = (
     ("bot.okx_order_instid_payload_repair_patch", "OKX_ORDER_INSTID_PAYLOAD_REPAIR"),
     ("bot.okx_final_order_submission_bridge_patch", "OKX_FINAL_ORDER_SUBMISSION_BRIDGE"),
     ("bot.stalled_writer_release_guard_v22", "STALLED_WRITER_RELEASE_GUARD_V22"),
+    # Keep synchronous capital publication inside the canonical freshness TTL.
+    # Slow venue workers continue asynchronously and can contribute on a later
+    # refresh once their observations are still fresh.
     ("bot.capital_refresh_live_continuity_v78_patch", "CAPITAL_REFRESH_FRESHNESS_BOUNDED_V78"),
+    # Synchronize canonical bootstrap/capital/readiness state before any
+    # compatibility activation proof is evaluated. This is state convergence,
+    # not a bypass; all writer/nonce/risk/kill-switch gates remain authoritative.
     ("bot.activation_capital_convergence_v62_patch", "ACTIVATION_CAPITAL_CONVERGENCE_V62"),
+    # Keep every post-activation observer and new-risk dispatch path on the same
+    # canonical CapitalAuthority freshness contract. Protective reduce/exit
+    # intents remain available when freshness is lost.
     ("bot.live_capital_freshness_v64_patch", "LIVE_CAPITAL_FRESHNESS_V64"),
+    # Close the remaining production liveness gaps without weakening execution:
+    # bound watchdog-driven refresh completion inside freshness, bridge v64
+    # across importlib, expose publication expiry dynamically, and reclaim scan
+    # ownership only when the recorded owner thread is actually gone.
     ("bot.production_freshness_scan_convergence_v93_patch", "PRODUCTION_FRESHNESS_SCAN_V93"),
+    # Bound startup position snapshots so a slow venue cannot hold the main
+    # startup thread indefinitely. v95 also makes position-sync completion a
+    # fail-closed activation prerequisite rather than pre-latching success.
     ("bot.position_sync_core_handoff_v95_patch", "POSITION_SYNC_CORE_HANDOFF_V95"),
+    # Publish position-sync truth into canonical readiness so an unsynced
+    # connected broker also revokes any stale coordinator dispatch commit.
     ("bot.position_sync_dispatch_authority_v96_patch", "POSITION_SYNC_DISPATCH_AUTHORITY_V96"),
     # The production core invokes TradingStrategy directly. These three guards
     # must be present on the canonical fast path, not only the legacy path:
@@ -57,9 +79,15 @@ _FAST_PATH_INSTALLERS = (
     ("bot.trading_strategy_apex_wiring_patch", "TRADING_STRATEGY_APEX_WIRING"),
     ("bot.strategy_runtime_integrity_patch", "STRATEGY_RUNTIME_INTEGRITY"),
     ("bot.final_production_activation_repair_v58_patch", "FINAL_PRODUCTION_ACTIVATION_V58"),
+    # v61 must install before v59/v60 start their reconciliation/activation
+    # monitors. It guards v60's request boundary and makes v16 readiness reflect
+    # current proof truth before any activation attempt is permitted.
     ("bot.final_production_activation_repair_v61_patch", "FINAL_PRODUCTION_ACTIVATION_V61"),
     ("bot.final_production_activation_repair_v59_patch", "FINAL_PRODUCTION_ACTIVATION_V59"),
     ("bot.final_production_activation_repair_v60_patch", "FINAL_PRODUCTION_ACTIVATION_V60"),
+    # A local LIVE_ACTIVE state is not sufficient for broker order dispatch.
+    # Require the canonical StartupCoordinator dispatch commit as well; v92
+    # repairs only that commit after the existing readiness proof passes.
     ("bot.live_active_dispatch_commit_v92_patch", "LIVE_ACTIVE_DISPATCH_COMMIT_V92"),
 )
 
