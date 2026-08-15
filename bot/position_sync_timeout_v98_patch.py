@@ -9,8 +9,9 @@ v98 changes only the *default* timeout to 12 seconds. An explicit
 NIJA_POSITION_FETCH_TIMEOUT_S value remains authoritative. v99 is installed
 from the same canonical slot so platform readiness is isolated from slow user
 position snapshots while each user execution path remains fail closed. v100
-uses that same early fast-path slot to install bounded canonical TradingStrategy
-class recovery before Step 2.5 publication can consume a stale partial module.
+adds bounded canonical TradingStrategy class recovery, and v102 supersedes the
+active-import retry behavior with a passive observer that never re-enters the
+canonical module import while it is still initializing.
 """
 from __future__ import annotations
 
@@ -56,6 +57,17 @@ def _install_v100() -> bool:
     return installer() is not False
 
 
+def _install_v102() -> bool:
+    try:
+        from bot import canonical_strategy_class_recovery_v102_patch as v102
+    except ImportError:
+        import canonical_strategy_class_recovery_v102_patch as v102  # type: ignore[import]
+    installer = getattr(v102, "install_import_hook", None) or getattr(v102, "install", None)
+    if not callable(installer):
+        return False
+    return installer() is not False
+
+
 def install() -> bool:
     global _INSTALLED
 
@@ -77,6 +89,12 @@ def install() -> bool:
             MARKER,
         )
         return False
+    if not _install_v102():
+        LOGGER.critical(
+            "POSITION_SYNC_TIMEOUT_V98_V102_INSTALL_FAILED marker=%s trading_fail_closed=true",
+            MARKER,
+        )
+        return False
 
     if _INSTALLED:
         return True
@@ -86,7 +104,8 @@ def install() -> bool:
     LOGGER.critical(
         "POSITION_SYNC_TIMEOUT_V98_INSTALLED marker=%s default_timeout_s=%.1f "
         "explicit_env_override_preserved=true account_isolation_v99=true "
-        "strategy_class_recovery_v100=true safety_gates_unchanged=true",
+        "strategy_class_recovery_v100=true passive_strategy_recovery_v102=true "
+        "safety_gates_unchanged=true",
         MARKER,
         _DEFAULT_TIMEOUT_S,
     )
