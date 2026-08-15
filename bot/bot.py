@@ -19,7 +19,7 @@ import sys
 from typing import Iterable
 
 logger = logging.getLogger("nija.bot_entrypoint")
-_FAST_PATH_MARKER = "20260815-canonical-fast-entrypoint-v66"
+_FAST_PATH_MARKER = "20260815-canonical-fast-entrypoint-v67"
 
 _FAST_PATH_INSTALLERS = (
     ("bot.writer_reelection_loss_reason_v46_patch", "WRITER_REELECTION_LOSS_REASON_V46"),
@@ -77,6 +77,10 @@ _FAST_PATH_INSTALLERS = (
     ("bot.trading_engine_strategy_wrapper_patch", "TRADING_ENGINE_STRATEGY_WRAPPER"),
     ("bot.trading_strategy_apex_wiring_patch", "TRADING_STRATEGY_APEX_WIRING"),
     ("bot.runtime_truth_convergence_v97_patch", "RUNTIME_TRUTH_CONVERGENCE_V97"),
+    # Revoke a broker's previous successful position-sync proof before every
+    # fresh authoritative fetch. A timeout must leave readiness false rather
+    # than reusing a stale _startup_position_sync_adopted=True latch.
+    ("bot.position_sync_failure_truth_v98_patch", "POSITION_SYNC_FAILURE_TRUTH_V98"),
     ("bot.strategy_runtime_integrity_patch", "STRATEGY_RUNTIME_INTEGRITY"),
     ("bot.final_production_activation_repair_v58_patch", "FINAL_PRODUCTION_ACTIVATION_V58"),
     # v61 must install before v59/v60 start their reconciliation/activation
