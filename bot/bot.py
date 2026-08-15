@@ -19,7 +19,7 @@ import sys
 from typing import Iterable
 
 logger = logging.getLogger("nija.bot_entrypoint")
-_FAST_PATH_MARKER = "20260815-canonical-fast-entrypoint-v67"
+_FAST_PATH_MARKER = "20260815-canonical-fast-entrypoint-v68"
 
 _FAST_PATH_INSTALLERS = (
     ("bot.writer_reelection_loss_reason_v46_patch", "WRITER_REELECTION_LOSS_REASON_V46"),
@@ -68,6 +68,10 @@ _FAST_PATH_INSTALLERS = (
     # startup thread indefinitely. v95 also makes position-sync completion a
     # fail-closed activation prerequisite rather than pre-latching success.
     ("bot.position_sync_core_handoff_v95_patch", "POSITION_SYNC_CORE_HANDOFF_V95"),
+    # Production Kraken snapshots exceeded the historical five-second default.
+    # v98 raises only the default wait budget; explicit env overrides and all
+    # fail-closed position/readiness/dispatch gates remain authoritative.
+    ("bot.position_sync_timeout_v98_patch", "POSITION_SYNC_TIMEOUT_V98"),
     # Publish position-sync truth into canonical readiness so an unsynced
     # connected broker also revokes any stale coordinator dispatch commit.
     ("bot.position_sync_dispatch_authority_v96_patch", "POSITION_SYNC_DISPATCH_AUTHORITY_V96"),
