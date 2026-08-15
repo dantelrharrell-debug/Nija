@@ -6,9 +6,9 @@ short default caused repeated timeout/invalidation during otherwise healthy
 broker startup.
 
 v98 changes only the *default* timeout to 12 seconds. An explicit
-NIJA_POSITION_FETCH_TIMEOUT_S value remains authoritative. All v95/v96/v97
-position-sync, readiness, dispatch, writer, nonce, risk, and kill-switch gates
-remain unchanged.
+NIJA_POSITION_FETCH_TIMEOUT_S value remains authoritative. v99 is installed
+from the same canonical slot so platform readiness is isolated from slow user
+position snapshots while each user execution path remains fail closed.
 """
 from __future__ import annotations
 
@@ -32,10 +32,19 @@ def _timeout_s_v98() -> float:
         return _DEFAULT_TIMEOUT_S
 
 
+def _install_v99() -> bool:
+    try:
+        from bot import position_sync_account_isolation_v99_patch as v99
+    except ImportError:
+        import position_sync_account_isolation_v99_patch as v99  # type: ignore[import]
+    installer = getattr(v99, "install_import_hook", None) or getattr(v99, "install", None)
+    if not callable(installer):
+        return False
+    return installer() is not False
+
+
 def install() -> bool:
     global _INSTALLED
-    if _INSTALLED:
-        return True
 
     try:
         from bot import position_sync_core_handoff_v95_patch as v95
@@ -43,11 +52,22 @@ def install() -> bool:
         import position_sync_core_handoff_v95_patch as v95  # type: ignore[import]
 
     setattr(v95, "_timeout_s", _timeout_s_v98)
+    if not _install_v99():
+        LOGGER.critical(
+            "POSITION_SYNC_TIMEOUT_V98_V99_INSTALL_FAILED marker=%s trading_fail_closed=true",
+            MARKER,
+        )
+        return False
+
+    if _INSTALLED:
+        return True
+
     os.environ["NIJA_POSITION_SYNC_TIMEOUT_V98_INSTALLED"] = "1"
     _INSTALLED = True
     LOGGER.critical(
         "POSITION_SYNC_TIMEOUT_V98_INSTALLED marker=%s default_timeout_s=%.1f "
-        "explicit_env_override_preserved=true safety_gates_unchanged=true",
+        "explicit_env_override_preserved=true account_isolation_v99=true "
+        "safety_gates_unchanged=true",
         MARKER,
         _DEFAULT_TIMEOUT_S,
     )
