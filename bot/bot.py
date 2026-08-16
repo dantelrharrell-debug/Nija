@@ -59,6 +59,7 @@ _FAST_PATH_INSTALLERS = (
     ("bot.final_production_activation_repair_v58_patch", "FINAL_PRODUCTION_ACTIVATION_V58"),
     ("bot.final_production_activation_repair_v61_patch", "FINAL_PRODUCTION_ACTIVATION_V61"),
     ("bot.final_production_activation_repair_v59_patch", "FINAL_PRODUCTION_ACTIVATION_V59"),
+    ("bot.final_activation_v60_v16_compat_v113_patch", "FINAL_ACTIVATION_V60_V16_COMPAT_V113"),
     ("bot.final_production_activation_repair_v60_patch", "FINAL_PRODUCTION_ACTIVATION_V60"),
     ("bot.live_active_dispatch_commit_v92_patch", "LIVE_ACTIVE_DISPATCH_COMMIT_V92"),
 )
@@ -100,11 +101,11 @@ def _canonical_fast_import(module_name: str):
     """Load an audited fast-path guard without replaying wrapped import_module.
 
     Production 2026-08-16 showed importlib.import_module wrapped by dozens of
-    historical compatibility patches.  A single guard load therefore traversed
+    historical compatibility patches. A single guard load therefore traversed
     the whole wrapper stack and could RecursionError before the guard installer
-    ran.  CPython's already-loaded frozen bootstrap primitive performs the
+    ran. CPython's already-loaded frozen bootstrap primitive performs the
     canonical module load directly and still honors normal module import
-    semantics inside the guard itself.  This changes only the fast-path guard
+    semantics inside the guard itself. This changes only the fast-path guard
     loader; it does not remove or bypass any installed safety guard.
     """
     bootstrap = getattr(importlib, "_bootstrap", None)
