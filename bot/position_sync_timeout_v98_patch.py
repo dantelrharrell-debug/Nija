@@ -1,29 +1,11 @@
-"""Tune startup position-fetch timeout without weakening position-sync safety.
+"""Tune startup position synchronization without weakening activation safety.
 
-Production logs on 2026-08-15 showed authoritative Kraken position snapshots
-crossing the v95 five-second default. v95 correctly failed closed, but the
-short default caused repeated timeout/invalidation during otherwise healthy
-broker startup.
-
-v98 changes only the *default* timeout to 12 seconds. An explicit
-NIJA_POSITION_FETCH_TIMEOUT_S value remains authoritative. v99 is installed
-from the same canonical slot so platform readiness is isolated from slow user
-position snapshots while each user execution path remains fail closed. v105 is
-installed before strategy recovery so the canonical TradingStrategy class is
-published before cycle-prone optional dependencies are hydrated. v106 guards
-the shared MultiAccountBrokerManager capital-refresh choke point against
-same-thread recursive startup callbacks while preserving only already-published
-authoritative capital truth. v107 serializes Kraken nonce rebuild recovery and
-adds import-hook reentry hardening. v108 dispatches connected platform broker
-position snapshots independently of capital readiness while preserving the
-existing bounded/fail-closed v95/v98 position-sync contract. v116 closes the
-activation/writer/readiness convergence races, v117 adds bounded stale
-position-fetch generations plus supervised-pending THREADS_STARTING liveness
-without granting execution authority, and v118 repairs the terminal writer-loss
-SEAK halt signature mismatch while preserving fail-closed shutdown semantics.
-v104 remains as the narrow legacy import-cycle guard. v100/v102 retain bounded
-fail-closed class recovery, and v103 retains the runtime reconciliation
-single-flight guard.
+v98 raises the default broker-position fetch timeout to 12 seconds while
+preserving an explicit ``NIJA_POSITION_FETCH_TIMEOUT_S`` override.  Later
+repairs are installed from this canonical slot in dependency order.  v119 adds
+canonical position-sync observation to preactivation truth and expands release
+attestation so v98/v116/v117/v118/v119 must all be present before the runtime
+release manifest can report complete.
 """
 from __future__ import annotations
 
@@ -72,6 +54,7 @@ def install() -> bool:
         ("runtime_convergence_v116_patch", "V116"),
         ("position_fetch_generation_v117_patch", "V117"),
         ("terminal_writer_loss_seak_v118_patch", "V118"),
+        ("preactivation_position_sync_v119_patch", "V119"),
         ("startup_strategy_import_cycle_v104_patch", "V104"),
         ("canonical_strategy_class_recovery_v100_patch", "V100"),
         ("canonical_strategy_class_recovery_v102_patch", "V102"),
@@ -91,7 +74,7 @@ def install() -> bool:
     os.environ["NIJA_POSITION_SYNC_TIMEOUT_V98_INSTALLED"] = "1"
     _INSTALLED = True
     LOGGER.critical(
-        "POSITION_SYNC_TIMEOUT_V98_INSTALLED marker=%s default_timeout_s=%.1f explicit_env_override_preserved=true account_isolation_v99=true startup_publication_bootstrap_v105=true capital_refresh_reentrancy_v106=true startup_hook_nonce_v107=true platform_position_sync_v108=true runtime_convergence_v116=true position_fetch_generation_v117=true terminal_writer_loss_seak_v118=true strategy_import_cycle_v104=true strategy_class_recovery_v100=true passive_strategy_recovery_v102=true startup_convergence_v103=true safety_gates_unchanged=true",
+        "POSITION_SYNC_TIMEOUT_V98_INSTALLED marker=%s default_timeout_s=%.1f explicit_env_override_preserved=true account_isolation_v99=true startup_publication_bootstrap_v105=true capital_refresh_reentrancy_v106=true startup_hook_nonce_v107=true platform_position_sync_v108=true runtime_convergence_v116=true position_fetch_generation_v117=true terminal_writer_loss_seak_v118=true preactivation_position_sync_v119=true strategy_import_cycle_v104=true strategy_class_recovery_v100=true passive_strategy_recovery_v102=true startup_convergence_v103=true safety_gates_unchanged=true",
         MARKER,
         _DEFAULT_TIMEOUT_S,
     )
