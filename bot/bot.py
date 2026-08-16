@@ -33,6 +33,7 @@ _FAST_PATH_INSTALLERS = (
     ("bot.zero_signal_streak_cap_repair_v51_patch", "ZERO_SIGNAL_STREAK_CAP_V51"),
     ("bot.heartbeat_authority_single_source_patch", "HEARTBEAT_AUTHORITY_SINGLE_SOURCE"),
     ("bot.precore_authority_heartbeat_v63_patch", "PRECORE_AUTHORITY_HEARTBEAT_V63"),
+    ("bot.canonical_self_healing_handoff_v124_patch", "CANONICAL_SELF_HEALING_HANDOFF_V124"),
     ("bot.activation_convergence_v17_patch", "ACTIVATION_CONVERGENCE_V17"),
     ("bot.activation_convergence_v17_importlib_bridge", "ACTIVATION_CONVERGENCE_V17_IMPORTLIB_BRIDGE"),
     ("bot.okx_patch_churn_guard_patch", "OKX_PATCH_CHURN_GUARD"),
