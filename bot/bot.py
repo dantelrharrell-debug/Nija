@@ -157,7 +157,30 @@ def _install_guards(
     return ready
 
 
+def _install_canonical_import_shield_v123() -> bool:
+    try:
+        module = _canonical_fast_import("bot.canonical_import_shield_v123_patch")
+        installer = getattr(module, "install_import_hook", None) or getattr(module, "install", None)
+        if not callable(installer) or installer() is False:
+            raise RuntimeError("canonical import shield v123 installer unavailable or returned false")
+        logger.critical(
+            "CANONICAL_IMPORT_SHIELD_V123_EARLY_READY source=bot_entrypoint before_fast_guard_bundle=true"
+        )
+        return True
+    except Exception as exc:
+        logger.critical(
+            "CANONICAL_IMPORT_SHIELD_V123_EARLY_FAILED source=bot_entrypoint err=%s trading_fail_closed=true",
+            exc,
+            exc_info=True,
+        )
+        return False
+
+
 if _canonical_fast_path_enabled():
+    if not _install_canonical_import_shield_v123():
+        os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "0"
+        os.environ["NIJA_RUNTIME_TRADING_STATE"] = "OFF"
+        raise RuntimeError("canonical import shield failed; trading remains fail closed")
     if not _install_guards(
         _FAST_PATH_INSTALLERS,
         mode="canonical_fast",
@@ -167,7 +190,7 @@ if _canonical_fast_path_enabled():
         os.environ["NIJA_RUNTIME_TRADING_STATE"] = "OFF"
         raise RuntimeError("canonical fast-path safety guards failed; trading remains fail closed")
     logger.critical(
-        "CANONICAL_ENTRYPOINT_FAST_PATH_READY marker=%s import_loader=frozen_bootstrap package_hook_fanout=deferred handoff=bot.bot_main",
+        "CANONICAL_ENTRYPOINT_FAST_PATH_READY marker=%s import_loader=frozen_bootstrap package_hook_fanout=deferred import_shield_v123=true handoff=bot.bot_main",
         _FAST_PATH_MARKER,
     )
 else:
