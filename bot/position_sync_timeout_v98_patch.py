@@ -14,9 +14,11 @@ published before cycle-prone optional dependencies are hydrated. v106 guards
 the shared MultiAccountBrokerManager capital-refresh choke point against
 same-thread recursive startup callbacks while preserving only already-published
 authoritative capital truth. v107 serializes Kraken nonce rebuild recovery and
-adds import-hook reentry hardening. v104 remains as the narrow legacy import-cycle
-guard. v100/v102 retain bounded fail-closed class recovery, and v103 retains
-the runtime reconciliation single-flight guard.
+adds import-hook reentry hardening. v108 dispatches connected platform broker
+position snapshots independently of capital readiness while preserving the
+existing bounded/fail-closed v95/v98 position-sync contract. v104 remains as the
+narrow legacy import-cycle guard. v100/v102 retain bounded fail-closed class
+recovery, and v103 retains the runtime reconciliation single-flight guard.
 """
 from __future__ import annotations
 
@@ -61,6 +63,7 @@ def install() -> bool:
         ("startup_publication_bootstrap_v105_patch", "V105"),
         ("capital_refresh_reentrancy_v106_patch", "V106"),
         ("startup_hook_nonce_v107_patch", "V107"),
+        ("platform_position_sync_v108_patch", "V108"),
         ("startup_strategy_import_cycle_v104_patch", "V104"),
         ("canonical_strategy_class_recovery_v100_patch", "V100"),
         ("canonical_strategy_class_recovery_v102_patch", "V102"),
@@ -80,7 +83,7 @@ def install() -> bool:
     os.environ["NIJA_POSITION_SYNC_TIMEOUT_V98_INSTALLED"] = "1"
     _INSTALLED = True
     LOGGER.critical(
-        "POSITION_SYNC_TIMEOUT_V98_INSTALLED marker=%s default_timeout_s=%.1f explicit_env_override_preserved=true account_isolation_v99=true startup_publication_bootstrap_v105=true capital_refresh_reentrancy_v106=true startup_hook_nonce_v107=true strategy_import_cycle_v104=true strategy_class_recovery_v100=true passive_strategy_recovery_v102=true startup_convergence_v103=true safety_gates_unchanged=true",
+        "POSITION_SYNC_TIMEOUT_V98_INSTALLED marker=%s default_timeout_s=%.1f explicit_env_override_preserved=true account_isolation_v99=true startup_publication_bootstrap_v105=true capital_refresh_reentrancy_v106=true startup_hook_nonce_v107=true platform_position_sync_v108=true strategy_import_cycle_v104=true strategy_class_recovery_v100=true passive_strategy_recovery_v102=true startup_convergence_v103=true safety_gates_unchanged=true",
         MARKER,
         _DEFAULT_TIMEOUT_S,
     )
