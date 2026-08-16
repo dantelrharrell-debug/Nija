@@ -6,12 +6,12 @@ canonical broker-startup convergence hook before importing ``main.py`` or the
 execute ``bot.__init__`` and load ``bot.bot_main`` before a late hook has a
 chance to wrap writer acquisition.
 
-The launcher now also establishes the canonical writer before ``main.py`` runs
-its compatibility/runtime installer fanout. The acquisition is performed only
-through ``bot.bot_main._acquire_writer_authority_before_nonce()``, which keeps
-the existing exact Redis fencing/generation proof and fail-closed behavior. The
-final ``bot.bot`` handoff reuses the already-imported canonical module instead
-of executing it a second time under ``__main__``.
+The launcher also establishes the canonical writer before ``main.py`` runs its
+compatibility/runtime installer fanout. v111 makes the bootstrap-critical module
+loads use CPython's canonical frozen import primitive so historical
+``importlib.import_module`` wrappers cannot recursively re-enter ``bot.bot``
+before the writer-first handoff completes. Runtime hooks and all fail-closed
+writer/nonce/risk/kill-switch checks remain authoritative.
 """
 from __future__ import annotations
 
@@ -25,8 +25,8 @@ import sys
 from types import ModuleType
 from typing import Any
 
-MARKER = "20260807-canonical-runtime-launcher-v26-v44-v43-v42-v41-v40-v39-v38-v37-v18"
-WRITER_FIRST_MARKER = "20260809-canonical-writer-first-v59"
+MARKER = "20260816-canonical-runtime-launcher-v111"
+WRITER_FIRST_MARKER = "20260816-canonical-writer-first-v111"
 ROOT = Path(__file__).resolve().parents[1]
 V24_PATH = ROOT / "bot" / "canonical_broker_startup_convergence_v24.py"
 V32_PATH = ROOT / "bot" / "runtime_execution_convergence_v32.py"
@@ -45,6 +45,18 @@ V18_PATH = ROOT / "bot" / "production_corrective_set_v18_patch.py"
 V19_PATH = ROOT / "bot" / "entrypoint_writer_epoch_recovery_v19_patch.py"
 MAIN_PATH = ROOT / "main.py"
 LOGGER = logging.getLogger("nija.canonical_runtime_launcher")
+
+
+def _canonical_import(module_name: str) -> ModuleType:
+    """Load a bootstrap-critical module without mutable import_module wrappers."""
+    bootstrap = getattr(importlib, "_bootstrap", None)
+    gcd_import = getattr(bootstrap, "_gcd_import", None) if bootstrap is not None else None
+    if not callable(gcd_import):
+        raise RuntimeError("canonical_import_primitive_unavailable")
+    module = gcd_import(module_name)
+    if not isinstance(module, ModuleType):
+        raise RuntimeError(f"canonical_import_invalid_module:{module_name}")
+    return module
 
 
 def _load_module_by_path(module_name: str, path: Path) -> ModuleType:
@@ -245,7 +257,10 @@ def install_canonical_startup_guard() -> ModuleType:
     _install_production_corrective_set()
     os.environ["NIJA_CANONICAL_RUNTIME_LAUNCHER_V26_READY"] = "1"
     os.environ["NIJA_CANONICAL_RUNTIME_LAUNCHER_V26_MARKER"] = MARKER
-    LOGGER.critical("CANONICAL_RUNTIME_LAUNCHER_V26_READY marker=%s bot_main_preloaded=false v24_installed=true v32_installed=true v33_installed=true v34_installed=true v36_installed=true v37_installed=true v38_installed=true v19_installed=true v39_installed=true v40_installed=true v41_installed=true v42_installed=true v43_installed=true v44_installed=true v18_installed=true", MARKER)
+    LOGGER.critical(
+        "CANONICAL_RUNTIME_LAUNCHER_V26_READY marker=%s bot_main_preloaded=false v111_launcher_import=true",
+        MARKER,
+    )
     return module
 
 
@@ -265,10 +280,9 @@ def _release_early_writer(bot_main: ModuleType, *, reason: str) -> None:
 
 
 def _bootstrap_writer_first() -> tuple[ModuleType, ModuleType]:
-    """Import the canonical entrypoint and prove Redis writer authority first."""
-
-    bot_entry = importlib.import_module("bot.bot")
-    bot_main = importlib.import_module("bot.bot_main")
+    """Import canonical entrypoint and prove Redis writer authority first."""
+    bot_entry = _canonical_import("bot.bot")
+    bot_main = _canonical_import("bot.bot_main")
     acquire = getattr(bot_main, "_acquire_writer_authority_before_nonce", None)
     if not callable(acquire):
         raise RuntimeError("canonical writer bootstrap function unavailable")
@@ -295,12 +309,10 @@ def _bootstrap_writer_first() -> tuple[ModuleType, ModuleType]:
     )
     if not exact_runtime:
         _release_early_writer(bot_main, reason="runtime_lineage_incomplete")
-        raise RuntimeError(
-            "canonical writer bootstrap did not establish exact distributed lineage"
-        )
+        raise RuntimeError("canonical writer bootstrap did not establish exact distributed lineage")
 
     try:
-        authority = importlib.import_module("bot.execution_authority_context")
+        authority = _canonical_import("bot.execution_authority_context")
         verify = getattr(authority, "assert_distributed_writer_authority", None)
         if not callable(verify):
             raise RuntimeError("distributed authority verifier unavailable")
@@ -310,10 +322,11 @@ def _bootstrap_writer_first() -> tuple[ModuleType, ModuleType]:
         raise
 
     os.environ["NIJA_CANONICAL_WRITER_FIRST_V59_READY"] = "1"
+    os.environ["NIJA_CANONICAL_LAUNCHER_IMPORT_V111_READY"] = "1"
     LOGGER.critical(
-        "CANONICAL_EARLY_WRITER_BOOTSTRAP_VERIFIED marker=%s generation=%s "
-        "token_prefix=%s exact_redis_proof=true local_fallback=false "
-        "runtime_fanout_started=false",
+        "CANONICAL_EARLY_WRITER_BOOTSTRAP_VERIFIED marker=%s generation=%s token_prefix=%s "
+        "exact_redis_proof=true local_fallback=false runtime_fanout_started=false "
+        "bootstrap_import_loader=frozen_bootstrap",
         WRITER_FIRST_MARKER,
         generation,
         token[:8],
@@ -323,7 +336,6 @@ def _bootstrap_writer_first() -> tuple[ModuleType, ModuleType]:
 
 def _run_main_single_identity(bot_entry: ModuleType, bot_main: ModuleType) -> None:
     """Run ``main.py`` while reusing the canonical ``bot.bot`` module once."""
-
     original_run_module = runpy.run_module
     handoff_started = False
 
@@ -341,18 +353,15 @@ def _run_main_single_identity(bot_entry: ModuleType, bot_main: ModuleType) -> No
                 run_name=run_name,
                 alter_sys=alter_sys,
             )
-
         canonical = sys.modules.get("bot.bot")
         if canonical is None or canonical is not bot_entry:
             raise RuntimeError("canonical bot.bot module identity changed before handoff")
         entry_main = getattr(canonical, "main", None)
         if not callable(entry_main):
             raise RuntimeError("canonical bot.bot main callable unavailable")
-
         handoff_started = True
         LOGGER.critical(
-            "CANONICAL_BOT_SINGLE_IDENTITY_HANDOFF marker=%s "
-            "module=bot.bot reused_module=true run_name=%s",
+            "CANONICAL_BOT_SINGLE_IDENTITY_HANDOFF marker=%s module=bot.bot reused_module=true run_name=%s",
             WRITER_FIRST_MARKER,
             run_name or "unset",
         )
@@ -375,7 +384,11 @@ def main() -> int:
         raise RuntimeError(f"canonical main.py missing: {MAIN_PATH}")
     install_canonical_startup_guard()
     bot_entry, bot_main = _bootstrap_writer_first()
-    print("CANONICAL_ENTRYPOINT_FAST_PATH_ARMED marker=20260807-canonical-fast-entrypoint-v44-v43-v42-v41-v40-v39-v38-v37-v18 package_hook_fanout=deferred", flush=True)
+    print(
+        "CANONICAL_ENTRYPOINT_FAST_PATH_ARMED marker=20260816-canonical-runtime-launcher-v111 "
+        "package_hook_fanout=deferred bootstrap_import_loader=frozen_bootstrap",
+        flush=True,
+    )
     _run_main_single_identity(bot_entry, bot_main)
     return 0
 
