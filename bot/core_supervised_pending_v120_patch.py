@@ -2,10 +2,10 @@
 
 Production deployment 2b43a7d2 proved position-sync and bootstrap convergence,
 but the canonical TradingLoop still exited after its bounded
-``TRADING_ENGINE_READY`` wait expired.  That return was then correctly treated
+``TRADING_ENGINE_READY`` wait expired. That return was then correctly treated
 by writer authority as terminal ``core_thread_dead`` and the process restarted.
 
-v120 preserves the existing bounded wait and every execution gate.  It wraps
+v120 preserves the existing bounded wait and every execution gate. It wraps
 ``run_trading_loop`` so that a return is retried only when all of these are true:
 
 * the canonical Redis process-writer proof is still exact and current;
@@ -15,9 +15,9 @@ v120 preserves the existing bounded wait and every execution gate.  It wraps
 * TRADING_ENGINE_READY remains unset (the observed startup-pending return path).
 
 No broker I/O, scan, order, readiness, nonce, capital, position, or execution
-authority is fabricated.  Structural failures still terminate the core thread.
+authority is fabricated. Structural failures still terminate the core thread.
 The patch adds no new global import hook; future nija_core_loop imports are
-patched through the already-installed v54 lifecycle hook.
+patched by extending the already-installed v54 lifecycle dispatch function.
 """
 from __future__ import annotations
 
@@ -34,6 +34,7 @@ LOGGER = logging.getLogger("nija.core_supervised_pending_v120")
 MARKER = "20260816-core-supervised-pending-v120"
 RELEASE_ID = "20260816-runtime-convergence-v120"
 _PATCH_ATTR = "_nija_core_supervised_pending_v120"
+_V54_DISPATCH_ATTR = "_nija_core_supervised_pending_v120_dispatch"
 _LOCK = threading.RLock()
 _INSTALLED = False
 
@@ -168,6 +169,34 @@ def _patch_core_loop(module: ModuleType) -> bool:
     return True
 
 
+def _patch_v54_dispatch() -> bool:
+    try:
+        from bot import writer_runtime_lifecycle_supervisor_v54_patch as v54
+    except Exception:
+        return False
+
+    current = getattr(v54, "_patch_core_loop", None)
+    if not callable(current):
+        return False
+    if getattr(current, _V54_DISPATCH_ATTR, False):
+        return True
+
+    @wraps(current)
+    def patch_core_loop_v120(module: ModuleType) -> bool:
+        if not current(module):
+            return False
+        return _patch_core_loop(module)
+
+    setattr(patch_core_loop_v120, _V54_DISPATCH_ATTR, True)
+    setattr(patch_core_loop_v120, "__wrapped__", current)
+    v54._patch_core_loop = patch_core_loop_v120
+    LOGGER.critical(
+        "CORE_SUPERVISED_PENDING_V120_V54_DISPATCH_PATCHED marker=%s existing_import_hook_reused=true new_import_hook=false",
+        MARKER,
+    )
+    return True
+
+
 def _patch_release_manifest() -> bool:
     manifest = sys.modules.get("bot.runtime_release_manifest_patch") or sys.modules.get(
         "runtime_release_manifest_patch"
@@ -188,6 +217,9 @@ def _patch_release_manifest() -> bool:
 def install() -> bool:
     global _INSTALLED
     with _LOCK:
+        if not _patch_v54_dispatch():
+            return False
+
         module = _loaded_core()
         patch_ok = True if module is None else _patch_core_loop(module)
         if not patch_ok:
@@ -200,7 +232,7 @@ def install() -> bool:
 
         _INSTALLED = True
         LOGGER.critical(
-            "CORE_SUPERVISED_PENDING_V120_INSTALLED marker=%s import_hook_added=false start_gate_timeout_still_bounded=true core_liveness_preserved=true execution_fail_closed=true initial_patch_ready=%s",
+            "CORE_SUPERVISED_PENDING_V120_INSTALLED marker=%s import_hook_added=false v54_dispatch_reused=true start_gate_timeout_still_bounded=true core_liveness_preserved=true execution_fail_closed=true initial_patch_ready=%s",
             MARKER,
             patch_ok,
         )
@@ -218,5 +250,6 @@ __all__ = [
     "install",
     "install_import_hook",
     "_patch_core_loop",
+    "_patch_v54_dispatch",
     "_supervised_pending_return_allowed",
 ]
