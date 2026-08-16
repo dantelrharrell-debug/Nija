@@ -8,16 +8,16 @@ broker startup.
 v98 changes only the *default* timeout to 12 seconds. An explicit
 NIJA_POSITION_FETCH_TIMEOUT_S value remains authoritative. v99 is installed
 from the same canonical slot so platform readiness is isolated from slow user
-position snapshots while each user execution path remains fail closed. v100
-adds bounded canonical TradingStrategy class recovery, v102 supersedes the
-active-import retry behavior with a passive observer, and v103 extends that
-passive convergence window while preventing recursive runtime reconciliation.
+position snapshots while each user execution path remains fail closed. v104 is
+installed before strategy recovery so optional APEX/core-loop imports cannot
+hold the canonical TradingStrategy module in a partial initialization cycle.
+v100/v102 retain bounded fail-closed class recovery, and v103 retains the
+runtime reconciliation single-flight guard.
 """
 from __future__ import annotations
 
 import logging
 import os
-from typing import Any
 
 LOGGER = logging.getLogger("nija.position_sync_timeout_v98")
 MARKER = "20260815-position-sync-timeout-v98"
@@ -41,6 +41,17 @@ def _install_v99() -> bool:
     except ImportError:
         import position_sync_account_isolation_v99_patch as v99  # type: ignore[import]
     installer = getattr(v99, "install_import_hook", None) or getattr(v99, "install", None)
+    if not callable(installer):
+        return False
+    return installer() is not False
+
+
+def _install_v104() -> bool:
+    try:
+        from bot import startup_strategy_import_cycle_v104_patch as v104
+    except ImportError:
+        import startup_strategy_import_cycle_v104_patch as v104  # type: ignore[import]
+    installer = getattr(v104, "install_import_hook", None) or getattr(v104, "install", None)
     if not callable(installer):
         return False
     return installer() is not False
@@ -94,6 +105,12 @@ def install() -> bool:
             MARKER,
         )
         return False
+    if not _install_v104():
+        LOGGER.critical(
+            "POSITION_SYNC_TIMEOUT_V98_V104_INSTALL_FAILED marker=%s trading_fail_closed=true",
+            MARKER,
+        )
+        return False
     if not _install_v100():
         LOGGER.critical(
             "POSITION_SYNC_TIMEOUT_V98_V100_INSTALL_FAILED marker=%s trading_fail_closed=true",
@@ -121,8 +138,9 @@ def install() -> bool:
     LOGGER.critical(
         "POSITION_SYNC_TIMEOUT_V98_INSTALLED marker=%s default_timeout_s=%.1f "
         "explicit_env_override_preserved=true account_isolation_v99=true "
-        "strategy_class_recovery_v100=true passive_strategy_recovery_v102=true "
-        "startup_convergence_v103=true safety_gates_unchanged=true",
+        "strategy_import_cycle_v104=true strategy_class_recovery_v100=true "
+        "passive_strategy_recovery_v102=true startup_convergence_v103=true "
+        "safety_gates_unchanged=true",
         MARKER,
         _DEFAULT_TIMEOUT_S,
     )
