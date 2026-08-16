@@ -1,20 +1,7 @@
 """Production convergence repair v116.
 
-Closes the remaining startup races observed on 2026-08-16 without weakening
-execution safety:
-
-* canonical readiness must be complete before activation compatibility paths run;
-* a healthy writer/core process may remain supervised and fail closed while
-  activation readiness converges instead of tearing down a valid Redis lease;
-* duplicate position-sync callers are serialized per broker and coalesced for a
-  short freshness window so one caller cannot immediately revoke another
-  caller's just-published authoritative snapshot;
-* writer state cannot resurrect from LOST while release/shutdown is in progress;
-* connected Kraken user accounts remain trading-ineligible until their own
-  authoritative startup position snapshot succeeds.
-
-No readiness, writer ownership, broker connectivity, capital, position, nonce,
-or execution authority is fabricated.
+Closes remaining activation, writer-lifecycle, and position-sync races without
+fabricating readiness or weakening any execution gate.
 """
 from __future__ import annotations
 
@@ -27,11 +14,10 @@ import threading
 import time
 from functools import wraps
 from types import ModuleType
-from typing import Any, Callable
+from typing import Any
 
 LOGGER = logging.getLogger("nija.runtime_convergence_v116")
 MARKER = "20260816-runtime-convergence-v116"
-_TRUE = {"1", "true", "yes", "on", "enabled", "y"}
 _LOCK = threading.RLock()
 _IMPORT_LOCAL = threading.local()
 _IMPORT_FLAG = "_NIJA_RUNTIME_CONVERGENCE_V116_IMPORT_HOOK"
@@ -40,15 +26,18 @@ _BROKER_LOCKS: dict[int, threading.RLock] = {}
 _BROKER_LOCKS_GUARD = threading.Lock()
 
 
-def _truthy(name: str) -> bool:
-    return str(os.environ.get(name, "") or "").strip().lower() in _TRUE
-
-
-def _module(*names: str) -> ModuleType | None:
+def _loaded(*names: str) -> ModuleType | None:
     for name in names:
         mod = sys.modules.get(name)
         if isinstance(mod, ModuleType):
             return mod
+    return None
+
+
+def _import(*names: str) -> ModuleType | None:
+    mod = _loaded(*names)
+    if mod is not None:
+        return mod
     for name in names:
         try:
             mod = importlib.import_module(name)
@@ -60,11 +49,11 @@ def _module(*names: str) -> ModuleType | None:
 
 
 def _readiness_complete() -> tuple[bool, list[str]]:
-    mod = _module("bot.readiness_table", "readiness_table")
+    mod = _import("bot.readiness_table", "readiness_table")
     if mod is None:
         return False, ["readiness_table_unavailable"]
     try:
-        snapshot = dict(getattr(mod, "snapshot")() or {})
+        snapshot = dict(mod.snapshot() or {})
     except Exception:
         return False, ["readiness_snapshot_unavailable"]
     pending = sorted(str(k) for k, v in snapshot.items() if not bool(v))
@@ -72,14 +61,12 @@ def _readiness_complete() -> tuple[bool, list[str]]:
 
 
 def _patch_activation_bridge() -> bool:
-    mod = _module("bot.activation_snapshot_bridge_patch", "activation_snapshot_bridge_patch")
+    mod = _loaded("bot.activation_snapshot_bridge_patch", "activation_snapshot_bridge_patch")
     if mod is None:
-        return False
-    current = getattr(mod, "_concrete_activation_gates_pass", None)
-    if not callable(current):
-        return False
-    if getattr(current, _PATCH_ATTR, False):
         return True
+    current = getattr(mod, "_concrete_activation_gates_pass", None)
+    if not callable(current) or getattr(current, _PATCH_ATTR, False):
+        return callable(current)
 
     @wraps(current)
     def guarded(tsm_module: Any) -> tuple[bool, str]:
@@ -89,7 +76,7 @@ def _patch_activation_bridge() -> bool:
         ready, pending = _readiness_complete()
         if not ready:
             LOGGER.critical(
-                "ACTIVATION_BRIDGE_V116_BLOCKED marker=%s reason=canonical_readiness_incomplete pending=%s fail_closed=true",
+                "ACTIVATION_BRIDGE_V116_BLOCKED marker=%s pending=%s fail_closed=true",
                 MARKER,
                 pending,
             )
@@ -97,29 +84,23 @@ def _patch_activation_bridge() -> bool:
         return True, ""
 
     setattr(guarded, _PATCH_ATTR, True)
-    setattr(guarded, "__wrapped__", current)
     mod._concrete_activation_gates_pass = guarded
     return True
 
 
 def _patch_trading_state_machine() -> bool:
-    mod = _module("bot.trading_state_machine", "trading_state_machine")
+    mod = _loaded("bot.trading_state_machine", "trading_state_machine")
     if mod is None:
-        return False
-    cls = getattr(mod, "TradingStateMachine", None)
-    if not isinstance(cls, type):
-        return False
-    current = getattr(cls, "commit_activation", None)
-    if not callable(current):
-        return False
-    if getattr(current, _PATCH_ATTR, False):
         return True
+    cls = getattr(mod, "TradingStateMachine", None)
+    current = getattr(cls, "commit_activation", None) if isinstance(cls, type) else None
+    if not callable(current) or getattr(current, _PATCH_ATTR, False):
+        return callable(current)
 
     @wraps(current)
     def commit_guarded(self: Any, *args: Any, **kwargs: Any):
-        state_reader = getattr(self, "get_current_state", None)
         try:
-            state = state_reader() if callable(state_reader) else getattr(self, "_current_state", None)
+            state = self.get_current_state()
             state_name = str(getattr(state, "value", state) or "").upper()
         except Exception:
             state_name = ""
@@ -135,82 +116,61 @@ def _patch_trading_state_machine() -> bool:
         return current(self, *args, **kwargs)
 
     setattr(commit_guarded, _PATCH_ATTR, True)
-    setattr(commit_guarded, "__wrapped__", current)
     cls.commit_activation = commit_guarded
     return True
 
 
-def _writer_runtime_healthy(runtime: Any, trading_thread: Any) -> tuple[bool, str]:
-    if runtime is None:
-        return False, "runtime_missing"
-    if bool(getattr(runtime, "lost", True)):
-        return False, "runtime_lost"
-    if not bool(getattr(runtime, "acquired", False)):
-        return False, "runtime_not_acquired"
-    if bool(getattr(runtime, "_local_fallback", False)):
-        return False, "local_fallback"
-    if trading_thread is None or not callable(getattr(trading_thread, "is_alive", None)):
-        return False, "core_thread_missing"
-    try:
-        if not trading_thread.is_alive():
-            return False, "core_thread_dead"
-    except Exception:
-        return False, "core_thread_state_unavailable"
-    if _truthy("NIJA_PROCESS_EXIT_REQUESTED"):
-        return False, "process_exit_requested"
-    return True, "writer_core_healthy"
-
-
 def _bootstrap_running_supervised() -> bool:
-    mod = _module("bot.bootstrap_state_machine", "bootstrap_state_machine")
+    mod = _import("bot.bootstrap_state_machine", "bootstrap_state_machine")
     if mod is None:
         return False
-    getter = getattr(mod, "get_bootstrap_fsm", None)
-    if not callable(getter):
-        return False
     try:
-        fsm = getter()
+        fsm = mod.get_bootstrap_fsm()
         value = getattr(getattr(fsm, "state", None), "value", getattr(fsm, "current_state", ""))
-        value = getattr(value, "value", value)
-        return str(value) == "RUNNING_SUPERVISED"
+        return str(getattr(value, "value", value)) == "RUNNING_SUPERVISED"
     except Exception:
         return False
+
+
+def _writer_core_healthy(runtime: Any, trading_thread: Any) -> bool:
+    if runtime is None or bool(getattr(runtime, "lost", True)) or not bool(getattr(runtime, "acquired", False)):
+        return False
+    if bool(getattr(runtime, "_local_fallback", False)):
+        return False
+    try:
+        if trading_thread is None or not trading_thread.is_alive():
+            return False
+    except Exception:
+        return False
+    if os.environ.get("NIJA_PROCESS_EXIT_REQUESTED", "").strip().lower() in {"1", "true", "yes"}:
+        return False
+    return True
 
 
 def _patch_bot_main() -> bool:
-    mod = _module("bot.bot_main", "bot_main")
+    mod = _loaded("bot.bot_main", "bot_main")
     if mod is None:
-        return False
-    current = getattr(mod, "_perform_post_core_activation_convergence", None)
-    if not callable(current):
-        return False
-    if getattr(current, _PATCH_ATTR, False):
         return True
+    current = getattr(mod, "_perform_post_core_activation_convergence", None)
+    if not callable(current) or getattr(current, _PATCH_ATTR, False):
+        return callable(current)
 
     @wraps(current)
     def supervised_pending(runtime: Any, trading_thread: Any, *args: Any, **kwargs: Any) -> bool:
         result = bool(current(runtime, trading_thread, *args, **kwargs))
         if result:
             return True
-        healthy, reason = _writer_runtime_healthy(runtime, trading_thread)
-        if healthy and _bootstrap_running_supervised():
+        if _writer_core_healthy(runtime, trading_thread) and _bootstrap_running_supervised():
             os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "0"
             os.environ["NIJA_EXECUTION_ACTIVE"] = "false"
             LOGGER.critical(
-                "POST_CORE_V116_SUPERVISED_PENDING marker=%s reason=activation_not_ready writer_core_healthy=true bootstrap=RUNNING_SUPERVISED process_exit=false trading_fail_closed=true",
+                "POST_CORE_V116_SUPERVISED_PENDING marker=%s writer_core_healthy=true bootstrap=RUNNING_SUPERVISED trading_fail_closed=true",
                 MARKER,
             )
             return True
-        LOGGER.critical(
-            "POST_CORE_V116_FATAL marker=%s reason=%s bootstrap_running_supervised=%s",
-            MARKER,
-            reason,
-            _bootstrap_running_supervised(),
-        )
         return False
 
     setattr(supervised_pending, _PATCH_ATTR, True)
-    setattr(supervised_pending, "__wrapped__", current)
     mod._perform_post_core_activation_convergence = supervised_pending
     return True
 
@@ -218,14 +178,10 @@ def _patch_bot_main() -> bool:
 def _broker_lock(broker: Any) -> threading.RLock:
     key = id(broker)
     with _BROKER_LOCKS_GUARD:
-        lock = _BROKER_LOCKS.get(key)
-        if lock is None:
-            lock = threading.RLock()
-            _BROKER_LOCKS[key] = lock
-        return lock
+        return _BROKER_LOCKS.setdefault(key, threading.RLock())
 
 
-def _sync_freshness_s() -> float:
+def _freshness_s() -> float:
     try:
         return max(0.1, min(10.0, float(os.environ.get("NIJA_POSITION_SYNC_DUPLICATE_COALESCE_S", "3") or 3.0)))
     except (TypeError, ValueError):
@@ -233,25 +189,21 @@ def _sync_freshness_s() -> float:
 
 
 def _patch_position_sync() -> bool:
-    mod = _module("bot.startup_position_sync", "startup_position_sync")
+    mod = _loaded("bot.startup_position_sync", "startup_position_sync")
     if mod is None:
-        return False
-    current = getattr(mod, "_adopt_broker_positions", None)
-    if not callable(current):
-        return False
-    if getattr(current, _PATCH_ATTR, False):
         return True
+    current = getattr(mod, "_adopt_broker_positions", None)
+    if not callable(current) or getattr(current, _PATCH_ATTR, False):
+        return callable(current)
 
     @wraps(current)
     def single_flight(broker: Any, broker_name: str, eps: Any) -> int:
-        lock = _broker_lock(broker)
-        with lock:
+        with _broker_lock(broker):
             now = time.monotonic()
             last_ok = float(getattr(broker, "_nija_position_sync_v116_last_ok", 0.0) or 0.0)
-            adopted = bool(getattr(broker, "_startup_position_sync_adopted", False))
-            if adopted and last_ok > 0.0 and now - last_ok <= _sync_freshness_s():
+            if bool(getattr(broker, "_startup_position_sync_adopted", False)) and last_ok > 0 and now - last_ok <= _freshness_s():
                 LOGGER.info(
-                    "POSITION_SYNC_V116_COALESCED marker=%s broker=%s age_s=%.3f authoritative_snapshot_reused=true duplicate_only=true",
+                    "POSITION_SYNC_V116_COALESCED marker=%s broker=%s age_s=%.3f duplicate_only=true",
                     MARKER,
                     broker_name,
                     max(0.0, now - last_ok),
@@ -262,31 +214,25 @@ def _patch_position_sync() -> bool:
             except BaseException:
                 setattr(broker, "_startup_position_sync_fetch_ok", False)
                 raise
-            synced = bool(getattr(broker, "_startup_position_sync_adopted", False))
-            if synced:
+            if bool(getattr(broker, "_startup_position_sync_adopted", False)):
                 setattr(broker, "_nija_position_sync_v116_last_ok", time.monotonic())
                 setattr(broker, "_startup_position_sync_fetch_ok", True)
                 setattr(broker, "_startup_position_sync_error", None)
             return result
 
     setattr(single_flight, _PATCH_ATTR, True)
-    setattr(single_flight, "__wrapped__", current)
     mod._adopt_broker_positions = single_flight
     return True
 
 
 def _patch_writer_state() -> bool:
-    mod = _module("bot.entrypoint_writer_authority", "entrypoint_writer_authority")
+    mod = _loaded("bot.entrypoint_writer_authority", "entrypoint_writer_authority")
     if mod is None:
-        return False
-    cls = getattr(mod, "EntrypointWriterAuthority", None)
-    if not isinstance(cls, type):
-        return False
-    current = getattr(cls, "_set_writer_state", None)
-    if not callable(current):
-        return False
-    if getattr(current, _PATCH_ATTR, False):
         return True
+    cls = getattr(mod, "EntrypointWriterAuthority", None)
+    current = getattr(cls, "_set_writer_state", None) if isinstance(cls, type) else None
+    if not callable(current) or getattr(current, _PATCH_ATTR, False):
+        return callable(current)
 
     @wraps(current)
     def no_resurrection(self: Any, state: Any, *args: Any, **kwargs: Any):
@@ -307,20 +253,17 @@ def _patch_writer_state() -> bool:
         return current(self, state, *args, **kwargs)
 
     setattr(no_resurrection, _PATCH_ATTR, True)
-    setattr(no_resurrection, "__wrapped__", current)
     cls._set_writer_state = no_resurrection
     return True
 
 
 def _patch_kraken_user_eligibility() -> bool:
-    mod = _module("bot.kraken_all_account_supervision_v86", "kraken_all_account_supervision_v86")
+    mod = _loaded("bot.kraken_all_account_supervision_v86", "kraken_all_account_supervision_v86")
     if mod is None:
-        return False
-    current = getattr(mod, "_reconcile_post_connect", None)
-    if not callable(current):
-        return False
-    if getattr(current, _PATCH_ATTR, False):
         return True
+    current = getattr(mod, "_reconcile_post_connect", None)
+    if not callable(current) or getattr(current, _PATCH_ATTR, False):
+        return callable(current)
 
     @wraps(current)
     def reconcile_guarded(manager: Any, user_id: str, broker_type: Any, broker: Any) -> None:
@@ -335,28 +278,25 @@ def _patch_kraken_user_eligibility() -> bool:
         if isinstance(blocked, dict):
             blocked[key] = "position_sync_incomplete"
         LOGGER.warning(
-            "USER_TRADING_ELIGIBILITY_V116_BLOCKED marker=%s account=user:%s:kraken reason=position_sync_incomplete connected=%s execution_fail_closed=true",
+            "USER_TRADING_ELIGIBILITY_V116_BLOCKED marker=%s account=user:%s:kraken reason=position_sync_incomplete execution_fail_closed=true",
             MARKER,
             user_id,
-            bool(getattr(broker, "connected", False)),
         )
 
     setattr(reconcile_guarded, _PATCH_ATTR, True)
-    setattr(reconcile_guarded, "__wrapped__", current)
     mod._reconcile_post_connect = reconcile_guarded
     return True
 
 
 def _patch_loaded() -> bool:
-    results = (
+    return all((
         _patch_activation_bridge(),
         _patch_trading_state_machine(),
         _patch_bot_main(),
         _patch_position_sync(),
         _patch_writer_state(),
         _patch_kraken_user_eligibility(),
-    )
-    return all(results)
+    ))
 
 
 def install_import_hook() -> bool:
@@ -388,7 +328,6 @@ def install_import_hook() -> bool:
 
             builtins.__import__ = importing
             setattr(builtins, _IMPORT_FLAG, True)
-
         os.environ["NIJA_RUNTIME_CONVERGENCE_V116_INSTALLED"] = "1"
         LOGGER.critical(
             "RUNTIME_CONVERGENCE_V116_INSTALLED marker=%s readiness_bypass=false supervised_pending=true position_sync_single_flight=true writer_resurrection=false user_position_sync_eligibility=true initial_patch_ready=%s",
