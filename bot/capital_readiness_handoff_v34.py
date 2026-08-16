@@ -2,8 +2,12 @@
 
 Publishes canonical capital readiness only after CapitalCSMv2 has accepted a
 fresh, positive live snapshot and entered READY. This closes the observer gap
-where the CSM was READY while three_venue_execution_readiness still reported
+where the CSM was READY while downstream readiness observers still reported
 capital_ready=False. It does not synthesize capital or force activation.
+
+The handoff also publishes a short-lived proof record consumed by v109. This
+record is derived only from the exact snapshot accepted by CSM-v2 and therefore
+may bridge object-publication lag without inventing balance or broker state.
 """
 from __future__ import annotations
 
@@ -41,16 +45,22 @@ def _snapshot_valid(snapshot: Any) -> bool:
 def _publish_ready(source: str, snapshot: Any) -> None:
     capital = float(getattr(snapshot, "real_capital", 0.0) or 0.0)
     broker_count = int(getattr(snapshot, "broker_count", 0) or 0)
+    now = time.time()
     os.environ["CAPITAL_SYSTEM_READY"] = "1"
     os.environ["NIJA_CAPITAL_READY"] = "1"
     os.environ["NIJA_CAPITAL_READINESS_SOURCE"] = source
     os.environ["NIJA_CAPITAL_READINESS_HANDOFF_V34"] = "1"
+    os.environ["NIJA_CAPITAL_HANDOFF_REAL"] = f"{capital:.12f}"
+    os.environ["NIJA_CAPITAL_HANDOFF_BROKER_COUNT"] = str(broker_count)
+    os.environ["NIJA_CAPITAL_HANDOFF_ACCEPTED_TS"] = f"{now:.6f}"
+    os.environ.setdefault("NIJA_CAPITAL_HANDOFF_TTL_S", "90")
     LOGGER.info(
-        "CAPITAL_READINESS_HANDOFF_V34_READY marker=%s source=%s capital=%.2f broker_count=%d fresh=true",
+        "CAPITAL_READINESS_HANDOFF_V34_READY marker=%s source=%s capital=%.2f broker_count=%d fresh=true proof_ts=%.3f",
         MARKER,
         source,
         capital,
         broker_count,
+        now,
     )
     try:
         readiness = importlib.import_module("three_venue_execution_readiness")
