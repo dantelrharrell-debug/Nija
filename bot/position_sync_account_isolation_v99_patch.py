@@ -37,6 +37,7 @@ _HOOK_FLAG = "_NIJA_POSITION_SYNC_ACCOUNT_ISOLATION_V99_IMPORT_HOOK"
 _COPY_ATTR = "_nija_position_sync_account_isolation_v99"
 _ORIGINAL_STATUS: Callable[[Any], tuple[bool, list[str], dict[str, bool]]] | None = None
 _LAST_USER_SIGNATURE = ""
+_IMPORT_LOCAL = threading.local()
 
 
 def _v95_module() -> ModuleType:
@@ -77,7 +78,6 @@ def _platform_position_sync_status(manager: Any) -> tuple[bool, list[str], dict[
         for name, broker in platform.items()
     }
     pending = sorted(name for name, synced in status.items() if not synced)
-    # Empty platform set is never globally ready.
     return bool(status) and not pending, pending, status
 
 
@@ -109,7 +109,6 @@ def _publish_user_diagnostics(manager: Any) -> None:
 
 
 def position_sync_status_v99(manager: Any) -> tuple[bool, list[str], dict[str, bool]]:
-    """Replacement consumed by v95/v96 global activation paths."""
     ready, pending, status = _platform_position_sync_status(manager)
     _publish_user_diagnostics(manager)
     return ready, pending, status
@@ -137,7 +136,6 @@ def _patch_v95() -> bool:
 
 
 def _guard_submitter(current: Callable[..., Any]) -> Callable[..., Any]:
-    """Block CopyTradeEngine user orders until that broker has a real snapshot."""
     if getattr(current, _COPY_ATTR, False):
         return current
 
@@ -168,7 +166,6 @@ def _guard_submitter(current: Callable[..., Any]) -> Callable[..., Any]:
 def _patch_copy_trade_engine(module: ModuleType) -> bool:
     current = getattr(module, "submit_market_order_via_pipeline", None)
     if current is None:
-        # The copy engine already fails closed when the submit helper is absent.
         return True
     if not callable(current):
         return False
@@ -206,7 +203,20 @@ def install_import_hook() -> bool:
                 result = original_import(name, globals, locals, fromlist, level)
                 text = str(name or "")
                 if "copy_trade_engine" in text or "position_sync_core_handoff_v95_patch" in text:
-                    _patch_loaded()
+                    depth = int(getattr(_IMPORT_LOCAL, "patch_depth", 0) or 0)
+                    if depth == 0:
+                        _IMPORT_LOCAL.patch_depth = 1
+                        try:
+                            _patch_loaded()
+                        finally:
+                            _IMPORT_LOCAL.patch_depth = 0
+                    else:
+                        LOGGER.debug(
+                            "POSITION_SYNC_V99_IMPORT_REENTRY_SUPPRESSED marker=%s name=%s depth=%d",
+                            MARKER,
+                            text,
+                            depth,
+                        )
                 return result
 
             builtins.__import__ = importing
@@ -215,7 +225,7 @@ def install_import_hook() -> bool:
         os.environ["NIJA_POSITION_SYNC_ACCOUNT_ISOLATION_V99_INSTALLED"] = "1"
         LOGGER.critical(
             "POSITION_SYNC_ACCOUNT_ISOLATION_V99_INSTALLED marker=%s "
-            "global_scope=platform user_scope=account_local safety_gates_unchanged=true",
+            "global_scope=platform user_scope=account_local import_reentry_guard=true safety_gates_unchanged=true",
             MARKER,
         )
         return True

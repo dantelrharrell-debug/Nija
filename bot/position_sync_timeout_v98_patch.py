@@ -13,7 +13,8 @@ installed before strategy recovery so the canonical TradingStrategy class is
 published before cycle-prone optional dependencies are hydrated. v106 guards
 the shared MultiAccountBrokerManager capital-refresh choke point against
 same-thread recursive startup callbacks while preserving only already-published
-authoritative capital truth. v104 remains as the narrow legacy import-cycle
+authoritative capital truth. v107 serializes Kraken nonce rebuild recovery and
+adds import-hook reentry hardening. v104 remains as the narrow legacy import-cycle
 guard. v100/v102 retain bounded fail-closed class recovery, and v103 retains
 the runtime reconciliation single-flight guard.
 """
@@ -38,147 +39,48 @@ def _timeout_s_v98() -> float:
         return _DEFAULT_TIMEOUT_S
 
 
-def _install_v99() -> bool:
+def _install_module(name: str) -> bool:
     try:
-        from bot import position_sync_account_isolation_v99_patch as v99
+        module = __import__(f"bot.{name}", fromlist=[name])
     except ImportError:
-        import position_sync_account_isolation_v99_patch as v99  # type: ignore[import]
-    installer = getattr(v99, "install_import_hook", None) or getattr(v99, "install", None)
-    if not callable(installer):
-        return False
-    return installer() is not False
-
-
-def _install_v105() -> bool:
-    try:
-        from bot import startup_publication_bootstrap_v105_patch as v105
-    except ImportError:
-        import startup_publication_bootstrap_v105_patch as v105  # type: ignore[import]
-    installer = getattr(v105, "install_import_hook", None) or getattr(v105, "install", None)
-    if not callable(installer):
-        return False
-    return installer() is not False
-
-
-def _install_v106() -> bool:
-    try:
-        from bot import capital_refresh_reentrancy_v106_patch as v106
-    except ImportError:
-        import capital_refresh_reentrancy_v106_patch as v106  # type: ignore[import]
-    installer = getattr(v106, "install_import_hook", None) or getattr(v106, "install", None)
-    if not callable(installer):
-        return False
-    return installer() is not False
-
-
-def _install_v104() -> bool:
-    try:
-        from bot import startup_strategy_import_cycle_v104_patch as v104
-    except ImportError:
-        import startup_strategy_import_cycle_v104_patch as v104  # type: ignore[import]
-    installer = getattr(v104, "install_import_hook", None) or getattr(v104, "install", None)
-    if not callable(installer):
-        return False
-    return installer() is not False
-
-
-def _install_v100() -> bool:
-    try:
-        from bot import canonical_strategy_class_recovery_v100_patch as v100
-    except ImportError:
-        import canonical_strategy_class_recovery_v100_patch as v100  # type: ignore[import]
-    installer = getattr(v100, "install_import_hook", None) or getattr(v100, "install", None)
-    if not callable(installer):
-        return False
-    return installer() is not False
-
-
-def _install_v102() -> bool:
-    try:
-        from bot import canonical_strategy_class_recovery_v102_patch as v102
-    except ImportError:
-        import canonical_strategy_class_recovery_v102_patch as v102  # type: ignore[import]
-    installer = getattr(v102, "install_import_hook", None) or getattr(v102, "install", None)
-    if not callable(installer):
-        return False
-    return installer() is not False
-
-
-def _install_v103() -> bool:
-    try:
-        from bot import startup_convergence_v103_patch as v103
-    except ImportError:
-        import startup_convergence_v103_patch as v103  # type: ignore[import]
-    installer = getattr(v103, "install_import_hook", None) or getattr(v103, "install", None)
-    if not callable(installer):
-        return False
-    return installer() is not False
+        module = __import__(name)
+    installer = getattr(module, "install_import_hook", None) or getattr(module, "install", None)
+    return callable(installer) and installer() is not False
 
 
 def install() -> bool:
     global _INSTALLED
-
     try:
         from bot import position_sync_core_handoff_v95_patch as v95
     except ImportError:
         import position_sync_core_handoff_v95_patch as v95  # type: ignore[import]
 
     setattr(v95, "_timeout_s", _timeout_s_v98)
-    if not _install_v99():
-        LOGGER.critical(
-            "POSITION_SYNC_TIMEOUT_V98_V99_INSTALL_FAILED marker=%s trading_fail_closed=true",
-            MARKER,
-        )
-        return False
-    if not _install_v105():
-        LOGGER.critical(
-            "POSITION_SYNC_TIMEOUT_V98_V105_INSTALL_FAILED marker=%s trading_fail_closed=true",
-            MARKER,
-        )
-        return False
-    if not _install_v106():
-        LOGGER.critical(
-            "POSITION_SYNC_TIMEOUT_V98_V106_INSTALL_FAILED marker=%s trading_fail_closed=true",
-            MARKER,
-        )
-        return False
-    if not _install_v104():
-        LOGGER.critical(
-            "POSITION_SYNC_TIMEOUT_V98_V104_INSTALL_FAILED marker=%s trading_fail_closed=true",
-            MARKER,
-        )
-        return False
-    if not _install_v100():
-        LOGGER.critical(
-            "POSITION_SYNC_TIMEOUT_V98_V100_INSTALL_FAILED marker=%s trading_fail_closed=true",
-            MARKER,
-        )
-        return False
-    if not _install_v102():
-        LOGGER.critical(
-            "POSITION_SYNC_TIMEOUT_V98_V102_INSTALL_FAILED marker=%s trading_fail_closed=true",
-            MARKER,
-        )
-        return False
-    if not _install_v103():
-        LOGGER.critical(
-            "POSITION_SYNC_TIMEOUT_V98_V103_INSTALL_FAILED marker=%s trading_fail_closed=true",
-            MARKER,
-        )
-        return False
+    ordered = [
+        ("position_sync_account_isolation_v99_patch", "V99"),
+        ("startup_publication_bootstrap_v105_patch", "V105"),
+        ("capital_refresh_reentrancy_v106_patch", "V106"),
+        ("startup_hook_nonce_v107_patch", "V107"),
+        ("startup_strategy_import_cycle_v104_patch", "V104"),
+        ("canonical_strategy_class_recovery_v100_patch", "V100"),
+        ("canonical_strategy_class_recovery_v102_patch", "V102"),
+        ("startup_convergence_v103_patch", "V103"),
+    ]
+    for module_name, label in ordered:
+        if not _install_module(module_name):
+            LOGGER.critical(
+                "POSITION_SYNC_TIMEOUT_V98_%s_INSTALL_FAILED marker=%s trading_fail_closed=true",
+                label,
+                MARKER,
+            )
+            return False
 
     if _INSTALLED:
         return True
-
     os.environ["NIJA_POSITION_SYNC_TIMEOUT_V98_INSTALLED"] = "1"
     _INSTALLED = True
     LOGGER.critical(
-        "POSITION_SYNC_TIMEOUT_V98_INSTALLED marker=%s default_timeout_s=%.1f "
-        "explicit_env_override_preserved=true account_isolation_v99=true "
-        "startup_publication_bootstrap_v105=true capital_refresh_reentrancy_v106=true "
-        "strategy_import_cycle_v104=true strategy_class_recovery_v100=true "
-        "passive_strategy_recovery_v102=true startup_convergence_v103=true "
-        "safety_gates_unchanged=true",
+        "POSITION_SYNC_TIMEOUT_V98_INSTALLED marker=%s default_timeout_s=%.1f explicit_env_override_preserved=true account_isolation_v99=true startup_publication_bootstrap_v105=true capital_refresh_reentrancy_v106=true startup_hook_nonce_v107=true strategy_import_cycle_v104=true strategy_class_recovery_v100=true passive_strategy_recovery_v102=true startup_convergence_v103=true safety_gates_unchanged=true",
         MARKER,
         _DEFAULT_TIMEOUT_S,
     )
