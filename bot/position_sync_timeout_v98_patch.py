@@ -6,8 +6,9 @@ are installed from this canonical slot in dependency order. v119 adds canonical
 position-sync observation to preactivation truth. v120 preserves canonical
 TradingLoop liveness while exact-writer supervised activation remains pending.
 v121 bounds read-only Kraken HTTP calls, v122 requires that timeout layer before
-v108 may dispatch a Kraken platform reconciliation worker, and v123 keeps the
-canonical fast path behind the process-wide import-chain compactor.
+v108 may dispatch a Kraken platform reconciliation worker, v123 keeps the
+canonical fast path behind the process-wide import-chain compactor, and v124
+bounds synchronous canonical strategy publication work before core startup.
 """
 from __future__ import annotations
 
@@ -64,6 +65,9 @@ def install() -> bool:
         ("preactivation_position_sync_v119_patch", "V119"),
         ("core_supervised_pending_v120_patch", "V120"),
         ("canonical_import_shield_v123_patch", "V123"),
+        # v124 must be installed before the canonical strategy import-cycle and
+        # recovery layers can trigger synchronous TradingStrategy construction.
+        ("canonical_strategy_startup_bound_v124_patch", "V124"),
         ("startup_strategy_import_cycle_v104_patch", "V104"),
         ("canonical_strategy_class_recovery_v100_patch", "V100"),
         ("canonical_strategy_class_recovery_v102_patch", "V102"),
@@ -83,7 +87,7 @@ def install() -> bool:
     os.environ["NIJA_POSITION_SYNC_TIMEOUT_V98_INSTALLED"] = "1"
     _INSTALLED = True
     LOGGER.critical(
-        "POSITION_SYNC_TIMEOUT_V98_INSTALLED marker=%s default_timeout_s=%.1f explicit_env_override_preserved=true account_isolation_v99=true startup_publication_bootstrap_v105=true capital_refresh_reentrancy_v106=true startup_hook_nonce_v107=true kraken_read_timeout_v121=true kraken_position_sync_prereq_v122=true platform_position_sync_v108=true runtime_convergence_v116=true position_fetch_generation_v117=true terminal_writer_loss_seak_v118=true preactivation_position_sync_v119=true core_supervised_pending_v120=true canonical_import_shield_v123=true strategy_import_cycle_v104=true strategy_class_recovery_v100=true passive_strategy_recovery_v102=true startup_convergence_v103=true safety_gates_unchanged=true",
+        "POSITION_SYNC_TIMEOUT_V98_INSTALLED marker=%s default_timeout_s=%.1f explicit_env_override_preserved=true account_isolation_v99=true startup_publication_bootstrap_v105=true capital_refresh_reentrancy_v106=true startup_hook_nonce_v107=true kraken_read_timeout_v121=true kraken_position_sync_prereq_v122=true platform_position_sync_v108=true runtime_convergence_v116=true position_fetch_generation_v117=true terminal_writer_loss_seak_v118=true preactivation_position_sync_v119=true core_supervised_pending_v120=true canonical_import_shield_v123=true canonical_strategy_startup_bound_v124=true strategy_import_cycle_v104=true strategy_class_recovery_v100=true passive_strategy_recovery_v102=true startup_convergence_v103=true safety_gates_unchanged=true",
         MARKER,
         _DEFAULT_TIMEOUT_S,
     )
