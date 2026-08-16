@@ -13,6 +13,9 @@ v108 breaks that liveness cycle without weakening safety:
 * each unsynchronized broker gets one daemon reconciliation worker at a time;
 * workers call the existing ``startup_position_sync._adopt_broker_positions``
   path, which is already bounded by v95 and fail-closed by v98;
+* transient fetch failures receive a short bounded retry window in the same
+  single-flight worker, so a brief upstream 5xx does not require an unrelated
+  capital refresh before position readiness can recover;
 * empty snapshots count only when the broker actually returned an authoritative
   empty result through that existing path;
 * canonical v96 position-sync readiness is republished after every attempt;
@@ -85,6 +88,28 @@ def _publish_readiness(manager: Any, source: str) -> None:
         )
 
 
+def _retry_policy() -> tuple[int, float, float]:
+    """Return bounded position-sync retry policy.
+
+    The defaults keep retry ownership inside one v108 single-flight worker for
+    roughly seven seconds after the initial attempt (1s + 2s + 4s). Explicit
+    environment values remain authoritative. Invalid values fall back safely.
+    """
+    try:
+        attempts = int(os.getenv("NIJA_PLATFORM_POSITION_SYNC_MAX_ATTEMPTS", "4"))
+    except (TypeError, ValueError):
+        attempts = 4
+    try:
+        base_delay = float(os.getenv("NIJA_PLATFORM_POSITION_SYNC_RETRY_BASE_S", "1.0"))
+    except (TypeError, ValueError):
+        base_delay = 1.0
+    try:
+        max_delay = float(os.getenv("NIJA_PLATFORM_POSITION_SYNC_RETRY_MAX_S", "4.0"))
+    except (TypeError, ValueError):
+        max_delay = 4.0
+    return max(1, min(attempts, 8)), max(0.1, base_delay), max(0.1, max_delay)
+
+
 def _worker(manager: Any, broker_name: str, broker: Any, key: tuple[int, int], trigger: str) -> None:
     try:
         try:
@@ -98,23 +123,59 @@ def _worker(manager: Any, broker_name: str, broker: Any, key: tuple[int, int], t
         if not callable(adopt):
             raise RuntimeError("startup position-sync adopter unavailable")
 
+        max_attempts, base_delay_s, max_delay_s = _retry_policy()
         LOGGER.critical(
-            "PLATFORM_POSITION_SYNC_V108_START marker=%s broker=%s trigger=%s authoritative_fetch=true synthetic_empty_snapshot=false",
+            "PLATFORM_POSITION_SYNC_V108_START marker=%s broker=%s trigger=%s authoritative_fetch=true synthetic_empty_snapshot=false max_attempts=%d",
             MARKER,
             broker_name,
             trigger,
+            max_attempts,
         )
-        adopt(broker, f"platform:{broker_name}", eps)
-        synced = bool(getattr(broker, "_startup_position_sync_adopted", False))
-        LOGGER.critical(
-            "PLATFORM_POSITION_SYNC_V108_COMPLETE marker=%s broker=%s trigger=%s synced=%s fetch_ok=%s error=%s",
-            MARKER,
-            broker_name,
-            trigger,
-            str(synced).lower(),
-            getattr(broker, "_startup_position_sync_fetch_ok", None),
-            getattr(broker, "_startup_position_sync_error", None),
-        )
+
+        for attempt in range(1, max_attempts + 1):
+            adopt(broker, f"platform:{broker_name}", eps)
+            synced = bool(getattr(broker, "_startup_position_sync_adopted", False))
+            fetch_ok = getattr(broker, "_startup_position_sync_fetch_ok", None)
+            error = getattr(broker, "_startup_position_sync_error", None)
+            _publish_readiness(manager, source=f"v108:{trigger}:{broker_name}:attempt_{attempt}")
+
+            if synced:
+                LOGGER.critical(
+                    "PLATFORM_POSITION_SYNC_V108_COMPLETE marker=%s broker=%s trigger=%s attempt=%d synced=true fetch_ok=%s error=%s",
+                    MARKER,
+                    broker_name,
+                    trigger,
+                    attempt,
+                    fetch_ok,
+                    error,
+                )
+                break
+
+            if attempt >= max_attempts:
+                LOGGER.warning(
+                    "PLATFORM_POSITION_SYNC_V108_RETRIES_EXHAUSTED marker=%s broker=%s trigger=%s attempts=%d synced=false fetch_ok=%s error=%s trading_fail_closed=true",
+                    MARKER,
+                    broker_name,
+                    trigger,
+                    max_attempts,
+                    fetch_ok,
+                    error,
+                )
+                break
+
+            delay_s = min(max_delay_s, base_delay_s * (2 ** (attempt - 1)))
+            LOGGER.warning(
+                "PLATFORM_POSITION_SYNC_V108_RETRY marker=%s broker=%s trigger=%s attempt=%d next_attempt=%d delay_s=%.2f synced=false fetch_ok=%s error=%s trading_fail_closed=true",
+                MARKER,
+                broker_name,
+                trigger,
+                attempt,
+                attempt + 1,
+                delay_s,
+                fetch_ok,
+                error,
+            )
+            time.sleep(delay_s)
     except BaseException as exc:
         try:
             setattr(broker, "_startup_position_sync_adopted", False)
@@ -131,7 +192,7 @@ def _worker(manager: Any, broker_name: str, broker: Any, key: tuple[int, int], t
             exc,
         )
     finally:
-        _publish_readiness(manager, source=f"v108:{trigger}:{broker_name}")
+        _publish_readiness(manager, source=f"v108:{trigger}:{broker_name}:final")
         with _LOCK:
             _ACTIVE.discard(key)
 
@@ -248,7 +309,7 @@ def install() -> bool:
         os.environ["NIJA_PLATFORM_POSITION_SYNC_V108_INSTALLED"] = "1"
         _INSTALLED = True
         LOGGER.critical(
-            "PLATFORM_POSITION_SYNC_V108_INSTALLED marker=%s direct_platform_dispatch=true capital_ready_dependency=false single_flight=true import_hook=false synthetic_empty_snapshot=false",
+            "PLATFORM_POSITION_SYNC_V108_INSTALLED marker=%s direct_platform_dispatch=true capital_ready_dependency=false single_flight=true bounded_retry=true import_hook=false synthetic_empty_snapshot=false",
             MARKER,
         )
         return True
@@ -266,5 +327,6 @@ __all__ = [
     "install_import_hook",
     "dispatch_platform_position_sync",
     "_connected_unsynced_platform_brokers",
+    "_retry_policy",
     "_patch_mabm",
 ]
