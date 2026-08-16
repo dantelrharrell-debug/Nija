@@ -2,25 +2,28 @@
 
 Production release v123 proved writer authority, broker connectivity, balance
 hydration, capital, risk, nonce, and position synchronization while bot_main was
-still blocked in the legacy SelfHealingStartup compatibility phase.  Canonical
-broker prebootstrap already establishes and verifies those prerequisites before
-bot_main reaches Step 1, so repeating the legacy recovery sequence can delay core
-registration indefinitely while the BootstrapFSM remains LOCK_ACQUIRED.
+still blocked in the legacy SelfHealingStartup compatibility phase. Canonical
+broker prebootstrap already establishes and verifies the prerequisites needed to
+continue into core creation before bot_main reaches Step 1, so repeating the
+legacy recovery sequence can delay core registration indefinitely while the
+BootstrapFSM remains LOCK_ACQUIRED.
 
-v124 replaces only that redundant canonical Step-1 wait.  The fast handoff is
-allowed when all proof-backed prerequisites are currently true:
+v124 replaces only that redundant canonical Step-1 wait. The fast handoff is
+allowed when all proof-backed pre-core prerequisites are currently true:
 
 * canonical fast-path production launch is active;
 * exact distributed writer authority verifies successfully;
 * the canonical broker manager contract is initialized;
 * at least one connected platform broker exists;
-* broker_connected, balance_hydrated, capital_ready, risk_ready, nonce_ready,
-  and position_sync_ready are all true; and
+* broker_connected, balance_hydrated, capital_ready, risk_ready, and nonce_ready
+  are all true; and
 * no process-exit/shutdown request is active.
 
-If any proof is absent, the original SelfHealingStartup path runs unchanged.  The
-patch never marks strategy/execution/bootstrap readiness, never fabricates nonce
-or broker state, never grants execution authority, and keeps trading fail-closed
+Position synchronization, strategy readiness, execution readiness, bootstrap
+finalization, and dispatch authority remain owned by their existing downstream
+activation gates after the real core thread is registered. If any pre-core proof
+is absent, the original SelfHealingStartup path runs unchanged. The patch never
+fabricates readiness or grants execution authority and keeps trading fail-closed
 until the existing post-core activation convergence completes.
 """
 from __future__ import annotations
@@ -48,7 +51,6 @@ _REQUIRED_READINESS = (
     "capital_ready",
     "risk_ready",
     "nonce_ready",
-    "position_sync_ready",
 )
 
 
@@ -94,9 +96,8 @@ def _connected_broker(manager: Any) -> tuple[Any | None, str]:
     except Exception:
         items = []
 
-    # Prefer Kraken when healthy because it is the funded primary account in
-    # the canonical production path, but any already-connected platform broker
-    # remains a valid recovery/fallback surface.
+    # Prefer Kraken when healthy because it is the canonical funded primary;
+    # any already-connected platform broker remains a valid fallback surface.
     healthy: list[tuple[int, str, Any]] = []
     for key, broker in items:
         if broker is None or not bool(getattr(broker, "connected", False)):
@@ -155,9 +156,7 @@ def _fast_handoff_proof(module: ModuleType | None = None) -> tuple[bool, Any | N
     if broker is None:
         return False, None, "", "connected_broker_selection_failed"
 
-    return True, broker, broker_name, (
-        "proofs_ready:writer,manager,broker,balance,capital,risk,nonce,position_sync"
-    )
+    return True, broker, broker_name, "proofs_ready:writer,manager,broker,balance,capital,risk,nonce"
 
 
 def _patch_bot_main(module: ModuleType | None = None) -> bool:
@@ -178,7 +177,7 @@ def _patch_bot_main(module: ModuleType | None = None) -> bool:
     def run_self_healing_startup_v124(*args: Any, **kwargs: Any):
         ok, broker, broker_name, detail = _fast_handoff_proof(module)
         if ok:
-            # Explicitly preserve fail-closed execution truth.  Step 2/3 and the
+            # Explicitly preserve fail-closed execution truth. Step 2/3 and the
             # existing post-core convergence own all later readiness/authority.
             os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "0"
             os.environ["NIJA_EXECUTION_ACTIVE"] = "false"
