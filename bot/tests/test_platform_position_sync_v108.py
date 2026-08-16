@@ -72,6 +72,18 @@ def test_dispatch_is_single_flight_per_broker(monkeypatch):
     assert calls == [("kraken", "first")]
 
 
+def test_retry_policy_defaults_and_bounds(monkeypatch):
+    monkeypatch.delenv("NIJA_PLATFORM_POSITION_SYNC_MAX_ATTEMPTS", raising=False)
+    monkeypatch.delenv("NIJA_PLATFORM_POSITION_SYNC_RETRY_BASE_S", raising=False)
+    monkeypatch.delenv("NIJA_PLATFORM_POSITION_SYNC_RETRY_MAX_S", raising=False)
+    assert v108._retry_policy() == (4, 1.0, 4.0)
+
+    monkeypatch.setenv("NIJA_PLATFORM_POSITION_SYNC_MAX_ATTEMPTS", "999")
+    monkeypatch.setenv("NIJA_PLATFORM_POSITION_SYNC_RETRY_BASE_S", "0")
+    monkeypatch.setenv("NIJA_PLATFORM_POSITION_SYNC_RETRY_MAX_S", "0")
+    assert v108._retry_policy() == (8, 0.1, 0.1)
+
+
 def test_worker_retries_unsynced_fetch_and_recovers(monkeypatch):
     broker = FakeBroker(connected=True)
     manager = FakeManager(broker)
@@ -136,6 +148,7 @@ def test_worker_preserves_fail_closed_state_on_error(monkeypatch):
 
     import bot
     monkeypatch.setattr(bot, "startup_position_sync", FakeSyncModule, raising=False)
+    monkeypatch.setattr(v108, "_retry_policy", lambda: (1, 0.1, 0.1))
     monkeypatch.setattr(v108, "_publish_readiness", lambda *args, **kwargs: None)
     with v108._LOCK:
         v108._ACTIVE.add(key)
@@ -145,6 +158,43 @@ def test_worker_preserves_fail_closed_state_on_error(monkeypatch):
     assert broker._startup_position_sync_adopted is False
     assert broker._startup_position_sync_fetch_ok is False
     assert "TimeoutError" in str(broker._startup_position_sync_error)
+    with v108._LOCK:
+        assert key not in v108._ACTIVE
+
+
+def test_worker_exhausts_retries_without_granting_readiness(monkeypatch):
+    broker = FakeBroker(connected=True)
+    manager = FakeManager(broker)
+    key = (id(manager), id(broker))
+    calls = []
+
+    class FakeSyncModule:
+        @staticmethod
+        def _get_entry_price_store():
+            return None
+
+        @staticmethod
+        def _adopt_broker_positions(broker_arg, broker_name, eps):
+            calls.append(broker_name)
+            broker_arg._startup_position_sync_adopted = False
+            broker_arg._startup_position_sync_fetch_ok = False
+            broker_arg._startup_position_sync_error = "HTTPError:502 Bad Gateway"
+            return 0
+
+    import bot
+    monkeypatch.setattr(bot, "startup_position_sync", FakeSyncModule, raising=False)
+    monkeypatch.setattr(v108, "_retry_policy", lambda: (3, 0.1, 0.1))
+    monkeypatch.setattr(v108.time, "sleep", lambda delay: None)
+    monkeypatch.setattr(v108, "_publish_readiness", lambda *args, **kwargs: None)
+    with v108._LOCK:
+        v108._ACTIVE.add(key)
+
+    v108._worker(manager, "coinbase", broker, key, "test")
+
+    assert calls == ["platform:coinbase"] * 3
+    assert broker._startup_position_sync_adopted is False
+    assert broker._startup_position_sync_fetch_ok is False
+    assert "502" in str(broker._startup_position_sync_error)
     with v108._LOCK:
         assert key not in v108._ACTIVE
 
