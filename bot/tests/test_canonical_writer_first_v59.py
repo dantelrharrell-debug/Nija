@@ -78,7 +78,7 @@ def test_writer_first_requires_exact_distributed_runtime(monkeypatch) -> None:
             return bot_main
         raise AssertionError(f"unexpected import: {name}")
 
-    monkeypatch.setattr(launcher.importlib, "import_module", _import)
+    monkeypatch.setattr(launcher, "_canonical_import", _import)
 
     try:
         launcher._bootstrap_writer_first()
