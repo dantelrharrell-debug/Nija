@@ -181,17 +181,12 @@ def test_canonical_fast_path_remains_fail_closed_for_required_guard_failure() ->
     env["NIJA_CANONICAL_RUNTIME_LAUNCHER_V26_READY"] = "1"
 
     script = """
-import importlib
+import sys
 import types
 
-_original = importlib.import_module
-
-def _patched(name, package=None):
-    if name == "bot.writer_generation_state_gate_v50_patch":
-        return types.SimpleNamespace(install_import_hook=lambda: False)
-    return _original(name, package)
-
-importlib.import_module = _patched
+failed_guard = types.ModuleType("bot.writer_generation_state_gate_v50_patch")
+failed_guard.install_import_hook = lambda: False
+sys.modules["bot.writer_generation_state_gate_v50_patch"] = failed_guard
 
 try:
     import bot.bot  # noqa: F401
