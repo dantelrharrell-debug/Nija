@@ -5,6 +5,12 @@ remain false until LIVE_ACTIVE, while LIVE_ACTIVE itself required that table to
 already be true. Every readiness key is reconstructed from current process facts
 and is marked ready only when its own safety proof passes. Activation continues
 through TradingStateMachine.commit_activation(); no force transition is used.
+
+v109 also consumes the short-lived CapitalCSMv2 handoff proof published by
+capital_readiness_handoff_v34. The handoff is used only to bridge object-
+publication lag after CSM-v2 has accepted a fresh positive live snapshot. It is
+never accepted after its TTL expires and never overrides fresher authoritative
+CapitalAuthority truth.
 """
 from __future__ import annotations
 
@@ -60,9 +66,29 @@ def _live_mode() -> bool:
     return _truthy("LIVE_CAPITAL_VERIFIED") and not _truthy("DRY_RUN_MODE") and not _truthy("PAPER_MODE")
 
 
-def _ensure_strategy_publication_monitor() -> tuple[bool, str]:
-    """Start the safe publisher once live intent enters preactivation."""
+def _fresh_capital_handoff() -> dict[str, Any] | None:
+    """Return a fresh CSM-v2 accepted-snapshot proof, otherwise None."""
+    if not _truthy("NIJA_CAPITAL_READINESS_HANDOFF_V34"):
+        return None
+    accepted_at = _float(os.environ.get("NIJA_CAPITAL_HANDOFF_ACCEPTED_TS"), 0.0)
+    real = _float(os.environ.get("NIJA_CAPITAL_HANDOFF_REAL"), 0.0)
+    registered = _int(os.environ.get("NIJA_CAPITAL_HANDOFF_BROKER_COUNT"), 0)
+    ttl = max(1.0, _float(os.environ.get("NIJA_CAPITAL_HANDOFF_TTL_S"), 90.0))
+    age = max(0.0, time.time() - accepted_at) if accepted_at > 0 else float("inf")
+    if accepted_at <= 0.0 or real <= 0.0 or registered <= 0 or age > ttl:
+        return None
+    return {
+        "hydrated": True,
+        "stale": False,
+        "real": real,
+        "registered": registered,
+        "source": "csm_v2_handoff_v109",
+        "handoff_age_s": age,
+        "handoff_ttl_s": ttl,
+    }
 
+
+def _ensure_strategy_publication_monitor() -> tuple[bool, str]:
     global _STRATEGY_PUBLICATION_MONITOR_STARTED
     if _STRATEGY_PUBLICATION_MONITOR_STARTED:
         return True, "already_started"
@@ -89,6 +115,7 @@ def _capital_snapshot() -> dict[str, Any]:
         "stale": True,
         "real": 0.0,
         "registered": 0,
+        "source": "capital_authority",
     }
     try:
         try:
@@ -123,6 +150,27 @@ def _capital_snapshot() -> dict[str, Any]:
         result["stale"] = bool(stale()) if callable(stale) else bool(getattr(authority, "stale", False))
     except Exception as exc:
         result["error"] = f"{type(exc).__name__}:{exc}"
+
+    authoritative_ready = bool(result.get("hydrated")) and not bool(result.get("stale")) and _float(result.get("real")) > 0.0 and _int(result.get("registered")) > 0
+    if authoritative_ready:
+        return result
+
+    handoff = _fresh_capital_handoff()
+    if handoff is not None:
+        logger.warning(
+            "PREACTIVATION_CAPITAL_V109_HANDOFF_USED marker=%s authority_hydrated=%s authority_real=%.2f authority_registered=%d handoff_real=%.2f handoff_registered=%d age_s=%.3f ttl_s=%.1f",
+            _MARKER,
+            bool(result.get("hydrated")),
+            _float(result.get("real")),
+            _int(result.get("registered")),
+            _float(handoff.get("real")),
+            _int(handoff.get("registered")),
+            _float(handoff.get("handoff_age_s")),
+            _float(handoff.get("handoff_ttl_s")),
+        )
+        if "error" in result:
+            handoff["authority_error"] = result["error"]
+        return handoff
     return result
 
 
@@ -143,11 +191,7 @@ def _execution_pipeline_ready() -> bool:
         module = sys.modules.get("bot.execution_pipeline") or importlib.import_module("bot.execution_pipeline")
         pipeline = getattr(module, "ExecutionPipeline", None)
         execute = getattr(pipeline, "execute", None) if isinstance(pipeline, type) else None
-        return bool(
-            callable(execute)
-            and _truthy("NIJA_PRE_DISPATCH_RISK_SIZING_READY")
-            and _truthy("NIJA_PRE_DISPATCH_RISK_SIZING_FAIL_CLOSED")
-        )
+        return bool(callable(execute) and _truthy("NIJA_PRE_DISPATCH_RISK_SIZING_READY") and _truthy("NIJA_PRE_DISPATCH_RISK_SIZING_FAIL_CLOSED"))
     except Exception:
         return False
 
@@ -213,7 +257,6 @@ def _bootstrap_ready() -> tuple[bool, list[str]]:
         state_value = str(getattr(state, "value", state) or "UNKNOWN").strip().upper()
     except Exception:
         state_value = "UNAVAILABLE"
-
     required = {
         "bootstrap_supervised": state_value == "RUNNING_SUPERVISED",
         "module_identity": _truthy("NIJA_RUNTIME_MODULE_IDENTITY_READY"),
@@ -237,11 +280,7 @@ def _collect_proofs() -> tuple[dict[str, bool], dict[str, Any]]:
     hydrated = bool(capital.get("hydrated")) and not bool(capital.get("stale"))
     funded = _float(capital.get("real")) > 0.0
     registered = _int(capital.get("registered")) > 0
-    risk = bool(
-        _truthy("NIJA_PRE_DISPATCH_RISK_SIZING_READY")
-        and _truthy("NIJA_PRE_DISPATCH_RISK_SIZING_FAIL_CLOSED")
-        and _truthy("NIJA_DOWNSTREAM_RISK_GOVERNOR_V2_INSTALLED")
-    )
+    risk = bool(_truthy("NIJA_PRE_DISPATCH_RISK_SIZING_READY") and _truthy("NIJA_PRE_DISPATCH_RISK_SIZING_FAIL_CLOSED") and _truthy("NIJA_DOWNSTREAM_RISK_GOVERNOR_V2_INSTALLED"))
     authority = bool(strict_ok and kill_ok)
     proofs = {
         "broker_connected": bool(hydrated and funded and registered),
@@ -250,9 +289,6 @@ def _collect_proofs() -> tuple[dict[str, bool], dict[str, Any]]:
         "capital_ready": bool(_live_mode() and hydrated and funded),
         "risk_ready": risk,
         "strategy_ready": strategy,
-        # Execution wiring is not execution readiness.  Keep reporting false
-        # until the same strict writer/nonce and kill-switch proof required by
-        # activation is present.
         "execution_ready": bool(execution and risk and authority),
         "nonce_ready": strict_ok,
         "bootstrap_ready": bootstrap_ok,
@@ -286,18 +322,8 @@ def _mark_proven_readiness(proofs: dict[str, bool]) -> tuple[bool, list[str]]:
             os.environ["NIJA_AUTHORITY_READY"] = "1" if bool(proofs.get("authority_ready")) else "0"
             os.environ["NIJA_NONCE_READY"] = "1" if bool(proofs.get("nonce_ready")) else "0"
             os.environ["NIJA_RUNTIME_NONCE_READY"] = os.environ["NIJA_NONCE_READY"]
-            logger.critical(
-                "PREACTIVATION_READY authority_ready=%s nonce_ready=%s writer_authority=confirmed blockers_cleared=true",
-                bool(proofs.get("authority_ready")),
-                bool(proofs.get("nonce_ready")),
-            )
-        logger.critical(
-            "PREACTIVATION_READINESS_V16_RECONSTRUCTED marker=%s before=%s after=%s proofs=%s",
-            _MARKER,
-            before,
-            after,
-            proofs,
-        )
+            logger.critical("PREACTIVATION_READY authority_ready=%s nonce_ready=%s writer_authority=confirmed blockers_cleared=true", bool(proofs.get("authority_ready")), bool(proofs.get("nonce_ready")))
+        logger.critical("PREACTIVATION_READINESS_V16_RECONSTRUCTED marker=%s before=%s after=%s proofs=%s", _MARKER, before, after, proofs)
         return not after, after
     except Exception as exc:
         os.environ["NIJA_PREACTIVATION_READINESS_V16_READY"] = "0"
@@ -305,7 +331,6 @@ def _mark_proven_readiness(proofs: dict[str, bool]) -> tuple[bool, list[str]]:
 
 
 def _rearm_unsafe_timeout(sm: Any) -> None:
-    """Prevent the legacy timeout force-path; normal commit gates remain authoritative."""
     if _truthy("NIJA_ALLOW_PENDING_CONFIRMATION_FORCE_TIMEOUT", "false"):
         return
     try:
@@ -319,57 +344,24 @@ def _rearm_unsafe_timeout(sm: Any) -> None:
 
 
 def _retry_activation_after_publication() -> tuple[bool, dict[str, Any]]:
-    """Perform a short bounded retry burst after strategy publication lands."""
-
-    max_attempts = max(
-        1,
-        _int(os.environ.get("NIJA_POST_PUBLICATION_ACTIVATION_MAX_ATTEMPTS"), 3),
-    )
-    delay_s = max(
-        0.0,
-        _float(os.environ.get("NIJA_POST_PUBLICATION_ACTIVATION_INITIAL_DELAY_S"), 0.25),
-    )
-    max_delay_s = max(
-        delay_s,
-        _float(os.environ.get("NIJA_POST_PUBLICATION_ACTIVATION_MAX_DELAY_S"), 1.5),
-    )
-    backoff = max(
-        1.0,
-        _float(os.environ.get("NIJA_POST_PUBLICATION_ACTIVATION_BACKOFF"), 2.0),
-    )
-    last_details: dict[str, Any] = {
-        "activation": "post_publication_retry_not_attempted",
-    }
-
+    max_attempts = max(1, _int(os.environ.get("NIJA_POST_PUBLICATION_ACTIVATION_MAX_ATTEMPTS"), 3))
+    delay_s = max(0.0, _float(os.environ.get("NIJA_POST_PUBLICATION_ACTIVATION_INITIAL_DELAY_S"), 0.25))
+    max_delay_s = max(delay_s, _float(os.environ.get("NIJA_POST_PUBLICATION_ACTIVATION_MAX_DELAY_S"), 1.5))
+    backoff = max(1.0, _float(os.environ.get("NIJA_POST_PUBLICATION_ACTIVATION_BACKOFF"), 2.0))
+    last_details: dict[str, Any] = {"activation": "post_publication_retry_not_attempted"}
     for attempt in range(1, max_attempts + 1):
         active, details = _attempt_activation()
         last_details = details
         blockers = details.get("pending") or details.get("activation") or "none"
-        logger.warning(
-            "POST_PUBLICATION_ACTIVATION_RETRY attempt=%d/%d active=%s delay_s=%.2f blockers=%s",
-            attempt,
-            max_attempts,
-            str(active).lower(),
-            delay_s if attempt < max_attempts else 0.0,
-            blockers,
-        )
+        logger.warning("POST_PUBLICATION_ACTIVATION_RETRY attempt=%d/%d active=%s delay_s=%.2f blockers=%s", attempt, max_attempts, str(active).lower(), delay_s if attempt < max_attempts else 0.0, blockers)
         if active:
-            logger.critical(
-                "POST_PUBLICATION_ACTIVATION_RETRY_SUCCESS attempts=%d state=%s",
-                attempt,
-                details.get("state_after") or details.get("state_before") or "unknown",
-            )
+            logger.critical("POST_PUBLICATION_ACTIVATION_RETRY_SUCCESS attempts=%d state=%s", attempt, details.get("state_after") or details.get("state_before") or "unknown")
             details["post_publication_retry_attempts"] = attempt
             return True, details
         if attempt < max_attempts:
             time.sleep(delay_s)
             delay_s = min(max_delay_s, delay_s * backoff if delay_s > 0.0 else max_delay_s)
-
-    logger.warning(
-        "POST_PUBLICATION_ACTIVATION_RETRY_EXHAUSTED attempts=%d blockers=%s",
-        max_attempts,
-        last_details.get("pending") or last_details.get("activation") or "unknown",
-    )
+    logger.warning("POST_PUBLICATION_ACTIVATION_RETRY_EXHAUSTED attempts=%d blockers=%s", max_attempts, last_details.get("pending") or last_details.get("activation") or "unknown")
     last_details["post_publication_retry_attempts"] = max_attempts
     return False, last_details
 
@@ -379,102 +371,45 @@ def _attempt_activation() -> tuple[bool, dict[str, Any]]:
     ready, pending = _mark_proven_readiness(proofs)
     details["proofs"] = proofs
     details["pending"] = pending
-    if not ready:
-        return False, details
+    monitor_started, monitor_detail = _ensure_strategy_publication_monitor()
+    details["strategy_publication_monitor"] = {"started": monitor_started, "detail": monitor_detail}
     try:
         try:
-            monitor = importlib.import_module("bot.activation_pending_commit_monitor_patch")
+            module = importlib.import_module("bot.trading_state_machine")
         except Exception:
-            monitor = importlib.import_module("activation_pending_commit_monitor_patch")
-        sm = monitor._state_machine()
-        if sm is None:
-            details["activation"] = "state_machine_unavailable"
-            return False, details
-        state = monitor._current_state_value(sm)
-        details["state_before"] = state
-        if state == "LIVE_ACTIVE":
-            return True, details
-        if state not in {"OFF", "LIVE_PENDING_CONFIRMATION"}:
-            details["activation"] = f"state_not_armable:{state}"
-            return False, details
-        accepted, meta = monitor._capital_ready_snapshot()
-        if not accepted:
-            details["activation"] = f"capital_snapshot_not_accepted:{meta}"
-            return False, details
+            module = importlib.import_module("trading_state_machine")
+        sm = module.get_trading_state_machine()
         _rearm_unsafe_timeout(sm)
-        committed = bool(monitor._commit_once(sm, meta))
-        state_after = monitor._current_state_value(sm)
-        details["state_after"] = state_after
-        details["activation"] = "committed" if committed else "normal_commit_rejected"
-        if committed and state_after == "LIVE_ACTIVE":
-            logger.critical(
-                "LIVE_EXECUTION_ENABLED authority_ready=%s nonce_ready=%s activation=%s",
-                bool(proofs.get("authority_ready")),
-                bool(proofs.get("nonce_ready")),
-                details["activation"],
-            )
-        return bool(committed and state_after == "LIVE_ACTIVE"), details
+        before = sm.get_current_state()
+        details["state_before"] = str(getattr(before, "value", before))
+        if not ready:
+            return False, details
+        active = bool(sm.commit_activation())
+        after = sm.get_current_state()
+        details["state_after"] = str(getattr(after, "value", after))
+        return active, details
     except Exception as exc:
-        details["activation"] = f"activation_attempt_failed:{type(exc).__name__}:{exc}"
+        details["activation"] = f"{type(exc).__name__}:{exc}"
         return False, details
-
-
-def _cycle() -> tuple[bool, dict[str, Any]]:
-    global _LAST_STRATEGY_PUBLISHED
-    try:
-        v15 = importlib.import_module("runtime_convergence_v15_patch")
-        installer = getattr(v15, "install", None)
-        if callable(installer):
-            installer()
-    except Exception:
-        pass
-    if not _live_mode():
-        return False, {"live_mode": False}
-    publisher_started, publisher_detail = _ensure_strategy_publication_monitor()
-    active, details = _attempt_activation()
-    strategy_published = bool(
-        (details.get("proofs") or {}).get("strategy_ready") or _strategy_published()
-    )
-    if strategy_published and not _LAST_STRATEGY_PUBLISHED and not active:
-        retry_active, retry_details = _retry_activation_after_publication()
-        details["post_publication_retry"] = {
-            "attempted": True,
-            "active": retry_active,
-            "attempts": retry_details.get("post_publication_retry_attempts"),
-        }
-        if retry_active:
-            active = True
-            details = retry_details
-    else:
-        details["post_publication_retry"] = {"attempted": False}
-    _LAST_STRATEGY_PUBLISHED = strategy_published
-    details["strategy_publication_monitor"] = {
-        "started": publisher_started,
-        "detail": publisher_detail,
-    }
-    return active, details
 
 
 def _monitor() -> None:
-    global _LAST_SIGNATURE
-    interval = max(0.5, _float(os.environ.get("NIJA_PREACTIVATION_V16_INTERVAL_S"), 2.0))
+    global _LAST_SIGNATURE, _LAST_STRATEGY_PUBLISHED
+    interval = max(0.25, _float(os.environ.get("NIJA_PREACTIVATION_READINESS_POLL_S"), 1.0))
     while True:
         try:
-            active, details = _cycle()
-            signature = repr((active, details))
+            active, details = _attempt_activation()
+            proofs = details.get("proofs", {})
+            strategy_published = bool(proofs.get("strategy_ready"))
+            signature = repr((active, details.get("pending"), proofs, details.get("state_before"), details.get("state_after")))
             if signature != _LAST_SIGNATURE:
                 _LAST_SIGNATURE = signature
-                blockers = details.get("pending") or details.get("activation") or "none"
-                logger.log(
-                    logging.INFO if active else logging.WARNING,
-                    "PREACTIVATION_READINESS_V16_STATE marker=%s active=%s blockers=%s details=%s persistent=true force_transition=false",
-                    _MARKER,
-                    str(active).lower(),
-                    blockers,
-                    details,
-                )
-        except Exception:
-            logger.exception("PREACTIVATION_READINESS_V16_RETRY marker=%s", _MARKER)
+                logger.warning("PREACTIVATION_READINESS_V16_STATE marker=%s active=%s blockers=%s details=%s persistent=true force_transition=false", _MARKER, str(active).lower(), details.get("pending", []), details)
+            if strategy_published and not _LAST_STRATEGY_PUBLISHED and not active:
+                _retry_activation_after_publication()
+            _LAST_STRATEGY_PUBLISHED = strategy_published
+        except Exception as exc:
+            logger.warning("PREACTIVATION_READINESS_V16_MONITOR_ERROR marker=%s error=%s:%s", _MARKER, type(exc).__name__, exc)
         time.sleep(interval)
 
 
@@ -483,28 +418,16 @@ def install() -> bool:
     with _LOCK:
         if _STARTED:
             return True
-        _STARTED = True
-        os.environ["NIJA_PREACTIVATION_READINESS_V16_INSTALLED"] = "1"
-        thread = threading.Thread(target=_monitor, name="PreActivationReadinessV16", daemon=True)
+        thread = threading.Thread(target=_monitor, name="preactivation-readiness-v16", daemon=True)
         thread.start()
-        logger.critical(
-            "PREACTIVATION_READINESS_V16_INSTALLED marker=%s persistent=true proof_based=true normal_commit_only=true thread_alive=%s",
-            _MARKER,
-            thread.is_alive(),
-        )
-        return True
+        _STARTED = thread.is_alive()
+    if not _STARTED:
+        return False
+    os.environ["NIJA_PREACTIVATION_READINESS_V16_INSTALLED"] = "1"
+    logger.warning("PREACTIVATION_READINESS_V16_INSTALLED marker=%s proof_based=true force_transition=false capital_handoff_v109=true", _MARKER)
+    return True
 
 
-def install_import_hook() -> bool:
-    return install()
+install_import_hook = install
 
-
-__all__ = [
-    "install",
-    "install_import_hook",
-    "_collect_proofs",
-    "_mark_proven_readiness",
-    "_attempt_activation",
-    "_cycle",
-    "_rearm_unsafe_timeout",
-]
+__all__ = ["install", "install_import_hook", "_capital_snapshot", "_fresh_capital_handoff", "_collect_proofs"]
