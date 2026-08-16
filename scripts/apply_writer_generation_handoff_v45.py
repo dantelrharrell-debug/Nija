@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Idempotently wire writer-generation v45/v47/v48/v49 into canonical launcher v26.
+"""Idempotently wire writer-generation safety and startup timeout defaults.
 
-v112 intentionally avoids rewriting launcher version markers. The canonical
-launcher changes independently (v110/v111 and future revisions), so build-time
-patching must key off stable structural anchors and attest the actual safety
-wiring rather than a historical marker string.
+v112 intentionally avoids rewriting launcher version markers. v114 additionally
+raises the canonical live prebootstrap handoff default from 45s to 90s at image
+build time. The environment override remains authoritative, and the underlying
+registration, capital, readiness, writer, nonce, risk, and execution proofs are
+unchanged.
 """
 from __future__ import annotations
 
@@ -13,10 +14,11 @@ import py_compile
 
 ROOT = Path(__file__).resolve().parents[1]
 LAUNCHER = ROOT / "scripts" / "canonical_runtime_launcher_v26.py"
+PREBOOTSTRAP = ROOT / "bot" / "canonical_broker_prebootstrap_v22.py"
 V47 = ROOT / "bot" / "writer_generation_idempotence_v47_patch.py"
 V48 = ROOT / "bot" / "writer_lost_epoch_v48_patch.py"
 V49 = ROOT / "bot" / "writer_recovery_monitor_cleanup_v49_patch.py"
-MARKER = "20260816-writer-generation-launcher-patcher-v112"
+MARKER = "20260816-prebootstrap-timeout-v114"
 
 
 def _replace_once(text: str, old: str, new: str, label: str) -> str:
@@ -61,6 +63,30 @@ def _wire_launcher(text: str) -> str:
     return text
 
 
+def _patch_prebootstrap_timeout() -> bool:
+    """Raise only the default v22 handoff timeout; preserve explicit env values."""
+    text = PREBOOTSTRAP.read_text(encoding="utf-8")
+    original = text
+    text = _replace_once(
+        text,
+        'timeout_s = float(os.getenv("NIJA_PREBOOTSTRAP_HANDOFF_TIMEOUT_S", "45"))',
+        'timeout_s = float(os.getenv("NIJA_PREBOOTSTRAP_HANDOFF_TIMEOUT_S", "90"))',
+        "prebootstrap timeout env default",
+    )
+    text = _replace_once(
+        text,
+        "timeout_s = 45.0",
+        "timeout_s = 90.0",
+        "prebootstrap timeout fallback",
+    )
+    if text != original:
+        PREBOOTSTRAP.write_text(text, encoding="utf-8")
+    if 'NIJA_PREBOOTSTRAP_HANDOFF_TIMEOUT_S", "90"' not in text or "timeout_s = 90.0" not in text:
+        raise RuntimeError("prebootstrap timeout v114 attestation failed")
+    py_compile.compile(str(PREBOOTSTRAP), doraise=True)
+    return text != original
+
+
 def apply() -> bool:
     for label, path in (("v47", V47), ("v48", V48), ("v49", V49)):
         if not path.is_file():
@@ -92,10 +118,12 @@ def apply() -> bool:
     if missing:
         raise RuntimeError("writer generation launcher attestation missing: " + ", ".join(missing))
 
+    timeout_changed = _patch_prebootstrap_timeout()
     py_compile.compile(str(LAUNCHER), doraise=True)
     print(
         f"WRITER_GENERATION_V45_V47_V48_V49_LAUNCHER_PATCHED marker={MARKER} "
-        "v45=true v47=true v48=true v49=true version_marker_preserved=true",
+        "v45=true v47=true v48=true v49=true version_marker_preserved=true "
+        f"prebootstrap_timeout_default_s=90 timeout_changed={str(timeout_changed).lower()}",
         flush=True,
     )
     return True
