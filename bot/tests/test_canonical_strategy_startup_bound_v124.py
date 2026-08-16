@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import queue
 import threading
 import time
@@ -78,7 +77,6 @@ def test_wiring_hydration_removes_unbounded_first_attempt(monkeypatch):
         return True
 
     def old_bounded(_strategy, broker=None, reason="runtime"):
-        # Models the old implementation's misleading synchronous first call.
         return hydrate(_strategy, broker=broker, reason=reason)
 
     wiring_module._needs_hydration = needs
@@ -93,6 +91,38 @@ def test_wiring_hydration_removes_unbounded_first_attempt(monkeypatch):
 
     assert elapsed < 0.3
     assert ready is False
+
+
+def test_complete_publication_is_bounded_and_late_publish_is_suppressed(monkeypatch):
+    publication_module = ModuleType("fake_publication")
+    published = []
+
+    def publish(strategy):
+        published.append(strategy)
+
+    def publish_canonical_strategy(*args, **kwargs):
+        time.sleep(1.2)
+        publication_module._publish(object())
+        return object(), "late"
+
+    publication_module._publish = publish
+    publication_module.publish_canonical_strategy = publish_canonical_strategy
+    # The production clamp has a 1s minimum. Make the original operation exceed it.
+    monkeypatch.setenv("NIJA_CANONICAL_STRATEGY_PUBLICATION_TIMEOUT_S", "1")
+
+    assert v124._patch_publication_bound(publication_module)
+    started = time.monotonic()
+    strategy, detail = publication_module.publish_canonical_strategy()
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 1.15
+    assert strategy is None
+    assert detail == "publication_timeout_v124"
+
+    # Let the original worker reach its attempted publish. The guard must keep
+    # a post-deadline strategy from becoming visible/readiness-producing.
+    time.sleep(0.35)
+    assert published == []
 
 
 def test_release_manifest_attests_v124(monkeypatch):
