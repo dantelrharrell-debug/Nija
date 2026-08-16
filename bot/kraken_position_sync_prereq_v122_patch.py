@@ -1,7 +1,7 @@
 """Require the bounded Kraken read layer before platform position sync can start.
 
 Production release v121 proved a startup ordering race: v98 installed v108
-(platform position-sync dispatch) before v121 (bounded Kraken REST reads).  v108
+(platform position-sync dispatch) before v121 (bounded Kraken REST reads). v108
 can patch capital refresh and launch a Kraken reconciliation worker immediately.
 If that first worker enters Kraken's shared private-API lock before v121 wraps the
 concrete API object, the already-running HTTP request remains unbounded and later
@@ -10,10 +10,9 @@ bounded generations can queue behind the same lock indefinitely.
 v122 closes that race without changing readiness semantics:
 
 * v121 must be installed before v108 is allowed to dispatch Kraken work;
-* v108 is installed only after that prerequisite is satisfied;
-* as a defense in depth, v108's connected-unsynced discovery suppresses Kraken
-  if the v121 installation flag is ever absent, while leaving other brokers
-  eligible for their normal reconciliation path;
+* v108 discovery is patched before its installer can expose dispatch;
+* as defense in depth, Kraken discovery is suppressed whenever the v121
+  installation flag is absent, while non-Kraken brokers keep their normal path;
 * no synthetic positions, readiness, writer authority, nonce authority, capital,
   risk, or execution authority are fabricated;
 * no new import hook is added.
@@ -115,7 +114,7 @@ def _patch_v108(v108: ModuleType) -> bool:
     setattr(connected_unsynced_v122, "__wrapped__", current)
     v108._connected_unsynced_platform_brokers = connected_unsynced_v122
     LOGGER.critical(
-        "KRAKEN_POSITION_SYNC_V122_V108_PATCHED marker=%s v121_prerequisite=true non_kraken_dispatch_unchanged=true import_hook_added=false",
+        "KRAKEN_POSITION_SYNC_V122_V108_PATCHED marker=%s v121_prerequisite=true patch_before_dispatch_install=true non_kraken_dispatch_unchanged=true import_hook_added=false",
         MARKER,
     )
     return True
@@ -147,10 +146,12 @@ def install() -> bool:
         v108 = _load_v108()
         if v108 is None:
             return False
+        # Patch discovery before v108 can patch refresh_capital_authority and
+        # expose its dispatch path to concurrent runtime refreshes.
+        if not _patch_v108(v108):
+            return False
         installer = getattr(v108, "install_import_hook", None) or getattr(v108, "install", None)
         if not callable(installer) or installer() is False:
-            return False
-        if not _patch_v108(v108):
             return False
 
         os.environ["NIJA_KRAKEN_POSITION_SYNC_PREREQ_V122_INSTALLED"] = "1"
@@ -160,7 +161,7 @@ def install() -> bool:
 
         _INSTALLED = True
         LOGGER.critical(
-            "KRAKEN_POSITION_SYNC_PREREQ_V122_INSTALLED marker=%s v121_ready=true v108_after_v121=true kraken_dispatch_fail_closed=true import_hook_added=false safety_gates_unchanged=true",
+            "KRAKEN_POSITION_SYNC_PREREQ_V122_INSTALLED marker=%s v121_ready=true v108_after_v121=true discovery_patched_before_dispatch=true kraken_dispatch_fail_closed=true import_hook_added=false safety_gates_unchanged=true",
             MARKER,
         )
         return True
