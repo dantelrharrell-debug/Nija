@@ -17,11 +17,13 @@ authoritative capital truth. v107 serializes Kraken nonce rebuild recovery and
 adds import-hook reentry hardening. v108 dispatches connected platform broker
 position snapshots independently of capital readiness while preserving the
 existing bounded/fail-closed v95/v98 position-sync contract. v116 closes the
-activation/writer/readiness convergence races, and v117 adds bounded stale
+activation/writer/readiness convergence races, v117 adds bounded stale
 position-fetch generations plus supervised-pending THREADS_STARTING liveness
-without granting execution authority. v104 remains as the narrow legacy
-import-cycle guard. v100/v102 retain bounded fail-closed class recovery, and
-v103 retains the runtime reconciliation single-flight guard.
+without granting execution authority, and v118 repairs the terminal writer-loss
+SEAK halt signature mismatch while preserving fail-closed shutdown semantics.
+v104 remains as the narrow legacy import-cycle guard. v100/v102 retain bounded
+fail-closed class recovery, and v103 retains the runtime reconciliation
+single-flight guard.
 """
 from __future__ import annotations
 
@@ -69,6 +71,7 @@ def install() -> bool:
         ("platform_position_sync_v108_patch", "V108"),
         ("runtime_convergence_v116_patch", "V116"),
         ("position_fetch_generation_v117_patch", "V117"),
+        ("terminal_writer_loss_seak_v118_patch", "V118"),
         ("startup_strategy_import_cycle_v104_patch", "V104"),
         ("canonical_strategy_class_recovery_v100_patch", "V100"),
         ("canonical_strategy_class_recovery_v102_patch", "V102"),
@@ -88,7 +91,7 @@ def install() -> bool:
     os.environ["NIJA_POSITION_SYNC_TIMEOUT_V98_INSTALLED"] = "1"
     _INSTALLED = True
     LOGGER.critical(
-        "POSITION_SYNC_TIMEOUT_V98_INSTALLED marker=%s default_timeout_s=%.1f explicit_env_override_preserved=true account_isolation_v99=true startup_publication_bootstrap_v105=true capital_refresh_reentrancy_v106=true startup_hook_nonce_v107=true platform_position_sync_v108=true runtime_convergence_v116=true position_fetch_generation_v117=true strategy_import_cycle_v104=true strategy_class_recovery_v100=true passive_strategy_recovery_v102=true startup_convergence_v103=true safety_gates_unchanged=true",
+        "POSITION_SYNC_TIMEOUT_V98_INSTALLED marker=%s default_timeout_s=%.1f explicit_env_override_preserved=true account_isolation_v99=true startup_publication_bootstrap_v105=true capital_refresh_reentrancy_v106=true startup_hook_nonce_v107=true platform_position_sync_v108=true runtime_convergence_v116=true position_fetch_generation_v117=true terminal_writer_loss_seak_v118=true strategy_import_cycle_v104=true strategy_class_recovery_v100=true passive_strategy_recovery_v102=true startup_convergence_v103=true safety_gates_unchanged=true",
         MARKER,
         _DEFAULT_TIMEOUT_S,
     )
