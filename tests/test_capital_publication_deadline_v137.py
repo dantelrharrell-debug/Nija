@@ -247,14 +247,21 @@ def test_patch_does_not_change_nonce_risk_or_kill_switch_environment(monkeypatch
     assert os.environ["NIJA_EMERGENCY_STOP"] == "1"
 
 
-def test_release_manifest_statically_wires_v137() -> None:
+def test_release_manifest_statically_wires_v137_and_successor_v138() -> None:
     from bot import runtime_release_manifest_patch as manifest
 
-    assert manifest.RELEASE_ID == "20260817-runtime-convergence-v137"
+    assert manifest.RELEASE_ID == "20260817-runtime-convergence-v138"
     assert (
         "bot.capital_publication_deadline_v137_patch",
         "install_import_hook",
     ) in manifest._INSTALLERS
+    assert (
+        "bot.final_execution_state_router_convergence_patch",
+        "install_import_hook",
+    ) in manifest._INSTALLERS
     assert manifest._REQUIRED_FLAGS["capital_publication_deadline_v137"] == (
         "NIJA_CAPITAL_PUBLICATION_DEADLINE_V137_INSTALLED"
+    )
+    assert manifest._REQUIRED_FLAGS["final_execution_state_router_v138"] == (
+        "NIJA_FINAL_EXECUTION_STATE_ROUTER_READY"
     )
