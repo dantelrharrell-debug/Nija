@@ -6,14 +6,15 @@ order and does not bypass risk, sizing, cash, position, or broker controls.
 v138 hardening
 --------------
 The convergence watchdog must report *current convergence*, not merely whether
-it changed something on the current call.  Earlier versions returned ``False``
+it changed something on the current call. Earlier versions returned ``False``
 for already-wrapped execution/startup targets, which meant the 200 ms watchdog
 could never reach its terminal ready state after the first successful patch.
 The startup probe also looked only for module-level functions even though the
 canonical implementation lives on :class:`StartupCoordinator`.
 
-v138 makes every patch probe idempotent, patches the canonical class method,
-and publishes ``NIJA_FINAL_EXECUTION_STATE_ROUTER_READY=1`` only when execution,
+v138 makes every patch probe idempotent, verifies the canonical
+``StartupCoordinator.build_snapshot`` owner without changing its behavior, and
+publishes ``NIJA_FINAL_EXECUTION_STATE_ROUTER_READY=1`` only when execution,
 startup, and OKX router convergence are all currently true.
 """
 from __future__ import annotations
@@ -21,10 +22,8 @@ from __future__ import annotations
 import importlib
 import logging
 import os
-import sys
 import threading
 import time
-from dataclasses import is_dataclass, replace
 from functools import wraps
 from types import ModuleType
 from typing import Any
@@ -142,87 +141,85 @@ def _runtime_live() -> bool:
 
 
 def _repair_startup_result(result: Any, method_name: str) -> Any:
-    """Preserve monotonic public LIVE state only when runtime authority is already live."""
-    if not _runtime_live():
+    """Legacy module-level compatibility repair; canonical snapshots are untouched."""
+    if not _runtime_live() or not isinstance(result, dict):
         return result
 
-    if isinstance(result, dict):
-        state = str(result.get("trading_state", result.get("state", ""))).upper()
-        if state in {"", "UNKNOWN", "PENDING", "STARTING", "LIVE_PENDING_CONFIRMATION"}:
-            result["trading_state"] = "LIVE_ACTIVE"
-            result["state"] = "LIVE_ACTIVE"
-            result["state_repair_reason"] = "monotonic_live_runtime_evidence"
-            logger.critical(
-                "STARTUP_STATE_MONOTONIC_LIVE_REPAIRED marker=%s method=%s previous=%s",
-                _MARKER, method_name, state,
-            )
-        os.environ["NIJA_TRADING_STATE"] = "LIVE_ACTIVE"
-        return result
-
-    # StartupCoordinator.build_snapshot returns a frozen dataclass.  Preserve
-    # the historical monotonic repair on its public trading_state field only;
-    # do not mutate runtime_authority_state, readiness, nonce, or dispatch.
-    if is_dataclass(result) and hasattr(result, "trading_state"):
-        state = str(getattr(result, "trading_state", "") or "").upper()
-        if state in {"", "UNKNOWN", "PENDING", "STARTING", "LIVE_PENDING_CONFIRMATION"}:
-            try:
-                result = replace(result, trading_state="LIVE_ACTIVE")
-                logger.critical(
-                    "STARTUP_STATE_MONOTONIC_LIVE_REPAIRED marker=%s method=%s previous=%s dataclass=true",
-                    _MARKER, method_name, state,
-                )
-            except Exception:
-                logger.exception(
-                    "STARTUP_STATE_MONOTONIC_LIVE_REPAIR_FAILED marker=%s method=%s previous=%s",
-                    _MARKER, method_name, state,
-                )
-        os.environ["NIJA_TRADING_STATE"] = "LIVE_ACTIVE"
+    state = str(result.get("trading_state", result.get("state", ""))).upper()
+    if state in {"", "UNKNOWN", "PENDING", "STARTING", "LIVE_PENDING_CONFIRMATION"}:
+        result["trading_state"] = "LIVE_ACTIVE"
+        result["state"] = "LIVE_ACTIVE"
+        result["state_repair_reason"] = "monotonic_live_runtime_evidence"
+        logger.critical(
+            "STARTUP_STATE_MONOTONIC_LIVE_REPAIRED marker=%s method=%s previous=%s legacy_module_level=true",
+            _MARKER, method_name, state,
+        )
+    os.environ["NIJA_TRADING_STATE"] = "LIVE_ACTIVE"
     return result
 
 
-def _patch_startup_state() -> bool:
-    """Patch canonical startup snapshot owners and return current convergence."""
-    converged = False
-    seen_owners: set[int] = set()
-    seen_methods: set[tuple[int, str]] = set()
+def _mark_canonical_startup_owner(module: ModuleType) -> bool:
+    """Verify canonical StartupCoordinator ownership without wrapping it."""
+    cls = getattr(module, "StartupCoordinator", None)
+    if not isinstance(cls, type):
+        return False
+    current = getattr(cls, "build_snapshot", None)
+    if not callable(current):
+        return False
+    if not getattr(current, "_nija_startup_router_converged_v138", False):
+        try:
+            current._nija_startup_router_converged_v138 = True  # type: ignore[attr-defined]
+        except Exception:
+            logger.exception(
+                "STARTUP_ROUTER_CANONICAL_OWNER_MARK_FAILED marker=%s module=%s",
+                _MARKER, module.__name__,
+            )
+            return False
+        logger.critical(
+            "STARTUP_ROUTER_CANONICAL_OWNER_CONVERGED marker=%s release=%s module=%s owner=StartupCoordinator.build_snapshot behavior_unchanged=true",
+            _MARKER, _RELEASE, module.__name__,
+        )
+    return True
 
+
+def _patch_legacy_startup_functions(module: ModuleType) -> bool:
+    """Retain historical compatibility wrappers only for module-level helpers."""
+    converged = False
+    for method_name in ("reconcile", "_reconcile", "build_snapshot", "_build_snapshot"):
+        current = getattr(module, method_name, None)
+        if not callable(current):
+            continue
+        if getattr(current, "_nija_live_monotonic_v1", False):
+            converged = True
+            continue
+
+        @wraps(current)
+        def wrapper(*args: Any, __current=current, __name=method_name, **kwargs: Any):
+            return _repair_startup_result(__current(*args, **kwargs), __name)
+
+        wrapper._nija_live_monotonic_v1 = True  # type: ignore[attr-defined]
+        wrapper.__wrapped__ = current  # type: ignore[attr-defined]
+        setattr(module, method_name, wrapper)
+        converged = True
+    return converged
+
+
+def _patch_startup_state() -> bool:
+    """Return True when canonical startup ownership is currently converged."""
+    canonical = False
+    legacy = False
+    seen_modules: set[int] = set()
     for name in ("bot.startup_coordinator", "startup_coordinator"):
         try:
             module = importlib.import_module(name)
         except Exception:
             continue
-
-        owners: list[Any] = [module]
-        coordinator_cls = getattr(module, "StartupCoordinator", None)
-        if isinstance(coordinator_cls, type):
-            owners.append(coordinator_cls)
-
-        for owner in owners:
-            if id(owner) in seen_owners:
-                continue
-            seen_owners.add(id(owner))
-            for method_name in ("reconcile", "_reconcile", "build_snapshot", "_build_snapshot"):
-                key = (id(owner), method_name)
-                if key in seen_methods:
-                    continue
-                seen_methods.add(key)
-                current = getattr(owner, method_name, None)
-                if not callable(current):
-                    continue
-                if getattr(current, "_nija_live_monotonic_v1", False):
-                    converged = True
-                    continue
-
-                @wraps(current)
-                def wrapper(*args: Any, __current=current, __name=method_name, **kwargs: Any):
-                    return _repair_startup_result(__current(*args, **kwargs), __name)
-
-                wrapper._nija_live_monotonic_v1 = True  # type: ignore[attr-defined]
-                wrapper.__wrapped__ = current  # type: ignore[attr-defined]
-                setattr(owner, method_name, wrapper)
-                converged = True
-
-    return converged
+        if id(module) in seen_modules:
+            continue
+        seen_modules.add(id(module))
+        canonical = _mark_canonical_startup_owner(module) or canonical
+        legacy = _patch_legacy_startup_functions(module) or legacy
+    return canonical or legacy
 
 
 def _patch_okx_router_identity() -> bool:
