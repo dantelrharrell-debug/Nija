@@ -68,6 +68,7 @@ _FAST_PATH_INSTALLERS = (
     ("bot.canonical_publication_direct_v127_patch", "CANONICAL_PUBLICATION_DIRECT_V127"),
     ("bot.seak_nonce_causality_v128_patch", "SEAK_NONCE_CAUSALITY_V128"),
     ("bot.authority_heartbeat_startup_grace_v129_patch", "AUTHORITY_HEARTBEAT_STARTUP_GRACE_V129"),
+    ("bot.kill_switch_stale_heartbeat_recovery_v130_patch", "KILL_SWITCH_STALE_HEARTBEAT_RECOVERY_V130"),
 )
 
 _FAST_PATH_COMPAT_OPTIONAL_GUARDS = frozenset(
