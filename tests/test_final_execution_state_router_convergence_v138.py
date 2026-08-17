@@ -22,7 +22,7 @@ def test_execute_action_patch_is_idempotently_converged() -> None:
     assert getattr(FakeExecutionOwner.execute_action, "_nija_terminal_reason_v1", False) is True
 
 
-def test_startup_patch_targets_canonical_coordinator_class_and_is_idempotent(monkeypatch) -> None:
+def test_startup_patch_targets_canonical_coordinator_without_wrapping_behavior(monkeypatch) -> None:
     fake_module = types.ModuleType("bot.startup_coordinator")
 
     class FakeStartupCoordinator:
@@ -33,6 +33,7 @@ def test_startup_patch_targets_canonical_coordinator_class_and_is_idempotent(mon
             }
 
     fake_module.StartupCoordinator = FakeStartupCoordinator
+    original = FakeStartupCoordinator.build_snapshot
 
     def fake_import(name: str):
         if name in {"bot.startup_coordinator", "startup_coordinator"}:
@@ -40,11 +41,12 @@ def test_startup_patch_targets_canonical_coordinator_class_and_is_idempotent(mon
         raise ImportError(name)
 
     monkeypatch.setattr(v138.importlib, "import_module", fake_import)
-    monkeypatch.setattr(v138, "_runtime_live", lambda: False)
 
     assert v138._patch_startup_state() is True
-    assert getattr(FakeStartupCoordinator.build_snapshot, "_nija_live_monotonic_v1", False) is True
+    assert FakeStartupCoordinator.build_snapshot is original
+    assert getattr(original, "_nija_startup_router_converged_v138", False) is True
     assert v138._patch_startup_state() is True
+    assert FakeStartupCoordinator.build_snapshot is original
 
     result = FakeStartupCoordinator().build_snapshot(
         trading_state="LIVE_PENDING_CONFIRMATION",
@@ -62,10 +64,11 @@ class FakeSnapshot:
     dispatch_health_ready: bool
 
 
-def test_live_monotonic_repair_only_changes_public_trading_state(monkeypatch) -> None:
+def test_canonical_snapshot_object_is_never_rewritten_even_when_runtime_live(monkeypatch) -> None:
     monkeypatch.setattr(v138, "_runtime_live", lambda: True)
     monkeypatch.setenv("NIJA_NONCE_READY", "0")
     monkeypatch.setenv("NIJA_RUNTIME_EXECUTION_AUTHORITY", "1")
+    monkeypatch.delenv("NIJA_TRADING_STATE", raising=False)
 
     original = FakeSnapshot(
         trading_state="LIVE_PENDING_CONFIRMATION",
@@ -76,15 +79,17 @@ def test_live_monotonic_repair_only_changes_public_trading_state(monkeypatch) ->
 
     repaired = v138._repair_startup_result(original, "build_snapshot")
 
-    assert repaired.trading_state == "LIVE_ACTIVE"
+    assert repaired is original
+    assert repaired.trading_state == "LIVE_PENDING_CONFIRMATION"
     assert repaired.runtime_authority_state == "EXECUTING"
     assert repaired.nonce_ready is False
     assert repaired.dispatch_health_ready is False
     assert os.environ["NIJA_NONCE_READY"] == "0"
     assert os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] == "1"
+    assert "NIJA_TRADING_STATE" not in os.environ
 
 
-def test_non_live_runtime_never_promotes_pending_state(monkeypatch) -> None:
+def test_non_live_runtime_never_promotes_pending_legacy_state(monkeypatch) -> None:
     monkeypatch.setattr(v138, "_runtime_live", lambda: False)
     original = {
         "trading_state": "LIVE_PENDING_CONFIRMATION",
@@ -98,6 +103,21 @@ def test_non_live_runtime_never_promotes_pending_state(monkeypatch) -> None:
     assert repaired["trading_state"] == "LIVE_PENDING_CONFIRMATION"
     assert repaired["nonce_ready"] is False
     assert repaired["dispatch_health_ready"] is False
+
+
+def test_legacy_module_level_dict_repair_requires_already_live_runtime(monkeypatch) -> None:
+    monkeypatch.setattr(v138, "_runtime_live", lambda: True)
+    original = {
+        "trading_state": "LIVE_PENDING_CONFIRMATION",
+        "nonce_ready": True,
+    }
+
+    repaired = v138._repair_startup_result(original, "legacy_build_snapshot")
+
+    assert repaired is original
+    assert repaired["trading_state"] == "LIVE_ACTIVE"
+    assert repaired["nonce_ready"] is True
+    assert os.environ["NIJA_TRADING_STATE"] == "LIVE_ACTIVE"
 
 
 def test_converge_once_reports_current_convergence_and_publishes_ready(monkeypatch) -> None:
