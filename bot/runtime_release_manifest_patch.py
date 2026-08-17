@@ -11,6 +11,9 @@ from typing import Callable
 
 logger = logging.getLogger("nija.runtime_release_manifest")
 RELEASE_ID = "20260817-runtime-convergence-v138"
+# Immutable owner used by the v139 release-identity guard. Older convergence
+# installers may register flags, but may not downgrade this manifest identity.
+DECLARED_RELEASE_ID = RELEASE_ID
 _INSTALLED = False
 _LOCK = threading.RLock()
 _TRUE = {"1", "true", "yes", "on", "enabled", "y"}
@@ -59,6 +62,10 @@ _INSTALLERS = (
     # makes publication expiry authoritative at read time. It also reasserts
     # the v78 dependency for long-running processes.
     ("bot.activation_stop_capital_freshness_v135_patch", "install_import_hook"),
+    # v139 must run before v136: v136 historically wrote its own RELEASE_ID into
+    # the parent manifest. The guard rewires that registration to be flag-only
+    # and restores the canonical manifest identity before v136 is invoked.
+    ("bot.runtime_release_identity_guard_patch", "install_import_hook"),
     # v136 makes the activation snapshot bridge observational only. Current
     # v134 proof plus the non-expired v135 publication are required before cycle
     # snapshot augmentation, and TradingStateMachine.commit_activation remains
@@ -104,6 +111,7 @@ _REQUIRED_FLAGS = {
     "capital_refresh_live_continuity_v78": "NIJA_CAPITAL_REFRESH_LIVE_CONTINUITY_V78_INSTALLED",
     "readiness_proof_convergence_v134": "NIJA_READINESS_PROOF_CONVERGENCE_V134_INSTALLED",
     "activation_stop_capital_freshness_v135": "NIJA_ACTIVATION_STOP_CAPITAL_FRESHNESS_V135_INSTALLED",
+    "runtime_release_identity_v139": "NIJA_RUNTIME_RELEASE_IDENTITY_GUARD_INSTALLED",
     "activation_publication_convergence_v136": "NIJA_ACTIVATION_PUBLICATION_CONVERGENCE_V136_INSTALLED",
     "capital_publication_deadline_v137": "NIJA_CAPITAL_PUBLICATION_DEADLINE_V137_INSTALLED",
     "final_execution_state_router_v138": "NIJA_FINAL_EXECUTION_STATE_ROUTER_READY",
@@ -236,21 +244,25 @@ def _audit() -> tuple[bool, dict[str, str]]:
 
 def _publish(ready: bool, details: dict[str, str]) -> None:
     previous = os.environ.get("NIJA_RUNTIME_RELEASE_READY", "")
-    os.environ["NIJA_RUNTIME_RELEASE_ID"] = RELEASE_ID
+    # Re-anchor the mutable compatibility name before publishing. This is a
+    # second line of defense if an older module was reloaded between audits.
+    global RELEASE_ID
+    RELEASE_ID = DECLARED_RELEASE_ID
+    os.environ["NIJA_RUNTIME_RELEASE_ID"] = DECLARED_RELEASE_ID
     os.environ["NIJA_RUNTIME_RELEASE_READY"] = "1" if ready else "0"
     logger.critical(
         "NIJA_RUNTIME_RELEASE_MANIFEST release=%s deployment_sha=%s ready=%s python_pid=%s details=%s",
-        RELEASE_ID, _deployment_sha(), str(ready).lower(), os.getpid(), details,
+        DECLARED_RELEASE_ID, _deployment_sha(), str(ready).lower(), os.getpid(), details,
     )
     if not ready:
         logger.critical(
             "RUNTIME_RELEASE_INCOMPLETE_EXECUTION_UNSAFE release=%s action=keep_broker_order_gates_fail_closed",
-            RELEASE_ID,
+            DECLARED_RELEASE_ID,
         )
     elif previous == "0":
         logger.critical(
             "RUNTIME_RELEASE_CONVERGENCE_RECOVERED release=%s action=broker_order_gates_may_follow_normal_authority_checks",
-            RELEASE_ID,
+            DECLARED_RELEASE_ID,
         )
 
 
@@ -264,7 +276,7 @@ def _watchdog() -> None:
                 last_signature = signature
                 _publish(ready, details)
         except Exception as exc:
-            logger.critical("RUNTIME_RELEASE_AUDIT_FAILED release=%s error=%s", RELEASE_ID, exc)
+            logger.critical("RUNTIME_RELEASE_AUDIT_FAILED release=%s error=%s", DECLARED_RELEASE_ID, exc)
         time.sleep(max(10.0, float(os.environ.get("NIJA_RUNTIME_RELEASE_AUDIT_INTERVAL_S", "30") or 30)))
 
 
@@ -276,11 +288,11 @@ def install_import_hook() -> None:
         if not _INSTALLED:
             _INSTALLED = True
             threading.Thread(target=_watchdog, name="RuntimeReleaseManifest", daemon=True).start()
-    logger.critical("NIJA_RUNTIME_RELEASE_MANIFEST_INSTALLED release=%s", RELEASE_ID)
+    logger.critical("NIJA_RUNTIME_RELEASE_MANIFEST_INSTALLED release=%s", DECLARED_RELEASE_ID)
 
 
 __all__ = [
-    "RELEASE_ID", "install_import_hook", "_audit", "_deployment_sha",
+    "RELEASE_ID", "DECLARED_RELEASE_ID", "install_import_hook", "_audit", "_deployment_sha",
     "_expected_scan_wrapper_release", "_scan_release_compatible", "_bounded_acyclic_scan",
     "_readiness_contract_consistent", "_runtime_limits_consistent",
 ]
