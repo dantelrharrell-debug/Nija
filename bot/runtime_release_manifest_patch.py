@@ -10,7 +10,7 @@ import time
 from typing import Callable
 
 logger = logging.getLogger("nija.runtime_release_manifest")
-RELEASE_ID = "20260817-runtime-convergence-v136"
+RELEASE_ID = "20260817-runtime-convergence-v137"
 _INSTALLED = False
 _LOCK = threading.RLock()
 _TRUE = {"1", "true", "yes", "on", "enabled", "y"}
@@ -64,6 +64,10 @@ _INSTALLERS = (
     # snapshot augmentation, and TradingStateMachine.commit_activation remains
     # the sole transition authority.
     ("bot.activation_publication_convergence_v136_patch", "install_import_hook"),
+    # v137 schedules a canonical coordinator refresh before immutable capital
+    # publication expiry, coalesces duplicate in-flight refreshes, and clamps
+    # legacy-ready results when the publication proof is not current.
+    ("bot.capital_publication_deadline_v137_patch", "install_import_hook"),
 )
 
 _REQUIRED_FLAGS = {
@@ -96,6 +100,7 @@ _REQUIRED_FLAGS = {
     "readiness_proof_convergence_v134": "NIJA_READINESS_PROOF_CONVERGENCE_V134_INSTALLED",
     "activation_stop_capital_freshness_v135": "NIJA_ACTIVATION_STOP_CAPITAL_FRESHNESS_V135_INSTALLED",
     "activation_publication_convergence_v136": "NIJA_ACTIVATION_PUBLICATION_CONVERGENCE_V136_INSTALLED",
+    "capital_publication_deadline_v137": "NIJA_CAPITAL_PUBLICATION_DEADLINE_V137_INSTALLED",
 }
 
 
