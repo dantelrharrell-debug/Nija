@@ -67,6 +67,7 @@ _FAST_PATH_INSTALLERS = (
     ("bot.canonical_strategy_fast_start_v126_patch", "CANONICAL_STRATEGY_FAST_START_V126"),
     ("bot.canonical_publication_direct_v127_patch", "CANONICAL_PUBLICATION_DIRECT_V127"),
     ("bot.seak_nonce_causality_v128_patch", "SEAK_NONCE_CAUSALITY_V128"),
+    ("bot.authority_heartbeat_startup_grace_v129_patch", "AUTHORITY_HEARTBEAT_STARTUP_GRACE_V129"),
 )
 
 _FAST_PATH_COMPAT_OPTIONAL_GUARDS = frozenset(
