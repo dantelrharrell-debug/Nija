@@ -10,7 +10,7 @@ import time
 from typing import Callable
 
 logger = logging.getLogger("nija.runtime_release_manifest")
-RELEASE_ID = "20260817-runtime-convergence-v137"
+RELEASE_ID = "20260817-runtime-convergence-v138"
 _INSTALLED = False
 _LOCK = threading.RLock()
 _TRUE = {"1", "true", "yes", "on", "enabled", "y"}
@@ -68,6 +68,11 @@ _INSTALLERS = (
     # publication expiry, coalesces duplicate in-flight refreshes, and clamps
     # legacy-ready results when the publication proof is not current.
     ("bot.capital_publication_deadline_v137_patch", "install_import_hook"),
+    # v138 makes the final execution/startup/router convergence probe idempotent,
+    # targets StartupCoordinator.build_snapshot on the canonical class, and
+    # terminates the 200 ms convergence watchdog once all three components are
+    # already converged. No readiness, nonce, risk, or execution gate is relaxed.
+    ("bot.final_execution_state_router_convergence_patch", "install_import_hook"),
 )
 
 _REQUIRED_FLAGS = {
@@ -101,6 +106,7 @@ _REQUIRED_FLAGS = {
     "activation_stop_capital_freshness_v135": "NIJA_ACTIVATION_STOP_CAPITAL_FRESHNESS_V135_INSTALLED",
     "activation_publication_convergence_v136": "NIJA_ACTIVATION_PUBLICATION_CONVERGENCE_V136_INSTALLED",
     "capital_publication_deadline_v137": "NIJA_CAPITAL_PUBLICATION_DEADLINE_V137_INSTALLED",
+    "final_execution_state_router_v138": "NIJA_FINAL_EXECUTION_STATE_ROUTER_READY",
 }
 
 
