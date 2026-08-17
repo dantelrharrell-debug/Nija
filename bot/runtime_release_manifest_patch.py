@@ -10,7 +10,7 @@ import time
 from typing import Callable
 
 logger = logging.getLogger("nija.runtime_release_manifest")
-RELEASE_ID = "20260716-runtime-convergence-v14"
+RELEASE_ID = "20260817-runtime-convergence-v134"
 _INSTALLED = False
 _LOCK = threading.RLock()
 _TRUE = {"1", "true", "yes", "on", "enabled", "y"}
@@ -47,6 +47,10 @@ _INSTALLERS = (
     ("bot.kraken_exit_only_recovery_phase_guard_patch", "install_import_hook"),
     ("bot.kraken_profit_realization_guard_patch", "install_import_hook"),
     ("bot.coinbase_pem_quarantine_patch", "install_import_hook"),
+    # Must run after v133 and the activation/readiness modules it converges.
+    # The installer is idempotent and reasserts ownership if older convergence
+    # layers replay later in a long-running process.
+    ("bot.readiness_proof_convergence_v134_patch", "install_import_hook"),
 )
 
 _REQUIRED_FLAGS = {
@@ -75,6 +79,7 @@ _REQUIRED_FLAGS = {
     "kraken_synthetic_equity_scrub": "NIJA_KRAKEN_SYNTHETIC_EQUITY_SCRUB_INSTALLED",
     "kraken_exit_only_recovery_guard": "NIJA_KRAKEN_EXIT_ONLY_RECOVERY_PHASE_GUARD_INSTALLED",
     "profit_realization_guard": "NIJA_KRAKEN_PROFIT_REALIZATION_GUARD_INSTALLED",
+    "readiness_proof_convergence_v134": "NIJA_READINESS_PROOF_CONVERGENCE_V134_INSTALLED",
 }
 
 
