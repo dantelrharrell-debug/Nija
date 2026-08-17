@@ -63,6 +63,7 @@ _FAST_PATH_INSTALLERS = (
     ("bot.final_activation_v60_v16_compat_v113_patch", "FINAL_ACTIVATION_V60_V16_COMPAT_V113"),
     ("bot.final_production_activation_repair_v60_patch", "FINAL_PRODUCTION_ACTIVATION_V60"),
     ("bot.live_active_dispatch_commit_v92_patch", "LIVE_ACTIVE_DISPATCH_COMMIT_V92"),
+    ("bot.canonical_core_import_handoff_v125_patch", "CANONICAL_CORE_IMPORT_HANDOFF_V125"),
 )
 
 _FAST_PATH_COMPAT_OPTIONAL_GUARDS = frozenset(
