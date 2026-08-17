@@ -48,3 +48,10 @@ jobs:
 
       - name: Run import smoke test
         run: python -m pytest -q tests/imports_smoke_test.py
+
+      - name: Run capital convergence regression tests
+        run: |
+          python -m pytest -q \
+            tests/test_activation_stop_capital_freshness_v135.py \
+            tests/test_activation_publication_convergence_v136.py \
+            tests/test_capital_publication_deadline_v137.py
