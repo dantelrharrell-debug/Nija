@@ -203,10 +203,9 @@ def test_deadline_refresh_uses_only_canonical_coordinator(monkeypatch) -> None:
     monkeypatch.setattr(v137, "_authority", lambda: authority)
 
     broker = SimpleNamespace(_last_known_balance=468.02)
-    broker_type = SimpleNamespace(value="kraken")
     coordinator = FakeCoordinator(snapshot=snapshot)
     manager = _manager(coordinator)
-    manager._platform_brokers = {broker_type: broker}
+    manager._platform_brokers = {"kraken": broker}
 
     assert v137._execute_deadline_refresh(manager, trigger="test_v137") is True
     assert len(coordinator.calls) == 1
@@ -223,8 +222,8 @@ def test_user_capital_remains_excluded_without_explicit_opt_in(monkeypatch) -> N
     platform_broker = SimpleNamespace(_last_known_balance=100.0)
     user_broker = SimpleNamespace(_last_known_balance=50.0, connected=True)
     manager = _manager()
-    manager._platform_brokers = {SimpleNamespace(value="kraken"): platform_broker}
-    manager.user_brokers = {"tania": {SimpleNamespace(value="kraken"): user_broker}}
+    manager._platform_brokers = {"kraken": platform_broker}
+    manager.user_brokers = {"tania": {"kraken": user_broker}}
 
     broker_map = v137._runtime_broker_map(manager)
 
