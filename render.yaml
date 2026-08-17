@@ -5,7 +5,7 @@ services:
     region: oregon
     dockerfilePath: ./Dockerfile
     dockerCommand: bash scripts/render_entrypoint.sh
-    autoDeployTrigger: checksPass
+    autoDeployTrigger: commit
     numInstances: 1
     healthCheckPath: /healthz
     maxShutdownDelaySeconds: 60
