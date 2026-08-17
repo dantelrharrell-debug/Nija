@@ -6,6 +6,10 @@ v132 addresses two observed post-startup regressions without weakening safety:
 2) the v130 stale-stop worker is startup-bounded, so a persisted restart-file
    record can re-surface the retired v128 heartbeat stop long after boot.
 
+v133 is chained from this canonical installer to revoke false current proofs and
+fail closed through the canonical TradingStateMachine if proof loss occurs after
+LIVE_ACTIVE.
+
 This patch never clears manual/UI/CLI stops, never clears a direct new heartbeat
 activation, never changes SEAK, nonce, risk, or execution authority, and never
 forces LIVE_ACTIVE.
@@ -85,9 +89,6 @@ def _anchor_readiness_owner() -> bool:
     v16 = importlib.import_module("preactivation_readiness_convergence_v16_patch")
     v58 = importlib.import_module("bot.final_production_activation_repair_v58_patch")
 
-    # Replace the exported v58 callable itself. If any later installer assigns
-    # v16._mark_proven_readiness = v58._incremental_mark_proven_readiness, it
-    # still lands on current-proof truth synchronization rather than sticky True.
     v58._incremental_mark_proven_readiness = _durable_truth_sync
     v16._mark_proven_readiness = _durable_truth_sync
 
@@ -187,6 +188,7 @@ def _durability_worker() -> None:
             if now - last_owner_check >= 5.0:
                 v16 = importlib.import_module("preactivation_readiness_convergence_v16_patch")
                 current = getattr(v16, "_mark_proven_readiness", None)
+                # v133 deliberately advertises v132 ownership compatibility.
                 if not getattr(current, "_nija_v132_truth_sync", False):
                     _anchor_readiness_owner()
                     LOGGER.critical(
@@ -209,15 +211,29 @@ def _patch_release_manifest() -> bool:
     if not isinstance(required, dict):
         return False
     required["readiness_killswitch_durability_v132"] = _FLAG
-    manifest.RELEASE_ID = RELEASE_ID
     return True
+
+
+def _install_v133_post_activation_guard() -> bool:
+    try:
+        from bot import post_activation_proof_loss_v133_patch as v133
+        installer = getattr(v133, "install", None)
+        if not callable(installer):
+            return False
+        return bool(installer())
+    except Exception as exc:
+        LOGGER.critical(
+            "POST_ACTIVATION_PROOF_LOSS_V133_CHAIN_FAILED marker=%s err=%s:%s trading_fail_closed=true",
+            MARKER, type(exc).__name__, exc, exc_info=True,
+        )
+        return False
 
 
 def install() -> bool:
     global _INSTALLED
     with _LOCK:
         if _INSTALLED and os.environ.get(_FLAG) == "1":
-            return True
+            return _install_v133_post_activation_guard()
         try:
             ok = _anchor_readiness_owner() and _patch_release_manifest()
         except Exception as exc:
@@ -236,10 +252,14 @@ def install() -> bool:
             name="ReadinessKillSwitchDurabilityV132",
             daemon=True,
         ).start()
+        if not _install_v133_post_activation_guard():
+            os.environ.pop(_FLAG, None)
+            _INSTALLED = False
+            return False
         LOGGER.critical(
             "READINESS_KILLSWITCH_DURABILITY_V132_INSTALLED marker=%s release=%s "
             "generic_auto_clear=false direct_new_heartbeat_stops_preserved=true manual_stops_preserved=true "
-            "risk_gates_unchanged=true seak_unchanged=true execution_authority_unchanged=true",
+            "risk_gates_unchanged=true seak_unchanged=true execution_authority_unchanged=true v133_chained=true",
             MARKER, RELEASE_ID,
         )
         return True
