@@ -69,14 +69,13 @@ _FAST_PATH_INSTALLERS = (
     ("bot.seak_nonce_causality_v128_patch", "SEAK_NONCE_CAUSALITY_V128"),
     ("bot.authority_heartbeat_startup_grace_v129_patch", "AUTHORITY_HEARTBEAT_STARTUP_GRACE_V129"),
     ("bot.kill_switch_stale_heartbeat_recovery_v130_patch", "KILL_SWITCH_STALE_HEARTBEAT_RECOVERY_V130"),
+    ("bot.readiness_killswitch_causality_v131_patch", "READINESS_KILLSWITCH_CAUSALITY_V131"),
 )
 
-_FAST_PATH_COMPAT_OPTIONAL_GUARDS = frozenset(
-    {
-        "WRITER_REELECTION_LOSS_REASON_V46",
-        "ACTIVATION_CONVERGENCE_V17_IMPORTLIB_BRIDGE",
-    }
-)
+_FAST_PATH_COMPAT_OPTIONAL_GUARDS = frozenset({
+    "WRITER_REELECTION_LOSS_REASON_V46",
+    "ACTIVATION_CONVERGENCE_V17_IMPORTLIB_BRIDGE",
+})
 
 _LEGACY_INSTALLERS = (
     *_FAST_PATH_INSTALLERS,
@@ -91,17 +90,11 @@ _LEGACY_INSTALLERS = (
 
 
 def _truthy(name: str) -> bool:
-    return str(os.environ.get(name, "")).strip().lower() in {
-        "1", "true", "yes", "on", "enabled", "y",
-    }
+    return str(os.environ.get(name, "")).strip().lower() in {"1", "true", "yes", "on", "enabled", "y"}
 
 
 def _canonical_fast_path_enabled() -> bool:
-    return bool(
-        _truthy("NIJA_CANONICAL_ENTRYPOINT_FAST_PATH")
-        and _truthy("NIJA_DEFER_RUNTIME_SITE_HOOKS")
-        and os.environ.get("NIJA_CANONICAL_RUNTIME_LAUNCHER_V26_READY") == "1"
-    )
+    return bool(_truthy("NIJA_CANONICAL_ENTRYPOINT_FAST_PATH") and _truthy("NIJA_DEFER_RUNTIME_SITE_HOOKS") and os.environ.get("NIJA_CANONICAL_RUNTIME_LAUNCHER_V26_READY") == "1")
 
 
 def _canonical_fast_import(module_name: str):
@@ -112,22 +105,13 @@ def _canonical_fast_import(module_name: str):
     return gcd_import(module_name)
 
 
-def _install_guards(
-    specs: Iterable[tuple[str, str]],
-    *,
-    mode: str,
-    optional_labels: frozenset[str] | None = None,
-) -> bool:
+def _install_guards(specs: Iterable[tuple[str, str]], *, mode: str, optional_labels: frozenset[str] | None = None) -> bool:
     ready = True
     installed: list[str] = []
     optional_labels = optional_labels or frozenset()
     for module_name, label in specs:
         try:
-            module = (
-                _canonical_fast_import(module_name)
-                if mode == "canonical_fast"
-                else importlib.import_module(module_name)
-            )
+            module = _canonical_fast_import(module_name) if mode == "canonical_fast" else importlib.import_module(module_name)
             installer = getattr(module, "install_import_hook", None) or getattr(module, "install", None)
             if not callable(installer):
                 raise RuntimeError("installer_missing")
@@ -138,19 +122,11 @@ def _install_guards(
             logger.warning("%s_INSTALL_REQUESTED source=bot_entrypoint mode=%s", label, mode)
         except Exception as exc:
             if label in optional_labels:
-                logger.warning(
-                    "%s_INSTALL_SKIPPED_OPTIONAL source=bot_entrypoint mode=%s err=%s",
-                    label, mode, exc,
-                )
+                logger.warning("%s_INSTALL_SKIPPED_OPTIONAL source=bot_entrypoint mode=%s err=%s", label, mode, exc)
                 continue
             ready = False
-            logger.critical(
-                "%s_INSTALL_FAILED source=bot_entrypoint mode=%s err=%s", label, mode, exc, exc_info=True,
-            )
-    logger.critical(
-        "BOT_ENTRYPOINT_GUARD_BUNDLE_COMPLETE marker=%s mode=%s ready=%s installed=%s",
-        _FAST_PATH_MARKER, mode, ready, ",".join(installed) or "none",
-    )
+            logger.critical("%s_INSTALL_FAILED source=bot_entrypoint mode=%s err=%s", label, mode, exc, exc_info=True)
+    logger.critical("BOT_ENTRYPOINT_GUARD_BUNDLE_COMPLETE marker=%s mode=%s ready=%s installed=%s", _FAST_PATH_MARKER, mode, ready, ",".join(installed) or "none")
     return ready
 
 
@@ -160,16 +136,10 @@ def _install_canonical_import_shield_v123() -> bool:
         installer = getattr(module, "install_import_hook", None) or getattr(module, "install", None)
         if not callable(installer) or installer() is False:
             raise RuntimeError("canonical import shield v123 installer unavailable or returned false")
-        logger.critical(
-            "CANONICAL_IMPORT_SHIELD_V123_EARLY_READY source=bot_entrypoint before_fast_guard_bundle=true"
-        )
+        logger.critical("CANONICAL_IMPORT_SHIELD_V123_EARLY_READY source=bot_entrypoint before_fast_guard_bundle=true")
         return True
     except Exception as exc:
-        logger.critical(
-            "CANONICAL_IMPORT_SHIELD_V123_EARLY_FAILED source=bot_entrypoint err=%s trading_fail_closed=true",
-            exc,
-            exc_info=True,
-        )
+        logger.critical("CANONICAL_IMPORT_SHIELD_V123_EARLY_FAILED source=bot_entrypoint err=%s trading_fail_closed=true", exc, exc_info=True)
         return False
 
 
@@ -178,23 +148,13 @@ if _canonical_fast_path_enabled():
         os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "0"
         os.environ["NIJA_RUNTIME_TRADING_STATE"] = "OFF"
         raise RuntimeError("canonical import shield failed; trading remains fail closed")
-    if not _install_guards(
-        _FAST_PATH_INSTALLERS,
-        mode="canonical_fast",
-        optional_labels=_FAST_PATH_COMPAT_OPTIONAL_GUARDS,
-    ):
+    if not _install_guards(_FAST_PATH_INSTALLERS, mode="canonical_fast", optional_labels=_FAST_PATH_COMPAT_OPTIONAL_GUARDS):
         os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "0"
         os.environ["NIJA_RUNTIME_TRADING_STATE"] = "OFF"
         raise RuntimeError("canonical fast-path safety guards failed; trading remains fail closed")
-    logger.critical(
-        "CANONICAL_ENTRYPOINT_FAST_PATH_READY marker=%s import_loader=frozen_bootstrap package_hook_fanout=deferred import_shield_v123=true handoff=bot.bot_main",
-        _FAST_PATH_MARKER,
-    )
+    logger.critical("CANONICAL_ENTRYPOINT_FAST_PATH_READY marker=%s import_loader=frozen_bootstrap package_hook_fanout=deferred import_shield_v123=true handoff=bot.bot_main", _FAST_PATH_MARKER)
 else:
-    logger.warning(
-        "BOT_ENTRYPOINT_LEGACY_COMPATIBILITY_PATH marker=%s canonical_fast_path=false",
-        _FAST_PATH_MARKER,
-    )
+    logger.warning("BOT_ENTRYPOINT_LEGACY_COMPATIBILITY_PATH marker=%s canonical_fast_path=false", _FAST_PATH_MARKER)
     _install_guards(_LEGACY_INSTALLERS, mode="legacy_compatibility")
 
 from bot.bot_main import main
