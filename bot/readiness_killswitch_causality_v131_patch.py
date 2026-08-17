@@ -7,6 +7,9 @@ v131 is deliberately narrow:
 - remove the circular requirement that authority/execution readiness already be
   true while the kill switch itself is intentionally forcing them false.
 
+v132 is chained from this canonical installer so durability ownership is always
+installed after the v131 causality layer.
+
 No generic kill-switch clearing, risk bypass, synthetic readiness, SEAK resume,
 or execution-authority grant is introduced.
 """
@@ -42,8 +45,6 @@ def _patch_v58_precedence() -> bool:
             if os.environ.get("NIJA_FINAL_PRODUCTION_ACTIVATION_V61_INSTALLED") == "1" or bool(
                 getattr(v61, "_INSTALLED", False)
             ):
-                # Re-assert the newer current-proof synchronizer. v58 must never
-                # replace it with its older monotonic-true publisher.
                 reapply = getattr(v61, "_patch_v16_truth_sync", None)
                 if callable(reapply) and bool(reapply()):
                     LOGGER.critical(
@@ -69,8 +70,6 @@ def _causal_activation(status: dict[str, Any]) -> tuple[str, str]:
     latest_reason = str(latest.get("reason") or "")
     latest_source = str(latest.get("source") or "")
 
-    # Restart file detection is not a new safety cause; it is persistence of an
-    # already-active stop. Look backward only in that exact case.
     if latest_source.strip().upper() == "FILE_SYSTEM" and "Kill switch file detected" in latest_reason:
         for item in reversed(history[:-1]):
             if not isinstance(item, dict) or not item.get("source"):
@@ -106,9 +105,6 @@ def _patch_v130_causality() -> bool:
         except Exception as exc:
             return False, f"writer_probe:{type(exc).__name__}"
 
-        # authority_ready/execution_ready are intentionally excluded here: an
-        # active kill switch makes those proofs false by design, so requiring
-        # them before clearing the stale kill switch is circular.
         try:
             from bot.readiness_table import snapshot
             table = snapshot()
@@ -156,15 +152,29 @@ def _patch_release_manifest() -> bool:
     if not isinstance(required, dict):
         return False
     required["readiness_killswitch_causality_v131"] = _FLAG
-    manifest.RELEASE_ID = RELEASE_ID
     return True
+
+
+def _install_v132_durability() -> bool:
+    try:
+        from bot import readiness_killswitch_durability_v132_patch as v132
+        installer = getattr(v132, "install", None)
+        if not callable(installer):
+            return False
+        return bool(installer())
+    except Exception as exc:
+        LOGGER.critical(
+            "READINESS_KILLSWITCH_DURABILITY_V132_CHAIN_FAILED marker=%s err=%s:%s trading_fail_closed=true",
+            MARKER, type(exc).__name__, exc, exc_info=True,
+        )
+        return False
 
 
 def install() -> bool:
     global _INSTALLED
     with _LOCK:
         if _INSTALLED and os.environ.get(_FLAG) == "1":
-            return True
+            return _install_v132_durability()
         try:
             ok = _patch_v58_precedence() and _patch_v130_causality() and _patch_release_manifest()
         except Exception as exc:
@@ -178,9 +188,13 @@ def install() -> bool:
             return False
         os.environ[_FLAG] = "1"
         _INSTALLED = True
+        if not _install_v132_durability():
+            os.environ.pop(_FLAG, None)
+            _INSTALLED = False
+            return False
         LOGGER.critical(
             "READINESS_KILLSWITCH_CAUSALITY_V131_INSTALLED marker=%s release=%s "
-            "generic_auto_clear=false risk_gates_unchanged=true readiness_synthetic=false execution_authority_unchanged=true",
+            "generic_auto_clear=false risk_gates_unchanged=true readiness_synthetic=false execution_authority_unchanged=true v132_chained=true",
             MARKER, RELEASE_ID,
         )
         return True
