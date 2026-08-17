@@ -136,10 +136,10 @@ def test_v78_is_required_and_installed_fail_closed(monkeypatch) -> None:
     assert os.environ["NIJA_CAPITAL_REFRESH_LIVE_CONTINUITY_V78_INSTALLED"] == "1"
 
 
-def test_release_manifest_statically_wires_v78_and_v135() -> None:
+def test_release_manifest_statically_wires_v78_v135_and_successor_v136() -> None:
     from bot import runtime_release_manifest_patch as manifest
 
-    assert manifest.RELEASE_ID == "20260817-runtime-convergence-v135"
+    assert manifest.RELEASE_ID == "20260817-runtime-convergence-v136"
     assert (
         "bot.capital_refresh_live_continuity_v78_patch",
         "install_import_hook",
@@ -148,9 +148,16 @@ def test_release_manifest_statically_wires_v78_and_v135() -> None:
         "bot.activation_stop_capital_freshness_v135_patch",
         "install_import_hook",
     ) in manifest._INSTALLERS
+    assert (
+        "bot.activation_publication_convergence_v136_patch",
+        "install_import_hook",
+    ) in manifest._INSTALLERS
     assert manifest._REQUIRED_FLAGS["capital_refresh_live_continuity_v78"] == (
         "NIJA_CAPITAL_REFRESH_LIVE_CONTINUITY_V78_INSTALLED"
     )
     assert manifest._REQUIRED_FLAGS["activation_stop_capital_freshness_v135"] == (
         "NIJA_ACTIVATION_STOP_CAPITAL_FRESHNESS_V135_INSTALLED"
+    )
+    assert manifest._REQUIRED_FLAGS["activation_publication_convergence_v136"] == (
+        "NIJA_ACTIVATION_PUBLICATION_CONVERGENCE_V136_INSTALLED"
     )
