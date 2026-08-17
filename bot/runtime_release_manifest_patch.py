@@ -10,7 +10,7 @@ import time
 from typing import Callable
 
 logger = logging.getLogger("nija.runtime_release_manifest")
-RELEASE_ID = "20260817-runtime-convergence-v135"
+RELEASE_ID = "20260817-runtime-convergence-v136"
 _INSTALLED = False
 _LOCK = threading.RLock()
 _TRUE = {"1", "true", "yes", "on", "enabled", "y"}
@@ -59,6 +59,11 @@ _INSTALLERS = (
     # makes publication expiry authoritative at read time. It also reasserts
     # the v78 dependency for long-running processes.
     ("bot.activation_stop_capital_freshness_v135_patch", "install_import_hook"),
+    # v136 makes the activation snapshot bridge observational only. Current
+    # v134 proof plus the non-expired v135 publication are required before cycle
+    # snapshot augmentation, and TradingStateMachine.commit_activation remains
+    # the sole transition authority.
+    ("bot.activation_publication_convergence_v136_patch", "install_import_hook"),
 )
 
 _REQUIRED_FLAGS = {
@@ -90,6 +95,7 @@ _REQUIRED_FLAGS = {
     "capital_refresh_live_continuity_v78": "NIJA_CAPITAL_REFRESH_LIVE_CONTINUITY_V78_INSTALLED",
     "readiness_proof_convergence_v134": "NIJA_READINESS_PROOF_CONVERGENCE_V134_INSTALLED",
     "activation_stop_capital_freshness_v135": "NIJA_ACTIVATION_STOP_CAPITAL_FRESHNESS_V135_INSTALLED",
+    "activation_publication_convergence_v136": "NIJA_ACTIVATION_PUBLICATION_CONVERGENCE_V136_INSTALLED",
 }
 
 
