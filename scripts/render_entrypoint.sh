@@ -69,6 +69,7 @@ python3 -S -m py_compile \
     bot/tests/test_writer_generation_handoff_v45.py \
     bot/tests/test_canonical_writer_first_v59.py \
     scripts/canonical_runtime_launcher_v26.py \
+    scripts/render_memory_pressure_guard.py \
     scripts/apply_canonical_launcher_v26.py \
     scripts/apply_writer_generation_handoff_v45.py \
     scripts/apply_direct_broker_prebootstrap_v27.py \
@@ -85,6 +86,7 @@ grep -Fq '_install_writer_generation_handoff_v45()' scripts/canonical_runtime_la
 grep -Fq 'CANONICAL_EARLY_WRITER_BOOTSTRAP_VERIFIED' scripts/canonical_runtime_launcher_v26.py
 grep -Fq 'CANONICAL_BOT_SINGLE_IDENTITY_HANDOFF' scripts/canonical_runtime_launcher_v26.py
 grep -Fq 'NIJA_CANONICAL_WRITER_FIRST_V59_READY' scripts/canonical_runtime_launcher_v26.py
+grep -Fq '_start_render_memory_pressure_guard()' scripts/canonical_runtime_launcher_v26.py
 grep -Fq 'bind_entrypoint_writer_authority_aliases(runtime)' bot/bot_main.py
 grep -Fq 'NIJA_ENTRYPOINT_WRITER_MODULE_IDENTITY_CONVERGED' bot/entrypoint_writer_authority.py
 grep -Fq 'heartbeat_telemetry_mutation=false' bot/broker_manager.py
