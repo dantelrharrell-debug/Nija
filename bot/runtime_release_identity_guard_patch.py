@@ -53,6 +53,38 @@ def _declared_release(manifest: Any) -> str:
     return str(getattr(manifest, "RELEASE_ID", "") or "").strip()
 
 
+class _CanonicalReleaseManifestModule(ModuleType):
+    """Module type that keeps the canonical manifest release ID immutable."""
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        if name == "RELEASE_ID":
+            declared = _declared_release(self)
+            candidate = str(value or "").strip()
+            if declared and candidate and candidate != declared:
+                LOGGER.warning(
+                    "RUNTIME_RELEASE_IDENTITY_OVERRIDE_BLOCKED marker=%s attempted=%s declared=%s",
+                    MARKER,
+                    candidate,
+                    declared,
+                )
+                value = declared
+        super().__setattr__(name, value)
+
+
+def _install_manifest_release_write_barrier() -> bool:
+    """Prevent every legacy module, including future reloads, from downgrading RELEASE_ID."""
+    manifest = importlib.import_module("bot.runtime_release_manifest_patch")
+    declared = _declared_release(manifest)
+    if not declared:
+        return False
+    if not isinstance(manifest, _CanonicalReleaseManifestModule):
+        manifest.__class__ = _CanonicalReleaseManifestModule
+    # Use the guarded assignment so the compatibility name is re-anchored now.
+    manifest.RELEASE_ID = declared
+    os.environ["NIJA_RUNTIME_RELEASE_ID"] = declared
+    return True
+
+
 def _patch_manifest_registration(module_name: str, label: str, flag: str) -> bool:
     module = importlib.import_module(module_name)
     manifest = importlib.import_module("bot.runtime_release_manifest_patch")
@@ -326,11 +358,12 @@ def install_import_hook() -> bool:
     with _LOCK:
         already_installed = _INSTALLED and os.environ.get(_FLAG) == "1"
         try:
+            barrier_ok = _install_manifest_release_write_barrier()
             registrations_ok = _patch_legacy_manifest_registrations()
             readiness_ok = _patch_secondary_runtime_broker_discovery()
             quiescence_ok = _patch_manifest_quiescence()
             identity_ok = _restore_manifest_identity(emit_drift=not already_installed)
-            ok = bool(registrations_ok and readiness_ok and quiescence_ok and identity_ok)
+            ok = bool(barrier_ok and registrations_ok and readiness_ok and quiescence_ok and identity_ok)
         except Exception as exc:
             LOGGER.critical(
                 "RUNTIME_RELEASE_IDENTITY_GUARD_INSTALL_FAILED marker=%s err=%s:%s fail_closed=true",
@@ -351,7 +384,7 @@ def install_import_hook() -> bool:
     if not already_installed:
         LOGGER.critical(
             "RUNTIME_RELEASE_IDENTITY_GUARD_INSTALLED marker=%s canonical_manifest_owner=true "
-            "legacy_release_override=false legacy_writers=v134,v135,v136 "
+            "legacy_release_override=false release_write_barrier=true legacy_writers=v134,v135,v136 "
             "verify_first_audit=true repair_only_on_drift=true canonical_manager_readiness=true "
             "readiness_unchanged=true kill_switch_unchanged=true nonce_unchanged=true "
             "risk_gates_unchanged=true execution_authority_unchanged=true",
@@ -369,6 +402,7 @@ __all__ = [
     "install",
     "install_import_hook",
     "_declared_release",
+    "_install_manifest_release_write_barrier",
     "_patch_v136_manifest_registration",
     "_patch_legacy_manifest_registrations",
     "_patch_secondary_runtime_broker_discovery",
