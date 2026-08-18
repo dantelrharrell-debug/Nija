@@ -168,11 +168,11 @@ def test_readiness_discovery_includes_canonical_private_manager(monkeypatch) -> 
     assert set(brokers) == {"kraken", "coinbase", "okx"}
 
 
-def test_identity_restore_updates_module_and_published_release(monkeypatch) -> None:
+def test_release_write_barrier_blocks_any_legacy_assignment() -> None:
     declared = manifest.DECLARED_RELEASE_ID
-    monkeypatch.setattr(manifest, "RELEASE_ID", v135.RELEASE_ID)
-    monkeypatch.setenv("NIJA_RUNTIME_RELEASE_ID", v135.RELEASE_ID)
+    assert v139._install_manifest_release_write_barrier() is True
 
-    assert v139._restore_manifest_identity(emit_drift=False) is True
+    manifest.RELEASE_ID = v135.RELEASE_ID
+
     assert manifest.RELEASE_ID == declared
     assert os.environ["NIJA_RUNTIME_RELEASE_ID"] == declared
