@@ -11,7 +11,7 @@ from typing import Callable
 
 logger = logging.getLogger("nija.runtime_release_manifest")
 # Keep the static bootstrap identity at v138 for the v139 write-barrier contract.
-# v144/v145 promote DECLARED_RELEASE_ID during runtime convergence only after
+# v144-v146 promote DECLARED_RELEASE_ID during runtime convergence only after
 # their safety layers are attached; this lets CI detect legacy downgrade attempts
 # while production publishes the newest successfully installed runtime release.
 RELEASE_ID = "20260817-runtime-convergence-v138"
@@ -61,6 +61,7 @@ _INSTALLERS = (
     ("bot.runtime_quality_hardening_v144_patch", "install_import_hook"),
     ("bot.runtime_quality_hardening_v144_entry_classifier_patch", "install_import_hook"),
     ("bot.runtime_startup_convergence_v145_patch", "install_import_hook"),
+    ("bot.runtime_reconciliation_shutdown_v146_patch", "install_import_hook"),
 )
 
 _REQUIRED_FLAGS = {
@@ -100,6 +101,7 @@ _REQUIRED_FLAGS = {
     "runtime_quality_v144_entry_classifier": "NIJA_RUNTIME_QUALITY_HARDENING_V144_ENTRY_CLASSIFIER_INSTALLED",
     "runtime_quality_v144_release_contract": "NIJA_RUNTIME_QUALITY_HARDENING_V144_RELEASE_CONTRACT_READY",
     "runtime_startup_convergence_v145": "NIJA_RUNTIME_STARTUP_CONVERGENCE_V145_READY",
+    "runtime_reconciliation_shutdown_v146": "NIJA_RUNTIME_RECONCILIATION_SHUTDOWN_V146_READY",
 }
 
 

@@ -21,6 +21,23 @@ class RuntimeManifestV145OwnershipV146Tests(unittest.TestCase):
             "NIJA_RUNTIME_STARTUP_CONVERGENCE_V145_READY",
         )
 
+    def test_manifest_installs_v146_reconciliation_shutdown_convergence(self) -> None:
+        self.assertIn(
+            (
+                "bot.runtime_reconciliation_shutdown_v146_patch",
+                "install_import_hook",
+            ),
+            tuple(self.manifest._INSTALLERS),
+        )
+
+    def test_manifest_requires_v146_ready_proof(self) -> None:
+        self.assertEqual(
+            self.manifest._REQUIRED_FLAGS.get(
+                "runtime_reconciliation_shutdown_v146"
+            ),
+            "NIJA_RUNTIME_RECONCILIATION_SHUTDOWN_V146_READY",
+        )
+
     def test_missing_v145_proof_cannot_publish_ready(self) -> None:
         required = dict(self.manifest._REQUIRED_FLAGS)
         installers = tuple(self.manifest._INSTALLERS)
