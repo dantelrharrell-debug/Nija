@@ -92,6 +92,16 @@ def _environment_snapshot() -> dict[str, Any]:
     return {
         "state": os.environ.get("NIJA_RUNTIME_TRADING_STATE", "OFF"),
         "writer_authority": os.environ.get("NIJA_RUNTIME_EXECUTION_AUTHORITY", "0"),
+        "reconciliation_complete": os.environ.get(
+            "NIJA_RECONCILIATION_COMPLETE", "false"
+        ),
+        "reconciliation_status": os.environ.get(
+            "NIJA_RECONCILIATION_STATUS", "PENDING"
+        ),
+        "position_sync_ready": os.environ.get(
+            "NIJA_POSITION_SYNC_ACTIVATION_READY", "0"
+        ),
+        "runtime_release_id": os.environ.get("NIJA_RUNTIME_RELEASE_ID", "unknown"),
         "strict_secondary_venues": os.environ.get(
             "NIJA_REQUIRE_SECONDARY_VENUES_READY", "false"
         ),
@@ -145,6 +155,10 @@ def _safe_render_startup_snapshot() -> dict[str, Any]:
     return {
         "state": "OFF",
         "writer_authority": "0",
+        "reconciliation_complete": "0",
+        "reconciliation_status": "PENDING",
+        "position_sync_ready": "0",
+        "runtime_release_id": os.environ.get("NIJA_RUNTIME_RELEASE_ID", "unknown"),
         "strict_secondary_venues": os.environ.get(
             "NIJA_REQUIRE_SECONDARY_VENUES_READY", "true"
         ),
@@ -211,6 +225,24 @@ def _readiness() -> tuple[bool, dict[str, object]]:
     policy = _normalised_policy(snapshot)
     required_ready = _truthy_value(snapshot.get("required_venues_ready"))
     global_ready = _global_ready_from_snapshot(snapshot, required_ready)
+    reconciliation_reported = any(
+        key in snapshot
+        for key in ("reconciliation_complete", "reconciliation_status")
+    )
+    reconciliation_complete = _truthy_value(snapshot.get("reconciliation_complete"))
+    reconciliation_status = str(
+        snapshot.get("reconciliation_status") or "PENDING"
+    ).strip().upper()
+    reconciliation_ready = (
+        reconciliation_complete
+        and reconciliation_status in {"CLEAN", "CLEAN_START"}
+    ) if reconciliation_reported else True
+    position_sync_reported = "position_sync_ready" in snapshot
+    position_sync_ready = (
+        _truthy_value(snapshot.get("position_sync_ready"))
+        if position_sync_reported
+        else True
+    )
 
     if policy == "global_all_required":
         venue_policy_ready = required_ready
@@ -219,12 +251,23 @@ def _readiness() -> tuple[bool, dict[str, object]]:
         # executable live venue but do not require every secondary venue.
         venue_policy_ready = global_ready
 
-    ready = state == "LIVE_ACTIVE" and writer_ready and venue_policy_ready
+    ready = (
+        state == "LIVE_ACTIVE"
+        and writer_ready
+        and venue_policy_ready
+        and reconciliation_ready
+        and position_sync_ready
+    )
 
     details: dict[str, object] = {
         "status": "ready" if ready else "not_ready",
         "state": state,
         "writer_authority": writer_raw,
+        "reconciliation_complete": reconciliation_complete,
+        "reconciliation_status": reconciliation_status,
+        "reconciliation_ready": reconciliation_ready,
+        "position_sync_ready": position_sync_ready,
+        "runtime_release_id": snapshot.get("runtime_release_id", "unknown"),
         "strict_secondary_venues": strict,
         "secondary_venue_policy": policy,
         "required_venues_ready": required_ready,
