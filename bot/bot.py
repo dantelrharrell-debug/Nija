@@ -22,6 +22,11 @@ logger = logging.getLogger("nija.bot_entrypoint")
 _FAST_PATH_MARKER = "20260816-canonical-fast-entrypoint-v110"
 
 _FAST_PATH_INSTALLERS = (
+    # The Render liveness server is a sibling process, so canonical runtime
+    # state must be published through the existing atomic bridge.  The legacy
+    # main.py fanout installs this bridge, but the canonical fast path skips
+    # that fanout by design.
+    ("render_readiness_state_bridge", "RENDER_READINESS_STATE_BRIDGE"),
     ("bot.writer_reelection_loss_reason_v46_patch", "WRITER_REELECTION_LOSS_REASON_V46"),
     ("bot.writer_generation_state_gate_v50_patch", "WRITER_GENERATION_STATE_GATE_V50"),
     ("bot.writer_distributed_loss_watchdog_v52_patch", "WRITER_DISTRIBUTED_LOSS_WATCHDOG_V52"),
