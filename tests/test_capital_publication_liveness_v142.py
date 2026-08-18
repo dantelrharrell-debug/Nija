@@ -173,6 +173,11 @@ def test_release_manifest_requires_v140_v141_and_v142(monkeypatch) -> None:
     monkeypatch.setattr(manifest, "_REQUIRED_FLAGS", dict(manifest._REQUIRED_FLAGS))
     monkeypatch.setattr(manifest, "_INSTALLERS", tuple(manifest._INSTALLERS))
     monkeypatch.setattr(manifest, "DECLARED_RELEASE_ID", str(manifest.DECLARED_RELEASE_ID))
+    monkeypatch.setattr(manifest, "RELEASE_ID", str(manifest.RELEASE_ID))
+    monkeypatch.setenv(
+        "NIJA_RUNTIME_RELEASE_ID",
+        str(os.environ.get("NIJA_RUNTIME_RELEASE_ID", manifest.RELEASE_ID)),
+    )
 
     assert v142._patch_release_manifest()
 
