@@ -1,8 +1,8 @@
 """Keep StartupCoordinator kill-switch truth aligned with the canonical KillSwitch.
 
-The canonical kill switch is the safety authority.  This patch mirrors its
+The canonical kill switch is the safety authority. This patch mirrors its
 active/inactive state into StartupCoordinator without clearing the stop,
-changing risk gates, or forcing a coordinator lifecycle state.  A state change
+changing risk gates, or forcing a coordinator lifecycle state. A state change
 invalidates any prior activation commit and advances the global epoch so a
 fresh activation proof is required after deactivation.
 """
@@ -116,6 +116,26 @@ def _patch_kill_switch_class(kill_switch_cls: type) -> bool:
     return True
 
 
+def _install_authority_liveness() -> bool:
+    """Chain the narrow heartbeat-stop liveness repair fail-closed."""
+    try:
+        from bot import runtime_killswitch_authority_liveness_patch as liveness
+
+        installer = getattr(liveness, "install_import_hook", None) or getattr(
+            liveness, "install", None
+        )
+        if not callable(installer):
+            return False
+        return bool(installer())
+    except Exception as exc:
+        logger.exception(
+            "KILL_SWITCH_AUTHORITY_LIVENESS_CHAIN_FAILED marker=%s error=%s",
+            _MARKER,
+            exc,
+        )
+        return False
+
+
 def install_import_hook() -> None:
     """Install synchronization and immediately reconcile preexisting state."""
     with _LOCK:
@@ -133,11 +153,14 @@ def install_import_hook() -> None:
         active = bool(instance.is_active())
         if not _publish_coordinator_truth(active, "install_reconcile"):
             raise RuntimeError("startup_coordinator_sync_failed")
+        if not _install_authority_liveness():
+            raise RuntimeError("runtime_killswitch_authority_liveness_not_ready")
 
         os.environ["NIJA_KILL_SWITCH_COORDINATOR_SYNC_INSTALLED"] = "1"
         os.environ["NIJA_KILL_SWITCH_COORDINATOR_SYNC_READY"] = "1"
         logger.critical(
-            "KILL_SWITCH_COORDINATOR_SYNC_INSTALLED marker=%s active=%s auto_clear=false risk_gates_unchanged=true",
+            "KILL_SWITCH_COORDINATOR_SYNC_INSTALLED marker=%s active=%s auto_clear=false "
+            "risk_gates_unchanged=true authority_liveness_chained=true",
             _MARKER,
             str(active).lower(),
         )
@@ -152,4 +175,5 @@ __all__ = [
     "install_import_hook",
     "_patch_kill_switch_class",
     "_publish_coordinator_truth",
+    "_install_authority_liveness",
 ]
