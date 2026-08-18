@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import sys
 import types
 import unittest
 from types import SimpleNamespace
@@ -230,8 +229,12 @@ class CapitalPublicationLivenessV142Tests(unittest.TestCase):
                 return fake_manifest
             return real_import(name)
 
-        with patch.object(v142.importlib, "import_module", side_effect=fake_import):
+        with (
+            patch.object(v142.importlib, "import_module", side_effect=fake_import),
+            patch.dict(os.environ, {}, clear=False),
+        ):
             self.assertTrue(v142._patch_release_manifest())
+            self.assertEqual(os.environ.get("NIJA_RUNTIME_RELEASE_ID"), v142.RELEASE_ID)
 
         self.assertEqual(fake_manifest.DECLARED_RELEASE_ID, v142.RELEASE_ID)
         self.assertEqual(fake_manifest.RELEASE_ID, v142.RELEASE_ID)
