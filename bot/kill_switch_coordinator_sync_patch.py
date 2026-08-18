@@ -305,6 +305,22 @@ def _install_authority_liveness() -> bool:
         )
         return False
 
+    try:
+        from bot import kill_switch_persistence_provenance_v143_patch as provenance_liveness
+
+        installer = getattr(provenance_liveness, "install_import_hook", None) or getattr(
+            provenance_liveness, "install", None
+        )
+        if not callable(installer) or not bool(installer()):
+            return False
+    except Exception as exc:
+        logger.exception(
+            "KILL_SWITCH_PERSISTENCE_PROVENANCE_V143_CHAIN_FAILED marker=%s error=%s",
+            _MARKER,
+            exc,
+        )
+        return False
+
     return True
 
 
@@ -334,7 +350,8 @@ def install_import_hook() -> None:
             "KILL_SWITCH_COORDINATOR_SYNC_INSTALLED marker=%s active=%s auto_clear=false "
             "risk_gates_unchanged=true authority_liveness_chained=true "
             "stalled_writer_capital_freshness_chained=true "
-            "capital_publication_liveness_chained=true",
+            "capital_publication_liveness_chained=true "
+            "kill_switch_persistence_provenance_chained=true",
             _MARKER,
             str(active).lower(),
         )
