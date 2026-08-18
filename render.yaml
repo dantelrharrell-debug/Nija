@@ -149,8 +149,9 @@ services:
         value: "60"
       # Keep the isolated liveness endpoint available while Render-local
       # transient writer/worker exits wait for the old Redis lease to expire.
-      # Generic canonical crashes and known transient exits retry in-process;
-      # other statuses still terminate the container for platform recovery.
+      # A clean return is unexpected for this continuous service. Clean returns,
+      # generic canonical crashes, and known transient exits retry in-process;
+      # SIGTERM and other statuses still terminate for platform recovery.
       # No writer, nonce, or execution-authority gate is bypassed.
       - key: NIJA_RENDER_RUNTIME_RECOVERY_MAX_ATTEMPTS
         value: "12"
