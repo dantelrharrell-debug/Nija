@@ -1,20 +1,9 @@
 """Fail closed when critical current proofs are lost after LIVE_ACTIVE.
 
-v133 closes the post-activation gap exposed by v132: v132 detected false
-current proofs while LIVE_ACTIVE but intentionally left the readiness table
-sticky after activation.  That allowed the public trading state to remain live
-while broker/balance/capital truth had already fallen false.
-
-Safety contract:
-- never fabricate or copy readiness from coarse/sticky state;
-- never clear kill switch or SEAK;
-- never grant writer, nonce, or execution authority;
-- never force LIVE_ACTIVE;
-- use the canonical TradingStateMachine transition for LIVE_ACTIVE -> OFF so
-  activation commitment, dispatch permission, and execution authority are
-  revoked atomically by the existing state machine;
-- leave recovery/reactivation to the existing canonical activation path after
-  all current proofs become true again.
+v133 keeps current readiness truth authoritative while avoiding repeated
+CRITICAL telemetry for unchanged pre-live/pending state. A real loss of proof
+from LIVE_ACTIVE still transitions through the canonical FSM to OFF and remains
+CRITICAL.
 """
 from __future__ import annotations
 
@@ -30,6 +19,7 @@ RELEASE_ID = "20260817-runtime-convergence-v133"
 _FLAG = "NIJA_POST_ACTIVATION_PROOF_LOSS_V133_INSTALLED"
 _LOCK = threading.RLock()
 _INSTALLED = False
+_LAST_SYNC_SIGNATURE = ""
 
 _CRITICAL_KEYS = (
     "broker_connected",
@@ -84,9 +74,6 @@ def _fail_closed_live_state(sm: Any, pending: list[str]) -> bool:
         trading_state = getattr(tsm, "TradingState")
         sm.transition_to(trading_state.OFF, reason=reason)
     except Exception as exc:
-        # Do not invent a secondary state mutation if the canonical transition
-        # fails.  Emit a hard diagnostic; existing dispatch gates still observe
-        # the revoked readiness table and false readiness env.
         LOGGER.critical(
             "POST_ACTIVATION_PROOF_LOSS_V133_TRANSITION_FAILED marker=%s pending=%s "
             "err=%s:%s canonical_state_unchanged=true trading_fail_closed_requested=true",
@@ -109,6 +96,7 @@ def _fail_closed_live_state(sm: Any, pending: list[str]) -> bool:
 
 
 def _truth_sync_v133(proofs: dict[str, bool]) -> tuple[bool, list[str]]:
+    global _LAST_SYNC_SIGNATURE
     table = importlib.import_module("bot.readiness_table")
     before = dict(table.snapshot())
     sm = _state_machine()
@@ -118,22 +106,39 @@ def _truth_sync_v133(proofs: dict[str, bool]) -> tuple[bool, list[str]]:
     failed_closed = _fail_closed_live_state(sm, pending)
     state_after = _state_value(sm)
 
-    LOGGER.critical(
-        "PREACTIVATION_READINESS_V133_TRUTH_SYNC marker=%s state_before=%s state_after=%s "
-        "before=%s after=%s pending=%s fail_closed_transition=%s",
-        MARKER,
-        state_before,
-        state_after,
-        before,
-        after,
-        pending,
-        str(failed_closed).lower(),
-    )
+    signature = f"{state_before}|{state_after}|{pending}|{before != after}|{failed_closed}"
+    changed_signature = signature != _LAST_SYNC_SIGNATURE
+    _LAST_SYNC_SIGNATURE = signature
+
+    if failed_closed:
+        LOGGER.critical(
+            "PREACTIVATION_READINESS_V133_TRUTH_SYNC marker=%s state_before=%s state_after=%s "
+            "pending=%s fail_closed_transition=true",
+            MARKER,
+            state_before,
+            state_after,
+            pending,
+        )
+    elif before != after or changed_signature:
+        LOGGER.info(
+            "PREACTIVATION_READINESS_V133_TRUTH_SYNC marker=%s state_before=%s state_after=%s "
+            "pending=%s table_changed=%s fail_closed_transition=false",
+            MARKER,
+            state_before,
+            state_after,
+            pending,
+            str(before != after).lower(),
+        )
+    else:
+        LOGGER.debug(
+            "PREACTIVATION_READINESS_V133_UNCHANGED marker=%s state=%s pending=%s",
+            MARKER,
+            state_after,
+            pending,
+        )
     return (not pending), pending
 
 
-# Keep compatibility ownership markers so v132's durability watchdog does not
-# replace this stricter successor with the older pre-live-only function.
 _truth_sync_v133._nija_v61_truth_sync = True  # type: ignore[attr-defined]
 _truth_sync_v133._nija_v132_truth_sync = True  # type: ignore[attr-defined]
 _truth_sync_v133._nija_v133_truth_sync = True  # type: ignore[attr-defined]
@@ -144,7 +149,6 @@ def _anchor_owner() -> bool:
     v58 = importlib.import_module("bot.final_production_activation_repair_v58_patch")
     v132 = importlib.import_module("bot.readiness_killswitch_durability_v132_patch")
 
-    # Replace every compatibility export that can be replayed later.
     v132._durable_truth_sync = _truth_sync_v133
     v58._incremental_mark_proven_readiness = _truth_sync_v133
     v16._mark_proven_readiness = _truth_sync_v133
@@ -155,18 +159,16 @@ def _anchor_owner() -> bool:
             v132._durable_truth_sync = _truth_sync_v133
             v58._incremental_mark_proven_readiness = _truth_sync_v133
             v16._mark_proven_readiness = _truth_sync_v133
-            LOGGER.critical(
-                "READINESS_V133_OWNER_REASSERTED marker=%s source=v58_patch_readiness "
-                "post_activation_fail_closed=true",
+            LOGGER.debug(
+                "READINESS_V133_OWNER_REASSERTED marker=%s source=v58_patch_readiness post_activation_fail_closed=true",
                 MARKER,
             )
             return True
         patch_readiness_v133._nija_v133_owner = True  # type: ignore[attr-defined]
         v58._patch_readiness = patch_readiness_v133
 
-    LOGGER.critical(
-        "READINESS_V133_OWNER_ANCHORED marker=%s v132_export_replaced=true "
-        "v58_export_replaced=true v16_owner=true post_activation_fail_closed=true",
+    LOGGER.info(
+        "READINESS_V133_OWNER_ANCHORED marker=%s v132_export_replaced=true v58_export_replaced=true v16_owner=true post_activation_fail_closed=true",
         MARKER,
     )
     return True
@@ -178,7 +180,8 @@ def _patch_release_manifest() -> bool:
     if not isinstance(required, dict):
         return False
     required["post_activation_proof_loss_v133"] = _FLAG
-    manifest.RELEASE_ID = RELEASE_ID
+    # Register proof only. Older convergence modules must never downgrade the
+    # canonical release identity owned by the newest manifest.
     return True
 
 
@@ -191,8 +194,7 @@ def install() -> bool:
             ok = _anchor_owner() and _patch_release_manifest()
         except Exception as exc:
             LOGGER.critical(
-                "POST_ACTIVATION_PROOF_LOSS_V133_INSTALL_FAILED marker=%s err=%s:%s "
-                "trading_fail_closed=true",
+                "POST_ACTIVATION_PROOF_LOSS_V133_INSTALL_FAILED marker=%s err=%s:%s trading_fail_closed=true",
                 MARKER,
                 type(exc).__name__,
                 exc,
@@ -204,13 +206,9 @@ def install() -> bool:
             return False
         os.environ[_FLAG] = "1"
         _INSTALLED = True
-        LOGGER.critical(
-            "POST_ACTIVATION_PROOF_LOSS_V133_INSTALLED marker=%s release=%s "
-            "post_activation_false_proofs_revoke_readiness=true canonical_off_transition=true "
-            "kill_switch_unchanged=true seak_unchanged=true nonce_gates_unchanged=true "
-            "risk_gates_unchanged=true force_live=false",
+        LOGGER.info(
+            "POST_ACTIVATION_PROOF_LOSS_V133_INSTALLED marker=%s post_activation_false_proofs_revoke_readiness=true canonical_off_transition=true kill_switch_unchanged=true seak_unchanged=true nonce_gates_unchanged=true risk_gates_unchanged=true force_live=false",
             MARKER,
-            RELEASE_ID,
         )
         return True
 

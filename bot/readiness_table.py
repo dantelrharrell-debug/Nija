@@ -2,7 +2,7 @@
 NIJA Startup Readiness Truth Table
 ===================================
 
-Single source of truth for startup readiness.  Replaces the previous system
+Single source of truth for startup readiness. Replaces the previous system
 of eight ``threading.Event`` objects, a ``StartupReadinessGate`` with
 ``threading.Condition`` / callback / catch-up logic, a
 ``_compute_system_ready`` function that re-derived the same truth from the
@@ -10,15 +10,10 @@ object graph, and a set of global boolean locals re-computed at thread launch.
 
 Design rules
 ------------
-* **One write path per component**: each subsystem calls ``mark_ready(key)``
-  exactly once.  There are no events to set, no gates to signal, and no
-  catch-up replays.
-* **No blocking reads**: ``is_ready()`` is a pure boolean read.  The startup
-  path polls with a bounded deadline; there is no ``Condition.wait()`` and
-  therefore no possibility of deadlock.
-* **Lock only on write**: ``_LOCK`` is only held during writes.  Reads of
-  Python ``bool`` values are atomic in CPython, so ``is_ready()`` and
-  ``snapshot()`` do not need the lock.
+* **One write path per component**: each subsystem calls ``mark_ready(key)``.
+* **No blocking reads**: ``is_ready()`` is a pure boolean read.
+* **Lock only on write**: readiness writes are serialized and versioned.
+* **Idempotent telemetry**: repeated writes of the same truth are DEBUG only.
 * **Diagnosable**: ``snapshot()`` returns a copy of the full table in O(n).
 
 Keys
@@ -42,10 +37,6 @@ from typing import Dict, Iterable
 
 logger = logging.getLogger("nija.readiness_table")
 
-# ---------------------------------------------------------------------------
-# Canonical keys
-# ---------------------------------------------------------------------------
-
 KEYS: tuple[str, ...] = (
     "broker_connected",
     "balance_hydrated",
@@ -58,115 +49,91 @@ KEYS: tuple[str, ...] = (
     "bootstrap_ready",
 )
 
-# ---------------------------------------------------------------------------
-# Module-level truth table
-# ---------------------------------------------------------------------------
-
 _TABLE: Dict[str, bool] = {k: False for k in KEYS}
 _LOCK = threading.Lock()
 _VERSION = 0
-
-# A threading.Event that is set (and immediately cleared) whenever _VERSION
-# increments.  Consumers that want an immediate retry on readiness change
-# (e.g. the activation-pending commit monitor) can wait on this event with a
-# bounded timeout instead of sleeping a full polling interval.
 READINESS_CHANGED_EVENT: threading.Event = threading.Event()
 
-
-# ---------------------------------------------------------------------------
-# Write API
-# ---------------------------------------------------------------------------
 
 def set_ready(
     component: str,
     value: bool,
     *,
     allow_regression: bool = False,
-) -> None:
-    """Set readiness while preventing ordinary true-to-false regressions.
+) -> bool:
+    """Set readiness and return whether the canonical truth actually changed.
 
-    Runtime authority loss is intentionally different from an ordinary startup
-    update: a previously valid writer/nonce proof must be revocable.  Callers
-    should use :func:`revoke_ready` for that explicit terminal transition.
+    Ordinary true-to-false regressions are rejected. Runtime authority loss is
+    intentionally different: callers use :func:`revoke_ready`, which explicitly
+    permits a terminal regression.
     """
     global _VERSION
-    _snapshot = None
-    _changed = False
+    snapshot: Dict[str, bool]
+    changed = False
     with _LOCK:
         if component not in _TABLE:
             logger.debug("readiness_table: auto-registering unknown key '%s'", component)
             _TABLE[component] = False
-            _changed = True
-        current = _TABLE.get(component)
-        if current is True and value is False and not allow_regression:
+        current = bool(_TABLE.get(component, False))
+        desired = bool(value)
+        if current and not desired and not allow_regression:
             logger.warning("Prevented readiness regression | %s", component)
-            return
-        if current != bool(value):
-            _changed = True
-        _TABLE[component] = bool(value)
-        if _changed:
+            return False
+        if current != desired:
+            _TABLE[component] = desired
             _VERSION += 1
-        _snapshot = dict(_TABLE)
+            changed = True
+        version = int(_VERSION)
+        snapshot = dict(_TABLE)
 
-    # Notify any waiter (e.g. activation monitor) that the version changed.
-    # The event is a fire-and-forget pulse: set immediately then clear so that
-    # a consumer polling `wait(timeout=T)` wakes up once per version increment
-    # rather than staying set across multiple later polls.
-    if _changed:
+    if changed:
         READINESS_CHANGED_EVENT.set()
         READINESS_CHANGED_EVENT.clear()
-
-    try:
         try:
-            from bot.startup_coordinator import get_startup_coordinator
-        except ImportError:
-            from startup_coordinator import get_startup_coordinator  # type: ignore[import]
-        get_startup_coordinator().record_readiness(
-            key=component,
-            value=bool(value),
-            version=_VERSION,
-            table=_snapshot or {},
-        )
-    except Exception:
-        logger.debug("readiness_table: coordinator update skipped", exc_info=True)
+            try:
+                from bot.startup_coordinator import get_startup_coordinator
+            except ImportError:
+                from startup_coordinator import get_startup_coordinator  # type: ignore[import]
+            get_startup_coordinator().record_readiness(
+                key=component,
+                value=bool(value),
+                version=version,
+                table=snapshot,
+            )
+        except Exception:
+            logger.debug("readiness_table: coordinator update skipped", exc_info=True)
+    return changed
 
 
 def mark_ready(component: str) -> None:
-    """Mark *component* as ready.
-
-    If *component* is not one of the canonical keys it is accepted anyway so
-    that callers do not need to track the exact key list.
-    """
-    set_ready(component, True)
-    logger.critical(
-        "✅ READINESS_TABLE mark_ready=%s table=%s",
-        component,
-        _TABLE,
-    )
+    """Mark *component* ready without re-emitting unchanged success state."""
+    changed = set_ready(component, True)
+    if changed:
+        logger.info("READINESS_TABLE_READY component=%s table=%s", component, snapshot())
+    else:
+        logger.debug("READINESS_TABLE_UNCHANGED component=%s ready=true", component)
 
 
 def revoke_ready(component: str, *, reason: str) -> None:
     """Revoke a dynamic readiness proof after terminal runtime invalidation."""
-
-    set_ready(component, False, allow_regression=True)
-    logger.critical(
-        "READINESS_TABLE_REVOKED component=%s reason=%s table=%s",
-        component,
-        reason,
-        _TABLE,
-    )
+    changed = set_ready(component, False, allow_regression=True)
+    if changed:
+        logger.warning(
+            "READINESS_TABLE_REVOKED component=%s reason=%s table=%s",
+            component,
+            reason,
+            snapshot(),
+        )
+    else:
+        logger.debug(
+            "READINESS_TABLE_UNCHANGED component=%s ready=false reason=%s",
+            component,
+            reason,
+        )
 
 
 def revoke_many(components: Iterable[str], *, reason: str) -> None:
-    """Atomically revoke several runtime readiness proofs.
-
-    Writer loss invalidates authority, nonce, and execution as one event.  A
-    sequence of individual writes exposes impossible intermediate snapshots
-    (for example ``authority_ready=False`` while ``execution_ready=True``) to
-    coordinator readers.  This bulk API publishes one versioned snapshot so
-    every consumer observes the same fail-closed transition.
-    """
-
+    """Atomically revoke several runtime readiness proofs as one transition."""
     global _VERSION
     normalized = tuple(dict.fromkeys(str(name) for name in components if str(name)))
     if not normalized:
@@ -177,7 +144,6 @@ def revoke_many(components: Iterable[str], *, reason: str) -> None:
         for component in normalized:
             if component not in _TABLE:
                 _TABLE[component] = False
-                changed = True
             elif _TABLE[component]:
                 _TABLE[component] = False
                 changed = True
@@ -189,53 +155,54 @@ def revoke_many(components: Iterable[str], *, reason: str) -> None:
     if changed:
         READINESS_CHANGED_EVENT.set()
         READINESS_CHANGED_EVENT.clear()
-
-    try:
         try:
-            from bot.startup_coordinator import get_startup_coordinator
-        except ImportError:
-            from startup_coordinator import get_startup_coordinator  # type: ignore[import]
-        get_startup_coordinator().record_readiness(
-            key="__bulk_revoke__",
-            value=False,
-            version=version,
-            table=table,
+            try:
+                from bot.startup_coordinator import get_startup_coordinator
+            except ImportError:
+                from startup_coordinator import get_startup_coordinator  # type: ignore[import]
+            get_startup_coordinator().record_readiness(
+                key="__bulk_revoke__",
+                value=False,
+                version=version,
+                table=table,
+            )
+        except Exception:
+            logger.debug("readiness_table: coordinator bulk revoke skipped", exc_info=True)
+        logger.warning(
+            "READINESS_TABLE_BULK_REVOKED components=%s reason=%s version=%d table=%s",
+            ",".join(normalized),
+            reason,
+            version,
+            table,
         )
-    except Exception:
-        logger.debug("readiness_table: coordinator bulk revoke skipped", exc_info=True)
-
-    logger.critical(
-        "READINESS_TABLE_BULK_REVOKED components=%s reason=%s version=%d table=%s",
-        ",".join(normalized),
-        reason,
-        version,
-        table,
-    )
+    else:
+        logger.debug(
+            "READINESS_TABLE_BULK_UNCHANGED components=%s reason=%s version=%d",
+            ",".join(normalized),
+            reason,
+            version,
+        )
 
 
 def mark_not_applicable(component: str, *, reason: str = "not configured") -> None:
-    """Mark *component* as not applicable (treated as ready for gate evaluation).
+    """Mark an optional subsystem as ready for gate evaluation."""
+    changed = set_ready(component, True)
+    if changed:
+        logger.info(
+            "READINESS_TABLE_NOT_APPLICABLE component=%s reason=%s",
+            component,
+            reason,
+        )
+    else:
+        logger.debug(
+            "READINESS_TABLE_NOT_APPLICABLE_UNCHANGED component=%s reason=%s",
+            component,
+            reason,
+        )
 
-    Use this for optional subsystems that are skipped in the current
-    deployment (e.g. ``nonce_ready`` on a Coinbase-only bot).
-    """
-    set_ready(component, True)
-    logger.info(
-        "⏩ READINESS_TABLE mark_not_applicable=%s reason=%s",
-        component,
-        reason,
-    )
-
-
-# ---------------------------------------------------------------------------
-# Read API
-# ---------------------------------------------------------------------------
 
 def is_ready() -> bool:
-    """Return True when every key in the table is True.
-
-    Acquires the lock to produce a consistent view across all keys.
-    """
+    """Return True when every registered key is True."""
     with _LOCK:
         return all(_TABLE.values())
 
@@ -264,15 +231,13 @@ def pending() -> list[str]:
         return sorted(k for k, v in _TABLE.items() if not v)
 
 
-# ---------------------------------------------------------------------------
-# Reset (for warm restarts / tests)
-# ---------------------------------------------------------------------------
-
 def reset() -> None:
     """Reset all keys to False (use before a fresh startup attempt)."""
     global _VERSION
     with _LOCK:
-        for k in list(_TABLE):
-            _TABLE[k] = False
+        for key in list(_TABLE):
+            _TABLE[key] = False
         _VERSION += 1
-    logger.info("🔄 READINESS_TABLE reset — all keys False")
+    READINESS_CHANGED_EVENT.set()
+    READINESS_CHANGED_EVENT.clear()
+    logger.info("READINESS_TABLE_RESET all_keys=false")

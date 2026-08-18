@@ -10,16 +10,17 @@ import time
 from typing import Callable
 
 logger = logging.getLogger("nija.runtime_release_manifest")
+# Keep the static bootstrap identity at v138 for the v139 write-barrier contract.
+# v144/v145 promote DECLARED_RELEASE_ID during runtime convergence only after
+# their safety layers are attached; this lets CI detect legacy downgrade attempts
+# while production publishes the newest successfully installed runtime release.
 RELEASE_ID = "20260817-runtime-convergence-v138"
-# Immutable owner used by the v139 release-identity guard. Older convergence
-# installers may register flags, but may not downgrade this manifest identity.
 DECLARED_RELEASE_ID = RELEASE_ID
 _INSTALLED = False
 _LOCK = threading.RLock()
 _TRUE = {"1", "true", "yes", "on", "enabled", "y"}
 
 _INSTALLERS = (
-    # Repair policy and module aliases before any identity/quiescence audit.
     ("bot.runtime_post_import_convergence_patch", "install"),
     ("runtime_module_identity_convergence_patch", "install_import_hook"),
     ("scan_wrapper_depth_convergence_patch", "install_import_hook"),
@@ -50,38 +51,15 @@ _INSTALLERS = (
     ("bot.kraken_exit_only_recovery_phase_guard_patch", "install_import_hook"),
     ("bot.kraken_profit_realization_guard_patch", "install_import_hook"),
     ("bot.coinbase_pem_quarantine_patch", "install_import_hook"),
-    # v78 bounds synchronous balance-fetch waits inside the canonical 90-second
-    # capital freshness contract. It is safe and idempotent, and does not extend
-    # stale fallback age or broker timeouts.
     ("bot.capital_refresh_live_continuity_v78_patch", "install_import_hook"),
-    # v139 must run before v134-v136. Those legacy convergence modules register
-    # runtime flags but historically also rewrote the parent manifest RELEASE_ID.
-    # The guard makes their registration flag-only before any of them executes,
-    # keeps the canonical release identity immutable, and converts later healthy
-    # audits to verify-first behavior instead of replaying every installer.
     ("bot.runtime_release_identity_guard_patch", "install_import_hook"),
-    # Must run after v133 and the activation/readiness modules it converges.
-    # The installer is idempotent and reasserts ownership if older convergence
-    # layers replay later in a long-running process.
     ("bot.readiness_proof_convergence_v134_patch", "install_import_hook"),
-    # v135 prevents writer-only authority bootstrap under a protected stop and
-    # makes publication expiry authoritative at read time. It also reasserts
-    # the v78 dependency for long-running processes.
     ("bot.activation_stop_capital_freshness_v135_patch", "install_import_hook"),
-    # v136 makes the activation snapshot bridge observational only. Current
-    # v134 proof plus the non-expired v135 publication are required before cycle
-    # snapshot augmentation, and TradingStateMachine.commit_activation remains
-    # the sole transition authority.
     ("bot.activation_publication_convergence_v136_patch", "install_import_hook"),
-    # v137 schedules a canonical coordinator refresh before immutable capital
-    # publication expiry, coalesces duplicate in-flight refreshes, and clamps
-    # legacy-ready results when the publication proof is not current.
     ("bot.capital_publication_deadline_v137_patch", "install_import_hook"),
-    # v138 makes the final execution/startup/router convergence probe idempotent,
-    # targets StartupCoordinator.build_snapshot on the canonical class, and
-    # terminates the 200 ms convergence watchdog once all three components are
-    # already converged. No readiness, nonce, risk, or execution gate is relaxed.
     ("bot.final_execution_state_router_convergence_patch", "install_import_hook"),
+    ("bot.runtime_quality_hardening_v144_patch", "install_import_hook"),
+    ("bot.runtime_quality_hardening_v144_entry_classifier_patch", "install_import_hook"),
 )
 
 _REQUIRED_FLAGS = {
@@ -117,6 +95,9 @@ _REQUIRED_FLAGS = {
     "activation_publication_convergence_v136": "NIJA_ACTIVATION_PUBLICATION_CONVERGENCE_V136_INSTALLED",
     "capital_publication_deadline_v137": "NIJA_CAPITAL_PUBLICATION_DEADLINE_V137_INSTALLED",
     "final_execution_state_router_v138": "NIJA_FINAL_EXECUTION_STATE_ROUTER_READY",
+    "runtime_quality_hardening_v144": "NIJA_RUNTIME_QUALITY_HARDENING_V144_READY",
+    "runtime_quality_v144_entry_classifier": "NIJA_RUNTIME_QUALITY_HARDENING_V144_ENTRY_CLASSIFIER_INSTALLED",
+    "runtime_quality_v144_release_contract": "NIJA_RUNTIME_QUALITY_HARDENING_V144_RELEASE_CONTRACT_READY",
 }
 
 
@@ -136,7 +117,9 @@ def _invoke(module_name: str, function_name: str) -> tuple[bool, str]:
     try:
         module = importlib.import_module(module_name)
         installer: Callable = getattr(module, function_name)
-        installer()
+        result = installer()
+        if result is False:
+            return False, "installer_returned_false"
         return True, "ok"
     except Exception as exc:
         return False, f"{type(exc).__name__}:{exc}"
@@ -196,7 +179,7 @@ def _runtime_limits_consistent() -> tuple[bool, str]:
 def _audit() -> tuple[bool, dict[str, str]]:
     results: dict[str, str] = {}
     ready = True
-    for module_name, function_name in _INSTALLERS:
+    for module_name, function_name in tuple(_INSTALLERS):
         ok, reason = _invoke(module_name, function_name)
         results[module_name] = reason
         ready = ready and ok
@@ -227,7 +210,7 @@ def _audit() -> tuple[bool, dict[str, str]]:
     else:
         results["scan_wrapper_release"] = scan_release
 
-    for label, flag in _REQUIRED_FLAGS.items():
+    for label, flag in dict(_REQUIRED_FLAGS).items():
         value = str(os.environ.get(flag, "") or "").strip()
         if value != "1":
             ready = False
@@ -246,24 +229,33 @@ def _audit() -> tuple[bool, dict[str, str]]:
 
 def _publish(ready: bool, details: dict[str, str]) -> None:
     previous = os.environ.get("NIJA_RUNTIME_RELEASE_READY", "")
-    # Re-anchor the mutable compatibility name before publishing. This is a
-    # second line of defense if an older module was reloaded between audits.
     global RELEASE_ID
     RELEASE_ID = DECLARED_RELEASE_ID
     os.environ["NIJA_RUNTIME_RELEASE_ID"] = DECLARED_RELEASE_ID
     os.environ["NIJA_RUNTIME_RELEASE_READY"] = "1" if ready else "0"
-    logger.critical(
-        "NIJA_RUNTIME_RELEASE_MANIFEST release=%s deployment_sha=%s ready=%s python_pid=%s details=%s",
-        DECLARED_RELEASE_ID, _deployment_sha(), str(ready).lower(), os.getpid(), details,
-    )
-    if not ready:
+    if ready:
+        logger.info(
+            "NIJA_RUNTIME_RELEASE_MANIFEST release=%s deployment_sha=%s ready=true python_pid=%s details=%s",
+            DECLARED_RELEASE_ID,
+            _deployment_sha(),
+            os.getpid(),
+            details,
+        )
+        if previous == "0":
+            logger.warning(
+                "RUNTIME_RELEASE_CONVERGENCE_RECOVERED release=%s action=broker_order_gates_may_follow_normal_authority_checks",
+                DECLARED_RELEASE_ID,
+            )
+    else:
+        logger.critical(
+            "NIJA_RUNTIME_RELEASE_MANIFEST release=%s deployment_sha=%s ready=false python_pid=%s details=%s",
+            DECLARED_RELEASE_ID,
+            _deployment_sha(),
+            os.getpid(),
+            details,
+        )
         logger.critical(
             "RUNTIME_RELEASE_INCOMPLETE_EXECUTION_UNSAFE release=%s action=keep_broker_order_gates_fail_closed",
-            DECLARED_RELEASE_ID,
-        )
-    elif previous == "0":
-        logger.critical(
-            "RUNTIME_RELEASE_CONVERGENCE_RECOVERED release=%s action=broker_order_gates_may_follow_normal_authority_checks",
             DECLARED_RELEASE_ID,
         )
 
@@ -290,7 +282,7 @@ def install_import_hook() -> None:
         if not _INSTALLED:
             _INSTALLED = True
             threading.Thread(target=_watchdog, name="RuntimeReleaseManifest", daemon=True).start()
-    logger.critical("NIJA_RUNTIME_RELEASE_MANIFEST_INSTALLED release=%s", DECLARED_RELEASE_ID)
+    logger.info("NIJA_RUNTIME_RELEASE_MANIFEST_INSTALLED release=%s ready=%s", DECLARED_RELEASE_ID, str(ready).lower())
 
 
 __all__ = [
