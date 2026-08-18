@@ -37,14 +37,7 @@ def _live_runtime_expected() -> bool:
 
 
 def _install_source_runtime_guards() -> bool:
-    """Install venue readiness before this module imports any ``bot.*`` code.
-
-    ``main.py`` loads this file directly from disk, so the root bootstrap can be
-    imported without executing ``bot.__init__``. Live failures are converted to
-    ``SystemExit`` so main's optional-guard ``except Exception`` cannot swallow
-    the failure and continue trading without venue isolation.
-    """
-
+    """Install venue readiness before this module imports any ``bot.*`` code."""
     try:
         bootstrap = importlib.import_module("source_runtime_guard_bootstrap")
         installer = getattr(bootstrap, "install", None)
@@ -102,6 +95,7 @@ def _set_defaults() -> None:
     os.environ.setdefault("NIJA_PRE_TRADE_STALE_EXPOSURE_TOLERANCE_USD", "5")
     os.environ.setdefault("NIJA_LIVE_AI_GATE_REQUIRED", "true")
     os.environ.setdefault("NIJA_RUNTIME_RELEASE_REENTRY_AUDIT_MIN_S", "30")
+    os.environ.setdefault("NIJA_ACTIVATION_DEFER_LOG_INTERVAL_S", "15")
 
 
 def _install_kraken_patch_log_dedupe() -> None:
@@ -136,7 +130,10 @@ def _install_module(module_name: str, marker: str) -> bool:
             module = importlib.import_module(module_name)
         installer = getattr(module, "install_import_hook", None) or getattr(module, "install", None)
         if callable(installer):
-            installer()
+            result = installer()
+            if result is False:
+                logger.warning("%s_FAILED marker=20260706b reason=installer_returned_false", marker)
+                return False
             if module_name == "preactivation_readiness_convergence_v16_patch":
                 original_mark = getattr(module, "_mark_proven_readiness", None)
                 if callable(original_mark) and not getattr(original_mark, "_nija_publish_once", False):
@@ -146,11 +143,11 @@ def _install_module(module_name: str, marker: str) -> bool:
                         return _original(proofs)
                     setattr(_mark_once, "_nija_publish_once", True)
                     setattr(module, "_mark_proven_readiness", _mark_once)
-            logger.warning("%s marker=20260706b", marker)
+            logger.info("%s marker=20260706b", marker)
             return True
         logger.warning("%s_SKIPPED marker=20260706b reason=installer_missing", marker)
     except Exception as exc:
-        logger.warning("%s_FAILED marker=20260706b error=%s", marker, exc)
+        logger.warning("%s_FAILED marker=20260706b error=%s", marker, exc, exc_info=True)
     return False
 
 
@@ -160,6 +157,7 @@ def install() -> None:
     source_guards_ok = _install_source_runtime_guards()
     _set_defaults()
     _install_kraken_patch_log_dedupe()
+
     runtime_quality_v144_ok = _install_module(
         "runtime_quality_hardening_v144_patch",
         "RUNTIME_QUALITY_HARDENING_V144_GLOBAL_STARTUP_INSTALL_REQUESTED",
@@ -168,16 +166,31 @@ def install() -> None:
         "runtime_quality_hardening_v144_entry_classifier_patch",
         "RUNTIME_QUALITY_HARDENING_V144_ENTRY_CLASSIFIER_GLOBAL_STARTUP_INSTALL_REQUESTED",
     )
+    runtime_startup_v145_ok = _install_module(
+        "runtime_startup_convergence_v145_patch",
+        "RUNTIME_STARTUP_CONVERGENCE_V145_GLOBAL_STARTUP_INSTALL_REQUESTED",
+    )
+
+    hardening_ready = bool(
+        runtime_quality_v144_ok
+        and runtime_quality_v144_classifier_ok
+        and runtime_startup_v145_ok
+    )
     os.environ["NIJA_RUNTIME_QUALITY_HARDENING_V144_STARTUP_READY"] = (
         "1" if runtime_quality_v144_ok and runtime_quality_v144_classifier_ok else "0"
     )
-    if _live_runtime_expected() and not (
-        runtime_quality_v144_ok and runtime_quality_v144_classifier_ok
-    ):
+    os.environ["NIJA_RUNTIME_STARTUP_CONVERGENCE_V145_STARTUP_READY"] = (
+        "1" if runtime_startup_v145_ok else "0"
+    )
+    if _live_runtime_expected() and not hardening_ready:
         logger.critical(
-            "RUNTIME_QUALITY_HARDENING_V144_REQUIRED_STARTUP_FAILED marker=20260818-runtime-quality-hardening-v144 live=true trading_fail_closed=true"
+            "RUNTIME_HARDENING_REQUIRED_STARTUP_FAILED marker=20260818-runtime-startup-convergence-v145 v144=%s classifier=%s v145=%s live=true trading_fail_closed=true",
+            runtime_quality_v144_ok,
+            runtime_quality_v144_classifier_ok,
+            runtime_startup_v145_ok,
         )
         raise SystemExit(78)
+
     preactivation_ok = _install_module(
         "preactivation_readiness_convergence_v16_patch",
         "PREACTIVATION_READINESS_V16_GLOBAL_STARTUP_INSTALL_REQUESTED",
@@ -186,12 +199,14 @@ def install() -> None:
     trailing_ok = _install_module("global_trailing_protection_patch", "GLOBAL_TRAILING_PROTECTION_GLOBAL_STARTUP_INSTALL_REQUESTED")
     profit_position_ok = _install_module("profit_position_protection_patch", "PROFIT_POSITION_PROTECTION_GLOBAL_STARTUP_INSTALL_REQUESTED")
     stale_exposure_ok = _install_module("pre_trade_stale_exposure_reconcile_patch", "PRE_TRADE_STALE_EXPOSURE_RECONCILE_GLOBAL_STARTUP_INSTALL_REQUESTED")
+
     setattr(builtins, "_NIJA_GLOBAL_RUNTIME_STARTUP_GUARDS_20260706B", True)
-    logger.warning(
-        "GLOBAL_RUNTIME_STARTUP_GUARDS_INSTALLED marker=20260706b source_venue_guards=%s runtime_quality_v144=%s runtime_quality_v144_classifier=%s preactivation_v16=%s held_cap=%s global_trailing=%s profit_position=%s stale_exposure=%s cap=%s",
+    logger.info(
+        "GLOBAL_RUNTIME_STARTUP_GUARDS_INSTALLED marker=20260706b source_venue_guards=%s runtime_quality_v144=%s runtime_quality_v144_classifier=%s runtime_startup_v145=%s preactivation_v16=%s held_cap=%s global_trailing=%s profit_position=%s stale_exposure=%s cap=%s",
         source_guards_ok,
         runtime_quality_v144_ok,
         runtime_quality_v144_classifier_ok,
+        runtime_startup_v145_ok,
         preactivation_ok,
         held_ok,
         trailing_ok,
