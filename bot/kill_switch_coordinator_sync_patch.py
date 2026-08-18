@@ -117,16 +117,15 @@ def _patch_kill_switch_class(kill_switch_cls: type) -> bool:
 
 
 def _install_authority_liveness() -> bool:
-    """Chain the narrow heartbeat-stop liveness repair fail-closed."""
+    """Chain narrow runtime liveness repairs fail-closed."""
     try:
         from bot import runtime_killswitch_authority_liveness_patch as liveness
 
         installer = getattr(liveness, "install_import_hook", None) or getattr(
             liveness, "install", None
         )
-        if not callable(installer):
+        if not callable(installer) or not bool(installer()):
             return False
-        return bool(installer())
     except Exception as exc:
         logger.exception(
             "KILL_SWITCH_AUTHORITY_LIVENESS_CHAIN_FAILED marker=%s error=%s",
@@ -134,6 +133,24 @@ def _install_authority_liveness() -> bool:
             exc,
         )
         return False
+
+    try:
+        from bot import stalled_writer_capital_freshness_v141_patch as capital_liveness
+
+        installer = getattr(capital_liveness, "install_import_hook", None) or getattr(
+            capital_liveness, "install", None
+        )
+        if not callable(installer) or not bool(installer()):
+            return False
+    except Exception as exc:
+        logger.exception(
+            "STALLED_WRITER_CAPITAL_FRESHNESS_CHAIN_FAILED marker=%s error=%s",
+            _MARKER,
+            exc,
+        )
+        return False
+
+    return True
 
 
 def install_import_hook() -> None:
@@ -154,13 +171,14 @@ def install_import_hook() -> None:
         if not _publish_coordinator_truth(active, "install_reconcile"):
             raise RuntimeError("startup_coordinator_sync_failed")
         if not _install_authority_liveness():
-            raise RuntimeError("runtime_killswitch_authority_liveness_not_ready")
+            raise RuntimeError("runtime_liveness_guards_not_ready")
 
         os.environ["NIJA_KILL_SWITCH_COORDINATOR_SYNC_INSTALLED"] = "1"
         os.environ["NIJA_KILL_SWITCH_COORDINATOR_SYNC_READY"] = "1"
         logger.critical(
             "KILL_SWITCH_COORDINATOR_SYNC_INSTALLED marker=%s active=%s auto_clear=false "
-            "risk_gates_unchanged=true authority_liveness_chained=true",
+            "risk_gates_unchanged=true authority_liveness_chained=true "
+            "stalled_writer_capital_freshness_chained=true",
             _MARKER,
             str(active).lower(),
         )
