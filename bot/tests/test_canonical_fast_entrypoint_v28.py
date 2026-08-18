@@ -78,6 +78,8 @@ def test_bot_entrypoint_fast_path_is_small_and_fail_closed() -> None:
     fast_block = source.split("_FAST_PATH_INSTALLERS = (", 1)[1].split(
         ")\n\n_LEGACY_INSTALLERS", 1
     )[0]
+    assert "render_readiness_state_bridge" in fast_block
+    assert "RENDER_READINESS_STATE_BRIDGE" in fast_block
     assert "writer_reelection_loss_reason_v46_patch" in fast_block
     assert "WRITER_REELECTION_LOSS_REASON_V46" in fast_block
     assert "writer_generation_state_gate_v50_patch" in fast_block
