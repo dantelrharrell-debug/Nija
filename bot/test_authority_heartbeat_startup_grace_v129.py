@@ -44,7 +44,7 @@ def test_v129_does_not_resume_seak_clear_shutdown_or_grant_execution():
     source = Path(patch.__file__).read_text(encoding="utf-8")
     assert ".resume(" not in source
     assert "_halt_event.clear(" not in source
-    assert "shutdown_requested"] = " not in source
+    assert 'shutdown_requested"] = ' not in source
     assert "mark_ready(" not in source
     assert 'NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "1"' not in source
     assert "post_registration_core_death_fatal=true" in source
