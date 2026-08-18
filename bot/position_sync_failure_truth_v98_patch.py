@@ -83,6 +83,41 @@ def _patch_startup_sync(module: ModuleType) -> bool:
             raise
 
         synced = bool(getattr(broker, "_startup_position_sync_adopted", False))
+        fetch_ok = getattr(broker, "_startup_position_sync_fetch_ok", None)
+
+        # The canonical adopter is the authority boundary: it sets ``adopted``
+        # only after the returned snapshot (including a genuine empty snapshot)
+        # has been fully reconciled.  Publish the corresponding fetch proof here
+        # after the pre-fetch revocation above.  Preserve an explicit False from
+        # an inner transport wrapper; a masked fetch failure must never be turned
+        # into an authoritative empty snapshot.
+        if synced and fetch_ok is not False:
+            try:
+                setattr(broker, "_startup_position_sync_fetch_ok", True)
+                setattr(broker, "_startup_position_sync_error", None)
+            except Exception:
+                synced = False
+                try:
+                    setattr(broker, "_startup_position_sync_adopted", False)
+                    setattr(broker, "_startup_position_sync_symbols", tuple())
+                except Exception:
+                    pass
+                LOGGER.exception(
+                    "POSITION_SYNC_V98_FETCH_PROOF_PUBLISH_FAILED marker=%s "
+                    "broker=%s fail_closed=true",
+                    MARKER,
+                    broker_name,
+                )
+        elif synced:
+            # An explicit fetch failure is stronger than a legacy adopter that
+            # accepted a compatibility-layer ``[]`` fallback.
+            synced = False
+            try:
+                setattr(broker, "_startup_position_sync_adopted", False)
+                setattr(broker, "_startup_position_sync_symbols", tuple())
+            except Exception:
+                pass
+
         if not synced:
             os.environ["NIJA_POSITION_SYNC_ACTIVATION_READY"] = "0"
             os.environ["NIJA_POSITION_SYNC_DISPATCH_READY"] = "0"
@@ -91,6 +126,13 @@ def _patch_startup_sync(module: ModuleType) -> bool:
                 MARKER,
                 broker_name,
                 str(previous).lower(),
+            )
+        else:
+            LOGGER.info(
+                "POSITION_SYNC_V98_FETCH_PROOF_READY marker=%s broker=%s "
+                "authoritative_snapshot=true positions_adopted=true",
+                MARKER,
+                broker_name,
             )
         return result
 
