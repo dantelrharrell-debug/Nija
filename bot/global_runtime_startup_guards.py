@@ -168,6 +168,16 @@ def install() -> None:
         "runtime_quality_hardening_v144_entry_classifier_patch",
         "RUNTIME_QUALITY_HARDENING_V144_ENTRY_CLASSIFIER_GLOBAL_STARTUP_INSTALL_REQUESTED",
     )
+    os.environ["NIJA_RUNTIME_QUALITY_HARDENING_V144_STARTUP_READY"] = (
+        "1" if runtime_quality_v144_ok and runtime_quality_v144_classifier_ok else "0"
+    )
+    if _live_runtime_expected() and not (
+        runtime_quality_v144_ok and runtime_quality_v144_classifier_ok
+    ):
+        logger.critical(
+            "RUNTIME_QUALITY_HARDENING_V144_REQUIRED_STARTUP_FAILED marker=20260818-runtime-quality-hardening-v144 live=true trading_fail_closed=true"
+        )
+        raise SystemExit(78)
     preactivation_ok = _install_module(
         "preactivation_readiness_convergence_v16_patch",
         "PREACTIVATION_READINESS_V16_GLOBAL_STARTUP_INSTALL_REQUESTED",
