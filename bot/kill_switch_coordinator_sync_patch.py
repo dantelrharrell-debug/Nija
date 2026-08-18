@@ -116,6 +116,89 @@ def _patch_kill_switch_class(kill_switch_cls: type) -> bool:
     return True
 
 
+def _prepare_capital_publication_liveness(publication_liveness: Any) -> bool:
+    """Normalize v142 wrapper proof and pre-v142 in-flight rollover semantics.
+
+    ``functools.wraps`` intentionally copies the wrapped function name, so a
+    wrapper must be proven by its ownership marker rather than by its display
+    name.  This helper also handles a coordinator that was already in-flight
+    before v142 could stamp a generation/start time: once v137 says publication
+    refresh is due (including pre-expiry headroom), the untracked owner is
+    replaced immediately instead of waiting for the immutable publication to
+    expire and forcing another LIVE_ACTIVE -> OFF cycle.
+    """
+    if bool(getattr(publication_liveness, "_nija_startup_chain_prepared", False)):
+        return True
+
+    def marker_chain_contains(callable_obj: Any, *, marker: str, expected_name: str = "") -> bool:
+        del expected_name  # display names are not ownership proof under functools.wraps
+        seen: set[int] = set()
+        current = callable_obj
+        for _ in range(32):
+            if not callable(current) or id(current) in seen:
+                return False
+            seen.add(id(current))
+            if bool(getattr(current, marker, False)):
+                return True
+            current = getattr(current, "__wrapped__", None)
+        return False
+
+    publication_liveness._chain_contains = marker_chain_contains
+
+    original_inflight = getattr(publication_liveness, "_coordinator_in_flight_v142", None)
+    if not callable(original_inflight):
+        return False
+
+    @wraps(original_inflight)
+    def coordinator_in_flight_with_upgrade_rollover(manager: Any) -> bool:
+        coordinator = getattr(manager, "_capital_coordinator", None)
+        if coordinator is None or not bool(getattr(coordinator, "_in_flight", False)):
+            return False
+
+        tracked = bool(getattr(coordinator, "_nija_v142_flight_generation", 0))
+        if not tracked:
+            try:
+                from bot import capital_publication_deadline_v137_patch as v137
+
+                authority = publication_liveness._authority()
+                due, meta = v137._publication_refresh_due(authority, manager)
+            except Exception as exc:
+                logger.warning(
+                    "CAPITAL_PUBLICATION_V142_UPGRADE_PROBE_FAILED marker=%s err=%s:%s "
+                    "existing_owner_preserved=true trading_fail_closed=true",
+                    _MARKER,
+                    type(exc).__name__,
+                    exc,
+                )
+                return True
+
+            if due:
+                replacement = publication_liveness._rollover_coordinator(
+                    manager,
+                    expected_old=coordinator,
+                    reason="untracked_inflight_refresh_due:" + str(meta.get("due_reason") or "due"),
+                )
+                logger.critical(
+                    "CAPITAL_PUBLICATION_V142_UPGRADE_ROLLOVER marker=%s due_reason=%s "
+                    "remaining_s=%s old_id=%s new_id=%s pre_expiry=%s "
+                    "publication_expiry_extended=false trading_fail_closed_until_refresh=true",
+                    _MARKER,
+                    meta.get("due_reason"),
+                    meta.get("remaining_s"),
+                    hex(id(coordinator)),
+                    hex(id(replacement)) if replacement is not None else "none",
+                    str(float(meta.get("remaining_s", 0.0) or 0.0) > 0.0).lower(),
+                )
+                return bool(replacement is coordinator or replacement is None)
+
+        return bool(original_inflight(manager))
+
+    setattr(coordinator_in_flight_with_upgrade_rollover, "_nija_v142_upgrade_rollover", True)
+    publication_liveness._coordinator_in_flight_v142 = coordinator_in_flight_with_upgrade_rollover
+    publication_liveness._nija_startup_chain_prepared = True
+    return True
+
+
 def _install_authority_liveness() -> bool:
     """Chain narrow runtime liveness repairs fail-closed."""
     try:
@@ -158,6 +241,8 @@ def _install_authority_liveness() -> bool:
     try:
         from bot import capital_publication_liveness_v142_patch as publication_liveness
 
+        if not _prepare_capital_publication_liveness(publication_liveness):
+            return False
         installer = getattr(publication_liveness, "install_import_hook", None) or getattr(
             publication_liveness, "install", None
         )
@@ -215,5 +300,6 @@ __all__ = [
     "install_import_hook",
     "_patch_kill_switch_class",
     "_publish_coordinator_truth",
+    "_prepare_capital_publication_liveness",
     "_install_authority_liveness",
 ]
