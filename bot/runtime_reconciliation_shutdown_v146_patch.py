@@ -57,6 +57,24 @@ def _position_sync_truth(module: ModuleType, manager: Any) -> tuple[bool, list[s
         ready, pending, status = v95.position_sync_status(manager)
         normalized = {str(name): bool(value) for name, value in dict(status or {}).items()}
         connected = dict(v95._connected_brokers(manager) or {})
+
+        # v99 intentionally isolates global platform readiness from per-user
+        # copy-trading accounts.  Its patched status function reports only
+        # ``platform:*`` brokers and exposes ``platform_position_sync_status``
+        # as the scope contract.  Apply the independent fetch proof to that
+        # same broker set; comparing platform-only status with every connected
+        # user broker silently undoes v99 and lets a late user connection revoke
+        # the whole platform after activation.  User brokers remain fail closed
+        # behind v99's per-account execution guard and diagnostics.
+        platform_scope = callable(
+            getattr(v95, "platform_position_sync_status", None)
+        )
+        if platform_scope:
+            connected = {
+                str(name): broker
+                for name, broker in connected.items()
+                if str(name).startswith("platform:")
+            }
         connected_names = {str(name) for name in connected}
         status_names = set(normalized)
         fetch_pending = sorted(
