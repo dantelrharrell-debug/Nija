@@ -147,6 +147,14 @@ services:
         value: "5"
       - key: NIJA_RENDER_STARTUP_RECOVERY_MAX_ATTEMPTS
         value: "60"
+      # Keep the isolated liveness endpoint available while Render-local
+      # transient writer/worker exits wait for the old Redis lease to expire.
+      # Unknown exit statuses still terminate the container for platform-level
+      # recovery; no writer, nonce, or execution-authority gate is bypassed.
+      - key: NIJA_RENDER_RUNTIME_RECOVERY_MAX_ATTEMPTS
+        value: "12"
+      - key: NIJA_RENDER_RUNTIME_RECOVERY_DELAY_S
+        value: "65"
       - key: NIJA_CAPITAL_WATCHDOG_INTERVAL_S
         value: "5"
       - key: NIJA_CAPITAL_STARTUP_INVARIANT_TIMEOUT_S
