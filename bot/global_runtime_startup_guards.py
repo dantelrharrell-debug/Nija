@@ -164,6 +164,10 @@ def install() -> None:
         "runtime_quality_hardening_v144_patch",
         "RUNTIME_QUALITY_HARDENING_V144_GLOBAL_STARTUP_INSTALL_REQUESTED",
     )
+    runtime_quality_v144_classifier_ok = _install_module(
+        "runtime_quality_hardening_v144_entry_classifier_patch",
+        "RUNTIME_QUALITY_HARDENING_V144_ENTRY_CLASSIFIER_GLOBAL_STARTUP_INSTALL_REQUESTED",
+    )
     preactivation_ok = _install_module(
         "preactivation_readiness_convergence_v16_patch",
         "PREACTIVATION_READINESS_V16_GLOBAL_STARTUP_INSTALL_REQUESTED",
@@ -174,9 +178,10 @@ def install() -> None:
     stale_exposure_ok = _install_module("pre_trade_stale_exposure_reconcile_patch", "PRE_TRADE_STALE_EXPOSURE_RECONCILE_GLOBAL_STARTUP_INSTALL_REQUESTED")
     setattr(builtins, "_NIJA_GLOBAL_RUNTIME_STARTUP_GUARDS_20260706B", True)
     logger.warning(
-        "GLOBAL_RUNTIME_STARTUP_GUARDS_INSTALLED marker=20260706b source_venue_guards=%s runtime_quality_v144=%s preactivation_v16=%s held_cap=%s global_trailing=%s profit_position=%s stale_exposure=%s cap=%s",
+        "GLOBAL_RUNTIME_STARTUP_GUARDS_INSTALLED marker=20260706b source_venue_guards=%s runtime_quality_v144=%s runtime_quality_v144_classifier=%s preactivation_v16=%s held_cap=%s global_trailing=%s profit_position=%s stale_exposure=%s cap=%s",
         source_guards_ok,
         runtime_quality_v144_ok,
+        runtime_quality_v144_classifier_ok,
         preactivation_ok,
         held_ok,
         trailing_ok,
