@@ -18,7 +18,7 @@ def test_runtime_pipeline_deadline_never_reaches_publication_ttl(monkeypatch) ->
 
 
 def test_readiness_truth_keeps_hydration_and_connectivity_separate_from_freshness(monkeypatch) -> None:
-    from bot import preactivation_readiness_convergence_v16_patch as v16
+    import preactivation_readiness_convergence_v16_patch as v16
 
     def stale_capital_proof():
         return (
