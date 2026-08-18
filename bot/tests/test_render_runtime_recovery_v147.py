@@ -15,7 +15,7 @@ def test_render_recovery_is_narrow_and_fail_closed() -> None:
         source.index("# Treat SIGTERM (143) as graceful")
     ]
 
-    assert "42|75|137) _RENDER_RUNTIME_RECOVERABLE=true" in recovery
+    assert "1|42|75|137) _RENDER_RUNTIME_RECOVERABLE=true" in recovery
     assert "writer_authority_bypass=false" in recovery
     assert "NIJA_DEFER_RUNTIME_SITE_HOOKS=1 $PY -u scripts/canonical_runtime_launcher_v26.py" in recovery
     assert "NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK=true" not in recovery
