@@ -29,6 +29,12 @@ services:
         value: "2"
       - key: MALLOC_TRIM_THRESHOLD_
         value: "131072"
+      - key: NIJA_RENDER_MEMORY_TRIM_THRESHOLD
+        value: "0.72"
+      - key: NIJA_RENDER_MEMORY_GUARD_INTERVAL_S
+        value: "5"
+      - key: NIJA_RENDER_MEMORY_TRIM_MIN_GAP_S
+        value: "10"
       - key: ALLOW_CONSUMER_USD
         value: "true"
 
