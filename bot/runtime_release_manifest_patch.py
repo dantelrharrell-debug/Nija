@@ -54,6 +54,12 @@ _INSTALLERS = (
     # capital freshness contract. It is safe and idempotent, and does not extend
     # stale fallback age or broker timeouts.
     ("bot.capital_refresh_live_continuity_v78_patch", "install_import_hook"),
+    # v139 must run before v134-v136. Those legacy convergence modules register
+    # runtime flags but historically also rewrote the parent manifest RELEASE_ID.
+    # The guard makes their registration flag-only before any of them executes,
+    # keeps the canonical release identity immutable, and converts later healthy
+    # audits to verify-first behavior instead of replaying every installer.
+    ("bot.runtime_release_identity_guard_patch", "install_import_hook"),
     # Must run after v133 and the activation/readiness modules it converges.
     # The installer is idempotent and reasserts ownership if older convergence
     # layers replay later in a long-running process.
@@ -62,10 +68,6 @@ _INSTALLERS = (
     # makes publication expiry authoritative at read time. It also reasserts
     # the v78 dependency for long-running processes.
     ("bot.activation_stop_capital_freshness_v135_patch", "install_import_hook"),
-    # v139 must run before v136: v136 historically wrote its own RELEASE_ID into
-    # the parent manifest. The guard rewires that registration to be flag-only
-    # and restores the canonical manifest identity before v136 is invoked.
-    ("bot.runtime_release_identity_guard_patch", "install_import_hook"),
     # v136 makes the activation snapshot bridge observational only. Current
     # v134 proof plus the non-expired v135 publication are required before cycle
     # snapshot augmentation, and TradingStateMachine.commit_activation remains
