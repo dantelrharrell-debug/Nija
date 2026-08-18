@@ -91,6 +91,16 @@ def _payload() -> dict[str, Any]:
         "pid": os.getpid(),
         "state": os.environ.get("NIJA_RUNTIME_TRADING_STATE", "OFF"),
         "writer_authority": os.environ.get("NIJA_RUNTIME_EXECUTION_AUTHORITY", "0"),
+        "reconciliation_complete": "1"
+        if _truthy(os.environ.get("NIJA_RECONCILIATION_COMPLETE", "false"))
+        else "0",
+        "reconciliation_status": str(
+            os.environ.get("NIJA_RECONCILIATION_STATUS", "PENDING") or "PENDING"
+        ).strip().upper(),
+        "position_sync_ready": "1"
+        if _truthy(os.environ.get("NIJA_POSITION_SYNC_ACTIVATION_READY", "0"))
+        else "0",
+        "runtime_release_id": os.environ.get("NIJA_RUNTIME_RELEASE_ID", "unknown"),
         "strict_secondary_venues": os.environ.get(
             "NIJA_REQUIRE_SECONDARY_VENUES_READY", "false"
         ),
