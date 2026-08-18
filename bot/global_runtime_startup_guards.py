@@ -100,6 +100,8 @@ def _set_defaults() -> None:
     os.environ.setdefault("NIJA_PRE_TRADE_STALE_EXPOSURE_RECONCILE_ENABLED", "true")
     os.environ.setdefault("NIJA_PRE_TRADE_STALE_EXPOSURE_MIN_USD", "25")
     os.environ.setdefault("NIJA_PRE_TRADE_STALE_EXPOSURE_TOLERANCE_USD", "5")
+    os.environ.setdefault("NIJA_LIVE_AI_GATE_REQUIRED", "true")
+    os.environ.setdefault("NIJA_RUNTIME_RELEASE_REENTRY_AUDIT_MIN_S", "30")
 
 
 def _install_kraken_patch_log_dedupe() -> None:
@@ -158,6 +160,24 @@ def install() -> None:
     source_guards_ok = _install_source_runtime_guards()
     _set_defaults()
     _install_kraken_patch_log_dedupe()
+    runtime_quality_v144_ok = _install_module(
+        "runtime_quality_hardening_v144_patch",
+        "RUNTIME_QUALITY_HARDENING_V144_GLOBAL_STARTUP_INSTALL_REQUESTED",
+    )
+    runtime_quality_v144_classifier_ok = _install_module(
+        "runtime_quality_hardening_v144_entry_classifier_patch",
+        "RUNTIME_QUALITY_HARDENING_V144_ENTRY_CLASSIFIER_GLOBAL_STARTUP_INSTALL_REQUESTED",
+    )
+    os.environ["NIJA_RUNTIME_QUALITY_HARDENING_V144_STARTUP_READY"] = (
+        "1" if runtime_quality_v144_ok and runtime_quality_v144_classifier_ok else "0"
+    )
+    if _live_runtime_expected() and not (
+        runtime_quality_v144_ok and runtime_quality_v144_classifier_ok
+    ):
+        logger.critical(
+            "RUNTIME_QUALITY_HARDENING_V144_REQUIRED_STARTUP_FAILED marker=20260818-runtime-quality-hardening-v144 live=true trading_fail_closed=true"
+        )
+        raise SystemExit(78)
     preactivation_ok = _install_module(
         "preactivation_readiness_convergence_v16_patch",
         "PREACTIVATION_READINESS_V16_GLOBAL_STARTUP_INSTALL_REQUESTED",
@@ -168,8 +188,10 @@ def install() -> None:
     stale_exposure_ok = _install_module("pre_trade_stale_exposure_reconcile_patch", "PRE_TRADE_STALE_EXPOSURE_RECONCILE_GLOBAL_STARTUP_INSTALL_REQUESTED")
     setattr(builtins, "_NIJA_GLOBAL_RUNTIME_STARTUP_GUARDS_20260706B", True)
     logger.warning(
-        "GLOBAL_RUNTIME_STARTUP_GUARDS_INSTALLED marker=20260706b source_venue_guards=%s preactivation_v16=%s held_cap=%s global_trailing=%s profit_position=%s stale_exposure=%s cap=%s",
+        "GLOBAL_RUNTIME_STARTUP_GUARDS_INSTALLED marker=20260706b source_venue_guards=%s runtime_quality_v144=%s runtime_quality_v144_classifier=%s preactivation_v16=%s held_cap=%s global_trailing=%s profit_position=%s stale_exposure=%s cap=%s",
         source_guards_ok,
+        runtime_quality_v144_ok,
+        runtime_quality_v144_classifier_ok,
         preactivation_ok,
         held_ok,
         trailing_ok,
