@@ -55,4 +55,5 @@ jobs:
             tests/test_activation_stop_capital_freshness_v135.py \
             tests/test_activation_publication_convergence_v136.py \
             tests/test_capital_publication_deadline_v137.py \
-            tests/test_final_execution_state_router_convergence_v138.py
+            tests/test_final_execution_state_router_convergence_v138.py \
+            tests/test_runtime_release_identity_v139.py
