@@ -109,6 +109,76 @@ class RuntimeReconciliationShutdownV146Tests(unittest.TestCase):
         self.assertEqual(pending, ["platform:coinbase", "platform:kraken"])
         self.assertEqual(status, {"platform:kraken": True})
 
+    def test_v99_platform_scope_does_not_reintroduce_user_brokers(self) -> None:
+        platform = types.SimpleNamespace(
+            _startup_position_sync_adopted=True,
+            _startup_position_sync_fetch_ok=True,
+        )
+        user = types.SimpleNamespace(
+            _startup_position_sync_adopted=False,
+            _startup_position_sync_fetch_ok=None,
+        )
+
+        class V95:
+            platform_position_sync_status = staticmethod(lambda _manager: None)
+
+            @staticmethod
+            def position_sync_status(_manager):
+                return True, [], {"platform:kraken": True}
+
+            @staticmethod
+            def _connected_brokers(_manager):
+                return {
+                    "platform:kraken": platform,
+                    "user:customer:kraken": user,
+                }
+
+        module = types.ModuleType("fake_position_sync_v96_v99_scope")
+        module._v95_module = lambda: V95
+
+        ready, pending, status = v146._position_sync_truth(module, object())
+
+        self.assertTrue(ready)
+        self.assertEqual(pending, [])
+        self.assertEqual(status, {"platform:kraken": True})
+
+    def test_v99_platform_scope_still_requires_every_platform_fetch_proof(self) -> None:
+        kraken = types.SimpleNamespace(_startup_position_sync_fetch_ok=True)
+        coinbase = types.SimpleNamespace(_startup_position_sync_fetch_ok=None)
+
+        class V95:
+            platform_position_sync_status = staticmethod(lambda _manager: None)
+
+            @staticmethod
+            def position_sync_status(_manager):
+                return (
+                    True,
+                    [],
+                    {"platform:kraken": True, "platform:coinbase": True},
+                )
+
+            @staticmethod
+            def _connected_brokers(_manager):
+                return {
+                    "platform:kraken": kraken,
+                    "platform:coinbase": coinbase,
+                    "user:customer:kraken": types.SimpleNamespace(
+                        _startup_position_sync_fetch_ok=True
+                    ),
+                }
+
+        module = types.ModuleType("fake_position_sync_v96_v99_fetch")
+        module._v95_module = lambda: V95
+
+        ready, pending, status = v146._position_sync_truth(module, object())
+
+        self.assertFalse(ready)
+        self.assertEqual(pending, ["platform:coinbase"])
+        self.assertEqual(
+            status,
+            {"platform:kraken": True, "platform:coinbase": True},
+        )
+
     def test_position_sync_regression_revokes_clean_proof(self) -> None:
         os.environ["NIJA_RECONCILIATION_STATUS"] = "CLEAN_START"
         os.environ["NIJA_RECONCILIATION_COMPLETE"] = "true"
