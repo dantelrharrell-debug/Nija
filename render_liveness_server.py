@@ -23,6 +23,121 @@ _STARTED_AT = time.time()
 _TRUE = {"1", "true", "yes", "on", "enabled", "y"}
 
 
+def _read_text(path: Path) -> Optional[str]:
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except (FileNotFoundError, PermissionError, OSError):
+        return None
+
+
+def _bytes_to_mb(value: Optional[str]) -> Optional[float]:
+    if value is None or value == "max":
+        return None
+    try:
+        return round(max(0, int(value)) / (1024 * 1024), 3)
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_proc_status(path: Path) -> dict[str, str]:
+    raw = _read_text(path)
+    if raw is None:
+        return {}
+    parsed: dict[str, str] = {}
+    for line in raw.splitlines():
+        key, separator, value = line.partition(":")
+        if separator:
+            parsed[key.strip()] = value.strip()
+    return parsed
+
+
+def _runtime_process_snapshot(proc_root: Path = Path("/proc")) -> dict[str, object]:
+    """Return bounded runtime RSS/thread telemetry without importing psutil."""
+    try:
+        candidates = sorted(
+            (path for path in proc_root.iterdir() if path.name.isdigit()),
+            key=lambda path: int(path.name),
+        )
+    except (FileNotFoundError, PermissionError, OSError):
+        return {}
+
+    for process_dir in candidates:
+        try:
+            command = (process_dir / "cmdline").read_bytes().replace(b"\0", b" ").decode(
+                "utf-8", errors="replace"
+            )
+        except (FileNotFoundError, PermissionError, OSError):
+            continue
+        if "canonical_runtime_launcher_v26.py" not in command:
+            continue
+
+        status = _parse_proc_status(process_dir / "status")
+        rss_text = str(status.get("VmRSS", "0 kB")).split()[0]
+        try:
+            rss_mb = round(max(0, int(rss_text)) / 1024, 3)
+        except (TypeError, ValueError):
+            rss_mb = None
+        try:
+            thread_count: Optional[int] = max(0, int(status.get("Threads", "0")))
+        except (TypeError, ValueError):
+            thread_count = None
+        return {
+            "runtime_pid": int(process_dir.name),
+            "runtime_rss_mb": rss_mb,
+            "runtime_threads": thread_count,
+        }
+    return {}
+
+
+def _memory_snapshot(
+    cgroup_root: Path = Path("/sys/fs/cgroup"),
+    proc_root: Path = Path("/proc"),
+) -> dict[str, object]:
+    """Read cgroup v2/v1 memory pressure plus canonical runtime RSS."""
+    current_raw = _read_text(cgroup_root / "memory.current")
+    limit_raw = _read_text(cgroup_root / "memory.max")
+    peak_raw = _read_text(cgroup_root / "memory.peak")
+    events_raw = _read_text(cgroup_root / "memory.events")
+
+    if current_raw is None:
+        legacy = cgroup_root / "memory"
+        current_raw = _read_text(legacy / "memory.usage_in_bytes")
+        limit_raw = _read_text(legacy / "memory.limit_in_bytes")
+        peak_raw = _read_text(legacy / "memory.max_usage_in_bytes")
+        events_raw = _read_text(legacy / "memory.failcnt")
+
+    current_mb = _bytes_to_mb(current_raw)
+    limit_mb = _bytes_to_mb(limit_raw)
+    peak_mb = _bytes_to_mb(peak_raw)
+    details: dict[str, object] = {
+        "memory_current_mb": current_mb,
+        "memory_limit_mb": limit_mb,
+        "memory_peak_mb": peak_mb,
+        "memory_utilization_percent": (
+            round(current_mb * 100 / limit_mb, 2)
+            if current_mb is not None and limit_mb not in {None, 0}
+            else None
+        ),
+    }
+
+    events: dict[str, int] = {}
+    if events_raw is not None:
+        for line in events_raw.splitlines():
+            parts = line.split()
+            if len(parts) == 2:
+                try:
+                    events[parts[0]] = int(parts[1])
+                except ValueError:
+                    continue
+        if not events and events_raw.isdigit():
+            events["failcnt"] = int(events_raw)
+    details["memory_oom_count"] = events.get("oom", 0)
+    details["memory_oom_kill_count"] = events.get("oom_kill", 0)
+    details["memory_fail_count"] = events.get("failcnt", 0)
+    details.update(_runtime_process_snapshot(proc_root))
+    return details
+
+
 def _truthy_value(value: Any) -> bool:
     return str(value or "").strip().lower() in _TRUE
 
@@ -297,6 +412,7 @@ def _readiness() -> tuple[bool, dict[str, object]]:
         "uptime_seconds": round(time.time() - _STARTED_AT, 3),
         "commit": snapshot.get("commit", os.environ.get("GIT_COMMIT_SHORT", "unknown")),
     }
+    details.update(_memory_snapshot())
     return ready, details
 
 

@@ -14,6 +14,21 @@ services:
         value: "5000"
       - key: WEB_CONCURRENCY
         value: "1"
+      # Bound native numerical-library threads and glibc allocation arenas on
+      # the memory-constrained Render worker. This changes resource usage only;
+      # strategy calculations and live-trading safety gates are unchanged.
+      - key: OPENBLAS_NUM_THREADS
+        value: "1"
+      - key: OMP_NUM_THREADS
+        value: "1"
+      - key: MKL_NUM_THREADS
+        value: "1"
+      - key: NUMEXPR_NUM_THREADS
+        value: "1"
+      - key: MALLOC_ARENA_MAX
+        value: "2"
+      - key: MALLOC_TRIM_THRESHOLD_
+        value: "131072"
       - key: ALLOW_CONSUMER_USD
         value: "true"
 
