@@ -43,6 +43,7 @@ V43_PATH = ROOT / "bot" / "capital_publication_convergence_v43_patch.py"
 V44_PATH = ROOT / "bot" / "kraken_connection_convergence_v44_patch.py"
 V18_PATH = ROOT / "bot" / "production_corrective_set_v18_patch.py"
 V19_PATH = ROOT / "bot" / "entrypoint_writer_epoch_recovery_v19_patch.py"
+RENDER_MEMORY_GUARD_PATH = ROOT / "scripts" / "render_memory_pressure_guard.py"
 MAIN_PATH = ROOT / "main.py"
 LOGGER = logging.getLogger("nija.canonical_runtime_launcher")
 
@@ -57,6 +58,25 @@ def _canonical_import(module_name: str) -> ModuleType:
     if not isinstance(module, ModuleType):
         raise RuntimeError(f"canonical_import_invalid_module:{module_name}")
     return module
+
+
+def _start_render_memory_pressure_guard() -> bool:
+    """Start the stdlib-only Render guard before importing the bot package."""
+    if not RENDER_MEMORY_GUARD_PATH.is_file():
+        raise RuntimeError(
+            f"Render memory pressure guard missing: {RENDER_MEMORY_GUARD_PATH}"
+        )
+    module = _load_module_by_path(
+        "nija_render_memory_pressure_guard_v151",
+        RENDER_MEMORY_GUARD_PATH,
+    )
+    starter = getattr(module, "start", None)
+    if not callable(starter):
+        raise RuntimeError("Render memory pressure guard start callable unavailable")
+    started = bool(starter())
+    if started and os.environ.get("NIJA_RENDER_MEMORY_PRESSURE_GUARD_V151_READY") != "1":
+        raise RuntimeError("Render memory pressure guard did not attest ready")
+    return started
 
 
 def _load_module_by_path(module_name: str, path: Path) -> ModuleType:
@@ -382,6 +402,7 @@ def main() -> int:
     os.environ["NIJA_CANONICAL_ENTRYPOINT_FAST_PATH"] = "1"
     if not MAIN_PATH.is_file():
         raise RuntimeError(f"canonical main.py missing: {MAIN_PATH}")
+    _start_render_memory_pressure_guard()
     install_canonical_startup_guard()
     bot_entry, bot_main = _bootstrap_writer_first()
     print(
