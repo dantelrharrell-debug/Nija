@@ -119,19 +119,22 @@ def _patch_kill_switch_class(kill_switch_cls: type) -> bool:
 def _prepare_capital_publication_liveness(publication_liveness: Any) -> bool:
     """Normalize v142 wrapper proof and pre-v142 in-flight rollover semantics.
 
-    ``functools.wraps`` intentionally copies the wrapped function name, so a
-    wrapper must be proven by its ownership marker rather than by its display
-    name.  This helper also handles a coordinator that was already in-flight
-    before v142 could stamp a generation/start time: once v137 says publication
-    refresh is due (including pre-expiry headroom), the untracked owner is
-    replaced immediately instead of waiting for the immutable publication to
-    expire and forcing another LIVE_ACTIVE -> OFF cycle.
+    ``functools.wraps`` copies ``__name__`` and ownership attributes from the
+    wrapped function.  The stable identity of the wrapper implementation is the
+    underlying code object's ``co_name``.  Use that plus the ownership marker so
+    copied attributes on unrelated outer wrappers cannot falsely prove the v35
+    or v78 layer is still present.
+
+    This helper also handles a coordinator that was already in-flight before
+    v142 could stamp a generation/start time: once v137 says publication refresh
+    is due (including pre-expiry headroom), the untracked owner is replaced
+    immediately instead of waiting for immutable publication expiry and forcing
+    another LIVE_ACTIVE -> OFF cycle.
     """
     if bool(getattr(publication_liveness, "_nija_startup_chain_prepared", False)):
         return True
 
     def marker_chain_contains(callable_obj: Any, *, marker: str, expected_name: str = "") -> bool:
-        del expected_name  # display names are not ownership proof under functools.wraps
         seen: set[int] = set()
         current = callable_obj
         for _ in range(32):
@@ -139,7 +142,11 @@ def _prepare_capital_publication_liveness(publication_liveness: Any) -> bool:
                 return False
             seen.add(id(current))
             if bool(getattr(current, marker, False)):
-                return True
+                if not expected_name:
+                    return True
+                code = getattr(current, "__code__", None)
+                if str(getattr(code, "co_name", "") or "") == expected_name:
+                    return True
             current = getattr(current, "__wrapped__", None)
         return False
 
