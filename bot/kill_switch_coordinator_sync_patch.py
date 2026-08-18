@@ -150,6 +150,27 @@ def _install_authority_liveness() -> bool:
         )
         return False
 
+    # v142 is chained through this already-required manifest installer so the
+    # runtime release can never publish ready=true without proving the capital
+    # publication liveness repair was installed. v142 itself registers v140,
+    # v141 and v142 as required manifest proofs and advances the canonical
+    # release identity only after its fail-closed install succeeds.
+    try:
+        from bot import capital_publication_liveness_v142_patch as publication_liveness
+
+        installer = getattr(publication_liveness, "install_import_hook", None) or getattr(
+            publication_liveness, "install", None
+        )
+        if not callable(installer) or not bool(installer()):
+            return False
+    except Exception as exc:
+        logger.exception(
+            "CAPITAL_PUBLICATION_LIVENESS_CHAIN_FAILED marker=%s error=%s",
+            _MARKER,
+            exc,
+        )
+        return False
+
     return True
 
 
@@ -178,7 +199,8 @@ def install_import_hook() -> None:
         logger.critical(
             "KILL_SWITCH_COORDINATOR_SYNC_INSTALLED marker=%s active=%s auto_clear=false "
             "risk_gates_unchanged=true authority_liveness_chained=true "
-            "stalled_writer_capital_freshness_chained=true",
+            "stalled_writer_capital_freshness_chained=true "
+            "capital_publication_liveness_chained=true",
             _MARKER,
             str(active).lower(),
         )
