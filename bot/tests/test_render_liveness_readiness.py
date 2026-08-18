@@ -18,6 +18,10 @@ def _reset(monkeypatch, tmp_path):
     for name in (
         "NIJA_RUNTIME_TRADING_STATE",
         "NIJA_RUNTIME_EXECUTION_AUTHORITY",
+        "NIJA_RECONCILIATION_COMPLETE",
+        "NIJA_RECONCILIATION_STATUS",
+        "NIJA_POSITION_SYNC_ACTIVATION_READY",
+        "NIJA_RUNTIME_RELEASE_ID",
         "NIJA_REQUIRE_SECONDARY_VENUES_READY",
         "NIJA_SECONDARY_VENUE_POLICY",
         "NIJA_REQUIRED_VENUES_READY",
@@ -50,6 +54,9 @@ def test_broker_local_readiness_allows_healthy_kraken_when_secondaries_are_missi
     monkeypatch.setenv("NIJA_GLOBAL_TRADING_READY", "1")
     monkeypatch.setenv("NIJA_MULTI_BROKER_TRADING_READY", "1")
     monkeypatch.setenv("NIJA_ACTIVE_LIVE_VENUES", "kraken")
+    monkeypatch.setenv("NIJA_RECONCILIATION_COMPLETE", "true")
+    monkeypatch.setenv("NIJA_RECONCILIATION_STATUS", "CLEAN_START")
+    monkeypatch.setenv("NIJA_POSITION_SYNC_ACTIVATION_READY", "1")
     monkeypatch.setenv("NIJA_REQUIRED_VENUES_MISSING", "coinbase,okx")
 
     ready, details = server._readiness()
@@ -73,6 +80,10 @@ def test_global_all_required_policy_blocks_until_required_venues_are_ready(monke
     monkeypatch.setenv("NIJA_REQUIRED_VENUES_READY", "0")
     monkeypatch.setenv("NIJA_GLOBAL_TRADING_READY", "1")
     monkeypatch.setenv("NIJA_ACTIVE_LIVE_VENUES", "kraken")
+    monkeypatch.setenv("NIJA_RECONCILIATION_COMPLETE", "true")
+    monkeypatch.setenv("NIJA_RECONCILIATION_STATUS", "CLEAN_START")
+    monkeypatch.setenv("NIJA_POSITION_SYNC_ACTIVATION_READY", "1")
+    monkeypatch.setenv("NIJA_RUNTIME_RELEASE_ID", "20260818-runtime-convergence-v146")
     monkeypatch.setenv("NIJA_REQUIRED_VENUES_MISSING", "coinbase,okx")
 
     ready, details = server._readiness()
@@ -120,6 +131,9 @@ def test_readiness_passes_with_all_required_venues_ready(monkeypatch, tmp_path):
     monkeypatch.setenv("NIJA_OKX_ACTIVATION_STATE", "ready")
     monkeypatch.setenv("NIJA_OKX_CONNECTED", "1")
     monkeypatch.setenv("NIJA_OKX_TRADING_READY", "1")
+    monkeypatch.setenv("NIJA_RECONCILIATION_COMPLETE", "true")
+    monkeypatch.setenv("NIJA_RECONCILIATION_STATUS", "CLEAN_START")
+    monkeypatch.setenv("NIJA_POSITION_SYNC_ACTIVATION_READY", "1")
 
     ready, details = server._readiness()
 
@@ -141,6 +155,10 @@ def test_bridge_normalizes_contradictory_required_venue_state(monkeypatch, tmp_p
     monkeypatch.setenv("NIJA_REQUIRED_VENUES_MISSING", "coinbase,okx")
     monkeypatch.setenv("NIJA_GLOBAL_TRADING_READY", "1")
     monkeypatch.setenv("NIJA_ACTIVE_LIVE_VENUES", "kraken")
+    monkeypatch.setenv("NIJA_RECONCILIATION_COMPLETE", "true")
+    monkeypatch.setenv("NIJA_RECONCILIATION_STATUS", "CLEAN_START")
+    monkeypatch.setenv("NIJA_POSITION_SYNC_ACTIVATION_READY", "1")
+    monkeypatch.setenv("NIJA_RUNTIME_RELEASE_ID", "20260818-runtime-convergence-v146")
 
     payload = bridge.publish_once()
 
@@ -163,6 +181,32 @@ def test_bridge_normalizes_contradictory_required_venue_state(monkeypatch, tmp_p
     assert details["writer_authority"] == "1"
     assert details["required_venues_ready"] is False
     assert details["global_trading_ready"] is True
+    assert details["reconciliation_complete"] is True
+    assert details["reconciliation_status"] == "CLEAN_START"
+    assert details["reconciliation_ready"] is True
+    assert details["position_sync_ready"] is True
+    assert details["runtime_release_id"] == "20260818-runtime-convergence-v146"
+
+
+def test_shared_readiness_fails_closed_when_reconciliation_regresses(monkeypatch, tmp_path):
+    _reset(monkeypatch, tmp_path)
+    monkeypatch.setenv("RENDER", "true")
+    monkeypatch.setenv("NIJA_RUNTIME_TRADING_STATE", "LIVE_ACTIVE")
+    monkeypatch.setenv("NIJA_RUNTIME_EXECUTION_AUTHORITY", "1")
+    monkeypatch.setenv("NIJA_SECONDARY_VENUE_POLICY", "broker_local")
+    monkeypatch.setenv("NIJA_GLOBAL_TRADING_READY", "1")
+    monkeypatch.setenv("NIJA_ACTIVE_LIVE_VENUES", "kraken")
+    monkeypatch.setenv("NIJA_RECONCILIATION_COMPLETE", "false")
+    monkeypatch.setenv("NIJA_RECONCILIATION_STATUS", "PENDING")
+    monkeypatch.setenv("NIJA_POSITION_SYNC_ACTIVATION_READY", "0")
+
+    bridge.publish_once()
+    ready, details = server._readiness()
+
+    assert ready is False
+    assert details["state"] == "LIVE_ACTIVE"
+    assert details["reconciliation_ready"] is False
+    assert details["position_sync_ready"] is False
 
 
 def test_render_without_fresh_shared_state_is_safely_not_ready(monkeypatch, tmp_path):
