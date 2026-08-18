@@ -1649,7 +1649,7 @@ while true; do
 
     _RENDER_RUNTIME_RECOVERABLE=false
     case "${status}" in
-        42|75|137) _RENDER_RUNTIME_RECOVERABLE=true ;;
+        1|42|75|137) _RENDER_RUNTIME_RECOVERABLE=true ;;
     esac
 
     if [ "${_RENDER_RUNTIME_RECOVERY}" != "true" ] \
@@ -1659,7 +1659,7 @@ while true; do
 
     _RENDER_RUNTIME_RECOVERY_ATTEMPT=$((_RENDER_RUNTIME_RECOVERY_ATTEMPT + 1))
     if [ "${_RENDER_RUNTIME_RECOVERY_ATTEMPT}" -gt "${_RENDER_RUNTIME_RECOVERY_MAX_ATTEMPTS}" ]; then
-        echo "❌ RENDER_RUNTIME_RECOVERY_EXHAUSTED marker=20260818-render-runtime-recovery-v147 status=${status} attempts=${_RENDER_RUNTIME_RECOVERY_MAX_ATTEMPTS} action=delegate_to_platform"
+        echo "❌ RENDER_RUNTIME_RECOVERY_EXHAUSTED marker=20260818-render-runtime-recovery-v148 status=${status} attempts=${_RENDER_RUNTIME_RECOVERY_MAX_ATTEMPTS} action=delegate_to_platform"
         break
     fi
 
@@ -1667,9 +1667,9 @@ while true; do
     # process is gone. Waiting beyond the lease TTL prevents the replacement
     # from racing a stale Redis owner token. The next canonical interpreter
     # still has to acquire a fresh generation and pass every readiness gate.
-    echo "⚠️ RENDER_RUNTIME_RECOVERY_SCHEDULED marker=20260818-render-runtime-recovery-v147 status=${status} attempt=${_RENDER_RUNTIME_RECOVERY_ATTEMPT}/${_RENDER_RUNTIME_RECOVERY_MAX_ATTEMPTS} delay_s=${_RENDER_RUNTIME_RECOVERY_DELAY_S} liveness_preserved=true writer_authority_bypass=false"
+    echo "⚠️ RENDER_RUNTIME_RECOVERY_SCHEDULED marker=20260818-render-runtime-recovery-v148 status=${status} attempt=${_RENDER_RUNTIME_RECOVERY_ATTEMPT}/${_RENDER_RUNTIME_RECOVERY_MAX_ATTEMPTS} delay_s=${_RENDER_RUNTIME_RECOVERY_DELAY_S} liveness_preserved=true writer_authority_bypass=false"
     sleep "${_RENDER_RUNTIME_RECOVERY_DELAY_S}"
-    echo "🔄 RENDER_RUNTIME_RECOVERY_RETRY marker=20260818-render-runtime-recovery-v147 attempt=${_RENDER_RUNTIME_RECOVERY_ATTEMPT} canonical=launcher-v26"
+    echo "🔄 RENDER_RUNTIME_RECOVERY_RETRY marker=20260818-render-runtime-recovery-v148 attempt=${_RENDER_RUNTIME_RECOVERY_ATTEMPT} canonical=launcher-v26"
 done
 
 # Treat SIGTERM (143) as graceful to avoid restart loops during platform stop/redeploy
