@@ -170,11 +170,16 @@ def install() -> None:
         "runtime_startup_convergence_v145_patch",
         "RUNTIME_STARTUP_CONVERGENCE_V145_GLOBAL_STARTUP_INSTALL_REQUESTED",
     )
+    runtime_reconciliation_v146_ok = _install_module(
+        "runtime_reconciliation_shutdown_v146_patch",
+        "RUNTIME_RECONCILIATION_SHUTDOWN_V146_GLOBAL_STARTUP_INSTALL_REQUESTED",
+    )
 
     hardening_ready = bool(
         runtime_quality_v144_ok
         and runtime_quality_v144_classifier_ok
         and runtime_startup_v145_ok
+        and runtime_reconciliation_v146_ok
     )
     os.environ["NIJA_RUNTIME_QUALITY_HARDENING_V144_STARTUP_READY"] = (
         "1" if runtime_quality_v144_ok and runtime_quality_v144_classifier_ok else "0"
@@ -182,12 +187,19 @@ def install() -> None:
     os.environ["NIJA_RUNTIME_STARTUP_CONVERGENCE_V145_STARTUP_READY"] = (
         "1" if runtime_startup_v145_ok else "0"
     )
+    os.environ["NIJA_RUNTIME_RECONCILIATION_SHUTDOWN_V146_STARTUP_READY"] = (
+        "1" if runtime_reconciliation_v146_ok else "0"
+    )
     if _live_runtime_expected() and not hardening_ready:
         logger.critical(
-            "RUNTIME_HARDENING_REQUIRED_STARTUP_FAILED marker=20260818-runtime-startup-convergence-v145 v144=%s classifier=%s v145=%s live=true trading_fail_closed=true",
+            "RUNTIME_HARDENING_REQUIRED_STARTUP_FAILED "
+            "marker=20260818-runtime-reconciliation-shutdown-v146 "
+            "v144=%s classifier=%s v145=%s v146=%s "
+            "live=true trading_fail_closed=true",
             runtime_quality_v144_ok,
             runtime_quality_v144_classifier_ok,
             runtime_startup_v145_ok,
+            runtime_reconciliation_v146_ok,
         )
         raise SystemExit(78)
 
@@ -202,11 +214,16 @@ def install() -> None:
 
     setattr(builtins, "_NIJA_GLOBAL_RUNTIME_STARTUP_GUARDS_20260706B", True)
     logger.info(
-        "GLOBAL_RUNTIME_STARTUP_GUARDS_INSTALLED marker=20260706b source_venue_guards=%s runtime_quality_v144=%s runtime_quality_v144_classifier=%s runtime_startup_v145=%s preactivation_v16=%s held_cap=%s global_trailing=%s profit_position=%s stale_exposure=%s cap=%s",
+        "GLOBAL_RUNTIME_STARTUP_GUARDS_INSTALLED marker=20260706b "
+        "source_venue_guards=%s runtime_quality_v144=%s "
+        "runtime_quality_v144_classifier=%s runtime_startup_v145=%s "
+        "runtime_reconciliation_v146=%s preactivation_v16=%s held_cap=%s "
+        "global_trailing=%s profit_position=%s stale_exposure=%s cap=%s",
         source_guards_ok,
         runtime_quality_v144_ok,
         runtime_quality_v144_classifier_ok,
         runtime_startup_v145_ok,
+        runtime_reconciliation_v146_ok,
         preactivation_ok,
         held_ok,
         trailing_ok,

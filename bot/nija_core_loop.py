@@ -5657,6 +5657,7 @@ _loop_guard = threading.Lock()
 _loop_running = False
 _engine_start_guard = threading.Lock()
 _engine_thread: Optional[threading.Thread] = None
+_engine_stop_event = threading.Event()
 # Hard trading-active flag.  Set to True only after BOTH the hydration and CSM
 # barriers have passed.  The main while-loop is conditioned on this flag so the
 # loop body never executes until the bot is genuinely ready to trade.
@@ -5670,6 +5671,40 @@ _exec_test_fired = False
 # here — the earlier definition is the canonical one.  The FORCE_TRADE check
 # that sets this event lives in run_trading_loop() so it is evaluated at
 # runtime, not at module import time.
+
+
+def request_trading_engine_stop(reason: str = "shutdown_requested") -> None:
+    """Stop the scheduler and wake any interruptible core-loop wait.
+
+    This is a process-local lifecycle signal only.  It never grants execution
+    authority or releases the distributed writer lease; ``bot_main`` retains
+    ownership of that ordered shutdown sequence.
+    """
+    global _trading_active
+    _trading_active = False
+    _engine_stop_event.set()
+    logger.info("TRADING_ENGINE_STOP_REQUESTED reason=%s", reason)
+
+
+def _interruptible_sleep(timeout_s: float) -> bool:
+    """Wait up to ``timeout_s`` and return True when shutdown interrupted it."""
+    try:
+        timeout = max(0.0, float(timeout_s))
+    except (TypeError, ValueError):
+        timeout = 0.0
+    return _engine_stop_event.wait(timeout=timeout)
+
+
+def _wait_for_engine_ready_or_stop(timeout_s: float) -> bool:
+    """Wait for the start gate while remaining immediately stoppable."""
+    deadline = time.monotonic() + max(0.0, float(timeout_s))
+    while not TRADING_ENGINE_READY.is_set():
+        remaining = deadline - time.monotonic()
+        if remaining <= 0.0:
+            break
+        if _engine_stop_event.wait(timeout=min(0.25, remaining)):
+            return False
+    return TRADING_ENGINE_READY.is_set()
 
 
 # ---------------------------------------------------------------------------
@@ -5861,6 +5896,11 @@ def start_trading_engine(strategy: Any) -> threading.Thread:
             if getattr(strategy, "broker", None) is not None
             else "none",
         )
+
+        # A previous stopped worker must not leak its process-local stop signal
+        # into a deliberate replacement start. Existing live workers are
+        # returned above and therefore never have their stop request cleared.
+        _engine_stop_event.clear()
 
         # Install graceful shutdown handling before spawning the trading thread.
         if _GRACEFUL_HANDOFF_AVAILABLE and _get_handoff_coordinator is not None:
@@ -6271,7 +6311,13 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                     _loop_guard.release()
             return
 
-        if not TRADING_ENGINE_READY.wait(timeout=30):
+        if not _wait_for_engine_ready_or_stop(30.0):
+            if _engine_stop_event.is_set():
+                logger.info(
+                    "TRADING_ENGINE_START_GATE_STOPPED elapsed=%.1fs",
+                    time.monotonic() - _start_gate_t0,
+                )
+                return
             logger.critical(
                 "TIMEOUT_WAITING_FOR_TRADING_ENGINE_READY "
                 "(iter=%d elapsed=%.0fs remaining=%.0fs)",
@@ -6717,7 +6763,9 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                 time.monotonic() - _cap_precheck_t0,
                 _cap_precheck_timeout,
             )
-            time.sleep(1.0)
+            if _interruptible_sleep(1.0):
+                logger.info("TRADING_ENGINE_STOPPED phase=capital_precheck")
+                return
         if not _cap_precheck_ok:
             _precheck_snap = _capture_cycle_capital_state()
             _precheck_total = float(_precheck_snap.get("ca_total_capital", 0.0) or 0.0)
@@ -6870,7 +6918,7 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                     _loop_guard.release()
             return
         logger.critical("LIFECYCLE: entering cycle scheduler")
-        while _trading_active:
+        while _trading_active and not _engine_stop_event.is_set():
             try:
                 # Graceful shutdown gate: stop accepting new cycles when SIGTERM
                 # has been received.  The shutdown handler waits for in-flight
@@ -7413,7 +7461,9 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                             _skipped_cycles * cycle_secs,
                             _sleep_s,
                         )
-                    time.sleep(_sleep_s)
+                    if _interruptible_sleep(_sleep_s):
+                        logger.info("TRADING_ENGINE_STOPPED phase=broker_reconnect_backoff")
+                        return
                     logger.debug("🚧 LOOP BLOCKED PATH REACHED — no broker connected, skipping cycle")
                     continue
 
@@ -7472,7 +7522,9 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                             _runtime_authority = ""
                     except Exception as _exec_gate_err:
                         logger.warning("Execution gate probe failed; skipping strategy cycle: %s", _exec_gate_err)
-                        time.sleep(cycle_secs)
+                        if _interruptible_sleep(cycle_secs):
+                            logger.info("TRADING_ENGINE_STOPPED phase=activation_wait")
+                            return
                         continue
 
                     # No operator flag can bypass the lifecycle commit.  A cycle
@@ -7529,7 +7581,9 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                                     _dispatch_reason or "not_reported",
                                     _activation_retry_sleep_s,
                                 )
-                            time.sleep(_activation_retry_sleep_s)
+                            if _interruptible_sleep(_activation_retry_sleep_s):
+                                logger.info("TRADING_ENGINE_STOPPED phase=activation_retry")
+                                return
                             continue
                     else:
                         _last_cycle_skip_signature = None
@@ -7643,7 +7697,9 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                     _missing_ref_retry_s = float(
                         os.getenv("NIJA_MISSING_REF_RETRY_S", "15") or 15
                     )
-                    time.sleep(_missing_ref_retry_s)
+                    if _interruptible_sleep(_missing_ref_retry_s):
+                        logger.info("TRADING_ENGINE_STOPPED phase=missing_reference_retry")
+                        return
                     continue
                 # ── End Fix 4 ─────────────────────────────────────────────────
 
@@ -7905,7 +7961,9 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                     _cycle_elapsed,
                     _next_sleep_s,
                 )
-                time.sleep(_next_sleep_s)
+                if _interruptible_sleep(_next_sleep_s):
+                    logger.info("TRADING_ENGINE_STOPPED phase=between_cycles")
+                    return
 
             except Exception as _err:
                 _activation_retry_count += 1
@@ -7920,7 +7978,9 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                     _watchdog_backoff_enabled,
                     _watchdog_backoff_max_multiplier,
                 )
-                time.sleep(_error_sleep_s)
+                if _interruptible_sleep(_error_sleep_s):
+                    logger.info("TRADING_ENGINE_STOPPED phase=error_backoff")
+                    return
 
     except Exception as e:
         logger.exception("💥 FATAL ERROR IN TRADING LOOP: %s", e)

@@ -244,7 +244,34 @@ def _signal_handler(signum: int, frame) -> None:
         signal_shutdown()
     except Exception:
         logger.debug("bootstrap shutdown signal unavailable", exc_info=True)
+    _signal_core_loop_shutdown(f"signal:{sig_name}")
     _shutdown_event.set()
+
+
+def _signal_core_loop_shutdown(reason: str) -> bool:
+    """Wake the canonical core loop without importing it during early startup."""
+    module = sys.modules.get("bot.nija_core_loop") or sys.modules.get("nija_core_loop")
+    if module is None:
+        return False
+    request_stop = getattr(module, "request_trading_engine_stop", None)
+    if not callable(request_stop):
+        logger.warning(
+            "TRADING_ENGINE_STOP_SIGNAL_UNAVAILABLE reason=%s",
+            reason,
+        )
+        return False
+    try:
+        request_stop(reason)
+        return True
+    except Exception as exc:
+        logger.warning(
+            "TRADING_ENGINE_STOP_SIGNAL_FAILED reason=%s error=%s:%s",
+            reason,
+            type(exc).__name__,
+            exc,
+            exc_info=True,
+        )
+        return False
 
 
 def _acquire_writer_authority_before_nonce() -> bool:
@@ -1498,10 +1525,12 @@ def main() -> int:
         # lease is released.
         #
         # Shutdown order:
-        # 1. signal all workers to stop (already done via _shutdown_event.set() above)
+        # 1. signal all workers to stop
         # 2. stop v86 Kraken user supervision (prevents new reconnect jobs)
         # 3. join canonical core thread if it was started
         # 4. release writer authority LAST
+        _signal_core_loop_shutdown(_process_exit_reason or "bot_main_finally")
+
         try:
             from bot.kraken_all_account_supervision_v86 import (
                 stop as _stop_kraken_v86,
