@@ -1612,11 +1612,65 @@ _cleanup_pid_lock() {
 }
 trap '_cleanup_pid_lock' EXIT INT TERM
 
-set +e
-NIJA_DEFER_RUNTIME_SITE_HOOKS=1 $PY -u scripts/canonical_runtime_launcher_v26.py
-status=$?
-echo "🧭 STARTUP_HANDOFF_RUNTIME_EXIT status=${status}"
-set -e
+_RENDER_RUNTIME_RECOVERY=false
+if _is_truthy_flag "${RENDER:-0}" \
+    || [ -n "${RENDER_SERVICE_ID:-}${RENDER_SERVICE_NAME:-}${RENDER_INSTANCE_ID:-}${RENDER_GIT_COMMIT:-}" ]; then
+    _RENDER_RUNTIME_RECOVERY=true
+fi
+
+_RENDER_RUNTIME_RECOVERY_MAX_ATTEMPTS="${NIJA_RENDER_RUNTIME_RECOVERY_MAX_ATTEMPTS:-12}"
+if ! printf "%s" "${_RENDER_RUNTIME_RECOVERY_MAX_ATTEMPTS}" | grep -Eq '^[0-9]+$' \
+    || [ "${_RENDER_RUNTIME_RECOVERY_MAX_ATTEMPTS}" -le 0 ]; then
+    _RENDER_RUNTIME_RECOVERY_MAX_ATTEMPTS=12
+fi
+
+_RENDER_RUNTIME_RECOVERY_DELAY_S="${NIJA_RENDER_RUNTIME_RECOVERY_DELAY_S:-}"
+if ! printf "%s" "${_RENDER_RUNTIME_RECOVERY_DELAY_S}" | grep -Eq '^[0-9]+$' \
+    || [ "${_RENDER_RUNTIME_RECOVERY_DELAY_S:-0}" -le 0 ]; then
+    _LEASE_TTL_FOR_RECOVERY_MS="${NIJA_REDIS_LEASE_TTL_MS:-60000}"
+    if ! printf "%s" "${_LEASE_TTL_FOR_RECOVERY_MS}" | grep -Eq '^[0-9]+$'; then
+        _LEASE_TTL_FOR_RECOVERY_MS=60000
+    fi
+    _RENDER_RUNTIME_RECOVERY_DELAY_S=$(((_LEASE_TTL_FOR_RECOVERY_MS + 999) / 1000 + 5))
+fi
+if [ "${_RENDER_RUNTIME_RECOVERY_DELAY_S}" -lt 15 ]; then
+    _RENDER_RUNTIME_RECOVERY_DELAY_S=15
+elif [ "${_RENDER_RUNTIME_RECOVERY_DELAY_S}" -gt 120 ]; then
+    _RENDER_RUNTIME_RECOVERY_DELAY_S=120
+fi
+
+_RENDER_RUNTIME_RECOVERY_ATTEMPT=0
+while true; do
+    set +e
+    NIJA_DEFER_RUNTIME_SITE_HOOKS=1 $PY -u scripts/canonical_runtime_launcher_v26.py
+    status=$?
+    echo "🧭 STARTUP_HANDOFF_RUNTIME_EXIT status=${status}"
+    set -e
+
+    _RENDER_RUNTIME_RECOVERABLE=false
+    case "${status}" in
+        42|75|137) _RENDER_RUNTIME_RECOVERABLE=true ;;
+    esac
+
+    if [ "${_RENDER_RUNTIME_RECOVERY}" != "true" ] \
+        || [ "${_RENDER_RUNTIME_RECOVERABLE}" != "true" ]; then
+        break
+    fi
+
+    _RENDER_RUNTIME_RECOVERY_ATTEMPT=$((_RENDER_RUNTIME_RECOVERY_ATTEMPT + 1))
+    if [ "${_RENDER_RUNTIME_RECOVERY_ATTEMPT}" -gt "${_RENDER_RUNTIME_RECOVERY_MAX_ATTEMPTS}" ]; then
+        echo "❌ RENDER_RUNTIME_RECOVERY_EXHAUSTED marker=20260818-render-runtime-recovery-v147 status=${status} attempts=${_RENDER_RUNTIME_RECOVERY_MAX_ATTEMPTS} action=delegate_to_platform"
+        break
+    fi
+
+    # The isolated liveness server remains online while the failed writer
+    # process is gone. Waiting beyond the lease TTL prevents the replacement
+    # from racing a stale Redis owner token. The next canonical interpreter
+    # still has to acquire a fresh generation and pass every readiness gate.
+    echo "⚠️ RENDER_RUNTIME_RECOVERY_SCHEDULED marker=20260818-render-runtime-recovery-v147 status=${status} attempt=${_RENDER_RUNTIME_RECOVERY_ATTEMPT}/${_RENDER_RUNTIME_RECOVERY_MAX_ATTEMPTS} delay_s=${_RENDER_RUNTIME_RECOVERY_DELAY_S} liveness_preserved=true writer_authority_bypass=false"
+    sleep "${_RENDER_RUNTIME_RECOVERY_DELAY_S}"
+    echo "🔄 RENDER_RUNTIME_RECOVERY_RETRY marker=20260818-render-runtime-recovery-v147 attempt=${_RENDER_RUNTIME_RECOVERY_ATTEMPT} canonical=launcher-v26"
+done
 
 # Treat SIGTERM (143) as graceful to avoid restart loops during platform stop/redeploy
 if [ "$status" -eq 0 ]; then
