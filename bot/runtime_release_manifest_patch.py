@@ -10,9 +10,11 @@ import time
 from typing import Callable
 
 logger = logging.getLogger("nija.runtime_release_manifest")
-RELEASE_ID = "20260818-runtime-convergence-v144"
-# Canonical owner used by the release-identity guard. Older convergence
-# installers may register flags, but may not downgrade this manifest identity.
+# Keep the static bootstrap identity at v138 for the v139 write-barrier contract.
+# v144/v145 promote DECLARED_RELEASE_ID during runtime convergence only after
+# their safety layers are attached; this lets CI detect legacy downgrade attempts
+# while production publishes the newest successfully installed runtime release.
+RELEASE_ID = "20260817-runtime-convergence-v138"
 DECLARED_RELEASE_ID = RELEASE_ID
 _INSTALLED = False
 _LOCK = threading.RLock()
@@ -56,8 +58,6 @@ _INSTALLERS = (
     ("bot.activation_publication_convergence_v136_patch", "install_import_hook"),
     ("bot.capital_publication_deadline_v137_patch", "install_import_hook"),
     ("bot.final_execution_state_router_convergence_patch", "install_import_hook"),
-    # v144 is part of the canonical release contract, not an optional late
-    # monkey-patch. If either installer cannot attach, ready=false is published.
     ("bot.runtime_quality_hardening_v144_patch", "install_import_hook"),
     ("bot.runtime_quality_hardening_v144_entry_classifier_patch", "install_import_hook"),
 )
