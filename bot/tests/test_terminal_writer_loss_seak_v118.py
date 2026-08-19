@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import importlib.util
 import sys
+from pathlib import Path
 from types import ModuleType
 
 
@@ -42,3 +44,25 @@ def test_terminal_writer_loss_patch_is_idempotent(monkeypatch):
     first = latch_mod._halt_seak_on_terminal_loss
     assert patch._patch_terminal_latch() is True
     assert latch_mod._halt_seak_on_terminal_loss is first
+
+
+def test_canonical_terminal_latch_uses_positional_seak_reason(monkeypatch):
+    calls: list[str] = []
+
+    class FakeSEAK:
+        def emergency_halt(self, reason: str = "emergency halt") -> None:
+            calls.append(reason)
+
+    seak_mod = ModuleType("bot.single_execution_authority_kernel")
+    seak_mod.get_seak = lambda: FakeSEAK()
+    monkeypatch.setitem(sys.modules, "bot.single_execution_authority_kernel", seak_mod)
+
+    path = Path(__file__).resolve().parents[1] / "terminal_writer_loss_latch.py"
+    spec = importlib.util.spec_from_file_location("test_terminal_writer_loss_latch_base", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    module._halt_seak_on_terminal_loss("core_thread_dead")
+
+    assert calls == ["terminal_writer_loss:core_thread_dead"]

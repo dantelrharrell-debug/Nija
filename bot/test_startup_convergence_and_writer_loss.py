@@ -149,8 +149,7 @@ class TestTerminalWriterLossLatch(unittest.TestCase):
         self.assertTrue(self.latch.private_io_suppressed("post_latch"))
         hooks["revoke_spy"].assert_called_once()
         hooks["seak"].emergency_halt.assert_called_once_with(
-            "terminal_writer_loss:lease_no_longer_owned",
-            source="terminal_writer_loss_latch",
+            "terminal_writer_loss:lease_no_longer_owned"
         )
         hooks["shutdown"].assert_called_once_with()
         hooks["request_exit"].assert_called_once_with(

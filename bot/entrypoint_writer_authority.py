@@ -78,6 +78,40 @@ def _cfg_float(name: str, default: float, *, minimum: float = 0.0) -> float:
         return max(minimum, default)
 
 
+def _process_shutdown_requested() -> bool:
+    """Return whether the canonical process is intentionally shutting down.
+
+    Signal handlers publish shutdown intent before stopping ``TradingLoop``.
+    The writer heartbeat must quiesce during that narrow handoff window rather
+    than reclassifying the deliberately stopped core as terminal writer loss.
+    It does not release or grant authority here; ``bot_main`` retains the sole
+    compare-delete release path, and an interrupted release falls back to TTL.
+    """
+
+    for name in ("bot.bot_main", "bot_main"):
+        module = sys.modules.get(name)
+        event = getattr(module, "_shutdown_event", None) if module else None
+        if event is not None and callable(getattr(event, "is_set", None)):
+            try:
+                if event.is_set():
+                    return True
+            except Exception:
+                pass
+
+    for name in ("bot.bootstrap_utils", "bootstrap_utils"):
+        module = sys.modules.get(name)
+        getter = getattr(module, "get_shutdown_event", None) if module else None
+        if callable(getter):
+            try:
+                event = getter()
+                if event is not None and event.is_set():
+                    return True
+            except Exception:
+                pass
+
+    return False
+
+
 def _cfg_int(name: str, default: int, *, minimum: int = 1) -> int:
     try:
         return max(minimum, int(float(os.environ.get(name, str(default)) or default)))
@@ -1588,7 +1622,23 @@ class EntrypointWriterAuthority:
         first_failure_at = 0.0
 
         while not self._stop.is_set():
+            if _process_shutdown_requested():
+                logger.info(
+                    "ENTRYPOINT_WRITER_HEARTBEAT_QUIESCED marker=%s "
+                    "reason=process_shutdown_requested "
+                    "compare_delete_owner=bot_main lease_ttl_fallback=true",
+                    _MARKER,
+                )
+                return
             ok, reason = self._heartbeat_tick()
+            if ok and reason == "shutdown_requested":
+                logger.info(
+                    "ENTRYPOINT_WRITER_HEARTBEAT_QUIESCED marker=%s "
+                    "reason=process_shutdown_requested_race "
+                    "compare_delete_owner=bot_main lease_ttl_fallback=true",
+                    _MARKER,
+                )
+                return
             if ok:
                 failures = 0
                 first_failure_at = 0.0
@@ -1706,6 +1756,12 @@ class EntrypointWriterAuthority:
         return True, ""
 
     def _heartbeat_tick(self) -> tuple[bool, str]:
+        # SIGTERM/SIGINT handlers publish shutdown intent before stopping the
+        # core.  Quiesce without renewing or classifying that expected stop as
+        # writer loss; bot_main's finally block performs exact compare-delete.
+        if _process_shutdown_requested():
+            return True, "shutdown_requested"
+
         os.environ["NIJA_WRITER_HEARTBEAT_ALIVE_TS"] = str(time.time())
         self._set_writer_state(WriterState.VERIFYING, reason="heartbeat_tick")
 
