@@ -9,6 +9,8 @@ from tempfile import TemporaryDirectory
 ROOT = Path(__file__).resolve().parents[2]
 GUARD_PATH = ROOT / "scripts" / "render_memory_pressure_guard.py"
 LAUNCHER_PATH = ROOT / "scripts" / "canonical_runtime_launcher_v26.py"
+DOCKERIGNORE_PATH = ROOT / ".dockerignore"
+DOCKERFILE_PATH = ROOT / "Dockerfile"
 
 
 def _load_guard():
@@ -75,3 +77,12 @@ def test_launcher_starts_guard_before_bot_package_imports() -> None:
     )
     assert "RENDER_MEMORY_GUARD_PATH.is_file()" in source
     assert "NIJA_RENDER_MEMORY_PRESSURE_GUARD_V151_READY" in source
+
+
+def test_render_image_packages_and_validates_memory_guard() -> None:
+    dockerignore = DOCKERIGNORE_PATH.read_text(encoding="utf-8")
+    dockerfile = DOCKERFILE_PATH.read_text(encoding="utf-8")
+
+    assert "!scripts/render_memory_pressure_guard.py" in dockerignore
+    assert "/app/scripts/render_memory_pressure_guard.py" in dockerfile
+    assert "test -f /app/scripts/render_memory_pressure_guard.py" in dockerfile

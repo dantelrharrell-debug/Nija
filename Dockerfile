@@ -54,6 +54,7 @@ RUN NIJA_DEFER_RUNTIME_SITE_HOOKS=1 python -S -m py_compile \
         /app/scripts/apply_canonical_launcher_v26.py \
         /app/scripts/apply_writer_generation_handoff_v45.py \
         /app/scripts/canonical_runtime_launcher_v26.py \
+        /app/scripts/render_memory_pressure_guard.py \
         /app/scripts/runtime_entrypoint_attestation.py \
         /app/render_liveness_server.py \
         /app/render_readiness_state_bridge.py \
@@ -109,6 +110,7 @@ RUN test -f /app/scripts/redis_connectivity_check.sh && \
     test -f /app/scripts/apply_canonical_launcher_v26.py && \
     test -f /app/scripts/apply_writer_generation_handoff_v45.py && \
     test -f /app/scripts/canonical_runtime_launcher_v26.py && \
+    test -f /app/scripts/render_memory_pressure_guard.py && \
     test -f /app/bot/writer_generation_handoff_v45_patch.py && \
     chmod +x /app/scripts/redis_connectivity_check.sh \
              /app/scripts/production_bootstrap.sh \

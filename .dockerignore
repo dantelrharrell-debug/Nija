@@ -113,6 +113,7 @@ scripts/*
 !scripts/apply_canonical_launcher_v26.py
 !scripts/apply_writer_generation_handoff_v45.py
 !scripts/canonical_runtime_launcher_v26.py
+!scripts/render_memory_pressure_guard.py
 !scripts/apply_direct_broker_prebootstrap_v27.py
 !scripts/install_sitecustomize_defer_guard.py
 !scripts/runtime_entrypoint_attestation.py
