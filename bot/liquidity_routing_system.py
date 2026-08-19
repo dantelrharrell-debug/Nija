@@ -1,488 +1,163 @@
-"""
-NIJA Liquidity Routing System
-==============================
-
-Smart order routing for best execution across multiple liquidity sources.
-
-Features:
-- Best price discovery across exchanges
-- Slippage minimization
-- Order splitting for large trades
-- Liquidity aggregation
-- Smart routing algorithms
-- Real-time execution optimization
-
-This ensures best possible execution prices by routing to optimal venues.
-
-Author: NIJA Trading Systems
-Version: 1.0 (Path 3)
-Date: January 30, 2026
-"""
-
-import logging
-from typing import Dict, List, Optional, Tuple
-from dataclasses import dataclass, field
+"""NIJA exchange-aware smart liquidity routing."""
+import logging, math
+from dataclasses import dataclass
 from datetime import datetime
-from enum import Enum
 from decimal import Decimal
-import heapq
+from enum import Enum
+from typing import Dict, List, Optional, Tuple
 
 logger = logging.getLogger("nija.liquidity_routing")
 
-
 class Exchange(Enum):
-    """Supported exchanges"""
-    COINBASE = "coinbase"
-    KRAKEN = "kraken"
-    BINANCE = "binance"
-    OKX = "okx"
-
-
+    COINBASE="coinbase"; KRAKEN="kraken"; BINANCE="binance"; OKX="okx"
 class OrderType(Enum):
-    """Order types"""
-    MARKET = "market"
-    LIMIT = "limit"
-
+    MARKET="market"; LIMIT="limit"
 
 @dataclass
 class LiquidityLevel:
-    """Single level of liquidity (bid or ask)"""
-    exchange: Exchange
-    price: Decimal
-    size: Decimal
-    
-    def __lt__(self, other):
-        """For heap comparison (best price first)"""
-        return self.price < other.price
-
+    exchange: Exchange; price: Decimal; size: Decimal
+    def __lt__(self, other): return self.price < other.price
 
 @dataclass
 class OrderBook:
-    """Aggregated order book from an exchange"""
-    exchange: Exchange
-    symbol: str
-    bids: List[LiquidityLevel]  # Sorted descending (best bid first)
-    asks: List[LiquidityLevel]  # Sorted ascending (best ask first)
-    timestamp: datetime
-    
-    def get_best_bid(self) -> Optional[LiquidityLevel]:
-        """Get best bid"""
-        return self.bids[0] if self.bids else None
-    
-    def get_best_ask(self) -> Optional[LiquidityLevel]:
-        """Get best ask"""
-        return self.asks[0] if self.asks else None
-    
-    def to_dict(self) -> Dict:
-        """Convert to dictionary"""
-        return {
-            'exchange': self.exchange.value,
-            'symbol': self.symbol,
-            'best_bid': float(self.bids[0].price) if self.bids else None,
-            'best_ask': float(self.asks[0].price) if self.asks else None,
-            'bid_depth': sum(float(level.size) for level in self.bids),
-            'ask_depth': sum(float(level.size) for level in self.asks),
-            'timestamp': self.timestamp.isoformat()
-        }
-
+    exchange: Exchange; symbol: str; bids: List[LiquidityLevel]; asks: List[LiquidityLevel]; timestamp: datetime
+    def get_best_bid(self): return self.bids[0] if self.bids else None
+    def get_best_ask(self): return self.asks[0] if self.asks else None
+    def to_dict(self):
+        return {"exchange":self.exchange.value,"symbol":self.symbol,
+                "best_bid":float(self.bids[0].price) if self.bids else None,
+                "best_ask":float(self.asks[0].price) if self.asks else None,
+                "bid_depth":sum(float(x.size) for x in self.bids),
+                "ask_depth":sum(float(x.size) for x in self.asks),"timestamp":self.timestamp.isoformat()}
 
 @dataclass
 class RouteSegment:
-    """A segment of a routed order"""
-    exchange: Exchange
-    price: Decimal
-    size: Decimal
-    side: str  # 'buy' or 'sell'
-    estimated_fee: Decimal
-    
-    def total_cost(self) -> Decimal:
-        """Calculate total cost including fees"""
-        base_cost = self.price * self.size
-        return base_cost + self.estimated_fee
-    
-    def to_dict(self) -> Dict:
-        """Convert to dictionary"""
-        return {
-            'exchange': self.exchange.value,
-            'price': float(self.price),
-            'size': float(self.size),
-            'side': self.side,
-            'estimated_fee': float(self.estimated_fee),
-            'total_cost': float(self.total_cost())
-        }
-
+    exchange: Exchange; price: Decimal; size: Decimal; side: str; estimated_fee: Decimal
+    def total_cost(self): return self.price*self.size+self.estimated_fee
+    def to_dict(self):
+        return {"exchange":self.exchange.value,"price":float(self.price),"size":float(self.size),
+                "side":self.side,"estimated_fee":float(self.estimated_fee),"total_cost":float(self.total_cost())}
 
 @dataclass
 class RoutedOrder:
-    """Order routing plan"""
-    symbol: str
-    side: str  # 'buy' or 'sell'
-    total_size: Decimal
-    segments: List[RouteSegment]
-    avg_price: Decimal
-    total_cost: Decimal
-    total_fees: Decimal
-    slippage_pct: float
-    created_at: datetime
-    
-    def to_dict(self) -> Dict:
-        """Convert to dictionary"""
-        return {
-            'symbol': self.symbol,
-            'side': self.side,
-            'total_size': float(self.total_size),
-            'segments': [seg.to_dict() for seg in self.segments],
-            'avg_price': float(self.avg_price),
-            'total_cost': float(self.total_cost),
-            'total_fees': float(self.total_fees),
-            'slippage_pct': self.slippage_pct,
-            'num_venues': len(set(seg.exchange for seg in self.segments)),
-            'created_at': self.created_at.isoformat()
-        }
-
+    symbol:str; side:str; total_size:Decimal; segments:List[RouteSegment]; avg_price:Decimal
+    total_cost:Decimal; total_fees:Decimal; slippage_pct:float; created_at:datetime
+    def to_dict(self):
+        return {"symbol":self.symbol,"side":self.side,"total_size":float(self.total_size),
+                "segments":[x.to_dict() for x in self.segments],"avg_price":float(self.avg_price),
+                "total_cost":float(self.total_cost),"total_fees":float(self.total_fees),
+                "slippage_pct":self.slippage_pct,"num_venues":len({x.exchange for x in self.segments}),
+                "created_at":self.created_at.isoformat()}
 
 class LiquidityRoutingSystem:
-    """
-    Smart order routing system for optimal execution
-    
-    How it works:
-    1. Aggregate liquidity from multiple exchanges
-    2. Sort by best price
-    3. Split order across venues for best execution
-    4. Calculate total cost including fees and slippage
-    5. Route to minimize total cost
-    
-    Example:
-        Want to buy 5 BTC
-        Coinbase: 1 BTC @ $50,000
-        Kraken: 2 BTC @ $49,990
-        Binance: 3 BTC @ $50,010
-        
-        Optimal route:
-        1. Buy 2 BTC on Kraken @ $49,990
-        2. Buy 1 BTC on Coinbase @ $50,000
-        3. Buy 2 BTC on Binance @ $50,010
-        Avg price: $49,998 (saved $60 vs buying all on Coinbase)
-    """
-    
-    def __init__(self, config: Dict = None):
-        """
-        Initialize liquidity routing system
-        
-        Args:
-            config: Optional configuration dictionary
-        """
-        self.config = config or {}
-        
-        # Fee structures
-        self.fee_rates = {
-            Exchange.COINBASE: Decimal('0.006'),  # 0.6%
-            Exchange.KRAKEN: Decimal('0.0026'),  # 0.26%
-            Exchange.BINANCE: Decimal('0.001'),  # 0.1%
-            Exchange.OKX: Decimal('0.001')  # 0.1%
-        }
-        
-        # Order books
-        self.order_books: Dict[Exchange, Dict[str, OrderBook]] = {}
-        
-        # Routing statistics
-        self.total_orders_routed = 0
-        self.total_savings_usd = Decimal('0')
-        
-        logger.info("LiquidityRoutingSystem initialized")
-    
-    def update_order_book(
-        self,
-        exchange: Exchange,
-        symbol: str,
-        bids: List[Tuple[Decimal, Decimal]],
-        asks: List[Tuple[Decimal, Decimal]]
-    ):
-        """
-        Update order book for an exchange
-        
-        Args:
-            exchange: Exchange name
-            symbol: Trading symbol
-            bids: List of (price, size) tuples
-            asks: List of (price, size) tuples
-        """
-        # Convert to LiquidityLevel objects
-        bid_levels = [
-            LiquidityLevel(exchange=exchange, price=price, size=size)
-            for price, size in bids
-        ]
-        ask_levels = [
-            LiquidityLevel(exchange=exchange, price=price, size=size)
-            for price, size in asks
-        ]
-        
-        # Sort: bids descending, asks ascending
-        bid_levels.sort(key=lambda x: x.price, reverse=True)
-        ask_levels.sort(key=lambda x: x.price)
-        
-        # Create order book
-        order_book = OrderBook(
-            exchange=exchange,
-            symbol=symbol,
-            bids=bid_levels,
-            asks=ask_levels,
-            timestamp=datetime.now()
-        )
-        
-        # Store
-        if exchange not in self.order_books:
-            self.order_books[exchange] = {}
-        self.order_books[exchange][symbol] = order_book
-    
-    def find_best_route(
-        self,
-        symbol: str,
-        side: str,
-        size: Decimal,
-        max_slippage_pct: float = 1.0
-    ) -> Optional[RoutedOrder]:
-        """
-        Find best routing for an order
-        
-        Args:
-            symbol: Trading symbol
-            side: 'buy' or 'sell'
-            size: Order size
-            max_slippage_pct: Maximum allowed slippage percentage
-        
-        Returns:
-            RoutedOrder or None if routing not possible
-        """
-        # Aggregate liquidity across exchanges
-        if side == 'buy':
-            liquidity = self._aggregate_asks(symbol)
-            is_ascending = True  # Best price is lowest
-        else:
-            liquidity = self._aggregate_bids(symbol)
-            is_ascending = False  # Best price is highest
-        
-        if not liquidity:
-            logger.warning(f"No liquidity available for {symbol}")
-            return None
-        
-        # Sort by price (best first)
-        liquidity.sort(key=lambda x: x.price, reverse=not is_ascending)
-        
-        # Route order across venues
-        segments = []
-        remaining_size = size
-        total_cost = Decimal('0')
-        total_fees = Decimal('0')
-        
-        for level in liquidity:
-            if remaining_size <= 0:
-                break
-            
-            # How much to fill at this level
-            fill_size = min(remaining_size, level.size)
-            
-            # Calculate fee
-            fee_rate = self.fee_rates.get(level.exchange, Decimal('0.001'))
-            fee = fill_size * level.price * fee_rate
-            
-            # Create segment
-            segment = RouteSegment(
-                exchange=level.exchange,
-                price=level.price,
-                size=fill_size,
-                side=side,
-                estimated_fee=fee
-            )
-            
-            segments.append(segment)
-            remaining_size -= fill_size
-            total_cost += segment.total_cost()
-            total_fees += fee
-        
-        # Check if we filled the entire order
-        if remaining_size > 0:
-            logger.warning(
-                f"Insufficient liquidity: requested {size}, only {size - remaining_size} available"
-            )
-            # Partial fill is still valid
-        
-        # Calculate average price
-        filled_size = size - remaining_size
-        if filled_size == 0:
-            return None
-        
-        avg_price = (total_cost - total_fees) / filled_size
-        
-        # Calculate slippage vs best price
-        best_price = liquidity[0].price
-        slippage_pct = float(abs(avg_price - best_price) / best_price * 100)
-        
-        # Check slippage tolerance
-        if slippage_pct > max_slippage_pct:
-            logger.warning(
-                f"Slippage {slippage_pct:.2f}% exceeds max {max_slippage_pct:.2f}%"
-            )
-            # Could return None here to reject order, or proceed anyway
-        
-        # Create routed order
-        routed_order = RoutedOrder(
-            symbol=symbol,
-            side=side,
-            total_size=filled_size,
-            segments=segments,
-            avg_price=avg_price,
-            total_cost=total_cost,
-            total_fees=total_fees,
-            slippage_pct=slippage_pct,
-            created_at=datetime.now()
-        )
-        
-        self.total_orders_routed += 1
-        
-        # Calculate savings vs worst case (single venue)
-        worst_case_cost = self._calculate_worst_case_cost(symbol, side, size)
-        if worst_case_cost:
-            savings = worst_case_cost - total_cost
-            self.total_savings_usd += savings
-            logger.info(f"Routing savings: ${savings:.2f}")
-        
-        logger.info(
-            f"Route found: {side.upper()} {filled_size} {symbol} | "
-            f"Avg price: ${avg_price:.2f} | Slippage: {slippage_pct:.2f}% | "
-            f"Venues: {len(set(seg.exchange for seg in segments))}"
-        )
-        
-        return routed_order
-    
-    def _aggregate_asks(self, symbol: str) -> List[LiquidityLevel]:
-        """Aggregate all ask liquidity for a symbol"""
-        all_asks = []
-        
-        for exchange, books in self.order_books.items():
-            if symbol in books:
-                all_asks.extend(books[symbol].asks)
-        
-        return all_asks
-    
-    def _aggregate_bids(self, symbol: str) -> List[LiquidityLevel]:
-        """Aggregate all bid liquidity for a symbol"""
-        all_bids = []
-        
-        for exchange, books in self.order_books.items():
-            if symbol in books:
-                all_bids.extend(books[symbol].bids)
-        
-        return all_bids
-    
-    def _calculate_worst_case_cost(
-        self,
-        symbol: str,
-        side: str,
-        size: Decimal
-    ) -> Optional[Decimal]:
-        """Calculate cost of filling entire order on single worst venue"""
-        # For simplicity, assume worst = most expensive
-        # In practice, would walk the book
-        if side == 'buy':
-            liquidity = self._aggregate_asks(symbol)
-            if not liquidity:
-                return None
-            worst_price = max(level.price for level in liquidity)
-        else:
-            liquidity = self._aggregate_bids(symbol)
-            if not liquidity:
-                return None
-            worst_price = min(level.price for level in liquidity)
-        
-        # Assume average fee
-        avg_fee_rate = sum(self.fee_rates.values()) / len(self.fee_rates)
-        
-        return size * worst_price * (Decimal('1') + avg_fee_rate)
-    
-    def get_best_price(
-        self,
-        symbol: str,
-        side: str
-    ) -> Optional[Tuple[Exchange, Decimal]]:
-        """
-        Get best price across all exchanges
-        
-        Args:
-            symbol: Trading symbol
-            side: 'buy' or 'sell'
-        
-        Returns:
-            Tuple of (exchange, price) or None
-        """
-        if side == 'buy':
-            liquidity = self._aggregate_asks(symbol)
-            if not liquidity:
-                return None
-            best = min(liquidity, key=lambda x: x.price)
-        else:
-            liquidity = self._aggregate_bids(symbol)
-            if not liquidity:
-                return None
-            best = max(liquidity, key=lambda x: x.price)
-        
-        return (best.exchange, best.price)
-    
-    def get_liquidity_summary(self, symbol: str) -> Dict:
-        """Get liquidity summary for a symbol"""
-        total_bid_size = Decimal('0')
-        total_ask_size = Decimal('0')
-        exchanges_with_liquidity = []
-        
-        for exchange, books in self.order_books.items():
-            if symbol in books:
-                book = books[symbol]
-                bid_size = sum(level.size for level in book.bids)
-                ask_size = sum(level.size for level in book.asks)
-                
-                if bid_size > 0 or ask_size > 0:
-                    exchanges_with_liquidity.append(exchange.value)
-                    total_bid_size += bid_size
-                    total_ask_size += ask_size
-        
-        # Get best prices
-        best_bid = self.get_best_price(symbol, 'sell')
-        best_ask = self.get_best_price(symbol, 'buy')
-        
-        return {
-            'symbol': symbol,
-            'total_bid_size': float(total_bid_size),
-            'total_ask_size': float(total_ask_size),
-            'best_bid': {
-                'exchange': best_bid[0].value,
-                'price': float(best_bid[1])
-            } if best_bid else None,
-            'best_ask': {
-                'exchange': best_ask[0].value,
-                'price': float(best_ask[1])
-            } if best_ask else None,
-            'spread_pct': float((best_ask[1] - best_bid[1]) / best_bid[1] * 100) if best_bid and best_ask else None,
-            'exchanges': exchanges_with_liquidity,
-            'num_exchanges': len(exchanges_with_liquidity)
-        }
-    
-    def get_stats(self) -> Dict:
-        """Get routing statistics"""
-        return {
-            'total_orders_routed': self.total_orders_routed,
-            'total_savings_usd': float(self.total_savings_usd),
-            'avg_savings_per_order': (
-                float(self.total_savings_usd / self.total_orders_routed)
-                if self.total_orders_routed > 0 else 0.0
-            ),
-            'exchanges_tracked': len(self.order_books),
-            'symbols_available': len(set(
-                symbol
-                for books in self.order_books.values()
-                for symbol in books.keys()
-            ))
-        }
+    """Routes using price/fees plus venue depth, spread, and realized volatility."""
+    DEFAULT_PROFILE={"depth_weight":.40,"spread_weight":.25,"volatility_weight":.25,
+                     "fee_weight":.10,"volatility_soft_limit_pct":1.5,"max_participation_rate":.80}
+    def __init__(self, config:Dict=None):
+        self.config=config or {}
+        self.fee_rates={Exchange.COINBASE:Decimal("0.006"),Exchange.KRAKEN:Decimal("0.0026"),
+                        Exchange.BINANCE:Decimal("0.001"),Exchange.OKX:Decimal("0.001")}
+        for k,v in self.config.get("fee_rates",{}).items():
+            e=self._exchange(k)
+            if e: self.fee_rates[e]=Decimal(str(v))
+        self.order_books={}; self._mid_history={}; self.total_orders_routed=0; self.total_savings_usd=Decimal("0")
+        self._window=max(3,int(self.config.get("volatility_window",24)))
+        self._max_penalty_bps=max(0.,float(self.config.get("max_microstructure_penalty_bps",20.)))
+    @staticmethod
+    def _exchange(v):
+        if isinstance(v,Exchange): return v
+        try: return Exchange(str(v).lower())
+        except (ValueError,TypeError): return None
+    def _profile(self,e):
+        p=dict(self.DEFAULT_PROFILE); p.update(self.config.get("venue_profiles",{}).get(e.value,{}) or {}); return p
+    def update_order_book(self,exchange,symbol,bids,asks):
+        exchange=self._exchange(exchange)
+        if exchange is None: raise ValueError("Unsupported exchange")
+        b=[LiquidityLevel(exchange,p,s) for p,s in bids]; a=[LiquidityLevel(exchange,p,s) for p,s in asks]
+        b.sort(key=lambda x:x.price,reverse=True); a.sort(key=lambda x:x.price)
+        book=OrderBook(exchange,symbol,b,a,datetime.now()); self.order_books.setdefault(exchange,{})[symbol]=book
+        if b and a and b[0].price>0 and a[0].price>0:
+            h=self._mid_history.setdefault(exchange,{}).setdefault(symbol,[]); h.append((b[0].price+a[0].price)/2)
+            if len(h)>self._window: del h[:-self._window]
+    def _vol_pct(self,e,symbol):
+        h=self._mid_history.get(e,{}).get(symbol,[]); r=[float((c-p)/p) for p,c in zip(h,h[1:]) if p>0]
+        if len(r)<2:return 0.0
+        m=sum(r)/len(r); return math.sqrt(sum((x-m)**2 for x in r)/len(r))*100
+    def get_venue_metrics(self,exchange,symbol,side,target_size=None):
+        e=self._exchange(exchange); book=self.order_books.get(e,{}).get(symbol) if e else None
+        if not book or not book.bids or not book.asks:return None
+        side=side.lower(); levels=book.asks if side=="buy" else book.bids
+        bid,ask=book.bids[0],book.asks[0]; spread=max(0.,float((ask.price-bid.price)/bid.price*100))
+        depth=sum((x.size for x in levels),Decimal("0")); target=target_size if target_size and target_size>0 else depth
+        depth_score=min(1.,float(depth/target)) if target>0 else 0.; p=self._profile(e)
+        vol=self._vol_pct(e,symbol); vol_score=1/(1+vol/max(.01,float(p["volatility_soft_limit_pct"])))
+        spread_score=1/(1+spread/max(.01,float(self.config.get("spread_soft_limit_pct",.20))))
+        fee=float(self.fee_rates.get(e,Decimal("0.001"))*100); fee_score=1/(1+fee/max(.01,float(self.config.get("fee_soft_limit_pct",.60))))
+        weights=[float(p[x]) for x in ("depth_weight","spread_weight","volatility_weight","fee_weight")]; total=sum(weights) or 1
+        score=sum(v*w/total for v,w in zip((depth_score,spread_score,vol_score,fee_score),weights))
+        return {"exchange":e.value,"symbol":symbol,"side":side,"venue_score":max(0.,min(1.,score)),
+                "spread_pct":spread,"side_depth":float(depth),"top5_depth":float(sum((x.size for x in levels[:5]),Decimal("0"))),
+                "depth_score":depth_score,"realized_volatility_pct":vol,"volatility_score":vol_score,
+                "fee_pct":fee,"fee_score":fee_score,"max_participation_rate":float(p["max_participation_rate"])}
+    def _effective(self,level,symbol,side,size):
+        m=self.get_venue_metrics(level.exchange,symbol,side,size); score=m["venue_score"] if m else 0
+        fee=self.fee_rates.get(level.exchange,Decimal("0.001")); penalty=Decimal(str((1-score)*self._max_penalty_bps/10000))
+        return level.price*(1+fee+penalty) if side=="buy" else level.price*(1-fee-penalty)
+    def _levels(self,symbol,side):
+        attr="asks" if side=="buy" else "bids"
+        return [x for books in self.order_books.values() if symbol in books for x in getattr(books[symbol],attr)]
+    def find_best_route(self,symbol,side,size,max_slippage_pct=1.0):
+        side=side.lower()
+        if side not in {"buy","sell"}: raise ValueError("side must be 'buy' or 'sell'")
+        if size<=0: raise ValueError("size must be positive")
+        levels=self._levels(symbol,side)
+        if not levels:return None
+        levels.sort(key=lambda x:self._effective(x,symbol,side,size),reverse=side=="sell")
+        venues={x.exchange for x in levels}; caps={}
+        for e in venues:
+            m=self.get_venue_metrics(e,symbol,side,size); p=self._profile(e)
+            if len(venues)==1: caps[e]=size
+            elif m:
+                rate=min(1.,max(.05,float(p["max_participation_rate"])*max(.25,m["volatility_score"])))
+                caps[e]=min(size,Decimal(str(m["side_depth"]))*Decimal(str(rate)))
+            else:caps[e]=Decimal("0")
+        used={e:Decimal("0") for e in venues}; remain=size; seg=[]; total=Decimal("0"); fees=Decimal("0")
+        for level in levels:
+            room=max(Decimal("0"),caps[level.exchange]-used[level.exchange]); fill=min(remain,level.size,room)
+            if fill<=0:continue
+            fee=fill*level.price*self.fee_rates.get(level.exchange,Decimal("0.001")); s=RouteSegment(level.exchange,level.price,fill,side,fee)
+            seg.append(s); used[level.exchange]+=fill; remain-=fill; total+=s.total_cost(); fees+=fee
+            if remain<=0:break
+        filled=size-remain
+        if filled<=0:return None
+        avg=(total-fees)/filled; raw=[x.price for x in levels]; best=min(raw) if side=="buy" else max(raw)
+        slippage=float(abs(avg-best)/best*100); self.total_orders_routed+=1
+        return RoutedOrder(symbol,side,filled,seg,avg,total,fees,slippage,datetime.now())
+    def get_best_price(self,symbol,side):
+        levels=self._levels(symbol,side)
+        if not levels:return None
+        x=min(levels,key=lambda y:y.price) if side=="buy" else max(levels,key=lambda y:y.price); return x.exchange,x.price
+    def get_best_venue(self,symbol,side,target_size):
+        out=[]
+        for e,books in self.order_books.items():
+            if symbol not in books:continue
+            m=self.get_venue_metrics(e,symbol,side,target_size)
+            if not m:continue
+            level=books[symbol].get_best_ask() if side=="buy" else books[symbol].get_best_bid(); m=dict(m)
+            m["best_price"]=float(level.price); m["effective_unit_price"]=float(self._effective(level,symbol,side,target_size)); out.append(m)
+        if not out:return None
+        return min(out,key=lambda x:x["effective_unit_price"]) if side=="buy" else max(out,key=lambda x:x["effective_unit_price"])
+    def get_liquidity_summary(self,symbol):
+        bid=sum((x.size for x in self._levels(symbol,"sell")),Decimal("0")); ask=sum((x.size for x in self._levels(symbol,"buy")),Decimal("0"))
+        ex=[e.value for e,b in self.order_books.items() if symbol in b]; bb=self.get_best_price(symbol,"sell"); ba=self.get_best_price(symbol,"buy")
+        return {"symbol":symbol,"total_bid_size":float(bid),"total_ask_size":float(ask),
+                "best_bid":{"exchange":bb[0].value,"price":float(bb[1])} if bb else None,
+                "best_ask":{"exchange":ba[0].value,"price":float(ba[1])} if ba else None,
+                "spread_pct":float((ba[1]-bb[1])/bb[1]*100) if bb and ba else None,"exchanges":ex,"num_exchanges":len(ex),
+                "venue_metrics":{e:{"buy":self.get_venue_metrics(Exchange(e),symbol,"buy"),"sell":self.get_venue_metrics(Exchange(e),symbol,"sell")} for e in ex}}
+    def get_stats(self):
+        return {"total_orders_routed":self.total_orders_routed,"total_savings_usd":float(self.total_savings_usd),
+                "avg_savings_per_order":float(self.total_savings_usd/self.total_orders_routed) if self.total_orders_routed else 0.,
+                "exchanges_tracked":len(self.order_books),"symbols_available":len({s for b in self.order_books.values() for s in b}),"venue_aware_routing":True}
 
-
-# Global instance
-liquidity_routing_system = LiquidityRoutingSystem()
+liquidity_routing_system=LiquidityRoutingSystem()
