@@ -64,10 +64,9 @@ def test_pre_v142_inflight_is_preserved_during_refresh_headroom() -> None:
 
 
 def test_direct_broker_connectivity_false_cannot_be_overridden_by_stale_manager_state() -> None:
-    broker_key = SimpleNamespace(value="kraken")
     broker = SimpleNamespace(connected=False)
     manager = SimpleNamespace(
-        _platform_brokers={broker_key: broker},
+        _platform_brokers={"kraken": broker},
         _platform_state={"kraken": "connected"},
         is_platform_connected=lambda raw_key: True,
     )
@@ -88,10 +87,9 @@ def test_direct_broker_connectivity_false_cannot_be_overridden_by_stale_manager_
 
 
 def test_direct_broker_connectivity_true_remains_connected() -> None:
-    broker_key = SimpleNamespace(value="coinbase")
     broker = SimpleNamespace(connected=True)
     manager = SimpleNamespace(
-        _platform_brokers={broker_key: broker},
+        _platform_brokers={"coinbase": broker},
         _platform_state={"coinbase": "disconnected"},
         is_platform_connected=lambda raw_key: False,
     )
