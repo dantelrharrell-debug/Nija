@@ -1,15 +1,21 @@
 """Fail-closed runtime quality convergence for live market data and capital refreshes.
 
 Production 2026-08-19 reached LIVE_ACTIVE with healthy writer authority, but logs
-showed two post-activation quality defects:
+showed post-activation quality and convergence defects:
 
 * Phase-3 scans could run for many minutes because the existing scan deadline
   guard preserved additional fetches after its deadline unless an environment
   override explicitly enabled hard skipping.
 * Capital refresh generations could repeatedly wait on the same already-timed-
   out broker worker merely because that daemon thread was still alive.
+* The trading-state activation-intent probe passed the literal string UNKNOWN
+  into StartupCoordinator.build_snapshot(), creating recurring synthetic
+  UNKNOWN -> LIVE_ACTIVE repairs even though the canonical state was known.
+* The v142 total runtime deadline left too little post-fetch headroom: a refresh
+  could publish a valid 3/3 snapshot near the end of its fetch budget and still
+  be retired while finishing same-tick post-publication work.
 
-v157 repairs those liveness problems without weakening trading safety:
+v157/v159 repairs those liveness problems without weakening trading safety:
 
 * explicitly installs the existing market-data stability and phase-3 stall
   guards and defaults the phase-3 deadline behavior to fail closed (skip data
@@ -20,6 +26,11 @@ v157 repairs those liveness problems without weakening trading safety:
 * when a prior capital broker worker is still alive beyond its own timeout,
   reuses no duplicate network request and fails that broker result immediately
   through the existing freshness-aware fallback/exclusion path;
+* replaces the activation-intent read-only UNKNOWN probe with the canonical
+  TradingStateMachine state while preserving explicit OFF/DRY_RUN/
+  LIVE_PENDING_CONFIRMATION/EMERGENCY_STOP states;
+* gives the v142 runtime pipeline enough bounded post-fetch completion headroom
+  while retaining a hard deadline strictly inside CapitalAuthority freshness;
 * never fabricates balances, extends freshness, changes signal thresholds,
   clears a kill switch, grants execution authority, forces candidates, or
   dispatches orders.
@@ -38,7 +49,9 @@ from typing import Any
 
 LOGGER = logging.getLogger("nija.runtime_quality_convergence_v157")
 MARKER = "20260819-runtime-quality-convergence-v157"
+READINESS_V159_MARKER = "20260819-runtime-readiness-v159"
 _FLAG = "NIJA_RUNTIME_QUALITY_CONVERGENCE_V157_READY"
+_V159_FLAG = "NIJA_RUNTIME_READINESS_V159_READY"
 _LOCK = threading.RLock()
 _QUALITY_LOCK = threading.RLock()
 _LATEST_CORE_QUALITY: dict[str, Any] = {}
@@ -47,6 +60,11 @@ _CAP_INIT_ATTR = "_nija_runtime_quality_v157_capital_init"
 _CAP_RESULT_ATTR = "_nija_runtime_quality_v157_capital_result"
 _CORE_ATTR = "_nija_runtime_quality_v157_core_quality"
 _HEALTH_ATTR = "_nija_runtime_quality_v157_market_health"
+_STATE_SOURCE_ATTR = "_nija_runtime_readiness_v159_state_source"
+_CAP_DEADLINE_ATTR = "_nija_runtime_readiness_v159_capital_deadline"
+_VALID_TRADING_STATES = frozenset(
+    {"OFF", "DRY_RUN", "LIVE_PENDING_CONFIRMATION", "LIVE_ACTIVE", "EMERGENCY_STOP"}
+)
 
 
 def _float_env(name: str, default: float) -> float:
@@ -191,6 +209,175 @@ def _patch_capital_expired_inflight_failfast() -> bool:
     )
 
 
+def _canonical_trading_state(tsm: ModuleType) -> str:
+    """Read the canonical trading state without inventing a live state."""
+    getter = getattr(tsm, "get_trading_state_machine", None)
+    if callable(getter):
+        try:
+            sm = getter()
+            current = getattr(sm, "get_current_state", lambda: None)()
+            value = str(getattr(current, "value", current) or "").strip().upper()
+            if value in _VALID_TRADING_STATES:
+                return value
+        except Exception:
+            pass
+
+    singleton = getattr(tsm, "trading_state_machine", None)
+    if singleton is not None:
+        try:
+            current = getattr(singleton, "get_current_state", lambda: None)()
+            value = str(getattr(current, "value", current) or "").strip().upper()
+            if value in _VALID_TRADING_STATES:
+                return value
+        except Exception:
+            pass
+
+    env_state = str(os.environ.get("NIJA_RUNTIME_TRADING_STATE", "") or "").strip().upper()
+    if env_state in _VALID_TRADING_STATES:
+        return env_state
+    return "OFF"
+
+
+def _patch_activation_intent_state_source() -> bool:
+    """Stop the read-only activation-intent probe from injecting literal UNKNOWN."""
+    try:
+        tsm = importlib.import_module("bot.trading_state_machine")
+    except Exception as exc:
+        LOGGER.error(
+            "RUNTIME_READINESS_V159_STATE_IMPORT_FAILED marker=%s error=%s:%s",
+            READINESS_V159_MARKER,
+            type(exc).__name__,
+            exc,
+        )
+        return False
+
+    current = getattr(tsm, "_activation_intent_present", None)
+    if not callable(current):
+        return False
+    if getattr(current, _STATE_SOURCE_ATTR, False):
+        return True
+
+    env_truthy = getattr(tsm, "_env_truthy", None)
+    coordinator_getter = getattr(tsm, "_get_startup_coordinator", None)
+    if not callable(coordinator_getter):
+        return False
+
+    @wraps(current)
+    def activation_intent_v159(runtime_mode: Any = None) -> bool:
+        if runtime_mode is not None:
+            live_intent = bool(getattr(runtime_mode, "is_live", False))
+        elif callable(env_truthy):
+            try:
+                live_intent = bool(env_truthy("LIVE_CAPITAL_VERIFIED"))
+            except Exception:
+                live_intent = False
+        else:
+            live_intent = str(os.environ.get("LIVE_CAPITAL_VERIFIED", "")).strip().lower() in {
+                "1", "true", "yes", "enabled", "on", "y"
+            }
+
+        coordinator_requested = False
+        state = _canonical_trading_state(tsm)
+        try:
+            coordinator_requested = bool(
+                coordinator_getter().build_snapshot(
+                    trading_state=state,
+                    activation_intent=False,
+                ).activation_intent
+            )
+        except Exception:
+            coordinator_requested = False
+        return bool(live_intent or coordinator_requested)
+
+    setattr(activation_intent_v159, _STATE_SOURCE_ATTR, True)
+    setattr(activation_intent_v159, "__wrapped__", current)
+    setattr(tsm, "_activation_intent_present", activation_intent_v159)
+    LOGGER.critical(
+        "ACTIVATION_INTENT_CANONICAL_STATE_SOURCE_V159 marker=%s state=%s literal_unknown_probe=false safety_states_preserved=true",
+        READINESS_V159_MARKER,
+        _canonical_trading_state(tsm),
+    )
+    return True
+
+
+def _capital_deadline_value(
+    original_deadline_s: float,
+    ttl_s: float,
+    fetch_budget_s: float,
+    post_fetch_headroom_s: float = 30.0,
+    safety_margin_s: float = 10.0,
+) -> float:
+    """Return a runtime deadline with tail headroom, strictly inside freshness."""
+    ttl = max(10.0, float(ttl_s))
+    budget = max(5.0, float(fetch_budget_s))
+    margin = max(5.0, min(float(safety_margin_s), max(5.0, ttl / 2.0)))
+    safe_ceiling = max(10.0, ttl - margin)
+    desired = budget + max(5.0, float(post_fetch_headroom_s))
+    floor = min(safe_ceiling, desired)
+    return max(10.0, min(safe_ceiling, max(float(original_deadline_s), floor)))
+
+
+def _patch_capital_pipeline_deadline_headroom() -> bool:
+    """Give v142 bounded post-fetch time without extending capital freshness."""
+    try:
+        v142 = importlib.import_module("bot.capital_publication_liveness_v142_patch")
+    except Exception as exc:
+        LOGGER.error(
+            "RUNTIME_READINESS_V159_CAPITAL_IMPORT_FAILED marker=%s error=%s:%s trading_fail_closed=true",
+            READINESS_V159_MARKER,
+            type(exc).__name__,
+            exc,
+        )
+        return False
+
+    current = getattr(v142, "_runtime_pipeline_deadline_seconds", None)
+    ttl_getter = getattr(v142, "_freshness_ttl_seconds", None)
+    budget_getter = getattr(v142, "_fetch_budget_seconds", None)
+    if not callable(current) or not callable(ttl_getter) or not callable(budget_getter):
+        return False
+    if getattr(current, _CAP_DEADLINE_ATTR, False):
+        return True
+    original = current
+
+    @wraps(original)
+    def deadline_v159() -> float:
+        try:
+            original_s = float(original())
+        except Exception:
+            original_s = 0.0
+        try:
+            ttl_s = float(ttl_getter())
+        except Exception:
+            ttl_s = 90.0
+        try:
+            fetch_budget_s = float(budget_getter())
+        except Exception:
+            fetch_budget_s = max(5.0, ttl_s - 30.0)
+        return _capital_deadline_value(
+            original_s,
+            ttl_s,
+            fetch_budget_s,
+            post_fetch_headroom_s=_float_env(
+                "NIJA_CAPITAL_RUNTIME_PIPELINE_POST_FETCH_HEADROOM_S", 30.0
+            ),
+            safety_margin_s=_float_env(
+                "NIJA_CAPITAL_RUNTIME_PIPELINE_SAFETY_MARGIN_S", 10.0
+            ),
+        )
+
+    setattr(deadline_v159, _CAP_DEADLINE_ATTR, True)
+    setattr(deadline_v159, "__wrapped__", original)
+    setattr(v142, "_runtime_pipeline_deadline_seconds", deadline_v159)
+    LOGGER.critical(
+        "CAPITAL_RUNTIME_DEADLINE_HEADROOM_V159 marker=%s deadline_s=%.1f ttl_s=%.1f fetch_budget_s=%.1f publication_expiry_extended=false generation_fence_unchanged=true trading_fail_closed_on_true_timeout=true",
+        READINESS_V159_MARKER,
+        deadline_v159(),
+        float(ttl_getter()),
+        float(budget_getter()),
+    )
+    return True
+
+
 def _record_core_quality(result: Any) -> None:
     """Capture the latest phase-3 data completeness without changing its result."""
     if not isinstance(result, (tuple, list)) or len(result) < 4:
@@ -288,8 +475,6 @@ def _patch_core_quality_probe() -> bool:
         setattr(phase3_quality_v157, "__wrapped__", original)
         setattr(cls, "_phase3_scan_and_enter", phase3_quality_v157)
 
-    # If the core is not imported yet, the runtime post-import watchdog will
-    # retry after phase3_scan_stall_guard's import hook has patched the class.
     return True if not seen else any(
         isinstance(sys.modules.get(name), ModuleType)
         and isinstance(getattr(sys.modules.get(name), "NijaCoreLoop", None), type)
@@ -342,26 +527,37 @@ def install() -> bool:
         capital_ok = _patch_capital_expired_inflight_failfast()
         health_ok = _patch_market_data_health()
         core_ok = _patch_core_quality_probe()
-        ready = bool(guards_ok and capital_ok and health_ok and core_ok)
+        state_source_ok = _patch_activation_intent_state_source()
+        deadline_ok = _patch_capital_pipeline_deadline_headroom()
+        readiness_v159 = bool(state_source_ok and deadline_ok)
+        ready = bool(guards_ok and capital_ok and health_ok and core_ok and readiness_v159)
         os.environ[_FLAG] = "1" if ready else "0"
+        os.environ[_V159_FLAG] = "1" if readiness_v159 else "0"
         LOGGER.critical(
-            "RUNTIME_QUALITY_CONVERGENCE_V157 marker=%s ready=%s phase3_deadline_fail_closed=true capital_expired_inflight_failfast=%s market_health_core_quality=%s core_probe=%s safety_gates_bypassed=false",
+            "RUNTIME_QUALITY_CONVERGENCE_V157 marker=%s ready=%s phase3_deadline_fail_closed=true capital_expired_inflight_failfast=%s market_health_core_quality=%s core_probe=%s state_source_v159=%s capital_deadline_v159=%s safety_gates_bypassed=false",
             MARKER,
             str(ready).lower(),
             str(capital_ok).lower(),
             str(health_ok).lower(),
             str(core_ok).lower(),
+            str(state_source_ok).lower(),
+            str(deadline_ok).lower(),
         )
         return ready
 
 
 __all__ = [
     "MARKER",
+    "READINESS_V159_MARKER",
     "install",
     "_flight_expired",
     "_expired_flight_ids",
     "_record_core_quality",
     "_core_quality_gate",
+    "_canonical_trading_state",
+    "_capital_deadline_value",
+    "_patch_activation_intent_state_source",
+    "_patch_capital_pipeline_deadline_headroom",
     "_patch_capital_expired_inflight_failfast",
     "_patch_core_quality_probe",
     "_patch_market_data_health",
