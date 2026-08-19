@@ -85,15 +85,16 @@ services:
         value: "5.00"
 
       # Multi-venue routing. Every connected venue is scanned independently and
-      # sized only from its own spendable quote balance.
+      # sized only from its own spendable quote balance. Alpaca is intentionally
+      # excluded while the platform Alpaca account is unfunded.
       - key: PRIMARY_EXECUTION_VENUE
         value: "auto"
       - key: NIJA_BROKER_PRIORITY
-        value: "okx,coinbase,kraken,alpaca"
+        value: "okx,coinbase,kraken"
       - key: NIJA_ENTRY_BROKER_PRIORITY
-        value: "okx,coinbase,kraken,alpaca"
+        value: "okx,coinbase,kraken"
       - key: NIJA_ALLOWED_EXECUTION_BROKERS
-        value: "okx,coinbase,kraken,alpaca"
+        value: "okx,coinbase,kraken"
       - key: NIJA_BROKER_INDEPENDENT_LIVE_EXECUTION
         value: "true"
       - key: NIJA_INDEPENDENT_BROKER_TRADING
@@ -147,10 +148,11 @@ services:
       - key: OKX_US_REGION
         value: "true"
 
-      # Alpaca US equities/ETFs activation. The venue remains fail-closed until
-      # credentials, connection, market hours, and spendable cash are verified.
+      # Alpaca platform standby. Credentials remain available for future funding,
+      # but the platform broker is not created, registered, position-synced, or
+      # eligible for execution while ENABLE_ALPACA=false.
       - key: ENABLE_ALPACA
-        value: "true"
+        value: "false"
       - key: ALPACA_MIN_BALANCE_USD
         value: "2.00"
 
