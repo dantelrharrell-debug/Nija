@@ -7,7 +7,9 @@ trade independently. This guard continuously restores the canonical alias, sets
 the authority broker threshold from the active readiness policy, installs the
 fail-closed v154 pre-authority structural gate repair, the v155 same-lease nonce
 maturity verifier, the v157 post-activation runtime-quality convergence repair,
-and the v158 bounded capital-pipeline publication-margin repair.
+the v158 bounded capital-pipeline publication-margin repair, the v161
+capital/position liveness convergence repair, and the v162 retired-observation
+fence.
 """
 from __future__ import annotations
 
@@ -158,6 +160,38 @@ def _install_v158_capital_margin() -> bool:
         return False
 
 
+def _install_v161_capital_position_convergence() -> bool:
+    try:
+        module = importlib.import_module("bot.runtime_capital_position_convergence_v161_patch")
+        install_fn = getattr(module, "install", None)
+        if not callable(install_fn):
+            raise RuntimeError("v161_install_missing")
+        return bool(install_fn())
+    except Exception as exc:
+        logger.error(
+            "RUNTIME_CAPITAL_POSITION_CONVERGENCE_V161_INSTALL_ERROR error=%s:%s trading_fail_closed=true",
+            type(exc).__name__,
+            exc,
+        )
+        return False
+
+
+def _install_v162_late_observation_fence() -> bool:
+    try:
+        module = importlib.import_module("bot.runtime_capital_late_observation_fence_v162_patch")
+        install_fn = getattr(module, "install", None)
+        if not callable(install_fn):
+            raise RuntimeError("v162_install_missing")
+        return bool(install_fn())
+    except Exception as exc:
+        logger.error(
+            "RUNTIME_CAPITAL_LATE_OBSERVATION_FENCE_V162_INSTALL_ERROR error=%s:%s trading_fail_closed=true",
+            type(exc).__name__,
+            exc,
+        )
+        return False
+
+
 def _iteration() -> bool:
     changed = _canonicalize_alias()
     required = _apply_broker_threshold()
@@ -166,6 +200,8 @@ def _iteration() -> bool:
     v155_installed = _install_v155_nonce_maturity()
     v157_installed = _install_v157_runtime_quality()
     v158_installed = _install_v158_capital_margin()
+    v161_installed = _install_v161_capital_position_convergence()
+    v162_installed = _install_v162_late_observation_fence()
     os.environ["NIJA_RUNTIME_POST_IMPORT_CONVERGENCE_INSTALLED"] = "1"
     if changed:
         logger.warning(
@@ -175,7 +211,9 @@ def _iteration() -> bool:
             _ALIAS,
         )
     logger.debug(
-        "RUNTIME_POST_IMPORT_CONVERGENCE marker=%s policy=%s min_brokers=%d audit_patched=%s v154_installed=%s v155_installed=%s v157_installed=%s v158_installed=%s",
+        "RUNTIME_POST_IMPORT_CONVERGENCE marker=%s policy=%s min_brokers=%d audit_patched=%s "
+        "v154_installed=%s v155_installed=%s v157_installed=%s v158_installed=%s "
+        "v161_installed=%s v162_installed=%s",
         _MARKER,
         _policy(),
         required,
@@ -184,8 +222,17 @@ def _iteration() -> bool:
         str(v155_installed).lower(),
         str(v157_installed).lower(),
         str(v158_installed).lower(),
+        str(v161_installed).lower(),
+        str(v162_installed).lower(),
     )
-    return bool(v154_installed and v155_installed and v157_installed and v158_installed)
+    return bool(
+        v154_installed
+        and v155_installed
+        and v157_installed
+        and v158_installed
+        and v161_installed
+        and v162_installed
+    )
 
 
 def _watchdog() -> None:
@@ -209,7 +256,10 @@ def install() -> bool:
                 daemon=True,
             ).start()
         logger.critical(
-            "RUNTIME_POST_IMPORT_CONVERGENCE_INSTALLED marker=%s policy=%s min_brokers=%d alias_same=true v154_recovery=true v155_nonce_maturity=true v157_runtime_quality=true v158_capital_margin=true",
+            "RUNTIME_POST_IMPORT_CONVERGENCE_INSTALLED marker=%s policy=%s min_brokers=%d "
+            "alias_same=true v154_recovery=true v155_nonce_maturity=true v157_runtime_quality=true "
+            "v158_capital_margin=true v161_capital_position_convergence=true "
+            "v162_late_observation_fence=true",
             _MARKER,
             _policy(),
             _required_broker_count(),
@@ -228,5 +278,7 @@ __all__ = [
     "_install_v155_nonce_maturity",
     "_install_v157_runtime_quality",
     "_install_v158_capital_margin",
+    "_install_v161_capital_position_convergence",
+    "_install_v162_late_observation_fence",
     "_iteration",
 ]
