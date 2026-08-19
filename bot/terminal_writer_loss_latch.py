@@ -237,10 +237,11 @@ def _halt_seak_on_terminal_loss(reason: str) -> None:
         if seak is not None:
             halt = getattr(seak, "emergency_halt", None)
             if callable(halt):
-                halt(
-                    f"terminal_writer_loss:{reason}",
-                    source="terminal_writer_loss_latch",
-                )
+                # SingleExecutionAuthorityKernel.emergency_halt() accepts one
+                # positional reason.  Keep source provenance in the structured
+                # log instead of passing an unsupported keyword at the most
+                # important fail-closed boundary.
+                halt(f"terminal_writer_loss:{reason}")
                 logger.critical(
                     "SEAK_HALT_DIAGNOSTIC reason=terminal_writer_loss "
                     "source=terminal_writer_loss_latch "
