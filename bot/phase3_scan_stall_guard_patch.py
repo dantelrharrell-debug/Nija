@@ -5,15 +5,18 @@ import logging
 import os
 import sys
 import time
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from functools import wraps
 from types import ModuleType
 from typing import Any, Iterable
 
 logger = logging.getLogger("nija.phase3_scan_stall_guard")
 _MARKER = "20260709an"
+_PREFETCH_MARKER = "20260820-phase3-bounded-prefetch-v171"
 _HOOK_FLAG = "_NIJA_PHASE3_SCAN_STALL_GUARD_HOOK_20260709AN"
 _PHASE3_PATCH_ATTR = "_nija_phase3_scan_stall_guard_20260709an"
 _FETCH_PATCH_ATTR = "_nija_phase3_fetch_deadline_guard_20260709an"
+_PREFETCH_PATCH_ATTR = "_nija_phase3_bounded_prefetch_v171"
 _TRUE = {"1", "true", "yes", "on", "enabled", "y"}
 
 
@@ -130,6 +133,66 @@ def _window_symbols(owner: Any, symbols: Iterable[Any] | None, available_slots: 
     return selected, {"original": total, "selected": len(selected), "cursor": cursor, "next_cursor": next_cursor}
 
 
+def _bounded_prefetch(
+    owner: Any,
+    broker: Any,
+    selected: list[Any],
+    fetch_fn: Any,
+    cache: dict[str, Any],
+    deadline_ts: float,
+) -> tuple[int, int]:
+    """Populate the same-cycle cache without exceeding the Phase 3 deadline."""
+    if not selected or not callable(fetch_fn) or not _truthy("NIJA_PHASE3_PREFETCH_ENABLED", True):
+        return 0, 0
+    max_workers = max(
+        1,
+        min(
+            len(selected),
+            _int_env("NIJA_PHASE3_PREFETCH_WORKERS", 6),
+            _int_env("NIJA_MAX_OHLC_WORKERS", 8),
+        ),
+    )
+    if max_workers <= 1:
+        return 0, 0
+
+    futures: dict[Future[Any], str] = {}
+    executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="nija-phase3-prefetch")
+    try:
+        for symbol in selected:
+            if time.monotonic() >= deadline_ts:
+                break
+            key = str(symbol or "unknown")
+            try:
+                futures[executor.submit(fetch_fn, owner, broker, symbol)] = key
+            except RuntimeError:
+                break
+
+        pending = set(futures)
+        while pending:
+            remaining = max(0.0, deadline_ts - time.monotonic())
+            if remaining <= 0.0:
+                break
+            done, pending = wait(
+                pending,
+                timeout=min(0.25, remaining),
+                return_when=FIRST_COMPLETED,
+            )
+            for future in done:
+                key = futures[future]
+                try:
+                    frame = future.result(timeout=0)
+                except Exception:
+                    frame = None
+                if _cacheable_df(frame):
+                    cache[key] = frame
+        for future in pending:
+            future.cancel()
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
+
+    return len(futures), len(cache)
+
+
 def _patch_core_loop_module(module: ModuleType) -> bool:
     cls = getattr(module, "NijaCoreLoop", None)
     if not isinstance(cls, type):
@@ -159,17 +222,21 @@ def _patch_core_loop_module(module: ModuleType) -> bool:
                 except Exception:
                     pass
 
+            # v171: prefetch and scoring share the same immutable Phase 3
+            # deadline. Strong prefetched frames are consumed before any second
+            # exchange call, eliminating the serial re-fetch pattern.
+            cached = cache.get(symbol) if cache_active else None
+            if _cacheable_df(cached):
+                logger.debug(
+                    "PHASE3_PREFETCH_CACHE_HIT marker=%s symbol=%s rows=%d",
+                    _PREFETCH_MARKER,
+                    symbol,
+                    _df_len(cached),
+                )
+                return cached
+
             if deadline_elapsed:
                 if _truthy("NIJA_PHASE3_FETCH_DEADLINE_SKIP_ENABLED", False):
-                    cached = cache.get(symbol) if cache_active else None
-                    if _cacheable_df(cached):
-                        logger.warning(
-                            "PHASE3_SELECTED_CANDIDATE_CACHE_REUSED marker=%s symbol=%s reason=deadline_elapsed_hard_skip_cache_hit rows=%d",
-                            _MARKER,
-                            symbol,
-                            _df_len(cached),
-                        )
-                        return cached
                     logger.warning(
                         "PHASE3_SCAN_STALL_GUARD_DEADLINE_SKIP marker=%s symbol=%s reason=phase3_deadline_elapsed hard_skip=true cache_hit=false",
                         _MARKER,
@@ -221,6 +288,7 @@ def _patch_core_loop_module(module: ModuleType) -> bool:
             return result
 
         setattr(fetch_df_with_phase3_deadline, _FETCH_PATCH_ATTR, True)
+        setattr(fetch_df_with_phase3_deadline, _PREFETCH_PATCH_ATTR, True)
         setattr(cls, "_fetch_df", fetch_df_with_phase3_deadline)
         patched = True
 
@@ -240,9 +308,31 @@ def _patch_core_loop_module(module: ModuleType) -> bool:
             setattr(self, "_nija_phase3_deadline_ts_20260709am", deadline_ts)
             setattr(self, "_nija_phase3_deadline_ts_20260709al", deadline_ts)
             setattr(self, "_nija_phase3_market_data_cache_active_20260709an", True)
-            setattr(self, "_nija_phase3_market_data_cache_20260709an", {})
+            cycle_cache: dict[str, Any] = {}
+            setattr(self, "_nija_phase3_market_data_cache_20260709an", cycle_cache)
+
+            prefetch_started = time.monotonic()
+            submitted, cached_count = _bounded_prefetch(
+                self,
+                broker,
+                list(selected),
+                original_fetch,
+                cycle_cache,
+                deadline_ts,
+            )
+            logger.info(
+                "PHASE3_PREFETCH_V171 marker=%s selected=%d submitted=%d cached=%d elapsed_s=%.3f deadline_remaining_s=%.3f workers=%d",
+                _PREFETCH_MARKER,
+                len(selected),
+                submitted,
+                cached_count,
+                time.monotonic() - prefetch_started,
+                max(0.0, deadline_ts - time.monotonic()),
+                max(1, min(len(selected) or 1, _int_env("NIJA_PHASE3_PREFETCH_WORKERS", 6), _int_env("NIJA_MAX_OHLC_WORKERS", 8))),
+            )
+
             logger.critical(
-                "PHASE3_SCAN_STALL_GUARD_WINDOW marker=%s original_symbols=%d selected_symbols=%d cursor=%d next_cursor=%d available_slots=%s deadline_s=%.1f hard_deadline_skip=%s cache_same_cycle_market_data=true",
+                "PHASE3_SCAN_STALL_GUARD_WINDOW marker=%s original_symbols=%d selected_symbols=%d cursor=%d next_cursor=%d available_slots=%s deadline_s=%.1f hard_deadline_skip=%s cache_same_cycle_market_data=true bounded_prefetch_v171=true",
                 _MARKER,
                 int(meta.get("original", 0)),
                 int(meta.get("selected", 0)),
@@ -253,7 +343,7 @@ def _patch_core_loop_module(module: ModuleType) -> bool:
                 _truthy("NIJA_PHASE3_FETCH_DEADLINE_SKIP_ENABLED", False),
             )
             print(
-                f"[NIJA-PRINT] PHASE3_SCAN_STALL_GUARD_WINDOW marker={_MARKER} original={meta.get('original', 0)} selected={meta.get('selected', 0)} cursor={meta.get('cursor', 0)} next={meta.get('next_cursor', 0)} hard_skip={_truthy('NIJA_PHASE3_FETCH_DEADLINE_SKIP_ENABLED', False)} cache=true",
+                f"[NIJA-PRINT] PHASE3_SCAN_STALL_GUARD_WINDOW marker={_MARKER} original={meta.get('original', 0)} selected={meta.get('selected', 0)} cursor={meta.get('cursor', 0)} next={meta.get('next_cursor', 0)} hard_skip={_truthy('NIJA_PHASE3_FETCH_DEADLINE_SKIP_ENABLED', False)} cache=true prefetch_v171=true",
                 flush=True,
             )
             started = time.monotonic()
@@ -272,37 +362,40 @@ def _patch_core_loop_module(module: ModuleType) -> bool:
                 except Exception:
                     pass
             elapsed = time.monotonic() - started
-            if elapsed >= timeout_s:
+            total_elapsed = max(0.0, time.monotonic() - prefetch_started)
+            if total_elapsed >= timeout_s:
                 logger.warning(
-                    "PHASE3_SCAN_STALL_GUARD_OVER_DEADLINE marker=%s elapsed_s=%.2f deadline_s=%.2f selected_symbols=%d original_symbols=%d action=preserved_ranked_candidates_cache_enabled",
+                    "PHASE3_SCAN_STALL_GUARD_OVER_DEADLINE marker=%s elapsed_s=%.2f deadline_s=%.2f selected_symbols=%d original_symbols=%d action=fail_closed_missing_data bounded_prefetch_v171=true",
                     _MARKER,
-                    elapsed,
+                    total_elapsed,
                     timeout_s,
                     int(meta.get("selected", 0)),
                     int(meta.get("original", 0)),
                 )
             else:
                 logger.info(
-                    "PHASE3_SCAN_STALL_GUARD_COMPLETE marker=%s elapsed_s=%.2f selected_symbols=%d original_symbols=%d cache_enabled=true",
+                    "PHASE3_SCAN_STALL_GUARD_COMPLETE marker=%s elapsed_s=%.2f selected_symbols=%d original_symbols=%d cache_enabled=true bounded_prefetch_v171=true scan_body_s=%.2f",
                     _MARKER,
-                    elapsed,
+                    total_elapsed,
                     int(meta.get("selected", 0)),
                     int(meta.get("original", 0)),
+                    elapsed,
                 )
             return result
 
         setattr(phase3_with_stall_guard, _PHASE3_PATCH_ATTR, True)
+        setattr(phase3_with_stall_guard, _PREFETCH_PATCH_ATTR, True)
         setattr(cls, "_phase3_scan_and_enter", phase3_with_stall_guard)
         patched = True
 
     if patched:
         logger.warning(
-            "PHASE3_SCAN_STALL_GUARD_PATCHED marker=%s module=%s preserve_selected_candidates=true cache_same_cycle_market_data=true",
+            "PHASE3_SCAN_STALL_GUARD_PATCHED marker=%s module=%s preserve_selected_candidates=true cache_same_cycle_market_data=true bounded_prefetch_v171=true",
             _MARKER,
             getattr(module, "__name__", "unknown"),
         )
         print(
-            f"[NIJA-PRINT] PHASE3_SCAN_STALL_GUARD_PATCHED marker={_MARKER} preserve_selected_candidates=true cache_same_cycle_market_data=true",
+            f"[NIJA-PRINT] PHASE3_SCAN_STALL_GUARD_PATCHED marker={_MARKER} preserve_selected_candidates=true cache_same_cycle_market_data=true bounded_prefetch_v171=true",
             flush=True,
         )
     return patched
@@ -333,7 +426,7 @@ def install_import_hook() -> None:
 
     builtins.__import__ = importing
     setattr(builtins, _HOOK_FLAG, True)
-    logger.warning("PHASE3_SCAN_STALL_GUARD_INSTALL_COMPLETE marker=%s preserve_selected_candidates=true cache_same_cycle_market_data=true", _MARKER)
+    logger.warning("PHASE3_SCAN_STALL_GUARD_INSTALL_COMPLETE marker=%s preserve_selected_candidates=true cache_same_cycle_market_data=true bounded_prefetch_v171=true", _MARKER)
 
 
 def install() -> None:
