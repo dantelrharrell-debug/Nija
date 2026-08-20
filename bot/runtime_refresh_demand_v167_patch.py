@@ -11,7 +11,9 @@ the older 80s coordinator path. v168 is installed immediately afterward so
 retired physical v142 generations cannot starve the canonical recovery lane.
 v169 is then reasserted so authority-liveness heartbeats cannot masquerade as
 ORDER/FILL proof and fresh broker-owned observations are seeded immediately
-before canonical publication augmentation.
+before canonical publication augmentation. v170 then makes accepted capital
+publication/readiness monotonic, and v171 reasserts the bounded concurrent
+market-data path used by Phase 3.
 """
 from __future__ import annotations
 
@@ -98,40 +100,51 @@ def _patch_release_manifest() -> bool:
         return False
 
 
-def _install_v168_generation_liveness() -> bool:
+def _install_named(module_name: str, label: str) -> bool:
     try:
-        module = importlib.import_module("bot.runtime_capital_generation_liveness_v168_patch")
-        installer = getattr(module, "install", None)
+        module = importlib.import_module(module_name)
+        installer = getattr(module, "install", None) or getattr(module, "install_import_hook", None)
         if not callable(installer):
             return False
         return bool(installer())
     except Exception as exc:
         LOGGER.error(
-            "RUNTIME_CAPITAL_GENERATION_LIVENESS_V168_INSTALL_ERROR marker=%s error=%s:%s "
-            "trading_fail_closed=true",
+            "%s_INSTALL_ERROR marker=%s module=%s error=%s:%s trading_fail_closed=true",
+            label,
             MARKER,
+            module_name,
             type(exc).__name__,
             exc,
         )
         return False
+
+
+def _install_v168_generation_liveness() -> bool:
+    return _install_named(
+        "bot.runtime_capital_generation_liveness_v168_patch",
+        "RUNTIME_CAPITAL_GENERATION_LIVENESS_V168",
+    )
 
 
 def _install_v169_execution_capital_integrity() -> bool:
-    try:
-        module = importlib.import_module("bot.runtime_execution_capital_integrity_v169_patch")
-        installer = getattr(module, "install", None)
-        if not callable(installer):
-            return False
-        return bool(installer())
-    except Exception as exc:
-        LOGGER.error(
-            "RUNTIME_EXECUTION_CAPITAL_INTEGRITY_V169_INSTALL_ERROR marker=%s error=%s:%s "
-            "trading_fail_closed=true",
-            MARKER,
-            type(exc).__name__,
-            exc,
-        )
-        return False
+    return _install_named(
+        "bot.runtime_execution_capital_integrity_v169_patch",
+        "RUNTIME_EXECUTION_CAPITAL_INTEGRITY_V169",
+    )
+
+
+def _install_v170_capital_monotonicity() -> bool:
+    return _install_named(
+        "bot.runtime_capital_publication_monotonicity_v170_patch",
+        "RUNTIME_CAPITAL_PUBLICATION_MONOTONICITY_V170",
+    )
+
+
+def _install_v171_market_data_concurrency() -> bool:
+    return _install_named(
+        "bot.runtime_market_data_concurrency_v171_patch",
+        "RUNTIME_MARKET_DATA_CONCURRENCY_V171",
+    )
 
 
 def install() -> bool:
@@ -153,25 +166,38 @@ def install() -> bool:
         manifest_ok = _patch_release_manifest()
         v168_ok = _install_v168_generation_liveness()
         v169_ok = _install_v169_execution_capital_integrity()
-        ready = bool(verified and periodic_ok and manifest_ok and v168_ok and v169_ok)
+        v170_ok = _install_v170_capital_monotonicity()
+        v171_ok = _install_v171_market_data_concurrency()
+        ready = bool(
+            verified
+            and periodic_ok
+            and manifest_ok
+            and v168_ok
+            and v169_ok
+            and v170_ok
+            and v171_ok
+        )
         os.environ[_READY_FLAG] = "1" if ready else "0"
         if not ready:
             LOGGER.critical(
                 "RUNTIME_REFRESH_DEMAND_V167_FAILED marker=%s v32_verified=%s periodic_fallback_ok=%s "
-                "manifest_ok=%s v168_ok=%s v169_ok=%s trading_fail_closed=true",
+                "manifest_ok=%s v168_ok=%s v169_ok=%s v170_ok=%s v171_ok=%s trading_fail_closed=true",
                 MARKER,
                 str(verified).lower(),
                 str(periodic_ok).lower(),
                 str(manifest_ok).lower(),
                 str(v168_ok).lower(),
                 str(v169_ok).lower(),
+                str(v170_ok).lower(),
+                str(v171_ok).lower(),
             )
             return False
         LOGGER.critical(
             "RUNTIME_REFRESH_DEMAND_V167 marker=%s ready=true startup_double_refresh_removed=true "
             "monitor_initial_delay=true routine_refresh_owner=v137 periodic_fallback_bounded=true "
             "recovery_refresh_preserved=true v168_generation_liveness=true "
-            "v169_execution_capital_integrity=true publication_expiry_extended=false "
+            "v169_execution_capital_integrity=true v170_capital_monotonicity=true "
+            "v171_market_data_concurrency=true publication_expiry_extended=false "
             "stale_promoted=false safety_gates_bypassed=false",
             MARKER,
         )
@@ -190,4 +216,6 @@ __all__ = [
     "_patch_v166_periodic_fallback",
     "_install_v168_generation_liveness",
     "_install_v169_execution_capital_integrity",
+    "_install_v170_capital_monotonicity",
+    "_install_v171_market_data_concurrency",
 ]
