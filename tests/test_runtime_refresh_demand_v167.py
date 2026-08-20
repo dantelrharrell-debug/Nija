@@ -59,3 +59,47 @@ def test_install_sets_v167_prebot_attestation(monkeypatch):
     monkeypatch.delenv("NIJA_RUNTIME_REFRESH_DEMAND_V167_PREBOT_READY", raising=False)
     assert module.install_import_hook() is True
     assert os.environ["NIJA_RUNTIME_REFRESH_DEMAND_V167_PREBOT_READY"] == "1"
+
+
+def test_v167_attestation_bounds_periodic_fallback(monkeypatch):
+    patch = importlib.import_module("bot.runtime_refresh_demand_v167_patch")
+    v166 = importlib.import_module("bot.runtime_capital_refresh_ownership_v166_patch")
+
+    original = v166._is_proactive_trigger
+    monkeypatch.setattr(v166, "_is_proactive_trigger", original)
+    assert patch._patch_v166_periodic_fallback() is True
+    assert v166._is_proactive_trigger("periodic_runtime_convergence") is True
+    assert v166._is_proactive_trigger("periodic_runtime_convergence:retry") is True
+    assert v166._is_proactive_trigger("publication_deadline_v137") is True
+
+
+def test_v167_install_registers_release_manifest(monkeypatch):
+    patch = importlib.import_module("bot.runtime_refresh_demand_v167_patch")
+    manifest = importlib.import_module("bot.runtime_release_manifest_patch")
+    monkeypatch.setattr(manifest, "_REQUIRED_FLAGS", dict(manifest._REQUIRED_FLAGS))
+    monkeypatch.delenv("NIJA_RUNTIME_REFRESH_DEMAND_V167_READY", raising=False)
+
+    assert patch.install() is True
+    assert os.environ["NIJA_RUNTIME_REFRESH_DEMAND_V167_READY"] == "1"
+    assert manifest._REQUIRED_FLAGS["runtime_refresh_demand_v167"] == (
+        "NIJA_RUNTIME_REFRESH_DEMAND_V167_READY"
+    )
+
+
+def test_post_import_convergence_installs_v167(monkeypatch):
+    post = importlib.import_module("bot.runtime_post_import_convergence_patch")
+    calls: list[tuple[str, str, str]] = []
+
+    def fake_install_named(module_name: str, missing_reason: str, log_prefix: str) -> bool:
+        calls.append((module_name, missing_reason, log_prefix))
+        return True
+
+    monkeypatch.setattr(post, "_install_named", fake_install_named)
+    assert post._install_v167_refresh_demand() is True
+    assert calls == [
+        (
+            "bot.runtime_refresh_demand_v167_patch",
+            "v167_install_missing",
+            "RUNTIME_REFRESH_DEMAND_V167_INSTALL_ERROR",
+        )
+    ]
