@@ -1,37 +1,16 @@
-"""Runtime activation convergence repair v163.
+"""Converge platform position proof and nonce-lease activation liveness.
 
-Production deployment 4efea093 on 2026-08-19 proved that v161/v162 repaired the
-capital-liveness path, but exposed two final activation-liveness defects:
+v163 keeps all existing fail-closed requirements, but removes two startup
+liveness contradictions observed on 2026-08-19:
 
-* v108/v161 considered ``_startup_position_sync_adopted`` sufficient to stop
-  redispatching a platform broker. v146 correctly requires the independent
-  ``_startup_position_sync_fetch_ok is True`` proof, so a broker could be
-  reported ready by v96 while v146 revoked the same snapshot as unproven;
-* a same-owner/same-token Redis nonce lease that was merely finishing its
-  configured 30-second maturity window was counted as ``nonce_drift`` by the
-  execution circuit breaker. Three expected startup deferrals could therefore
-  permanently trip the breaker before the lease became mature. v155 also used a
-  two-second final wait cap, while production reached the final check only
-  2.31 seconds short of the full requirement.
+* a platform broker is not position-ready until both the adopted marker and the
+  independent authoritative-fetch proof are true;
+* a same-owner/same-token lease that is merely completing its configured
+  stability window remains an activation deferral, not a nonce-drift anomaly.
 
-v163 converges those paths without weakening their safety contracts:
-
-* position reconciliation remains pending until BOTH the adopted marker and the
-  authoritative fetch proof are true; missing fetch proof is redispatched by the
-  existing bounded single-flight worker;
-* the v161 worker only completes when both proofs are true;
-* the final nonce maturity re-check may wait at most five seconds, but still
-  requires the full configured stability duration and the exact same lease
-  token/owner before succeeding;
-* expected same-lease maturity deferrals are not counted as nonce-drift circuit
-  breaker anomalies. Real nonce failures, token/owner changes, stability
-  regression, Redis failures, and every other anomaly remain unchanged;
-* once the full nonce gate later succeeds, a breaker that was tripped solely by
-  the historical transient-maturity classification is cleared. No unrelated
-  breaker reason is reset.
-
-No position, capital, nonce, writer, risk, kill-switch, or trading readiness is
-fabricated.
+The full nonce stability duration, lease identity, Redis/writer authority,
+position fetch proof, circuit breakers for real faults, and every trading/risk
+safety gate remain required.
 """
 from __future__ import annotations
 
@@ -68,8 +47,7 @@ def _v155() -> ModuleType:
 
 
 def _connected_platform_brokers_requiring_proof(manager: Any) -> list[tuple[str, Any]]:
-    """Return connected platform brokers lacking either authoritative sync proof."""
-    v108 = _v108()
+    """Find connected platform brokers missing either authoritative sync proof."""
     found: list[tuple[str, Any]] = []
     try:
         platform = getattr(manager, "platform_brokers", {}) or {}
@@ -82,8 +60,8 @@ def _connected_platform_brokers_requiring_proof(manager: Any) -> list[tuple[str,
             fetch_ok = getattr(broker, "_startup_position_sync_fetch_ok", None) is True
             if adopted and fetch_ok:
                 continue
-            broker_name = str(getattr(broker_type, "value", broker_type) or "unknown").lower()
-            found.append((broker_name, broker))
+            name = str(getattr(broker_type, "value", broker_type) or "unknown").lower()
+            found.append((name, broker))
     except Exception as exc:
         LOGGER.warning(
             "POSITION_SYNC_V163_DISCOVERY_FAILED marker=%s error=%s:%s fail_closed=true",
@@ -101,7 +79,7 @@ def _position_worker_v163(
     key: tuple[int, int],
     trigger: str,
 ) -> None:
-    """Run authoritative v161 reconciliation until both sync proofs converge."""
+    """Retry authoritative adoption until BOTH adopted and fetch proof are true."""
     v108 = _v108()
     v161 = _v161()
     try:
@@ -111,7 +89,6 @@ def _position_worker_v163(
         adopt = getattr(sync_module, "_adopt_broker_positions", None)
         if not callable(adopt):
             raise RuntimeError("startup position-sync adopter unavailable")
-
         max_attempts, base_delay_s, max_delay_s = v108._retry_policy()
         LOGGER.critical(
             "POSITION_SYNC_V163_START marker=%s broker=%s trigger=%s max_attempts=%d "
@@ -134,10 +111,7 @@ def _position_worker_v163(
             adopted = bool(getattr(broker, "_startup_position_sync_adopted", False))
             fetch_ok = getattr(broker, "_startup_position_sync_fetch_ok", None) is True
             error = getattr(broker, "_startup_position_sync_error", None)
-            v108._publish_readiness(
-                manager,
-                source=f"v163:{trigger}:{broker_name}:attempt_{attempt}",
-            )
+            v108._publish_readiness(manager, source=f"v163:{trigger}:{broker_name}:attempt_{attempt}")
             if adopted and fetch_ok:
                 LOGGER.critical(
                     "POSITION_SYNC_V163_COMPLETE marker=%s broker=%s trigger=%s attempt=%d "
@@ -149,7 +123,6 @@ def _position_worker_v163(
                     error,
                 )
                 return
-
             if attempt >= max_attempts:
                 LOGGER.warning(
                     "POSITION_SYNC_V163_RETRIES_EXHAUSTED marker=%s broker=%s trigger=%s attempts=%d "
@@ -164,21 +137,7 @@ def _position_worker_v163(
                     type(attempt_error).__name__ if attempt_error is not None else "none",
                 )
                 return
-
             delay_s = min(max_delay_s, base_delay_s * (2 ** (attempt - 1)))
-            LOGGER.warning(
-                "POSITION_SYNC_V163_RETRY marker=%s broker=%s trigger=%s attempt=%d next_attempt=%d "
-                "delay_s=%.2f adopted=%s fetch_ok=%s error=%s trading_fail_closed=true",
-                MARKER,
-                broker_name,
-                trigger,
-                attempt,
-                attempt + 1,
-                delay_s,
-                str(adopted).lower(),
-                str(fetch_ok).lower(),
-                error,
-            )
             time.sleep(delay_s)
     except BaseException as exc:
         try:
@@ -209,51 +168,57 @@ def _position_worker_v163(
 
 def _patch_position_sync() -> bool:
     v108 = _v108()
-    current_discovery = getattr(v108, "_connected_unsynced_platform_brokers", None)
-    current_worker = getattr(v108, "_worker", None)
-    if not callable(current_discovery) or not callable(current_worker):
+    discovery = getattr(v108, "_connected_unsynced_platform_brokers", None)
+    worker = getattr(v108, "_worker", None)
+    if not callable(discovery) or not callable(worker):
         return False
+    if not bool(getattr(discovery, _PATCH_ATTR, False)):
+        original_discovery = discovery
 
-    if not bool(getattr(current_discovery, _PATCH_ATTR, False)):
-        @wraps(current_discovery)
+        @wraps(original_discovery)
         def discovery_v163(manager: Any) -> list[tuple[str, Any]]:
             return _connected_platform_brokers_requiring_proof(manager)
 
         setattr(discovery_v163, _PATCH_ATTR, True)
-        setattr(discovery_v163, "__wrapped__", current_discovery)
+        setattr(discovery_v163, "__wrapped__", original_discovery)
         v108._connected_unsynced_platform_brokers = discovery_v163
+    if not bool(getattr(worker, _PATCH_ATTR, False)):
+        original_worker = worker
 
-    if not bool(getattr(current_worker, _PATCH_ATTR, False)):
-        @wraps(current_worker)
+        @wraps(original_worker)
         def worker_v163(manager: Any, broker_name: str, broker: Any, key: tuple[int, int], trigger: str) -> None:
             _position_worker_v163(manager, broker_name, broker, key, trigger)
 
         setattr(worker_v163, _PATCH_ATTR, True)
-        setattr(worker_v163, "__wrapped__", current_worker)
+        setattr(worker_v163, "__wrapped__", original_worker)
         v108._worker = worker_v163
     return True
 
 
 def _transient_nonce_maturity(detail: str) -> bool:
+    """True only for an ordinary same-lease maturity deferral."""
     text = str(detail or "").lower()
-    return (
-        "nonce lease unstable" in text
-        and "lease_identity_changed" not in text
-        and "stability_regressed" not in text
-        and "hard fail" not in text
-        and "redis" not in text.split("nonce lease unstable", 1)[0]
+    if "nonce lease unstable" not in text:
+        return False
+    hard_markers = (
+        "lease_identity_changed",
+        "stability_regressed",
+        "invalid_status",
+        "status_unavailable",
+        "incomplete_identity",
+        "final_verify_error",
     )
+    return not any(marker in text for marker in hard_markers)
 
 
 def _clear_historical_maturity_breaker(tsm: ModuleType) -> bool:
-    """Clear only a breaker tripped solely by transient nonce lease immaturity."""
+    """Clear only a breaker whose recorded reason is transient lease maturity."""
     lock = getattr(tsm, "_EXECUTION_CIRCUIT_BREAKER_LOCK", None)
     counts = getattr(tsm, "_EXECUTION_CIRCUIT_BREAKER_COUNTS", None)
     reason = str(getattr(tsm, "_EXECUTION_CIRCUIT_BREAKER_REASON", "") or "")
-    tripped = bool(getattr(tsm, "_EXECUTION_CIRCUIT_BREAKER_TRIPPED", False))
-    if not tripped or not _transient_nonce_maturity(reason):
+    if not bool(getattr(tsm, "_EXECUTION_CIRCUIT_BREAKER_TRIPPED", False)):
         return False
-    if lock is None or not isinstance(counts, dict):
+    if not _transient_nonce_maturity(reason) or lock is None or not isinstance(counts, dict):
         return False
     with lock:
         current_reason = str(getattr(tsm, "_EXECUTION_CIRCUIT_BREAKER_REASON", "") or "")
@@ -275,40 +240,34 @@ def _clear_historical_maturity_breaker(tsm: ModuleType) -> bool:
 def _patch_nonce_convergence() -> bool:
     tsm = _tsm()
     v155 = _v155()
-
-    current_cap = getattr(v155, "_final_wait_cap_s", None)
-    if not callable(current_cap):
+    cap = getattr(v155, "_final_wait_cap_s", None)
+    record = getattr(tsm, "_record_execution_anomaly", None)
+    gate = getattr(tsm, "_nonce_writer_lease_gate", None)
+    if not callable(cap) or not callable(record) or not callable(gate):
         return False
-    if not bool(getattr(current_cap, _PATCH_ATTR, False)):
-        original_cap = current_cap
+
+    if not bool(getattr(cap, _PATCH_ATTR, False)):
+        original_cap = cap
 
         @wraps(original_cap)
         def final_wait_cap_v163() -> float:
-            # Preserve any operator value above five seconds only up to v155's
-            # own safety ceiling; lift the historical two-second default/limit
-            # just enough to finish the observed same-lease maturity edge.
-            try:
-                original_value = float(original_cap())
-            except Exception:
-                original_value = 2.0
-            return min(5.0, max(original_value, 5.0))
+            # v155 itself has a five-second safety ceiling. Raising the old
+            # two-second cap does not lower the configured maturity requirement.
+            return 5.0
 
         setattr(final_wait_cap_v163, _PATCH_ATTR, True)
         setattr(final_wait_cap_v163, "__wrapped__", original_cap)
         v155._final_wait_cap_s = final_wait_cap_v163
 
-    current_record = getattr(tsm, "_record_execution_anomaly", None)
-    if not callable(current_record):
-        return False
-    if not bool(getattr(current_record, _PATCH_ATTR, False)):
-        original_record = current_record
+    if not bool(getattr(record, _PATCH_ATTR, False)):
+        original_record = record
 
         @wraps(original_record)
         def record_v163(kind: str, detail: str = "") -> None:
             if str(kind) == "nonce_drift" and _transient_nonce_maturity(detail):
                 LOGGER.warning(
-                    "NONCE_V163_MATURITY_DEFERRAL_NOT_COUNTED marker=%s detail=%s "
-                    "activation_still_fail_closed=true circuit_breaker_bypass=false",
+                    "NONCE_V163_MATURITY_DEFERRAL_NOT_COUNTED marker=%s "
+                    "activation_still_fail_closed=true circuit_breaker_bypass=false detail=%s",
                     MARKER,
                     detail,
                 )
@@ -319,11 +278,8 @@ def _patch_nonce_convergence() -> bool:
         setattr(record_v163, "__wrapped__", original_record)
         tsm._record_execution_anomaly = record_v163
 
-    current_gate = getattr(tsm, "_nonce_writer_lease_gate", None)
-    if not callable(current_gate):
-        return False
-    if not bool(getattr(current_gate, _PATCH_ATTR, False)):
-        original_gate = current_gate
+    if not bool(getattr(gate, _PATCH_ATTR, False)):
+        original_gate = gate
 
         @wraps(original_gate)
         def gate_v163() -> tuple[bool, str]:
