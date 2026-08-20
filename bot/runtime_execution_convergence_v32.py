@@ -6,8 +6,14 @@ adds only fail-closed, idempotent coordination:
 * prevents nested ConnectionStabilityManager reconnect calls;
 * deduplicates reconnect hooks and preserves the original reconnect callable;
 * arms the existing writer-scoped Kraken authenticated recovery after authority;
-* requests a canonical capital refresh after broker recovery; and
-* re-evaluates activation/readiness after a fresh snapshot is published.
+* requests canonical capital refreshes after real broker recovery;
+* defers the initial writer-acquisition refresh until runtime capital startup is
+  actually ready, preventing a pre-patch bootstrap refresh from monopolizing the
+  coordinator;
+* leaves routine freshness refresh ownership to v137 once that scheduler is
+  running, so the 30-second convergence monitor does not create duplicate broker
+  I/O; and
+* re-evaluates activation/readiness without synthesizing capital.
 
 It does not synthesize balances, bypass authentication, force LIVE_ACTIVE, or
 submit orders.
@@ -28,6 +34,7 @@ from typing import Any, Callable, Optional
 
 LOGGER = logging.getLogger("nija.runtime_execution_convergence")
 MARKER = "20260727-runtime-execution-convergence-v32"
+REFRESH_DEMAND_MARKER = "20260819-runtime-refresh-demand-v167"
 _TRUE = {"1", "true", "yes", "on", "enabled", "y"}
 _TARGETS = {
     "bot.connection_stability_manager",
@@ -38,6 +45,8 @@ _LOCK = threading.RLock()
 _INSTALLED = False
 _MONITOR_STARTED = False
 _PATCHED_MODULES: set[int] = set()
+_ROUTINE_TRIGGER = "periodic_runtime_convergence"
+_STARTUP_TRIGGER = "writer_authority_acquired"
 
 
 def _truthy(name: str) -> bool:
@@ -97,36 +106,63 @@ def _call_first(module: ModuleType, names: tuple[str, ...]) -> bool:
     return False
 
 
-def _request_runtime_reconciliation(trigger: str) -> bool:
-    """Refresh canonical capital and re-evaluate readiness without bypasses."""
-    if not _writer_ready():
+def _canonical_manager() -> Any:
+    module = importlib.import_module("bot.multi_account_broker_manager")
+    getter = getattr(module, "get_broker_manager", None)
+    if not callable(getter):
+        raise RuntimeError("canonical_broker_manager_getter_missing")
+    manager = getter()
+    if manager is None:
+        raise RuntimeError("canonical_broker_manager_missing")
+    return manager
+
+
+def _event_is_set(value: Any) -> bool:
+    reader = getattr(value, "is_set", None)
+    if not callable(reader):
         return False
-    refreshed = False
     try:
-        manager_module = importlib.import_module("bot.multi_account_broker_manager")
-        manager = manager_module.get_broker_manager()
-        refresh = getattr(manager, "refresh_capital_authority", None)
-        if callable(refresh):
-            try:
-                refresh(trigger=trigger)
-            except TypeError:
-                refresh()
-            refreshed = True
-            LOGGER.warning(
-                "CAPITAL_REFRESH_REQUESTED marker=%s trigger=%s",
-                MARKER,
-                trigger,
-            )
-    except Exception as exc:
-        LOGGER.warning(
-            "CAPITAL_REFRESH_DEFERRED marker=%s trigger=%s error=%s:%s",
-            MARKER,
-            trigger,
-            type(exc).__name__,
-            exc,
-        )
+        return bool(reader())
+    except Exception:
         return False
 
+
+def _startup_runtime_refresh_ready(manager: Any) -> bool:
+    """True only after broker registration and the canonical startup lock are ready."""
+    registration = getattr(manager, "_broker_registration_complete", None)
+    if registration is not None and not _event_is_set(registration):
+        return False
+
+    if bool(getattr(manager, "_startup_lock_released", False)):
+        return True
+
+    try:
+        authority_module = importlib.import_module("bot.capital_authority")
+        getter = getattr(authority_module, "get_startup_lock", None)
+        if callable(getter):
+            return _event_is_set(getter())
+    except Exception:
+        pass
+    return False
+
+
+def _routine_refresh_owned_by_v137(manager: Any) -> bool:
+    """Return whether the dedicated publication scheduler owns routine refreshes."""
+    if not bool(getattr(manager, "_nija_capital_publication_deadline_v137_started", False)):
+        return False
+    try:
+        module = importlib.import_module("bot.capital_publication_deadline_v137_patch")
+        installed = str(os.environ.get("NIJA_CAPITAL_PUBLICATION_DEADLINE_V137_INSTALLED", "") or "")
+        return bool(
+            installed.strip().lower() in _TRUE
+            and callable(getattr(module, "_publication_refresh_due", None))
+            and callable(getattr(module, "_execute_deadline_refresh", None))
+        )
+    except Exception:
+        return False
+
+
+def _reevaluate_runtime_readiness() -> None:
     try:
         state_module = importlib.import_module("bot.trading_state_machine")
         getter = getattr(state_module, "get_state_machine", None)
@@ -155,7 +191,76 @@ def _request_runtime_reconciliation(trigger: str) -> bool:
         )
     except Exception:
         pass
+
+
+def _request_runtime_reconciliation(trigger: str) -> bool:
+    """Refresh canonical capital only when this convergence layer owns demand.
+
+    The dedicated v137 monitor is the sole routine freshness scheduler once it
+    is running.  Startup writer acquisition may occur before the runtime capital
+    patches are installed, so that trigger is allowed to refresh only after the
+    broker-registration/startup lock is complete.  Recovery/reconnect triggers
+    retain the legacy authoritative refresh behavior.
+    """
+    if not _writer_ready():
+        return False
+
+    normalized = str(trigger or "").strip().lower()
+    refreshed = False
+    try:
+        manager = _canonical_manager()
+
+        if normalized == _STARTUP_TRIGGER and not _startup_runtime_refresh_ready(manager):
+            LOGGER.info(
+                "CAPITAL_REFRESH_DEFERRED marker=%s demand_marker=%s trigger=%s "
+                "reason=startup_not_runtime_ready refresh_started=false",
+                MARKER,
+                REFRESH_DEMAND_MARKER,
+                trigger,
+            )
+            _reevaluate_runtime_readiness()
+            return False
+
+        if normalized == _ROUTINE_TRIGGER and _routine_refresh_owned_by_v137(manager):
+            LOGGER.info(
+                "CAPITAL_REFRESH_ROUTINE_SKIPPED marker=%s demand_marker=%s trigger=%s "
+                "owner=v137_publication_scheduler refresh_started=false readiness_recheck=true",
+                MARKER,
+                REFRESH_DEMAND_MARKER,
+                trigger,
+            )
+            _reevaluate_runtime_readiness()
+            return False
+
+        refresh = getattr(manager, "refresh_capital_authority", None)
+        if callable(refresh):
+            try:
+                refresh(trigger=trigger)
+            except TypeError:
+                refresh()
+            refreshed = True
+            LOGGER.warning(
+                "CAPITAL_REFRESH_REQUESTED marker=%s demand_marker=%s trigger=%s",
+                MARKER,
+                REFRESH_DEMAND_MARKER,
+                trigger,
+            )
+    except Exception as exc:
+        LOGGER.warning(
+            "CAPITAL_REFRESH_DEFERRED marker=%s demand_marker=%s trigger=%s error=%s:%s",
+            MARKER,
+            REFRESH_DEMAND_MARKER,
+            trigger,
+            type(exc).__name__,
+            exc,
+        )
+        return False
+
+    _reevaluate_runtime_readiness()
     return refreshed
+
+
+setattr(_request_runtime_reconciliation, "_nija_runtime_refresh_demand_v167", True)
 
 
 def _arm_kraken_recovery() -> bool:
@@ -279,8 +384,13 @@ def _patch_bot_main(module: ModuleType) -> bool:
         acquired = bool(original(*args, **kwargs))
         if acquired:
             _arm_kraken_recovery()
+            # Reconciliation is evaluated before the monitor starts.  During
+            # cold bootstrap this is readiness-only because startup is not yet
+            # runtime-ready; on a mature re-acquisition it may perform one
+            # authoritative refresh.  Starting the monitor afterwards removes
+            # the historical two-refresh startup race.
+            _request_runtime_reconciliation(_STARTUP_TRIGGER)
             _start_monitor()
-            _request_runtime_reconciliation("writer_authority_acquired")
         return acquired
 
     acquire._nija_runtime_convergence_v32 = True
@@ -327,24 +437,43 @@ class _Finder(importlib.abc.MetaPathFinder):
         return spec
 
 
+def _monitor_interval_seconds() -> float:
+    try:
+        return max(
+            10.0,
+            float(os.environ.get("NIJA_RUNTIME_CONVERGENCE_INTERVAL_S", "30") or 30),
+        )
+    except (TypeError, ValueError):
+        return 30.0
+
+
 def _monitor() -> None:
-    last_kraken_ready = False
+    # The old monitor refreshed immediately on thread start, racing the
+    # writer-authority handoff refresh before v137/v166 were installed.  Delay
+    # the first tick by one normal cadence; _patch_bot_main already arms Kraken
+    # recovery synchronously before this thread starts.
+    last_kraken_ready = _truthy("NIJA_KRAKEN_AUTHENTICATED_RECOVERY_READY")
     while True:
+        time.sleep(_monitor_interval_seconds())
         try:
             if _writer_ready():
                 _arm_kraken_recovery()
                 kraken_ready = _truthy("NIJA_KRAKEN_AUTHENTICATED_RECOVERY_READY")
-                trigger = "kraken_recovery_ready" if kraken_ready and not last_kraken_ready else "periodic_runtime_convergence"
+                trigger = (
+                    "kraken_recovery_ready"
+                    if kraken_ready and not last_kraken_ready
+                    else _ROUTINE_TRIGGER
+                )
                 _request_runtime_reconciliation(trigger)
                 last_kraken_ready = kraken_ready
         except Exception as exc:
             LOGGER.warning(
-                "RUNTIME_CONVERGENCE_MONITOR_ERROR marker=%s error=%s:%s",
+                "RUNTIME_CONVERGENCE_MONITOR_ERROR marker=%s demand_marker=%s error=%s:%s",
                 MARKER,
+                REFRESH_DEMAND_MARKER,
                 type(exc).__name__,
                 exc,
             )
-        time.sleep(max(10.0, float(os.environ.get("NIJA_RUNTIME_CONVERGENCE_INTERVAL_S", "30") or 30)))
 
 
 def _start_monitor() -> bool:
@@ -356,8 +485,10 @@ def _start_monitor() -> bool:
         thread.start()
         _MONITOR_STARTED = True
     LOGGER.warning(
-        "RUNTIME_EXECUTION_CONVERGENCE_MONITOR_STARTED marker=%s thread_alive=%s",
+        "RUNTIME_EXECUTION_CONVERGENCE_MONITOR_STARTED marker=%s demand_marker=%s "
+        "thread_alive=%s initial_refresh_delayed=true routine_refresh_owner=v137_when_available",
         MARKER,
+        REFRESH_DEMAND_MARKER,
         thread.is_alive(),
     )
     return thread.is_alive()
@@ -367,6 +498,7 @@ def install_import_hook() -> bool:
     global _INSTALLED
     with _LOCK:
         if _INSTALLED:
+            os.environ["NIJA_RUNTIME_REFRESH_DEMAND_V167_PREBOT_READY"] = "1"
             return True
         for name in _TARGETS:
             module = sys.modules.get(name)
@@ -376,7 +508,13 @@ def install_import_hook() -> bool:
             sys.meta_path.insert(0, _Finder())
         _INSTALLED = True
     os.environ["NIJA_RUNTIME_EXECUTION_CONVERGENCE_V32_INSTALLED"] = "1"
-    LOGGER.critical("RUNTIME_EXECUTION_CONVERGENCE_INSTALLED marker=%s", MARKER)
+    os.environ["NIJA_RUNTIME_REFRESH_DEMAND_V167_PREBOT_READY"] = "1"
+    LOGGER.critical(
+        "RUNTIME_EXECUTION_CONVERGENCE_INSTALLED marker=%s demand_marker=%s "
+        "startup_double_refresh_removed=true monitor_initial_delay=true routine_v137_owned=true",
+        MARKER,
+        REFRESH_DEMAND_MARKER,
+    )
     return True
 
 
