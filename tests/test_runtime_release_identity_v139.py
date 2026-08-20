@@ -176,3 +176,29 @@ def test_release_write_barrier_blocks_any_legacy_assignment() -> None:
 
     assert manifest.RELEASE_ID == declared
     assert os.environ["NIJA_RUNTIME_RELEASE_ID"] == declared
+
+
+def test_declared_release_promotion_is_monotonic_and_blocks_v142_replay(monkeypatch) -> None:
+    fake = v139._CanonicalReleaseManifestModule("fake_runtime_release_manifest")
+    fake.DECLARED_RELEASE_ID = "20260818-runtime-convergence-v138"
+    fake.RELEASE_ID = fake.DECLARED_RELEASE_ID
+
+    fake.DECLARED_RELEASE_ID = "20260818-runtime-convergence-v146"
+    assert fake.DECLARED_RELEASE_ID == "20260818-runtime-convergence-v146"
+    assert fake.RELEASE_ID == "20260818-runtime-convergence-v146"
+
+    fake.DECLARED_RELEASE_ID = "20260818-runtime-convergence-v142"
+    fake.RELEASE_ID = "20260818-runtime-convergence-v142"
+
+    assert fake.DECLARED_RELEASE_ID == "20260818-runtime-convergence-v146"
+    assert fake.RELEASE_ID == "20260818-runtime-convergence-v146"
+
+
+def test_release_rank_orders_date_then_version() -> None:
+    assert v139._release_rank("20260818-runtime-convergence-v146") > v139._release_rank(
+        "20260818-runtime-convergence-v142"
+    )
+    assert v139._release_rank("20260819-runtime-convergence-v1") > v139._release_rank(
+        "20260818-runtime-convergence-v999"
+    )
+    assert v139._release_rank("not-a-release") is None
