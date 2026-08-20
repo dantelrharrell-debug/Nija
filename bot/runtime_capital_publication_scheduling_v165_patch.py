@@ -13,6 +13,8 @@ v165 repairs scheduling only:
   plus watchdog cadence, not merely the broker-fetch budget;
 * the resulting headroom is still capped strictly inside the existing canonical
   freshness TTL, so publication expiry is never extended;
+* v166 is installed from this already-required post-import convergence path so
+  active-writer-only refresh ownership and tighter proactive bounds remain live;
 * no balance, readiness, writer/nonce authority, kill switch, risk decision,
   activation state, or order permission is synthesized.
 """
@@ -107,6 +109,22 @@ def _patch_release_manifest() -> bool:
         return False
 
 
+def _install_v166() -> bool:
+    try:
+        module = importlib.import_module("bot.runtime_capital_refresh_ownership_v166_patch")
+        install_fn = getattr(module, "install", None)
+        if not callable(install_fn):
+            return False
+        return bool(install_fn())
+    except Exception as exc:
+        LOGGER.error(
+            "RUNTIME_CAPITAL_REFRESH_OWNERSHIP_V166_INSTALL_ERROR error=%s:%s trading_fail_closed=true",
+            type(exc).__name__,
+            exc,
+        )
+        return False
+
+
 def install() -> bool:
     with _LOCK:
         headroom_ok = _patch_v137_headroom()
@@ -124,8 +142,6 @@ def install() -> bool:
             return False
         ttl_s = _freshness_ttl_seconds()
         deadline_s = _effective_pipeline_deadline_seconds()
-        # Use a representative manager cadence only for telemetry if canonical
-        # manager lookup is unavailable during very early install.
         try:
             mabm = importlib.import_module("bot.multi_account_broker_manager")
             getter = getattr(mabm, "get_broker_manager", None)
@@ -144,6 +160,12 @@ def install() -> bool:
             cadence_s,
             headroom_s,
         )
+        # v166 deliberately installs after v165 has published its base wrappers,
+        # then replaces only the proactive runtime timing/ownership semantics.
+        # Do not mark v165 unready when the optional follow-up import is still in
+        # flight during the first import pass; the required v166 manifest flag
+        # remains fail-closed until its own install completes.
+        _install_v166()
         return True
 
 
@@ -159,4 +181,5 @@ __all__ = [
     "_freshness_ttl_seconds",
     "_watchdog_cadence_seconds",
     "_required_headroom_seconds",
+    "_install_v166",
 ]
