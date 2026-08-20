@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import functools
+import linecache
 import time
 
 from bot import runtime_post_core_activation_budget_v172_patch as patch
@@ -65,9 +67,51 @@ def test_source_repair_replaces_only_legacy_30s_cap():
     assert before + 84.5 <= deadline <= after + 85.5
 
 
+def _compiled_v60_owner():
+    filename = "/tmp/nija/bot/final_production_activation_repair_v60_patch.py"
+    source = '''\
+def converge(runtime, trading_thread, *, timeout_s: float = 60.0) -> bool:
+    deadline = time.monotonic() + max(1.0, min(float(timeout_s), 60.0))
+    return deadline
+'''
+    namespace = {"time": time}
+    linecache.cache[filename] = (len(source), None, source.splitlines(True), filename)
+    exec(compile(source, filename, "exec"), namespace)
+    return namespace["converge"]
+
+
+def test_v172_targets_v60_owner_under_v116_v117_style_wrappers():
+    owner = _compiled_v60_owner()
+
+    @functools.wraps(owner)
+    def v116(runtime, trading_thread, *args, **kwargs):
+        return owner(runtime, trading_thread, *args, **kwargs)
+
+    @functools.wraps(v116)
+    def v117(runtime, trading_thread, *args, **kwargs):
+        return v116(runtime, trading_thread, *args, **kwargs)
+
+    resolved, kind = patch._find_deadline_owner(v117)
+    assert resolved is owner
+    assert kind == "v60"
+
+    owner.__globals__["_nija_v172_activation_wait_s"] = lambda requested: 85.0
+    replacement = patch._compile_repaired_function(owner, kind)
+    owner.__code__ = replacement.__code__
+    owner.__defaults__ = replacement.__defaults__
+    owner.__kwdefaults__ = replacement.__kwdefaults__
+
+    before = time.monotonic()
+    deadline = v117(None, None, timeout_s=60.0)
+    after = time.monotonic()
+
+    assert before + 84.5 <= deadline <= after + 85.5
+    assert v117.__wrapped__ is v116
+    assert v116.__wrapped__ is owner
+
+
 def test_wait_budget_does_not_change_gate_result(monkeypatch):
     monkeypatch.setenv("NIJA_CAPITAL_FRESHNESS_TTL_S", "90")
-    # v172 computes only a wait duration; it has no API for granting readiness.
     wait_s = patch._activation_wait_seconds(60.0)
     assert isinstance(wait_s, float)
     assert not hasattr(patch, "force_activation")
