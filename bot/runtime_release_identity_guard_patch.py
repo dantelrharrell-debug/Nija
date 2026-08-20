@@ -14,6 +14,7 @@ from __future__ import annotations
 import importlib
 import logging
 import os
+import re
 import sys
 import threading
 from collections.abc import Mapping
@@ -26,6 +27,7 @@ _FLAG = "NIJA_RUNTIME_RELEASE_IDENTITY_GUARD_INSTALLED"
 _LOCK = threading.RLock()
 _INSTALLED = False
 _PATCH_ATTR = "_nija_runtime_release_identity_guard_v2"
+_RELEASE_PATTERN = re.compile(r"^(?P<date>\d{8})-runtime-convergence-v(?P<version>\d+)$")
 
 _LEGACY_MANIFEST_REGISTRATIONS = (
     (
@@ -46,6 +48,13 @@ _LEGACY_MANIFEST_REGISTRATIONS = (
 )
 
 
+def _release_rank(value: str) -> tuple[int, int] | None:
+    match = _RELEASE_PATTERN.match(str(value or "").strip())
+    if not match:
+        return None
+    return int(match.group("date")), int(match.group("version"))
+
+
 def _declared_release(manifest: Any) -> str:
     value = str(getattr(manifest, "DECLARED_RELEASE_ID", "") or "").strip()
     if value:
@@ -54,9 +63,24 @@ def _declared_release(manifest: Any) -> str:
 
 
 class _CanonicalReleaseManifestModule(ModuleType):
-    """Module type that keeps the canonical manifest release ID immutable."""
+    """Module type that keeps canonical release promotion monotonic."""
 
     def __setattr__(self, name: str, value: Any) -> None:
+        candidate = str(value or "").strip() if name in {"RELEASE_ID", "DECLARED_RELEASE_ID"} else ""
+        declared = _declared_release(self) if name in {"RELEASE_ID", "DECLARED_RELEASE_ID"} else ""
+
+        if name == "DECLARED_RELEASE_ID" and declared and candidate and candidate != declared:
+            current_rank = _release_rank(declared)
+            candidate_rank = _release_rank(candidate)
+            if current_rank is not None and candidate_rank is not None and candidate_rank < current_rank:
+                LOGGER.warning(
+                    "RUNTIME_RELEASE_DECLARATION_DOWNGRADE_BLOCKED marker=%s attempted=%s declared=%s",
+                    MARKER,
+                    candidate,
+                    declared,
+                )
+                value = declared
+
         if name == "RELEASE_ID":
             declared = _declared_release(self)
             candidate = str(value or "").strip()
@@ -68,18 +92,27 @@ class _CanonicalReleaseManifestModule(ModuleType):
                     declared,
                 )
                 value = declared
+
         super().__setattr__(name, value)
+
+        # A successful declared-release promotion must keep the compatibility
+        # identity and published control-plane value synchronized immediately.
+        if name == "DECLARED_RELEASE_ID":
+            final_declared = str(getattr(self, "DECLARED_RELEASE_ID", "") or "").strip()
+            if final_declared:
+                super().__setattr__("RELEASE_ID", final_declared)
+                os.environ["NIJA_RUNTIME_RELEASE_ID"] = final_declared
 
 
 def _install_manifest_release_write_barrier() -> bool:
-    """Prevent every legacy module, including future reloads, from downgrading RELEASE_ID."""
+    """Prevent legacy modules, including future reloads, from downgrading release identity."""
     manifest = importlib.import_module("bot.runtime_release_manifest_patch")
     declared = _declared_release(manifest)
     if not declared:
         return False
     if not isinstance(manifest, _CanonicalReleaseManifestModule):
         manifest.__class__ = _CanonicalReleaseManifestModule
-    # Use the guarded assignment so the compatibility name is re-anchored now.
+    manifest.DECLARED_RELEASE_ID = declared
     manifest.RELEASE_ID = declared
     os.environ["NIJA_RUNTIME_RELEASE_ID"] = declared
     return True
@@ -115,7 +148,6 @@ def _patch_legacy_manifest_registrations() -> bool:
 
 
 def _patch_v136_manifest_registration() -> bool:
-    """Compatibility helper retained for the v139 regression suite."""
     return _patch_manifest_registration(
         "bot.activation_publication_convergence_v136_patch",
         "activation_publication_convergence_v136",
@@ -129,6 +161,7 @@ def _restore_manifest_identity(*, emit_drift: bool = True) -> bool:
     if not declared:
         return False
     previous = str(getattr(manifest, "RELEASE_ID", "") or "").strip()
+    manifest.DECLARED_RELEASE_ID = declared
     manifest.RELEASE_ID = declared
     os.environ["NIJA_RUNTIME_RELEASE_ID"] = declared
     if emit_drift and previous and previous != declared:
@@ -204,12 +237,9 @@ def _patch_secondary_runtime_broker_discovery() -> bool:
 
 
 def _verify_manifest_without_reinstall(manifest: Any) -> tuple[bool, dict[str, str]]:
-    """Verify release invariants without replaying convergence installers."""
     results: dict[str, str] = {}
     ready = True
 
-    # Preserve the original audit's details shape so a healthy watchdog does not
-    # republish solely because installer execution was replaced by verification.
     for module_name, _function_name in tuple(getattr(manifest, "_INSTALLERS", ())):
         results[module_name] = "ok"
 
@@ -384,10 +414,10 @@ def install_import_hook() -> bool:
     if not already_installed:
         LOGGER.critical(
             "RUNTIME_RELEASE_IDENTITY_GUARD_INSTALLED marker=%s canonical_manifest_owner=true "
-            "legacy_release_override=false release_write_barrier=true legacy_writers=v134,v135,v136 "
-            "verify_first_audit=true repair_only_on_drift=true canonical_manager_readiness=true "
-            "readiness_unchanged=true kill_switch_unchanged=true nonce_unchanged=true "
-            "risk_gates_unchanged=true execution_authority_unchanged=true",
+            "legacy_release_override=false declared_release_downgrade=false release_write_barrier=true "
+            "legacy_writers=v134,v135,v136 verify_first_audit=true repair_only_on_drift=true "
+            "canonical_manager_readiness=true readiness_unchanged=true kill_switch_unchanged=true "
+            "nonce_unchanged=true risk_gates_unchanged=true execution_authority_unchanged=true",
             MARKER,
         )
     return True
@@ -401,6 +431,7 @@ __all__ = [
     "MARKER",
     "install",
     "install_import_hook",
+    "_release_rank",
     "_declared_release",
     "_install_manifest_release_write_barrier",
     "_patch_v136_manifest_registration",
