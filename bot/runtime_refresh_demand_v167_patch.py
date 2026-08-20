@@ -12,8 +12,9 @@ retired physical v142 generations cannot starve the canonical recovery lane.
 v169 is then reasserted so authority-liveness heartbeats cannot masquerade as
 ORDER/FILL proof and fresh broker-owned observations are seeded immediately
 before canonical publication augmentation. v170 then makes accepted capital
-publication/readiness monotonic, and v171 reasserts the bounded concurrent
-market-data path used by Phase 3.
+publication/readiness monotonic, v171 reasserts the bounded concurrent
+market-data path used by Phase 3, and v172 aligns the finite post-core activation
+wait with the longer capital convergence budget without changing any gate.
 """
 from __future__ import annotations
 
@@ -147,6 +148,13 @@ def _install_v171_market_data_concurrency() -> bool:
     )
 
 
+def _install_v172_post_core_activation_budget() -> bool:
+    return _install_named(
+        "bot.runtime_post_core_activation_budget_v172_patch",
+        "RUNTIME_POST_CORE_ACTIVATION_BUDGET_V172",
+    )
+
+
 def install() -> bool:
     with _LOCK:
         try:
@@ -168,6 +176,7 @@ def install() -> bool:
         v169_ok = _install_v169_execution_capital_integrity()
         v170_ok = _install_v170_capital_monotonicity()
         v171_ok = _install_v171_market_data_concurrency()
+        v172_ok = _install_v172_post_core_activation_budget()
         ready = bool(
             verified
             and periodic_ok
@@ -176,12 +185,14 @@ def install() -> bool:
             and v169_ok
             and v170_ok
             and v171_ok
+            and v172_ok
         )
         os.environ[_READY_FLAG] = "1" if ready else "0"
         if not ready:
             LOGGER.critical(
                 "RUNTIME_REFRESH_DEMAND_V167_FAILED marker=%s v32_verified=%s periodic_fallback_ok=%s "
-                "manifest_ok=%s v168_ok=%s v169_ok=%s v170_ok=%s v171_ok=%s trading_fail_closed=true",
+                "manifest_ok=%s v168_ok=%s v169_ok=%s v170_ok=%s v171_ok=%s v172_ok=%s "
+                "trading_fail_closed=true",
                 MARKER,
                 str(verified).lower(),
                 str(periodic_ok).lower(),
@@ -190,6 +201,7 @@ def install() -> bool:
                 str(v169_ok).lower(),
                 str(v170_ok).lower(),
                 str(v171_ok).lower(),
+                str(v172_ok).lower(),
             )
             return False
         LOGGER.critical(
@@ -197,8 +209,8 @@ def install() -> bool:
             "monitor_initial_delay=true routine_refresh_owner=v137 periodic_fallback_bounded=true "
             "recovery_refresh_preserved=true v168_generation_liveness=true "
             "v169_execution_capital_integrity=true v170_capital_monotonicity=true "
-            "v171_market_data_concurrency=true publication_expiry_extended=false "
-            "stale_promoted=false safety_gates_bypassed=false",
+            "v171_market_data_concurrency=true v172_post_core_activation_budget=true "
+            "publication_expiry_extended=false stale_promoted=false safety_gates_bypassed=false",
             MARKER,
         )
         return True
@@ -218,4 +230,5 @@ __all__ = [
     "_install_v169_execution_capital_integrity",
     "_install_v170_capital_monotonicity",
     "_install_v171_market_data_concurrency",
+    "_install_v172_post_core_activation_budget",
 ]
