@@ -2,17 +2,22 @@
 
 Production evidence showed a successful complete capital publication could land
 milliseconds after v133 had revoked ``capital_ready`` and transitioned
-``LIVE_ACTIVE -> OFF``.  The next normal monitor tick eventually re-probes the
+``LIVE_ACTIVE -> OFF``. The next normal monitor tick eventually re-probes the
 same facts, but during that gap execution remains fail-closed even though the
 canonical CapitalAuthority already holds a fresh accepted snapshot.
 
-v176 closes only that synchronization gap.  It wraps the canonical
+v176 closes only that synchronization gap. It wraps the canonical
 ``CapitalRefreshCoordinator.execute_refresh`` return path and, after a non-None
 accepted snapshot, asks the existing v16 proof collector/activation path to
-re-evaluate immediately.  v16's readiness writer is still owned by v133, so a
-false proof is still revoked and LIVE state still fails closed.  No freshness
+re-evaluate immediately. v16's readiness writer is still owned by v133, so a
+false proof is still revoked and LIVE state still fails closed. No freshness
 TTL, capital value, safety gate, signal threshold, nonce rule, kill switch, or
 execution permission is altered.
+
+The 2026-08-21 follow-up also installs v178 before the coordinator wrapper. v178
+repairs only the exact same-canonical-publication status-poisoning case where a
+duplicate refresh is rejected as ``snapshot_not_newer`` even though the already
+published snapshot is still complete and inside its original immutable expiry.
 """
 from __future__ import annotations
 
@@ -110,6 +115,24 @@ def _rearm_after_publication(trigger: str) -> tuple[bool, str]:
         return False, f"{type(exc).__name__}:{exc}"
 
 
+def _install_v178_publication_identity() -> bool:
+    try:
+        module = importlib.import_module("bot.runtime_capital_publication_identity_v178_patch")
+        installer = getattr(module, "install", None) or getattr(module, "install_import_hook", None)
+        if not callable(installer):
+            return False
+        return bool(installer())
+    except Exception as exc:
+        LOGGER.error(
+            "RUNTIME_CAPITAL_PUBLICATION_IDENTITY_V178_INSTALL_ERROR marker=%s error=%s:%s "
+            "trading_fail_closed=true",
+            MARKER,
+            type(exc).__name__,
+            exc,
+        )
+        return False
+
+
 def _patch_coordinator() -> bool:
     try:
         module = importlib.import_module("bot.capital_flow_state_machine")
@@ -152,24 +175,26 @@ def _patch_release_manifest() -> bool:
 
 def install() -> bool:
     with _LOCK:
+        v178_ok = _install_v178_publication_identity()
         coordinator_ok = _patch_coordinator()
         manifest_ok = _patch_release_manifest()
-        ready = bool(coordinator_ok and manifest_ok)
+        ready = bool(v178_ok and coordinator_ok and manifest_ok)
         os.environ[_READY_FLAG] = "1" if ready else "0"
         if not ready:
             LOGGER.critical(
-                "RUNTIME_CAPITAL_REACTIVATION_V176_FAILED marker=%s coordinator_ok=%s "
+                "RUNTIME_CAPITAL_REACTIVATION_V176_FAILED marker=%s v178_ok=%s coordinator_ok=%s "
                 "manifest_ok=%s trading_fail_closed=true",
                 MARKER,
+                str(v178_ok).lower(),
                 str(coordinator_ok).lower(),
                 str(manifest_ok).lower(),
             )
             return False
         LOGGER.critical(
             "RUNTIME_CAPITAL_REACTIVATION_V176 marker=%s ready=true "
-            "post_publication_proof_recheck=true canonical_commit_only=true "
-            "v133_fail_closed_preserved=true freshness_ttl_unchanged=true "
-            "forced_activation=false safety_gates_bypassed=false",
+            "v178_publication_identity=true post_publication_proof_recheck=true "
+            "canonical_commit_only=true v133_fail_closed_preserved=true "
+            "freshness_ttl_unchanged=true forced_activation=false safety_gates_bypassed=false",
             MARKER,
         )
         return True
@@ -186,5 +211,6 @@ __all__ = [
     "install_import_hook",
     "_publication_is_fresh",
     "_rearm_after_publication",
+    "_install_v178_publication_identity",
     "_patch_coordinator",
 ]
