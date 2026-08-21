@@ -1,26 +1,29 @@
-"""Prevent post-bootstrap direct fallback from downgrading canonical capital.
+"""Prevent private direct fallback from downgrading canonical capital.
 
-Production on 2026-08-21 proved a runtime-only capital split after the canonical
-coordinator had already established complete three-broker state. During a
-coordinator rollover/in-flight gap, ``MultiAccountBrokerManager`` may fall back
-to ``CapitalAuthority.refresh(..., _bypass_startup_lock=True)``. Base
-``CapitalAuthority.refresh`` replaces the complete internal balance map with the
-results of that direct refresh and stamps ``last_updated`` to now. A slow or
-failed Kraken read can therefore replace a complete 3/3 state with 2/3 before
-v170 correctly rejects the partial publication.
+Production on 2026-08-21 proved two runtime-only failure modes around
+``MultiAccountBrokerManager``'s coordinator-unavailable fallback to
+``CapitalAuthority.refresh(..., _bypass_startup_lock=True)``:
 
-v180 restores single-writer ownership after bootstrap:
+* after a complete canonical broker set exists, a later private fallback can
+  become a second writer and replace 3/3 capital with a partial map; and
+* after broker registration is finalized, the *first* private fallback can
+  arrive with only 2/3 expected broker inputs and seed an incomplete canonical
+  CapitalAuthority state before the coordinator publishes a complete snapshot.
 
-* the call must use the private ``_bypass_startup_lock`` fallback flag;
+v180 enforces the private-fallback boundary without weakening bootstrap:
+
+* the call must use the private ``_bypass_startup_lock`` flag;
 * broker registration must already be finalized;
-* CapitalAuthority must already hold at least ``expected_brokers`` entries;
-* once that complete canonical state exists, any later private bypass refresh is
-  suppressed and the canonical coordinator remains the only runtime writer.
+* if CapitalAuthority already holds a complete canonical set, every later
+  private fallback is suppressed so the coordinator remains the only writer;
+* if CapitalAuthority is still incomplete, an incomplete private input map is
+  suppressed, but a complete expected-broker input map remains allowed to build
+  the initial bootstrap snapshot.
 
-The suppressed fallback does not merge balances, mutate ``last_updated``, extend
-freshness/publication expiry, promote stale data, fabricate a broker balance,
-change writer/nonce/risk/kill-switch authority, or force activation/trading.
-Cold/bootstrap refreshes and ordinary non-bypass refreshes continue unchanged.
+Suppression does not merge balances, mutate ``last_updated``, extend freshness
+or publication expiry, promote stale data, fabricate a broker balance, change
+writer/nonce/risk/kill-switch authority, or force activation/trading.
+Pre-registration bootstrap and ordinary non-bypass refreshes remain unchanged.
 """
 from __future__ import annotations
 
@@ -102,6 +105,9 @@ def _should_suppress_direct_fallback(
     incoming = _incoming_keys(broker_map)
     covered = existing.intersection(incoming)
     missing = sorted(existing.difference(incoming))
+    registration_complete = _registration_complete(authority)
+    existing_complete = len(existing) >= expected
+    incoming_complete = len(incoming) >= expected
 
     metadata = {
         "expected": expected,
@@ -109,20 +115,22 @@ def _should_suppress_direct_fallback(
         "incoming": sorted(incoming),
         "covered": sorted(covered),
         "missing": missing,
-        "registration_complete": _registration_complete(authority),
+        "registration_complete": registration_complete,
         "bypass_startup_lock": bool(bypass_startup_lock),
+        "existing_complete": existing_complete,
+        "incoming_complete": incoming_complete,
     }
 
-    # The private bypass exists to build the initial bootstrap snapshot. Once a
-    # complete canonical broker set already exists after registration, allowing
-    # this fallback to run creates a second capital writer. Preserve the exact
-    # prior state and let the coordinator refresh it; if it expires meanwhile,
-    # normal freshness gates fail closed.
+    # The private bypass exists only to build the initial bootstrap snapshot.
+    # Once registration is finalized, it must never publish an incomplete input
+    # map. A complete bootstrap input remains allowed while CA itself is still
+    # incomplete. Once CA has a complete canonical set, every later private
+    # fallback is suppressed so the coordinator remains the sole runtime writer.
     suppress = bool(
         bypass_startup_lock
-        and metadata["registration_complete"]
+        and registration_complete
         and expected > 1
-        and len(existing) >= expected
+        and (existing_complete or not incoming_complete)
     )
     return suppress, metadata
 
@@ -159,19 +167,28 @@ def _patch_capital_authority() -> bool:
         )
         if suppress:
             last_updated = getattr(self, "last_updated", None)
+            reason = (
+                "prior_complete_state"
+                if metadata["existing_complete"]
+                else "registered_incomplete_input"
+            )
             LOGGER.critical(
-                "CAPITAL_V180_DIRECT_FALLBACK_SUPPRESSED marker=%s "
+                "CAPITAL_V180_DIRECT_FALLBACK_SUPPRESSED marker=%s reason=%s "
                 "incoming=%s existing=%s missing=%s covered=%d expected=%d "
+                "incoming_complete=%s existing_complete=%s "
                 "registration_complete=true bypass_startup_lock=true "
                 "last_updated=%s balances_mutated=false last_updated_mutated=false "
                 "freshness_extended=false publication_expiry_extended=false "
                 "stale_promoted=false trading_fail_closed=true",
                 MARKER,
+                reason,
                 metadata["incoming"],
                 metadata["existing"],
                 metadata["missing"],
                 len(metadata["covered"]),
                 int(metadata["expected"]),
+                str(metadata["incoming_complete"]).lower(),
+                str(metadata["existing_complete"]).lower(),
                 last_updated,
             )
             return None
@@ -221,8 +238,9 @@ def install() -> bool:
 
         LOGGER.critical(
             "RUNTIME_CAPITAL_DIRECT_REFRESH_DOWNGRADE_V180 marker=%s ready=true "
-            "private_fallback_only=true prior_complete_state_required=true "
-            "post_bootstrap_direct_fallback_suppressed=true cold_bootstrap_unchanged=true "
+            "private_fallback_only=true prior_complete_state_required=false "
+            "registered_incomplete_input_rejected=true complete_bootstrap_input_allowed=true "
+            "post_bootstrap_direct_fallback_suppressed=true pre_registration_bootstrap_unchanged=true "
             "canonical_coordinator_single_writer=true balances_mutated_on_reject=false "
             "last_updated_mutated_on_reject=false freshness_extended=false "
             "publication_expiry_extended=false stale_promoted=false forced_trade=false "
