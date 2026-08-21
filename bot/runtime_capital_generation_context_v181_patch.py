@@ -160,6 +160,7 @@ def _patch_publication_context() -> bool:
             else:
                 setattr(local, "refresh_generation", previous)
 
+    publish_snapshot_v181.__name__ = "publish_snapshot_v181"
     setattr(publish_snapshot_v181, _PATCH_ATTR, True)
     setattr(publish_snapshot_v181, "__wrapped__", original)
     cls.publish_snapshot = publish_snapshot_v181
