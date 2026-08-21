@@ -14,10 +14,11 @@ false proof is still revoked and LIVE state still fails closed. No freshness
 TTL, capital value, safety gate, signal threshold, nonce rule, kill switch, or
 execution permission is altered.
 
-The 2026-08-21 follow-up also installs v178 before the coordinator wrapper. v178
-repairs only the exact same-canonical-publication status-poisoning case where a
-duplicate refresh is rejected as ``snapshot_not_newer`` even though the already
-published snapshot is still complete and inside its original immutable expiry.
+The 2026-08-21 follow-ups install v179 and v178 before the coordinator wrapper.
+v179 converges bootstrap-seed generation identity plus the canonical hydration
+event invariant; v178 repairs only the exact same-canonical-publication status-
+poisoning case for ``snapshot_not_newer``. Neither patch broadens freshness or
+activation policy.
 """
 from __future__ import annotations
 
@@ -115,22 +116,37 @@ def _rearm_after_publication(trigger: str) -> tuple[bool, str]:
         return False, f"{type(exc).__name__}:{exc}"
 
 
-def _install_v178_publication_identity() -> bool:
+def _install_named(module_name: str, label: str) -> bool:
     try:
-        module = importlib.import_module("bot.runtime_capital_publication_identity_v178_patch")
+        module = importlib.import_module(module_name)
         installer = getattr(module, "install", None) or getattr(module, "install_import_hook", None)
         if not callable(installer):
             return False
         return bool(installer())
     except Exception as exc:
         LOGGER.error(
-            "RUNTIME_CAPITAL_PUBLICATION_IDENTITY_V178_INSTALL_ERROR marker=%s error=%s:%s "
-            "trading_fail_closed=true",
+            "%s_INSTALL_ERROR marker=%s module=%s error=%s:%s trading_fail_closed=true",
+            label,
             MARKER,
+            module_name,
             type(exc).__name__,
             exc,
         )
         return False
+
+
+def _install_v179_bootstrap_capital_publication() -> bool:
+    return _install_named(
+        "bot.runtime_bootstrap_capital_publication_v179_patch",
+        "RUNTIME_BOOTSTRAP_CAPITAL_PUBLICATION_V179",
+    )
+
+
+def _install_v178_publication_identity() -> bool:
+    return _install_named(
+        "bot.runtime_capital_publication_identity_v178_patch",
+        "RUNTIME_CAPITAL_PUBLICATION_IDENTITY_V178",
+    )
 
 
 def _patch_coordinator() -> bool:
@@ -175,16 +191,18 @@ def _patch_release_manifest() -> bool:
 
 def install() -> bool:
     with _LOCK:
+        v179_ok = _install_v179_bootstrap_capital_publication()
         v178_ok = _install_v178_publication_identity()
         coordinator_ok = _patch_coordinator()
         manifest_ok = _patch_release_manifest()
-        ready = bool(v178_ok and coordinator_ok and manifest_ok)
+        ready = bool(v179_ok and v178_ok and coordinator_ok and manifest_ok)
         os.environ[_READY_FLAG] = "1" if ready else "0"
         if not ready:
             LOGGER.critical(
-                "RUNTIME_CAPITAL_REACTIVATION_V176_FAILED marker=%s v178_ok=%s coordinator_ok=%s "
-                "manifest_ok=%s trading_fail_closed=true",
+                "RUNTIME_CAPITAL_REACTIVATION_V176_FAILED marker=%s v179_ok=%s v178_ok=%s "
+                "coordinator_ok=%s manifest_ok=%s trading_fail_closed=true",
                 MARKER,
+                str(v179_ok).lower(),
                 str(v178_ok).lower(),
                 str(coordinator_ok).lower(),
                 str(manifest_ok).lower(),
@@ -192,9 +210,10 @@ def install() -> bool:
             return False
         LOGGER.critical(
             "RUNTIME_CAPITAL_REACTIVATION_V176 marker=%s ready=true "
-            "v178_publication_identity=true post_publication_proof_recheck=true "
-            "canonical_commit_only=true v133_fail_closed_preserved=true "
-            "freshness_ttl_unchanged=true forced_activation=false safety_gates_bypassed=false",
+            "v179_bootstrap_capital_publication=true v178_publication_identity=true "
+            "post_publication_proof_recheck=true canonical_commit_only=true "
+            "v133_fail_closed_preserved=true freshness_ttl_unchanged=true "
+            "forced_activation=false safety_gates_bypassed=false",
             MARKER,
         )
         return True
@@ -211,6 +230,7 @@ __all__ = [
     "install_import_hook",
     "_publication_is_fresh",
     "_rearm_after_publication",
+    "_install_v179_bootstrap_capital_publication",
     "_install_v178_publication_identity",
     "_patch_coordinator",
 ]
