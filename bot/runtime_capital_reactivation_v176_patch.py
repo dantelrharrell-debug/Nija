@@ -14,12 +14,14 @@ false proof is still revoked and LIVE state still fails closed. No freshness
 TTL, capital value, safety gate, signal threshold, nonce rule, kill switch, or
 execution permission is altered.
 
-The 2026-08-21 follow-ups install v179, v178, and v180 before the coordinator
-wrapper. v179 converges bootstrap-seed generation identity plus the canonical
-hydration event invariant; v178 repairs only the exact same-canonical-publication
-status-poisoning case for ``snapshot_not_newer``; v180 prevents a private direct
-refresh fallback from replacing a previously complete canonical broker set after
-bootstrap. None of these patches broadens freshness or activation policy.
+The 2026-08-21 follow-ups install v179, v178, v180, and v181 before the
+coordinator wrapper. v179 converges bootstrap-seed generation identity plus the
+canonical hydration event invariant; v178 repairs only the exact
+same-canonical-publication status-poisoning case for ``snapshot_not_newer``;
+v180 prevents a private direct refresh fallback from replacing a previously
+complete canonical broker set after bootstrap; v181 restores v142 generation
+context only for the exact current canonical coordinator worker after rollover.
+None of these patches broadens freshness or activation policy.
 """
 from __future__ import annotations
 
@@ -157,6 +159,13 @@ def _install_v180_direct_refresh_downgrade() -> bool:
     )
 
 
+def _install_v181_generation_context() -> bool:
+    return _install_named(
+        "bot.runtime_capital_generation_context_v181_patch",
+        "RUNTIME_CAPITAL_GENERATION_CONTEXT_V181",
+    )
+
+
 def _patch_coordinator() -> bool:
     try:
         module = importlib.import_module("bot.capital_flow_state_machine")
@@ -202,18 +211,22 @@ def install() -> bool:
         v179_ok = _install_v179_bootstrap_capital_publication()
         v178_ok = _install_v178_publication_identity()
         v180_ok = _install_v180_direct_refresh_downgrade()
+        v181_ok = _install_v181_generation_context()
         coordinator_ok = _patch_coordinator()
         manifest_ok = _patch_release_manifest()
-        ready = bool(v179_ok and v178_ok and v180_ok and coordinator_ok and manifest_ok)
+        ready = bool(
+            v179_ok and v178_ok and v180_ok and v181_ok and coordinator_ok and manifest_ok
+        )
         os.environ[_READY_FLAG] = "1" if ready else "0"
         if not ready:
             LOGGER.critical(
                 "RUNTIME_CAPITAL_REACTIVATION_V176_FAILED marker=%s v179_ok=%s v178_ok=%s "
-                "v180_ok=%s coordinator_ok=%s manifest_ok=%s trading_fail_closed=true",
+                "v180_ok=%s v181_ok=%s coordinator_ok=%s manifest_ok=%s trading_fail_closed=true",
                 MARKER,
                 str(v179_ok).lower(),
                 str(v178_ok).lower(),
                 str(v180_ok).lower(),
+                str(v181_ok).lower(),
                 str(coordinator_ok).lower(),
                 str(manifest_ok).lower(),
             )
@@ -221,9 +234,10 @@ def install() -> bool:
         LOGGER.critical(
             "RUNTIME_CAPITAL_REACTIVATION_V176 marker=%s ready=true "
             "v179_bootstrap_capital_publication=true v178_publication_identity=true "
-            "v180_direct_refresh_downgrade=true post_publication_proof_recheck=true "
-            "canonical_commit_only=true v133_fail_closed_preserved=true "
-            "freshness_ttl_unchanged=true forced_activation=false safety_gates_bypassed=false",
+            "v180_direct_refresh_downgrade=true v181_generation_context=true "
+            "post_publication_proof_recheck=true canonical_commit_only=true "
+            "v133_fail_closed_preserved=true freshness_ttl_unchanged=true "
+            "forced_activation=false safety_gates_bypassed=false",
             MARKER,
         )
         return True
@@ -243,5 +257,6 @@ __all__ = [
     "_install_v179_bootstrap_capital_publication",
     "_install_v178_publication_identity",
     "_install_v180_direct_refresh_downgrade",
+    "_install_v181_generation_context",
     "_patch_coordinator",
 ]
