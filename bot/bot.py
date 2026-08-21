@@ -148,18 +148,56 @@ def _install_canonical_import_shield_v123() -> bool:
         return False
 
 
+def _install_capital_v180_early(*, mode: str) -> bool:
+    """Arm only v180's CapitalAuthority guard before bot_main can refresh capital.
+
+    The full v180 installer also edits the release manifest, which belongs to the
+    later post-import convergence chain. At the entrypoint we need only the
+    idempotent CapitalAuthority.refresh wrapper so the first post-bootstrap
+    private fallback cannot become a second capital writer.
+    """
+    try:
+        module_name = "bot.runtime_capital_direct_refresh_downgrade_v180_patch"
+        module = _canonical_fast_import(module_name) if mode == "canonical_fast" else importlib.import_module(module_name)
+        patcher = getattr(module, "_patch_capital_authority", None)
+        if not callable(patcher) or patcher() is False:
+            raise RuntimeError("v180 capital authority patcher unavailable or returned false")
+        logger.critical(
+            "CAPITAL_V180_EARLY_ENTRYPOINT_READY source=bot_entrypoint mode=%s "
+            "before_bot_main=true release_manifest_deferred=true "
+            "freshness_extended=false safety_gates_unchanged=true",
+            mode,
+        )
+        return True
+    except Exception as exc:
+        logger.critical(
+            "CAPITAL_V180_EARLY_ENTRYPOINT_FAILED source=bot_entrypoint mode=%s "
+            "err=%s trading_fail_closed=true",
+            mode,
+            exc,
+            exc_info=True,
+        )
+        return False
+
+
+def _fail_closed_startup(reason: str) -> None:
+    os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "0"
+    os.environ["NIJA_RUNTIME_TRADING_STATE"] = "OFF"
+    raise RuntimeError(reason)
+
+
 if _canonical_fast_path_enabled():
     if not _install_canonical_import_shield_v123():
-        os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "0"
-        os.environ["NIJA_RUNTIME_TRADING_STATE"] = "OFF"
-        raise RuntimeError("canonical import shield failed; trading remains fail closed")
+        _fail_closed_startup("canonical import shield failed; trading remains fail closed")
+    if not _install_capital_v180_early(mode="canonical_fast"):
+        _fail_closed_startup("v180 early capital guard failed; trading remains fail closed")
     if not _install_guards(_FAST_PATH_INSTALLERS, mode="canonical_fast", optional_labels=_FAST_PATH_COMPAT_OPTIONAL_GUARDS):
-        os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "0"
-        os.environ["NIJA_RUNTIME_TRADING_STATE"] = "OFF"
-        raise RuntimeError("canonical fast-path safety guards failed; trading remains fail closed")
-    logger.critical("CANONICAL_ENTRYPOINT_FAST_PATH_READY marker=%s import_loader=frozen_bootstrap package_hook_fanout=deferred import_shield_v123=true handoff=bot.bot_main", _FAST_PATH_MARKER)
+        _fail_closed_startup("canonical fast-path safety guards failed; trading remains fail closed")
+    logger.critical("CANONICAL_ENTRYPOINT_FAST_PATH_READY marker=%s import_loader=frozen_bootstrap package_hook_fanout=deferred import_shield_v123=true capital_v180_early=true handoff=bot.bot_main", _FAST_PATH_MARKER)
 else:
     logger.warning("BOT_ENTRYPOINT_LEGACY_COMPATIBILITY_PATH marker=%s canonical_fast_path=false", _FAST_PATH_MARKER)
+    if not _install_capital_v180_early(mode="legacy_compatibility"):
+        _fail_closed_startup("v180 early capital guard failed; trading remains fail closed")
     _install_guards(_LEGACY_INSTALLERS, mode="legacy_compatibility")
 
 from bot.bot_main import main
