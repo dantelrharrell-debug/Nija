@@ -14,9 +14,11 @@ ORDER/FILL proof and fresh broker-owned observations are seeded immediately
 before canonical publication augmentation. v170 then makes accepted capital
 publication/readiness monotonic, v171 reasserts the bounded concurrent
 market-data path used by Phase 3, v172 aligns the finite post-core activation
-wait with the longer capital convergence budget without changing any gate, and
-v173 keeps Kraken's post-Balance valuation tail from self-amplifying stale
-balance flights while preserving all freshness/completeness fences.
+wait with the longer capital convergence budget without changing any gate, v173
+keeps Kraken's post-Balance valuation tail from self-amplifying stale balance
+flights, and v174 admits an already-fresh, sequence-fenced Kraken observation
+without re-waiting the full proactive budget while preserving all freshness and
+completeness fences.
 """
 from __future__ import annotations
 
@@ -164,6 +166,13 @@ def _install_v173_kraken_capital_tail_liveness() -> bool:
     )
 
 
+def _install_v174_kraken_capital_observation_admission() -> bool:
+    return _install_named(
+        "bot.runtime_kraken_capital_observation_admission_v174_patch",
+        "RUNTIME_KRAKEN_CAPITAL_OBSERVATION_ADMISSION_V174",
+    )
+
+
 def install() -> bool:
     with _LOCK:
         try:
@@ -187,6 +196,7 @@ def install() -> bool:
         v171_ok = _install_v171_market_data_concurrency()
         v172_ok = _install_v172_post_core_activation_budget()
         v173_ok = _install_v173_kraken_capital_tail_liveness()
+        v174_ok = _install_v174_kraken_capital_observation_admission()
         ready = bool(
             verified
             and periodic_ok
@@ -197,13 +207,14 @@ def install() -> bool:
             and v171_ok
             and v172_ok
             and v173_ok
+            and v174_ok
         )
         os.environ[_READY_FLAG] = "1" if ready else "0"
         if not ready:
             LOGGER.critical(
                 "RUNTIME_REFRESH_DEMAND_V167_FAILED marker=%s v32_verified=%s periodic_fallback_ok=%s "
                 "manifest_ok=%s v168_ok=%s v169_ok=%s v170_ok=%s v171_ok=%s v172_ok=%s "
-                "v173_ok=%s trading_fail_closed=true",
+                "v173_ok=%s v174_ok=%s trading_fail_closed=true",
                 MARKER,
                 str(verified).lower(),
                 str(periodic_ok).lower(),
@@ -214,6 +225,7 @@ def install() -> bool:
                 str(v171_ok).lower(),
                 str(v172_ok).lower(),
                 str(v173_ok).lower(),
+                str(v174_ok).lower(),
             )
             return False
         LOGGER.critical(
@@ -222,8 +234,8 @@ def install() -> bool:
             "recovery_refresh_preserved=true v168_generation_liveness=true "
             "v169_execution_capital_integrity=true v170_capital_monotonicity=true "
             "v171_market_data_concurrency=true v172_post_core_activation_budget=true "
-            "v173_kraken_capital_tail_liveness=true publication_expiry_extended=false "
-            "stale_promoted=false safety_gates_bypassed=false",
+            "v173_kraken_capital_tail_liveness=true v174_kraken_observation_admission=true "
+            "publication_expiry_extended=false stale_promoted=false safety_gates_bypassed=false",
             MARKER,
         )
         return True
@@ -245,4 +257,5 @@ __all__ = [
     "_install_v171_market_data_concurrency",
     "_install_v172_post_core_activation_budget",
     "_install_v173_kraken_capital_tail_liveness",
+    "_install_v174_kraken_capital_observation_admission",
 ]
