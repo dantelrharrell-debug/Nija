@@ -23,6 +23,10 @@ monitor prefer the populated canonical broker manager over empty compatibility
 aliases, and v176 keeps proactive caller-thread deadline context intact while
 moving best-effort capital-state persistence off the live publication critical
 path.
+aliases, v176 immediately re-evaluates canonical activation after an accepted
+fresh capital publication, and v177 gives the live Kraken Phase-3 path a bounded
+public-OHLC-first source so a Kraken scan does not depend on a slow Coinbase
+candle fallback.
 """
 from __future__ import annotations
 
@@ -188,6 +192,17 @@ def _install_v176_capital_pipeline_completion() -> bool:
     return _install_named(
         "bot.runtime_capital_pipeline_completion_v176_patch",
         "RUNTIME_CAPITAL_PIPELINE_COMPLETION_V176",
+def _install_v176_capital_reactivation() -> bool:
+    return _install_named(
+        "bot.runtime_capital_reactivation_v176_patch",
+        "RUNTIME_CAPITAL_REACTIVATION_V176",
+    )
+
+
+def _install_v177_market_data_source_convergence() -> bool:
+    return _install_named(
+        "bot.runtime_market_data_source_convergence_v177_patch",
+        "RUNTIME_MARKET_DATA_SOURCE_CONVERGENCE_V177",
     )
 
 
@@ -217,6 +232,8 @@ def install() -> bool:
         v174_ok = _install_v174_kraken_capital_observation_admission()
         v175_ok = _install_v175_authority_position_convergence()
         v176_ok = _install_v176_capital_pipeline_completion()
+        v176_ok = _install_v176_capital_reactivation()
+        v177_ok = _install_v177_market_data_source_convergence()
         ready = bool(
             verified
             and periodic_ok
@@ -230,6 +247,7 @@ def install() -> bool:
             and v174_ok
             and v175_ok
             and v176_ok
+            and v177_ok
         )
         os.environ[_READY_FLAG] = "1" if ready else "0"
         if not ready:
@@ -237,6 +255,7 @@ def install() -> bool:
                 "RUNTIME_REFRESH_DEMAND_V167_FAILED marker=%s v32_verified=%s periodic_fallback_ok=%s "
                 "manifest_ok=%s v168_ok=%s v169_ok=%s v170_ok=%s v171_ok=%s v172_ok=%s "
                 "v173_ok=%s v174_ok=%s v175_ok=%s v176_ok=%s trading_fail_closed=true",
+                "v173_ok=%s v174_ok=%s v175_ok=%s v176_ok=%s v177_ok=%s trading_fail_closed=true",
                 MARKER,
                 str(verified).lower(),
                 str(periodic_ok).lower(),
@@ -250,6 +269,7 @@ def install() -> bool:
                 str(v174_ok).lower(),
                 str(v175_ok).lower(),
                 str(v176_ok).lower(),
+                str(v177_ok).lower(),
             )
             return False
         LOGGER.critical(
@@ -261,6 +281,9 @@ def install() -> bool:
             "v173_kraken_capital_tail_liveness=true v174_kraken_observation_admission=true "
             "v175_authority_position_convergence=true v176_capital_pipeline_completion=true "
             "publication_expiry_extended=false stale_promoted=false safety_gates_bypassed=false",
+            "v175_authority_position_convergence=true v176_capital_reactivation=true "
+            "v177_market_data_source_convergence=true publication_expiry_extended=false "
+            "stale_promoted=false safety_gates_bypassed=false",
             MARKER,
         )
         return True
@@ -285,4 +308,6 @@ __all__ = [
     "_install_v174_kraken_capital_observation_admission",
     "_install_v175_authority_position_convergence",
     "_install_v176_capital_pipeline_completion",
+    "_install_v176_capital_reactivation",
+    "_install_v177_market_data_source_convergence",
 ]
