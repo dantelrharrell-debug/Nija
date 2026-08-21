@@ -86,6 +86,24 @@ def test_v167_install_registers_release_manifest(monkeypatch):
     )
 
 
+def test_v167_install_chain_includes_v174(monkeypatch):
+    patch = importlib.import_module("bot.runtime_refresh_demand_v167_patch")
+    calls: list[tuple[str, str]] = []
+
+    def fake_install_named(module_name: str, label: str) -> bool:
+        calls.append((module_name, label))
+        return True
+
+    monkeypatch.setattr(patch, "_install_named", fake_install_named)
+    assert patch._install_v174_kraken_capital_observation_admission() is True
+    assert calls == [
+        (
+            "bot.runtime_kraken_capital_observation_admission_v174_patch",
+            "RUNTIME_KRAKEN_CAPITAL_OBSERVATION_ADMISSION_V174",
+        )
+    ]
+
+
 def test_post_import_convergence_installs_v167(monkeypatch):
     post = importlib.import_module("bot.runtime_post_import_convergence_patch")
     calls: list[tuple[str, str, str]] = []
