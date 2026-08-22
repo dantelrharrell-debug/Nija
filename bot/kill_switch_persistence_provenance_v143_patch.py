@@ -19,6 +19,12 @@ v143 repairs provenance only; it does not clear a kill switch itself:
 * preserve manual/UI/CLI, unrelated automatic risk, unknown-source, direct new
   heartbeat, and post-deactivation file stops fail-closed.
 
+v185 hardens v143's idempotence after production installer replay. A replay can
+replace ``KillSwitch.get_status`` or one of the causal-reader function objects
+without clearing v143's process-local installed flag. v143 now reasserts its
+status wrapper, causal-reader anchors, and release-manifest contract on every
+installer invocation instead of returning early solely because the flag is set.
+
 No live state, execution authority, risk gate, nonce, writer lease, SEAK state,
 capital freshness, or publication expiry is changed by this patch.
 """
@@ -33,8 +39,10 @@ from typing import Any
 
 LOGGER = logging.getLogger("nija.kill_switch_persistence_provenance_v143")
 MARKER = "20260818-kill-switch-persistence-provenance-v143"
+REASSERT_MARKER = "20260822-kill-switch-provenance-reassert-v185"
 RELEASE_ID = "20260818-runtime-convergence-v143"
 _FLAG = "NIJA_KILL_SWITCH_PERSISTENCE_PROVENANCE_V143_READY"
+_REASSERT_FLAG = "NIJA_KILL_SWITCH_PROVENANCE_REASSERT_V185_READY"
 _PATCH_ATTR = "_nija_kill_switch_persistence_provenance_v143"
 _META_KEY = "_nija_persisted_cause_v143"
 _DEPTH_KEY = "_nija_persistence_history_depth_v143"
@@ -208,6 +216,19 @@ def _causal_activation_from_status(
     return str(latest.get("reason") or ""), str(latest.get("source") or "")
 
 
+def _wrap_causal_reader(current: Any, fallback_attr: str) -> Any:
+    if getattr(current, _PATCH_ATTR, False):
+        return current
+
+    @wraps(current)
+    def causal_activation_v143(status: dict[str, Any]) -> tuple[str, str]:
+        return _causal_activation_from_status(status, current)
+
+    setattr(causal_activation_v143, _PATCH_ATTR, True)
+    setattr(causal_activation_v143, fallback_attr, current)
+    return causal_activation_v143
+
+
 def _patch_causal_readers() -> bool:
     v140 = importlib.import_module("bot.runtime_killswitch_authority_liveness_patch")
     v131 = importlib.import_module("bot.readiness_killswitch_causality_v131_patch")
@@ -218,30 +239,15 @@ def _patch_causal_readers() -> bool:
     if not callable(current_v140) or not callable(current_v131):
         return False
 
-    if getattr(current_v140, _PATCH_ATTR, False) and getattr(current_v131, _PATCH_ATTR, False):
-        v130._latest_activation = current_v140
-        return True
+    anchored_v140 = _wrap_causal_reader(current_v140, "_nija_v143_v140_fallback")
+    anchored_v131 = _wrap_causal_reader(current_v131, "_nija_v143_v131_fallback")
+    v140._causal_activation = anchored_v140
+    v131._causal_activation = anchored_v131
 
-    @wraps(current_v140)
-    def causal_activation_v143(status: dict[str, Any]) -> tuple[str, str]:
-        return _causal_activation_from_status(status, current_v140)
-
-    setattr(causal_activation_v143, _PATCH_ATTR, True)
-    setattr(causal_activation_v143, "_nija_v143_v140_fallback", current_v140)
-    v140._causal_activation = causal_activation_v143
-
-    @wraps(current_v131)
-    def causal_activation_v143_v131(status: dict[str, Any]) -> tuple[str, str]:
-        return _causal_activation_from_status(status, current_v131)
-
-    setattr(causal_activation_v143_v131, _PATCH_ATTR, True)
-    setattr(causal_activation_v143_v131, "_nija_v143_v131_fallback", current_v131)
-    v131._causal_activation = causal_activation_v143_v131
-
-    # v130 captured v131's old function object during its installer. Re-anchor
-    # that compatibility pointer so direct v130 recovery sees the same bounded
-    # provenance record as v132/v140.
-    v130._latest_activation = causal_activation_v143_v131
+    # v130 captured v131's old function object during its installer. Always
+    # re-anchor that compatibility pointer so installer replay cannot leave it
+    # reading a stale bounded-history implementation while v143 reports ready.
+    v130._latest_activation = anchored_v131
     return True
 
 
@@ -253,6 +259,7 @@ def _patch_release_manifest() -> bool:
         return False
 
     required["kill_switch_persistence_provenance_v143"] = _FLAG
+    required["kill_switch_provenance_reassert_v185"] = _REASSERT_FLAG
     own = ("bot.kill_switch_persistence_provenance_v143_patch", "install_import_hook")
     if own not in installers:
         manifest._INSTALLERS = tuple(installers) + (own,)
@@ -266,19 +273,23 @@ def _patch_release_manifest() -> bool:
 def install_import_hook() -> bool:
     global _INSTALLED
     with _LOCK:
-        if _INSTALLED and os.environ.get(_FLAG) == "1":
-            return True
-
         # v143 is a follow-on to the existing narrow v140 recovery and the v142
         # runtime release. Refuse partial installation rather than widening any
         # recovery path in an unknown runtime composition.
         if os.environ.get("NIJA_RUNTIME_KILLSWITCH_AUTHORITY_LIVENESS_V140_READY") != "1":
             os.environ.pop(_FLAG, None)
+            os.environ.pop(_REASSERT_FLAG, None)
             return False
         if os.environ.get("NIJA_CAPITAL_PUBLICATION_LIVENESS_V142_READY") != "1":
             os.environ.pop(_FLAG, None)
+            os.environ.pop(_REASSERT_FLAG, None)
             return False
 
+        # Do not return early merely because process-local installation state is
+        # already true. Release verification can replay installers after imports
+        # or compatibility layers replace function/class objects. Reassert each
+        # non-authoritative wrapper every time so "ready" means currently owned.
+        was_installed = bool(_INSTALLED and os.environ.get(_FLAG) == "1")
         try:
             ok = bool(
                 _patch_kill_switch_status()
@@ -298,10 +309,12 @@ def install_import_hook() -> bool:
 
         if not ok:
             os.environ.pop(_FLAG, None)
+            os.environ.pop(_REASSERT_FLAG, None)
             os.environ["NIJA_RUNTIME_RELEASE_READY"] = "0"
             return False
 
         os.environ[_FLAG] = "1"
+        os.environ[_REASSERT_FLAG] = "1"
         first = not _INSTALLED
         _INSTALLED = True
 
@@ -315,6 +328,15 @@ def install_import_hook() -> bool:
             MARKER,
             RELEASE_ID,
         )
+    elif was_installed:
+        LOGGER.critical(
+            "KILL_SWITCH_PROVENANCE_V185_REASSERTED marker=%s "
+            "kill_switch_status_owner=true causal_readers_reanchored=true "
+            "v130_pointer_reanchored=true generic_auto_clear=false "
+            "manual_ui_cli_stops_preserved=true risk_stops_preserved=true "
+            "execution_authority_unchanged=true force_live=false",
+            REASSERT_MARKER,
+        )
     return True
 
 
@@ -324,6 +346,7 @@ def install() -> bool:
 
 __all__ = [
     "MARKER",
+    "REASSERT_MARKER",
     "RELEASE_ID",
     "install",
     "install_import_hook",
