@@ -25,6 +25,14 @@ without clearing v143's process-local installed flag. v143 now reasserts its
 status wrapper, causal-reader anchors, and release-manifest contract on every
 installer invocation instead of returning early solely because the flag is set.
 
+v186 closes the ordering gap observed in production: the v132 durability worker
+can evaluate a persisted stop immediately before v185 repairs the causal-reader
+anchors. After a successful reassertion, v186 performs one immediate call to the
+existing guarded v132 recovery entry point and emits a bounded causal class. It
+does not widen eligibility, call ``KillSwitch.deactivate`` directly, grant
+execution authority, or force LIVE_ACTIVE. Manual/UI/CLI, risk, drawdown,
+liquidation, panic, unknown-source, and provenance-boundary stops remain closed.
+
 No live state, execution authority, risk gate, nonce, writer lease, SEAK state,
 capital freshness, or publication expiry is changed by this patch.
 """
@@ -40,9 +48,11 @@ from typing import Any
 LOGGER = logging.getLogger("nija.kill_switch_persistence_provenance_v143")
 MARKER = "20260818-kill-switch-persistence-provenance-v143"
 REASSERT_MARKER = "20260822-kill-switch-provenance-reassert-v185"
+POST_REASSERT_MARKER = "20260822-kill-switch-post-reassert-recheck-v186"
 RELEASE_ID = "20260818-runtime-convergence-v143"
 _FLAG = "NIJA_KILL_SWITCH_PERSISTENCE_PROVENANCE_V143_READY"
 _REASSERT_FLAG = "NIJA_KILL_SWITCH_PROVENANCE_REASSERT_V185_READY"
+_POST_REASSERT_FLAG = "NIJA_KILL_SWITCH_POST_REASSERT_RECHECK_V186_READY"
 _PATCH_ATTR = "_nija_kill_switch_persistence_provenance_v143"
 _META_KEY = "_nija_persisted_cause_v143"
 _DEPTH_KEY = "_nija_persistence_history_depth_v143"
@@ -60,13 +70,7 @@ def _restart_persistence_record(item: object) -> bool:
 
 
 def _derive_persisted_cause(history: object) -> dict[str, Any] | None:
-    """Return one bounded causal record for the current restart-persisted stop.
-
-    A source-less record is written by ``KillSwitch.deactivate`` and therefore
-    terminates provenance. Crossing that boundary could misattribute a later
-    manually-created ``EMERGENCY_STOP`` file to an older automatic heartbeat
-    activation, so v143 deliberately refuses to scan past it.
-    """
+    """Return one bounded causal record for the current restart-persisted stop."""
     if not isinstance(history, list) or not history:
         return None
     latest = history[-1]
@@ -243,12 +247,98 @@ def _patch_causal_readers() -> bool:
     anchored_v131 = _wrap_causal_reader(current_v131, "_nija_v143_v131_fallback")
     v140._causal_activation = anchored_v140
     v131._causal_activation = anchored_v131
-
-    # v130 captured v131's old function object during its installer. Always
-    # re-anchor that compatibility pointer so installer replay cannot leave it
-    # reading a stale bounded-history implementation while v143 reports ready.
     v130._latest_activation = anchored_v131
     return True
+
+
+def _causal_class(reason: object, source: object) -> str:
+    """Return a bounded diagnostic class without widening recovery eligibility."""
+    reason_l = str(reason or "").strip().lower()
+    source_u = str(source or "").strip().upper()
+    if source_u == "PROVENANCE_BOUNDARY" or reason_l.startswith("v143_provenance_blocked:"):
+        return "provenance_boundary"
+    if source_u in {"MANUAL", "UI", "CLI"} or any(
+        token in reason_l for token in ("operator", "manual", "ui stop", "cli stop")
+    ):
+        return "manual_or_operator"
+    if any(
+        token in reason_l
+        for token in (
+            "drawdown", "daily loss", "weekly loss", "loss limit", "consecutive losses",
+            "liquidation", "panic", "api instability", "unexpected balance", "balance delta",
+        )
+    ):
+        return "risk_or_drawdown"
+    heartbeat = "authority_heartbeat_expired" in reason_l or "authority heartbeat expired" in reason_l
+    dead_core = "core_thread_dead" in reason_l or "nija_core_thread_alive" in reason_l
+    if heartbeat and dead_core:
+        return "retired_heartbeat_core_signature"
+    if heartbeat:
+        return "heartbeat_other_signature"
+    if source_u == "FILE_SYSTEM" or "kill switch file detected" in reason_l:
+        return "filesystem_persistence"
+    if not reason_l and not source_u:
+        return "unknown"
+    return "other_preserved"
+
+
+def _post_reassert_recheck() -> bool:
+    """Immediately re-run the existing guarded recovery after causal re-anchoring.
+
+    This function deliberately delegates the decision to v132/v140. It never
+    calls KillSwitch.deactivate itself and never modifies readiness or authority.
+    """
+    recovered = False
+    active_before: object = "unknown"
+    active_after: object = "unknown"
+    causal_source = ""
+    causal_reason = ""
+    diagnostic = "unknown"
+    try:
+        kill_module = importlib.import_module("bot.kill_switch")
+        getter = getattr(kill_module, "get_kill_switch", None)
+        kill_switch = getter() if callable(getter) else None
+        status = kill_switch.get_status() if kill_switch is not None else {}
+        active_before = bool(status.get("is_active")) if isinstance(status, dict) else "unknown"
+
+        v140 = importlib.import_module("bot.runtime_killswitch_authority_liveness_patch")
+        reader = getattr(v140, "_causal_activation", None)
+        if callable(reader) and isinstance(status, dict):
+            causal_reason, causal_source = reader(status)
+        diagnostic = _causal_class(causal_reason, causal_source)
+
+        v132 = importlib.import_module("bot.readiness_killswitch_durability_v132_patch")
+        attempt = getattr(v132, "_attempt_persisted_stop_recovery", None)
+        if callable(attempt) and active_before is True:
+            recovered = bool(attempt())
+
+        if kill_switch is not None:
+            status_after = kill_switch.get_status()
+            if isinstance(status_after, dict):
+                active_after = bool(status_after.get("is_active"))
+    except Exception as exc:
+        LOGGER.warning(
+            "KILL_SWITCH_PROVENANCE_V186_RECHECK_ERROR marker=%s err=%s:%s "
+            "trading_fail_closed=true eligibility_unchanged=true",
+            POST_REASSERT_MARKER,
+            type(exc).__name__,
+            exc,
+        )
+        return False
+
+    LOGGER.critical(
+        "KILL_SWITCH_PROVENANCE_V186_POST_REASSERT_RECHECK marker=%s "
+        "attempted=%s recovered=%s active_before=%s active_after=%s causal_class=%s "
+        "eligibility_unchanged=true direct_deactivate=false generic_auto_clear=false "
+        "manual_ui_cli_stops_preserved=true risk_stops_preserved=true force_live=false",
+        POST_REASSERT_MARKER,
+        str(active_before is True).lower(),
+        str(recovered).lower(),
+        active_before,
+        active_after,
+        diagnostic,
+    )
+    return recovered
 
 
 def _patch_release_manifest() -> bool:
@@ -260,6 +350,7 @@ def _patch_release_manifest() -> bool:
 
     required["kill_switch_persistence_provenance_v143"] = _FLAG
     required["kill_switch_provenance_reassert_v185"] = _REASSERT_FLAG
+    required["kill_switch_post_reassert_recheck_v186"] = _POST_REASSERT_FLAG
     own = ("bot.kill_switch_persistence_provenance_v143_patch", "install_import_hook")
     if own not in installers:
         manifest._INSTALLERS = tuple(installers) + (own,)
@@ -273,22 +364,17 @@ def _patch_release_manifest() -> bool:
 def install_import_hook() -> bool:
     global _INSTALLED
     with _LOCK:
-        # v143 is a follow-on to the existing narrow v140 recovery and the v142
-        # runtime release. Refuse partial installation rather than widening any
-        # recovery path in an unknown runtime composition.
         if os.environ.get("NIJA_RUNTIME_KILLSWITCH_AUTHORITY_LIVENESS_V140_READY") != "1":
             os.environ.pop(_FLAG, None)
             os.environ.pop(_REASSERT_FLAG, None)
+            os.environ.pop(_POST_REASSERT_FLAG, None)
             return False
         if os.environ.get("NIJA_CAPITAL_PUBLICATION_LIVENESS_V142_READY") != "1":
             os.environ.pop(_FLAG, None)
             os.environ.pop(_REASSERT_FLAG, None)
+            os.environ.pop(_POST_REASSERT_FLAG, None)
             return False
 
-        # Do not return early merely because process-local installation state is
-        # already true. Release verification can replay installers after imports
-        # or compatibility layers replace function/class objects. Reassert each
-        # non-authoritative wrapper every time so "ready" means currently owned.
         was_installed = bool(_INSTALLED and os.environ.get(_FLAG) == "1")
         try:
             ok = bool(
@@ -310,11 +396,13 @@ def install_import_hook() -> bool:
         if not ok:
             os.environ.pop(_FLAG, None)
             os.environ.pop(_REASSERT_FLAG, None)
+            os.environ.pop(_POST_REASSERT_FLAG, None)
             os.environ["NIJA_RUNTIME_RELEASE_READY"] = "0"
             return False
 
         os.environ[_FLAG] = "1"
         os.environ[_REASSERT_FLAG] = "1"
+        os.environ[_POST_REASSERT_FLAG] = "1"
         first = not _INSTALLED
         _INSTALLED = True
 
@@ -337,6 +425,11 @@ def install_import_hook() -> bool:
             "execution_authority_unchanged=true force_live=false",
             REASSERT_MARKER,
         )
+
+    # Perform the recheck only after the installer lock is released. The existing
+    # v132/v140 recovery path remains the sole authority to deactivate an
+    # eligible retired heartbeat stop.
+    _post_reassert_recheck()
     return True
 
 
@@ -347,11 +440,14 @@ def install() -> bool:
 __all__ = [
     "MARKER",
     "REASSERT_MARKER",
+    "POST_REASSERT_MARKER",
     "RELEASE_ID",
     "install",
     "install_import_hook",
     "_derive_persisted_cause",
     "_causal_activation_from_status",
+    "_causal_class",
+    "_post_reassert_recheck",
     "_patch_kill_switch_status",
     "_patch_causal_readers",
     "_patch_release_manifest",
