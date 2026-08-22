@@ -205,7 +205,7 @@ def test_effective_kraken_readiness_requires_current_complete_canonical_truth(mo
         get_last_pricing_coverage=lambda: 1.0,
     )
     manager = SimpleNamespace(
-        _platform_brokers={SimpleNamespace(value="kraken"): kraken},
+        _platform_brokers={"kraken": kraken},
         _capital_bootstrap_fsm=SimpleNamespace(state=SimpleNamespace(value="READY")),
     )
 
