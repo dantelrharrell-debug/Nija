@@ -77,3 +77,16 @@ def test_v176_installs_v183_kraken_capital_balance_liveness(monkeypatch):
 
     monkeypatch.setattr(v176.importlib, "import_module", fake_import)
     assert v176._install_v183_kraken_capital_balance_liveness() is True
+
+
+def test_v176_installs_v184_kraken_aggregate_valuation_confidence(monkeypatch):
+    fake_v184 = types.SimpleNamespace(install=lambda: True)
+    original_import = v176.importlib.import_module
+
+    def fake_import(name: str):
+        if name == "bot.runtime_kraken_aggregate_valuation_confidence_v184_patch":
+            return fake_v184
+        return original_import(name)
+
+    monkeypatch.setattr(v176.importlib, "import_module", fake_import)
+    assert v176._install_v184_kraken_aggregate_valuation_confidence() is True
