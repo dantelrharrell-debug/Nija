@@ -1,490 +1,419 @@
 # NIJA AI Trading LLC — Production Success & Recovery Anchor
 
-**Status date:** August 13, 2026
+**Status date:** August 22, 2026
 
-**Known-good deployed checkpoint:** `666ef8893dd491bcd2e52acb6cae8291e61d780e`
+**Current 100/100 production-readiness checkpoint:** `740c98dc94374bb1ed770ff96a5eafabfd32681b`
 
-**Runtime generation observed healthy:** `3774`
+**Immutable recovery branch:** `recovery/100-prod-readiness-20260822`
 
-This README is the durable recovery anchor for NIJA. Its purpose is to make it possible to return production to the current known-good state if a future deployment, restart, dependency change, or runtime regression breaks startup, writer authority, broker readiness, or live execution readiness.
+**Runtime generation observed healthy:** `4629`
 
-> Important: this checkpoint proves NIJA reached and sustained `LIVE_ACTIVE`, with all canonical readiness proofs true, a live registered core thread, healthy writer authority, and all three configured platform brokers execution-ready. It does **not** yet prove a new end-to-end trade lifecycle after this recovery. Do not call the system 100/100 end-to-end verified until a real exchange order is acknowledged/filled and a later exit is also acknowledged/filled.
+This README is the durable recovery anchor for NIJA. Its purpose is to make it possible to return production to the August 22, 2026 known-good state if a future deployment, restart, dependency change, runtime regression, broker issue, capital-publication failure, writer-authority failure, or position-sync regression breaks production readiness.
 
-NIJA does not guarantee trades, fills, profits, income, or returns. Never manufacture readiness with forced activation, synthetic capital, credential bypasses, nonce bypasses, writer-lock deletion, emergency-stop bypasses, or fabricated order/fill state.
+> This checkpoint proves **100/100 production readiness**: writer/core healthy, all three configured platform brokers connected, authoritative position sync/reconciliation healthy, capital refresh ready, strategy ready, nonce valid, circuit breaker closed, and `EXECUTION_ALLOWED: TRUE` through the normal safety path. It does **not** claim that a new live entry/fill/exit lifecycle occurred inside the same log slice. A real broker order/fill remains separate behavioral proof and must never be fabricated.
 
----
-
-## 1. Current Known-Good Production State — August 13, 2026
-
-The current production process recovered from the earlier startup/readiness failures and reached a stable live state.
-
-### Proven runtime state
-
-The successful runtime showed all of the following simultaneously:
-
-```text
-PREACTIVATION_READY
-state=LIVE_ACTIVE
-pending=[]
-authority_ready=true
-nonce_ready=true
-writer_authority=confirmed
-blockers_cleared=true
-current_proofs=true
-```
-
-The readiness table was fully true:
-
-```text
-broker_connected=True
-balance_hydrated=True
-authority_ready=True
-capital_ready=True
-risk_ready=True
-strategy_ready=True
-execution_ready=True
-nonce_ready=True
-bootstrap_ready=True
-```
-
-Writer authority was healthy and tied to the real core thread:
-
-```text
-WRITER_LOCK_RENEWED
-writer_generation=3774
-core_thread_alive=True
-core_thread_registered=True
-core_thread_reason=ok
-```
-
-Repeated activation reconciliation correctly reported:
-
-```text
-ACTIVATION_SINGLE_FLIGHT_RESULT
-ok=True
-reason=already_live
-state_before=LIVE_ACTIVE
-```
-
-The main process also reported:
-
-```text
-BOT_MAIN_KEEPALIVE_HEARTBEAT
-startup_complete=True
-writer_authority=True
-TradingLoop
-```
-
-### Three-venue execution readiness
-
-All three configured platform venues were authenticated, funded, and eligible in the successful runtime:
-
-```text
-THREE_VENUE_STAGE venue=kraken ... marked_ready=True eligible=True activation=ready
-THREE_VENUE_STAGE venue=coinbase ... marked_ready=True eligible=True activation=ready
-THREE_VENUE_STAGE venue=okx ... marked_ready=True eligible=True activation=ready
-BROKER_INDEPENDENT_EXECUTION_READY ... all_venues_ready=True execution_enabled=True
-THREE_VENUE_EXECUTION_READY ... kraken=True coinbase=True okx=True execution_enabled=True
-```
-
-Observed live spendable values in one successful readiness window were approximately:
-
-```text
-kraken   154.49
-coinbase  95.12
-okx      144.96
-```
-
-A separate live CapitalAuthority refresh in the same recovered generation showed total portfolio authority around `$467.20` across three connected brokers. Treat balances as dynamic; use current live exchange observations, not these historical numbers, when validating a future recovery.
+NIJA does not guarantee trades, fills, profits, income, or returns. Never manufacture readiness with forced activation, synthetic capital, fabricated prices, credential bypasses, nonce bypasses, writer-lock deletion, freshness extension, emergency-stop bypasses, weakened risk gates, or fake order/fill state.
 
 ---
 
-## 2. What Is Still Awaiting Final End-to-End Confirmation
+## 1. August 22, 2026 — 100/100 Production-Readiness Baseline
 
-NIJA is currently proven **live and execution-ready**, but the August 13 recovery evidence has not yet shown a complete new entry/exit lifecycle after recovery.
-
-Before calling this checkpoint **100/100 end-to-end verified**, capture real broker evidence for:
-
-1. Strategy/risk decision reaches execution.
-2. Order request reaches the selected broker adapter.
-3. Exchange returns an order ID / txid / broker acknowledgment.
-4. Entry order reaches a confirmed fill state.
-5. Position is visible in broker reconciliation.
-6. Exit protection tracks the position.
-7. Exit order reaches the broker.
-8. Exchange acknowledges the exit.
-9. Exit reaches confirmed fill/closed state.
-10. Position and PnL reconciliation agree with the broker after closure.
-
-Do **not** treat any of the following by itself as proof of a real trade:
+The successful production lineage is anchored to:
 
 ```text
-LIVE_ACTIVE
-execution_ready=True
-TRADE DECISION final_decision=EXECUTE
-PIPELINE_STAGE risk_governor status=passed
-stage=FILL_VERIFY on the authority heartbeat marker
+deployment_sha=740c98dc94374bb1ed770ff96a5eafabfd32681b
+runtime_generation=4629
 ```
 
-The authority-heartbeat `FILL_VERIFY` label refers to heartbeat marker verification, not exchange trade fills.
-
----
-
-## 3. Canonical Production Startup Path
-
-The production startup path remains:
+The runtime proved the complete live gate:
 
 ```text
-scripts/production_bootstrap.sh
-    -> start.sh
-    -> scripts/canonical_runtime_launcher_v26.py
-    -> main.py
-    -> bot.bot
-    -> bot.bot_main
+Reconciliation: COMPLETE
+Nonce Sync: VALID
+Lease Owner: CONFIRMED
+Writer Heartbeat: HEALTHY
+Strategy Ready: TRUE
+Circuit Breaker: CLOSED
+EXECUTION_ALLOWED: TRUE
 ```
 
-The canonical high-level startup order is:
-
-1. Install runtime safety/convergence patches.
-2. Acquire the single-writer lease and fencing generation.
-3. Start writer and authority heartbeat supervision.
-4. Establish nonce protection.
-5. Prepare the canonical broker runtime.
-6. Hydrate live broker balances and capital authority.
-7. Complete SelfHealingStartup.
-8. Advance BootstrapFSM toward thread startup.
-9. Publish the canonical strategy.
-10. Start the real trading engine/core thread.
-11. Register that exact live thread with writer authority.
-12. Reach `RUNNING_SUPERVISED`.
-13. Complete post-core readiness convergence.
-14. Only then allow the normal activation path to hold `LIVE_ACTIVE`.
-
-Do not pre-grant or synthesize any of these:
-
-```text
-authority_ready
-nonce_ready
-strategy_ready
-execution_ready
-bootstrap_ready
-NIJA_RUNTIME_EXECUTION_AUTHORITY
-LIVE_ACTIVE
-```
-
----
-
-## 4. Exact Recovery Checklist
-
-If NIJA regresses, restore using this checklist in order. Do not skip ahead by forcing later readiness states.
-
-### A. Confirm deployment identity
-
-Known-good checkpoint:
-
-```text
-666ef8893dd491bcd2e52acb6cae8291e61d780e
-```
-
-A newer commit may be valid, but when debugging compare its runtime behavior against this checkpoint.
-
-Expected release evidence:
-
-```text
-NIJA_RUNTIME_RELEASE_MANIFEST ... deployment_sha=<expected sha> ready=true
-```
-
-### B. Confirm writer authority
-
-Healthy evidence:
+Writer/core proof:
 
 ```text
 WRITER_LOCK_RENEWED
 WRITER_STATE_TRANSITION ... state=ACTIVE
-HEARTBEAT_REFRESH
-HEARTBEAT_CHECK ... healthy=True authoritative=True
-```
-
-Healthy core attachment must show:
-
-```text
 core_thread_alive=True
 core_thread_registered=True
 core_thread_reason=ok
 ```
 
-If the core is not registered/alive, stop diagnosis there. Do not force authority or execution readiness.
-
-### C. Confirm canonical readiness table
-
-The target known-good table is:
+Position/reconciliation proof:
 
 ```text
-broker_connected=True
-balance_hydrated=True
-authority_ready=True
-capital_ready=True
-risk_ready=True
-strategy_ready=True
-execution_ready=True
-nonce_ready=True
-bootstrap_ready=True
+RUNTIME_POSITION_FETCH_PROOF_V182 ... ready=true ... synthetic_success=false
+STARTUP_RECONCILIATION_V146_READY ... status=CLEAN_START ... authoritative_snapshots=true
+POSITION_SYNC_V96_READINESS ... ready=true pending=[]
+status={'platform:kraken': True, 'platform:coinbase': True, 'platform:okx': True}
 ```
 
-Then v61 should report:
+Broker connectivity proof:
 
 ```text
-PREACTIVATION_READINESS_V61_TRUTH_SYNC ... state=LIVE_ACTIVE ... pending=[]
-PREACTIVATION_READY ... writer_authority=confirmed blockers_cleared=true current_proofs=true
+kraken_connected=True
+coinbase_connected=True
+okx_connected=True
+all_configured_connected=True
+platform_accounts_connected=3
+platform_accounts_registered=3
+kraken_users_registered=2
+kraken_users_connected=2
+user_accounts_trading_eligible=2
 ```
 
-### D. Confirm three platform brokers
-
-Expected configured live platform venues:
+Capital proof in the successful window:
 
 ```text
-kraken
-coinbase
-okx
+CAPITAL_REFRESH_COMPLETED ... success=true ready=true total_capital=342.57
+RUNTIME_CAPITAL_PUBLICATION_IDENTITY_V178 ... reason_not_repairable:accepted
 ```
 
-Healthy execution readiness should show each venue ready plus:
+The observed `$342.57` is a historical live snapshot, not a fixed target. Recovery must use current broker-backed balances, not reproduce that number.
+
+The final execution router also reported:
 
 ```text
-BROKER_INDEPENDENT_EXECUTION_READY ... execution_enabled=True
-THREE_VENUE_EXECUTION_READY ... execution_enabled=True
+FINAL_EXECUTION_STATE_ROUTER_RECONVERGED
+state={'execution': True, 'startup': True, 'okx': True}
 ```
-
-A degraded optional venue should fail closed/isolate itself rather than fabricate global readiness.
-
-### E. Confirm main/core runtime
-
-Healthy evidence:
-
-```text
-BOT_MAIN_KEEPALIVE_HEARTBEAT startup_complete=True writer_authority=True
-TradingLoop
-BrokerWorker-kraken
-BrokerWorker-coinbase
-BrokerWorker-okx
-```
-
-### F. Confirm activation remains stable
-
-Repeated activation requests after recovery should be idempotent:
-
-```text
-ACTIVATION_SINGLE_FLIGHT_RESULT ... ok=True reason=already_live state_before=LIVE_ACTIVE
-```
-
-If repeated activation instead revokes proofs or returns to `LIVE_PENDING_CONFIRMATION`, identify the first false proof rather than forcing activation.
-
-### G. Confirm actual execution separately
-
-Only exchange/broker evidence counts as proof of a trade. Look for order submission followed by broker acknowledgment and fill evidence such as an exchange order ID/txid and confirmed filled/closed status.
-
-Do not infer fills from signals, scans, risk approval, or execution readiness.
 
 ---
 
-## 5. Recovery Decision Tree
+## 2. Exact Recovery Target
 
-### Case 1 — `LIVE_PENDING_CONFIRMATION`, core not registered
+If production regresses, the target is not merely `LIVE_ACTIVE`. Restore the full evidence chain below:
 
-Typical blockers:
+1. Expected deployment/recovery lineage loaded.
+2. Single writer owns the current generation.
+3. Writer heartbeat healthy.
+4. Real core thread alive and registered.
+5. Kraken, Coinbase, and OKX connected.
+6. Position fetch/adoption proof genuine (`synthetic_success=false`).
+7. Reconciliation reaches `CLEAN_START` with authoritative snapshots.
+8. Position sync is 3/3 with `pending=[]`.
+9. Capital refresh succeeds with all expected brokers represented.
+10. Capital publication is current/accepted.
+11. v183 Kraken balance liveness is ready.
+12. v184 authenticated aggregate valuation confidence is ready.
+13. Nonce sync is valid.
+14. Lease owner confirmed.
+15. Strategy ready.
+16. Circuit breaker closed.
+17. Kill switch naturally inactive.
+18. Final execution router is enabled.
+19. `EXECUTION_ALLOWED: TRUE` appears through the normal canonical path.
+20. No active fail-closed execution blocker remains.
 
-```text
-core_registered=False
-core_alive=False
-bootstrap_state=<not RUNNING_SUPERVISED>
-```
-
-Action:
-
-- Verify `bot.bot_main` is progressing through the canonical startup sequence.
-- Verify canonical broker prebootstrap returned control to `bot_main`.
-- Do not weaken v61, writer fencing, nonce rules, risk rules, or kill-switch behavior.
-- Do not set `_startup_complete` early.
-- Do not fabricate a core thread or mark it registered unless the real thread is alive.
-
-### Case 2 — writer renews but readiness is false
-
-Action:
-
-- Find the first false proof in the readiness table.
-- Verify writer generation/token are current.
-- Verify heartbeat authority.
-- Verify nonce authority.
-- Verify broker/capital freshness.
-- Let v61 remain fail-closed until every proof is true.
-
-### Case 3 — `EMERGENCY_STOP`
-
-Action:
-
-- Determine the actual stop reason first.
-- Never clear operator, kill-switch, loss, liquidation, panic, drawdown, or unknown emergency stops automatically.
-- Heartbeat-origin stale-stop recovery is allowed only through the narrow existing recovery path after current writer proof and explicit kill-switch-clear proof.
-
-### Case 4 — live and ready, but no orders
-
-Action:
-
-- Do not modify startup/authority code merely because there is no trade.
-- Inspect strategy signals, TPE decision, market-data sufficiency, volume/spread filters, risk governor, exchange minimums, and the execution path after `final_decision=EXECUTE`.
-- A lack of valid signals or risk-approved opportunities is not a startup failure.
-
-### Case 5 — `EXECUTE` decision but no broker ACK
-
-Action:
-
-- Trace execution from the final strategy/risk decision into the broker router.
-- Confirm selected broker is still connected and execution eligible.
-- Confirm order request actually reached the adapter.
-- Require broker response evidence before classifying the event as submitted/rejected/filled.
-- Do not convert generic false/none returns into fake exchange rejections or fills.
-
-### Case 6 — entry fills but exit does not
-
-Action:
-
-- Verify broker-native position reconciliation.
-- Verify cost basis/entry price is trustworthy.
-- Verify automatic exit supervisors are registered for that broker/account.
-- Verify the exit request reaches the broker and receives acknowledgment.
-- Never invent an exit fill or manually mark the position closed without exchange evidence.
+Do not skip failed steps by forcing later states.
 
 ---
 
-## 6. Current Recovery/Hardening Milestones
+## 3. Recovery Rollback Procedure
 
-The August recovery sequence that led to the current successful runtime includes these important merged checkpoints:
+### A. Preserve evidence first
+
+Before changing code or redeploying, save the failing production logs and identify the **first false proof**. Do not patch based only on the last downstream error.
+
+### B. Compare against the immutable checkpoint
+
+Known-good code checkpoint:
 
 ```text
-PR #2504  Fix writer readiness convergence for live activation
-merge: 1bf87084ff1c57e0d41bd824e7a92507ee47dae8
-
-PR #2505  Kraken user reconnect hardening
-merge: d1baa21c34777727c332ab655431f76d5b544ce9
-
-PR #2506  Generic-false execution circuit-breaker convergence (v88)
-merge: 935fb4f90d90f3e46c82a6211e7c3e921ff7fd0a
-
-PR #2507  Kraken reconnect liveness regression coverage
-merge: d1721fc55b26417c878f5ecf79fc4bb3c54155a8
-
-PR #2508  Recover stale heartbeat-origin emergency stop after authority returns
-merge: 26254d1614533d5a84a575239534e07a6f65ca28
-
-PR #2509  Document fail-closed prebootstrap core handoff repair
-merge: 666ef8893dd491bcd2e52acb6cae8291e61d780e
+740c98dc94374bb1ed770ff96a5eafabfd32681b
 ```
 
-Important distinction: PR #2509 was documentation only. The successful production runtime on `666ef889...` therefore proves the runtime recovered without the proposed v94 production handoff change being applied. Do not assume that proposal is required unless a future regression reproduces the canonical prebootstrap stall and the change is separately reviewed and approved.
+Known-good branch:
+
+```text
+recovery/100-prod-readiness-20260822
+```
+
+Use this branch as the behavioral comparison point. Do not rewrite or force-move it unless intentionally creating a new recovery anchor after a later proven-good release.
+
+### C. Roll back code only when evidence supports it
+
+If a later deployment introduced a regression, restore from the known-good checkpoint using normal Git/GitHub rollback or redeploy procedures. Never bypass runtime safety gates merely to make the rollback appear healthy.
+
+### D. Re-validate production after rollback
+
+A rollback is not complete until runtime again proves:
+
+```text
+writer ACTIVE
+core_thread_alive=True
+core_thread_registered=True
+3/3 broker connectivity
+3/3 position sync
+CLEAN_START authoritative reconciliation
+capital refresh success=true ready=true
+nonce VALID
+strategy TRUE
+circuit breaker CLOSED
+EXECUTION_ALLOWED: TRUE
+```
 
 ---
 
-## 7. Safety-Critical Contracts That Must Not Be Weakened
+## 4. Critical Recovery Lineage — v169 through v184
 
-The following remain non-negotiable recovery constraints:
+The successful August 22 runtime includes the following hardening chain:
+
+```text
+v169 execution-capital integrity
+v170 capital publication monotonicity
+v171 market-data concurrency
+v172 post-core activation budget
+v173 Kraken capital tail liveness
+v174 Kraken capital observation admission
+v175 authority-position convergence
+v176 capital pipeline completion/reactivation
+v177 market-data source convergence
+v178 capital publication identity recovery
+v179 bootstrap capital publication/hydration convergence
+v180 direct-refresh capital downgrade guard/bootstrap completeness
+v181 canonical generation-context recovery
+v182 authoritative position-fetch proof reassertion
+v183 Kraken capital balance liveness/cache-only valuation
+v184 authenticated Kraken aggregate-equity valuation confidence
+```
+
+Important merged checkpoints leading to the successful baseline:
+
+```text
+PR #2626 -> 9dcf412e0cdf39394e77a25cc5d06c2d6b5173aa
+PR #2627 -> 11db94d8a849d5fd6955876f3513f55715ba87d6
+PR #2628 -> 9d497b22bc7966d70f573d273eca8c3aa96519a3
+PR #2629 -> 7a23a0fa395ad2f650ba3bf0f1b8c66c45c7d7e3
+PR #2630 -> 68b99033c0cd4746441dd6ef7c1daff297009093
+PR #2631 -> 1bd329e3efe72b22dc7aec6359d3f398810ceeb8
+PR #2632 -> 3ddccccf98267c3325feb2db4a142a535fb23a2d
+PR #2633 -> 20a40012bb60a12fe948714cf0d1591316ec658b
+PR #2634 -> cc579542218dfacce64738ba1ca78e134f7f6da5
+PR #2635 -> 3c6f6fd84f5b6054dc80a30f0b3246c5a253d7c2
+PR #2636 -> 740c98dc94374bb1ed770ff96a5eafabfd32681b
+```
+
+Do not assume a future failure requires a new numbered patch. First determine whether the problem is broker-side, account-side, transient, deployment-related, stale state, or an actual code defect.
+
+---
+
+## 5. Kraken-Specific Recovery Contract
+
+Kraken was the final repeated capital-readiness problem before the 100/100 checkpoint.
+
+### v183 contract
+
+During capital refresh, per-asset USD pricing is cache-only so public price lookups cannot consume the private-balance budget. Authenticated Kraken `TradeBalance` equivalent equity remains authoritative for total-equity floor logic.
+
+Do not undo this by reintroducing serial public price fetches into the protected capital-refresh path.
+
+### v184 contract
+
+Fresh authenticated Kraken `TradeBalance.result.eb` may provide effective aggregate valuation coverage when it is:
+
+- authenticated,
+- positive,
+- from the same balance epoch,
+- fresh,
+- error-free,
+- and the broker is available/healthy.
+
+Raw asset-pricing coverage remains diagnostic and must not be falsified.
+
+Never fabricate asset prices, extend freshness TTL, mutate capital to pass confidence, or weaken broker-completeness requirements.
+
+---
+
+## 6. Position & Held-Trade Recovery Contract
+
+A healthy runtime must prove real position adoption/fetch, not copied or synthetic readiness.
+
+Expected proof:
+
+```text
+RUNTIME_POSITION_FETCH_PROOF_V182
+ready=true
+exact_v98_owner_required=true
+adopted_and_fetch_proof_required=true
+synthetic_success=false
+```
+
+Healthy reconciliation must return:
+
+```text
+STARTUP_RECONCILIATION_V146_READY
+status=CLEAN_START
+authoritative_snapshots=true
+```
+
+The automatic exit stack must remain intact for existing positions. Entry fail-closed conditions must not disable legitimate protective exits.
+
+Do not create duplicate exit workers that could double-sell a position.
+
+---
+
+## 7. Exit-Protection Stack That Must Be Preserved
+
+Current production code contains the following protections:
+
+- hard/standard stop loss,
+- forced/emergency stop loss,
+- take-profit levels,
+- trailing/profit-lock exit,
+- trailing stop loss,
+- trailing take profit,
+- break-even stop,
+- universal broker exit supervision,
+- Kraken profit-realization protection.
+
+The canonical automatic SL/TP monitor is engine-aware and scans open positions. Recovery must preserve position metadata such as symbol, side, quantity, entry price, market price access, and stored protection levels.
+
+Never mark a position closed or fabricate an exit fill without broker/exchange evidence.
+
+---
+
+## 8. Safety-Critical Contracts — Never Weaken These to Recover Faster
 
 - Single-writer fencing remains authoritative.
 - Writer generation/token must be current.
 - Nonce protection remains fail-closed.
 - Real broker credentials/authentication are required.
 - Capital must come from current broker-backed observations.
+- Complete broker aggregation rules remain truthful.
+- Freshness TTLs must not be extended to hide failures.
+- Stale or partial snapshots must not be promoted to current.
+- Position readiness must come from authoritative broker snapshots.
 - Risk governor remains in the execution path.
 - Kill switch and genuine emergency stops remain authoritative.
-- Core thread readiness must describe the actual real thread.
-- `LIVE_ACTIVE` must come only through the canonical state machine.
+- Core-thread readiness must describe the actual live thread.
+- `EXECUTION_ALLOWED` must come only through the canonical state machine/gates.
 - Order submission/fill state must come from broker/exchange evidence.
-- User accounts must not be marked connected/funded without real proof.
-- Do not disable circuit breakers or safety supervisors just to increase trade frequency.
+- User capital must never be mixed into platform capital.
+- Do not lower market-quality, risk, spread, volume, or signal thresholds merely to force a trade.
+- Absence of trades by itself is not a bug.
 
 ---
 
-## 8. Current Live Broker Contract
+## 9. Known Non-Blocking / Transient Signals
 
-NIJA's active platform crypto execution runtime uses:
-
-| Venue | Endpoint / role | Current recovery expectation |
-|---|---|---|
-| Kraken | Primary supported platform venue | Authenticated, funded, nonce-ready, execution eligible |
-| Coinbase Advanced Trade | Independent platform venue | Authenticated ECDSA/CDP credentials, funded, execution eligible |
-| OKX US | Independent platform venue | `https://us.okx.com`, authenticated, funded, execution eligible |
-
-Brokerage balances, positions, risk state, and orders remain independent. Do not merge one venue's available cash into another venue's execution budget.
-
-Recommended credential permissions are read/query + trade only. **Do not enable withdrawals.**
-
----
-
-## 9. Non-Blocking Conditions Seen in the Successful Runtime
-
-These were observed while NIJA remained healthy and `LIVE_ACTIVE`:
+The successful runtime may still show installer/reset/replay messages such as:
 
 ```text
-DATA_FAILURE_QUARANTINE for symbols with insufficient candle history
-VOLUME_TOO_LOW ... decision=BLOCK
-BrokerWorker scan TIMED OUT after 5.0s ... Broker available for next cycle
-SCAN_GUARD_WAITING
+RUNTIME_RELEASE_DECLARATION_DOWNGRADE_BLOCKED
+RUNTIME_RELEASE_IDENTITY_OVERRIDE_BLOCKED
+RUNTIME_RELEASE_REPAIR_AUDIT_REQUIRED
+POSITION_SYNC_V96_READINESS source=install_fail_closed ready=false status={}
+STARTUP_RECONCILIATION_V146_PENDING source=install_fail_closed
 ```
 
-These conditions can reduce opportunities or slow individual scan cycles, but they are not automatically startup/readiness failures.
+These are not automatically production failures. Judge the final/current runtime truth after convergence. In the August 22 successful window, position sync repeatedly returned to 3/3 ready and execution remained allowed.
 
-Investigate them if they become persistent enough to prevent all valid execution opportunities, but do not weaken live safety gates to compensate.
+Likewise, market-data quality blocks, insufficient candle history, low volume, spread filters, and no valid strategy signal can correctly prevent new entries while the runtime remains 100/100 ready.
 
 ---
 
-## 10. Definition of 100/100 Verified Success
+## 10. Definition of 100/100 Production Readiness
 
-NIJA may be called **100/100 verified end-to-end** only when all of the following have been observed in the same current production lineage:
+The August 22 checkpoint meets all of these:
 
-- [x] Canonical deployment starts.
-- [x] Writer lease acquired and continuously renewed.
-- [x] Writer heartbeat authoritative.
+- [x] Current deployment identity known.
+- [x] Writer lease acquired and renewed.
+- [x] Writer heartbeat healthy.
 - [x] Real core thread alive and registered.
-- [x] `startup_complete=True`.
-- [x] Kraken ready.
-- [x] Coinbase ready.
-- [x] OKX ready.
-- [x] Live broker-backed capital hydrated.
-- [x] All readiness table proofs true.
-- [x] `PREACTIVATION_READY` with no blockers.
-- [x] `LIVE_ACTIVE` stable.
-- [x] Strategy/trading loop running.
-- [x] Execution authorization active through the normal path.
-- [ ] New live order receives real exchange acknowledgment/order ID.
-- [ ] New live entry reaches confirmed exchange fill.
-- [ ] Position reconciliation confirms the entry.
-- [ ] Automatic exit path triggers under a valid exit condition.
-- [ ] Exit order receives real exchange acknowledgment/order ID.
-- [ ] Exit reaches confirmed exchange fill/closed state.
+- [x] Kraken connected.
+- [x] Coinbase connected.
+- [x] OKX connected.
+- [x] Authoritative position adoption/fetch proof.
+- [x] `CLEAN_START` reconciliation.
+- [x] Position sync 3/3.
+- [x] Broker-backed capital refresh succeeds.
+- [x] Capital publication accepted/current.
+- [x] v183 ready.
+- [x] v184 ready.
+- [x] Nonce valid.
+- [x] Lease owner confirmed.
+- [x] Strategy ready.
+- [x] Circuit breaker closed.
+- [x] Kill switch inactive naturally.
+- [x] Execution router enabled.
+- [x] `EXECUTION_ALLOWED: TRUE`.
+
+Therefore the August 22 runtime is the **100/100 production-readiness recovery baseline**.
+
+### Separate end-to-end behavioral proof
+
+The following are stronger behavioral confirmations but are not required to establish that the runtime is ready and authorized:
+
+- [ ] A new legitimate live order receives a broker/exchange acknowledgment/order ID.
+- [ ] The new entry reaches a confirmed fill.
+- [ ] Position reconciliation confirms that fill.
+- [ ] A valid exit condition triggers.
+- [ ] The exit order is acknowledged.
+- [ ] The exit reaches confirmed fill/closed state.
 - [ ] Final broker position/PnL reconciliation confirms closure.
 
-Until the unchecked items are proven, the correct status is:
-
-> **NIJA is live, fully ready, and authorized to execute; end-to-end entry/fill/exit confirmation is still pending.**
+Do not force a trade merely to satisfy this checklist.
 
 ---
 
 ## 11. When Everything Is Working
 
-If the runtime shows the known-good state above, **do not keep patching production simply because no trade has occurred yet**.
+If production matches the August 22 recovery target, **stop patching unless a concrete defect appears**.
 
-Wait for a valid market opportunity. Change code only when logs show a concrete defect such as:
+Do not treat the following as reasons to modify core safety/readiness code by themselves:
 
 ```text
-execution decision reaches EXECUTE but never reaches broker adapter
-broker returns a real rejection that is mishandled
-order is acknowledged but fill state is lost
-position is filled but reconciliation misses it
-exit supervisor fails to submit a valid exit
-exit is acknowledged/filled but position state is not reconciled
-writer/core/readiness state regresses from current truth
+no trade yet
+no valid signal
+market quality blocked entry
+volume too low
+spread too wide
+insufficient candle history
+risk rejected a candidate
 ```
 
-Preserving a proven working live runtime is safer than continuously modifying it without evidence of a defect.
+Change code only when evidence shows a real defect, such as:
+
+```text
+writer/core/readiness truth regresses
+one broker repeatedly fails authoritative synchronization
+capital publication repeatedly loses a healthy broker
+current authenticated capital cannot be admitted correctly
+EXECUTION_ALLOWED becomes false despite all required proofs being current
+an EXECUTE decision never reaches the broker adapter
+broker acknowledgment/fill state is mishandled
+position reconciliation loses a real filled position
+protective exit logic fails to submit a valid exit
+```
+
+Preserving a proven working runtime is safer than continuously modifying it without evidence.
+
+---
+
+## 12. Historical Recovery Anchor
+
+The prior August 13 recovery checkpoint was:
+
+```text
+666ef8893dd491bcd2e52acb6cae8291e61d780e
+runtime_generation=3774
+```
+
+It remains useful historical context, but it is **superseded as the primary recovery target** by the August 22 checkpoint:
+
+```text
+740c98dc94374bb1ed770ff96a5eafabfd32681b
+runtime_generation=4629
+```
 
 ---
 
