@@ -64,3 +64,16 @@ def test_v176_installs_v182_position_fetch_proof(monkeypatch):
 
     monkeypatch.setattr(v176.importlib, "import_module", fake_import)
     assert v176._install_v182_position_fetch_proof() is True
+
+
+def test_v176_installs_v183_kraken_capital_balance_liveness(monkeypatch):
+    fake_v183 = types.SimpleNamespace(install=lambda: True)
+    original_import = v176.importlib.import_module
+
+    def fake_import(name: str):
+        if name == "bot.runtime_kraken_capital_balance_liveness_v183_patch":
+            return fake_v183
+        return original_import(name)
+
+    monkeypatch.setattr(v176.importlib, "import_module", fake_import)
+    assert v176._install_v183_kraken_capital_balance_liveness() is True
