@@ -51,3 +51,16 @@ def test_v176_never_rearms_stale_publication(monkeypatch):
     active, reason = v176._rearm_after_publication("test")
     assert active is False
     assert reason == "publication_stale"
+
+
+def test_v176_installs_v182_position_fetch_proof(monkeypatch):
+    fake_v182 = types.SimpleNamespace(install=lambda: True)
+    original_import = v176.importlib.import_module
+
+    def fake_import(name: str):
+        if name == "bot.runtime_position_fetch_proof_v182_patch":
+            return fake_v182
+        return original_import(name)
+
+    monkeypatch.setattr(v176.importlib, "import_module", fake_import)
+    assert v176._install_v182_position_fetch_proof() is True
