@@ -30,8 +30,30 @@ MARKER = "20260821-runtime-capital-generation-context-v181"
 RELEASE_ID = "20260821-runtime-convergence-v181"
 _READY_FLAG = "NIJA_RUNTIME_CAPITAL_GENERATION_CONTEXT_V181_READY"
 _PATCH_ATTR = "_nija_runtime_capital_generation_context_v181"
+_V142_PATCH_ATTR = "_nija_capital_publication_liveness_v142"
+_V142_MARKER = "20260818-capital-publication-liveness-v142"
+_V142_MODULE_NAMES = {
+    "bot.capital_publication_liveness_v142_patch",
+    "capital_publication_liveness_v142_patch",
+}
 _LOCK = threading.RLock()
 _MISSING = object()
+
+
+def _is_exact_v142_publication_wrapper(candidate: Any) -> bool:
+    """Identify v142 by function-owner globals, not a wraps-copied name/marker."""
+    if not callable(candidate) or not bool(getattr(candidate, _V142_PATCH_ATTR, False)):
+        return False
+    owner = getattr(candidate, "__globals__", {}) or {}
+    if str(owner.get("__name__", "")) not in _V142_MODULE_NAMES:
+        return False
+    if str(owner.get("MARKER", "")) != _V142_MARKER:
+        return False
+    return bool(
+        owner.get("_LOCAL") is not None
+        and callable(owner.get("_generation_state"))
+        and callable(owner.get("_canonical_manager"))
+    )
 
 
 def _find_v142_publication_wrapper(callable_obj: Any) -> Any:
@@ -42,10 +64,7 @@ def _find_v142_publication_wrapper(callable_obj: Any) -> Any:
         if not callable(current) or id(current) in seen:
             return None
         seen.add(id(current))
-        if (
-            str(getattr(current, "__name__", "")) == "publish_snapshot_v142"
-            and bool(getattr(current, "_nija_capital_publication_liveness_v142", False))
-        ):
+        if _is_exact_v142_publication_wrapper(current):
             return current
         current = getattr(current, "__wrapped__", None)
     return None
@@ -213,6 +232,7 @@ __all__ = [
     "RELEASE_ID",
     "install",
     "install_import_hook",
+    "_is_exact_v142_publication_wrapper",
     "_find_v142_publication_wrapper",
     "_canonical_generation_from_v142_wrapper",
     "_patch_publication_context",
