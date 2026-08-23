@@ -18,8 +18,13 @@ This repair changes cache *admission only*:
 * no stale frame is promoted across cycles and no trade is forced.
 
 v197 is installed as a mandatory companion from this already-required runtime
-path.  It repairs only the pre-existing whitelisted heartbeat verification probe
+path. It repairs only the pre-existing whitelisted heartbeat verification probe
 handoff through ExecutionPipeline; ordinary trade authority remains unchanged.
+v202 is installed immediately after v197 and changes only heartbeat retry
+*liveness*: when authoritative position sync changes from false to true while a
+failed heartbeat probe is sleeping, that sleep wakes so the unchanged verifier
+can retry before the bounded post-core startup window expires. No gate is
+bypassed and ordinary retry cadence is unchanged.
 """
 from __future__ import annotations
 
@@ -33,6 +38,7 @@ LOGGER = logging.getLogger("nija.runtime_phase3_execution_frame_handoff_v196")
 MARKER = "20260823-phase3-execution-frame-handoff-v196"
 _READY_FLAG = "NIJA_RUNTIME_PHASE3_EXECUTION_FRAME_HANDOFF_V196_READY"
 _V197_READY_FLAG = "NIJA_RUNTIME_HEARTBEAT_PROBE_PIPELINE_BRIDGE_V197_READY"
+_V202_READY_FLAG = "NIJA_HEARTBEAT_POSITION_SYNC_WAKEUP_V202_READY"
 _PATCH_ATTR = "_nija_phase3_execution_frame_handoff_v196"
 _LOCK = threading.RLock()
 _REQUIRED_COLUMNS = frozenset({"open", "high", "low", "close", "volume"})
@@ -77,15 +83,24 @@ setattr(_structurally_cacheable_execution_frame, _PATCH_ATTR, True)
 
 
 def _install_v197() -> bool:
+    """Install the heartbeat pipeline bridge and its v202 readiness wakeup."""
     try:
         module = importlib.import_module("bot.runtime_heartbeat_probe_pipeline_bridge_v197_patch")
         installer = getattr(module, "install", None) or getattr(module, "install_import_hook", None)
         if not callable(installer):
             return False
-        return bool(installer()) and os.environ.get(_V197_READY_FLAG, "0").strip() == "1"
+        v197_ready = bool(installer()) and os.environ.get(_V197_READY_FLAG, "0").strip() == "1"
+        if not v197_ready:
+            return False
+
+        wakeup = importlib.import_module("bot.runtime_heartbeat_position_sync_wakeup_v202_patch")
+        wakeup_installer = getattr(wakeup, "install", None) or getattr(wakeup, "install_import_hook", None)
+        if not callable(wakeup_installer):
+            return False
+        return bool(wakeup_installer()) and os.environ.get(_V202_READY_FLAG, "0").strip() == "1"
     except Exception as exc:
         LOGGER.critical(
-            "RUNTIME_PHASE3_EXECUTION_FRAME_HANDOFF_V196_V197_INSTALL_FAILED marker=%s "
+            "RUNTIME_PHASE3_EXECUTION_FRAME_HANDOFF_V196_HEARTBEAT_CHAIN_FAILED marker=%s "
             "error=%s:%s trading_fail_closed=true",
             MARKER,
             type(exc).__name__,
@@ -95,7 +110,7 @@ def _install_v197() -> bool:
 
 
 def install() -> bool:
-    """Reassert v196 cache admission and mandatory v197 startup-probe handoff."""
+    """Reassert v196 cache admission and mandatory heartbeat startup-probe chain."""
     with _LOCK:
         try:
             guard = importlib.import_module("bot.phase3_scan_stall_guard_patch")
@@ -117,25 +132,28 @@ def install() -> bool:
 
         installed = getattr(guard, "_cacheable_df", None)
         cache_ready = bool(callable(installed) and getattr(installed, _PATCH_ATTR, False))
-        v197_ready = _install_v197() if cache_ready else False
-        ready = bool(cache_ready and v197_ready)
+        heartbeat_chain_ready = _install_v197() if cache_ready else False
+        ready = bool(cache_ready and heartbeat_chain_ready)
         os.environ[_READY_FLAG] = "1" if ready else "0"
         if not ready:
             LOGGER.critical(
                 "RUNTIME_PHASE3_EXECUTION_FRAME_HANDOFF_V196_FAILED marker=%s "
-                "cache_ready=%s heartbeat_probe_pipeline_bridge_v197=%s trading_fail_closed=true",
+                "cache_ready=%s heartbeat_probe_chain=%s v197=%s v202=%s trading_fail_closed=true",
                 MARKER,
                 str(cache_ready).lower(),
-                str(v197_ready).lower(),
+                str(heartbeat_chain_ready).lower(),
+                os.environ.get(_V197_READY_FLAG, "0"),
+                os.environ.get(_V202_READY_FLAG, "0"),
             )
             return False
 
         LOGGER.critical(
             "RUNTIME_PHASE3_EXECUTION_FRAME_HANDOFF_V196 marker=%s ready=true "
             "same_cycle_only=true min_rows=%d ohlcv_required=true "
-            "heartbeat_probe_pipeline_bridge_v197=true volume_quality_gate_unchanged=true "
-            "min_notional_gate_unchanged=true risk_gates_unchanged=true "
-            "order_quote_freshness_unchanged=true forced_trade=false safety_gates_bypassed=false",
+            "heartbeat_probe_pipeline_bridge_v197=true heartbeat_position_sync_wakeup_v202=true "
+            "volume_quality_gate_unchanged=true min_notional_gate_unchanged=true "
+            "risk_gates_unchanged=true order_quote_freshness_unchanged=true "
+            "forced_trade=false safety_gates_bypassed=false",
             MARKER,
             _configured_min_rows(),
         )
