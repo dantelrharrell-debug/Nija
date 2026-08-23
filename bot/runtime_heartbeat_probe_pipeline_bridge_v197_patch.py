@@ -16,18 +16,22 @@ orders still require ordinary runtime authority.  Writer, nonce, kill-switch,
 risk, broker-health, throttling, sizing, min-notional, and exchange order gates
 remain unchanged.
 
-v200 closes the remaining scheduler-policy mismatch exposed in production on
-2026-08-23.  The trading state machine requires genuine heartbeat execution
-verification whenever either ``HEARTBEAT_REQUIRED_FIRST_ACTIVATION`` or
-``HEARTBEAT_TRADE`` is enabled, while TradingStrategy historically scheduled the
-probe only for ``HEARTBEAT_TRADE``.  When the required-first policy was enabled
-alone, startup could reach LIVE_ACTIVE state but post-core convergence remained
-fail-closed on ``can_execute`` forever because no genuine probe was ever
-scheduled.  v200 aligns those two policies by enabling the existing heartbeat
-probe scheduler in-process whenever required-first verification is explicitly
-configured.  It does not grant execution authority or bypass any downstream
-writer, nonce, kill-switch, risk, broker-health, sizing, min-notional, order, or
-fill-verification gate.
+v200 aligned the scheduler when ``HEARTBEAT_REQUIRED_FIRST_ACTIVATION`` was
+explicitly enabled.  Production then exposed the remaining contract mismatch:
+canonical ``execution_authority_context.can_execute()`` always requires a fresh,
+stage-sufficient heartbeat execution marker in LIVE mode, while both legacy
+heartbeat scheduler flags can legitimately be unset.  In that configuration the
+mandatory proof could never be created and post-core convergence exhausted its
+budget while remaining fail-closed.
+
+v201 aligns scheduling with the canonical LIVE execution contract itself.  When
+the centralized runtime-mode resolver says this process is genuinely live,
+v201 arms the existing heartbeat verification scheduler before TradingStrategy
+construction.  Dry-run, paper, monitor, conflicting, or unresolved modes never
+cause a live verification order to be scheduled.  v201 does not grant execution
+authority, mark a heartbeat as successful, fabricate ORDER/FILL proof, or bypass
+writer, nonce, kill-switch, risk, broker-health, sizing, min-notional, exchange
+order, fill-verification, reconciliation, or capital gates.
 """
 from __future__ import annotations
 
@@ -44,8 +48,10 @@ from typing import Any, Callable
 LOGGER = logging.getLogger("nija.runtime_heartbeat_probe_pipeline_bridge_v197")
 MARKER = "20260823-heartbeat-probe-pipeline-bridge-v197"
 V200_MARKER = "20260823-heartbeat-required-scheduler-v200"
+V201_MARKER = "20260823-live-execution-heartbeat-scheduler-v201"
 _READY_FLAG = "NIJA_RUNTIME_HEARTBEAT_PROBE_PIPELINE_BRIDGE_V197_READY"
 _V200_READY_FLAG = "NIJA_HEARTBEAT_REQUIRED_SCHEDULER_V200_READY"
+_V201_READY_FLAG = "NIJA_LIVE_EXECUTION_HEARTBEAT_SCHEDULER_V201_READY"
 _PATCH_ATTR = "_nija_runtime_heartbeat_probe_pipeline_bridge_v197"
 _SNAPSHOT_PATCH_ATTR = "_nija_runtime_heartbeat_probe_snapshot_bridge_v197"
 _IMPORT_HOOK_ATTR = "_NIJA_RUNTIME_HEARTBEAT_PROBE_PIPELINE_BRIDGE_V197_IMPORT_HOOK"
@@ -70,17 +76,64 @@ def _env_truthy(name: str) -> bool:
     return str(os.environ.get(name, "") or "").strip().lower() in _TRUE
 
 
+def _resolved_runtime_mode() -> tuple[bool, str, str]:
+    """Return (resolved, mode, source) from NIJA's centralized mode resolver."""
+    try:
+        runtime_mode = importlib.import_module("bot.runtime_mode")
+        resolver = getattr(runtime_mode, "resolve_runtime_mode_safe", None)
+        if not callable(resolver):
+            return False, "unresolved", "resolver_unavailable"
+        resolved = resolver(LOGGER)
+        if resolved is None:
+            return False, "unresolved", "resolver_returned_none"
+        mode = str(getattr(resolved, "mode", "") or "").strip().lower()
+        source = str(getattr(resolved, "source", "") or "").strip() or "unknown"
+        conflicts = tuple(getattr(resolved, "conflicts", ()) or ())
+        if conflicts:
+            return False, mode or "unresolved", "conflict:" + ",".join(str(item) for item in conflicts)
+        if mode not in {"live", "dry_run", "paper", "monitor"}:
+            return False, mode or "unresolved", "invalid_mode"
+        return True, mode, source
+    except Exception as exc:
+        return False, "unresolved", f"resolver_error:{type(exc).__name__}:{exc}"
+
+
 def _align_required_heartbeat_scheduler_policy() -> bool:
-    """Ensure an explicitly required startup execution proof is actually scheduled."""
+    """Ensure canonical LIVE execution proof has an existing scheduler path.
+
+    ``execution_authority_context.can_execute()`` treats heartbeat freshness and
+    stage sufficiency as mandatory LIVE pre-trade gates.  Therefore a LIVE
+    runtime must have a way to create genuine ORDER/FILL proof even when legacy
+    opt-in scheduler flags are unset.  This function only arms the already
+    existing TradingStrategy heartbeat verifier; it does not execute an order by
+    itself and it never runs the scheduler in dry-run, paper, or monitor mode.
+    """
     required_first = _env_truthy("HEARTBEAT_REQUIRED_FIRST_ACTIVATION")
+    heartbeat_trade_before = _env_truthy("HEARTBEAT_TRADE")
+    mode_resolved, mode, mode_source = _resolved_runtime_mode()
+    live_mode = bool(mode_resolved and mode == "live")
+    aligned_v200 = False
+    aligned_v201 = False
+
+    # Preserve v200 behavior for explicitly configured first-activation proof.
+    if required_first and not heartbeat_trade_before:
+        os.environ["HEARTBEAT_TRADE"] = "true"
+        aligned_v200 = True
+
     heartbeat_trade = _env_truthy("HEARTBEAT_TRADE")
-    aligned = False
-    if required_first and not heartbeat_trade:
+
+    # v201: canonical can_execute always requires a genuine stage-sufficient
+    # heartbeat marker in LIVE mode.  Arm the existing verifier so that proof can
+    # actually be produced.  Non-live and unresolved/conflicting modes do not
+    # schedule a live verification order.
+    if live_mode and not heartbeat_trade:
         os.environ["HEARTBEAT_TRADE"] = "true"
         heartbeat_trade = True
-        aligned = True
+        aligned_v201 = True
 
     os.environ[_V200_READY_FLAG] = "1"
+    os.environ[_V201_READY_FLAG] = "1" if mode_resolved else "0"
+
     LOGGER.critical(
         "HEARTBEAT_REQUIRED_SCHEDULER_V200_READY marker=%s "
         "required_first=%s heartbeat_trade=%s aligned=%s "
@@ -90,9 +143,27 @@ def _align_required_heartbeat_scheduler_policy() -> bool:
         V200_MARKER,
         str(required_first).lower(),
         str(heartbeat_trade).lower(),
-        str(aligned).lower(),
+        str(aligned_v200).lower(),
     )
-    return True
+    LOGGER.critical(
+        "LIVE_EXECUTION_HEARTBEAT_SCHEDULER_V201_READY marker=%s "
+        "mode_resolved=%s mode=%s mode_source=%s live_mode=%s "
+        "heartbeat_trade_before=%s heartbeat_trade_after=%s aligned=%s "
+        "canonical_can_execute_heartbeat_gate_preserved=true "
+        "dry_run_paper_monitor_probe_suppressed=true existing_probe_scheduler_only=true "
+        "execution_authority_granted=false proof_fabricated=false "
+        "writer_nonce_risk_killswitch_reconciliation_capital_order_fill_gates_unchanged=true "
+        "forced_activation=false safety_gates_bypassed=false",
+        V201_MARKER,
+        str(mode_resolved).lower(),
+        mode,
+        mode_source,
+        str(live_mode).lower(),
+        str(heartbeat_trade_before).lower(),
+        str(heartbeat_trade).lower(),
+        str(aligned_v201).lower(),
+    )
+    return bool(mode_resolved)
 
 
 def _canonical_authority_module() -> ModuleType:
@@ -275,6 +346,7 @@ def _patch_release_manifest() -> bool:
             return False
         required["runtime_heartbeat_probe_pipeline_bridge_v197"] = _READY_FLAG
         required["runtime_heartbeat_required_scheduler_v200"] = _V200_READY_FLAG
+        required["runtime_live_execution_heartbeat_scheduler_v201"] = _V201_READY_FLAG
         return True
     except Exception:
         return False
@@ -298,7 +370,8 @@ def install() -> bool:
             return False
         LOGGER.critical(
             "RUNTIME_HEARTBEAT_PROBE_PIPELINE_BRIDGE_V197 marker=%s ready=true "
-            "heartbeat_required_scheduler_v200=true pipeline_snapshot_bridge=true pipeline_dispatch_bridge=true "
+            "heartbeat_required_scheduler_v200=true live_execution_heartbeat_scheduler_v201=true "
+            "pipeline_snapshot_bridge=true pipeline_dispatch_bridge=true "
             "probe_reasons=HEARTBEAT_TRADE,HEARTBEAT_TRADE_CLOSE "
             "ordinary_can_execute_unchanged=true canonical_runtime_snapshot_unchanged=true "
             "startup_authority_reverified=true writer_nonce_risk_killswitch_order_gates_unchanged=true "
@@ -315,9 +388,11 @@ def install_import_hook() -> bool:
 __all__ = [
     "MARKER",
     "V200_MARKER",
+    "V201_MARKER",
     "install",
     "install_import_hook",
     "_align_required_heartbeat_scheduler_policy",
+    "_resolved_runtime_mode",
     "_patch_authority_dispatch",
     "_bind_pipeline_surfaces",
 ]
