@@ -1,24 +1,219 @@
-# NIJA AI Trading LLC — Production Success & Recovery Anchor
+# NIJA AI Trading LLC — Production Success, Current Runtime & Recovery Anchor
 
-**Status date:** August 22, 2026
+**Status date:** August 22, 2026 (America/Los_Angeles; latest runtime evidence is August 23, 2026 UTC)
 
-**Current 100/100 production-readiness checkpoint:** `740c98dc94374bb1ed770ff96a5eafabfd32681b`
+**Current deployed production-readiness runtime:** `6d3c8e37b02e6b4a3679c34fc0450d4c53ed064e`
+
+**Current runtime generation observed healthy:** `4648`
+
+**Immutable explicit-gate recovery checkpoint:** `740c98dc94374bb1ed770ff96a5eafabfd32681b`
 
 **Immutable recovery branch:** `recovery/100-prod-readiness-20260822`
 
-**Runtime generation observed healthy:** `4629`
+This README is the durable production and recovery anchor for NIJA. It records both the latest verified production runtime and the immutable August 22 recovery checkpoint so production can be restored without weakening safety controls.
 
-This README is the durable recovery anchor for NIJA. Its purpose is to make it possible to return production to the August 22, 2026 known-good state if a future deployment, restart, dependency change, runtime regression, broker issue, capital-publication failure, writer-authority failure, or position-sync regression breaks production readiness.
-
-> This checkpoint proves **100/100 production readiness**: writer/core healthy, all three configured platform brokers connected, authoritative position sync/reconciliation healthy, capital refresh ready, strategy ready, nonce valid, circuit breaker closed, and `EXECUTION_ALLOWED: TRUE` through the normal safety path. It does **not** claim that a new live entry/fill/exit lifecycle occurred inside the same log slice. A real broker order/fill remains separate behavioral proof and must never be fabricated.
+> The current v188 deployment (`6d3c8e37...`) reproduced the operational production-readiness state: writer/core healthy, Kraken/Coinbase/OKX connected, authoritative reconciliation `CLEAN_START`, position sync 3/3, fresh complete capital 3/3, kill switch inactive, `LIVE_ACTIVE`, strict live dispatch ready, and the strategy trade cycle invoked through the normal runtime path. The latest log slice does **not** contain the literal `EXECUTION_ALLOWED: TRUE` line and does **not** contain a new broker order ID/fill. The immutable August 22 checkpoint remains the canonical explicit-gate proof because it includes `EXECUTION_ALLOWED: TRUE`.
 
 NIJA does not guarantee trades, fills, profits, income, or returns. Never manufacture readiness with forced activation, synthetic capital, fabricated prices, credential bypasses, nonce bypasses, writer-lock deletion, freshness extension, emergency-stop bypasses, weakened risk gates, or fake order/fill state.
 
 ---
 
-## 1. August 22, 2026 — 100/100 Production-Readiness Baseline
+## 1. Latest Verified Production Runtime — v188
 
-The successful production lineage is anchored to:
+Current deployed SHA:
+
+```text
+deployment_sha=6d3c8e37b02e6b4a3679c34fc0450d4c53ed064e
+runtime_generation=4648
+writer_token_prefix=3335
+```
+
+The runtime release manifest reports the v188 deployment SHA while retaining the established runtime release identity:
+
+```text
+NIJA_RUNTIME_RELEASE_MANIFEST
+release=20260818-runtime-convergence-v146
+deployment_sha=6d3c8e37b02e6b4a3679c34fc0450d4c53ed064e
+ready=true
+```
+
+### Broker connectivity
+
+The current runtime proved all configured platform brokers connected:
+
+```text
+kraken_connected=True
+coinbase_connected=True
+okx_connected=True
+all_configured_connected=True
+platform_accounts_connected=3
+platform_accounts_registered=3
+registry_all_connected=True
+```
+
+Kraken user supervision also reported:
+
+```text
+kraken_users_registered=2
+kraken_users_connected=2
+kraken_users_disconnected=0
+kraken_users_all_connected=True
+user_accounts_registered=2
+user_accounts_connected=2
+user_accounts_trading_eligible=2
+```
+
+### Writer/core authority
+
+```text
+WRITER_LOCK_RENEWED
+generation=4648
+token_prefix=3335
+core_thread_alive=True
+core_thread_registered=True
+core_thread_reason=ok
+WRITER_STATE_TRANSITION ... state=ACTIVE reason=heartbeat_renewed
+```
+
+### Reconciliation and position sync
+
+The runtime reached authoritative clean reconciliation:
+
+```text
+STARTUP_RECONCILIATION_V146_READY
+status=CLEAN_START
+brokers=['platform:coinbase', 'platform:kraken', 'platform:okx']
+authoritative_snapshots=true
+```
+
+Position sync then proved all three platform brokers current:
+
+```text
+POSITION_SYNC_V96_READINESS
+ready=true
+pending=[]
+status={'platform:kraken': True, 'platform:coinbase': True, 'platform:okx': True}
+canonical_readiness=true
+```
+
+The authoritative position-fetch proof remained genuine:
+
+```text
+RUNTIME_POSITION_FETCH_PROOF_V182
+ready=true
+exact_v98_owner_required=true
+adopted_and_fetch_proof_required=true
+copied_marker_false_positive_blocked=true
+synthetic_success=false
+```
+
+### Capital proof
+
+Current complete capital snapshot:
+
+```text
+real_capital=341.53984970237343
+usable_capital=334.70905270832594
+risk_capital=334.70905270832594
+broker_count=3
+expected_brokers=3
+capital_completeness=1.0
+is_fresh=True
+capital_lifecycle_state=ACTIVE_CAPITAL
+```
+
+Broker-backed balances in that snapshot:
+
+```text
+kraken=246.4199
+coinbase=95.11593557479999
+okx=0.004014127573456987
+```
+
+The observed dollar values are live historical snapshots, not fixed recovery targets. Recovery must always use current broker-backed balances.
+
+The runtime also reported:
+
+```text
+AGGREGATED STATE:
+aggregation_ready=True
+capital_authority_ready=True
+all_brokers_ready=True
+valid_brokers=3
+platform_brokers=['kraken', 'coinbase', 'okx']
+bootstrap_state=READY
+runtime_state=RUN_READY
+```
+
+### Live runtime / trade-cycle proof
+
+The state machine repeatedly reported:
+
+```text
+trading_state=LIVE_ACTIVE
+kill_switch=False
+```
+
+Strict live dispatch was available with fresh complete capital:
+
+```text
+TRADING_STATE_DISPATCH_LATCH_REPAIR_APPLIED
+detail=strict_live_dispatch_ready
+state=LIVE_ACTIVE
+hydrated=True
+complete=True
+registered_brokers=3
+expected_brokers=3
+valid_brokers=3
+fresh=True
+```
+
+The core then entered the live trade cycle:
+
+```text
+TRADE LOOP HEARTBEAT: active=True
+LIVE LOOP TICK — scanning markets
+RUNNING TRADE CYCLE
+[CYCLE_INVOKE] strategy.run_cycle() CALLED
+```
+
+This is stronger than a startup-only readiness snapshot: the live core reached the strategy execution cycle through the normal runtime path.
+
+### What this latest slice does not prove
+
+The current v188 log slice does not include:
+
+```text
+EXECUTION_ALLOWED: TRUE
+new broker order ID / acknowledgment
+new confirmed entry fill
+new confirmed exit fill
+```
+
+Therefore:
+
+- v188 is the **current verified operational production-readiness runtime**.
+- the August 22 immutable checkpoint remains the **canonical explicit `EXECUTION_ALLOWED: TRUE` recovery proof**.
+- a real order/fill remains separate behavioral proof and must never be fabricated or forced merely to satisfy documentation.
+
+### Position-specific safety condition observed
+
+A Kraken user position was synchronized for `CELO-USD` with an unresolved trusted entry/cost basis:
+
+```text
+POSITION_COST_BASIS_RECONCILIATION_REQUIRED
+symbol=CELO-USD
+cost_basis_verified=False
+auto_exit_blocked=true
+```
+
+This is **not a global runtime blocker**. It is correct fail-safe behavior for that position. NIJA must not auto-exit that position using an unverified cost basis. Resolve it only from trusted broker/reconciliation evidence; never invent an entry price.
+
+---
+
+## 2. August 22, 2026 — Immutable 100/100 Explicit-Gate Baseline
+
+The immutable successful production lineage is anchored to:
 
 ```text
 deployment_sha=740c98dc94374bb1ed770ff96a5eafabfd32681b
@@ -88,7 +283,24 @@ state={'execution': True, 'startup': True, 'okx': True}
 
 ---
 
-## 2. Exact Recovery Target
+## 3. Current Recovery Hierarchy
+
+Use this order when recovering production:
+
+1. **Preferred current runtime reference:** `6d3c8e37b02e6b4a3679c34fc0450d4c53ed064e` (v188).
+2. Verify that the failure is an actual persistent code/runtime defect rather than startup convergence, broker latency, account-side behavior, market quality, or a temporary external failure.
+3. If v188 cannot be restored safely or its lineage is suspect, compare against the immutable explicit-gate baseline:
+
+```text
+740c98dc94374bb1ed770ff96a5eafabfd32681b
+recovery/100-prod-readiness-20260822
+```
+
+Do not force-move or rewrite the immutable recovery branch merely because a newer deployment is healthy. Create a new recovery anchor only after intentionally validating and preserving a later full explicit-gate proof.
+
+---
+
+## 4. Exact Recovery Target
 
 If production regresses, the target is not merely `LIVE_ACTIVE`. Restore the full evidence chain below:
 
@@ -110,38 +322,43 @@ If production regresses, the target is not merely `LIVE_ACTIVE`. Restore the ful
 16. Circuit breaker closed.
 17. Kill switch naturally inactive.
 18. Final execution router is enabled.
-19. `EXECUTION_ALLOWED: TRUE` appears through the normal canonical path.
+19. `EXECUTION_ALLOWED: TRUE` appears through the normal canonical path for the strongest explicit-gate proof.
 20. No active fail-closed execution blocker remains.
+21. Live core can enter `strategy.run_cycle()` without bypassing any safety gate.
 
 Do not skip failed steps by forcing later states.
 
 ---
 
-## 3. Recovery Rollback Procedure
+## 5. Recovery Rollback Procedure
 
 ### A. Preserve evidence first
 
 Before changing code or redeploying, save the failing production logs and identify the **first false proof**. Do not patch based only on the last downstream error.
 
-### B. Compare against the immutable checkpoint
+### B. Compare against the current runtime and immutable checkpoint
 
-Known-good code checkpoint:
+Current deployed reference:
+
+```text
+6d3c8e37b02e6b4a3679c34fc0450d4c53ed064e
+```
+
+Immutable explicit-gate checkpoint:
 
 ```text
 740c98dc94374bb1ed770ff96a5eafabfd32681b
 ```
 
-Known-good branch:
+Immutable branch:
 
 ```text
 recovery/100-prod-readiness-20260822
 ```
 
-Use this branch as the behavioral comparison point. Do not rewrite or force-move it unless intentionally creating a new recovery anchor after a later proven-good release.
-
 ### C. Roll back code only when evidence supports it
 
-If a later deployment introduced a regression, restore from the known-good checkpoint using normal Git/GitHub rollback or redeploy procedures. Never bypass runtime safety gates merely to make the rollback appear healthy.
+If a later deployment introduced a regression, restore from a proven-good checkpoint using normal Git/GitHub rollback or redeploy procedures. Never bypass runtime safety gates merely to make the rollback appear healthy.
 
 ### D. Re-validate production after rollback
 
@@ -158,14 +375,16 @@ capital refresh success=true ready=true
 nonce VALID
 strategy TRUE
 circuit breaker CLOSED
-EXECUTION_ALLOWED: TRUE
+kill switch naturally inactive
+strict live dispatch ready
+EXECUTION_ALLOWED: TRUE (strongest explicit-gate proof)
 ```
 
 ---
 
-## 4. Critical Recovery Lineage — v169 through v184
+## 6. Critical Recovery Lineage — v169 through v188
 
-The successful August 22 runtime includes the following hardening chain:
+The current production hardening lineage includes:
 
 ```text
 v169 execution-capital integrity
@@ -184,9 +403,15 @@ v181 canonical generation-context recovery
 v182 authoritative position-fetch proof reassertion
 v183 Kraken capital balance liveness/cache-only valuation
 v184 authenticated Kraken aggregate-equity valuation confidence
+v185 kill-switch provenance reassertion
+v186 post-reassert guarded kill-switch recovery recheck
+v187 canonical capital generation / effective Kraken valuation coverage
+v188 production readiness convergence stabilization
 ```
 
-Important merged checkpoints leading to the successful baseline:
+v188 preserves the normal safety path. It does not force live state, fabricate capital or prices, manufacture position success, weaken completeness/freshness, disable the kill switch, or bypass writer/nonce/risk/execution-authority gates.
+
+Important merged checkpoints leading to the immutable August 22 baseline:
 
 ```text
 PR #2626 -> 9dcf412e0cdf39394e77a25cc5d06c2d6b5173aa
@@ -206,9 +431,9 @@ Do not assume a future failure requires a new numbered patch. First determine wh
 
 ---
 
-## 5. Kraken-Specific Recovery Contract
+## 7. Kraken-Specific Recovery Contract
 
-Kraken was the final repeated capital-readiness problem before the 100/100 checkpoint.
+Kraken was the final repeated capital-readiness problem before the immutable 100/100 checkpoint.
 
 ### v183 contract
 
@@ -231,9 +456,13 @@ Raw asset-pricing coverage remains diagnostic and must not be falsified.
 
 Never fabricate asset prices, extend freshness TTL, mutate capital to pass confidence, or weaken broker-completeness requirements.
 
+### v187/v188 contract
+
+Current canonical generation context and effective Kraken valuation coverage must stay tied to accepted canonical snapshots and authenticated v184 proof. Retired-generation fences remain authoritative. v188 stabilizes convergence around those contracts; it does not redefine the underlying truth conditions.
+
 ---
 
-## 6. Position & Held-Trade Recovery Contract
+## 8. Position & Held-Trade Recovery Contract
 
 A healthy runtime must prove real position adoption/fetch, not copied or synthetic readiness.
 
@@ -257,11 +486,13 @@ authoritative_snapshots=true
 
 The automatic exit stack must remain intact for existing positions. Entry fail-closed conditions must not disable legitimate protective exits.
 
+When a real position has unverified cost basis/entry metadata, NIJA must preserve the raw position while blocking unsafe automatic exit logic for that position until trusted reconciliation resolves the basis.
+
 Do not create duplicate exit workers that could double-sell a position.
 
 ---
 
-## 7. Exit-Protection Stack That Must Be Preserved
+## 9. Exit-Protection Stack That Must Be Preserved
 
 Current production code contains the following protections:
 
@@ -281,7 +512,7 @@ Never mark a position closed or fabricate an exit fill without broker/exchange e
 
 ---
 
-## 8. Safety-Critical Contracts — Never Weaken These to Recover Faster
+## 10. Safety-Critical Contracts — Never Weaken These to Recover Faster
 
 - Single-writer fencing remains authoritative.
 - Writer generation/token must be current.
@@ -303,9 +534,9 @@ Never mark a position closed or fabricate an exit fill without broker/exchange e
 
 ---
 
-## 9. Known Non-Blocking / Transient Signals
+## 11. Known Non-Blocking / Transient Signals
 
-The successful runtime may still show installer/reset/replay messages such as:
+Healthy runtime may still show installer/reset/replay messages such as:
 
 ```text
 RUNTIME_RELEASE_DECLARATION_DOWNGRADE_BLOCKED
@@ -315,17 +546,27 @@ POSITION_SYNC_V96_READINESS source=install_fail_closed ready=false status={}
 STARTUP_RECONCILIATION_V146_PENDING source=install_fail_closed
 ```
 
-These are not automatically production failures. Judge the final/current runtime truth after convergence. In the August 22 successful window, position sync repeatedly returned to 3/3 ready and execution remained allowed.
+These are not automatically production failures. Judge the final/current runtime truth after convergence.
 
-Likewise, market-data quality blocks, insufficient candle history, low volume, spread filters, and no valid strategy signal can correctly prevent new entries while the runtime remains 100/100 ready.
+In the v188 production slice, install-time fail-closed position/reconciliation resets were followed by:
+
+```text
+STARTUP_RECONCILIATION_V146_READY ... status=CLEAN_START
+POSITION_SYNC_V96_READINESS ... ready=true ... 3/3
+LIVE_ACTIVE
+strict_live_dispatch_ready
+strategy.run_cycle() CALLED
+```
+
+Likewise, market-data quality blocks, insufficient candle history, low volume, spread filters, and no valid strategy signal can correctly prevent new entries while the runtime remains production ready.
 
 ---
 
-## 10. Definition of 100/100 Production Readiness
+## 12. Definition of Production Readiness
 
-The August 22 checkpoint meets all of these:
+### Current v188 operational production proof
 
-- [x] Current deployment identity known.
+- [x] Current deployment identity known (`6d3c8e37...`).
 - [x] Writer lease acquired and renewed.
 - [x] Writer heartbeat healthy.
 - [x] Real core thread alive and registered.
@@ -335,23 +576,38 @@ The August 22 checkpoint meets all of these:
 - [x] Authoritative position adoption/fetch proof.
 - [x] `CLEAN_START` reconciliation.
 - [x] Position sync 3/3.
-- [x] Broker-backed capital refresh succeeds.
-- [x] Capital publication accepted/current.
+- [x] Broker-backed capital complete 3/3.
+- [x] Capital publication accepted/current and fresh.
 - [x] v183 ready.
 - [x] v184 ready.
+- [x] v185/v186 kill-switch provenance protections preserved.
+- [x] v187 generation/valuation coverage ready.
+- [x] Kill switch inactive naturally.
+- [x] Runtime state `LIVE_ACTIVE`.
+- [x] Strict live dispatch ready.
+- [x] Live trade loop active.
+- [x] `strategy.run_cycle()` invoked.
+- [ ] Literal `EXECUTION_ALLOWED: TRUE` line present in this specific v188 log slice.
+- [ ] New broker order acknowledgment/fill proven in this specific v188 log slice.
+
+### Immutable August 22 explicit-gate proof
+
+The immutable checkpoint additionally proved:
+
 - [x] Nonce valid.
 - [x] Lease owner confirmed.
 - [x] Strategy ready.
 - [x] Circuit breaker closed.
-- [x] Kill switch inactive naturally.
-- [x] Execution router enabled.
 - [x] `EXECUTION_ALLOWED: TRUE`.
 
-Therefore the August 22 runtime is the **100/100 production-readiness recovery baseline**.
+Therefore:
+
+- **v188 is the current verified operational production-readiness runtime.**
+- **`740c98dc...` remains the immutable 100/100 explicit-gate recovery baseline.**
 
 ### Separate end-to-end behavioral proof
 
-The following are stronger behavioral confirmations but are not required to establish that the runtime is ready and authorized:
+The following are stronger behavioral confirmations but are not required to establish that the runtime is ready and operating:
 
 - [ ] A new legitimate live order receives a broker/exchange acknowledgment/order ID.
 - [ ] The new entry reaches a confirmed fill.
@@ -365,9 +621,9 @@ Do not force a trade merely to satisfy this checklist.
 
 ---
 
-## 11. When Everything Is Working
+## 13. When Everything Is Working
 
-If production matches the August 22 recovery target, **stop patching unless a concrete defect appears**.
+If production matches the v188 current runtime or the immutable August 22 recovery target, **stop patching unless a concrete defect appears**.
 
 Do not treat the following as reasons to modify core safety/readiness code by themselves:
 
@@ -379,6 +635,7 @@ volume too low
 spread too wide
 insufficient candle history
 risk rejected a candidate
+installer replay emitted a temporary fail-closed reset
 ```
 
 Change code only when evidence shows a real defect, such as:
@@ -399,21 +656,30 @@ Preserving a proven working runtime is safer than continuously modifying it with
 
 ---
 
-## 12. Historical Recovery Anchor
+## 14. Historical Recovery Anchors
 
-The prior August 13 recovery checkpoint was:
+Prior August 13 recovery checkpoint:
 
 ```text
 666ef8893dd491bcd2e52acb6cae8291e61d780e
 runtime_generation=3774
 ```
 
-It remains useful historical context, but it is **superseded as the primary recovery target** by the August 22 checkpoint:
+Immutable August 22 explicit-gate checkpoint:
 
 ```text
 740c98dc94374bb1ed770ff96a5eafabfd32681b
 runtime_generation=4629
 ```
+
+Current v188 deployed runtime:
+
+```text
+6d3c8e37b02e6b4a3679c34fc0450d4c53ed064e
+runtime_generation=4648
+```
+
+The August 13 checkpoint remains historical context. The August 22 checkpoint remains the immutable explicit-gate recovery anchor. v188 is the newest verified deployed operational production state.
 
 ---
 
