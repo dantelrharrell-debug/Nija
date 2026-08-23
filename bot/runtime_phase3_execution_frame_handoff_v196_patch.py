@@ -16,6 +16,10 @@ This repair changes cache *admission only*:
 * the cache remains the v171 same-cycle cache and is cleared after Phase 3,
 * volume/liquidity/min-notional/risk/order/nonce/writer gates are unchanged,
 * no stale frame is promoted across cycles and no trade is forced.
+
+v197 is installed as a mandatory companion from this already-required runtime
+path.  It repairs only the pre-existing whitelisted heartbeat verification probe
+handoff through ExecutionPipeline; ordinary trade authority remains unchanged.
 """
 from __future__ import annotations
 
@@ -28,6 +32,7 @@ from typing import Any
 LOGGER = logging.getLogger("nija.runtime_phase3_execution_frame_handoff_v196")
 MARKER = "20260823-phase3-execution-frame-handoff-v196"
 _READY_FLAG = "NIJA_RUNTIME_PHASE3_EXECUTION_FRAME_HANDOFF_V196_READY"
+_V197_READY_FLAG = "NIJA_RUNTIME_HEARTBEAT_PROBE_PIPELINE_BRIDGE_V197_READY"
 _PATCH_ATTR = "_nija_phase3_execution_frame_handoff_v196"
 _LOCK = threading.RLock()
 _REQUIRED_COLUMNS = frozenset({"open", "high", "low", "close", "volume"})
@@ -63,7 +68,6 @@ def _structurally_cacheable_execution_frame(df: Any) -> bool:
     Volume *quality* intentionally is not decided here. The existing Phase 3
     volume/liquidity gate remains authoritative and can still block the symbol.
     """
-
     if df is None or _df_len(df) < _configured_min_rows():
         return False
     return _REQUIRED_COLUMNS.issubset(_column_names(df))
@@ -72,9 +76,26 @@ def _structurally_cacheable_execution_frame(df: Any) -> bool:
 setattr(_structurally_cacheable_execution_frame, _PATCH_ATTR, True)
 
 
-def install() -> bool:
-    """Reassert v196 cache admission on the active v171 guard module."""
+def _install_v197() -> bool:
+    try:
+        module = importlib.import_module("bot.runtime_heartbeat_probe_pipeline_bridge_v197_patch")
+        installer = getattr(module, "install", None) or getattr(module, "install_import_hook", None)
+        if not callable(installer):
+            return False
+        return bool(installer()) and os.environ.get(_V197_READY_FLAG, "0").strip() == "1"
+    except Exception as exc:
+        LOGGER.critical(
+            "RUNTIME_PHASE3_EXECUTION_FRAME_HANDOFF_V196_V197_INSTALL_FAILED marker=%s "
+            "error=%s:%s trading_fail_closed=true",
+            MARKER,
+            type(exc).__name__,
+            exc,
+        )
+        return False
 
+
+def install() -> bool:
+    """Reassert v196 cache admission and mandatory v197 startup-probe handoff."""
     with _LOCK:
         try:
             guard = importlib.import_module("bot.phase3_scan_stall_guard_patch")
@@ -95,22 +116,26 @@ def install() -> bool:
             setattr(guard, "_cacheable_df", _structurally_cacheable_execution_frame)
 
         installed = getattr(guard, "_cacheable_df", None)
-        ready = bool(callable(installed) and getattr(installed, _PATCH_ATTR, False))
+        cache_ready = bool(callable(installed) and getattr(installed, _PATCH_ATTR, False))
+        v197_ready = _install_v197() if cache_ready else False
+        ready = bool(cache_ready and v197_ready)
         os.environ[_READY_FLAG] = "1" if ready else "0"
         if not ready:
             LOGGER.critical(
                 "RUNTIME_PHASE3_EXECUTION_FRAME_HANDOFF_V196_FAILED marker=%s "
-                "reason=cache_admission_not_bound trading_fail_closed=true",
+                "cache_ready=%s heartbeat_probe_pipeline_bridge_v197=%s trading_fail_closed=true",
                 MARKER,
+                str(cache_ready).lower(),
+                str(v197_ready).lower(),
             )
             return False
 
         LOGGER.critical(
             "RUNTIME_PHASE3_EXECUTION_FRAME_HANDOFF_V196 marker=%s ready=true "
             "same_cycle_only=true min_rows=%d ohlcv_required=true "
-            "volume_quality_gate_unchanged=true min_notional_gate_unchanged=true "
-            "risk_gates_unchanged=true order_quote_freshness_unchanged=true "
-            "forced_trade=false safety_gates_bypassed=false",
+            "heartbeat_probe_pipeline_bridge_v197=true volume_quality_gate_unchanged=true "
+            "min_notional_gate_unchanged=true risk_gates_unchanged=true "
+            "order_quote_freshness_unchanged=true forced_trade=false safety_gates_bypassed=false",
             MARKER,
             _configured_min_rows(),
         )
