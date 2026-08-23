@@ -15,10 +15,21 @@ by generation after a bounded stale interval; late superseded generations are
 never allowed to return authoritative data.  Healthy writer/core runtimes may
 remain alive while THREADS_STARTING/RUNNING_SUPERVISED readiness converges, but
 only with runtime execution authority explicitly disabled.
+
+The 2026-08-22 v191 refinement fixes the supervised-pending return contract.
+Historically v116/v117 could return True merely to keep a healthy writer/core
+alive while execution was still fail-closed.  bot_main interprets True as full
+post-core execution readiness and can therefore open TRADING_ENGINE_READY before
+canonical runtime authority is actually granted.  v191 keeps the caller inside
+a bounded supervised-pending observer instead.  It returns True only after the
+readiness table, TradingStateMachine, StartupCoordinator and explicit runtime
+execution-authority bit all prove the same executable epoch.  It never sets
+execution authority, LIVE_ACTIVE, readiness, capital, nonce or dispatch state.
 """
 from __future__ import annotations
 
 import builtins
+import importlib
 import logging
 import os
 import sys
@@ -30,6 +41,7 @@ from typing import Any, Callable
 
 LOGGER = logging.getLogger("nija.position_fetch_generation_v117")
 MARKER = "20260816-position-fetch-generation-v117"
+_V191_MARKER = "20260822-post-core-execution-handoff-v191"
 _LOCK = threading.RLock()
 _IMPORT_LOCAL = threading.local()
 _HOOK_FLAG = "_NIJA_POSITION_FETCH_GENERATION_V117_IMPORT_HOOK"
@@ -259,6 +271,135 @@ def _writer_core_healthy(runtime: Any, trading_thread: Any) -> bool:
     return True
 
 
+def _shutdown_requested() -> bool:
+    if os.environ.get("NIJA_PROCESS_EXIT_REQUESTED", "").strip().lower() in {"1", "true", "yes", "on"}:
+        return True
+    mod = _loaded("bot.bot_main", "bot_main")
+    event = getattr(mod, "_shutdown_event", None) if mod is not None else None
+    return bool(event is not None and callable(getattr(event, "is_set", None)) and event.is_set())
+
+
+def _post_core_pending_timeout_s() -> float:
+    try:
+        return max(
+            60.0,
+            min(
+                600.0,
+                float(os.environ.get("NIJA_POST_CORE_SUPERVISED_PENDING_MAX_S", "180") or 180.0),
+            ),
+        )
+    except (TypeError, ValueError):
+        return 180.0
+
+
+def _request_normal_activation() -> None:
+    try:
+        module = importlib.import_module("bot.final_production_activation_repair_v60_patch")
+        request = getattr(module, "request_activation", None)
+        if callable(request):
+            request("v191_post_core_supervised_pending")
+    except Exception as exc:
+        LOGGER.debug("POST_CORE_V191 activation request skipped err=%s", exc)
+
+
+def _clear_start_gate_while_pending() -> None:
+    core = _loaded("bot.nija_core_loop", "nija_core_loop")
+    event = getattr(core, "TRADING_ENGINE_READY", None) if core is not None else None
+    if event is not None and callable(getattr(event, "clear", None)):
+        try:
+            event.clear()
+        except Exception:
+            pass
+
+
+def _exact_execution_ready(runtime: Any, trading_thread: Any) -> tuple[bool, str]:
+    """Observe, but never create, the canonical post-core execution proof."""
+    if not _writer_core_healthy(runtime, trading_thread):
+        return False, "writer_or_core_not_healthy"
+    if _shutdown_requested():
+        return False, "shutdown_requested"
+    bootstrap = _bootstrap_state().strip().upper()
+    if bootstrap != "RUNNING_SUPERVISED":
+        return False, f"bootstrap_not_supervised:{bootstrap or 'unknown'}"
+
+    try:
+        readiness = importlib.import_module("bot.readiness_table")
+        snapshot = dict(readiness.snapshot() or {})
+        pending = sorted(str(key) for key, value in snapshot.items() if not bool(value))
+    except Exception as exc:
+        return False, f"readiness_probe_failed:{type(exc).__name__}:{exc}"
+    if pending:
+        return False, f"readiness_pending:{','.join(pending)}"
+
+    try:
+        tsm = importlib.import_module("bot.trading_state_machine")
+        getter = getattr(tsm, "get_state_machine", None)
+        sm = getter() if callable(getter) else None
+        if sm is None:
+            return False, "state_machine_unavailable"
+        state_obj = sm.get_current_state()
+        state = str(getattr(state_obj, "value", state_obj) or "").strip().upper()
+        if state != "LIVE_ACTIVE":
+            return False, f"state_not_live_active:{state or 'unknown'}"
+        committed_reader = getattr(sm, "get_activation_committed", None)
+        committed = bool(committed_reader()) if callable(committed_reader) else bool(getattr(sm, "_activation_committed", False))
+        if not committed:
+            return False, "activation_not_committed"
+        if not bool(sm.can_execute()):
+            return False, "state_machine_can_execute_false"
+    except Exception as exc:
+        return False, f"state_machine_probe_failed:{type(exc).__name__}:{exc}"
+
+    try:
+        coordinator_mod = importlib.import_module("bot.startup_coordinator")
+        get_global_state = getattr(coordinator_mod, "get_global_state", None)
+        if not callable(get_global_state):
+            return False, "global_state_unavailable"
+        startup = get_global_state().capture(
+            trading_state="LIVE_ACTIVE",
+            activation_intent=True,
+        ).startup
+        runtime_authority = str(getattr(startup, "runtime_authority_state", "") or "").strip().upper()
+        lifecycle = str(getattr(startup, "lifecycle_phase", "") or "").strip().upper()
+        if runtime_authority != "EXECUTING":
+            return False, f"coordinator_not_executing:{runtime_authority or 'unknown'}"
+        if lifecycle != "LIVE":
+            return False, f"lifecycle_not_live:{lifecycle or 'unknown'}"
+        if not bool(getattr(startup, "dispatch_enabled", False)):
+            return False, "coordinator_dispatch_disabled"
+        if not bool(getattr(startup, "execution_permitted", False)):
+            return False, "coordinator_execution_not_permitted"
+    except Exception as exc:
+        return False, f"coordinator_probe_failed:{type(exc).__name__}:{exc}"
+
+    try:
+        kill = importlib.import_module("bot.kill_switch")
+        if bool(kill.get_kill_switch().is_active()):
+            return False, "kill_switch_active"
+    except Exception as exc:
+        return False, f"kill_switch_probe_failed:{type(exc).__name__}:{exc}"
+
+    if os.environ.get("NIJA_RUNTIME_EXECUTION_AUTHORITY", "0").strip().lower() not in {"1", "true", "yes", "on"}:
+        return False, "runtime_execution_authority_not_granted"
+    return True, "canonical_execution_proof_complete"
+
+
+def _request_fail_closed_restart(mod: ModuleType, reason: str) -> None:
+    request = getattr(mod, "request_process_exit", None)
+    if callable(request):
+        try:
+            request(
+                reason,
+                exit_code=75,
+                terminal_startup_failure=True,
+            )
+            return
+        except Exception:
+            pass
+    os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "0"
+    os.environ["NIJA_EXECUTION_ACTIVE"] = "false"
+
+
 def _patch_bot_main() -> bool:
     mod = _loaded("bot.bot_main", "bot_main")
     if mod is None:
@@ -270,22 +411,99 @@ def _patch_bot_main() -> bool:
     @wraps(current)
     def supervised_pending(runtime: Any, trading_thread: Any, *args: Any, **kwargs: Any) -> bool:
         result = bool(current(runtime, trading_thread, *args, **kwargs))
-        if result:
-            return True
-        state = _bootstrap_state()
-        if state in {"THREADS_STARTING", "RUNNING_SUPERVISED"} and _writer_core_healthy(runtime, trading_thread):
-            os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "0"
-            os.environ["NIJA_EXECUTION_ACTIVE"] = "false"
+        exact_ready, detail = _exact_execution_ready(runtime, trading_thread)
+        if exact_ready:
             LOGGER.critical(
-                "POST_CORE_V117_SUPERVISED_PENDING marker=%s bootstrap=%s exact_writer=true core_alive=true execution_fail_closed=true",
-                MARKER,
-                state,
+                "POST_CORE_EXECUTION_HANDOFF_V191_READY marker=%s inner_result=%s detail=%s "
+                "runtime_execution_authority=true trading_gate_may_open=true",
+                _V191_MARKER,
+                str(result).lower(),
+                detail,
             )
             return True
+
+        state = _bootstrap_state().strip().upper()
+        if state not in {"THREADS_STARTING", "RUNNING_SUPERVISED"} or not _writer_core_healthy(runtime, trading_thread):
+            LOGGER.critical(
+                "POST_CORE_EXECUTION_HANDOFF_V191_FATAL marker=%s inner_result=%s bootstrap=%s detail=%s "
+                "writer_core_healthy=false_or_bootstrap_invalid=true trading_fail_closed=true",
+                _V191_MARKER,
+                str(result).lower(),
+                state or "unknown",
+                detail,
+            )
+            return False
+
+        os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "0"
+        os.environ["NIJA_EXECUTION_ACTIVE"] = "false"
+        _clear_start_gate_while_pending()
+        timeout_s = _post_core_pending_timeout_s()
+        deadline = time.monotonic() + timeout_s
+        attempt = 0
+        last_detail = detail
+        LOGGER.critical(
+            "POST_CORE_EXECUTION_HANDOFF_V191_PENDING marker=%s inner_result=%s bootstrap=%s "
+            "detail=%s timeout_s=%.1f exact_writer=true core_alive=true execution_fail_closed=true "
+            "trading_gate_opened=false",
+            _V191_MARKER,
+            str(result).lower(),
+            state,
+            detail,
+            timeout_s,
+        )
+
+        while time.monotonic() < deadline:
+            if _shutdown_requested() or not _writer_core_healthy(runtime, trading_thread):
+                return False
+            state = _bootstrap_state().strip().upper()
+            if state not in {"THREADS_STARTING", "RUNNING_SUPERVISED"}:
+                return False
+            _request_normal_activation()
+            exact_ready, last_detail = _exact_execution_ready(runtime, trading_thread)
+            if exact_ready:
+                LOGGER.critical(
+                    "POST_CORE_EXECUTION_HANDOFF_V191_READY marker=%s attempts=%d detail=%s "
+                    "runtime_execution_authority=true trading_gate_may_open=true",
+                    _V191_MARKER,
+                    attempt + 1,
+                    last_detail,
+                )
+                return True
+            attempt += 1
+            if attempt == 1 or attempt % 10 == 0:
+                LOGGER.info(
+                    "POST_CORE_EXECUTION_HANDOFF_V191_WAIT marker=%s attempt=%d bootstrap=%s detail=%s "
+                    "execution_fail_closed=true",
+                    _V191_MARKER,
+                    attempt,
+                    state,
+                    last_detail,
+                )
+            time.sleep(1.0)
+
+        LOGGER.critical(
+            "POST_CORE_EXECUTION_HANDOFF_V191_TIMEOUT marker=%s attempts=%d detail=%s "
+            "timeout_s=%.1f restart_requested=true execution_fail_closed=true",
+            _V191_MARKER,
+            attempt,
+            last_detail,
+            timeout_s,
+        )
+        _request_fail_closed_restart(mod, f"v191_post_core_execution_timeout:{last_detail}")
         return False
 
     setattr(supervised_pending, _PATCH_ATTR, True)
+    setattr(supervised_pending, "_nija_post_core_execution_handoff_v191", True)
+    setattr(supervised_pending, "__wrapped__", current)
     mod._perform_post_core_activation_convergence = supervised_pending
+    os.environ["NIJA_POST_CORE_EXECUTION_HANDOFF_V191_READY"] = "1"
+    LOGGER.critical(
+        "POST_CORE_EXECUTION_HANDOFF_V191_INSTALLED marker=%s "
+        "supervised_pending_is_not_execution_ready=true exact_execution_proof_required=true "
+        "runtime_authority_mutated=false trading_state_mutated=false readiness_fabricated=false "
+        "forced_activation=false safety_gates_bypassed=false",
+        _V191_MARKER,
+    )
     return True
 
 
@@ -318,7 +536,9 @@ def install_import_hook() -> bool:
 
         os.environ["NIJA_POSITION_FETCH_GENERATION_V117_INSTALLED"] = "1"
         LOGGER.critical(
-            "POSITION_FETCH_GENERATION_V117_INSTALLED marker=%s timeout_s=%.2f stale_after_s=%.2f supervised_threads_starting=true late_generation_discard=true initial_patch_ready=%s",
+            "POSITION_FETCH_GENERATION_V117_INSTALLED marker=%s timeout_s=%.2f stale_after_s=%.2f "
+            "supervised_threads_starting=true late_generation_discard=true "
+            "v191_post_core_execution_handoff=true initial_patch_ready=%s",
             MARKER,
             _timeout_s(),
             _stale_after_s(),
