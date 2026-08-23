@@ -11,6 +11,14 @@ false value immediately makes execution non-permitted; a true-to-false
 regression also advances the global epoch and revokes an existing activation
 commit through the canonical coordinator path.
 
+v188 makes installer replay idempotent. The first install remains fail-closed,
+but a later installer replay must not erase a proven live position-sync state by
+publishing an empty ``manager=None`` snapshot. Replays re-evaluate the canonical
+manager when available; if the canonical manager is temporarily unavailable,
+the existing readiness value is preserved rather than synthetically regressed.
+Real position-sync regressions still publish ``False`` through the normal live
+manager/startup hooks.
+
 No writer, nonce, capital, risk, strategy, kill-switch, or execution authority is
 synthesized here. Readiness becomes true only when at least one broker is
 connected and every currently connected platform/user broker has completed an
@@ -29,6 +37,7 @@ from typing import Any
 
 LOGGER = logging.getLogger("nija.position_sync_dispatch_authority_v96")
 MARKER = "20260814-position-sync-dispatch-authority-v96"
+REPLAY_MARKER = "20260822-position-sync-install-replay-v188"
 READINESS_KEY = "position_sync_ready"
 _LOCK = threading.RLock()
 _HOOK_FLAG = "_NIJA_POSITION_SYNC_DISPATCH_AUTHORITY_V96_IMPORT_HOOK"
@@ -97,6 +106,75 @@ def publish_position_sync_readiness(manager: Any, *, source: str) -> tuple[bool,
         status,
     )
     return bool(ready), pending, status
+
+
+def _current_readiness_value() -> bool:
+    """Read canonical readiness truth without mutating it."""
+    try:
+        readiness = _readiness_module()
+        snapshot = getattr(readiness, "snapshot", None)
+        table = dict(snapshot()) if callable(snapshot) else {}
+        return bool(table.get(READINESS_KEY, False))
+    except Exception:
+        return False
+
+
+def _replay_safe_install_seed() -> None:
+    """Seed fail-closed exactly once; replay from live truth thereafter.
+
+    The builtins hook flag is process-wide and survives module import aliases and
+    installer replay. On first install there is no trusted position snapshot yet,
+    so publish ``False`` exactly as v96 historically did. On subsequent replays,
+    prefer a fresh canonical-manager evaluation. If that manager cannot be
+    resolved transiently, leave the existing canonical readiness bit untouched.
+    """
+    first_install = not bool(getattr(builtins, _HOOK_FLAG, False))
+    if first_install:
+        publish_position_sync_readiness(None, source="install_fail_closed")
+        LOGGER.critical(
+            "POSITION_SYNC_V188_INSTALL_SEED marker=%s mode=first_install ready=false "
+            "fail_closed=true existing_proof_overwritten=false",
+            REPLAY_MARKER,
+        )
+        return
+
+    manager = None
+    try:
+        manager = _v95_module()._canonical_manager()
+    except Exception as exc:
+        LOGGER.warning(
+            "POSITION_SYNC_V188_REPLAY_MANAGER_UNAVAILABLE marker=%s error=%s:%s "
+            "existing_readiness_preserved=true synthetic_regression=false",
+            REPLAY_MARKER,
+            type(exc).__name__,
+            exc,
+        )
+
+    if manager is not None:
+        ready, pending, status = publish_position_sync_readiness(
+            manager,
+            source="install_replay_canonical_manager",
+        )
+        LOGGER.critical(
+            "POSITION_SYNC_V188_INSTALL_REPLAY marker=%s manager_resolved=true ready=%s "
+            "pending=%s status=%s canonical_recheck=true synthetic_regression=false",
+            REPLAY_MARKER,
+            str(bool(ready)).lower(),
+            pending,
+            status,
+        )
+        return
+
+    existing = _current_readiness_value()
+    os.environ["NIJA_POSITION_SYNC_ACTIVATION_READY"] = "1" if existing else "0"
+    os.environ["NIJA_POSITION_SYNC_DISPATCH_READY"] = "1" if existing else "0"
+    LOGGER.critical(
+        "POSITION_SYNC_V188_INSTALL_REPLAY marker=%s manager_resolved=false "
+        "existing_ready=%s existing_readiness_preserved=true synthetic_regression=false "
+        "fail_closed_if_unproven=true",
+        REPLAY_MARKER,
+        str(bool(existing)).lower(),
+    )
 
 
 def _patch_mabm(module: ModuleType) -> bool:
@@ -169,9 +247,7 @@ def _patch_loaded() -> bool:
 
 def install_import_hook() -> bool:
     with _LOCK:
-        # Establish the fail-closed key before activation can consume an old
-        # coordinator commit. An absent/empty broker set is intentionally false.
-        publish_position_sync_readiness(None, source="install_fail_closed")
+        _replay_safe_install_seed()
         _patch_loaded()
         if not getattr(builtins, _HOOK_FLAG, False):
             original_import = builtins.__import__
@@ -188,9 +264,10 @@ def install_import_hook() -> bool:
             setattr(builtins, _HOOK_FLAG, True)
 
         os.environ["NIJA_POSITION_SYNC_DISPATCH_AUTHORITY_V96_INSTALLED"] = "1"
+        os.environ["NIJA_POSITION_SYNC_INSTALL_REPLAY_V188_READY"] = "1"
         LOGGER.critical(
             "POSITION_SYNC_DISPATCH_AUTHORITY_V96_INSTALLED marker=%s readiness_key=%s "
-            "fail_closed=true stale_commit_revocation=true safety_gates_unchanged=true",
+            "fail_closed=true replay_safe_v188=true stale_commit_revocation=true safety_gates_unchanged=true",
             MARKER,
             READINESS_KEY,
         )
@@ -203,10 +280,13 @@ def install() -> bool:
 
 __all__ = [
     "MARKER",
+    "REPLAY_MARKER",
     "READINESS_KEY",
     "install",
     "install_import_hook",
     "publish_position_sync_readiness",
+    "_current_readiness_value",
+    "_replay_safe_install_seed",
     "_patch_mabm",
     "_patch_startup_sync",
 ]
