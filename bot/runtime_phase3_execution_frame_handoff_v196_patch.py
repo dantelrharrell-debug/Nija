@@ -25,6 +25,11 @@ v202 is installed immediately after v197 and changes only heartbeat retry
 failed heartbeat probe is sleeping, that sleep wakes so the unchanged verifier
 can retry before the bounded post-core startup window expires. No gate is
 bypassed and ordinary retry cadence is unchanged.
+v203 is installed after v202 and repairs one additional liveness gap: when the
+canonical strategy publisher reuses an already-created TradingStrategy instead
+of re-running its constructor, the existing heartbeat scheduler is re-armed if
+policy requires it and its verifier thread is absent/dead. v203 does not write
+proof, grant authority, or bypass any execution gate.
 """
 from __future__ import annotations
 
@@ -39,6 +44,7 @@ MARKER = "20260823-phase3-execution-frame-handoff-v196"
 _READY_FLAG = "NIJA_RUNTIME_PHASE3_EXECUTION_FRAME_HANDOFF_V196_READY"
 _V197_READY_FLAG = "NIJA_RUNTIME_HEARTBEAT_PROBE_PIPELINE_BRIDGE_V197_READY"
 _V202_READY_FLAG = "NIJA_HEARTBEAT_POSITION_SYNC_WAKEUP_V202_READY"
+_V203_READY_FLAG = "NIJA_EXISTING_STRATEGY_HEARTBEAT_REARM_V203_READY"
 _PATCH_ATTR = "_nija_phase3_execution_frame_handoff_v196"
 _LOCK = threading.RLock()
 _REQUIRED_COLUMNS = frozenset({"open", "high", "low", "close", "volume"})
@@ -83,7 +89,7 @@ setattr(_structurally_cacheable_execution_frame, _PATCH_ATTR, True)
 
 
 def _install_v197() -> bool:
-    """Install the heartbeat pipeline bridge and its v202 readiness wakeup."""
+    """Install the heartbeat pipeline bridge plus v202/v203 liveness repairs."""
     try:
         module = importlib.import_module("bot.runtime_heartbeat_probe_pipeline_bridge_v197_patch")
         installer = getattr(module, "install", None) or getattr(module, "install_import_hook", None)
@@ -97,7 +103,15 @@ def _install_v197() -> bool:
         wakeup_installer = getattr(wakeup, "install", None) or getattr(wakeup, "install_import_hook", None)
         if not callable(wakeup_installer):
             return False
-        return bool(wakeup_installer()) and os.environ.get(_V202_READY_FLAG, "0").strip() == "1"
+        v202_ready = bool(wakeup_installer()) and os.environ.get(_V202_READY_FLAG, "0").strip() == "1"
+        if not v202_ready:
+            return False
+
+        rearm = importlib.import_module("bot.runtime_existing_strategy_heartbeat_rearm_v203_patch")
+        rearm_installer = getattr(rearm, "install", None) or getattr(rearm, "install_import_hook", None)
+        if not callable(rearm_installer):
+            return False
+        return bool(rearm_installer()) and os.environ.get(_V203_READY_FLAG, "0").strip() == "1"
     except Exception as exc:
         LOGGER.critical(
             "RUNTIME_PHASE3_EXECUTION_FRAME_HANDOFF_V196_HEARTBEAT_CHAIN_FAILED marker=%s "
@@ -138,12 +152,13 @@ def install() -> bool:
         if not ready:
             LOGGER.critical(
                 "RUNTIME_PHASE3_EXECUTION_FRAME_HANDOFF_V196_FAILED marker=%s "
-                "cache_ready=%s heartbeat_probe_chain=%s v197=%s v202=%s trading_fail_closed=true",
+                "cache_ready=%s heartbeat_probe_chain=%s v197=%s v202=%s v203=%s trading_fail_closed=true",
                 MARKER,
                 str(cache_ready).lower(),
                 str(heartbeat_chain_ready).lower(),
                 os.environ.get(_V197_READY_FLAG, "0"),
                 os.environ.get(_V202_READY_FLAG, "0"),
+                os.environ.get(_V203_READY_FLAG, "0"),
             )
             return False
 
@@ -151,9 +166,9 @@ def install() -> bool:
             "RUNTIME_PHASE3_EXECUTION_FRAME_HANDOFF_V196 marker=%s ready=true "
             "same_cycle_only=true min_rows=%d ohlcv_required=true "
             "heartbeat_probe_pipeline_bridge_v197=true heartbeat_position_sync_wakeup_v202=true "
-            "volume_quality_gate_unchanged=true min_notional_gate_unchanged=true "
-            "risk_gates_unchanged=true order_quote_freshness_unchanged=true "
-            "forced_trade=false safety_gates_bypassed=false",
+            "existing_strategy_heartbeat_rearm_v203=true volume_quality_gate_unchanged=true "
+            "min_notional_gate_unchanged=true risk_gates_unchanged=true "
+            "order_quote_freshness_unchanged=true forced_trade=false safety_gates_bypassed=false",
             MARKER,
             _configured_min_rows(),
         )
