@@ -15,16 +15,27 @@ allowed when all proof-backed pre-core prerequisites are currently true:
 * exact distributed writer authority verifies successfully;
 * the canonical broker manager contract is initialized;
 * at least one connected platform broker exists;
-* broker_connected, balance_hydrated, capital_ready, risk_ready, and nonce_ready
-  are all true; and
+* broker_connected, balance_hydrated, capital_ready, and risk_ready are true;
+  and
 * no process-exit/shutdown request is active.
 
+v198 corrects a circular pre-core dependency exposed in production on
+2026-08-23.  Canonical broker prebootstrap v22 deliberately hands off before
+nonce readiness because nonce authority remains a downstream execution gate.
+The prior v124 proof added ``nonce_ready`` back as a prerequisite for merely
+skipping legacy SelfHealingStartup.  On a fresh process that could route startup
+back into the exact legacy compatibility path v124 was designed to avoid, leaving
+BootstrapFSM at LOCK_ACQUIRED until the 600-second core-registration watchdog
+released writer authority.
+
+Nonce readiness is therefore observational at this handoff, not granted or
+fabricated.  The real core may register while ``nonce_ready`` is false, but all
+normal order dispatch remains fail-closed on the existing nonce authority gates.
 Position synchronization, strategy readiness, execution readiness, bootstrap
 finalization, and dispatch authority remain owned by their existing downstream
-activation gates after the real core thread is registered. If any pre-core proof
-is absent, the original SelfHealingStartup path runs unchanged. The patch never
-fabricates readiness or grants execution authority and keeps trading fail-closed
-until the existing post-core activation convergence completes.
+activation gates after the real core thread is registered. If any actual
+pre-core proof is absent, the original SelfHealingStartup path runs unchanged.
+The patch never fabricates readiness or grants execution authority.
 """
 from __future__ import annotations
 
@@ -38,19 +49,25 @@ from typing import Any
 
 LOGGER = logging.getLogger("nija.canonical_self_healing_handoff_v124")
 MARKER = "20260816-canonical-self-healing-handoff-v124"
+V198_MARKER = "20260823-precore-nonce-handoff-v198"
 RELEASE_ID = "20260816-runtime-convergence-v124"
 _FLAG = "NIJA_CANONICAL_SELF_HEALING_HANDOFF_V124_INSTALLED"
+_V198_FLAG = "NIJA_PRECORE_NONCE_HANDOFF_V198_READY"
 _PATCH_ATTR = "_nija_canonical_self_healing_handoff_v124"
 _WIRING_GUARD_ATTR = "_nija_v124_idempotent_install_guard"
 _LOCK = threading.RLock()
 _INSTALLED = False
 _TRUE = {"1", "true", "yes", "on", "enabled", "y"}
+
+# v198: these are exactly the proof-backed prerequisites that canonical broker
+# prebootstrap v22 establishes before bot_main reaches Step 1.  nonce_ready is
+# intentionally not a core-registration prerequisite.  It remains mandatory at
+# the downstream execution-authority/order gates.
 _REQUIRED_READINESS = (
     "broker_connected",
     "balance_hydrated",
     "capital_ready",
     "risk_ready",
-    "nonce_ready",
 )
 
 
@@ -156,7 +173,14 @@ def _fast_handoff_proof(module: ModuleType | None = None) -> tuple[bool, Any | N
     if broker is None:
         return False, None, "", "connected_broker_selection_failed"
 
-    return True, broker, broker_name, "proofs_ready:writer,manager,broker,balance,capital,risk,nonce"
+    nonce_ready = bool(readiness.get("nonce_ready", False))
+    return (
+        True,
+        broker,
+        broker_name,
+        "proofs_ready:writer,manager,broker,balance,capital,risk;"
+        f"nonce_ready={int(nonce_ready)};nonce_gate=downstream_fail_closed",
+    )
 
 
 def _patch_bot_main(module: ModuleType | None = None) -> bool:
@@ -178,19 +202,33 @@ def _patch_bot_main(module: ModuleType | None = None) -> bool:
         ok, broker, broker_name, detail = _fast_handoff_proof(module)
         if ok:
             # Explicitly preserve fail-closed execution truth. Step 2/3 and the
-            # existing post-core convergence own all later readiness/authority.
+            # existing post-core convergence own all later readiness/authority,
+            # including nonce authority.
             os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "0"
             os.environ["NIJA_EXECUTION_ACTIVE"] = "false"
             LOGGER.critical(
-                "CANONICAL_SELF_HEALING_FAST_HANDOFF_V124_READY marker=%s broker=%s detail=%s legacy_recovery_skipped=true core_registration_next=true execution_authority_granted=false safety_gates_unchanged=true",
+                "CANONICAL_SELF_HEALING_FAST_HANDOFF_V124_READY marker=%s broker=%s detail=%s "
+                "legacy_recovery_skipped=true core_registration_next=true "
+                "execution_authority_granted=false safety_gates_unchanged=true",
                 MARKER,
+                broker_name,
+                detail,
+            )
+            LOGGER.critical(
+                "PRECORE_NONCE_HANDOFF_V198_READY marker=%s broker=%s detail=%s "
+                "nonce_ready_precore_required=false nonce_readiness_fabricated=false "
+                "nonce_lease_fabricated=false core_registration_only=true "
+                "execution_authority_unchanged=true downstream_nonce_gate_required=true "
+                "forced_activation=false safety_gates_bypassed=false",
+                V198_MARKER,
                 broker_name,
                 detail,
             )
             return True, broker, broker_name
 
         LOGGER.warning(
-            "CANONICAL_SELF_HEALING_FAST_HANDOFF_V124_FALLBACK marker=%s detail=%s action=run_original_self_healing execution_authority_granted=false",
+            "CANONICAL_SELF_HEALING_FAST_HANDOFF_V124_FALLBACK marker=%s detail=%s "
+            "action=run_original_self_healing execution_authority_granted=false",
             MARKER,
             detail,
         )
@@ -236,7 +274,8 @@ def _patch_wiring_reinstall_churn() -> bool:
     setattr(install_on_module_v124, "__wrapped__", current)
     wiring._install_on_module = install_on_module_v124
     LOGGER.critical(
-        "TRADING_STRATEGY_APEX_WIRING_V124_CHURN_GUARD_INSTALLED marker=%s reload_repair_preserved=true no_op_repatch_suppressed=true",
+        "TRADING_STRATEGY_APEX_WIRING_V124_CHURN_GUARD_INSTALLED marker=%s "
+        "reload_repair_preserved=true no_op_repatch_suppressed=true",
         MARKER,
     )
     return True
@@ -251,6 +290,7 @@ def _patch_release_manifest() -> bool:
     if not isinstance(required, dict):
         return False
     required["canonical_self_healing_handoff_v124"] = _FLAG
+    required["precore_nonce_handoff_v198"] = _V198_FLAG
     manifest.RELEASE_ID = RELEASE_ID
     return True
 
@@ -258,16 +298,22 @@ def _patch_release_manifest() -> bool:
 def install() -> bool:
     global _INSTALLED
     with _LOCK:
-        if _INSTALLED and os.environ.get(_FLAG) == "1":
+        if (
+            _INSTALLED
+            and os.environ.get(_FLAG) == "1"
+            and os.environ.get(_V198_FLAG) == "1"
+        ):
             return True
         bot_main_ok = _patch_bot_main()
         wiring_ok = _patch_wiring_reinstall_churn()
         manifest_ok = _patch_release_manifest()
         if not (bot_main_ok and wiring_ok and manifest_ok):
             os.environ.pop(_FLAG, None)
+            os.environ.pop(_V198_FLAG, None)
             _INSTALLED = False
             LOGGER.critical(
-                "CANONICAL_SELF_HEALING_HANDOFF_V124_INSTALL_FAILED marker=%s bot_main=%s wiring=%s manifest=%s trading_fail_closed=true",
+                "CANONICAL_SELF_HEALING_HANDOFF_V124_INSTALL_FAILED marker=%s bot_main=%s "
+                "wiring=%s manifest=%s trading_fail_closed=true",
                 MARKER,
                 bot_main_ok,
                 wiring_ok,
@@ -275,11 +321,21 @@ def install() -> bool:
             )
             return False
         os.environ[_FLAG] = "1"
+        os.environ[_V198_FLAG] = "1"
         _INSTALLED = True
         LOGGER.critical(
-            "CANONICAL_SELF_HEALING_HANDOFF_V124_INSTALLED marker=%s release=%s proof_backed_fast_handoff=true fallback_preserved=true execution_gates_unchanged=true",
+            "CANONICAL_SELF_HEALING_HANDOFF_V124_INSTALLED marker=%s release=%s "
+            "proof_backed_fast_handoff=true fallback_preserved=true execution_gates_unchanged=true",
             MARKER,
             RELEASE_ID,
+        )
+        LOGGER.critical(
+            "PRECORE_NONCE_HANDOFF_V198_INSTALLED marker=%s ready=true "
+            "nonce_ready_precore_required=false nonce_readiness_fabricated=false "
+            "nonce_lease_fabricated=false core_registration_only=true "
+            "downstream_nonce_gate_required=true execution_authority_unchanged=true "
+            "forced_activation=false safety_gates_bypassed=false",
+            V198_MARKER,
         )
         return True
 
@@ -290,6 +346,7 @@ def install_import_hook() -> bool:
 
 __all__ = [
     "MARKER",
+    "V198_MARKER",
     "RELEASE_ID",
     "install",
     "install_import_hook",
