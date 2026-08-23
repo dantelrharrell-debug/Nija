@@ -20,6 +20,7 @@ from typing import Iterable
 
 logger = logging.getLogger("nija.bot_entrypoint")
 _FAST_PATH_MARKER = "20260816-canonical-fast-entrypoint-v110"
+_PRECORE_STRATEGY_OWNER_MARKER = "20260822-precore-strategy-publication-owner-v190"
 
 _FAST_PATH_INSTALLERS = (
     # The Render liveness server is a sibling process, so canonical runtime
@@ -180,6 +181,67 @@ def _install_capital_v180_early(*, mode: str) -> bool:
         return False
 
 
+def _install_precore_strategy_publication_owner_v190() -> bool:
+    """Keep canonical Step 2.5 as the sole pre-core strategy publisher.
+
+    The proof-based preactivation monitor normally starts the generic strategy
+    publication monitor on every activation probe.  On the canonical fast path
+    that creates a second publisher before bot_main reaches its direct v127
+    Step 2.5 handoff.  Both publishers can contend on the same strategy
+    construction locks and leave core registration waiting behind a publication
+    timeout.  Defer only that background monitor until bot_main has completed
+    startup; bot_main's real v127 publisher remains unchanged and all execution
+    gates remain fail closed.
+    """
+    try:
+        module = _canonical_fast_import("preactivation_readiness_convergence_v16_patch")
+        current = getattr(module, "_ensure_strategy_publication_monitor", None)
+        if not callable(current):
+            raise RuntimeError("preactivation strategy monitor helper unavailable")
+        patch_attr = "_nija_precore_strategy_publication_owner_v190"
+        if bool(getattr(current, patch_attr, False)):
+            return True
+
+        def _owned_strategy_monitor_start():
+            bot_main = sys.modules.get("bot.bot_main")
+            startup_complete = bool(
+                bot_main is not None and getattr(bot_main, "_startup_complete", False)
+            )
+            if not startup_complete:
+                logger.info(
+                    "PRECORE_STRATEGY_PUBLICATION_V190_DEFERRED marker=%s "
+                    "owner=bot_main_step2_5 background_monitor_started=false "
+                    "strategy_readiness_synthetic=false execution_authority_unchanged=true",
+                    _PRECORE_STRATEGY_OWNER_MARKER,
+                )
+                return True, "deferred_to_bot_main_step2_5"
+            return current()
+
+        setattr(_owned_strategy_monitor_start, patch_attr, True)
+        setattr(_owned_strategy_monitor_start, "__wrapped__", current)
+        module._ensure_strategy_publication_monitor = _owned_strategy_monitor_start
+        os.environ["NIJA_PRECORE_STRATEGY_PUBLICATION_OWNER_V190_READY"] = "1"
+        logger.critical(
+            "PRECORE_STRATEGY_PUBLICATION_OWNER_V190_READY marker=%s "
+            "canonical_step2_5_single_owner=true background_precore_publisher=false "
+            "v127_direct_publisher_unchanged=true forced_activation=false "
+            "signal_thresholds_unchanged=true safety_gates_bypassed=false",
+            _PRECORE_STRATEGY_OWNER_MARKER,
+        )
+        return True
+    except Exception as exc:
+        os.environ["NIJA_PRECORE_STRATEGY_PUBLICATION_OWNER_V190_READY"] = "0"
+        logger.critical(
+            "PRECORE_STRATEGY_PUBLICATION_OWNER_V190_FAILED marker=%s err=%s:%s "
+            "trading_fail_closed=true",
+            _PRECORE_STRATEGY_OWNER_MARKER,
+            type(exc).__name__,
+            exc,
+            exc_info=True,
+        )
+        return False
+
+
 def _fail_closed_startup(reason: str) -> None:
     os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "0"
     os.environ["NIJA_RUNTIME_TRADING_STATE"] = "OFF"
@@ -191,9 +253,16 @@ if _canonical_fast_path_enabled():
         _fail_closed_startup("canonical import shield failed; trading remains fail closed")
     if not _install_capital_v180_early(mode="canonical_fast"):
         _fail_closed_startup("v180 early capital guard failed; trading remains fail closed")
+    if not _install_precore_strategy_publication_owner_v190():
+        _fail_closed_startup("v190 pre-core strategy publication owner guard failed; trading remains fail closed")
     if not _install_guards(_FAST_PATH_INSTALLERS, mode="canonical_fast", optional_labels=_FAST_PATH_COMPAT_OPTIONAL_GUARDS):
         _fail_closed_startup("canonical fast-path safety guards failed; trading remains fail closed")
-    logger.critical("CANONICAL_ENTRYPOINT_FAST_PATH_READY marker=%s import_loader=frozen_bootstrap package_hook_fanout=deferred import_shield_v123=true capital_v180_early=true handoff=bot.bot_main", _FAST_PATH_MARKER)
+    logger.critical(
+        "CANONICAL_ENTRYPOINT_FAST_PATH_READY marker=%s import_loader=frozen_bootstrap "
+        "package_hook_fanout=deferred import_shield_v123=true capital_v180_early=true "
+        "precore_strategy_owner_v190=true handoff=bot.bot_main",
+        _FAST_PATH_MARKER,
+    )
 else:
     logger.warning("BOT_ENTRYPOINT_LEGACY_COMPATIBILITY_PATH marker=%s canonical_fast_path=false", _FAST_PATH_MARKER)
     if not _install_capital_v180_early(mode="legacy_compatibility"):
