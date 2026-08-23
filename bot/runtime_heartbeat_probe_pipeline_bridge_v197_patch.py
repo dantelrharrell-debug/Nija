@@ -15,6 +15,19 @@ HEARTBEAT_TRADE_CLOSE contexts.  Every bridge decision re-runs
 orders still require ordinary runtime authority.  Writer, nonce, kill-switch,
 risk, broker-health, throttling, sizing, min-notional, and exchange order gates
 remain unchanged.
+
+v200 closes the remaining scheduler-policy mismatch exposed in production on
+2026-08-23.  The trading state machine requires genuine heartbeat execution
+verification whenever either ``HEARTBEAT_REQUIRED_FIRST_ACTIVATION`` or
+``HEARTBEAT_TRADE`` is enabled, while TradingStrategy historically scheduled the
+probe only for ``HEARTBEAT_TRADE``.  When the required-first policy was enabled
+alone, startup could reach LIVE_ACTIVE state but post-core convergence remained
+fail-closed on ``can_execute`` forever because no genuine probe was ever
+scheduled.  v200 aligns those two policies by enabling the existing heartbeat
+probe scheduler in-process whenever required-first verification is explicitly
+configured.  It does not grant execution authority or bypass any downstream
+writer, nonce, kill-switch, risk, broker-health, sizing, min-notional, order, or
+fill-verification gate.
 """
 from __future__ import annotations
 
@@ -30,11 +43,14 @@ from typing import Any, Callable
 
 LOGGER = logging.getLogger("nija.runtime_heartbeat_probe_pipeline_bridge_v197")
 MARKER = "20260823-heartbeat-probe-pipeline-bridge-v197"
+V200_MARKER = "20260823-heartbeat-required-scheduler-v200"
 _READY_FLAG = "NIJA_RUNTIME_HEARTBEAT_PROBE_PIPELINE_BRIDGE_V197_READY"
+_V200_READY_FLAG = "NIJA_HEARTBEAT_REQUIRED_SCHEDULER_V200_READY"
 _PATCH_ATTR = "_nija_runtime_heartbeat_probe_pipeline_bridge_v197"
 _SNAPSHOT_PATCH_ATTR = "_nija_runtime_heartbeat_probe_snapshot_bridge_v197"
 _IMPORT_HOOK_ATTR = "_NIJA_RUNTIME_HEARTBEAT_PROBE_PIPELINE_BRIDGE_V197_IMPORT_HOOK"
 _LOCK = threading.RLock()
+_TRUE = {"1", "true", "yes", "enabled", "on", "y"}
 
 _AUTHORITY_MODULE_NAMES = (
     "bot.execution_authority_context",
@@ -48,6 +64,35 @@ _TARGET_IMPORT_SUFFIXES = (
     "execution_authority_context",
     "execution_pipeline",
 )
+
+
+def _env_truthy(name: str) -> bool:
+    return str(os.environ.get(name, "") or "").strip().lower() in _TRUE
+
+
+def _align_required_heartbeat_scheduler_policy() -> bool:
+    """Ensure an explicitly required startup execution proof is actually scheduled."""
+    required_first = _env_truthy("HEARTBEAT_REQUIRED_FIRST_ACTIVATION")
+    heartbeat_trade = _env_truthy("HEARTBEAT_TRADE")
+    aligned = False
+    if required_first and not heartbeat_trade:
+        os.environ["HEARTBEAT_TRADE"] = "true"
+        heartbeat_trade = True
+        aligned = True
+
+    os.environ[_V200_READY_FLAG] = "1"
+    LOGGER.critical(
+        "HEARTBEAT_REQUIRED_SCHEDULER_V200_READY marker=%s "
+        "required_first=%s heartbeat_trade=%s aligned=%s "
+        "existing_probe_scheduler_only=true execution_authority_granted=false "
+        "writer_nonce_risk_killswitch_order_fill_gates_unchanged=true "
+        "forced_activation=false safety_gates_bypassed=false",
+        V200_MARKER,
+        str(required_first).lower(),
+        str(heartbeat_trade).lower(),
+        str(aligned).lower(),
+    )
+    return True
 
 
 def _canonical_authority_module() -> ModuleType:
@@ -229,6 +274,7 @@ def _patch_release_manifest() -> bool:
         if not isinstance(required, dict):
             return False
         required["runtime_heartbeat_probe_pipeline_bridge_v197"] = _READY_FLAG
+        required["runtime_heartbeat_required_scheduler_v200"] = _V200_READY_FLAG
         return True
     except Exception:
         return False
@@ -236,22 +282,23 @@ def _patch_release_manifest() -> bool:
 
 def install() -> bool:
     with _LOCK:
+        policy_ok = _align_required_heartbeat_scheduler_policy()
         apply_ok = _apply()
         hook_ok = _install_import_reassertion_hook()
         manifest_ok = _patch_release_manifest()
-        ready = bool(apply_ok and hook_ok and manifest_ok)
+        ready = bool(policy_ok and apply_ok and hook_ok and manifest_ok)
         os.environ[_READY_FLAG] = "1" if ready else "0"
         if not ready:
             LOGGER.critical(
                 "RUNTIME_HEARTBEAT_PROBE_PIPELINE_BRIDGE_V197_FAILED marker=%s "
-                "apply=%s hook=%s manifest=%s trading_fail_closed=true",
+                "policy=%s apply=%s hook=%s manifest=%s trading_fail_closed=true",
                 MARKER,
-                str(apply_ok).lower(), str(hook_ok).lower(), str(manifest_ok).lower(),
+                str(policy_ok).lower(), str(apply_ok).lower(), str(hook_ok).lower(), str(manifest_ok).lower(),
             )
             return False
         LOGGER.critical(
             "RUNTIME_HEARTBEAT_PROBE_PIPELINE_BRIDGE_V197 marker=%s ready=true "
-            "pipeline_snapshot_bridge=true pipeline_dispatch_bridge=true "
+            "heartbeat_required_scheduler_v200=true pipeline_snapshot_bridge=true pipeline_dispatch_bridge=true "
             "probe_reasons=HEARTBEAT_TRADE,HEARTBEAT_TRADE_CLOSE "
             "ordinary_can_execute_unchanged=true canonical_runtime_snapshot_unchanged=true "
             "startup_authority_reverified=true writer_nonce_risk_killswitch_order_gates_unchanged=true "
@@ -265,4 +312,12 @@ def install_import_hook() -> bool:
     return install()
 
 
-__all__ = ["MARKER", "install", "install_import_hook", "_patch_authority_dispatch", "_bind_pipeline_surfaces"]
+__all__ = [
+    "MARKER",
+    "V200_MARKER",
+    "install",
+    "install_import_hook",
+    "_align_required_heartbeat_scheduler_policy",
+    "_patch_authority_dispatch",
+    "_bind_pipeline_surfaces",
+]
