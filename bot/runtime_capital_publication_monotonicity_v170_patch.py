@@ -9,10 +9,22 @@ Production on 2026-08-20 exposed two remaining split-brain paths:
   then v34 could publish readiness from that stale object identity.
 
 v170 makes the accepted publication monotonic and makes downstream readiness
-consume the exact canonical CapitalAuthority publication.  It never extends
-freshness, promotes stale capital, fabricates a broker balance, changes the
-v168 thread ceiling, clears a kill switch, grants nonce/writer authority, or
-forces activation.
+consume the exact canonical CapitalAuthority publication.  Production on
+2026-08-23 exposed one remaining mutation-order gap: when no publication was
+currently valid, base CapitalAuthority could apply a fresh 2/3 candidate before
+v170 relabelled the attempt rejected/stale.  The rejected candidate then remained
+in the canonical in-memory snapshot and could look fresh to readers that inspect
+CapitalAuthority state separately from publication status.
+
+The v199 hardening in this module rejects every incomplete live candidate before
+calling the base publish path.  An existing complete canonical snapshot remains
+unchanged (and remains stale when its immutable expiry has elapsed) until a new
+complete snapshot is available.  No partial candidate may refresh last_updated,
+replace broker balances, or replace the typed canonical snapshot.
+
+This patch never extends freshness, promotes stale capital, fabricates a broker
+balance, changes the v168 thread ceiling, clears a kill switch, grants
+nonce/writer authority, or forces activation.
 """
 from __future__ import annotations
 
@@ -27,6 +39,7 @@ from typing import Any
 
 LOGGER = logging.getLogger("nija.runtime_capital_publication_monotonicity_v170")
 MARKER = "20260820-runtime-capital-publication-monotonicity-v170"
+V199_MARKER = "20260823-capital-partial-premutation-v199"
 _READY_FLAG = "NIJA_RUNTIME_CAPITAL_PUBLICATION_MONOTONICITY_V170_READY"
 _PATCH_ATTR = "_nija_runtime_capital_publication_monotonicity_v170"
 _CSM_ATTR = "_nija_runtime_capital_csm_canonical_v170"
@@ -188,46 +201,53 @@ def _patch_capital_authority(module: ModuleType | None = None) -> bool:
         previous_current = _status_current(_current_status(self))
         complete, contributed, required = _snapshot_complete(self, snapshot)
 
-        # A partial refresh may not replace an accepted complete publication
-        # before that publication's immutable expiry.  No timestamp is renewed.
-        if not complete and previous_current:
-            LOGGER.warning(
-                "CAPITAL_V170_PARTIAL_PRESERVED marker=%s contributed=%d required=%d "
-                "prior_expiry=%s candidate_mutated=false freshness_extended=false "
-                "publication_expiry_extended=false",
-                MARKER,
-                contributed,
-                required,
-                getattr(previous_raw, "expiry", None),
-            )
-            return False
+        # v199: reject every incomplete candidate BEFORE the base authority can
+        # mutate _broker_balances, last_updated, or _last_typed_snapshot.  When
+        # a complete current publication exists, preserve its exact status and
+        # immutable expiry.  When no current publication exists, record a stale
+        # rejection status only; canonical capital state remains untouched.
+        if not complete:
+            if previous_current:
+                LOGGER.warning(
+                    "CAPITAL_V170_PARTIAL_PRESERVED marker=%s v199_marker=%s "
+                    "contributed=%d required=%d prior_expiry=%s candidate_mutated=false "
+                    "canonical_snapshot_preserved=true broker_balances_preserved=true "
+                    "last_updated_preserved=true freshness_extended=false "
+                    "publication_expiry_extended=false",
+                    MARKER,
+                    V199_MARKER,
+                    contributed,
+                    required,
+                    getattr(previous_raw, "expiry", None),
+                )
+                return False
 
-        result = bool(current(self, snapshot, writer_id))
-        after = _raw_status(self)
-        after_reason = str(getattr(after, "reason", "") or "")
-
-        # Base CapitalAuthority historically returns True for a fresh positive
-        # partial snapshot.  It may remain hydrated for diagnostics, but it is
-        # never an accepted live publication and callers receive False.
-        if not complete and result:
             _set_status(
                 self,
                 module,
                 accepted=False,
                 stale=True,
                 reason=f"incomplete_broker_aggregation:{contributed}/{required}",
-                timestamp=getattr(after, "timestamp", getattr(snapshot, "computed_at", None)),
-                expiry=getattr(after, "expiry", None),
+                timestamp=getattr(snapshot, "computed_at", None),
+                expiry=getattr(previous_raw, "expiry", None),
             )
             LOGGER.critical(
-                "CAPITAL_V170_PARTIAL_RECORDED marker=%s contributed=%d required=%d "
-                "accepted=false stale=true hydration_preserved=true freshness_extended=false "
-                "trading_fail_closed=true",
+                "CAPITAL_V199_PARTIAL_PREMUTATION_REJECTED marker=%s v170_marker=%s "
+                "contributed=%d required=%d prior_publication_current=false "
+                "candidate_mutated=false canonical_snapshot_preserved=true "
+                "broker_balances_preserved=true last_updated_preserved=true "
+                "accepted=false stale=true freshness_extended=false "
+                "publication_expiry_extended=false trading_fail_closed=true",
+                V199_MARKER,
                 MARKER,
                 contributed,
                 required,
             )
             return False
+
+        result = bool(current(self, snapshot, writer_id))
+        after = _raw_status(self)
+        after_reason = str(getattr(after, "reason", "") or "")
 
         # Older/expired rejected attempts describe the rejected candidate, not
         # the newer current publication.  Restore the exact prior status object,
@@ -382,8 +402,9 @@ def install() -> bool:
             "RUNTIME_CAPITAL_PUBLICATION_MONOTONICITY_V170 marker=%s ready=true "
             "complete_broker_entries_required=true zero_balance_entry_counts=true "
             "rejected_attempt_status_monotonic=true csm_uses_canonical_publication=true "
-            "v34_partial_handoff_blocked=true freshness_extended=false "
-            "publication_expiry_extended=false stale_promoted=false safety_gates_bypassed=false",
+            "v34_partial_handoff_blocked=true partial_premutation_reject_v199=true "
+            "freshness_extended=false publication_expiry_extended=false "
+            "stale_promoted=false safety_gates_bypassed=false",
             MARKER,
         )
         return True
@@ -395,6 +416,7 @@ def install_import_hook() -> bool:
 
 __all__ = [
     "MARKER",
+    "V199_MARKER",
     "install",
     "install_import_hook",
     "_snapshot_complete",
