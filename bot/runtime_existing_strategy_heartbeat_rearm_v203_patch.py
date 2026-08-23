@@ -8,6 +8,12 @@ so a reused instance can reach RUNNING_SUPERVISED with every structural gate
 ready while no heartbeat verifier thread exists to create the required genuine
 execution proof.
 
+v127's direct Step 2.5 publisher captures ``strategy_publication_patch._publish``
+in a closure when v127 installs. If v203 wraps ``_publish`` later, that cached
+closure can still call the pre-v203 publication function and bypass the re-arm.
+v203 therefore guards both publication surfaces: the canonical ``_publish``
+primitive and bot_main's Step 2.5 runtime publication helper.
+
 This patch repairs scheduling liveness only:
 * it runs only when the existing HEARTBEAT_TRADE policy is enabled,
 * it never writes heartbeat/execution proof itself,
@@ -23,12 +29,14 @@ import importlib
 import logging
 import os
 import threading
+from functools import wraps
 from typing import Any
 
 LOGGER = logging.getLogger("nija.runtime_existing_strategy_heartbeat_rearm_v203")
 MARKER = "20260823-existing-strategy-heartbeat-rearm-v203"
 _READY_FLAG = "NIJA_EXISTING_STRATEGY_HEARTBEAT_REARM_V203_READY"
 _PATCH_ATTR = "_nija_existing_strategy_heartbeat_rearm_v203"
+_BOT_MAIN_PATCH_ATTR = "_nija_existing_strategy_heartbeat_rearm_v203_bot_main"
 _TRUTHY = {"1", "true", "yes", "on", "enabled", "y"}
 _LOCK = threading.RLock()
 
@@ -39,7 +47,11 @@ def _truthy(name: str) -> bool:
 
 def _thread_alive(strategy: Any) -> bool:
     thread = getattr(strategy, "_heartbeat_trade_thread", None)
-    return bool(thread is not None and callable(getattr(thread, "is_alive", None)) and thread.is_alive())
+    return bool(
+        thread is not None
+        and callable(getattr(thread, "is_alive", None))
+        and thread.is_alive()
+    )
 
 
 def _ensure_heartbeat_scheduler(strategy: Any) -> bool:
@@ -123,8 +135,74 @@ def _ensure_heartbeat_scheduler(strategy: Any) -> bool:
     return alive
 
 
+def _wrap_publication_primitive(module: Any) -> bool:
+    current = getattr(module, "_publish", None)
+    if not callable(current):
+        return False
+    if getattr(current, _PATCH_ATTR, False):
+        return True
+
+    previous = current
+
+    @wraps(previous)
+    def _publish_with_heartbeat_rearm(strategy: Any) -> Any:
+        result = previous(strategy)
+        _ensure_heartbeat_scheduler(strategy)
+        return result
+
+    setattr(_publish_with_heartbeat_rearm, _PATCH_ATTR, True)
+    setattr(module, "_nija_v203_previous_publish", previous)
+    setattr(module, "_publish", _publish_with_heartbeat_rearm)
+    installed = getattr(module, "_publish", None)
+    return bool(callable(installed) and getattr(installed, _PATCH_ATTR, False))
+
+
+def _wrap_bot_main_runtime_publisher() -> bool:
+    """Catch v127's cached publication closure at the Step 2.5 boundary."""
+    try:
+        bot_main = importlib.import_module("bot.bot_main")
+    except Exception as exc:
+        LOGGER.critical(
+            "EXISTING_STRATEGY_HEARTBEAT_REARM_V203_BOT_MAIN_WRAP_FAILED marker=%s "
+            "reason=bot_main_import_failed error=%s:%s trading_fail_closed=true",
+            MARKER,
+            type(exc).__name__,
+            exc,
+        )
+        return False
+
+    current = getattr(bot_main, "_publish_canonical_strategy_for_runtime", None)
+    if not callable(current):
+        LOGGER.critical(
+            "EXISTING_STRATEGY_HEARTBEAT_REARM_V203_BOT_MAIN_WRAP_FAILED marker=%s "
+            "reason=runtime_publisher_missing trading_fail_closed=true",
+            MARKER,
+        )
+        return False
+    if getattr(current, _BOT_MAIN_PATCH_ATTR, False):
+        return True
+
+    previous = current
+
+    @wraps(previous)
+    def _publish_runtime_with_heartbeat_rearm(explicit_broker: Any) -> Any:
+        strategy = previous(explicit_broker)
+        if strategy is not None:
+            _ensure_heartbeat_scheduler(strategy)
+        return strategy
+
+    # wraps() intentionally preserves v127's helper marker from the inner
+    # function so later v127 reassertions recognize the direct publisher as
+    # still installed instead of replacing this outer liveness wrapper.
+    setattr(_publish_runtime_with_heartbeat_rearm, _BOT_MAIN_PATCH_ATTR, True)
+    setattr(bot_main, "_nija_v203_previous_runtime_publisher", previous)
+    setattr(bot_main, "_publish_canonical_strategy_for_runtime", _publish_runtime_with_heartbeat_rearm)
+    installed = getattr(bot_main, "_publish_canonical_strategy_for_runtime", None)
+    return bool(callable(installed) and getattr(installed, _BOT_MAIN_PATCH_ATTR, False))
+
+
 def install() -> bool:
-    """Wrap canonical strategy publication with idempotent heartbeat re-arming."""
+    """Guard both canonical publication paths with idempotent heartbeat re-arming."""
     with _LOCK:
         try:
             module = importlib.import_module("bot.strategy_publication_patch")
@@ -139,43 +217,26 @@ def install() -> bool:
             )
             return False
 
-        current = getattr(module, "_publish", None)
-        if not callable(current):
-            os.environ[_READY_FLAG] = "0"
-            LOGGER.critical(
-                "EXISTING_STRATEGY_HEARTBEAT_REARM_V203_INSTALL_FAILED marker=%s reason=publish_missing "
-                "trading_fail_closed=true",
-                MARKER,
-            )
-            return False
-
-        if not getattr(current, _PATCH_ATTR, False):
-            previous = current
-
-            def _publish_with_heartbeat_rearm(strategy: Any) -> Any:
-                result = previous(strategy)
-                _ensure_heartbeat_scheduler(strategy)
-                return result
-
-            setattr(_publish_with_heartbeat_rearm, _PATCH_ATTR, True)
-            setattr(module, "_nija_v203_previous_publish", previous)
-            setattr(module, "_publish", _publish_with_heartbeat_rearm)
-
-        installed = getattr(module, "_publish", None)
-        ready = bool(callable(installed) and getattr(installed, _PATCH_ATTR, False))
+        primitive_ready = _wrap_publication_primitive(module)
+        bot_main_ready = _wrap_bot_main_runtime_publisher()
+        ready = bool(primitive_ready and bot_main_ready)
         os.environ[_READY_FLAG] = "1" if ready else "0"
         if not ready:
             LOGGER.critical(
-                "EXISTING_STRATEGY_HEARTBEAT_REARM_V203_INSTALL_FAILED marker=%s reason=wrapper_not_installed "
-                "trading_fail_closed=true",
+                "EXISTING_STRATEGY_HEARTBEAT_REARM_V203_INSTALL_FAILED marker=%s "
+                "primitive_ready=%s bot_main_ready=%s trading_fail_closed=true",
                 MARKER,
+                str(primitive_ready).lower(),
+                str(bot_main_ready).lower(),
             )
             return False
 
         LOGGER.critical(
             "EXISTING_STRATEGY_HEARTBEAT_REARM_V203_READY marker=%s ready=true "
-            "existing_strategy_only=true existing_scheduler_only=true execution_authority_granted=false "
-            "proof_fabricated=false forced_activation=false safety_gates_bypassed=false",
+            "publication_primitive_guarded=true bot_main_step2_5_guarded=true "
+            "v127_cached_publish_bypass_closed=true existing_strategy_only=true "
+            "existing_scheduler_only=true execution_authority_granted=false proof_fabricated=false "
+            "forced_activation=false safety_gates_bypassed=false",
             MARKER,
         )
         return True
