@@ -14,10 +14,10 @@ false proof is still revoked and LIVE state still fails closed. No freshness
 TTL, capital value, safety gate, signal threshold, nonce rule, kill switch, or
 execution permission is altered.
 
-The 2026-08-21/22 follow-ups install v179, v178, v180, v181, v182, v183, and v184
-before the coordinator wrapper. v179 converges bootstrap-seed generation identity
-plus the canonical hydration event invariant; v178 repairs only the exact
-same-canonical-publication status-poisoning case for ``snapshot_not_newer``;
+The 2026-08-21/22 follow-ups install v179, v178, v180, v181, v182, v183, v184,
+and v189 before the coordinator wrapper. v179 converges bootstrap-seed generation
+identity plus the canonical hydration event invariant; v178 repairs only the
+exact same-canonical-publication status-poisoning case for ``snapshot_not_newer``;
 v180 prevents a private direct refresh fallback from replacing a previously
 complete canonical broker set after bootstrap; v181 restores v142 generation
 context only for the exact current canonical coordinator worker after rollover;
@@ -27,8 +27,11 @@ keeps Kraken capital-refresh asset valuation cache-only so the existing bounded
 Balance + TradeBalance path can finish inside the proactive pipeline budget;
 v184 lets Stage-4 valuation confidence recognize only fresh authenticated
 TradeBalance equivalent-equity proof from the same balance epoch while preserving
-the raw per-asset pricing metric. None of these patches broadens freshness or
-activation policy.
+the raw per-asset pricing metric; v189 supplements an incomplete refresh source
+graph only with missing connected broker objects already present in the canonical
+platform registry, so the original authenticated balance fetch can still prove
+3/3 capital without fabricating balances or weakening completeness. None of
+these patches broadens freshness or activation policy.
 """
 from __future__ import annotations
 
@@ -194,6 +197,13 @@ def _install_v184_kraken_aggregate_valuation_confidence() -> bool:
     )
 
 
+def _install_v189_platform_source_graph() -> bool:
+    return _install_named(
+        "bot.runtime_capital_platform_source_graph_v189_patch",
+        "RUNTIME_CAPITAL_PLATFORM_SOURCE_GRAPH_V189",
+    )
+
+
 def _patch_coordinator() -> bool:
     try:
         module = importlib.import_module("bot.capital_flow_state_machine")
@@ -243,6 +253,7 @@ def install() -> bool:
         v182_ok = _install_v182_position_fetch_proof()
         v183_ok = _install_v183_kraken_capital_balance_liveness()
         v184_ok = _install_v184_kraken_aggregate_valuation_confidence()
+        v189_ok = _install_v189_platform_source_graph()
         coordinator_ok = _patch_coordinator()
         manifest_ok = _patch_release_manifest()
         ready = bool(
@@ -253,6 +264,7 @@ def install() -> bool:
             and v182_ok
             and v183_ok
             and v184_ok
+            and v189_ok
             and coordinator_ok
             and manifest_ok
         )
@@ -260,7 +272,7 @@ def install() -> bool:
         if not ready:
             LOGGER.critical(
                 "RUNTIME_CAPITAL_REACTIVATION_V176_FAILED marker=%s v179_ok=%s v178_ok=%s "
-                "v180_ok=%s v181_ok=%s v182_ok=%s v183_ok=%s v184_ok=%s "
+                "v180_ok=%s v181_ok=%s v182_ok=%s v183_ok=%s v184_ok=%s v189_ok=%s "
                 "coordinator_ok=%s manifest_ok=%s trading_fail_closed=true",
                 MARKER,
                 str(v179_ok).lower(),
@@ -270,6 +282,7 @@ def install() -> bool:
                 str(v182_ok).lower(),
                 str(v183_ok).lower(),
                 str(v184_ok).lower(),
+                str(v189_ok).lower(),
                 str(coordinator_ok).lower(),
                 str(manifest_ok).lower(),
             )
@@ -280,6 +293,7 @@ def install() -> bool:
             "v180_direct_refresh_downgrade=true v181_generation_context=true "
             "v182_position_fetch_proof=true v183_kraken_capital_balance_liveness=true "
             "v184_kraken_aggregate_valuation_confidence=true "
+            "v189_platform_source_graph=true "
             "post_publication_proof_recheck=true canonical_commit_only=true "
             "v133_fail_closed_preserved=true freshness_ttl_unchanged=true "
             "forced_activation=false safety_gates_bypassed=false",
@@ -306,5 +320,6 @@ __all__ = [
     "_install_v182_position_fetch_proof",
     "_install_v183_kraken_capital_balance_liveness",
     "_install_v184_kraken_aggregate_valuation_confidence",
+    "_install_v189_platform_source_graph",
     "_patch_coordinator",
 ]
