@@ -20,7 +20,11 @@ This repair changes cache *admission only*:
 v197 is installed as a mandatory companion from this already-required runtime
 path. It repairs only the pre-existing whitelisted heartbeat verification probe
 handoff through ExecutionPipeline; ordinary trade authority remains unchanged.
-v202 is installed immediately after v197 and changes only heartbeat retry
+v210 is installed immediately after v197 and bounds only heartbeat-thread
+read-only authentication probes before market discovery. Timed-out reads fail
+closed and retry; normal broker reads and every execution/authority gate remain
+unchanged.
+v202 is installed immediately after v210 and changes only heartbeat retry
 *liveness*: when authoritative position sync changes from false to true while a
 failed heartbeat probe is sleeping, that sleep wakes so the unchanged verifier
 can retry before the bounded post-core startup window expires. No gate is
@@ -56,6 +60,7 @@ LOGGER = logging.getLogger("nija.runtime_phase3_execution_frame_handoff_v196")
 MARKER = "20260823-phase3-execution-frame-handoff-v196"
 _READY_FLAG = "NIJA_RUNTIME_PHASE3_EXECUTION_FRAME_HANDOFF_V196_READY"
 _V197_READY_FLAG = "NIJA_RUNTIME_HEARTBEAT_PROBE_PIPELINE_BRIDGE_V197_READY"
+_V210_READY_FLAG = "NIJA_HEARTBEAT_AUTH_PROBE_BOUND_V210_READY"
 _V202_READY_FLAG = "NIJA_HEARTBEAT_POSITION_SYNC_WAKEUP_V202_READY"
 _V207_READY_FLAG = "NIJA_PRECORE_STRATEGY_LOOKUP_V207_READY"
 _V203_READY_FLAG = "NIJA_EXISTING_STRATEGY_HEARTBEAT_REARM_V203_READY"
@@ -105,7 +110,7 @@ setattr(_structurally_cacheable_execution_frame, _PATCH_ATTR, True)
 
 
 def _install_v197() -> bool:
-    """Install heartbeat bridge plus v202/v207/v203/v204/v206 repairs."""
+    """Install heartbeat bridge plus v210/v202/v207/v203/v204/v206 repairs."""
     try:
         module = importlib.import_module("bot.runtime_heartbeat_probe_pipeline_bridge_v197_patch")
         installer = getattr(module, "install", None) or getattr(module, "install_import_hook", None)
@@ -113,6 +118,14 @@ def _install_v197() -> bool:
             return False
         v197_ready = bool(installer()) and os.environ.get(_V197_READY_FLAG, "0").strip() == "1"
         if not v197_ready:
+            return False
+
+        auth_bound = importlib.import_module("bot.runtime_heartbeat_auth_probe_bound_v210_patch")
+        auth_bound_installer = getattr(auth_bound, "install", None) or getattr(auth_bound, "install_import_hook", None)
+        if not callable(auth_bound_installer):
+            return False
+        v210_ready = bool(auth_bound_installer()) and os.environ.get(_V210_READY_FLAG, "0").strip() == "1"
+        if not v210_ready:
             return False
 
         wakeup = importlib.import_module("bot.runtime_heartbeat_position_sync_wakeup_v202_patch")
@@ -192,12 +205,13 @@ def install() -> bool:
         if not ready:
             LOGGER.critical(
                 "RUNTIME_PHASE3_EXECUTION_FRAME_HANDOFF_V196_FAILED marker=%s "
-                "cache_ready=%s heartbeat_probe_chain=%s v197=%s v202=%s v207=%s v203=%s v204=%s v206=%s "
+                "cache_ready=%s heartbeat_probe_chain=%s v197=%s v210=%s v202=%s v207=%s v203=%s v204=%s v206=%s "
                 "trading_fail_closed=true",
                 MARKER,
                 str(cache_ready).lower(),
                 str(heartbeat_chain_ready).lower(),
                 os.environ.get(_V197_READY_FLAG, "0"),
+                os.environ.get(_V210_READY_FLAG, "0"),
                 os.environ.get(_V202_READY_FLAG, "0"),
                 os.environ.get(_V207_READY_FLAG, "0"),
                 os.environ.get(_V203_READY_FLAG, "0"),
@@ -209,12 +223,12 @@ def install() -> bool:
         LOGGER.critical(
             "RUNTIME_PHASE3_EXECUTION_FRAME_HANDOFF_V196 marker=%s ready=true "
             "same_cycle_only=true min_rows=%d ohlcv_required=true "
-            "heartbeat_probe_pipeline_bridge_v197=true heartbeat_position_sync_wakeup_v202=true "
-            "precore_strategy_lookup_v207=true existing_strategy_heartbeat_rearm_v203=true "
-            "execution_pipeline_late_binding_v204=true kraken_ecel_symbol_canonicalization_v206=true "
-            "volume_quality_gate_unchanged=true min_notional_gate_unchanged=true "
-            "risk_gates_unchanged=true order_quote_freshness_unchanged=true "
-            "forced_trade=false safety_gates_bypassed=false",
+            "heartbeat_probe_pipeline_bridge_v197=true heartbeat_auth_probe_bound_v210=true "
+            "heartbeat_position_sync_wakeup_v202=true precore_strategy_lookup_v207=true "
+            "existing_strategy_heartbeat_rearm_v203=true execution_pipeline_late_binding_v204=true "
+            "kraken_ecel_symbol_canonicalization_v206=true volume_quality_gate_unchanged=true "
+            "min_notional_gate_unchanged=true risk_gates_unchanged=true "
+            "order_quote_freshness_unchanged=true forced_trade=false safety_gates_bypassed=false",
             MARKER,
             _configured_min_rows(),
         )
