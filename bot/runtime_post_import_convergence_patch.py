@@ -11,7 +11,8 @@ the v158 bounded capital-pipeline publication-margin repair, the v161
 capital/position liveness convergence repair, the v162 retired-observation
 fence, the v163 activation proof convergence repair, the v164 canonical
 capital publication/worker-liveness repair, the v165 proactive publication
-scheduler convergence repair, and the v167 runtime refresh-demand attestation.
+scheduler convergence repair, the v167 runtime refresh-demand attestation, and
+the v209 confirmed-zero-balance completeness repair.
 """
 from __future__ import annotations
 
@@ -195,6 +196,14 @@ def _install_v167_refresh_demand() -> bool:
     )
 
 
+def _install_v209_zero_balance_completeness() -> bool:
+    return _install_named(
+        "bot.runtime_zero_balance_completeness_v209_patch",
+        "v209_install_missing",
+        "ZERO_BALANCE_COMPLETENESS_V209_INSTALL_ERROR",
+    )
+
+
 def _iteration() -> bool:
     changed = _canonicalize_alias()
     required = _apply_broker_threshold()
@@ -209,6 +218,7 @@ def _iteration() -> bool:
     v164_installed = _install_v164_capital_publication_liveness()
     v165_installed = _install_v165_capital_publication_scheduling()
     v167_installed = _install_v167_refresh_demand()
+    v209_installed = _install_v209_zero_balance_completeness()
     os.environ["NIJA_RUNTIME_POST_IMPORT_CONVERGENCE_INSTALLED"] = "1"
     if changed:
         logger.warning(
@@ -221,7 +231,7 @@ def _iteration() -> bool:
         "RUNTIME_POST_IMPORT_CONVERGENCE marker=%s policy=%s min_brokers=%d audit_patched=%s "
         "v154_installed=%s v155_installed=%s v157_installed=%s v158_installed=%s "
         "v161_installed=%s v162_installed=%s v163_installed=%s v164_installed=%s "
-        "v165_installed=%s v167_installed=%s",
+        "v165_installed=%s v167_installed=%s v209_installed=%s",
         _MARKER,
         _policy(),
         required,
@@ -236,6 +246,7 @@ def _iteration() -> bool:
         str(v164_installed).lower(),
         str(v165_installed).lower(),
         str(v167_installed).lower(),
+        str(v209_installed).lower(),
     )
     return bool(
         v154_installed
@@ -248,6 +259,7 @@ def _iteration() -> bool:
         and v164_installed
         and v165_installed
         and v167_installed
+        and v209_installed
     )
 
 
@@ -277,7 +289,7 @@ def install() -> bool:
             "v158_capital_margin=true v161_capital_position_convergence=true "
             "v162_late_observation_fence=true v163_activation_convergence=true "
             "v164_capital_publication_liveness=true v165_capital_publication_scheduling=true "
-            "v167_refresh_demand=true",
+            "v167_refresh_demand=true v209_zero_balance_completeness=true",
             _MARKER,
             _policy(),
             _required_broker_count(),
@@ -302,5 +314,6 @@ __all__ = [
     "_install_v164_capital_publication_liveness",
     "_install_v165_capital_publication_scheduling",
     "_install_v167_refresh_demand",
+    "_install_v209_zero_balance_completeness",
     "_iteration",
 ]

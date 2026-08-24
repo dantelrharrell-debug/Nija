@@ -18,6 +18,12 @@ manager when available; if the canonical manager is temporarily unavailable,
 the existing readiness value is preserved rather than synthetically regressed.
 Real position-sync regressions still publish ``False`` through the normal live
 manager/startup hooks.
+v195 makes the installer replay-idempotent.  The first process install still
+publishes an explicit fail-closed position-sync key before activation can consume
+old state, but later installer replays no longer overwrite already-proven live
+position-sync/reconciliation truth with an artificial ``manager=None`` result.
+Real broker-set or fetch-proof regressions still publish false through the normal
+runtime paths.
 
 No writer, nonce, capital, risk, strategy, kill-switch, or execution authority is
 synthesized here. Readiness becomes true only when at least one broker is
@@ -38,9 +44,11 @@ from typing import Any
 LOGGER = logging.getLogger("nija.position_sync_dispatch_authority_v96")
 MARKER = "20260814-position-sync-dispatch-authority-v96"
 REPLAY_MARKER = "20260822-position-sync-install-replay-v188"
+V195_MARKER = "20260823-position-sync-installer-idempotence-v195"
 READINESS_KEY = "position_sync_ready"
 _LOCK = threading.RLock()
 _HOOK_FLAG = "_NIJA_POSITION_SYNC_DISPATCH_AUTHORITY_V96_IMPORT_HOOK"
+_INITIAL_FAIL_CLOSED_FLAG = "_NIJA_POSITION_SYNC_DISPATCH_AUTHORITY_V96_INITIAL_FAIL_CLOSED"
 _MABM_ATTR = "_nija_position_sync_dispatch_authority_v96"
 _SYNC_ATTR = "_nija_position_sync_dispatch_authority_v96"
 
@@ -248,6 +256,22 @@ def _patch_loaded() -> bool:
 def install_import_hook() -> bool:
     with _LOCK:
         _replay_safe_install_seed()
+        # Establish the fail-closed key exactly once per Python process before
+        # activation can consume an old coordinator commit.  Installer replay is
+        # common in the canonical release chain; replay must not revoke a proven
+        # live state merely because the installer itself has no manager argument.
+        initial_fail_closed = not bool(getattr(builtins, _INITIAL_FAIL_CLOSED_FLAG, False))
+        if initial_fail_closed:
+            publish_position_sync_readiness(None, source="install_fail_closed")
+            setattr(builtins, _INITIAL_FAIL_CLOSED_FLAG, True)
+        else:
+            LOGGER.info(
+                "POSITION_SYNC_V195_INSTALL_REPLAY_PRESERVED marker=%s "
+                "initial_fail_closed_replayed=false proven_runtime_state_unchanged=true "
+                "real_regressions_still_fail_closed=true",
+                V195_MARKER,
+            )
+
         _patch_loaded()
         if not getattr(builtins, _HOOK_FLAG, False):
             original_import = builtins.__import__
@@ -268,6 +292,11 @@ def install_import_hook() -> bool:
         LOGGER.critical(
             "POSITION_SYNC_DISPATCH_AUTHORITY_V96_INSTALLED marker=%s readiness_key=%s "
             "fail_closed=true replay_safe_v188=true stale_commit_revocation=true safety_gates_unchanged=true",
+        os.environ["NIJA_POSITION_SYNC_INSTALLER_IDEMPOTENCE_V195_READY"] = "1"
+        LOGGER.critical(
+            "POSITION_SYNC_DISPATCH_AUTHORITY_V96_INSTALLED marker=%s readiness_key=%s "
+            "fail_closed=true stale_commit_revocation=true installer_replay_idempotent_v195=true "
+            "safety_gates_unchanged=true",
             MARKER,
             READINESS_KEY,
         )
@@ -281,6 +310,7 @@ def install() -> bool:
 __all__ = [
     "MARKER",
     "REPLAY_MARKER",
+    "V195_MARKER",
     "READINESS_KEY",
     "install",
     "install_import_hook",

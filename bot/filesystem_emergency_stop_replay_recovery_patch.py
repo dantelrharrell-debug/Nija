@@ -1,235 +1,111 @@
 from __future__ import annotations
 
-import builtins
-import json
+"""Legacy filesystem EMERGENCY_STOP compatibility shim — fail closed.
+
+The original 20260708b repair used marker/state-file text heuristics to decide
+that an ``EMERGENCY_STOP`` file was a stale replay, then quarantined the marker
+and reset the state machine.  Later production hardening (v130/v131/v132,
+v143/v185/v186, and v193/v194) established a much narrower recovery contract:
+a stop may recover automatically only when canonical provenance proves the
+retired ``AUTHORITY_HEARTBEAT_EXPIRED`` + ``core_thread_dead`` race and all
+current runtime health proofs pass.
+
+This module now preserves its import/API compatibility while delegating any
+recovery attempt to that guarded chain.  It never quarantines/removes an
+EMERGENCY_STOP marker itself, never flips ``KillSwitch._is_active``, never
+resets the state machine, never grants execution authority, and never forces
+LIVE_ACTIVE.
+"""
+
+import importlib
 import logging
 import os
-import sys
-import time
-from functools import wraps
 from pathlib import Path
-from types import ModuleType
 from typing import Any
 
 logger = logging.getLogger("nija.filesystem_emergency_stop_replay_recovery")
-_PATCHED_ATTR = "_nija_filesystem_emergency_stop_replay_recovery_20260708b"
-_HOOK_ATTR = "_NIJA_FILESYSTEM_EMERGENCY_STOP_REPLAY_RECOVERY_HOOK_20260708B"
-_TRUE = {"1", "true", "yes", "on", "enabled", "y"}
-_UNSAFE_TOKENS = (
-    "manual",
-    "operator",
-    "ui",
-    "cli",
-    "daily loss",
-    "weekly loss",
-    "drawdown",
-    "loss limit",
-    "consecutive losses",
-    "unexpected balance",
-    "balance delta",
-    "api instability",
-    "liquidation",
-    "panic",
-)
-_SAFE_REPLAY_TOKENS = (
-    "kill switch file detected",
-    "emergency stop active",
-    "file_system",
-    "filesystem",
-)
-
-
-def _truthy(name: str, default: str = "true") -> bool:
-    return str(os.environ.get(name, default)).strip().lower() in _TRUE
+MARKER = "20260824-filesystem-emergency-stop-guarded-v214"
+_FLAG = "NIJA_FILESYSTEM_EMERGENCY_STOP_REPLAY_GUARDED_V214_READY"
 
 
 def _base_path(explicit: Any = None) -> Path:
     if explicit:
         return Path(str(explicit)).resolve()
-    # In Railway the project root is commonly /app.  For repo-local execution this
-    # resolves to the parent of bot/.
     return Path(__file__).resolve().parents[1]
 
 
-def _read(path: Path) -> str:
+def _marker_exists(base_path: Any = None) -> bool:
     try:
-        return path.read_text(encoding="utf-8", errors="ignore") if path.exists() else ""
+        return (_base_path(base_path) / "EMERGENCY_STOP").exists()
     except Exception:
-        return ""
-
-
-def _load_json(path: Path) -> dict[str, Any]:
-    try:
-        return json.loads(_read(path)) if path.exists() else {}
-    except Exception:
-        return {}
-
-
-def _has_unsafe(text: str) -> bool:
-    lowered = str(text or "").lower()
-    return any(token in lowered for token in _UNSAFE_TOKENS)
-
-
-def _looks_like_filesystem_replay(kill_text: str, state: dict[str, Any]) -> bool:
-    combined = f"{kill_text}\n{json.dumps(state, default=str, sort_keys=True)}".lower()
-    if not combined.strip() or _has_unsafe(combined):
         return False
-    # Exact stale pattern from this incident: file-system self-replay with no
-    # underlying drawdown/manual/operator reason.
-    if "reason: kill switch file detected" in combined:
-        return True
-    if "kill switch file detected" in combined and "file_system" in combined:
-        return True
-    if "emergency stop active" in combined and "kill switch file detected" in combined:
-        return True
-    return False
 
 
-def _quarantine(path: Path, suffix: str) -> Path | None:
-    if not path.exists():
-        return None
-    target = path.with_name(f"{path.name}.quarantined.{suffix}")
+def _delegate_guarded_recovery() -> bool:
+    """Delegate only to the canonical exact-provenance recovery chain."""
     try:
-        path.replace(target)
-        return target
-    except Exception as exc:
-        logger.error(
-            "FILESYSTEM_EMERGENCY_STOP_REPLAY_QUARANTINE_FAILED marker=20260708b path=%s error=%s",
-            path,
-            exc,
-        )
-        return None
-
-
-def _reset_state_machine(reason: str) -> None:
-    try:
-        try:
-            from bot.trading_state_machine import get_state_machine, TradingState
-        except ImportError:
-            from trading_state_machine import get_state_machine, TradingState  # type: ignore[import]
-        sm = get_state_machine()
-        current = sm.get_current_state()
-        if current == TradingState.EMERGENCY_STOP:
-            sm.transition_to(TradingState.OFF, reason)
+        v132 = importlib.import_module("bot.readiness_killswitch_durability_v132_patch")
+        attempt = getattr(v132, "_attempt_persisted_stop_recovery", None)
+        if not callable(attempt):
             logger.critical(
-                "FILESYSTEM_EMERGENCY_STOP_REPLAY_STATE_RESET marker=20260708b state=OFF reason=%s",
-                reason,
+                "FILESYSTEM_EMERGENCY_STOP_V214_PRESERVED marker=%s "
+                "reason=canonical_recovery_unavailable marker_removed=false "
+                "state_mutated=false trading_fail_closed=true",
+                MARKER,
             )
+            return False
+        recovered = bool(attempt())
+        logger.critical(
+            "FILESYSTEM_EMERGENCY_STOP_V214_DELEGATED marker=%s recovered=%s "
+            "canonical_v132_v143_v193_only=true marker_removed_directly=false "
+            "state_mutated_directly=false generic_text_heuristics=false",
+            MARKER,
+            str(recovered).lower(),
+        )
+        return recovered
     except Exception as exc:
         logger.warning(
-            "FILESYSTEM_EMERGENCY_STOP_REPLAY_STATE_RESET_SKIPPED marker=20260708b error=%s",
+            "FILESYSTEM_EMERGENCY_STOP_V214_DELEGATE_ERROR marker=%s err=%s:%s "
+            "trading_fail_closed=true marker_removed=false state_mutated=false",
+            MARKER,
+            type(exc).__name__,
             exc,
         )
-    os.environ["NIJA_RUNTIME_TRADING_STATE"] = "OFF"
-    os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "0"
+        return False
 
 
 def recover(base_path: Any = None) -> bool:
-    if not _truthy("NIJA_FILESYSTEM_EMERGENCY_STOP_REPLAY_RECOVERY_ENABLED", "true"):
+    """Compatibility recovery entry point with guarded-only semantics.
+
+    No text-based auto-clear is permitted.  If no marker exists there is
+    nothing to recover.  If a marker exists, the canonical v132/v143/v193 chain
+    owns the decision.
+    """
+    if not _marker_exists(base_path):
         return False
-    base = _base_path(base_path)
-    kill_file = base / "EMERGENCY_STOP"
-    state_file = base / ".nija_kill_switch_state.json"
-    if not kill_file.exists():
-        return False
-    kill_text = _read(kill_file)
-    state = _load_json(state_file)
-    if not _looks_like_filesystem_replay(kill_text, state):
-        logger.critical(
-            "FILESYSTEM_EMERGENCY_STOP_REPLAY_RECOVERY_SKIPPED marker=20260708b reason=not_safe_to_auto_clear kill_file=%s",
-            kill_file,
-        )
-        return False
-    suffix = str(int(time.time()))
-    moved_kill = _quarantine(kill_file, suffix)
-    moved_state = _quarantine(state_file, suffix)
-    if moved_kill is None:
-        return False
-    reason = "stale file-system EMERGENCY_STOP replay quarantined after capital/authority recovery"
-    _reset_state_machine(reason)
+    return _delegate_guarded_recovery()
+
+
+def install_import_hook() -> bool:
+    # Explicitly disable the historical broad heuristic switch even if an old
+    # deployment environment still carries it as true.  The compatibility
+    # module remains installed, but all recovery is delegated to canonical
+    # exact provenance.
+    os.environ["NIJA_FILESYSTEM_EMERGENCY_STOP_REPLAY_RECOVERY_ENABLED"] = "false"
+    os.environ[_FLAG] = "1"
     logger.critical(
-        "FILESYSTEM_EMERGENCY_STOP_REPLAY_QUARANTINED marker=20260708b kill_file=%s state_file=%s reason=%s",
-        moved_kill,
-        moved_state,
-        reason,
-    )
-    print(
-        f"[NIJA-PRINT] FILESYSTEM_EMERGENCY_STOP_REPLAY_QUARANTINED marker=20260708b kill_file={moved_kill.name}",
-        flush=True,
+        "FILESYSTEM_EMERGENCY_STOP_REPLAY_GUARDED_V214_READY marker=%s "
+        "legacy_text_auto_clear=false quarantine_direct=false state_reset_direct=false "
+        "canonical_guarded_recovery_only=true manual_ui_cli_risk_stops_preserved=true "
+        "execution_authority_unchanged=true forced_activation=false "
+        "safety_gates_bypassed=false",
+        MARKER,
     )
     return True
 
 
-def _patch_module(module: ModuleType) -> bool:
-    cls = getattr(module, "KillSwitch", None)
-    if not isinstance(cls, type):
-        return False
-    patched = False
-    original_init = getattr(cls, "__init__", None)
-    if callable(original_init) and not getattr(original_init, _PATCHED_ATTR, False):
-        @wraps(original_init)
-        def __init__(self: Any, base_path: Any = None, *args: Any, **kwargs: Any):
-            try:
-                recover(base_path)
-            except Exception as exc:
-                logger.warning("FILESYSTEM_EMERGENCY_STOP_REPLAY_RECOVERY_ERROR marker=20260708b stage=init error=%s", exc)
-            return original_init(self, base_path, *args, **kwargs)
-        setattr(__init__, _PATCHED_ATTR, True)
-        setattr(cls, "__init__", __init__)
-        patched = True
-    original_is_active = getattr(cls, "is_active", None)
-    if callable(original_is_active) and not getattr(original_is_active, _PATCHED_ATTR, False):
-        @wraps(original_is_active)
-        def is_active(self: Any, *args: Any, **kwargs: Any):
-            try:
-                recover(getattr(self, "_base_path", None))
-                # If recovery happened, keep this object consistent with disk state.
-                if not Path(getattr(self, "_kill_file", "")).exists() and getattr(self, "_is_active", False):
-                    if _looks_like_filesystem_replay("kill switch file detected", {"source": "FILE_SYSTEM"}):
-                        self._is_active = False
-            except Exception as exc:
-                logger.warning("FILESYSTEM_EMERGENCY_STOP_REPLAY_RECOVERY_ERROR marker=20260708b stage=is_active error=%s", exc)
-            return original_is_active(self, *args, **kwargs)
-        setattr(is_active, _PATCHED_ATTR, True)
-        setattr(cls, "is_active", is_active)
-        patched = True
-    if patched:
-        logger.warning("FILESYSTEM_EMERGENCY_STOP_REPLAY_RECOVERY_PATCHED marker=20260708b module=%s", getattr(module, "__name__", "unknown"))
-        print("[NIJA-PRINT] FILESYSTEM_EMERGENCY_STOP_REPLAY_RECOVERY_PATCHED marker=20260708b", flush=True)
-    return patched
+def install() -> bool:
+    return install_import_hook()
 
 
-def _patch_loaded() -> None:
-    for name in ("bot.kill_switch", "kill_switch"):
-        module = sys.modules.get(name)
-        if isinstance(module, ModuleType):
-            try:
-                _patch_module(module)
-            except Exception as exc:
-                logger.warning("FILESYSTEM_EMERGENCY_STOP_REPLAY_PATCH_FAILED marker=20260708b module=%s error=%s", name, exc)
-
-
-def install_import_hook() -> None:
-    os.environ.setdefault("NIJA_FILESYSTEM_EMERGENCY_STOP_REPLAY_RECOVERY_ENABLED", "true")
-    try:
-        recover(None)
-    except Exception as exc:
-        logger.warning("FILESYSTEM_EMERGENCY_STOP_REPLAY_EARLY_RECOVER_ERROR marker=20260708b error=%s", exc)
-    _patch_loaded()
-    if getattr(builtins, _HOOK_ATTR, False):
-        return
-    original_import = builtins.__import__
-
-    def guarded_import(name: str, globals: Any = None, locals: Any = None, fromlist: Any = (), level: int = 0):
-        module = original_import(name, globals, locals, fromlist, level)
-        if str(name).endswith("kill_switch") or name in {"bot.kill_switch", "kill_switch"}:
-            _patch_loaded()
-        return module
-
-    builtins.__import__ = guarded_import
-    setattr(builtins, _HOOK_ATTR, True)
-    logger.warning("FILESYSTEM_EMERGENCY_STOP_REPLAY_RECOVERY_IMPORT_HOOK marker=20260708b")
-
-
-def install() -> None:
-    install_import_hook()
+__all__ = ["MARKER", "recover", "install", "install_import_hook"]

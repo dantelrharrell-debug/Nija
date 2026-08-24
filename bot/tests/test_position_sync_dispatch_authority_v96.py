@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import builtins
 import os
 import types
 import unittest
@@ -13,6 +14,10 @@ class PositionSyncDispatchAuthorityV96Tests(unittest.TestCase):
         os.environ.pop("NIJA_POSITION_SYNC_ACTIVATION_READY", None)
         os.environ.pop("NIJA_POSITION_SYNC_DISPATCH_READY", None)
         os.environ.pop("NIJA_POSITION_SYNC_INSTALL_REPLAY_V188_READY", None)
+        os.environ.pop("NIJA_POSITION_SYNC_INSTALLER_IDEMPOTENCE_V195_READY", None)
+        for attr in (v96._INITIAL_FAIL_CLOSED_FLAG, v96._HOOK_FLAG):
+            if hasattr(builtins, attr):
+                delattr(builtins, attr)
 
     def test_publish_is_fail_closed_without_connected_brokers(self) -> None:
         calls = []
@@ -152,6 +157,20 @@ class PositionSyncDispatchAuthorityV96Tests(unittest.TestCase):
         self.assertEqual(result, {"ready": True})
         self.assertEqual(events[0], "refresh")
         self.assertEqual(events[1], ("publish", manager, "refresh_capital_authority"))
+
+    def test_installer_replay_does_not_republish_artificial_fail_closed_state(self) -> None:
+        calls = []
+
+        with mock.patch.object(
+            v96,
+            "publish_position_sync_readiness",
+            side_effect=lambda manager, source: calls.append((manager, source)) or (False, [], {}),
+        ), mock.patch.object(v96, "_patch_loaded", return_value=True):
+            self.assertTrue(v96.install_import_hook())
+            self.assertTrue(v96.install_import_hook())
+
+        self.assertEqual(calls, [(None, "install_fail_closed")])
+        self.assertEqual(os.environ["NIJA_POSITION_SYNC_INSTALLER_IDEMPOTENCE_V195_READY"], "1")
 
 
 if __name__ == "__main__":

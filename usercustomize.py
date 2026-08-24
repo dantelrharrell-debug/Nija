@@ -234,6 +234,83 @@ def _patch_trading_state_machine(tsm: ModuleType) -> None:
     if not callable(getattr(tsm, "heartbeat_marker_stage_is_sufficient", None)):
         setattr(tsm, "heartbeat_marker_stage_is_sufficient", heartbeat_marker_stage_is_sufficient)
 
+    # Activation recovery patch: the entrypoint writer heartbeat and the
+    # AuthorityHeartbeatMonitor share NIJA_WRITER_HEARTBEAT_ACTIVE.  A healthy
+    # entrypoint writer can therefore set that env var to 1 before the separate
+    # authority monitor starts.  trading_state_machine.commit_activation() then
+    # assumes the marker-producing monitor is already running and can remain
+    # fail-closed forever with heartbeat_verification:marker_missing.
+    #
+    # Re-arm the existing idempotent AuthorityHeartbeatMonitor only when:
+    #   * heartbeat verification is required,
+    #   * the canonical marker is genuinely missing,
+    #   * this process already holds the distributed writer lease, and
+    #   * the fencing token is present.
+    # No readiness bit, proof, trading state, or execution gate is fabricated.
+    _tsm_cls = getattr(tsm, "TradingStateMachine", None)
+    _original_commit = getattr(_tsm_cls, "_commit_activation_unlocked", None) if _tsm_cls else None
+    if callable(_original_commit) and not getattr(
+        _original_commit, "_nija_heartbeat_marker_monitor_rearm", False
+    ):
+        def _wrapped_commit_activation_unlocked(self, *args: Any, **kwargs: Any):
+            try:
+                required_fn = getattr(tsm, "_heartbeat_verification_required", None)
+                status_fn = getattr(tsm, "_heartbeat_verification_status", None)
+                heartbeat_required = (
+                    bool(required_fn())
+                    if callable(required_fn)
+                    else (
+                        str(os.environ.get("HEARTBEAT_REQUIRED_FIRST_ACTIVATION", "") or "").strip().lower() in _TRUE
+                        or str(os.environ.get("HEARTBEAT_TRADE", "") or "").strip().lower() in _TRUE
+                    )
+                )
+                if heartbeat_required and callable(status_fn):
+                    marker_ok, marker_reason, marker_meta = status_fn()
+                    lease_held = (
+                        str(os.environ.get("NIJA_WRITER_LEASE_ACQUIRED", "") or "")
+                        .strip()
+                        .lower()
+                        in _TRUE
+                    )
+                    fencing_token_present = bool(
+                        str(os.environ.get("NIJA_WRITER_FENCING_TOKEN", "") or "").strip()
+                    )
+                    if (
+                        not marker_ok
+                        and marker_reason == "marker_missing"
+                        and lease_held
+                        and fencing_token_present
+                    ):
+                        try:
+                            from bot.authority_heartbeat import start_authority_heartbeat
+                        except ImportError:
+                            from authority_heartbeat import start_authority_heartbeat  # type: ignore[import]
+                        start_authority_heartbeat()
+                        logger.critical(
+                            "USERCUSTOMIZE_HEARTBEAT_MARKER_MONITOR_REARM "
+                            "reason=marker_missing lease_held=true fencing_token=true "
+                            "path=%s safety_gates_bypassed=false proof_fabricated=false",
+                            (marker_meta or {}).get("path", _default_marker_path(tsm)),
+                        )
+            except Exception as exc:
+                logger.warning(
+                    "USERCUSTOMIZE_HEARTBEAT_MARKER_MONITOR_REARM_FAILED err=%s "
+                    "activation_remains_fail_closed=true",
+                    exc,
+                )
+            return _original_commit(self, *args, **kwargs)
+
+        setattr(
+            _wrapped_commit_activation_unlocked,
+            "_nija_heartbeat_marker_monitor_rearm",
+            True,
+        )
+        setattr(tsm.TradingStateMachine, "_commit_activation_unlocked", _wrapped_commit_activation_unlocked)
+        logger.critical(
+            "USERCUSTOMIZE_HEARTBEAT_MARKER_MONITOR_REARM_PATCHED module=%s",
+            getattr(tsm, "__name__", "<unknown>"),
+        )
+
     setattr(tsm, "_nija_usercustomize_heartbeat_helpers", True)
     logger.critical(
         "USERCUSTOMIZE_HEARTBEAT_HELPERS_PATCHED module=%s required_stage=%s",
