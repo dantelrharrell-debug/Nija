@@ -35,6 +35,10 @@ the canonical order submitter. If an early circular/import-order failure cached
 ``PipelineRequest`` or ``get_execution_pipeline`` as unavailable, v204 rebinds
 those symbols lazily from the canonical execution pipeline at real order time.
 If the pipeline is still unavailable the existing fail-closed rejection remains.
+v206 is installed after v204 and repairs only Kraken legacy REST pair identity
+before ECEL contract lookup (for example XETHZUSD -> ETH-USD and XXBTZUSD ->
+XBT-USD). Existing ECEL contract rules and minimums remain authoritative and all
+writer/nonce/risk/kill-switch/capital/position/order/fill gates remain unchanged.
 """
 from __future__ import annotations
 
@@ -51,6 +55,7 @@ _V197_READY_FLAG = "NIJA_RUNTIME_HEARTBEAT_PROBE_PIPELINE_BRIDGE_V197_READY"
 _V202_READY_FLAG = "NIJA_HEARTBEAT_POSITION_SYNC_WAKEUP_V202_READY"
 _V203_READY_FLAG = "NIJA_EXISTING_STRATEGY_HEARTBEAT_REARM_V203_READY"
 _V204_READY_FLAG = "NIJA_EXECUTION_PIPELINE_LATE_BINDING_V204_READY"
+_V206_READY_FLAG = "NIJA_KRAKEN_ECEL_SYMBOL_CANONICALIZATION_V206_READY"
 _PATCH_ATTR = "_nija_phase3_execution_frame_handoff_v196"
 _LOCK = threading.RLock()
 _REQUIRED_COLUMNS = frozenset({"open", "high", "low", "close", "volume"})
@@ -95,7 +100,7 @@ setattr(_structurally_cacheable_execution_frame, _PATCH_ATTR, True)
 
 
 def _install_v197() -> bool:
-    """Install the heartbeat pipeline bridge plus v202/v203/v204 repairs."""
+    """Install heartbeat bridge plus v202/v203/v204/v206 repairs."""
     try:
         module = importlib.import_module("bot.runtime_heartbeat_probe_pipeline_bridge_v197_patch")
         installer = getattr(module, "install", None) or getattr(module, "install_import_hook", None)
@@ -125,7 +130,15 @@ def _install_v197() -> bool:
         late_bind_installer = getattr(late_bind, "install", None) or getattr(late_bind, "install_import_hook", None)
         if not callable(late_bind_installer):
             return False
-        return bool(late_bind_installer()) and os.environ.get(_V204_READY_FLAG, "0").strip() == "1"
+        v204_ready = bool(late_bind_installer()) and os.environ.get(_V204_READY_FLAG, "0").strip() == "1"
+        if not v204_ready:
+            return False
+
+        ecel_symbols = importlib.import_module("bot.runtime_kraken_ecel_symbol_canonicalization_v206_patch")
+        ecel_installer = getattr(ecel_symbols, "install", None) or getattr(ecel_symbols, "install_import_hook", None)
+        if not callable(ecel_installer):
+            return False
+        return bool(ecel_installer()) and os.environ.get(_V206_READY_FLAG, "0").strip() == "1"
     except Exception as exc:
         LOGGER.critical(
             "RUNTIME_PHASE3_EXECUTION_FRAME_HANDOFF_V196_HEARTBEAT_CHAIN_FAILED marker=%s "
@@ -166,7 +179,8 @@ def install() -> bool:
         if not ready:
             LOGGER.critical(
                 "RUNTIME_PHASE3_EXECUTION_FRAME_HANDOFF_V196_FAILED marker=%s "
-                "cache_ready=%s heartbeat_probe_chain=%s v197=%s v202=%s v203=%s v204=%s trading_fail_closed=true",
+                "cache_ready=%s heartbeat_probe_chain=%s v197=%s v202=%s v203=%s v204=%s v206=%s "
+                "trading_fail_closed=true",
                 MARKER,
                 str(cache_ready).lower(),
                 str(heartbeat_chain_ready).lower(),
@@ -174,6 +188,7 @@ def install() -> bool:
                 os.environ.get(_V202_READY_FLAG, "0"),
                 os.environ.get(_V203_READY_FLAG, "0"),
                 os.environ.get(_V204_READY_FLAG, "0"),
+                os.environ.get(_V206_READY_FLAG, "0"),
             )
             return False
 
@@ -182,9 +197,9 @@ def install() -> bool:
             "same_cycle_only=true min_rows=%d ohlcv_required=true "
             "heartbeat_probe_pipeline_bridge_v197=true heartbeat_position_sync_wakeup_v202=true "
             "existing_strategy_heartbeat_rearm_v203=true execution_pipeline_late_binding_v204=true "
-            "volume_quality_gate_unchanged=true min_notional_gate_unchanged=true "
-            "risk_gates_unchanged=true order_quote_freshness_unchanged=true "
-            "forced_trade=false safety_gates_bypassed=false",
+            "kraken_ecel_symbol_canonicalization_v206=true volume_quality_gate_unchanged=true "
+            "min_notional_gate_unchanged=true risk_gates_unchanged=true "
+            "order_quote_freshness_unchanged=true forced_trade=false safety_gates_bypassed=false",
             MARKER,
             _configured_min_rows(),
         )
