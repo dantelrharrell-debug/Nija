@@ -92,7 +92,7 @@ def _install_early_safety_repairs() -> None:
         ("exchange_rejection_sample_guard_v222_patch", "EXCHANGE_REJECTION_SAMPLE_GUARD_V222"),
         ("exchange_reject_provenance_v224_patch", "EXCHANGE_REJECT_PROVENANCE_V224"),
         ("runtime_kraken_capital_admission_v227_patch", "KRAKEN_CAPITAL_ADMISSION_V227"),
-        ("exchange_rejection_stale_latch_recovery_v226_patch", "EXCHANGE_REJECTION_STALE_LATCH_RECOVERY_V226"),
+        ("exchange_rejection_stale_latch_v226_patch", "EXCHANGE_REJECTION_STALE_LATCH_V226"),
         ("runtime_heartbeat_killswitch_clear_wakeup_v225_patch", "HEARTBEAT_KILLSWITCH_CLEAR_WAKEUP_V225"),
     )
     for module_name, label in repairs:
