@@ -1,4 +1,11 @@
-"""Runtime convergence bridge for account-scoped Kraken spot margin."""
+"""Runtime convergence bridge for account-scoped Kraken spot margin.
+
+v223 preserves KrakenBroker.place_market_order()'s native public call shape and
+injects margin fields only at the private AddOrder payload boundary.  This keeps
+all existing nonce, writer-authority, validation, maker/market fallback, txid,
+and fill checks on the canonical broker path while ensuring leverage actually
+reaches Kraken.
+"""
 
 from __future__ import annotations
 
@@ -7,14 +14,21 @@ import logging
 import os
 import sys
 import threading
+from contextlib import contextmanager
+from contextvars import ContextVar
+from functools import wraps
 from types import ModuleType
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Iterator, Optional
 
 logger = logging.getLogger("nija.kraken_margin_auto_runtime")
-_MARKER = "20260713-kraken-margin-v1"
+_MARKER = "20260824-kraken-margin-callshape-v223"
 _ORIGINAL_IMPORT: Optional[Callable[..., Any]] = None
 _LOCK = threading.RLock()
 _PATCHED_MODULES: set[tuple[str, int]] = set()
+_MARGIN_ORDER_PARAMS: ContextVar[Optional[Dict[str, Any]]] = ContextVar(
+    "nija_kraken_margin_order_params_v223",
+    default=None,
+)
 
 
 def _is_kraken(broker: Any) -> bool:
@@ -110,6 +124,93 @@ def _normalize_margin_result(result: Any, *, size_usd: float, metadata: Dict[str
     return fill_price, filled_usd
 
 
+def _clamp_leverage(value: Any) -> int:
+    try:
+        return min(3, max(1, int(float(value or 1))))
+    except Exception:
+        return 1
+
+
+@contextmanager
+def _margin_order_scope(leverage: Any, reduce_only: bool) -> Iterator[None]:
+    lev = _clamp_leverage(leverage)
+    if lev <= 1:
+        yield
+        return
+    token = _MARGIN_ORDER_PARAMS.set(
+        {
+            "leverage": str(lev),
+            "reduce_only": bool(reduce_only),
+        }
+    )
+    try:
+        yield
+    finally:
+        _MARGIN_ORDER_PARAMS.reset(token)
+
+
+def _patch_kraken_class(cls: type) -> bool:
+    """Patch the canonical private-call boundary, never the broker's public signature."""
+    current = getattr(cls, "_kraken_private_call", None)
+    if not callable(current):
+        return False
+    if getattr(current, "_nija_kraken_margin_addorder_v223", False):
+        return True
+    original = current
+
+    @wraps(original)
+    def private_call_v223(self: Any, method: str, params: Optional[Dict[str, Any]] = None, *args: Any, **kwargs: Any) -> Any:
+        payload = dict(params or {})
+        scoped = _MARGIN_ORDER_PARAMS.get()
+        if scoped and str(method or "").strip().lower() == "addorder":
+            leverage = str(scoped.get("leverage") or "").strip()
+            reduce_only = bool(scoped.get("reduce_only"))
+            existing_leverage = payload.get("leverage")
+            if existing_leverage not in (None, "") and str(existing_leverage) != leverage:
+                raise RuntimeError(
+                    f"KRAKEN_MARGIN_PAYLOAD_CONFLICT:leverage existing={existing_leverage} scoped={leverage}"
+                )
+            payload["leverage"] = leverage
+            if reduce_only:
+                existing_reduce = payload.get("reduce_only")
+                if existing_reduce not in (None, True, 1, "1", "true", "True"):
+                    raise RuntimeError(
+                        f"KRAKEN_MARGIN_PAYLOAD_CONFLICT:reduce_only existing={existing_reduce} scoped=true"
+                    )
+                payload["reduce_only"] = True
+            logger.critical(
+                "KRAKEN_MARGIN_ADDORDER_V223 marker=%s account=%s pair=%s side=%s leverage=%sx "
+                "reduce_only=%s native_place_market_order_callshape=true spot_fallback=false",
+                _MARKER,
+                _account_id(self, {}),
+                payload.get("pair") or "unknown",
+                payload.get("type") or "unknown",
+                leverage,
+                str(reduce_only).lower(),
+            )
+        return original(self, method, payload, *args, **kwargs)
+
+    setattr(private_call_v223, "_nija_kraken_margin_addorder_v223", True)
+    setattr(private_call_v223, "__wrapped__", original)
+    setattr(cls, "_kraken_private_call", private_call_v223)
+    logger.warning(
+        "KRAKEN_MARGIN_PRIVATE_CALL_PATCHED marker=%s class=%s native_public_signature_preserved=true",
+        _MARKER,
+        getattr(cls, "__name__", "unknown"),
+    )
+    return True
+
+
+def _patch_kraken_adapter(module: ModuleType) -> bool:
+    patched = False
+    for name in dir(module):
+        cls = getattr(module, name, None)
+        if not isinstance(cls, type) or "kraken" not in name.lower():
+            continue
+        patched = _patch_kraken_class(cls) or patched
+    return patched
+
+
 def _patch_router(module: ModuleType) -> bool:
     cls = getattr(module, "MultiBrokerExecutionRouter", None)
     if not isinstance(cls, type):
@@ -117,7 +218,7 @@ def _patch_router(module: ModuleType) -> bool:
     current = getattr(cls, "_dispatch_direct_broker_market_order", None)
     if not callable(current):
         return False
-    if getattr(current, "_nija_kraken_margin_dispatch_v1", False):
+    if getattr(current, "_nija_kraken_margin_dispatch_v223", False):
         return True
     original = current
 
@@ -130,7 +231,7 @@ def _patch_router(module: ModuleType) -> bool:
         metadata: Dict[str, Any],
     ) -> tuple[float, float]:
         meta = dict(metadata or {})
-        leverage = min(3, max(1, int(float(meta.get("leverage") or 1))))
+        leverage = _clamp_leverage(meta.get("leverage"))
         if not _is_kraken(broker) or leverage <= 1:
             return original(
                 broker,
@@ -144,6 +245,7 @@ def _patch_router(module: ModuleType) -> bool:
         account = _account_id(broker, meta)
         try:
             from bot.kraken_margin_engine import get_margin_engine, margin_account_scope
+
             engine = get_margin_engine(account_id=account, adapter=broker)
             allowed, reason = engine.is_margin_trade_allowed(
                 is_reducing=reduce_only,
@@ -154,23 +256,32 @@ def _patch_router(module: ModuleType) -> bool:
                 raise RuntimeError(reason)
             if leverage not in pair_values:
                 raise RuntimeError(f"pair_leverage_unavailable:{pair_values or 'none'}")
+            if not _patch_kraken_class(type(broker)):
+                raise RuntimeError("kraken_private_addorder_boundary_unavailable")
             submit = getattr(broker, "place_market_order", None)
             if not callable(submit):
                 raise RuntimeError(f"Broker {broker!r} has no place_market_order method")
+
             logger.critical(
                 "KRAKEN_MARGIN_ORDER_COMPILED marker=%s account=%s symbol=%s side=%s "
-                "notional=$%.2f leverage=%sx reduce_only=%s margin_mode_payload=false",
-                _MARKER, account, symbol, side, float(size_usd), leverage, reduce_only,
+                "notional=$%.2f leverage=%sx reduce_only=%s native_callshape=true",
+                _MARKER,
+                account,
+                symbol,
+                side,
+                float(size_usd),
+                leverage,
+                reduce_only,
             )
-            with margin_account_scope(account, adapter=broker):
+            with margin_account_scope(account, adapter=broker), _margin_order_scope(leverage, reduce_only):
+                # IMPORTANT: preserve the canonical KrakenBroker public signature.
+                # The scoped private-call wrapper adds leverage/reduce_only only to
+                # the AddOrder payload created inside place_market_order().
                 result = submit(
                     symbol,
                     side,
                     float(size_usd),
                     size_type="quote",
-                    leverage=leverage,
-                    reduce_only=reduce_only,
-                    margin_mode=None,
                 )
             fill_price, filled_usd = _normalize_margin_result(
                 result,
@@ -179,121 +290,33 @@ def _patch_router(module: ModuleType) -> bool:
             )
             logger.critical(
                 "KRAKEN_MARGIN_ORDER_ACK marker=%s account=%s symbol=%s leverage=%sx "
-                "reduce_only=%s",
-                _MARKER, account, symbol, leverage, reduce_only,
+                "reduce_only=%s native_callshape=true",
+                _MARKER,
+                account,
+                symbol,
+                leverage,
+                reduce_only,
             )
             return fill_price, filled_usd
         except Exception as exc:
             logger.error(
                 "KRAKEN_MARGIN_DISPATCH_BLOCKED marker=%s account=%s symbol=%s side=%s "
                 "leverage=%sx reduce_only=%s reason=%s spot_fallback=false",
-                _MARKER, account, symbol, side, leverage, reduce_only, exc,
+                _MARKER,
+                account,
+                symbol,
+                side,
+                leverage,
+                reduce_only,
+                exc,
             )
             raise
 
-    setattr(dispatch_direct_broker_market_order, "_nija_kraken_margin_dispatch_v1", True)
+    setattr(dispatch_direct_broker_market_order, "_nija_kraken_margin_dispatch_v223", True)
     setattr(dispatch_direct_broker_market_order, "__wrapped__", original)
     setattr(cls, "_dispatch_direct_broker_market_order", staticmethod(dispatch_direct_broker_market_order))
-    logger.warning("KRAKEN_MARGIN_ROUTER_BRIDGE_PATCHED marker=%s", _MARKER)
+    logger.warning("KRAKEN_MARGIN_ROUTER_BRIDGE_PATCHED marker=%s native_callshape=true", _MARKER)
     return True
-
-
-def _patch_kraken_adapter(module: ModuleType) -> bool:
-    patched = False
-    for name in dir(module):
-        cls = getattr(module, name, None)
-        if not isinstance(cls, type) or "kraken" not in name.lower():
-            continue
-        current = getattr(cls, "place_market_order", None)
-        if not callable(current) or getattr(current, "_nija_kraken_margin_fail_closed_v1", False):
-            continue
-        original = current
-
-        def place_market_order(
-            self: Any,
-            symbol: str,
-            side: str,
-            size: float,
-            size_type: str = "quote",
-            leverage: int = 1,
-            reduce_only: Optional[bool] = None,
-            margin_mode: Optional[str] = None,
-            _original=original,
-        ) -> Any:
-            lev = min(3, max(1, int(float(leverage or 1))))
-            if lev <= 1:
-                return _original(
-                    self,
-                    symbol,
-                    side,
-                    size,
-                    size_type=size_type,
-                    leverage=1,
-                    reduce_only=reduce_only,
-                    margin_mode=None,
-                )
-
-            explicit_reduce = reduce_only is True
-            account = _account_id(self, {})
-            try:
-                from bot.kraken_margin_engine import get_margin_engine, margin_account_scope
-                engine = get_margin_engine(account_id=account, adapter=self)
-                allowed, reason = engine.is_margin_trade_allowed(
-                    is_reducing=explicit_reduce,
-                    adapter=self,
-                )
-                pair_values = engine.get_pair_leverages(symbol, side, adapter=self)
-                if not allowed:
-                    detail = reason
-                elif lev not in pair_values:
-                    detail = f"pair_leverage_unavailable:{pair_values or 'none'}"
-                else:
-                    detail = ""
-                if detail:
-                    logger.error(
-                        "KRAKEN_MARGIN_ADAPTER_BLOCKED marker=%s account=%s symbol=%s side=%s "
-                        "leverage=%sx reduce_only=%s reason=%s spot_fallback=false",
-                        _MARKER, account, symbol, side, lev, explicit_reduce, detail,
-                    )
-                    return {
-                        "order_id": None,
-                        "symbol": symbol,
-                        "side": side,
-                        "size": size,
-                        "status": "error",
-                        "error": f"KRAKEN_MARGIN_BLOCKED:{detail}",
-                        "leverage": lev,
-                        "spot_fallback": False,
-                    }
-                with margin_account_scope(account, adapter=self):
-                    return _original(
-                        self,
-                        symbol,
-                        side,
-                        size,
-                        size_type=size_type,
-                        leverage=lev,
-                        reduce_only=explicit_reduce,
-                        margin_mode=None,
-                    )
-            except Exception as exc:
-                return {
-                    "order_id": None,
-                    "symbol": symbol,
-                    "side": side,
-                    "size": size,
-                    "status": "error",
-                    "error": f"KRAKEN_MARGIN_PREFLIGHT_FAILED:{exc}",
-                    "leverage": lev,
-                    "spot_fallback": False,
-                }
-
-        setattr(place_market_order, "_nija_kraken_margin_fail_closed_v1", True)
-        setattr(place_market_order, "__wrapped__", original)
-        setattr(cls, "place_market_order", place_market_order)
-        patched = True
-        logger.warning("KRAKEN_MARGIN_ADAPTER_FAIL_CLOSED_PATCHED marker=%s class=%s", _MARKER, name)
-    return patched
 
 
 def _patch_module(module: ModuleType) -> bool:
@@ -354,7 +377,8 @@ def install_import_hook() -> None:
     _patch_loaded()
     logger.critical(
         "KRAKEN_MARGIN_AUTO_RUNTIME_INSTALLED marker=%s enabled=%s auto=%s "
-        "default_leverage=%s hard_max=3x long_only=%s",
+        "default_leverage=%s hard_max=3x long_only=%s native_public_callshape=true "
+        "addorder_payload_injection=true spot_fallback=false",
         _MARKER,
         os.environ.get("NIJA_KRAKEN_MARGIN_ENABLED"),
         os.environ.get("NIJA_KRAKEN_AUTO_MARGIN_ENABLED"),
@@ -363,4 +387,11 @@ def install_import_hook() -> None:
     )
 
 
-__all__ = ["install_import_hook", "_patch_capability_matrix", "_patch_router"]
+__all__ = [
+    "install_import_hook",
+    "_patch_capability_matrix",
+    "_patch_router",
+    "_patch_kraken_adapter",
+    "_patch_kraken_class",
+    "_margin_order_scope",
+]
