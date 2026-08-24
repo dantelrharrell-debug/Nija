@@ -20,6 +20,13 @@ the wrappers to observe, so v203 also discovers that already-published strategy
 and idempotently re-arms its existing scheduler during install. It never creates
 or replaces a strategy object.
 
+A third production case can replace the canonical ``strategy_publication_patch``
+module object during import-identity convergence after v127 has cached the old
+``_publish`` callable.  The live strategy then remains reachable only through
+v127's cached publisher closure while the current module reports
+``_PUBLISHED=None``.  v203 recovers that exact already-created object from the
+cached callable's globals and re-arms only its existing heartbeat scheduler.
+
 This patch repairs scheduling liveness only:
 * it runs only when the existing HEARTBEAT_TRADE policy is enabled,
 * it never writes heartbeat/execution proof itself,
@@ -141,6 +148,67 @@ def _ensure_heartbeat_scheduler(strategy: Any) -> bool:
     return alive
 
 
+def _strategy_from_cached_runtime_publisher() -> Any:
+    """Recover v127's already-published strategy from its cached ``_publish``.
+
+    v127 closes over a ``publish`` callable.  If import-identity convergence later
+    replaces ``bot.strategy_publication_patch`` in ``sys.modules``, that callable
+    still points at the detached module globals containing the real ``_PUBLISHED``
+    object.  Reading that pointer is safe: this function never constructs,
+    republishes, replaces, or mutates strategy/readiness state.
+    """
+    try:
+        bot_main = importlib.import_module("bot.bot_main")
+    except Exception as exc:
+        LOGGER.warning(
+            "EXISTING_STRATEGY_HEARTBEAT_REARM_V203_CACHED_LOOKUP_DEFERRED marker=%s "
+            "reason=bot_main_import_failed error=%s:%s",
+            MARKER,
+            type(exc).__name__,
+            exc,
+        )
+        return None
+
+    roots = [
+        getattr(bot_main, "_publish_canonical_strategy_for_runtime", None),
+        getattr(bot_main, "_nija_v203_previous_runtime_publisher", None),
+    ]
+    seen: set[int] = set()
+
+    for root in roots:
+        current = root
+        while callable(current) and id(current) not in seen:
+            seen.add(id(current))
+            code = getattr(current, "__code__", None)
+            closure = getattr(current, "__closure__", None) or ()
+            freevars = tuple(getattr(code, "co_freevars", ()) or ())
+            for name, cell in zip(freevars, closure):
+                if name != "publish":
+                    continue
+                try:
+                    cached_publish = cell.cell_contents
+                except ValueError:
+                    continue
+                if not callable(cached_publish):
+                    continue
+                globals_dict = getattr(cached_publish, "__globals__", None)
+                if not isinstance(globals_dict, dict):
+                    continue
+                strategy = globals_dict.get("_PUBLISHED")
+                if strategy is None or not callable(getattr(strategy, "run_cycle", None)):
+                    continue
+                LOGGER.critical(
+                    "EXISTING_STRATEGY_HEARTBEAT_REARM_V203_CACHED_PUBLISHER_RECOVERED marker=%s "
+                    "same_existing_object=true detached_publication_globals=true strategy_replaced=false "
+                    "execution_authority_granted=false proof_fabricated=false safety_gates_bypassed=false",
+                    MARKER,
+                )
+                return strategy
+            current = getattr(current, "__wrapped__", None)
+
+    return None
+
+
 def _already_published_strategy(module: Any) -> Any:
     """Return an existing published strategy without constructing a replacement."""
     strategy = getattr(module, "_PUBLISHED", None)
@@ -149,34 +217,34 @@ def _already_published_strategy(module: Any) -> Any:
 
     finder = getattr(module, "_existing", None)
     class_getter = getattr(module, "_strategy_class", None)
-    if not callable(finder):
-        return None
+    if callable(finder):
+        strategy_class = None
+        if callable(class_getter):
+            try:
+                strategy_class = class_getter()
+            except Exception as exc:
+                LOGGER.warning(
+                    "EXISTING_STRATEGY_HEARTBEAT_REARM_V203_EXISTING_LOOKUP_DEFERRED marker=%s "
+                    "reason=strategy_class_lookup_failed error=%s:%s",
+                    MARKER,
+                    type(exc).__name__,
+                    exc,
+                )
+            else:
+                try:
+                    strategy = finder(strategy_class)
+                except Exception as exc:
+                    LOGGER.warning(
+                        "EXISTING_STRATEGY_HEARTBEAT_REARM_V203_EXISTING_LOOKUP_DEFERRED marker=%s "
+                        "reason=existing_strategy_lookup_failed error=%s:%s",
+                        MARKER,
+                        type(exc).__name__,
+                        exc,
+                    )
+                if strategy is not None:
+                    return strategy
 
-    strategy_class = None
-    if callable(class_getter):
-        try:
-            strategy_class = class_getter()
-        except Exception as exc:
-            LOGGER.warning(
-                "EXISTING_STRATEGY_HEARTBEAT_REARM_V203_EXISTING_LOOKUP_DEFERRED marker=%s "
-                "reason=strategy_class_lookup_failed error=%s:%s",
-                MARKER,
-                type(exc).__name__,
-                exc,
-            )
-            return None
-
-    try:
-        return finder(strategy_class)
-    except Exception as exc:
-        LOGGER.warning(
-            "EXISTING_STRATEGY_HEARTBEAT_REARM_V203_EXISTING_LOOKUP_DEFERRED marker=%s "
-            "reason=existing_strategy_lookup_failed error=%s:%s",
-            MARKER,
-            type(exc).__name__,
-            exc,
-        )
-        return None
+    return _strategy_from_cached_runtime_publisher()
 
 
 def _rearm_already_published_strategy(module: Any) -> bool:
@@ -185,7 +253,7 @@ def _rearm_already_published_strategy(module: Any) -> bool:
     if strategy is None:
         LOGGER.info(
             "EXISTING_STRATEGY_HEARTBEAT_REARM_V203_IMMEDIATE_SKIPPED marker=%s "
-            "reason=no_existing_strategy future_publication_guarded=true",
+            "reason=no_existing_strategy future_publication_guarded=true cached_v127_checked=true",
             MARKER,
         )
         return True
@@ -312,8 +380,8 @@ def install() -> bool:
             "EXISTING_STRATEGY_HEARTBEAT_REARM_V203_READY marker=%s ready=true "
             "publication_primitive_guarded=true bot_main_step2_5_guarded=true "
             "install_after_publication_gap_closed=true v127_cached_publish_bypass_closed=true "
-            "existing_strategy_only=true existing_scheduler_only=true "
-            "execution_authority_granted=false proof_fabricated=false "
+            "detached_v127_cached_publication_recovery=true existing_strategy_only=true "
+            "existing_scheduler_only=true execution_authority_granted=false proof_fabricated=false "
             "forced_activation=false safety_gates_bypassed=false",
             MARKER,
         )
@@ -329,6 +397,7 @@ __all__ = [
     "install",
     "install_import_hook",
     "_ensure_heartbeat_scheduler",
+    "_strategy_from_cached_runtime_publisher",
     "_already_published_strategy",
     "_rearm_already_published_strategy",
 ]
