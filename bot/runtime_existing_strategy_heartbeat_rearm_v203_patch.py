@@ -14,6 +14,12 @@ closure can still call the pre-v203 publication function and bypass the re-arm.
 v203 therefore guards both publication surfaces: the canonical ``_publish``
 primitive and bot_main's Step 2.5 runtime publication helper.
 
+A second production ordering case installs v203 after the canonical strategy has
+already been published. In that case there may be no later publication call for
+the wrappers to observe, so v203 also discovers that already-published strategy
+and idempotently re-arms its existing scheduler during install. It never creates
+or replaces a strategy object.
+
 This patch repairs scheduling liveness only:
 * it runs only when the existing HEARTBEAT_TRADE policy is enabled,
 * it never writes heartbeat/execution proof itself,
@@ -135,6 +141,75 @@ def _ensure_heartbeat_scheduler(strategy: Any) -> bool:
     return alive
 
 
+def _already_published_strategy(module: Any) -> Any:
+    """Return an existing published strategy without constructing a replacement."""
+    strategy = getattr(module, "_PUBLISHED", None)
+    if strategy is not None:
+        return strategy
+
+    finder = getattr(module, "_existing", None)
+    class_getter = getattr(module, "_strategy_class", None)
+    if not callable(finder):
+        return None
+
+    strategy_class = None
+    if callable(class_getter):
+        try:
+            strategy_class = class_getter()
+        except Exception as exc:
+            LOGGER.warning(
+                "EXISTING_STRATEGY_HEARTBEAT_REARM_V203_EXISTING_LOOKUP_DEFERRED marker=%s "
+                "reason=strategy_class_lookup_failed error=%s:%s",
+                MARKER,
+                type(exc).__name__,
+                exc,
+            )
+            return None
+
+    try:
+        return finder(strategy_class)
+    except Exception as exc:
+        LOGGER.warning(
+            "EXISTING_STRATEGY_HEARTBEAT_REARM_V203_EXISTING_LOOKUP_DEFERRED marker=%s "
+            "reason=existing_strategy_lookup_failed error=%s:%s",
+            MARKER,
+            type(exc).__name__,
+            exc,
+        )
+        return None
+
+
+def _rearm_already_published_strategy(module: Any) -> bool:
+    """Close the install-after-publication gap without fabricating execution proof."""
+    strategy = _already_published_strategy(module)
+    if strategy is None:
+        LOGGER.info(
+            "EXISTING_STRATEGY_HEARTBEAT_REARM_V203_IMMEDIATE_SKIPPED marker=%s "
+            "reason=no_existing_strategy future_publication_guarded=true",
+            MARKER,
+        )
+        return True
+
+    ready = _ensure_heartbeat_scheduler(strategy)
+    if not ready:
+        LOGGER.critical(
+            "EXISTING_STRATEGY_HEARTBEAT_REARM_V203_IMMEDIATE_FAILED marker=%s "
+            "reason=existing_scheduler_not_alive execution_authority_granted=false "
+            "proof_fabricated=false trading_fail_closed=true",
+            MARKER,
+        )
+        return False
+
+    LOGGER.critical(
+        "EXISTING_STRATEGY_HEARTBEAT_REARM_V203_IMMEDIATE_READY marker=%s "
+        "existing_strategy_found=true existing_scheduler_only=true strategy_replaced=false "
+        "execution_authority_granted=false proof_fabricated=false forced_activation=false "
+        "safety_gates_bypassed=false",
+        MARKER,
+    )
+    return True
+
+
 def _wrap_publication_primitive(module: Any) -> bool:
     current = getattr(module, "_publish", None)
     if not callable(current):
@@ -202,7 +277,7 @@ def _wrap_bot_main_runtime_publisher() -> bool:
 
 
 def install() -> bool:
-    """Guard both canonical publication paths with idempotent heartbeat re-arming."""
+    """Guard publication paths and re-arm any strategy published before install."""
     with _LOCK:
         try:
             module = importlib.import_module("bot.strategy_publication_patch")
@@ -219,23 +294,26 @@ def install() -> bool:
 
         primitive_ready = _wrap_publication_primitive(module)
         bot_main_ready = _wrap_bot_main_runtime_publisher()
-        ready = bool(primitive_ready and bot_main_ready)
+        immediate_ready = _rearm_already_published_strategy(module)
+        ready = bool(primitive_ready and bot_main_ready and immediate_ready)
         os.environ[_READY_FLAG] = "1" if ready else "0"
         if not ready:
             LOGGER.critical(
                 "EXISTING_STRATEGY_HEARTBEAT_REARM_V203_INSTALL_FAILED marker=%s "
-                "primitive_ready=%s bot_main_ready=%s trading_fail_closed=true",
+                "primitive_ready=%s bot_main_ready=%s immediate_ready=%s trading_fail_closed=true",
                 MARKER,
                 str(primitive_ready).lower(),
                 str(bot_main_ready).lower(),
+                str(immediate_ready).lower(),
             )
             return False
 
         LOGGER.critical(
             "EXISTING_STRATEGY_HEARTBEAT_REARM_V203_READY marker=%s ready=true "
             "publication_primitive_guarded=true bot_main_step2_5_guarded=true "
-            "v127_cached_publish_bypass_closed=true existing_strategy_only=true "
-            "existing_scheduler_only=true execution_authority_granted=false proof_fabricated=false "
+            "install_after_publication_gap_closed=true v127_cached_publish_bypass_closed=true "
+            "existing_strategy_only=true existing_scheduler_only=true "
+            "execution_authority_granted=false proof_fabricated=false "
             "forced_activation=false safety_gates_bypassed=false",
             MARKER,
         )
@@ -246,4 +324,11 @@ def install_import_hook() -> bool:
     return install()
 
 
-__all__ = ["MARKER", "install", "install_import_hook", "_ensure_heartbeat_scheduler"]
+__all__ = [
+    "MARKER",
+    "install",
+    "install_import_hook",
+    "_ensure_heartbeat_scheduler",
+    "_already_published_strategy",
+    "_rearm_already_published_strategy",
+]
