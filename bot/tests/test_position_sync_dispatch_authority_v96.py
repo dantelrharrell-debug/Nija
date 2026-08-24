@@ -13,6 +13,7 @@ class PositionSyncDispatchAuthorityV96Tests(unittest.TestCase):
     def tearDown(self) -> None:
         os.environ.pop("NIJA_POSITION_SYNC_ACTIVATION_READY", None)
         os.environ.pop("NIJA_POSITION_SYNC_DISPATCH_READY", None)
+        os.environ.pop("NIJA_POSITION_SYNC_INSTALL_REPLAY_V188_READY", None)
         os.environ.pop("NIJA_POSITION_SYNC_INSTALLER_IDEMPOTENCE_V195_READY", None)
         for attr in (v96._INITIAL_FAIL_CLOSED_FLAG, v96._HOOK_FLAG):
             if hasattr(builtins, attr):
@@ -71,6 +72,39 @@ class PositionSyncDispatchAuthorityV96Tests(unittest.TestCase):
             ],
         )
         self.assertEqual(os.environ["NIJA_POSITION_SYNC_DISPATCH_READY"], "0")
+
+    def test_first_install_seed_remains_fail_closed(self) -> None:
+        with mock.patch.object(v96.builtins, v96._HOOK_FLAG, False, create=True), mock.patch.object(
+            v96, "publish_position_sync_readiness"
+        ) as publish:
+            v96._replay_safe_install_seed()
+        publish.assert_called_once_with(None, source="install_fail_closed")
+
+    def test_replay_rechecks_canonical_manager_and_preserves_real_regression(self) -> None:
+        manager = object()
+        v95 = types.SimpleNamespace(_canonical_manager=lambda: manager)
+        with mock.patch.object(v96.builtins, v96._HOOK_FLAG, True, create=True), mock.patch.object(
+            v96, "_v95_module", return_value=v95
+        ), mock.patch.object(
+            v96,
+            "publish_position_sync_readiness",
+            return_value=(False, ["platform:kraken"], {"platform:kraken": False}),
+        ) as publish:
+            v96._replay_safe_install_seed()
+        publish.assert_called_once_with(manager, source="install_replay_canonical_manager")
+
+    def test_replay_without_manager_preserves_existing_true_proof(self) -> None:
+        readiness = types.SimpleNamespace(snapshot=lambda: {v96.READINESS_KEY: True})
+        v95 = types.SimpleNamespace(_canonical_manager=lambda: None)
+        with mock.patch.object(v96.builtins, v96._HOOK_FLAG, True, create=True), mock.patch.object(
+            v96, "_readiness_module", return_value=readiness
+        ), mock.patch.object(v96, "_v95_module", return_value=v95), mock.patch.object(
+            v96, "publish_position_sync_readiness"
+        ) as publish:
+            v96._replay_safe_install_seed()
+        publish.assert_not_called()
+        self.assertEqual(os.environ["NIJA_POSITION_SYNC_ACTIVATION_READY"], "1")
+        self.assertEqual(os.environ["NIJA_POSITION_SYNC_DISPATCH_READY"], "1")
 
     def test_startup_sync_wrapper_publishes_after_reconciliation(self) -> None:
         manager = object()
