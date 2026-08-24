@@ -15,6 +15,8 @@ process restart; execution remains fail closed until v191's exact proof passes.
 v194 defers v193 transactional kill-switch recovery until the canonical
 kill-switch coordinator and v143 provenance chain are both ready, so v193 cannot
 make the pre-core v98 umbrella fail before its dependencies exist.
+v213 patches kill-switch file persistence before the deferred recovery chain is
+armed so an existing EMERGENCY_STOP marker is never rewritten on restart.
 """
 from __future__ import annotations
 
@@ -71,6 +73,10 @@ def install() -> bool:
         # is imported. It adds no new global import hook and preserves the exact
         # execution proof while suppressing restart for healthy pending states.
         ("post_core_recoverable_pending_v192_patch", "V192"),
+        # v213 must attach before deferred kill-switch recovery so every later
+        # FILE_SYSTEM persistence check preserves the original marker bytes.
+        # It never clears a stop or changes recovery eligibility.
+        ("kill_switch_file_provenance_v213_patch", "V213"),
         # v193 depends on the later kill-switch coordinator/v143 chain. Arm a
         # non-blocking deferred installer here instead of importing v193 directly
         # in the pre-core v98 umbrella.
@@ -101,7 +107,7 @@ def install() -> bool:
     os.environ["NIJA_POSITION_SYNC_TIMEOUT_V98_INSTALLED"] = "1"
     _INSTALLED = True
     LOGGER.critical(
-        "POSITION_SYNC_TIMEOUT_V98_INSTALLED marker=%s default_timeout_s=%.1f explicit_env_override_preserved=true account_isolation_v99=true startup_publication_bootstrap_v105=true capital_refresh_reentrancy_v106=true startup_hook_nonce_v107=true kraken_read_timeout_v121=true kraken_position_sync_prereq_v122=true platform_position_sync_v108=true runtime_convergence_v116=true position_fetch_generation_v117=true post_core_recoverable_pending_v192=true kill_switch_transactional_recovery_v194_deferred=true terminal_writer_loss_seak_v118=true preactivation_position_sync_v119=true core_supervised_pending_v120=true canonical_import_shield_v123=true canonical_strategy_startup_bound_v124=true strategy_import_cycle_v104=true strategy_class_recovery_v100=true passive_strategy_recovery_v102=true startup_convergence_v103=true safety_gates_unchanged=true",
+        "POSITION_SYNC_TIMEOUT_V98_INSTALLED marker=%s default_timeout_s=%.1f explicit_env_override_preserved=true account_isolation_v99=true startup_publication_bootstrap_v105=true capital_refresh_reentrancy_v106=true startup_hook_nonce_v107=true kraken_read_timeout_v121=true kraken_position_sync_prereq_v122=true platform_position_sync_v108=true runtime_convergence_v116=true position_fetch_generation_v117=true post_core_recoverable_pending_v192=true kill_switch_file_provenance_v213=true kill_switch_transactional_recovery_v194_deferred=true terminal_writer_loss_seak_v118=true preactivation_position_sync_v119=true core_supervised_pending_v120=true canonical_import_shield_v123=true canonical_strategy_startup_bound_v124=true strategy_import_cycle_v104=true strategy_class_recovery_v100=true passive_strategy_recovery_v102=true startup_convergence_v103=true safety_gates_unchanged=true",
         MARKER,
         _DEFAULT_TIMEOUT_S,
     )
