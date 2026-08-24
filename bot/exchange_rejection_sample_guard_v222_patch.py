@@ -26,9 +26,11 @@ from __future__ import annotations
 import importlib
 import logging
 import os
+import sys
 import threading
 import time
 from functools import wraps
+from types import ModuleType
 from typing import Any
 
 LOGGER = logging.getLogger("nija.exchange_rejection_sample_guard_v222")
@@ -276,19 +278,28 @@ def attempt_recovery_once() -> bool:
 
 
 def _register_manifest() -> bool:
-    try:
-        manifest = importlib.import_module("bot.runtime_release_manifest_patch")
-        required = getattr(manifest, "_REQUIRED_FLAGS", None)
-        installers = getattr(manifest, "_INSTALLERS", None)
-        if not isinstance(required, dict) or not isinstance(installers, tuple):
-            return False
-        required["exchange_rejection_sample_guard_v222"] = _FLAG
-        own = ("bot.exchange_rejection_sample_guard_v222_patch", "install_import_hook")
-        if own not in installers:
-            manifest._INSTALLERS = tuple(installers) + (own,)
-        return True
-    except Exception:
+    manifest = sys.modules.get("bot.runtime_release_manifest_patch")
+    if not isinstance(manifest, ModuleType):
         return False
+    required = getattr(manifest, "_REQUIRED_FLAGS", None)
+    installers = getattr(manifest, "_INSTALLERS", None)
+    if not isinstance(required, dict) or not isinstance(installers, tuple):
+        return False
+    required["exchange_rejection_sample_guard_v222"] = _FLAG
+    own = ("bot.exchange_rejection_sample_guard_v222_patch", "install_import_hook")
+    if own not in installers:
+        manifest._INSTALLERS = tuple(installers) + (own,)
+    return True
+
+
+def _configured_minimum_samples() -> int:
+    try:
+        module = importlib.import_module("bot.exchange_kill_switch")
+        cfg_cls = getattr(module, "ExchangeKillSwitchConfig", None)
+        cfg = cfg_cls() if callable(cfg_cls) else None
+        return _minimum_samples(cfg)
+    except Exception:
+        return 5
 
 
 def _worker() -> None:
@@ -326,7 +337,7 @@ def install() -> bool:
         "single_sample_red_blocked=true exact_legacy_recovery_only=true manual_ui_cli_risk_auth_unknown_preserved=true "
         "execution_authority_unchanged=true forced_activation=false safety_gates_bypassed=false",
         MARKER,
-        _minimum_samples(getattr(importlib.import_module("bot.exchange_kill_switch").ExchangeKillSwitchProtector(), "_cfg", None)),
+        _configured_minimum_samples(),
     )
     return True
 
