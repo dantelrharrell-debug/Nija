@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import importlib
+import os
+import sys
 import threading
-from types import SimpleNamespace
+from types import FunctionType, SimpleNamespace
 
 
 class _AliveThread:
@@ -39,7 +41,7 @@ def test_rearm_already_published_strategy_uses_existing_object(monkeypatch):
     assert calls["scheduler"] == 1
     assert strategy._heartbeat_trade_enabled is True
     assert strategy._heartbeat_trade_thread.is_alive() is True
-    assert __import__("os").environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] == "0"
+    assert os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] == "0"
 
 
 def test_rearm_already_published_strategy_is_noop_when_none_exists(monkeypatch):
@@ -74,3 +76,59 @@ def test_existing_live_scheduler_is_not_duplicated(monkeypatch):
 
     assert module._ensure_heartbeat_scheduler(strategy) is True
     assert calls["scheduler"] == 0
+
+
+def test_detached_v127_cached_publisher_recovers_same_strategy_and_rearms(monkeypatch):
+    module = importlib.import_module("bot.runtime_existing_strategy_heartbeat_rearm_v203_patch")
+
+    calls = {"scheduler": 0}
+    strategy = SimpleNamespace(
+        run_cycle=lambda: None,
+        _heartbeat_trade_enabled=False,
+        _heartbeat_trade_thread=None,
+        _heartbeat_trade_completed=False,
+        _heartbeat_trade_success=False,
+        _heartbeat_trade_lock=threading.Lock(),
+    )
+
+    def schedule() -> None:
+        calls["scheduler"] += 1
+        strategy._heartbeat_trade_thread = _AliveThread()
+
+    strategy._schedule_heartbeat_trade = schedule
+
+    # Build a callable whose globals emulate the detached publication module
+    # retained by v127's cached closure after module-identity convergence.
+    cached_publish = FunctionType(
+        (lambda value: None).__code__,
+        {"_PUBLISHED": strategy},
+        name="_publish",
+    )
+
+    def make_v127_runtime_publisher(publish):
+        def _publisher(explicit_broker):
+            # Reference the closure cell exactly as v127 does; execution is not
+            # required for recovery, only the cached callable identity is read.
+            if publish is None:
+                return None
+            return explicit_broker
+
+        return _publisher
+
+    fake_bot_main = SimpleNamespace(
+        _publish_canonical_strategy_for_runtime=make_v127_runtime_publisher(cached_publish)
+    )
+    monkeypatch.setitem(sys.modules, "bot.bot_main", fake_bot_main)
+    monkeypatch.setenv("HEARTBEAT_TRADE", "true")
+    monkeypatch.setenv("DRY_RUN_MODE", "false")
+    monkeypatch.setenv("PAPER_MODE", "false")
+    monkeypatch.setenv("NIJA_RUNTIME_EXECUTION_AUTHORITY", "0")
+
+    publication = SimpleNamespace(_PUBLISHED=None)
+    recovered = module._already_published_strategy(publication)
+    assert recovered is strategy
+    assert module._rearm_already_published_strategy(publication) is True
+    assert calls["scheduler"] == 1
+    assert strategy._heartbeat_trade_thread.is_alive() is True
+    assert publication._PUBLISHED is None
+    assert os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] == "0"
