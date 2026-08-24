@@ -12,10 +12,16 @@ from bot.kraken_margin_engine import (
     get_margin_engine,
     reset_margin_engines_for_tests,
 )
-from bot.kraken_margin_auto_runtime_patch import _patch_capability_matrix, _patch_router
+from bot.kraken_margin_auto_runtime_patch import (
+    _patch_capability_matrix,
+    _patch_kraken_adapter,
+    _patch_router,
+)
 
 
 class FakeKrakenAdapter:
+    """Kraken-shaped adapter with the same strict public callshape as production."""
+
     NAME = "Kraken"
 
     def __init__(self, account_id: str = "platform", *, pair_leverages=(2, 3), margin_level=500.0):
@@ -23,6 +29,7 @@ class FakeKrakenAdapter:
         self.pair_leverages = list(pair_leverages)
         self.margin_level = float(margin_level)
         self.private_calls = []
+        self.private_order_calls = []
         self.public_calls = []
         self.submit_calls = []
         self.api = SimpleNamespace(query_public=self.query_public)
@@ -60,8 +67,26 @@ class FakeKrakenAdapter:
             }
         return {"error": ["not mocked"], "result": {}}
 
-    def place_market_order(self, symbol, side, size, **kwargs):
-        self.submit_calls.append((symbol, side, size, dict(kwargs)))
+    def _kraken_private_call(self, method, params=None, **kwargs):
+        payload = dict(params or {})
+        self.private_order_calls.append((method, payload, dict(kwargs)))
+        if method == "AddOrder":
+            return {"error": [], "result": {"txid": ["margin-order-1"]}}
+        return {"error": ["not mocked"], "result": {}}
+
+    # Deliberately NO leverage/reduce_only/margin_mode kwargs.  This reproduces
+    # the production KrakenBroker method that v1 called with an invalid shape.
+    def place_market_order(self, symbol, side, size, size_type="quote"):
+        self.submit_calls.append((symbol, side, size, {"size_type": size_type}))
+        self._kraken_private_call(
+            "AddOrder",
+            {
+                "pair": symbol,
+                "type": side,
+                "ordertype": "market",
+                "volume": str(size),
+            },
+        )
         return {
             "status": "filled",
             "order_id": "margin-order-1",
@@ -172,30 +197,53 @@ class TestKrakenMarginDispatchBridge(unittest.TestCase):
                 return 1.0, float(size_usd)
         return MultiBrokerExecutionRouter
 
-    def test_router_passes_leverage_and_reduce_only_without_margin_mode(self):
-        adapter = FakeKrakenAdapter("platform", pair_leverages=(2, 3))
+    def _dispatch(self, adapter, *, reduce_only=False):
         module = types.ModuleType("bot.multi_broker_execution_router")
         module.MultiBrokerExecutionRouter = self._router_class()
         self.assertTrue(_patch_router(module))
-        result = module.MultiBrokerExecutionRouter._dispatch_direct_broker_market_order(
+        return module.MultiBrokerExecutionRouter._dispatch_direct_broker_market_order(
             adapter,
             symbol="BTC-USD",
-            side="buy",
+            side="sell" if reduce_only else "buy",
             size_usd=40.0,
             metadata={
                 "account_id": "platform",
                 "leverage": 2,
-                "reduce_only": False,
+                "reduce_only": reduce_only,
                 "margin_mode": "cross",
                 "price_hint_usd": 50_000.0,
             },
         )
+
+    def test_router_preserves_native_public_callshape_and_injects_leverage_at_addorder(self):
+        adapter = FakeKrakenAdapter("platform", pair_leverages=(2, 3))
+        result = self._dispatch(adapter)
         self.assertEqual(result, (50_000.0, 40.0))
         self.assertEqual(len(adapter.submit_calls), 1)
         _, _, _, kwargs = adapter.submit_calls[0]
-        self.assertEqual(kwargs["leverage"], 2)
-        self.assertFalse(kwargs["reduce_only"])
-        self.assertIsNone(kwargs["margin_mode"])
+        self.assertEqual(kwargs, {"size_type": "quote"})
+        self.assertEqual(len(adapter.private_order_calls), 1)
+        method, params, _ = adapter.private_order_calls[0]
+        self.assertEqual(method, "AddOrder")
+        self.assertEqual(params["leverage"], "2")
+        self.assertNotIn("reduce_only", params)
+
+    def test_reduce_only_is_injected_only_for_reducing_margin_order(self):
+        adapter = FakeKrakenAdapter("platform", pair_leverages=(2, 3))
+        self._dispatch(adapter, reduce_only=True)
+        _, params, _ = adapter.private_order_calls[0]
+        self.assertEqual(params["leverage"], "2")
+        self.assertIs(params["reduce_only"], True)
+
+    def test_spot_order_outside_margin_scope_has_no_margin_fields(self):
+        adapter = FakeKrakenAdapter("platform")
+        module = types.ModuleType("bot.broker_manager")
+        module.FakeKrakenAdapter = FakeKrakenAdapter
+        self.assertTrue(_patch_kraken_adapter(module))
+        adapter.place_market_order("BTC-USD", "buy", 20.0, size_type="quote")
+        _, params, _ = adapter.private_order_calls[0]
+        self.assertNotIn("leverage", params)
+        self.assertNotIn("reduce_only", params)
 
     def test_margin_failure_does_not_fallback_to_spot(self):
         adapter = FakeKrakenAdapter("platform", pair_leverages=())
@@ -211,6 +259,7 @@ class TestKrakenMarginDispatchBridge(unittest.TestCase):
                 metadata={"account_id": "platform", "leverage": 2, "reduce_only": False},
             )
         self.assertEqual(adapter.submit_calls, [])
+        self.assertEqual(adapter.private_order_calls, [])
 
 
 class TestKrakenMarginCapabilityInstall(unittest.TestCase):
