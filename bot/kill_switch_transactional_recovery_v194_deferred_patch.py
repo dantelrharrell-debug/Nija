@@ -7,9 +7,10 @@ path fail closed. v194 keeps the pre-core install non-blocking, then installs v1
 only after both dependency readiness flags are present.
 
 After v193 is installed, v215 emits a bounded read-only causal diagnostic, v216
-keeps that diagnostic observable in later production log slices, and v219 may
-recover only the exact legacy false-auth signature caused by the pre-v218
-``auth`` substring classifier. Manual/risk/unknown stops remain preserved.
+keeps that diagnostic observable in later production log slices, v218 installs the
+explicit authentication classifier, and v219 may recover only the exact legacy
+false-auth signature caused by the old ``auth`` substring classifier.
+Manual/risk/unknown stops remain preserved.
 
 This patch does not grant execution authority, force LIVE_ACTIVE, alter
 nonce/capital/position-sync truth, or change risk/signal thresholds.
@@ -79,6 +80,13 @@ def _install_v216_diagnostic() -> bool:
     )
 
 
+def _install_v218_classifier() -> bool:
+    return _install_optional(
+        "bot.failure_mode_auth_classification_v218_patch",
+        "FAILURE_MODE_AUTH_V218",
+    )
+
+
 def _install_v219_recovery() -> bool:
     return _install_optional(
         "bot.kill_switch_false_auth_recovery_v219_patch",
@@ -90,16 +98,19 @@ def _publish_ready() -> None:
     os.environ[_FLAG] = "1"
     diagnostic_ready = _install_v215_diagnostic()
     periodic_ready = _install_v216_diagnostic()
-    false_auth_ready = _install_v219_recovery()
+    classifier_ready = _install_v218_classifier()
+    false_auth_ready = _install_v219_recovery() if classifier_ready else False
     LOGGER.critical(
         "KILL_SWITCH_TRANSACTIONAL_RECOVERY_V194_READY marker=%s "
         "v193_installed_after_dependencies=true v215_diagnostic_ready=%s "
-        "v216_periodic_diagnostic_ready=%s v219_false_auth_recovery_ready=%s "
-        "pre_core_blocking=false execution_authority_unchanged=true "
-        "forced_activation=false safety_gates_bypassed=false",
+        "v216_periodic_diagnostic_ready=%s v218_auth_classifier_ready=%s "
+        "v219_false_auth_recovery_ready=%s pre_core_blocking=false "
+        "execution_authority_unchanged=true forced_activation=false "
+        "safety_gates_bypassed=false",
         MARKER,
         str(diagnostic_ready).lower(),
         str(periodic_ready).lower(),
+        str(classifier_ready).lower(),
         str(false_auth_ready).lower(),
     )
 
@@ -128,7 +139,9 @@ def install() -> bool:
         if _truthy(_FLAG):
             _install_v215_diagnostic()
             _install_v216_diagnostic()
-            _install_v219_recovery()
+            classifier_ready = _install_v218_classifier()
+            if classifier_ready:
+                _install_v219_recovery()
             return True
         if _dependencies_ready():
             try:
@@ -155,8 +168,8 @@ def install() -> bool:
                 "KILL_SWITCH_TRANSACTIONAL_RECOVERY_V194_ARMED marker=%s "
                 "dependency_wait=true pre_core_blocking=false v193_not_skipped=true "
                 "v215_diagnostic_deferred=true v216_periodic_diagnostic_deferred=true "
-                "v219_false_auth_recovery_deferred=true execution_authority_unchanged=true "
-                "safety_gates_bypassed=false",
+                "v218_auth_classifier_deferred=true v219_false_auth_recovery_deferred=true "
+                "execution_authority_unchanged=true safety_gates_bypassed=false",
                 MARKER,
             )
         return True
