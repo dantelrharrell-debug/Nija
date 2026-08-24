@@ -6,9 +6,10 @@ before those later runtime dependencies are ready, making the entire canonical f
 path fail closed. v194 keeps the pre-core install non-blocking, then installs v193
 only after both dependency readiness flags are present.
 
-After v193 is installed, v215 emits a bounded read-only causal diagnostic so a
-preserved stop can be diagnosed from production logs without weakening recovery
-eligibility or mutating any stop/authority state.
+After v193 is installed, v215 emits a bounded read-only causal diagnostic and
+v216 keeps that diagnostic observable in later production log slices while an
+active stop remains preserved. Neither diagnostic changes recovery eligibility or
+mutates stop/authority state.
 
 This patch changes install ordering only. It does not clear the kill switch, grant
 execution authority, force LIVE_ACTIVE, alter nonce/capital/position-sync truth, or
@@ -54,10 +55,24 @@ def _install_v215_diagnostic() -> bool:
         installer = getattr(module, "install_import_hook", None) or getattr(module, "install", None)
         return callable(installer) and installer() is not False
     except Exception as exc:
-        # Diagnostics can never become an execution-authority dependency. The
-        # guarded recovery remains installed and trading remains fail closed.
         LOGGER.warning(
             "KILL_SWITCH_CAUSAL_V215_INSTALL_DEFERRED marker=%s err=%s:%s "
+            "recovery_eligibility_unchanged=true trading_fail_closed=true",
+            MARKER,
+            type(exc).__name__,
+            exc,
+        )
+        return False
+
+
+def _install_v216_diagnostic() -> bool:
+    try:
+        module = importlib.import_module("bot.kill_switch_causal_diagnostic_v216_periodic_patch")
+        installer = getattr(module, "install_import_hook", None) or getattr(module, "install", None)
+        return callable(installer) and installer() is not False
+    except Exception as exc:
+        LOGGER.warning(
+            "KILL_SWITCH_CAUSAL_V216_INSTALL_DEFERRED marker=%s err=%s:%s "
             "recovery_eligibility_unchanged=true trading_fail_closed=true",
             MARKER,
             type(exc).__name__,
@@ -69,13 +84,16 @@ def _install_v215_diagnostic() -> bool:
 def _publish_ready() -> None:
     os.environ[_FLAG] = "1"
     diagnostic_ready = _install_v215_diagnostic()
+    periodic_ready = _install_v216_diagnostic()
     LOGGER.critical(
         "KILL_SWITCH_TRANSACTIONAL_RECOVERY_V194_READY marker=%s "
         "v193_installed_after_dependencies=true v215_diagnostic_ready=%s "
-        "pre_core_blocking=false execution_authority_unchanged=true "
-        "forced_activation=false safety_gates_bypassed=false",
+        "v216_periodic_diagnostic_ready=%s pre_core_blocking=false "
+        "execution_authority_unchanged=true forced_activation=false "
+        "safety_gates_bypassed=false",
         MARKER,
         str(diagnostic_ready).lower(),
+        str(periodic_ready).lower(),
     )
 
 
@@ -101,9 +119,8 @@ def install() -> bool:
     global _STARTED
     with _LOCK:
         if _truthy(_FLAG):
-            # Re-emit the bounded diagnostic on installer replay. emit() itself
-            # deduplicates unchanged signatures.
             _install_v215_diagnostic()
+            _install_v216_diagnostic()
             return True
         if _dependencies_ready():
             try:
@@ -129,8 +146,8 @@ def install() -> bool:
             LOGGER.critical(
                 "KILL_SWITCH_TRANSACTIONAL_RECOVERY_V194_ARMED marker=%s "
                 "dependency_wait=true pre_core_blocking=false v193_not_skipped=true "
-                "v215_diagnostic_deferred=true execution_authority_unchanged=true "
-                "safety_gates_bypassed=false",
+                "v215_diagnostic_deferred=true v216_periodic_diagnostic_deferred=true "
+                "execution_authority_unchanged=true safety_gates_bypassed=false",
                 MARKER,
             )
         return True
