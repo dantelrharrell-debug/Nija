@@ -87,7 +87,6 @@ def publish_position_sync_readiness(manager: Any, *, source: str) -> tuple[bool,
     if manager is not None:
         try:
             raw_ready, pending, status = _v95_module().position_sync_status(manager)
-            # Never treat an empty connected-broker set as dispatch-ready.
             ready = bool(status) and bool(raw_ready)
         except Exception as exc:
             LOGGER.warning(
@@ -128,14 +127,7 @@ def _current_readiness_value() -> bool:
 
 
 def _replay_safe_install_seed() -> None:
-    """Seed fail-closed exactly once; replay from live truth thereafter.
-
-    The builtins hook flag is process-wide and survives module import aliases and
-    installer replay. On first install there is no trusted position snapshot yet,
-    so publish ``False`` exactly as v96 historically did. On subsequent replays,
-    prefer a fresh canonical-manager evaluation. If that manager cannot be
-    resolved transiently, leave the existing canonical readiness bit untouched.
-    """
+    """Seed fail-closed exactly once; replay from live truth thereafter."""
     first_install = not bool(getattr(builtins, _HOOK_FLAG, False))
     if first_install:
         publish_position_sync_readiness(None, source="install_fail_closed")
@@ -256,10 +248,6 @@ def _patch_loaded() -> bool:
 def install_import_hook() -> bool:
     with _LOCK:
         _replay_safe_install_seed()
-        # Establish the fail-closed key exactly once per Python process before
-        # activation can consume an old coordinator commit.  Installer replay is
-        # common in the canonical release chain; replay must not revoke a proven
-        # live state merely because the installer itself has no manager argument.
         initial_fail_closed = not bool(getattr(builtins, _INITIAL_FAIL_CLOSED_FLAG, False))
         if initial_fail_closed:
             publish_position_sync_readiness(None, source="install_fail_closed")
@@ -289,14 +277,11 @@ def install_import_hook() -> bool:
 
         os.environ["NIJA_POSITION_SYNC_DISPATCH_AUTHORITY_V96_INSTALLED"] = "1"
         os.environ["NIJA_POSITION_SYNC_INSTALL_REPLAY_V188_READY"] = "1"
-        LOGGER.critical(
-            "POSITION_SYNC_DISPATCH_AUTHORITY_V96_INSTALLED marker=%s readiness_key=%s "
-            "fail_closed=true replay_safe_v188=true stale_commit_revocation=true safety_gates_unchanged=true",
         os.environ["NIJA_POSITION_SYNC_INSTALLER_IDEMPOTENCE_V195_READY"] = "1"
         LOGGER.critical(
             "POSITION_SYNC_DISPATCH_AUTHORITY_V96_INSTALLED marker=%s readiness_key=%s "
-            "fail_closed=true stale_commit_revocation=true installer_replay_idempotent_v195=true "
-            "safety_gates_unchanged=true",
+            "fail_closed=true replay_safe_v188=true stale_commit_revocation=true "
+            "installer_replay_idempotent_v195=true safety_gates_unchanged=true",
             MARKER,
             READINESS_KEY,
         )
