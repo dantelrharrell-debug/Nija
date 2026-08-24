@@ -15,6 +15,14 @@ closed and retries; it never returns fabricated balances/accounts, never grants
 execution authority, and never alters writer, nonce, risk, kill-switch,
 reconciliation, capital, order, fill, or activation gates. At most one timed-out
 worker per broker/method may remain in flight.
+
+v211 is installed as a mandatory companion after v210. It closes the final
+pipeline-local startup-probe circularity proven in production: v197 can reverify
+and admit the whitelisted heartbeat probe while Pipeline._dispatch still sees
+dispatch_enabled=false from the pre-LIVE canonical snapshot. v211 changes only
+the pipeline-local snapshot for an already-authorized heartbeat probe; canonical
+lifecycle/coordinator truth and all downstream safety/order/fill gates remain
+unchanged.
 """
 from __future__ import annotations
 
@@ -31,6 +39,7 @@ from typing import Any, Callable
 LOGGER = logging.getLogger("nija.runtime_heartbeat_auth_probe_bound_v210")
 MARKER = "20260824-heartbeat-auth-probe-bound-v210"
 _READY_FLAG = "NIJA_HEARTBEAT_AUTH_PROBE_BOUND_V210_READY"
+_V211_READY_FLAG = "NIJA_HEARTBEAT_DISPATCH_SCOPE_V211_READY"
 _PATCH_ATTR = "_nija_heartbeat_auth_probe_bound_v210"
 _LOCK = threading.RLock()
 _FLIGHTS: dict[tuple[int, str], threading.Thread] = {}
@@ -174,6 +183,23 @@ def _patch_broker_auth_reads() -> int:
     return patched
 
 
+def _install_v211() -> bool:
+    try:
+        module = importlib.import_module("bot.runtime_heartbeat_dispatch_scope_v211_patch")
+        installer = getattr(module, "install", None) or getattr(module, "install_import_hook", None)
+        if not callable(installer):
+            return False
+        return bool(installer()) and os.environ.get(_V211_READY_FLAG, "0").strip() == "1"
+    except Exception as exc:
+        LOGGER.critical(
+            "HEARTBEAT_AUTH_PROBE_V210_V211_FAILED marker=%s error=%s:%s trading_fail_closed=true",
+            MARKER,
+            type(exc).__name__,
+            exc,
+        )
+        return False
+
+
 def _patch_release_manifest() -> bool:
     try:
         manifest = importlib.import_module("bot.runtime_release_manifest_patch")
@@ -181,6 +207,7 @@ def _patch_release_manifest() -> bool:
         if not isinstance(required, dict):
             return False
         required["heartbeat_auth_probe_bound_v210"] = _READY_FLAG
+        required["heartbeat_dispatch_scope_v211"] = _V211_READY_FLAG
         return True
     except Exception:
         return False
@@ -190,6 +217,7 @@ def install() -> bool:
     try:
         patched = _patch_broker_auth_reads()
         manifest_ok = _patch_release_manifest()
+        v211_ok = _install_v211()
     except Exception as exc:
         os.environ[_READY_FLAG] = "0"
         LOGGER.critical(
@@ -200,24 +228,25 @@ def install() -> bool:
         )
         return False
 
-    ready = bool(patched > 0 and manifest_ok)
+    ready = bool(patched > 0 and manifest_ok and v211_ok)
     os.environ[_READY_FLAG] = "1" if ready else "0"
     if not ready:
         LOGGER.critical(
-            "HEARTBEAT_AUTH_PROBE_V210_FAILED marker=%s patched_surfaces=%s manifest=%s "
+            "HEARTBEAT_AUTH_PROBE_V210_FAILED marker=%s patched_surfaces=%s manifest=%s v211=%s "
             "trading_fail_closed=true",
             MARKER,
             patched,
             str(manifest_ok).lower(),
+            str(v211_ok).lower(),
         )
         return False
 
     LOGGER.critical(
         "HEARTBEAT_AUTH_PROBE_V210_READY marker=%s ready=true patched_surfaces=%s timeout_s=%.2f "
         "heartbeat_thread_only=true read_only=true normal_broker_reads_unchanged=true "
-        "single_inflight_per_broker_method=true balance_fabricated=false auth_fabricated=false "
-        "execution_authority_granted=false proof_fabricated=false forced_trade=false "
-        "writer_nonce_risk_killswitch_reconciliation_capital_order_fill_gates_unchanged=true "
+        "single_inflight_per_broker_method=true heartbeat_dispatch_scope_v211=true "
+        "balance_fabricated=false auth_fabricated=false execution_authority_granted=false proof_fabricated=false "
+        "forced_trade=false writer_nonce_risk_killswitch_reconciliation_capital_order_fill_gates_unchanged=true "
         "safety_gates_bypassed=false",
         MARKER,
         patched,
