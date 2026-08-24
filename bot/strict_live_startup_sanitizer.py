@@ -5,9 +5,10 @@ In every live mode, no local-writer, degraded-authority, or operator force-trade
 flag may remain truthy. Redis being absent is a blocker, never permission to
 replace distributed ownership with a process-local assertion.
 
-The earliest startup path also installs the kill-switch provenance and failure
-classification repairs before normal runtime modules can instantiate or use the
-hard-stop singleton. These repairs never clear a stop or grant trading authority.
+The earliest startup path also installs the kill-switch provenance, failure
+classification, and durable guarded-replay repairs before normal runtime modules
+can instantiate or use the hard-stop singleton. These repairs never clear an
+unproven stop or grant trading authority.
 """
 
 from __future__ import annotations
@@ -90,6 +91,10 @@ def _install_early_safety_repairs() -> None:
         (
             "failure_mode_auth_classification_v218_patch",
             "FAILURE_MODE_AUTH_V218",
+        ),
+        (
+            "kill_switch_durable_replay_v221_patch",
+            "KILL_SWITCH_DURABLE_REPLAY_V221",
         ),
     )
     for module_name, label in repairs:
@@ -175,6 +180,7 @@ def install_import_hook() -> None:
 # This must run before sanitize imports or the broader trading runtime can create
 # the global KillSwitch singleton. Importing bot.kill_switch defines the class but
 # does not instantiate the singleton, so v217 can safely patch constructor-time
-# file handling before the first get_kill_switch() call.
+# file handling before the first get_kill_switch() call. v221 itself does not
+# import the release manifest here; it waits for the canonical runtime to load it.
 _install_early_safety_repairs()
 sanitize("module_import")
