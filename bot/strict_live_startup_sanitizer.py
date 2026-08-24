@@ -4,6 +4,10 @@ This module runs before the trading runtime imports authority/execution modules.
 In every live mode, no local-writer, degraded-authority, or operator force-trade
 flag may remain truthy. Redis being absent is a blocker, never permission to
 replace distributed ownership with a process-local assertion.
+
+The earliest startup path also installs the kill-switch provenance and failure
+classification repairs before normal runtime modules can instantiate or use the
+hard-stop singleton. These repairs never clear a stop or grant trading authority.
 """
 
 from __future__ import annotations
@@ -39,6 +43,7 @@ _FORBIDDEN_LIVE_FLAGS = (
     "NIJA_EMERGENCY_LOCAL_FALLBACK_ACTIVE",
 )
 _FALLBACK_SCORE_FLOOR_NORMALIZED = False
+_EARLY_SAFETY_REPAIRS_ATTEMPTED = False
 
 
 def _truthy(name: str) -> bool:
@@ -63,6 +68,52 @@ def _float_env(name: str, default: float) -> float:
         return float(os.environ.get(name, default) or default)
     except Exception:
         return default
+
+
+def _install_early_safety_repairs() -> None:
+    """Install hard-stop root repairs before normal runtime imports.
+
+    Failure is deliberately fail-closed: this helper never clears a stop, marks a
+    readiness bit, or grants execution authority. It only installs code repairs
+    and emits a critical diagnostic if one cannot attach.
+    """
+    global _EARLY_SAFETY_REPAIRS_ATTEMPTED
+    if _EARLY_SAFETY_REPAIRS_ATTEMPTED:
+        return
+    _EARLY_SAFETY_REPAIRS_ATTEMPTED = True
+
+    repairs = (
+        (
+            "kill_switch_early_provenance_v217_patch",
+            "KILL_SWITCH_EARLY_V217",
+        ),
+        (
+            "failure_mode_auth_classification_v218_patch",
+            "FAILURE_MODE_AUTH_V218",
+        ),
+    )
+    for module_name, label in repairs:
+        try:
+            module = __import__(f"bot.{module_name}", fromlist=["install_import_hook"])
+            installer = getattr(module, "install_import_hook", None) or getattr(module, "install", None)
+            ok = callable(installer) and installer() is not False
+            if not ok:
+                logger.critical(
+                    "%s_EARLY_INSTALL_NOT_READY module=%s trading_fail_closed=true "
+                    "execution_authority_unchanged=true",
+                    label,
+                    module_name,
+                )
+        except Exception as exc:
+            logger.critical(
+                "%s_EARLY_INSTALL_FAILED module=%s err=%s:%s trading_fail_closed=true "
+                "execution_authority_unchanged=true",
+                label,
+                module_name,
+                type(exc).__name__,
+                exc,
+                exc_info=True,
+            )
 
 
 def _normalize_fallback_score_floor() -> None:
@@ -117,7 +168,13 @@ def sanitize(reason: str = "package_import") -> None:
 
 
 def install_import_hook() -> None:
+    _install_early_safety_repairs()
     sanitize("install_import_hook")
 
 
+# This must run before sanitize imports or the broader trading runtime can create
+# the global KillSwitch singleton. Importing bot.kill_switch defines the class but
+# does not instantiate the singleton, so v217 can safely patch constructor-time
+# file handling before the first get_kill_switch() call.
+_install_early_safety_repairs()
 sanitize("module_import")
