@@ -6,10 +6,11 @@ flag may remain truthy. Redis being absent is a blocker, never permission to
 replace distributed ownership with a process-local assertion.
 
 The earliest startup path also installs the kill-switch provenance, failure
-classification, durable guarded-replay, exchange rejection sample,
-exchange-rejection provenance, and heartbeat recovery-liveness repairs before
-normal runtime modules can instantiate or use the hard-stop singleton. These
-repairs never clear an unproven stop or grant trading authority.
+classification, durable guarded-replay, exchange rejection sample/provenance,
+stale rejection recovery, Kraken capital admission, and heartbeat recovery
+liveness repairs before normal runtime modules can instantiate or use the
+hard-stop singleton. These repairs never clear an unproven stop or grant trading
+authority.
 """
 
 from __future__ import annotations
@@ -73,11 +74,11 @@ def _float_env(name: str, default: float) -> float:
 
 
 def _install_early_safety_repairs() -> None:
-    """Install hard-stop root repairs before normal runtime imports.
+    """Install hard-stop/capital root repairs before normal runtime imports.
 
-    Failure is deliberately fail-closed: this helper never clears a stop, marks a
-    readiness bit, or grants execution authority. It only installs code repairs
-    and emits a critical diagnostic if one cannot attach.
+    Failure is deliberately fail-closed: this helper never marks a readiness bit
+    or grants execution authority. Recovery modules themselves require exact
+    provenance and current safety proofs before changing a persisted stop/value.
     """
     global _EARLY_SAFETY_REPAIRS_ATTEMPTED
     if _EARLY_SAFETY_REPAIRS_ATTEMPTED:
@@ -85,30 +86,14 @@ def _install_early_safety_repairs() -> None:
     _EARLY_SAFETY_REPAIRS_ATTEMPTED = True
 
     repairs = (
-        (
-            "kill_switch_early_provenance_v217_patch",
-            "KILL_SWITCH_EARLY_V217",
-        ),
-        (
-            "failure_mode_auth_classification_v218_patch",
-            "FAILURE_MODE_AUTH_V218",
-        ),
-        (
-            "kill_switch_durable_replay_v221_patch",
-            "KILL_SWITCH_DURABLE_REPLAY_V221",
-        ),
-        (
-            "exchange_rejection_sample_guard_v222_patch",
-            "EXCHANGE_REJECTION_SAMPLE_GUARD_V222",
-        ),
-        (
-            "exchange_reject_provenance_v224_patch",
-            "EXCHANGE_REJECT_PROVENANCE_V224",
-        ),
-        (
-            "runtime_heartbeat_killswitch_clear_wakeup_v225_patch",
-            "HEARTBEAT_KILLSWITCH_CLEAR_WAKEUP_V225",
-        ),
+        ("kill_switch_early_provenance_v217_patch", "KILL_SWITCH_EARLY_V217"),
+        ("failure_mode_auth_classification_v218_patch", "FAILURE_MODE_AUTH_V218"),
+        ("kill_switch_durable_replay_v221_patch", "KILL_SWITCH_DURABLE_REPLAY_V221"),
+        ("exchange_rejection_sample_guard_v222_patch", "EXCHANGE_REJECTION_SAMPLE_GUARD_V222"),
+        ("exchange_reject_provenance_v224_patch", "EXCHANGE_REJECT_PROVENANCE_V224"),
+        ("runtime_kraken_capital_admission_v227_patch", "KRAKEN_CAPITAL_ADMISSION_V227"),
+        ("exchange_rejection_stale_latch_recovery_v226_patch", "EXCHANGE_REJECTION_STALE_LATCH_RECOVERY_V226"),
+        ("runtime_heartbeat_killswitch_clear_wakeup_v225_patch", "HEARTBEAT_KILLSWITCH_CLEAR_WAKEUP_V225"),
     )
     for module_name, label in repairs:
         try:
@@ -117,15 +102,13 @@ def _install_early_safety_repairs() -> None:
             ok = callable(installer) and installer() is not False
             if not ok:
                 logger.critical(
-                    "%s_EARLY_INSTALL_NOT_READY module=%s trading_fail_closed=true "
-                    "execution_authority_unchanged=true",
+                    "%s_EARLY_INSTALL_NOT_READY module=%s trading_fail_closed=true execution_authority_unchanged=true",
                     label,
                     module_name,
                 )
         except Exception as exc:
             logger.critical(
-                "%s_EARLY_INSTALL_FAILED module=%s err=%s:%s trading_fail_closed=true "
-                "execution_authority_unchanged=true",
+                "%s_EARLY_INSTALL_FAILED module=%s err=%s:%s trading_fail_closed=true execution_authority_unchanged=true",
                 label,
                 module_name,
                 type(exc).__name__,
@@ -135,13 +118,7 @@ def _install_early_safety_repairs() -> None:
 
 
 def _normalize_fallback_score_floor() -> None:
-    """Keep dead-zone fallback tradable without weakening liquidity safety.
-
-    The forced-fallback payload repair still performs hard geometry,
-    positive-expectancy, and competitive-liquidity checks. This only prevents a
-    stale fixed 60.0 score floor from vetoing otherwise selected micro-cap
-    candidates during live dead-zone/Always-Trade cycles.
-    """
+    """Keep dead-zone fallback tradable without weakening liquidity safety."""
     global _FALLBACK_SCORE_FLOOR_NORMALIZED
     floor_name = "NIJA_FALLBACK_STRICT_SCORE_FLOOR"
     target = _float_env("NIJA_FALLBACK_LIVE_ACTIVE_STRICT_SCORE_FLOOR", 40.0)
@@ -190,10 +167,5 @@ def install_import_hook() -> None:
     sanitize("install_import_hook")
 
 
-# This must run before sanitize imports or the broader trading runtime can create
-# the global KillSwitch singleton. Importing bot.kill_switch defines the class but
-# does not instantiate the singleton, so v217 can safely patch constructor-time
-# file handling before the first get_kill_switch() call. v221/v222/v224/v225 do
-# not force release-manifest imports here; they wait for canonical runtime loading.
 _install_early_safety_repairs()
 sanitize("module_import")
