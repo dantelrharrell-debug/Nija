@@ -2,22 +2,25 @@
 
 Production evidence on 2026-08-25 showed a canonical capital publication rejected
 as ``incomplete_broker_aggregation:2/3`` while the stalled-writer diagnostic
-reported ``valid_brokers=3`` and position sync remained 3/3.  The v209 zero
+reported ``valid_brokers=3`` and position sync remained 3/3. The v209 zero
 balance completeness repair is intentionally fail closed, but its provenance
 reader returned the first loaded stall-guard alias even when that alias did not
-own the current thread's active refresh context.  A second alias could therefore
+own the current thread's active refresh context. A second alias could therefore
 hold the real same-cycle ``live_brokers`` evidence while v209 saw an empty/default
 status and declined the legitimate zero-balance entry.
 
-v229 changes only provenance selection.  It inspects every known stall-guard
-alias, considers only aliases whose thread-local refresh context is actively in
-flight on the publishing thread, deduplicates identical module objects, and
-merges evidence conservatively.  Exclusion or disagreement always wins over a
-live observation.  The existing v209 rules remain authoritative: only an exact
+v229 changes provenance selection. It inspects every known stall-guard alias,
+considers only aliases whose thread-local refresh context is actively in flight
+on the publishing thread, deduplicates identical module objects, and merges
+evidence conservatively. Exclusion or disagreement always wins over a live
+observation. The existing v209 rules remain authoritative: only an exact
 same-cycle live zero may restore a missing broker key; positive balances are
-never synthesized; timeout/error/stale/unknown brokers remain excluded; capital
-amounts, freshness, completeness thresholds, writer/nonce/risk/kill-switch,
-order/fill and activation gates are unchanged.
+never synthesized; timeout/error/stale/unknown brokers remain excluded.
+
+After its provenance hooks attach, v229 installs v230 so every distinct loaded
+CapitalAuthority publisher alias receives the same v209 augmentation boundary.
+Capital amounts, freshness, completeness thresholds, writer/nonce/risk/
+kill-switch, order/fill and activation gates remain unchanged.
 """
 from __future__ import annotations
 
@@ -62,7 +65,6 @@ def _row_scalar(row: Any) -> float | None:
 
 
 def _active_guard_statuses() -> list[tuple[str, ModuleType, dict[str, Any]]]:
-    """Return only same-thread guard aliases with an active refresh context."""
     rows: list[tuple[str, ModuleType, dict[str, Any]]] = []
     seen: set[int] = set()
     for name in _GUARD_NAMES:
@@ -82,10 +84,7 @@ def _active_guard_statuses() -> list[tuple[str, ModuleType, dict[str, Any]]]:
             LOGGER.warning(
                 "CAPITAL_PROVENANCE_ALIAS_V229_READ_FAILED marker=%s alias=%s error=%s:%s "
                 "trading_fail_closed=true",
-                MARKER,
-                name,
-                type(exc).__name__,
-                exc,
+                MARKER, name, type(exc).__name__, exc,
             )
             continue
         rows.append((name, module, status))
@@ -93,7 +92,6 @@ def _active_guard_statuses() -> list[tuple[str, ModuleType, dict[str, Any]]]:
 
 
 def _merged_active_guard_status() -> dict[str, Any]:
-    """Merge active alias evidence with exclusion/conflict taking precedence."""
     rows = _active_guard_statuses()
     if not rows:
         return {}
@@ -107,7 +105,6 @@ def _merged_active_guard_status() -> dict[str, Any]:
 
     for alias, _module, status in rows:
         used_fallback = used_fallback or bool(status.get("used_fallback", False))
-
         for raw_key, raw_row in dict(status.get("brokers", {}) or {}).items():
             broker = _key(raw_key)
             if broker and broker not in fallbacks:
@@ -144,7 +141,6 @@ def _merged_active_guard_status() -> dict[str, Any]:
             row["alias"] = alias
             live[broker] = row
 
-    # Safety rule: any active exclusion or cross-alias disagreement wins.
     for broker in set(excluded) | conflicts:
         live.pop(broker, None)
 
@@ -167,11 +163,7 @@ def _merged_active_guard_status() -> dict[str, Any]:
         LOGGER.warning(
             "CAPITAL_PROVENANCE_ALIAS_V229_MERGED marker=%s aliases=%s live=%s excluded=%s conflicts=%s "
             "exclusion_wins=true stale_aliases_ignored=true capital_mutated=false trading_fail_closed=true",
-            MARKER,
-            list(result["active_aliases"]),
-            sorted(live),
-            sorted(excluded),
-            sorted(conflicts),
+            MARKER, list(result["active_aliases"]), sorted(live), sorted(excluded), sorted(conflicts),
         )
     return result
 
@@ -195,8 +187,6 @@ def _patch_v209() -> bool:
             active = _merged_active_guard_status()
             if active:
                 return active
-            # No same-thread active refresh provenance means v209 must not use a
-            # stale/default alias as evidence for a new zero-balance entry.
             return {}
 
         setattr(guard_v229, _PATCH_ATTR, True)
@@ -226,14 +216,8 @@ def _patch_v209() -> bool:
                     "snapshot_keys=%s live_keys=%s excluded_keys=%s candidate_missing=%s additions=%s "
                     "positive_balance_fabricated=false timeout_exclusions_preserved=true "
                     "freshness_extended=false completeness_threshold_unchanged=true trading_fail_closed=true",
-                    MARKER,
-                    expected,
-                    len(before_keys),
-                    before_keys,
-                    live_keys,
-                    excluded_keys,
-                    candidate_missing,
-                    list(additions),
+                    MARKER, expected, len(before_keys), before_keys, live_keys, excluded_keys,
+                    candidate_missing, list(additions),
                 )
             return augmented, additions
 
@@ -259,21 +243,35 @@ def _patch_release_manifest() -> bool:
         return False
 
 
+def _install_v230() -> bool:
+    try:
+        module = importlib.import_module("bot.runtime_capital_authority_alias_v230_patch")
+        installer = getattr(module, "install", None)
+        return bool(callable(installer) and installer())
+    except Exception as exc:
+        LOGGER.error(
+            "CAPITAL_AUTHORITY_ALIAS_V230_INSTALL_ERROR marker=%s error=%s:%s trading_fail_closed=true",
+            MARKER, type(exc).__name__, exc,
+        )
+        return False
+
+
 def install() -> bool:
     with _LOCK:
         v209_ok = _patch_v209()
         manifest_ok = _patch_release_manifest()
-        ready = bool(v209_ok and manifest_ok)
+        v230_ok = bool(v209_ok and manifest_ok and _install_v230())
+        ready = bool(v209_ok and manifest_ok and v230_ok)
         os.environ[_READY_FLAG] = "1" if ready else "0"
         LOGGER.critical(
             "RUNTIME_CAPITAL_PROVENANCE_ALIAS_V229 marker=%s ready=%s "
             "active_refresh_alias_only=true duplicate_module_dedup=true exclusion_wins=true "
             "alias_conflict_fail_closed=true same_cycle_live_zero_rule_preserved=true "
-            "positive_balance_fabricated=false stale_balance_reused=false freshness_extended=false "
-            "completeness_threshold_unchanged=true writer_nonce_risk_killswitch_order_fill_gates_unchanged=true "
-            "forced_activation=false safety_gates_bypassed=false",
-            MARKER,
-            str(ready).lower(),
+            "publisher_alias_v230=%s positive_balance_fabricated=false stale_balance_reused=false "
+            "freshness_extended=false completeness_threshold_unchanged=true "
+            "writer_nonce_risk_killswitch_order_fill_gates_unchanged=true forced_activation=false "
+            "safety_gates_bypassed=false",
+            MARKER, str(ready).lower(), str(v230_ok).lower(),
         )
         return ready
 
@@ -290,4 +288,5 @@ __all__ = [
     "_active_guard_statuses",
     "_merged_active_guard_status",
     "_patch_v209",
+    "_install_v230",
 ]
