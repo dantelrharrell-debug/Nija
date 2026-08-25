@@ -7,10 +7,10 @@ replace distributed ownership with a process-local assertion.
 
 The earliest startup path also installs the kill-switch provenance, failure
 classification, durable guarded-replay, exchange rejection sample,
-exchange-rejection provenance, Kraken capital admission, stale rejection recovery,
-and heartbeat recovery-liveness repairs before normal runtime modules can
-instantiate or use the hard-stop singleton. These repairs never clear an
-unproven stop or grant trading authority.
+exchange-rejection provenance, dispatch provenance, Kraken capital admission,
+stale rejection recovery, and heartbeat recovery-liveness repairs before normal
+runtime modules can instantiate or use the hard-stop singleton. These repairs
+never clear an unproven stop or grant trading authority.
 """
 
 from __future__ import annotations
@@ -105,6 +105,10 @@ def _install_early_safety_repairs() -> None:
         (
             "exchange_reject_provenance_v224_patch",
             "EXCHANGE_REJECT_PROVENANCE_V224",
+        ),
+        (
+            "exchange_reject_dispatch_provenance_v228_patch",
+            "EXCHANGE_REJECT_DISPATCH_PROVENANCE_V228",
         ),
         (
             "runtime_kraken_capital_admission_v227_patch",
@@ -202,7 +206,7 @@ def install_import_hook() -> None:
 # This must run before sanitize imports or the broader trading runtime can create
 # the global KillSwitch singleton. Importing bot.kill_switch defines the class but
 # does not instantiate the singleton, so v217 can safely patch constructor-time
-# file handling before the first get_kill_switch() call. v221/v222/v224/v225/v226/v227
+# file handling before the first get_kill_switch() call. v221/v222/v224/v225/v226/v227/v228
 # do not force release-manifest imports here; they wait for canonical runtime loading.
 _install_early_safety_repairs()
 sanitize("module_import")
