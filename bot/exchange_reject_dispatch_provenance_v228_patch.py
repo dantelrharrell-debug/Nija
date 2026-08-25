@@ -1,4 +1,4 @@
-"""Keep local/pre-dispatch failures out of exchange rejection telemetry (v228).
+"""Keep local/pre-dispatch failures out of exchange rejection telemetry (v228/v232).
 
 Production on 2026-08-25 showed the canonical EXCHANGE_MONITOR stop holding a
 5/5 rejection window while the runtime was otherwise converged.  The execution
@@ -7,13 +7,24 @@ pipeline can return failures before a broker order is sent (for example
 through ``_on_order_rejected``.  The pipeline's synthetic telemetry order ID
 alone does not prove that an exchange saw or rejected an order.
 
-v228 patches only the telemetry emission boundary.  Known local, authority,
+V228 patches only the telemetry emission boundary.  Known local, authority,
 state-machine, liquidity, routing, risk, ECEL, disconnected-adapter and other
 pre-dispatch failures are logged as non-exchange outcomes and are not appended
 to ExchangeKillSwitchProtector's order-rejection window.  Errors that are not
 classified as local continue through the existing path unchanged, so genuine
 broker/exchange rejection telemetry, thresholds and fail-closed behavior remain
 intact.
+
+V232 closes a remaining route-guard provenance gap discovered after capital and
+position readiness converged. ``execution_route_integrity_patch`` deliberately
+classifies several route/adapter outcomes as soft dispatch failures, but those
+same strings could still be forwarded to this exchange-rejection telemetry
+boundary.  V232 therefore treats those unproven route/adapter outcomes as
+non-exchange results too.  Generic messages such as ``OKX order failed`` and
+``all operations failed`` are excluded because, by themselves, they do not prove
+that a broker submit reached an exchange or that an exchange returned a reject.
+A concrete exchange response such as ``Kraken AddOrder rejected: ...`` remains
+unclassified here and continues to count normally.
 
 This patch never clears a kill switch, resets a rejection window, marks
 readiness, grants execution authority, fabricates broker ACK/fill proof, changes
@@ -81,6 +92,19 @@ _NON_EXCHANGE_MARKERS = (
     "ecel reject:",
     "orderfeasibility deny",
     "postguard deny",
+    # V232: execution_route_integrity_patch classifies these as soft/local
+    # route outcomes.  None of these strings alone proves broker submission or
+    # an exchange-level reject response.
+    "broker_dispatch_failed",
+    "empty_order_result",
+    "empty order result",
+    "execution_route_mismatch",
+    "brokerrouteguard deny",
+    "broker disabled",
+    "adapter_exception",
+    "broker_dispatch_exception",
+    "okx order failed",
+    "all operations failed",
 )
 
 
@@ -113,8 +137,9 @@ def _patch_execution_pipeline() -> bool:
             LOGGER.critical(
                 "EXCHANGE_REJECT_V228_NON_EXCHANGE_IGNORED marker=%s "
                 "symbol=%s side=%s reason=%s exchange_sample_mutated=false "
-                "exchange_order_provenance=false kill_switch_unchanged=true "
-                "execution_authority_unchanged=true safety_gates_bypassed=false",
+                "exchange_order_provenance=false route_guard_provenance_v232=true "
+                "kill_switch_unchanged=true execution_authority_unchanged=true "
+                "safety_gates_bypassed=false",
                 MARKER,
                 str(symbol)[:64],
                 str(side)[:32],
@@ -179,10 +204,11 @@ def install() -> bool:
             _THREAD.start()
     LOGGER.critical(
         "EXCHANGE_REJECT_DISPATCH_PROVENANCE_V228_READY marker=%s ready=true "
-        "local_predispatch_rejects_excluded=true real_exchange_path_unchanged=true "
-        "rejection_thresholds_unchanged=true rejection_window_not_cleared=true "
-        "kill_switch_unchanged=true execution_authority_unchanged=true "
-        "forced_activation=false safety_gates_bypassed=false",
+        "local_predispatch_rejects_excluded=true route_guard_provenance_v232=true "
+        "real_exchange_path_unchanged=true rejection_thresholds_unchanged=true "
+        "rejection_window_not_cleared=true kill_switch_unchanged=true "
+        "execution_authority_unchanged=true forced_activation=false "
+        "safety_gates_bypassed=false",
         MARKER,
     )
     return True
