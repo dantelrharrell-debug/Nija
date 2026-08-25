@@ -13,6 +13,19 @@ provenance reader is hardened by V229 before V230 is installed from V229. Thus
 only a same-cycle live exact zero can restore a missing broker entry; positive,
 stale, timeout, error, excluded or conflicting observations remain fail closed.
 
+Wrapper-order hardening
+-----------------------
+Production at 05:30 UTC showed both V230 aliases patched yet V170 still rejected
+raw 2/3 snapshots before any V229 diagnostic/restoration ran. The cause was
+``functools.wraps`` marker inheritance: when a later wrapper (for example V170)
+wrapped V230, it copied V230's custom marker into its own ``__dict__``. The old
+idempotence test used ``getattr(current, _PATCH_ATTR)`` and therefore mistook the
+outer non-V230 wrapper for the active V230 boundary. V230 now tracks the exact
+wrapper function objects it owns in a WeakSet. If another wrapper is replayed
+outside V230, the reassert worker detects that the current method is not a direct
+V230 wrapper and re-anchors augmentation outside it. This preserves every inner
+safety/rejection gate while ensuring completeness augmentation runs first.
+
 V230 never fabricates positive capital, changes capital totals, freshness TTL,
 completeness thresholds, writer/nonce/risk/kill-switch state, execution proof,
 order/fill proof, or activation state.
@@ -25,9 +38,10 @@ import os
 import sys
 import threading
 import time
+import weakref
 from functools import wraps
 from types import ModuleType
-from typing import Any
+from typing import Any, Callable
 
 LOGGER = logging.getLogger("nija.runtime_capital_authority_alias_v230")
 MARKER = "20260825-runtime-capital-authority-alias-v230"
@@ -37,6 +51,7 @@ _PATCH_ATTR = "_nija_runtime_capital_authority_alias_v230"
 _LOCK = threading.RLock()
 _THREAD: threading.Thread | None = None
 _AUTHORITY_NAMES = ("bot.capital_authority", "capital_authority")
+_DIRECT_WRAPPERS: weakref.WeakSet[Callable[..., Any]] = weakref.WeakSet()
 
 
 def _loaded_authority_classes() -> list[tuple[str, type]]:
@@ -55,12 +70,27 @@ def _loaded_authority_classes() -> list[tuple[str, type]]:
     return rows
 
 
+def _is_direct_wrapper(method: Any) -> bool:
+    """Return True only when *method itself* is a V230-owned outer wrapper.
+
+    Do not trust a copied custom attribute here. ``functools.wraps`` propagates
+    the wrapped function's ``__dict__`` to a new outer wrapper, which is exactly
+    the production ordering failure this check prevents.
+    """
+    try:
+        return method in _DIRECT_WRAPPERS
+    except TypeError:
+        return False
+
+
 def _patch_class(alias: str, cls: type) -> bool:
     current = getattr(cls, "publish_snapshot", None)
     if not callable(current):
         return False
-    if bool(getattr(current, _PATCH_ATTR, False)):
+    if _is_direct_wrapper(current):
         return True
+
+    inherited_marker = bool(getattr(current, _PATCH_ATTR, False))
 
     @wraps(current)
     def publish_v230(self: Any, snapshot: Any, writer_id: str) -> bool:
@@ -91,8 +121,19 @@ def _patch_class(alias: str, cls: type) -> bool:
 
     setattr(publish_v230, _PATCH_ATTR, True)
     setattr(publish_v230, "__wrapped__", current)
+    _DIRECT_WRAPPERS.add(publish_v230)
     cls.publish_snapshot = publish_v230
-    return True
+
+    if inherited_marker:
+        LOGGER.warning(
+            "CAPITAL_AUTHORITY_ALIAS_V230_REANCHORED marker=%s alias=%s "
+            "copied_marker_detected=true outer_wrapper_repaired=true "
+            "augmentation_runs_before_inner_gates=true completeness_threshold_unchanged=true "
+            "trading_fail_closed=true",
+            MARKER,
+            alias,
+        )
+    return _is_direct_wrapper(cls.publish_snapshot)
 
 
 def _patch_loaded_aliases() -> tuple[int, int]:
@@ -153,7 +194,8 @@ def install() -> bool:
             _THREAD.start()
         LOGGER.critical(
             "RUNTIME_CAPITAL_AUTHORITY_ALIAS_V230 marker=%s ready=%s loaded_alias_classes=%d "
-            "patched_alias_classes=%d duplicate_identity_dedup=true v209_v229_required=true "
+            "patched_alias_classes=%d duplicate_identity_dedup=true direct_wrapper_identity=true "
+            "wraps_marker_inheritance_safe=true v209_v229_required=true "
             "exact_same_cycle_zero_only=true positive_balance_fabricated=false stale_balance_reused=false "
             "freshness_extended=false completeness_threshold_unchanged=true "
             "writer_nonce_risk_killswitch_order_fill_gates_unchanged=true forced_activation=false "
@@ -173,5 +215,7 @@ __all__ = [
     "install",
     "install_import_hook",
     "_loaded_authority_classes",
+    "_is_direct_wrapper",
+    "_patch_class",
     "_patch_loaded_aliases",
 ]
