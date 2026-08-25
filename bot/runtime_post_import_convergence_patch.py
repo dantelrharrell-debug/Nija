@@ -12,8 +12,18 @@ capital/position liveness convergence repair, the v162 retired-observation
 fence, the v163 activation proof convergence repair, the v164 canonical
 capital publication/worker-liveness repair, the v165 proactive publication
 scheduler convergence repair, the v167 runtime refresh-demand attestation, the
-v209 confirmed-zero-balance completeness repair, and the v229 same-cycle capital
-provenance alias convergence repair.
+v209 confirmed-zero-balance completeness repair, the v229 same-cycle capital
+provenance alias convergence repair, and the v224/v228/v232 execution-rejection
+provenance guards.
+
+The rejection guards are intentionally installed by this early recurring owner,
+not only by the later release-manifest replay. Production on 2026-08-25 showed
+that startup heartbeat attempts can run between module import and manifest replay;
+without the early install those local fail-closed results can populate the
+ExchangeKillSwitchProtector rolling order window before v224/v228 are attached.
+That makes v226 correctly refuse stale-latch recovery because the current-process
+window is no longer empty. Installing v224/v228/v232 here closes that ordering
+race without clearing any rejection samples or weakening the kill switch.
 """
 from __future__ import annotations
 
@@ -118,105 +128,77 @@ def _install_named(module_name: str, missing_reason: str, log_prefix: str) -> bo
 
 
 def _install_v154_recovery() -> bool:
-    return _install_named(
-        "bot.runtime_execution_recovery_v154_patch",
-        "v154_install_missing",
-        "RUNTIME_EXECUTION_RECOVERY_V154_INSTALL_ERROR",
-    )
+    return _install_named("bot.runtime_execution_recovery_v154_patch", "v154_install_missing", "RUNTIME_EXECUTION_RECOVERY_V154_INSTALL_ERROR")
 
 
 def _install_v155_nonce_maturity() -> bool:
-    return _install_named(
-        "bot.nonce_lease_maturity_v155_patch",
-        "v155_install_missing",
-        "NONCE_LEASE_MATURITY_V155_INSTALL_ERROR",
-    )
+    return _install_named("bot.nonce_lease_maturity_v155_patch", "v155_install_missing", "NONCE_LEASE_MATURITY_V155_INSTALL_ERROR")
 
 
 def _install_v157_runtime_quality() -> bool:
-    return _install_named(
-        "bot.runtime_quality_convergence_v157_patch",
-        "v157_install_missing",
-        "RUNTIME_QUALITY_CONVERGENCE_V157_INSTALL_ERROR",
-    )
+    return _install_named("bot.runtime_quality_convergence_v157_patch", "v157_install_missing", "RUNTIME_QUALITY_CONVERGENCE_V157_INSTALL_ERROR")
 
 
 def _install_v158_capital_margin() -> bool:
-    return _install_named(
-        "bot.capital_pipeline_margin_v158_patch",
-        "v158_install_missing",
-        "CAPITAL_PIPELINE_MARGIN_V158_INSTALL_ERROR",
-    )
+    return _install_named("bot.capital_pipeline_margin_v158_patch", "v158_install_missing", "CAPITAL_PIPELINE_MARGIN_V158_INSTALL_ERROR")
 
 
 def _install_v161_capital_position_convergence() -> bool:
-    return _install_named(
-        "bot.runtime_capital_position_convergence_v161_patch",
-        "v161_install_missing",
-        "RUNTIME_CAPITAL_POSITION_CONVERGENCE_V161_INSTALL_ERROR",
-    )
+    return _install_named("bot.runtime_capital_position_convergence_v161_patch", "v161_install_missing", "RUNTIME_CAPITAL_POSITION_CONVERGENCE_V161_INSTALL_ERROR")
 
 
 def _install_v162_late_observation_fence() -> bool:
-    return _install_named(
-        "bot.runtime_capital_late_observation_fence_v162_patch",
-        "v162_install_missing",
-        "RUNTIME_CAPITAL_LATE_OBSERVATION_FENCE_V162_INSTALL_ERROR",
-    )
+    return _install_named("bot.runtime_capital_late_observation_fence_v162_patch", "v162_install_missing", "RUNTIME_CAPITAL_LATE_OBSERVATION_FENCE_V162_INSTALL_ERROR")
 
 
 def _install_v163_activation_convergence() -> bool:
-    return _install_named(
-        "bot.runtime_activation_convergence_v163_patch",
-        "v163_install_missing",
-        "RUNTIME_ACTIVATION_CONVERGENCE_V163_INSTALL_ERROR",
-    )
+    return _install_named("bot.runtime_activation_convergence_v163_patch", "v163_install_missing", "RUNTIME_ACTIVATION_CONVERGENCE_V163_INSTALL_ERROR")
 
 
 def _install_v164_capital_publication_liveness() -> bool:
-    return _install_named(
-        "bot.runtime_capital_publication_liveness_v164_patch",
-        "v164_install_missing",
-        "RUNTIME_CAPITAL_PUBLICATION_LIVENESS_V164_INSTALL_ERROR",
-    )
+    return _install_named("bot.runtime_capital_publication_liveness_v164_patch", "v164_install_missing", "RUNTIME_CAPITAL_PUBLICATION_LIVENESS_V164_INSTALL_ERROR")
 
 
 def _install_v165_capital_publication_scheduling() -> bool:
-    return _install_named(
-        "bot.runtime_capital_publication_scheduling_v165_patch",
-        "v165_install_missing",
-        "RUNTIME_CAPITAL_PUBLICATION_SCHEDULING_V165_INSTALL_ERROR",
-    )
+    return _install_named("bot.runtime_capital_publication_scheduling_v165_patch", "v165_install_missing", "RUNTIME_CAPITAL_PUBLICATION_SCHEDULING_V165_INSTALL_ERROR")
 
 
 def _install_v167_refresh_demand() -> bool:
-    return _install_named(
-        "bot.runtime_refresh_demand_v167_patch",
-        "v167_install_missing",
-        "RUNTIME_REFRESH_DEMAND_V167_INSTALL_ERROR",
-    )
+    return _install_named("bot.runtime_refresh_demand_v167_patch", "v167_install_missing", "RUNTIME_REFRESH_DEMAND_V167_INSTALL_ERROR")
 
 
 def _install_v209_zero_balance_completeness() -> bool:
-    return _install_named(
-        "bot.runtime_zero_balance_completeness_v209_patch",
-        "v209_install_missing",
-        "ZERO_BALANCE_COMPLETENESS_V209_INSTALL_ERROR",
-    )
+    return _install_named("bot.runtime_zero_balance_completeness_v209_patch", "v209_install_missing", "ZERO_BALANCE_COMPLETENESS_V209_INSTALL_ERROR")
+
+
+def _install_v224_exchange_reject_provenance() -> bool:
+    return _install_named("bot.exchange_reject_provenance_v224_patch", "v224_install_missing", "EXCHANGE_REJECT_PROVENANCE_V224_INSTALL_ERROR")
+
+
+def _install_v228_exchange_reject_dispatch_provenance() -> bool:
+    return _install_named("bot.exchange_reject_dispatch_provenance_v228_patch", "v228_install_missing", "EXCHANGE_REJECT_DISPATCH_PROVENANCE_V228_INSTALL_ERROR")
 
 
 def _install_v229_capital_provenance_alias() -> bool:
-    return _install_named(
-        "bot.runtime_capital_provenance_alias_convergence_v229_patch",
-        "v229_install_missing",
-        "RUNTIME_CAPITAL_PROVENANCE_ALIAS_V229_INSTALL_ERROR",
-    )
+    return _install_named("bot.runtime_capital_provenance_alias_convergence_v229_patch", "v229_install_missing", "RUNTIME_CAPITAL_PROVENANCE_ALIAS_V229_INSTALL_ERROR")
+
+
+def _install_v232_heartbeat_execution_quality() -> bool:
+    return _install_named("bot.runtime_heartbeat_execution_quality_v232_patch", "v232_install_missing", "HEARTBEAT_EXECUTION_QUALITY_V232_INSTALL_ERROR")
 
 
 def _iteration() -> bool:
     changed = _canonicalize_alias()
     required = _apply_broker_threshold()
     patched = _patch_quiescence_audit()
+
+    # Install rejection provenance before the broader activation/liveness set.
+    # This ordering is deliberate: no startup probe should be able to create a
+    # local synthetic rejection sample before v224/v228 are attached.
+    v224_installed = _install_v224_exchange_reject_provenance()
+    v228_installed = _install_v228_exchange_reject_dispatch_provenance()
+    v232_installed = _install_v232_heartbeat_execution_quality()
+
     v154_installed = _install_v154_recovery()
     v155_installed = _install_v155_nonce_maturity()
     v157_installed = _install_v157_runtime_quality()
@@ -231,49 +213,29 @@ def _iteration() -> bool:
     # v229 must attach after v209 so it can harden v209's provenance reader
     # without replacing the existing exact-live-zero admission rule.
     v229_installed = _install_v229_capital_provenance_alias()
+
     os.environ["NIJA_RUNTIME_POST_IMPORT_CONVERGENCE_INSTALLED"] = "1"
     if changed:
-        logger.warning(
-            "DOWNSTREAM_RISK_ALIAS_DRIFT_REPAIRED marker=%s canonical=%s alias=%s same=true",
-            _MARKER,
-            _CANONICAL,
-            _ALIAS,
-        )
+        logger.warning("DOWNSTREAM_RISK_ALIAS_DRIFT_REPAIRED marker=%s canonical=%s alias=%s same=true", _MARKER, _CANONICAL, _ALIAS)
+
     logger.debug(
         "RUNTIME_POST_IMPORT_CONVERGENCE marker=%s policy=%s min_brokers=%d audit_patched=%s "
+        "v224_installed=%s v228_installed=%s v232_installed=%s "
         "v154_installed=%s v155_installed=%s v157_installed=%s v158_installed=%s "
         "v161_installed=%s v162_installed=%s v163_installed=%s v164_installed=%s "
         "v165_installed=%s v167_installed=%s v209_installed=%s v229_installed=%s",
-        _MARKER,
-        _policy(),
-        required,
-        str(patched).lower(),
-        str(v154_installed).lower(),
-        str(v155_installed).lower(),
-        str(v157_installed).lower(),
-        str(v158_installed).lower(),
-        str(v161_installed).lower(),
-        str(v162_installed).lower(),
-        str(v163_installed).lower(),
-        str(v164_installed).lower(),
-        str(v165_installed).lower(),
-        str(v167_installed).lower(),
-        str(v209_installed).lower(),
-        str(v229_installed).lower(),
+        _MARKER, _policy(), required, str(patched).lower(),
+        str(v224_installed).lower(), str(v228_installed).lower(), str(v232_installed).lower(),
+        str(v154_installed).lower(), str(v155_installed).lower(), str(v157_installed).lower(),
+        str(v158_installed).lower(), str(v161_installed).lower(), str(v162_installed).lower(),
+        str(v163_installed).lower(), str(v164_installed).lower(), str(v165_installed).lower(),
+        str(v167_installed).lower(), str(v209_installed).lower(), str(v229_installed).lower(),
     )
     return bool(
-        v154_installed
-        and v155_installed
-        and v157_installed
-        and v158_installed
-        and v161_installed
-        and v162_installed
-        and v163_installed
-        and v164_installed
-        and v165_installed
-        and v167_installed
-        and v209_installed
-        and v229_installed
+        v224_installed and v228_installed and v232_installed
+        and v154_installed and v155_installed and v157_installed and v158_installed
+        and v161_installed and v162_installed and v163_installed and v164_installed
+        and v165_installed and v167_installed and v209_installed and v229_installed
     )
 
 
@@ -292,44 +254,30 @@ def install() -> bool:
         _iteration()
         if not _STARTED:
             _STARTED = True
-            threading.Thread(
-                target=_watchdog,
-                name="RuntimePostImportConvergence",
-                daemon=True,
-            ).start()
+            threading.Thread(target=_watchdog, name="RuntimePostImportConvergence", daemon=True).start()
         logger.critical(
             "RUNTIME_POST_IMPORT_CONVERGENCE_INSTALLED marker=%s policy=%s min_brokers=%d "
-            "alias_same=true v154_recovery=true v155_nonce_maturity=true v157_runtime_quality=true "
+            "alias_same=true v224_exchange_reject_provenance=true "
+            "v228_exchange_reject_dispatch_provenance=true v232_heartbeat_execution_quality=true "
+            "v154_recovery=true v155_nonce_maturity=true v157_runtime_quality=true "
             "v158_capital_margin=true v161_capital_position_convergence=true "
             "v162_late_observation_fence=true v163_activation_convergence=true "
             "v164_capital_publication_liveness=true v165_capital_publication_scheduling=true "
             "v167_refresh_demand=true v209_zero_balance_completeness=true "
             "v229_capital_provenance_alias=true",
-            _MARKER,
-            _policy(),
-            _required_broker_count(),
+            _MARKER, _policy(), _required_broker_count(),
         )
         return True
 
 
 __all__ = [
-    "install",
-    "_policy",
-    "_required_broker_count",
-    "_apply_broker_threshold",
-    "_canonicalize_alias",
-    "_patch_quiescence_audit",
-    "_install_v154_recovery",
-    "_install_v155_nonce_maturity",
-    "_install_v157_runtime_quality",
-    "_install_v158_capital_margin",
-    "_install_v161_capital_position_convergence",
-    "_install_v162_late_observation_fence",
-    "_install_v163_activation_convergence",
-    "_install_v164_capital_publication_liveness",
-    "_install_v165_capital_publication_scheduling",
-    "_install_v167_refresh_demand",
-    "_install_v209_zero_balance_completeness",
-    "_install_v229_capital_provenance_alias",
-    "_iteration",
+    "install", "_policy", "_required_broker_count", "_apply_broker_threshold",
+    "_canonicalize_alias", "_patch_quiescence_audit", "_install_v154_recovery",
+    "_install_v155_nonce_maturity", "_install_v157_runtime_quality",
+    "_install_v158_capital_margin", "_install_v161_capital_position_convergence",
+    "_install_v162_late_observation_fence", "_install_v163_activation_convergence",
+    "_install_v164_capital_publication_liveness", "_install_v165_capital_publication_scheduling",
+    "_install_v167_refresh_demand", "_install_v209_zero_balance_completeness",
+    "_install_v224_exchange_reject_provenance", "_install_v228_exchange_reject_dispatch_provenance",
+    "_install_v229_capital_provenance_alias", "_install_v232_heartbeat_execution_quality", "_iteration",
 ]
