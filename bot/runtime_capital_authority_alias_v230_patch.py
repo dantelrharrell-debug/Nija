@@ -2,16 +2,16 @@
 
 Production on 2026-08-25 showed V229 ready while canonical publication still
 failed closed as incomplete_broker_aggregation:2/3 and heartbeat execution was
-blocked by capital_snapshot_stale.  V209 patches bot.capital_authority only; a
+blocked by capital_snapshot_stale. V209 patches bot.capital_authority only; a
 separately loaded capital_authority module can therefore publish without V209's
 same-cycle exact-zero augmentation.
 
 V230 patches publish_snapshot on every loaded CapitalAuthority class reachable
-through bot.capital_authority and capital_authority.  Duplicate module/class
-identities are deduplicated.  The wrapper delegates augmentation to V209, whose
-provenance reader is hardened by V229.  Therefore only a same-cycle live exact
-zero can restore a missing broker entry; positive, stale, timeout, error,
-excluded or conflicting observations remain fail closed.
+through bot.capital_authority and capital_authority. Duplicate module/class
+identities are deduplicated. The wrapper delegates augmentation to V209, whose
+provenance reader is hardened by V229 before V230 is installed from V229. Thus
+only a same-cycle live exact zero can restore a missing broker entry; positive,
+stale, timeout, error, excluded or conflicting observations remain fail closed.
 
 V230 never fabricates positive capital, changes capital totals, freshness TTL,
 completeness thresholds, writer/nonce/risk/kill-switch state, execution proof,
@@ -96,7 +96,6 @@ def _patch_class(alias: str, cls: type) -> bool:
 
 
 def _patch_loaded_aliases() -> tuple[int, int]:
-    """Patch every distinct currently loaded publisher class."""
     rows = _loaded_authority_classes()
     patched = 0
     for alias, cls in rows:
@@ -134,17 +133,12 @@ def _worker() -> None:
 def install() -> bool:
     global _THREAD
     with _LOCK:
-        # Ensure V209 then V229 are attached before this publisher wrapper.
+        # V229 invokes V230 only after V209 and V229 provenance hooks are ready.
         v209 = importlib.import_module("bot.runtime_zero_balance_completeness_v209_patch")
-        v229 = importlib.import_module("bot.runtime_capital_provenance_alias_convergence_v229_patch")
         if getattr(v209, "install", lambda: False)() is False:
             os.environ[_READY_FLAG] = "0"
             return False
-        if getattr(v229, "install", lambda: False)() is False:
-            os.environ[_READY_FLAG] = "0"
-            return False
 
-        # Import canonical authority so at least one real publisher must exist.
         importlib.import_module("bot.capital_authority")
         patched, loaded = _patch_loaded_aliases()
         manifest_ok = _register_manifest()
