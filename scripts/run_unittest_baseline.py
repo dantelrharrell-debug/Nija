@@ -5,12 +5,16 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 import sys
+import threading
 import unittest
 from urllib.parse import unquote
 
 
 FailureKey = tuple[str, str]
 _KINDS = {"FAIL", "ERROR"}
+_TEST_ONLY_RESTART_THREAD_NAMES = frozenset({
+    "terminal-writer-loss-forced-restart",
+})
 
 
 def _parse_baseline(path: Path) -> set[FailureKey]:
@@ -37,6 +41,53 @@ def _parse_baseline(path: Path) -> set[FailureKey]:
         entries.add(entry)
         test_ids.add(entry[1])
     return entries
+
+
+def _reset_terminal_writer_loss_test_state() -> None:
+    """Prevent one unit test's terminal-loss proof from killing later tests.
+
+    Production correctly arms an ``os._exit(75)`` timer after terminal writer
+    loss. Unit tests intentionally exercise that path, but the daemon Timer can
+    outlive the test method and terminate the entire shared unittest process
+    several tests later. Cancel only the explicitly named forced-restart timer
+    and invoke the latch module's documented test-only reset hook between test
+    cases. Production code and restart behavior are unchanged.
+    """
+    for thread in tuple(threading.enumerate()):
+        if thread.name not in _TEST_ONLY_RESTART_THREAD_NAMES:
+            continue
+        cancel = getattr(thread, "cancel", None)
+        if callable(cancel):
+            try:
+                cancel()
+            except Exception:
+                pass
+
+    seen: set[int] = set()
+    for module_name in (
+        "bot.terminal_writer_loss_latch",
+        "terminal_writer_loss_latch",
+    ):
+        module = sys.modules.get(module_name)
+        if module is None or id(module) in seen:
+            continue
+        seen.add(id(module))
+        reset = getattr(module, "reset_for_test", None)
+        if callable(reset):
+            try:
+                reset()
+            except Exception:
+                pass
+
+
+class _IsolatedTextTestResult(unittest.TextTestResult):
+    """Text result that clears process-level restart state after every test."""
+
+    def stopTest(self, test: unittest.case.TestCase) -> None:  # noqa: N802
+        try:
+            super().stopTest(test)
+        finally:
+            _reset_terminal_writer_loss_test_state()
 
 
 def _observed_failures(result: unittest.TestResult) -> set[FailureKey]:
@@ -67,11 +118,18 @@ def main(argv: list[str] | None = None) -> int:
         print(f"CI_BASELINE_INVALID: {exc}", file=sys.stderr)
         return 2
 
+    _reset_terminal_writer_loss_test_state()
     suite = unittest.defaultTestLoader.discover(
         start_dir=args.start_dir,
         pattern=args.pattern,
     )
-    result = unittest.TextTestRunner(verbosity=2).run(suite)
+    runner = unittest.TextTestRunner(
+        verbosity=2,
+        resultclass=_IsolatedTextTestResult,
+    )
+    result = runner.run(suite)
+    _reset_terminal_writer_loss_test_state()
+
     observed = _observed_failures(result)
     unexpected = observed - baseline
     resolved = baseline - observed
