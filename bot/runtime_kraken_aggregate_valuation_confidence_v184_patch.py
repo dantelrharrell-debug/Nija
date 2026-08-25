@@ -1,35 +1,14 @@
 """Use authenticated Kraken aggregate-equity proof for capital confidence.
 
-Production on 2026-08-22 showed the v183 capital-liveness repair working:
-CapitalAuthority publishes a fresh accepted 3/3 platform snapshot, Kraken
-TradeBalance returns a positive authenticated equivalent balance (``eb``), and
-position/writer/runtime readiness are healthy.  The capital runtime nevertheless
-remains RUN_DEGRADED because Stage 4's legacy pricing-coverage input stays 0.0:
-v183 intentionally avoids cold per-asset public ticker calls during the bounded
-capital refresh.
+This runtime hardening keeps the raw per-asset pricing metric truthful while
+allowing a fresh authenticated Kraken TradeBalance equivalent-equity proof to
+satisfy the capital valuation-confidence input.  It also distinguishes local
+process read-lock contention (KrakenReadLockBusy / v212) from genuine Kraken
+exchange/API failures so local scheduling contention cannot by itself collapse
+pricing confidence to zero.
 
-v184 preserves the raw per-asset pricing metric and adds a narrowly-scoped
-aggregate valuation proof.  A successful authenticated read-only ``TradeBalance``
-response records its positive ``eb`` and timestamp on the exact Kraken broker
-instance.  ``get_last_pricing_coverage`` is then allowed to return effective
-valuation coverage=1.0 only when all of the following are true:
-
-* the most recent TradeBalance response was successful and ``eb`` is positive;
-* its proof timestamp is still inside the canonical capital freshness TTL;
-* the broker's last successful balance timestamp is also inside that TTL;
-* the TradeBalance and balance observations belong to the same fetch epoch
-  (bounded timestamp skew);
-* Kraken reports zero consecutive balance errors and is not unavailable/error.
-
-The historical ``_last_pricing_coverage_pct`` field is NOT modified, so raw
-per-asset pricing diagnostics remain truthful.  This patch only supplies the
-Stage-4 legacy coverage accessor with the stronger authenticated aggregate-equity
-valuation authority that already determines ``total_funds`` in broker_manager.
-
-No balance/capital value is synthesized.  No freshness TTL, publication expiry,
-broker completeness, writer/nonce/risk state, kill switch, activation state,
-execution permission, signal threshold, market-quality gate, or trade routing is
-changed.
+No balance or price is fabricated. Freshness, completeness, writer, nonce,
+risk, kill-switch, order, fill, and activation gates remain authoritative.
 """
 from __future__ import annotations
 
@@ -49,6 +28,8 @@ _PRIVATE_ATTR = "_nija_runtime_kraken_aggregate_valuation_confidence_v184_privat
 _COVERAGE_ATTR = "_nija_runtime_kraken_aggregate_valuation_confidence_v184_coverage"
 _PROOF_EQUITY_ATTR = "_nija_v184_tradebalance_equity_usd"
 _PROOF_TS_ATTR = "_nija_v184_tradebalance_equity_ts"
+_LOCAL_BUSY_COUNT_ATTR = "_nija_v184_local_read_lock_busy_count"
+_LOCAL_BUSY_TS_ATTR = "_nija_v184_local_read_lock_busy_ts"
 _LOCK = threading.RLock()
 
 
@@ -61,7 +42,6 @@ def _positive_float(value: Any) -> Optional[float]:
 
 
 def _canonical_freshness_ttl_s() -> float:
-    """Read, never extend, the canonical capital freshness TTL."""
     try:
         module = importlib.import_module("bot.capital_flow_state_machine")
         ttl = float(getattr(module, "FRESHNESS_TTL_S", 90.0) or 90.0)
@@ -73,6 +53,33 @@ def _canonical_freshness_ttl_s() -> float:
 def _clear_aggregate_proof(instance: Any) -> None:
     setattr(instance, _PROOF_EQUITY_ATTR, 0.0)
     setattr(instance, _PROOF_TS_ATTR, 0.0)
+
+
+def _reset_local_contention(instance: Any) -> None:
+    setattr(instance, _LOCAL_BUSY_COUNT_ATTR, 0)
+    setattr(instance, _LOCAL_BUSY_TS_ATTR, 0.0)
+
+
+def _record_local_contention(instance: Any) -> None:
+    try:
+        count = int(getattr(instance, _LOCAL_BUSY_COUNT_ATTR, 0) or 0)
+    except Exception:
+        count = 0
+    setattr(instance, _LOCAL_BUSY_COUNT_ATTR, count + 1)
+    setattr(instance, _LOCAL_BUSY_TS_ATTR, time.time())
+    LOGGER.info(
+        "KRAKEN_CAPITAL_V184_LOCAL_READ_CONTENTION marker=%s account=%s count=%d "
+        "exchange_failure=false balance_fabricated=false",
+        MARKER,
+        getattr(instance, "account_identifier", "unknown"),
+        count + 1,
+    )
+
+
+def _is_local_read_contention(exc: BaseException) -> bool:
+    name = exc.__class__.__name__
+    message = str(exc or "")
+    return name == "KrakenReadLockBusy" or "Kraken read lock busy" in message
 
 
 def _record_tradebalance_result(instance: Any, result: Any) -> None:
@@ -90,10 +97,32 @@ def _record_tradebalance_result(instance: Any, result: Any) -> None:
         return
     setattr(instance, _PROOF_EQUITY_ATTR, equity)
     setattr(instance, _PROOF_TS_ATTR, time.time())
+    # A successful authenticated TradeBalance establishes a new clean proof
+    # epoch.  Only local lock-contention events after this proof are relevant.
+    _reset_local_contention(instance)
+
+
+def _local_contention_covers_current_errors(instance: Any, proof_ts: float) -> tuple[bool, int, int]:
+    """Return True only when every current error can be attributed to local v212 contention."""
+    try:
+        errors_getter = getattr(instance, "get_error_count", None)
+        errors = int(errors_getter()) if callable(errors_getter) else 0
+    except Exception:
+        return False, 0, 0
+    if errors <= 0:
+        return False, errors, 0
+    try:
+        local_count = int(getattr(instance, _LOCAL_BUSY_COUNT_ATTR, 0) or 0)
+        local_ts = float(getattr(instance, _LOCAL_BUSY_TS_ATTR, 0.0) or 0.0)
+    except Exception:
+        return False, errors, 0
+    # Fail closed unless all currently reported errors are covered by local
+    # contention observed after the successful authenticated proof epoch.
+    covered = local_count >= errors and local_ts >= proof_ts > 0.0
+    return covered, errors, local_count
 
 
 def _aggregate_proof_status(instance: Any, *, now: Optional[float] = None) -> tuple[bool, str, float, float]:
-    """Return whether aggregate-equity proof is current and same-epoch."""
     current = time.time() if now is None else float(now)
     equity = _positive_float(getattr(instance, _PROOF_EQUITY_ATTR, 0.0)) or 0.0
     try:
@@ -123,31 +152,38 @@ def _aggregate_proof_status(instance: Any, *, now: Optional[float] = None) -> tu
     balance_age = max(0.0, current - balance_ts)
     if balance_age > ttl:
         return False, "balance_observation_stale", equity, proof_age
-
-    # get_account_balance sets _balance_last_updated immediately after the
-    # authenticated TradeBalance call.  Allow a small scheduling/logging gap,
-    # but never join unrelated observations from different refresh epochs.
     if abs(balance_ts - proof_ts) > 5.0:
         return False, "aggregate_balance_epoch_mismatch", equity, proof_age
 
-    errors_getter = getattr(instance, "get_error_count", None)
-    if callable(errors_getter):
-        try:
-            if int(errors_getter()) != 0:
-                return False, "kraken_balance_errors_present", equity, proof_age
-        except Exception:
-            return False, "kraken_error_state_unknown", equity, proof_age
+    contention_only, error_count, local_count = _local_contention_covers_current_errors(instance, proof_ts)
+    if error_count > 0 and not contention_only:
+        return False, "kraken_exchange_or_unattributed_errors_present", equity, proof_age
 
     available_getter = getattr(instance, "is_available", None)
     if callable(available_getter):
         try:
-            if not bool(available_getter()):
-                return False, "kraken_unavailable", equity, proof_age
+            available = bool(available_getter())
         except Exception:
             return False, "kraken_availability_unknown", equity, proof_age
+        if not available and not contention_only:
+            return False, "kraken_unavailable", equity, proof_age
 
-    if str(getattr(instance, "kraken_health", "OK") or "OK").upper() == "ERROR":
+    health = str(getattr(instance, "kraken_health", "OK") or "OK").upper()
+    if health == "ERROR" and not contention_only:
         return False, "kraken_health_error", equity, proof_age
+
+    if contention_only:
+        LOGGER.warning(
+            "KRAKEN_CAPITAL_V184_LOCAL_CONTENTION_TOLERATED marker=%s account=%s "
+            "error_count=%d local_contention_count=%d proof_age_s=%.3f "
+            "authenticated_equity_required=true exchange_error_ignored=false",
+            MARKER,
+            getattr(instance, "account_identifier", "unknown"),
+            error_count,
+            local_count,
+            proof_age,
+        )
+        return True, "authenticated_tradebalance_equity_local_contention_only", equity, proof_age
 
     return True, "authenticated_tradebalance_equity", equity, proof_age
 
@@ -185,8 +221,10 @@ def _patch_kraken_provenance() -> bool:
             is_tradebalance = str(method or "") == "TradeBalance"
             try:
                 result = original_private(self, method, *args, **kwargs)
-            except Exception:
-                if is_tradebalance:
+            except Exception as exc:
+                if _is_local_read_contention(exc):
+                    _record_local_contention(self)
+                elif is_tradebalance:
                     _clear_aggregate_proof(self)
                 raise
             if is_tradebalance:
@@ -210,7 +248,7 @@ def _patch_kraken_provenance() -> bool:
             valid, reason, equity, proof_age = _aggregate_proof_status(self)
             if not valid:
                 return raw_coverage
-            effective = max(raw_coverage, 1.0)
+            effective = 1.0
             LOGGER.info(
                 "KRAKEN_CAPITAL_V184_AGGREGATE_VALUATION_PROOF marker=%s account=%s "
                 "eb=%.8f proof_age_s=%.3f raw_asset_pricing_coverage=%.3f "
@@ -264,6 +302,7 @@ def install() -> bool:
         LOGGER.critical(
             "RUNTIME_KRAKEN_AGGREGATE_VALUATION_CONFIDENCE_V184 marker=%s ready=true "
             "authenticated_tradebalance_equity_required=true same_balance_epoch_required=true "
+            "local_read_contention_classified=true unattributed_exchange_errors_fail_closed=true "
             "raw_asset_pricing_metric_preserved=true effective_valuation_coverage=true "
             "freshness_ttl_unchanged=true publication_expiry_extended=false "
             "capital_mutated=false asset_prices_fabricated=false forced_activation=false "
