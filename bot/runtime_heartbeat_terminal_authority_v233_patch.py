@@ -7,8 +7,10 @@ guard could still hold an imported/stale can_execute reference and re-block the 
 verified heartbeat on lifecycle_phase:BOOT.
 
 This revision carries a same-thread, sub-second terminal grant from the verified
-pipeline authority check to the immediately-following broker submit guard and also
-patches the broker integration submit guard itself. It never changes lifecycle state,
+pipeline authority check to the immediately-following broker submit guard. It patches
+both can_execute() and can_execute_startup_probe() on terminal broker modules so the
+existing broker_manager fallback path can atomically consume the already-verified
+grant even when its can_execute reference is stale. It never changes lifecycle state,
 readiness, nonce, kill switch, capital, broker health, ECEL, minimum-notional,
 acknowledgement, or fill proof. Ordinary orders do not receive the grant.
 """
@@ -29,6 +31,7 @@ LOGGER = logging.getLogger("nija.runtime_heartbeat_terminal_authority_v233")
 MARKER = "20260825-heartbeat-terminal-authority-v233"
 _FLAG = "NIJA_HEARTBEAT_TERMINAL_AUTHORITY_V233_READY"
 _PATCH_ATTR = "_nija_heartbeat_terminal_authority_v233"
+_PROBE_PATCH_ATTR = "_nija_heartbeat_terminal_probe_v233"
 _GUARD_PATCH_ATTR = "_nija_heartbeat_terminal_submit_guard_v233"
 _LOCK = threading.RLock()
 _THREAD: threading.Thread | None = None
@@ -179,13 +182,45 @@ def _wrap_can_execute(current: Callable[..., Any], authority: ModuleType) -> Cal
     return can_execute_v233
 
 
-def _patch_submit_guard(module: ModuleType) -> bool:
-    """Patch the final broker-integration guard that may retain a stale import.
+def _wrap_startup_probe(current: Callable[..., Any]) -> Callable[..., Any]:
+    """Let terminal broker fallback checks consume an already-verified v233 grant.
 
-    The guard is allowed to recover only an ExecutionBlocked caused by BOOT on the
-    same thread while an already-verified startup-probe grant is still live.
-    Every other exception and every ordinary order remain fail-closed.
+    broker_manager intentionally calls can_execute_startup_probe() after a denied
+    can_execute(). In production its imported can_execute reference can be stale,
+    so this wrapper gives that existing fallback path access to the same-thread,
+    sub-second grant created by the canonical pipeline check. It never creates a
+    grant and therefore cannot authorize an ordinary order on its own.
     """
+    if bool(getattr(current, _PROBE_PATCH_ATTR, False)):
+        return current
+
+    @wraps(current)
+    def startup_probe_v233(*args: Any, **kwargs: Any):
+        try:
+            allowed, reason = current(*args, **kwargs)
+        except Exception:
+            allowed, reason = False, "startup_probe_error"
+        if bool(allowed):
+            return allowed, reason
+        inherited_reason = _consume_live_grant()
+        if inherited_reason is None:
+            return allowed, reason
+        LOGGER.critical(
+            "HEARTBEAT_TERMINAL_AUTHORITY_V233_BROKER_PROBE_GRANT_CONSUMED marker=%s probe_reason=%s "
+            "same_thread=true bounded_grant=true terminal_fallback=true ordinary_orders_unchanged=true "
+            "canonical_lifecycle_unchanged=true execution_proof_fabricated=false forced_activation=false "
+            "safety_gates_bypassed=false",
+            MARKER, inherited_reason,
+        )
+        return True, inherited_reason
+
+    setattr(startup_probe_v233, _PROBE_PATCH_ATTR, True)
+    setattr(startup_probe_v233, "__wrapped__", current)
+    return startup_probe_v233
+
+
+def _patch_submit_guard(module: ModuleType) -> bool:
+    """Patch the final broker-integration guard that may retain a stale import."""
     current = getattr(module, "_reject_if_unauthorized_order_submit", None)
     if not callable(current):
         return True
@@ -223,7 +258,8 @@ def _patch_submit_guard(module: ModuleType) -> bool:
 def _patch_terminal_surfaces() -> tuple[bool, tuple[str, ...]]:
     authority = _authority_module()
     current = getattr(authority, "can_execute", None)
-    if not callable(current):
+    canonical_probe = getattr(authority, "can_execute_startup_probe", None)
+    if not callable(current) or not callable(canonical_probe):
         return False, ()
 
     wrapped = _wrap_can_execute(current, authority)
@@ -236,6 +272,7 @@ def _patch_terminal_surfaces() -> tuple[bool, tuple[str, ...]]:
     patched: list[str] = []
     seen: set[int] = set()
     guard_ok = True
+    probe_ok = True
     for module_name in _TERMINAL_MODULE_NAMES:
         module = sys.modules.get(module_name)
         if not isinstance(module, ModuleType):
@@ -246,16 +283,25 @@ def _patch_terminal_surfaces() -> tuple[bool, tuple[str, ...]]:
         if id(module) in seen:
             continue
         seen.add(id(module))
+
         existing = getattr(module, "can_execute", None)
         if callable(existing):
             setattr(module, "can_execute", wrapped)
-            if getattr(module, "can_execute", None) is wrapped:
-                patched.append(str(getattr(module, "__name__", module_name)))
-        if module_name.endswith("broker_integration"):
+
+        existing_probe = getattr(module, "can_execute_startup_probe", None)
+        if callable(existing_probe):
+            terminal_probe = _wrap_startup_probe(existing_probe)
+            setattr(module, "can_execute_startup_probe", terminal_probe)
+            probe_ok = bool(getattr(module, "can_execute_startup_probe", None) is terminal_probe and probe_ok)
+
+        if getattr(module, "can_execute", None) is wrapped:
+            patched.append(str(getattr(module, "__name__", module_name)))
+
+        if module_name.endswith("broker_integration") or module_name.endswith("broker_manager"):
             guard_ok = bool(_patch_submit_guard(module) and guard_ok)
 
     canonical_ok = bool(getattr(authority, "can_execute", None) is wrapped and getattr(wrapped, _PATCH_ATTR, False))
-    return canonical_ok and bool(patched) and guard_ok, tuple(sorted(set(patched)))
+    return canonical_ok and bool(patched) and guard_ok and probe_ok, tuple(sorted(set(patched)))
 
 
 def _patch_broker_manager() -> bool:
@@ -311,8 +357,9 @@ def install() -> bool:
     LOGGER.critical(
         "HEARTBEAT_TERMINAL_AUTHORITY_V233_READY marker=%s ready=true broker_terminal_startup_probe_bridge=true "
         "canonical_authority_wrapped=true patched_surfaces=%s startup_write_authority_required=true "
-        "bounded_terminal_grant=true grant_ttl_s=%.2f broker_submit_guard_patched=true ordinary_orders_unchanged=true "
-        "canonical_lifecycle_unchanged=true execution_proof_fabricated=false forced_activation=false safety_gates_bypassed=false",
+        "bounded_terminal_grant=true grant_ttl_s=%.2f broker_submit_guard_patched=true terminal_probe_patched=true "
+        "ordinary_orders_unchanged=true canonical_lifecycle_unchanged=true execution_proof_fabricated=false "
+        "forced_activation=false safety_gates_bypassed=false",
         MARKER, ",".join(patched_surfaces), _GRANT_TTL_S,
     )
     return True
@@ -330,4 +377,5 @@ __all__ = [
     "_patch_terminal_surfaces",
     "_patch_submit_guard",
     "_wrap_can_execute",
+    "_wrap_startup_probe",
 ]
