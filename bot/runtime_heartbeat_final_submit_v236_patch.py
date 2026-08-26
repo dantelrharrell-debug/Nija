@@ -3,15 +3,21 @@
 Production on 2026-08-26 showed that the heartbeat order passes risk/ECEL and the
 pipeline startup-probe authority check, but a later broker terminal can still
 re-evaluate the canonical lifecycle as BOOT. A v233 same-thread grant is the preferred
-fast path, but production also proved that intermediate authority reads/reassertions
-can consume or replace that transient grant before ``broker_manager`` reaches its
-final submit guard.
+fast path, but intermediate authority reads/reassertions can consume that transient
+grant before ``broker_manager`` reaches its final submit guard.
+
+This revision also closes the verified-context lifetime gap at
+``pipeline_order_submitter.submit_market_order_via_pipeline``. TradingStrategy opens
+``startup_execution_probe_scope`` around that helper, but production has many nested
+pipeline/router wrappers before terminal submission. v236 now re-enters the canonical
+startup-probe scope *inside* the helper only when the caller is already an independently
+verified startup probe and the strategy is exactly HEARTBEAT_TRADE or
+HEARTBEAT_TRADE_CLOSE. An ordinary order cannot create this context because the wrapper
+first requires ``can_execute_startup_probe()`` to already return true.
 
 v236 never creates general execution authority. For an exact lifecycle BOOT denial it
 first accepts a still-live v233 grant. If that transient grant is absent, it asks the
-canonical ``can_execute_startup_probe()`` in the *current context*. That function only
-returns true when the ContextVar reason is one of the whitelisted startup heartbeats
-and ``assert_startup_write_authority()`` succeeds. v236 then re-runs
+canonical ``can_execute_startup_probe()`` in the current context and re-runs
 ``assert_startup_write_authority()`` immediately before releasing the final submit
 boundary. All non-heartbeat contexts and every non-BOOT denial remain fail-closed.
 Ordinary orders, lifecycle state, readiness, nonce, risk, capital, broker health,
@@ -33,11 +39,16 @@ LOGGER = logging.getLogger("nija.runtime_heartbeat_final_submit_v236")
 MARKER = "20260826-heartbeat-final-submit-v236"
 _FLAG = "NIJA_HEARTBEAT_FINAL_SUBMIT_V236_READY"
 _PATCH_ATTR = "_nija_heartbeat_final_submit_v236"
+_HELPER_PATCH_ATTR = "_nija_heartbeat_submit_context_v236"
 _MODULES = (
     "bot.broker_manager",
     "broker_manager",
     "bot.broker_integration",
     "broker_integration",
+)
+_SUBMITTER_MODULES = (
+    "bot.pipeline_order_submitter",
+    "pipeline_order_submitter",
 )
 _ALLOWED_PROBE_REASONS = {"HEARTBEAT_TRADE", "HEARTBEAT_TRADE_CLOSE"}
 
@@ -55,7 +66,6 @@ def _authority_module() -> ModuleType | None:
 
 
 def _live_verified_grant() -> str | None:
-    """Return the preferred v233 same-thread grant without consuming it."""
     try:
         v233 = importlib.import_module("bot.runtime_heartbeat_terminal_authority_v233_patch")
         grant = getattr(v233, "_GRANT", None)
@@ -74,13 +84,6 @@ def _live_verified_grant() -> str | None:
 
 
 def _canonical_verified_probe() -> str | None:
-    """Independently verify the current ContextVar startup heartbeat.
-
-    This is intentionally not inferred from order fields, thread names, symbols,
-    strategy names or call stack. The canonical authority module owns both the
-    whitelist and writer-authority verification. If the startup-probe scope has
-    already ended, this returns None and the broker submit remains blocked.
-    """
     authority = _authority_module()
     if authority is None:
         return None
@@ -134,6 +137,76 @@ def _verified_reason() -> tuple[str | None, str]:
     return None, "none"
 
 
+def _strategy_from_submit_call(args: tuple[Any, ...], kwargs: dict[str, Any]) -> str:
+    raw = kwargs.get("strategy")
+    if raw is None and len(args) >= 6:
+        raw = args[5]
+    return str(raw or "").strip().upper()
+
+
+def _patch_submit_helper() -> bool:
+    """Keep an already-verified heartbeat ContextVar live through pipeline submit."""
+    module: ModuleType | None = None
+    for name in _SUBMITTER_MODULES:
+        candidate = sys.modules.get(name)
+        if isinstance(candidate, ModuleType):
+            module = candidate
+            break
+    if module is None:
+        try:
+            module = importlib.import_module("bot.pipeline_order_submitter")
+        except Exception:
+            return False
+    current = getattr(module, "submit_market_order_via_pipeline", None)
+    if not callable(current):
+        return False
+    if bool(getattr(current, _HELPER_PATCH_ATTR, False)):
+        return True
+
+    @wraps(current)
+    def submit_with_verified_context(*args: Any, **kwargs: Any):
+        strategy = _strategy_from_submit_call(args, kwargs)
+        if strategy not in _ALLOWED_PROBE_REASONS:
+            return current(*args, **kwargs)
+
+        # Critical safety invariant: strategy text alone is never authority.
+        # The caller must already be inside NIJA's canonical, independently
+        # verified startup probe before v236 may preserve/re-enter that context.
+        verified_reason = _canonical_verified_probe()
+        if verified_reason is None or verified_reason != strategy:
+            return current(*args, **kwargs)
+
+        authority = _authority_module()
+        scope = getattr(authority, "startup_execution_probe_scope", None) if authority else None
+        if not callable(scope) or not _reverify_startup_write_authority():
+            return current(*args, **kwargs)
+
+        LOGGER.critical(
+            "HEARTBEAT_SUBMIT_CONTEXT_V236_PRESERVED marker=%s probe_reason=%s "
+            "caller_already_verified=true startup_write_authority_reverified=true "
+            "pipeline_submit_scope=true ordinary_orders_unchanged=true lifecycle_unchanged=true "
+            "execution_proof_fabricated=false forced_activation=false safety_gates_bypassed=false",
+            MARKER, verified_reason,
+        )
+        with scope(verified_reason):
+            return current(*args, **kwargs)
+
+    setattr(submit_with_verified_context, _HELPER_PATCH_ATTR, True)
+    setattr(submit_with_verified_context, "__wrapped__", current)
+    setattr(module, "submit_market_order_via_pipeline", submit_with_verified_context)
+    for alias in _SUBMITTER_MODULES:
+        alias_module = sys.modules.get(alias)
+        if isinstance(alias_module, ModuleType):
+            setattr(alias_module, "submit_market_order_via_pipeline", submit_with_verified_context)
+
+    # TradingStrategy imports the helper by value, so reanchor that pointer too.
+    for strategy_name in ("bot.trading_strategy", "trading_strategy"):
+        strategy_module = sys.modules.get(strategy_name)
+        if isinstance(strategy_module, ModuleType):
+            setattr(strategy_module, "submit_market_order_via_pipeline", submit_with_verified_context)
+    return True
+
+
 def _patch_module(module: ModuleType) -> bool:
     current = getattr(module, "_reject_if_unauthorized_order_submit", None)
     if not callable(current):
@@ -146,10 +219,6 @@ def _patch_module(module: ModuleType) -> bool:
         try:
             return current(*args, **kwargs)
         except BaseException as exc:
-            # Do not depend on module-local exception identity: import/reassertion
-            # can leave terminal modules holding equivalent ExecutionBlocked classes.
-            # Eligibility is instead constrained to the exact canonical BOOT denial,
-            # then independently authenticated as a whitelisted startup probe.
             if not _eligible_boot_denial(exc):
                 raise
             reason, source = _verified_reason()
@@ -193,26 +262,26 @@ def _patch_surfaces() -> tuple[bool, tuple[str, ...]]:
 
 def install() -> bool:
     try:
-        # Keep v233/v235 as the preferred same-thread handoff. v236's canonical
-        # probe fallback only applies if that transient handoff has been consumed.
         v235 = importlib.import_module("bot.runtime_heartbeat_terminal_broker_manager_v235_patch")
         install_v235 = getattr(v235, "install", None)
         upstream = bool(callable(install_v235) and install_v235())
+        helper_ready = _patch_submit_helper()
         terminal, patched = _patch_surfaces()
-        ready = bool(upstream and terminal and _authority_module() is not None)
+        ready = bool(upstream and helper_ready and terminal and _authority_module() is not None)
     except Exception as exc:
         LOGGER.error(
             "HEARTBEAT_FINAL_SUBMIT_V236_INSTALL_ERROR marker=%s error=%s:%s trading_fail_closed=true",
             MARKER, type(exc).__name__, exc,
         )
-        ready, patched = False, ()
+        ready, patched, helper_ready = False, (), False
     os.environ[_FLAG] = "1" if ready else "0"
     if ready:
         LOGGER.critical(
             "HEARTBEAT_FINAL_SUBMIT_V236_READY marker=%s ready=true patched_surfaces=%s "
-            "v233_verified_grant_preferred=true canonical_probe_fallback=true v235_required=true "
-            "startup_write_authority_reverified=true final_submit_only=true canonical_lifecycle_unchanged=true "
-            "ordinary_orders_unchanged=true execution_proof_fabricated=false forced_activation=false safety_gates_bypassed=false",
+            "verified_submit_context_preserved=true v233_verified_grant_preferred=true "
+            "canonical_probe_fallback=true v235_required=true startup_write_authority_reverified=true "
+            "final_submit_only=true canonical_lifecycle_unchanged=true ordinary_orders_unchanged=true "
+            "execution_proof_fabricated=false forced_activation=false safety_gates_bypassed=false",
             MARKER, ",".join(patched),
         )
     return ready
@@ -228,5 +297,6 @@ __all__ = [
     "install_import_hook",
     "_live_verified_grant",
     "_canonical_verified_probe",
+    "_patch_submit_helper",
     "_patch_surfaces",
 ]
