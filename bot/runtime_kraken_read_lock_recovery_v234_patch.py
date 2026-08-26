@@ -11,22 +11,11 @@ This patch does NOT bypass the Kraken lock, fabricate balances, clear the kill
 switch, grant execution authority, change nonce policy, or retry mutating calls.
 It observes ``KrakenReadLockBusy`` failures from the existing v121 wrapper. A
 successful Kraken private call clears the starvation episode. Quiet time alone
-does not: production probes can be farther apart than the old quiet-reset window,
-which previously prevented the stale threshold from ever accumulating.
-
-The recycle threshold is intentionally shorter than the account-level broker
-failure escalation window. Local lock contention is a process-local liveness
-failure, not proof that Kraken or a user's credentials are unavailable. Recycling
-early prevents a wedged reader from accumulating dozens of misleading balance
-failures and pushing otherwise healthy accounts into EXIT-ONLY solely because a
-local read lock remained owned by a dead/stalled worker.
-
-Mutating calls remain serialized by the original broker implementation. A
-mutating call suppresses recovery while active, preventing a recycle from being
-initiated by this patch during a known order/cancel/edit request.
+does not.
 """
 from __future__ import annotations
 
+import importlib
 import logging
 import os
 import signal
@@ -48,10 +37,7 @@ _BUSY_COUNT = 0
 _ACTIVE_MUTATIONS = 0
 _RECYCLE_REQUESTED = False
 
-_MUTATING = {
-    "AddOrder", "AddOrderBatch", "CancelOrder", "CancelOrderBatch",
-    "CancelAll", "CancelAllOrdersAfter", "EditOrder",
-}
+_MUTATING = {"AddOrder", "AddOrderBatch", "CancelOrder", "CancelOrderBatch", "CancelAll", "CancelAllOrdersAfter", "EditOrder"}
 
 
 def _float_env(name: str, default: float, minimum: float, maximum: float) -> float:
@@ -63,14 +49,10 @@ def _float_env(name: str, default: float, minimum: float, maximum: float) -> flo
 
 
 def _stale_after_s() -> float:
-    # Recovery must beat broker-level consecutive-error escalation. We still
-    # require >=3 independent lock-busy observations and no mutating request.
     return _float_env("NIJA_KRAKEN_READ_LOCK_RECYCLE_AFTER_S", 15.0, 10.0, 120.0)
 
 
 def _quiet_reset_s() -> float:
-    # Retained for configuration/log compatibility. Quiet time is diagnostic;
-    # only an actual successful private call proves the lock recovered.
     return _float_env("NIJA_KRAKEN_READ_LOCK_QUIET_RESET_S", 8.0, 3.0, 30.0)
 
 
@@ -103,12 +85,7 @@ def _note_busy() -> None:
         age = max(0.0, now - _BUSY_SINCE)
     os.environ["NIJA_KRAKEN_READ_LOCK_V234_STARVING"] = "1"
     os.environ["NIJA_KRAKEN_READ_LOCK_V234_BUSY_COUNT"] = str(count)
-    LOGGER.warning(
-        "KRAKEN_READ_LOCK_V234_STARVATION marker=%s busy_count=%d age_s=%.2f "
-        "action=observe_fail_closed reset_requires_success=true lock_bypass=false "
-        "local_contention=true broker_unavailability_unproven=true",
-        MARKER, count, age,
-    )
+    LOGGER.warning("KRAKEN_READ_LOCK_V234_STARVATION marker=%s busy_count=%d age_s=%.2f action=observe_fail_closed reset_requires_success=true lock_bypass=false local_contention=true broker_unavailability_unproven=true", MARKER, count, age)
 
 
 def _note_success() -> None:
@@ -121,11 +98,7 @@ def _note_success() -> None:
     os.environ.pop("NIJA_KRAKEN_READ_LOCK_V234_STARVING", None)
     os.environ.pop("NIJA_KRAKEN_READ_LOCK_V234_BUSY_COUNT", None)
     if had_episode:
-        LOGGER.info(
-            "KRAKEN_READ_LOCK_V234_RECOVERED marker=%s proof=successful_private_call "
-            "recycle_cancelled=true synthetic_success=false",
-            MARKER,
-        )
+        LOGGER.info("KRAKEN_READ_LOCK_V234_RECOVERED marker=%s proof=successful_private_call recycle_cancelled=true synthetic_success=false", MARKER)
 
 
 def _patch_broker_manager(module: ModuleType | None = None) -> bool:
@@ -156,7 +129,6 @@ def _patch_broker_manager(module: ModuleType | None = None) -> bool:
             finally:
                 with _LOCK:
                     _ACTIVE_MUTATIONS = max(0, _ACTIVE_MUTATIONS - 1)
-
         try:
             result = current(self, *args, **kwargs)
             _note_success()
@@ -172,6 +144,16 @@ def _patch_broker_manager(module: ModuleType | None = None) -> bool:
     return True
 
 
+def _install_v235() -> bool:
+    try:
+        module = importlib.import_module("bot.runtime_heartbeat_terminal_broker_manager_v235_patch")
+        installer = getattr(module, "install", None)
+        return bool(installer()) if callable(installer) else False
+    except Exception as exc:
+        LOGGER.error("HEARTBEAT_TERMINAL_BROKER_MANAGER_V235_CHAIN_INSTALL_ERROR marker=%s error=%s:%s trading_fail_closed=true", MARKER, type(exc).__name__, exc)
+        return False
+
+
 def _watchdog() -> None:
     global _RECYCLE_REQUESTED
     while True:
@@ -185,34 +167,18 @@ def _watchdog() -> None:
             age = now - _BUSY_SINCE
             count = _BUSY_COUNT
             active_mutations = _ACTIVE_MUTATIONS
-            # Require both elapsed time and repeated independent failed reads.
-            # Do not clear merely because probes are sparse; success owns reset.
             if age < _stale_after_s() or count < 3:
                 continue
             if active_mutations > 0:
-                LOGGER.critical(
-                    "KRAKEN_READ_LOCK_V234_RECYCLE_DEFERRED marker=%s age_s=%.2f busy_count=%d "
-                    "active_mutations=%d reason=mutation_inflight safety_preserved=true",
-                    MARKER, age, count, active_mutations,
-                )
+                LOGGER.critical("KRAKEN_READ_LOCK_V234_RECYCLE_DEFERRED marker=%s age_s=%.2f busy_count=%d active_mutations=%d reason=mutation_inflight safety_preserved=true", MARKER, age, count, active_mutations)
                 continue
             _RECYCLE_REQUESTED = True
-
         os.environ["NIJA_KRAKEN_READ_LOCK_V234_RECYCLE_REQUESTED"] = "1"
-        LOGGER.critical(
-            "KRAKEN_READ_LOCK_V234_RECYCLE_REQUESTED marker=%s age_s=%.2f busy_count=%d "
-            "active_mutations=0 signal=SIGTERM lock_force_release=false balance_fabricated=false "
-            "execution_authority_unchanged=true nonce_policy_unchanged=true order_retry=false "
-            "local_contention=true broker_unavailability_unproven=true safety_gates_bypassed=false",
-            MARKER, age, count,
-        )
+        LOGGER.critical("KRAKEN_READ_LOCK_V234_RECYCLE_REQUESTED marker=%s age_s=%.2f busy_count=%d active_mutations=0 signal=SIGTERM lock_force_release=false balance_fabricated=false execution_authority_unchanged=true nonce_policy_unchanged=true order_retry=false local_contention=true broker_unavailability_unproven=true safety_gates_bypassed=false", MARKER, age, count)
         try:
             os.kill(os.getpid(), signal.SIGTERM)
         except Exception as exc:
-            LOGGER.error(
-                "KRAKEN_READ_LOCK_V234_RECYCLE_SIGNAL_ERROR marker=%s error=%s:%s trading_fail_closed=true",
-                MARKER, type(exc).__name__, exc,
-            )
+            LOGGER.error("KRAKEN_READ_LOCK_V234_RECYCLE_SIGNAL_ERROR marker=%s error=%s:%s trading_fail_closed=true", MARKER, type(exc).__name__, exc)
         return
 
 
@@ -221,20 +187,15 @@ def install() -> bool:
     with _LOCK:
         if not _patch_broker_manager():
             return False
+        if not _install_v235():
+            LOGGER.error("RUNTIME_KRAKEN_READ_LOCK_RECOVERY_V234_V235_NOT_READY marker=%s trading_fail_closed=true", MARKER)
+            return False
         os.environ["NIJA_RUNTIME_KRAKEN_READ_LOCK_RECOVERY_V234_INSTALLED"] = "1"
         if not _STARTED:
             _STARTED = True
             threading.Thread(target=_watchdog, name="KrakenReadLockRecoveryV234", daemon=True).start()
-    LOGGER.critical(
-        "RUNTIME_KRAKEN_READ_LOCK_RECOVERY_V234_READY marker=%s ready=true "
-        "recycle_after_s=%.2f quiet_reset_s=%.2f reset_requires_success=true "
-        "process_local_lock_only=true mutating_calls_tracked=true lock_force_release=false "
-        "lock_bypass=false balance_fabricated=false execution_authority_granted=false "
-        "nonce_policy_unchanged=true local_contention_not_exchange_failure=true "
-        "forced_trade=false safety_gates_bypassed=false",
-        MARKER, _stale_after_s(), _quiet_reset_s(),
-    )
+    LOGGER.critical("RUNTIME_KRAKEN_READ_LOCK_RECOVERY_V234_READY marker=%s ready=true recycle_after_s=%.2f quiet_reset_s=%.2f reset_requires_success=true process_local_lock_only=true mutating_calls_tracked=true lock_force_release=false lock_bypass=false balance_fabricated=false execution_authority_granted=false nonce_policy_unchanged=true local_contention_not_exchange_failure=true heartbeat_terminal_v235=true forced_trade=false safety_gates_bypassed=false", MARKER, _stale_after_s(), _quiet_reset_s())
     return True
 
 
-__all__ = ["MARKER", "install", "_patch_broker_manager", "_stale_after_s", "_quiet_reset_s"]
+__all__ = ["MARKER", "install", "_patch_broker_manager", "_stale_after_s", "_quiet_reset_s", "_install_v235"]
