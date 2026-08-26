@@ -25,6 +25,9 @@ wrapper function objects it owns in a WeakSet. If another wrapper is replayed
 outside V230, the reassert worker detects that the current method is not a direct
 V230 wrapper and re-anchors augmentation outside it. This preserves every inner
 safety/rejection gate while ensuring completeness augmentation runs first.
+After V230's publisher aliases are converged, V231 is installed to keep current
+writer-authority truth independent from Kraken nonce maturity and to remove the
+legacy Coinbase-only nonce shortcut when Kraken is an active connected broker.
 
 V230 never fabricates positive capital, changes capital totals, freshness TTL,
 completeness thresholds, writer/nonce/risk/kill-switch state, execution proof,
@@ -157,11 +160,28 @@ def _register_manifest() -> bool:
         return False
 
 
+def _install_v231() -> bool:
+    """Install authority/nonce truth convergence after V230 is established."""
+    try:
+        module = importlib.import_module("bot.runtime_authority_nonce_truth_convergence_v231_patch")
+        installer = getattr(module, "install", None)
+        return bool(callable(installer) and installer())
+    except Exception as exc:
+        LOGGER.error(
+            "RUNTIME_AUTHORITY_NONCE_TRUTH_V231_INSTALL_ERROR marker=%s error=%s:%s trading_fail_closed=true",
+            MARKER,
+            type(exc).__name__,
+            exc,
+        )
+        return False
+
+
 def _worker() -> None:
     while True:
         try:
             _patch_loaded_aliases()
             _register_manifest()
+            _install_v231()
         except Exception as exc:
             LOGGER.warning(
                 "CAPITAL_AUTHORITY_ALIAS_V230_REASSERT_ERROR marker=%s error=%s:%s "
@@ -183,7 +203,10 @@ def install() -> bool:
         importlib.import_module("bot.capital_authority")
         patched, loaded = _patch_loaded_aliases()
         manifest_ok = _register_manifest()
-        ready = bool(loaded >= 1 and patched == loaded and manifest_ok)
+        base_ready = bool(loaded >= 1 and patched == loaded and manifest_ok)
+        # Install V231 only after V230's own publisher safety boundary is ready.
+        v231_ok = bool(base_ready and _install_v231())
+        ready = bool(base_ready and v231_ok)
         os.environ[_READY_FLAG] = "1" if ready else "0"
         if ready and (_THREAD is None or not _THREAD.is_alive()):
             _THREAD = threading.Thread(
@@ -197,10 +220,13 @@ def install() -> bool:
             "patched_alias_classes=%d duplicate_identity_dedup=true direct_wrapper_identity=true "
             "wraps_marker_inheritance_safe=true v209_v229_required=true "
             "exact_same_cycle_zero_only=true positive_balance_fabricated=false stale_balance_reused=false "
+            "patched_alias_classes=%d duplicate_identity_dedup=true v209_v229_required=true "
+            "v231_authority_nonce_truth=%s exact_same_cycle_zero_only=true "
+            "positive_balance_fabricated=false stale_balance_reused=false "
             "freshness_extended=false completeness_threshold_unchanged=true "
             "writer_nonce_risk_killswitch_order_fill_gates_unchanged=true forced_activation=false "
             "safety_gates_bypassed=false",
-            MARKER, str(ready).lower(), loaded, patched,
+            MARKER, str(ready).lower(), loaded, patched, str(v231_ok).lower(),
         )
         return ready
 
@@ -218,4 +244,5 @@ __all__ = [
     "_is_direct_wrapper",
     "_patch_class",
     "_patch_loaded_aliases",
+    "_install_v231",
 ]
