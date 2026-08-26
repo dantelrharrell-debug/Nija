@@ -2,21 +2,25 @@
 
 Production on 2026-08-26 proved that the heartbeat reaches the real submit boundary
 with a canonical startup-probe context, yet a terminal module can still call an
-imported ``can_execute`` binding that returns ``lifecycle_phase:BOOT``.  The live
-Coinbase/Kraken implementation is defined in ``bot.broker_integration`` while some
-runtime adapters expose the same decision through ``bot.broker_manager``.  Earlier
-v240 only patched broker_manager, leaving the actual broker_integration binding able
-to reject a verified heartbeat between convergence passes.
+imported ``can_execute`` binding that returns ``lifecycle_phase:BOOT``.  The source
+contract in ``execution_authority_context.can_execute`` explicitly says startup probes
+are the only pre-LIVE exception, but Gate 0 returns the BOOT denial before that
+exception is consulted.
 
-A BOOT lifecycle denial is converted to ALLOW only when the *canonical*
-``can_execute_startup_probe()`` independently succeeds in the current context and
-``assert_startup_write_authority()`` succeeds again immediately.  The bridge is not
-available from symbol/strategy text, thread name, call stack, or environment flags.
-Therefore ordinary orders cannot create the exception.
+v240 therefore wraps the *canonical* execution-authority ``can_execute`` function in
+addition to all terminal aliases.  A BOOT lifecycle denial is converted to ALLOW only
+when the canonical ``can_execute_startup_probe()`` independently succeeds in the
+current ContextVar scope, ``assert_startup_write_authority()`` succeeds again
+immediately, and the kill switch is clear.  This is the startup-probe path already
+specified by the canonical authority module; it is not available from symbol text,
+strategy text, thread name, call stack, or environment flags.
 
-No lifecycle state is mutated.  Kill switch, writer/lease authority, risk, capital,
-broker health, ECEL, minimum notional, exchange acknowledgement, fill proof and
-activation proof remain unchanged.  A real exchange result is still required before
+The startup probe intentionally cannot require normal LIVE-only dispatch-health truth:
+that truth is established by the very execution proof the heartbeat exists to create.
+All ordinary orders still use the normal lifecycle/state/nonce/heartbeat/dispatch
+contract.  Risk, capital, broker routing/health checks, ECEL, minimum notional,
+exchange acknowledgement, fill proof and activation proof remain unchanged elsewhere
+in the execution pipeline.  A real exchange result is still required before
 execution_ready can become true.
 """
 from __future__ import annotations
@@ -35,6 +39,8 @@ MARKER = "20260826-heartbeat-terminal-lifecycle-v240"
 _FLAG = "NIJA_HEARTBEAT_TERMINAL_LIFECYCLE_V240_READY"
 _PATCH_ATTR = "_nija_heartbeat_terminal_lifecycle_v240"
 _TERMINALS = (
+    "bot.execution_authority_context",
+    "execution_authority_context",
     "bot.broker_integration",
     "broker_integration",
     "bot.broker_manager",
@@ -75,11 +81,12 @@ def _verified_probe_reason() -> str | None:
         normalized = str(reason or "").strip().upper()
         if not bool(allowed) or normalized not in _ALLOWED:
             return None
+        # Kill-switch truth remains an independent hard stop.  Do not require
+        # normal LIVE-only dispatch health here: the startup heartbeat exists to
+        # establish execution proof before LIVE dispatch health can converge.
         if callable(snapshot_fn):
             snapshot = snapshot_fn()
             if bool(getattr(snapshot, "kill_switch_active", True)):
-                return None
-            if not bool(getattr(snapshot, "dispatch_health_ready", False)):
                 return None
         reverify()
         return normalized
@@ -134,9 +141,10 @@ def _wrap(current: Callable[..., Any], surface: str) -> Callable[..., Any]:
             return decision
         LOGGER.critical(
             "HEARTBEAT_TERMINAL_LIFECYCLE_V240_ALLOWED marker=%s probe_reason=%s "
-            "terminal_surface=%s startup_write_authority_reverified=true "
-            "kill_switch_clear=true dispatch_health_ready=true canonical_lifecycle_unchanged=true "
-            "ordinary_orders_unchanged=true risk_capital_broker_health_ecel_min_notional_order_fill_gates_unchanged=true "
+            "terminal_surface=%s canonical_startup_probe=true startup_write_authority_reverified=true "
+            "kill_switch_clear=true live_dispatch_health_not_required_for_probe=true "
+            "canonical_lifecycle_unchanged=true ordinary_orders_unchanged=true "
+            "risk_capital_broker_route_ecel_min_notional_order_fill_gates_unchanged=true "
             "execution_proof_fabricated=false forced_activation=false safety_gates_bypassed=false",
             MARKER, probe_reason, surface,
         )
@@ -177,7 +185,12 @@ def install() -> bool:
         install_v236 = getattr(v236, "install", None)
         upstream = bool(callable(install_v236) and install_v236())
         terminal, surfaces = _patch_terminal_modules()
-        ready = bool(upstream and terminal and "bot.broker_integration" in surfaces)
+        ready = bool(
+            upstream
+            and terminal
+            and "bot.execution_authority_context" in surfaces
+            and "bot.broker_integration" in surfaces
+        )
     except Exception as exc:
         LOGGER.error(
             "HEARTBEAT_TERMINAL_LIFECYCLE_V240_INSTALL_ERROR marker=%s error=%s:%s trading_fail_closed=true",
@@ -188,8 +201,9 @@ def install() -> bool:
     if ready:
         LOGGER.critical(
             "HEARTBEAT_TERMINAL_LIFECYCLE_V240_READY marker=%s ready=true patched_surfaces=%s "
-            "live_broker_integration_required=true v236_required=true canonical_probe_required=true "
-            "startup_write_authority_reverified=true kill_switch_clear_required=true dispatch_health_required=true "
+            "canonical_execution_authority_required=true live_broker_integration_required=true "
+            "v236_required=true canonical_probe_required=true startup_write_authority_reverified=true "
+            "kill_switch_clear_required=true live_dispatch_health_not_required_for_probe=true "
             "ordinary_orders_unchanged=true canonical_lifecycle_unchanged=true execution_proof_fabricated=false "
             "forced_activation=false safety_gates_bypassed=false",
             MARKER, ",".join(surfaces),
