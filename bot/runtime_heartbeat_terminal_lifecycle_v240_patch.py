@@ -1,9 +1,12 @@
-"""Bridge a verified startup heartbeat through broker_manager's terminal lifecycle gate (v240).
+"""Bridge a verified startup heartbeat through all terminal lifecycle gates (v240).
 
 Production on 2026-08-26 proved that the heartbeat reaches the real submit boundary
-with a canonical startup-probe context, yet broker_manager can still call an imported
-``can_execute`` binding that returns ``lifecycle_phase:BOOT``.  This patch changes only
-that terminal module-local decision binding.
+with a canonical startup-probe context, yet a terminal module can still call an
+imported ``can_execute`` binding that returns ``lifecycle_phase:BOOT``.  The live
+Coinbase/Kraken implementation is defined in ``bot.broker_integration`` while some
+runtime adapters expose the same decision through ``bot.broker_manager``.  Earlier
+v240 only patched broker_manager, leaving the actual broker_integration binding able
+to reject a verified heartbeat between convergence passes.
 
 A BOOT lifecycle denial is converted to ALLOW only when the *canonical*
 ``can_execute_startup_probe()`` independently succeeds in the current context and
@@ -31,7 +34,16 @@ LOGGER = logging.getLogger("nija.runtime_heartbeat_terminal_lifecycle_v240")
 MARKER = "20260826-heartbeat-terminal-lifecycle-v240"
 _FLAG = "NIJA_HEARTBEAT_TERMINAL_LIFECYCLE_V240_READY"
 _PATCH_ATTR = "_nija_heartbeat_terminal_lifecycle_v240"
-_TERMINALS = ("bot.broker_manager", "broker_manager")
+_TERMINALS = (
+    "bot.broker_integration",
+    "broker_integration",
+    "bot.broker_manager",
+    "broker_manager",
+    "bot.execution_pipeline",
+    "execution_pipeline",
+    "bot.live_broker_adapters",
+    "live_broker_adapters",
+)
 _ALLOWED = {"HEARTBEAT_TRADE", "HEARTBEAT_TRADE_CLOSE"}
 
 
@@ -55,6 +67,7 @@ def _verified_probe_reason() -> str | None:
     authority = _authority()
     checker = getattr(authority, "can_execute_startup_probe", None)
     reverify = getattr(authority, "assert_startup_write_authority", None)
+    snapshot_fn = getattr(authority, "runtime_authority_snapshot", None)
     if not callable(checker) or not callable(reverify):
         return None
     try:
@@ -62,6 +75,12 @@ def _verified_probe_reason() -> str | None:
         normalized = str(reason or "").strip().upper()
         if not bool(allowed) or normalized not in _ALLOWED:
             return None
+        if callable(snapshot_fn):
+            snapshot = snapshot_fn()
+            if bool(getattr(snapshot, "kill_switch_active", True)):
+                return None
+            if not bool(getattr(snapshot, "dispatch_health_ready", False)):
+                return None
         reverify()
         return normalized
     except Exception as exc:
@@ -99,7 +118,7 @@ def _bridge(decision: Any, reason: str) -> Any:
         return proxy
 
 
-def _wrap(current: Callable[..., Any]) -> Callable[..., Any]:
+def _wrap(current: Callable[..., Any], surface: str) -> Callable[..., Any]:
     if bool(getattr(current, _PATCH_ATTR, False)):
         return current
 
@@ -115,11 +134,11 @@ def _wrap(current: Callable[..., Any]) -> Callable[..., Any]:
             return decision
         LOGGER.critical(
             "HEARTBEAT_TERMINAL_LIFECYCLE_V240_ALLOWED marker=%s probe_reason=%s "
-            "terminal_surface=broker_manager startup_write_authority_reverified=true "
-            "canonical_lifecycle_unchanged=true ordinary_orders_unchanged=true "
-            "kill_switch_risk_capital_broker_health_ecel_min_notional_order_fill_gates_unchanged=true "
+            "terminal_surface=%s startup_write_authority_reverified=true "
+            "kill_switch_clear=true dispatch_health_ready=true canonical_lifecycle_unchanged=true "
+            "ordinary_orders_unchanged=true risk_capital_broker_health_ecel_min_notional_order_fill_gates_unchanged=true "
             "execution_proof_fabricated=false forced_activation=false safety_gates_bypassed=false",
-            MARKER, probe_reason,
+            MARKER, probe_reason, surface,
         )
         return _bridge(decision, probe_reason)
 
@@ -144,10 +163,11 @@ def _patch_terminal_modules() -> tuple[bool, tuple[str, ...]]:
         current = getattr(module, "can_execute", None)
         if not callable(current):
             continue
-        wrapped = _wrap(current)
+        surface = str(getattr(module, "__name__", name))
+        wrapped = _wrap(current, surface)
         setattr(module, "can_execute", wrapped)
         if getattr(module, "can_execute", None) is wrapped:
-            patched.append(str(getattr(module, "__name__", name)))
+            patched.append(surface)
     return bool(patched), tuple(sorted(set(patched)))
 
 
@@ -157,7 +177,7 @@ def install() -> bool:
         install_v236 = getattr(v236, "install", None)
         upstream = bool(callable(install_v236) and install_v236())
         terminal, surfaces = _patch_terminal_modules()
-        ready = bool(upstream and terminal)
+        ready = bool(upstream and terminal and "bot.broker_integration" in surfaces)
     except Exception as exc:
         LOGGER.error(
             "HEARTBEAT_TERMINAL_LIFECYCLE_V240_INSTALL_ERROR marker=%s error=%s:%s trading_fail_closed=true",
@@ -168,7 +188,8 @@ def install() -> bool:
     if ready:
         LOGGER.critical(
             "HEARTBEAT_TERMINAL_LIFECYCLE_V240_READY marker=%s ready=true patched_surfaces=%s "
-            "v236_required=true canonical_probe_required=true startup_write_authority_reverified=true "
+            "live_broker_integration_required=true v236_required=true canonical_probe_required=true "
+            "startup_write_authority_reverified=true kill_switch_clear_required=true dispatch_health_required=true "
             "ordinary_orders_unchanged=true canonical_lifecycle_unchanged=true execution_proof_fabricated=false "
             "forced_activation=false safety_gates_bypassed=false",
             MARKER, ",".join(surfaces),
