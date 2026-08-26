@@ -1,11 +1,13 @@
 """Finalize the verified startup-heartbeat handoff at broker submission (v236).
 
 Production on 2026-08-26 showed that the heartbeat order passes risk/ECEL and the
-pipeline startup-probe authority check, but a later broker-integration terminal can
-still re-evaluate the canonical lifecycle as BOOT after intermediate wrappers have
-consumed v233's read budget. That prevents the real verification order from reaching
-the exchange, so the heartbeat marker can never be created and execution_ready can
-never converge.
+pipeline startup-probe authority check, but a later broker terminal can still
+re-evaluate the canonical lifecycle as BOOT after intermediate wrappers have consumed
+v233's read budget. In the live Coinbase path the final denial is emitted by
+``broker_manager._reject_if_unauthorized_order_submit`` rather than only by
+``broker_integration``. If that surface is not wrapped, the real verification order
+never reaches the exchange, so the execution heartbeat marker cannot be created and
+``execution_ready`` cannot converge.
 
 v236 does not create startup authority. It only recognizes a still-live v233 grant
 that was already armed by an independently verified startup probe, on the same thread
@@ -29,7 +31,12 @@ LOGGER = logging.getLogger("nija.runtime_heartbeat_final_submit_v236")
 MARKER = "20260826-heartbeat-final-submit-v236"
 _FLAG = "NIJA_HEARTBEAT_FINAL_SUBMIT_V236_READY"
 _PATCH_ATTR = "_nija_heartbeat_final_submit_v236"
-_MODULES = ("bot.broker_integration", "broker_integration")
+_MODULES = (
+    "bot.broker_manager",
+    "broker_manager",
+    "bot.broker_integration",
+    "broker_integration",
+)
 
 
 def _live_verified_grant() -> str | None:
