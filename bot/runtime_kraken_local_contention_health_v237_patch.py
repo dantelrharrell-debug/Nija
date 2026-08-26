@@ -1,15 +1,15 @@
 """Keep process-local Kraken read-lock contention out of broker failure health (v237).
 
-Production on 2026-08-26 showed KrakenReadLockBusy causing user/platform broker
-failure streaks and EXIT-ONLY even though v184/v234 classify the condition as local
-process contention, not an authenticated Kraken/exchange failure.
+KrakenReadLockBusy is a process-local synchronization failure, not evidence that the
+Kraken exchange, credentials, nonce, or account are unhealthy. The current read stays
+fail-closed and v234 remains responsible for bounded recovery, but this condition must
+not create or preserve a broker failure streak/DEAD state.
 
-v237 patches BrokerFailureManager.record_error only for Kraken errors whose reason is
-an exact local read-lock contention signature. Those observations remain fail-closed
-for the current read and are still handled by v234's bounded process recycle. They do
-not increment exchange/account failure streaks or mark Kraken dead. All genuine API,
-authentication, nonce, order, timeout, HTTP, and unattributed errors continue through
-the original failure manager unchanged.
+The patch recognizes only exact Kraken local-lock signatures. For those signatures it
+atomically clears a streak/dead state whose last recorded reason is itself local
+contention. It never clears health state attributed to API, auth, nonce, order, HTTP,
+exchange timeout, or unknown errors. Genuine errors continue through the original
+failure manager unchanged.
 """
 from __future__ import annotations
 
@@ -38,6 +38,32 @@ def _is_local_contention(broker_name: str, reason: str) -> bool:
     )
 
 
+def _clear_local_only_state(self: Any, broker_name: str) -> tuple[bool, int]:
+    """Clear only health state whose recorded cause is proven local contention."""
+    lock = getattr(self, "_lock", None)
+    states = getattr(self, "_states", None)
+    if lock is None or not isinstance(states, dict):
+        return False, 0
+    with lock:
+        state = states.get(broker_name)
+        if state is None:
+            return False, 0
+        previous = int(getattr(state, "consecutive_errors", 0) or 0)
+        last_reason = str(getattr(state, "last_error_reason", "") or "")
+        if previous <= 0 and not bool(getattr(state, "is_dead", False)):
+            return False, 0
+        # Never erase a streak whose provenance is not the exact local-lock class.
+        if last_reason and not _is_local_contention(broker_name, last_reason):
+            return False, previous
+        state.consecutive_errors = 0
+        state.last_error_reason = ""
+        if bool(getattr(state, "is_dead", False)):
+            state.is_dead = False
+            state.dead_since = None
+            state.retry_attempts = 0
+        return True, previous
+
+
 def _patch_failure_manager() -> bool:
     module = importlib.import_module("bot.broker_failure_manager")
     cls = getattr(module, "BrokerFailureManager", None)
@@ -52,12 +78,14 @@ def _patch_failure_manager() -> bool:
     @wraps(current)
     def record_error_v237(self: Any, broker_name: str, reason: str = "") -> bool:
         if _is_local_contention(broker_name, reason):
+            cleared, previous = _clear_local_only_state(self, broker_name)
             LOGGER.warning(
-                "KRAKEN_LOCAL_CONTENTION_V237_EXCLUDED marker=%s broker=%s "
-                "reason=%s current_read_fail_closed=true broker_failure_streak_unchanged=true "
+                "KRAKEN_LOCAL_CONTENTION_V237_EXCLUDED marker=%s broker=%s reason=%s "
+                "current_read_fail_closed=true broker_failure_streak_incremented=false "
+                "local_only_streak_cleared=%s previous_consecutive_errors=%s "
                 "exchange_unavailability_unproven=true v234_recovery_authoritative=true "
                 "auth_nonce_order_http_errors_unchanged=true safety_gates_bypassed=false",
-                MARKER, broker_name, str(reason)[:160],
+                MARKER, broker_name, str(reason)[:160], str(cleared).lower(), previous,
             )
             return False
         return bool(current(self, broker_name, reason))
@@ -84,8 +112,8 @@ def install() -> bool:
     os.environ[_FLAG] = "1" if ready else "0"
     if ready:
         LOGGER.critical(
-            "KRAKEN_LOCAL_CONTENTION_V237_READY marker=%s ready=true "
-            "local_read_lock_only=true broker_failure_streak_excluded=true v234_required=true "
+            "KRAKEN_LOCAL_CONTENTION_V237_READY marker=%s ready=true local_read_lock_only=true "
+            "broker_failure_streak_excluded=true local_only_stale_health_repair=true v234_required=true "
             "current_read_fail_closed=true genuine_exchange_errors_unchanged=true "
             "execution_authority_unchanged=true nonce_policy_unchanged=true forced_trade=false "
             "safety_gates_bypassed=false",
@@ -98,4 +126,10 @@ def install_import_hook() -> bool:
     return install()
 
 
-__all__ = ["MARKER", "install", "install_import_hook", "_is_local_contention"]
+__all__ = [
+    "MARKER",
+    "install",
+    "install_import_hook",
+    "_is_local_contention",
+    "_clear_local_only_state",
+]
