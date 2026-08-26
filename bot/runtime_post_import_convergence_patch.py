@@ -1,14 +1,5 @@
-"""Keep broker-local authority and canonical module identity stable after imports.
-
-This early recurring owner restores canonical runtime identity and installs the
-safety/convergence repairs that must exist before startup heartbeat probes run.
-In particular v224/v228/v232 prevent local pre-dispatch failures from polluting
-the exchange rejection window, and v233 carries the already-verified startup
-heartbeat context through broker_manager's terminal authority check without
-changing ordinary LIVE order authority.
-"""
+"""Keep broker-local authority and canonical module identity stable after imports."""
 from __future__ import annotations
-
 import importlib
 import logging
 import os
@@ -19,7 +10,7 @@ from types import ModuleType
 from typing import Any
 
 logger = logging.getLogger("nija.runtime_post_import_convergence")
-_MARKER = "20260716-post-import-convergence-v1"
+_MARKER = "20260826-post-import-convergence-v234"
 _LOCK = threading.RLock()
 _STARTED = False
 _CANONICAL = "bot.downstream_risk_governor_equity_repair_patch"
@@ -83,8 +74,8 @@ def _patch_quiescence_audit() -> bool:
         _canonicalize_alias()
         _apply_broker_threshold()
         return original(*args, **kwargs)
-    audit._nija_post_import_alias_guard_v1 = True  # type: ignore[attr-defined]
-    audit.__wrapped__ = original  # type: ignore[attr-defined]
+    audit._nija_post_import_alias_guard_v1 = True
+    audit.__wrapped__ = original
     module.audit = audit
     return True
 
@@ -119,6 +110,7 @@ def _install_v228_exchange_reject_dispatch_provenance(): return _install_named("
 def _install_v229_capital_provenance_alias(): return _install_named("bot.runtime_capital_provenance_alias_convergence_v229_patch", "v229_install_missing", "RUNTIME_CAPITAL_PROVENANCE_ALIAS_V229_INSTALL_ERROR")
 def _install_v232_heartbeat_execution_quality(): return _install_named("bot.runtime_heartbeat_execution_quality_v232_patch", "v232_install_missing", "HEARTBEAT_EXECUTION_QUALITY_V232_INSTALL_ERROR")
 def _install_v233_heartbeat_terminal_authority(): return _install_named("bot.runtime_heartbeat_terminal_authority_v233_patch", "v233_install_missing", "HEARTBEAT_TERMINAL_AUTHORITY_V233_INSTALL_ERROR")
+def _install_v234_kraken_read_lock_recovery(): return _install_named("bot.runtime_kraken_read_lock_recovery_v234_patch", "v234_install_missing", "KRAKEN_READ_LOCK_RECOVERY_V234_INSTALL_ERROR")
 
 
 def _iteration() -> bool:
@@ -129,6 +121,7 @@ def _iteration() -> bool:
     v228 = _install_v228_exchange_reject_dispatch_provenance()
     v232 = _install_v232_heartbeat_execution_quality()
     v233 = _install_v233_heartbeat_terminal_authority()
+    v234 = _install_v234_kraken_read_lock_recovery()
     installs = [
         _install_v154_recovery(), _install_v155_nonce_maturity(), _install_v157_runtime_quality(),
         _install_v158_capital_margin(), _install_v161_capital_position_convergence(),
@@ -140,8 +133,8 @@ def _iteration() -> bool:
     os.environ["NIJA_RUNTIME_POST_IMPORT_CONVERGENCE_INSTALLED"] = "1"
     if changed:
         logger.warning("DOWNSTREAM_RISK_ALIAS_DRIFT_REPAIRED marker=%s canonical=%s alias=%s same=true", _MARKER, _CANONICAL, _ALIAS)
-    logger.debug("RUNTIME_POST_IMPORT_CONVERGENCE marker=%s policy=%s min_brokers=%d audit_patched=%s v224=%s v228=%s v232=%s v233=%s", _MARKER, _policy(), required, patched, v224, v228, v232, v233)
-    return bool(v224 and v228 and v232 and v233 and all(installs))
+    logger.debug("RUNTIME_POST_IMPORT_CONVERGENCE marker=%s policy=%s min_brokers=%d audit_patched=%s v224=%s v228=%s v232=%s v233=%s v234=%s", _MARKER, _policy(), required, patched, v224, v228, v232, v233, v234)
+    return bool(v224 and v228 and v232 and v233 and v234 and all(installs))
 
 
 def _watchdog() -> None:
@@ -160,8 +153,8 @@ def install() -> bool:
         if not _STARTED:
             _STARTED = True
             threading.Thread(target=_watchdog, name="RuntimePostImportConvergence", daemon=True).start()
-        logger.critical("RUNTIME_POST_IMPORT_CONVERGENCE_INSTALLED marker=%s policy=%s min_brokers=%d alias_same=true v224=true v228=true v232=true v233=true ready=%s", _MARKER, _policy(), _required_broker_count(), str(ready).lower())
+        logger.critical("RUNTIME_POST_IMPORT_CONVERGENCE_INSTALLED marker=%s policy=%s min_brokers=%d alias_same=true v224=true v228=true v232=true v233=true v234=true ready=%s", _MARKER, _policy(), _required_broker_count(), str(ready).lower())
         return ready
 
 
-__all__ = ["install", "_policy", "_required_broker_count", "_apply_broker_threshold", "_canonicalize_alias", "_patch_quiescence_audit", "_install_v233_heartbeat_terminal_authority", "_iteration"]
+__all__ = ["install", "_policy", "_required_broker_count", "_apply_broker_threshold", "_canonicalize_alias", "_patch_quiescence_audit", "_install_v233_heartbeat_terminal_authority", "_install_v234_kraken_read_lock_recovery", "_iteration"]
