@@ -10,7 +10,7 @@ from types import ModuleType
 from typing import Any
 
 logger = logging.getLogger("nija.runtime_post_import_convergence")
-_MARKER = "20260826-post-import-convergence-v236"
+_MARKER = "20260826-post-import-convergence-v237"
 _LOCK = threading.RLock()
 _STARTED = False
 _CANONICAL = "bot.downstream_risk_governor_equity_repair_patch"
@@ -112,6 +112,7 @@ def _install_v232_heartbeat_execution_quality(): return _install_named("bot.runt
 def _install_v233_heartbeat_terminal_authority(): return _install_named("bot.runtime_heartbeat_terminal_authority_v233_patch", "v233_install_missing", "HEARTBEAT_TERMINAL_AUTHORITY_V233_INSTALL_ERROR")
 def _install_v234_kraken_read_lock_recovery(): return _install_named("bot.runtime_kraken_read_lock_recovery_v234_patch", "v234_install_missing", "KRAKEN_READ_LOCK_RECOVERY_V234_INSTALL_ERROR")
 def _install_v236_heartbeat_final_submit(): return _install_named("bot.runtime_heartbeat_final_submit_v236_patch", "v236_install_missing", "HEARTBEAT_FINAL_SUBMIT_V236_INSTALL_ERROR")
+def _install_v237_kraken_local_contention_health(): return _install_named("bot.runtime_kraken_local_contention_health_v237_patch", "v237_install_missing", "KRAKEN_LOCAL_CONTENTION_V237_INSTALL_ERROR")
 
 
 def _iteration() -> bool:
@@ -124,6 +125,7 @@ def _iteration() -> bool:
     v233 = _install_v233_heartbeat_terminal_authority()
     v234 = _install_v234_kraken_read_lock_recovery()
     v236 = _install_v236_heartbeat_final_submit()
+    v237 = _install_v237_kraken_local_contention_health()
     installs = [
         _install_v154_recovery(), _install_v155_nonce_maturity(), _install_v157_runtime_quality(),
         _install_v158_capital_margin(), _install_v161_capital_position_convergence(),
@@ -135,8 +137,8 @@ def _iteration() -> bool:
     os.environ["NIJA_RUNTIME_POST_IMPORT_CONVERGENCE_INSTALLED"] = "1"
     if changed:
         logger.warning("DOWNSTREAM_RISK_ALIAS_DRIFT_REPAIRED marker=%s canonical=%s alias=%s same=true", _MARKER, _CANONICAL, _ALIAS)
-    logger.debug("RUNTIME_POST_IMPORT_CONVERGENCE marker=%s policy=%s min_brokers=%d audit_patched=%s v224=%s v228=%s v232=%s v233=%s v234=%s v236=%s", _MARKER, _policy(), required, patched, v224, v228, v232, v233, v234, v236)
-    return bool(v224 and v228 and v232 and v233 and v234 and v236 and all(installs))
+    logger.debug("RUNTIME_POST_IMPORT_CONVERGENCE marker=%s policy=%s min_brokers=%d audit_patched=%s v224=%s v228=%s v232=%s v233=%s v234=%s v236=%s v237=%s", _MARKER, _policy(), required, patched, v224, v228, v232, v233, v234, v236, v237)
+    return bool(v224 and v228 and v232 and v233 and v234 and v236 and v237 and all(installs))
 
 
 def _watchdog() -> None:
@@ -155,8 +157,8 @@ def install() -> bool:
         if not _STARTED:
             _STARTED = True
             threading.Thread(target=_watchdog, name="RuntimePostImportConvergence", daemon=True).start()
-        logger.critical("RUNTIME_POST_IMPORT_CONVERGENCE_INSTALLED marker=%s policy=%s min_brokers=%d alias_same=true v224=true v228=true v232=true v233=true v234=true v236=true ready=%s", _MARKER, _policy(), _required_broker_count(), str(ready).lower())
+        logger.critical("RUNTIME_POST_IMPORT_CONVERGENCE_INSTALLED marker=%s policy=%s min_brokers=%d alias_same=true v224=true v228=true v232=true v233=true v234=true v236=true v237=true ready=%s", _MARKER, _policy(), _required_broker_count(), str(ready).lower())
         return ready
 
 
-__all__ = ["install", "_policy", "_required_broker_count", "_apply_broker_threshold", "_canonicalize_alias", "_patch_quiescence_audit", "_install_v233_heartbeat_terminal_authority", "_install_v234_kraken_read_lock_recovery", "_install_v236_heartbeat_final_submit", "_iteration"]
+__all__ = ["install", "_policy", "_required_broker_count", "_apply_broker_threshold", "_canonicalize_alias", "_patch_quiescence_audit", "_install_v233_heartbeat_terminal_authority", "_install_v234_kraken_read_lock_recovery", "_install_v236_heartbeat_final_submit", "_install_v237_kraken_local_contention_health", "_iteration"]
