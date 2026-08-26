@@ -34,6 +34,22 @@ def test_non_exchange_classifier_covers_predispatch_failures():
         assert v228._is_non_exchange_rejection(reason) is True
 
 
+def test_v232_classifier_covers_route_guard_soft_failures_without_exchange_proof():
+    reasons = (
+        "broker_dispatch_failed:kraken:none_result",
+        "broker_dispatch_failed:coinbase:empty_order_result",
+        "empty order result from adapter",
+        "execution_route_mismatch:selected=kraken:actual=coinbase:symbol=BTC-USD",
+        "BrokerRouteGuard deny: broker disabled for live execution selected=okx",
+        "adapter_exception: TimeoutError",
+        "broker_dispatch_exception: RuntimeError",
+        "OKX order failed",
+        "all operations failed",
+    )
+    for reason in reasons:
+        assert v228._is_non_exchange_rejection(reason) is True
+
+
 def test_classifier_does_not_swallow_unclassified_exchange_rejects():
     assert v228._is_non_exchange_rejection("Kraken AddOrder rejected: EOrder:Insufficient margin") is False
     assert v228._is_non_exchange_rejection("Coinbase order rejected: UNKNOWN_EXCHANGE_FAILURE") is False
@@ -49,6 +65,21 @@ def test_dispatch_disabled_does_not_mutate_exchange_rejection_window(tmp_path, m
         symbol="BTC-USD",
         side="buy",
         reason="dispatch_disabled: dispatch.enabled=false",
+    )
+
+    assert list(protector._order_results) == []
+
+
+def test_v232_route_soft_failure_does_not_mutate_exchange_rejection_window(tmp_path, monkeypatch):
+    protector = _protector(tmp_path)
+    monkeypatch.setattr(execution_pipeline, "get_exchange_kill_switch_protector", lambda: protector)
+    assert v228._patch_execution_pipeline()
+
+    execution_pipeline.ExecutionPipeline._emit_execution_rejection_telemetry(
+        _pipeline_stub(),
+        symbol="BTC-USD",
+        side="buy",
+        reason="broker_dispatch_failed:kraken:empty_order_result",
     )
 
     assert list(protector._order_results) == []
