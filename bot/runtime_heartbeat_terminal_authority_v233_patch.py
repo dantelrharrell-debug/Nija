@@ -2,14 +2,15 @@
 
 The startup heartbeat is allowed only after can_execute_startup_probe() independently
 re-verifies startup write authority. Production showed that the first pipeline
-terminal consumed that ContextVar-backed authorization, while the later
-broker-manager submit check could run after the probe context was no longer visible.
+terminal consumed that ContextVar-backed authorization, while a later broker submit
+guard could still hold an imported/stale can_execute reference and re-block the same
+verified heartbeat on lifecycle_phase:BOOT.
 
-This revision carries a one-shot, same-thread, sub-second terminal grant from the
-verified pipeline authority check to the immediately-following broker submit check.
-It never changes lifecycle state, readiness, nonce, kill switch, capital, broker
-health, ECEL, minimum-notional, acknowledgement, or fill proof. Ordinary orders do
-not receive the grant.
+This revision carries a same-thread, sub-second terminal grant from the verified
+pipeline authority check to the immediately-following broker submit guard and also
+patches the broker integration submit guard itself. It never changes lifecycle state,
+readiness, nonce, kill switch, capital, broker health, ECEL, minimum-notional,
+acknowledgement, or fill proof. Ordinary orders do not receive the grant.
 """
 from __future__ import annotations
 
@@ -28,6 +29,7 @@ LOGGER = logging.getLogger("nija.runtime_heartbeat_terminal_authority_v233")
 MARKER = "20260825-heartbeat-terminal-authority-v233"
 _FLAG = "NIJA_HEARTBEAT_TERMINAL_AUTHORITY_V233_READY"
 _PATCH_ATTR = "_nija_heartbeat_terminal_authority_v233"
+_GUARD_PATCH_ATTR = "_nija_heartbeat_terminal_submit_guard_v233"
 _LOCK = threading.RLock()
 _THREAD: threading.Thread | None = None
 _GRANT = threading.local()
@@ -67,21 +69,35 @@ def _boot_lifecycle_block(decision: Any) -> bool:
 def _set_one_shot_grant(probe_reason: str) -> None:
     _GRANT.thread_id = threading.get_ident()
     _GRANT.expires = time.monotonic() + _GRANT_TTL_S
-    _GRANT.remaining = 1
+    # Two terminal reads are permitted because production has both the pipeline
+    # terminal and a broker-submit terminal. The grant remains same-thread,
+    # sub-second, and startup-probe-only.
+    _GRANT.remaining = 2
     _GRANT.probe_reason = str(probe_reason)
 
 
-def _consume_one_shot_grant(decision: Any) -> str | None:
-    if not _boot_lifecycle_block(decision):
-        return None
+def _grant_reason_if_live() -> str | None:
     if int(getattr(_GRANT, "thread_id", -1)) != threading.get_ident():
         return None
     if float(getattr(_GRANT, "expires", 0.0) or 0.0) < time.monotonic():
         return None
     if int(getattr(_GRANT, "remaining", 0) or 0) <= 0:
         return None
-    _GRANT.remaining = 0
     return str(getattr(_GRANT, "probe_reason", "HEARTBEAT_TRADE") or "HEARTBEAT_TRADE")
+
+
+def _consume_live_grant() -> str | None:
+    reason = _grant_reason_if_live()
+    if reason is None:
+        return None
+    _GRANT.remaining = max(0, int(getattr(_GRANT, "remaining", 0) or 0) - 1)
+    return reason
+
+
+def _consume_one_shot_grant(decision: Any) -> str | None:
+    if not _boot_lifecycle_block(decision):
+        return None
+    return _consume_live_grant()
 
 
 def _bridge_decision(decision: Any, probe_reason: str) -> Any:
@@ -103,6 +119,8 @@ def _bridge_decision(decision: Any, probe_reason: str) -> Any:
         except Exception:
             pass
         bridged.allowed = True
+        bridged.allow = True
+        bridged.decision = "ALLOW"
         bridged.reason = f"startup_probe_terminal_authority:{probe_reason}"
         bridged.first_failed_gate = ""
         bridged.reason_code = "allowed_startup_probe"
@@ -117,7 +135,7 @@ def _wrap_can_execute(current: Callable[..., Any], authority: ModuleType) -> Cal
     @wraps(current)
     def can_execute_v233(*args: Any, **kwargs: Any) -> Any:
         decision = current(*args, **kwargs)
-        if bool(getattr(decision, "allowed", False)):
+        if bool(getattr(decision, "allowed", getattr(decision, "allow", False))):
             return decision
 
         checker = getattr(authority, "can_execute_startup_probe", None)
@@ -148,7 +166,7 @@ def _wrap_can_execute(current: Callable[..., Any], authority: ModuleType) -> Cal
             bridged = _bridge_decision(decision, inherited_reason)
             LOGGER.critical(
                 "HEARTBEAT_TERMINAL_AUTHORITY_V233_TERMINAL_GRANT_CONSUMED marker=%s probe_reason=%s "
-                "original_reason=%s same_thread=true one_shot=true canonical_lifecycle_unchanged=true "
+                "original_reason=%s same_thread=true bounded_grant=true canonical_lifecycle_unchanged=true "
                 "ordinary_orders_unchanged=true execution_proof_fabricated=false forced_activation=false "
                 "safety_gates_bypassed=false",
                 MARKER, inherited_reason, _decision_reason(decision),
@@ -159,6 +177,47 @@ def _wrap_can_execute(current: Callable[..., Any], authority: ModuleType) -> Cal
     setattr(can_execute_v233, _PATCH_ATTR, True)
     setattr(can_execute_v233, "__wrapped__", current)
     return can_execute_v233
+
+
+def _patch_submit_guard(module: ModuleType) -> bool:
+    """Patch the final broker-integration guard that may retain a stale import.
+
+    The guard is allowed to recover only an ExecutionBlocked caused by BOOT on the
+    same thread while an already-verified startup-probe grant is still live.
+    Every other exception and every ordinary order remain fail-closed.
+    """
+    current = getattr(module, "_reject_if_unauthorized_order_submit", None)
+    if not callable(current):
+        return True
+    if bool(getattr(current, _GUARD_PATCH_ATTR, False)):
+        return True
+
+    blocked_cls = getattr(module, "ExecutionBlocked", RuntimeError)
+
+    @wraps(current)
+    def submit_guard_v233(*args: Any, **kwargs: Any):
+        try:
+            return current(*args, **kwargs)
+        except blocked_cls as exc:
+            text = str(exc or "").lower()
+            if "lifecycle_phase:boot" not in text and "lifecycle_phase_not_live" not in text:
+                raise
+            inherited_reason = _consume_live_grant()
+            if inherited_reason is None:
+                raise
+            LOGGER.critical(
+                "HEARTBEAT_TERMINAL_AUTHORITY_V233_SUBMIT_GUARD_CONSUMED marker=%s probe_reason=%s "
+                "same_thread=true bounded_grant=true original_error=%s ordinary_orders_unchanged=true "
+                "canonical_lifecycle_unchanged=true execution_proof_fabricated=false forced_activation=false "
+                "safety_gates_bypassed=false",
+                MARKER, inherited_reason, str(exc),
+            )
+            return None
+
+    setattr(submit_guard_v233, _GUARD_PATCH_ATTR, True)
+    setattr(submit_guard_v233, "__wrapped__", current)
+    setattr(module, "_reject_if_unauthorized_order_submit", submit_guard_v233)
+    return True
 
 
 def _patch_terminal_surfaces() -> tuple[bool, tuple[str, ...]]:
@@ -176,6 +235,7 @@ def _patch_terminal_surfaces() -> tuple[bool, tuple[str, ...]]:
 
     patched: list[str] = []
     seen: set[int] = set()
+    guard_ok = True
     for module_name in _TERMINAL_MODULE_NAMES:
         module = sys.modules.get(module_name)
         if not isinstance(module, ModuleType):
@@ -191,9 +251,11 @@ def _patch_terminal_surfaces() -> tuple[bool, tuple[str, ...]]:
             setattr(module, "can_execute", wrapped)
             if getattr(module, "can_execute", None) is wrapped:
                 patched.append(str(getattr(module, "__name__", module_name)))
+        if module_name.endswith("broker_integration"):
+            guard_ok = bool(_patch_submit_guard(module) and guard_ok)
 
     canonical_ok = bool(getattr(authority, "can_execute", None) is wrapped and getattr(wrapped, _PATCH_ATTR, False))
-    return canonical_ok and bool(patched), tuple(sorted(set(patched)))
+    return canonical_ok and bool(patched) and guard_ok, tuple(sorted(set(patched)))
 
 
 def _patch_broker_manager() -> bool:
@@ -249,8 +311,8 @@ def install() -> bool:
     LOGGER.critical(
         "HEARTBEAT_TERMINAL_AUTHORITY_V233_READY marker=%s ready=true broker_terminal_startup_probe_bridge=true "
         "canonical_authority_wrapped=true patched_surfaces=%s startup_write_authority_required=true "
-        "one_shot_terminal_grant=true grant_ttl_s=%.2f ordinary_orders_unchanged=true canonical_lifecycle_unchanged=true "
-        "execution_proof_fabricated=false forced_activation=false safety_gates_bypassed=false",
+        "bounded_terminal_grant=true grant_ttl_s=%.2f broker_submit_guard_patched=true ordinary_orders_unchanged=true "
+        "canonical_lifecycle_unchanged=true execution_proof_fabricated=false forced_activation=false safety_gates_bypassed=false",
         MARKER, ",".join(patched_surfaces), _GRANT_TTL_S,
     )
     return True
@@ -266,5 +328,6 @@ __all__ = [
     "install_import_hook",
     "_patch_broker_manager",
     "_patch_terminal_surfaces",
+    "_patch_submit_guard",
     "_wrap_can_execute",
 ]
