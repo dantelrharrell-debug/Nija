@@ -1,16 +1,15 @@
-"""Bind Kraken local-read contention to the exact live broker instance (v242).
+"""Bind Kraken local-read contention to every live broker class identity (v242).
 
-Production on 2026-08-26 showed v241 installed while get_account_balance() still
+Production on 2026-08-26 showed v241/v242 installed while get_account_balance() still
 incremented direct failure counters and entered EXIT-ONLY after KrakenReadLockBusy.
-The reason is that v241 depended on v234's process-wide environment counter, but the
-live private-call binding producing the timeout was not guaranteed to pass through the
-same wrapped class identity before the balance method swallowed the exception.
+The live KrakenBroker is defined in ``bot.broker_integration``; earlier v242 only
+searched broker_manager aliases, so the actual instance could remain unpatched.
 
 v242 patches every loaded KrakenBroker class alias at BOTH boundaries:
 1. _kraken_private_call records a monotonic instance-local sequence only when the
    raised exception is provably KrakenReadLockBusy/local read-lock contention.
 2. get_account_balance/connect snapshot health before the call. If that exact instance
-   sequence increased during the call, any direct health mutations are restored to the
+   sequence increased during the call, direct health mutations are restored to the
    exact pre-call values.
 
 The read/connect result itself is NOT changed. A failed local read remains failed and
@@ -34,7 +33,12 @@ _FLAG = "NIJA_KRAKEN_LOCAL_CONTENTION_INSTANCE_V242_READY"
 _PRIVATE_ATTR = "_nija_kraken_local_contention_private_v242"
 _BALANCE_ATTR = "_nija_kraken_local_contention_balance_v242"
 _CONNECT_ATTR = "_nija_kraken_local_contention_connect_v242"
-_MODULES = ("bot.broker_manager", "broker_manager")
+_MODULES = (
+    "bot.broker_integration",
+    "broker_integration",
+    "bot.broker_manager",
+    "broker_manager",
+)
 _SEQ_ATTR = "_nija_kraken_local_read_busy_seq_v242"
 
 
@@ -188,6 +192,7 @@ def _patch_class(cls: type) -> bool:
 def _patch_aliases() -> tuple[bool, int, tuple[str, ...]]:
     classes: dict[int, type] = {}
     modules: list[str] = []
+    live_integration_found = False
     for name in _MODULES:
         module = sys.modules.get(name)
         if not isinstance(module, ModuleType):
@@ -198,15 +203,16 @@ def _patch_aliases() -> tuple[bool, int, tuple[str, ...]]:
         cls = getattr(module, "KrakenBroker", None)
         if isinstance(cls, type):
             classes[id(cls)] = cls
-            modules.append(str(getattr(module, "__name__", name)))
+            module_name = str(getattr(module, "__name__", name))
+            modules.append(module_name)
+            if module_name == "bot.broker_integration":
+                live_integration_found = True
     patched = sum(1 for cls in classes.values() if _patch_class(cls))
-    return bool(classes and patched == len(classes)), patched, tuple(sorted(set(modules)))
+    return bool(classes and live_integration_found and patched == len(classes)), patched, tuple(sorted(set(modules)))
 
 
 def install() -> bool:
     try:
-        # Keep prior recovery/accounting layers installed; v242 only closes their
-        # live-instance identity gap.
         v241 = importlib.import_module("bot.runtime_kraken_local_contention_alias_v241_patch")
         upstream_install = getattr(v241, "install", None)
         upstream = bool(callable(upstream_install) and upstream_install())
@@ -222,9 +228,9 @@ def install() -> bool:
     if ready:
         LOGGER.critical(
             "KRAKEN_LOCAL_CONTENTION_V242_READY marker=%s ready=true patched_classes=%d modules=%s "
-            "instance_local_busy_sequence=true private_call_boundary=true balance_health_guard=true "
-            "connect_health_guard=true exact_precall_health_only=true current_call_fail_closed=true "
-            "genuine_exchange_api_auth_nonce_http_order_failures_unchanged=true "
+            "live_broker_integration_required=true instance_local_busy_sequence=true private_call_boundary=true "
+            "balance_health_guard=true connect_health_guard=true exact_precall_health_only=true "
+            "current_call_fail_closed=true genuine_exchange_api_auth_nonce_http_order_failures_unchanged=true "
             "execution_authority_unchanged=true forced_trade=false safety_gates_bypassed=false",
             MARKER, patched_classes, ",".join(modules),
         )
