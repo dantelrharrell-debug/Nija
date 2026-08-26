@@ -220,12 +220,9 @@ def install() -> bool:
             "patched_alias_classes=%d duplicate_identity_dedup=true direct_wrapper_identity=true "
             "wraps_marker_inheritance_safe=true v209_v229_required=true "
             "exact_same_cycle_zero_only=true positive_balance_fabricated=false stale_balance_reused=false "
-            "patched_alias_classes=%d duplicate_identity_dedup=true v209_v229_required=true "
-            "v231_authority_nonce_truth=%s exact_same_cycle_zero_only=true "
-            "positive_balance_fabricated=false stale_balance_reused=false "
-            "freshness_extended=false completeness_threshold_unchanged=true "
-            "writer_nonce_risk_killswitch_order_fill_gates_unchanged=true forced_activation=false "
-            "safety_gates_bypassed=false",
+            "v231_authority_nonce_truth=%s freshness_extended=false "
+            "completeness_threshold_unchanged=true writer_nonce_risk_killswitch_order_fill_gates_unchanged=true "
+            "forced_activation=false safety_gates_bypassed=false",
             MARKER, str(ready).lower(), loaded, patched, str(v231_ok).lower(),
         )
         return ready
