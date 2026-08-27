@@ -1,272 +1,251 @@
-"""
-NIJA Mobile-Ready Backend Server
+"""NIJA Mobile-Ready Backend Server.
 
-Main entry point for the mobile-ready REST API and WebSocket server.
-This server integrates all mobile features:
-- Trading engine API
-- In-app purchase validation
-- Education content delivery
-- Real-time WebSocket updates
-- Subscription management
-- Authenticated account deletion
-
-Deploy this to your cloud provider (AWS, GCP, Azure, Railway, etc.)
-
-Author: NIJA Trading Systems
-Version: 1.0
-Date: February 2026
+Production entry point for the mobile REST and WebSocket service. The gateway
+adds a defense-in-depth JWT gate for all user-scoped mobile API namespaces so a
+route cannot accidentally become public merely because a decorator is omitted.
 """
 
-import os
+from __future__ import annotations
+
 import logging
+import os
 from datetime import datetime
 
-from flask import Flask, jsonify, request
+from flask import jsonify, request
 from flask_cors import CORS
 from flask_socketio import SocketIO
 
-# Import API blueprints
-from api_server import app as base_app, require_auth
+from api_server import app as base_app, decode_jwt_token
+from auth.user_database import get_user_database
 from unified_mobile_api import register_unified_mobile_api
 from iap_handler import register_iap_api
 from education_system import register_education_api
 from mobile_api import mobile_api, MOBILE_API_BASE
 from account_deletion_api import account_deletion_api
 
-# Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
 
-# ========================================
-# Application Configuration
-# ========================================
-
-# Use existing Flask app from api_server or create new one
 app = base_app
 
-# Add WebSocket support
+_DEFAULT_ORIGINS = "https://nijaaitrading.com,https://www.nijaaitrading.com"
+_allowed_origins = [
+    origin.strip()
+    for origin in os.getenv("ALLOWED_ORIGINS", _DEFAULT_ORIGINS).split(",")
+    if origin.strip()
+]
+if "*" in _allowed_origins:
+    logger.warning("Wildcard mobile CORS is enabled; production should use explicit origins")
+
 socketio = SocketIO(
     app,
-    cors_allowed_origins="*",
-    async_mode='threading',
+    cors_allowed_origins=_allowed_origins,
+    async_mode="threading",
     logger=True,
-    engineio_logger=False
+    engineio_logger=False,
 )
 
-# Configure CORS for mobile apps
-CORS(app, resources={
-    r"/api/*": {
-        "origins": os.getenv('ALLOWED_ORIGINS', '*').split(','),
-        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-        "allow_headers": ["Content-Type", "Authorization"],
-        "expose_headers": ["Content-Type", "Authorization"],
-        "supports_credentials": True,
-        "max_age": 3600
-    }
-})
+CORS(
+    app,
+    resources={
+        r"/api/*": {
+            "origins": _allowed_origins,
+            "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+            "allow_headers": ["Content-Type", "Authorization"],
+            "expose_headers": ["Content-Type", "Authorization"],
+            "supports_credentials": True,
+            "max_age": 3600,
+        }
+    },
+)
 
-# ========================================
-# Register All API Blueprints
-# ========================================
+# Public endpoints inside otherwise protected mobile namespaces.
+_PUBLIC_MOBILE_PATHS = {
+    "/api/mobile/status",
+    "/api/mobile/config",
+    "/api/v1/subscription/tiers",
+}
+_PROTECTED_PREFIXES = ("/api/mobile/", "/api/v1/", "/api/account/")
 
-# Mobile API endpoints
+
+@app.before_request
+def mobile_gateway_authentication():
+    """Fail closed for every user-scoped mobile HTTP request.
+
+    This is deliberately in addition to route-level decorators. It protects new
+    endpoints from accidental exposure and also verifies that the JWT subject
+    still maps to an enabled account, immediately invalidating tokens after
+    account deletion/disablement.
+    """
+    if request.method == "OPTIONS":
+        return None
+    if request.path in _PUBLIC_MOBILE_PATHS:
+        return None
+    if not request.path.startswith(_PROTECTED_PREFIXES):
+        return None
+
+    auth_header = request.headers.get("Authorization", "")
+    parts = auth_header.split()
+    if len(parts) != 2 or parts[0].lower() != "bearer":
+        return jsonify({"error": "Authentication required"}), 401
+
+    payload = decode_jwt_token(parts[1])
+    user_id = payload.get("user_id") if isinstance(payload, dict) else None
+    if not isinstance(user_id, str) or not user_id:
+        return jsonify({"error": "Invalid or expired token"}), 401
+
+    user_record = get_user_database().get_user(user_id)
+    if not user_record or not user_record.get("enabled", True):
+        return jsonify({"error": "Account is unavailable"}), 401
+
+    request.user_id = user_id
+    return None
+
+
 app.register_blueprint(mobile_api)
 logger.info("Registered mobile_api blueprint")
 
-# Account deletion endpoint required for mobile-store readiness
 app.register_blueprint(account_deletion_api)
 logger.info("Registered account_deletion_api blueprint")
 
-# Unified mobile API (v1) with subscription enforcement
 register_unified_mobile_api(app, socketio)
-
-# In-app purchase handlers
 register_iap_api(app)
-
-# Education content system
 register_education_api(app)
 
-# ========================================
-# Root Endpoints
-# ========================================
 
-@app.route('/')
+@app.route("/")
 def index():
-    """
-    API root - provides API information and available endpoints.
-    """
     return jsonify({
-        'name': 'NIJA Mobile API',
-        'version': '1.0.0',
-        'description': 'Mobile-ready REST and WebSocket API for NIJA trading platform',
-        'documentation': '/api/docs',
-        'health': '/health',
-        'status': '/status',
-        'api_versions': {
-            'v1': '/api/v1',
-            'mobile': MOBILE_API_BASE,
-            'iap': '/api/iap',
-            'education': '/api/education'
+        "name": "NIJA Mobile API",
+        "version": "1.1.0",
+        "description": "Mobile-ready REST and WebSocket API for NIJA trading platform",
+        "documentation": "/api/docs",
+        "health": "/health",
+        "status": "/status",
+        "api_versions": {
+            "v1": "/api/v1",
+            "mobile": MOBILE_API_BASE,
+            "iap": "/api/iap",
+            "education": "/api/education",
         },
-        'features': [
-            'Trading control and monitoring',
-            'Real-time position updates via WebSocket',
-            'Subscription management',
-            'In-app purchase validation (iOS/Android)',
-            'Education content delivery',
-            'Performance analytics',
-            'Multi-broker support',
-            'Authenticated account deletion'
+        "features": [
+            "Authenticated trading control and monitoring",
+            "Real-time position updates via WebSocket",
+            "Subscription management",
+            "In-app purchase validation (iOS/Android)",
+            "Education content delivery",
+            "Performance analytics",
+            "Multi-broker support",
+            "Authenticated account deletion",
+            "Persistent encrypted mobile device registration",
         ],
-        'websocket': {
-            'endpoint': '/socket.io',
-            'events': ['connect', 'disconnect', 'subscribe_positions', 'subscribe_trades']
-        }
+        "websocket": {
+            "endpoint": "/socket.io",
+            "events": ["connect", "disconnect", "subscribe_positions", "subscribe_trades"],
+        },
     })
 
 
-@app.route('/api/docs')
+@app.route("/api/docs")
 def api_documentation():
-    """
-    API documentation overview.
-    """
     return jsonify({
-        'title': 'NIJA Mobile API Documentation',
-        'version': '1.0.0',
-        'base_url': request.host_url,
-        'authentication': {
-            'type': 'Bearer JWT',
-            'header': 'Authorization: Bearer <token>',
-            'endpoints': {
-                'register': 'POST /api/auth/register',
-                'login': 'POST /api/auth/login'
-            }
+        "title": "NIJA Mobile API Documentation",
+        "version": "1.1.0",
+        "base_url": request.host_url,
+        "authentication": {
+            "type": "Bearer JWT",
+            "header": "Authorization: Bearer <token>",
+            "endpoints": {
+                "register": "POST /api/auth/register",
+                "login": "POST /api/auth/login",
+            },
         },
-        'endpoints': {
-            'Trading Control': {
-                'start_trading': 'POST /api/v1/trading/start',
-                'stop_trading': 'POST /api/v1/trading/stop',
-                'get_status': 'GET /api/v1/trading/status',
-                'get_positions': 'GET /api/v1/positions'
+        "endpoints": {
+            "Trading Control": {
+                "start_trading": "POST /api/v1/trading/start",
+                "stop_trading": "POST /api/v1/trading/stop",
+                "get_status": "GET /api/v1/trading/status",
+                "get_positions": "GET /api/v1/positions",
             },
-            'Subscriptions': {
-                'get_info': 'GET /api/v1/subscription/info',
-                'get_tiers': 'GET /api/v1/subscription/tiers',
-                'upgrade': 'POST /api/v1/subscription/upgrade'
+            "Device": {
+                "register": "POST /api/mobile/device/register",
+                "unregister": "DELETE /api/mobile/device/unregister",
+                "list": "GET /api/mobile/device/list",
             },
-            'In-App Purchases': {
-                'verify_ios': 'POST /api/iap/verify/ios',
-                'verify_android': 'POST /api/iap/verify/android',
-                'get_status': 'GET /api/iap/subscription/status'
+            "Subscriptions": {
+                "get_info": "GET /api/v1/subscription/info",
+                "get_tiers": "GET /api/v1/subscription/tiers",
+                "upgrade": "POST /api/v1/subscription/upgrade",
             },
-            'Education': {
-                'get_catalog': 'GET /api/education/catalog',
-                'get_lesson': 'GET /api/education/lessons/<id>',
-                'get_progress': 'GET /api/education/progress',
-                'update_progress': 'POST /api/education/progress/<lesson_id>'
+            "In-App Purchases": {
+                "verify_ios": "POST /api/iap/verify/ios",
+                "verify_android": "POST /api/iap/verify/android",
+                "get_status": "GET /api/iap/subscription/status",
             },
-            'Analytics': {
-                'get_performance': 'GET /api/v1/analytics/performance'
+            "Education": {
+                "get_catalog": "GET /api/education/catalog",
+                "get_lesson": "GET /api/education/lessons/<id>",
+                "get_progress": "GET /api/education/progress",
+                "update_progress": "POST /api/education/progress/<lesson_id>",
             },
-            'Account': {
-                'get_deletion_requirements': 'GET /api/account/deletion',
-                'delete_account': 'DELETE /api/account/deletion'
-            }
+            "Analytics": {"get_performance": "GET /api/v1/analytics/performance"},
+            "Account": {
+                "get_deletion_requirements": "GET /api/account/deletion",
+                "delete_account": "DELETE /api/account/deletion",
+            },
         },
-        'websocket': {
-            'url': f'ws://{request.host}/socket.io',
-            'events': {
-                'subscribe_positions': 'Subscribe to real-time position updates',
-                'subscribe_trades': 'Subscribe to real-time trade executions',
-                'position_update': 'Receive position updates',
-                'trade_execution': 'Receive trade notifications'
-            }
+        "rate_limits": {
+            "free": "10 requests/minute",
+            "basic": "30 requests/minute",
+            "pro": "100 requests/minute",
+            "enterprise": "300 requests/minute",
         },
-        'rate_limits': {
-            'free': '10 requests/minute',
-            'basic': '30 requests/minute',
-            'pro': '100 requests/minute',
-            'enterprise': '300 requests/minute'
-        }
     })
 
-
-# ========================================
-# Error Handlers
-# ========================================
 
 @app.errorhandler(404)
 def not_found(error):
-    """Handle 404 errors"""
     return jsonify({
-        'error': 'Endpoint not found',
-        'message': 'The requested endpoint does not exist',
-        'documentation': '/api/docs'
+        "error": "Endpoint not found",
+        "message": "The requested endpoint does not exist",
+        "documentation": "/api/docs",
     }), 404
 
 
 @app.errorhandler(500)
 def internal_error(error):
-    """Handle 500 errors"""
-    logger.error(f"Internal server error: {error}")
+    logger.error("Internal server error: %s", error)
     return jsonify({
-        'error': 'Internal server error',
-        'message': 'An unexpected error occurred',
-        'timestamp': datetime.utcnow().isoformat()
+        "error": "Internal server error",
+        "message": "An unexpected error occurred",
+        "timestamp": datetime.utcnow().isoformat(),
     }), 500
 
 
 @app.errorhandler(403)
 def forbidden(error):
-    """Handle 403 errors"""
     return jsonify({
-        'error': 'Forbidden',
-        'message': 'You do not have permission to access this resource',
-        'subscription_info': '/api/v1/subscription/tiers'
+        "error": "Forbidden",
+        "message": "You do not have permission to access this resource",
+        "subscription_info": "/api/v1/subscription/tiers",
     }), 403
 
 
-# ========================================
-# Main Entry Point
-# ========================================
+if __name__ == "__main__":
+    host = os.getenv("HOST", "0.0.0.0")
+    port = int(os.getenv("PORT", 5000))
+    debug = os.getenv("DEBUG", "false").lower() == "true"
 
-if __name__ == '__main__':
-    # Configuration
-    host = os.getenv('HOST', '0.0.0.0')
-    port = int(os.getenv('PORT', 5000))
-    debug = os.getenv('DEBUG', 'false').lower() == 'true'
-    
-    logger.info("=" * 60)
-    logger.info("NIJA Mobile-Ready Backend Server")
-    logger.info("=" * 60)
-    logger.info(f"Starting server on {host}:{port}")
-    logger.info(f"Debug mode: {debug}")
-    logger.info(f"Environment: {os.getenv('FLASK_ENV', 'development')}")
-    logger.info("=" * 60)
-    logger.info("\nRegistered Endpoints:")
-    logger.info("  Root: /")
-    logger.info("  Docs: /api/docs")
-    logger.info("  Health: /health, /healthz")
-    logger.info("  Status: /status")
-    logger.info("  Account deletion: /api/account/deletion")
-    logger.info("\nAPI Versions:")
-    logger.info("  v1: /api/v1/*")
-    logger.info("  Mobile: %s/*", MOBILE_API_BASE)
-    logger.info("  IAP: /api/iap/*")
-    logger.info("  Education: /api/education/*")
-    logger.info("\nWebSocket:")
-    logger.info(f"  Endpoint: ws://{host}:{port}/socket.io")
-    logger.info("=" * 60)
-    
-    # Start server with WebSocket support
+    logger.info("NIJA Mobile-Ready Backend Server starting on %s:%s", host, port)
+    logger.info("Environment: %s", os.getenv("FLASK_ENV", "development"))
     socketio.run(
         app,
         host=host,
         port=port,
         debug=debug,
         use_reloader=debug,
-        log_output=True
+        log_output=True,
     )
