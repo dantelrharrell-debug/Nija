@@ -1,0 +1,26 @@
+name: Mobile Store Readiness
+
+on:
+  pull_request:
+    paths:
+      - 'android/**'
+      - 'mobile/android/**'
+      - 'scripts/validate_mobile_store_readiness.py'
+      - '.github/workflows/mobile-store-readiness.yml'
+  push:
+    branches: [ main ]
+    paths:
+      - 'android/**'
+      - 'mobile/android/**'
+      - 'scripts/validate_mobile_store_readiness.py'
+
+jobs:
+  android-api-level:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Validate Google Play API level
+        run: python scripts/validate_mobile_store_readiness.py
