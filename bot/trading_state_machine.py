@@ -3315,10 +3315,16 @@ def _runtime_writer_nonce_ready() -> tuple[bool, str]:
     heartbeat_required = _heartbeat_verification_required()
     heartbeat_ok, heartbeat_err, _ = _heartbeat_verification_status()
     if heartbeat_required and not heartbeat_ok:
-        _record_execution_anomaly(
-            "heartbeat_verification",
-            heartbeat_err or "missing_or_stale",
-        )
+        # ``marker_missing`` is the expected bootstrap state before the genuine
+        # startup heartbeat reaches ORDER_VERIFY.  Counting readiness polling as
+        # repeated execution anomalies trips the circuit breaker before that
+        # probe can create its marker, producing a circular deadlock.  Malformed,
+        # stale, or insufficient markers remain anomalies and fail closed.
+        if heartbeat_err != "marker_missing":
+            _record_execution_anomaly(
+                "heartbeat_verification",
+                heartbeat_err or "missing_or_stale",
+            )
         return False, f"heartbeat_verification:{heartbeat_err or 'missing_or_stale'}"
 
     writer_ok, writer_err = _distributed_writer_authority_gate()
