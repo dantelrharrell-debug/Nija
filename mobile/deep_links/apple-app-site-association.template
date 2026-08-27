@@ -1,0 +1,14 @@
+{
+  "applinks": {
+    "details": [
+      {
+        "appIDs": [
+          "APPLE_TEAM_ID.com.nijaaitrading.app"
+        ],
+        "components": [
+          { "/": "/*", "comment": "Route NIJA HTTPS links into the native app." }
+        ]
+      }
+    ]
+  }
+}
