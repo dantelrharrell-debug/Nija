@@ -1,12 +1,12 @@
 {
-  "appId": "com.nija.trading",
+  "appId": "com.nijaaitrading.app",
   "appName": "NIJA",
   "webDir": "frontend",
   "bundledWebRuntime": true,
   "server": {
     "androidScheme": "https",
     "iosScheme": "https",
-    "hostname": "nija.app"
+    "hostname": "nijaaitrading.com"
   },
   "plugins": {
     "SplashScreen": {
