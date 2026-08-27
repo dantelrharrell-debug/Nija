@@ -1,17 +1,10 @@
 """Recover from a permanently wedged process-local Kraken private-read lock.
 
-Production on 2026-08-26 proved that v212's bounded 3 s lock admission correctly
-fails closed, but a process-local lock can remain unavailable across many
-successive reads. Because ``threading`` locks cannot be safely force-released by
-a non-owner thread, the safe automatic recovery for a stale in-process owner is
-to recycle the worker process after repeated failed admissions over a bounded
-observation window.
-
-This patch does NOT bypass the Kraken lock, fabricate balances, clear the kill
-switch, grant execution authority, change nonce policy, or retry mutating calls.
-It observes ``KrakenReadLockBusy`` failures from the existing v121 wrapper. A
-successful Kraken private call clears the starvation episode. Quiet time alone
-does not.
+v234 observes KrakenReadLockBusy at every live KrakenBroker class identity.  A local
+read-lock timeout is not exchange/API/auth/nonce failure.  Reads remain fail-closed;
+mutating calls are never retried or lock-bypassed.  If repeated local contention is
+proven and no mutation is in flight, the process may recycle so the stale in-process
+lock is discarded safely.
 """
 from __future__ import annotations
 
@@ -36,7 +29,7 @@ _LAST_BUSY = 0.0
 _BUSY_COUNT = 0
 _ACTIVE_MUTATIONS = 0
 _RECYCLE_REQUESTED = False
-
+_MODULES = ("bot.broker_integration", "broker_integration", "bot.broker_manager", "broker_manager")
 _MUTATING = {"AddOrder", "AddOrderBatch", "CancelOrder", "CancelOrderBatch", "CancelAll", "CancelAllOrdersAfter", "EditOrder"}
 
 
@@ -57,9 +50,7 @@ def _quiet_reset_s() -> float:
 
 
 def _method_from_call(args: tuple[Any, ...], kwargs: dict[str, Any]) -> str:
-    if args:
-        return str(args[0] or "")
-    return str(kwargs.get("method") or "")
+    return str(args[0] if args else kwargs.get("method", "") or "")
 
 
 def _is_lock_busy(exc: BaseException) -> bool:
@@ -69,7 +60,8 @@ def _is_lock_busy(exc: BaseException) -> bool:
             return True
     except Exception:
         pass
-    return "kraken read lock busy" in str(exc or "").lower()
+    text = str(exc or "").lower()
+    return "kraken read lock busy" in text or "krakenreadlockbusy" in text
 
 
 def _note_busy() -> None:
@@ -85,7 +77,13 @@ def _note_busy() -> None:
         age = max(0.0, now - _BUSY_SINCE)
     os.environ["NIJA_KRAKEN_READ_LOCK_V234_STARVING"] = "1"
     os.environ["NIJA_KRAKEN_READ_LOCK_V234_BUSY_COUNT"] = str(count)
-    LOGGER.warning("KRAKEN_READ_LOCK_V234_STARVATION marker=%s busy_count=%d age_s=%.2f action=observe_fail_closed reset_requires_success=true lock_bypass=false local_contention=true broker_unavailability_unproven=true", MARKER, count, age)
+    os.environ["NIJA_KRAKEN_READ_LOCK_V234_BUSY_EPOCH"] = str(time.time())
+    LOGGER.warning(
+        "KRAKEN_READ_LOCK_V234_STARVATION marker=%s busy_count=%d age_s=%.2f "
+        "action=observe_fail_closed reset_requires_success=true lock_bypass=false local_contention=true "
+        "broker_unavailability_unproven=true",
+        MARKER, count, age,
+    )
 
 
 def _note_success() -> None:
@@ -95,23 +93,17 @@ def _note_success() -> None:
         _BUSY_SINCE = 0.0
         _LAST_BUSY = 0.0
         _BUSY_COUNT = 0
-    os.environ.pop("NIJA_KRAKEN_READ_LOCK_V234_STARVING", None)
-    os.environ.pop("NIJA_KRAKEN_READ_LOCK_V234_BUSY_COUNT", None)
+    for key in ("NIJA_KRAKEN_READ_LOCK_V234_STARVING", "NIJA_KRAKEN_READ_LOCK_V234_BUSY_COUNT", "NIJA_KRAKEN_READ_LOCK_V234_BUSY_EPOCH"):
+        os.environ.pop(key, None)
     if had_episode:
         LOGGER.info("KRAKEN_READ_LOCK_V234_RECOVERED marker=%s proof=successful_private_call recycle_cancelled=true synthetic_success=false", MARKER)
 
 
-def _patch_broker_manager(module: ModuleType | None = None) -> bool:
-    module = module or sys.modules.get("bot.broker_manager") or sys.modules.get("broker_manager")
-    if not isinstance(module, ModuleType):
-        return True
-    cls = getattr(module, "KrakenBroker", None)
-    if not isinstance(cls, type):
-        return False
+def _patch_class(cls: type) -> bool:
     current = getattr(cls, "_kraken_private_call", None)
     if not callable(current):
         return False
-    if getattr(current, _PATCH_ATTR, False):
+    if bool(getattr(current, _PATCH_ATTR, False)):
         return True
 
     @wraps(current)
@@ -122,13 +114,6 @@ def _patch_broker_manager(module: ModuleType | None = None) -> bool:
         if mutating:
             with _LOCK:
                 _ACTIVE_MUTATIONS += 1
-            try:
-                result = current(self, *args, **kwargs)
-                _note_success()
-                return result
-            finally:
-                with _LOCK:
-                    _ACTIVE_MUTATIONS = max(0, _ACTIVE_MUTATIONS - 1)
         try:
             result = current(self, *args, **kwargs)
             _note_success()
@@ -137,11 +122,43 @@ def _patch_broker_manager(module: ModuleType | None = None) -> bool:
             if _is_lock_busy(exc):
                 _note_busy()
             raise
+        finally:
+            if mutating:
+                with _LOCK:
+                    _ACTIVE_MUTATIONS = max(0, _ACTIVE_MUTATIONS - 1)
 
     setattr(kraken_private_call_v234, _PATCH_ATTR, True)
     setattr(kraken_private_call_v234, "__wrapped__", current)
     cls._kraken_private_call = kraken_private_call_v234
     return True
+
+
+def _patch_all_kraken_classes() -> tuple[bool, int, tuple[str, ...]]:
+    classes: dict[int, type] = {}
+    modules: list[str] = []
+    live_found = False
+    for name in _MODULES:
+        module = sys.modules.get(name)
+        if not isinstance(module, ModuleType):
+            try:
+                module = importlib.import_module(name)
+            except Exception:
+                continue
+        cls = getattr(module, "KrakenBroker", None)
+        if isinstance(cls, type):
+            classes[id(cls)] = cls
+            module_name = str(getattr(module, "__name__", name))
+            modules.append(module_name)
+            if module_name == "bot.broker_integration":
+                live_found = True
+    patched = sum(1 for cls in classes.values() if _patch_class(cls))
+    return bool(classes and live_found and patched == len(classes)), patched, tuple(sorted(set(modules)))
+
+
+def _patch_broker_manager(module: ModuleType | None = None) -> bool:
+    # Backward-compatible entrypoint retained for older convergence callers.
+    ready, _, _ = _patch_all_kraken_classes()
+    return ready
 
 
 def _install_v235() -> bool:
@@ -185,7 +202,8 @@ def _watchdog() -> None:
 def install() -> bool:
     global _STARTED
     with _LOCK:
-        if not _patch_broker_manager():
+        aliases_ready, patched_classes, modules = _patch_all_kraken_classes()
+        if not aliases_ready:
             return False
         if not _install_v235():
             LOGGER.error("RUNTIME_KRAKEN_READ_LOCK_RECOVERY_V234_V235_NOT_READY marker=%s trading_fail_closed=true", MARKER)
@@ -194,8 +212,15 @@ def install() -> bool:
         if not _STARTED:
             _STARTED = True
             threading.Thread(target=_watchdog, name="KrakenReadLockRecoveryV234", daemon=True).start()
-    LOGGER.critical("RUNTIME_KRAKEN_READ_LOCK_RECOVERY_V234_READY marker=%s ready=true recycle_after_s=%.2f quiet_reset_s=%.2f reset_requires_success=true process_local_lock_only=true mutating_calls_tracked=true lock_force_release=false lock_bypass=false balance_fabricated=false execution_authority_granted=false nonce_policy_unchanged=true local_contention_not_exchange_failure=true heartbeat_terminal_v235=true forced_trade=false safety_gates_bypassed=false", MARKER, _stale_after_s(), _quiet_reset_s())
+    LOGGER.critical(
+        "RUNTIME_KRAKEN_READ_LOCK_RECOVERY_V234_READY marker=%s ready=true patched_classes=%d modules=%s "
+        "live_broker_integration_required=true recycle_after_s=%.2f quiet_reset_s=%.2f reset_requires_success=true "
+        "process_local_lock_only=true mutating_calls_tracked=true lock_force_release=false lock_bypass=false "
+        "balance_fabricated=false execution_authority_granted=false nonce_policy_unchanged=true "
+        "local_contention_not_exchange_failure=true heartbeat_terminal_v235=true forced_trade=false safety_gates_bypassed=false",
+        MARKER, patched_classes, ",".join(modules), _stale_after_s(), _quiet_reset_s(),
+    )
     return True
 
 
-__all__ = ["MARKER", "install", "_patch_broker_manager", "_stale_after_s", "_quiet_reset_s", "_install_v235"]
+__all__ = ["MARKER", "install", "_patch_broker_manager", "_patch_all_kraken_classes", "_stale_after_s", "_quiet_reset_s", "_install_v235"]
