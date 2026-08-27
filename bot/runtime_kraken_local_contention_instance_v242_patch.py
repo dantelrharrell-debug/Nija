@@ -210,6 +210,10 @@ def _patch_aliases() -> tuple[bool, int, tuple[str, ...]]:
             classes[id(cls)] = cls
             module_name = str(getattr(module, "__name__", name))
             modules.append(module_name)
+            # The production class is ``bot.broker_manager.KrakenBroker``.
+            # The integration module defines ``KrakenBrokerAdapter`` instead;
+            # looking for ``KrakenBroker`` there kept the entire v234/v237/
+            # v241/v242 readiness chain false despite effective protection.
             if module_name == "bot.broker_manager":
                 canonical_manager_found = True
     patched = sum(1 for cls in classes.values() if _patch_class(cls))

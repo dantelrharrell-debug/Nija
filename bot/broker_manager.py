@@ -8004,6 +8004,19 @@ class BinanceBroker(BaseBroker):
         return ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT', 'ADAUSDT']
 
 
+def _is_local_kraken_read_contention(error: BaseException) -> bool:
+    """Return whether *error* proves process-local Kraken read-lock contention."""
+    normalized = str(error or "").strip().lower()
+    return any(
+        token in normalized
+        for token in (
+            "kraken read lock busy",
+            "krakenreadlockbusy",
+            "local_read_lock_timeout",
+        )
+    )
+
+
 class KrakenBroker(BaseBroker):
     """
     Kraken Pro Exchange integration for cryptocurrency spot trading.
@@ -10676,12 +10689,7 @@ class KrakenBroker(BaseBroker):
             # the transient call fails closed without incrementing the balance
             # error streak or entering EXIT-ONLY.  Reuse only a previously
             # authenticated cached balance; never fabricate success/capital.
-            _local_read_lock_error = str(e or "").strip().lower()
-            if (
-                "kraken read lock busy" in _local_read_lock_error
-                or "krakenreadlockbusy" in _local_read_lock_error
-                or "local_read_lock_timeout" in _local_read_lock_error
-            ):
+            if _is_local_kraken_read_contention(e):
                 logger.warning(
                     "KRAKEN_LOCAL_READ_CONTENTION_V243_EXCLUDED account=%s "
                     "health_counter_unchanged=true availability_unchanged=true "
@@ -12297,6 +12305,16 @@ class KrakenBroker(BaseBroker):
             return positions
 
         except Exception as e:
+            if _is_local_kraken_read_contention(e):
+                logger.warning(
+                    "KRAKEN_LOCAL_READ_CONTENTION_V245_POSITION_EXCLUDED account=%s "
+                    "health_counter_unchanged=true availability_unchanged=true "
+                    "exit_only_unchanged=true position_snapshot_fail_closed=true "
+                    "exchange_unavailability_unproven=true error=%s",
+                    self.account_identifier,
+                    str(e)[:180],
+                )
+                return []
             self._demote_on_writer_authority_failure(e)
             logger.error(f"Error fetching Kraken positions: {e}")
             return []

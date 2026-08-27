@@ -1131,7 +1131,7 @@ class TradingStrategy:
             way, market discovery failure never blocks heartbeat execution.
         """
         # ── Resolve broker ─────────────────────────────────────────────────
-        broker = self._get_active_broker()
+        broker = self._get_heartbeat_broker()
         if broker is None:
             logger.error("❌ Heartbeat trade: no active broker available")
             return False
@@ -1561,6 +1561,83 @@ class TradingStrategy:
         if status:
             logger.warning("No entry-eligible broker available: %s", status)
         return None
+
+    def _get_heartbeat_broker(self) -> Optional[Any]:
+        """Return a canonically execution-ready broker for startup proof.
+
+        ``NIJA_EXECUTION_READY_VENUES`` is published by the authoritative
+        three-venue readiness reconciler.  When it is present, a startup
+        ORDER_VERIFY/FILL_VERIFY probe must not reuse a merely connected or
+        legacy-balance-eligible cached broker outside that set.  Ordinary entry
+        routing remains unchanged and the method fails closed if none of the
+        published ready venues can be resolved to a live broker object.
+        """
+        readiness_published = "NIJA_EXECUTION_READY_VENUES" in os.environ
+        ready_raw = os.environ.get("NIJA_EXECUTION_READY_VENUES", "")
+        ready_venues = {
+            venue.strip().lower()
+            for venue in ready_raw.split(",")
+            if venue.strip()
+        }
+        if not readiness_published:
+            return self._get_active_broker()
+        if not ready_venues:
+            logger.error(
+                "Heartbeat broker selection failed closed: ready_venues=none "
+                "status=canonical_readiness_has_no_ready_venues"
+            )
+            return None
+
+        candidates: Dict[Any, Any] = {}
+        if self.multi_account_manager is not None:
+            try:
+                candidates.update(
+                    getattr(self.multi_account_manager, "platform_brokers", {}) or {}
+                )
+            except Exception as exc:
+                logger.debug("Heartbeat MABM broker lookup failed: %s", exc)
+        if self.broker_manager is not None:
+            try:
+                candidates.update(getattr(self.broker_manager, "brokers", {}) or {})
+                primary = self.broker_manager.get_primary_broker()
+                if primary is not None:
+                    candidates.setdefault(
+                        getattr(primary, "broker_type", "primary"), primary
+                    )
+            except Exception as exc:
+                logger.debug("Heartbeat BrokerManager lookup failed: %s", exc)
+        if self.broker is not None:
+            candidates.setdefault(
+                getattr(self.broker, "broker_type", "cached"), self.broker
+            )
+
+        ready_candidates = {
+            raw_key: broker
+            for raw_key, broker in candidates.items()
+            if broker is not None
+            and self._broker_key_from_obj(broker) in ready_venues
+        }
+        selected, name, status = self._select_entry_broker(ready_candidates)
+        if selected is None:
+            logger.error(
+                "Heartbeat broker selection failed closed: ready_venues=%s status=%s",
+                ",".join(sorted(ready_venues)),
+                status or "no_matching_broker_objects",
+            )
+            return None
+
+        self.broker = selected
+        if self.broker_manager is not None:
+            try:
+                self.broker_manager.active_broker = selected
+            except Exception:
+                pass
+        logger.info(
+            "HEARTBEAT_CANONICAL_VENUE_SELECTED venue=%s ready_venues=%s",
+            name,
+            ",".join(sorted(ready_venues)),
+        )
+        return selected
 
     @staticmethod
     def _position_symbol(position: Any) -> str:

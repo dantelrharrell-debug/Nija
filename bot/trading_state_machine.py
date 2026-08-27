@@ -616,7 +616,10 @@ def _kraken_nonce_gates_required() -> bool:
     Kraken is not an active connected platform broker. In that case, enforcing
     Kraken nonce gates can block dispatch unnecessarily.
     """
-    if _env_truthy("NIJA_FORCE_KRAKEN_NONCE_GATES", "false"):
+    if (
+        _env_truthy("NIJA_FORCE_KRAKEN_NONCE_GATES", "false")
+        or _env_truthy("KRAKEN_NONCE_LEASE_REQUIRED", "false")
+    ):
         return True
 
     try:
@@ -3287,10 +3290,9 @@ def _is_authority_ready() -> bool:
             except ImportError:
                 from readiness_table import mark_ready as _rt_mark  # type: ignore[import]
             _rt_mark("authority_ready")
-            # Also mark nonce_ready for Coinbase-only mode (Kraken nonce not
-            # required), which unblocks the prereqs_ready check inside the
-            # coordinator's _reconcile_runtime_authority_locked().
-            if not os.environ.get("KRAKEN_NONCE_LEASE_REQUIRED", "").strip():
+            # Also mark nonce_ready only when canonical runtime topology proves
+            # that no active Kraken platform broker requires nonce authority.
+            if not _kraken_nonce_gates_required():
                 _rt_mark("nonce_ready")
             logger.critical(
                 "[AUTHORITY_GRANTED] writer_authority_gate_passed — "

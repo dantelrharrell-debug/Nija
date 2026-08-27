@@ -156,6 +156,11 @@ def _patch_all_kraken_classes() -> tuple[bool, int, tuple[str, ...]]:
             classes[id(cls)] = cls
             module_name = str(getattr(module, "__name__", name))
             modules.append(module_name)
+            # ``KrakenBroker`` is defined by the canonical broker-manager
+            # module.  ``bot.broker_integration`` exposes
+            # ``KrakenBrokerAdapter`` instead, so requiring a KrakenBroker
+            # class there makes this installer permanently report false even
+            # after the real live class has been patched.
             if module_name == "bot.broker_manager":
                 canonical_manager_found = True
     patched = sum(1 for cls in classes.values() if _patch_class(cls))

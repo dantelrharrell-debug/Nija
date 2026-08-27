@@ -219,6 +219,76 @@ class TestHeartbeatEmptyMarketFallback(unittest.TestCase):
                 marker_payload = json.loads(marker_file.read())
                 self.assertEqual(marker_payload.get("stage"), "ORDER_VERIFY")
 
+    def test_heartbeat_uses_canonical_ready_venue_not_cached_degraded_broker(self):
+        """A cached Kraken broker cannot override Coinbase-only readiness."""
+        from bot.trading_strategy import TradingStrategy
+
+        kraken = SimpleNamespace(
+            NAME="kraken",
+            connected=True,
+            exit_only_mode=False,
+            _last_known_balance=250.0,
+        )
+        coinbase = SimpleNamespace(
+            NAME="coinbase",
+            connected=True,
+            exit_only_mode=False,
+            _last_known_balance=95.0,
+        )
+
+        strategy = self._make_strategy_with_broker(kraken)
+        strategy.multi_account_manager = SimpleNamespace(
+            platform_brokers={"kraken": kraken, "coinbase": coinbase}
+        )
+
+        with patch.dict(
+            "os.environ",
+            {"NIJA_EXECUTION_READY_VENUES": "coinbase,okx"},
+            clear=False,
+        ):
+            selected = strategy._get_heartbeat_broker()
+
+        self.assertIs(selected, coinbase)
+        self.assertIs(strategy.broker, coinbase)
+
+    def test_heartbeat_fails_closed_when_ready_venue_object_is_missing(self):
+        """Published readiness never falls back to a degraded cached venue."""
+        kraken = SimpleNamespace(
+            NAME="kraken",
+            connected=True,
+            exit_only_mode=False,
+            _last_known_balance=250.0,
+        )
+        strategy = self._make_strategy_with_broker(kraken)
+
+        with patch.dict(
+            "os.environ",
+            {"NIJA_EXECUTION_READY_VENUES": "coinbase"},
+            clear=False,
+        ):
+            selected = strategy._get_heartbeat_broker()
+
+        self.assertIsNone(selected)
+
+    def test_heartbeat_fails_closed_when_published_ready_set_is_empty(self):
+        """An authoritative empty ready set is not treated as unpublished."""
+        kraken = SimpleNamespace(
+            NAME="kraken",
+            connected=True,
+            exit_only_mode=False,
+            _last_known_balance=250.0,
+        )
+        strategy = self._make_strategy_with_broker(kraken)
+
+        with patch.dict(
+            "os.environ",
+            {"NIJA_EXECUTION_READY_VENUES": ""},
+            clear=False,
+        ):
+            selected = strategy._get_heartbeat_broker()
+
+        self.assertIsNone(selected)
+
     def test_heartbeat_fill_verify_blocks_without_fill(self):
         broker = MagicMock()
         broker.connected = True

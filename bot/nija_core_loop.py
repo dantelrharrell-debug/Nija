@@ -7795,6 +7795,31 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                                 _pool_dispatched = True
 
                                 _accepted_count = sum(1 for v in _pool_accepted.values() if v)
+                                # A successfully accepted first broker-pool batch is
+                                # the async equivalent of entering run_scan_phase.
+                                # Record that lifecycle edge immediately so startup
+                                # authority convergence does not wait on a scan-start
+                                # watchdog that the authority gate itself prevents a
+                                # worker from reaching.  This is telemetry only: it
+                                # grants no execution authority and does not mark the
+                                # scan complete.
+                                if _accepted_count > 0 and cycle == 1:
+                                    try:
+                                        from bot.entrypoint_writer_authority import (
+                                            get_entrypoint_writer_authority,
+                                        )
+                                        get_entrypoint_writer_authority().record_scan_started()
+                                        logger.critical(
+                                            "SCAN_ASYNC_DISPATCH_STARTED cycle=%d accepted=%d",
+                                            cycle,
+                                            _accepted_count,
+                                        )
+                                    except Exception as _scan_start_err:
+                                        logger.warning(
+                                            "SCAN_ASYNC_DISPATCH_TELEMETRY_FAILED cycle=%d err=%s",
+                                            cycle,
+                                            _scan_start_err,
+                                        )
                                 logger.critical(
                                     "🚀 [BROKER_POOL] Dispatched %d/%d broker workers | "
                                     "cycle=%d brokers=%s",

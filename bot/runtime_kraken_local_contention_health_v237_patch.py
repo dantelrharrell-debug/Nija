@@ -154,6 +154,10 @@ def _patch_kraken_balance_health() -> bool:
         cls = getattr(module, "KrakenBroker", None)
         if isinstance(cls, type) and callable(getattr(cls, "get_account_balance", None)):
             classes[id(cls)] = cls
+            # The live ``KrakenBroker`` class belongs to
+            # ``bot.broker_manager``.  ``bot.broker_integration`` has a
+            # differently shaped ``KrakenBrokerAdapter`` and must not be used
+            # as proof that the manager class exists.
             if str(getattr(module, "__name__", name)) == "bot.broker_manager":
                 canonical_manager_found = True
     return bool(
