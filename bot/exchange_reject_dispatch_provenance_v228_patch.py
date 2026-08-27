@@ -1,4 +1,4 @@
-"""Keep local/pre-dispatch failures out of exchange rejection telemetry (v228/v232).
+"""Keep local/pre-dispatch failures out of exchange rejection telemetry (v228/v232/v247).
 
 Production on 2026-08-25 showed the canonical EXCHANGE_MONITOR stop holding a
 5/5 rejection window while the runtime was otherwise converged.  The execution
@@ -25,6 +25,17 @@ non-exchange results too.  Generic messages such as ``OKX order failed`` and
 that a broker submit reached an exchange or that an exchange returned a reject.
 A concrete exchange response such as ``Kraken AddOrder rejected: ...`` remains
 unclassified here and continues to count normally.
+
+V247 closes the startup-heartbeat lifecycle provenance gap.  A terminal
+execution-authority validator can legitimately fail closed with
+``lifecycle_phase:BOOT`` / ``lifecycle_phase_not_live`` before any broker submit
+has occurred.  Those canonical lifecycle denials are local pre-dispatch outcomes,
+not exchange rejections, so they must not poison the exchange rejection-rate
+window.  This change is deliberately prospective: it never deletes an existing
+same-process rejection sample whose provenance is unknown.  Because the rolling
+window itself is not persisted, the next clean process starts with an empty
+window and v226 can independently recover a persisted historical EXCHANGE_MONITOR
+latch only after all of its existing safety proofs pass.
 
 This patch never clears a kill switch, resets a rejection window, marks
 readiness, grants execution authority, fabricates broker ACK/fill proof, changes
@@ -67,6 +78,11 @@ _NON_EXCHANGE_MARKERS = (
     "runtime authority convergence lost",
     "seak halted",
     "trading blocked",
+    # V247: canonical startup lifecycle denials happen before broker submit.
+    # Keep these exact authority-state tokens out of exchange telemetry while
+    # leaving unclassified broker/exchange rejection strings untouched.
+    "lifecycle_phase:boot",
+    "lifecycle_phase_not_live",
     "exchangekillswitch: exchange health red",
     "exchange health red — trade blocked",
     "liquidityintelligenceengine",
@@ -138,8 +154,8 @@ def _patch_execution_pipeline() -> bool:
                 "EXCHANGE_REJECT_V228_NON_EXCHANGE_IGNORED marker=%s "
                 "symbol=%s side=%s reason=%s exchange_sample_mutated=false "
                 "exchange_order_provenance=false route_guard_provenance_v232=true "
-                "kill_switch_unchanged=true execution_authority_unchanged=true "
-                "safety_gates_bypassed=false",
+                "lifecycle_provenance_v247=true kill_switch_unchanged=true "
+                "execution_authority_unchanged=true safety_gates_bypassed=false",
                 MARKER,
                 str(symbol)[:64],
                 str(side)[:32],
@@ -205,10 +221,10 @@ def install() -> bool:
     LOGGER.critical(
         "EXCHANGE_REJECT_DISPATCH_PROVENANCE_V228_READY marker=%s ready=true "
         "local_predispatch_rejects_excluded=true route_guard_provenance_v232=true "
-        "real_exchange_path_unchanged=true rejection_thresholds_unchanged=true "
-        "rejection_window_not_cleared=true kill_switch_unchanged=true "
-        "execution_authority_unchanged=true forced_activation=false "
-        "safety_gates_bypassed=false",
+        "lifecycle_provenance_v247=true real_exchange_path_unchanged=true "
+        "rejection_thresholds_unchanged=true rejection_window_not_cleared=true "
+        "kill_switch_unchanged=true execution_authority_unchanged=true "
+        "forced_activation=false safety_gates_bypassed=false",
         MARKER,
     )
     return True
