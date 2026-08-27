@@ -141,7 +141,7 @@ def _patch_balance_class(cls: type) -> bool:
 
 def _patch_kraken_balance_health() -> bool:
     classes: dict[int, type] = {}
-    live_found = False
+    canonical_manager_found = False
     for name in _MODULES:
         module = sys.modules.get(name)
         if not isinstance(module, ModuleType):
@@ -152,9 +152,17 @@ def _patch_kraken_balance_health() -> bool:
         cls = getattr(module, "KrakenBroker", None)
         if isinstance(cls, type):
             classes[id(cls)] = cls
-            if str(getattr(module, "__name__", name)) == "bot.broker_integration":
-                live_found = True
-    return bool(classes and live_found and all(_patch_balance_class(cls) for cls in classes.values()))
+            # The live ``KrakenBroker`` class belongs to
+            # ``bot.broker_manager``.  ``bot.broker_integration`` has a
+            # differently shaped ``KrakenBrokerAdapter`` and must not be used
+            # as proof that the manager class exists.
+            if str(getattr(module, "__name__", name)) == "bot.broker_manager":
+                canonical_manager_found = True
+    return bool(
+        classes
+        and canonical_manager_found
+        and all(_patch_balance_class(cls) for cls in classes.values())
+    )
 
 
 def install() -> bool:

@@ -192,7 +192,7 @@ def _patch_class(cls: type) -> bool:
 def _patch_aliases() -> tuple[bool, int, tuple[str, ...]]:
     classes: dict[int, type] = {}
     modules: list[str] = []
-    live_integration_found = False
+    canonical_manager_found = False
     for name in _MODULES:
         module = sys.modules.get(name)
         if not isinstance(module, ModuleType):
@@ -205,10 +205,16 @@ def _patch_aliases() -> tuple[bool, int, tuple[str, ...]]:
             classes[id(cls)] = cls
             module_name = str(getattr(module, "__name__", name))
             modules.append(module_name)
-            if module_name == "bot.broker_integration":
-                live_integration_found = True
+            # The production class is ``bot.broker_manager.KrakenBroker``.
+            # The integration module defines ``KrakenBrokerAdapter`` instead;
+            # looking for ``KrakenBroker`` there kept the entire v234/v237/
+            # v241/v242 readiness chain false despite effective protection.
+            if module_name == "bot.broker_manager":
+                canonical_manager_found = True
     patched = sum(1 for cls in classes.values() if _patch_class(cls))
-    return bool(classes and live_integration_found and patched == len(classes)), patched, tuple(sorted(set(modules)))
+    return bool(
+        classes and canonical_manager_found and patched == len(classes)
+    ), patched, tuple(sorted(set(modules)))
 
 
 def install() -> bool:
@@ -228,7 +234,7 @@ def install() -> bool:
     if ready:
         LOGGER.critical(
             "KRAKEN_LOCAL_CONTENTION_V242_READY marker=%s ready=true patched_classes=%d modules=%s "
-            "live_broker_integration_required=true instance_local_busy_sequence=true private_call_boundary=true "
+            "canonical_broker_manager_required=true instance_local_busy_sequence=true private_call_boundary=true "
             "balance_health_guard=true connect_health_guard=true exact_precall_health_only=true "
             "current_call_fail_closed=true genuine_exchange_api_auth_nonce_http_order_failures_unchanged=true "
             "execution_authority_unchanged=true forced_trade=false safety_gates_bypassed=false",

@@ -88,6 +88,26 @@ def _env_truthy(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "enabled", "on"}
 
 
+def _kraken_nonce_gates_required_now() -> bool:
+    """Return current Kraken nonce applicability from canonical broker topology.
+
+    A missing legacy ``KRAKEN_NONCE_LEASE_REQUIRED`` variable is not evidence
+    of Coinbase-only operation.  Preserve an explicit legacy affirmative as a
+    strict operator override, then ask the trading state machine to classify
+    the registered live platform brokers.  Any probe failure remains
+    fail-closed and therefore cannot fabricate nonce readiness.
+    """
+    if _env_truthy("KRAKEN_NONCE_LEASE_REQUIRED"):
+        return True
+    try:
+        from bot import trading_state_machine as _tsm
+
+        probe = getattr(_tsm, "_kraken_nonce_gates_required", None)
+        return bool(probe()) if callable(probe) else True
+    except Exception:
+        return True
+
+
 def _backoff_wait_s(consecutive_failures: int) -> float:
     """Compute exponential backoff wait time for a given failure count.
 
@@ -809,17 +829,15 @@ class AuthorityHeartbeatMonitor:
                         "[AUTHORITY_GRANTED] authority_heartbeat_tick_passed — "
                         "marked authority_ready=True in readiness_table"
                     )
-                # For Coinbase-only deployments the Kraken nonce lease is not
-                # required.  Mark nonce_ready so prereqs_ready can be satisfied.
+                # For genuinely Coinbase-only deployments the Kraken nonce
+                # lease is not required.  Runtime broker topology, not absence
+                # of a legacy env variable, is authoritative.
                 if not _rt_table.get("nonce_ready", False):
-                    _kraken_nonce_required = os.environ.get(
-                        "KRAKEN_NONCE_LEASE_REQUIRED", ""
-                    ).strip()
-                    if not _kraken_nonce_required:
+                    if not _kraken_nonce_gates_required_now():
                         _rt_mark("nonce_ready")
                         logger.info(
                             "AUTHORITY_HEARTBEAT: marked nonce_ready=True "
-                            "(Coinbase-only mode — Kraken nonce not required)"
+                            "(canonical topology has no active Kraken platform broker)"
                         )
             except Exception as _rt_exc:
                 logger.debug(

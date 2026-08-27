@@ -100,6 +100,7 @@ def _patch_class(cls: type) -> bool:
 def _patch_aliases() -> tuple[bool, int, tuple[str, ...]]:
     classes: dict[int, type] = {}
     modules: list[str] = []
+    canonical_manager_found = False
     for name in _MODULES:
         module = sys.modules.get(name)
         if not isinstance(module, ModuleType):
@@ -110,9 +111,14 @@ def _patch_aliases() -> tuple[bool, int, tuple[str, ...]]:
         cls = getattr(module, "KrakenBroker", None)
         if isinstance(cls, type):
             classes[id(cls)] = cls
-            modules.append(str(getattr(module, "__name__", name)))
+            module_name = str(getattr(module, "__name__", name))
+            modules.append(module_name)
+            if module_name == "bot.broker_manager":
+                canonical_manager_found = True
     patched = sum(1 for cls in classes.values() if _patch_class(cls))
-    return bool(classes and patched == len(classes)), patched, tuple(sorted(set(modules)))
+    return bool(
+        classes and canonical_manager_found and patched == len(classes)
+    ), patched, tuple(sorted(set(modules)))
 
 
 def install() -> bool:

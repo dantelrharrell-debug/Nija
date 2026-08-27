@@ -37,6 +37,7 @@ import os
 import time
 import threading
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from bot.startup_coordinator import (
@@ -162,6 +163,35 @@ class TestAuthorityReadyBootstrap(unittest.TestCase):
 
         if result:
             self.assertTrue(readiness_table.snapshot().get("nonce_ready", False))
+
+    def test_connected_kraken_requires_nonce_without_legacy_env(self) -> None:
+        """Canonical connected topology overrides a missing legacy nonce flag."""
+        import bot.trading_state_machine as tsm
+
+        os.environ.pop("KRAKEN_NONCE_LEASE_REQUIRED", None)
+        manager = SimpleNamespace(
+            platform_brokers={"kraken": SimpleNamespace(connected=True)}
+        )
+
+        with patch.object(tsm, "_get_mabm_instance", return_value=manager):
+            self.assertTrue(tsm._kraken_nonce_gates_required())
+
+    def test_authority_bootstrap_does_not_mark_nonce_for_connected_kraken(self) -> None:
+        """Writer authority alone cannot satisfy an active Kraken nonce gate."""
+        import bot.trading_state_machine as tsm
+
+        os.environ.pop("KRAKEN_NONCE_LEASE_REQUIRED", None)
+        manager = SimpleNamespace(
+            platform_brokers={"kraken": SimpleNamespace(connected=True)}
+        )
+
+        with patch.object(
+            tsm, "_distributed_writer_authority_gate", return_value=(True, "")
+        ), patch.object(tsm, "_get_mabm_instance", return_value=manager):
+            self.assertTrue(tsm._is_authority_ready())
+
+        self.assertTrue(readiness_table.snapshot().get("authority_ready", False))
+        self.assertFalse(readiness_table.snapshot().get("nonce_ready", False))
 
 
 # ---------------------------------------------------------------------------
@@ -313,6 +343,29 @@ class TestAuthorityHeartbeatMarksReadiness(unittest.TestCase):
         self.assertFalse(
             readiness_table.snapshot().get("nonce_ready", False),
             "nonce_ready must NOT be auto-set when KRAKEN_NONCE_LEASE_REQUIRED is set",
+        )
+
+    def test_tick_does_not_infer_coinbase_only_from_missing_legacy_env(self) -> None:
+        """An active Kraken topology keeps nonce readiness fail-closed."""
+        monitor = self._make_monitor()
+        os.environ.pop("KRAKEN_NONCE_LEASE_REQUIRED", None)
+
+        with patch(
+            "bot.authority_heartbeat._check_authority_once",
+            return_value=(True, ""),
+        ), patch(
+            "bot.authority_heartbeat._write_heartbeat_marker",
+        ), patch.object(
+            monitor, "_write_heartbeat_to_redis", return_value=None, create=True
+        ), patch(
+            "bot.authority_heartbeat._kraken_nonce_gates_required_now",
+            return_value=True,
+        ):
+            monitor._tick()
+
+        self.assertFalse(
+            readiness_table.snapshot().get("nonce_ready", False),
+            "missing legacy env must not fabricate Coinbase-only nonce readiness",
         )
 
     def test_failed_tick_does_not_mark_authority_ready(self) -> None:

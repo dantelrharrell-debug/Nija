@@ -51,3 +51,25 @@ def test_local_kraken_read_contention_without_cache_returns_zero_without_health_
     assert broker._is_available is True
     assert broker.exit_only_mode is False
     assert broker.kraken_health == "OK"
+
+
+def test_local_kraken_position_contention_skips_authority_demotion():
+    broker = broker_manager.KrakenBroker.__new__(broker_manager.KrakenBroker)
+    broker.api = object()
+    broker.account_identifier = "PLATFORM"
+    broker._balance_fetch_errors = 2
+    broker._is_available = True
+    broker.exit_only_mode = False
+    broker.kraken_health = "OK"
+    broker._kraken_private_call = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        RuntimeError("Kraken read lock busy after 3.00s for Balance")
+    )
+    broker._demote_on_writer_authority_failure = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        AssertionError("local contention must not enter authority demotion")
+    )
+
+    assert broker_manager.KrakenBroker.get_positions(broker) == []
+    assert broker._balance_fetch_errors == 2
+    assert broker._is_available is True
+    assert broker.exit_only_mode is False
+    assert broker.kraken_health == "OK"
