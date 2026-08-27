@@ -2,10 +2,11 @@
 
 Production on 2026-08-26 showed v241/v242 installed while get_account_balance() still
 incremented direct failure counters and entered EXIT-ONLY after KrakenReadLockBusy.
-The live KrakenBroker is defined in ``bot.broker_integration``; earlier v242 only
-searched broker_manager aliases, so the actual instance could remain unpatched.
+The private read and balance owner is ``bot.broker_manager.KrakenBroker``; the
+``bot.broker_integration`` module exposes ``KrakenBrokerAdapter`` at a different layer
+and must not be required as proof that this instance guard is active.
 
-v242 patches every loaded KrakenBroker class alias at BOTH boundaries:
+v242 patches every loaded canonical/legacy KrakenBroker class alias at BOTH boundaries:
 1. _kraken_private_call records a monotonic instance-local sequence only when the
    raised exception is provably KrakenReadLockBusy/local read-lock contention.
 2. get_account_balance/connect snapshot health before the call. If that exact instance
@@ -201,7 +202,11 @@ def _patch_aliases() -> tuple[bool, int, tuple[str, ...]]:
             except Exception:
                 continue
         cls = getattr(module, "KrakenBroker", None)
-        if isinstance(cls, type):
+        if (
+            isinstance(cls, type)
+            and callable(getattr(cls, "_kraken_private_call", None))
+            and callable(getattr(cls, "get_account_balance", None))
+        ):
             classes[id(cls)] = cls
             module_name = str(getattr(module, "__name__", name))
             modules.append(module_name)

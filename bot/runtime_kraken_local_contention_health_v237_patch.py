@@ -1,10 +1,12 @@
 """Keep process-local Kraken read-lock contention out of broker failure health (v237).
 
 A KrakenReadLockBusy read still fails closed, but it is not evidence that Kraken,
-credentials, nonce, or the account are unhealthy.  Patch every loaded live KrakenBroker
-identity and restore only the exact pre-call health fields when v234 proves contention
-occurred during that call.  Genuine exchange/API/auth/nonce/order/HTTP failures remain
-authoritative.
+credentials, nonce, or the account are unhealthy. Patch every loaded KrakenBroker
+identity that owns the balance path and restore only the exact pre-call health fields
+when v234 proves contention occurred during that call. The canonical balance/private
+read owner is ``bot.broker_manager.KrakenBroker``; broker_integration exposes an adapter
+layer and is not a valid readiness prerequisite for this guard. Genuine
+exchange/API/auth/nonce/order/HTTP failures remain authoritative.
 """
 from __future__ import annotations
 
@@ -150,7 +152,7 @@ def _patch_kraken_balance_health() -> bool:
             except Exception:
                 continue
         cls = getattr(module, "KrakenBroker", None)
-        if isinstance(cls, type):
+        if isinstance(cls, type) and callable(getattr(cls, "get_account_balance", None)):
             classes[id(cls)] = cls
             # The live ``KrakenBroker`` class belongs to
             # ``bot.broker_manager``.  ``bot.broker_integration`` has a
@@ -178,7 +180,7 @@ def install() -> bool:
         ready = False
     os.environ[_FLAG] = "1" if ready else "0"
     if ready:
-        LOGGER.critical("KRAKEN_LOCAL_CONTENTION_V237_READY marker=%s ready=true all_live_kraken_aliases=true local_read_lock_only=true broker_failure_streak_excluded=true direct_balance_health_protected=true current_read_fail_closed=true genuine_exchange_errors_unchanged=true execution_authority_unchanged=true nonce_policy_unchanged=true forced_trade=false safety_gates_bypassed=false", MARKER)
+        LOGGER.critical("KRAKEN_LOCAL_CONTENTION_V237_READY marker=%s ready=true canonical_broker_manager=true local_read_lock_only=true broker_failure_streak_excluded=true direct_balance_health_protected=true current_read_fail_closed=true genuine_exchange_errors_unchanged=true execution_authority_unchanged=true nonce_policy_unchanged=true forced_trade=false safety_gates_bypassed=false", MARKER)
     return ready
 
 

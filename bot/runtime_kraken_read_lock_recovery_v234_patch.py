@@ -1,10 +1,15 @@
 """Recover from a permanently wedged process-local Kraken private-read lock.
 
-v234 observes KrakenReadLockBusy at every live KrakenBroker class identity.  A local
-read-lock timeout is not exchange/API/auth/nonce failure.  Reads remain fail-closed;
-mutating calls are never retried or lock-bypassed.  If repeated local contention is
-proven and no mutation is in flight, the process may recycle so the stale in-process
-lock is discarded safely.
+v234 observes KrakenReadLockBusy at every live KrakenBroker class identity that owns
+``_kraken_private_call``.  The canonical private-read owner is
+``bot.broker_manager.KrakenBroker`` (the same surface patched by v121); the
+``bot.broker_integration`` module exposes KrakenBrokerAdapter and must not be required
+as proof that the private-read recovery is installed.
+
+A local read-lock timeout is not exchange/API/auth/nonce failure. Reads remain
+fail-closed; mutating calls are never retried or lock-bypassed. If repeated local
+contention is proven and no mutation is in flight, the process may recycle so the
+stale in-process lock is discarded safely.
 """
 from __future__ import annotations
 
@@ -145,7 +150,9 @@ def _patch_all_kraken_classes() -> tuple[bool, int, tuple[str, ...]]:
             except Exception:
                 continue
         cls = getattr(module, "KrakenBroker", None)
-        if isinstance(cls, type):
+        # Only a class that actually owns the private-call boundary is relevant
+        # to v234. broker_integration's KrakenBrokerAdapter is a different layer.
+        if isinstance(cls, type) and callable(getattr(cls, "_kraken_private_call", None)):
             classes[id(cls)] = cls
             module_name = str(getattr(module, "__name__", name))
             modules.append(module_name)
@@ -219,7 +226,7 @@ def install() -> bool:
             threading.Thread(target=_watchdog, name="KrakenReadLockRecoveryV234", daemon=True).start()
     LOGGER.critical(
         "RUNTIME_KRAKEN_READ_LOCK_RECOVERY_V234_READY marker=%s ready=true patched_classes=%d modules=%s "
-        "live_broker_integration_required=true recycle_after_s=%.2f quiet_reset_s=%.2f reset_requires_success=true "
+        "canonical_broker_manager_required=true recycle_after_s=%.2f quiet_reset_s=%.2f reset_requires_success=true "
         "process_local_lock_only=true mutating_calls_tracked=true lock_force_release=false lock_bypass=false "
         "balance_fabricated=false execution_authority_granted=false nonce_policy_unchanged=true "
         "local_contention_not_exchange_failure=true heartbeat_terminal_v235=true forced_trade=false safety_gates_bypassed=false",
