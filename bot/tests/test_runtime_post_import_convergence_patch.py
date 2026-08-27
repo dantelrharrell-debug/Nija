@@ -39,3 +39,21 @@ def test_downstream_risk_alias_drift_is_repaired(monkeypatch):
     assert patch._canonicalize_alias() is True
     assert sys.modules[patch._ALIAS] is canonical
     assert patch._canonicalize_alias() is False
+
+
+def test_iteration_reports_hidden_failed_prerequisite(monkeypatch):
+    monkeypatch.setattr(patch, "_canonicalize_alias", lambda: False)
+    monkeypatch.setattr(patch, "_apply_broker_threshold", lambda: 1)
+    monkeypatch.setattr(patch, "_patch_quiescence_audit", lambda: True)
+
+    installers = [
+        name for name in dir(patch)
+        if name.startswith("_install_v") and callable(getattr(patch, name))
+    ]
+    for name in installers:
+        monkeypatch.setattr(patch, name, lambda: True)
+    monkeypatch.setattr(patch, "_install_v155_nonce_maturity", lambda: False)
+
+    assert patch._iteration() is False
+    assert patch._LAST_PREREQUISITES["v155_nonce_maturity"] is False
+    assert patch._LAST_PREREQUISITES["v242_kraken_contention_instance"] is True
