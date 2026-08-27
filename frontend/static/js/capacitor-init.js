@@ -7,6 +7,7 @@
  * - Splash screen handling
  * - Push notifications setup
  * - Native device features
+ * - Store-required in-app account deletion access
  */
 
 // Check if running in Capacitor (native app)
@@ -38,23 +39,19 @@ async function initializeCapacitor() {
         const { Keyboard } = Capacitor.Plugins;
         const { Network } = Capacitor.Plugins;
 
-        // Get device info
         if (Device) {
             NativeApp.deviceInfo = await Device.getInfo();
             NativeApp.platform = NativeApp.deviceInfo.platform;
             console.log('Device info:', NativeApp.deviceInfo);
         }
 
-        // Configure status bar
         if (StatusBar) {
             await StatusBar.setStyle({ style: 'DARK' });
             await StatusBar.setBackgroundColor({ color: '#0f172a' });
             console.log('Status bar configured');
         }
 
-        // Hide splash screen after app is ready
         if (SplashScreen) {
-            // Will be hidden after data loads
             window.addEventListener('load', async () => {
                 setTimeout(async () => {
                     await SplashScreen.hide();
@@ -62,13 +59,11 @@ async function initializeCapacitor() {
             });
         }
 
-        // Configure keyboard behavior
         if (Keyboard) {
             await Keyboard.setAccessoryBarVisible({ isVisible: true });
             await Keyboard.setScroll({ isDisabled: false });
         }
 
-        // Listen for app state changes
         if (App) {
             App.addListener('appStateChange', ({ isActive }) => {
                 console.log('App state changed. Is active:', isActive);
@@ -79,14 +74,12 @@ async function initializeCapacitor() {
 
             App.addListener('backButton', () => {
                 console.log('Back button pressed');
-                // Handle back button navigation
                 if (window.handleBackButton) {
                     window.handleBackButton();
                 }
             });
         }
 
-        // Monitor network status
         if (Network) {
             Network.addListener('networkStatusChange', (status) => {
                 console.log('Network status changed', status);
@@ -98,8 +91,6 @@ async function initializeCapacitor() {
 
         NativeApp.initialized = true;
         console.log('Capacitor initialized successfully');
-
-        // Trigger custom event
         window.dispatchEvent(new CustomEvent('capacitor-ready'));
 
     } catch (error) {
@@ -115,8 +106,6 @@ async function initializePushNotifications() {
 
     try {
         const { PushNotifications } = window.Capacitor.Plugins;
-
-        // Request permission
         let permStatus = await PushNotifications.checkPermissions();
 
         if (permStatus.receive === 'prompt') {
@@ -128,13 +117,10 @@ async function initializePushNotifications() {
             return;
         }
 
-        // Register for push notifications
         await PushNotifications.register();
 
-        // Listeners for push events
         PushNotifications.addListener('registration', (token) => {
-            console.log('Push registration success, token:', token.value);
-            // Send token to backend
+            console.log('Push registration success');
             if (window.registerPushToken) {
                 window.registerPushToken(token.value);
             }
@@ -145,16 +131,14 @@ async function initializePushNotifications() {
         });
 
         PushNotifications.addListener('pushNotificationReceived', (notification) => {
-            console.log('Push notification received:', notification);
-            // Handle notification in foreground
+            console.log('Push notification received');
             if (window.handlePushNotification) {
                 window.handlePushNotification(notification);
             }
         });
 
         PushNotifications.addListener('pushNotificationActionPerformed', (notification) => {
-            console.log('Push notification action performed:', notification);
-            // Handle notification tap
+            console.log('Push notification action performed');
             if (window.handlePushAction) {
                 window.handlePushAction(notification);
             }
@@ -226,11 +210,97 @@ async function openExternalUrl(url) {
     }
 }
 
+// ========================================
+// Account deletion — App Store / Play readiness
+// ========================================
+
+function ensureAccountDeletionControls() {
+    const settings = document.getElementById('settings-content');
+    if (!settings || document.getElementById('nija-account-deletion-section')) return;
+
+    const section = document.createElement('div');
+    section.className = 'section';
+    section.id = 'nija-account-deletion-section';
+    section.innerHTML = `
+        <h3>Privacy & Account</h3>
+        <div class="status-card">
+            <p><strong>Delete NIJA Account</strong></p>
+            <p>Permanently remove your NIJA account, active sessions, NIJA-held broker credentials, and registered device tokens where applicable. This does not delete accounts held directly with your broker, Apple, Google, or other third parties.</p>
+            <p>Limited records may be retained only where required for legal, tax, accounting, security, fraud-prevention, dispute-resolution, or regulatory obligations.</p>
+            <button id="delete-nija-account-btn" class="btn btn-danger" type="button">Delete Account</button>
+        </div>
+    `;
+    settings.appendChild(section);
+
+    const button = document.getElementById('delete-nija-account-btn');
+    if (button) button.addEventListener('click', requestNijaAccountDeletion);
+}
+
+async function requestNijaAccountDeletion() {
+    const first = window.confirm(
+        'Delete your NIJA account? This is permanent. Stop live trading and review any open broker positions before continuing.'
+    );
+    if (!first) return;
+
+    const confirmation = window.prompt(
+        'Type DELETE MY NIJA ACCOUNT to confirm permanent deletion.'
+    );
+    if (confirmation !== 'DELETE MY NIJA ACCOUNT') {
+        window.alert('Account deletion cancelled. The confirmation phrase did not match.');
+        return;
+    }
+
+    const token = localStorage.getItem('nija_token');
+    if (!token) {
+        window.alert('Please sign in again before deleting your account.');
+        return;
+    }
+
+    try {
+        const response = await fetch(`${window.location.origin}/api/account/deletion`, {
+            method: 'DELETE',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}`
+            },
+            body: JSON.stringify({ confirmation })
+        });
+        const data = await response.json().catch(() => ({}));
+
+        if (!response.ok || !data.success) {
+            throw new Error(data.message || data.error || 'Deletion could not be confirmed');
+        }
+
+        localStorage.removeItem('nija_token');
+        localStorage.removeItem('nija_risk_acknowledged');
+        window.alert('Your NIJA account deletion request completed successfully. Third-party brokerage accounts were not deleted.');
+
+        if (typeof window.handleLogout === 'function') {
+            window.handleLogout();
+        } else {
+            window.location.reload();
+        }
+    } catch (error) {
+        console.error('NIJA account deletion failed:', error);
+        window.alert(`Account deletion was not confirmed: ${error.message}`);
+    }
+}
+
+function scheduleAccountDeletionControls() {
+    ensureAccountDeletionControls();
+    const observer = new MutationObserver(() => ensureAccountDeletionControls());
+    observer.observe(document.documentElement, { childList: true, subtree: true });
+}
+
 // Initialize on DOMContentLoaded
 if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', initializeCapacitor);
+    document.addEventListener('DOMContentLoaded', () => {
+        initializeCapacitor();
+        scheduleAccountDeletionControls();
+    });
 } else {
     initializeCapacitor();
+    scheduleAccountDeletionControls();
 }
 
 // Export for use in other scripts
@@ -239,3 +309,4 @@ window.initializePushNotifications = initializePushNotifications;
 window.showNativeToast = showNativeToast;
 window.triggerHaptic = triggerHaptic;
 window.openExternalUrl = openExternalUrl;
+window.requestNijaAccountDeletion = requestNijaAccountDeletion;
