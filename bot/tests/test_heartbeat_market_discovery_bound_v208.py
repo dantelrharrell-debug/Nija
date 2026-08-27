@@ -10,6 +10,10 @@ from unittest.mock import patch
 from bot.runtime_heartbeat_probe_pipeline_bridge_v197_patch import (
     _wrap_heartbeat_market_discovery_method,
 )
+from bot.trading_strategy import (
+    _HEARTBEAT_DISCOVERY_FLIGHTS,
+    _bounded_heartbeat_market_discovery,
+)
 
 
 class _Broker:
@@ -24,6 +28,9 @@ class _Broker:
 
 
 class HeartbeatMarketDiscoveryBoundV208Tests(unittest.TestCase):
+    def tearDown(self) -> None:
+        _HEARTBEAT_DISCOVERY_FLIGHTS.clear()
+
     def test_heartbeat_thread_times_out_to_empty_markets(self) -> None:
         broker = _Broker()
         wrapped = _wrap_heartbeat_market_discovery_method(
@@ -64,6 +71,25 @@ class HeartbeatMarketDiscoveryBoundV208Tests(unittest.TestCase):
             method_name="get_available_markets",
         )
         self.assertEqual(wrapped(broker), ["BTC-USD", "ETH-USD"])
+
+    def test_call_site_timeout_covers_late_bound_broker_alias(self) -> None:
+        broker = _Broker()
+        with patch.dict(
+            os.environ,
+            {"NIJA_HEARTBEAT_MARKET_DISCOVERY_TIMEOUT_S": "0.5"},
+            clear=False,
+        ):
+            started = time.monotonic()
+            with self.assertRaisesRegex(TimeoutError, "market discovery timed out"):
+                _bounded_heartbeat_market_discovery(broker, "get_available_markets")
+            elapsed = time.monotonic() - started
+
+            with self.assertRaisesRegex(TimeoutError, "still in flight"):
+                _bounded_heartbeat_market_discovery(broker, "get_available_markets")
+
+        self.assertEqual(broker.calls, 1)
+        self.assertLess(elapsed, 1.25)
+        broker.release.set()
 
 
 if __name__ == "__main__":
