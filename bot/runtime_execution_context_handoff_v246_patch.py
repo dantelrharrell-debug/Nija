@@ -12,6 +12,14 @@ for each submitted call and runs that call inside the copied context.  The stdli
 executor is not modified globally.  No startup-probe context is created here: an
 ordinary order with no verified context remains ordinary in the worker.
 
+Production later proved a startup ordering race: v246 could be ready before the
+v228/v247 exchange-rejection provenance wrapper had attached to ExecutionPipeline.
+That left a short interval where local startup/lifecycle failures could be counted as
+exchange rejection samples.  v246 now requires the existing v228 installer to be
+active before enabling the heartbeat worker context handoff.  It does not clear any
+rejection samples or deactivate a kill switch; a clean process must still satisfy
+v226's independent persisted-latch recovery proof.
+
 Lifecycle state, writer/lease authority, nonce, risk, capital, broker health, kill
 switch, ECEL, minimum notional, exchange acknowledgement, fill proof, and activation
 proof are unchanged and remain fail closed.
@@ -63,6 +71,41 @@ def _execution_pipeline_module() -> ModuleType:
     return importlib.import_module("bot.execution_pipeline")
 
 
+def _install_exchange_rejection_provenance() -> bool:
+    """Require v228/v247 before heartbeat worker execution can be enabled.
+
+    v228 owns the canonical pre-dispatch rejection classifier and includes the
+    v247 lifecycle provenance rules.  Installing it here closes the startup
+    ordering gap without mutating the protector's existing rejection window or
+    changing any kill-switch recovery policy.
+    """
+    try:
+        module = importlib.import_module("bot.exchange_reject_dispatch_provenance_v228_patch")
+        installer = getattr(module, "install", None)
+        if not callable(installer):
+            installer = getattr(module, "install_import_hook", None)
+        if not callable(installer):
+            return False
+        ready = bool(installer())
+        if not ready:
+            LOGGER.warning(
+                "RUNTIME_EXECUTION_CONTEXT_HANDOFF_V246_PROVENANCE_WAIT marker=%s "
+                "v228_ready=false rejection_window_cleared=false kill_switch_unchanged=true "
+                "trading_fail_closed=true",
+                MARKER,
+            )
+        return ready
+    except Exception as exc:
+        LOGGER.warning(
+            "RUNTIME_EXECUTION_CONTEXT_HANDOFF_V246_PROVENANCE_ERROR marker=%s error=%s:%s "
+            "rejection_window_cleared=false kill_switch_unchanged=true trading_fail_closed=true",
+            MARKER,
+            type(exc).__name__,
+            exc,
+        )
+        return False
+
+
 def _patch_execution_pipeline(module: ModuleType | None = None) -> bool:
     target = module or _execution_pipeline_module()
     current = getattr(target, "concurrent", None)
@@ -102,9 +145,10 @@ def _register_manifest() -> bool:
 
 def install() -> bool:
     try:
-        pipeline_ready = _patch_execution_pipeline()
+        provenance_ready = _install_exchange_rejection_provenance()
+        pipeline_ready = _patch_execution_pipeline() if provenance_ready else False
         manifest_ready = _register_manifest()
-        ready = bool(pipeline_ready and manifest_ready)
+        ready = bool(provenance_ready and pipeline_ready and manifest_ready)
     except Exception as exc:
         LOGGER.error(
             "RUNTIME_EXECUTION_CONTEXT_HANDOFF_V246_INSTALL_ERROR marker=%s error=%s:%s "
@@ -113,15 +157,26 @@ def install() -> bool:
             type(exc).__name__,
             exc,
         )
+        provenance_ready = False
         ready = False
     os.environ[_FLAG] = "1" if ready else "0"
     if ready:
         LOGGER.critical(
             "RUNTIME_EXECUTION_CONTEXT_HANDOFF_V246 marker=%s ready=true "
+            "exchange_reject_dispatch_provenance_v228=true lifecycle_provenance_v247=true "
             "pipeline_thread_context_propagated=true stdlib_executor_unchanged=true "
             "startup_probe_context_created=false existing_context_only=true ordinary_orders_unchanged=true "
+            "rejection_window_cleared=false kill_switch_unchanged=true "
             "lifecycle_writer_nonce_risk_capital_broker_health_killswitch_ecel_min_notional_fill_gates_unchanged=true "
             "execution_proof_fabricated=false forced_activation=false safety_gates_bypassed=false",
+            MARKER,
+        )
+    elif not provenance_ready:
+        LOGGER.critical(
+            "RUNTIME_EXECUTION_CONTEXT_HANDOFF_V246_BLOCKED marker=%s ready=false "
+            "reason=exchange_reject_dispatch_provenance_unready rejection_window_cleared=false "
+            "kill_switch_unchanged=true execution_proof_fabricated=false forced_activation=false "
+            "safety_gates_bypassed=false trading_fail_closed=true",
             MARKER,
         )
     return ready
@@ -135,6 +190,7 @@ __all__ = [
     "MARKER",
     "install",
     "install_import_hook",
+    "_install_exchange_rejection_provenance",
     "_patch_execution_pipeline",
     "_register_manifest",
     "_ContextPropagatingThreadPoolExecutor",
