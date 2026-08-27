@@ -10671,6 +10671,29 @@ class KrakenBroker(BaseBroker):
             return 0.0
 
         except Exception as e:
+            # Process-local read-lock contention is not Kraken/API/auth/nonce
+            # unavailability.  Classify it before any broker-health mutation so
+            # the transient call fails closed without incrementing the balance
+            # error streak or entering EXIT-ONLY.  Reuse only a previously
+            # authenticated cached balance; never fabricate success/capital.
+            _local_read_lock_error = str(e or "").strip().lower()
+            if (
+                "kraken read lock busy" in _local_read_lock_error
+                or "krakenreadlockbusy" in _local_read_lock_error
+                or "local_read_lock_timeout" in _local_read_lock_error
+            ):
+                logger.warning(
+                    "KRAKEN_LOCAL_READ_CONTENTION_V243_EXCLUDED account=%s "
+                    "health_counter_unchanged=true availability_unchanged=true "
+                    "exit_only_unchanged=true current_read_fail_closed=true "
+                    "cached_balance_only=true exchange_unavailability_unproven=true error=%s",
+                    self.account_identifier,
+                    str(e)[:180],
+                )
+                if self._last_known_balance is not None:
+                    return self.balance_cache.get("kraken", self._last_known_balance)
+                return 0.0
+
             if self._demote_on_writer_authority_failure(e):
                 return 0.0
             _nonce_rebuild_cooldown_s = self._get_nonce_rebuild_retry_cooldown_seconds(e)
