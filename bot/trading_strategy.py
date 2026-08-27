@@ -105,6 +105,73 @@ except ImportError:
         logger.warning("MarketReadinessGate not available — startup market probe will run degraded")
 
 _HEARTBEAT_LOG_LIMITER = get_log_rate_limiter()
+_HEARTBEAT_DISCOVERY_LOCK = threading.Lock()
+_HEARTBEAT_DISCOVERY_FLIGHTS: Dict[tuple[int, str], threading.Thread] = {}
+
+
+def _heartbeat_market_discovery_timeout_s() -> float:
+    """Return the caller-owned timeout for heartbeat market discovery."""
+    try:
+        value = float(os.environ.get("NIJA_HEARTBEAT_MARKET_DISCOVERY_TIMEOUT_S", "5") or 5.0)
+    except (TypeError, ValueError):
+        value = 5.0
+    return max(0.5, min(30.0, value))
+
+
+def _bounded_heartbeat_market_discovery(broker: Any, method_name: str) -> Any:
+    """Run heartbeat market discovery once with a bounded, fail-safe wait.
+
+    Runtime patch v208 protects known broker classes, but late-bound aliases can
+    replace those class methods after installation.  Owning the timeout at the
+    heartbeat call site guarantees that a read-only discovery call cannot pin
+    the one heartbeat scheduler forever.  A timed-out worker remains registered
+    until it exits, preventing duplicate requests on later retries.
+    """
+    method = getattr(broker, method_name)
+    key = (id(broker), method_name)
+    result_queue: "queue.Queue[tuple[str, Any]]" = queue.Queue(maxsize=1)
+
+    with _HEARTBEAT_DISCOVERY_LOCK:
+        existing = _HEARTBEAT_DISCOVERY_FLIGHTS.get(key)
+        if existing is not None and existing.is_alive():
+            raise TimeoutError(f"heartbeat market discovery still in flight: {method_name}")
+        _HEARTBEAT_DISCOVERY_FLIGHTS.pop(key, None)
+
+        worker_ref: Dict[str, threading.Thread] = {}
+
+        def _runner() -> None:
+            try:
+                result_queue.put_nowait(("result", method()))
+            except BaseException as exc:
+                try:
+                    result_queue.put_nowait(("error", exc))
+                except queue.Full:
+                    pass
+            finally:
+                worker = worker_ref.get("worker")
+                with _HEARTBEAT_DISCOVERY_LOCK:
+                    if worker is not None and _HEARTBEAT_DISCOVERY_FLIGHTS.get(key) is worker:
+                        _HEARTBEAT_DISCOVERY_FLIGHTS.pop(key, None)
+
+        worker = threading.Thread(
+            target=_runner,
+            name=f"HeartbeatMarketDiscovery-Caller-{type(broker).__name__}-{method_name}",
+            daemon=True,
+        )
+        worker_ref["worker"] = worker
+        _HEARTBEAT_DISCOVERY_FLIGHTS[key] = worker
+        worker.start()
+
+    timeout_s = _heartbeat_market_discovery_timeout_s()
+    try:
+        kind, payload = result_queue.get(timeout=timeout_s)
+    except queue.Empty as exc:
+        raise TimeoutError(
+            f"heartbeat market discovery timed out after {timeout_s:.2f}s: {method_name}"
+        ) from exc
+    if kind == "error":
+        raise payload
+    return payload
 
 
 def _heartbeat_rate_limited_info(category: str, key: str, window_seconds: float, message: str, *args: Any) -> None:
@@ -1188,7 +1255,7 @@ class TradingStrategy:
                 else None
             )
             if _market_getter is not None:
-                available_markets = getattr(broker, _market_getter)()
+                available_markets = _bounded_heartbeat_market_discovery(broker, _market_getter)
                 _discovery_count = len(available_markets) if isinstance(available_markets, list) else 0
                 _heartbeat_rate_limited_info(
                     "heartbeat_market_discovery_count",
