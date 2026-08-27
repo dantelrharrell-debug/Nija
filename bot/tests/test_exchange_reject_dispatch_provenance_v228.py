@@ -34,6 +34,17 @@ def test_non_exchange_classifier_covers_predispatch_failures():
         assert v228._is_non_exchange_rejection(reason) is True
 
 
+def test_v247_classifier_covers_startup_lifecycle_denials_without_exchange_proof():
+    reasons = (
+        "lifecycle_phase:BOOT",
+        "Execution blocked: lifecycle_phase:BOOT",
+        "lifecycle_phase_not_live",
+        "ExecutionAuthority reject: lifecycle_phase_not_live",
+    )
+    for reason in reasons:
+        assert v228._is_non_exchange_rejection(reason) is True
+
+
 def test_v232_classifier_covers_route_guard_soft_failures_without_exchange_proof():
     reasons = (
         "broker_dispatch_failed:kraken:none_result",
@@ -65,6 +76,21 @@ def test_dispatch_disabled_does_not_mutate_exchange_rejection_window(tmp_path, m
         symbol="BTC-USD",
         side="buy",
         reason="dispatch_disabled: dispatch.enabled=false",
+    )
+
+    assert list(protector._order_results) == []
+
+
+def test_v247_boot_lifecycle_denial_does_not_mutate_exchange_rejection_window(tmp_path, monkeypatch):
+    protector = _protector(tmp_path)
+    monkeypatch.setattr(execution_pipeline, "get_exchange_kill_switch_protector", lambda: protector)
+    assert v228._patch_execution_pipeline()
+
+    execution_pipeline.ExecutionPipeline._emit_execution_rejection_telemetry(
+        _pipeline_stub(),
+        symbol="BTC-USD",
+        side="buy",
+        reason="Execution blocked: lifecycle_phase:BOOT",
     )
 
     assert list(protector._order_results) == []
