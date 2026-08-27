@@ -119,6 +119,7 @@ def _install_v239_all_account_profit_targets(): return _install_named("bot.runti
 def _install_v240_heartbeat_terminal_lifecycle(): return _install_named("bot.runtime_heartbeat_terminal_lifecycle_v240_patch", "v240_install_missing", "HEARTBEAT_TERMINAL_LIFECYCLE_V240_INSTALL_ERROR")
 def _install_v241_kraken_local_contention_alias(): return _install_named("bot.runtime_kraken_local_contention_alias_v241_patch", "v241_install_missing", "KRAKEN_LOCAL_CONTENTION_V241_INSTALL_ERROR")
 def _install_v242_kraken_local_contention_instance(): return _install_named("bot.runtime_kraken_local_contention_instance_v242_patch", "v242_install_missing", "KRAKEN_LOCAL_CONTENTION_V242_INSTALL_ERROR")
+def _install_v244_heartbeat_broker_manager_terminal(): return _install_named("bot.runtime_heartbeat_broker_manager_terminal_v244_patch", "v244_install_missing", "HEARTBEAT_BROKER_MANAGER_TERMINAL_V244_INSTALL_ERROR")
 
 
 def _iteration() -> bool:
@@ -137,6 +138,7 @@ def _iteration() -> bool:
     v240 = _install_v240_heartbeat_terminal_lifecycle()
     v241 = _install_v241_kraken_local_contention_alias()
     v242 = _install_v242_kraken_local_contention_instance()
+    v244 = _install_v244_heartbeat_broker_manager_terminal()
     prerequisites = {
         "audit_patched": patched,
         "v154_execution_recovery": _install_v154_recovery(),
@@ -163,6 +165,7 @@ def _iteration() -> bool:
         "v240_heartbeat_terminal_lifecycle": v240,
         "v241_kraken_contention_alias": v241,
         "v242_kraken_contention_instance": v242,
+        "v244_heartbeat_broker_manager_terminal": v244,
     }
     global _LAST_PREREQUISITES
     _LAST_PREREQUISITES = dict(prerequisites)
@@ -206,4 +209,4 @@ def install() -> bool:
         return ready
 
 
-__all__ = ["install", "_policy", "_required_broker_count", "_apply_broker_threshold", "_canonicalize_alias", "_patch_quiescence_audit", "_install_v233_heartbeat_terminal_authority", "_install_v234_kraken_read_lock_recovery", "_install_v236_heartbeat_final_submit", "_install_v237_kraken_local_contention_health", "_install_v238_heartbeat_marker_convergence", "_install_v239_all_account_profit_targets", "_install_v240_heartbeat_terminal_lifecycle", "_install_v241_kraken_local_contention_alias", "_install_v242_kraken_local_contention_instance", "_iteration", "_LAST_PREREQUISITES"]
+__all__ = ["install", "_policy", "_required_broker_count", "_apply_broker_threshold", "_canonicalize_alias", "_patch_quiescence_audit", "_install_v233_heartbeat_terminal_authority", "_install_v234_kraken_read_lock_recovery", "_install_v236_heartbeat_final_submit", "_install_v237_kraken_local_contention_health", "_install_v238_heartbeat_marker_convergence", "_install_v239_all_account_profit_targets", "_install_v240_heartbeat_terminal_lifecycle", "_install_v241_kraken_local_contention_alias", "_install_v242_kraken_local_contention_instance", "_install_v244_heartbeat_broker_manager_terminal", "_iteration", "_LAST_PREREQUISITES"]
