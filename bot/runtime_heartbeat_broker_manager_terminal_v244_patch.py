@@ -13,6 +13,11 @@ writer authority is reverified immediately at the terminal method.  The canonica
 authority bindings are anchored for that method call so its inner
 _reject_if_unauthorized_order_submit check observes the verified probe.
 
+v246 is installed from this already-authoritative heartbeat convergence slot.  It
+copies existing ContextVars into ExecutionPipeline's timeout worker so the verified
+startup probe is not lost merely because routing crosses a ThreadPoolExecutor
+boundary.  v246 creates no authority and does not patch the stdlib executor globally.
+
 Ordinary orders, lifecycle state, nonce, risk, capital, broker health, kill switch,
 minimum notional, exchange acknowledgement, fill proof, and readiness remain unchanged.
 """
@@ -39,14 +44,7 @@ def _v236() -> ModuleType:
 
 
 def _verified_reason() -> str | None:
-    """Resolve only authority that was already verified upstream.
-
-    v236._verified_reason() prefers the same-thread, sub-second v233 grant and then
-    falls back to the canonical startup-probe ContextVar.  v244 previously called
-    only _canonical_verified_probe(), which lost the production heartbeat whenever
-    its ContextVar scope ended before the broker-manager method.  This resolver never
-    creates a grant and therefore cannot authorize an ordinary order by itself.
-    """
+    """Resolve only authority that was already verified upstream."""
     v236 = _v236()
     resolver = getattr(v236, "_verified_reason", None)
     if callable(resolver):
@@ -64,8 +62,6 @@ def _verified_reason() -> str | None:
         if normalized in _ALLOWED:
             return normalized
 
-    # Compatibility fallback for an older v236 shape.  This remains fail-closed
-    # and still requires the canonical ContextVar to be active.
     canonical = getattr(v236, "_canonical_verified_probe", None)
     if not callable(canonical):
         return None
@@ -133,13 +129,25 @@ def _patch_broker_manager_methods() -> tuple[bool, tuple[str, ...]]:
             setattr(cls, method_name, wrapped)
             if bool(getattr(getattr(cls, method_name, None), _PATCH_ATTR, False)):
                 patched.append(surface)
-    # Kraken is the production heartbeat route that exposed this gap.  Keep the
-    # existing Coinbase requirement and require the Kraken market terminal too.
     required = all(
         surface in patched
         for surface in ("CoinbaseBroker.place_market_order", "KrakenBroker.place_market_order")
     )
     return required, tuple(sorted(set(patched)))
+
+
+def _install_v246_context_handoff() -> bool:
+    try:
+        module = importlib.import_module("bot.runtime_execution_context_handoff_v246_patch")
+        installer = getattr(module, "install", None) or getattr(module, "install_import_hook", None)
+        return bool(callable(installer) and installer())
+    except Exception as exc:
+        LOGGER.error(
+            "HEARTBEAT_BROKER_MANAGER_TERMINAL_V244_V246_INSTALL_ERROR marker=%s "
+            "error=%s:%s trading_fail_closed=true",
+            MARKER, type(exc).__name__, exc,
+        )
+        return False
 
 
 def install() -> bool:
@@ -148,21 +156,22 @@ def install() -> bool:
         upstream_install = getattr(v240, "install", None)
         upstream = bool(callable(upstream_install) and upstream_install())
         methods_ready, surfaces = _patch_broker_manager_methods()
-        ready = bool(upstream and methods_ready)
+        context_handoff_ready = _install_v246_context_handoff()
+        ready = bool(upstream and methods_ready and context_handoff_ready)
     except Exception as exc:
         LOGGER.error(
             "HEARTBEAT_BROKER_MANAGER_TERMINAL_V244_INSTALL_ERROR marker=%s error=%s:%s trading_fail_closed=true",
             MARKER, type(exc).__name__, exc,
         )
-        ready, surfaces = False, ()
+        ready, surfaces, context_handoff_ready = False, (), False
     os.environ[_FLAG] = "1" if ready else "0"
     if ready:
         LOGGER.critical(
             "HEARTBEAT_BROKER_MANAGER_TERMINAL_V244_READY marker=%s ready=true surfaces=%s "
             "coinbase_live_terminal_required=true kraken_live_terminal_required=true "
             "verified_v233_grant_fallback=true canonical_context_preferred=true "
-            "startup_writer_reverification_required=true grant_ttl_not_extended=true "
-            "ordinary_orders_unchanged=true execution_proof_fabricated=false "
+            "pipeline_context_handoff_v246=true startup_writer_reverification_required=true "
+            "grant_ttl_not_extended=true ordinary_orders_unchanged=true execution_proof_fabricated=false "
             "forced_activation=false safety_gates_bypassed=false",
             MARKER, ",".join(surfaces),
         )
@@ -179,6 +188,7 @@ __all__ = [
     "install_import_hook",
     "_wrap_method",
     "_patch_broker_manager_methods",
+    "_install_v246_context_handoff",
     "_verified_reason",
     "_writer_ready",
 ]
