@@ -2,10 +2,11 @@
 
 Production on 2026-08-26 showed v241/v242 installed while get_account_balance() still
 incremented direct failure counters and entered EXIT-ONLY after KrakenReadLockBusy.
-The live KrakenBroker is defined in ``bot.broker_integration``; earlier v242 only
-searched broker_manager aliases, so the actual instance could remain unpatched.
+The private read and balance owner is ``bot.broker_manager.KrakenBroker``; the
+``bot.broker_integration`` module exposes ``KrakenBrokerAdapter`` at a different layer
+and must not be required as proof that this instance guard is active.
 
-v242 patches every loaded KrakenBroker class alias at BOTH boundaries:
+v242 patches every loaded canonical/legacy KrakenBroker class alias at BOTH boundaries:
 1. _kraken_private_call records a monotonic instance-local sequence only when the
    raised exception is provably KrakenReadLockBusy/local read-lock contention.
 2. get_account_balance/connect snapshot health before the call. If that exact instance
@@ -192,7 +193,7 @@ def _patch_class(cls: type) -> bool:
 def _patch_aliases() -> tuple[bool, int, tuple[str, ...]]:
     classes: dict[int, type] = {}
     modules: list[str] = []
-    live_integration_found = False
+    canonical_manager_found = False
     for name in _MODULES:
         module = sys.modules.get(name)
         if not isinstance(module, ModuleType):
@@ -201,14 +202,20 @@ def _patch_aliases() -> tuple[bool, int, tuple[str, ...]]:
             except Exception:
                 continue
         cls = getattr(module, "KrakenBroker", None)
-        if isinstance(cls, type):
+        if (
+            isinstance(cls, type)
+            and callable(getattr(cls, "_kraken_private_call", None))
+            and callable(getattr(cls, "get_account_balance", None))
+        ):
             classes[id(cls)] = cls
             module_name = str(getattr(module, "__name__", name))
             modules.append(module_name)
-            if module_name == "bot.broker_integration":
-                live_integration_found = True
+            if module_name == "bot.broker_manager":
+                canonical_manager_found = True
     patched = sum(1 for cls in classes.values() if _patch_class(cls))
-    return bool(classes and live_integration_found and patched == len(classes)), patched, tuple(sorted(set(modules)))
+    return bool(
+        classes and canonical_manager_found and patched == len(classes)
+    ), patched, tuple(sorted(set(modules)))
 
 
 def install() -> bool:
@@ -228,7 +235,7 @@ def install() -> bool:
     if ready:
         LOGGER.critical(
             "KRAKEN_LOCAL_CONTENTION_V242_READY marker=%s ready=true patched_classes=%d modules=%s "
-            "live_broker_integration_required=true instance_local_busy_sequence=true private_call_boundary=true "
+            "canonical_broker_manager_required=true instance_local_busy_sequence=true private_call_boundary=true "
             "balance_health_guard=true connect_health_guard=true exact_precall_health_only=true "
             "current_call_fail_closed=true genuine_exchange_api_auth_nonce_http_order_failures_unchanged=true "
             "execution_authority_unchanged=true forced_trade=false safety_gates_bypassed=false",
