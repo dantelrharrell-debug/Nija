@@ -759,28 +759,6 @@ def publish_once(*, force: bool = False) -> dict[str, Any]:
 
 def reconcile_execution_readiness(*, trigger: str = "manual", force: bool = False) -> dict[str, Any]:
     payload = publish_once(force=force)
-    runtime_enabled = _truthy("NIJA_RUNTIME_EXECUTION_AUTHORITY")
-    if (
-        payload["writer_ready"]
-        and payload["capital_ready"]
-        and payload["any_venue_ready"]
-        and not runtime_enabled
-    ):
-        state = payload.get("writer_state", {})
-        logger.critical(
-            "WRITER_AUTHORITY_STATE_MACHINE_BUG marker=%s trigger=%s "
-            "lease=%s token=%s heartbeat_healthy=%s core_loop_alive=%s "
-            "capital_ready=%s ready_venues=%s runtime_execution_authority=%s auto_repair=true",
-            MARKER,
-            trigger,
-            state.get("lease_acquired"),
-            state.get("fencing_token"),
-            state.get("heartbeat_healthy"),
-            state.get("core_loop_alive"),
-            payload["capital_ready"],
-            ",".join(payload["ready_venues"]) or "none",
-            runtime_enabled,
-        )
     if payload["writer_ready"]:
         try:
             repair = importlib.import_module("bot.runtime_authority_convergence_repair_patch")
@@ -799,6 +777,33 @@ def reconcile_execution_readiness(*, trigger: str = "manual", force: bool = Fals
                     MARKER,
                     trigger,
                 )
+    # Diagnose only after the bounded convergence repair has had a chance to
+    # commit through the canonical state machine.  Previously this marker was
+    # emitted before every successful repair and falsely described a transient
+    # pre-repair observation as a persistent state-machine defect.
+    runtime_enabled = _truthy("NIJA_RUNTIME_EXECUTION_AUTHORITY")
+    if (
+        payload["writer_ready"]
+        and payload["capital_ready"]
+        and payload["any_venue_ready"]
+        and not runtime_enabled
+    ):
+        state = payload.get("writer_state", {})
+        logger.critical(
+            "WRITER_AUTHORITY_STATE_MACHINE_BUG marker=%s trigger=%s "
+            "lease=%s token=%s heartbeat_healthy=%s core_loop_alive=%s "
+            "capital_ready=%s ready_venues=%s runtime_execution_authority=%s "
+            "auto_repair_attempted=true",
+            MARKER,
+            trigger,
+            state.get("lease_acquired"),
+            state.get("fencing_token"),
+            state.get("heartbeat_healthy"),
+            state.get("core_loop_alive"),
+            payload["capital_ready"],
+            ",".join(payload["ready_venues"]) or "none",
+            runtime_enabled,
+        )
     return payload
 
 
