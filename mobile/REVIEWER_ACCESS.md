@@ -56,7 +56,7 @@ If the review team requires access to an additional feature, contact NIJA throug
 - [ ] no email verification or MFA loop blocks review
 - [ ] Education/Simulation mode loads without broker credentials
 - [ ] sample data is clearly labeled simulated
-- [ ] no screen promises guaranteed profits, income or returns
+- [ ] no screen makes profit, income, or return promises
 - [ ] Privacy Policy and Terms links are reachable over public HTTPS
 - [ ] account deletion starts inside the app
 - [ ] support URL/contact works
