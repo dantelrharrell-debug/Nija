@@ -8,6 +8,26 @@ import pytest
 import bot.runtime_heartbeat_broker_manager_terminal_v244_patch as patch
 
 
+def test_verified_reason_uses_live_v233_grant_when_canonical_scope_unwound(monkeypatch):
+    fake_v236 = SimpleNamespace(
+        _verified_reason=lambda: ("HEARTBEAT_TRADE", "v233_grant"),
+        _canonical_verified_probe=lambda: None,
+    )
+    monkeypatch.setattr(patch, "_v236", lambda: fake_v236)
+
+    assert patch._verified_reason() == "HEARTBEAT_TRADE"
+
+
+def test_verified_reason_remains_fail_closed_without_upstream_proof(monkeypatch):
+    fake_v236 = SimpleNamespace(
+        _verified_reason=lambda: (None, "none"),
+        _canonical_verified_probe=lambda: None,
+    )
+    monkeypatch.setattr(patch, "_v236", lambda: fake_v236)
+
+    assert patch._verified_reason() is None
+
+
 def test_verified_heartbeat_is_reanchored_at_broker_manager(monkeypatch):
     module = ModuleType("bot.broker_manager")
     state = {"scope": False, "bindings": False, "calls": 0}

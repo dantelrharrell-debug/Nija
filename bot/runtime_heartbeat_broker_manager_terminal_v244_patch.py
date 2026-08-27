@@ -2,13 +2,15 @@
 
 Production proved the heartbeat passed the pipeline authority gate and router, then
 failed a second authority validation inside bot.broker_manager after the bounded v233
-grant expired.  The canonical startup-probe ContextVar was still the correct authority
-carrier; a wall-clock grant must not be extended merely to cover slow routing.
+grant expired.  The canonical startup-probe ContextVar is the preferred authority
+carrier, but the same-thread v233 grant is the bounded fallback when the ContextVar
+scope has already unwound before the broker-manager terminal.
 
-v244 wraps the actual live broker-manager submit methods.  It enters only when the
-canonical ContextVar already verifies HEARTBEAT_TRADE/HEARTBEAT_TRADE_CLOSE and current
-startup writer authority is reverified immediately at the terminal method.  The
-canonical authority bindings are anchored for that method call so its inner
+v244 wraps the actual live broker-manager submit methods.  It enters only when v236
+can resolve an already-verified HEARTBEAT_TRADE/HEARTBEAT_TRADE_CLOSE from either the
+canonical ContextVar or the still-live same-thread v233 grant, and current startup
+writer authority is reverified immediately at the terminal method.  The canonical
+authority bindings are anchored for that method call so its inner
 _reject_if_unauthorized_order_submit check observes the verified probe.
 
 Ordinary orders, lifecycle state, nonce, risk, capital, broker health, kill switch,
@@ -37,7 +39,40 @@ def _v236() -> ModuleType:
 
 
 def _verified_reason() -> str | None:
-    reason = getattr(_v236(), "_canonical_verified_probe")()
+    """Resolve only authority that was already verified upstream.
+
+    v236._verified_reason() prefers the same-thread, sub-second v233 grant and then
+    falls back to the canonical startup-probe ContextVar.  v244 previously called
+    only _canonical_verified_probe(), which lost the production heartbeat whenever
+    its ContextVar scope ended before the broker-manager method.  This resolver never
+    creates a grant and therefore cannot authorize an ordinary order by itself.
+    """
+    v236 = _v236()
+    resolver = getattr(v236, "_verified_reason", None)
+    if callable(resolver):
+        try:
+            resolved = resolver()
+        except Exception as exc:
+            LOGGER.warning(
+                "HEARTBEAT_BROKER_MANAGER_TERMINAL_V244_RESOLVE_ERROR marker=%s "
+                "error=%s:%s trading_fail_closed=true",
+                MARKER, type(exc).__name__, exc,
+            )
+            resolved = None
+        value = resolved[0] if isinstance(resolved, tuple) and resolved else resolved
+        normalized = str(value or "").strip().upper()
+        if normalized in _ALLOWED:
+            return normalized
+
+    # Compatibility fallback for an older v236 shape.  This remains fail-closed
+    # and still requires the canonical ContextVar to be active.
+    canonical = getattr(v236, "_canonical_verified_probe", None)
+    if not callable(canonical):
+        return None
+    try:
+        reason = canonical()
+    except Exception:
+        return None
     normalized = str(reason or "").strip().upper()
     return normalized if normalized in _ALLOWED else None
 
@@ -68,9 +103,8 @@ def _wrap_method(current: Callable[..., Any], module: ModuleType, surface: str) 
             return current(self, *args, **kwargs)
         LOGGER.critical(
             "HEARTBEAT_BROKER_MANAGER_TERMINAL_V244_REANCHORED marker=%s surface=%s "
-            "probe_reason=%s canonical_context_already_verified=true "
-            "startup_writer_reverified=true canonical_terminal_bindings=true "
-            "grant_ttl_not_extended=true ordinary_orders_unchanged=true "
+            "probe_reason=%s verified_upstream_authority=true startup_writer_reverified=true "
+            "canonical_terminal_bindings=true grant_ttl_not_extended=true ordinary_orders_unchanged=true "
             "lifecycle_nonce_risk_capital_broker_health_killswitch_min_notional_fill_gates_unchanged=true "
             "execution_proof_fabricated=false forced_activation=false safety_gates_bypassed=false",
             MARKER, surface, reason,
@@ -99,7 +133,12 @@ def _patch_broker_manager_methods() -> tuple[bool, tuple[str, ...]]:
             setattr(cls, method_name, wrapped)
             if bool(getattr(getattr(cls, method_name, None), _PATCH_ATTR, False)):
                 patched.append(surface)
-    required = "CoinbaseBroker.place_market_order" in patched
+    # Kraken is the production heartbeat route that exposed this gap.  Keep the
+    # existing Coinbase requirement and require the Kraken market terminal too.
+    required = all(
+        surface in patched
+        for surface in ("CoinbaseBroker.place_market_order", "KrakenBroker.place_market_order")
+    )
     return required, tuple(sorted(set(patched)))
 
 
@@ -120,7 +159,8 @@ def install() -> bool:
     if ready:
         LOGGER.critical(
             "HEARTBEAT_BROKER_MANAGER_TERMINAL_V244_READY marker=%s ready=true surfaces=%s "
-            "coinbase_live_terminal_required=true canonical_context_required=true "
+            "coinbase_live_terminal_required=true kraken_live_terminal_required=true "
+            "verified_v233_grant_fallback=true canonical_context_preferred=true "
             "startup_writer_reverification_required=true grant_ttl_not_extended=true "
             "ordinary_orders_unchanged=true execution_proof_fabricated=false "
             "forced_activation=false safety_gates_bypassed=false",
