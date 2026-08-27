@@ -133,7 +133,7 @@ Recommended sequence:
 
 ## Google Play feature graphic concept
 
-Use official NIJA black-and-gold branding. Keep the graphic simple: NIJA emblem, product name, and a non-promissory phrase such as **Learn. Monitor. Control Risk.** Do not show exaggerated profit charts, dollar stacks, guaranteed return language, or fabricated performance claims.
+Use official NIJA black-and-gold branding. Keep the graphic simple: NIJA emblem, product name, and a non-promissory phrase such as **Learn. Monitor. Control Risk.** Do not show exaggerated profit charts, dollar stacks, return-promise wording, or fabricated performance claims.
 
 ## App icon requirements
 
@@ -143,11 +143,11 @@ Use the approved NIJA sword-and-laurel emblem in a simplified square-safe treatm
 
 Avoid:
 
-- guaranteed profit / guaranteed returns
-- passive income promises
-- get rich / financial freedom guarantees
+- profit or return promises
+- income-without-effort claims
+- get-rich or wealth-outcome guarantees
 - "AI makes money for you"
-- risk-free trading
+- no-risk trading wording
 - 100% win rate
 - claims of regulatory approval unless formally obtained and applicable
 
