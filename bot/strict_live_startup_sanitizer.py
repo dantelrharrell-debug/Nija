@@ -8,9 +8,10 @@ replace distributed ownership with a process-local assertion.
 The earliest startup path also installs the kill-switch provenance, failure
 classification, durable guarded-replay, exchange rejection sample,
 exchange-rejection provenance, dispatch provenance, Kraken capital admission,
-stale rejection recovery, and heartbeat recovery-liveness repairs before normal
-runtime modules can instantiate or use the hard-stop singleton. These repairs
-never clear an unproven stop or grant trading authority.
+stale rejection recovery, heartbeat recovery-liveness, and activation proof
+truth repairs before normal runtime modules can instantiate or use the hard-stop
+or activation singletons. These repairs never clear an unproven stop or grant
+trading authority.
 
 Production on 2026-08-27 first proved that merely listing dispatch provenance
 among the early repairs was not sufficient: other repair imports could run
@@ -105,6 +106,10 @@ _REMAINING_EARLY_REPAIRS = (
     (
         "runtime_heartbeat_killswitch_clear_wakeup_v225_patch",
         "HEARTBEAT_KILLSWITCH_CLEAR_WAKEUP_V225",
+    ),
+    (
+        "runtime_activation_snapshot_proof_truth_v251_patch",
+        "ACTIVATION_SNAPSHOT_PROOF_TRUTH_V251",
     ),
 )
 
@@ -301,7 +306,7 @@ def install_import_hook() -> bool:
 # This must run before sanitize imports or the broader trading runtime can create
 # the global KillSwitch singleton. v217 is intentionally first. v228 immediately
 # follows, then v224 must protect the synthetic pipeline-reject boundary before
-# v218/v221/v222/v225/v226/v227 are imported. No startup path here clears a
+# v218/v221/v222/v225/v226/v227/v251 are imported. No startup path here clears a
 # rejection sample or an active kill switch.
 _install_early_safety_repairs()
 sanitize("module_import")
