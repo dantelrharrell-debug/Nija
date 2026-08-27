@@ -8,6 +8,7 @@ This server integrates all mobile features:
 - Education content delivery
 - Real-time WebSocket updates
 - Subscription management
+- Authenticated account deletion
 
 Deploy this to your cloud provider (AWS, GCP, Azure, Railway, etc.)
 
@@ -30,6 +31,7 @@ from unified_mobile_api import register_unified_mobile_api
 from iap_handler import register_iap_api
 from education_system import register_education_api
 from mobile_api import mobile_api, MOBILE_API_BASE
+from account_deletion_api import account_deletion_api
 
 # Configure logging
 logging.basicConfig(
@@ -74,6 +76,10 @@ CORS(app, resources={
 app.register_blueprint(mobile_api)
 logger.info("Registered mobile_api blueprint")
 
+# Account deletion endpoint required for mobile-store readiness
+app.register_blueprint(account_deletion_api)
+logger.info("Registered account_deletion_api blueprint")
+
 # Unified mobile API (v1) with subscription enforcement
 register_unified_mobile_api(app, socketio)
 
@@ -112,7 +118,8 @@ def index():
             'In-app purchase validation (iOS/Android)',
             'Education content delivery',
             'Performance analytics',
-            'Multi-broker support'
+            'Multi-broker support',
+            'Authenticated account deletion'
         ],
         'websocket': {
             'endpoint': '/socket.io',
@@ -163,6 +170,10 @@ def api_documentation():
             },
             'Analytics': {
                 'get_performance': 'GET /api/v1/analytics/performance'
+            },
+            'Account': {
+                'get_deletion_requirements': 'GET /api/account/deletion',
+                'delete_account': 'DELETE /api/account/deletion'
             }
         },
         'websocket': {
@@ -240,6 +251,7 @@ if __name__ == '__main__':
     logger.info("  Docs: /api/docs")
     logger.info("  Health: /health, /healthz")
     logger.info("  Status: /status")
+    logger.info("  Account deletion: /api/account/deletion")
     logger.info("\nAPI Versions:")
     logger.info("  v1: /api/v1/*")
     logger.info("  Mobile: %s/*", MOBILE_API_BASE)
