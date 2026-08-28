@@ -104,6 +104,37 @@ def test_v267_proves_five_reclassified_local_samples(monkeypatch):
     assert detail == "verified_non_exchange_current_window:5"
 
 
+def test_v269_v267_proves_five_exact_hardening_enforcement_samples(monkeypatch):
+    records = [_local_record(i, reason="HARDENING_ENFORCEMENT") for i in range(5)]
+    protector = _Protector(results=(False,) * 5, provenance=records)
+    monkeypatch.setattr(v226, "_minimum_samples", lambda _protector: 5)
+
+    from bot import exchange_kill_switch_alias_provenance_v258_patch as v258
+    assert v258._is_non_exchange("HARDENING_ENFORCEMENT") is True
+
+    ok, detail, count = v226._current_window_false_positive_proof(protector)
+    assert ok is True
+    assert count == 5
+    assert detail == "verified_non_exchange_current_window:5"
+
+
+def test_v269_v267_refuses_hardening_token_embedded_in_exchange_message(monkeypatch):
+    records = [_local_record(i, reason="HARDENING_ENFORCEMENT") for i in range(4)]
+    records.append(
+        _local_record(
+            4,
+            reason="Coinbase rejected order: HARDENING_ENFORCEMENT upstream policy",
+        )
+    )
+    protector = _Protector(results=(False,) * 5, provenance=records)
+    monkeypatch.setattr(v226, "_minimum_samples", lambda _protector: 5)
+
+    ok, detail, count = v226._current_window_false_positive_proof(protector)
+    assert ok is False
+    assert count == 0
+    assert detail.startswith("provenance_not_non_exchange:4:")
+
+
 def test_v267_refuses_one_genuine_exchange_rejection(monkeypatch):
     records = [_local_record(i) for i in range(4)]
     records.append(_local_record(4, reason="Kraken AddOrder rejected: EOrder:Insufficient funds"))
