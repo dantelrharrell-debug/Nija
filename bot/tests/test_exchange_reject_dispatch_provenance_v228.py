@@ -61,9 +61,20 @@ def test_v232_classifier_covers_route_guard_soft_failures_without_exchange_proof
         assert v228._is_non_exchange_rejection(reason) is True
 
 
+def test_v253_classifier_covers_unconfirmed_ack_and_unfilled_soft_outcomes():
+    reasons = (
+        "confirmed_order_rejected:ack_timeout_no_confirmed_fill_within_30s",
+        "ack_timeout_no_confirmed_fill",
+        "terminal_reject_status:unfilled",
+    )
+    for reason in reasons:
+        assert v228._is_non_exchange_rejection(reason) is True
+
+
 def test_classifier_does_not_swallow_unclassified_exchange_rejects():
     assert v228._is_non_exchange_rejection("Kraken AddOrder rejected: EOrder:Insufficient margin") is False
     assert v228._is_non_exchange_rejection("Coinbase order rejected: UNKNOWN_EXCHANGE_FAILURE") is False
+    assert v228._is_non_exchange_rejection("Coinbase order rejected: request timeout at exchange") is False
 
 
 def test_dispatch_disabled_does_not_mutate_exchange_rejection_window(tmp_path, monkeypatch):
@@ -106,6 +117,21 @@ def test_v232_route_soft_failure_does_not_mutate_exchange_rejection_window(tmp_p
         symbol="BTC-USD",
         side="buy",
         reason="broker_dispatch_failed:kraken:empty_order_result",
+    )
+
+    assert list(protector._order_results) == []
+
+
+def test_v253_unconfirmed_ack_timeout_does_not_mutate_exchange_rejection_window(tmp_path, monkeypatch):
+    protector = _protector(tmp_path)
+    monkeypatch.setattr(execution_pipeline, "get_exchange_kill_switch_protector", lambda: protector)
+    assert v228._patch_execution_pipeline()
+
+    execution_pipeline.ExecutionPipeline._emit_execution_rejection_telemetry(
+        _pipeline_stub(),
+        symbol="BTC-USD",
+        side="buy",
+        reason="confirmed_order_rejected:ack_timeout_no_confirmed_fill_within_30s",
     )
 
     assert list(protector._order_results) == []
