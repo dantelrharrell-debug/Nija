@@ -11,7 +11,9 @@ call chain.
 v182 repairs only that wrapper/proof handoff.  It identifies the exact v98
 wrapper by its function-owner globals, reasserts it on the canonical startup
 adopter when missing, makes platform discovery require both adoption and fetch
-proof, and fail-closes a worker that returns adopted without fetch proof.
+proof, fail-closes a worker that returns adopted without fetch proof, and
+reasserts the exact v108 MABM refresh dispatcher so a broker missing proof gets
+a real authoritative retry after later wrapper churn.
 
 No position, connectivity, capital, writer/nonce authority, kill switch, risk
 state, activation state, or execution permission is fabricated or promoted.
@@ -242,6 +244,46 @@ def _patch_worker() -> bool:
         return False
 
 
+def _reassert_v108_dispatch_hook() -> tuple[bool, str]:
+    """Restore the exact v108 MABM refresh dispatcher after wrapper churn."""
+    try:
+        v108 = _v108_module()
+        patch_loaded = getattr(v108, "_patch_loaded", None)
+        if not callable(patch_loaded):
+            return False, "v108_patch_loaded_unavailable"
+        ready = bool(patch_loaded())
+        if not ready:
+            return False, "v108_mabm_not_loaded_or_patch_failed"
+
+        exact = getattr(v108, "_chain_has_exact_refresh_hook", None)
+        if not callable(exact):
+            return False, "v108_exact_refresh_verifier_unavailable"
+
+        verified = False
+        for module_name in ("bot.multi_account_broker_manager", "multi_account_broker_manager"):
+            try:
+                module = importlib.import_module(module_name)
+            except ImportError:
+                continue
+            cls = getattr(module, "MultiAccountBrokerManager", None)
+            current = getattr(cls, "refresh_capital_authority", None) if isinstance(cls, type) else None
+            if callable(current) and bool(exact(current)):
+                verified = True
+                break
+        if not verified:
+            return False, "exact_v108_refresh_hook_not_verified"
+
+        LOGGER.critical(
+            "POSITION_FETCH_PROOF_V182_V108_DISPATCH_REASSERTED marker=%s "
+            "exact_refresh_owner=true copied_marker_false_positive_blocked=true "
+            "authoritative_retry_only=true synthetic_success=false safety_gates_bypassed=false",
+            MARKER,
+        )
+        return True, "exact_v108_refresh_hook_ready"
+    except Exception as exc:
+        return False, f"v108_dispatch_reassert_error:{type(exc).__name__}:{exc}"
+
+
 def _patch_release_manifest() -> bool:
     try:
         manifest = importlib.import_module("bot.runtime_release_manifest_patch")
@@ -259,25 +301,28 @@ def install() -> bool:
         v98_ok, v98_detail = _reassert_v98_adopter()
         discovery_ok = _patch_discovery()
         worker_ok = _patch_worker()
+        dispatch_ok, dispatch_detail = _reassert_v108_dispatch_hook()
         manifest_ok = _patch_release_manifest()
-        ready = bool(v98_ok and discovery_ok and worker_ok and manifest_ok)
+        ready = bool(v98_ok and discovery_ok and worker_ok and dispatch_ok and manifest_ok)
         os.environ[_READY_FLAG] = "1" if ready else "0"
         if not ready:
             LOGGER.critical(
                 "RUNTIME_POSITION_FETCH_PROOF_V182_FAILED marker=%s v98_ok=%s v98_detail=%s "
-                "discovery_ok=%s worker_ok=%s manifest_ok=%s trading_fail_closed=true",
+                "discovery_ok=%s worker_ok=%s dispatch_ok=%s dispatch_detail=%s manifest_ok=%s trading_fail_closed=true",
                 MARKER,
                 str(v98_ok).lower(),
                 v98_detail,
                 str(discovery_ok).lower(),
                 str(worker_ok).lower(),
+                str(dispatch_ok).lower(),
+                dispatch_detail,
                 str(manifest_ok).lower(),
             )
             return False
         LOGGER.critical(
             "RUNTIME_POSITION_FETCH_PROOF_V182 marker=%s ready=true exact_v98_owner_required=true "
-            "adopted_and_fetch_proof_required=true copied_marker_false_positive_blocked=true "
-            "synthetic_success=false forced_activation=false safety_gates_bypassed=false",
+            "adopted_and_fetch_proof_required=true exact_v108_refresh_hook_required=true "
+            "copied_marker_false_positive_blocked=true synthetic_success=false forced_activation=false safety_gates_bypassed=false",
             MARKER,
         )
         return True
@@ -297,5 +342,6 @@ __all__ = [
     "_connected_platform_brokers_requiring_proof",
     "_patch_discovery",
     "_patch_worker",
+    "_reassert_v108_dispatch_hook",
     "_patch_release_manifest",
 ]
