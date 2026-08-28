@@ -12,6 +12,7 @@ logger = logging.getLogger("nija.exchange_kill_switch_internal_reject_guard")
 _MARKER = "EXCHANGE_KILL_SWITCH_INTERNAL_REJECT_GUARD_PATCHED marker=20260706a"
 _V254_MARKER = "20260828-soft-reject-telemetry-v254"
 _V258_MARKER = "20260828-exchange-killswitch-alias-provenance-v258"
+_V259_MARKER = "20260828-early-rejection-classification-v259"
 _PATCHED_ATTR = "_nija_exchange_kill_switch_internal_reject_guard_20260706a"
 _TELEMETRY_PATCHED_ATTR = "_nija_early_soft_reject_telemetry_v254"
 _TRUE = {"1", "true", "yes", "on", "enabled", "y"}
@@ -26,24 +27,64 @@ _INTERNAL_REJECT_PATTERNS = (
     "venue registry",
 )
 
-# These outcomes do not prove that an exchange rejected a submitted order.  The
+# These outcomes do not prove that an exchange rejected a submitted order. The
 # guard is loaded by sitecustomize and patches ExecutionPipeline on first import,
-# so the protection exists before deferred startup repair modules run.
+# so this classification must be at least as complete as the deferred v258
+# classifier. Keep genuine/unknown exchange failures out of this tuple.
 _SOFT_NON_EXCHANGE_REASON_PATTERNS = (
-    "execution gate pending",
-    "state_machine=emergency_stop",
-    "state_machine=live_pending_confirmation",
-    "state_machine=off",
     "dispatch_disabled",
-    "runtime authority convergence lost",
     "executionauthority reject",
     "execution_authority_blocked",
     "execution_authority_runtime",
+    "execution_authority_halt",
+    "execution gate pending",
+    "blocked by state_machine",
+    "state_machine=emergency_stop",
+    "state_machine=live_pending_confirmation",
+    "state_machine=off",
+    "runtime authority convergence lost",
+    "seak halted",
+    "trading blocked",
     "lifecycle_phase:boot",
     "lifecycle_phase_not_live",
-    "terminal_reject_status:unfilled",
+    "exchangekillswitch: exchange health red",
+    "exchange health red — trade blocked",
+    "liquidityintelligenceengine",
+    "liquidity grade below",
+    "no available venue found",
+    "no execution router available",
+    "broker_adapter_not_connected",
+    "execution blocked:",
+    "no_execution_venue_available",
+    "broker_not_registered",
+    "replacement_unavailable",
+    "direct_broker_metadata_mismatch",
+    "direct_broker_metadata_cleared",
+    "routing candidate",
+    "internal route",
+    "venue registry",
+    "pretraderiskengine reject",
+    "riskgovernor blocked",
+    "slippageguard blocked",
+    "capitalauthorization deny",
+    "marginhealthgate reject",
+    "ecel unavailable",
+    "ecel reject:",
+    "orderfeasibility deny",
+    "postguard deny",
+    "broker_dispatch_failed",
+    "empty_order_result",
+    "empty order result",
+    "execution_route_mismatch",
+    "brokerrouteguard deny",
+    "broker disabled",
+    "adapter_exception",
+    "broker_dispatch_exception",
+    "okx order failed",
+    "all operations failed",
     "confirmed_order_rejected:ack_timeout",
     "ack_timeout_no_confirmed_fill",
+    "terminal_reject_status:unfilled",
 )
 
 
@@ -135,10 +176,11 @@ def _patch_execution_pipeline_module(module: ModuleType) -> bool:
     ) -> Any:
         if _soft_non_exchange_reason(reason):
             logger.warning(
-                "EARLY_SOFT_REJECT_TELEMETRY_IGNORED marker=%s symbol=%s side=%s "
+                "EARLY_SOFT_REJECT_TELEMETRY_IGNORED marker=%s v259_marker=%s symbol=%s side=%s "
                 "reason=%s exchange_sample_mutated=false kill_switch_unchanged=true "
                 "execution_authority_unchanged=true execution_proof_fabricated=false",
                 _V254_MARKER,
+                _V259_MARKER,
                 str(symbol)[:64],
                 str(side)[:32],
                 str(reason)[:512],
@@ -150,8 +192,9 @@ def _patch_execution_pipeline_module(module: ModuleType) -> bool:
     setattr(_emit_execution_rejection_telemetry_v254, "__wrapped__", original)
     setattr(cls, "_emit_execution_rejection_telemetry", _emit_execution_rejection_telemetry_v254)
     logger.warning(
-        "EARLY_SOFT_REJECT_TELEMETRY_GUARD_PATCHED marker=%s module=%s",
+        "EARLY_SOFT_REJECT_TELEMETRY_GUARD_PATCHED marker=%s v259_marker=%s module=%s",
         _V254_MARKER,
+        _V259_MARKER,
         getattr(module, "__name__", "unknown"),
     )
     return True
@@ -204,9 +247,10 @@ def install_import_hook() -> None:
     builtins.__import__ = guarded_import
     setattr(builtins, "_NIJA_EXCHANGE_KILL_SWITCH_INTERNAL_REJECT_GUARD_HOOK", True)
     logger.warning(
-        "EXCHANGE_KILL_SWITCH_INTERNAL_REJECT_GUARD_IMPORT_HOOK marker=20260706a v254_marker=%s v258_marker=%s",
+        "EXCHANGE_KILL_SWITCH_INTERNAL_REJECT_GUARD_IMPORT_HOOK marker=20260706a v254_marker=%s v258_marker=%s v259_marker=%s",
         _V254_MARKER,
         _V258_MARKER,
+        _V259_MARKER,
     )
 
 
