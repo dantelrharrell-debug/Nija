@@ -10,7 +10,9 @@ from typing import Any
 
 logger = logging.getLogger("nija.exchange_kill_switch_internal_reject_guard")
 _MARKER = "EXCHANGE_KILL_SWITCH_INTERNAL_REJECT_GUARD_PATCHED marker=20260706a"
+_V254_MARKER = "20260828-soft-reject-telemetry-v254"
 _PATCHED_ATTR = "_nija_exchange_kill_switch_internal_reject_guard_20260706a"
+_TELEMETRY_PATCHED_ATTR = "_nija_early_soft_reject_telemetry_v254"
 _TRUE = {"1", "true", "yes", "on", "enabled", "y"}
 _INTERNAL_REJECT_PATTERNS = (
     "no_execution_venue_available",
@@ -23,6 +25,26 @@ _INTERNAL_REJECT_PATTERNS = (
     "venue registry",
 )
 
+# These outcomes do not prove that an exchange rejected a submitted order.  The
+# guard is loaded by sitecustomize and patches ExecutionPipeline on first import,
+# so the protection exists before deferred startup repair modules run.
+_SOFT_NON_EXCHANGE_REASON_PATTERNS = (
+    "execution gate pending",
+    "state_machine=emergency_stop",
+    "state_machine=live_pending_confirmation",
+    "state_machine=off",
+    "dispatch_disabled",
+    "runtime authority convergence lost",
+    "executionauthority reject",
+    "execution_authority_blocked",
+    "execution_authority_runtime",
+    "lifecycle_phase:boot",
+    "lifecycle_phase_not_live",
+    "terminal_reject_status:unfilled",
+    "confirmed_order_rejected:ack_timeout",
+    "ack_timeout_no_confirmed_fill",
+)
+
 
 def _truthy(name: str, default: str = "true") -> bool:
     return str(os.environ.get(name, default)).strip().lower() in _TRUE
@@ -31,6 +53,11 @@ def _truthy(name: str, default: str = "true") -> bool:
 def _internal_reject(*values: Any) -> bool:
     text = " ".join(str(v or "") for v in values).lower()
     return any(pattern in text for pattern in _INTERNAL_REJECT_PATTERNS)
+
+
+def _soft_non_exchange_reason(value: Any) -> bool:
+    text = str(value or "").strip().lower()
+    return bool(text) and any(pattern in text for pattern in _SOFT_NON_EXCHANGE_REASON_PATTERNS)
 
 
 def _patch_module(module: ModuleType) -> bool:
@@ -57,9 +84,52 @@ def _patch_module(module: ModuleType) -> bool:
         return original(self, order_id, accepted, *args, **kwargs)
 
     setattr(record_order_result, _PATCHED_ATTR, True)
+    setattr(record_order_result, "__wrapped__", original)
     setattr(cls, "record_order_result", record_order_result)
     logger.warning("%s class=ExchangeKillSwitchProtector", _MARKER)
     print("[NIJA-PRINT] EXCHANGE_KILL_SWITCH_INTERNAL_REJECT_GUARD_PATCHED marker=20260706a", flush=True)
+    return True
+
+
+def _patch_execution_pipeline_module(module: ModuleType) -> bool:
+    cls = getattr(module, "ExecutionPipeline", None)
+    if not isinstance(cls, type):
+        return False
+    original = getattr(cls, "_emit_execution_rejection_telemetry", None)
+    if not callable(original):
+        return False
+    if getattr(original, _TELEMETRY_PATCHED_ATTR, False):
+        return True
+
+    @wraps(original)
+    def _emit_execution_rejection_telemetry_v254(
+        self: Any,
+        *,
+        symbol: str,
+        side: str,
+        reason: str,
+    ) -> Any:
+        if _soft_non_exchange_reason(reason):
+            logger.warning(
+                "EARLY_SOFT_REJECT_TELEMETRY_IGNORED marker=%s symbol=%s side=%s "
+                "reason=%s exchange_sample_mutated=false kill_switch_unchanged=true "
+                "execution_authority_unchanged=true execution_proof_fabricated=false",
+                _V254_MARKER,
+                str(symbol)[:64],
+                str(side)[:32],
+                str(reason)[:512],
+            )
+            return None
+        return original(self, symbol=symbol, side=side, reason=reason)
+
+    setattr(_emit_execution_rejection_telemetry_v254, _TELEMETRY_PATCHED_ATTR, True)
+    setattr(_emit_execution_rejection_telemetry_v254, "__wrapped__", original)
+    setattr(cls, "_emit_execution_rejection_telemetry", _emit_execution_rejection_telemetry_v254)
+    logger.warning(
+        "EARLY_SOFT_REJECT_TELEMETRY_GUARD_PATCHED marker=%s module=%s",
+        _V254_MARKER,
+        getattr(module, "__name__", "unknown"),
+    )
     return True
 
 
@@ -72,9 +142,19 @@ def _try_patch_loaded() -> bool:
     return patched
 
 
+def _try_patch_execution_pipeline_loaded() -> bool:
+    patched = False
+    for name in ("bot.execution_pipeline", "execution_pipeline"):
+        module = sys.modules.get(name)
+        if isinstance(module, ModuleType):
+            patched = _patch_execution_pipeline_module(module) or patched
+    return patched
+
+
 def install_import_hook() -> None:
     os.environ.setdefault("NIJA_EXCHANGE_KILL_SWITCH_IGNORE_INTERNAL_ROUTING_REJECTS", "true")
     _try_patch_loaded()
+    _try_patch_execution_pipeline_loaded()
     if getattr(builtins, "_NIJA_EXCHANGE_KILL_SWITCH_INTERNAL_REJECT_GUARD_HOOK", False):
         return
     original_import = builtins.__import__
@@ -82,17 +162,22 @@ def install_import_hook() -> None:
     def guarded_import(name: str, globals=None, locals=None, fromlist=(), level: int = 0):
         module = original_import(name, globals, locals, fromlist, level)
         try:
-            if name.endswith("exchange_kill_switch"):
-                _try_patch_loaded()
-            else:
-                _try_patch_loaded()
+            _try_patch_loaded()
+            _try_patch_execution_pipeline_loaded()
         except Exception as exc:
-            logger.warning("EXCHANGE_KILL_SWITCH_INTERNAL_REJECT_GUARD hook failed name=%s error=%s", name, exc)
+            logger.warning(
+                "EXCHANGE_KILL_SWITCH_INTERNAL_REJECT_GUARD hook failed name=%s error=%s",
+                name,
+                exc,
+            )
         return module
 
     builtins.__import__ = guarded_import
     setattr(builtins, "_NIJA_EXCHANGE_KILL_SWITCH_INTERNAL_REJECT_GUARD_HOOK", True)
-    logger.warning("EXCHANGE_KILL_SWITCH_INTERNAL_REJECT_GUARD_IMPORT_HOOK marker=20260706a")
+    logger.warning(
+        "EXCHANGE_KILL_SWITCH_INTERNAL_REJECT_GUARD_IMPORT_HOOK marker=20260706a v254_marker=%s",
+        _V254_MARKER,
+    )
 
 
 def install() -> None:
