@@ -18,6 +18,12 @@ copies existing ContextVars into ExecutionPipeline's timeout worker so the verif
 startup probe is not lost merely because routing crosses a ThreadPoolExecutor
 boundary.  v246 creates no authority and does not patch the stdlib executor globally.
 
+v255 is installed from this terminal convergence owner after v244/v246 are ready. It
+adds bounded failover between already-ready heartbeat venues for proven process-local
+read contention, reasserts real position-fetch proof propagation, and prevents a
+non-owner capital refresh thread from mutating BootstrapFSM. It never creates proof or
+weakens any execution gate.
+
 Ordinary orders, lifecycle state, nonce, risk, capital, broker health, kill switch,
 minimum notional, exchange acknowledgement, fill proof, and readiness remain unchanged.
 """
@@ -150,6 +156,28 @@ def _install_v246_context_handoff() -> bool:
         return False
 
 
+def _install_v255_terminal_activation_liveness() -> bool:
+    """Install the terminal liveness repair after the verified submit chain is ready."""
+    try:
+        module = importlib.import_module("bot.runtime_terminal_activation_liveness_v255_patch")
+        installer = getattr(module, "install", None) or getattr(module, "install_import_hook", None)
+        ready = bool(callable(installer) and installer())
+        if not ready:
+            LOGGER.error(
+                "HEARTBEAT_BROKER_MANAGER_TERMINAL_V244_V255_INSTALL_FAILED marker=%s "
+                "trading_fail_closed=true",
+                MARKER,
+            )
+        return ready
+    except Exception as exc:
+        LOGGER.error(
+            "HEARTBEAT_BROKER_MANAGER_TERMINAL_V244_V255_INSTALL_ERROR marker=%s "
+            "error=%s:%s trading_fail_closed=true",
+            MARKER, type(exc).__name__, exc,
+        )
+        return False
+
+
 def install() -> bool:
     try:
         v240 = importlib.import_module("bot.runtime_heartbeat_terminal_lifecycle_v240_patch")
@@ -157,21 +185,23 @@ def install() -> bool:
         upstream = bool(callable(upstream_install) and upstream_install())
         methods_ready, surfaces = _patch_broker_manager_methods()
         context_handoff_ready = _install_v246_context_handoff()
-        ready = bool(upstream and methods_ready and context_handoff_ready)
+        v255_ready = _install_v255_terminal_activation_liveness()
+        ready = bool(upstream and methods_ready and context_handoff_ready and v255_ready)
     except Exception as exc:
         LOGGER.error(
             "HEARTBEAT_BROKER_MANAGER_TERMINAL_V244_INSTALL_ERROR marker=%s error=%s:%s trading_fail_closed=true",
             MARKER, type(exc).__name__, exc,
         )
-        ready, surfaces, context_handoff_ready = False, (), False
+        ready, surfaces, context_handoff_ready, v255_ready = False, (), False, False
     os.environ[_FLAG] = "1" if ready else "0"
     if ready:
         LOGGER.critical(
             "HEARTBEAT_BROKER_MANAGER_TERMINAL_V244_READY marker=%s ready=true surfaces=%s "
             "coinbase_live_terminal_required=true kraken_live_terminal_required=true "
             "verified_v233_grant_fallback=true canonical_context_preferred=true "
-            "pipeline_context_handoff_v246=true startup_writer_reverification_required=true "
-            "grant_ttl_not_extended=true ordinary_orders_unchanged=true execution_proof_fabricated=false "
+            "pipeline_context_handoff_v246=true terminal_activation_liveness_v255=true "
+            "startup_writer_reverification_required=true grant_ttl_not_extended=true "
+            "ordinary_orders_unchanged=true execution_proof_fabricated=false "
             "forced_activation=false safety_gates_bypassed=false",
             MARKER, ",".join(surfaces),
         )
@@ -189,6 +219,7 @@ __all__ = [
     "_wrap_method",
     "_patch_broker_manager_methods",
     "_install_v246_context_handoff",
+    "_install_v255_terminal_activation_liveness",
     "_verified_reason",
     "_writer_ready",
 ]
