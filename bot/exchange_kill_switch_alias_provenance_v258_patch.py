@@ -29,6 +29,7 @@ from typing import Any, Callable
 
 LOGGER = logging.getLogger("nija.exchange_kill_switch_alias_provenance_v258")
 MARKER = "20260828-exchange-killswitch-alias-provenance-v258"
+V269_MARKER = "20260828-hardening-enforcement-provenance-v269"
 _FLAG = "NIJA_EXCHANGE_KILLSWITCH_ALIAS_PROVENANCE_V258_READY"
 _RECORDER_ATTR = "_nija_exchange_killswitch_alias_recorder_v258"
 _REJECT_ATTR = "_nija_exchange_killswitch_alias_reject_context_v258"
@@ -95,10 +96,20 @@ _NON_EXCHANGE_MARKERS = (
     "terminal_reject_status:unfilled",
 )
 
+# ``HARDENING_ENFORCEMENT`` is the documented execution-layer return code for a
+# position-cap/minimum-size/average-position/dust block.  That control returns
+# before broker API dispatch.  Keep it exact-match only so an arbitrary exchange
+# message that merely contains the token cannot be reclassified as local.
+_EXACT_NON_EXCHANGE_CODES = frozenset({"hardening_enforcement"})
+
 
 def _is_non_exchange(reason: Any) -> bool:
     text = str(reason or "").strip().lower()
-    return bool(text) and any(marker in text for marker in _NON_EXCHANGE_MARKERS)
+    if not text:
+        return False
+    if text in _EXACT_NON_EXCHANGE_CODES:
+        return True
+    return any(marker in text for marker in _NON_EXCHANGE_MARKERS)
 
 
 def _context_payload() -> dict[str, str]:
@@ -379,19 +390,21 @@ def install() -> bool:
             _THREAD.start()
     os.environ[_FLAG] = "1"
     LOGGER.critical(
-        "EXCHANGE_REJECT_V258_READY marker=%s ready=true dual_kill_switch_identity_guard=true "
+        "EXCHANGE_REJECT_V258_READY marker=%s v269_marker=%s ready=true dual_kill_switch_identity_guard=true "
         "dual_pipeline_context_guard=true counted_sample_diagnostics=true provenance_history=true "
-        "legacy_alias_import_forced=false rejection_window_cleared=false kill_switch_mutated=false "
-        "rejection_thresholds_unchanged=true minimum_sample_unchanged=true genuine_exchange_rejects_unchanged=true "
-        "execution_authority_unchanged=true execution_proof_fabricated=false forced_activation=false "
-        "safety_gates_bypassed=false",
+        "hardening_enforcement_exact_non_exchange=true legacy_alias_import_forced=false "
+        "rejection_window_cleared=false kill_switch_mutated=false rejection_thresholds_unchanged=true "
+        "minimum_sample_unchanged=true genuine_exchange_rejects_unchanged=true execution_authority_unchanged=true "
+        "execution_proof_fabricated=false forced_activation=false safety_gates_bypassed=false",
         MARKER,
+        V269_MARKER,
     )
     return True
 
 
 __all__ = [
     "MARKER",
+    "V269_MARKER",
     "install",
     "reassert_loaded",
     "_is_non_exchange",
