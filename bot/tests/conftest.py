@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -26,14 +27,21 @@ _KILL_SWITCH_ARTIFACTS = [
     _REPO_ROOT / "data" / "exchange_kill_switch_state.json",
 ]
 
-# Some writer-authority tests intentionally exercise the production path that
-# arms a daemon fallback restart timer. In production the default grace is 15s
-# and the callback terminates the process with os._exit(75). Leaving that real
-# timer armed during pytest kills the test runner before pytest can print the
-# assertion summary. Give only the test process a long default grace; tests that
-# verify the timer value explicitly override this environment variable locally.
-_WRITER_RESTART_GRACE_ENV = "NIJA_WRITER_AUTHORITY_FALLBACK_RESTART_GRACE_S"
+# Some writer-authority tests intentionally exercise production paths that arm
+# daemon fallback restart timers. In production both defaults are 15s and the
+# callbacks terminate the process with os._exit(75). Leaving either real timer
+# armed during pytest kills the test runner before pytest can print the assertion
+# summary. Give only the test process a long default grace and cancel any timer
+# that was actually armed before restoring environment state. Tests that verify
+# timer values explicitly override these variables locally.
+_WRITER_FALLBACK_RESTART_GRACE_ENV = "NIJA_WRITER_AUTHORITY_FALLBACK_RESTART_GRACE_S"
+_WRITER_RUNTIME_RESTART_GRACE_ENV = "NIJA_WRITER_AUTHORITY_RESTART_GRACE_S"
+_CORE_REGISTRATION_RESTART_GRACE_ENV = "NIJA_CORE_REGISTRATION_RESTART_GRACE_S"
 _TEST_WRITER_RESTART_GRACE_S = "3600"
+_RESTART_TIMER_NAMES = {
+    "entrypoint-writer-unhandled-loss-restart",
+    "writer-authority-forced-restart",
+}
 
 
 def _remove_kill_switch_artifacts() -> None:
@@ -56,6 +64,50 @@ def _reset_readiness_authority_state() -> None:
         pass
 
 
+def _cancel_writer_restart_timers() -> None:
+    """Cancel test-armed process restart timers without changing production code."""
+    for thread in list(threading.enumerate()):
+        try:
+            if getattr(thread, "name", "") in _RESTART_TIMER_NAMES:
+                cancel = getattr(thread, "cancel", None)
+                if callable(cancel):
+                    cancel()
+        except Exception:
+            pass
+
+    # bot_main keeps its restart timer in a module-global reference. Clear that
+    # test-process reference after cancelling so a later test can exercise the
+    # scheduling path independently.
+    for module_name in ("bot.bot_main", "bot_main"):
+        module = sys.modules.get(module_name)
+        if module is None:
+            continue
+        try:
+            timer = getattr(module, "_core_registration_restart_timer", None)
+            cancel = getattr(timer, "cancel", None)
+            if callable(cancel):
+                cancel()
+            module._core_registration_restart_timer = None
+        except Exception:
+            pass
+        try:
+            shutdown_event = getattr(module, "_shutdown_event", None)
+            clear = getattr(shutdown_event, "clear", None)
+            if callable(clear):
+                clear()
+            module._process_exit_code = 0
+            module._process_exit_reason = ""
+        except Exception:
+            pass
+
+    for key in (
+        "NIJA_PROCESS_EXIT_REQUESTED",
+        "NIJA_PROCESS_EXIT_CODE",
+        "NIJA_PROCESS_EXIT_REASON",
+    ):
+        os.environ.pop(key, None)
+
+
 @pytest.fixture(autouse=True)
 def _clean_kill_switch_state():
     """
@@ -69,17 +121,26 @@ def _clean_kill_switch_state():
     """
     _remove_kill_switch_artifacts()
     _reset_readiness_authority_state()
+    _cancel_writer_restart_timers()
 
-    previous_restart_grace = os.environ.get(_WRITER_RESTART_GRACE_ENV)
-    if previous_restart_grace is None:
-        os.environ[_WRITER_RESTART_GRACE_ENV] = _TEST_WRITER_RESTART_GRACE_S
+    restart_envs = (
+        _WRITER_FALLBACK_RESTART_GRACE_ENV,
+        _WRITER_RUNTIME_RESTART_GRACE_ENV,
+        _CORE_REGISTRATION_RESTART_GRACE_ENV,
+    )
+    saved_restart_grace = {name: os.environ.get(name) for name in restart_envs}
+    for name in restart_envs:
+        if saved_restart_grace[name] is None:
+            os.environ[name] = _TEST_WRITER_RESTART_GRACE_S
 
     yield
 
-    if previous_restart_grace is None:
-        os.environ.pop(_WRITER_RESTART_GRACE_ENV, None)
-    else:
-        os.environ[_WRITER_RESTART_GRACE_ENV] = previous_restart_grace
+    _cancel_writer_restart_timers()
+    for name, previous in saved_restart_grace.items():
+        if previous is None:
+            os.environ.pop(name, None)
+        else:
+            os.environ[name] = previous
 
     _remove_kill_switch_artifacts()
     _reset_readiness_authority_state()
