@@ -12,6 +12,10 @@ symbols before the unchanged compiler performs contract lookup.  Unknown pair
 ids continue through the previous normalizer and remain fail closed if no rule
 exists.
 
+V261 extends the same proven identity repair to the terminal Kraken broker
+boundary after production showed ECEL accepted ``XETHZUSD`` but broker-local
+normalization later synthesized invalid ``XETHZ-USD`` before Kraken submission.
+
 No contract rule is invented, no minimum is reduced, and no execution, writer,
 nonce, risk, kill-switch, capital, reconciliation, order or fill gate is
 bypassed.
@@ -31,9 +35,6 @@ _READY_FLAG = "NIJA_KRAKEN_ECEL_SYMBOL_CANONICALIZATION_V206_READY"
 _PATCH_ATTR = "_nija_kraken_ecel_symbol_canonicalization_v206"
 _LOCK = threading.RLock()
 
-# Kraken REST pair ids still use legacy X/Z asset wrappers for several major
-# assets.  Keep this deliberately narrow to the heartbeat candidate set that is
-# proven by production and already represented in ECEL's seeded contract map.
 _KRAKEN_BASE_ALIASES = {
     "XXBT": "XBT",
     "XBT": "XBT",
@@ -52,8 +53,6 @@ def _legacy_kraken_pair(raw_symbol: str, broker: str) -> Optional[str]:
     if not raw or "-" in raw or "/" in raw:
         return None
 
-    # Kraken's legacy USD quote wrapper is ZUSD.  Also accept plain USD for the
-    # same known legacy base aliases.  All other symbols fall through unchanged.
     for raw_quote, canonical_quote in (("ZUSD", "USD"), ("USD", "USD")):
         if not raw.endswith(raw_quote) or len(raw) <= len(raw_quote):
             continue
@@ -84,8 +83,7 @@ def _install_on_module(module: Any) -> bool:
             prior = previous(raw_symbol, broker)
             if prior != canonical:
                 LOGGER.info(
-                    "KRAKEN_ECEL_SYMBOL_V206_CANONICALIZED marker=%s raw=%s prior=%s canonical=%s "
-                    "contract_rules_unchanged=true",
+                    "KRAKEN_ECEL_SYMBOL_V206_CANONICALIZED marker=%s raw=%s prior=%s canonical=%s contract_rules_unchanged=true",
                     MARKER,
                     raw_symbol,
                     prior,
@@ -121,14 +119,33 @@ def _self_test(module: Any) -> bool:
         if normalize(raw, "kraken") != expected:
             return False
 
-    # Verify that canonicalized heartbeat candidates resolve only to rules that
-    # already exist in ECEL's seeded Kraken schema.  This does not add rules.
     schema = schema_cls()
     for raw in ("XETHZUSD", "XXBTZUSD", "XXRPZUSD", "SOLUSD"):
         canonical = normalize(raw, "kraken")
         if schema.get_rule("kraken", canonical) is None:
             return False
     return True
+
+
+def _install_v261() -> bool:
+    try:
+        module = importlib.import_module("bot.runtime_kraken_terminal_symbol_canonicalization_v261_patch")
+        installer = getattr(module, "install", None)
+        ready = bool(callable(installer) and installer())
+        if not ready:
+            LOGGER.critical(
+                "KRAKEN_ECEL_SYMBOL_V206_V261_FAILED marker=%s trading_fail_closed=true",
+                MARKER,
+            )
+        return ready
+    except Exception as exc:
+        LOGGER.critical(
+            "KRAKEN_ECEL_SYMBOL_V206_V261_FAILED marker=%s error=%s:%s trading_fail_closed=true",
+            MARKER,
+            type(exc).__name__,
+            exc,
+        )
+        return False
 
 
 def install() -> bool:
@@ -138,8 +155,7 @@ def install() -> bool:
         except Exception as exc:
             os.environ[_READY_FLAG] = "0"
             LOGGER.critical(
-                "KRAKEN_ECEL_SYMBOL_V206_FAILED marker=%s reason=ecel_import_failed "
-                "error=%s:%s trading_fail_closed=true",
+                "KRAKEN_ECEL_SYMBOL_V206_FAILED marker=%s reason=ecel_import_failed error=%s:%s trading_fail_closed=true",
                 MARKER,
                 type(exc).__name__,
                 exc,
@@ -148,27 +164,26 @@ def install() -> bool:
 
         installed = _install_on_module(module)
         tested = bool(installed and _self_test(module))
-        ready = bool(installed and tested)
+        v261_ready = bool(tested and _install_v261())
+        ready = bool(installed and tested and v261_ready)
         os.environ[_READY_FLAG] = "1" if ready else "0"
 
         if not ready:
             LOGGER.critical(
-                "KRAKEN_ECEL_SYMBOL_V206_FAILED marker=%s installed=%s self_test=%s "
-                "trading_fail_closed=true",
+                "KRAKEN_ECEL_SYMBOL_V206_FAILED marker=%s installed=%s self_test=%s v261_ready=%s trading_fail_closed=true",
                 MARKER,
                 str(installed).lower(),
                 str(tested).lower(),
+                str(v261_ready).lower(),
             )
             return False
 
         LOGGER.critical(
-            "KRAKEN_ECEL_SYMBOL_V206_READY marker=%s ready=true "
-            "legacy_xethzusd_to_ethusd=true legacy_xxbtzusd_to_xbtusd=true "
-            "legacy_xxrpzusd_to_xrpusd=true existing_contract_rules_only=true "
-            "contract_minimums_unchanged=true execution_authority_granted=false "
+            "KRAKEN_ECEL_SYMBOL_V206_READY marker=%s ready=true legacy_xethzusd_to_ethusd=true "
+            "legacy_xxbtzusd_to_xbtusd=true legacy_xxrpzusd_to_xrpusd=true existing_contract_rules_only=true "
+            "terminal_symbol_v261=true contract_minimums_unchanged=true execution_authority_granted=false "
             "execution_proof_fabricated=false forced_trade=false "
-            "writer_nonce_risk_killswitch_capital_position_order_fill_gates_unchanged=true "
-            "safety_gates_bypassed=false",
+            "writer_nonce_risk_killswitch_capital_position_order_fill_gates_unchanged=true safety_gates_bypassed=false",
             MARKER,
         )
         return True
