@@ -16,6 +16,9 @@ class _Strategy:
             "coinbase": _Broker("coinbase"),
         }
         self.calls = []
+        self.multi_account_manager = types.SimpleNamespace(platform_brokers=dict(self.brokers))
+        self.broker_manager = None
+        self.broker = None
 
     def _broker_key_from_obj(self, broker):
         return broker.name
@@ -31,7 +34,16 @@ class _Strategy:
             name for name in os.environ.get("NIJA_EXECUTION_READY_VENUES", "").split(",") if name
         )
         self.calls.append(("select", ready))
-        return self.brokers.get(ready[0]) if ready else None
+        selected = self.brokers.get(ready[0]) if ready else None
+        self.broker = selected
+        return selected
+
+    def _select_entry_broker(self, candidates):
+        for name in ("kraken", "coinbase"):
+            for broker in candidates.values():
+                if broker.name == name:
+                    return broker, name, {name: "ready"}
+        return None, None, {}
 
     def _execute_heartbeat_trade(self):
         broker = self._get_heartbeat_broker()
