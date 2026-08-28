@@ -166,7 +166,7 @@ def _install_kraken_user_supervision() -> bool:
         LOGGER.critical(
             "KRAKEN_USER_SUPERVISION_V88_CHAINED marker=%s source=v86+v90+v266 "
             "authenticated_reconnect_only=true canonical_rebuild=true writer_scoped=true "
-            "state_sensitive_diagnostics=true live_broker_recovery_pulse=true",
+            "state_sensitive_diagnostics=true extra_reconcile_calls=false retry_cadence_unchanged=true",
             MARKER,
         )
     return installed
