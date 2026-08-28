@@ -40,6 +40,12 @@ def test_launcher_orders_writer_before_main_runtime_fanout(monkeypatch, tmp_path
         events.append("writer")
         return bot_entry, bot_main
 
+    monkeypatch.setattr(
+        launcher,
+        "_install_exchange_rejection_provenance_before_runtime",
+        lambda: events.append("provenance"),
+    )
+
     def _single_identity(entry, main):
         assert entry is bot_entry
         assert main is bot_main
@@ -49,7 +55,90 @@ def test_launcher_orders_writer_before_main_runtime_fanout(monkeypatch, tmp_path
     monkeypatch.setattr(launcher, "_run_main_single_identity", _single_identity)
 
     assert launcher.main() == 0
-    assert events == ["guards", "writer", "main"]
+    assert events == ["guards", "writer", "provenance", "main"]
+
+
+def test_launcher_installs_rejection_provenance_before_runtime(monkeypatch) -> None:
+    launcher = _load("test_canonical_writer_first_v59_provenance")
+    events: list[str] = []
+
+    provenance = ModuleType("bot.exchange_kill_switch_alias_provenance_v258_patch")
+
+    def _install_provenance() -> bool:
+        events.append("v258_install")
+        monkeypatch.setenv(
+            "NIJA_EXCHANGE_KILLSWITCH_ALIAS_PROVENANCE_V258_READY",
+            "1",
+        )
+        return True
+
+    provenance.install = _install_provenance
+    provenance.reassert_loaded = lambda: events.append("v258_reassert") or True
+
+    internal = ModuleType("bot.exchange_kill_switch_internal_reject_guard_patch")
+
+    def _install_internal() -> None:
+        events.append("internal_install")
+        monkeypatch.setenv(
+            "NIJA_EXCHANGE_KILL_SWITCH_IGNORE_INTERNAL_ROUTING_REJECTS",
+            "true",
+        )
+
+    internal.install_import_hook = _install_internal
+
+    modules = {
+        provenance.__name__: provenance,
+        internal.__name__: internal,
+    }
+    monkeypatch.setattr(launcher, "_canonical_import", modules.__getitem__)
+
+    launcher._install_exchange_rejection_provenance_before_runtime()
+
+    assert events == [
+        "v258_install",
+        "v258_reassert",
+        "internal_install",
+        "v258_reassert",
+    ]
+
+
+def test_launcher_releases_writer_when_rejection_provenance_fails(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    launcher = _load("test_canonical_writer_first_v59_provenance_failure")
+    fake_main = tmp_path / "main.py"
+    fake_main.write_text("pass\n", encoding="utf-8")
+    monkeypatch.setattr(launcher, "MAIN_PATH", fake_main)
+    monkeypatch.setattr(launcher, "install_canonical_startup_guard", lambda: object())
+
+    bot_entry = ModuleType("bot.bot")
+    bot_main = ModuleType("bot.bot_main")
+    monkeypatch.setattr(
+        launcher,
+        "_bootstrap_writer_first",
+        lambda: (bot_entry, bot_main),
+    )
+    monkeypatch.setattr(
+        launcher,
+        "_install_exchange_rejection_provenance_before_runtime",
+        lambda: (_ for _ in ()).throw(RuntimeError("provenance failed")),
+    )
+    released: list[str] = []
+    monkeypatch.setattr(
+        launcher,
+        "_release_early_writer",
+        lambda _main, *, reason: released.append(reason),
+    )
+
+    try:
+        launcher.main()
+    except RuntimeError as exc:
+        assert str(exc) == "provenance failed"
+    else:
+        raise AssertionError("provenance failure must stop canonical startup")
+
+    assert released == ["exchange_rejection_provenance_pre_runtime_failed"]
 
 
 def test_writer_first_requires_exact_distributed_runtime(monkeypatch) -> None:

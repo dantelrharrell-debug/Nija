@@ -44,6 +44,11 @@ def test_launcher_preserves_defer_flag_through_main_handoff(monkeypatch, tmp_pat
         "_bootstrap_writer_first",
         lambda: (bot_entry, bot_main),
     )
+    monkeypatch.setattr(
+        launcher,
+        "_install_exchange_rejection_provenance_before_runtime",
+        lambda: None,
+    )
 
     def _run_path(path: str, *, run_name: str) -> None:
         observed["path"] = path
