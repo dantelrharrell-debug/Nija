@@ -165,21 +165,63 @@ def _patch_trading_strategy() -> bool:
                 )
                 return None
 
-            os.environ["NIJA_EXECUTION_READY_VENUES"] = ",".join(allowed)
-            try:
-                selected = original_select(self)
-            finally:
-                os.environ["NIJA_EXECUTION_READY_VENUES"] = original_raw
+            candidates = {}
+            if getattr(self, "multi_account_manager", None) is not None:
+                try:
+                    candidates.update(getattr(self.multi_account_manager, "platform_brokers", {}) or {})
+                except Exception as exc:
+                    LOGGER.debug("Heartbeat v255 MABM lookup failed: %s", exc)
+            if getattr(self, "broker_manager", None) is not None:
+                try:
+                    candidates.update(getattr(self.broker_manager, "brokers", {}) or {})
+                    primary = self.broker_manager.get_primary_broker()
+                    if primary is not None:
+                        candidates.setdefault(getattr(primary, "broker_type", "primary"), primary)
+                except Exception as exc:
+                    LOGGER.debug("Heartbeat v255 BrokerManager lookup failed: %s", exc)
+            if getattr(self, "broker", None) is not None:
+                candidates.setdefault(getattr(self.broker, "broker_type", "cached"), self.broker)
 
-            if selected is not None:
-                LOGGER.critical(
-                    "HEARTBEAT_LOCAL_CONTENTION_V255_FAILOVER marker=%s blocked=%s selected=%s "
-                    "canonical_ready_set_only=true ordinary_routing_unchanged=true "
-                    "broker_health_unchanged=true execution_proof_fabricated=false",
+            allowed_set = set(allowed)
+            ready_candidates = {
+                raw_key: broker
+                for raw_key, broker in candidates.items()
+                if broker is not None and _broker_key(self, broker) in allowed_set
+            }
+            selector = getattr(self, "_select_entry_broker", None)
+            if not callable(selector):
+                LOGGER.error(
+                    "HEARTBEAT_LOCAL_CONTENTION_V255_SELECTOR_MISSING marker=%s "
+                    "trading_fail_closed=true",
                     MARKER,
-                    ",".join(blocked),
-                    _broker_key(self, selected),
                 )
+                return None
+            selected, name, status = selector(ready_candidates)
+            if selected is None:
+                LOGGER.warning(
+                    "HEARTBEAT_LOCAL_CONTENTION_V255_FAILOVER_UNAVAILABLE marker=%s "
+                    "allowed=%s blocked=%s status=%s trading_fail_closed=true",
+                    MARKER,
+                    ",".join(allowed),
+                    ",".join(blocked),
+                    status or "no_matching_broker_objects",
+                )
+                return None
+            self.broker = selected
+            if getattr(self, "broker_manager", None) is not None:
+                try:
+                    self.broker_manager.active_broker = selected
+                except Exception:
+                    pass
+
+            LOGGER.critical(
+                "HEARTBEAT_LOCAL_CONTENTION_V255_FAILOVER marker=%s blocked=%s selected=%s "
+                "canonical_ready_set_only=true ordinary_routing_unchanged=true "
+                "broker_health_unchanged=true execution_proof_fabricated=false",
+                MARKER,
+                ",".join(blocked),
+                _broker_key(self, selected),
+            )
             return selected
 
         setattr(select_v255, _HEARTBEAT_PATCH_ATTR, True)
