@@ -23,7 +23,10 @@ v108 breaks that liveness cycle without weakening safety:
   bootstrap, risk, kill-switch, or execution readiness is synthesized.
 
 This module deliberately does not add another ``builtins.__import__`` wrapper.
-A short-lived monitor patches MABM once it is loaded, then exits.
+A short-lived monitor patches MABM once it is loaded, then exits.  The MABM
+refresh hook is identified by its exact function owner rather than a copied
+``functools.wraps`` marker so later wrapper churn cannot silently detach the
+position-sync recovery dispatcher.
 """
 from __future__ import annotations
 
@@ -229,6 +232,31 @@ def dispatch_platform_position_sync(manager: Any, *, trigger: str) -> int:
     return started
 
 
+def _is_exact_refresh_hook(candidate: Any) -> bool:
+    """Return True only for the real v108 MABM refresh wrapper."""
+    if not callable(candidate) or not bool(getattr(candidate, _PATCH_ATTR, False)):
+        return False
+    owner = getattr(candidate, "__globals__", {}) or {}
+    return bool(
+        str(owner.get("MARKER", "")) == MARKER
+        and str(owner.get("__name__", "")).endswith("platform_position_sync_v108_patch")
+    )
+
+
+def _chain_has_exact_refresh_hook(callable_obj: Any) -> bool:
+    """Ignore markers copied by functools.wraps and prove v108 is in-chain."""
+    seen: set[int] = set()
+    current = callable_obj
+    for _ in range(32):
+        if not callable(current) or id(current) in seen:
+            return False
+        seen.add(id(current))
+        if _is_exact_refresh_hook(current):
+            return True
+        current = getattr(current, "__wrapped__", None)
+    return False
+
+
 def _patch_mabm(module: ModuleType) -> bool:
     cls = getattr(module, "MultiAccountBrokerManager", None)
     if not isinstance(cls, type):
@@ -236,10 +264,24 @@ def _patch_mabm(module: ModuleType) -> bool:
     current = getattr(cls, "refresh_capital_authority", None)
     if not callable(current):
         return False
-    if bool(getattr(current, _PATCH_ATTR, False)):
+    if _chain_has_exact_refresh_hook(current):
         return True
 
-    @wraps(current)
+    copied_marker = bool(getattr(current, _PATCH_ATTR, False))
+    if copied_marker:
+        try:
+            delattr(current, _PATCH_ATTR)
+        except Exception:
+            LOGGER.warning(
+                "PLATFORM_POSITION_SYNC_V108_COPIED_MARKER_CLEAR_FAILED marker=%s module=%s fail_closed=true",
+                MARKER,
+                module.__name__,
+            )
+            return False
+
+    original = current
+
+    @wraps(original)
     def refresh_capital_authority_v108(self: Any, *args: Any, **kwargs: Any):
         trigger = str(kwargs.get("trigger", args[0] if args else "refresh_capital_authority"))
         try:
@@ -252,15 +294,16 @@ def _patch_mabm(module: ModuleType) -> bool:
                 type(exc).__name__,
                 exc,
             )
-        return current(self, *args, **kwargs)
+        return original(self, *args, **kwargs)
 
     setattr(refresh_capital_authority_v108, _PATCH_ATTR, True)
-    setattr(refresh_capital_authority_v108, "__wrapped__", current)
+    setattr(refresh_capital_authority_v108, "__wrapped__", original)
     cls.refresh_capital_authority = refresh_capital_authority_v108  # type: ignore[assignment]
     LOGGER.critical(
-        "PLATFORM_POSITION_SYNC_V108_MABM_PATCHED marker=%s module=%s dispatch_before_capital_refresh=true capital_ready_dependency=false safety_gates_unchanged=true",
+        "PLATFORM_POSITION_SYNC_V108_MABM_PATCHED marker=%s module=%s dispatch_before_capital_refresh=true capital_ready_dependency=false exact_owner=true copied_marker_false_positive_blocked=true reasserted=%s safety_gates_unchanged=true",
         MARKER,
         module.__name__,
+        str(copied_marker).lower(),
     )
     return True
 
@@ -309,7 +352,7 @@ def install() -> bool:
         os.environ["NIJA_PLATFORM_POSITION_SYNC_V108_INSTALLED"] = "1"
         _INSTALLED = True
         LOGGER.critical(
-            "PLATFORM_POSITION_SYNC_V108_INSTALLED marker=%s direct_platform_dispatch=true capital_ready_dependency=false single_flight=true bounded_retry=true import_hook=false synthetic_empty_snapshot=false",
+            "PLATFORM_POSITION_SYNC_V108_INSTALLED marker=%s direct_platform_dispatch=true capital_ready_dependency=false single_flight=true bounded_retry=true import_hook=false synthetic_empty_snapshot=false exact_refresh_hook_owner=true",
             MARKER,
         )
         return True
@@ -328,5 +371,7 @@ __all__ = [
     "dispatch_platform_position_sync",
     "_connected_unsynced_platform_brokers",
     "_retry_policy",
+    "_is_exact_refresh_hook",
+    "_chain_has_exact_refresh_hook",
     "_patch_mabm",
 ]
