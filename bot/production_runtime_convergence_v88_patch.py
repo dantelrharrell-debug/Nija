@@ -154,6 +154,9 @@ def _install_kraken_user_supervision() -> bool:
         if installed:
             from bot import kraken_user_connection_convergence_v90_patch as v90
             installed = bool(v90.install_import_hook())
+        if installed:
+            from bot import all_account_connectivity_truth_v266_patch as v266
+            installed = bool(v266.install_import_hook())
     except Exception as exc:
         LOGGER.warning("KRAKEN_USER_SUPERVISION_V88_INSTALL_FAILED marker=%s error=%s:%s", MARKER, type(exc).__name__, exc)
         return False
@@ -161,8 +164,9 @@ def _install_kraken_user_supervision() -> bool:
         with _LOCK:
             _KRAKEN_SUPERVISION_INSTALLED = True
         LOGGER.critical(
-            "KRAKEN_USER_SUPERVISION_V88_CHAINED marker=%s source=v86+v90 "
-            "authenticated_reconnect_only=true canonical_rebuild=true writer_scoped=true",
+            "KRAKEN_USER_SUPERVISION_V88_CHAINED marker=%s source=v86+v90+v266 "
+            "authenticated_reconnect_only=true canonical_rebuild=true writer_scoped=true "
+            "state_sensitive_diagnostics=true live_broker_recovery_pulse=true",
             MARKER,
         )
     return installed
@@ -227,8 +231,8 @@ def install_import_hook() -> bool:
     os.environ["NIJA_PRODUCTION_RUNTIME_CONVERGENCE_V88_INSTALLED"] = "1"
     LOGGER.critical(
         "PRODUCTION_RUNTIME_CONVERGENCE_V88_INSTALLED marker=%s circuit_classification=true "
-        "kraken_user_supervision=true kraken_user_rebuild_v90=true stale_log_filter=true "
-        "risk_gates_unchanged=true nonce_gates_unchanged=true",
+        "kraken_user_supervision=true kraken_user_rebuild_v90=true all_account_connectivity_v266=true "
+        "stale_log_filter=true risk_gates_unchanged=true nonce_gates_unchanged=true",
         MARKER,
     )
     return True
