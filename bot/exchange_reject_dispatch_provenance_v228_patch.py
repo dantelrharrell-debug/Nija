@@ -1,18 +1,19 @@
-"""Keep local/pre-dispatch failures out of exchange rejection telemetry (v228/v256).
+"""Keep local/pre-dispatch failures out of exchange rejection telemetry (v228/v257).
 
 The exchange rejection-rate kill switch must only be fed by outcomes that are not
-known to be local/pre-dispatch failures. Earlier v228/v232/v247/v253 classifiers
-protected the pipeline telemetry emitter, but production proved that wrapper
-ordering could still leave a same-process 5/5 rejection window. V256 therefore
-adds a second, independent guard at ExchangeKillSwitchProtector.record_order_result
-and carries the rejection reason through ExecutionPipeline._on_order_rejected.
+known to be local/pre-dispatch failures. V256 added rejection-reason context and
+a recorder-boundary guard. Production then proved a dual-import identity gap:
+``bot.execution_pipeline`` could be protected while a separately loaded
+``execution_pipeline`` alias remained able to emit rejection telemetry without
+that context.
 
-Known local/authority/lifecycle/routing/risk/ECEL/soft-ACK failures remain failed
-operations, but they are not exchange rejection samples. Unclassified outcomes
-continue through the existing path unchanged, so genuine exchange rejections,
-thresholds, and fail-closed behavior are preserved. The patch never clears an
-existing window or kill switch and never fabricates execution, nonce, ACK, fill,
-or readiness proof.
+V257 patches every loaded ExecutionPipeline module identity, without importing a
+legacy alias merely to create one. It also emits a diagnostic for every rejected
+sample that is actually allowed through to the ExchangeKillSwitchProtector. This
+is diagnostic/provenance hardening only: unknown and genuine exchange rejects
+continue to count, rejection thresholds are unchanged, and no existing rejection
+window or kill switch is cleared. Execution, nonce, ACK, fill, authority, and
+readiness proof are never fabricated.
 """
 from __future__ import annotations
 
@@ -31,6 +32,7 @@ LOGGER = logging.getLogger("nija.exchange_reject_dispatch_provenance_v228")
 MARKER = "20260825-exchange-reject-dispatch-provenance-v228"
 V253_MARKER = "20260828-soft-timeout-rejection-provenance-v253"
 V256_MARKER = "20260828-rejection-recorder-provenance-v256"
+V257_MARKER = "20260828-execution-pipeline-alias-provenance-v257"
 _FLAG = "NIJA_EXCHANGE_REJECT_DISPATCH_PROVENANCE_V228_READY"
 _PATCH_ATTR = "_nija_exchange_reject_dispatch_provenance_v228"
 _REJECT_HANDLER_PATCH_ATTR = "_nija_exchange_reject_reason_context_v256"
@@ -141,7 +143,7 @@ def _append_provenance(protector: Any, *, order_id: str, accepted: bool, context
             "known_non_exchange": _is_non_exchange_rejection(context.get("reason", "")) if context else False,
         })
     except Exception:
-        LOGGER.debug("V256 rejection provenance append failed", exc_info=True)
+        LOGGER.debug("V257 rejection provenance append failed", exc_info=True)
 
 
 def _patch_exchange_recorder() -> bool:
@@ -163,16 +165,29 @@ def _patch_exchange_recorder() -> bool:
         if not bool(accepted) and reason and _is_non_exchange_rejection(reason):
             _append_provenance(self, order_id=order_id, accepted=False, context=context)
             LOGGER.critical(
-                "EXCHANGE_REJECT_V256_RECORDER_NON_EXCHANGE_IGNORED marker=%s v228_marker=%s "
+                "EXCHANGE_REJECT_V256_RECORDER_NON_EXCHANGE_IGNORED marker=%s v228_marker=%s v257_marker=%s "
                 "order_id=%s symbol=%s side=%s reason=%s exchange_sample_mutated=false "
                 "exchange_order_provenance=false rejection_window_unchanged=true kill_switch_unchanged=true "
                 "execution_authority_unchanged=true execution_proof_fabricated=false safety_gates_bypassed=false",
-                V256_MARKER, MARKER, str(order_id)[:256], context.get("symbol", ""),
+                V256_MARKER, MARKER, V257_MARKER, str(order_id)[:256], context.get("symbol", ""),
                 context.get("side", ""), reason[:512],
             )
             return None
         result = original(self, order_id, accepted, *args, **kwargs)
         _append_provenance(self, order_id=order_id, accepted=bool(accepted), context=context)
+        if not bool(accepted):
+            LOGGER.critical(
+                "EXCHANGE_REJECT_V257_COUNTED_SAMPLE marker=%s order_id=%s source=%s context_present=%s "
+                "symbol=%s side=%s reason=%s known_non_exchange=false sample_counted=true "
+                "rejection_thresholds_unchanged=true kill_switch_behavior_unchanged=true",
+                V257_MARKER,
+                str(order_id)[:256],
+                "execution_pipeline" if context else "direct_or_legacy",
+                str(bool(context)).lower(),
+                context.get("symbol", ""),
+                context.get("side", ""),
+                (reason or "missing")[:512],
+            )
         return result
 
     setattr(record_order_result_v256, _RECORDER_PATCH_ATTR, True)
@@ -181,8 +196,7 @@ def _patch_exchange_recorder() -> bool:
     return True
 
 
-def _patch_execution_pipeline() -> bool:
-    module = importlib.import_module("bot.execution_pipeline")
+def _patch_pipeline_module(module: ModuleType) -> bool:
     cls = getattr(module, "ExecutionPipeline", None)
     if not isinstance(cls, type):
         return False
@@ -217,12 +231,12 @@ def _patch_execution_pipeline() -> bool:
         def emit_v228(self: Any, *, symbol: str, side: str, reason: str) -> Any:
             if _is_non_exchange_rejection(reason):
                 LOGGER.critical(
-                    "EXCHANGE_REJECT_V228_NON_EXCHANGE_IGNORED marker=%s v253_marker=%s v256_marker=%s "
-                    "symbol=%s side=%s reason=%s exchange_sample_mutated=false exchange_order_provenance=false "
-                    "route_guard_provenance_v232=true lifecycle_provenance_v247=true soft_timeout_provenance_v253=true "
-                    "recorder_guard_v256=true kill_switch_unchanged=true execution_authority_unchanged=true "
-                    "execution_proof_fabricated=false safety_gates_bypassed=false",
-                    MARKER, V253_MARKER, V256_MARKER, str(symbol)[:64], str(side)[:32], str(reason)[:512],
+                    "EXCHANGE_REJECT_V228_NON_EXCHANGE_IGNORED marker=%s v253_marker=%s v256_marker=%s v257_marker=%s "
+                    "module=%s symbol=%s side=%s reason=%s exchange_sample_mutated=false exchange_order_provenance=false "
+                    "recorder_guard_v256=true alias_guard_v257=true kill_switch_unchanged=true "
+                    "execution_authority_unchanged=true execution_proof_fabricated=false safety_gates_bypassed=false",
+                    MARKER, V253_MARKER, V256_MARKER, V257_MARKER, getattr(module, "__name__", "unknown"),
+                    str(symbol)[:64], str(side)[:32], str(reason)[:512],
                 )
                 return None
             previous = _set_context(symbol=symbol, side=side, reason=reason)
@@ -238,6 +252,27 @@ def _patch_execution_pipeline() -> bool:
     return bool(getattr(getattr(cls, "_emit_execution_rejection_telemetry", None), _PATCH_ATTR, False)) and bool(
         getattr(getattr(cls, "_on_order_rejected", None), _REJECT_HANDLER_PATCH_ATTR, False)
     )
+
+
+def _patch_execution_pipeline() -> bool:
+    canonical = importlib.import_module("bot.execution_pipeline")
+    modules: list[ModuleType] = []
+    seen: set[int] = set()
+    for candidate in (canonical, sys.modules.get("execution_pipeline")):
+        if isinstance(candidate, ModuleType) and id(candidate) not in seen:
+            seen.add(id(candidate))
+            modules.append(candidate)
+    outcomes = {getattr(module, "__name__", "unknown"): _patch_pipeline_module(module) for module in modules}
+    alias = sys.modules.get("execution_pipeline")
+    alias_loaded = isinstance(alias, ModuleType)
+    alias_same = bool(alias_loaded and alias is canonical)
+    ready = bool(outcomes) and all(outcomes.values())
+    LOGGER.critical(
+        "EXCHANGE_REJECT_V257_PIPELINE_IDENTITIES marker=%s ready=%s identities=%s alias_loaded=%s alias_same_object=%s "
+        "legacy_alias_import_forced=false rejection_window_unchanged=true kill_switch_unchanged=true",
+        V257_MARKER, str(ready).lower(), outcomes, str(alias_loaded).lower(), str(alias_same).lower(),
+    )
+    return ready
 
 
 def _register_manifest_if_loaded() -> bool:
@@ -263,8 +298,8 @@ def _worker() -> None:
             _register_manifest_if_loaded()
         except Exception as exc:
             LOGGER.warning(
-                "EXCHANGE_REJECT_V228_REASSERT_ERROR marker=%s v256_marker=%s err=%s:%s trading_fail_closed=true",
-                MARKER, V256_MARKER, type(exc).__name__, exc,
+                "EXCHANGE_REJECT_V228_REASSERT_ERROR marker=%s v257_marker=%s err=%s:%s trading_fail_closed=true",
+                MARKER, V257_MARKER, type(exc).__name__, exc,
             )
         time.sleep(2.0)
 
@@ -283,13 +318,13 @@ def install() -> bool:
             _THREAD = threading.Thread(target=_worker, name="ExchangeRejectDispatchProvenanceV228", daemon=True)
             _THREAD.start()
     LOGGER.critical(
-        "EXCHANGE_REJECT_DISPATCH_PROVENANCE_V228_READY marker=%s v253_marker=%s v256_marker=%s ready=true "
-        "local_predispatch_rejects_excluded=true route_guard_provenance_v232=true lifecycle_provenance_v247=true "
-        "soft_timeout_provenance_v253=true rejection_reason_context_v256=true recorder_boundary_guard_v256=true "
-        "provenance_history_v256=true real_exchange_path_unchanged=true rejection_thresholds_unchanged=true "
-        "rejection_window_not_cleared=true kill_switch_unchanged=true execution_authority_unchanged=true "
-        "execution_proof_fabricated=false forced_activation=false safety_gates_bypassed=false",
-        MARKER, V253_MARKER, V256_MARKER,
+        "EXCHANGE_REJECT_DISPATCH_PROVENANCE_V228_READY marker=%s v253_marker=%s v256_marker=%s v257_marker=%s ready=true "
+        "local_predispatch_rejects_excluded=true rejection_reason_context_v256=true recorder_boundary_guard_v256=true "
+        "execution_pipeline_alias_guard_v257=true counted_sample_diagnostics_v257=true provenance_history_v256=true "
+        "real_exchange_path_unchanged=true rejection_thresholds_unchanged=true rejection_window_not_cleared=true "
+        "kill_switch_unchanged=true execution_authority_unchanged=true execution_proof_fabricated=false "
+        "forced_activation=false safety_gates_bypassed=false",
+        MARKER, V253_MARKER, V256_MARKER, V257_MARKER,
     )
     return True
 
@@ -299,7 +334,7 @@ def install_import_hook() -> bool:
 
 
 __all__ = [
-    "MARKER", "V253_MARKER", "V256_MARKER", "install", "install_import_hook",
-    "_is_non_exchange_rejection", "_patch_execution_pipeline", "_patch_exchange_recorder",
-    "_context_payload",
+    "MARKER", "V253_MARKER", "V256_MARKER", "V257_MARKER", "install", "install_import_hook",
+    "_is_non_exchange_rejection", "_patch_execution_pipeline", "_patch_pipeline_module",
+    "_patch_exchange_recorder", "_context_payload",
 ]
