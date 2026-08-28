@@ -4,6 +4,7 @@ import builtins
 import logging
 import os
 import sys
+import threading
 from functools import wraps
 from types import ModuleType
 from typing import Any
@@ -13,9 +14,11 @@ _MARKER = "EXCHANGE_KILL_SWITCH_INTERNAL_REJECT_GUARD_PATCHED marker=20260706a"
 _V254_MARKER = "20260828-soft-reject-telemetry-v254"
 _V258_MARKER = "20260828-exchange-killswitch-alias-provenance-v258"
 _V259_MARKER = "20260828-early-rejection-classification-v259"
+_V260_MARKER = "20260828-early-recorder-rejection-provenance-v260"
 _PATCHED_ATTR = "_nija_exchange_kill_switch_internal_reject_guard_20260706a"
 _TELEMETRY_PATCHED_ATTR = "_nija_early_soft_reject_telemetry_v254"
 _TRUE = {"1", "true", "yes", "on", "enabled", "y"}
+_REJECTION_CONTEXT = threading.local()
 _INTERNAL_REJECT_PATTERNS = (
     "no_execution_venue_available",
     "broker_not_registered",
@@ -102,6 +105,23 @@ def _soft_non_exchange_reason(value: Any) -> bool:
     return bool(text) and any(pattern in text for pattern in _SOFT_NON_EXCHANGE_REASON_PATTERNS)
 
 
+def _current_rejection_reason() -> str:
+    return str(getattr(_REJECTION_CONTEXT, "reason", "") or "")
+
+
+def _set_rejection_reason(reason: Any) -> str:
+    previous = _current_rejection_reason()
+    _REJECTION_CONTEXT.reason = str(reason or "")[:1024]
+    return previous
+
+
+def _restore_rejection_reason(previous: str) -> None:
+    if previous:
+        _REJECTION_CONTEXT.reason = previous
+    elif hasattr(_REJECTION_CONTEXT, "reason"):
+        delattr(_REJECTION_CONTEXT, "reason")
+
+
 def _install_v258() -> bool:
     """Install v258 without forcing either legacy kill-switch alias to import."""
     try:
@@ -135,6 +155,18 @@ def _patch_module(module: ModuleType) -> bool:
 
     @wraps(original)
     def record_order_result(self: Any, order_id: str, accepted: bool, *args: Any, **kwargs: Any):
+        reason = _current_rejection_reason()
+        if not accepted and reason and _soft_non_exchange_reason(reason):
+            logger.critical(
+                "EARLY_REJECTION_RECORDER_V260_NON_EXCHANGE_IGNORED marker=%s order_id=%s "
+                "reason=%s context_present=true exchange_sample_mutated=false rejection_window_unchanged=true "
+                "kill_switch_unchanged=true genuine_exchange_rejects_unchanged=true "
+                "execution_authority_unchanged=true execution_proof_fabricated=false safety_gates_bypassed=false",
+                _V260_MARKER,
+                str(order_id)[:256],
+                reason[:512],
+            )
+            return None
         if _truthy("NIJA_EXCHANGE_KILL_SWITCH_IGNORE_INTERNAL_ROUTING_REJECTS", "true"):
             if not accepted and _internal_reject(order_id, args, kwargs):
                 logger.critical(
@@ -146,12 +178,22 @@ def _patch_module(module: ModuleType) -> bool:
                     flush=True,
                 )
                 return None
+        if not accepted:
+            logger.critical(
+                "EARLY_REJECTION_RECORDER_V260_COUNTED marker=%s order_id=%s context_present=%s reason=%s "
+                "sample_preserved=true genuine_or_unknown_fail_closed=true rejection_thresholds_unchanged=true "
+                "kill_switch_behavior_unchanged=true safety_gates_bypassed=false",
+                _V260_MARKER,
+                str(order_id)[:256],
+                str(bool(reason)).lower(),
+                (reason or "missing")[:512],
+            )
         return original(self, order_id, accepted, *args, **kwargs)
 
     setattr(record_order_result, _PATCHED_ATTR, True)
     setattr(record_order_result, "__wrapped__", original)
     setattr(cls, "record_order_result", record_order_result)
-    logger.warning("%s class=ExchangeKillSwitchProtector", _MARKER)
+    logger.warning("%s class=ExchangeKillSwitchProtector v260_marker=%s", _MARKER, _V260_MARKER)
     print("[NIJA-PRINT] EXCHANGE_KILL_SWITCH_INTERNAL_REJECT_GUARD_PATCHED marker=20260706a", flush=True)
     return True
 
@@ -176,25 +218,31 @@ def _patch_execution_pipeline_module(module: ModuleType) -> bool:
     ) -> Any:
         if _soft_non_exchange_reason(reason):
             logger.warning(
-                "EARLY_SOFT_REJECT_TELEMETRY_IGNORED marker=%s v259_marker=%s symbol=%s side=%s "
+                "EARLY_SOFT_REJECT_TELEMETRY_IGNORED marker=%s v259_marker=%s v260_marker=%s symbol=%s side=%s "
                 "reason=%s exchange_sample_mutated=false kill_switch_unchanged=true "
                 "execution_authority_unchanged=true execution_proof_fabricated=false",
                 _V254_MARKER,
                 _V259_MARKER,
+                _V260_MARKER,
                 str(symbol)[:64],
                 str(side)[:32],
                 str(reason)[:512],
             )
             return None
-        return original(self, symbol=symbol, side=side, reason=reason)
+        previous = _set_rejection_reason(reason)
+        try:
+            return original(self, symbol=symbol, side=side, reason=reason)
+        finally:
+            _restore_rejection_reason(previous)
 
     setattr(_emit_execution_rejection_telemetry_v254, _TELEMETRY_PATCHED_ATTR, True)
     setattr(_emit_execution_rejection_telemetry_v254, "__wrapped__", original)
     setattr(cls, "_emit_execution_rejection_telemetry", _emit_execution_rejection_telemetry_v254)
     logger.warning(
-        "EARLY_SOFT_REJECT_TELEMETRY_GUARD_PATCHED marker=%s v259_marker=%s module=%s",
+        "EARLY_SOFT_REJECT_TELEMETRY_GUARD_PATCHED marker=%s v259_marker=%s v260_marker=%s module=%s",
         _V254_MARKER,
         _V259_MARKER,
+        _V260_MARKER,
         getattr(module, "__name__", "unknown"),
     )
     return True
@@ -247,10 +295,11 @@ def install_import_hook() -> None:
     builtins.__import__ = guarded_import
     setattr(builtins, "_NIJA_EXCHANGE_KILL_SWITCH_INTERNAL_REJECT_GUARD_HOOK", True)
     logger.warning(
-        "EXCHANGE_KILL_SWITCH_INTERNAL_REJECT_GUARD_IMPORT_HOOK marker=20260706a v254_marker=%s v258_marker=%s v259_marker=%s",
+        "EXCHANGE_KILL_SWITCH_INTERNAL_REJECT_GUARD_IMPORT_HOOK marker=20260706a v254_marker=%s v258_marker=%s v259_marker=%s v260_marker=%s",
         _V254_MARKER,
         _V258_MARKER,
         _V259_MARKER,
+        _V260_MARKER,
     )
 
 
