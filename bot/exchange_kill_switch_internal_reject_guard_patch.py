@@ -11,6 +11,7 @@ from typing import Any
 logger = logging.getLogger("nija.exchange_kill_switch_internal_reject_guard")
 _MARKER = "EXCHANGE_KILL_SWITCH_INTERNAL_REJECT_GUARD_PATCHED marker=20260706a"
 _V254_MARKER = "20260828-soft-reject-telemetry-v254"
+_V258_MARKER = "20260828-exchange-killswitch-alias-provenance-v258"
 _PATCHED_ATTR = "_nija_exchange_kill_switch_internal_reject_guard_20260706a"
 _TELEMETRY_PATCHED_ATTR = "_nija_early_soft_reject_telemetry_v254"
 _TRUE = {"1", "true", "yes", "on", "enabled", "y"}
@@ -58,6 +59,29 @@ def _internal_reject(*values: Any) -> bool:
 def _soft_non_exchange_reason(value: Any) -> bool:
     text = str(value or "").strip().lower()
     return bool(text) and any(pattern in text for pattern in _SOFT_NON_EXCHANGE_REASON_PATTERNS)
+
+
+def _install_v258() -> bool:
+    """Install v258 without forcing either legacy kill-switch alias to import."""
+    try:
+        from bot.exchange_kill_switch_alias_provenance_v258_patch import install as install_v258
+
+        ready = bool(install_v258())
+        logger.critical(
+            "EXCHANGE_KILL_SWITCH_V258_EARLY_INSTALL marker=%s ready=%s "
+            "legacy_alias_import_forced=false rejection_window_unchanged=true kill_switch_unchanged=true",
+            _V258_MARKER,
+            str(ready).lower(),
+        )
+        return ready
+    except Exception as exc:
+        logger.warning(
+            "EXCHANGE_KILL_SWITCH_V258_EARLY_INSTALL_FAILED marker=%s err=%s:%s trading_fail_closed=true",
+            _V258_MARKER,
+            type(exc).__name__,
+            exc,
+        )
+        return False
 
 
 def _patch_module(module: ModuleType) -> bool:
@@ -153,6 +177,7 @@ def _try_patch_execution_pipeline_loaded() -> bool:
 
 def install_import_hook() -> None:
     os.environ.setdefault("NIJA_EXCHANGE_KILL_SWITCH_IGNORE_INTERNAL_ROUTING_REJECTS", "true")
+    _install_v258()
     _try_patch_loaded()
     _try_patch_execution_pipeline_loaded()
     if getattr(builtins, "_NIJA_EXCHANGE_KILL_SWITCH_INTERNAL_REJECT_GUARD_HOOK", False):
@@ -164,6 +189,10 @@ def install_import_hook() -> None:
         try:
             _try_patch_loaded()
             _try_patch_execution_pipeline_loaded()
+            v258 = sys.modules.get("bot.exchange_kill_switch_alias_provenance_v258_patch")
+            reassert = getattr(v258, "reassert_loaded", None) if isinstance(v258, ModuleType) else None
+            if callable(reassert):
+                reassert()
         except Exception as exc:
             logger.warning(
                 "EXCHANGE_KILL_SWITCH_INTERNAL_REJECT_GUARD hook failed name=%s error=%s",
@@ -175,8 +204,9 @@ def install_import_hook() -> None:
     builtins.__import__ = guarded_import
     setattr(builtins, "_NIJA_EXCHANGE_KILL_SWITCH_INTERNAL_REJECT_GUARD_HOOK", True)
     logger.warning(
-        "EXCHANGE_KILL_SWITCH_INTERNAL_REJECT_GUARD_IMPORT_HOOK marker=20260706a v254_marker=%s",
+        "EXCHANGE_KILL_SWITCH_INTERNAL_REJECT_GUARD_IMPORT_HOOK marker=20260706a v254_marker=%s v258_marker=%s",
         _V254_MARKER,
+        _V258_MARKER,
     )
 
 
