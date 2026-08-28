@@ -48,6 +48,7 @@ export NIJA_DEFER_RUNTIME_SITE_HOOKS=1
 python3 -S scripts/apply_startup_handoff_fix.py
 python3 -S scripts/apply_canonical_launcher_v26.py
 python3 -S scripts/apply_writer_generation_handoff_v45.py
+python3 -S scripts/apply_render_signal_forwarding_v262.py
 bash -n start.sh
 python3 -S -m py_compile \
     main.py \
@@ -72,14 +73,18 @@ python3 -S -m py_compile \
     scripts/render_memory_pressure_guard.py \
     scripts/apply_canonical_launcher_v26.py \
     scripts/apply_writer_generation_handoff_v45.py \
+    scripts/apply_render_signal_forwarding_v262.py \
     scripts/apply_direct_broker_prebootstrap_v27.py \
     scripts/runtime_entrypoint_attestation.py
 
-grep -Fq '$PY -u scripts/canonical_runtime_launcher_v26.py' start.sh
+grep -Fq '$PY -u scripts/canonical_runtime_launcher_v26.py &' start.sh
 if grep -Fq '$PY -u main.py' start.sh; then
     echo "❌ Legacy direct main.py launch remains after v26 patch"
     exit 78
 fi
+grep -Fq 'RENDER_RUNTIME_SIGNAL_FORWARDED marker=20260828-render-signal-forwarding-v262' start.sh
+grep -Fq '_RENDER_RUNTIME_CHILD_PID=$!' start.sh
+grep -Fq 'kill -TERM "${_RENDER_RUNTIME_CHILD_PID}"' start.sh
 grep -Fq 'DIRECT_CANONICAL_BROKER_PREBOOTSTRAP_V27_READY' bot/bot_main.py
 grep -Fq 'V45_PATH = ROOT / "bot" / "writer_generation_handoff_v45_patch.py"' scripts/canonical_runtime_launcher_v26.py
 grep -Fq '_install_writer_generation_handoff_v45()' scripts/canonical_runtime_launcher_v26.py
@@ -91,7 +96,7 @@ grep -Fq 'bind_entrypoint_writer_authority_aliases(runtime)' bot/bot_main.py
 grep -Fq 'NIJA_ENTRYPOINT_WRITER_MODULE_IDENTITY_CONVERGED' bot/entrypoint_writer_authority.py
 grep -Fq 'heartbeat_telemetry_mutation=false' bot/broker_manager.py
 
-echo "🧭 RENDER_ENTRYPOINT_CANONICAL_HANDOFF_READY marker=20260810-render-entrypoint-v91 launcher=canonical_runtime_launcher_v26 writer_generation_handoff=v45 writer_first=v59 single_identity=true singleton_alias_convergence=v91 kraken_nonce_authority_gate=v91 direct_broker_prebootstrap=v27"
+echo "🧭 RENDER_ENTRYPOINT_CANONICAL_HANDOFF_READY marker=20260828-render-signal-forwarding-v262 launcher=canonical_runtime_launcher_v26 writer_generation_handoff=v45 writer_first=v59 signal_forwarding=v262 single_identity=true singleton_alias_convergence=v91 kraken_nonce_authority_gate=v91 direct_broker_prebootstrap=v27"
 unset NIJA_DEFER_RUNTIME_SITE_HOOKS
 
 exec bash scripts/production_bootstrap.sh "$@"
