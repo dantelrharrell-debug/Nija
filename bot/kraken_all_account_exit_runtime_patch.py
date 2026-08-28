@@ -667,7 +667,7 @@ def _patch_auto_exit_module(module: ModuleType) -> bool:
     if not callable(starter) or getattr(starter, "_nija_account_local_disabled_v1", False):
         return False
 
-    def start_monitor(engine: Any) -> None:
+    def start_monitor(engine: Any | None = None) -> None:
         logger.warning(
             "GLOBAL_SINGLETON_AUTO_EXIT_DISABLED marker=%s reason=account_local_kraken_supervisor_active",
             _MARKER,
