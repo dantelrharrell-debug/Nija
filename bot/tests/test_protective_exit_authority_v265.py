@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from bot.pipeline_request_contract import PipelineRequest, validate_pipeline_request
 from bot import runtime_protective_exit_authority_v265_patch as v265
+from bot import kraken_all_account_exit_runtime_patch as kraken_exit
 
 
 def test_pipeline_request_accepts_explicit_close_effect():
@@ -103,3 +104,20 @@ def test_kraken_ack_without_fill_remains_open():
     assert result["pending_order_id"] == "pending-123"
     assert v265._filled_result({"status": "accepted", "order_id": "pending-123"}) is False
     assert v265._filled_result({"status": "filled", "order_id": "filled-123"}) is True
+
+
+def test_kraken_auto_exit_patch_preserves_optional_noarg_monitor_interface():
+    module = ModuleType("bot.auto_exit_sl_tp_runtime_patch_test")
+    calls = []
+
+    def original_start_monitor(engine=None):
+        calls.append(engine)
+        return None
+
+    module._start_monitor = original_start_monitor
+
+    assert kraken_exit._patch_auto_exit_module(module) is True
+    assert module._start_monitor() is None
+    assert module._start_monitor(SimpleNamespace()) is None
+    assert getattr(module._start_monitor, "_nija_account_local_disabled_v1", False) is True
+    assert calls == []
