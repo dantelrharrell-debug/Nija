@@ -41,7 +41,7 @@ def _fake_modules(monkeypatch):
     return exchange, pipeline
 
 
-def test_v256_recorder_excludes_known_local_rejection(monkeypatch):
+def test_v256_emitter_excludes_known_local_rejection(monkeypatch):
     from bot import exchange_reject_dispatch_provenance_v228_patch as patch
 
     exchange, pipeline = _fake_modules(monkeypatch)
@@ -53,6 +53,26 @@ def test_v256_recorder_excludes_known_local_rejection(monkeypatch):
     request = type("Request", (), {"symbol": "BTC-USD", "side": "buy"})()
 
     worker._on_order_rejected(request, "dispatch_disabled: dispatch.enabled=false")
+
+    assert protector.samples == []
+
+
+def test_v256_recorder_fallback_excludes_known_local_rejection(monkeypatch):
+    from bot import exchange_reject_dispatch_provenance_v228_patch as patch
+
+    exchange, _pipeline = _fake_modules(monkeypatch)
+    assert patch._patch_exchange_recorder() is True
+
+    protector = exchange.ExchangeKillSwitchProtector()
+    previous = patch._set_context(
+        symbol="BTC-USD",
+        side="buy",
+        reason="dispatch_disabled: dispatch.enabled=false",
+    )
+    try:
+        protector.record_order_result("exec-reject:pipeline:BTC-USD:buy", False)
+    finally:
+        patch._restore_context(previous)
 
     assert protector.samples == []
     provenance = list(protector._nija_order_result_provenance_v256)
