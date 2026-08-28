@@ -1,4 +1,4 @@
-"""Keep local/pre-dispatch failures out of exchange rejection telemetry (v228/v232/v247).
+"""Keep local/pre-dispatch failures out of exchange rejection telemetry (v228/v232/v247/v253).
 
 Production on 2026-08-25 showed the canonical EXCHANGE_MONITOR stop holding a
 5/5 rejection window while the runtime was otherwise converged.  The execution
@@ -37,6 +37,20 @@ window itself is not persisted, the next clean process starts with an empty
 window and v226 can independently recover a persisted historical EXCHANGE_MONITOR
 latch only after all of its existing safety proofs pass.
 
+V253 closes an execution-outcome provenance mismatch observed on 2026-08-28.
+``ExecutionPipeline._reconcile_ack_timeout`` deliberately returns
+``confirmed_order_rejected:ack_timeout_no_confirmed_fill...`` when no confirmed
+broker acknowledgement/fill can be established inside the bounded ACK window.
+The existing soft-reject classifier already treats that and
+``terminal_reject_status:unfilled`` as operational/unconfirmed outcomes, but v228
+had not excluded those exact strings from exchange-rejection telemetry.  Five
+such synthetic results could therefore satisfy the 5/5 rejection-rate threshold
+without proving that an exchange rejected five submitted orders.  V253 excludes
+only those exact unconfirmed ACK/unfilled soft outcomes.  It does not treat them
+as success, does not establish execution/fill proof, does not clear an existing
+same-process window or kill switch, and does not suppress concrete exchange
+rejection responses.
+
 This patch never clears a kill switch, resets a rejection window, marks
 readiness, grants execution authority, fabricates broker ACK/fill proof, changes
 minimum notional/risk rules, or forces LIVE_ACTIVE.  A persisted historical
@@ -57,13 +71,15 @@ from typing import Any
 
 LOGGER = logging.getLogger("nija.exchange_reject_dispatch_provenance_v228")
 MARKER = "20260825-exchange-reject-dispatch-provenance-v228"
+V253_MARKER = "20260828-soft-timeout-rejection-provenance-v253"
 _FLAG = "NIJA_EXCHANGE_REJECT_DISPATCH_PROVENANCE_V228_READY"
 _PATCH_ATTR = "_nija_exchange_reject_dispatch_provenance_v228"
 _LOCK = threading.RLock()
 _THREAD: threading.Thread | None = None
 
 # These are outcomes that can be produced without a broker order ever reaching
-# an exchange.  They must never contribute to the exchange rejection-rate gate.
+# an exchange, or without any confirmed exchange rejection response. They must
+# never contribute to the exchange rejection-rate gate.
 _NON_EXCHANGE_MARKERS = (
     "dispatch_disabled",
     "executionauthority reject",
@@ -121,6 +137,12 @@ _NON_EXCHANGE_MARKERS = (
     "broker_dispatch_exception",
     "okx order failed",
     "all operations failed",
+    # V253: bounded ACK reconciliation could not establish a confirmed exchange
+    # ACK/fill/reject. These are explicitly soft/unconfirmed outcomes elsewhere
+    # in the pipeline and must not be promoted into exchange-rejection samples.
+    "confirmed_order_rejected:ack_timeout",
+    "ack_timeout_no_confirmed_fill",
+    "terminal_reject_status:unfilled",
 )
 
 
@@ -151,12 +173,14 @@ def _patch_execution_pipeline() -> bool:
     ) -> Any:
         if _is_non_exchange_rejection(reason):
             LOGGER.critical(
-                "EXCHANGE_REJECT_V228_NON_EXCHANGE_IGNORED marker=%s "
+                "EXCHANGE_REJECT_V228_NON_EXCHANGE_IGNORED marker=%s v253_marker=%s "
                 "symbol=%s side=%s reason=%s exchange_sample_mutated=false "
                 "exchange_order_provenance=false route_guard_provenance_v232=true "
-                "lifecycle_provenance_v247=true kill_switch_unchanged=true "
-                "execution_authority_unchanged=true safety_gates_bypassed=false",
+                "lifecycle_provenance_v247=true soft_timeout_provenance_v253=true "
+                "kill_switch_unchanged=true execution_authority_unchanged=true "
+                "execution_proof_fabricated=false safety_gates_bypassed=false",
                 MARKER,
+                V253_MARKER,
                 str(symbol)[:64],
                 str(side)[:32],
                 str(reason)[:512],
@@ -192,9 +216,10 @@ def _worker() -> None:
             _register_manifest_if_loaded()
         except Exception as exc:
             LOGGER.warning(
-                "EXCHANGE_REJECT_V228_REASSERT_ERROR marker=%s err=%s:%s "
+                "EXCHANGE_REJECT_V228_REASSERT_ERROR marker=%s v253_marker=%s err=%s:%s "
                 "trading_fail_closed=true",
                 MARKER,
+                V253_MARKER,
                 type(exc).__name__,
                 exc,
             )
@@ -219,13 +244,15 @@ def install() -> bool:
             )
             _THREAD.start()
     LOGGER.critical(
-        "EXCHANGE_REJECT_DISPATCH_PROVENANCE_V228_READY marker=%s ready=true "
+        "EXCHANGE_REJECT_DISPATCH_PROVENANCE_V228_READY marker=%s v253_marker=%s ready=true "
         "local_predispatch_rejects_excluded=true route_guard_provenance_v232=true "
-        "lifecycle_provenance_v247=true real_exchange_path_unchanged=true "
-        "rejection_thresholds_unchanged=true rejection_window_not_cleared=true "
-        "kill_switch_unchanged=true execution_authority_unchanged=true "
+        "lifecycle_provenance_v247=true soft_timeout_provenance_v253=true "
+        "real_exchange_path_unchanged=true rejection_thresholds_unchanged=true "
+        "rejection_window_not_cleared=true kill_switch_unchanged=true "
+        "execution_authority_unchanged=true execution_proof_fabricated=false "
         "forced_activation=false safety_gates_bypassed=false",
         MARKER,
+        V253_MARKER,
     )
     return True
 
@@ -236,6 +263,7 @@ def install_import_hook() -> bool:
 
 __all__ = [
     "MARKER",
+    "V253_MARKER",
     "install",
     "install_import_hook",
     "_is_non_exchange_rejection",
