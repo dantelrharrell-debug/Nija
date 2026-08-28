@@ -354,6 +354,59 @@ def _bootstrap_writer_first() -> tuple[ModuleType, ModuleType]:
     return bot_entry, bot_main
 
 
+def _install_exchange_rejection_provenance_before_runtime() -> None:
+    """Install rejection provenance before any runtime order can be recorded.
+
+    The canonical launcher deliberately defers ``sitecustomize``'s broad patch
+    fanout.  The exchange rejection recorder is different: if it is installed
+    after the heartbeat scheduler starts, the boolean rejection window can
+    contain samples with no corresponding provenance.  Such a window is
+    intentionally unrecoverable because NIJA cannot distinguish a local
+    pre-dispatch denial from a genuine exchange rejection.
+
+    At this point the exact writer is already established and the canonical
+    bot modules are loaded, but ``bot.bot.main`` has not started any runtime
+    work.  Installing and reasserting both guards here therefore closes the
+    provenance race without granting execution authority or changing any
+    kill-switch, risk, nonce, capital, order, ACK, or fill gate.
+    """
+    provenance = _canonical_import(
+        "bot.exchange_kill_switch_alias_provenance_v258_patch"
+    )
+    install_provenance = getattr(provenance, "install", None)
+    reassert_provenance = getattr(provenance, "reassert_loaded", None)
+    if not callable(install_provenance) or not bool(install_provenance()):
+        raise RuntimeError("exchange rejection provenance v258 installer failed")
+    if not callable(reassert_provenance) or not bool(reassert_provenance()):
+        raise RuntimeError("exchange rejection provenance v258 reassertion failed")
+    if os.environ.get("NIJA_EXCHANGE_KILLSWITCH_ALIAS_PROVENANCE_V258_READY") != "1":
+        raise RuntimeError("exchange rejection provenance v258 did not attest ready")
+
+    internal_guard = _canonical_import(
+        "bot.exchange_kill_switch_internal_reject_guard_patch"
+    )
+    install_internal_guard = getattr(internal_guard, "install_import_hook", None)
+    if not callable(install_internal_guard):
+        raise RuntimeError("exchange internal-reject guard installer unavailable")
+    install_internal_guard()
+    if os.environ.get("NIJA_EXCHANGE_KILL_SWITCH_IGNORE_INTERNAL_ROUTING_REJECTS") != "true":
+        raise RuntimeError("exchange internal-reject guard did not attest ready")
+
+    # The internal guard adds another wrapper and import hook.  Reassert v258
+    # once more so the final loaded method chain is instrumented before runtime.
+    if not bool(reassert_provenance()):
+        raise RuntimeError("exchange rejection provenance final reassertion failed")
+    LOGGER.critical(
+        "CANONICAL_REJECTION_PROVENANCE_PRE_RUNTIME_READY "
+        "marker=20260828-canonical-rejection-provenance-v268 "
+        "writer_first=true runtime_not_started=true v258_ready=true "
+        "internal_reject_guard=true rejection_window_unchanged=true "
+        "kill_switch_unchanged=true rejection_thresholds_unchanged=true "
+        "execution_authority_unchanged=true execution_proof_fabricated=false "
+        "forced_activation=false safety_gates_bypassed=false"
+    )
+
+
 def _run_main_single_identity(bot_entry: ModuleType, bot_main: ModuleType) -> None:
     """Run ``main.py`` while reusing the canonical ``bot.bot`` module once."""
     original_run_module = runpy.run_module
@@ -405,6 +458,14 @@ def main() -> int:
     _start_render_memory_pressure_guard()
     install_canonical_startup_guard()
     bot_entry, bot_main = _bootstrap_writer_first()
+    try:
+        _install_exchange_rejection_provenance_before_runtime()
+    except Exception:
+        _release_early_writer(
+            bot_main,
+            reason="exchange_rejection_provenance_pre_runtime_failed",
+        )
+        raise
     print(
         "CANONICAL_ENTRYPOINT_FAST_PATH_ARMED marker=20260816-canonical-runtime-launcher-v111 "
         "package_hook_fanout=deferred bootstrap_import_loader=frozen_bootstrap",
