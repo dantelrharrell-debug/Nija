@@ -22,6 +22,7 @@ _TRUE = {"1", "true", "yes", "on", "enabled", "y"}
 
 _INSTALLERS = (
     ("bot.runtime_post_import_convergence_patch", "install"),
+    ("bot.runtime_capital_position_liveness_v267_patch", "install_import_hook"),
     ("runtime_module_identity_convergence_patch", "install_import_hook"),
     ("scan_wrapper_depth_convergence_patch", "install_import_hook"),
     ("scan_wrapper_convergence_repair_patch", "install"),
@@ -66,6 +67,7 @@ _INSTALLERS = (
 
 _REQUIRED_FLAGS = {
     "post_import_convergence": "NIJA_RUNTIME_POST_IMPORT_CONVERGENCE_INSTALLED",
+    "runtime_capital_position_liveness_v267": "NIJA_RUNTIME_CAPITAL_POSITION_LIVENESS_V267_READY",
     "module_identity_guard": "NIJA_RUNTIME_MODULE_IDENTITY_GUARD_INSTALLED",
     "module_identity_ready": "NIJA_RUNTIME_MODULE_IDENTITY_READY",
     "convergence_quiescence_installed": "NIJA_RUNTIME_CONVERGENCE_QUIESCENCE_INSTALLED",
