@@ -8,6 +8,7 @@ import uuid
 _ASSET_CLASSES = {"crypto", "equity", "futures", "options"}
 _SIDES = {"buy", "sell"}
 _INTENT_TYPES = {"entry", "exit", "reduce", "rebalance"}
+_POSITION_EFFECTS = {"open", "close", "reduce"}
 _ORDER_TYPES = {"market", "limit", "twap", "stop", "stop_limit"}
 _TIFS = {"day", "gtc", "ioc", "fok"}
 _SIZING_MODES = {"notional_usd", "units"}
@@ -52,6 +53,7 @@ class PipelineRequest:
     # Execution intent
     side: str = "buy"
     intent_type: Optional[str] = None
+    position_effect: Optional[str] = None
     order_type: Optional[str] = "market"
     time_in_force: Optional[str] = None
     reduce_only: Optional[bool] = None
@@ -95,6 +97,7 @@ class PipelineRequest:
         object.__setattr__(self, "side", _norm_side(self.side))
         object.__setattr__(self, "asset_class", _norm_enum(self.asset_class))
         object.__setattr__(self, "intent_type", _norm_enum(self.intent_type))
+        object.__setattr__(self, "position_effect", _norm_enum(self.position_effect))
         object.__setattr__(self, "order_type", _norm_enum(self.order_type) or "market")
         object.__setattr__(self, "time_in_force", _norm_enum(self.time_in_force))
         object.__setattr__(self, "sizing_mode", _norm_enum(self.sizing_mode))
@@ -139,6 +142,12 @@ def validate_pipeline_request(req: PipelineRequest) -> Tuple[bool, str]:
         return False, "invalid_asset_class"
     if req.intent_type is not None and req.intent_type not in _INTENT_TYPES:
         return False, "invalid_intent_type"
+    if req.position_effect is not None and req.position_effect not in _POSITION_EFFECTS:
+        return False, "invalid_position_effect"
+    if req.intent_type == "entry" and req.position_effect in {"close", "reduce"}:
+        return False, "entry_intent_cannot_close_or_reduce"
+    if req.intent_type in {"exit", "reduce"} and req.position_effect == "open":
+        return False, "exit_or_reduce_intent_cannot_open"
     if req.time_in_force is not None and req.time_in_force not in _TIFS:
         return False, "invalid_time_in_force"
     if req.margin_mode is not None and req.margin_mode not in _MARGIN_MODES:

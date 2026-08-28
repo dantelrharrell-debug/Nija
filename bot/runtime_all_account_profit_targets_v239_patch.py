@@ -140,26 +140,54 @@ def _reassert_profit_exit_stack() -> bool:
         return False
 
 
+def _reassert_protective_exit_authority_v265() -> bool:
+    try:
+        v265 = importlib.import_module("bot.runtime_protective_exit_authority_v265_patch")
+        install = getattr(v265, "install", None)
+        return bool(callable(install) and install())
+    except Exception as exc:
+        LOGGER.error(
+            "ALL_ACCOUNT_PROFIT_TARGETS_V239_V265_ERROR marker=%s error=%s:%s new_entries_fail_closed=true",
+            MARKER, type(exc).__name__, exc,
+        )
+        return False
+
+
 def install() -> bool:
     try:
         patched = _patch_supervisor()
         v25_ready = _reassert_profit_exit_stack()
-        ready = bool(patched and v25_ready)
+        base_ready = bool(patched and v25_ready)
     except Exception as exc:
         LOGGER.error(
             "ALL_ACCOUNT_PROFIT_TARGETS_V239_INSTALL_ERROR marker=%s error=%s:%s trading_fail_closed=true",
             MARKER, type(exc).__name__, exc,
         )
-        ready = False
-    os.environ["NIJA_ALL_ACCOUNT_PROFIT_TARGETS_V239_READY"] = "1" if ready else "0"
+        base_ready = False
+
+    # Publish the v239 target truth before invoking v265 so its stack audit can
+    # require this exact all-account target policy without a circular false-negative.
+    os.environ["NIJA_ALL_ACCOUNT_PROFIT_TARGETS_V239_READY"] = "1" if base_ready else "0"
+    protective_ready = _reassert_protective_exit_authority_v265() if base_ready else False
+    ready = bool(base_ready and protective_ready)
+    if not ready:
+        os.environ["NIJA_ALL_ACCOUNT_PROFIT_TARGETS_V239_READY"] = "0"
+
     if ready:
         tp1, tp2, tp3 = _targets()
         LOGGER.critical(
             "ALL_ACCOUNT_PROFIT_TARGETS_V239_READY marker=%s ready=true scope=platform_and_all_registered_users "
             "tp1_pct=%.4f tp2_pct=%.4f tp3_pct=%.4f existing_targets_preserved=true "
             "fee_slippage_min_net_floor_preserved=true fill_confirmation_preserved=true stop_loss_unchanged=true "
-            "trailing_profit_unchanged=true execution_authority_unchanged=true safety_gates_bypassed=false",
+            "trailing_profit_unchanged=true protective_exit_authority_v265=true "
+            "execution_authority_unchanged=true safety_gates_bypassed=false",
             MARKER, tp1, tp2, tp3,
+        )
+    else:
+        LOGGER.error(
+            "ALL_ACCOUNT_PROFIT_TARGETS_V239_NOT_READY marker=%s base_ready=%s protective_exit_authority_v265=%s "
+            "new_entries_fail_closed=true existing_exits_remain_allowed=true",
+            MARKER, str(base_ready).lower(), str(protective_ready).lower(),
         )
     return ready
 
@@ -168,4 +196,7 @@ def install_import_hook() -> bool:
     return install()
 
 
-__all__ = ["MARKER", "install", "install_import_hook", "_with_profit_targets", "_targets"]
+__all__ = [
+    "MARKER", "install", "install_import_hook", "_with_profit_targets", "_targets",
+    "_reassert_protective_exit_authority_v265",
+]
