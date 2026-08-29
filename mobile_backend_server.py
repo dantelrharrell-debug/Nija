@@ -22,6 +22,7 @@ from iap_handler import register_iap_api
 from education_system import register_education_api
 from mobile_api import mobile_api, MOBILE_API_BASE
 from account_deletion_api import account_deletion_api
+from pricing_api import pricing_api
 
 logging.basicConfig(
     level=logging.INFO,
@@ -111,6 +112,9 @@ logger.info("Registered mobile_api blueprint")
 app.register_blueprint(account_deletion_api)
 logger.info("Registered account_deletion_api blueprint")
 
+app.register_blueprint(pricing_api)
+logger.info("Registered canonical pricing_api blueprint")
+
 register_unified_mobile_api(app, socketio)
 register_iap_api(app)
 register_education_api(app)
@@ -130,11 +134,13 @@ def index():
             "mobile": MOBILE_API_BASE,
             "iap": "/api/iap",
             "education": "/api/education",
+            "commercial_pricing": "/api/commercial/pricing",
         },
         "features": [
             "Authenticated trading control and monitoring",
             "Real-time position updates via WebSocket",
             "Subscription management",
+            "Canonical commercial pricing policy",
             "In-app purchase validation (iOS/Android)",
             "Education content delivery",
             "Performance analytics",
@@ -164,6 +170,10 @@ def api_documentation():
             },
         },
         "endpoints": {
+            "Commercial Pricing": {
+                "get_public_pricing": "GET /api/commercial/pricing",
+                "get_locked_user_offer": "GET /api/commercial/offer/<user_id>",
+            },
             "Trading Control": {
                 "start_trading": "POST /api/v1/trading/start",
                 "stop_trading": "POST /api/v1/trading/stop",
