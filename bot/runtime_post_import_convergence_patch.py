@@ -10,7 +10,7 @@ from types import ModuleType
 from typing import Any
 
 logger = logging.getLogger("nija.runtime_post_import_convergence")
-_MARKER = "20260829-post-import-convergence-v283"
+_MARKER = "20260829-post-import-convergence-v284"
 _LOCK = threading.RLock()
 _STARTED = False
 _LAST_PREREQUISITES: dict[str, bool] = {}
@@ -123,6 +123,7 @@ def _install_v244_heartbeat_broker_manager_terminal(): return _install_named("bo
 def _install_v263_heartbeat_state_machine_gate(): return _install_named("bot.runtime_heartbeat_state_machine_gate_v263_patch", "v263_install_missing", "HEARTBEAT_STATE_MACHINE_GATE_V263_INSTALL_ERROR")
 def _install_v267_capital_position_liveness(): return _install_named("bot.runtime_capital_position_liveness_v267_patch", "v267_install_missing", "RUNTIME_CAPITAL_POSITION_LIVENESS_V267_INSTALL_ERROR")
 def _install_v268_platform_kraken_registry_liveness(): return _install_named("bot.runtime_platform_kraken_registry_liveness_v268_patch", "v268_install_missing", "RUNTIME_PLATFORM_KRAKEN_REGISTRY_LIVENESS_V268_INSTALL_ERROR")
+def _install_v284_platform_object_liveness(): return _install_named("bot.runtime_platform_object_liveness_v284_patch", "v284_install_missing", "RUNTIME_PLATFORM_OBJECT_LIVENESS_V284_INSTALL_ERROR")
 def _install_v280_platform_activation_liveness(): return _install_named("bot.runtime_platform_activation_liveness_v280_patch", "v280_install_missing", "RUNTIME_PLATFORM_ACTIVATION_LIVENESS_V280_INSTALL_ERROR")
 def _install_v283_all_account_coverage_liveness(): return _install_named("bot.runtime_all_account_coverage_liveness_v283_patch", "v283_install_missing", "ALL_ACCOUNT_COVERAGE_LIVENESS_V283_INSTALL_ERROR")
 
@@ -146,12 +147,15 @@ def _iteration() -> bool:
     v244 = _install_v244_heartbeat_broker_manager_terminal()
     v263 = _install_v263_heartbeat_state_machine_gate()
 
-    # Registry/liveness repairs must run before the definitive all-account
-    # coverage audit. v239 may legitimately observe an empty early-startup
-    # registry; v283 refreshes that observational truth after v267/v268/v280
-    # have converged canonical manager state in the same watchdog iteration.
+    # Registry/liveness repair ordering is deliberate:
+    # v267 repairs capital/user-registry liveness; v268 repairs canonical Kraken
+    # ownership; v284 creates only missing configured Coinbase/OKX PLATFORM
+    # objects after registration has finalized; v280 then owns real bounded
+    # connect/adoption and authoritative position/capital wakeups; v283 performs
+    # the definitive all-account observational audit after those repairs.
     v267 = _install_v267_capital_position_liveness()
     v268 = _install_v268_platform_kraken_registry_liveness()
+    v284 = _install_v284_platform_object_liveness()
     v280 = _install_v280_platform_activation_liveness()
     v283 = _install_v283_all_account_coverage_liveness()
 
@@ -185,6 +189,7 @@ def _iteration() -> bool:
         "v263_heartbeat_state_machine_gate": v263,
         "v267_capital_position_liveness": v267,
         "v268_platform_kraken_registry_liveness": v268,
+        "v284_platform_object_liveness": v284,
         "v280_platform_activation_liveness": v280,
         "v283_all_account_coverage_liveness": v283,
     }
@@ -239,6 +244,7 @@ __all__ = [
     "_install_v240_heartbeat_terminal_lifecycle", "_install_v241_kraken_local_contention_alias",
     "_install_v242_kraken_local_contention_instance", "_install_v244_heartbeat_broker_manager_terminal",
     "_install_v263_heartbeat_state_machine_gate", "_install_v267_capital_position_liveness",
-    "_install_v268_platform_kraken_registry_liveness", "_install_v280_platform_activation_liveness",
-    "_install_v283_all_account_coverage_liveness", "_iteration", "_LAST_PREREQUISITES",
+    "_install_v268_platform_kraken_registry_liveness", "_install_v284_platform_object_liveness",
+    "_install_v280_platform_activation_liveness", "_install_v283_all_account_coverage_liveness",
+    "_iteration", "_LAST_PREREQUISITES",
 ]
