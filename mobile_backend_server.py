@@ -24,6 +24,7 @@ from mobile_api import mobile_api, MOBILE_API_BASE
 from account_deletion_api import account_deletion_api
 from pricing_api import pricing_api
 from stripe_billing_api import stripe_billing_api
+from justcall_api import justcall_api
 from commercial_pricing_runtime_patch import install_commercial_pricing_runtime_patch
 
 logging.basicConfig(
@@ -128,6 +129,9 @@ logger.info("Registered canonical pricing_api blueprint")
 app.register_blueprint(stripe_billing_api)
 logger.info("Registered Stripe web billing blueprint")
 
+app.register_blueprint(justcall_api)
+logger.info("Registered protected JustCall outreach API blueprint")
+
 register_unified_mobile_api(app, socketio)
 register_iap_api(app)
 register_education_api(app)
@@ -155,6 +159,7 @@ def index():
             "education": "/api/education",
             "commercial_pricing": "/api/commercial/pricing",
             "web_billing": "/api/billing",
+            "justcall_outreach": "/api/justcall",
         },
         "features": [
             "Authenticated trading control and monitoring",
@@ -168,6 +173,7 @@ def index():
             "Multi-broker support",
             "Authenticated account deletion",
             "Persistent encrypted mobile device registration",
+            "Protected JustCall outreach integration",
         ],
         "websocket": {
             "endpoint": "/socket.io",
@@ -231,6 +237,11 @@ def api_documentation():
             "Account": {
                 "get_deletion_requirements": "GET /api/account/deletion",
                 "delete_account": "DELETE /api/account/deletion",
+            },
+            "JustCall Outreach": {
+                "connection_status": "GET /api/justcall/status",
+                "list_voice_agents": "GET /api/justcall/voice-agents",
+                "initiate_consented_call": "POST /api/justcall/calls",
             },
         },
         "rate_limits": {
