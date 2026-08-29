@@ -2,27 +2,21 @@
 
 Production proved the heartbeat passed the pipeline authority gate and router, then
 failed a second authority validation inside bot.broker_manager after the bounded v233
-grant expired.  The canonical startup-probe ContextVar is the preferred authority
+grant expired. The canonical startup-probe ContextVar is the preferred authority
 carrier, but the same-thread v233 grant is the bounded fallback when the ContextVar
 scope has already unwound before the broker-manager terminal.
 
-v244 wraps the actual live broker-manager submit methods.  It enters only when v236
+v244 wraps the actual live broker-manager submit methods. It enters only when v236
 can resolve an already-verified HEARTBEAT_TRADE/HEARTBEAT_TRADE_CLOSE from either the
 canonical ContextVar or the still-live same-thread v233 grant, and current startup
-writer authority is reverified immediately at the terminal method.  The canonical
+writer authority is reverified immediately at the terminal method. The canonical
 authority bindings are anchored for that method call so its inner
 _reject_if_unauthorized_order_submit check observes the verified probe.
 
-v246 is installed from this already-authoritative heartbeat convergence slot.  It
-copies existing ContextVars into ExecutionPipeline's timeout worker so the verified
-startup probe is not lost merely because routing crosses a ThreadPoolExecutor
-boundary.  v246 creates no authority and does not patch the stdlib executor globally.
-
-v255 is installed from this terminal convergence owner after v244/v246 are ready. It
-adds bounded failover between already-ready heartbeat venues for proven process-local
-read contention, reasserts real position-fetch proof propagation, and prevents a
-non-owner capital refresh thread from mutating BootstrapFSM. It never creates proof or
-weakens any execution gate.
+v246 copies existing ContextVars into ExecutionPipeline's timeout worker. v255 adds
+bounded failover for proven process-local read contention and preserves authoritative
+position/capital ownership. v273 adds heartbeat-only venue failover after an unchanged
+ECEL POSITION_CAP_EXCEEDED result, without bypassing the account position cap.
 
 Ordinary orders, lifecycle state, nonce, risk, capital, broker health, kill switch,
 minimum notional, exchange acknowledgement, fill proof, and readiness remain unchanged.
@@ -58,8 +52,7 @@ def _verified_reason() -> str | None:
             resolved = resolver()
         except Exception as exc:
             LOGGER.warning(
-                "HEARTBEAT_BROKER_MANAGER_TERMINAL_V244_RESOLVE_ERROR marker=%s "
-                "error=%s:%s trading_fail_closed=true",
+                "HEARTBEAT_BROKER_MANAGER_TERMINAL_V244_RESOLVE_ERROR marker=%s error=%s:%s trading_fail_closed=true",
                 MARKER, type(exc).__name__, exc,
             )
             resolved = None
@@ -98,15 +91,14 @@ def _wrap_method(current: Callable[..., Any], module: ModuleType, surface: str) 
         bindings = getattr(v236, "_canonical_terminal_bindings", None)
         if not callable(scope) or not callable(bindings) or not _writer_ready():
             LOGGER.warning(
-                "HEARTBEAT_BROKER_MANAGER_TERMINAL_V244_DEFERRED marker=%s surface=%s "
-                "probe_reason=%s startup_writer_reverified=false trading_fail_closed=true",
+                "HEARTBEAT_BROKER_MANAGER_TERMINAL_V244_DEFERRED marker=%s surface=%s probe_reason=%s startup_writer_reverified=false trading_fail_closed=true",
                 MARKER, surface, reason,
             )
             return current(self, *args, **kwargs)
         LOGGER.critical(
-            "HEARTBEAT_BROKER_MANAGER_TERMINAL_V244_REANCHORED marker=%s surface=%s "
-            "probe_reason=%s verified_upstream_authority=true startup_writer_reverified=true "
-            "canonical_terminal_bindings=true grant_ttl_not_extended=true ordinary_orders_unchanged=true "
+            "HEARTBEAT_BROKER_MANAGER_TERMINAL_V244_REANCHORED marker=%s surface=%s probe_reason=%s "
+            "verified_upstream_authority=true startup_writer_reverified=true canonical_terminal_bindings=true "
+            "grant_ttl_not_extended=true ordinary_orders_unchanged=true "
             "lifecycle_nonce_risk_capital_broker_health_killswitch_min_notional_fill_gates_unchanged=true "
             "execution_proof_fabricated=false forced_activation=false safety_gates_bypassed=false",
             MARKER, surface, reason,
@@ -135,10 +127,7 @@ def _patch_broker_manager_methods() -> tuple[bool, tuple[str, ...]]:
             setattr(cls, method_name, wrapped)
             if bool(getattr(getattr(cls, method_name, None), _PATCH_ATTR, False)):
                 patched.append(surface)
-    required = all(
-        surface in patched
-        for surface in ("CoinbaseBroker.place_market_order", "KrakenBroker.place_market_order")
-    )
+    required = all(surface in patched for surface in ("CoinbaseBroker.place_market_order", "KrakenBroker.place_market_order"))
     return required, tuple(sorted(set(patched)))
 
 
@@ -149,30 +138,41 @@ def _install_v246_context_handoff() -> bool:
         return bool(callable(installer) and installer())
     except Exception as exc:
         LOGGER.error(
-            "HEARTBEAT_BROKER_MANAGER_TERMINAL_V244_V246_INSTALL_ERROR marker=%s "
-            "error=%s:%s trading_fail_closed=true",
+            "HEARTBEAT_BROKER_MANAGER_TERMINAL_V244_V246_INSTALL_ERROR marker=%s error=%s:%s trading_fail_closed=true",
             MARKER, type(exc).__name__, exc,
         )
         return False
 
 
 def _install_v255_terminal_activation_liveness() -> bool:
-    """Install the terminal liveness repair after the verified submit chain is ready."""
+    """Install v255 after the verified submit chain is ready."""
     try:
         module = importlib.import_module("bot.runtime_terminal_activation_liveness_v255_patch")
         installer = getattr(module, "install", None) or getattr(module, "install_import_hook", None)
         ready = bool(callable(installer) and installer())
         if not ready:
-            LOGGER.error(
-                "HEARTBEAT_BROKER_MANAGER_TERMINAL_V244_V255_INSTALL_FAILED marker=%s "
-                "trading_fail_closed=true",
-                MARKER,
-            )
+            LOGGER.error("HEARTBEAT_BROKER_MANAGER_TERMINAL_V244_V255_INSTALL_FAILED marker=%s trading_fail_closed=true", MARKER)
         return ready
     except Exception as exc:
         LOGGER.error(
-            "HEARTBEAT_BROKER_MANAGER_TERMINAL_V244_V255_INSTALL_ERROR marker=%s "
-            "error=%s:%s trading_fail_closed=true",
+            "HEARTBEAT_BROKER_MANAGER_TERMINAL_V244_V255_INSTALL_ERROR marker=%s error=%s:%s trading_fail_closed=true",
+            MARKER, type(exc).__name__, exc,
+        )
+        return False
+
+
+def _install_v273_heartbeat_position_cap_failover() -> bool:
+    """Install heartbeat-only venue failover without bypassing ECEL position caps."""
+    try:
+        module = importlib.import_module("bot.runtime_heartbeat_position_cap_failover_v273_patch")
+        installer = getattr(module, "install", None) or getattr(module, "install_import_hook", None)
+        ready = bool(callable(installer) and installer())
+        if not ready:
+            LOGGER.error("HEARTBEAT_BROKER_MANAGER_TERMINAL_V244_V273_INSTALL_FAILED marker=%s trading_fail_closed=true", MARKER)
+        return ready
+    except Exception as exc:
+        LOGGER.error(
+            "HEARTBEAT_BROKER_MANAGER_TERMINAL_V244_V273_INSTALL_ERROR marker=%s error=%s:%s trading_fail_closed=true",
             MARKER, type(exc).__name__, exc,
         )
         return False
@@ -186,23 +186,22 @@ def install() -> bool:
         methods_ready, surfaces = _patch_broker_manager_methods()
         context_handoff_ready = _install_v246_context_handoff()
         v255_ready = _install_v255_terminal_activation_liveness()
-        ready = bool(upstream and methods_ready and context_handoff_ready and v255_ready)
+        v273_ready = _install_v273_heartbeat_position_cap_failover()
+        ready = bool(upstream and methods_ready and context_handoff_ready and v255_ready and v273_ready)
     except Exception as exc:
         LOGGER.error(
             "HEARTBEAT_BROKER_MANAGER_TERMINAL_V244_INSTALL_ERROR marker=%s error=%s:%s trading_fail_closed=true",
             MARKER, type(exc).__name__, exc,
         )
-        ready, surfaces, context_handoff_ready, v255_ready = False, (), False, False
+        ready, surfaces, context_handoff_ready, v255_ready, v273_ready = False, (), False, False, False
     os.environ[_FLAG] = "1" if ready else "0"
     if ready:
         LOGGER.critical(
             "HEARTBEAT_BROKER_MANAGER_TERMINAL_V244_READY marker=%s ready=true surfaces=%s "
-            "coinbase_live_terminal_required=true kraken_live_terminal_required=true "
-            "verified_v233_grant_fallback=true canonical_context_preferred=true "
-            "pipeline_context_handoff_v246=true terminal_activation_liveness_v255=true "
-            "startup_writer_reverification_required=true grant_ttl_not_extended=true "
-            "ordinary_orders_unchanged=true execution_proof_fabricated=false "
-            "forced_activation=false safety_gates_bypassed=false",
+            "coinbase_live_terminal_required=true kraken_live_terminal_required=true verified_v233_grant_fallback=true "
+            "canonical_context_preferred=true pipeline_context_handoff_v246=true terminal_activation_liveness_v255=true "
+            "heartbeat_position_cap_failover_v273=true startup_writer_reverification_required=true grant_ttl_not_extended=true "
+            "ordinary_orders_unchanged=true execution_proof_fabricated=false forced_activation=false safety_gates_bypassed=false",
             MARKER, ",".join(surfaces),
         )
     return ready
@@ -220,6 +219,7 @@ __all__ = [
     "_patch_broker_manager_methods",
     "_install_v246_context_handoff",
     "_install_v255_terminal_activation_liveness",
+    "_install_v273_heartbeat_position_cap_failover",
     "_verified_reason",
     "_writer_ready",
 ]
