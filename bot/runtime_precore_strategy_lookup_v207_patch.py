@@ -13,12 +13,22 @@ after the TradingStrategy class has already loaded and immediately before the
 canonical builder invokes its constructor. That avoids a new early import fanout
 while guaranteeing the constructor cannot enter unbounded market discovery.
 
+The production bot.py path also imports the same source as top-level
+``trading_strategy`` and constructs that class directly.  v271 closes that alias
+race with a narrow import loader: after the top-level module executes, but before
+``from trading_strategy import TradingStrategy`` returns to bot.py, v269 is
+applied to every loaded strategy alias.  The loader performs no strategy
+construction and grants no runtime authority.
+
 Neither repair constructs or publishes a strategy during install, starts a
 second publisher, grants execution authority, nor changes writer/nonce/risk/
 kill-switch/capital/position/order/fill or activation gates.
 """
 from __future__ import annotations
 
+import importlib
+import importlib.abc
+import importlib.machinery
 import logging
 import os
 import sys
@@ -32,7 +42,9 @@ MARKER = "20260824-precore-strategy-lookup-v207"
 _READY_FLAG = "NIJA_PRECORE_STRATEGY_LOOKUP_V207_READY"
 _PATCH_ATTR = "_nija_precore_strategy_lookup_v207"
 _BUILD_PATCH_ATTR = "_nija_precore_strategy_builder_v269"
+_ALIAS_LOADER_ATTR = "_nija_precore_strategy_alias_loader_v271"
 _LOCK = threading.RLock()
+_ALIAS_FINDER: Any = None
 
 
 def _valid_strategy(candidate: Any) -> bool:
@@ -143,6 +155,105 @@ def _patch_v203() -> bool:
     return bool(callable(installed) and getattr(installed, _PATCH_ATTR, False))
 
 
+def _patch_loaded_strategy_aliases() -> bool:
+    """Apply v269 to any TradingStrategy modules already resident in memory."""
+    try:
+        from bot.runtime_precore_symbol_discovery_liveness_v269_patch import (
+            _patch_trading_strategy as patch_v269,
+        )
+    except Exception as exc:
+        LOGGER.warning(
+            "PRECORE_STRATEGY_ALIAS_V271_V269_IMPORT_FAILED marker=%s error=%s:%s",
+            MARKER,
+            type(exc).__name__,
+            exc,
+        )
+        return False
+    try:
+        return bool(patch_v269())
+    except Exception as exc:
+        LOGGER.warning(
+            "PRECORE_STRATEGY_ALIAS_V271_PATCH_FAILED marker=%s error=%s:%s",
+            MARKER,
+            type(exc).__name__,
+            exc,
+        )
+        return False
+
+
+class _TradingStrategyAliasLoader(importlib.abc.Loader):
+    """Delegate module execution, then patch the loaded top-level strategy alias."""
+
+    def __init__(self, wrapped: Any) -> None:
+        self._wrapped = wrapped
+        setattr(self, _ALIAS_LOADER_ATTR, True)
+
+    def create_module(self, spec: Any) -> Any:
+        creator = getattr(self._wrapped, "create_module", None)
+        if callable(creator):
+            return creator(spec)
+        return None
+
+    def exec_module(self, module: Any) -> None:
+        executor = getattr(self._wrapped, "exec_module", None)
+        if not callable(executor):
+            raise ImportError("trading_strategy loader has no exec_module")
+        executor(module)
+        if not _patch_loaded_strategy_aliases():
+            raise ImportError("precore_strategy_alias_v271_patch_failed")
+        LOGGER.critical(
+            "PRECORE_STRATEGY_ALIAS_V271_PATCHED marker=%s module=%s "
+            "constructor_not_started=true market_discovery_bounded=true "
+            "execution_authority_unchanged=true safety_gates_bypassed=false",
+            MARKER,
+            getattr(module, "__name__", "trading_strategy"),
+        )
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._wrapped, name)
+
+
+class _TradingStrategyAliasFinder(importlib.abc.MetaPathFinder):
+    """Wrap only the top-level trading_strategy loader without broad imports."""
+
+    def find_spec(self, fullname: str, path: Any = None, target: Any = None) -> Any:
+        if fullname != "trading_strategy":
+            return None
+        spec = importlib.machinery.PathFinder.find_spec(fullname, path)
+        if spec is None or spec.loader is None:
+            return spec
+        if bool(getattr(spec.loader, _ALIAS_LOADER_ATTR, False)):
+            return spec
+        spec.loader = _TradingStrategyAliasLoader(spec.loader)
+        return spec
+
+
+def _install_strategy_alias_guard() -> bool:
+    """Guarantee v269 is applied before bot.py receives top-level TradingStrategy."""
+    global _ALIAS_FINDER
+
+    # If the direct-entry alias is already loaded, patch synchronously now.
+    if isinstance(sys.modules.get("trading_strategy"), ModuleType):
+        return _patch_loaded_strategy_aliases()
+
+    # Reuse an existing finder across re-installs/import aliases.
+    for finder in list(sys.meta_path):
+        if isinstance(finder, _TradingStrategyAliasFinder):
+            _ALIAS_FINDER = finder
+            return True
+
+    finder = _TradingStrategyAliasFinder()
+    sys.meta_path.insert(0, finder)
+    _ALIAS_FINDER = finder
+    LOGGER.critical(
+        "PRECORE_STRATEGY_ALIAS_V271_ARMED marker=%s target=trading_strategy "
+        "post_exec_pre_constructor=true early_strategy_import=false "
+        "execution_authority_unchanged=true safety_gates_bypassed=false",
+        MARKER,
+    )
+    return True
+
+
 def _patch_strategy_builder() -> bool:
     """Install v269 immediately before the canonical strategy constructor runs."""
     try:
@@ -167,8 +278,8 @@ def _patch_strategy_builder() -> bool:
     @wraps(previous)
     def _build_strategy_with_v269(cls: type, brokers: dict[Any, dict[str, Any]]) -> Any:
         # publish_canonical_strategy resolves cls before reaching this builder,
-        # so bot.trading_strategy is already loaded. v269 therefore patches the
-        # existing class and does not create a new pre-core import fanout.
+        # so a strategy module is already loaded. v269 patches every resident
+        # alias and does not create a second production strategy class.
         try:
             from bot.runtime_precore_symbol_discovery_liveness_v269_patch import (
                 install as install_v269,
@@ -196,15 +307,17 @@ def install() -> bool:
     with _LOCK:
         lookup_ready = _patch_v203()
         builder_ready = _patch_strategy_builder()
-        ready = bool(lookup_ready and builder_ready)
+        alias_guard_ready = _install_strategy_alias_guard()
+        ready = bool(lookup_ready and builder_ready and alias_guard_ready)
         os.environ[_READY_FLAG] = "1" if ready else "0"
         if not ready:
             LOGGER.critical(
                 "PRECORE_STRATEGY_LOOKUP_V207_FAILED marker=%s lookup_ready=%s "
-                "builder_v269_ready=%s trading_fail_closed=true",
+                "builder_v269_ready=%s alias_guard_v271_ready=%s trading_fail_closed=true",
                 MARKER,
                 str(lookup_ready).lower(),
                 str(builder_ready).lower(),
+                str(alias_guard_ready).lower(),
             )
             return False
         LOGGER.critical(
@@ -212,6 +325,7 @@ def install() -> bool:
             "install_time_lookup_nonblocking=true broad_existing_scan=false "
             "already_loaded_pointers_only=true v127_cached_pointer_allowed=true "
             "step2_5_single_owner_preserved=true strategy_constructor_v269_guarded=true "
+            "top_level_strategy_alias_v271_guarded=true post_exec_pre_constructor_patch=true "
             "early_trading_strategy_import=false strategy_constructed=false "
             "strategy_published=false execution_authority_granted=false "
             "proof_fabricated=false forced_activation=false "
@@ -234,4 +348,6 @@ __all__ = [
     "_loaded_strategy_pointer",
     "_nonblocking_existing_strategy",
     "_patch_strategy_builder",
+    "_patch_loaded_strategy_aliases",
+    "_install_strategy_alias_guard",
 ]
