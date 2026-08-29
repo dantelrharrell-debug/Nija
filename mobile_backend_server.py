@@ -23,6 +23,7 @@ from education_system import register_education_api
 from mobile_api import mobile_api, MOBILE_API_BASE
 from account_deletion_api import account_deletion_api
 from pricing_api import pricing_api
+from stripe_billing_api import stripe_billing_api
 from commercial_pricing_runtime_patch import install_commercial_pricing_runtime_patch
 
 logging.basicConfig(
@@ -56,7 +57,7 @@ CORS(
         r"/api/*": {
             "origins": _allowed_origins,
             "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-            "allow_headers": ["Content-Type", "Authorization"],
+            "allow_headers": ["Content-Type", "Authorization", "Stripe-Signature"],
             "expose_headers": ["Content-Type", "Authorization"],
             "supports_credentials": True,
             "max_age": 3600,
@@ -70,12 +71,14 @@ _PUBLIC_MOBILE_PATHS = {
     "/api/mobile/config",
     "/api/v1/subscription/tiers",
     "/api/commercial/pricing",
+    "/api/billing/webhook",
 }
 _PROTECTED_PREFIXES = (
     "/api/mobile/",
     "/api/v1/",
     "/api/account/",
     "/api/commercial/offer/",
+    "/api/billing/",
 )
 
 
@@ -122,6 +125,9 @@ logger.info("Registered account_deletion_api blueprint")
 app.register_blueprint(pricing_api)
 logger.info("Registered canonical pricing_api blueprint")
 
+app.register_blueprint(stripe_billing_api)
+logger.info("Registered Stripe web billing blueprint")
+
 register_unified_mobile_api(app, socketio)
 register_iap_api(app)
 register_education_api(app)
@@ -137,7 +143,7 @@ logger.info("Installed canonical commercial pricing integration")
 def index():
     return jsonify({
         "name": "NIJA Mobile API",
-        "version": "1.1.0",
+        "version": "1.2.0",
         "description": "Mobile-ready REST and WebSocket API for NIJA trading platform",
         "documentation": "/api/docs",
         "health": "/health",
@@ -148,12 +154,14 @@ def index():
             "iap": "/api/iap",
             "education": "/api/education",
             "commercial_pricing": "/api/commercial/pricing",
+            "web_billing": "/api/billing",
         },
         "features": [
             "Authenticated trading control and monitoring",
             "Real-time position updates via WebSocket",
             "Subscription management",
             "Canonical commercial pricing policy",
+            "Signed Stripe web checkout and webhook processing",
             "In-app purchase validation (iOS/Android)",
             "Education content delivery",
             "Performance analytics",
@@ -172,7 +180,7 @@ def index():
 def api_documentation():
     return jsonify({
         "title": "NIJA Mobile API Documentation",
-        "version": "1.1.0",
+        "version": "1.2.0",
         "base_url": request.host_url,
         "authentication": {
             "type": "Bearer JWT",
@@ -186,6 +194,11 @@ def api_documentation():
             "Commercial Pricing": {
                 "get_public_pricing": "GET /api/commercial/pricing",
                 "get_locked_user_offer": "GET /api/commercial/offer/<user_id>",
+            },
+            "Web Billing": {
+                "create_checkout": "POST /api/billing/checkout",
+                "get_status": "GET /api/billing/status",
+                "stripe_webhook": "POST /api/billing/webhook",
             },
             "Trading Control": {
                 "start_trading": "POST /api/v1/trading/start",
