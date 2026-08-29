@@ -109,6 +109,61 @@ def _broker_status(name: str, contract: dict[str, tuple[str, ...]]) -> dict[str,
     }
 
 
+def _check_justcall_outreach() -> None:
+    """Emit a redacted JustCall authentication check without affecting startup."""
+    print("\n=== JUSTCALL OUTREACH ===")
+    api_key = os.getenv("JUSTCALL_API_KEY", "").strip()
+    api_secret = os.getenv("JUSTCALL_API_SECRET", "").strip()
+    outbound_number = os.getenv("JUSTCALL_OUTBOUND_NUMBER", "").strip()
+    ai_agent_id = os.getenv("JUSTCALL_AI_AGENT_ID", "").strip()
+    service_token = os.getenv("NIJA_OUTREACH_SERVICE_TOKEN", "").strip()
+
+    configured = bool(api_key and api_secret)
+    print(f"JUSTCALL_CREDENTIALS_CONFIGURED: {str(configured).lower()}")
+    print(f"JUSTCALL_OUTBOUND_NUMBER_CONFIGURED: {str(bool(outbound_number)).lower()}")
+    print(f"JUSTCALL_AI_AGENT_CONFIGURED: {str(bool(ai_agent_id)).lower()}")
+    print(f"NIJA_OUTREACH_SERVICE_TOKEN_CONFIGURED: {str(bool(service_token)).lower()}")
+
+    if not configured:
+        print(
+            "JUSTCALL_OUTREACH_STATUS configured=false authenticated=false "
+            "state=credentials_missing"
+        )
+        return
+
+    request = urllib.request.Request(
+        "https://api.justcall.io/v2.1/voice-agents/list?page=0&per_page=1&order=desc",
+        headers={
+            "Authorization": f"{api_key}:{api_secret}",
+            "Accept": "application/json",
+            "User-Agent": "NIJA-Outreach-StartupCheck/1.0",
+        },
+        method="GET",
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            body = response.read()
+            authenticated = 200 <= response.status < 300
+            print(
+                "JUSTCALL_OUTREACH_STATUS "
+                f"configured=true authenticated={str(authenticated).lower()} "
+                f"http_status={response.status} state="
+                f"{'connected' if authenticated else 'authentication_or_api_failed'} "
+                f"voice_agents_response_received={str(bool(body)).lower()}"
+            )
+    except urllib.error.HTTPError as exc:
+        print(
+            "JUSTCALL_OUTREACH_STATUS configured=true authenticated=false "
+            f"http_status={exc.code} state=authentication_or_api_failed"
+        )
+    except Exception as exc:
+        print(
+            "JUSTCALL_OUTREACH_STATUS configured=true authenticated=false "
+            f"state=provider_unreachable error_type={type(exc).__name__}"
+        )
+
+
 bad_shared_true = [name for name in SHARED_TRUE_FLAGS if not _is_true(name)]
 bad_shared_false = [name for name in SHARED_FALSE_FLAGS if not _is_false(name)]
 broker_statuses = {name: _broker_status(name, contract) for name, contract in BROKERS.items()}
@@ -144,6 +199,8 @@ if not ready_brokers:
     print("NO BROKER HAS A COMPLETE INDEPENDENT CONFIGURATION")
 if not redis_present:
     print("REDIS URL IS NOT CONFIGURED")
+
+_check_justcall_outreach()
 
 print("\n=== LOCAL ENDPOINTS ===")
 port = os.getenv("PORT", "5000")
