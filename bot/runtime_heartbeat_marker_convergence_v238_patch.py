@@ -1,4 +1,4 @@
-"""Re-arm genuine heartbeat execution after a proven writer renewal (v238).
+"""Re-arm genuine heartbeat execution after a proven writer renewal (v238/v275).
 
 Production on 2026-08-26 showed the entrypoint writer lease renewing successfully
 while the live activation circuit breaker still reported
@@ -6,10 +6,19 @@ while the live activation circuit breaker still reported
 called ``authority_heartbeat._write_heartbeat_marker()`` from a writer renewal.
 That is AUTH_VERIFY liveness, not ORDER_VERIFY/FILL_VERIFY execution proof.
 
-This corrected v238 never writes an execution heartbeat marker from writer renewal.
+The corrected v238 never writes an execution heartbeat marker from writer renewal.
 A healthy renewal is only a liveness wake-up: locate the already-published strategy
-and idempotently ensure its genuine heartbeat scheduler is running. The normal
-heartbeat order path must obtain a real broker result and
+and idempotently ensure its genuine heartbeat scheduler is running. Production on
+2026-08-29 then exposed a second startup gap: the writer renewed while the canonical
+strategy publication monitor remained deferred, leaving v238 permanently at
+``strategy_not_published``. v275 closes only that owner handoff. After a proven
+healthy writer renewal, and only when no strategy is already published, v238 may
+idempotently arm the existing strategy publication monitor. The publication module's
+own live-capital, runtime-state, writer-token, writer-generation, and hydrated-broker
+checks remain authoritative. v238 still reports scheduler-not-ready until a real
+strategy exists and never publishes readiness itself.
+
+The normal heartbeat order path must obtain a real broker result and
 ``TradingStrategy._persist_heartbeat_marker`` remains the owner of execution proof.
 Activation convergence is woken only after the canonical trading-state-machine
 verifier confirms that genuine marker is present, stage-sufficient, and fresh.
@@ -27,7 +36,29 @@ from typing import Any
 
 LOGGER = logging.getLogger("nija.runtime_heartbeat_marker_convergence_v238")
 MARKER = "20260826-heartbeat-marker-convergence-v238"
+V275_MARKER = "20260829-strategy-publication-writer-handoff-v275"
 _PATCH_ATTR = "_nija_heartbeat_marker_convergence_v238"
+
+
+def _arm_strategy_publication_monitor(publication: Any) -> tuple[bool, str]:
+    """Arm the existing publisher after writer proof; never publish readiness here."""
+    starter = getattr(publication, "start_monitor", None)
+    if not callable(starter):
+        return False, "publication_start_unavailable"
+    try:
+        armed = bool(starter())
+    except Exception as exc:
+        return False, f"publication_start_error:{type(exc).__name__}:{exc}"
+    if armed:
+        LOGGER.warning(
+            "STRATEGY_PUBLICATION_WRITER_HANDOFF_V275_ARMED marker=%s "
+            "writer_renewal_required=true publication_monitor_only=true "
+            "strategy_published=false readiness_fabricated=false execution_authority_granted=false "
+            "execution_proof_fabricated=false forced_activation=false safety_gates_bypassed=false",
+            V275_MARKER,
+        )
+        return True, "publication_monitor_armed"
+    return False, "publication_monitor_not_armed"
 
 
 def _rearm_genuine_heartbeat() -> tuple[bool, str]:
@@ -40,7 +71,10 @@ def _rearm_genuine_heartbeat() -> tuple[bool, str]:
             return False, "v203_helpers_unavailable"
         strategy = finder(publication)
         if strategy is None:
-            return False, "strategy_not_published"
+            armed, detail = _arm_strategy_publication_monitor(publication)
+            if armed:
+                return False, f"strategy_not_published:{detail}"
+            return False, f"strategy_not_published:{detail}"
         ready = bool(ensure(strategy))
         return ready, "scheduler_alive" if ready else "scheduler_not_alive"
     except Exception as exc:
@@ -162,7 +196,8 @@ def install() -> bool:
             "HEARTBEAT_MARKER_CONVERGENCE_V238_READY marker=%s ready=true genuine_writer_renewal_wakeup_only=true "
             "real_heartbeat_scheduler_rearmed=true execution_marker_owner=TradingStrategy._persist_heartbeat_marker "
             "canonical_execution_marker_verifier=true activation_reconcile_after_genuine_marker_only=true "
-            "execution_proof_fabricated=false forced_activation=false safety_gates_bypassed=false",
+            "strategy_publication_writer_handoff_v275=true execution_proof_fabricated=false forced_activation=false "
+            "safety_gates_bypassed=false",
             MARKER,
         )
     return ready
@@ -174,8 +209,10 @@ def install_import_hook() -> bool:
 
 __all__ = [
     "MARKER",
+    "V275_MARKER",
     "install",
     "install_import_hook",
+    "_arm_strategy_publication_monitor",
     "_rearm_genuine_heartbeat",
     "_genuine_execution_marker_ready",
 ]
