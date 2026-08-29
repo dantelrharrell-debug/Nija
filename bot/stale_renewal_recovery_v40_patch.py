@@ -13,9 +13,10 @@ proof becomes stale it reads the actual Redis lock:
 
 * lock still owned by this writer -> wait; do not create a second heartbeat
   worker and do not mutate the lease;
-* lock missing -> transition the runtime to LOST with the canonical
-  ``lock_missing_and_fencing_token_mismatch`` reason so v39 can perform bounded
-  fresh-epoch re-election;
+* lock missing with a still-matching Redis fencing token -> remain fail closed
+  for a short bounded recovery grace so the canonical heartbeat can exercise its
+  existing safe fencing-token restoration path;
+* lock missing without matching fencing proof -> transition the runtime to LOST;
 * lock owned by another writer -> transition to LOST with
   ``lock_owned_by_different_writer`` so the existing non-recoverable shutdown
   path remains authoritative;
@@ -30,13 +31,23 @@ writer heartbeat timestamp can look fresh while the canonical Redis metadata
 ``heartbeat_at`` becomes stale, which correctly blocks v60 re-anchoring and then
 cascades into stale capital and pending position synchronization.
 
-v40 now keeps that recovery work off the lease-renewal thread. The heartbeat path
+v40 keeps that recovery work off the lease-renewal thread. The heartbeat path
 uses only already-loaded ``bot_main`` state. Before startup is complete it returns
 immediately and lets the normal bounded registration deadline remain authoritative.
 After startup is complete, at most one daemon recovery worker invokes the existing
 canonical recovery routine. The heartbeat never fabricates core registration,
 writer renewal, readiness, capital freshness, position success, or execution
 authority.
+
+The 2026-08-29 follow-up also proved a second race: the stale-renewal watchdog
+classified every missing writer lock as ``lock_missing_and_fencing_token_mismatch``
+without checking the Redis fencing key. That conflicts with the canonical
+heartbeat's explicit safe recovery branch, which may restore a missing lock only
+when the durable fencing token still exactly matches the runtime token. v278 makes
+the watchdog use the same proof boundary. While that bounded recovery grace is
+open, execution authority remains revoked. If the fence differs, the renewal
+thread is dead, another writer appears, or the grace expires, the runtime is
+marked LOST and restarts as before.
 
 No capital, broker, SEAK, nonce, risk, fencing, kill-switch, position, order, or
 execution-readiness bypass is introduced.
@@ -57,6 +68,7 @@ from typing import Any
 LOGGER = logging.getLogger("nija.stale_renewal_recovery_v40")
 MARKER = "20260807-stale-renewal-recovery-v40"
 NONBLOCKING_MARKER = "20260829-writer-renewal-nonblocking-core-recovery-v277"
+MISSING_LOCK_FENCE_MARKER = "20260829-stale-renewal-missing-lock-fence-v278"
 
 _INSTALL_FLAG = "_NIJA_STALE_RENEWAL_RECOVERY_V40_IMPORT_HOOK"
 _IMPORTLIB_FLAG = "_NIJA_STALE_RENEWAL_RECOVERY_V40_IMPORTLIB_HOOK"
@@ -95,9 +107,16 @@ def _runtime_health(runtime: Any) -> tuple[bool, str, float, float]:
 
 
 def _inspect_lock(runtime: Any) -> tuple[str, str]:
-    """Return (state, detail): owned, missing, other, or error."""
+    """Return (state, detail): owned, recoverable_missing, missing, other, error.
+
+    ``recoverable_missing`` is intentionally narrow: the writer lock itself is
+    absent, but the durable Redis fencing key still exactly equals this runtime's
+    token. The canonical heartbeat already uses that same proof to safely restore
+    the exact lock. This watchdog never performs the restoration itself.
+    """
     client = getattr(runtime, "_client", None)
     lock_key = str(getattr(runtime, "_lock_key", "") or os.environ.get("NIJA_WRITER_LOCK_KEY", "") or "").strip()
+    fencing_key = str(getattr(runtime, "_fencing_key", "") or os.environ.get("NIJA_WRITER_FENCING_KEY", "") or "").strip()
     expected = str(getattr(runtime, "_lock_value", "") or "").strip()
     token = str(getattr(runtime, "_token", "") or os.environ.get("NIJA_WRITER_FENCING_TOKEN", "") or "").strip()
     if client is None or not lock_key:
@@ -107,7 +126,22 @@ def _inspect_lock(runtime: Any) -> tuple[str, str]:
     except Exception as exc:
         return "error", f"redis_lock_read_error:{type(exc).__name__}:{exc}"
     if not current:
-        return "missing", f"lock_missing key={lock_key}"
+        if not fencing_key or not token:
+            return "missing", f"lock_missing_fencing_proof_unavailable key={lock_key}"
+        try:
+            fence = _as_text(client.get(fencing_key)).strip()
+        except Exception as exc:
+            return "error", f"redis_fence_read_error:{type(exc).__name__}:{exc}"
+        if fence and fence == token:
+            return (
+                "recoverable_missing",
+                f"lock_missing_fence_matches key={lock_key} fence_key={fencing_key} token_prefix={token[:8]}",
+            )
+        return (
+            "missing",
+            f"lock_missing_fence_mismatch key={lock_key} fence_key={fencing_key} "
+            f"current_fence_prefix={fence[:8]} expected_prefix={token[:8]}",
+        )
     if expected and current == expected:
         return "owned", f"lock_owned_exact key={lock_key}"
     current_token = current.split(":", 1)[0]
@@ -152,6 +186,16 @@ def _on_writer_heartbeat_thread(runtime: Any) -> bool:
     if heartbeat is not None and current is heartbeat:
         return True
     return str(getattr(current, "name", "") or "") == "entrypoint-writer-lock-heartbeat"
+
+
+def _renewal_thread_alive(runtime: Any) -> bool:
+    heartbeat = getattr(runtime, "_heartbeat_thread", None)
+    if heartbeat is None or not callable(getattr(heartbeat, "is_alive", None)):
+        return False
+    try:
+        return bool(heartbeat.is_alive())
+    except Exception:
+        return False
 
 
 def _recovery_worker_lock(runtime: Any) -> threading.Lock:
@@ -277,16 +321,24 @@ def _patch_nonblocking_core_recovery(cls: type) -> bool:
 def _watchdog_loop(runtime: Any, stop_event: threading.Event) -> None:
     poll_s = _cfg_float("NIJA_STALE_RENEWAL_WATCHDOG_POLL_S", 2.0, 0.25)
     stale_confirmations = max(1, int(_cfg_float("NIJA_STALE_RENEWAL_CONFIRMATIONS", 2.0, 1.0)))
+    missing_recovery_grace_s = _cfg_float(
+        "NIJA_STALE_RENEWAL_MISSING_LOCK_RECOVERY_GRACE_S",
+        8.0,
+        1.0,
+    )
     stale_seen = 0
     last_log = 0.0
+    recoverable_missing_since = 0.0
     watched_generation = int(getattr(runtime, "_generation", 0) or 0)
 
     LOGGER.critical(
-        "STALE_RENEWAL_V40_WATCHDOG_STARTED marker=%s generation=%s poll_s=%.2f confirmations=%d",
+        "STALE_RENEWAL_V40_WATCHDOG_STARTED marker=%s generation=%s poll_s=%.2f confirmations=%d "
+        "missing_lock_recovery_grace_s=%.1f fence_check_v278=true",
         MARKER,
         getattr(runtime, "_generation", 0),
         poll_s,
         stale_confirmations,
+        missing_recovery_grace_s,
     )
 
     while not stop_event.is_set():
@@ -303,6 +355,7 @@ def _watchdog_loop(runtime: Any, stop_event: threading.Event) -> None:
             return
         if not bool(getattr(runtime, "acquired", False)):
             stale_seen = 0
+            recoverable_missing_since = 0.0
             stop_event.wait(poll_s)
             continue
 
@@ -317,17 +370,21 @@ def _watchdog_loop(runtime: Any, stop_event: threading.Event) -> None:
             return
         if ok:
             stale_seen = 0
+            recoverable_missing_since = 0.0
             stop_event.wait(poll_s)
             continue
 
         if reason != "renewal_success_stale":
             stale_seen = 0
+            recoverable_missing_since = 0.0
             stop_event.wait(poll_s)
             continue
 
         stale_seen += 1
         state, detail = _inspect_lock(runtime)
         now = time.monotonic()
+        if state != "recoverable_missing":
+            recoverable_missing_since = 0.0
         if now - last_log >= 5.0:
             last_log = now
             LOGGER.critical(
@@ -352,6 +409,52 @@ def _watchdog_loop(runtime: Any, stop_event: threading.Event) -> None:
         if state == "other":
             _mark_runtime_lost(runtime, "lock_owned_by_different_writer")
             return
+        if state == "recoverable_missing":
+            # The lock expired, but no newer writer epoch has claimed the durable
+            # fence. Only the canonical heartbeat may restore it. Keep execution
+            # fail closed while giving that already-existing path a short bound.
+            os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "0"
+            os.environ["NIJA_EXECUTION_ACTIVE"] = "false"
+            if not _renewal_thread_alive(runtime):
+                _mark_runtime_lost(runtime, "lock_missing_matching_fence_renewal_thread_not_alive")
+                return
+            if recoverable_missing_since <= 0.0:
+                recoverable_missing_since = now
+                LOGGER.critical(
+                    "STALE_RENEWAL_V278_MISSING_LOCK_RECOVERY_GRACE marker=%s generation=%s "
+                    "grace_s=%.1f detail=%s action=await_canonical_heartbeat "
+                    "execution_fail_closed=true lock_mutation=false",
+                    MISSING_LOCK_FENCE_MARKER,
+                    getattr(runtime, "_generation", 0),
+                    missing_recovery_grace_s,
+                    detail,
+                )
+            elif now - recoverable_missing_since >= missing_recovery_grace_s:
+                # Re-check at the terminal edge so a just-restored lock cannot be
+                # raced by the watchdog's stale sample.
+                terminal_state, terminal_detail = _inspect_lock(runtime)
+                if terminal_state == "owned":
+                    recoverable_missing_since = 0.0
+                    stale_seen = 0
+                    LOGGER.critical(
+                        "STALE_RENEWAL_V278_MISSING_LOCK_RECOVERED marker=%s generation=%s "
+                        "detail=%s execution_authority_not_granted=true",
+                        MISSING_LOCK_FENCE_MARKER,
+                        getattr(runtime, "_generation", 0),
+                        terminal_detail,
+                    )
+                elif terminal_state == "other":
+                    _mark_runtime_lost(runtime, "lock_owned_by_different_writer")
+                    return
+                elif terminal_state == "missing":
+                    _mark_runtime_lost(runtime, "lock_missing_and_fencing_token_mismatch")
+                    return
+                elif terminal_state == "recoverable_missing":
+                    _mark_runtime_lost(runtime, "lock_missing_matching_fence_recovery_grace_expired")
+                    return
+                # terminal_state=error remains fail closed and will be retried.
+            stop_event.wait(poll_s)
+            continue
         if state == "owned":
             # The old epoch still exists. Never start a second renewal worker or
             # mutate the lock from this watchdog. Continue fail-closed observation
@@ -441,7 +544,8 @@ def _patch_entrypoint_writer_authority(module: ModuleType) -> bool:
 
     setattr(cls, _PATCH_ATTR, True)
     LOGGER.critical(
-        "STALE_RENEWAL_V40_ENTRYPOINT_PATCHED marker=%s module=%s nonblocking_core_recovery=%s",
+        "STALE_RENEWAL_V40_ENTRYPOINT_PATCHED marker=%s module=%s nonblocking_core_recovery=%s "
+        "missing_lock_fence_v278=true",
         MARKER,
         module.__name__,
         str(bool(nonblocking_ready)).lower(),
@@ -501,9 +605,11 @@ def install_import_hook() -> bool:
 
         os.environ["NIJA_STALE_RENEWAL_RECOVERY_V40_INSTALLED"] = "1"
         os.environ["NIJA_WRITER_RENEWAL_NONBLOCKING_CORE_RECOVERY_V277_READY"] = "1"
+        os.environ["NIJA_STALE_RENEWAL_MISSING_LOCK_FENCE_V278_READY"] = "1"
         LOGGER.critical(
             "STALE_RENEWAL_RECOVERY_V40_INSTALLED marker=%s fail_closed=true lock_mutation=false "
-            "fresh_epoch_via_v39=true nonblocking_core_recovery_v277=true",
+            "fresh_epoch_via_v39=true nonblocking_core_recovery_v277=true "
+            "missing_lock_fence_v278=true",
             MARKER,
         )
         return True
