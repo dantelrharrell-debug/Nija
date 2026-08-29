@@ -13,6 +13,12 @@ does not publish strategy or execution readiness, and does not mutate capital,
 nonce, kill-switch, risk, order, fill, or trading state. TradingStrategy's
 existing broker-safe fallback symbol universe remains authoritative whenever
 live discovery is unavailable.
+
+The production entrypoint imports the same source file through both
+``bot.trading_strategy`` and top-level ``trading_strategy`` module names.  The
+liveness guard therefore patches every already-loaded TradingStrategy alias,
+not only the package-qualified class.  This prevents the direct bot.py
+constructor path from escaping the bounded discovery contract.
 """
 from __future__ import annotations
 
@@ -20,6 +26,7 @@ import importlib
 import logging
 import os
 import queue
+import sys
 import threading
 from functools import wraps
 from typing import Any
@@ -93,21 +100,7 @@ def _bounded_read(broker: Any, method_name: str) -> Any:
     return payload
 
 
-def _patch_trading_strategy() -> bool:
-    try:
-        module = importlib.import_module("bot.trading_strategy")
-        cls = getattr(module, "TradingStrategy", None)
-    except Exception as exc:
-        LOGGER.error(
-            "PRECORE_SYMBOL_DISCOVERY_V269_IMPORT_FAILED marker=%s error=%s:%s",
-            MARKER,
-            type(exc).__name__,
-            exc,
-        )
-        return False
-    if not isinstance(cls, type):
-        return False
-
+def _patch_strategy_class(cls: type) -> bool:
     current = getattr(cls, "_discover_broker_symbols", None)
     if not callable(current):
         return False
@@ -177,6 +170,61 @@ def _patch_trading_strategy() -> bool:
     return True
 
 
+def _patch_trading_strategy() -> bool:
+    """Patch every loaded TradingStrategy alias used by production startup."""
+    modules: list[Any] = []
+    seen_modules: set[int] = set()
+
+    # Prefer already-loaded modules so the patch never creates a second strategy
+    # module merely to prove readiness.  Import the package-qualified module only
+    # when neither alias is resident; this preserves the original v269 install
+    # contract used by unit tests and the canonical publication builder.
+    for module_name in ("bot.trading_strategy", "trading_strategy"):
+        module = sys.modules.get(module_name)
+        if module is not None and id(module) not in seen_modules:
+            seen_modules.add(id(module))
+            modules.append(module)
+
+    if not modules:
+        try:
+            module = importlib.import_module("bot.trading_strategy")
+            modules.append(module)
+        except Exception as exc:
+            LOGGER.error(
+                "PRECORE_SYMBOL_DISCOVERY_V269_IMPORT_FAILED marker=%s error=%s:%s",
+                MARKER,
+                type(exc).__name__,
+                exc,
+            )
+            return False
+
+    patched_classes = 0
+    seen_classes: set[int] = set()
+    patched_aliases: list[str] = []
+    for module in modules:
+        cls = getattr(module, "TradingStrategy", None)
+        if not isinstance(cls, type) or id(cls) in seen_classes:
+            continue
+        seen_classes.add(id(cls))
+        if _patch_strategy_class(cls):
+            patched_classes += 1
+            patched_aliases.append(str(getattr(module, "__name__", "unknown")))
+
+    if patched_classes == 0:
+        return False
+
+    LOGGER.critical(
+        "PRECORE_SYMBOL_DISCOVERY_V269_ALIASES_PATCHED marker=%s patched_classes=%d aliases=%s "
+        "top_level_alias_guarded=%s package_alias_guarded=%s safety_gates_bypassed=false",
+        MARKER,
+        patched_classes,
+        ",".join(sorted(patched_aliases)),
+        str("trading_strategy" in patched_aliases).lower(),
+        str("bot.trading_strategy" in patched_aliases).lower(),
+    )
+    return True
+
+
 def _patch_release_manifest() -> bool:
     try:
         manifest = importlib.import_module("bot.runtime_release_manifest_patch")
@@ -212,7 +260,7 @@ def install() -> bool:
             "RUNTIME_PRECORE_SYMBOL_DISCOVERY_LIVENESS_V269 marker=%s ready=true "
             "timeout_s=%.2f read_only_market_discovery=true single_flight=true "
             "late_result_discarded=true broker_safe_fallback_preserved=true "
-            "capital_thresholds_unchanged=true freshness_extended=false "
+            "module_aliases_guarded=true capital_thresholds_unchanged=true freshness_extended=false "
             "nonce_policy_unchanged=true kill_switch_unchanged=true risk_gates_unchanged=true "
             "order_fill_gates_unchanged=true execution_proof_fabricated=false "
             "forced_trade=false forced_activation=false safety_gates_bypassed=false",
@@ -233,6 +281,7 @@ __all__ = [
     "install_import_hook",
     "_timeout_s",
     "_bounded_read",
+    "_patch_strategy_class",
     "_patch_trading_strategy",
     "_patch_release_manifest",
 ]
