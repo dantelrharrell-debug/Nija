@@ -315,17 +315,16 @@ function scheduleAccountDeletionControls() {
     observer.observe(document.documentElement, { childList: true, subtree: true });
 }
 
-function renderBetaOfferCard(beta) {
+function getRegistrationPricingElements() {
     const select = document.getElementById('register-tier');
-    if (!select) return;
+    if (!select) return null;
 
-    // Preserve the internal BASIC capability tier expected by the legacy form,
-    // but remove that implementation detail from customer-facing registration.
+    // Keep legacy feature-tier selection internal and server-controlled.
     select.value = 'basic';
     const legacyGroup = select.closest('.form-group');
-    if (!legacyGroup) return;
-
+    if (!legacyGroup) return null;
     legacyGroup.style.display = 'none';
+
     let card = document.getElementById('nija-commercial-offer-card');
     if (!card) {
         card = document.createElement('div');
@@ -334,44 +333,71 @@ function renderBetaOfferCard(beta) {
         legacyGroup.insertAdjacentElement('afterend', card);
     }
 
+    const form = select.closest('form');
+    const submit = form ? form.querySelector('button[type="submit"]') : null;
+    return { card, submit };
+}
+
+function setRegistrationPricingState(message, ready = false) {
+    const elements = getRegistrationPricingElements();
+    if (!elements) return;
+
+    elements.card.innerHTML = `
+        <h3>NIJA Beta</h3>
+        <p>${message}</p>
+        <p><small>Trading and investing involve risk, including possible loss of capital. NIJA does not promise profit or performance results.</small></p>
+    `;
+    if (elements.submit) {
+        elements.submit.disabled = !ready;
+        elements.submit.setAttribute('aria-disabled', ready ? 'false' : 'true');
+    }
+}
+
+function renderBetaOfferCard(beta) {
+    const elements = getRegistrationPricingElements();
+    if (!elements) return false;
+
     const current = beta && beta.current_offer ? beta.current_offer : null;
-    const founding = current && current.code === 'founding_beta';
-    const amount = current && Number.isFinite(Number(current.amount_usd))
-        ? Number(current.amount_usd)
-        : (founding ? 50 : 75);
+    const amount = current ? Number(current.amount_usd) : NaN;
+    if (!current || !['founding_beta', 'standard_beta'].includes(current.code) || !Number.isFinite(amount)) {
+        return false;
+    }
+
     const remaining = beta && Number.isFinite(Number(beta.founding_remaining))
         ? Number(beta.founding_remaining)
         : null;
 
-    if (founding || !current) {
+    if (current.code === 'founding_beta') {
         const remainingText = remaining === null ? '' : `<p><strong>${remaining}</strong> founding beta spots currently remain.</p>`;
-        card.innerHTML = `
+        elements.card.innerHTML = `
             <h3>NIJA Founding Beta</h3>
             <p><strong>14 days free, then $${amount.toFixed(0)}/month.</strong></p>
             <p>Available to the first 100 eligible beta users. Your assigned founding offer is preserved with your account.</p>
             ${remainingText}
-            <p><small>NIJA Lessons are a separate $99 one-time educational purchase. Trading involves risk; no profit or performance is guaranteed.</small></p>
+            <p><small>NIJA Lessons are a separate $99 one-time educational purchase. Trading involves risk; NIJA does not promise profit or performance results.</small></p>
         `;
     } else {
-        card.innerHTML = `
+        elements.card.innerHTML = `
             <h3>NIJA Beta</h3>
             <p><strong>$${amount.toFixed(0)}/month.</strong></p>
-            <p>The first 100 founding beta spots have been claimed. New beta registrations use the current $75/month offer.</p>
-            <p><small>NIJA Lessons are a separate $99 one-time educational purchase. Planned full mobile paid release price is $99/month. Trading involves risk; no profit or performance is guaranteed.</small></p>
+            <p>The first 100 founding beta spots have been claimed. This is the current offer for new beta registrations.</p>
+            <p><small>NIJA Lessons are a separate $99 one-time educational purchase. Planned full mobile paid release price is $99/month. Trading involves risk; NIJA does not promise profit or performance results.</small></p>
         `;
     }
+
+    if (elements.submit) {
+        elements.submit.disabled = false;
+        elements.submit.setAttribute('aria-disabled', 'false');
+    }
+    return true;
 }
 
 async function ensureCommercialPricingControls() {
-    const select = document.getElementById('register-tier');
-    if (!select) return;
+    if (!document.getElementById('register-tier')) return;
 
-    // Hide stale access-tier marketing immediately, even if the pricing API is
-    // temporarily unavailable. Server-side registration still enforces BASIC.
-    renderBetaOfferCard({
-        current_offer: { code: 'founding_beta', amount_usd: 50 },
-        founding_remaining: null
-    });
+    // Fail closed: hide stale access-tier marketing and disable registration
+    // until the authoritative commercial-pricing endpoint confirms the offer.
+    setRegistrationPricingState('Checking the current NIJA beta offer…', false);
 
     try {
         const response = await fetch(`${window.location.origin}/api/commercial/pricing`, {
@@ -379,9 +405,15 @@ async function ensureCommercialPricingControls() {
         });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const data = await response.json();
-        renderBetaOfferCard(data.beta || null);
+        if (!renderBetaOfferCard(data.beta || null)) {
+            throw new Error('Pricing response did not contain a recognized current beta offer');
+        }
     } catch (error) {
-        console.warn('Using safe beta pricing fallback until pricing API is reachable:', error.message);
+        console.warn('Current NIJA beta pricing could not be verified:', error.message);
+        setRegistrationPricingState(
+            'Current NIJA beta pricing is temporarily unavailable. Please retry before registering so the correct offer can be verified.',
+            false
+        );
     }
 }
 
