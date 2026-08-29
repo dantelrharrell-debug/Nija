@@ -315,14 +315,96 @@ function scheduleAccountDeletionControls() {
     observer.observe(document.documentElement, { childList: true, subtree: true });
 }
 
+function renderBetaOfferCard(beta) {
+    const select = document.getElementById('register-tier');
+    if (!select) return;
+
+    // Preserve the internal BASIC capability tier expected by the legacy form,
+    // but remove that implementation detail from customer-facing registration.
+    select.value = 'basic';
+    const legacyGroup = select.closest('.form-group');
+    if (!legacyGroup) return;
+
+    legacyGroup.style.display = 'none';
+    let card = document.getElementById('nija-commercial-offer-card');
+    if (!card) {
+        card = document.createElement('div');
+        card.id = 'nija-commercial-offer-card';
+        card.className = 'status-card';
+        legacyGroup.insertAdjacentElement('afterend', card);
+    }
+
+    const current = beta && beta.current_offer ? beta.current_offer : null;
+    const founding = current && current.code === 'founding_beta';
+    const amount = current && Number.isFinite(Number(current.amount_usd))
+        ? Number(current.amount_usd)
+        : (founding ? 50 : 75);
+    const remaining = beta && Number.isFinite(Number(beta.founding_remaining))
+        ? Number(beta.founding_remaining)
+        : null;
+
+    if (founding || !current) {
+        const remainingText = remaining === null ? '' : `<p><strong>${remaining}</strong> founding beta spots currently remain.</p>`;
+        card.innerHTML = `
+            <h3>NIJA Founding Beta</h3>
+            <p><strong>14 days free, then $${amount.toFixed(0)}/month.</strong></p>
+            <p>Available to the first 100 eligible beta users. Your assigned founding offer is preserved with your account.</p>
+            ${remainingText}
+            <p><small>NIJA Lessons are a separate $99 one-time educational purchase. Trading involves risk; no profit or performance is guaranteed.</small></p>
+        `;
+    } else {
+        card.innerHTML = `
+            <h3>NIJA Beta</h3>
+            <p><strong>$${amount.toFixed(0)}/month.</strong></p>
+            <p>The first 100 founding beta spots have been claimed. New beta registrations use the current $75/month offer.</p>
+            <p><small>NIJA Lessons are a separate $99 one-time educational purchase. Planned full mobile paid release price is $99/month. Trading involves risk; no profit or performance is guaranteed.</small></p>
+        `;
+    }
+}
+
+async function ensureCommercialPricingControls() {
+    const select = document.getElementById('register-tier');
+    if (!select) return;
+
+    // Hide stale access-tier marketing immediately, even if the pricing API is
+    // temporarily unavailable. Server-side registration still enforces BASIC.
+    renderBetaOfferCard({
+        current_offer: { code: 'founding_beta', amount_usd: 50 },
+        founding_remaining: null
+    });
+
+    try {
+        const response = await fetch(`${window.location.origin}/api/commercial/pricing`, {
+            headers: { 'Accept': 'application/json' }
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const data = await response.json();
+        renderBetaOfferCard(data.beta || null);
+    } catch (error) {
+        console.warn('Using safe beta pricing fallback until pricing API is reachable:', error.message);
+    }
+}
+
+function scheduleCommercialPricingControls() {
+    ensureCommercialPricingControls();
+    const observer = new MutationObserver(() => {
+        if (!document.getElementById('nija-commercial-offer-card')) {
+            ensureCommercialPricingControls();
+        }
+    });
+    observer.observe(document.documentElement, { childList: true, subtree: true });
+}
+
 if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', () => {
         initializeCapacitor();
         scheduleAccountDeletionControls();
+        scheduleCommercialPricingControls();
     });
 } else {
     initializeCapacitor();
     scheduleAccountDeletionControls();
+    scheduleCommercialPricingControls();
 }
 
 window.NativeApp = NativeApp;
@@ -334,3 +416,4 @@ window.showNativeToast = showNativeToast;
 window.triggerHaptic = triggerHaptic;
 window.openExternalUrl = openExternalUrl;
 window.requestNijaAccountDeletion = requestNijaAccountDeletion;
+window.ensureCommercialPricingControls = ensureCommercialPricingControls;

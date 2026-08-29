@@ -22,6 +22,8 @@ from iap_handler import register_iap_api
 from education_system import register_education_api
 from mobile_api import mobile_api, MOBILE_API_BASE
 from account_deletion_api import account_deletion_api
+from pricing_api import pricing_api
+from commercial_pricing_runtime_patch import install_commercial_pricing_runtime_patch
 
 logging.basicConfig(
     level=logging.INFO,
@@ -62,13 +64,19 @@ CORS(
     },
 )
 
-# Public endpoints inside otherwise protected mobile namespaces.
+# Explicitly public endpoints inside otherwise protected API namespaces.
 _PUBLIC_MOBILE_PATHS = {
     "/api/mobile/status",
     "/api/mobile/config",
     "/api/v1/subscription/tiers",
+    "/api/commercial/pricing",
 }
-_PROTECTED_PREFIXES = ("/api/mobile/", "/api/v1/", "/api/account/")
+_PROTECTED_PREFIXES = (
+    "/api/mobile/",
+    "/api/v1/",
+    "/api/account/",
+    "/api/commercial/offer/",
+)
 
 
 @app.before_request
@@ -111,9 +119,18 @@ logger.info("Registered mobile_api blueprint")
 app.register_blueprint(account_deletion_api)
 logger.info("Registered account_deletion_api blueprint")
 
+app.register_blueprint(pricing_api)
+logger.info("Registered canonical pricing_api blueprint")
+
 register_unified_mobile_api(app, socketio)
 register_iap_api(app)
 register_education_api(app)
+
+# Install only after all blueprints are registered so the integration can wrap
+# the existing registration and subscription endpoints without changing legacy
+# feature-permission tier behavior.
+install_commercial_pricing_runtime_patch(app)
+logger.info("Installed canonical commercial pricing integration")
 
 
 @app.route("/")
@@ -130,11 +147,13 @@ def index():
             "mobile": MOBILE_API_BASE,
             "iap": "/api/iap",
             "education": "/api/education",
+            "commercial_pricing": "/api/commercial/pricing",
         },
         "features": [
             "Authenticated trading control and monitoring",
             "Real-time position updates via WebSocket",
             "Subscription management",
+            "Canonical commercial pricing policy",
             "In-app purchase validation (iOS/Android)",
             "Education content delivery",
             "Performance analytics",
@@ -164,6 +183,10 @@ def api_documentation():
             },
         },
         "endpoints": {
+            "Commercial Pricing": {
+                "get_public_pricing": "GET /api/commercial/pricing",
+                "get_locked_user_offer": "GET /api/commercial/offer/<user_id>",
+            },
             "Trading Control": {
                 "start_trading": "POST /api/v1/trading/start",
                 "stop_trading": "POST /api/v1/trading/stop",
