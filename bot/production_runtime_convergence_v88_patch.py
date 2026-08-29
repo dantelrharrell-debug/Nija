@@ -157,6 +157,13 @@ def _install_kraken_user_supervision() -> bool:
         if installed:
             from bot import all_account_connectivity_truth_v266_patch as v266
             installed = bool(v266.install_import_hook())
+        if installed:
+            # v282 is account-local: it suppresses redundant steady-state
+            # Kraken user audit I/O, requires authoritative position proof for
+            # user entries, and keeps v281 all-account coverage current. It
+            # never folds a failed user into platform execution readiness.
+            from bot import runtime_kraken_user_position_eligibility_v282_patch as v282
+            installed = bool(v282.install_import_hook())
     except Exception as exc:
         LOGGER.warning("KRAKEN_USER_SUPERVISION_V88_INSTALL_FAILED marker=%s error=%s:%s", MARKER, type(exc).__name__, exc)
         return False
@@ -164,9 +171,11 @@ def _install_kraken_user_supervision() -> bool:
         with _LOCK:
             _KRAKEN_SUPERVISION_INSTALLED = True
         LOGGER.critical(
-            "KRAKEN_USER_SUPERVISION_V88_CHAINED marker=%s source=v86+v90+v266 "
+            "KRAKEN_USER_SUPERVISION_V88_CHAINED marker=%s source=v86+v90+v266+v282 "
             "authenticated_reconnect_only=true canonical_rebuild=true writer_scoped=true "
-            "state_sensitive_diagnostics=true extra_reconcile_calls=false retry_cadence_unchanged=true",
+            "state_sensitive_diagnostics=true connected_poll_private_io_bounded=true "
+            "authoritative_user_position_proof_required=true all_account_coverage_periodic=true "
+            "platform_activation_unchanged=true",
             MARKER,
         )
     return installed
@@ -232,7 +241,8 @@ def install_import_hook() -> bool:
     LOGGER.critical(
         "PRODUCTION_RUNTIME_CONVERGENCE_V88_INSTALLED marker=%s circuit_classification=true "
         "kraken_user_supervision=true kraken_user_rebuild_v90=true all_account_connectivity_v266=true "
-        "stale_log_filter=true risk_gates_unchanged=true nonce_gates_unchanged=true",
+        "kraken_user_position_eligibility_v282=true stale_log_filter=true "
+        "risk_gates_unchanged=true nonce_gates_unchanged=true",
         MARKER,
     )
     return True
