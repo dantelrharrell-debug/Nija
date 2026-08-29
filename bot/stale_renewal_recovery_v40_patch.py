@@ -21,7 +21,25 @@ proof becomes stale it reads the actual Redis lock:
   path remains authoritative;
 * Redis inspection error -> remain fail closed and retry; never infer ownership.
 
-No capital, broker, SEAK, nonce, risk, or fencing bypass is introduced.
+The 2026-08-29 deployment also proved a heartbeat-thread starvation path. During
+pre-core startup ``EntrypointWriterAuthority._recover_core_thread_registration``
+can enter import/recovery work from the Redis renewal thread. Runtime import hooks
+and a long core recovery can then hold that thread for far longer than the writer
+renewal freshness bound even while the exact Redis lock remains owned. The local
+writer heartbeat timestamp can look fresh while the canonical Redis metadata
+``heartbeat_at`` becomes stale, which correctly blocks v60 re-anchoring and then
+cascades into stale capital and pending position synchronization.
+
+v40 now keeps that recovery work off the lease-renewal thread. The heartbeat path
+uses only already-loaded ``bot_main`` state. Before startup is complete it returns
+immediately and lets the normal bounded registration deadline remain authoritative.
+After startup is complete, at most one daemon recovery worker invokes the existing
+canonical recovery routine. The heartbeat never fabricates core registration,
+writer renewal, readiness, capital freshness, position success, or execution
+authority.
+
+No capital, broker, SEAK, nonce, risk, fencing, kill-switch, position, order, or
+execution-readiness bypass is introduced.
 """
 from __future__ import annotations
 
@@ -38,6 +56,7 @@ from typing import Any
 
 LOGGER = logging.getLogger("nija.stale_renewal_recovery_v40")
 MARKER = "20260807-stale-renewal-recovery-v40"
+NONBLOCKING_MARKER = "20260829-writer-renewal-nonblocking-core-recovery-v277"
 
 _INSTALL_FLAG = "_NIJA_STALE_RENEWAL_RECOVERY_V40_IMPORT_HOOK"
 _IMPORTLIB_FLAG = "_NIJA_STALE_RENEWAL_RECOVERY_V40_IMPORTLIB_HOOK"
@@ -45,6 +64,9 @@ _PATCH_ATTR = "_nija_stale_renewal_recovery_v40"
 _WATCHDOG_ATTR = "_nija_stale_renewal_watchdog_v40"
 _WATCHDOG_STOP_ATTR = "_nija_stale_renewal_watchdog_stop_v40"
 _WATCHDOG_GENERATION_ATTR = "_nija_stale_renewal_watchdog_generation_v40"
+_RECOVERY_PATCH_ATTR = "_nija_writer_renewal_nonblocking_core_recovery_v277"
+_RECOVERY_WORKER_ATTR = "_nija_core_recovery_worker_v277"
+_RECOVERY_LOCK_ATTR = "_nija_core_recovery_worker_lock_v277"
 _PATCH_LOCK = threading.RLock()
 
 
@@ -116,6 +138,139 @@ def _mark_runtime_lost(runtime: Any, reason: str) -> bool:
         reason,
     )
     marker(reason)
+    return True
+
+
+def _loaded_bot_main() -> Any:
+    """Return already-loaded bot_main without entering mutable import hooks."""
+    return sys.modules.get("bot.bot_main") or sys.modules.get("bot_main")
+
+
+def _on_writer_heartbeat_thread(runtime: Any) -> bool:
+    current = threading.current_thread()
+    heartbeat = getattr(runtime, "_heartbeat_thread", None)
+    if heartbeat is not None and current is heartbeat:
+        return True
+    return str(getattr(current, "name", "") or "") == "entrypoint-writer-lock-heartbeat"
+
+
+def _recovery_worker_lock(runtime: Any) -> threading.Lock:
+    lock = getattr(runtime, _RECOVERY_LOCK_ATTR, None)
+    if lock is not None:
+        return lock
+    with _PATCH_LOCK:
+        lock = getattr(runtime, _RECOVERY_LOCK_ATTR, None)
+        if lock is None:
+            lock = threading.Lock()
+            setattr(runtime, _RECOVERY_LOCK_ATTR, lock)
+        return lock
+
+
+def _dispatch_core_recovery_worker(runtime: Any, original: Any, source: str) -> tuple[bool, str]:
+    """Dispatch at most one canonical core recovery worker without blocking Redis renewal."""
+    lock = _recovery_worker_lock(runtime)
+    with lock:
+        worker = getattr(runtime, _RECOVERY_WORKER_ATTR, None)
+        if worker is not None and callable(getattr(worker, "is_alive", None)) and worker.is_alive():
+            return False, "recovery_in_flight"
+
+        next_at = float(getattr(runtime, "_core_recovery_next_attempt_monotonic", 0.0) or 0.0)
+        now = time.monotonic()
+        if next_at > now:
+            return False, f"recovery_backoff_active wait_s={next_at - now:.2f}"
+
+        def _worker() -> None:
+            ok = False
+            detail = "unknown"
+            try:
+                ok, detail = original(runtime, f"{source}:background_v277")
+            except Exception as exc:
+                detail = f"background_recovery_exception:{type(exc).__name__}:{exc}"
+                LOGGER.warning(
+                    "WRITER_V277_CORE_RECOVERY_WORKER_ERROR marker=%s generation=%s error=%s:%s "
+                    "writer_renewal_unchanged=true trading_fail_closed=true",
+                    NONBLOCKING_MARKER,
+                    getattr(runtime, "_generation", 0),
+                    type(exc).__name__,
+                    exc,
+                )
+            finally:
+                LOGGER.info(
+                    "WRITER_V277_CORE_RECOVERY_WORKER_COMPLETE marker=%s generation=%s ok=%s detail=%s "
+                    "core_registration_fabricated=false writer_renewal_fabricated=false",
+                    NONBLOCKING_MARKER,
+                    getattr(runtime, "_generation", 0),
+                    str(bool(ok)).lower(),
+                    detail,
+                )
+                with lock:
+                    if getattr(runtime, _RECOVERY_WORKER_ATTR, None) is threading.current_thread():
+                        setattr(runtime, _RECOVERY_WORKER_ATTR, None)
+
+        worker = threading.Thread(
+            target=_worker,
+            name=f"writer-core-registration-recovery-v277-g{int(getattr(runtime, '_generation', 0) or 0)}",
+            daemon=True,
+        )
+        setattr(runtime, _RECOVERY_WORKER_ATTR, worker)
+        worker.start()
+
+    LOGGER.critical(
+        "WRITER_V277_CORE_RECOVERY_DISPATCHED marker=%s generation=%s source=%s "
+        "heartbeat_thread_nonblocking=true single_flight=true canonical_recovery_only=true "
+        "writer_renewal_unchanged=true readiness_fabricated=false",
+        NONBLOCKING_MARKER,
+        getattr(runtime, "_generation", 0),
+        source,
+    )
+    return False, "recovery_dispatched"
+
+
+def _patch_nonblocking_core_recovery(cls: type) -> bool:
+    """Prevent core recovery/import work from blocking the exact Redis renewal thread."""
+    current = getattr(cls, "_recover_core_thread_registration", None)
+    if not callable(current):
+        return False
+    if bool(getattr(current, _RECOVERY_PATCH_ATTR, False)):
+        return True
+    original = current
+
+    @wraps(original)
+    def _recover_core_thread_registration_v277(self: Any, source: str):
+        if not _on_writer_heartbeat_thread(self):
+            return original(self, source)
+
+        # Never import bot_main from the Redis renewal thread. The canonical
+        # launcher loads it before writer acquisition; if it is not visible yet,
+        # the bounded startup registration deadline remains the authority.
+        bot_main = _loaded_bot_main()
+        if bot_main is None:
+            return False, "startup_module_not_loaded"
+
+        shutdown = getattr(bot_main, "_shutdown_event", None)
+        if shutdown is not None and callable(getattr(shutdown, "is_set", None)):
+            try:
+                if shutdown.is_set():
+                    return False, "shutdown_requested"
+            except Exception:
+                return False, "shutdown_state_unavailable"
+
+        if not bool(getattr(bot_main, "_startup_complete", False)):
+            return False, "startup_not_complete"
+
+        return _dispatch_core_recovery_worker(self, original, source)
+
+    setattr(_recover_core_thread_registration_v277, _RECOVERY_PATCH_ATTR, True)
+    setattr(_recover_core_thread_registration_v277, "__wrapped__", original)
+    cls._recover_core_thread_registration = _recover_core_thread_registration_v277
+    LOGGER.critical(
+        "WRITER_RENEWAL_NONBLOCKING_CORE_RECOVERY_V277_PATCHED marker=%s class=%s "
+        "heartbeat_imports=false background_recovery_single_flight=true "
+        "registration_deadline_unchanged=true writer_ttl_unchanged=true "
+        "execution_authority_unchanged=true safety_gates_bypassed=false",
+        NONBLOCKING_MARKER,
+        cls.__name__,
+    )
     return True
 
 
@@ -247,8 +402,12 @@ def _start_watchdog(runtime: Any) -> bool:
 
 def _patch_entrypoint_writer_authority(module: ModuleType) -> bool:
     cls = getattr(module, "EntrypointWriterAuthority", None)
-    if not isinstance(cls, type) or getattr(cls, _PATCH_ATTR, False):
+    if not isinstance(cls, type):
         return False
+
+    nonblocking_ready = _patch_nonblocking_core_recovery(cls)
+    if getattr(cls, _PATCH_ATTR, False):
+        return bool(nonblocking_ready)
 
     original_activate = getattr(cls, "_activate_distributed_authority", None)
     if callable(original_activate):
@@ -282,11 +441,12 @@ def _patch_entrypoint_writer_authority(module: ModuleType) -> bool:
 
     setattr(cls, _PATCH_ATTR, True)
     LOGGER.critical(
-        "STALE_RENEWAL_V40_ENTRYPOINT_PATCHED marker=%s module=%s",
+        "STALE_RENEWAL_V40_ENTRYPOINT_PATCHED marker=%s module=%s nonblocking_core_recovery=%s",
         MARKER,
         module.__name__,
+        str(bool(nonblocking_ready)).lower(),
     )
-    return True
+    return bool(nonblocking_ready)
 
 
 def _interesting_module(name: str) -> bool:
@@ -340,8 +500,10 @@ def install_import_hook() -> bool:
             setattr(importlib, _IMPORTLIB_FLAG, True)
 
         os.environ["NIJA_STALE_RENEWAL_RECOVERY_V40_INSTALLED"] = "1"
+        os.environ["NIJA_WRITER_RENEWAL_NONBLOCKING_CORE_RECOVERY_V277_READY"] = "1"
         LOGGER.critical(
-            "STALE_RENEWAL_RECOVERY_V40_INSTALLED marker=%s fail_closed=true lock_mutation=false fresh_epoch_via_v39=true",
+            "STALE_RENEWAL_RECOVERY_V40_INSTALLED marker=%s fail_closed=true lock_mutation=false "
+            "fresh_epoch_via_v39=true nonblocking_core_recovery_v277=true",
             MARKER,
         )
         return True
