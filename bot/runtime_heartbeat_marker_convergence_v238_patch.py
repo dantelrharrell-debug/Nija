@@ -15,8 +15,9 @@ strategy publication monitor remained deferred, leaving v238 permanently at
 healthy writer renewal, and only when no strategy is already published, v238 may
 idempotently arm the existing strategy publication monitor. The publication module's
 own live-capital, runtime-state, writer-token, writer-generation, and hydrated-broker
-checks remain authoritative. v238 still reports scheduler-not-ready until a real
-strategy exists and never publishes readiness itself.
+checks remain authoritative. Install-time rearm never arms publication; only the
+healthy writer-renewal path may do so. v238 still reports scheduler-not-ready until a
+real strategy exists and never publishes readiness itself.
 
 The normal heartbeat order path must obtain a real broker result and
 ``TradingStrategy._persist_heartbeat_marker`` remains the owner of execution proof.
@@ -61,7 +62,7 @@ def _arm_strategy_publication_monitor(publication: Any) -> tuple[bool, str]:
     return False, "publication_monitor_not_armed"
 
 
-def _rearm_genuine_heartbeat() -> tuple[bool, str]:
+def _rearm_genuine_heartbeat(*, allow_publication_arm: bool = False) -> tuple[bool, str]:
     try:
         v203 = importlib.import_module("bot.runtime_existing_strategy_heartbeat_rearm_v203_patch")
         publication = importlib.import_module("bot.strategy_publication_patch")
@@ -71,9 +72,9 @@ def _rearm_genuine_heartbeat() -> tuple[bool, str]:
             return False, "v203_helpers_unavailable"
         strategy = finder(publication)
         if strategy is None:
-            armed, detail = _arm_strategy_publication_monitor(publication)
-            if armed:
-                return False, f"strategy_not_published:{detail}"
+            if not allow_publication_arm:
+                return False, "strategy_not_published"
+            _armed, detail = _arm_strategy_publication_monitor(publication)
             return False, f"strategy_not_published:{detail}"
         ready = bool(ensure(strategy))
         return ready, "scheduler_alive" if ready else "scheduler_not_alive"
@@ -147,7 +148,7 @@ def _patch_entrypoint_writer() -> bool:
                 healthy = bool(proof and proof[0])
                 reason = str(proof[1] if len(proof) > 1 else "unknown")
             if acquired and not lost and healthy:
-                rearmed, rearm_detail = _rearm_genuine_heartbeat()
+                rearmed, rearm_detail = _rearm_genuine_heartbeat(allow_publication_arm=True)
                 LOGGER.critical(
                     "HEARTBEAT_MARKER_V238_LIVENESS_WAKE marker=%s source=entrypoint_writer_renewal "
                     "lease_acquired=true writer_lost=false renewal_health=true scheduler_ready=%s "
