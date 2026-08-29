@@ -5,18 +5,20 @@ Kraken-only while process-wide Coinbase/OKX PLATFORM objects could still exist,
 and showed position_sync_ready briefly report true before v146 correctly revoked
 it because independent authoritative fetch proof was missing.
 
-v280 repairs liveness only. It may adopt an existing, unique process-wide PLATFORM
-Coinbase/OKX broker into the canonical manager, reconnect an existing configured
+v280 repairs liveness only. It may adopt an existing process-wide PLATFORM
+Coinbase/OKX broker into the canonical manager, reconnect that exact configured
 broker through its real connect() method, synchronize the manager's normal
 connection mirrors only after real connection success, wake authoritative v108
-position sync, and request a normal canonical capital refresh. It also immediately
-wakes v108 after v182 reasserts the fetch-proof chain instead of waiting for an
-unrelated future capital refresh.
+position sync, and request a normal canonical capital refresh when topology or
+connectivity actually changed. It also immediately wakes v108 after v182
+reasserts the fetch-proof chain instead of waiting for an unrelated future
+capital refresh.
 
-The patch never creates credentials, never marks a failed connect successful,
-never lowers broker-count/capital/notional thresholds, never fabricates position,
-nonce, execution, order, acknowledgement, fill, or heartbeat proof, never clears
-a kill switch or rejection window, and never forces activation.
+The patch never creates credentials or broker objects, never marks a failed
+connect successful, never lowers broker-count/capital/notional thresholds, never
+fabricates position, nonce, execution, order, acknowledgement, fill, or heartbeat
+proof, never clears a kill switch or rejection window, and never forces
+activation. Recovery broker I/O is bounded by a per-instance retry floor.
 """
 from __future__ import annotations
 
@@ -24,6 +26,7 @@ import importlib
 import logging
 import os
 import threading
+import time
 from functools import wraps
 from typing import Any
 
@@ -33,12 +36,20 @@ RELEASE_ID = "20260829-runtime-convergence-v280"
 _READY_FLAG = "NIJA_RUNTIME_PLATFORM_ACTIVATION_LIVENESS_V280_READY"
 _PATCH_ATTR = "_nija_runtime_platform_activation_liveness_v280"
 _LOCK = threading.RLock()
-_TRUE = {"1", "true", "yes", "on", "enabled", "y"}
 _SUPPORTED = ("coinbase", "okx")
+_LAST_CONNECT_AT: dict[tuple[str, int], float] = {}
 
 
 def _label(value: Any) -> str:
     return str(getattr(value, "value", value) or "").strip().lower()
+
+
+def _connect_retry_s() -> float:
+    try:
+        configured = float(os.environ.get("NIJA_PLATFORM_ACTIVATION_RECOVERY_RETRY_S", "30") or 30.0)
+    except (TypeError, ValueError):
+        configured = 30.0
+    return max(15.0, min(300.0, configured))
 
 
 def _is_platform_account(broker: Any) -> bool:
@@ -66,6 +77,16 @@ def _platform_key(manager: Any, venue: str) -> Any:
                 return key
     broker_type = getattr(_broker_module(), "BrokerType", None)
     return getattr(broker_type, venue.upper(), None)
+
+
+def _manager_entry(manager: Any, venue: str) -> tuple[Any, Any]:
+    mapping = getattr(manager, "_platform_brokers", None)
+    if not isinstance(mapping, dict):
+        return None, None
+    for key, broker in list(mapping.items()):
+        if _label(key) == venue:
+            return key, broker
+    return None, None
 
 
 def _global_candidate(venue: str) -> Any:
@@ -104,17 +125,10 @@ def _adopt_existing(manager: Any, venue: str, broker: Any) -> bool:
     mapping = getattr(manager, "_platform_brokers", None)
     if not isinstance(mapping, dict):
         return False
-    existing_key = None
-    existing = None
-    for key, value in list(mapping.items()):
-        if _label(key) == venue:
-            existing_key, existing = key, value
-            break
+    existing_key, existing = _manager_entry(manager, venue)
     if existing is broker:
         return True
     if existing is not None and existing is not broker:
-        # Ambiguous ownership remains fail closed. Never replace a live manager
-        # object with another process-wide object without a dedicated proof.
         LOGGER.critical(
             "PLATFORM_ACTIVATION_V280_AMBIGUOUS marker=%s venue=%s manager_id=%s global_id=%s "
             "registry_mutated=false trading_fail_closed=true",
@@ -148,6 +162,7 @@ def _connect_existing(manager: Any, venue: str, broker: Any) -> bool:
         if callable(sync) and key is not None:
             sync(key, broker)
         return True
+
     if not _credentials_configured(broker) or not _configured_by_policy(venue, broker):
         LOGGER.warning(
             "PLATFORM_ACTIVATION_V280_CONNECT_INELIGIBLE marker=%s venue=%s credentials=%s "
@@ -156,6 +171,34 @@ def _connect_existing(manager: Any, venue: str, broker: Any) -> bool:
             str(_configured_by_policy(venue, broker)).lower(),
         )
         return False
+
+    attempt_key = (venue, id(broker))
+    now = time.monotonic()
+    with _LOCK:
+        previous = float(_LAST_CONNECT_AT.get(attempt_key, 0.0) or 0.0)
+        if previous > 0.0 and (now - previous) < _connect_retry_s():
+            LOGGER.debug(
+                "PLATFORM_ACTIVATION_V280_CONNECT_DEFERRED marker=%s venue=%s retry_in_s=%.2f "
+                "duplicate_io_suppressed=true trading_fail_closed=true",
+                MARKER, venue, _connect_retry_s() - (now - previous),
+            )
+            return False
+        _LAST_CONNECT_AT[attempt_key] = now
+
+    # Prefer the manager's normal reconnect owner when available. It calls the
+    # broker's real connect() method and synchronizes readiness only on success.
+    reconnect = getattr(manager, "try_reconnect_platform_broker", None)
+    key = _platform_key(manager, venue)
+    if callable(reconnect) and key is not None:
+        try:
+            return bool(reconnect(key)) and bool(getattr(broker, "connected", False))
+        except Exception as exc:
+            LOGGER.warning(
+                "PLATFORM_ACTIVATION_V280_RECONNECT_FAILED marker=%s venue=%s error=%s:%s trading_fail_closed=true",
+                MARKER, venue, type(exc).__name__, exc,
+            )
+            return False
+
     connect = getattr(broker, "connect", None)
     if not callable(connect):
         return False
@@ -169,7 +212,6 @@ def _connect_existing(manager: Any, venue: str, broker: Any) -> bool:
         return False
     if not connected:
         return False
-    key = _platform_key(manager, venue)
     sync = getattr(manager, "_sync_reconnect_readiness", None)
     if callable(sync) and key is not None:
         sync(key, broker)
@@ -193,14 +235,16 @@ def _wake_position_sync(manager: Any, trigger: str) -> int:
         return 0
 
 
-def _request_capital_refresh(manager: Any, trigger: str) -> None:
+def _request_capital_refresh(manager: Any, trigger: str) -> bool:
     refresh = getattr(manager, "refresh_capital_authority", None)
     if not callable(refresh):
-        return
+        return False
     try:
         refresh(trigger=trigger)
+        return True
     except Exception:
         LOGGER.debug("v280 capital refresh failed", exc_info=True)
+        return False
 
 
 def reconcile_once() -> dict[str, str]:
@@ -208,25 +252,37 @@ def reconcile_once() -> dict[str, str]:
     outcomes: dict[str, str] = {}
     if manager is None:
         return {"manager": "missing"}
+
+    topology_changed = False
     for venue in _SUPPORTED:
+        _, before = _manager_entry(manager, venue)
         candidate = _global_candidate(venue)
         if candidate is None:
             outcomes[venue] = "no_existing_platform_object"
             continue
+        before_connected = bool(getattr(candidate, "connected", False))
         if not _adopt_existing(manager, venue, candidate):
             outcomes[venue] = "ownership_ambiguous"
             continue
-        if _connect_existing(manager, venue, candidate):
+        if before is None:
+            topology_changed = True
+        connected = _connect_existing(manager, venue, candidate)
+        if connected:
             outcomes[venue] = "connected"
+            if not before_connected:
+                topology_changed = True
         else:
             outcomes[venue] = "not_connected"
+
     workers = _wake_position_sync(manager, "v280_platform_reconcile")
-    _request_capital_refresh(manager, "v280_platform_reconcile")
+    refresh_requested = False
+    if topology_changed or workers > 0:
+        refresh_requested = _request_capital_refresh(manager, "v280_platform_reconcile")
     LOGGER.critical(
         "PLATFORM_ACTIVATION_V280_RECONCILE marker=%s outcomes=%s position_workers=%d "
-        "capital_refresh_requested=true thresholds_unchanged=true execution_proof_fabricated=false "
-        "forced_activation=false safety_gates_bypassed=false",
-        MARKER, outcomes, workers,
+        "topology_changed=%s capital_refresh_requested=%s duplicate_io_bounded=true "
+        "thresholds_unchanged=true execution_proof_fabricated=false forced_activation=false safety_gates_bypassed=false",
+        MARKER, outcomes, workers, str(topology_changed).lower(), str(refresh_requested).lower(),
     )
     return outcomes
 
@@ -304,5 +360,5 @@ def install_import_hook() -> bool:
 __all__ = [
     "MARKER", "RELEASE_ID", "install", "install_import_hook", "reconcile_once",
     "_global_candidate", "_adopt_existing", "_connect_existing", "_wake_position_sync",
-    "_patch_v182_install",
+    "_patch_v182_install", "_connect_retry_s",
 ]
