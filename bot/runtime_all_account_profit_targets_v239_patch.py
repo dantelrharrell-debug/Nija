@@ -168,6 +168,24 @@ def _audit_all_account_position_exit_coverage_v281() -> bool:
         return False
 
 
+def _install_kraken_user_position_eligibility_v282() -> bool:
+    """Install account-local user position proof and v281 liveness hardening."""
+    try:
+        v282 = importlib.import_module("bot.runtime_kraken_user_position_eligibility_v282_patch")
+        install = getattr(v282, "install", None)
+        if not callable(install):
+            return False
+        return bool(install())
+    except Exception as exc:
+        os.environ["NIJA_KRAKEN_USER_POSITION_ELIGIBILITY_V282_READY"] = "0"
+        LOGGER.error(
+            "ALL_ACCOUNT_PROFIT_TARGETS_V239_V282_ERROR marker=%s error=%s:%s "
+            "user_entries_fail_closed=true platform_activation_unchanged=true exits_preserved=true",
+            MARKER, type(exc).__name__, exc,
+        )
+        return False
+
+
 def install() -> bool:
     try:
         patched = _patch_supervisor()
@@ -192,6 +210,7 @@ def install() -> bool:
     # all-account coverage failure without unnecessarily revoking safe platform
     # execution.
     v281_installed = _audit_all_account_position_exit_coverage_v281()
+    v282_installed = _install_kraken_user_position_eligibility_v282()
 
     if ready:
         tp1, tp2, tp3 = _targets()
@@ -200,14 +219,17 @@ def install() -> bool:
             "tp1_pct=%.4f tp2_pct=%.4f tp3_pct=%.4f existing_targets_preserved=true "
             "fee_slippage_min_net_floor_preserved=true fill_confirmation_preserved=true stop_loss_unchanged=true "
             "trailing_profit_unchanged=true protective_exit_authority_v265=true "
-            "all_account_coverage_v281_installed=%s execution_authority_unchanged=true safety_gates_bypassed=false",
-            MARKER, tp1, tp2, tp3, str(v281_installed).lower(),
+            "all_account_coverage_v281_installed=%s kraken_user_position_eligibility_v282_installed=%s "
+            "execution_authority_unchanged=true safety_gates_bypassed=false",
+            MARKER, tp1, tp2, tp3, str(v281_installed).lower(), str(v282_installed).lower(),
         )
     else:
         LOGGER.error(
             "ALL_ACCOUNT_PROFIT_TARGETS_V239_NOT_READY marker=%s base_ready=%s protective_exit_authority_v265=%s "
-            "all_account_coverage_v281_installed=%s new_entries_fail_closed=true existing_exits_remain_allowed=true",
-            MARKER, str(base_ready).lower(), str(protective_ready).lower(), str(v281_installed).lower(),
+            "all_account_coverage_v281_installed=%s kraken_user_position_eligibility_v282_installed=%s "
+            "new_entries_fail_closed=true existing_exits_remain_allowed=true",
+            MARKER, str(base_ready).lower(), str(protective_ready).lower(),
+            str(v281_installed).lower(), str(v282_installed).lower(),
         )
     return ready
 
@@ -219,4 +241,5 @@ def install_import_hook() -> bool:
 __all__ = [
     "MARKER", "install", "install_import_hook", "_with_profit_targets", "_targets",
     "_reassert_protective_exit_authority_v265", "_audit_all_account_position_exit_coverage_v281",
+    "_install_kraken_user_position_eligibility_v282",
 ]
