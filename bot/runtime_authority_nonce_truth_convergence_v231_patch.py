@@ -12,9 +12,21 @@ Production on 2026-08-25 exposed two coupled readiness defects:
 
 v231 keeps those facts independent. Writer authority is reconstructed only from
 current distributed-writer authority, a fresh writer heartbeat, and a clear kill
-switch. Nonce readiness remains the existing v16/current runtime nonce proof; if
-Kraken is connected, no Coinbase-only shortcut is permitted. Execution readiness
-requires both independent proofs.
+switch. Nonce readiness is reconstructed from the canonical raw nonce sync/lease
+gates; if Kraken is connected, no Coinbase-only shortcut is permitted.
+
+Production on 2026-08-29 then exposed a second coupling: v16's
+``_runtime_writer_nonce_ready`` checks the genuine heartbeat execution marker
+*before* its raw nonce gates. A missing ORDER/FILL marker therefore made both
+``execution_ready`` and ``nonce_ready`` false even when raw nonce authority was
+healthy. v272 separates those proofs at the v231 convergence boundary:
+
+* ``nonce_ready`` requires the canonical raw nonce sync/lease proof only;
+* ``execution_ready`` additionally requires a fresh, stage-sufficient heartbeat
+  execution marker. v169 provenance validation remains authoritative, so only
+  ``source=heartbeat_trade`` / ``proof_kind=execution_probe`` can satisfy
+  ORDER_VERIFY/FILL_VERIFY policy;
+* writer authority remains an independent current distributed-writer proof.
 
 When position synchronization is still false after a healthy authority heartbeat,
 v231 wakes the existing v161 authoritative position-sync monitor immediately.
@@ -36,8 +48,10 @@ from typing import Any
 
 LOGGER = logging.getLogger("nija.runtime_authority_nonce_truth_convergence_v231")
 MARKER = "20260825-runtime-authority-nonce-truth-convergence-v231"
+V272_MARKER = "20260829-nonce-execution-proof-separation-v272"
 RELEASE_ID = "20260825-runtime-convergence-v231"
 _READY_FLAG = "NIJA_RUNTIME_AUTHORITY_NONCE_TRUTH_V231_READY"
+_V272_READY_FLAG = "NIJA_NONCE_EXECUTION_PROOF_SEPARATION_V272_READY"
 _PATCH_ATTR = "_nija_runtime_authority_nonce_truth_v231"
 _LOCK = threading.RLock()
 _INSTALLED = False
@@ -89,6 +103,49 @@ def _current_writer_authority_proof() -> tuple[bool, str]:
     return True, f"writer_authority_current;{heartbeat_detail or 'heartbeat_fresh'}"
 
 
+def _raw_nonce_authority_proof() -> tuple[bool, str]:
+    """Return raw nonce sync/lease truth without consulting execution proof."""
+    try:
+        authority = importlib.import_module("bot.execution_authority_context")
+        probe = getattr(authority, "_runtime_nonce_authority_status", None)
+        if not callable(probe):
+            return False, "runtime_nonce_authority_probe_missing"
+        ready, detail = probe()
+        if not bool(ready):
+            return False, str(detail or "runtime_nonce_authority_not_ready")
+        return True, str(detail or "raw_nonce_authority_current")
+    except Exception as exc:
+        return False, f"runtime_nonce_authority_probe_failed:{type(exc).__name__}:{exc}"
+
+
+def _execution_marker_proof() -> tuple[bool, str]:
+    """Return genuine execution-marker truth with v169 provenance enforcement."""
+    try:
+        status = getattr(_tsm(), "_heartbeat_verification_status", None)
+        if not callable(status):
+            return False, "heartbeat_verification_probe_missing"
+        ready, detail, meta = status()
+        meta = dict(meta or {})
+        if not bool(ready):
+            return False, str(detail or "heartbeat_execution_marker_not_ready")
+        source = str(meta.get("source", "") or "").strip().lower()
+        proof_kind = str(meta.get("proof_kind", "") or "").strip().lower()
+        # v169 normally enforces these fields in the wrapped status function.
+        # Re-check them here so v272 remains fail closed if wrapper ordering ever
+        # changes during a late import/reassertion.
+        required = str(meta.get("required_stage", "ORDER_VERIFY") or "ORDER_VERIFY").strip().upper()
+        if required in {"ORDER_VERIFY", "FILL_VERIFY"}:
+            if source != "heartbeat_trade" or proof_kind != "execution_probe":
+                return False, (
+                    "execution_provenance_invalid:"
+                    f"source={source or 'missing'}:kind={proof_kind or 'missing'}"
+                )
+        stage = str(meta.get("stage", "") or "").strip().upper()
+        return True, f"execution_marker_current:stage={stage or 'verified'}"
+    except Exception as exc:
+        return False, f"heartbeat_verification_probe_failed:{type(exc).__name__}:{exc}"
+
+
 def _kraken_nonce_required() -> bool:
     """Use canonical runtime broker topology, never legacy env absence."""
     tsm = _tsm()
@@ -116,22 +173,27 @@ def _patch_v16_proof_collection() -> bool:
         proofs = dict(proofs or {})
         details = dict(details or {})
 
-        # Preserve the existing v16 nonce proof. It already flows through the
-        # canonical runtime writer/nonce gate and must remain false while a
-        # connected Kraken lease is pending. Only authority is decoupled from it.
-        nonce_ready = bool(proofs.get("nonce_ready", False))
         authority_ready, authority_detail = _current_writer_authority_proof()
+        nonce_ready, nonce_detail = _raw_nonce_authority_proof()
+        execution_marker_ready, execution_marker_detail = _execution_marker_proof()
         execution_pipeline = bool(details.get("execution_pipeline_wired", False))
         risk_ready = bool(proofs.get("risk_ready", False))
 
         proofs["authority_ready"] = bool(authority_ready)
         proofs["nonce_ready"] = bool(nonce_ready)
         proofs["execution_ready"] = bool(
-            execution_pipeline and risk_ready and authority_ready and nonce_ready
+            execution_pipeline
+            and risk_ready
+            and authority_ready
+            and nonce_ready
+            and execution_marker_ready
         )
         details["v231_writer_authority"] = authority_detail
         details["v231_kraken_nonce_required"] = _kraken_nonce_required()
-        details["v231_nonce_ready"] = nonce_ready
+        details["v231_nonce_ready"] = bool(nonce_ready)
+        details["v272_raw_nonce_detail"] = nonce_detail
+        details["v272_execution_marker_ready"] = bool(execution_marker_ready)
+        details["v272_execution_marker_detail"] = execution_marker_detail
         return proofs, details
 
     setattr(collect_v231, _PATCH_ATTR, True)
@@ -141,38 +203,27 @@ def _patch_v16_proof_collection() -> bool:
 
 
 def _correct_heartbeat_nonce_truth() -> tuple[bool, str]:
-    """Undo only the legacy Coinbase-only nonce shortcut when Kraken is active."""
-    if not _kraken_nonce_required():
-        return True, "kraken_nonce_not_applicable"
-
-    # Re-use the canonical v16 nonce proof after v231 collection patching.
-    try:
-        proofs, _details = _v16()._collect_proofs()
-        nonce_ready = bool(dict(proofs or {}).get("nonce_ready", False))
-    except Exception as exc:
-        nonce_ready = False
-        LOGGER.warning(
-            "AUTHORITY_NONCE_V231_NONCE_PROBE_ERROR marker=%s error=%s:%s trading_fail_closed=true",
-            MARKER,
-            type(exc).__name__,
-            exc,
-        )
-
+    """Correct nonce readiness from raw nonce authority, never execution proof."""
+    nonce_ready, nonce_detail = _raw_nonce_authority_proof()
     readiness = _readiness()
     table = dict(readiness.snapshot())
+
     if nonce_ready:
         if not bool(table.get("nonce_ready", False)):
             readiness.mark_ready("nonce_ready")
-        return True, "kraken_nonce_current_proof_true"
+        return True, nonce_detail or "raw_nonce_current_proof_true"
 
     if bool(table.get("nonce_ready", False)):
-        readiness.revoke_ready("nonce_ready", reason="v231_active_kraken_nonce_proof_false")
+        readiness.revoke_ready("nonce_ready", reason="v272_raw_nonce_authority_false")
         LOGGER.warning(
-            "AUTHORITY_NONCE_V231_FALSE_COINBASE_SHORTCUT_REVOKED marker=%s "
-            "kraken_active=true nonce_ready=false proof_fabricated=false trading_fail_closed=true",
-            MARKER,
+            "AUTHORITY_NONCE_V272_RAW_NONCE_REVOKED marker=%s kraken_nonce_required=%s "
+            "detail=%s nonce_ready=false execution_marker_ignored_for_nonce=true "
+            "proof_fabricated=false trading_fail_closed=true",
+            V272_MARKER,
+            str(_kraken_nonce_required()).lower(),
+            nonce_detail or "raw_nonce_authority_false",
         )
-    return False, "kraken_nonce_current_proof_false"
+    return False, nonce_detail or "raw_nonce_current_proof_false"
 
 
 def _wake_position_sync_if_needed() -> bool:
@@ -239,6 +290,7 @@ def _register_manifest() -> bool:
         if not isinstance(required, dict):
             return False
         required["runtime_authority_nonce_truth_v231"] = _READY_FLAG
+        required["nonce_execution_proof_separation_v272"] = _V272_READY_FLAG
         return True
     except Exception:
         return False
@@ -252,6 +304,7 @@ def install() -> bool:
         manifest_ok = _register_manifest()
         ready = bool(v16_ok and heartbeat_ok and manifest_ok)
         os.environ[_READY_FLAG] = "1" if ready else "0"
+        os.environ[_V272_READY_FLAG] = "1" if ready else "0"
         _INSTALLED = ready
         LOGGER.critical(
             "RUNTIME_AUTHORITY_NONCE_TRUTH_V231 marker=%s ready=%s "
@@ -263,6 +316,16 @@ def install() -> bool:
             MARKER,
             str(ready).lower(),
         )
+        LOGGER.critical(
+            "NONCE_EXECUTION_PROOF_SEPARATION_V272 marker=%s ready=%s "
+            "raw_nonce_independent=true execution_marker_independent=true "
+            "v169_execution_provenance_required=true nonce_from_execution_marker=false "
+            "execution_requires_raw_nonce=true execution_requires_genuine_marker=true "
+            "writer_authority_independent=true readiness_fabricated=false "
+            "execution_proof_fabricated=false forced_activation=false safety_gates_bypassed=false",
+            V272_MARKER,
+            str(ready).lower(),
+        )
         return ready
 
 
@@ -272,10 +335,13 @@ def install_import_hook() -> bool:
 
 __all__ = [
     "MARKER",
+    "V272_MARKER",
     "RELEASE_ID",
     "install",
     "install_import_hook",
     "_current_writer_authority_proof",
+    "_raw_nonce_authority_proof",
+    "_execution_marker_proof",
     "_kraken_nonce_required",
     "_correct_heartbeat_nonce_truth",
     "_wake_position_sync_if_needed",
