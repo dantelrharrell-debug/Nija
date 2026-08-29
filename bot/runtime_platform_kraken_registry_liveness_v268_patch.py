@@ -17,13 +17,27 @@ by assigning GLOBAL_PLATFORM_BROKERS[key] = broker.connected.  A transient
 connection false therefore removed the instance-presence guard and could allow a
 second platform broker object to be created on a later initialization pass.
 
-v268 repairs only that ownership/liveness split.  It preserves a broker-instance
-presence guard whenever an object exists, keeps connectivity in the dedicated
-connected registry, and can reconcile an already-split Kraken manager only when
-there is exactly one live, actually-connected PLATFORM KrakenBroker candidate.
-Ambiguous multiple connected platform instances remain fail closed.  No balance,
-capital freshness, nonce, execution authority, kill-switch state, order/fill
-proof, or broker connection is fabricated.
+The 2026-08-29 runtime then exposed a second form of the same split: a unique,
+connected process-wide PLATFORM KrakenBroker could exist while a replacement
+canonical MultiAccountBrokerManager had no Kraken key at all.  The original v268
+implementation treated that missing manager entry as already healthy, so the
+trading-state nonce/lease applicability probe could report "Kraken broker is not
+active" even though authoritative connected Kraken state existed elsewhere in the
+same process.
+
+v268 now repairs both forms of the ownership/liveness split.  It preserves a
+broker-instance presence guard whenever an object exists, keeps connectivity in
+the dedicated connected registry, can reconcile a disconnected manager copy, and
+can populate a missing canonical manager Kraken entry only when there is exactly
+one live, actually-connected PLATFORM KrakenBroker candidate.  User brokers never
+satisfy the repair.  Ambiguous multiple connected platform instances remain fail
+closed.  The nonce applicability probe performs the same reconciliation just in
+time before deciding Kraken is inactive, closing the startup ordering race.  A
+successful canonical handoff also wakes the existing authoritative platform
+position-sync dispatcher; it never marks that fetch successful itself.
+
+No balance, position, capital freshness, nonce, execution authority, kill-switch
+state, order/fill proof, or broker connection is fabricated.
 """
 from __future__ import annotations
 
@@ -34,13 +48,15 @@ import sys
 import threading
 from functools import wraps
 from types import ModuleType
-from typing import Any
+from typing import Any, Callable
 
 LOGGER = logging.getLogger("nija.runtime_platform_kraken_registry_liveness_v268")
 MARKER = "20260828-platform-kraken-registry-liveness-v268"
 RELEASE_ID = "20260828-runtime-convergence-v268"
 _READY_FLAG = "NIJA_RUNTIME_PLATFORM_KRAKEN_REGISTRY_LIVENESS_V268_READY"
 _PATCH_ATTR = "_nija_runtime_platform_kraken_registry_liveness_v268"
+_NONCE_PATCH_ATTR = "_nija_runtime_platform_kraken_registry_liveness_v268_nonce_probe"
+_POSITION_SYNC_TRIGGER = "platform_kraken_registry_v268_repair"
 _LOCK = threading.RLock()
 
 
@@ -128,6 +144,25 @@ def _connected_platform_kraken_candidates(broker_module: Any) -> list[Any]:
     return result
 
 
+def _kraken_key_for_candidate(broker_module: Any, broker: Any) -> Any:
+    """Resolve the manager key for a proven PLATFORM Kraken candidate.
+
+    Prefer the candidate's own broker_type identity so a replacement manager gets
+    the exact enum object used by the broker.  Fall back to BrokerType.KRAKEN from
+    the canonical broker module.  Never guess a string key when the canonical
+    enum cannot be resolved.
+    """
+    candidate_key = getattr(broker, "broker_type", None)
+    if _label(candidate_key) == "kraken":
+        return candidate_key
+
+    broker_type = getattr(broker_module, "BrokerType", None)
+    candidate_key = getattr(broker_type, "KRAKEN", None)
+    if _label(candidate_key) == "kraken":
+        return candidate_key
+    return None
+
+
 def _write_registry_truth(manager: Any, broker_module: Any, key: Any, broker: Any) -> None:
     """Write instance-presence and connectivity to their separate registries."""
     name = _label(key)
@@ -154,6 +189,58 @@ def _write_registry_truth(manager: Any, broker_module: Any, key: Any, broker: An
         local_connected[name] = _actually_connected(broker)
 
 
+def _sync_reconnect_readiness(manager: Any, key: Any, broker: Any) -> bool:
+    sync = getattr(manager, "_sync_reconnect_readiness", None)
+    if not callable(sync):
+        return True
+    try:
+        sync(key, broker)
+        return True
+    except Exception as exc:
+        LOGGER.warning(
+            "PLATFORM_KRAKEN_REGISTRY_V268_SYNC_FAILED marker=%s error=%s:%s "
+            "broker_connected=%s trading_fail_closed=true",
+            MARKER,
+            type(exc).__name__,
+            exc,
+            str(_actually_connected(broker)).lower(),
+        )
+        return False
+
+
+def _wake_position_sync(manager: Any) -> bool:
+    """Wake the existing authoritative platform position-sync dispatcher.
+
+    Dispatching is not success proof.  v108/v182 still require the authenticated
+    broker fetch and adoption path to complete before readiness can turn true.
+    """
+    try:
+        v108 = importlib.import_module("bot.platform_position_sync_v108_patch")
+        dispatch = getattr(v108, "dispatch_platform_position_sync", None)
+        if not callable(dispatch):
+            raise RuntimeError("v108_dispatch_unavailable")
+        dispatched = int(dispatch(manager, trigger=_POSITION_SYNC_TRIGGER) or 0)
+        LOGGER.critical(
+            "PLATFORM_KRAKEN_REGISTRY_V268_POSITION_SYNC_WAKE marker=%s dispatched=%d "
+            "authoritative_v108_only=true synthetic_success=false position_mutated=false "
+            "execution_authority_unchanged=true",
+            MARKER,
+            dispatched,
+        )
+        return True
+    except Exception as exc:
+        LOGGER.warning(
+            "PLATFORM_KRAKEN_REGISTRY_V268_POSITION_SYNC_WAKE_FAILED marker=%s error=%s:%s "
+            "synthetic_success=false trading_fail_closed=true",
+            MARKER,
+            type(exc).__name__,
+            exc,
+        )
+        # Registry repair remains valid. Position readiness itself stays fail
+        # closed and the normal v108/v202 retry cadence can retry later.
+        return False
+
+
 def _repair_manager_registry(manager: Any, broker_module: Any | None = None) -> bool:
     """Reconcile a split Kraken registry only with unambiguous live evidence."""
     if manager is None:
@@ -167,11 +254,64 @@ def _repair_manager_registry(manager: Any, broker_module: Any | None = None) -> 
         return False
 
     key, local = _kraken_mapping_entry(manager)
-    if key is None:
-        # No manager Kraken entry: keep existing global semantics untouched.
-        return True
-
     connected_candidates = _connected_platform_kraken_candidates(broker_module)
+
+    if key is None:
+        if len(connected_candidates) > 1:
+            LOGGER.critical(
+                "PLATFORM_KRAKEN_REGISTRY_V268_AMBIGUOUS marker=%s connected_candidates=%d "
+                "manager_entry_missing=true registry_mutated=false trading_fail_closed=true",
+                MARKER,
+                len(connected_candidates),
+            )
+            return False
+        if not connected_candidates:
+            # No manager entry and no connected PLATFORM candidate is legitimate
+            # for a deployment where Kraken is not active.  Do not fabricate one.
+            return True
+
+        canonical = connected_candidates[0]
+        resolved_key = _kraken_key_for_candidate(broker_module, canonical)
+        if resolved_key is None:
+            LOGGER.critical(
+                "PLATFORM_KRAKEN_REGISTRY_V268_MISSING_KEY_UNRESOLVED marker=%s "
+                "unique_connected_platform_candidate=true registry_mutated=false "
+                "trading_fail_closed=true",
+                MARKER,
+            )
+            return False
+
+        registry_lock = getattr(manager, "_registry_meta_lock", None)
+        if registry_lock is None:
+            registry_lock = _LOCK
+        inserted = False
+        with registry_lock:
+            current_key, current_local = _kraken_mapping_entry(manager)
+            if current_key is None:
+                mapping[resolved_key] = canonical
+                key, local = resolved_key, None
+                inserted = True
+            else:
+                # Another thread repaired the map while we were resolving the
+                # candidate.  Continue through the ordinary reconciliation path.
+                key, local = current_key, current_local
+
+        if inserted:
+            _write_registry_truth(manager, broker_module, key, canonical)
+            if not _sync_reconnect_readiness(manager, key, canonical):
+                return False
+            _wake_position_sync(manager)
+            LOGGER.critical(
+                "PLATFORM_KRAKEN_REGISTRY_V268_RECONCILED marker=%s old_id=0 canonical_id=%s "
+                "missing_manager_entry=true unique_connected_platform_candidate=true "
+                "user_brokers_excluded=true authoritative_position_sync_woken=true "
+                "balance_fabricated=false capital_mutated=false freshness_extended=false "
+                "nonce_policy_unchanged=true execution_authority_unchanged=true",
+                MARKER,
+                id(canonical),
+            )
+            return True
+
     canonical = local if _actually_connected(local) else None
 
     if canonical is not None:
@@ -212,25 +352,14 @@ def _repair_manager_registry(manager: Any, broker_module: Any | None = None) -> 
     _write_registry_truth(manager, broker_module, key, canonical)
 
     if replaced:
-        sync = getattr(manager, "_sync_reconnect_readiness", None)
-        if callable(sync):
-            try:
-                sync(key, canonical)
-            except Exception as exc:
-                LOGGER.warning(
-                    "PLATFORM_KRAKEN_REGISTRY_V268_SYNC_FAILED marker=%s error=%s:%s "
-                    "broker_connected=%s trading_fail_closed=true",
-                    MARKER,
-                    type(exc).__name__,
-                    exc,
-                    str(_actually_connected(canonical)).lower(),
-                )
-                return False
+        if not _sync_reconnect_readiness(manager, key, canonical):
+            return False
+        _wake_position_sync(manager)
         LOGGER.critical(
             "PLATFORM_KRAKEN_REGISTRY_V268_RECONCILED marker=%s old_id=%s canonical_id=%s "
-            "unique_connected_platform_candidate=true user_brokers_excluded=true "
-            "balance_fabricated=false capital_mutated=false freshness_extended=false "
-            "nonce_policy_unchanged=true execution_authority_unchanged=true",
+            "missing_manager_entry=false unique_connected_platform_candidate=true user_brokers_excluded=true "
+            "authoritative_position_sync_woken=true balance_fabricated=false capital_mutated=false "
+            "freshness_extended=false nonce_policy_unchanged=true execution_authority_unchanged=true",
             MARKER,
             id(local) if local is not None else 0,
             id(canonical),
@@ -272,6 +401,58 @@ def _patch_refresh_registry() -> bool:
     return True
 
 
+def _wrap_nonce_topology_probe(current: Callable[[], bool]) -> Callable[[], bool]:
+    """Reconcile canonical Kraken ownership before deciding nonce applicability."""
+    if bool(getattr(current, _NONCE_PATCH_ATTR, False)):
+        return current
+
+    @wraps(current)
+    def kraken_nonce_gates_required_v268() -> bool:
+        manager = _canonical_manager()
+        if manager is not None:
+            try:
+                broker_module = _broker_module()
+                if broker_module is None:
+                    # Topology cannot be inspected; require the gate rather than
+                    # fabricating Coinbase/OKX-only readiness.
+                    return True
+                if not _repair_manager_registry(manager, broker_module):
+                    LOGGER.critical(
+                        "PLATFORM_KRAKEN_REGISTRY_V268_NONCE_TOPOLOGY_FAIL_CLOSED marker=%s "
+                        "repair_ready=false nonce_gate_required=true execution_authority_unchanged=true",
+                        MARKER,
+                    )
+                    return True
+            except Exception as exc:
+                LOGGER.warning(
+                    "PLATFORM_KRAKEN_REGISTRY_V268_NONCE_TOPOLOGY_ERROR marker=%s error=%s:%s "
+                    "nonce_gate_required=true trading_fail_closed=true",
+                    MARKER,
+                    type(exc).__name__,
+                    exc,
+                )
+                return True
+        return bool(current())
+
+    setattr(kraken_nonce_gates_required_v268, _NONCE_PATCH_ATTR, True)
+    setattr(kraken_nonce_gates_required_v268, "__wrapped__", current)
+    return kraken_nonce_gates_required_v268
+
+
+def _patch_nonce_topology_probe() -> bool:
+    try:
+        module = importlib.import_module("bot.trading_state_machine")
+        current = getattr(module, "_kraken_nonce_gates_required", None)
+    except Exception:
+        return False
+    if not callable(current):
+        return False
+    wrapped = _wrap_nonce_topology_probe(current)
+    setattr(module, "_kraken_nonce_gates_required", wrapped)
+    installed = getattr(module, "_kraken_nonce_gates_required", None)
+    return bool(callable(installed) and getattr(installed, _NONCE_PATCH_ATTR, False))
+
+
 def _patch_release_manifest() -> bool:
     try:
         manifest = importlib.import_module("bot.runtime_release_manifest_patch")
@@ -291,17 +472,19 @@ def _patch_release_manifest() -> bool:
 def install() -> bool:
     with _LOCK:
         patched = _patch_refresh_registry()
+        nonce_probe = _patch_nonce_topology_probe()
         manager = _canonical_manager()
         repaired = _repair_manager_registry(manager) if manager is not None else True
         manifest = _patch_release_manifest()
-        ready = bool(patched and repaired and manifest)
+        ready = bool(patched and nonce_probe and repaired and manifest)
         os.environ[_READY_FLAG] = "1" if ready else "0"
         if not ready:
             LOGGER.critical(
                 "RUNTIME_PLATFORM_KRAKEN_REGISTRY_LIVENESS_V268_FAILED marker=%s "
-                "refresh_patch=%s repaired=%s manifest=%s trading_fail_closed=true",
+                "refresh_patch=%s nonce_topology_probe=%s repaired=%s manifest=%s trading_fail_closed=true",
                 MARKER,
                 str(patched).lower(),
+                str(nonce_probe).lower(),
                 str(repaired).lower(),
                 str(manifest).lower(),
             )
@@ -309,9 +492,11 @@ def install() -> bool:
         LOGGER.critical(
             "RUNTIME_PLATFORM_KRAKEN_REGISTRY_LIVENESS_V268 marker=%s ready=true "
             "instance_presence_separate_from_connectivity=true unique_connected_repair_only=true "
-            "user_brokers_excluded=true capital_thresholds_unchanged=true freshness_extended=false "
-            "nonce_policy_unchanged=true kill_switch_unchanged=true execution_proof_fabricated=false "
-            "forced_trade=false safety_gates_bypassed=false",
+            "missing_manager_entry_repair=true nonce_topology_probe=true "
+            "authoritative_position_sync_wakeup_on_repair=true user_brokers_excluded=true "
+            "capital_thresholds_unchanged=true freshness_extended=false nonce_policy_unchanged=true "
+            "kill_switch_unchanged=true execution_proof_fabricated=false forced_trade=false "
+            "safety_gates_bypassed=false",
             MARKER,
         )
         return True
@@ -330,8 +515,13 @@ __all__ = [
     "_is_platform_account",
     "_actually_connected",
     "_connected_platform_kraken_candidates",
+    "_kraken_key_for_candidate",
     "_write_registry_truth",
+    "_sync_reconnect_readiness",
+    "_wake_position_sync",
     "_repair_manager_registry",
     "_patch_refresh_registry",
+    "_wrap_nonce_topology_probe",
+    "_patch_nonce_topology_probe",
     "_patch_release_manifest",
 ]
