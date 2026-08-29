@@ -12,6 +12,7 @@ before writer authority has been established.
 
 import json
 import os
+import re
 import sys
 import urllib.error
 import urllib.request
@@ -19,6 +20,7 @@ from pathlib import Path
 
 TRUE = {"1", "true", "yes", "on", "enabled"}
 FALSE = {"0", "false", "no", "off", "disabled"}
+_AGENT_ID_RE = re.compile(r"^agent_[A-Za-z0-9_-]+$")
 
 BROKERS = {
     "kraken": {
@@ -109,8 +111,22 @@ def _broker_status(name: str, contract: dict[str, tuple[str, ...]]) -> dict[str,
     }
 
 
+def _collect_voice_agent_ids(value: object) -> set[str]:
+    """Collect only JustCall-style AI agent identifiers from an API payload."""
+    found: set[str] = set()
+    if isinstance(value, dict):
+        for item in value.values():
+            found.update(_collect_voice_agent_ids(item))
+    elif isinstance(value, list):
+        for item in value:
+            found.update(_collect_voice_agent_ids(item))
+    elif isinstance(value, str) and _AGENT_ID_RE.fullmatch(value):
+        found.add(value)
+    return found
+
+
 def _check_justcall_outreach() -> None:
-    """Emit a redacted JustCall authentication check without affecting startup."""
+    """Emit a redacted JustCall authentication/agent check without affecting startup."""
     print("\n=== JUSTCALL OUTREACH ===")
     api_key = os.getenv("JUSTCALL_API_KEY", "").strip()
     api_secret = os.getenv("JUSTCALL_API_SECRET", "").strip()
@@ -132,7 +148,7 @@ def _check_justcall_outreach() -> None:
         return
 
     request = urllib.request.Request(
-        "https://api.justcall.io/v2.1/voice-agents/list?page=0&per_page=1&order=desc",
+        "https://api.justcall.io/v2.1/voice-agents/list?page=0&per_page=100&order=desc",
         headers={
             "Authorization": f"{api_key}:{api_secret}",
             "Accept": "application/json",
@@ -152,6 +168,20 @@ def _check_justcall_outreach() -> None:
                 f"{'connected' if authenticated else 'authentication_or_api_failed'} "
                 f"voice_agents_response_received={str(bool(body)).lower()}"
             )
+            if authenticated and body:
+                try:
+                    payload = json.loads(body.decode("utf-8"))
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    print("JUSTCALL_VOICE_AGENT_DISCOVERY state=response_unparseable")
+                else:
+                    agent_ids = sorted(_collect_voice_agent_ids(payload))
+                    if agent_ids:
+                        print(
+                            "JUSTCALL_VOICE_AGENT_DISCOVERY "
+                            f"state=found count={len(agent_ids)} ids={','.join(agent_ids)}"
+                        )
+                    else:
+                        print("JUSTCALL_VOICE_AGENT_DISCOVERY state=none_found count=0")
     except urllib.error.HTTPError as exc:
         print(
             "JUSTCALL_OUTREACH_STATUS configured=true authenticated=false "
