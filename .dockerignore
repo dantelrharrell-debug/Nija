@@ -66,7 +66,7 @@ mobile/
 frontend/
 ui/
 
-# Kubernetes configs (not needed in container)
+# Kubernetes configs (not needed at runtime)
 k8s/
 
 # Security reports
@@ -113,6 +113,7 @@ scripts/*
 !scripts/apply_canonical_launcher_v26.py
 !scripts/apply_writer_generation_handoff_v45.py
 !scripts/apply_render_signal_forwarding_v262.py
+!scripts/apply_render_outreach_frontdoor.py
 !scripts/canonical_runtime_launcher_v26.py
 !scripts/render_memory_pressure_guard.py
 !scripts/apply_direct_broker_prebootstrap_v27.py
