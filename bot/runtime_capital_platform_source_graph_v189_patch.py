@@ -14,7 +14,12 @@ adapter does not expose a connected attribute).  It never supplies a balance,
 never reuses a stale balance, never changes expected-broker thresholds, never
 extends freshness/publication expiry, and never promotes a partial snapshot.
 The original CapitalAuthority refresh path still performs the authenticated
-balance read and all existing 3/3 completeness/freshness gates remain intact.
+balance read and all existing completeness/freshness gates remain intact.
+
+Production on 2026-08-29 then proved a separate denominator problem when three
+platform brokers were registered but Kraken was disconnected.  v189 therefore
+chains the v270 registered-platform completeness guard so connected-source
+selection can never redefine the registered platform denominator.
 """
 from __future__ import annotations
 
@@ -165,6 +170,27 @@ def _patch_capital_authority_refresh() -> bool:
     return True
 
 
+def _install_registered_platform_completeness_v270() -> bool:
+    try:
+        companion = importlib.import_module(
+            "bot.runtime_registered_platform_capital_completeness_v270_patch"
+        )
+        installer = getattr(companion, "install_import_hook", None) or getattr(
+            companion, "install", None
+        )
+        return bool(callable(installer) and installer())
+    except Exception as exc:
+        LOGGER.critical(
+            "REGISTERED_PLATFORM_CAPITAL_V270_CHAIN_FAILED marker=%s error=%s:%s "
+            "trading_fail_closed=true",
+            MARKER,
+            type(exc).__name__,
+            exc,
+            exc_info=True,
+        )
+        return False
+
+
 def _patch_release_manifest() -> bool:
     try:
         manifest = importlib.import_module("bot.runtime_release_manifest_patch")
@@ -184,23 +210,25 @@ def _patch_release_manifest() -> bool:
 def install() -> bool:
     with _LOCK:
         authority_ok = _patch_capital_authority_refresh()
+        v270_ok = _install_registered_platform_completeness_v270()
         manifest_ok = _patch_release_manifest()
-        ready = bool(authority_ok and manifest_ok)
+        ready = bool(authority_ok and v270_ok and manifest_ok)
         os.environ[_READY_FLAG] = "1" if ready else "0"
         if not ready:
             LOGGER.critical(
                 "RUNTIME_CAPITAL_PLATFORM_SOURCE_GRAPH_V189_FAILED marker=%s authority=%s "
-                "manifest=%s trading_fail_closed=true",
+                "registered_platform_v270=%s manifest=%s trading_fail_closed=true",
                 MARKER,
                 str(authority_ok).lower(),
+                str(v270_ok).lower(),
                 str(manifest_ok).lower(),
             )
             return False
         LOGGER.critical(
             "RUNTIME_CAPITAL_PLATFORM_SOURCE_GRAPH_V189 marker=%s ready=true "
             "canonical_registry_only=true connected_platform_sources_only=true "
-            "balances_fabricated=false stale_balance_reused=false "
-            "completeness_threshold_unchanged=true freshness_ttl_unchanged=true "
+            "registered_platform_v270=true balances_fabricated=false stale_balance_reused=false "
+            "completeness_threshold_not_lowered=true freshness_ttl_unchanged=true "
             "publication_expiry_extended=false forced_activation=false safety_gates_bypassed=false",
             MARKER,
         )
@@ -221,5 +249,6 @@ __all__ = [
     "_broker_is_connected",
     "_supplement_platform_sources",
     "_patch_capital_authority_refresh",
+    "_install_registered_platform_completeness_v270",
     "_patch_release_manifest",
 ]
