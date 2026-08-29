@@ -23,6 +23,7 @@ from education_system import register_education_api
 from mobile_api import mobile_api, MOBILE_API_BASE
 from account_deletion_api import account_deletion_api
 from pricing_api import pricing_api
+from commercial_pricing_runtime_patch import install_commercial_pricing_runtime_patch
 
 logging.basicConfig(
     level=logging.INFO,
@@ -63,13 +64,19 @@ CORS(
     },
 )
 
-# Public endpoints inside otherwise protected mobile namespaces.
+# Explicitly public endpoints inside otherwise protected API namespaces.
 _PUBLIC_MOBILE_PATHS = {
     "/api/mobile/status",
     "/api/mobile/config",
     "/api/v1/subscription/tiers",
+    "/api/commercial/pricing",
 }
-_PROTECTED_PREFIXES = ("/api/mobile/", "/api/v1/", "/api/account/")
+_PROTECTED_PREFIXES = (
+    "/api/mobile/",
+    "/api/v1/",
+    "/api/account/",
+    "/api/commercial/offer/",
+)
 
 
 @app.before_request
@@ -118,6 +125,12 @@ logger.info("Registered canonical pricing_api blueprint")
 register_unified_mobile_api(app, socketio)
 register_iap_api(app)
 register_education_api(app)
+
+# Install only after all blueprints are registered so the integration can wrap
+# the existing registration and subscription endpoints without changing legacy
+# feature-permission tier behavior.
+install_commercial_pricing_runtime_patch(app)
+logger.info("Installed canonical commercial pricing integration")
 
 
 @app.route("/")
