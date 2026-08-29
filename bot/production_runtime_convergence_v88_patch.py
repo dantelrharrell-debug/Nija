@@ -139,7 +139,11 @@ def _patch_trading_state_machine(tsm: ModuleType) -> bool:
     setattr(tsm, "_execution_circuit_breaker_status", _status)
     with _LOCK:
         _PATCHED_TSM_IDS.add(module_id)
-    LOGGER.critical("EXECUTION_CIRCUIT_BREAKER_CLASSIFICATION_V88_PATCHED marker=%s module=%s", MARKER, getattr(tsm, "__name__", "unknown"))
+    LOGGER.critical(
+        "EXECUTION_CIRCUIT_BREAKER_CLASSIFICATION_V88_PATCHED marker=%s module=%s",
+        MARKER,
+        getattr(tsm, "__name__", "unknown"),
+    )
     return True
 
 
@@ -164,17 +168,31 @@ def _install_kraken_user_supervision() -> bool:
             # never folds a failed user into platform execution readiness.
             from bot import runtime_kraken_user_position_eligibility_v282_patch as v282
             installed = bool(v282.install_import_hook())
+        if installed:
+            # v285 is the stronger position-visibility certificate. It requires
+            # current authoritative fetch proof + adoption, fingerprints broker
+            # rows/quantity/generation, retries stale platform proof through
+            # v108/v182, and gives connected user accounts a bounded read-only
+            # authoritative refresh path. It never grants platform execution.
+            from bot import runtime_authoritative_position_coverage_v285_patch as v285
+            installed = bool(v285.install_import_hook())
     except Exception as exc:
-        LOGGER.warning("KRAKEN_USER_SUPERVISION_V88_INSTALL_FAILED marker=%s error=%s:%s", MARKER, type(exc).__name__, exc)
+        LOGGER.warning(
+            "KRAKEN_USER_SUPERVISION_V88_INSTALL_FAILED marker=%s error=%s:%s",
+            MARKER,
+            type(exc).__name__,
+            exc,
+        )
         return False
     if installed:
         with _LOCK:
             _KRAKEN_SUPERVISION_INSTALLED = True
         LOGGER.critical(
-            "KRAKEN_USER_SUPERVISION_V88_CHAINED marker=%s source=v86+v90+v266+v282 "
+            "KRAKEN_USER_SUPERVISION_V88_CHAINED marker=%s source=v86+v90+v266+v282+v285 "
             "authenticated_reconnect_only=true canonical_rebuild=true writer_scoped=true "
             "state_sensitive_diagnostics=true connected_poll_private_io_bounded=true "
-            "authoritative_user_position_proof_required=true all_account_coverage_periodic=true "
+            "authoritative_user_position_proof_required=true current_snapshot_required=true "
+            "quantity_reconciliation_required=true all_account_coverage_periodic=true "
             "platform_activation_unchanged=true",
             MARKER,
         )
@@ -206,7 +224,10 @@ def _install_stale_startup_log_filter() -> None:
             return
         logging.getLogger("nija.final_production_activation_repair_v58").addFilter(_StaleStartupSuppressionFilter())
         _LOG_FILTER_INSTALLED = True
-    LOGGER.info("STALE_STARTUP_DIAGNOSTIC_FILTER_V88_INSTALLED marker=%s behavior_unchanged=true", MARKER)
+    LOGGER.info(
+        "STALE_STARTUP_DIAGNOSTIC_FILTER_V88_INSTALLED marker=%s behavior_unchanged=true",
+        MARKER,
+    )
 
 
 def _try_patch_loaded() -> bool:
@@ -236,13 +257,17 @@ def install_import_hook() -> bool:
     with _LOCK:
         if not _MONITOR_STARTED:
             _MONITOR_STARTED = True
-            threading.Thread(target=_monitor, name="ProductionRuntimeConvergenceV88", daemon=True).start()
+            threading.Thread(
+                target=_monitor,
+                name="ProductionRuntimeConvergenceV88",
+                daemon=True,
+            ).start()
     os.environ["NIJA_PRODUCTION_RUNTIME_CONVERGENCE_V88_INSTALLED"] = "1"
     LOGGER.critical(
         "PRODUCTION_RUNTIME_CONVERGENCE_V88_INSTALLED marker=%s circuit_classification=true "
         "kraken_user_supervision=true kraken_user_rebuild_v90=true all_account_connectivity_v266=true "
-        "kraken_user_position_eligibility_v282=true stale_log_filter=true "
-        "risk_gates_unchanged=true nonce_gates_unchanged=true",
+        "kraken_user_position_eligibility_v282=true authoritative_position_coverage_v285=true "
+        "stale_log_filter=true risk_gates_unchanged=true nonce_gates_unchanged=true",
         MARKER,
     )
     return True
@@ -252,4 +277,10 @@ def install() -> bool:
     return install_import_hook()
 
 
-__all__ = ["MARKER", "install", "install_import_hook", "_only_generic_execution_false_counts", "_patch_trading_state_machine"]
+__all__ = [
+    "MARKER",
+    "install",
+    "install_import_hook",
+    "_only_generic_execution_false_counts",
+    "_patch_trading_state_machine",
+]
