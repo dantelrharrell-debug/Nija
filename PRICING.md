@@ -13,7 +13,7 @@ This document is the authoritative public pricing policy for NIJA. Older Basic/P
 - NIJA Lessons are an educational product.
 - This is a one-time purchase, not a recurring subscription.
 - The lesson purchase is separate from NIJA platform access.
-- Educational content does not guarantee profits, income, or investment performance.
+- Educational content does not promise profit, income, or investment performance.
 
 ## 2. NIJA Beta - First 100 Users
 
@@ -56,13 +56,7 @@ Commercial pricing must be derived from the NIJA offer/cohort policy:
 
 ## 6. Sales and Marketing Rules
 
-NIJA representatives and marketing pages must not claim or imply:
-
-- guaranteed profits;
-- guaranteed income;
-- guaranteed investment returns;
-- risk-free trading;
-- certain financial results.
+NIJA representatives and marketing pages must describe trading as involving uncertainty and possible loss. They must not make assurances of profit, income, investment returns, no-loss trading, or certain financial results.
 
 Trading and investing involve risk, including possible loss of capital.
 
