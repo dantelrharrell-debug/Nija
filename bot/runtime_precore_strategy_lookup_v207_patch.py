@@ -1,23 +1,21 @@
-"""Keep v203 install-time strategy discovery non-importing during pre-core startup.
+"""Keep pre-core strategy discovery and construction nonblocking.
 
 Production deployment 22cde3c showed an 85 second startup stall between the
 v190 pre-core publication deferral and v203's IMMEDIATE_SKIPPED result while the
-canonical runtime was still generation 0 / BOOT_INIT.  v203's fallback called
-strategy_publication_patch._existing(), whose helper may import a broad set of
-runtime modules.  That is inappropriate inside the pre-core installer path: the
-real canonical strategy belongs to bot_main Step 2.5 and v190 intentionally
-keeps that path single-owner.
+canonical runtime was still generation 0 / BOOT_INIT. v207 originally narrowed
+v203's install-time lookup so it observes only already-loaded strategy pointers.
 
-v207 narrows only v203's install-time *lookup*.  It can observe:
-* the current publication module's existing _PUBLISHED pointer;
-* strategy pointers already present in already-loaded modules/state dictionaries;
-* v127's already-loaded cached publication closure via v203's existing helper.
+Production deployment b02a2238 later exposed the next pre-core liveness edge:
+TradingStrategy construction can synchronously perform broker market discovery
+before bot_main can start and register the canonical core thread. v269 bounds
+that read-only discovery. This module chains v269 at the narrowest safe point:
+after the TradingStrategy class has already loaded and immediately before the
+canonical builder invokes its constructor. That avoids a new early import fanout
+while guaranteeing the constructor cannot enter unbounded market discovery.
 
-It never imports modules merely to discover a strategy, never constructs or
-publishes a strategy, never starts a second publisher, and never changes any
-writer/nonce/risk/kill-switch/capital/position/order/fill or activation gate.
-Future canonical Step 2.5 publication remains wrapped by v203 and therefore
-re-arms the existing heartbeat scheduler normally after real publication.
+Neither repair constructs or publishes a strategy during install, starts a
+second publisher, grants execution authority, nor changes writer/nonce/risk/
+kill-switch/capital/position/order/fill or activation gates.
 """
 from __future__ import annotations
 
@@ -25,6 +23,7 @@ import logging
 import os
 import sys
 import threading
+from functools import wraps
 from types import ModuleType
 from typing import Any
 
@@ -32,6 +31,7 @@ LOGGER = logging.getLogger("nija.runtime_precore_strategy_lookup_v207")
 MARKER = "20260824-precore-strategy-lookup-v207"
 _READY_FLAG = "NIJA_PRECORE_STRATEGY_LOOKUP_V207_READY"
 _PATCH_ATTR = "_nija_precore_strategy_lookup_v207"
+_BUILD_PATCH_ATTR = "_nija_precore_strategy_builder_v269"
 _LOCK = threading.RLock()
 
 
@@ -128,7 +128,7 @@ def _patch_v203() -> bool:
     previous = current
 
     def _already_published_strategy_nonblocking(module: Any) -> Any:
-        # Use the publication object supplied by v203 when available.  The
+        # Use the publication object supplied by v203 when available. The
         # imported canonical object above is only a safe fallback and is already
         # loaded by v196/v203's normal install chain.
         target = module if module is not None else publication
@@ -143,21 +143,76 @@ def _patch_v203() -> bool:
     return bool(callable(installed) and getattr(installed, _PATCH_ATTR, False))
 
 
+def _patch_strategy_builder() -> bool:
+    """Install v269 immediately before the canonical strategy constructor runs."""
+    try:
+        import bot.strategy_publication_patch as publication
+    except Exception as exc:
+        LOGGER.critical(
+            "PRECORE_STRATEGY_BUILDER_V269_IMPORT_FAILED marker=%s error=%s:%s "
+            "trading_fail_closed=true",
+            MARKER,
+            type(exc).__name__,
+            exc,
+        )
+        return False
+
+    current = getattr(publication, "_build_strategy", None)
+    if not callable(current):
+        return False
+    if bool(getattr(current, _BUILD_PATCH_ATTR, False)):
+        return True
+    previous = current
+
+    @wraps(previous)
+    def _build_strategy_with_v269(cls: type, brokers: dict[Any, dict[str, Any]]) -> Any:
+        # publish_canonical_strategy resolves cls before reaching this builder,
+        # so bot.trading_strategy is already loaded. v269 therefore patches the
+        # existing class and does not create a new pre-core import fanout.
+        try:
+            from bot.runtime_precore_symbol_discovery_liveness_v269_patch import (
+                install as install_v269,
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                f"precore_symbol_discovery_v269_import_failed:{type(exc).__name__}:{exc}"
+            ) from exc
+        if not install_v269():
+            raise RuntimeError("precore_symbol_discovery_v269_install_failed")
+        LOGGER.critical(
+            "PRECORE_STRATEGY_BUILDER_V269_ARMED marker=%s "
+            "constructor_next=true early_import_fanout=false trading_fail_closed=true",
+            MARKER,
+        )
+        return previous(cls, brokers)
+
+    setattr(_build_strategy_with_v269, _BUILD_PATCH_ATTR, True)
+    setattr(_build_strategy_with_v269, "__wrapped__", previous)
+    publication._build_strategy = _build_strategy_with_v269
+    return True
+
+
 def install() -> bool:
     with _LOCK:
-        ready = _patch_v203()
+        lookup_ready = _patch_v203()
+        builder_ready = _patch_strategy_builder()
+        ready = bool(lookup_ready and builder_ready)
         os.environ[_READY_FLAG] = "1" if ready else "0"
         if not ready:
             LOGGER.critical(
-                "PRECORE_STRATEGY_LOOKUP_V207_FAILED marker=%s trading_fail_closed=true",
+                "PRECORE_STRATEGY_LOOKUP_V207_FAILED marker=%s lookup_ready=%s "
+                "builder_v269_ready=%s trading_fail_closed=true",
                 MARKER,
+                str(lookup_ready).lower(),
+                str(builder_ready).lower(),
             )
             return False
         LOGGER.critical(
             "PRECORE_STRATEGY_LOOKUP_V207_READY marker=%s ready=true "
             "install_time_lookup_nonblocking=true broad_existing_scan=false "
             "already_loaded_pointers_only=true v127_cached_pointer_allowed=true "
-            "step2_5_single_owner_preserved=true strategy_constructed=false "
+            "step2_5_single_owner_preserved=true strategy_constructor_v269_guarded=true "
+            "early_trading_strategy_import=false strategy_constructed=false "
             "strategy_published=false execution_authority_granted=false "
             "proof_fabricated=false forced_activation=false "
             "writer_nonce_risk_killswitch_capital_position_order_fill_gates_unchanged=true "
@@ -178,4 +233,5 @@ __all__ = [
     "_valid_strategy",
     "_loaded_strategy_pointer",
     "_nonblocking_existing_strategy",
+    "_patch_strategy_builder",
 ]
