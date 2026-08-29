@@ -49,6 +49,7 @@ python3 -S scripts/apply_startup_handoff_fix.py
 python3 -S scripts/apply_canonical_launcher_v26.py
 python3 -S scripts/apply_writer_generation_handoff_v45.py
 python3 -S scripts/apply_render_signal_forwarding_v262.py
+python3 -S scripts/apply_render_outreach_frontdoor.py
 bash -n start.sh
 python3 -S -m py_compile \
     main.py \
@@ -69,11 +70,14 @@ python3 -S -m py_compile \
     bot/writer_generation_handoff_v45_patch.py \
     bot/tests/test_writer_generation_handoff_v45.py \
     bot/tests/test_canonical_writer_first_v59.py \
+    render_liveness_server.py \
+    render_outreach_routes.py \
     scripts/canonical_runtime_launcher_v26.py \
     scripts/render_memory_pressure_guard.py \
     scripts/apply_canonical_launcher_v26.py \
     scripts/apply_writer_generation_handoff_v45.py \
     scripts/apply_render_signal_forwarding_v262.py \
+    scripts/apply_render_outreach_frontdoor.py \
     scripts/apply_direct_broker_prebootstrap_v27.py \
     scripts/runtime_entrypoint_attestation.py
 
@@ -95,8 +99,10 @@ grep -Fq '_start_render_memory_pressure_guard()' scripts/canonical_runtime_launc
 grep -Fq 'bind_entrypoint_writer_authority_aliases(runtime)' bot/bot_main.py
 grep -Fq 'NIJA_ENTRYPOINT_WRITER_MODULE_IDENTITY_CONVERGED' bot/entrypoint_writer_authority.py
 grep -Fq 'heartbeat_telemetry_mutation=false' bot/broker_manager.py
+grep -Fq 'handle_outreach_get(self)' render_liveness_server.py
+grep -Fq 'handle_outreach_post(self)' render_liveness_server.py
 
-echo "🧭 RENDER_ENTRYPOINT_CANONICAL_HANDOFF_READY marker=20260828-render-signal-forwarding-v262 launcher=canonical_runtime_launcher_v26 writer_generation_handoff=v45 writer_first=v59 signal_forwarding=v262 single_identity=true singleton_alias_convergence=v91 kraken_nonce_authority_gate=v91 direct_broker_prebootstrap=v27"
+echo "🧭 RENDER_ENTRYPOINT_CANONICAL_HANDOFF_READY marker=20260828-render-signal-forwarding-v262 launcher=canonical_runtime_launcher_v26 writer_generation_handoff=v45 writer_first=v59 signal_forwarding=v262 single_identity=true singleton_alias_convergence=v91 kraken_nonce_authority_gate=v91 direct_broker_prebootstrap=v27 outreach_frontdoor=v1"
 unset NIJA_DEFER_RUNTIME_SITE_HOOKS
 
 exec bash scripts/production_bootstrap.sh "$@"
