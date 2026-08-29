@@ -67,7 +67,7 @@ def test_result_counts_handles_normal_and_malformed_values():
 def test_post_import_orders_v283_after_registry_liveness_repairs(monkeypatch):
     order = []
 
-    # Keep the test focused on ordering of the four liveness/certification stages.
+    # Keep the test focused on ordering of the liveness/certification stages.
     monkeypatch.setattr(post_import, "_canonicalize_alias", lambda: False)
     monkeypatch.setattr(post_import, "_apply_broker_threshold", lambda: 1)
     monkeypatch.setattr(post_import, "_patch_quiescence_audit", lambda: True)
@@ -91,9 +91,11 @@ def test_post_import_orders_v283_after_registry_liveness_repairs(monkeypatch):
 
     monkeypatch.setattr(post_import, "_install_v267_capital_position_liveness", lambda: order.append("v267") or True)
     monkeypatch.setattr(post_import, "_install_v268_platform_kraken_registry_liveness", lambda: order.append("v268") or True)
+    monkeypatch.setattr(post_import, "_install_v284_platform_object_liveness", lambda: order.append("v284") or True)
     monkeypatch.setattr(post_import, "_install_v280_platform_activation_liveness", lambda: order.append("v280") or True)
     monkeypatch.setattr(post_import, "_install_v283_all_account_coverage_liveness", lambda: order.append("v283") or True)
 
     assert post_import._iteration() is True
-    assert order == ["v267", "v268", "v280", "v283"]
+    assert order == ["v267", "v268", "v284", "v280", "v283"]
+    assert post_import._LAST_PREREQUISITES["v284_platform_object_liveness"] is True
     assert post_import._LAST_PREREQUISITES["v283_all_account_coverage_liveness"] is True
