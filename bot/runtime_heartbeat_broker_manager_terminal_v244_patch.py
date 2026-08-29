@@ -16,7 +16,9 @@ _reject_if_unauthorized_order_submit check observes the verified probe.
 v246 copies existing ContextVars into ExecutionPipeline's timeout worker. v255 adds
 bounded failover for proven process-local read contention and preserves authoritative
 position/capital ownership. v273 adds heartbeat-only venue failover after an unchanged
-ECEL POSITION_CAP_EXCEEDED result, without bypassing the account position cap.
+ECEL POSITION_CAP_EXCEEDED result. v274 repairs the heartbeat selection race when the
+canonical ready-venue string is temporarily empty but broker-local live venues remain
+published; it is selection-only and grants no readiness or execution authority.
 
 Ordinary orders, lifecycle state, nonce, risk, capital, broker health, kill switch,
 minimum notional, exchange acknowledgement, fill proof, and readiness remain unchanged.
@@ -178,6 +180,23 @@ def _install_v273_heartbeat_position_cap_failover() -> bool:
         return False
 
 
+def _install_v274_heartbeat_live_venue_selection() -> bool:
+    """Install heartbeat-only live-venue selector fallback; no readiness is granted."""
+    try:
+        module = importlib.import_module("bot.runtime_heartbeat_live_venue_selection_v274_patch")
+        installer = getattr(module, "install", None) or getattr(module, "install_import_hook", None)
+        ready = bool(callable(installer) and installer())
+        if not ready:
+            LOGGER.error("HEARTBEAT_BROKER_MANAGER_TERMINAL_V244_V274_INSTALL_FAILED marker=%s trading_fail_closed=true", MARKER)
+        return ready
+    except Exception as exc:
+        LOGGER.error(
+            "HEARTBEAT_BROKER_MANAGER_TERMINAL_V244_V274_INSTALL_ERROR marker=%s error=%s:%s trading_fail_closed=true",
+            MARKER, type(exc).__name__, exc,
+        )
+        return False
+
+
 def install() -> bool:
     try:
         v240 = importlib.import_module("bot.runtime_heartbeat_terminal_lifecycle_v240_patch")
@@ -187,21 +206,23 @@ def install() -> bool:
         context_handoff_ready = _install_v246_context_handoff()
         v255_ready = _install_v255_terminal_activation_liveness()
         v273_ready = _install_v273_heartbeat_position_cap_failover()
-        ready = bool(upstream and methods_ready and context_handoff_ready and v255_ready and v273_ready)
+        v274_ready = _install_v274_heartbeat_live_venue_selection()
+        ready = bool(upstream and methods_ready and context_handoff_ready and v255_ready and v273_ready and v274_ready)
     except Exception as exc:
         LOGGER.error(
             "HEARTBEAT_BROKER_MANAGER_TERMINAL_V244_INSTALL_ERROR marker=%s error=%s:%s trading_fail_closed=true",
             MARKER, type(exc).__name__, exc,
         )
-        ready, surfaces, context_handoff_ready, v255_ready, v273_ready = False, (), False, False, False
+        ready, surfaces, context_handoff_ready, v255_ready, v273_ready, v274_ready = False, (), False, False, False, False
     os.environ[_FLAG] = "1" if ready else "0"
     if ready:
         LOGGER.critical(
             "HEARTBEAT_BROKER_MANAGER_TERMINAL_V244_READY marker=%s ready=true surfaces=%s "
             "coinbase_live_terminal_required=true kraken_live_terminal_required=true verified_v233_grant_fallback=true "
             "canonical_context_preferred=true pipeline_context_handoff_v246=true terminal_activation_liveness_v255=true "
-            "heartbeat_position_cap_failover_v273=true startup_writer_reverification_required=true grant_ttl_not_extended=true "
-            "ordinary_orders_unchanged=true execution_proof_fabricated=false forced_activation=false safety_gates_bypassed=false",
+            "heartbeat_position_cap_failover_v273=true heartbeat_live_venue_selection_v274=true "
+            "startup_writer_reverification_required=true grant_ttl_not_extended=true ordinary_orders_unchanged=true "
+            "execution_proof_fabricated=false forced_activation=false safety_gates_bypassed=false",
             MARKER, ",".join(surfaces),
         )
     return ready
@@ -220,6 +241,7 @@ __all__ = [
     "_install_v246_context_handoff",
     "_install_v255_terminal_activation_liveness",
     "_install_v273_heartbeat_position_cap_failover",
+    "_install_v274_heartbeat_live_venue_selection",
     "_verified_reason",
     "_writer_ready",
 ]
