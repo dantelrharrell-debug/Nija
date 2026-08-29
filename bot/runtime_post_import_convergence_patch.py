@@ -10,7 +10,7 @@ from types import ModuleType
 from typing import Any
 
 logger = logging.getLogger("nija.runtime_post_import_convergence")
-_MARKER = "20260828-post-import-convergence-v263"
+_MARKER = "20260829-post-import-convergence-v280"
 _LOCK = threading.RLock()
 _STARTED = False
 _LAST_PREREQUISITES: dict[str, bool] = {}
@@ -123,6 +123,7 @@ def _install_v244_heartbeat_broker_manager_terminal(): return _install_named("bo
 def _install_v263_heartbeat_state_machine_gate(): return _install_named("bot.runtime_heartbeat_state_machine_gate_v263_patch", "v263_install_missing", "HEARTBEAT_STATE_MACHINE_GATE_V263_INSTALL_ERROR")
 def _install_v267_capital_position_liveness(): return _install_named("bot.runtime_capital_position_liveness_v267_patch", "v267_install_missing", "RUNTIME_CAPITAL_POSITION_LIVENESS_V267_INSTALL_ERROR")
 def _install_v268_platform_kraken_registry_liveness(): return _install_named("bot.runtime_platform_kraken_registry_liveness_v268_patch", "v268_install_missing", "RUNTIME_PLATFORM_KRAKEN_REGISTRY_LIVENESS_V268_INSTALL_ERROR")
+def _install_v280_platform_activation_liveness(): return _install_named("bot.runtime_platform_activation_liveness_v280_patch", "v280_install_missing", "RUNTIME_PLATFORM_ACTIVATION_LIVENESS_V280_INSTALL_ERROR")
 
 
 def _iteration() -> bool:
@@ -145,6 +146,7 @@ def _iteration() -> bool:
     v263 = _install_v263_heartbeat_state_machine_gate()
     v267 = _install_v267_capital_position_liveness()
     v268 = _install_v268_platform_kraken_registry_liveness()
+    v280 = _install_v280_platform_activation_liveness()
     prerequisites = {
         "audit_patched": patched,
         "v154_execution_recovery": _install_v154_recovery(),
@@ -175,6 +177,7 @@ def _iteration() -> bool:
         "v263_heartbeat_state_machine_gate": v263,
         "v267_capital_position_liveness": v267,
         "v268_platform_kraken_registry_liveness": v268,
+        "v280_platform_activation_liveness": v280,
     }
     global _LAST_PREREQUISITES
     _LAST_PREREQUISITES = dict(prerequisites)
@@ -218,4 +221,4 @@ def install() -> bool:
         return ready
 
 
-__all__ = ["install", "_policy", "_required_broker_count", "_apply_broker_threshold", "_canonicalize_alias", "_patch_quiescence_audit", "_install_v233_heartbeat_terminal_authority", "_install_v234_kraken_read_lock_recovery", "_install_v236_heartbeat_final_submit", "_install_v237_kraken_local_contention_health", "_install_v238_heartbeat_marker_convergence", "_install_v239_all_account_profit_targets", "_install_v240_heartbeat_terminal_lifecycle", "_install_v241_kraken_local_contention_alias", "_install_v242_kraken_local_contention_instance", "_install_v244_heartbeat_broker_manager_terminal", "_install_v263_heartbeat_state_machine_gate", "_install_v267_capital_position_liveness", "_install_v268_platform_kraken_registry_liveness", "_iteration", "_LAST_PREREQUISITES"]
+__all__ = ["install", "_policy", "_required_broker_count", "_apply_broker_threshold", "_canonicalize_alias", "_patch_quiescence_audit", "_install_v233_heartbeat_terminal_authority", "_install_v234_kraken_read_lock_recovery", "_install_v236_heartbeat_final_submit", "_install_v237_kraken_local_contention_health", "_install_v238_heartbeat_marker_convergence", "_install_v239_all_account_profit_targets", "_install_v240_heartbeat_terminal_lifecycle", "_install_v241_kraken_local_contention_alias", "_install_v242_kraken_local_contention_instance", "_install_v244_heartbeat_broker_manager_terminal", "_install_v263_heartbeat_state_machine_gate", "_install_v267_capital_position_liveness", "_install_v268_platform_kraken_registry_liveness", "_install_v280_platform_activation_liveness", "_iteration", "_LAST_PREREQUISITES"]
