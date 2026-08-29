@@ -6,6 +6,7 @@ prices.
 """
 from __future__ import annotations
 
+import json
 from functools import wraps
 from typing import Any, Callable
 
@@ -25,13 +26,18 @@ def _response_object(response: Any) -> Any:
     return response[0] if isinstance(response, tuple) else response
 
 
+def _replace_json_body(response: Any, body: dict) -> None:
+    response.set_data(json.dumps(body, separators=(",", ":")))
+    response.content_type = "application/json"
+
+
 def _wrap_registration(original: Callable[..., Any]) -> Callable[..., Any]:
     @wraps(original)
     def wrapped(*args: Any, **kwargs: Any) -> Any:
         # Public clients may not self-select internal access/permission tiers.
         # Mutating Flask's cached JSON mapping before the legacy handler reads it
-        # lets the existing registration path remain backward compatible while
-        # preventing privilege selection through a customer-facing field.
+        # keeps the existing route compatible while preventing a customer from
+        # using registration to select elevated trading permissions.
         payload = request.get_json(silent=True)
         if isinstance(payload, dict):
             payload["subscription_tier"] = "basic"
@@ -51,8 +57,7 @@ def _wrap_registration(original: Callable[..., Any]) -> Callable[..., Any]:
             "lessons_one_time_usd": 99.0,
             "full_release_planned_monthly_usd": 99.0,
         }
-        response.set_data(response.json_module.dumps(body))
-        response.content_type = "application/json"
+        _replace_json_body(response, body)
         return result
 
     return wrapped
@@ -90,8 +95,7 @@ def _wrap_subscription_info(original: Callable[..., Any]) -> Callable[..., Any]:
         assignment = get_commercial_offer_store().get_assignment(user_id)
         if assignment:
             body["commercial_offer"] = assignment.to_dict()
-            response.set_data(response.json_module.dumps(body))
-            response.content_type = "application/json"
+            _replace_json_body(response, body)
         return result
 
     return wrapped
