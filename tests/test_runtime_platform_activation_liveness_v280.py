@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from types import SimpleNamespace
 
 import bot.runtime_platform_activation_liveness_v280_patch as v280
@@ -130,3 +131,54 @@ def test_v280_no_candidate_never_fabricates_broker(monkeypatch):
         "okx": "no_existing_platform_object",
     }
     assert manager._platform_brokers == {}
+
+
+def _reset_v258_log_dedup_state():
+    v280._V258_LAST_MESSAGE = ""
+    v280._V258_LAST_EMIT_AT = 0.0
+
+
+def test_v280_v258_identity_log_dedup_suppresses_unchanged_snapshot(monkeypatch):
+    _reset_v258_log_dedup_state()
+    monkeypatch.setenv("NIJA_V258_IDENTITY_LOG_INTERVAL_S", "30")
+
+    message = "EXCHANGE_REJECT_V258_KILLSWITCH_IDENTITIES marker=x class_ids={'a': 1}"
+    assert v280._allow_v258_identity_log(message, now=100.0) is True
+    assert v280._allow_v258_identity_log(message, now=101.0) is False
+
+
+def test_v280_v258_identity_change_logs_immediately(monkeypatch):
+    _reset_v258_log_dedup_state()
+    monkeypatch.setenv("NIJA_V258_IDENTITY_LOG_INTERVAL_S", "30")
+
+    first = "EXCHANGE_REJECT_V258_KILLSWITCH_IDENTITIES marker=x class_ids={'a': 1}"
+    changed = "EXCHANGE_REJECT_V258_KILLSWITCH_IDENTITIES marker=x class_ids={'a': 2}"
+    assert v280._allow_v258_identity_log(first, now=100.0) is True
+    assert v280._allow_v258_identity_log(changed, now=101.0) is True
+
+
+def test_v280_v258_identity_log_reemits_after_interval(monkeypatch):
+    _reset_v258_log_dedup_state()
+    monkeypatch.setenv("NIJA_V258_IDENTITY_LOG_INTERVAL_S", "30")
+
+    message = "EXCHANGE_REJECT_V258_KILLSWITCH_IDENTITIES marker=x class_ids={'a': 1}"
+    assert v280._allow_v258_identity_log(message, now=100.0) is True
+    assert v280._allow_v258_identity_log(message, now=129.9) is False
+    assert v280._allow_v258_identity_log(message, now=130.0) is True
+
+
+def test_v280_v258_filter_does_not_suppress_other_critical_logs(monkeypatch):
+    _reset_v258_log_dedup_state()
+    monkeypatch.setenv("NIJA_V258_IDENTITY_LOG_INTERVAL_S", "30")
+    filt = v280._V258IdentityDedupFilter()
+
+    record = logging.LogRecord(
+        name="nija.exchange_kill_switch_alias_provenance_v258",
+        level=logging.CRITICAL,
+        pathname=__file__,
+        lineno=1,
+        msg="EXCHANGE_REJECT_V258_COUNTED_SAMPLE marker=x",
+        args=(),
+        exc_info=None,
+    )
+    assert filt.filter(record) is True

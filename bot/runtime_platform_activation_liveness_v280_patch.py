@@ -19,6 +19,12 @@ connect successful, never lowers broker-count/capital/notional thresholds, never
 fabricates position, nonce, execution, order, acknowledgement, fill, or heartbeat
 proof, never clears a kill switch or rejection window, and never forces
 activation. Recovery broker I/O is bounded by a per-instance retry floor.
+
+v280 also installs an observational logging filter for the v258 kill-switch
+identity diagnostic. The filter suppresses only byte-for-byte equivalent identity
+snapshots inside a bounded interval; any identity/outcome change is emitted
+immediately. It does not mutate rejection samples, provenance, kill-switch state,
+thresholds, module identities, or readiness.
 """
 from __future__ import annotations
 
@@ -38,6 +44,10 @@ _PATCH_ATTR = "_nija_runtime_platform_activation_liveness_v280"
 _LOCK = threading.RLock()
 _SUPPORTED = ("coinbase", "okx")
 _LAST_CONNECT_AT: dict[tuple[str, int], float] = {}
+_V258_FILTER_ATTR = "_nija_v258_identity_dedup_v280"
+_V258_FILTER_LOCK = threading.RLock()
+_V258_LAST_MESSAGE = ""
+_V258_LAST_EMIT_AT = 0.0
 
 
 def _label(value: Any) -> str:
@@ -50,6 +60,65 @@ def _connect_retry_s() -> float:
     except (TypeError, ValueError):
         configured = 30.0
     return max(15.0, min(300.0, configured))
+
+
+def _v258_identity_log_interval_s() -> float:
+    try:
+        configured = float(os.environ.get("NIJA_V258_IDENTITY_LOG_INTERVAL_S", "30") or 30.0)
+    except (TypeError, ValueError):
+        configured = 30.0
+    return max(2.0, min(300.0, configured))
+
+
+def _allow_v258_identity_log(message: str, *, now: float | None = None) -> bool:
+    """Return True for changed v258 identity state or periodic unchanged samples.
+
+    The decision is observational only.  It never changes the underlying v258
+    instrumentation, provenance history, rejection window, kill switch, or any
+    execution/readiness state.
+    """
+    global _V258_LAST_MESSAGE, _V258_LAST_EMIT_AT
+    current = time.monotonic() if now is None else float(now)
+    text = str(message or "")
+    with _V258_FILTER_LOCK:
+        changed = text != _V258_LAST_MESSAGE
+        due = (current - _V258_LAST_EMIT_AT) >= _v258_identity_log_interval_s()
+        if changed or due or not _V258_LAST_MESSAGE:
+            _V258_LAST_MESSAGE = text
+            _V258_LAST_EMIT_AT = current
+            return True
+        return False
+
+
+class _V258IdentityDedupFilter(logging.Filter):
+    """Suppress only unchanged v258 identity diagnostics inside the log interval."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            message = record.getMessage()
+        except Exception:
+            return True
+        if not message.startswith("EXCHANGE_REJECT_V258_KILLSWITCH_IDENTITIES"):
+            return True
+        return _allow_v258_identity_log(message)
+
+
+def _install_v258_identity_log_filter() -> bool:
+    """Attach one dedup filter to the v258 logger without changing its behavior."""
+    target = logging.getLogger("nija.exchange_kill_switch_alias_provenance_v258")
+    for existing in list(getattr(target, "filters", ())):
+        if bool(getattr(existing, _V258_FILTER_ATTR, False)):
+            return True
+    filt = _V258IdentityDedupFilter()
+    setattr(filt, _V258_FILTER_ATTR, True)
+    target.addFilter(filt)
+    LOGGER.critical(
+        "EXCHANGE_REJECT_V258_LOG_DEDUP_V280_READY marker=%s interval_s=%.1f "
+        "unchanged_identity_only=true identity_changes_immediate=true rejection_window_unchanged=true "
+        "kill_switch_unchanged=true thresholds_unchanged=true safety_gates_bypassed=false",
+        MARKER, _v258_identity_log_interval_s(),
+    )
+    return True
 
 
 def _is_platform_account(broker: Any) -> bool:
@@ -330,10 +399,11 @@ def _register_manifest() -> bool:
 def install() -> bool:
     with _LOCK:
         try:
+            v258_log_ok = _install_v258_identity_log_filter()
             v182_ok = _patch_v182_install()
             manifest_ok = _register_manifest()
             outcomes = reconcile_once()
-            ready = bool(v182_ok and manifest_ok and "manager" not in outcomes)
+            ready = bool(v258_log_ok and v182_ok and manifest_ok and "manager" not in outcomes)
         except Exception as exc:
             ready = False
             outcomes = {"error": f"{type(exc).__name__}:{exc}"}
@@ -346,7 +416,7 @@ def install() -> bool:
             LOGGER.critical(
                 "PLATFORM_ACTIVATION_LIVENESS_V280_READY marker=%s ready=true outcomes=%s "
                 "existing_platform_objects_only=true real_connect_required=true authoritative_position_fetch_required=true "
-                "capital_thresholds_unchanged=true freshness_extended=false kill_switch_unchanged=true "
+                "v258_identity_log_dedup=true capital_thresholds_unchanged=true freshness_extended=false kill_switch_unchanged=true "
                 "execution_proof_fabricated=false forced_activation=false safety_gates_bypassed=false",
                 MARKER, outcomes,
             )
@@ -360,5 +430,6 @@ def install_import_hook() -> bool:
 __all__ = [
     "MARKER", "RELEASE_ID", "install", "install_import_hook", "reconcile_once",
     "_global_candidate", "_adopt_existing", "_connect_existing", "_wake_position_sync",
-    "_patch_v182_install", "_connect_retry_s",
+    "_patch_v182_install", "_connect_retry_s", "_v258_identity_log_interval_s",
+    "_allow_v258_identity_log", "_install_v258_identity_log_filter",
 ]
