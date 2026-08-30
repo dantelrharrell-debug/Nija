@@ -73,37 +73,41 @@ def test_same_key_private_calls_serialize_while_distinct_keys_can_overlap():
     same_a = _Broker("shared-key")
     same_b = _Broker("shared-key")
     other = _Broker("other-key")
+    shared_scope = v293._credential_scope_key(same_a)
+    other_scope = v293._credential_scope_key(other)
 
-    active = 0
-    peak_same = 0
-    peak_distinct = 0
+    active_total = 0
+    peak_total = 0
+    active_by_scope = {shared_scope: 0, other_scope: 0}
+    peak_by_scope = {shared_scope: 0, other_scope: 0}
     gate = threading.Lock()
     started = threading.Barrier(3)
 
-    def work(broker, bucket: str):
-        nonlocal active, peak_same, peak_distinct
+    def work(broker):
+        nonlocal active_total, peak_total
         started.wait(timeout=2.0)
+        scope = v293._credential_scope_key(broker)
 
         def inside():
-            nonlocal active, peak_same, peak_distinct
+            nonlocal active_total, peak_total
             scope_lock = v293._scoped_get_kraken_api_lock()
             with scope_lock:
                 with gate:
-                    active += 1
-                    if bucket == "same":
-                        peak_same = max(peak_same, active)
-                    else:
-                        peak_distinct = max(peak_distinct, active)
+                    active_total += 1
+                    active_by_scope[scope] += 1
+                    peak_total = max(peak_total, active_total)
+                    peak_by_scope[scope] = max(peak_by_scope[scope], active_by_scope[scope])
                 time.sleep(0.04)
                 with gate:
-                    active -= 1
+                    active_by_scope[scope] -= 1
+                    active_total -= 1
 
         v293._invoke_with_credential_scope(broker, inside)
 
     threads = [
-        threading.Thread(target=work, args=(same_a, "same")),
-        threading.Thread(target=work, args=(same_b, "same")),
-        threading.Thread(target=work, args=(other, "other")),
+        threading.Thread(target=work, args=(same_a,)),
+        threading.Thread(target=work, args=(same_b,)),
+        threading.Thread(target=work, args=(other,)),
     ]
     for thread in threads:
         thread.start()
@@ -111,8 +115,8 @@ def test_same_key_private_calls_serialize_while_distinct_keys_can_overlap():
         thread.join(timeout=2.0)
         assert not thread.is_alive()
 
-    # The two shared-key calls can never overlap each other. A distinct key may
-    # overlap one of them, so total active work may reach two but never three.
-    assert peak_same <= 2
-    assert peak_distinct <= 2
-    assert active == 0
+    assert peak_by_scope[shared_scope] == 1
+    assert peak_by_scope[other_scope] == 1
+    assert peak_total <= 2
+    assert peak_total >= 1
+    assert active_total == 0
