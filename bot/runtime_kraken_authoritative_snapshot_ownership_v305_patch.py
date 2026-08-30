@@ -19,6 +19,10 @@ Balance path does not call KrakenBroker.get_positions; it records v285 success o
 failure directly, so genuine authoritative Balance observations remain able to
 advance/revoke the snapshot.
 
+v306 is chained from this authority boundary so startup reconciliation hands off
+from a completed authoritative Balance phase to the broker-scoped v288/v304
+cost-basis phase without immediately starting another same-account Balance read.
+
 No snapshot timestamp or generation is advanced, no stale proof is relabeled
 fresh, no exception is converted to success, and no position/cost basis is
 fabricated.  Writer, nonce, capital, risk, kill-switch, broker health, position
@@ -42,9 +46,6 @@ _READY_FLAG = "NIJA_RUNTIME_KRAKEN_AUTHORITATIVE_SNAPSHOT_OWNERSHIP_V305_READY"
 _PATCH_ATTR = "_nija_kraken_authoritative_snapshot_ownership_v305"
 _MISSING = object()
 
-# These are the complete v285 authoritative snapshot state fields.  v305 restores
-# exactly what existed before an ordinary Kraken get_positions call; it never
-# manufactures or refreshes any of them.
 _SNAPSHOT_FIELDS = (
     "_nija_authoritative_position_snapshot_rows_v285",
     "_nija_authoritative_position_snapshot_at_monotonic_v285",
@@ -63,9 +64,6 @@ def _snapshot_fields(broker: Any) -> dict[str, Any]:
         except AttributeError:
             state[name] = _MISSING
         except Exception:
-            # Failing to inspect authority state must never produce a synthetic
-            # replacement.  Treat the field as missing and let restore fail
-            # closed on that field if the object rejects mutation.
             state[name] = _MISSING
     return state
 
@@ -99,7 +97,6 @@ def _state_changed(before: dict[str, Any], after: dict[str, Any]) -> bool:
             if left != right:
                 return True
     except Exception:
-        # Conservative diagnostic only; restore happens regardless.
         return True
     return False
 
@@ -194,6 +191,21 @@ def _register_manifest() -> bool:
         return False
 
 
+def _install_v306_phase_handoff() -> bool:
+    try:
+        module = importlib.import_module("bot.runtime_kraken_startup_phase_handoff_v306_patch")
+        installer = getattr(module, "install_import_hook", None)
+        return bool(callable(installer) and installer())
+    except Exception as exc:
+        LOGGER.error(
+            "KRAKEN_STARTUP_PHASE_V306_CHAIN_FAILED marker=%s error=%s:%s trading_fail_closed=true",
+            MARKER,
+            type(exc).__name__,
+            exc,
+        )
+        return False
+
+
 def reconcile_once() -> dict[str, Any]:
     patched, surfaces = _patch_loaded_surfaces()
     v286_ready = _v286_authority_ready()
@@ -216,12 +228,13 @@ def install() -> bool:
             "error": f"{type(exc).__name__}:{exc}",
         }
 
-    ready = bool(manifest_ok and state.get("ready"))
+    v306_ready = _install_v306_phase_handoff()
+    ready = bool(manifest_ok and state.get("ready") and v306_ready)
     os.environ[_READY_FLAG] = "1" if ready else "0"
     log = LOGGER.critical if ready else LOGGER.error
     log(
         "RUNTIME_KRAKEN_AUTHORITATIVE_SNAPSHOT_OWNERSHIP_V305_%s marker=%s ready=%s surfaces=%s "
-        "v286_balance_authority=%s ordinary_get_positions_state_isolated=true "
+        "v286_balance_authority=%s v306_phase_handoff=%s ordinary_get_positions_state_isolated=true "
         "ordinary_results_unchanged=true ordinary_exceptions_unchanged=true "
         "snapshot_ttl_unchanged=true timestamp_refresh=false generation_refresh=false "
         "stale_promoted=false synthetic_success=false position_cost_basis_fabricated=false "
@@ -233,6 +246,7 @@ def install() -> bool:
         str(ready).lower(),
         ",".join(state.get("broker_surfaces", ()) or ()) or "none",
         str(bool(state.get("v286_balance_authority"))).lower(),
+        str(v306_ready).lower(),
     )
     return ready
 
@@ -253,4 +267,5 @@ __all__ = [
     "_wrap_get_positions",
     "_patch_module",
     "_patch_loaded_surfaces",
+    "_install_v306_phase_handoff",
 ]
