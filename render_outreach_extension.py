@@ -1,8 +1,11 @@
-"""Signed webhook and compliance-gated campaign routes for NIJA outreach.
+"""Signed webhook, auto-registration, and compliance-gated NIJA outreach routes.
 
 This module extends the stdlib Render front door without altering trading
 readiness. Controlled test calls remain in render_outreach_routes; production
-campaign calls pass stricter compliance attestations here.
+campaign calls pass stricter compliance attestations here. JustCall webhook
+registration is idempotent and runs in a background thread after the Render
+HTTP listener is available, so telephony configuration never blocks trading
+startup.
 """
 
 from __future__ import annotations
@@ -11,19 +14,26 @@ import hashlib
 import hmac
 import json
 import os
+import threading
+import time
+import urllib.error
 import urllib.parse
+import urllib.request
 from datetime import datetime, timezone
 from typing import Any
 
 from render_outreach_routes import (
+    JUSTCALL_API_BASE,
     OutreachConfigurationError,
     OutreachProviderError,
     _E164_RE,
     _MAX_BODY_BYTES,
+    _credentials,
     _provider_request,
     _resolve_agent_id,
     _send_json,
     _service_authorized,
+    _timeout_seconds,
 )
 from render_outreach_store import (
     is_suppressed,
@@ -46,6 +56,16 @@ _ALLOWED_WEBHOOK_TYPES = {
     "jc.call_ai_generated",
     "contact.status_updated",
 }
+_AUTOCONFIG_EVENTS = (
+    "call.initiated",
+    "call.completed",
+    "call.updated",
+    "call.ai_voice_agent",
+    "jc.call_ai_generated",
+    "contact.status_updated",
+)
+_AUTOCONFIG_LOCK = threading.Lock()
+_AUTOCONFIG_STARTED = False
 
 
 def _path(handler: Any) -> str:
@@ -85,14 +105,18 @@ def _signature_valid(handler: Any, payload: dict[str, Any]) -> bool:
         return False
     encoded_url = urllib.parse.quote(webhook_url, safe="")
     material = f"{secret}|{encoded_url}|{event_type}|{timestamp}"
-    expected = hmac.new(secret.encode("utf-8"), material.encode("utf-8"), hashlib.sha256).hexdigest()
+    expected = hmac.new(
+        secret.encode("utf-8"),
+        material.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
     return hmac.compare_digest(expected, signature)
 
 
 def _is_validation_probe(payload: dict[str, Any]) -> bool:
-    # JustCall validates a newly-added webhook URL with an initial request. The
-    # receiver may acknowledge structurally incomplete validation probes, but
-    # only if they do not claim to be a normal supported call event.
+    # JustCall validates newly-added webhook URLs with an initial request. A
+    # structurally empty validation probe has no side effects and can be safely
+    # acknowledged; normal events still require a valid dynamic signature.
     event_type = str(payload.get("type", "") or "").strip()
     request_id = str(payload.get("request_id", "") or "").strip()
     return not event_type and not request_id
@@ -154,7 +178,10 @@ def _contact_status_suppression(payload: dict[str, Any]) -> None:
     if not number:
         return
     serialized = json.dumps(data, separators=(",", ":")).lower()
-    blocked = any(token in serialized for token in ("dnd", "dnm", "blacklist", "do_not_call", "do not call"))
+    blocked = any(
+        token in serialized
+        for token in ("dnd", "dnm", "blacklist", "do_not_call", "do not call")
+    )
     if blocked:
         set_suppression(
             contact_number=number,
@@ -162,6 +189,153 @@ def _contact_status_suppression(payload: dict[str, Any]) -> None:
             source="justcall_webhook",
             active=True,
         )
+
+
+def _autoconfig_enabled() -> bool:
+    value = str(os.getenv("NIJA_JUSTCALL_WEBHOOK_AUTOCONFIG", "1") or "1").strip().lower()
+    return value not in {"0", "false", "no", "off", "disabled"}
+
+
+def _public_base_url() -> str:
+    explicit = str(os.getenv("NIJA_OUTREACH_PUBLIC_BASE_URL", "") or "").strip()
+    if explicit:
+        return explicit.rstrip("/")
+    render_url = str(os.getenv("RENDER_EXTERNAL_URL", "") or "").strip()
+    if render_url:
+        return render_url.rstrip("/")
+    hostname = str(os.getenv("RENDER_EXTERNAL_HOSTNAME", "") or "").strip()
+    if hostname:
+        return f"https://{hostname.strip('/')}"
+    # Stable public service URL for the current NIJA production Render service.
+    return "https://nija-trading-bot-n7dh.onrender.com"
+
+
+def _webhook_url() -> str:
+    return f"{_public_base_url()}{_WEBHOOK_PATH}"
+
+
+def _contains_string(value: object, target: str) -> bool:
+    if isinstance(value, str):
+        return value == target
+    if isinstance(value, dict):
+        return any(_contains_string(item, target) for item in value.values())
+    if isinstance(value, list):
+        return any(_contains_string(item, target) for item in value)
+    return False
+
+
+def _justcall_webhook_request(
+    method: str,
+    path: str,
+    *,
+    payload: dict[str, Any] | None = None,
+) -> object:
+    api_key, api_secret = _credentials()
+    body = None if payload is None else json.dumps(payload).encode("utf-8")
+    request = urllib.request.Request(
+        f"{JUSTCALL_API_BASE}{path}",
+        data=body,
+        headers={
+            "Authorization": f"{api_key}:{api_secret}",
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "User-Agent": "NIJA-Outreach-Webhook-Autoconfig/1.0",
+        },
+        method=method,
+    )
+    with urllib.request.urlopen(request, timeout=_timeout_seconds()) as response:
+        raw = response.read()
+        if not 200 <= int(response.status) < 300:
+            raise OSError(f"JustCall webhook API returned HTTP {response.status}")
+    if not raw:
+        return {}
+    try:
+        return json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise OSError("JustCall webhook API returned invalid JSON") from exc
+
+
+def _ensure_justcall_webhooks_once() -> tuple[int, int, int]:
+    webhook_url = _webhook_url()
+    added = 0
+    existing = 0
+    failed = 0
+    for event_type in _AUTOCONFIG_EVENTS:
+        try:
+            query = urllib.parse.quote(event_type, safe="")
+            subscribed = _justcall_webhook_request("GET", f"/webhooks?type={query}")
+            if _contains_string(subscribed, webhook_url):
+                existing += 1
+                continue
+            _justcall_webhook_request(
+                "POST",
+                "/webhooks",
+                payload={"type": event_type, "webhook_url": webhook_url},
+            )
+            added += 1
+        except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError):
+            failed += 1
+    return added, existing, failed
+
+
+def _autoconfig_worker() -> None:
+    if not _autoconfig_enabled():
+        print("JUSTCALL_WEBHOOK_AUTOCONFIG state=disabled nonfatal=true", flush=True)
+        return
+    try:
+        _credentials()
+    except OutreachConfigurationError:
+        print(
+            "JUSTCALL_WEBHOOK_AUTOCONFIG state=skipped reason=credentials_missing nonfatal=true",
+            flush=True,
+        )
+        return
+
+    # Render may still be cutting traffic over from the previous instance when
+    # the new listener first binds. Retry without delaying or blocking startup.
+    for attempt, delay_s in enumerate((15, 30, 60, 120), start=1):
+        time.sleep(delay_s)
+        try:
+            added, existing, failed = _ensure_justcall_webhooks_once()
+        except Exception as exc:
+            print(
+                "JUSTCALL_WEBHOOK_AUTOCONFIG "
+                f"state=retry attempt={attempt} error={type(exc).__name__} nonfatal=true",
+                flush=True,
+            )
+            continue
+        total = len(_AUTOCONFIG_EVENTS)
+        if failed == 0 and added + existing == total:
+            print(
+                "JUSTCALL_WEBHOOK_AUTOCONFIG "
+                f"state=ready attempt={attempt} total={total} added={added} existing={existing} "
+                "signed_receiver=true nonfatal=true",
+                flush=True,
+            )
+            return
+        print(
+            "JUSTCALL_WEBHOOK_AUTOCONFIG "
+            f"state=retry attempt={attempt} total={total} added={added} existing={existing} "
+            f"failed={failed} nonfatal=true",
+            flush=True,
+        )
+    print(
+        "JUSTCALL_WEBHOOK_AUTOCONFIG state=incomplete retries_exhausted=true nonfatal=true",
+        flush=True,
+    )
+
+
+def start_justcall_webhook_autoconfig() -> None:
+    global _AUTOCONFIG_STARTED
+    with _AUTOCONFIG_LOCK:
+        if _AUTOCONFIG_STARTED:
+            return
+        _AUTOCONFIG_STARTED = True
+    threading.Thread(
+        target=_autoconfig_worker,
+        name="nija-justcall-webhook-autoconfig",
+        daemon=True,
+    ).start()
 
 
 def handle_outreach_extension_get(handler: Any) -> bool:
@@ -177,6 +351,9 @@ def handle_outreach_extension_get(handler: Any) -> bool:
             payload = webhook_status()
             payload["signature_validation"] = "hmac_sha256_v1"
             payload["webhook_path"] = _WEBHOOK_PATH
+            payload["webhook_url"] = _webhook_url()
+            payload["autoconfig_enabled"] = _autoconfig_enabled()
+            payload["autoconfig_events"] = list(_AUTOCONFIG_EVENTS)
         else:
             payload = {"calls": recent_calls(limit=20)}
     except Exception:
@@ -247,7 +424,11 @@ def handle_outreach_extension_post(handler: Any) -> bool:
 
     variables = body.get("dynamic_variables") or []
     if not isinstance(variables, list) or len(variables) > 50:
-        _send_json(handler, 422, {"error": "dynamic_variables must be an array of at most 50 items"})
+        _send_json(
+            handler,
+            422,
+            {"error": "dynamic_variables must be an array of at most 50 items"},
+        )
         return True
 
     try:
@@ -274,7 +455,11 @@ def handle_outreach_extension_post(handler: Any) -> bool:
     except OutreachConfigurationError as exc:
         _send_json(handler, 503, {"error": str(exc)})
     except OutreachProviderError as exc:
-        _send_json(handler, 502, {"error": str(exc), "provider_status": exc.status_code})
+        _send_json(
+            handler,
+            502,
+            {"error": str(exc), "provider_status": exc.status_code},
+        )
     except OSError:
         _send_json(handler, 503, {"error": "Outreach event store unavailable"})
     else:
