@@ -200,6 +200,9 @@ def _install_kraken_user_supervision() -> bool:
         if installed:
             from bot import runtime_kraken_monitoring_fairness_v297_patch as v297
             installed = bool(v297.install_import_hook())
+        if installed:
+            from bot import runtime_kraken_inflight_snapshot_truth_v298_patch as v298
+            installed = bool(v298.install_import_hook())
     except Exception as exc:
         LOGGER.warning(
             "KRAKEN_USER_SUPERVISION_V88_INSTALL_FAILED marker=%s error=%s:%s",
@@ -212,7 +215,7 @@ def _install_kraken_user_supervision() -> bool:
         with _LOCK:
             _KRAKEN_SUPERVISION_INSTALLED = True
         LOGGER.critical(
-            "KRAKEN_USER_SUPERVISION_V88_CHAINED marker=%s source=v86+v90+v266+v282+v285+v286+v287+v288+v289+v290+v292+v293+v294+v295+v296+v297 "
+            "KRAKEN_USER_SUPERVISION_V88_CHAINED marker=%s source=v86+v90+v266+v282+v285+v286+v287+v288+v289+v290+v292+v293+v294+v295+v296+v297+v298 "
             "authenticated_reconnect_only=true canonical_rebuild=true writer_scoped=true "
             "state_sensitive_diagnostics=true connected_poll_private_io_bounded=true "
             "authoritative_user_position_proof_required=true current_snapshot_required=true "
@@ -224,7 +227,8 @@ def _install_kraken_user_supervision() -> bool:
             "kraken_transport_timeout_bound=true credential_scoped_private_serialization=true "
             "platform_user_position_sync_isolation=true okx_fill_history_cost_basis=true "
             "dust_position_policy_converged=true authoritative_monitoring_priority=true "
-            "kraken_balance_single_flight=true lock_bypass=false lock_force_release=false "
+            "kraken_balance_single_flight=true inflight_current_snapshot_truth=true "
+            "snapshot_ttl_unchanged=true lock_bypass=false lock_force_release=false "
             "platform_activation_preserved_for_user_local_failures=true",
             MARKER,
         )
@@ -304,8 +308,8 @@ def install_import_hook() -> bool:
         "kraken_read_contention_recovery_v290=true kraken_transport_timeout_v292=true "
         "kraken_credential_lock_scope_v293=true position_sync_isolation_v294=true "
         "okx_cost_basis_recovery_v295=true dust_position_policy_convergence_v296=true "
-        "kraken_monitoring_fairness_v297=true stale_log_filter=true "
-        "risk_gates_unchanged=true nonce_gates_unchanged=true",
+        "kraken_monitoring_fairness_v297=true kraken_inflight_snapshot_truth_v298=true "
+        "stale_log_filter=true risk_gates_unchanged=true nonce_gates_unchanged=true",
         MARKER,
     )
     return True
