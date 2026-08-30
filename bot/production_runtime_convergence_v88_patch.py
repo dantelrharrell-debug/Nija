@@ -177,47 +177,26 @@ def _install_kraken_user_supervision() -> bool:
             from bot import runtime_kraken_cost_basis_bulk_v288_patch as v288
             installed = bool(v288.install_import_hook())
         if installed:
-            # v289 isolates persistent position/cost-basis state by broker account
-            # and removes stale tracker symbols only from a current authoritative
-            # snapshot. Existing exit-supervisor tracker object identities remain
-            # intact and all execution gates remain fail closed during recovery.
             from bot import runtime_account_scoped_position_state_v289_patch as v289
             installed = bool(v289.install_import_hook())
         if installed:
-            # v290 retries only explicit process-local Kraken read contention in
-            # the existing v286/v288 background workers. It never bypasses or
-            # force-releases the shared lock and does not retry genuine exchange,
-            # authentication, nonce, HTTP, order, or payload errors.
             from bot import runtime_kraken_read_contention_recovery_v290_patch as v290
             installed = bool(v290.install_import_hook())
         if installed:
-            # v292 binds the broker's existing API_TIMEOUT_SECONDS policy to the
-            # actual requests Session used by krakenex. This prevents a dead
-            # private HTTP read from pinning authoritative Balance single-flights
-            # indefinitely while leaving serialization, nonce, retry, order and
-            # fill semantics unchanged.
             from bot import runtime_kraken_transport_timeout_v292_patch as v292
             installed = bool(v292.install_import_hook())
         if installed:
-            # v293 scopes Kraken private-call serialization by proven API-key
-            # identity. The same key remains strictly serialized; independent
-            # platform/user keys no longer block one another behind a slow read.
-            # Unknown credential identity falls back to the original global lock.
             from bot import runtime_kraken_credential_lock_scope_v293_patch as v293
             installed = bool(v293.install_import_hook())
         if installed:
-            # v294 restores the platform/user isolation promised by v282. The
-            # canonical position_sync_ready activation certificate is platform
-            # only; user accounts remain independently entry-blocked until their
-            # own proof is current, while v281/v285 still audit all-account exits.
             from bot import runtime_position_sync_isolation_v294_patch as v294
             installed = bool(v294.install_import_hook())
         if installed:
-            # v295 uses OKX's existing authenticated fill-history primitive to
-            # recover genuine startup cost basis. Empty/pending history remains
-            # unverified; no dust exception or market-price fallback is added.
             from bot import runtime_okx_cost_basis_recovery_v295_patch as v295
             installed = bool(v295.install_import_hook())
+        if installed:
+            from bot import runtime_dust_position_policy_convergence_v296_patch as v296
+            installed = bool(v296.install_import_hook())
     except Exception as exc:
         LOGGER.warning(
             "KRAKEN_USER_SUPERVISION_V88_INSTALL_FAILED marker=%s error=%s:%s",
@@ -230,7 +209,7 @@ def _install_kraken_user_supervision() -> bool:
         with _LOCK:
             _KRAKEN_SUPERVISION_INSTALLED = True
         LOGGER.critical(
-            "KRAKEN_USER_SUPERVISION_V88_CHAINED marker=%s source=v86+v90+v266+v282+v285+v286+v287+v288+v289+v290+v292+v293+v294+v295 "
+            "KRAKEN_USER_SUPERVISION_V88_CHAINED marker=%s source=v86+v90+v266+v282+v285+v286+v287+v288+v289+v290+v292+v293+v294+v295+v296 "
             "authenticated_reconnect_only=true canonical_rebuild=true writer_scoped=true "
             "state_sensitive_diagnostics=true connected_poll_private_io_bounded=true "
             "authoritative_user_position_proof_required=true current_snapshot_required=true "
@@ -241,7 +220,8 @@ def _install_kraken_user_supervision() -> bool:
             "authoritative_stale_tracker_cleanup=true local_read_contention_retry=true "
             "kraken_transport_timeout_bound=true credential_scoped_private_serialization=true "
             "platform_user_position_sync_isolation=true okx_fill_history_cost_basis=true "
-            "lock_bypass=false lock_force_release=false platform_activation_preserved_for_user_local_failures=true",
+            "dust_position_policy_converged=true lock_bypass=false lock_force_release=false "
+            "platform_activation_preserved_for_user_local_failures=true",
             MARKER,
         )
     return installed
@@ -319,7 +299,8 @@ def install_import_hook() -> bool:
         "kraken_cost_basis_bulk_v288=true account_scoped_position_state_v289=true "
         "kraken_read_contention_recovery_v290=true kraken_transport_timeout_v292=true "
         "kraken_credential_lock_scope_v293=true position_sync_isolation_v294=true "
-        "okx_cost_basis_recovery_v295=true stale_log_filter=true risk_gates_unchanged=true nonce_gates_unchanged=true",
+        "okx_cost_basis_recovery_v295=true dust_position_policy_convergence_v296=true "
+        "stale_log_filter=true risk_gates_unchanged=true nonce_gates_unchanged=true",
         MARKER,
     )
     return True
