@@ -1,44 +1,48 @@
-"""Re-arm genuine heartbeat execution after a proven writer renewal (v238/v275).
+"""Re-arm genuine heartbeat execution after a proven writer renewal (v238/v275/v301).
 
-Production on 2026-08-26 showed the entrypoint writer lease renewing successfully
-while the live activation circuit breaker still reported
-``heartbeat_verification ... marker_missing``. The previous v238 implementation
-called ``authority_heartbeat._write_heartbeat_marker()`` from a writer renewal.
-That is AUTH_VERIFY liveness, not ORDER_VERIFY/FILL_VERIFY execution proof.
+v238 treats a successful entrypoint writer renewal only as a liveness wake-up;
+it never writes execution proof.  v275 may arm the existing strategy publication
+monitor after a real writer renewal when no strategy has been published yet.
 
-The corrected v238 never writes an execution heartbeat marker from writer renewal.
-A healthy renewal is only a liveness wake-up: locate the already-published strategy
-and idempotently ensure its genuine heartbeat scheduler is running. Production on
-2026-08-29 then exposed a second startup gap: the writer renewed while the canonical
-strategy publication monitor remained deferred, leaving v238 permanently at
-``strategy_not_published``. v275 closes only that owner handoff. After a proven
-healthy writer renewal, and only when no strategy is already published, v238 may
-idempotently arm the existing strategy publication monitor. The publication module's
-own live-capital, runtime-state, writer-token, writer-generation, and hydrated-broker
-checks remain authoritative. Install-time rearm never arms publication; only the
-healthy writer-renewal path may do so. v238 still reports scheduler-not-ready until a
-real strategy exists and never publishes readiness itself.
+Production on 2026-08-30 exposed a lease-thread isolation defect.  The v238
+wrapper performed strategy discovery/import, scheduler re-arm and activation
+reconciliation synchronously after the Redis renewal.  Once brokers became
+entry-ready that post-renewal work could block inside strategy publication/import
+state.  The Redis renewal itself succeeded, but the same heartbeat thread never
+returned for its next lease refresh.  The v40 watchdog then correctly observed
+``renewal_success_stale`` while the exact Redis lock was still owned.
 
-The normal heartbeat order path must obtain a real broker result and
-``TradingStrategy._persist_heartbeat_marker`` remains the owner of execution proof.
-Activation convergence is woken only after the canonical trading-state-machine
-verifier confirms that genuine marker is present, stage-sufficient, and fresh.
+v301 keeps the genuine Redis renewal path synchronous and authoritative, but
+moves all v238 post-renewal publication/strategy/activation work to one daemon
+single-flight worker per writer runtime.  The worker is generation/token scoped;
+a worker from a superseded writer epoch may finish diagnostic work but cannot
+wake activation for the new epoch.  Install-time re-arm behavior remains on the
+normal startup thread.
 
 No execution authority, readiness, nonce, risk, capital, broker-health, ECEL,
-minimum-notional, acknowledgement, or fill gate is bypassed or fabricated.
+minimum-notional, acknowledgement, fill, writer or fencing gate is bypassed or
+fabricated.  No Redis lock is renewed or mutated by the v301 worker.
 """
 from __future__ import annotations
 
 import importlib
 import logging
 import os
+import threading
 from functools import wraps
 from typing import Any
 
 LOGGER = logging.getLogger("nija.runtime_heartbeat_marker_convergence_v238")
 MARKER = "20260826-heartbeat-marker-convergence-v238"
 V275_MARKER = "20260829-strategy-publication-writer-handoff-v275"
+V301_MARKER = "20260830-writer-renewal-postwork-isolation-v301"
+V301_READY_FLAG = "NIJA_RUNTIME_WRITER_RENEWAL_POSTWORK_ISOLATION_V301_READY"
 _PATCH_ATTR = "_nija_heartbeat_marker_convergence_v238"
+_POSTWORK_THREAD_ATTR = "_nija_writer_renewal_postwork_thread_v301"
+_POSTWORK_LOCK_ATTR = "_nija_writer_renewal_postwork_lock_v301"
+_POSTWORK_GENERATION_ATTR = "_nija_writer_renewal_postwork_generation_v301"
+_POSTWORK_TOKEN_ATTR = "_nija_writer_renewal_postwork_token_v301"
+_POSTWORK_INIT_LOCK = threading.RLock()
 
 
 def _arm_strategy_publication_monitor(publication: Any) -> tuple[bool, str]:
@@ -123,6 +127,137 @@ def _wake_activation_after_genuine_marker(source: str) -> bool:
     return False
 
 
+def _runtime_epoch_current(runtime: Any, generation: int, token: str) -> bool:
+    """Process-local epoch check used only to suppress stale postwork."""
+    try:
+        return bool(
+            getattr(runtime, "acquired", False)
+            and not getattr(runtime, "lost", True)
+            and int(getattr(runtime, "_generation", 0) or 0) == int(generation)
+            and str(getattr(runtime, "_token", "") or "") == str(token or "")
+        )
+    except Exception:
+        return False
+
+
+def _postwork_lock(runtime: Any) -> threading.Lock:
+    lock = getattr(runtime, _POSTWORK_LOCK_ATTR, None)
+    if lock is not None:
+        return lock
+    with _POSTWORK_INIT_LOCK:
+        lock = getattr(runtime, _POSTWORK_LOCK_ATTR, None)
+        if lock is None:
+            lock = threading.Lock()
+            setattr(runtime, _POSTWORK_LOCK_ATTR, lock)
+        return lock
+
+
+def _dispatch_writer_renewal_postwork(runtime: Any) -> tuple[bool, str]:
+    """Move non-lease writer-renewal work off the Redis heartbeat thread."""
+    generation = int(getattr(runtime, "_generation", 0) or 0)
+    token = str(getattr(runtime, "_token", "") or "")
+    if generation <= 0 or not token or not _runtime_epoch_current(runtime, generation, token):
+        return False, "writer_epoch_not_current"
+
+    lock = _postwork_lock(runtime)
+    with lock:
+        existing = getattr(runtime, _POSTWORK_THREAD_ATTR, None)
+        if existing is not None and callable(getattr(existing, "is_alive", None)):
+            try:
+                if existing.is_alive():
+                    return False, "postwork_in_flight"
+            except Exception:
+                return False, "postwork_state_unavailable"
+
+        def _worker() -> None:
+            rearmed = False
+            rearm_detail = "not_run"
+            activation_woken = False
+            try:
+                if not _runtime_epoch_current(runtime, generation, token):
+                    LOGGER.info(
+                        "WRITER_RENEWAL_POSTWORK_V301_SUPPRESSED marker=%s generation=%d "
+                        "reason=writer_epoch_changed_before_worker_start redis_mutated=false "
+                        "activation_attempted=false execution_proof_fabricated=false",
+                        V301_MARKER,
+                        generation,
+                    )
+                    return
+
+                rearmed, rearm_detail = _rearm_genuine_heartbeat(
+                    allow_publication_arm=True
+                )
+                LOGGER.critical(
+                    "HEARTBEAT_MARKER_V238_LIVENESS_WAKE marker=%s source=entrypoint_writer_renewal_async_v301 "
+                    "lease_acquired=true writer_lost=false renewal_health=true scheduler_ready=%s "
+                    "scheduler_detail=%s execution_marker_written=false writer_renewal_not_execution_proof=true "
+                    "execution_proof_fabricated=false nonce_risk_capital_order_gates_unchanged=true "
+                    "safety_gates_bypassed=false",
+                    MARKER,
+                    str(rearmed).lower(),
+                    rearm_detail,
+                )
+
+                if not _runtime_epoch_current(runtime, generation, token):
+                    LOGGER.info(
+                        "WRITER_RENEWAL_POSTWORK_V301_SUPPRESSED marker=%s generation=%d "
+                        "reason=writer_epoch_changed_after_rearm redis_mutated=false "
+                        "activation_attempted=false execution_proof_fabricated=false",
+                        V301_MARKER,
+                        generation,
+                    )
+                    return
+
+                activation_woken = _wake_activation_after_genuine_marker(
+                    "entrypoint_writer_renewal_async_v301"
+                )
+            except Exception as exc:
+                LOGGER.warning(
+                    "WRITER_RENEWAL_POSTWORK_V301_ERROR marker=%s generation=%d error=%s:%s "
+                    "redis_mutated=false writer_renewal_unchanged=true trading_fail_closed=true",
+                    V301_MARKER,
+                    generation,
+                    type(exc).__name__,
+                    exc,
+                )
+            finally:
+                LOGGER.info(
+                    "WRITER_RENEWAL_POSTWORK_V301_COMPLETE marker=%s generation=%d "
+                    "scheduler_ready=%s scheduler_detail=%s activation_woken=%s "
+                    "redis_mutated=false writer_renewal_unchanged=true execution_proof_fabricated=false",
+                    V301_MARKER,
+                    generation,
+                    str(rearmed).lower(),
+                    rearm_detail,
+                    str(activation_woken).lower(),
+                )
+                with lock:
+                    if getattr(runtime, _POSTWORK_THREAD_ATTR, None) is threading.current_thread():
+                        setattr(runtime, _POSTWORK_THREAD_ATTR, None)
+                        setattr(runtime, _POSTWORK_GENERATION_ATTR, 0)
+                        setattr(runtime, _POSTWORK_TOKEN_ATTR, "")
+
+        worker = threading.Thread(
+            target=_worker,
+            name=f"writer-renewal-postwork-v301-g{generation}",
+            daemon=True,
+        )
+        setattr(runtime, _POSTWORK_THREAD_ATTR, worker)
+        setattr(runtime, _POSTWORK_GENERATION_ATTR, generation)
+        setattr(runtime, _POSTWORK_TOKEN_ATTR, token)
+        worker.start()
+
+    LOGGER.critical(
+        "WRITER_RENEWAL_POSTWORK_V301_DISPATCHED marker=%s generation=%d "
+        "lease_thread_nonblocking=true single_flight=true redis_mutated=false "
+        "writer_renewal_unchanged=true strategy_publication_async=true activation_reconcile_async=true "
+        "execution_proof_fabricated=false safety_gates_bypassed=false",
+        V301_MARKER,
+        generation,
+    )
+    return True, "postwork_dispatched"
+
+
 def _patch_entrypoint_writer() -> bool:
     module = importlib.import_module("bot.entrypoint_writer_authority")
     cls = getattr(module, "EntrypointWriterAuthority", None)
@@ -148,16 +283,15 @@ def _patch_entrypoint_writer() -> bool:
                 healthy = bool(proof and proof[0])
                 reason = str(proof[1] if len(proof) > 1 else "unknown")
             if acquired and not lost and healthy:
-                rearmed, rearm_detail = _rearm_genuine_heartbeat(allow_publication_arm=True)
-                LOGGER.critical(
-                    "HEARTBEAT_MARKER_V238_LIVENESS_WAKE marker=%s source=entrypoint_writer_renewal "
-                    "lease_acquired=true writer_lost=false renewal_health=true scheduler_ready=%s "
-                    "scheduler_detail=%s execution_marker_written=false writer_renewal_not_execution_proof=true "
-                    "execution_proof_fabricated=false nonce_risk_capital_order_gates_unchanged=true "
-                    "safety_gates_bypassed=false",
-                    MARKER, str(rearmed).lower(), rearm_detail,
-                )
-                _wake_activation_after_genuine_marker("entrypoint_writer_renewal")
+                dispatched, postwork_detail = _dispatch_writer_renewal_postwork(self)
+                if not dispatched:
+                    LOGGER.debug(
+                        "WRITER_RENEWAL_POSTWORK_V301_DEFERRED marker=%s generation=%s detail=%s "
+                        "lease_thread_nonblocking=true",
+                        V301_MARKER,
+                        getattr(self, "_generation", 0),
+                        postwork_detail,
+                    )
             else:
                 LOGGER.debug(
                     "HEARTBEAT_MARKER_V238_WAKE_SKIPPED marker=%s acquired=%s lost=%s healthy=%s reason=%s",
@@ -176,9 +310,22 @@ def _patch_entrypoint_writer() -> bool:
     return True
 
 
+def _register_v301_manifest() -> bool:
+    try:
+        manifest = importlib.import_module("bot.runtime_release_manifest_patch")
+        required = getattr(manifest, "_REQUIRED_FLAGS", None)
+        if not isinstance(required, dict):
+            return False
+        required["runtime_writer_renewal_postwork_isolation_v301"] = V301_READY_FLAG
+        return True
+    except Exception:
+        return False
+
+
 def install() -> bool:
     try:
         ready = _patch_entrypoint_writer()
+        manifest_ready = _register_v301_manifest()
         rearmed, detail = _rearm_genuine_heartbeat()
         LOGGER.info(
             "HEARTBEAT_MARKER_V238_INSTALL_REARM marker=%s scheduler_ready=%s detail=%s",
@@ -191,17 +338,32 @@ def install() -> bool:
             MARKER, type(exc).__name__, exc,
         )
         ready = False
+        manifest_ready = False
+
+    v301_ready = bool(ready and manifest_ready)
     os.environ["NIJA_HEARTBEAT_MARKER_CONVERGENCE_V238_READY"] = "1" if ready else "0"
+    os.environ[V301_READY_FLAG] = "1" if v301_ready else "0"
+    if v301_ready:
+        LOGGER.critical(
+            "RUNTIME_WRITER_RENEWAL_POSTWORK_ISOLATION_V301_READY marker=%s ready=true "
+            "writer_renewal_postwork_async=true single_flight=true generation_token_scoped=true "
+            "redis_mutated=false writer_renewal_unchanged=true writer_ttl_unchanged=true "
+            "strategy_publication_async=true activation_reconcile_async=true execution_proof_fabricated=false "
+            "forced_activation=false writer_nonce_risk_capital_position_killswitch_order_fill_gates_unchanged=true "
+            "safety_gates_bypassed=false",
+            V301_MARKER,
+        )
     if ready:
         LOGGER.critical(
             "HEARTBEAT_MARKER_CONVERGENCE_V238_READY marker=%s ready=true genuine_writer_renewal_wakeup_only=true "
             "real_heartbeat_scheduler_rearmed=true execution_marker_owner=TradingStrategy._persist_heartbeat_marker "
             "canonical_execution_marker_verifier=true activation_reconcile_after_genuine_marker_only=true "
-            "strategy_publication_writer_handoff_v275=true execution_proof_fabricated=false forced_activation=false "
-            "safety_gates_bypassed=false",
+            "strategy_publication_writer_handoff_v275=true writer_renewal_postwork_async_v301=%s "
+            "execution_proof_fabricated=false forced_activation=false safety_gates_bypassed=false",
             MARKER,
+            str(v301_ready).lower(),
         )
-    return ready
+    return bool(ready and v301_ready)
 
 
 def install_import_hook() -> bool:
@@ -211,9 +373,14 @@ def install_import_hook() -> bool:
 __all__ = [
     "MARKER",
     "V275_MARKER",
+    "V301_MARKER",
+    "V301_READY_FLAG",
     "install",
     "install_import_hook",
     "_arm_strategy_publication_monitor",
     "_rearm_genuine_heartbeat",
     "_genuine_execution_marker_ready",
+    "_wake_activation_after_genuine_marker",
+    "_runtime_epoch_current",
+    "_dispatch_writer_renewal_postwork",
 ]
