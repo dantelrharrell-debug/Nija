@@ -5,6 +5,11 @@ This guard prevents EntrypointWriterAuthority from recreating a vanished lock
 with the old fencing token. The existing heartbeat loop then marks authority
 lost, bot_main stops execution, and the next canonical acquisition obtains a
 fresh fencing token/generation.
+
+v300 is chained here because this guard is installed before writer loss can be
+observed.  The v300 companion binds callback-free fallback restart timers to the
+loss epoch that created them, preventing a stale timer from terminating a
+process after it has genuinely reacquired exact Redis writer authority.
 """
 from __future__ import annotations
 import builtins, importlib, logging, os, sys
@@ -57,6 +62,16 @@ def _patch_loaded() -> bool:
             changed = _patch(module) or changed
     return changed
 
+def _install_v300() -> bool:
+    """Install stale writer-loss restart protection without granting authority."""
+    try:
+        companion = importlib.import_module("bot.writer_reacquisition_restart_guard_v300_patch")
+        installer = getattr(companion, "install_import_hook", None) or getattr(companion, "install", None)
+        return bool(installer()) if callable(installer) else False
+    except Exception as exc:
+        LOGGER.error("WRITER_REACQUISITION_RESTART_GUARD_V300_INSTALL_FAILED marker=%s err=%s", MARKER, exc)
+        return False
+
 def install_import_hook() -> bool:
     _patch_loaded()
     if not getattr(builtins, _FLAG, False):
@@ -69,8 +84,13 @@ def install_import_hook() -> bool:
             return result
         builtins.__import__ = importing
         setattr(builtins, _FLAG, True)
+    v300_ready = _install_v300()
     os.environ["NIJA_WRITER_EPOCH_RECOVERY_V19_INSTALLED"] = "1"
-    LOGGER.critical("WRITER_EPOCH_RECOVERY_V19_INSTALLED marker=%s fail_closed=true", MARKER)
+    LOGGER.critical(
+        "WRITER_EPOCH_RECOVERY_V19_INSTALLED marker=%s fail_closed=true writer_reacquisition_restart_guard_v300=%s",
+        MARKER,
+        str(v300_ready).lower(),
+    )
     return True
 
 def install() -> bool:
