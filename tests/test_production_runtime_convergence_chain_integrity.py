@@ -38,7 +38,7 @@ def test_kraken_supervision_chain_references_existing_bot_modules():
     assert missing == [], f"Production convergence references missing bot modules: {missing}"
 
 
-def test_transport_isolation_cost_basis_dust_and_fairness_repairs_are_in_production_chain_in_order():
+def test_transport_isolation_cost_basis_dust_fairness_and_inflight_truth_repairs_are_in_production_chain_in_order():
     repo_root = Path(__file__).resolve().parents[1]
     source = (repo_root / "bot" / "production_runtime_convergence_v88_patch.py").read_text(encoding="utf-8")
 
@@ -48,6 +48,7 @@ def test_transport_isolation_cost_basis_dust_and_fairness_repairs_are_in_product
     v295 = source.index("runtime_okx_cost_basis_recovery_v295_patch")
     v296 = source.index("runtime_dust_position_policy_convergence_v296_patch")
     v297 = source.index("runtime_kraken_monitoring_fairness_v297_patch")
+    v298 = source.index("runtime_kraken_inflight_snapshot_truth_v298_patch")
 
-    assert v292 < v293 < v294 < v295 < v296 < v297
+    assert v292 < v293 < v294 < v295 < v296 < v297 < v298
     assert "runtime_account_scoped_reconciliation_truth_v291_patch" not in source
