@@ -15,10 +15,12 @@ TARGET = ROOT / "render_liveness_server.py"
 BASE_IMPORT = "from render_outreach_routes import handle_outreach_get, handle_outreach_post\n"
 EXT_IMPORT = (
     "from render_outreach_extension import "
-    "handle_outreach_extension_get, handle_outreach_extension_post\n"
+    "handle_outreach_extension_get, handle_outreach_extension_post, "
+    "start_justcall_webhook_autoconfig\n"
 )
 EXT_GET_MARKER = "        if handle_outreach_extension_get(self):\n            return\n\n"
 BASE_GET_MARKER = "        if handle_outreach_get(self):\n            return\n\n"
+AUTOCONFIG_CALL = "    start_justcall_webhook_autoconfig()\n"
 POST_METHOD = '''    def do_POST(self) -> None:  # noqa: N802 - stdlib handler contract\n        if handle_outreach_extension_post(self):\n            return\n        if handle_outreach_post(self):\n            return\n        self.send_response(404)\n        self.send_header("Content-Length", "0")\n        self.send_header("Connection", "close")\n        self.end_headers()\n\n'''
 
 
@@ -31,7 +33,14 @@ def main() -> int:
         if anchor not in text:
             raise RuntimeError("render liveness typing import anchor missing")
         text = text.replace(anchor, anchor + "\n" + BASE_IMPORT, 1)
-    if EXT_IMPORT.strip() not in text:
+
+    old_ext_import = (
+        "from render_outreach_extension import "
+        "handle_outreach_extension_get, handle_outreach_extension_post\n"
+    )
+    if old_ext_import in text:
+        text = text.replace(old_ext_import, EXT_IMPORT, 1)
+    elif EXT_IMPORT.strip() not in text:
         if BASE_IMPORT not in text:
             raise RuntimeError("render outreach base import anchor missing")
         text = text.replace(BASE_IMPORT, BASE_IMPORT + EXT_IMPORT, 1)
@@ -58,6 +67,12 @@ def main() -> int:
             raise RuntimeError("render liveness existing do_POST shape is unexpected")
         text = text.replace(old_post, POST_METHOD, 1)
 
+    if AUTOCONFIG_CALL.strip() not in text:
+        server_anchor = "    server.allow_reuse_address = True\n\n"
+        if server_anchor not in text:
+            raise RuntimeError("render liveness server startup anchor missing")
+        text = text.replace(server_anchor, server_anchor + AUTOCONFIG_CALL + "\n", 1)
+
     if text != original:
         TARGET.write_text(text, encoding="utf-8")
 
@@ -77,15 +92,17 @@ def main() -> int:
         "handle_outreach_get(self)",
         "handle_outreach_extension_post(self)",
         "handle_outreach_post(self)",
+        "start_justcall_webhook_autoconfig()",
     )
     missing = [marker for marker in required if marker not in verified]
     if missing:
         raise RuntimeError("Render outreach front-door patch incomplete: " + ", ".join(missing))
 
     print(
-        "RENDER_OUTREACH_FRONTDOOR_READY marker=20260829-render-outreach-frontdoor-v2 "
-        "protected=true signed_webhook=true campaign_compliance_fail_closed=true "
-        "consent_fail_closed=true liveness_unchanged=true readiness_unchanged=true"
+        "RENDER_OUTREACH_FRONTDOOR_READY marker=20260829-render-outreach-frontdoor-v3 "
+        "protected=true signed_webhook=true webhook_autoconfig=true "
+        "campaign_compliance_fail_closed=true consent_fail_closed=true "
+        "liveness_unchanged=true readiness_unchanged=true"
     )
     return 0
 
