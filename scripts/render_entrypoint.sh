@@ -72,6 +72,8 @@ python3 -S -m py_compile \
     bot/tests/test_canonical_writer_first_v59.py \
     render_liveness_server.py \
     render_outreach_routes.py \
+    render_outreach_extension.py \
+    render_outreach_store.py \
     scripts/canonical_runtime_launcher_v26.py \
     scripts/render_memory_pressure_guard.py \
     scripts/apply_canonical_launcher_v26.py \
@@ -99,10 +101,12 @@ grep -Fq '_start_render_memory_pressure_guard()' scripts/canonical_runtime_launc
 grep -Fq 'bind_entrypoint_writer_authority_aliases(runtime)' bot/bot_main.py
 grep -Fq 'NIJA_ENTRYPOINT_WRITER_MODULE_IDENTITY_CONVERGED' bot/entrypoint_writer_authority.py
 grep -Fq 'heartbeat_telemetry_mutation=false' bot/broker_manager.py
+grep -Fq 'handle_outreach_extension_get(self)' render_liveness_server.py
 grep -Fq 'handle_outreach_get(self)' render_liveness_server.py
+grep -Fq 'handle_outreach_extension_post(self)' render_liveness_server.py
 grep -Fq 'handle_outreach_post(self)' render_liveness_server.py
 
-echo "🧭 RENDER_ENTRYPOINT_CANONICAL_HANDOFF_READY marker=20260828-render-signal-forwarding-v262 launcher=canonical_runtime_launcher_v26 writer_generation_handoff=v45 writer_first=v59 signal_forwarding=v262 single_identity=true singleton_alias_convergence=v91 kraken_nonce_authority_gate=v91 direct_broker_prebootstrap=v27 outreach_frontdoor=v1"
+echo "🧭 RENDER_ENTRYPOINT_CANONICAL_HANDOFF_READY marker=20260828-render-signal-forwarding-v262 launcher=canonical_runtime_launcher_v26 writer_generation_handoff=v45 writer_first=v59 signal_forwarding=v262 single_identity=true singleton_alias_convergence=v91 kraken_nonce_authority_gate=v91 direct_broker_prebootstrap=v27 outreach_frontdoor=v2 signed_webhook=true campaign_compliance_fail_closed=true"
 unset NIJA_DEFER_RUNTIME_SITE_HOOKS
 
 exec bash scripts/production_bootstrap.sh "$@"
