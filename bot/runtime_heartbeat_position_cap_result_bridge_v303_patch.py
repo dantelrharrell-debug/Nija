@@ -19,6 +19,11 @@ existing trusted startup-probe verifier succeeds, and the returned error is an
 explicit position-cap denial.  v273 then performs its existing canonical-ready
 venue quarantine/retry logic.
 
+v305 is chained from this already-terminal Kraken supervision surface.  It
+isolates the v285 authoritative Kraken snapshot from ordinary OpenPositions
+reads while leaving v286 authenticated Balance reconciliation as the sole owner
+of that snapshot.  v303 is considered ready only when v305 is also installed.
+
 The position cap itself is never bypassed or reclassified.  A rejected order is
 never treated as submitted, filled, or as execution proof.  Ordinary orders,
 account limits, writer/nonce authority, risk, capital, kill switch, broker
@@ -187,6 +192,21 @@ def _register_manifest() -> bool:
         return False
 
 
+def _install_v305_snapshot_ownership() -> bool:
+    try:
+        module = importlib.import_module("bot.runtime_kraken_authoritative_snapshot_ownership_v305_patch")
+        installer = getattr(module, "install_import_hook", None)
+        return bool(callable(installer) and installer())
+    except Exception as exc:
+        LOGGER.error(
+            "KRAKEN_SNAPSHOT_OWNERSHIP_V305_CHAIN_FAILED marker=%s error=%s:%s trading_fail_closed=true",
+            MARKER,
+            type(exc).__name__,
+            exc,
+        )
+        return False
+
+
 def reconcile_once() -> dict[str, Any]:
     patched, surfaces = _patch_loaded_strategy_surfaces()
     return {
@@ -203,13 +223,14 @@ def install() -> bool:
     except Exception as exc:
         state = {"ready": False, "strategy_surfaces": (), "v273_bridge_target": False, "error": f"{type(exc).__name__}:{exc}"}
 
-    ready = bool(manifest_ok and state.get("ready") and state.get("v273_bridge_target"))
+    v305_ready = _install_v305_snapshot_ownership()
+    ready = bool(manifest_ok and state.get("ready") and state.get("v273_bridge_target") and v305_ready)
     os.environ[_READY_FLAG] = "1" if ready else "0"
     log = LOGGER.critical if ready else LOGGER.error
     log(
         "RUNTIME_HEARTBEAT_POSITION_CAP_RESULT_BRIDGE_V303_%s marker=%s ready=%s surfaces=%s "
         "caller_result_observation=true v273_bridge_target=%s trusted_startup_probe_only=true "
-        "position_cap_unchanged=true pipeline_result_unchanged=true ordinary_orders_unchanged=true "
+        "v305_snapshot_ownership=%s position_cap_unchanged=true pipeline_result_unchanged=true ordinary_orders_unchanged=true "
         "execution_proof_fabricated=false forced_trade=false forced_activation=false "
         "writer_nonce_risk_capital_killswitch_broker_health_min_notional_order_ack_fill_gates_unchanged=true "
         "safety_gates_bypassed=false",
@@ -218,6 +239,7 @@ def install() -> bool:
         str(ready).lower(),
         ",".join(state.get("strategy_surfaces", ()) or ()) or "none",
         str(bool(state.get("v273_bridge_target"))).lower(),
+        str(v305_ready).lower(),
     )
     return ready
 
@@ -236,4 +258,5 @@ __all__ = [
     "_wrap_submit",
     "_patch_strategy_module",
     "_patch_loaded_strategy_surfaces",
+    "_install_v305_snapshot_ownership",
 ]
