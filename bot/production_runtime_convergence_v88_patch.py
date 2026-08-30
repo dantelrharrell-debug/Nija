@@ -198,6 +198,20 @@ def _install_kraken_user_supervision() -> bool:
             # fill semantics unchanged.
             from bot import runtime_kraken_transport_timeout_v292_patch as v292
             installed = bool(v292.install_import_hook())
+        if installed:
+            # v293 scopes Kraken private-call serialization by proven API-key
+            # identity. The same key remains strictly serialized; independent
+            # platform/user keys no longer block one another behind a slow read.
+            # Unknown credential identity falls back to the original global lock.
+            from bot import runtime_kraken_credential_lock_scope_v293_patch as v293
+            installed = bool(v293.install_import_hook())
+        if installed:
+            # v294 restores the platform/user isolation promised by v282. The
+            # canonical position_sync_ready activation certificate is platform
+            # only; user accounts remain independently entry-blocked until their
+            # own proof is current, while v281/v285 still audit all-account exits.
+            from bot import runtime_position_sync_isolation_v294_patch as v294
+            installed = bool(v294.install_import_hook())
     except Exception as exc:
         LOGGER.warning(
             "KRAKEN_USER_SUPERVISION_V88_INSTALL_FAILED marker=%s error=%s:%s",
@@ -210,7 +224,7 @@ def _install_kraken_user_supervision() -> bool:
         with _LOCK:
             _KRAKEN_SUPERVISION_INSTALLED = True
         LOGGER.critical(
-            "KRAKEN_USER_SUPERVISION_V88_CHAINED marker=%s source=v86+v90+v266+v282+v285+v286+v287+v288+v289+v290+v292 "
+            "KRAKEN_USER_SUPERVISION_V88_CHAINED marker=%s source=v86+v90+v266+v282+v285+v286+v287+v288+v289+v290+v292+v293+v294 "
             "authenticated_reconnect_only=true canonical_rebuild=true writer_scoped=true "
             "state_sensitive_diagnostics=true connected_poll_private_io_bounded=true "
             "authoritative_user_position_proof_required=true current_snapshot_required=true "
@@ -219,8 +233,9 @@ def _install_kraken_user_supervision() -> bool:
             "rate_profile_aware_stale_flight_retirement=true bulk_startup_cost_basis=true "
             "account_scoped_position_state=true scoped_entry_price_store=true "
             "authoritative_stale_tracker_cleanup=true local_read_contention_retry=true "
-            "kraken_transport_timeout_bound=true lock_bypass=false lock_force_release=false "
-            "platform_activation_unchanged=true",
+            "kraken_transport_timeout_bound=true credential_scoped_private_serialization=true "
+            "platform_user_position_sync_isolation=true lock_bypass=false lock_force_release=false "
+            "platform_activation_preserved_for_user_local_failures=true",
             MARKER,
         )
     return installed
@@ -297,6 +312,7 @@ def install_import_hook() -> bool:
         "kraken_position_refresh_liveness_v286=true kraken_position_flight_recovery_v287=true "
         "kraken_cost_basis_bulk_v288=true account_scoped_position_state_v289=true "
         "kraken_read_contention_recovery_v290=true kraken_transport_timeout_v292=true "
+        "kraken_credential_lock_scope_v293=true position_sync_isolation_v294=true "
         "stale_log_filter=true risk_gates_unchanged=true nonce_gates_unchanged=true",
         MARKER,
     )
