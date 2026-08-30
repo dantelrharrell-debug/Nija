@@ -1,9 +1,8 @@
 """Idempotently expose protected JustCall routes on NIJA's Render front door.
 
 The Render service binds ``render_liveness_server.py`` to the public PORT before
-the trading runtime starts. This patch adds only delegation hooks to the
-stdlib-only ``render_outreach_routes`` module, preserving all existing liveness
-and trading-readiness behavior.
+the trading runtime starts. This patch adds only delegation hooks to stdlib-only
+outreach modules, preserving all existing liveness and trading-readiness behavior.
 """
 
 from __future__ import annotations
@@ -13,44 +12,70 @@ import py_compile
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 TARGET = ROOT / "render_liveness_server.py"
-IMPORT_LINE = "from render_outreach_routes import handle_outreach_get, handle_outreach_post\n"
-GET_MARKER = "        if handle_outreach_get(self):\n            return\n\n"
-POST_METHOD = '''    def do_POST(self) -> None:  # noqa: N802 - stdlib handler contract\n        if handle_outreach_post(self):\n            return\n        self.send_response(404)\n        self.send_header("Content-Length", "0")\n        self.send_header("Connection", "close")\n        self.end_headers()\n\n'''
+BASE_IMPORT = "from render_outreach_routes import handle_outreach_get, handle_outreach_post\n"
+EXT_IMPORT = (
+    "from render_outreach_extension import "
+    "handle_outreach_extension_get, handle_outreach_extension_post\n"
+)
+EXT_GET_MARKER = "        if handle_outreach_extension_get(self):\n            return\n\n"
+BASE_GET_MARKER = "        if handle_outreach_get(self):\n            return\n\n"
+POST_METHOD = '''    def do_POST(self) -> None:  # noqa: N802 - stdlib handler contract\n        if handle_outreach_extension_post(self):\n            return\n        if handle_outreach_post(self):\n            return\n        self.send_response(404)\n        self.send_header("Content-Length", "0")\n        self.send_header("Connection", "close")\n        self.end_headers()\n\n'''
 
 
 def main() -> int:
     text = TARGET.read_text(encoding="utf-8")
     original = text
 
-    if IMPORT_LINE.strip() not in text:
-        anchor = "from typing import Any, Optional\n"
+    anchor = "from typing import Any, Optional\n"
+    if BASE_IMPORT.strip() not in text:
         if anchor not in text:
             raise RuntimeError("render liveness typing import anchor missing")
-        text = text.replace(anchor, anchor + "\n" + IMPORT_LINE, 1)
+        text = text.replace(anchor, anchor + "\n" + BASE_IMPORT, 1)
+    if EXT_IMPORT.strip() not in text:
+        if BASE_IMPORT not in text:
+            raise RuntimeError("render outreach base import anchor missing")
+        text = text.replace(BASE_IMPORT, BASE_IMPORT + EXT_IMPORT, 1)
 
-    if GET_MARKER.strip() not in text:
-        anchor = "    def do_GET(self) -> None:  # noqa: N802 - stdlib handler contract\n"
-        if anchor not in text:
-            raise RuntimeError("render liveness do_GET anchor missing")
-        text = text.replace(anchor, anchor + GET_MARKER, 1)
+    get_anchor = "    def do_GET(self) -> None:  # noqa: N802 - stdlib handler contract\n"
+    if get_anchor not in text:
+        raise RuntimeError("render liveness do_GET anchor missing")
+    if EXT_GET_MARKER.strip() not in text:
+        if BASE_GET_MARKER in text:
+            text = text.replace(BASE_GET_MARKER, EXT_GET_MARKER + BASE_GET_MARKER, 1)
+        else:
+            text = text.replace(get_anchor, get_anchor + EXT_GET_MARKER + BASE_GET_MARKER, 1)
+    elif BASE_GET_MARKER.strip() not in text:
+        text = text.replace(EXT_GET_MARKER, EXT_GET_MARKER + BASE_GET_MARKER, 1)
 
     if "def do_POST(self)" not in text:
-        anchor = "    def log_message(self, fmt: str, *args: object) -> None:\n"
-        if anchor not in text:
+        log_anchor = "    def log_message(self, fmt: str, *args: object) -> None:\n"
+        if log_anchor not in text:
             raise RuntimeError("render liveness log_message anchor missing")
-        text = text.replace(anchor, POST_METHOD + anchor, 1)
+        text = text.replace(log_anchor, POST_METHOD + log_anchor, 1)
+    elif "handle_outreach_extension_post(self)" not in text:
+        old_post = '''    def do_POST(self) -> None:  # noqa: N802 - stdlib handler contract\n        if handle_outreach_post(self):\n            return\n        self.send_response(404)\n        self.send_header("Content-Length", "0")\n        self.send_header("Connection", "close")\n        self.end_headers()\n\n'''
+        if old_post not in text:
+            raise RuntimeError("render liveness existing do_POST shape is unexpected")
+        text = text.replace(old_post, POST_METHOD, 1)
 
     if text != original:
         TARGET.write_text(text, encoding="utf-8")
 
-    py_compile.compile(str(TARGET), doraise=True)
-    outreach = ROOT / "render_outreach_routes.py"
-    py_compile.compile(str(outreach), doraise=True)
+    for module in (
+        TARGET,
+        ROOT / "render_outreach_routes.py",
+        ROOT / "render_outreach_extension.py",
+        ROOT / "render_outreach_store.py",
+    ):
+        py_compile.compile(str(module), doraise=True)
 
     verified = TARGET.read_text(encoding="utf-8")
     required = (
-        IMPORT_LINE.strip(),
+        BASE_IMPORT.strip(),
+        EXT_IMPORT.strip(),
+        "handle_outreach_extension_get(self)",
         "handle_outreach_get(self)",
+        "handle_outreach_extension_post(self)",
         "handle_outreach_post(self)",
     )
     missing = [marker for marker in required if marker not in verified]
@@ -58,8 +83,9 @@ def main() -> int:
         raise RuntimeError("Render outreach front-door patch incomplete: " + ", ".join(missing))
 
     print(
-        "RENDER_OUTREACH_FRONTDOOR_READY marker=20260829-render-outreach-frontdoor-v1 "
-        "protected=true consent_fail_closed=true liveness_unchanged=true readiness_unchanged=true"
+        "RENDER_OUTREACH_FRONTDOOR_READY marker=20260829-render-outreach-frontdoor-v2 "
+        "protected=true signed_webhook=true campaign_compliance_fail_closed=true "
+        "consent_fail_closed=true liveness_unchanged=true readiness_unchanged=true"
     )
     return 0
 
