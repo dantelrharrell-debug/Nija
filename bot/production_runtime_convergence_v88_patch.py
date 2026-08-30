@@ -171,11 +171,16 @@ def _install_kraken_user_supervision() -> bool:
             from bot import runtime_kraken_position_refresh_liveness_v286_patch as v286
             installed = bool(v286.install_import_hook())
         if installed:
-            # v287 retires only stale unfinished v286 authoritative Balance
-            # single-flights. It does not grant readiness or fabricate position
-            # success; all v285 freshness and protection checks remain required.
+            # v287 retires only dead or genuinely over-budget unfinished v286
+            # Balance flights. It never grants readiness or extends freshness.
             from bot import runtime_kraken_position_flight_recovery_v287_patch as v287
             installed = bool(v287.install_import_hook())
+        if installed:
+            # v288 coalesces Kraken startup cost-basis recovery into one
+            # broker-scoped bulk trade-history flight instead of one bounded
+            # request per held symbol. Missing history still fails closed.
+            from bot import runtime_kraken_cost_basis_bulk_v288_patch as v288
+            installed = bool(v288.install_import_hook())
     except Exception as exc:
         LOGGER.warning(
             "KRAKEN_USER_SUPERVISION_V88_INSTALL_FAILED marker=%s error=%s:%s",
@@ -188,13 +193,14 @@ def _install_kraken_user_supervision() -> bool:
         with _LOCK:
             _KRAKEN_SUPERVISION_INSTALLED = True
         LOGGER.critical(
-            "KRAKEN_USER_SUPERVISION_V88_CHAINED marker=%s source=v86+v90+v266+v282+v285+v286+v287 "
+            "KRAKEN_USER_SUPERVISION_V88_CHAINED marker=%s source=v86+v90+v266+v282+v285+v286+v287+v288 "
             "authenticated_reconnect_only=true canonical_rebuild=true writer_scoped=true "
             "state_sensitive_diagnostics=true connected_poll_private_io_bounded=true "
             "authoritative_user_position_proof_required=true current_snapshot_required=true "
             "quantity_reconciliation_required=true all_account_coverage_periodic=true "
             "kraken_read_rate_wait_outside_global_lock=true raw_balance_position_enumeration=true "
-            "stale_authoritative_flight_retirement=true platform_activation_unchanged=true",
+            "rate_profile_aware_stale_flight_retirement=true bulk_startup_cost_basis=true "
+            "platform_activation_unchanged=true",
             MARKER,
         )
     return installed
@@ -269,7 +275,8 @@ def install_import_hook() -> bool:
         "kraken_user_supervision=true kraken_user_rebuild_v90=true all_account_connectivity_v266=true "
         "kraken_user_position_eligibility_v282=true authoritative_position_coverage_v285=true "
         "kraken_position_refresh_liveness_v286=true kraken_position_flight_recovery_v287=true "
-        "stale_log_filter=true risk_gates_unchanged=true nonce_gates_unchanged=true",
+        "kraken_cost_basis_bulk_v288=true stale_log_filter=true risk_gates_unchanged=true "
+        "nonce_gates_unchanged=true",
         MARKER,
     )
     return True
