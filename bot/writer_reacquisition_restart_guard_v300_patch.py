@@ -28,6 +28,7 @@ granted and no readiness proof is fabricated.
 from __future__ import annotations
 
 import builtins
+import importlib
 import logging
 import os
 import sys
@@ -119,6 +120,7 @@ def _cancel_pending_restart(
         setattr(runtime, "_nija_v300_restart_token", "")
         setattr(runtime, "_nija_v300_restart_callback", None)
 
+    was_alive = _timer_alive(timer)
     if timer is not None:
         cancel = getattr(timer, "cancel", None)
         if callable(cancel):
@@ -137,7 +139,7 @@ def _cancel_pending_restart(
             old_generation,
             str(new_generation if new_generation is not None else getattr(runtime, "_generation", 0)),
             str(new_token if new_token is not None else getattr(runtime, "_token", ""))[:8],
-            str(_timer_alive(timer)).lower(),
+            str(was_alive).lower(),
         )
         return True
     return False
@@ -358,8 +360,21 @@ def _patch_loaded() -> bool:
     return found
 
 
+def _register_manifest() -> bool:
+    try:
+        manifest = importlib.import_module("bot.runtime_release_manifest_patch")
+        required = getattr(manifest, "_REQUIRED_FLAGS", None)
+        if not isinstance(required, dict):
+            return False
+        required["writer_reacquisition_restart_guard_v300"] = _READY_FLAG
+        return True
+    except Exception:
+        return False
+
+
 def install_import_hook() -> bool:
     patched = _patch_loaded()
+    manifest_ready = _register_manifest()
     if not bool(getattr(builtins, _IMPORT_HOOK_FLAG, False)):
         original_import = builtins.__import__
 
@@ -373,18 +388,24 @@ def install_import_hook() -> bool:
         builtins.__import__ = importing
         setattr(builtins, _IMPORT_HOOK_FLAG, True)
 
-    os.environ[_READY_FLAG] = "1"
-    LOGGER.critical(
-        "WRITER_REACQUISITION_RESTART_GUARD_V300_READY marker=%s ready=true "
-        "loaded_authority_patched=%s stale_loss_timer_cancel_on_reacquire=true "
-        "loss_epoch_bound=true exact_redis_recovery_recheck=true genuine_loss_restart_preserved=true "
+    ready = bool(manifest_ready)
+    os.environ[_READY_FLAG] = "1" if ready else "0"
+    log = LOGGER.critical if ready else LOGGER.error
+    log(
+        "WRITER_REACQUISITION_RESTART_GUARD_V300_%s marker=%s ready=%s "
+        "loaded_authority_patched=%s manifest_registered=%s "
+        "stale_loss_timer_cancel_on_reacquire=true loss_epoch_bound=true "
+        "exact_redis_recovery_recheck=true genuine_loss_restart_preserved=true "
         "writer_authority_granted=false redis_mutated=false fencing_unchanged=true "
         "nonce_risk_capital_position_killswitch_order_fill_gates_unchanged=true "
         "forced_activation=false safety_gates_bypassed=false",
+        "READY" if ready else "NOT_READY",
         MARKER,
+        str(ready).lower(),
         str(patched).lower(),
+        str(manifest_ready).lower(),
     )
-    return True
+    return ready
 
 
 def install() -> bool:
@@ -397,6 +418,7 @@ __all__ = [
     "install_import_hook",
     "_patch",
     "_patch_loaded",
+    "_register_manifest",
     "_cancel_pending_restart",
     "_restart_suppression_reason",
     "_schedule_restart_v300",
