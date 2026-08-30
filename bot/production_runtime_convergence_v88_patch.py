@@ -190,6 +190,14 @@ def _install_kraken_user_supervision() -> bool:
             # authentication, nonce, HTTP, order, or payload errors.
             from bot import runtime_kraken_read_contention_recovery_v290_patch as v290
             installed = bool(v290.install_import_hook())
+        if installed:
+            # v291 binds the broker's existing API_TIMEOUT_SECONDS policy to the
+            # actual requests Session used by krakenex. This prevents a dead
+            # private HTTP read from pinning authoritative Balance single-flights
+            # indefinitely while leaving serialization, nonce, retry, order and
+            # fill semantics unchanged.
+            from bot import runtime_kraken_transport_timeout_v291_patch as v291
+            installed = bool(v291.install_import_hook())
     except Exception as exc:
         LOGGER.warning(
             "KRAKEN_USER_SUPERVISION_V88_INSTALL_FAILED marker=%s error=%s:%s",
@@ -202,7 +210,7 @@ def _install_kraken_user_supervision() -> bool:
         with _LOCK:
             _KRAKEN_SUPERVISION_INSTALLED = True
         LOGGER.critical(
-            "KRAKEN_USER_SUPERVISION_V88_CHAINED marker=%s source=v86+v90+v266+v282+v285+v286+v287+v288+v289+v290 "
+            "KRAKEN_USER_SUPERVISION_V88_CHAINED marker=%s source=v86+v90+v266+v282+v285+v286+v287+v288+v289+v290+v291 "
             "authenticated_reconnect_only=true canonical_rebuild=true writer_scoped=true "
             "state_sensitive_diagnostics=true connected_poll_private_io_bounded=true "
             "authoritative_user_position_proof_required=true current_snapshot_required=true "
@@ -211,7 +219,8 @@ def _install_kraken_user_supervision() -> bool:
             "rate_profile_aware_stale_flight_retirement=true bulk_startup_cost_basis=true "
             "account_scoped_position_state=true scoped_entry_price_store=true "
             "authoritative_stale_tracker_cleanup=true local_read_contention_retry=true "
-            "lock_bypass=false lock_force_release=false platform_activation_unchanged=true",
+            "kraken_transport_timeout_bound=true lock_bypass=false lock_force_release=false "
+            "platform_activation_unchanged=true",
             MARKER,
         )
     return installed
@@ -287,8 +296,8 @@ def install_import_hook() -> bool:
         "kraken_user_position_eligibility_v282=true authoritative_position_coverage_v285=true "
         "kraken_position_refresh_liveness_v286=true kraken_position_flight_recovery_v287=true "
         "kraken_cost_basis_bulk_v288=true account_scoped_position_state_v289=true "
-        "kraken_read_contention_recovery_v290=true stale_log_filter=true risk_gates_unchanged=true "
-        "nonce_gates_unchanged=true",
+        "kraken_read_contention_recovery_v290=true kraken_transport_timeout_v291=true "
+        "stale_log_filter=true risk_gates_unchanged=true nonce_gates_unchanged=true",
         MARKER,
     )
     return True
