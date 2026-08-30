@@ -17,6 +17,11 @@ While the bulk read is pending or failed, verified EntryPriceStore or
 broker-position evidence may still satisfy the existing hierarchy, but no
 current-market fallback or synthetic cost basis is introduced.
 
+v304 is chained from this cost-basis surface so older authenticated Kraken
+history pages can be recovered when the broker's pre-request wall-clock deadline
+expires during legitimate MICRO_CAP pacing. v304 does not weaken that generic
+deadline or any Kraken rate/transport/credential controls.
+
 This patch does not alter authoritative quantities, v285 freshness, Kraken rate
 limits, writer/nonce/capital/risk/kill-switch/order/fill gates, or exit rules.
 Missing cost basis remains fail closed and auto-exit remains blocked until
@@ -346,22 +351,39 @@ def _register_manifest() -> bool:
         return False
 
 
+def _install_v304_history_pagination() -> bool:
+    try:
+        module = importlib.import_module("bot.runtime_kraken_cost_basis_history_pagination_v304_patch")
+        installer = getattr(module, "install_import_hook", None)
+        return bool(callable(installer) and installer())
+    except Exception as exc:
+        LOGGER.error(
+            "KRAKEN_COST_BASIS_V304_CHAIN_FAILED marker=%s error=%s:%s trading_fail_closed=true",
+            MARKER,
+            type(exc).__name__,
+            exc,
+        )
+        return False
+
+
 def install() -> bool:
     with _LOCK:
         patched = _patch_startup_entry_price()
         manifest_ok = _register_manifest()
-        ready = bool(patched and manifest_ok)
+        v304_ready = _install_v304_history_pagination()
+        ready = bool(patched and manifest_ok and v304_ready)
         os.environ[_READY_FLAG] = "1" if ready else "0"
         LOGGER.critical(
             "RUNTIME_KRAKEN_COST_BASIS_BULK_V288_%s marker=%s ready=%s "
             "broker_scoped_single_flight=true bulk_trade_history=true per_symbol_history_suppressed=true "
             "bounded_caller_wait=true late_real_result_reused=true broker_position_and_verified_store_preserved=true "
-            "cost_basis_fabricated=false current_price_fallback=false authoritative_quantity_unchanged=true "
+            "v304_history_pagination=%s cost_basis_fabricated=false current_price_fallback=false authoritative_quantity_unchanged=true "
             "kraken_rate_limits_unchanged=true forced_trade=false forced_activation=false "
             "writer_nonce_capital_risk_killswitch_order_fill_gates_unchanged=true safety_gates_bypassed=false",
             "READY" if ready else "NOT_READY",
             MARKER,
             str(ready).lower(),
+            str(v304_ready).lower(),
         )
         return ready
 
