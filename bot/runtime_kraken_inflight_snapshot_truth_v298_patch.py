@@ -99,7 +99,12 @@ def _strong_proof(broker: Any) -> tuple[bool, str]:
 def _snapshot_age_s(broker: Any) -> tuple[float, float]:
     try:
         recorded = float(
-            getattr(broker, "_nija_authoritative_position_snapshot_at_v285", 0.0) or 0.0
+            getattr(
+                broker,
+                "_nija_authoritative_position_snapshot_at_monotonic_v285",
+                0.0,
+            )
+            or 0.0
         )
     except Exception:
         recorded = 0.0
@@ -195,7 +200,7 @@ def _patch_startup_adopter() -> bool:
         try:
             return int(original(broker, broker_name, eps) or 0)
         except BaseException as exc:
-            preserve, reason, snapshot_age, max_age, flight_age = _should_preserve(
+            preserve, _reason, snapshot_age, max_age, flight_age = _should_preserve(
                 real,
                 exc,
                 pre_ready=pre_ready,
