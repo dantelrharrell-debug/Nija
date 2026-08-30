@@ -38,8 +38,13 @@ def test_kraken_supervision_chain_references_existing_bot_modules():
     assert missing == [], f"Production convergence references missing bot modules: {missing}"
 
 
-def test_transport_timeout_v292_is_in_production_chain():
+def test_transport_and_isolation_repairs_are_in_production_chain_in_order():
     repo_root = Path(__file__).resolve().parents[1]
     source = (repo_root / "bot" / "production_runtime_convergence_v88_patch.py").read_text(encoding="utf-8")
-    assert "runtime_kraken_transport_timeout_v292_patch" in source
+
+    v292 = source.index("runtime_kraken_transport_timeout_v292_patch")
+    v293 = source.index("runtime_kraken_credential_lock_scope_v293_patch")
+    v294 = source.index("runtime_position_sync_isolation_v294_patch")
+
+    assert v292 < v293 < v294
     assert "runtime_account_scoped_reconciliation_truth_v291_patch" not in source
