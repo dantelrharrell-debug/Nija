@@ -62,6 +62,7 @@ _FAST_PATH_INSTALLERS = (
     ("bot.trading_strategy_apex_wiring_patch", "TRADING_STRATEGY_APEX_WIRING"),
     ("bot.runtime_truth_convergence_v97_patch", "RUNTIME_TRUTH_CONVERGENCE_V97"),
     ("bot.position_sync_failure_truth_v98_patch", "POSITION_SYNC_FAILURE_TRUTH_V98"),
+    ("bot.runtime_kraken_precore_liveness_v318_patch", "KRAKEN_PRECORE_LIVENESS_V318"),
     ("bot.strategy_runtime_integrity_patch", "STRATEGY_RUNTIME_INTEGRITY"),
     ("bot.final_production_activation_repair_v58_patch", "FINAL_PRODUCTION_ACTIVATION_V58"),
     ("bot.final_production_activation_repair_v61_patch", "FINAL_PRODUCTION_ACTIVATION_V61"),
