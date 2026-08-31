@@ -20,6 +20,7 @@ from bot import auto_exit_sl_tp_runtime_patch as auto_exit
 
 logger = logging.getLogger("nija.universal_broker_exit_supervisor")
 _MARKER = "20260802-universal-exit-shared-state-v2"
+_OPERATOR_MARKER = "20260831-operator-net-profit-exit-v1"
 _PATCHED = "__nija_universal_broker_exit_supervisor_v1__"
 _STATE_KEY = "_NIJA_UNIVERSAL_BROKER_EXIT_SHARED_STATE_V2"
 if not hasattr(builtins, _STATE_KEY):
@@ -106,6 +107,49 @@ def _tracker_positions(broker: Any) -> list[dict[str, Any]]:
     return normalized
 
 
+def _venue_cost_pct(broker: Any) -> float:
+    label = auto_exit._broker_label(broker)
+    venue_default = 0.014
+    if "kraken" in label:
+        venue_default = 0.008
+    elif "okx" in label:
+        venue_default = 0.004
+    round_trip = max(
+        0.0,
+        _f(
+            os.environ.get(f"NIJA_{label.upper()}_ROUND_TRIP_FEE_PCT"),
+            _f(os.environ.get("NIJA_EXIT_ROUND_TRIP_FEE_PCT"), venue_default),
+        ),
+    )
+    slippage = max(0.0, _f(os.environ.get("NIJA_EXIT_SLIPPAGE_RESERVE_PCT"), 0.0015))
+    return round_trip + slippage
+
+
+def _operator_profit_exit_active() -> bool:
+    if not _truthy("NIJA_OPERATOR_NET_PROFIT_EXIT_ENABLED", "false"):
+        return False
+    until_epoch = _f(os.environ.get("NIJA_OPERATOR_NET_PROFIT_EXIT_UNTIL_EPOCH"), 0.0)
+    return bool(until_epoch > 0.0 and time.time() <= until_epoch)
+
+
+def _operator_basis_verified(pos: dict[str, Any]) -> bool:
+    if auto_exit._entry_price(pos) <= 0 or auto_exit._quantity(pos) <= 0:
+        return False
+    if pos.get("cost_basis_verified") is False:
+        return False
+    if bool(pos.get("auto_exit_blocked", False)):
+        return False
+    return True
+
+
+def _operator_net_profit_target(broker: Any, pos: dict[str, Any]) -> float:
+    if not _operator_basis_verified(pos):
+        return 0.0
+    entry = auto_exit._entry_price(pos)
+    minimum_net = max(0.0, _f(os.environ.get("NIJA_OPERATOR_MIN_NET_PROFIT_PCT"), 0.0005))
+    return entry * (1.0 + _venue_cost_pct(broker) + minimum_net)
+
+
 def _fee_aware_profit_target(broker: Any, pos: dict[str, Any]) -> float:
     entry = auto_exit._entry_price(pos)
     if entry <= 0:
@@ -117,16 +161,8 @@ def _fee_aware_profit_target(broker: Any, pos: dict[str, Any]) -> float:
     )
     if explicit > 0:
         return explicit
-    label = auto_exit._broker_label(broker)
-    venue_default = 0.014
-    if "kraken" in label:
-        venue_default = 0.008
-    elif "okx" in label:
-        venue_default = 0.004
-    round_trip = max(0.0, _f(os.environ.get(f"NIJA_{label.upper()}_ROUND_TRIP_FEE_PCT"), _f(os.environ.get("NIJA_EXIT_ROUND_TRIP_FEE_PCT"), venue_default)))
-    slippage = max(0.0, _f(os.environ.get("NIJA_EXIT_SLIPPAGE_RESERVE_PCT"), 0.0015))
     minimum_net = max(0.0, _f(os.environ.get("NIJA_MINIMUM_NET_PROFIT_PCT"), 0.004))
-    return entry * (1.0 + round_trip + slippage + minimum_net)
+    return entry * (1.0 + _venue_cost_pct(broker) + minimum_net)
 
 
 def _trigger(broker: Any, pos: dict[str, Any], market: float) -> tuple[bool, str, float]:
@@ -134,6 +170,26 @@ def _trigger(broker: Any, pos: dict[str, Any], market: float) -> tuple[bool, str
     if hit:
         return hit, reason, target
     side = auto_exit._side(pos.get("side"), pos)
+    if _operator_profit_exit_active():
+        operator_target = _operator_net_profit_target(broker, pos)
+        if operator_target > 0:
+            if side in {"long", "buy"} and market >= operator_target:
+                return True, "operator_net_profit_exit", operator_target
+            if side in {"short", "sell"} and market <= entry / max(1e-12, (1.0 + _venue_cost_pct(broker) + max(0.0, _f(os.environ.get("NIJA_OPERATOR_MIN_NET_PROFIT_PCT"), 0.0005))))):
+                return True, "operator_net_profit_exit", market
+        elif auto_exit._entry_price(pos) > 0:
+            logger.warning(
+                "OPERATOR_NET_PROFIT_EXIT_SKIPPED_UNVERIFIED marker=%s venue=%s account=%s symbol=%s "
+                "entry=%.8f qty=%.8f cost_basis_verified=%s auto_exit_blocked=%s",
+                _OPERATOR_MARKER,
+                auto_exit._broker_label(broker),
+                _account_label(broker),
+                auto_exit._sym(pos.get("symbol")),
+                auto_exit._entry_price(pos),
+                auto_exit._quantity(pos),
+                pos.get("cost_basis_verified"),
+                bool(pos.get("auto_exit_blocked", False)),
+            )
     profit_target = _fee_aware_profit_target(broker, pos)
     if profit_target > 0:
         if side in {"long", "buy"} and market >= profit_target:
@@ -176,6 +232,17 @@ def _scan_broker(broker: Any) -> int:
     closed = 0
     account = _account_label(broker)
     venue = auto_exit._broker_label(broker)
+    if _operator_profit_exit_active():
+        logger.critical(
+            "OPERATOR_NET_PROFIT_EXIT_REQUEST_ACTIVE marker=%s venue=%s account=%s request_id=%s "
+            "until_epoch=%s fee_slippage_reserve_preserved=true minimum_order_unchanged=true "
+            "fill_confirmation_required=true loss_liquidation=false",
+            _OPERATOR_MARKER,
+            venue,
+            account,
+            str(os.environ.get("NIJA_OPERATOR_NET_PROFIT_EXIT_REQUEST_ID", "unspecified") or "unspecified"),
+            str(os.environ.get("NIJA_OPERATOR_NET_PROFIT_EXIT_UNTIL_EPOCH", "") or ""),
+        )
     for pos in _tracker_positions(broker):
         symbol = auto_exit._sym(pos.get("symbol"))
         pid = str(pos.get("position_id") or symbol)
