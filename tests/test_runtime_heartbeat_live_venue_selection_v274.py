@@ -7,21 +7,47 @@ import bot.runtime_heartbeat_live_venue_selection_v274_patch as v274
 
 
 class _Broker:
-    def __init__(self, name: str) -> None:
+    def __init__(self, name: str, balance: float = 50.0) -> None:
         self.broker_type = name
+        self.connected = True
+        self._last_known_balance = float(balance)
+        self.live_reads = 0
+
+    def get_account_balance(self):
+        self.live_reads += 1
+        raise AssertionError("v322 funded selection must not start broker I/O")
 
 
 class _Strategy:
-    def __init__(self) -> None:
+    def __init__(self, *, coinbase: float = 50.0, kraken: float = 50.0) -> None:
         self.broker = None
+        self.coinbase = _Broker("coinbase", coinbase)
+        self.kraken = _Broker("kraken", kraken)
         self.multi_account_manager = type(
-            "M", (), {"platform_brokers": {"c": _Broker("coinbase"), "k": _Broker("kraken")}}
+            "M",
+            (),
+            {"platform_brokers": {"c": self.coinbase, "k": self.kraken}},
         )()
         self.broker_manager = None
 
+    @staticmethod
+    def _balance_from_payload(payload):
+        return float(payload)
+
+    @staticmethod
+    def _broker_key_from_obj(broker):
+        return str(getattr(broker, "broker_type", "") or "").lower()
+
+    @staticmethod
+    def _resolve_heartbeat_trade_amount_usd(_broker):
+        return 12.50
+
     def _select_entry_broker(self, candidates):
-        broker = next(iter(candidates.values()), None)
-        return broker, getattr(broker, "broker_type", None), "ok" if broker else "none"
+        for wanted in ("coinbase", "kraken"):
+            for broker in candidates.values():
+                if getattr(broker, "broker_type", None) == wanted:
+                    return broker, wanted, {wanted: "ok"}
+        return None, None, {"all": "none"}
 
 
 def _on_heartbeat(fn):
@@ -70,19 +96,46 @@ def test_v274_empty_canonical_set_is_heartbeat_thread_only():
 
 def test_v274_wrapper_preserves_original_selection_success():
     _reset_env()
-    strategy = _Strategy()
-    expected = _Broker("okx")
+    strategy = _Strategy(coinbase=0.0, kraken=0.0)
+    expected = _Broker("okx", 0.0)
     wrapped = v274._wrap_selector(lambda self: expected)
     assert wrapped(strategy) is expected
 
 
-def test_v274_wrapper_uses_only_broker_local_active_venue():
+def test_v322_skips_underfunded_active_venue_and_uses_funded_one():
+    _reset_env()
+    os.environ["NIJA_EXECUTION_READY_VENUES"] = ""
+    os.environ["NIJA_GLOBAL_TRADING_READY"] = "1"
+    os.environ["NIJA_ACTIVE_LIVE_VENUES"] = "coinbase,kraken"
+    strategy = _Strategy(coinbase=8.22, kraken=50.0)
+    wrapped = v274._wrap_selector(lambda self: None)
+    selected = _on_heartbeat(lambda: wrapped(strategy))
+    assert selected is strategy.kraken
+    assert strategy.coinbase.live_reads == 0
+    assert strategy.kraken.live_reads == 0
+
+
+def test_v322_fails_closed_when_no_active_venue_can_fund_heartbeat():
+    _reset_env()
+    os.environ["NIJA_EXECUTION_READY_VENUES"] = ""
+    os.environ["NIJA_GLOBAL_TRADING_READY"] = "1"
+    os.environ["NIJA_ACTIVE_LIVE_VENUES"] = "coinbase,kraken"
+    strategy = _Strategy(coinbase=8.22, kraken=10.89)
+    wrapped = v274._wrap_selector(lambda self: None)
+    selected = _on_heartbeat(lambda: wrapped(strategy))
+    assert selected is None
+    assert strategy.coinbase.live_reads == 0
+    assert strategy.kraken.live_reads == 0
+
+
+def test_v274_wrapper_uses_only_broker_local_active_venue_when_funded():
     _reset_env()
     os.environ["NIJA_EXECUTION_READY_VENUES"] = ""
     os.environ["NIJA_GLOBAL_TRADING_READY"] = "1"
     os.environ["NIJA_ACTIVE_LIVE_VENUES"] = "kraken"
-    strategy = _Strategy()
+    strategy = _Strategy(coinbase=50.0, kraken=50.0)
     wrapped = v274._wrap_selector(lambda self: None)
     selected = _on_heartbeat(lambda: wrapped(strategy))
     assert selected is not None
     assert selected.broker_type == "kraken"
+    assert strategy.kraken.live_reads == 0
