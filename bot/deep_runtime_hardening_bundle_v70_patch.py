@@ -21,6 +21,7 @@ _MODULES = (
     "bot.universal_exit_fill_reconciliation_v67_patch",
     "bot.universal_net_profit_exit_floor_v68_patch",
     "bot.live_entry_expectancy_authority_v69_patch",
+    "bot.runtime_all_in_profitability_authority_v324_patch",
     "bot.account_scoped_profit_state_v71_patch",
     "bot.live_exchange_constraints_authority_v72_patch",
     "bot.live_exchange_base_minimum_v73_patch",
@@ -65,11 +66,12 @@ def install_import_hook() -> bool:
         LOGGER.critical(
             "DEEP_RUNTIME_HARDENING_V70_READY marker=%s components=%d "
             "broker_account_isolation=true exit_fill_confirmation=true net_profit_floor=true "
-            "live_entry_expectancy=true realized_profit_proof=true account_scoped_profit_state=true "
+            "live_entry_expectancy=true all_in_profitability=true current_fee_fallbacks=true "
+            "short_carry_costed=true realized_profit_proof=true account_scoped_profit_state=true "
             "live_symbol_constraints=true post_rounding_base_minimum=true adaptive_profit_exit=true "
             "held_positions_connected=true universal_exit_tracker_convergence=true "
             "short_profit_exit_inverse_pnl=true short_trailing_profit=true short_capability_gate_preserved=true "
-            "writer_reconstitution=true slow_broker_capital_continuity=true",
+            "writer_reconstitution=true slow_broker_capital_continuity=true safety_gates_bypassed=false",
             MARKER,
             len(installed),
         )
