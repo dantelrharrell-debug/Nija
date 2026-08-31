@@ -10,11 +10,14 @@ bounded generations can queue behind the same lock indefinitely.
 v122 closes that race without changing readiness semantics:
 
 * v121 must be installed before v108 is allowed to dispatch Kraken work;
+* v312's authenticated same-credential Balance epoch handoff must also be
+  installed after v121's early v286/v293/v297/v299 stack and before v108 can
+  launch the first PLATFORM Kraken reconciliation worker;
 * v108 discovery is patched before its installer can expose dispatch;
 * as defense in depth, Kraken discovery is suppressed whenever the v121
   installation flag is absent, while non-Kraken brokers keep their normal path;
 * no synthetic positions, readiness, writer authority, nonce authority, capital,
-  risk, or execution authority are fabricated;
+  risk, execution authority, heartbeat proof, or LIVE_ACTIVE state is fabricated;
 * no new import hook is added.
 """
 from __future__ import annotations
@@ -29,6 +32,7 @@ from typing import Any
 
 LOGGER = logging.getLogger("nija.kraken_position_sync_prereq_v122")
 MARKER = "20260816-kraken-position-sync-prereq-v122"
+EARLY_HANDOFF_MARKER = "20260831-kraken-position-sync-v312-prereq"
 RELEASE_ID = "20260816-runtime-convergence-v122"
 _PATCH_ATTR = "_nija_kraken_position_sync_prereq_v122"
 _LOCK = threading.RLock()
@@ -37,6 +41,10 @@ _INSTALLED = False
 
 def _v121_ready() -> bool:
     return os.environ.get("NIJA_KRAKEN_READ_TIMEOUT_V121_INSTALLED", "").strip() == "1"
+
+
+def _v312_ready() -> bool:
+    return os.environ.get("NIJA_RUNTIME_KRAKEN_BALANCE_EPOCH_HANDOFF_V312_READY", "").strip() == "1"
 
 
 def _ensure_v121() -> bool:
@@ -60,6 +68,41 @@ def _ensure_v121() -> bool:
             MARKER,
         )
         return False
+    return True
+
+
+def _ensure_v312() -> bool:
+    """Install the real-Balance handoff before the first v108 Kraken dispatch.
+
+    v121's v311 early convergence has already installed v286/v292/v293/v297/v299
+    by the time this helper runs, so v312 can safely wrap those live functions.
+    Failure leaves Kraken position dispatch closed rather than granting readiness.
+    """
+    try:
+        from bot import runtime_kraken_balance_epoch_handoff_v312_patch as v312
+    except Exception as exc:
+        LOGGER.critical(
+            "KRAKEN_POSITION_SYNC_V312_IMPORT_FAILED marker=%s error=%s:%s trading_fail_closed=true",
+            EARLY_HANDOFF_MARKER,
+            type(exc).__name__,
+            exc,
+        )
+        return False
+    installer = getattr(v312, "install_import_hook", None) or getattr(v312, "install", None)
+    if not callable(installer) or installer() is False or not _v312_ready():
+        LOGGER.critical(
+            "KRAKEN_POSITION_SYNC_V312_PREREQ_FAILED marker=%s "
+            "kraken_dispatch_blocked=true readiness_granted=false trading_fail_closed=true",
+            EARLY_HANDOFF_MARKER,
+        )
+        return False
+    LOGGER.critical(
+        "KRAKEN_POSITION_SYNC_V312_PREREQ_READY marker=%s ready=true before_v108_dispatch=true "
+        "authenticated_balance_only=true same_credential_only=true credential_proof_required=true "
+        "position_success_fabricated=false execution_proof_fabricated=false forced_activation=false "
+        "safety_gates_bypassed=false",
+        EARLY_HANDOFF_MARKER,
+    )
     return True
 
 
@@ -91,7 +134,7 @@ def _patch_v108(v108: ModuleType) -> bool:
     @wraps(current)
     def connected_unsynced_v122(manager: Any):
         brokers = list(current(manager) or [])
-        if _v121_ready():
+        if _v121_ready() and _v312_ready():
             return brokers
 
         allowed = []
@@ -104,9 +147,13 @@ def _patch_v108(v108: ModuleType) -> bool:
 
         if blocked:
             LOGGER.critical(
-                "KRAKEN_POSITION_SYNC_V122_DISPATCH_BLOCKED marker=%s blocked=%d reason=v121_not_ready non_kraken_continues=true synthetic_empty_snapshot=false trading_fail_closed=true",
+                "KRAKEN_POSITION_SYNC_V122_DISPATCH_BLOCKED marker=%s blocked=%d "
+                "reason=kraken_read_prereq_not_ready non_kraken_continues=true "
+                "v121_ready=%s v312_ready=%s synthetic_empty_snapshot=false trading_fail_closed=true",
                 MARKER,
                 blocked,
+                str(_v121_ready()).lower(),
+                str(_v312_ready()).lower(),
             )
         return allowed
 
@@ -114,7 +161,9 @@ def _patch_v108(v108: ModuleType) -> bool:
     setattr(connected_unsynced_v122, "__wrapped__", current)
     v108._connected_unsynced_platform_brokers = connected_unsynced_v122
     LOGGER.critical(
-        "KRAKEN_POSITION_SYNC_V122_V108_PATCHED marker=%s v121_prerequisite=true patch_before_dispatch_install=true non_kraken_dispatch_unchanged=true import_hook_added=false",
+        "KRAKEN_POSITION_SYNC_V122_V108_PATCHED marker=%s v121_prerequisite=true "
+        "v312_prerequisite=true patch_before_dispatch_install=true non_kraken_dispatch_unchanged=true "
+        "import_hook_added=false",
         MARKER,
     )
     return True
@@ -142,6 +191,8 @@ def install() -> bool:
     with _LOCK:
         if not _ensure_v121():
             return False
+        if not _ensure_v312():
+            return False
 
         v108 = _load_v108()
         if v108 is None:
@@ -161,7 +212,10 @@ def install() -> bool:
 
         _INSTALLED = True
         LOGGER.critical(
-            "KRAKEN_POSITION_SYNC_PREREQ_V122_INSTALLED marker=%s v121_ready=true v108_after_v121=true discovery_patched_before_dispatch=true kraken_dispatch_fail_closed=true import_hook_added=false safety_gates_unchanged=true",
+            "KRAKEN_POSITION_SYNC_PREREQ_V122_INSTALLED marker=%s v121_ready=true v312_ready=true "
+            "v312_before_first_kraken_dispatch=true v108_after_v121=true discovery_patched_before_dispatch=true "
+            "kraken_dispatch_fail_closed=true import_hook_added=false readiness_granted=false "
+            "execution_proof_fabricated=false forced_activation=false safety_gates_unchanged=true",
             MARKER,
         )
         return True
@@ -174,10 +228,13 @@ def install_import_hook() -> bool:
 
 __all__ = [
     "MARKER",
+    "EARLY_HANDOFF_MARKER",
     "RELEASE_ID",
     "install",
     "install_import_hook",
     "_v121_ready",
+    "_v312_ready",
     "_ensure_v121",
+    "_ensure_v312",
     "_patch_v108",
 ]
