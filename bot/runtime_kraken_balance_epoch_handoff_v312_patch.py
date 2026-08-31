@@ -142,8 +142,6 @@ def _record_observation(broker: Any, response: Any) -> bool:
             "observed_at": now,
             "account": str(getattr(broker, "account_identifier", "unknown") or "unknown"),
         }
-        # Bound process-local provenance state. This normally contains only a
-        # handful of credentials, but never allow unbounded growth.
         if len(_OBSERVATIONS) > 64:
             oldest = sorted(
                 _OBSERVATIONS.items(),
@@ -285,13 +283,7 @@ def _patch_v286_finish_flight() -> bool:
 
 
 def _patch_v286_authoritative_positions() -> bool:
-    """Recover the caller after its normal bounded wait using newer real data.
-
-    This covers a flight that started before v312 was installed. Only the
-    TimeoutError path is eligible; all other failures retain their original
-    semantics. The observation must have arrived during this caller's current
-    reconciliation epoch, so a pre-existing stale Balance cannot satisfy it.
-    """
+    """Recover after the normal bounded wait using newer authenticated data."""
     v286 = _v286()
     current = getattr(v286, "_authoritative_positions", None)
     if not callable(current):
@@ -305,7 +297,7 @@ def _patch_v286_authoritative_positions() -> bool:
         attempt_started = time.monotonic()
         try:
             return original(broker)
-        except TimeoutError:
+        except TimeoutError as timeout_exc:
             observation = _fresh_observation(broker, not_before=attempt_started)
             if observation is None:
                 raise
@@ -323,7 +315,7 @@ def _patch_v286_authoritative_positions() -> bool:
                     type(exc).__name__,
                     exc,
                 )
-                raise
+                raise timeout_exc from exc
 
     setattr(authoritative_positions_v312, _V286_POSITIONS_PATCH_ATTR, True)
     setattr(authoritative_positions_v312, "__wrapped__", original)
