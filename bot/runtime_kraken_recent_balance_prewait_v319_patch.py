@@ -23,7 +23,16 @@ interval, transport timeout, nonce ordering, lock semantics, snapshot TTL,
 position quantity, cost basis, execution proof, order, fill, or activation gate
 is relaxed or fabricated.
 
-v320 is chained from this already-canonical fast-path installer.  It does not
+Production generation 5056 exposed one remaining provenance gap: a genuine
+canonical Kraken ``Balance`` call could complete successfully in the ordinary
+account-balance path without passing through v312's narrower v299 observer
+surface. The v321 observer extension in this module records that already-issued
+successful canonical response through v312's existing credential-proven cache.
+It never starts another broker call and never changes the response or exception
+semantics. That lets the existing v312/v319 handoff eliminate the otherwise
+redundant ~58 second monitoring prewait.
+
+v320 is chained from this already-canonical fast-path installer. It does not
 change v319's Kraken behavior; it arms the platform/user position-readiness
 isolation hook so v285's strong all-account proof can continue protecting each
 user account without letting an unproven user revoke otherwise-valid PLATFORM
@@ -40,9 +49,11 @@ from typing import Any
 
 LOGGER = logging.getLogger("nija.runtime_kraken_recent_balance_prewait_v319")
 MARKER = "20260831-kraken-recent-balance-prewait-v319"
+BALANCE_OBSERVER_MARKER = "20260831-kraken-canonical-balance-observer-v321"
 RELEASE_ID = "20260831-runtime-convergence-v319"
 _READY_FLAG = "NIJA_RUNTIME_KRAKEN_RECENT_BALANCE_PREWAIT_V319_READY"
 _PATCH_ATTR = "_nija_kraken_recent_balance_prewait_v319"
+_BALANCE_OBSERVER_ATTR = "_nija_kraken_canonical_balance_observer_v321"
 
 
 def _v286() -> Any:
@@ -53,19 +64,23 @@ def _v312() -> Any:
     return importlib.import_module("bot.runtime_kraken_balance_epoch_handoff_v312_patch")
 
 
+def _broker_module() -> Any:
+    return importlib.import_module("bot.broker_manager")
+
+
 def _preactivation() -> bool:
     state = str(os.environ.get("NIJA_RUNTIME_TRADING_STATE", "") or "").strip().upper()
     return state != "LIVE_ACTIVE"
 
 
-def _chain_has_patch(callable_obj: Any) -> bool:
+def _chain_has_patch(callable_obj: Any, attr: str = _PATCH_ATTR) -> bool:
     seen: set[int] = set()
     current = callable_obj
     for _ in range(128):
         if not callable(current) or id(current) in seen:
             return False
         seen.add(id(current))
-        if bool(getattr(current, _PATCH_ATTR, False)):
+        if bool(getattr(current, attr, False)):
             return True
         current = getattr(current, "__wrapped__", None)
     return False
@@ -81,6 +96,74 @@ def _recent_observation(broker: Any) -> dict[str, Any] | None:
     # structural validity, and the existing v312 short TTL.
     row = getter(broker, not_before=0.0)
     return dict(row) if isinstance(row, dict) else None
+
+
+def _patch_canonical_balance_observer() -> bool:
+    """Record already-issued successful canonical Balance reads for v312 reuse.
+
+    This wrapper is observation-only: it delegates exactly once to the existing
+    canonical private-call chain, preserves all exceptions and return values, and
+    records only a successful ``Balance`` response through v312's existing
+    credential-proven validator/cache.
+    """
+    try:
+        cls = getattr(_broker_module(), "KrakenBroker", None)
+    except Exception:
+        return False
+    if not isinstance(cls, type):
+        return False
+
+    current = getattr(cls, "_kraken_private_call", None)
+    if not callable(current):
+        return False
+    if _chain_has_patch(current, _BALANCE_OBSERVER_ATTR):
+        return True
+    original = current
+
+    @wraps(original)
+    def private_balance_observer_v321(self: Any, *args: Any, **kwargs: Any):
+        method = str(args[0] if args else kwargs.get("method", "") or "")
+        response = original(self, *args, **kwargs)
+        if method != "Balance":
+            return response
+
+        recorded = False
+        try:
+            recorder = getattr(_v312(), "_record_observation", None)
+            if callable(recorder):
+                recorded = bool(recorder(self, response))
+        except Exception as exc:
+            LOGGER.warning(
+                "KRAKEN_CANONICAL_BALANCE_OBSERVER_V321_DEFERRED marker=%s account=%s "
+                "error=%s:%s response_unchanged=true exception_semantics_unchanged=true "
+                "new_broker_io=false readiness_granted=false execution_proof_fabricated=false "
+                "safety_gates_bypassed=false",
+                BALANCE_OBSERVER_MARKER,
+                str(getattr(self, "account_identifier", "unknown") or "unknown"),
+                type(exc).__name__,
+                exc,
+            )
+            return response
+
+        if recorded:
+            LOGGER.critical(
+                "KRAKEN_CANONICAL_BALANCE_OBSERVER_V321_RECORDED marker=%s account=%s "
+                "authenticated_balance=true credential_proven=true same_credential_cache=true "
+                "v312_cache_ttl_unchanged=true response_unchanged=true exception_semantics_unchanged=true "
+                "new_broker_io=false rate_interval_unchanged=true transport_timeout_unchanged=true "
+                "nonce_ordering_unchanged=true lock_bypass=false lock_force_release=false "
+                "position_success_fabricated=false balance_fabricated=false readiness_granted=false "
+                "execution_proof_fabricated=false forced_trade=false forced_activation=false "
+                "safety_gates_bypassed=false",
+                BALANCE_OBSERVER_MARKER,
+                str(getattr(self, "account_identifier", "unknown") or "unknown"),
+            )
+        return response
+
+    setattr(private_balance_observer_v321, _BALANCE_OBSERVER_ATTR, True)
+    setattr(private_balance_observer_v321, "__wrapped__", original)
+    cls._kraken_private_call = private_balance_observer_v321
+    return True
 
 
 def _patch_v286_new_flight() -> bool:
@@ -189,10 +272,11 @@ def install() -> bool:
         v312_ready = os.environ.get("NIJA_RUNTIME_KRAKEN_BALANCE_EPOCH_HANDOFF_V312_READY") == "1"
         if not v312_ready:
             raise RuntimeError("v312_not_ready")
+        observer = _patch_canonical_balance_observer()
         patched = _patch_v286_new_flight()
         manifest = _register_manifest()
         v320 = _install_platform_position_isolation_v320()
-        ready = bool(patched and manifest and v320)
+        ready = bool(observer and patched and manifest and v320)
     except Exception as exc:
         ready = False
         LOGGER.critical(
@@ -213,7 +297,7 @@ def install() -> bool:
             "transport_timeout_unchanged=true nonce_ordering_unchanged=true lock_bypass=false "
             "lock_force_release=false position_success_fabricated=false balance_fabricated=false "
             "readiness_granted=false execution_proof_fabricated=false forced_activation=false "
-            "platform_position_isolation_v320=true "
+            "canonical_balance_observer_v321=true platform_position_isolation_v320=true "
             "writer_nonce_risk_capital_killswitch_order_fill_gates_unchanged=true "
             "safety_gates_bypassed=false",
             MARKER,
@@ -227,11 +311,13 @@ def install_import_hook() -> bool:
 
 __all__ = [
     "MARKER",
+    "BALANCE_OBSERVER_MARKER",
     "RELEASE_ID",
     "install",
     "install_import_hook",
     "_preactivation",
     "_recent_observation",
+    "_patch_canonical_balance_observer",
     "_patch_v286_new_flight",
     "_install_platform_position_isolation_v320",
 ]
