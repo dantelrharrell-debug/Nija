@@ -12,6 +12,7 @@ import py_compile
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 TARGET = ROOT / "render_liveness_server.py"
+EXTENSION = ROOT / "render_outreach_extension.py"
 BASE_IMPORT = "from render_outreach_routes import handle_outreach_get, handle_outreach_post\n"
 EXT_IMPORT = (
     "from render_outreach_extension import "
@@ -26,6 +27,17 @@ POST_METHOD = '''    def do_POST(self) -> None:  # noqa: N802 - stdlib handler c
 
 
 def main() -> int:
+    # JustCall's current contact-status event is ``jc.contact_status_updated``.
+    # Older NIJA builds used ``contact.status_updated``, which caused exactly one
+    # webhook subscription to fail on every startup. Normalize the source before
+    # the extension is imported by the front-door listener.
+    extension_text = EXTENSION.read_text(encoding="utf-8")
+    legacy_contact_event = '"contact.status_updated"'
+    canonical_contact_event = '"jc.contact_status_updated"'
+    if legacy_contact_event in extension_text:
+        extension_text = extension_text.replace(legacy_contact_event, canonical_contact_event)
+        EXTENSION.write_text(extension_text, encoding="utf-8")
+
     text = TARGET.read_text(encoding="utf-8")
     original = text
 
@@ -84,7 +96,7 @@ def main() -> int:
     for module in (
         TARGET,
         ROOT / "render_outreach_routes.py",
-        ROOT / "render_outreach_extension.py",
+        EXTENSION,
         ROOT / "render_outreach_store.py",
         ROOT / "render_lead_intake.py",
     ):
@@ -106,11 +118,18 @@ def main() -> int:
     if missing:
         raise RuntimeError("Render outreach front-door patch incomplete: " + ", ".join(missing))
 
+    extension_verified = EXTENSION.read_text(encoding="utf-8")
+    if legacy_contact_event in extension_verified:
+        raise RuntimeError("Legacy JustCall contact-status webhook event remains")
+    if canonical_contact_event not in extension_verified:
+        raise RuntimeError("Canonical JustCall contact-status webhook event missing")
+
     print(
-        "RENDER_OUTREACH_FRONTDOOR_READY marker=20260830-render-outreach-frontdoor-v5 "
+        "RENDER_OUTREACH_FRONTDOOR_READY marker=20260831-render-outreach-frontdoor-v6 "
         "protected=true signed_webhook=true webhook_autoconfig=true "
         "lead_intake_normalized=true account_check_protected=true "
         "markdown_email_normalized=true nested_formname_normalized=true "
+        "justcall_contact_status_event_canonical=true "
         "campaign_compliance_fail_closed=true consent_fail_closed=true "
         "liveness_unchanged=true readiness_unchanged=true"
     )
