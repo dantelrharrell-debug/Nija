@@ -3,9 +3,10 @@
 Research-backed live-capital hardening for NIJA's economic gates.
 
 The runtime already has strong expectancy (v69), fee-aware exit (v68), adaptive
-profit trailing (v74), risk, fill, nonce and reconciliation authorities.  The
-remaining economic weakness was stale static fee data in legacy modules and the
-absence of a conservative carrying-cost reserve for short positions.
+profit trailing (v74), risk, fill, nonce and reconciliation authorities. The
+remaining economic weaknesses were stale static fee data in legacy modules,
+cached capability fee functions, and the absence of a conservative carrying-cost
+reserve for short positions.
 
 v324 is monotonic hardening only:
 * runtime/account fee data remains authoritative whenever the broker exposes it;
@@ -14,13 +15,13 @@ v324 is monotonic hardening only:
   slippage and minimum-net-profit gates after short carry when applicable;
 * v68 normal profit exits include short carry in break-even/net-profit floors;
 * legacy static fee consumers are updated at runtime without loosening any gate;
-* short capability remains fail-closed.  This patch never enables shorting on a
-  venue/account/symbol that the existing capability authority rejects;
+* short capability remains fail-closed and Alpaca equity shorts additionally
+  require current borrow/locate evidence;
 * protective exits, kill switch, writer/nonce authority, capital freshness,
   reconciliation and order/fill gates are untouched.
 
 The conservative base-tier fallbacks correspond to public schedules reviewed on
-2026-08-31.  They are deliberately fallbacks: a proven live account tier wins.
+2026-08-31. They are deliberately fallbacks: a proven live account tier wins.
 """
 from __future__ import annotations
 
@@ -63,7 +64,6 @@ def _is_alpaca_crypto_symbol(symbol: str) -> bool:
         return True
     if "-" in text and text.rsplit("-", 1)[-1] in {"USD", "USDT", "USDC", "BTC", "ETH"}:
         return True
-    # Alpaca accepts legacy crypto symbols such as BTCUSD.
     known = {
         "BTC", "ETH", "SOL", "DOGE", "AVAX", "LINK", "LTC", "BCH", "UNI",
         "AAVE", "DOT", "SHIB", "SUSHI", "GRT", "BAT", "MKR", "YFI", "USDT",
@@ -83,7 +83,6 @@ def _current_base_fees(broker_name: str, symbol: str) -> tuple[float, float, str
             return 0.0002, 0.0005, "kraken_derivatives_base_20260819"
         return 0.0040, 0.0080, "kraken_spot_tier1_20260709"
     if broker == "coinbase":
-        # Coinbase Advanced Intro 1.  Account-preview/runtime fee data overrides it.
         return 0.0060, 0.0120, "coinbase_advanced_intro1_20260831"
     if broker == "okx":
         if _is_derivative_symbol(symbol):
@@ -92,9 +91,6 @@ def _current_base_fees(broker_name: str, symbol: str) -> tuple[float, float, str
     if broker == "alpaca":
         if _is_alpaca_crypto_symbol(symbol):
             return 0.0015, 0.0025, "alpaca_crypto_tier1_20260831"
-        # Equities are generally commission-free, but v69/v68 still add spread,
-        # slippage and minimum-net-profit reserves. Regulatory/borrow costs are
-        # handled separately when applicable.
         return 0.0, 0.0, "alpaca_equity_commission_fallback"
     unknown = max(0.0, min(0.05, _f(os.environ.get("NIJA_UNKNOWN_BROKER_ONE_WAY_FEE_PCT"), 0.0050)))
     return unknown, unknown, "unknown_broker_conservative_fee"
@@ -119,6 +115,18 @@ def _broker_name_from_client(broker: Any) -> str:
         if known in name:
             return known
     return "unknown"
+
+
+def _strategy_broker_name(strategy: Any) -> str:
+    getter = getattr(strategy, "_get_broker_name", None)
+    if callable(getter):
+        try:
+            name = _norm(getter())
+            if name:
+                return name
+        except Exception:
+            pass
+    return _broker_name_from_client(getattr(strategy, "broker_client", None))
 
 
 def _extract_fee(value: Any) -> Optional[float]:
@@ -158,6 +166,18 @@ def _runtime_taker_fee(broker: Any, symbol: str) -> Optional[float]:
         if fee is not None:
             return fee
     return None
+
+
+def _all_in_round_trip_cost(strategy: Any, symbol: str) -> tuple[float, str]:
+    """v69 cost source that cannot be bypassed by a cached stale capability alias."""
+    broker = getattr(strategy, "broker_client", None)
+    runtime_fee = _runtime_taker_fee(broker, symbol)
+    spread = max(0.0, _f(os.environ.get("NIJA_ENTRY_SPREAD_RESERVE_PCT"), 0.0010))
+    if runtime_fee is not None:
+        return min(0.25, runtime_fee * 2.0 + spread), "broker_runtime_taker_fee_v324"
+    broker_name = _strategy_broker_name(strategy)
+    _maker, taker, source = _current_base_fees(broker_name, symbol)
+    return min(0.25, taker * 2.0 + spread), f"current_base_fee_v324:{source}"
 
 
 def _extract_short_carry(mapping: Mapping[str, Any]) -> Optional[float]:
@@ -243,21 +263,13 @@ def _asset_metadata(broker: Any, symbol: str) -> Optional[Mapping[str, Any]]:
 
 
 def _short_capability(strategy: Any, symbol: str, result: Mapping[str, Any]) -> tuple[bool, str]:
-    broker_name = "unknown"
-    getter = getattr(strategy, "_get_broker_name", None)
-    if callable(getter):
-        try:
-            broker_name = _norm(getter())
-        except Exception:
-            pass
+    broker_name = _strategy_broker_name(strategy)
     broker = getattr(strategy, "broker_client", None)
-    if broker_name == "unknown":
-        broker_name = _broker_name_from_client(broker)
 
     try:
         caps = importlib.import_module("bot.exchange_capabilities")
         can_short = getattr(caps, "can_short", None)
-        if callable(can_short) and not bool(can_short(broker_name, symbol)):
+        if not callable(can_short) or not bool(can_short(broker_name, symbol)):
             return False, f"{broker_name}:short_capability_not_proven"
     except Exception:
         return False, f"{broker_name}:short_capability_authority_unavailable"
@@ -269,15 +281,19 @@ def _short_capability(strategy: Any, symbol: str, result: Mapping[str, Any]) -> 
 
     asset = _asset_metadata(broker, symbol)
     if not asset:
-        # The existing symbol capability authority has already approved the
-        # short. Do not invent a borrow status, but carry a conservative reserve.
-        return True, "alpaca:asset_metadata_unavailable_existing_gate_preserved"
-    if asset.get("shortable") is False:
-        return False, "alpaca:asset_not_shortable"
+        return False, "alpaca:borrow_metadata_not_proven"
+    if asset.get("shortable") is not True:
+        return False, "alpaca:asset_not_proven_shortable"
+
     borrow_status = _norm(asset.get("borrow_status"))
+    easy = asset.get("easy_to_borrow")
     if borrow_status in {"unavailable", "not_available", "no_borrow", "none"}:
         return False, f"alpaca:borrow_status={borrow_status}"
-    if borrow_status == "hard_to_borrow":
+    if borrow_status in {"easy_to_borrow", "easy", "etb"} or easy is True:
+        return True, "alpaca:easy_to_borrow"
+
+    hard = borrow_status in {"hard_to_borrow", "hard", "htb"} or easy is False
+    if hard:
         metadata = result.get("metadata") if isinstance(result.get("metadata"), Mapping) else {}
         locate_ok = bool(
             result.get("locate_available") or result.get("locate_id")
@@ -285,7 +301,9 @@ def _short_capability(strategy: Any, symbol: str, result: Mapping[str, Any]) -> 
         )
         if not locate_ok:
             return False, "alpaca:hard_to_borrow_locate_not_proven"
-    return True, f"alpaca:borrow_status={borrow_status or 'not_reported'}"
+        return True, "alpaca:hard_to_borrow_locate_proven"
+
+    return False, "alpaca:borrow_status_not_proven"
 
 
 def _patch_exchange_capabilities() -> bool:
@@ -384,6 +402,15 @@ def _patch_entry_authority() -> bool:
         v69 = importlib.import_module("bot.live_entry_expectancy_authority_v69_patch")
     except Exception:
         return False
+
+    current_round_trip = getattr(v69, "_round_trip_cost", None)
+    if not callable(current_round_trip):
+        return False
+    if not getattr(current_round_trip, _PATCH_ATTR, False):
+        setattr(_all_in_round_trip_cost, _PATCH_ATTR, True)
+        setattr(_all_in_round_trip_cost, "__wrapped__", current_round_trip)
+        v69._round_trip_cost = _all_in_round_trip_cost
+
     current = getattr(v69, "_validate_live_entry", None)
     if not callable(current):
         return False
@@ -421,7 +448,8 @@ def _patch_entry_authority() -> bool:
     setattr(validate_all_in, "__wrapped__", current)
     v69._validate_live_entry = validate_all_in
     LOGGER.critical(
-        "ALL_IN_PROFITABILITY_V324_ENTRY_PATCHED marker=%s short_carry_in_net_edge=true capability_gate_preserved=true",
+        "ALL_IN_PROFITABILITY_V324_ENTRY_PATCHED marker=%s current_fee_fallback=true "
+        "cached_capability_fee_bypass=false short_carry_in_net_edge=true capability_gate_preserved=true",
         MARKER,
     )
     return True
@@ -482,8 +510,9 @@ def install_import_hook() -> bool:
         if ready:
             LOGGER.critical(
                 "RUNTIME_ALL_IN_PROFITABILITY_AUTHORITY_V324_READY marker=%s outcomes=%s "
-                "runtime_fee_first=true current_base_fee_fallbacks=true short_carry_costed=true "
-                "short_capability_gate_preserved=true protective_exits_unchanged=true safety_gates_bypassed=false",
+                "runtime_fee_first=true current_base_fee_fallbacks=true cached_fee_bypass=false "
+                "short_carry_costed=true short_borrow_proof=true short_capability_gate_preserved=true "
+                "protective_exits_unchanged=true safety_gates_bypassed=false",
                 MARKER, outcomes,
             )
         else:
@@ -503,6 +532,7 @@ __all__ = [
     "install",
     "install_import_hook",
     "_current_base_fees",
+    "_all_in_round_trip_cost",
     "_short_carry_pct",
     "_short_capability",
 ]
