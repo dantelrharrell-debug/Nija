@@ -1,0 +1,27 @@
+name: Kraken v330 targeted validation
+
+on:
+  pull_request:
+    paths:
+      - 'bot/runtime_kraken_authoritative_snapshot_liveness_v330_patch.py'
+      - 'bot/runtime_kraken_recent_balance_prewait_v319_patch.py'
+      - 'tests/test_runtime_kraken_authoritative_snapshot_liveness_v330.py'
+      - '.github/workflows/kraken-v330-targeted.yml'
+
+jobs:
+  v330-regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      NIJA_DEFER_RUNTIME_SITE_HOOKS: '1'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+      - name: Install CI sitecustomize defer guard
+        run: python -S scripts/install_sitecustomize_defer_guard.py
+      - name: Run Kraken v330 regression tests
+        run: python -m unittest -v tests.test_runtime_kraken_authoritative_snapshot_liveness_v330
