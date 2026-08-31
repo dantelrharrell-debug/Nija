@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import threading
 from types import ModuleType, SimpleNamespace
 
@@ -86,3 +87,54 @@ def test_v121_falls_back_to_global_lock_when_credential_unproven(monkeypatch):
 
     assert v121._invoke_bounded_read(module, broker, "Balance", call) == "ok"
     assert observed == [fallback]
+
+
+def test_v311_installs_read_liveness_subset_in_declared_order(monkeypatch):
+    monkeypatch.delenv(v121._EARLY_READ_READY_FLAG, raising=False)
+    imported = []
+
+    class _FakeModule:
+        @staticmethod
+        def install_import_hook():
+            return True
+
+    def fake_import(name: str):
+        imported.append(name)
+        return _FakeModule()
+
+    monkeypatch.setattr(v121.importlib, "import_module", fake_import)
+
+    assert v121._install_early_read_convergence_v311() is True
+    assert imported == list(v121._EARLY_READ_MODULES)
+    assert os.environ[v121._EARLY_READ_READY_FLAG] == "1"
+
+
+def test_v311_failure_stays_fail_closed_and_retryable(monkeypatch):
+    monkeypatch.delenv(v121._EARLY_READ_READY_FLAG, raising=False)
+    imported = []
+
+    class _Ready:
+        @staticmethod
+        def install_import_hook():
+            return True
+
+    class _NotReady:
+        @staticmethod
+        def install_import_hook():
+            return False
+
+    def fake_import(name: str):
+        imported.append(name)
+        return _NotReady() if len(imported) == 2 else _Ready()
+
+    monkeypatch.setattr(v121.importlib, "import_module", fake_import)
+
+    assert v121._install_early_read_convergence_v311() is False
+    assert imported == list(v121._EARLY_READ_MODULES[:2])
+    assert os.environ[v121._EARLY_READ_READY_FLAG] == "0"
+
+    imported.clear()
+    monkeypatch.setattr(v121.importlib, "import_module", lambda name: imported.append(name) or _Ready())
+    assert v121._install_early_read_convergence_v311() is True
+    assert imported == list(v121._EARLY_READ_MODULES)
+    assert os.environ[v121._EARLY_READ_READY_FLAG] == "1"
