@@ -12,8 +12,19 @@ observes the real broker ``get_positions`` call through a transparent proxy, so
 only an authoritative returned snapshot may refresh proof and any exception,
 missing fetch, or reconciliation failure fails closed.
 
-No broker connectivity, risk, nonce, writer, capital, or order-dispatch gate is
-weakened or synthesized by this patch.
+v315 closes a proof-publication gap observed on 2026-08-31. Coinbase and OKX
+could complete the exact v98 fetch and reconcile every returned symbol while
+v285 still reported ``authoritative_position_snapshot_unproven``. When v285 is
+already loaded, the v98 proxy now publishes the exact returned list through
+v285's own snapshot recorder before declaring the fetch successful. No second
+broker read is issued. If that recorder is present but rejects the payload, the
+fetch fails closed rather than publishing split-brain proof. Kraken's v305/v286
+ownership boundary remains authoritative because ordinary Kraken get_positions
+state is isolated by v305 and v286 records its authenticated Balance snapshot
+directly.
+
+No broker connectivity, risk, nonce, writer, capital, execution, order, fill, or
+activation gate is weakened or synthesized by this patch.
 """
 from __future__ import annotations
 
@@ -29,6 +40,7 @@ from typing import Any
 
 LOGGER = logging.getLogger("nija.position_sync_failure_truth_v98")
 MARKER = "20260815-position-sync-failure-truth-v98"
+SNAPSHOT_BRIDGE_MARKER = "20260831-position-fetch-v285-snapshot-bridge-v315"
 _LOCK = threading.RLock()
 _HOOK_FLAG = "_NIJA_POSITION_SYNC_FAILURE_TRUTH_V98_IMPORT_HOOK"
 _ADOPT_ATTR = "_nija_position_sync_failure_truth_v98"
@@ -56,6 +68,49 @@ def _revoke_previous_success(broker: Any) -> None:
     os.environ["NIJA_POSITION_SYNC_DISPATCH_READY"] = "0"
 
 
+def _loaded_v285() -> ModuleType | None:
+    """Return the already-loaded v285 authority only; never create an import cycle."""
+    for name in (
+        "bot.runtime_authoritative_position_coverage_v285_patch",
+        "runtime_authoritative_position_coverage_v285_patch",
+    ):
+        module = sys.modules.get(name)
+        if isinstance(module, ModuleType):
+            return module
+    return None
+
+
+def _publish_v285_snapshot_if_loaded(broker: Any, result: Any) -> bool:
+    """Publish the exact returned list into v285 when that authority is active.
+
+    ``True`` means either v285 is not loaded yet (legacy startup ordering remains
+    unchanged) or the loaded v285 recorder accepted the exact response. A loaded
+    recorder rejecting the response is a proof-publication failure and must make
+    the v98 fetch fail closed.
+    """
+    v285 = _loaded_v285()
+    if v285 is None:
+        return True
+    if not isinstance(result, list):
+        return True
+    recorder = getattr(v285, "_record_snapshot_success", None)
+    if not callable(recorder):
+        return False
+    if not bool(recorder(broker, list(result))):
+        return False
+    LOGGER.critical(
+        "POSITION_SYNC_V315_SNAPSHOT_BRIDGED marker=%s broker=%s positions=%d "
+        "same_authoritative_response=true duplicate_broker_read=false "
+        "snapshot_timestamp_real_observation=true snapshot_generation_real_observation=true "
+        "position_success_fabricated=false readiness_granted=false "
+        "execution_proof_fabricated=false safety_gates_bypassed=false",
+        SNAPSHOT_BRIDGE_MARKER,
+        str(getattr(broker, "account_identifier", type(broker).__name__) or type(broker).__name__),
+        len(result),
+    )
+    return True
+
+
 class _FetchProofProxy:
     """Transparent broker proxy that observes the authoritative fetch outcome."""
 
@@ -78,12 +133,27 @@ class _FetchProofProxy:
 
     def get_positions(self, *args: Any, **kwargs: Any) -> Any:
         object.__setattr__(self, "fetch_attempted", True)
+        broker = object.__getattribute__(self, "_broker")
         try:
-            result = object.__getattribute__(self, "_broker").get_positions(*args, **kwargs)
+            result = broker.get_positions(*args, **kwargs)
         except BaseException as exc:
             object.__setattr__(self, "fetch_ok", False)
             object.__setattr__(self, "fetch_error", f"{type(exc).__name__}:{exc}")
             raise
+
+        try:
+            snapshot_ok = _publish_v285_snapshot_if_loaded(broker, result)
+        except BaseException as exc:
+            object.__setattr__(self, "fetch_ok", False)
+            object.__setattr__(self, "fetch_error", f"v285_snapshot_publish_error:{type(exc).__name__}:{exc}")
+            raise RuntimeError(
+                f"v285 authoritative snapshot publication failed: {type(exc).__name__}:{exc}"
+            ) from exc
+        if not snapshot_ok:
+            object.__setattr__(self, "fetch_ok", False)
+            object.__setattr__(self, "fetch_error", "v285_snapshot_publish_rejected")
+            raise RuntimeError("v285 authoritative snapshot publication rejected")
+
         object.__setattr__(self, "fetch_ok", True)
         object.__setattr__(self, "fetch_error", None)
         return result
@@ -102,11 +172,6 @@ def _patch_startup_sync(module: ModuleType) -> bool:
         previous_fetch_ok = getattr(broker, "_startup_position_sync_fetch_ok", None) is True
         proxy = _FetchProofProxy(broker)
 
-        # Do not revoke a previously authoritative snapshot merely because a
-        # maintenance refresh has started. The active v95 transport call is
-        # bounded; if it actually fails, the post-call proof below revokes the
-        # stale success immediately. This removes the Coinbase readiness flap
-        # without converting an error or timeout into success.
         try:
             result = int(current(proxy, broker_name, eps) or 0)
         except BaseException as exc:
@@ -157,8 +222,6 @@ def _patch_startup_sync(module: ModuleType) -> bool:
                     broker_name,
                 )
         else:
-            # The transport returned authoritatively but reconciliation did not
-            # complete. Keep the fetch fact, but never preserve readiness.
             try:
                 setattr(broker, "_startup_position_sync_fetch_ok", True)
                 setattr(broker, "_startup_position_sync_error", "authoritative_fetch_reconciliation_incomplete")
@@ -191,9 +254,11 @@ def _patch_startup_sync(module: ModuleType) -> bool:
     setattr(adopt_broker_positions_v98, "__wrapped__", current)
     module._adopt_broker_positions = adopt_broker_positions_v98
     LOGGER.critical(
-        "POSITION_SYNC_FAILURE_TRUTH_V98_PATCHED marker=%s module=%s file=%s "
-        "completed_failure_revocation=true inflight_prior_proof_preserved=true fail_closed=true",
+        "POSITION_SYNC_FAILURE_TRUTH_V98_PATCHED marker=%s snapshot_bridge_marker=%s module=%s file=%s "
+        "completed_failure_revocation=true inflight_prior_proof_preserved=true "
+        "v285_same_response_snapshot_bridge=true duplicate_broker_read=false fail_closed=true",
         MARKER,
+        SNAPSHOT_BRIDGE_MARKER,
         getattr(module, "__name__", "<unknown>"),
         getattr(module, "__file__", None),
     )
@@ -231,9 +296,11 @@ def install_import_hook() -> bool:
 
         os.environ["NIJA_POSITION_SYNC_FAILURE_TRUTH_V98_INSTALLED"] = "1"
         LOGGER.critical(
-            "POSITION_SYNC_FAILURE_TRUTH_V98_INSTALLED marker=%s completed_failure_revocation=true "
-            "inflight_prior_proof_preserved=true stale_success_reuse=false safety_gates_unchanged=true",
+            "POSITION_SYNC_FAILURE_TRUTH_V98_INSTALLED marker=%s snapshot_bridge_marker=%s "
+            "completed_failure_revocation=true inflight_prior_proof_preserved=true stale_success_reuse=false "
+            "v285_same_response_snapshot_bridge=true safety_gates_unchanged=true",
             MARKER,
+            SNAPSHOT_BRIDGE_MARKER,
         )
         return True
 
@@ -244,8 +311,10 @@ def install() -> bool:
 
 __all__ = [
     "MARKER",
+    "SNAPSHOT_BRIDGE_MARKER",
     "install",
     "install_import_hook",
     "_patch_startup_sync",
     "_FetchProofProxy",
+    "_publish_v285_snapshot_if_loaded",
 ]
