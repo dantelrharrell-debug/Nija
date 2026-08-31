@@ -26,6 +26,14 @@ _SOFT_REJECT_MARKERS = (
     "executionauthority reject",
     "execution_authority_blocked",
     "execution_authority_runtime",
+    # Execution-layer hardening runs before broker submission. These are local
+    # safety denials, not proof that an exchange rejected an ECEL-valid order.
+    # The denial itself remains fail-closed; this classification only prevents
+    # it from being promoted into a synthetic exchange/ECEL fault.
+    "hardening_enforcement",
+    "execution layer hardening",
+    "position_cap_exceeded",
+    "position cap reached",
 )
 
 
@@ -37,7 +45,7 @@ def _is_soft_operational_reject(error: Any) -> bool:
 def _patch_telemetry_boundary(cls: type) -> bool:
     """Keep known local/unconfirmed soft outcomes out of exchange rejection telemetry.
 
-    This is deliberately an early defense-in-depth boundary.  Soft outcomes are
+    This is deliberately an early defense-in-depth boundary. Soft outcomes are
     still returned as failures to callers; they are simply not promoted into the
     ExchangeKillSwitchProtector order-rejection window unless a concrete exchange
     rejection is independently observed elsewhere.
@@ -91,10 +99,6 @@ def _patch_module(module: ModuleType) -> bool:
     @wraps(original)
     def _on_order_rejected_soft(self: Any, request: Any, error: str, *args: Any, **kwargs: Any):
         if _is_soft_operational_reject(error):
-            # Do not emit exchange-rejection telemetry for a local/unconfirmed
-            # operational outcome.  The v254 telemetry wrapper above provides a
-            # second guard in case another caller invokes the telemetry method
-            # directly with the same soft reason.
             logger.warning(
                 "EXECUTION_SOFT_REJECT_CLASSIFIED marker=%s v254_marker=%s symbol=%s "
                 "side=%s error=%s action=no_ecel_systemerror_no_exchange_sample",
