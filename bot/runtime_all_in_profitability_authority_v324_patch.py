@@ -1,9 +1,9 @@
-"""Canonical profitability authority chain.
+"""Canonical NIJA profitability authority chain.
 
-This wrapper preserves the verified v324 economic implementation in
-``runtime_all_in_profitability_authority_v324_core`` and makes the existing
-canonical v324 startup attestation require the proof-gated Kraken short path
-(v325) and terminal no-spot-fallback integrity (v326) in the same process.
+The verified v324 economics live in ``runtime_all_in_profitability_authority_v324_core``.
+This canonical import path applies current U.S. public fee fallbacks and then
+requires the proof-gated Kraken short path (v325), terminal short integrity
+(v326), and current-cost broker routing (v327) in the same writer process.
 """
 from __future__ import annotations
 
@@ -16,6 +16,26 @@ from bot import runtime_all_in_profitability_authority_v324_core as _core
 
 LOGGER = logging.getLogger("nija.runtime_all_in_profitability_authority_v324_chain")
 MARKER = _core.MARKER
+_ORIGINAL_BASE_FEES = _core._current_base_fees
+
+
+def _current_base_fees(broker_name: str, symbol: str):
+    """Current conservative public fallback; authenticated account fees still win."""
+    broker = str(broker_name or "").strip().lower().replace(" ", "_")
+    upper_symbol = str(symbol or "").strip().upper()
+    derivative = any(token in upper_symbol for token in ("PERP", "FUT", "SWAP"))
+    if broker == "coinbase" and not derivative:
+        # Public Coinbase Advanced base tier: 40 bps maker / 60 bps taker.
+        return 0.0040, 0.0060, "coinbase_advanced_public_base_20260831"
+    if broker == "okx" and not derivative:
+        # OKX United States regular tier: 20 bps maker / 35 bps taker.
+        return 0.0020, 0.0035, "okx_us_regular_2026"
+    return _ORIGINAL_BASE_FEES(broker_name, symbol)
+
+
+# Core v324 functions resolve this global dynamically.  Patch it before the
+# installer updates legacy fee profiles, risk sizing, entry, and exit economics.
+_core._current_base_fees = _current_base_fees
 
 
 def _install_required(module_name: str, ready_env: str) -> bool:
@@ -30,6 +50,7 @@ def install_import_hook() -> bool:
     core_ready = bool(_core.install_import_hook())
     v325_ready = False
     v326_ready = False
+    v327_ready = False
     if core_ready:
         try:
             v325_ready = _install_required(
@@ -46,21 +67,30 @@ def install_import_hook() -> bool:
             )
         except Exception:
             LOGGER.exception("PROFITABILITY_CHAIN_V324_V326_FAILED marker=%s", MARKER)
+    if core_ready and v325_ready and v326_ready:
+        try:
+            v327_ready = _install_required(
+                "bot.runtime_execution_cost_routing_v327_patch",
+                "NIJA_RUNTIME_EXECUTION_COST_ROUTING_V327_READY",
+            )
+        except Exception:
+            LOGGER.exception("PROFITABILITY_CHAIN_V324_V327_FAILED marker=%s", MARKER)
 
-    ready = bool(core_ready and v325_ready and v326_ready)
+    ready = bool(core_ready and v325_ready and v326_ready and v327_ready)
     os.environ["NIJA_RUNTIME_ALL_IN_PROFITABILITY_V324_READY"] = "1" if ready else "0"
     os.environ["NIJA_CANONICAL_PROFITABILITY_CHAIN_READY"] = "1" if ready else "0"
     if ready:
         LOGGER.critical(
-            "CANONICAL_PROFITABILITY_CHAIN_READY marker=%s v324=true v325=true v326=true "
-            "current_cost_economics=true short_margin_proof=true terminal_margin_integrity=true "
-            "spot_fallback=false confirmed_short_fill_required=true safety_gates_bypassed=false",
+            "CANONICAL_PROFITABILITY_CHAIN_READY marker=%s v324=true v325=true v326=true v327=true "
+            "current_cost_economics=true current_us_fee_fallbacks=true short_margin_proof=true "
+            "terminal_margin_integrity=true cost_aware_routing=true spot_fallback=false "
+            "confirmed_short_fill_required=true safety_gates_bypassed=false",
             MARKER,
         )
     else:
         LOGGER.critical(
-            "CANONICAL_PROFITABILITY_CHAIN_INCOMPLETE marker=%s v324=%s v325=%s v326=%s fail_closed=true",
-            MARKER, core_ready, v325_ready, v326_ready,
+            "CANONICAL_PROFITABILITY_CHAIN_INCOMPLETE marker=%s v324=%s v325=%s v326=%s v327=%s fail_closed=true",
+            MARKER, core_ready, v325_ready, v326_ready, v327_ready,
         )
     return ready
 
@@ -69,8 +99,8 @@ def install() -> bool:
     return install_import_hook()
 
 
-# Preserve the original public surface plus the chained installers.
+# Preserve the original public surface plus corrected fee lookup and installers.
 __all__ = list(getattr(_core, "__all__", ()))
-for _name in ("MARKER", "install", "install_import_hook"):
+for _name in ("MARKER", "install", "install_import_hook", "_current_base_fees"):
     if _name not in __all__:
         __all__.append(_name)
