@@ -3,7 +3,8 @@
 The verified v324 economics live in ``runtime_all_in_profitability_authority_v324_core``.
 This canonical import path applies current U.S. public fee fallbacks and then
 requires the proof-gated Kraken short path (v325), terminal short integrity
-(v326), and current-cost broker routing (v327) in the same writer process.
+(v326), current-cost broker routing (v327), and confirmed-fill/slippage truth
+(v328) in the same writer process.
 """
 from __future__ import annotations
 
@@ -33,7 +34,7 @@ def _current_base_fees(broker_name: str, symbol: str):
     return _ORIGINAL_BASE_FEES(broker_name, symbol)
 
 
-# Core v324 functions resolve this global dynamically.  Patch it before the
+# Core v324 functions resolve this global dynamically. Patch it before the
 # installer updates legacy fee profiles, risk sizing, entry, and exit economics.
 _core._current_base_fees = _current_base_fees
 
@@ -51,6 +52,7 @@ def install_import_hook() -> bool:
     v325_ready = False
     v326_ready = False
     v327_ready = False
+    v328_ready = False
     if core_ready:
         try:
             v325_ready = _install_required(
@@ -75,22 +77,31 @@ def install_import_hook() -> bool:
             )
         except Exception:
             LOGGER.exception("PROFITABILITY_CHAIN_V324_V327_FAILED marker=%s", MARKER)
+    if core_ready and v325_ready and v326_ready and v327_ready:
+        try:
+            v328_ready = _install_required(
+                "bot.runtime_confirmed_fill_profitability_v328_patch",
+                "NIJA_RUNTIME_CONFIRMED_FILL_PROFITABILITY_V328_READY",
+            )
+        except Exception:
+            LOGGER.exception("PROFITABILITY_CHAIN_V324_V328_FAILED marker=%s", MARKER)
 
-    ready = bool(core_ready and v325_ready and v326_ready and v327_ready)
+    ready = bool(core_ready and v325_ready and v326_ready and v327_ready and v328_ready)
     os.environ["NIJA_RUNTIME_ALL_IN_PROFITABILITY_V324_READY"] = "1" if ready else "0"
     os.environ["NIJA_CANONICAL_PROFITABILITY_CHAIN_READY"] = "1" if ready else "0"
     if ready:
         LOGGER.critical(
-            "CANONICAL_PROFITABILITY_CHAIN_READY marker=%s v324=true v325=true v326=true v327=true "
+            "CANONICAL_PROFITABILITY_CHAIN_READY marker=%s v324=true v325=true v326=true v327=true v328=true "
             "current_cost_economics=true current_us_fee_fallbacks=true short_margin_proof=true "
-            "terminal_margin_integrity=true cost_aware_routing=true spot_fallback=false "
+            "terminal_margin_integrity=true cost_aware_routing=true confirmed_fill_truth=true "
+            "measured_slippage_learning=true unknown_slippage_not_zero=true spot_fallback=false "
             "confirmed_short_fill_required=true safety_gates_bypassed=false",
             MARKER,
         )
     else:
         LOGGER.critical(
-            "CANONICAL_PROFITABILITY_CHAIN_INCOMPLETE marker=%s v324=%s v325=%s v326=%s v327=%s fail_closed=true",
-            MARKER, core_ready, v325_ready, v326_ready, v327_ready,
+            "CANONICAL_PROFITABILITY_CHAIN_INCOMPLETE marker=%s v324=%s v325=%s v326=%s v327=%s v328=%s fail_closed=true",
+            MARKER, core_ready, v325_ready, v326_ready, v327_ready, v328_ready,
         )
     return ready
 
