@@ -22,6 +22,12 @@ v312's existing authoritative row builder and recorded through v285. No rate
 interval, transport timeout, nonce ordering, lock semantics, snapshot TTL,
 position quantity, cost basis, execution proof, order, fill, or activation gate
 is relaxed or fabricated.
+
+v320 is chained from this already-canonical fast-path installer.  It does not
+change v319's Kraken behavior; it arms the platform/user position-readiness
+isolation hook so v285's strong all-account proof can continue protecting each
+user account without letting an unproven user revoke otherwise-valid PLATFORM
+activation.
 """
 from __future__ import annotations
 
@@ -159,6 +165,25 @@ def _register_manifest() -> bool:
         return False
 
 
+def _install_platform_position_isolation_v320() -> bool:
+    try:
+        module = importlib.import_module("bot.runtime_platform_position_sync_isolation_v320_patch")
+        installer = getattr(module, "install_import_hook", None) or getattr(module, "install", None)
+        if not callable(installer):
+            return False
+        return bool(installer())
+    except Exception as exc:
+        LOGGER.critical(
+            "KRAKEN_RECENT_BALANCE_PREWAIT_V319_V320_CHAIN_FAILED marker=%s error=%s:%s "
+            "trading_fail_closed=true forced_activation=false safety_gates_bypassed=false",
+            MARKER,
+            type(exc).__name__,
+            exc,
+            exc_info=True,
+        )
+        return False
+
+
 def install() -> bool:
     try:
         v312_ready = os.environ.get("NIJA_RUNTIME_KRAKEN_BALANCE_EPOCH_HANDOFF_V312_READY") == "1"
@@ -166,7 +191,8 @@ def install() -> bool:
             raise RuntimeError("v312_not_ready")
         patched = _patch_v286_new_flight()
         manifest = _register_manifest()
-        ready = bool(patched and manifest)
+        v320 = _install_platform_position_isolation_v320()
+        ready = bool(patched and manifest and v320)
     except Exception as exc:
         ready = False
         LOGGER.critical(
@@ -187,6 +213,7 @@ def install() -> bool:
             "transport_timeout_unchanged=true nonce_ordering_unchanged=true lock_bypass=false "
             "lock_force_release=false position_success_fabricated=false balance_fabricated=false "
             "readiness_granted=false execution_proof_fabricated=false forced_activation=false "
+            "platform_position_isolation_v320=true "
             "writer_nonce_risk_capital_killswitch_order_fill_gates_unchanged=true "
             "safety_gates_bypassed=false",
             MARKER,
@@ -206,4 +233,5 @@ __all__ = [
     "_preactivation",
     "_recent_observation",
     "_patch_v286_new_flight",
+    "_install_platform_position_isolation_v320",
 ]
