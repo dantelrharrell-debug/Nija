@@ -107,9 +107,10 @@ def main() -> int:
         raise RuntimeError("Render outreach front-door patch incomplete: " + ", ".join(missing))
 
     print(
-        "RENDER_OUTREACH_FRONTDOOR_READY marker=20260830-render-outreach-frontdoor-v4 "
+        "RENDER_OUTREACH_FRONTDOOR_READY marker=20260830-render-outreach-frontdoor-v5 "
         "protected=true signed_webhook=true webhook_autoconfig=true "
-        "lead_intake_normalized=true markdown_email_normalized=true nested_formname_normalized=true "
+        "lead_intake_normalized=true account_check_protected=true "
+        "markdown_email_normalized=true nested_formname_normalized=true "
         "campaign_compliance_fail_closed=true consent_fail_closed=true "
         "liveness_unchanged=true readiness_unchanged=true"
     )
