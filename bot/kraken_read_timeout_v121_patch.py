@@ -1,16 +1,16 @@
-"""Bound read-only Kraken HTTP calls and the global API-lock wait.
+"""Bound read-only Kraken HTTP calls and canonical API-lock admission.
 
 Production generation logs showed repeated v117 Kraken position generations
 reaching the 12-second caller timeout. NIJA's Kraken private-call wrapper holds
-the process-wide Kraken API lock while calling ``krakenex.API.query_private``.
+a Kraken API serialization lock while calling ``krakenex.API.query_private``.
 v121 already bounds the HTTP request itself, but production on 2026-08-24 proved
 a second liveness gap: a read-only caller can wait indefinitely *before* the
-HTTP timeout begins while another caller owns the global lock. Heartbeat v210
-then times out its outer caller while the underlying daemon remains blocked on
-the lock, causing every later heartbeat retry to see the same in-flight worker.
+HTTP timeout begins while another caller owns the selected API lock. Heartbeat
+v210 then times out its outer caller while the underlying daemon remains blocked
+on the lock, causing every later heartbeat retry to see the same in-flight worker.
 
-This hardening bounds only acquisition of the existing process-wide Kraken API
-lock for read-only private calls. Mutating methods (AddOrder/Cancel/Edit/etc.)
+This hardening bounds only acquisition of the existing Kraken lock dispatcher
+for read-only private calls. Mutating methods (AddOrder/Cancel/Edit/etc.)
 preserve their existing serialization and timeout semantics so an ambiguous
 client timeout cannot trigger an automatic duplicate mutation. Once the read
 lock is acquired, the existing method runs unchanged and re-enters the same
@@ -18,8 +18,20 @@ lock is acquired, the existing method runs unchanged and re-enters the same
 v117 remains the outer fail-closed position snapshot authority and synthetic
 empty snapshots remain forbidden.
 
+Wrapper-order convergence v310 fixes a later interaction with v293. The v117
+dispatch hook can reassert v121 after the credential-scoped v293 wrapper has
+already been installed. In that order, the old v121 wrapper asked for the lock
+*before* v293 could establish the credential thread-local, accidentally falling
+back to the process-wide Kraken lock and re-coupling PLATFORM and USER accounts.
+v310 makes v121 itself credential-scope aware whenever v293 is already loaded,
+and makes v121 patch detection chain-aware so reassertion cannot stack another
+outer v121 wrapper. If credential scope is unavailable or unproven, the original
+canonical/global lock remains the fail-closed fallback.
+
 No new builtins/importlib hook is installed. Future broker_manager imports are
 patched by extending v117's already-installed broker-manager dispatch hook.
+No lock is bypassed or force-released and nonce/rate/transport/order/fill/risk,
+capital, kill-switch and execution-proof semantics remain unchanged.
 """
 from __future__ import annotations
 
@@ -34,10 +46,12 @@ from typing import Any, Callable
 LOGGER = logging.getLogger("nija.kraken_read_timeout_v121")
 MARKER = "20260816-kraken-read-timeout-v121"
 LOCK_BOUND_MARKER = "20260824-kraken-read-lock-bound-v212"
+LOCK_SCOPE_MARKER = "20260831-kraken-read-lock-wrapper-order-v310"
 RELEASE_ID = "20260816-runtime-convergence-v121"
 _PATCH_ATTR = "_nija_kraken_read_timeout_v121"
 _API_ATTR = "_nija_kraken_read_timeout_v121_api"
 _V117_DISPATCH_ATTR = "_nija_kraken_read_timeout_v121_dispatch"
+_LOCK_SCOPE_READY_FLAG = "NIJA_KRAKEN_READ_LOCK_SCOPE_V310_READY"
 _LOCK = threading.RLock()
 _INSTALLED = False
 
@@ -53,7 +67,7 @@ _MUTATING = {
 
 
 class KrakenReadLockBusy(RuntimeError):
-    """Fail-closed signal that a read could not enter the Kraken API lock."""
+    """Fail-closed signal that a read could not enter the selected Kraken API lock."""
 
 
 def _env_timeout(name: str, default: float, *, maximum: float = 30.0) -> float:
@@ -129,13 +143,49 @@ def _method_from_call(args: tuple[Any, ...], kwargs: dict[str, Any]) -> str:
     return str(kwargs.get("method") or "")
 
 
+def _chain_has_patch(callable_obj: Any) -> bool:
+    """Return true when any wrapper in the current chain is already v121."""
+    seen: set[int] = set()
+    current = callable_obj
+    for _ in range(128):
+        if not callable(current) or id(current) in seen:
+            return False
+        seen.add(id(current))
+        if bool(getattr(current, _PATCH_ATTR, False)):
+            return True
+        current = getattr(current, "__wrapped__", None)
+    return False
+
+
+def _credential_scope_runner() -> Callable[[Any, Callable[[], Any]], Any] | None:
+    """Return v293's scope runner only when that repair is already loaded.
+
+    v121 is installed earlier in startup than v293. Importing v293 from here
+    would change startup ordering, so this helper deliberately consults only
+    already-loaded modules. Later v117 reassertions then become order-safe
+    without creating a new import cycle.
+    """
+    module = (
+        sys.modules.get("bot.runtime_kraken_credential_lock_scope_v293_patch")
+        or sys.modules.get("runtime_kraken_credential_lock_scope_v293_patch")
+    )
+    if not isinstance(module, ModuleType):
+        return None
+    runner = getattr(module, "_invoke_with_credential_scope", None)
+    return runner if callable(runner) else None
+
+
 def _acquire_global_read_lock(module: ModuleType, method: str) -> tuple[Any | None, bool]:
-    """Bound read-only admission to the canonical Kraken global RLock.
+    """Bound read-only admission to the canonical Kraken lock dispatcher.
+
+    With v293 loaded, ``module.get_kraken_api_lock`` may resolve to a credential-
+    scoped lock when its credential context is active. Without v293 (or without
+    proven credential identity), it resolves to the original process-wide lock.
 
     Returning ``(None, False)`` means the canonical getter is unavailable and
-    the existing broker method should run unchanged. A busy canonical lock
-    raises ``KrakenReadLockBusy`` so the caller fails closed without leaving a
-    daemon parked indefinitely behind another Kraken request.
+    the existing broker method should run unchanged. A busy selected lock raises
+    ``KrakenReadLockBusy`` so the caller fails closed without leaving a daemon
+    parked indefinitely behind another Kraken request.
     """
     if method in _MUTATING:
         return None, False
@@ -145,14 +195,14 @@ def _acquire_global_read_lock(module: ModuleType, method: str) -> tuple[Any | No
         return None, False
 
     try:
-        global_lock = getter()
+        selected_lock = getter()
     except Exception:
         # Preserve the broker's existing error behavior if its canonical lock
         # getter itself is unavailable/broken.
         return None, False
 
-    acquire = getattr(global_lock, "acquire", None)
-    release = getattr(global_lock, "release", None)
+    acquire = getattr(selected_lock, "acquire", None)
+    release = getattr(selected_lock, "release", None)
     if not callable(acquire) or not callable(release):
         return None, False
 
@@ -165,8 +215,8 @@ def _acquire_global_read_lock(module: ModuleType, method: str) -> tuple[Any | No
     if not acquired:
         LOGGER.warning(
             "KRAKEN_READ_LOCK_V212_BUSY marker=%s method=%s wait_s=%.2f "
-            "read_only=true action=fail_closed_retry global_lock_preserved=true "
-            "http_timeout_unchanged=true mutating_calls_unchanged=true",
+            "read_only=true action=fail_closed_retry canonical_lock_dispatch_preserved=true "
+            "credential_scope_compatible=true http_timeout_unchanged=true mutating_calls_unchanged=true",
             LOCK_BOUND_MARKER,
             method or "unknown",
             wait_s,
@@ -175,7 +225,37 @@ def _acquire_global_read_lock(module: ModuleType, method: str) -> tuple[Any | No
             f"Kraken read lock busy after {wait_s:.2f}s for {method or 'private_read'}"
         )
 
-    return global_lock, True
+    return selected_lock, True
+
+
+def _invoke_bounded_read(
+    module: ModuleType,
+    broker: Any,
+    method: str,
+    call: Callable[[], Any],
+) -> Any:
+    """Acquire the bounded read lock inside v293 scope when available.
+
+    This is the v310 wrapper-order repair. If v121 is reasserted outside v293,
+    the v293 runner establishes the credential-local dispatch context *before*
+    v121 asks ``get_kraken_api_lock`` for the selected lock. The inner original
+    call may pass through v293 again; nested scope on the same RLock is safe and
+    preserves the existing serialization contract.
+    """
+
+    def _admit_then_call() -> Any:
+        selected_lock, acquired = _acquire_global_read_lock(module, method)
+        if not acquired or selected_lock is None:
+            return call()
+        try:
+            return call()
+        finally:
+            selected_lock.release()
+
+    runner = _credential_scope_runner()
+    if callable(runner):
+        return runner(broker, _admit_then_call)
+    return _admit_then_call()
 
 
 def _patch_broker_manager(module: ModuleType | None = None) -> bool:
@@ -190,7 +270,7 @@ def _patch_broker_manager(module: ModuleType | None = None) -> bool:
     current = getattr(cls, "_kraken_private_call", None)
     if not callable(current):
         return False
-    if not getattr(current, _PATCH_ATTR, False):
+    if not _chain_has_patch(current):
         @wraps(current)
         def kraken_private_call_v121(self: Any, *args: Any, **kwargs: Any):
             _wrap_api(getattr(self, "api", None))
@@ -201,18 +281,12 @@ def _patch_broker_manager(module: ModuleType | None = None) -> bool:
             if method in _MUTATING:
                 return current(self, *args, **kwargs)
 
-            global_lock, acquired = _acquire_global_read_lock(module, method)
-            if not acquired or global_lock is None:
-                return current(self, *args, **kwargs)
-
-            try:
-                # broker_manager._kraken_private_call re-enters this same
-                # process-wide threading.RLock, so its existing serialization,
-                # rate-limit, nonce, circuit-breaker, and fallback logic remain
-                # unchanged once admission succeeds.
-                return current(self, *args, **kwargs)
-            finally:
-                global_lock.release()
+            return _invoke_bounded_read(
+                module,
+                self,
+                method,
+                lambda: current(self, *args, **kwargs),
+            )
 
         setattr(kraken_private_call_v121, _PATCH_ATTR, True)
         setattr(kraken_private_call_v121, "__wrapped__", current)
@@ -227,12 +301,13 @@ def _patch_broker_manager(module: ModuleType | None = None) -> bool:
             LOGGER.debug("KRAKEN_READ_TIMEOUT_V121 live-instance patch skipped", exc_info=True)
 
     LOGGER.critical(
-        "KRAKEN_READ_TIMEOUT_V121_BROKER_PATCHED marker=%s lock_marker=%s broker_class=KrakenBroker "
+        "KRAKEN_READ_TIMEOUT_V121_BROKER_PATCHED marker=%s lock_marker=%s scope_marker=%s broker_class=KrakenBroker "
         "private_read_timeout_s=%.2f public_read_timeout_s=%.2f private_read_lock_wait_s=%.2f "
-        "read_lock_wait_bounded=true global_lock_preserved=true mutating_lock_wait_unchanged=true "
-        "synthetic_empty_snapshot=false",
+        "read_lock_wait_bounded=true chain_aware_patch_detection=true credential_scope_compatible=true "
+        "canonical_lock_dispatch_preserved=true mutating_lock_wait_unchanged=true synthetic_empty_snapshot=false",
         MARKER,
         LOCK_BOUND_MARKER,
+        LOCK_SCOPE_MARKER,
         _private_read_timeout_s(),
         _public_read_timeout_s(),
         _private_read_lock_wait_s(),
@@ -263,8 +338,9 @@ def _patch_v117_dispatch() -> bool:
     setattr(patch_broker_manager_v121, "__wrapped__", current)
     v117._patch_broker_manager = patch_broker_manager_v121
     LOGGER.critical(
-        "KRAKEN_READ_TIMEOUT_V121_V117_DISPATCH_PATCHED marker=%s existing_import_hook_reused=true new_import_hook=false",
+        "KRAKEN_READ_TIMEOUT_V121_V117_DISPATCH_PATCHED marker=%s scope_marker=%s existing_import_hook_reused=true new_import_hook=false chain_aware_reassertion=true",
         MARKER,
+        LOCK_SCOPE_MARKER,
     )
     return True
 
@@ -282,6 +358,7 @@ def _patch_release_manifest() -> bool:
     if not isinstance(required, dict):
         return False
     required["kraken_read_timeout_v121"] = "NIJA_KRAKEN_READ_TIMEOUT_V121_INSTALLED"
+    required["kraken_read_lock_scope_v310"] = _LOCK_SCOPE_READY_FLAG
     manifest.RELEASE_ID = RELEASE_ID
     return True
 
@@ -294,8 +371,10 @@ def install() -> bool:
         if not _patch_broker_manager():
             return False
         os.environ["NIJA_KRAKEN_READ_TIMEOUT_V121_INSTALLED"] = "1"
+        os.environ[_LOCK_SCOPE_READY_FLAG] = "1"
         if not _patch_release_manifest():
             os.environ.pop("NIJA_KRAKEN_READ_TIMEOUT_V121_INSTALLED", None)
+            os.environ.pop(_LOCK_SCOPE_READY_FLAG, None)
             return False
         _INSTALLED = True
         LOGGER.critical(
@@ -308,6 +387,15 @@ def install() -> bool:
             _public_read_timeout_s(),
             _private_read_lock_wait_s(),
         )
+        LOGGER.critical(
+            "KRAKEN_READ_LOCK_SCOPE_V310_READY marker=%s ready=true "
+            "v121_reassertion_chain_aware=true credential_scope_entered_before_lock_selection=true "
+            "distinct_credentials_independent_when_v293_loaded=true same_credential_serialized=true "
+            "unproven_credential_global_fallback=true lock_force_release=false lock_bypass=false "
+            "nonce_rate_transport_order_fill_risk_capital_killswitch_execution_gates_unchanged=true "
+            "execution_proof_fabricated=false forced_trade=false forced_activation=false safety_gates_bypassed=false",
+            LOCK_SCOPE_MARKER,
+        )
         return True
 
 
@@ -319,12 +407,17 @@ def install_import_hook() -> bool:
 __all__ = [
     "MARKER",
     "LOCK_BOUND_MARKER",
+    "LOCK_SCOPE_MARKER",
     "RELEASE_ID",
     "KrakenReadLockBusy",
     "install",
     "install_import_hook",
     "_private_read_lock_wait_s",
     "_wrap_api",
+    "_chain_has_patch",
+    "_credential_scope_runner",
+    "_acquire_global_read_lock",
+    "_invoke_bounded_read",
     "_patch_broker_manager",
     "_patch_v117_dispatch",
 ]
