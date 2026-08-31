@@ -37,6 +37,14 @@ change v319's Kraken behavior; it arms the platform/user position-readiness
 isolation hook so v285's strong all-account proof can continue protecting each
 user account without letting an unproven user revoke otherwise-valid PLATFORM
 activation.
+
+v330 is also chained here after v320. It keeps the same fail-closed contract and
+repairs only Kraken authoritative Balance/snapshot liveness: a timed-out retry
+may recover from a genuine credential-proven Balance observed during the same
+underlying v286 flight epoch, and still-current Kraken platform snapshots are
+queued for refresh at v285's existing refresh interval before expiry. v330 does
+not cancel workers, create duplicate private reads, extend freshness, or grant
+readiness.
 """
 from __future__ import annotations
 
@@ -267,6 +275,26 @@ def _install_platform_position_isolation_v320() -> bool:
         return False
 
 
+def _install_kraken_authoritative_snapshot_liveness_v330() -> bool:
+    try:
+        module = importlib.import_module("bot.runtime_kraken_authoritative_snapshot_liveness_v330_patch")
+        installer = getattr(module, "install_import_hook", None) or getattr(module, "install", None)
+        if not callable(installer):
+            return False
+        return bool(installer())
+    except Exception as exc:
+        LOGGER.critical(
+            "KRAKEN_RECENT_BALANCE_PREWAIT_V319_V330_CHAIN_FAILED marker=%s error=%s:%s "
+            "trading_fail_closed=true duplicate_private_call=false forced_activation=false "
+            "safety_gates_bypassed=false",
+            MARKER,
+            type(exc).__name__,
+            exc,
+            exc_info=True,
+        )
+        return False
+
+
 def install() -> bool:
     try:
         v312_ready = os.environ.get("NIJA_RUNTIME_KRAKEN_BALANCE_EPOCH_HANDOFF_V312_READY") == "1"
@@ -276,7 +304,8 @@ def install() -> bool:
         patched = _patch_v286_new_flight()
         manifest = _register_manifest()
         v320 = _install_platform_position_isolation_v320()
-        ready = bool(observer and patched and manifest and v320)
+        v330 = _install_kraken_authoritative_snapshot_liveness_v330()
+        ready = bool(observer and patched and manifest and v320 and v330)
     except Exception as exc:
         ready = False
         LOGGER.critical(
@@ -298,6 +327,7 @@ def install() -> bool:
             "lock_force_release=false position_success_fabricated=false balance_fabricated=false "
             "readiness_granted=false execution_proof_fabricated=false forced_activation=false "
             "canonical_balance_observer_v321=true platform_position_isolation_v320=true "
+            "kraken_authoritative_snapshot_liveness_v330=true "
             "writer_nonce_risk_capital_killswitch_order_fill_gates_unchanged=true "
             "safety_gates_bypassed=false",
             MARKER,
@@ -320,4 +350,5 @@ __all__ = [
     "_patch_canonical_balance_observer",
     "_patch_v286_new_flight",
     "_install_platform_position_isolation_v320",
+    "_install_kraken_authoritative_snapshot_liveness_v330",
 ]
