@@ -6,6 +6,10 @@ This module accepts those shapes, normalizes them into a stable schema, stores a
 deduplicated local record, and can forward the canonical payload to a configured
 server-side webhook without leaking provider secrets.
 
+It also exposes a narrow authenticated account-existence check for trusted
+server-to-server automation. The lookup never accepts passwords and never
+returns password hashes or broker credentials.
+
 The module is stdlib-only because ``render_liveness_server.py`` runs under
 ``python -S`` during early Render startup.
 """
@@ -28,6 +32,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 _LEAD_PATH = "/api/leads/intake"
+_ACCOUNT_CHECK_PATH = "/api/leads/account-check"
 _MAX_BODY_BYTES = 65536
 _DB_LOCK = threading.RLock()
 _SCHEMA_READY: set[str] = set()
@@ -156,6 +161,11 @@ def _db_path() -> pathlib.Path:
     return pathlib.Path(configured)
 
 
+def _user_db_path() -> pathlib.Path:
+    configured = str(os.getenv("NIJA_USER_DB_PATH") or "users.db").strip()
+    return pathlib.Path(configured).expanduser()
+
+
 def _connect() -> sqlite3.Connection:
     path = _db_path()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -223,6 +233,43 @@ def record_lead(payload: dict[str, Any]) -> tuple[dict[str, str], str, bool]:
         connection.commit()
         duplicate = cursor.rowcount == 0
     return canonical, event_key, duplicate
+
+
+def _lookup_user_by_email(email: str) -> dict[str, Any]:
+    """Return the minimum account state required by trusted lifecycle automation."""
+    path = _user_db_path()
+    if not path.is_file():
+        raise OSError("NIJA user database is unavailable")
+
+    try:
+        connection = sqlite3.connect(f"file:{path.resolve()}?mode=ro", uri=True, timeout=5.0)
+        connection.row_factory = sqlite3.Row
+        table = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='users'"
+        ).fetchone()
+        if table is None:
+            raise OSError("NIJA users table is unavailable")
+        row = connection.execute(
+            """
+            SELECT user_id, enabled, email_verified
+            FROM users
+            WHERE lower(email) = ?
+            LIMIT 1
+            """,
+            (email.lower(),),
+        ).fetchone()
+        connection.close()
+    except (sqlite3.Error, OSError) as exc:
+        raise OSError("NIJA user lookup is unavailable") from exc
+
+    if row is None:
+        return {"exists": False}
+    return {
+        "exists": True,
+        "user_id": str(row["user_id"] or ""),
+        "enabled": bool(row["enabled"]),
+        "email_verified": bool(row["email_verified"]),
+    }
 
 
 def _configured_token() -> str:
@@ -315,9 +362,9 @@ def _forward(canonical: dict[str, str]) -> bool:
 
 
 def handle_lead_intake_post(handler: Any) -> bool:
-    """Handle NIJA website lead intake; return whether the request path matched."""
+    """Handle protected NIJA lead intake/account lookup POST routes."""
     path = urllib.parse.urlsplit(str(getattr(handler, "path", "") or "")).path
-    if path != _LEAD_PATH:
+    if path not in {_LEAD_PATH, _ACCOUNT_CHECK_PATH}:
         return False
 
     authorized, status_code, detail = _authorized(handler)
@@ -327,6 +374,33 @@ def handle_lead_intake_post(handler: Any) -> bool:
 
     try:
         payload = _read_json(handler)
+    except ValueError as exc:
+        _send_json(handler, 422, {"error": str(exc)})
+        return True
+
+    if path == _ACCOUNT_CHECK_PATH:
+        email = normalize_email(payload.get("email"))
+        if not email:
+            _send_json(handler, 422, {"error": "A valid email is required"})
+            return True
+        try:
+            account = _lookup_user_by_email(email)
+        except OSError:
+            _send_json(
+                handler,
+                503,
+                {"error": "NIJA account lookup is temporarily unavailable", "lookup_available": False},
+            )
+            return True
+        response: dict[str, Any] = {
+            "lookup_available": True,
+            "email_normalized": True,
+            **account,
+        }
+        _send_json(handler, 200, response)
+        return True
+
+    try:
         canonical, event_key, duplicate = record_lead(payload)
     except ValueError as exc:
         _send_json(handler, 422, {"error": str(exc)})
