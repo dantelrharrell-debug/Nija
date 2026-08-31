@@ -28,6 +28,16 @@ and makes v121 patch detection chain-aware so reassertion cannot stack another
 outer v121 wrapper. If credential scope is unavailable or unproven, the original
 canonical/global lock remains the fail-closed fallback.
 
+Early read convergence v311 addresses a startup-order gap observed on 2026-08-31.
+The broader production convergence chain installed v286/v292/v293/v297/v299 only
+after the first heartbeat and authoritative PLATFORM Balance reconciliation had
+already started. That allowed an otherwise-correct pre-convergence Balance
+flight to monopolize the same credential long enough for startup reconciliation
+to remain pending. v311 installs only those already-existing, idempotent Kraken
+read-liveness repairs from v121's earlier installation point. A v311 failure is
+non-authoritative and leaves the previous fail-closed behavior intact; the later
+v88 convergence chain remains the canonical full installer.
+
 No new builtins/importlib hook is installed. Future broker_manager imports are
 patched by extending v117's already-installed broker-manager dispatch hook.
 No lock is bypassed or force-released and nonce/rate/transport/order/fill/risk,
@@ -35,6 +45,7 @@ capital, kill-switch and execution-proof semantics remain unchanged.
 """
 from __future__ import annotations
 
+import importlib
 import logging
 import os
 import sys
@@ -47,11 +58,20 @@ LOGGER = logging.getLogger("nija.kraken_read_timeout_v121")
 MARKER = "20260816-kraken-read-timeout-v121"
 LOCK_BOUND_MARKER = "20260824-kraken-read-lock-bound-v212"
 LOCK_SCOPE_MARKER = "20260831-kraken-read-lock-wrapper-order-v310"
+EARLY_READ_MARKER = "20260831-kraken-early-read-convergence-v311"
 RELEASE_ID = "20260816-runtime-convergence-v121"
 _PATCH_ATTR = "_nija_kraken_read_timeout_v121"
 _API_ATTR = "_nija_kraken_read_timeout_v121_api"
 _V117_DISPATCH_ATTR = "_nija_kraken_read_timeout_v121_dispatch"
 _LOCK_SCOPE_READY_FLAG = "NIJA_KRAKEN_READ_LOCK_SCOPE_V310_READY"
+_EARLY_READ_READY_FLAG = "NIJA_KRAKEN_EARLY_READ_CONVERGENCE_V311_READY"
+_EARLY_READ_MODULES = (
+    "bot.runtime_kraken_position_refresh_liveness_v286_patch",
+    "bot.runtime_kraken_transport_timeout_v292_patch",
+    "bot.runtime_kraken_credential_lock_scope_v293_patch",
+    "bot.runtime_kraken_monitoring_fairness_v297_patch",
+    "bot.runtime_kraken_credential_read_convergence_v299_patch",
+)
 _LOCK = threading.RLock()
 _INSTALLED = False
 
@@ -345,6 +365,62 @@ def _patch_v117_dispatch() -> bool:
     return True
 
 
+def _install_early_read_module(module_name: str) -> tuple[bool, str]:
+    try:
+        module = importlib.import_module(module_name)
+        installer = getattr(module, "install_import_hook", None) or getattr(module, "install", None)
+        if not callable(installer):
+            return False, "installer_unavailable"
+        result = installer()
+        if result is False:
+            return False, "installer_returned_false"
+        return True, "ok"
+    except Exception as exc:
+        return False, f"{type(exc).__name__}:{exc}"
+
+
+def _install_early_read_convergence_v311() -> bool:
+    """Install the narrow Kraken read-liveness subset before first reconciliation.
+
+    This does not grant readiness. The full production v88 chain remains the
+    canonical later installer and safely reasserts these idempotent modules.
+    """
+    if os.environ.get(_EARLY_READ_READY_FLAG) == "1":
+        return True
+
+    outcomes: dict[str, str] = {}
+    ready = True
+    for module_name in _EARLY_READ_MODULES:
+        ok, detail = _install_early_read_module(module_name)
+        outcomes[module_name] = detail
+        if not ok:
+            ready = False
+            break
+
+    os.environ[_EARLY_READ_READY_FLAG] = "1" if ready else "0"
+    if ready:
+        LOGGER.critical(
+            "KRAKEN_EARLY_READ_CONVERGENCE_V311_READY marker=%s ready=true modules=%s "
+            "before_first_reconciliation=true v88_full_chain_preserved=true "
+            "credential_scoped_serialization=true monitoring_prewait=true balance_single_flight=true "
+            "same_credential_coalescing=true transport_timeout_bound=true "
+            "readiness_granted=false reconciliation_fabricated=false position_success_fabricated=false "
+            "lock_force_release=false lock_bypass=false nonce_rate_order_fill_risk_capital_killswitch_execution_gates_unchanged=true "
+            "execution_proof_fabricated=false forced_trade=false forced_activation=false safety_gates_bypassed=false",
+            EARLY_READ_MARKER,
+            ",".join(_EARLY_READ_MODULES),
+        )
+    else:
+        LOGGER.warning(
+            "KRAKEN_EARLY_READ_CONVERGENCE_V311_DEFERRED marker=%s ready=false outcomes=%s "
+            "previous_fail_closed_behavior_preserved=true v88_full_chain_still_authoritative=true "
+            "readiness_granted=false execution_proof_fabricated=false safety_gates_bypassed=false",
+            EARLY_READ_MARKER,
+            outcomes,
+        )
+    return ready
+
+
 def _patch_release_manifest() -> bool:
     manifest = sys.modules.get("bot.runtime_release_manifest_patch") or sys.modules.get(
         "runtime_release_manifest_patch"
@@ -376,6 +452,11 @@ def install() -> bool:
             os.environ.pop("NIJA_KRAKEN_READ_TIMEOUT_V121_INSTALLED", None)
             os.environ.pop(_LOCK_SCOPE_READY_FLAG, None)
             return False
+        # v311 is deliberately best-effort from the v121 contract perspective.
+        # If an early dependency is not yet importable, v121 remains installed
+        # and fail-closed; subsequent v121 reassertions may retry, while the full
+        # v88 convergence chain remains the canonical later installer.
+        _install_early_read_convergence_v311()
         _INSTALLED = True
         LOGGER.critical(
             "KRAKEN_READ_TIMEOUT_V121_INSTALLED marker=%s lock_marker=%s private_read_timeout_s=%.2f "
@@ -408,6 +489,7 @@ __all__ = [
     "MARKER",
     "LOCK_BOUND_MARKER",
     "LOCK_SCOPE_MARKER",
+    "EARLY_READ_MARKER",
     "RELEASE_ID",
     "KrakenReadLockBusy",
     "install",
@@ -420,4 +502,6 @@ __all__ = [
     "_invoke_bounded_read",
     "_patch_broker_manager",
     "_patch_v117_dispatch",
+    "_install_early_read_module",
+    "_install_early_read_convergence_v311",
 ]
