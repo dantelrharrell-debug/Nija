@@ -33,8 +33,8 @@ class _AlpacaAssetBroker:
 
 def test_current_base_fee_fallbacks_are_conservative_current_tiers():
     assert v324._current_base_fees("kraken", "BTC-USD")[:2] == (0.0040, 0.0080)
-    assert v324._current_base_fees("coinbase", "BTC-USD")[:2] == (0.0060, 0.0120)
-    assert v324._current_base_fees("okx", "BTC-USDT")[:2] == (0.0008, 0.0010)
+    assert v324._current_base_fees("coinbase", "BTC-USD")[:2] == (0.0040, 0.0060)
+    assert v324._current_base_fees("okx", "BTC-USDT")[:2] == (0.0020, 0.0035)
     assert v324._current_base_fees("alpaca", "BTC/USD")[:2] == (0.0015, 0.0025)
     assert v324._current_base_fees("alpaca", "AAPL")[:2] == (0.0, 0.0)
 
