@@ -1,12 +1,9 @@
 """Durable, compliance-gated JustCall autodial queue for NIJA outreach.
 
-The worker never fabricates eligibility. Contacts may be queued before every gate
-is ready, but a provider call is submitted only after all stored compliance
-attestations are valid, the local calling window is open, no active duplicate
-call exists, local suppression is clear, and a JustCall AI Voice Agent resolves.
-
-The queue key includes record, campaign, phone, and call stage so retries are
-idempotent while intentional later campaign touches can use a new call_stage.
+Contacts may enter before every gate is ready. A provider call is submitted only
+when stored compliance evidence is valid, the recipient's local calling window
+is open, the NIJA daily quota has capacity, no active duplicate exists, local
+suppression is clear, and a JustCall AI Voice Agent resolves.
 """
 
 from __future__ import annotations
@@ -31,11 +28,7 @@ from render_outreach_routes import (
     _send_json,
     _service_authorized,
 )
-from render_outreach_store import (
-    is_suppressed,
-    phone_key,
-    record_outbound_submission,
-)
+from render_outreach_store import is_suppressed, phone_key, record_outbound_submission
 
 _QUEUE_LOCK = threading.RLock()
 _WORKER_LOCK = threading.Lock()
@@ -74,6 +67,10 @@ def _parse_iso(value: object) -> Optional[datetime]:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
+
+
+def _bool(value: object) -> bool:
+    return value is True or str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _db_path() -> pathlib.Path:
@@ -124,9 +121,14 @@ def _ensure_schema(connection: sqlite3.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_outreach_autodial_ready
             ON outreach_autodial_queue(state, next_attempt_at);
-
         CREATE INDEX IF NOT EXISTS idx_outreach_autodial_phone
             ON outreach_autodial_queue(phone_key, updated_at);
+
+        CREATE TABLE IF NOT EXISTS outreach_autodial_daily_quota (
+            quota_date TEXT PRIMARY KEY,
+            used_count INTEGER NOT NULL DEFAULT 0,
+            updated_at TEXT NOT NULL
+        );
         """
     )
     connection.commit()
@@ -135,10 +137,6 @@ def _ensure_schema(connection: sqlite3.Connection) -> None:
 def _queue_key(record_id: str, number: str, campaign: str, call_stage: str) -> str:
     material = "|".join((record_id.strip(), phone_key(number), campaign.strip(), call_stage.strip()))
     return hashlib.sha256(material.encode("utf-8")).hexdigest()
-
-
-def _bool(value: object) -> bool:
-    return value is True or str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _read_json(handler: Any) -> dict[str, Any]:
@@ -173,6 +171,7 @@ def _validate_timezone(name: str) -> str:
 
 
 def enqueue_candidate(body: dict[str, Any]) -> dict[str, Any]:
+    """Create or refresh a candidate without inventing any compliance evidence."""
     record_id = str(body.get("record_id", "") or "").strip()
     number = str(body.get("contact_number", "") or "").strip()
     campaign = str(body.get("campaign", "") or "").strip() or "NIJA Outreach"
@@ -184,11 +183,9 @@ def enqueue_candidate(body: dict[str, Any]) -> dict[str, Any]:
     if len(call_stage) > 100:
         raise ValueError("call_stage is too long")
     timezone_name = _validate_timezone(str(body.get("contact_timezone", "") or ""))
-
     variables = body.get("dynamic_variables") or []
     if not isinstance(variables, list) or len(variables) > 50:
         raise ValueError("dynamic_variables must be an array of at most 50 items")
-
     if _bool(body.get("test_mode")):
         raise ValueError("autodial queue accepts production campaign records only")
 
@@ -231,7 +228,6 @@ def enqueue_candidate(body: dict[str, Any]) -> dict[str, Any]:
                 "provider_call_key": existing["provider_call_key"],
                 "submitted_at": existing["submitted_at"],
             }
-
         connection.execute(
             """
             INSERT INTO outreach_autodial_queue (
@@ -253,10 +249,9 @@ def enqueue_candidate(body: dict[str, Any]) -> dict[str, Any]:
                 campaign_enabled=excluded.campaign_enabled,
                 dynamic_variables_json=excluded.dynamic_variables_json,
                 ai_agent_id=excluded.ai_agent_id,
-                state='queued',
-                next_attempt_at=excluded.next_attempt_at,
+                state=CASE WHEN outreach_autodial_queue.state='review_required' THEN 'review_required' ELSE 'queued' END,
+                next_attempt_at=CASE WHEN outreach_autodial_queue.state='review_required' THEN outreach_autodial_queue.next_attempt_at ELSE excluded.next_attempt_at END,
                 lease_until=NULL,
-                last_blocker=NULL,
                 updated_at=excluded.updated_at
             """,
             values,
@@ -270,19 +265,32 @@ def _worker_enabled() -> bool:
 
 
 def _poll_seconds() -> float:
-    raw = os.getenv("NIJA_JUSTCALL_AUTODIAL_POLL_SECONDS", "30").strip()
     try:
-        return max(10.0, min(float(raw), 300.0))
+        return max(10.0, min(float(os.getenv("NIJA_JUSTCALL_AUTODIAL_POLL_SECONDS", "30")), 300.0))
     except ValueError:
         return 30.0
 
 
 def _batch_size() -> int:
-    raw = os.getenv("NIJA_JUSTCALL_AUTODIAL_BATCH_SIZE", "10").strip()
     try:
-        return max(1, min(int(raw), 50))
+        return max(1, min(int(os.getenv("NIJA_JUSTCALL_AUTODIAL_BATCH_SIZE", "10")), 50))
     except ValueError:
         return 10
+
+
+def _daily_cap() -> int:
+    try:
+        return max(1, min(int(os.getenv("NIJA_AUTODIAL_DAILY_CAP", "300")), 5000))
+    except ValueError:
+        return 300
+
+
+def _quota_zone() -> ZoneInfo:
+    name = os.getenv("NIJA_AUTODIAL_QUOTA_TIMEZONE", "America/Los_Angeles").strip()
+    try:
+        return ZoneInfo(name)
+    except ZoneInfoNotFoundError:
+        return ZoneInfo("America/Los_Angeles")
 
 
 def _calling_hours() -> tuple[int, int]:
@@ -300,6 +308,76 @@ def _weekdays_only() -> bool:
     return _bool(os.getenv("NIJA_AUTODIAL_WEEKDAYS_ONLY", "1"))
 
 
+def _next_campaign_day_start(now_utc: datetime) -> datetime:
+    zone = _quota_zone()
+    local = now_utc.astimezone(zone)
+    target = (local + timedelta(days=1)).replace(hour=0, minute=0, second=5, microsecond=0)
+    while _weekdays_only() and target.weekday() >= 5:
+        target += timedelta(days=1)
+    return target.astimezone(timezone.utc)
+
+
+def _quota_date(now_utc: datetime) -> tuple[str, bool]:
+    local = now_utc.astimezone(_quota_zone())
+    return local.date().isoformat(), (not _weekdays_only() or local.weekday() < 5)
+
+
+def _quota_snapshot(now_utc: datetime) -> dict[str, Any]:
+    key, allowed_day = _quota_date(now_utc)
+    with _QUEUE_LOCK, _connect() as connection:
+        _ensure_schema(connection)
+        row = connection.execute(
+            "SELECT used_count FROM outreach_autodial_daily_quota WHERE quota_date=?", (key,)
+        ).fetchone()
+    used = int(row["used_count"] or 0) if row else 0
+    cap = _daily_cap()
+    return {
+        "date": key,
+        "used": used,
+        "cap": cap,
+        "remaining": max(0, cap - used),
+        "weekday_open": allowed_day,
+    }
+
+
+def _reserve_quota(now_utc: datetime) -> tuple[bool, str, str]:
+    key, allowed_day = _quota_date(now_utc)
+    if not allowed_day:
+        return False, key, "campaign_weekend_closed"
+    cap = _daily_cap()
+    now = _iso(now_utc)
+    with _QUEUE_LOCK, _connect() as connection:
+        _ensure_schema(connection)
+        connection.execute("BEGIN IMMEDIATE")
+        connection.execute(
+            "INSERT OR IGNORE INTO outreach_autodial_daily_quota(quota_date, used_count, updated_at) VALUES (?,0,?)",
+            (key, now),
+        )
+        row = connection.execute(
+            "SELECT used_count FROM outreach_autodial_daily_quota WHERE quota_date=?", (key,)
+        ).fetchone()
+        used = int(row["used_count"] or 0) if row else 0
+        if used >= cap:
+            connection.commit()
+            return False, key, "daily_cap_reached"
+        connection.execute(
+            "UPDATE outreach_autodial_daily_quota SET used_count=used_count+1, updated_at=? WHERE quota_date=?",
+            (now, key),
+        )
+        connection.commit()
+    return True, key, "ok"
+
+
+def _release_quota(key: str) -> None:
+    with _QUEUE_LOCK, _connect() as connection:
+        _ensure_schema(connection)
+        connection.execute(
+            "UPDATE outreach_autodial_daily_quota SET used_count=MAX(used_count-1,0), updated_at=? WHERE quota_date=?",
+            (_iso(_utcnow()), key),
+        )
+        connection.commit()
+
+
 def _calling_window(timezone_name: str, now_utc: datetime) -> tuple[bool, datetime, str]:
     if not timezone_name:
         return False, now_utc + timedelta(minutes=15), "contact_timezone_required"
@@ -307,23 +385,18 @@ def _calling_window(timezone_name: str, now_utc: datetime) -> tuple[bool, dateti
         zone = ZoneInfo(timezone_name)
     except ZoneInfoNotFoundError:
         return False, now_utc + timedelta(hours=1), "contact_timezone_invalid"
-
     local = now_utc.astimezone(zone)
     start_hour, end_hour = _calling_hours()
     if _weekdays_only() and local.weekday() >= 5:
-        days = 7 - local.weekday()
-        target = (local + timedelta(days=days)).replace(
-            hour=start_hour, minute=0, second=0, microsecond=0
-        )
+        target = (local + timedelta(days=1)).replace(hour=start_hour, minute=0, second=0, microsecond=0)
+        while target.weekday() >= 5:
+            target += timedelta(days=1)
         return False, target.astimezone(timezone.utc), "outside_calling_day"
-
     if local.hour < start_hour:
         target = local.replace(hour=start_hour, minute=0, second=0, microsecond=0)
         return False, target.astimezone(timezone.utc), "outside_calling_window"
     if local.hour >= end_hour:
-        target = (local + timedelta(days=1)).replace(
-            hour=start_hour, minute=0, second=0, microsecond=0
-        )
+        target = (local + timedelta(days=1)).replace(hour=start_hour, minute=0, second=0, microsecond=0)
         while _weekdays_only() and target.weekday() >= 5:
             target += timedelta(days=1)
         return False, target.astimezone(timezone.utc), "outside_calling_window"
@@ -346,12 +419,7 @@ def _active_call_exists(number: str, now_utc: datetime) -> bool:
         _ensure_schema(connection)
         try:
             row = connection.execute(
-                """
-                SELECT latest_event_type, updated_at
-                FROM outreach_calls
-                WHERE phone_key=?
-                ORDER BY id DESC LIMIT 1
-                """,
+                "SELECT latest_event_type, updated_at FROM outreach_calls WHERE phone_key=? ORDER BY id DESC LIMIT 1",
                 (pkey,),
             ).fetchone()
         except sqlite3.OperationalError:
@@ -370,7 +438,6 @@ def _active_call_exists(number: str, now_utc: datetime) -> bool:
 def _eligibility(row: sqlite3.Row, now_utc: datetime) -> tuple[list[str], datetime]:
     blockers: list[str] = []
     retry_at = now_utc + timedelta(minutes=15)
-
     if not bool(row["has_consent"]):
         blockers.append("verified_consent_required")
     if not str(row["consent_record_id"] or "").strip():
@@ -388,17 +455,21 @@ def _eligibility(row: sqlite3.Row, now_utc: datetime) -> tuple[list[str], dateti
     if not bool(row["campaign_enabled"]):
         blockers.append("campaign_not_enabled")
 
-    allowed, window_retry, window_reason = _calling_window(
-        str(row["contact_timezone"] or ""), now_utc
-    )
+    quota = _quota_snapshot(now_utc)
+    if not quota["weekday_open"]:
+        blockers.append("campaign_weekend_closed")
+        retry_at = max(retry_at, _next_campaign_day_start(now_utc))
+    elif quota["remaining"] <= 0:
+        blockers.append("daily_cap_reached")
+        retry_at = max(retry_at, _next_campaign_day_start(now_utc))
+
+    allowed, window_retry, window_reason = _calling_window(str(row["contact_timezone"] or ""), now_utc)
     if not allowed:
         blockers.append(window_reason)
         retry_at = max(retry_at, window_retry)
-
     if _active_call_exists(str(row["contact_number"] or ""), now_utc):
         blockers.append("duplicate_active_call")
         retry_at = max(retry_at, now_utc + timedelta(minutes=10))
-
     return blockers, retry_at
 
 
@@ -411,10 +482,7 @@ def _claim_one(now_utc: datetime) -> Optional[sqlite3.Row]:
         row = connection.execute(
             """
             SELECT * FROM outreach_autodial_queue
-            WHERE (
-                    state='queued'
-                    OR (state='processing' AND COALESCE(lease_until, '') <= ?)
-                  )
+            WHERE (state='queued' OR (state='processing' AND COALESCE(lease_until,'') <= ?))
               AND next_attempt_at <= ?
             ORDER BY next_attempt_at ASC, id ASC
             LIMIT 1
@@ -424,32 +492,25 @@ def _claim_one(now_utc: datetime) -> Optional[sqlite3.Row]:
         if row is None:
             connection.commit()
             return None
-        updated = connection.execute(
+        changed = connection.execute(
             """
             UPDATE outreach_autodial_queue
             SET state='processing', lease_until=?, attempts=attempts+1, updated_at=?
-            WHERE id=?
-              AND (state='queued' OR (state='processing' AND COALESCE(lease_until, '') <= ?))
+            WHERE id=? AND (state='queued' OR (state='processing' AND COALESCE(lease_until,'') <= ?))
             """,
             (lease, now, row["id"], now),
         )
         connection.commit()
-        if updated.rowcount != 1:
+        if changed.rowcount != 1:
             return None
-        return connection.execute(
-            "SELECT * FROM outreach_autodial_queue WHERE id=?", (row["id"],)
-        ).fetchone()
+        return connection.execute("SELECT * FROM outreach_autodial_queue WHERE id=?", (row["id"],)).fetchone()
 
 
 def _reschedule(queue_id: int, blocker: str, when: datetime, *, state: str = "queued") -> None:
     with _QUEUE_LOCK, _connect() as connection:
         _ensure_schema(connection)
         connection.execute(
-            """
-            UPDATE outreach_autodial_queue
-            SET state=?, next_attempt_at=?, lease_until=NULL, last_blocker=?, updated_at=?
-            WHERE id=?
-            """,
+            "UPDATE outreach_autodial_queue SET state=?, next_attempt_at=?, lease_until=NULL, last_blocker=?, updated_at=? WHERE id=?",
             (state, _iso(when), blocker[:500], _iso(_utcnow()), queue_id),
         )
         connection.commit()
@@ -460,12 +521,7 @@ def _mark_submitted(queue_id: int, call_key: str) -> None:
     with _QUEUE_LOCK, _connect() as connection:
         _ensure_schema(connection)
         connection.execute(
-            """
-            UPDATE outreach_autodial_queue
-            SET state='submitted', lease_until=NULL, last_blocker=NULL,
-                provider_call_key=?, submitted_at=?, updated_at=?
-            WHERE id=?
-            """,
+            "UPDATE outreach_autodial_queue SET state='submitted', lease_until=NULL, last_blocker=NULL, provider_call_key=?, submitted_at=?, updated_at=? WHERE id=?",
             (call_key, now, now, queue_id),
         )
         connection.commit()
@@ -478,23 +534,22 @@ def _submit_row(row: sqlite3.Row) -> bool:
     if blockers:
         _reschedule(int(row["id"]), ",".join(blockers), retry_at)
         return False
-
     try:
         variables = json.loads(str(row["dynamic_variables_json"] or "[]"))
     except (TypeError, ValueError, json.JSONDecodeError):
         variables = []
     if not isinstance(variables, list):
         variables = []
-
     try:
         agent_id = _resolve_agent_id(str(row["ai_agent_id"] or ""))
     except (ValueError, OutreachConfigurationError) as exc:
         _WORKER_LAST_ERROR = type(exc).__name__
-        _reschedule(
-            int(row["id"]),
-            "ai_agent_unavailable",
-            now_utc + timedelta(minutes=5),
-        )
+        _reschedule(int(row["id"]), "ai_agent_unavailable", now_utc + timedelta(minutes=5))
+        return False
+
+    reserved, quota_key, quota_reason = _reserve_quota(now_utc)
+    if not reserved:
+        _reschedule(int(row["id"]), quota_reason, _next_campaign_day_start(now_utc))
         return False
 
     request_payload = {
@@ -512,7 +567,6 @@ def _submit_row(row: sqlite3.Row) -> bool:
         "test_mode": False,
         "dynamic_variables": variables,
     }
-
     try:
         provider_payload = _provider_request(
             "POST",
@@ -532,13 +586,10 @@ def _submit_row(row: sqlite3.Row) -> bool:
             request_payload=request_payload,
         )
     except OutreachProviderError as exc:
+        _release_quota(quota_key)
         _WORKER_LAST_ERROR = "OutreachProviderError"
         if exc.status_code == 429:
-            _reschedule(
-                int(row["id"]),
-                "provider_rate_limited",
-                now_utc + timedelta(minutes=2),
-            )
+            _reschedule(int(row["id"]), "provider_rate_limited", now_utc + timedelta(minutes=2))
         else:
             _reschedule(
                 int(row["id"]),
@@ -548,6 +599,7 @@ def _submit_row(row: sqlite3.Row) -> bool:
             )
         return False
     except OSError:
+        _release_quota(quota_key)
         _WORKER_LAST_ERROR = "OutreachStoreError"
         _reschedule(
             int(row["id"]),
@@ -563,7 +615,7 @@ def _submit_row(row: sqlite3.Row) -> bool:
     _WORKER_LAST_ERROR = None
     print(
         "JUSTCALL_AUTODIAL_SUBMISSION state=submitted "
-        f"queue_id={int(row['id'])} campaign={str(row['campaign'] or '')[:80]}",
+        f"queue_id={int(row['id'])} campaign={str(row['campaign'] or '')[:80]} quota_date={quota_key}",
         flush=True,
     )
     return True
@@ -575,6 +627,8 @@ def _run_cycle() -> tuple[int, int]:
     submitted = 0
     _WORKER_LAST_CYCLE_AT = _iso(_utcnow())
     for _ in range(_batch_size()):
+        if _quota_snapshot(_utcnow())["remaining"] <= 0:
+            break
         row = _claim_one(_utcnow())
         if row is None:
             break
@@ -585,14 +639,15 @@ def _run_cycle() -> tuple[int, int]:
 
 
 def _worker() -> None:
+    global _WORKER_LAST_ERROR
     if not _worker_enabled():
         print("JUSTCALL_AUTODIAL_WORKER state=disabled fail_closed=true", flush=True)
         return
     print(
         "JUSTCALL_AUTODIAL_WORKER state=ready fail_closed=true "
-        f"poll_s={_poll_seconds():.0f} batch={_batch_size()} "
-        f"local_hours={_calling_hours()[0]}-{_calling_hours()[1]} "
-        f"weekdays_only={str(_weekdays_only()).lower()}",
+        f"poll_s={_poll_seconds():.0f} batch={_batch_size()} daily_cap={_daily_cap()} "
+        f"quota_tz={getattr(_quota_zone(), 'key', 'America/Los_Angeles')} "
+        f"local_hours={_calling_hours()[0]}-{_calling_hours()[1]} weekdays_only={str(_weekdays_only()).lower()}",
         flush=True,
     )
     while True:
@@ -600,16 +655,13 @@ def _worker() -> None:
             attempted, submitted = _run_cycle()
             if attempted:
                 print(
-                    "JUSTCALL_AUTODIAL_CYCLE "
-                    f"attempted={attempted} submitted={submitted} fail_closed=true",
+                    f"JUSTCALL_AUTODIAL_CYCLE attempted={attempted} submitted={submitted} fail_closed=true",
                     flush=True,
                 )
         except Exception as exc:
-            global _WORKER_LAST_ERROR
             _WORKER_LAST_ERROR = type(exc).__name__
             print(
-                "JUSTCALL_AUTODIAL_WORKER state=cycle_error "
-                f"error={type(exc).__name__} fail_closed=true",
+                f"JUSTCALL_AUTODIAL_WORKER state=cycle_error error={type(exc).__name__} fail_closed=true",
                 flush=True,
             )
         time.sleep(_poll_seconds())
@@ -621,11 +673,7 @@ def start_justcall_autodial() -> None:
         if _WORKER_STARTED:
             return
         _WORKER_STARTED = True
-    threading.Thread(
-        target=_worker,
-        name="nija-justcall-autodial",
-        daemon=True,
-    ).start()
+    threading.Thread(target=_worker, name="nija-justcall-autodial", daemon=True).start()
 
 
 def _queue_status() -> dict[str, Any]:
@@ -635,21 +683,28 @@ def _queue_status() -> dict[str, Any]:
             "SELECT state, COUNT(*) AS count FROM outreach_autodial_queue GROUP BY state"
         ).fetchall()
         next_row = connection.execute(
-            """
-            SELECT MIN(next_attempt_at) AS next_attempt_at
-            FROM outreach_autodial_queue
-            WHERE state IN ('queued','processing')
-            """
+            "SELECT MIN(next_attempt_at) AS next_attempt_at FROM outreach_autodial_queue WHERE state IN ('queued','processing')"
         ).fetchone()
+        blocker_rows = connection.execute(
+            """
+            SELECT COALESCE(last_blocker,'') AS blocker, COUNT(*) AS count
+            FROM outreach_autodial_queue
+            WHERE state='queued' AND COALESCE(last_blocker,'') <> ''
+            GROUP BY COALESCE(last_blocker,'')
+            ORDER BY count DESC LIMIT 20
+            """
+        ).fetchall()
     counts = {str(row["state"]): int(row["count"] or 0) for row in rows}
     return {
         "enabled": _worker_enabled(),
         "worker_started": _WORKER_STARTED,
         "poll_seconds": _poll_seconds(),
         "batch_size": _batch_size(),
+        "daily_quota": _quota_snapshot(_utcnow()),
         "calling_hours_local": list(_calling_hours()),
         "weekdays_only": _weekdays_only(),
         "counts": counts,
+        "blockers": {str(row["blocker"]): int(row["count"] or 0) for row in blocker_rows},
         "next_attempt_at": next_row["next_attempt_at"] if next_row else None,
         "last_cycle_at": _WORKER_LAST_CYCLE_AT,
         "last_submission_at": _WORKER_LAST_SUBMISSION_AT,
