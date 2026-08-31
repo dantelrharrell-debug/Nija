@@ -176,6 +176,37 @@ def _install_live_broker_profit_exit_v25() -> None:
             raise
 
 
+def _install_all_in_profitability_authority_v324() -> None:
+    """Install current-cost entry/exit economics on every production startup path."""
+
+    try:
+        authority = importlib.import_module("bot.runtime_all_in_profitability_authority_v324_patch")
+        installer = getattr(authority, "install_import_hook", None) or getattr(authority, "install", None)
+        if not callable(installer) or not bool(installer()):
+            raise RuntimeError("all-in profitability v324 installer unavailable or returned false")
+        if os.environ.get("NIJA_RUNTIME_ALL_IN_PROFITABILITY_V324_READY") != "1":
+            raise RuntimeError("all-in profitability v324 did not attest ready")
+        print("RUNTIME_ALL_IN_PROFITABILITY_AUTHORITY_V324_INSTALL_REQUESTED", flush=True)
+        logger.critical(
+            "RUNTIME_ALL_IN_PROFITABILITY_AUTHORITY_V324_INSTALL_REQUESTED "
+            "verified=true current_costs=true short_carry=true short_borrow_proof=true "
+            "protective_exits_unchanged=true safety_gates_bypassed=false"
+        )
+    except Exception as exc:
+        logger.critical(
+            "RUNTIME_ALL_IN_PROFITABILITY_AUTHORITY_V324_INSTALL_FAILED err=%s",
+            exc,
+            exc_info=True,
+        )
+        live = (
+            str(os.environ.get("LIVE_TRADING", "")).lower() in {"1", "true", "yes", "on"}
+            or str(os.environ.get("LIVE_CAPITAL_VERIFIED", "")).lower() in {"1", "true", "yes", "on"}
+            or str(os.environ.get("NIJA_EXECUTION_ACTIVE", "")).lower() in {"1", "true", "yes", "on"}
+        ) and str(os.environ.get("DRY_RUN_MODE", "")).lower() not in {"1", "true", "yes", "on"} and str(os.environ.get("PAPER_MODE", "")).lower() not in {"1", "true", "yes", "on"}
+        if live:
+            raise
+
+
 def _run_pre_startup_sanitization() -> None:
     """Sanitize live Redis bypass flags before startup safety initializes."""
 
@@ -395,6 +426,7 @@ def _run_legacy_preactivation_fanout() -> None:
     _install_current_capital_snapshot_freshness_repair()
     _install_authority_heartbeat_timeout_grace_repair()
     _install_live_broker_profit_exit_v25()
+    _install_all_in_profitability_authority_v324()
     _run_pre_startup_sanitization()
     _install_strategy_publication()
     _install_authority_readiness_repair()
@@ -416,12 +448,13 @@ def _run_legacy_preactivation_fanout() -> None:
 
 
 def _run_canonical_preactivation_handoff() -> None:
-    """Keep the canonical writer-first path side-effect bounded before handoff."""
+    """Keep the canonical writer-first path bounded while installing economic safety."""
 
+    _install_all_in_profitability_authority_v324()
     os.environ["NIJA_MAIN_CANONICAL_PREHANDOFF_BOUNDED"] = "1"
     logger.critical(
         "MAIN_CANONICAL_PREHANDOFF_BOUNDED marker=%s duplicated_compatibility_fanout=false "
-        "startup_runtime_safety_deferred=true handoff=bot.bot",
+        "startup_runtime_safety_deferred=true all_in_profitability_v324=true handoff=bot.bot",
         _CANONICAL_PREHANDOFF_MARKER,
     )
 
