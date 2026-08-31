@@ -170,14 +170,18 @@ def _trigger(broker: Any, pos: dict[str, Any], market: float) -> tuple[bool, str
     if hit:
         return hit, reason, target
     side = auto_exit._side(pos.get("side"), pos)
+    entry = auto_exit._entry_price(pos)
     if _operator_profit_exit_active():
         operator_target = _operator_net_profit_target(broker, pos)
         if operator_target > 0:
             if side in {"long", "buy"} and market >= operator_target:
                 return True, "operator_net_profit_exit", operator_target
-            if side in {"short", "sell"} and market <= entry / max(1e-12, (1.0 + _venue_cost_pct(broker) + max(0.0, _f(os.environ.get("NIJA_OPERATOR_MIN_NET_PROFIT_PCT"), 0.0005))))):
-                return True, "operator_net_profit_exit", market
-        elif auto_exit._entry_price(pos) > 0:
+            if side in {"short", "sell"}:
+                minimum_net = max(0.0, _f(os.environ.get("NIJA_OPERATOR_MIN_NET_PROFIT_PCT"), 0.0005))
+                short_target = entry / max(1e-12, (1.0 + _venue_cost_pct(broker) + minimum_net))
+                if market <= short_target:
+                    return True, "operator_net_profit_exit", short_target
+        elif entry > 0:
             logger.warning(
                 "OPERATOR_NET_PROFIT_EXIT_SKIPPED_UNVERIFIED marker=%s venue=%s account=%s symbol=%s "
                 "entry=%.8f qty=%.8f cost_basis_verified=%s auto_exit_blocked=%s",
@@ -185,7 +189,7 @@ def _trigger(broker: Any, pos: dict[str, Any], market: float) -> tuple[bool, str
                 auto_exit._broker_label(broker),
                 _account_label(broker),
                 auto_exit._sym(pos.get("symbol")),
-                auto_exit._entry_price(pos),
+                entry,
                 auto_exit._quantity(pos),
                 pos.get("cost_basis_verified"),
                 bool(pos.get("auto_exit_blocked", False)),
