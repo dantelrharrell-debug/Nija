@@ -26,6 +26,7 @@ _MODULES = (
     "bot.live_exchange_base_minimum_v73_patch",
     "bot.adaptive_profit_exit_v74_patch",
     "bot.held_position_exit_bootstrap_v75_patch",
+    "bot.runtime_universal_exit_tracker_convergence_v323_patch",
     "bot.writer_authority_reconstitution_v77_patch",
     "bot.capital_refresh_live_continuity_v78_patch",
 )
@@ -66,7 +67,9 @@ def install_import_hook() -> bool:
             "broker_account_isolation=true exit_fill_confirmation=true net_profit_floor=true "
             "live_entry_expectancy=true realized_profit_proof=true account_scoped_profit_state=true "
             "live_symbol_constraints=true post_rounding_base_minimum=true adaptive_profit_exit=true "
-            "held_positions_connected=true writer_reconstitution=true slow_broker_capital_continuity=true",
+            "held_positions_connected=true universal_exit_tracker_convergence=true "
+            "short_profit_exit_inverse_pnl=true short_trailing_profit=true short_capability_gate_preserved=true "
+            "writer_reconstitution=true slow_broker_capital_continuity=true",
             MARKER,
             len(installed),
         )
