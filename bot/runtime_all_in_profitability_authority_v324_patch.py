@@ -3,8 +3,9 @@
 The verified v324 economics live in ``runtime_all_in_profitability_authority_v324_core``.
 This canonical import path applies current U.S. public fee fallbacks and then
 requires the proof-gated Kraken short path (v325), terminal short integrity
-(v326), current-cost broker routing (v327), and confirmed-fill/slippage truth
-(v328) in the same writer process.
+(v326), current-cost broker routing (v327), confirmed-fill/slippage truth
+(v328), and authoritative entry-fee/short-ledger bookkeeping (v329) in the same
+writer process.
 """
 from __future__ import annotations
 
@@ -53,6 +54,7 @@ def install_import_hook() -> bool:
     v326_ready = False
     v327_ready = False
     v328_ready = False
+    v329_ready = False
     if core_ready:
         try:
             v325_ready = _install_required(
@@ -85,23 +87,34 @@ def install_import_hook() -> bool:
             )
         except Exception:
             LOGGER.exception("PROFITABILITY_CHAIN_V324_V328_FAILED marker=%s", MARKER)
+    if core_ready and v325_ready and v326_ready and v327_ready and v328_ready:
+        try:
+            v329_ready = _install_required(
+                "bot.runtime_authoritative_fee_ledger_v329_patch",
+                "NIJA_RUNTIME_AUTHORITATIVE_FEE_LEDGER_V329_READY",
+            )
+        except Exception:
+            LOGGER.exception("PROFITABILITY_CHAIN_V324_V329_FAILED marker=%s", MARKER)
 
-    ready = bool(core_ready and v325_ready and v326_ready and v327_ready and v328_ready)
+    ready = bool(
+        core_ready and v325_ready and v326_ready and v327_ready and v328_ready and v329_ready
+    )
     os.environ["NIJA_RUNTIME_ALL_IN_PROFITABILITY_V324_READY"] = "1" if ready else "0"
     os.environ["NIJA_CANONICAL_PROFITABILITY_CHAIN_READY"] = "1" if ready else "0"
     if ready:
         LOGGER.critical(
-            "CANONICAL_PROFITABILITY_CHAIN_READY marker=%s v324=true v325=true v326=true v327=true v328=true "
+            "CANONICAL_PROFITABILITY_CHAIN_READY marker=%s v324=true v325=true v326=true v327=true v328=true v329=true "
             "current_cost_economics=true current_us_fee_fallbacks=true short_margin_proof=true "
             "terminal_margin_integrity=true cost_aware_routing=true confirmed_fill_truth=true "
-            "measured_slippage_learning=true unknown_slippage_not_zero=true spot_fallback=false "
-            "confirmed_short_fill_required=true safety_gates_bypassed=false",
+            "measured_slippage_learning=true unknown_slippage_not_zero=true authoritative_entry_fee=true "
+            "authoritative_short_ledger_side=true spot_fallback=false confirmed_short_fill_required=true "
+            "safety_gates_bypassed=false",
             MARKER,
         )
     else:
         LOGGER.critical(
-            "CANONICAL_PROFITABILITY_CHAIN_INCOMPLETE marker=%s v324=%s v325=%s v326=%s v327=%s v328=%s fail_closed=true",
-            MARKER, core_ready, v325_ready, v326_ready, v327_ready, v328_ready,
+            "CANONICAL_PROFITABILITY_CHAIN_INCOMPLETE marker=%s v324=%s v325=%s v326=%s v327=%s v328=%s v329=%s fail_closed=true",
+            MARKER, core_ready, v325_ready, v326_ready, v327_ready, v328_ready, v329_ready,
         )
     return ready
 
