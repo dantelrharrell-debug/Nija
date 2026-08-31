@@ -1,8 +1,8 @@
-"""Idempotently expose protected JustCall routes on NIJA's Render front door.
+"""Idempotently expose protected outreach and lead routes on NIJA's Render front door.
 
 The Render service binds ``render_liveness_server.py`` to the public PORT before
 the trading runtime starts. This patch adds only delegation hooks to stdlib-only
-outreach modules, preserving all existing liveness and trading-readiness behavior.
+outreach/lead modules, preserving all existing liveness and trading-readiness behavior.
 """
 
 from __future__ import annotations
@@ -18,10 +18,11 @@ EXT_IMPORT = (
     "handle_outreach_extension_get, handle_outreach_extension_post, "
     "start_justcall_webhook_autoconfig\n"
 )
+LEAD_IMPORT = "from render_lead_intake import handle_lead_intake_post\n"
 EXT_GET_MARKER = "        if handle_outreach_extension_get(self):\n            return\n\n"
 BASE_GET_MARKER = "        if handle_outreach_get(self):\n            return\n\n"
 AUTOCONFIG_CALL = "    start_justcall_webhook_autoconfig()\n"
-POST_METHOD = '''    def do_POST(self) -> None:  # noqa: N802 - stdlib handler contract\n        if handle_outreach_extension_post(self):\n            return\n        if handle_outreach_post(self):\n            return\n        self.send_response(404)\n        self.send_header("Content-Length", "0")\n        self.send_header("Connection", "close")\n        self.end_headers()\n\n'''
+POST_METHOD = '''    def do_POST(self) -> None:  # noqa: N802 - stdlib handler contract\n        if handle_lead_intake_post(self):\n            return\n        if handle_outreach_extension_post(self):\n            return\n        if handle_outreach_post(self):\n            return\n        self.send_response(404)\n        self.send_header("Content-Length", "0")\n        self.send_header("Connection", "close")\n        self.end_headers()\n\n'''
 
 
 def main() -> int:
@@ -45,6 +46,11 @@ def main() -> int:
             raise RuntimeError("render outreach base import anchor missing")
         text = text.replace(BASE_IMPORT, BASE_IMPORT + EXT_IMPORT, 1)
 
+    if LEAD_IMPORT.strip() not in text:
+        if EXT_IMPORT not in text:
+            raise RuntimeError("render outreach extension import anchor missing")
+        text = text.replace(EXT_IMPORT, EXT_IMPORT + LEAD_IMPORT, 1)
+
     get_anchor = "    def do_GET(self) -> None:  # noqa: N802 - stdlib handler contract\n"
     if get_anchor not in text:
         raise RuntimeError("render liveness do_GET anchor missing")
@@ -61,11 +67,10 @@ def main() -> int:
         if log_anchor not in text:
             raise RuntimeError("render liveness log_message anchor missing")
         text = text.replace(log_anchor, POST_METHOD + log_anchor, 1)
-    elif "handle_outreach_extension_post(self)" not in text:
-        old_post = '''    def do_POST(self) -> None:  # noqa: N802 - stdlib handler contract\n        if handle_outreach_post(self):\n            return\n        self.send_response(404)\n        self.send_header("Content-Length", "0")\n        self.send_header("Connection", "close")\n        self.end_headers()\n\n'''
-        if old_post not in text:
-            raise RuntimeError("render liveness existing do_POST shape is unexpected")
-        text = text.replace(old_post, POST_METHOD, 1)
+    elif "handle_lead_intake_post(self)" not in text:
+        post_start = text.index("    def do_POST(self) -> None:  # noqa: N802 - stdlib handler contract\n")
+        post_end = text.index("    def log_message(self, fmt: str, *args: object) -> None:\n", post_start)
+        text = text[:post_start] + POST_METHOD + text[post_end:]
 
     if AUTOCONFIG_CALL.strip() not in text:
         server_anchor = "    server.allow_reuse_address = True\n\n"
@@ -81,6 +86,7 @@ def main() -> int:
         ROOT / "render_outreach_routes.py",
         ROOT / "render_outreach_extension.py",
         ROOT / "render_outreach_store.py",
+        ROOT / "render_lead_intake.py",
     ):
         py_compile.compile(str(module), doraise=True)
 
@@ -88,8 +94,10 @@ def main() -> int:
     required = (
         BASE_IMPORT.strip(),
         EXT_IMPORT.strip(),
+        LEAD_IMPORT.strip(),
         "handle_outreach_extension_get(self)",
         "handle_outreach_get(self)",
+        "handle_lead_intake_post(self)",
         "handle_outreach_extension_post(self)",
         "handle_outreach_post(self)",
         "start_justcall_webhook_autoconfig()",
@@ -99,8 +107,9 @@ def main() -> int:
         raise RuntimeError("Render outreach front-door patch incomplete: " + ", ".join(missing))
 
     print(
-        "RENDER_OUTREACH_FRONTDOOR_READY marker=20260829-render-outreach-frontdoor-v3 "
+        "RENDER_OUTREACH_FRONTDOOR_READY marker=20260830-render-outreach-frontdoor-v4 "
         "protected=true signed_webhook=true webhook_autoconfig=true "
+        "lead_intake_normalized=true markdown_email_normalized=true nested_formname_normalized=true "
         "campaign_compliance_fail_closed=true consent_fail_closed=true "
         "liveness_unchanged=true readiness_unchanged=true"
     )
