@@ -5,8 +5,9 @@ This canonical import path applies current U.S. public fee fallbacks and then
 requires the proof-gated Kraken short path (v325), terminal short integrity
 (v326), current-cost broker routing (v327), confirmed-fill/slippage truth
 (v328), authoritative entry-fee/short-ledger bookkeeping (v329), capital
-recycling / just-in-time exit proof (v330), and canonical exit broker rebinding
-(v331) in the same writer process.
+recycling / just-in-time exit proof (v330), canonical exit broker rebinding
+(v331), and JIT reconciliation-conflict recovery (v332) in the same writer
+process.
 """
 from __future__ import annotations
 
@@ -47,9 +48,6 @@ def _install_required(module_name: str, ready_env: str) -> bool:
 
 def install_import_hook() -> bool:
     core_ready = bool(_core.install_import_hook())
-    v325_ready = v326_ready = v327_ready = v328_ready = False
-    v329_ready = v330_ready = v331_ready = False
-
     stages = (
         ("v325", "bot.runtime_kraken_short_margin_profit_v325_patch", "NIJA_RUNTIME_KRAKEN_SHORT_MARGIN_PROFIT_V325_READY"),
         ("v326", "bot.runtime_kraken_short_terminal_integrity_v326_patch", "NIJA_RUNTIME_KRAKEN_SHORT_TERMINAL_V326_READY"),
@@ -58,6 +56,7 @@ def install_import_hook() -> bool:
         ("v329", "bot.runtime_authoritative_fee_ledger_v329_patch", "NIJA_RUNTIME_AUTHORITATIVE_FEE_LEDGER_V329_READY"),
         ("v330", "bot.runtime_capital_recycling_exit_v330_patch", "NIJA_RUNTIME_CAPITAL_RECYCLING_EXIT_V330_READY"),
         ("v331", "bot.runtime_universal_exit_broker_rebinding_v331_patch", "NIJA_RUNTIME_UNIVERSAL_EXIT_BROKER_REBINDING_V331_READY"),
+        ("v332", "bot.runtime_exit_jit_conflict_recovery_v332_patch", "NIJA_RUNTIME_EXIT_JIT_CONFLICT_RECOVERY_V332_READY"),
     )
     outcomes = {}
     previous = core_ready
@@ -71,32 +70,25 @@ def install_import_hook() -> bool:
         outcomes[label] = bool(result)
         previous = bool(previous and result)
 
-    v325_ready = outcomes["v325"]
-    v326_ready = outcomes["v326"]
-    v327_ready = outcomes["v327"]
-    v328_ready = outcomes["v328"]
-    v329_ready = outcomes["v329"]
-    v330_ready = outcomes["v330"]
-    v331_ready = outcomes["v331"]
-
     ready = bool(core_ready and all(outcomes.values()))
     os.environ["NIJA_RUNTIME_ALL_IN_PROFITABILITY_V324_READY"] = "1" if ready else "0"
     os.environ["NIJA_CANONICAL_PROFITABILITY_CHAIN_READY"] = "1" if ready else "0"
     if ready:
         LOGGER.critical(
-            "CANONICAL_PROFITABILITY_CHAIN_READY marker=%s v324=true v325=true v326=true v327=true v328=true v329=true v330=true v331=true "
+            "CANONICAL_PROFITABILITY_CHAIN_READY marker=%s v324=true v325=true v326=true v327=true v328=true v329=true v330=true v331=true v332=true "
             "current_cost_economics=true current_us_fee_fallbacks=true short_margin_proof=true "
             "terminal_margin_integrity=true cost_aware_routing=true confirmed_fill_truth=true "
             "measured_slippage_learning=true unknown_slippage_not_zero=true authoritative_entry_fee=true "
             "authoritative_short_ledger_side=true capital_recycling_exit=true jit_exit_position_proof=true "
             "aged_profit_target_decay=true entry_free_cash_reserve=true canonical_exit_broker_rebinding=true "
-            "spot_fallback=false confirmed_short_fill_required=true safety_gates_bypassed=false",
+            "jit_symbol_absence_reproof=true jit_quantity_conflict_reproof=true spot_fallback=false "
+            "confirmed_short_fill_required=true safety_gates_bypassed=false",
             MARKER,
         )
     else:
         LOGGER.critical(
-            "CANONICAL_PROFITABILITY_CHAIN_INCOMPLETE marker=%s v324=%s v325=%s v326=%s v327=%s v328=%s v329=%s v330=%s v331=%s fail_closed=true",
-            MARKER, core_ready, v325_ready, v326_ready, v327_ready, v328_ready, v329_ready, v330_ready, v331_ready,
+            "CANONICAL_PROFITABILITY_CHAIN_INCOMPLETE marker=%s core=%s outcomes=%s fail_closed=true",
+            MARKER, core_ready, outcomes,
         )
     return ready
 
