@@ -1,6 +1,7 @@
-"""Automatic Apollo -> NIJA outreach feeder.
+"""Automatic Apollo -> NIJA outreach feeder and website-lead recovery mirror.
 
-Poll saved Apollo contacts, normalize phone/timezone data, and feed NIJA's
+Poll saved Apollo contacts, mirror NIJA website-lead contacts into the durable
+Render lead store, normalize phone/timezone data, and feed NIJA's
 compliance-gated autodial queue. Cold Apollo contacts are never promoted to
 CALL READY without explicit consent/legal/DNC/suppression evidence.
 """
@@ -17,6 +18,7 @@ import urllib.request
 from datetime import datetime, timezone
 from typing import Any, Optional
 
+from render_lead_intake import record_lead
 from render_outreach_autodial import enqueue_candidate
 from render_outreach_routes import _E164_RE, _send_json, _service_authorized
 from render_outreach_store import is_suppressed, set_suppression
@@ -24,6 +26,7 @@ from render_outreach_store import is_suppressed, set_suppression
 APOLLO_API_BASE = "https://api.apollo.io/api/v1"
 _STATUS_PATH = "/api/apollo/feeder-status"
 _SYNC_PATH = "/api/apollo/sync-now"
+_DEFAULT_WEBSITE_LEAD_LABEL_ID = "6a95ec5c651e97000cd9a898"
 _WORKER_LOCK = threading.Lock()
 _WORKER_STARTED = False
 _LAST_SYNC_AT: Optional[str] = None
@@ -40,7 +43,9 @@ def _iso(value: datetime) -> str:
 
 
 def _bool(value: object) -> bool:
-    return value is True or str(value or "").strip().lower() in {"1", "true", "yes", "on", "qualified", "clear", "passed"}
+    return value is True or str(value or "").strip().lower() in {
+        "1", "true", "yes", "on", "qualified", "clear", "passed"
+    }
 
 
 def _enabled() -> bool:
@@ -65,8 +70,25 @@ def _api_key() -> str:
     return os.getenv("APOLLO_API_KEY", "").strip()
 
 
+def _website_lead_label_id() -> str:
+    return (
+        os.getenv("NIJA_APOLLO_WEBSITE_LEAD_LABEL_ID", "").strip()
+        or _DEFAULT_WEBSITE_LEAD_LABEL_ID
+    )
+
+
+def _website_lead_form_name() -> str:
+    return (
+        os.getenv("NIJA_APOLLO_WEBSITE_LEAD_FORM_NAME", "Intro Lead Gate").strip()
+        or "Intro Lead Gate"
+    )
+
+
 def _db_path() -> pathlib.Path:
-    return pathlib.Path(os.getenv("NIJA_OUTREACH_DB_PATH", "").strip() or "/app/data/nija_outreach.sqlite3")
+    return pathlib.Path(
+        os.getenv("NIJA_OUTREACH_DB_PATH", "").strip()
+        or "/app/data/nija_outreach.sqlite3"
+    )
 
 
 def _connect() -> sqlite3.Connection:
@@ -90,14 +112,18 @@ def _ensure_schema(connection: sqlite3.Connection) -> None:
         )
         """
     )
-    connection.execute("INSERT OR IGNORE INTO outreach_apollo_sync_state(singleton) VALUES (1)")
+    connection.execute(
+        "INSERT OR IGNORE INTO outreach_apollo_sync_state(singleton) VALUES (1)"
+    )
     connection.commit()
 
 
 def _load_cursor() -> str:
     with _connect() as connection:
         _ensure_schema(connection)
-        row = connection.execute("SELECT last_contact_updated_at FROM outreach_apollo_sync_state WHERE singleton=1").fetchone()
+        row = connection.execute(
+            "SELECT last_contact_updated_at FROM outreach_apollo_sync_state WHERE singleton=1"
+        ).fetchone()
     return str(row["last_contact_updated_at"] or "") if row else ""
 
 
@@ -123,7 +149,12 @@ def _apollo_request(path: str, payload: dict[str, Any]) -> dict[str, Any]:
     request = urllib.request.Request(
         f"{APOLLO_API_BASE}{path}",
         data=json.dumps(payload).encode("utf-8"),
-        headers={"x-api-key": key, "accept": "application/json", "content-type": "application/json", "user-agent": "NIJA-Apollo-Feeder/1.0"},
+        headers={
+            "x-api-key": key,
+            "accept": "application/json",
+            "content-type": "application/json",
+            "user-agent": "NIJA-Apollo-Feeder/1.1",
+        },
         method="POST",
     )
     try:
@@ -150,12 +181,58 @@ def _custom_field(contact: dict[str, Any], env_name: str) -> object:
     return fields.get(field_id)
 
 
+def _is_website_lead(contact: dict[str, Any]) -> bool:
+    expected = _website_lead_label_id()
+    labels = contact.get("label_ids")
+    if not expected or not isinstance(labels, list):
+        return False
+    return expected in {str(value or "").strip() for value in labels}
+
+
+def _mirror_website_lead(contact: dict[str, Any]) -> str:
+    """Persist Apollo-recovered website leads before phone/calling gates apply."""
+    if not _is_website_lead(contact):
+        return "not_website_lead"
+
+    email = str(contact.get("email", "") or "").strip()
+    if not email:
+        return "website_lead_missing_email"
+
+    name = str(contact.get("name", "") or "").strip()
+    if name == "(No Name)":
+        name = ""
+    submitted_at = str(
+        contact.get("created_at")
+        or contact.get("updated_at")
+        or _iso(_utcnow())
+    ).strip()
+    contact_id = str(contact.get("id", "") or "").strip()
+
+    payload = {
+        "form_name": _website_lead_form_name(),
+        "name": name,
+        "email": email,
+        "submitted_at": submitted_at,
+        "source": "apollo_recovery",
+        "apollo_contact_id": contact_id,
+    }
+    try:
+        _, _, duplicate = record_lead(payload)
+    except (OSError, ValueError):
+        return "website_lead_error"
+    return "website_lead_existing" if duplicate else "website_lead_mirrored"
+
+
 def _phone(contact: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     numbers = contact.get("phone_numbers")
     if not isinstance(numbers, list):
         return "", {}
     items = [item for item in numbers if isinstance(item, dict)]
-    items.sort(key=lambda item: 0 if str(item.get("type", "")).lower() in {"mobile", "direct", "work_direct"} else 1)
+    items.sort(
+        key=lambda item: 0
+        if str(item.get("type", "")).lower() in {"mobile", "direct", "work_direct"}
+        else 1
+    )
     for item in items:
         number = str(item.get("sanitized_number", "") or "").strip()
         if _E164_RE.fullmatch(number):
@@ -165,12 +242,24 @@ def _phone(contact: dict[str, Any]) -> tuple[str, dict[str, Any]]:
 
 def _evidence(contact: dict[str, Any], phone_meta: dict[str, Any]) -> dict[str, Any]:
     has_consent = _bool(_custom_field(contact, "NIJA_APOLLO_CONSENT_FIELD_ID"))
-    consent_record_id = str(_custom_field(contact, "NIJA_APOLLO_CONSENT_RECORD_FIELD_ID") or "").strip()
-    legal_basis = str(_custom_field(contact, "NIJA_APOLLO_LEGAL_BASIS_FIELD_ID") or "").strip()
-    dnc_value = str(_custom_field(contact, "NIJA_APOLLO_DNC_STATUS_FIELD_ID") or "").strip().lower()
-    dnc_checked_at = str(_custom_field(contact, "NIJA_APOLLO_DNC_CHECKED_AT_FIELD_ID") or "").strip()
-    suppression_clear = _bool(_custom_field(contact, "NIJA_APOLLO_SUPPRESSION_CLEAR_FIELD_ID"))
-    explicit_campaign_enabled = _bool(_custom_field(contact, "NIJA_APOLLO_CAMPAIGN_ENABLED_FIELD_ID"))
+    consent_record_id = str(
+        _custom_field(contact, "NIJA_APOLLO_CONSENT_RECORD_FIELD_ID") or ""
+    ).strip()
+    legal_basis = str(
+        _custom_field(contact, "NIJA_APOLLO_LEGAL_BASIS_FIELD_ID") or ""
+    ).strip()
+    dnc_value = str(
+        _custom_field(contact, "NIJA_APOLLO_DNC_STATUS_FIELD_ID") or ""
+    ).strip().lower()
+    dnc_checked_at = str(
+        _custom_field(contact, "NIJA_APOLLO_DNC_CHECKED_AT_FIELD_ID") or ""
+    ).strip()
+    suppression_clear = _bool(
+        _custom_field(contact, "NIJA_APOLLO_SUPPRESSION_CLEAR_FIELD_ID")
+    )
+    explicit_campaign_enabled = _bool(
+        _custom_field(contact, "NIJA_APOLLO_CAMPAIGN_ENABLED_FIELD_ID")
+    )
 
     provider_dnc = str(phone_meta.get("dnc_status_cd", "") or "").strip().lower()
     if provider_dnc == "found":
@@ -185,9 +274,20 @@ def _evidence(contact: dict[str, Any], phone_meta: dict[str, Any]) -> dict[str, 
             "provider_dnc_found": True,
         }
 
-    dnc_clear = dnc_value in {"qualified", "clear", "not_found", "not found", "passed", "true", "1"}
-    complete = bool(has_consent and consent_record_id and legal_basis and dnc_clear and dnc_checked_at and suppression_clear)
-    campaign_enabled = explicit_campaign_enabled or (_bool(os.getenv("NIJA_APOLLO_AUTO_ENABLE_QUALIFIED", "1")) and complete)
+    dnc_clear = dnc_value in {
+        "qualified", "clear", "not_found", "not found", "passed", "true", "1"
+    }
+    complete = bool(
+        has_consent
+        and consent_record_id
+        and legal_basis
+        and dnc_clear
+        and dnc_checked_at
+        and suppression_clear
+    )
+    campaign_enabled = explicit_campaign_enabled or (
+        _bool(os.getenv("NIJA_APOLLO_AUTO_ENABLE_QUALIFIED", "1")) and complete
+    )
     return {
         "has_consent": has_consent,
         "consent_record_id": consent_record_id,
@@ -201,8 +301,18 @@ def _evidence(contact: dict[str, Any], phone_meta: dict[str, Any]) -> dict[str, 
 
 
 def _dynamic_variables(contact: dict[str, Any]) -> list[dict[str, str]]:
-    pairs = (("first_name", contact.get("first_name")), ("full_name", contact.get("name")), ("company", contact.get("organization_name")), ("title", contact.get("title")), ("email", contact.get("email")))
-    return [{"name": name, "value": str(value).strip()[:500], "type": "string"} for name, value in pairs if str(value or "").strip()]
+    pairs = (
+        ("first_name", contact.get("first_name")),
+        ("full_name", contact.get("name")),
+        ("company", contact.get("organization_name")),
+        ("title", contact.get("title")),
+        ("email", contact.get("email")),
+    )
+    return [
+        {"name": key, "value": str(value).strip()[:500], "type": "string"}
+        for key, value in pairs
+        if str(value or "").strip()
+    ]
 
 
 def _contact_payload(contact: dict[str, Any]) -> tuple[Optional[dict[str, Any]], str]:
@@ -219,7 +329,12 @@ def _contact_payload(contact: dict[str, Any]) -> tuple[Optional[dict[str, Any]],
     evidence = _evidence(contact, phone_meta)
     if evidence.pop("provider_dnc_found", False):
         try:
-            set_suppression(contact_number=number, reason="apollo_dnc_found", source="apollo", active=True)
+            set_suppression(
+                contact_number=number,
+                reason="apollo_dnc_found",
+                source="apollo",
+                active=True,
+            )
         except (OSError, ValueError):
             pass
     if is_suppressed(number):
@@ -229,7 +344,8 @@ def _contact_payload(contact: dict[str, Any]) -> tuple[Optional[dict[str, Any]],
     return {
         "record_id": f"apollo:{contact_id}",
         "contact_number": number,
-        "campaign": os.getenv("NIJA_APOLLO_CAMPAIGN", "NIJA Apollo Outbound").strip() or "NIJA Apollo Outbound",
+        "campaign": os.getenv("NIJA_APOLLO_CAMPAIGN", "NIJA Apollo Outbound").strip()
+        or "NIJA Apollo Outbound",
         "call_stage": "initial",
         "contact_timezone": timezone_name,
         "dynamic_variables": _dynamic_variables(contact),
@@ -241,22 +357,56 @@ def _contact_payload(contact: dict[str, Any]) -> tuple[Optional[dict[str, Any]],
 def run_sync() -> dict[str, int]:
     cursor = _load_cursor()
     newest_seen = cursor
-    counts = {"contacts_seen": 0, "queued_or_refreshed": 0, "missing_phone": 0, "missing_timezone": 0, "missing_contact_id": 0, "already_submitted": 0, "errors": 0}
-    stop = False
+    counts = {
+        "contacts_scanned": 0,
+        "contacts_seen": 0,
+        "website_leads_mirrored": 0,
+        "website_leads_existing": 0,
+        "website_lead_errors": 0,
+        "website_lead_missing_email": 0,
+        "queued_or_refreshed": 0,
+        "missing_phone": 0,
+        "missing_timezone": 0,
+        "missing_contact_id": 0,
+        "already_submitted": 0,
+        "errors": 0,
+    }
+
     for page in range(1, _pages_per_sync() + 1):
-        response = _apollo_request("/contacts/search", {"sort_by_field": "contact_updated_at", "sort_ascending": False, "per_page": 100, "page": page})
+        response = _apollo_request(
+            "/contacts/search",
+            {
+                "sort_by_field": "contact_updated_at",
+                "sort_ascending": False,
+                "per_page": 100,
+                "page": page,
+            },
+        )
         contacts = response.get("contacts")
         if not isinstance(contacts, list) or not contacts:
             break
+
         for contact in contacts:
             if not isinstance(contact, dict):
                 continue
+            counts["contacts_scanned"] += 1
             updated_at = str(contact.get("updated_at", "") or "")
             if updated_at and (not newest_seen or updated_at > newest_seen):
                 newest_seen = updated_at
+
+            mirror_result = _mirror_website_lead(contact)
+            if mirror_result == "website_lead_mirrored":
+                counts["website_leads_mirrored"] += 1
+            elif mirror_result == "website_lead_existing":
+                counts["website_leads_existing"] += 1
+            elif mirror_result == "website_lead_error":
+                counts["website_lead_errors"] += 1
+            elif mirror_result == "website_lead_missing_email":
+                counts["website_lead_missing_email"] += 1
+
             if cursor and updated_at and updated_at <= cursor:
-                stop = True
-                break
+                continue
+
             counts["contacts_seen"] += 1
             payload, reason = _contact_payload(contact)
             if payload is None:
@@ -271,8 +421,10 @@ def run_sync() -> dict[str, int]:
                 counts["already_submitted"] += 1
             else:
                 counts["queued_or_refreshed"] += 1
-        if stop or len(contacts) < 100:
+
+        if len(contacts) < 100:
             break
+
     _save_state(newest_seen, counts)
     return counts
 
@@ -284,17 +436,38 @@ def _worker() -> None:
         return
     if not _api_key():
         _LAST_ERROR = "APOLLO_API_KEY_missing"
-        print("APOLLO_NIJA_FEEDER state=blocked reason=api_key_missing fail_closed=true", flush=True)
+        print(
+            "APOLLO_NIJA_FEEDER state=blocked reason=api_key_missing fail_closed=true",
+            flush=True,
+        )
         return
-    print(f"APOLLO_NIJA_FEEDER state=ready poll_s={_poll_seconds():.0f} max_pages={_pages_per_sync()} cold_contacts_call_ready=false fail_closed=true", flush=True)
+    print(
+        f"APOLLO_NIJA_FEEDER state=ready poll_s={_poll_seconds():.0f} "
+        f"max_pages={_pages_per_sync()} cold_contacts_call_ready=false "
+        "website_lead_mirror=true fail_closed=true",
+        flush=True,
+    )
     while True:
         try:
             counts = run_sync()
             _LAST_ERROR = None
-            print(f"APOLLO_NIJA_FEEDER_SYNC seen={counts.get('contacts_seen',0)} queued={counts.get('queued_or_refreshed',0)} missing_phone={counts.get('missing_phone',0)} errors={counts.get('errors',0)}", flush=True)
+            print(
+                "APOLLO_NIJA_FEEDER_SYNC "
+                f"scanned={counts.get('contacts_scanned', 0)} "
+                f"seen={counts.get('contacts_seen', 0)} "
+                f"lead_mirrored={counts.get('website_leads_mirrored', 0)} "
+                f"lead_existing={counts.get('website_leads_existing', 0)} "
+                f"queued={counts.get('queued_or_refreshed', 0)} "
+                f"missing_phone={counts.get('missing_phone', 0)} "
+                f"errors={counts.get('errors', 0) + counts.get('website_lead_errors', 0)}",
+                flush=True,
+            )
         except Exception as exc:
             _LAST_ERROR = type(exc).__name__
-            print(f"APOLLO_NIJA_FEEDER state=sync_error error={type(exc).__name__} fail_closed=true", flush=True)
+            print(
+                f"APOLLO_NIJA_FEEDER state=sync_error error={type(exc).__name__} fail_closed=true",
+                flush=True,
+            )
         time.sleep(_poll_seconds())
 
 
@@ -304,7 +477,11 @@ def start_apollo_feeder() -> None:
         if _WORKER_STARTED:
             return
         _WORKER_STARTED = True
-    threading.Thread(target=_worker, name="nija-apollo-feeder", daemon=True).start()
+    threading.Thread(
+        target=_worker,
+        name="nija-apollo-feeder",
+        daemon=True,
+    ).start()
 
 
 def status() -> dict[str, Any]:
@@ -317,6 +494,8 @@ def status() -> dict[str, Any]:
         "last_sync_at": _LAST_SYNC_AT,
         "last_error": _LAST_ERROR,
         "last_counts": _LAST_COUNTS,
+        "website_lead_mirror": True,
+        "website_lead_label_id_configured": bool(_website_lead_label_id()),
         "cold_contacts_call_ready": False,
         "requires_authoritative_consent_and_compliance_evidence": True,
         "fail_closed": True,
