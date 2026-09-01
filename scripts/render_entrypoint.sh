@@ -47,6 +47,7 @@ _promote_secret_alias KRAKEN_PLATFORM_API_SECRET \
 export NIJA_DEFER_RUNTIME_SITE_HOOKS=1
 python3 -S scripts/apply_startup_handoff_fix.py
 python3 -S scripts/apply_canonical_launcher_v26.py
+python3 -S scripts/apply_execution_proof_startup_isolation_v339.py
 python3 -S scripts/apply_writer_generation_handoff_v45.py
 python3 -S scripts/apply_render_signal_forwarding_v262.py
 python3 -S scripts/apply_render_outreach_frontdoor.py
@@ -68,6 +69,8 @@ python3 -S -m py_compile \
     bot/writer_single_owner_convergence_v82_patch.py \
     bot/stalled_writer_release_guard_v22.py \
     bot/writer_generation_handoff_v45_patch.py \
+    bot/runtime_execution_capital_integrity_v169_patch.py \
+    bot/runtime_heartbeat_marker_convergence_v238_patch.py \
     bot/tests/test_writer_generation_handoff_v45.py \
     bot/tests/test_canonical_writer_first_v59.py \
     render_liveness_server.py \
@@ -77,6 +80,7 @@ python3 -S -m py_compile \
     scripts/canonical_runtime_launcher_v26.py \
     scripts/render_memory_pressure_guard.py \
     scripts/apply_canonical_launcher_v26.py \
+    scripts/apply_execution_proof_startup_isolation_v339.py \
     scripts/apply_writer_generation_handoff_v45.py \
     scripts/apply_render_signal_forwarding_v262.py \
     scripts/apply_render_outreach_frontdoor.py \
@@ -98,6 +102,11 @@ grep -Fq 'CANONICAL_EARLY_WRITER_BOOTSTRAP_VERIFIED' scripts/canonical_runtime_l
 grep -Fq 'CANONICAL_BOT_SINGLE_IDENTITY_HANDOFF' scripts/canonical_runtime_launcher_v26.py
 grep -Fq 'NIJA_CANONICAL_WRITER_FIRST_V59_READY' scripts/canonical_runtime_launcher_v26.py
 grep -Fq '_start_render_memory_pressure_guard()' scripts/canonical_runtime_launcher_v26.py
+grep -Fq '_prepare_execution_proof_startup_isolation_v339()' scripts/canonical_runtime_launcher_v26.py
+grep -Fq 'NIJA_EXECUTION_MARKER_PATH' bot/runtime_execution_capital_integrity_v169_patch.py
+grep -Fq '_quarantine_authority_execution_marker()' bot/runtime_execution_capital_integrity_v169_patch.py
+grep -Fq 'v169_provenance_guard_not_ready' bot/runtime_heartbeat_marker_convergence_v238_patch.py
+grep -Fq 'verified_v169_execution_probe' bot/runtime_heartbeat_marker_convergence_v238_patch.py
 grep -Fq 'bind_entrypoint_writer_authority_aliases(runtime)' bot/bot_main.py
 grep -Fq 'NIJA_ENTRYPOINT_WRITER_MODULE_IDENTITY_CONVERGED' bot/entrypoint_writer_authority.py
 grep -Fq 'heartbeat_telemetry_mutation=false' bot/broker_manager.py
@@ -107,7 +116,7 @@ grep -Fq 'handle_outreach_extension_post(self)' render_liveness_server.py
 grep -Fq 'handle_outreach_post(self)' render_liveness_server.py
 grep -Fq 'start_justcall_webhook_autoconfig()' render_liveness_server.py
 
-echo "🧭 RENDER_ENTRYPOINT_CANONICAL_HANDOFF_READY marker=20260828-render-signal-forwarding-v262 launcher=canonical_runtime_launcher_v26 writer_generation_handoff=v45 writer_first=v59 signal_forwarding=v262 single_identity=true singleton_alias_convergence=v91 kraken_nonce_authority_gate=v91 direct_broker_prebootstrap=v27 outreach_frontdoor=v3 signed_webhook=true webhook_autoconfig=true campaign_compliance_fail_closed=true"
+echo "🧭 RENDER_ENTRYPOINT_CANONICAL_HANDOFF_READY marker=20260831-execution-proof-startup-isolation-v339 launcher=canonical_runtime_launcher_v26 writer_generation_handoff=v45 writer_first=v59 execution_proof_startup_isolation=v339 signal_forwarding=v262 single_identity=true singleton_alias_convergence=v91 kraken_nonce_authority_gate=v91 direct_broker_prebootstrap=v27 outreach_frontdoor=v3 signed_webhook=true webhook_autoconfig=true campaign_compliance_fail_closed=true"
 unset NIJA_DEFER_RUNTIME_SITE_HOOKS
 
 exec bash scripts/production_bootstrap.sh "$@"
