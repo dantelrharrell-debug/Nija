@@ -10,8 +10,9 @@ recycling / just-in-time exit proof (v330), canonical exit broker rebinding
 market-price convergence for exits (v333), canonical protective-exit
 submission through the explicit exit pipeline (v334), protective-close
 capability semantics (v335), rejected-submission fill truth (v336), the
-hard-proof protective-exit authority bridge (v337), and canonical exit pipeline
-late binding (v338) in the same writer process.
+hard-proof protective-exit authority bridge (v337), canonical exit pipeline
+late binding (v338), and exact-broker protective-exit health (v339) in the same
+writer process.
 """
 from __future__ import annotations
 
@@ -66,6 +67,7 @@ def install_import_hook() -> bool:
         ("v336", "bot.runtime_exit_submission_failure_truth_v336_patch", "NIJA_RUNTIME_EXIT_SUBMISSION_FAILURE_TRUTH_V336_READY"),
         ("v337", "bot.runtime_protective_exit_authority_bridge_v337_patch", "NIJA_RUNTIME_PROTECTIVE_EXIT_AUTHORITY_BRIDGE_V337_READY"),
         ("v338", "bot.runtime_exit_pipeline_late_binding_v338_patch", "NIJA_RUNTIME_EXIT_PIPELINE_LATE_BINDING_V338_READY"),
+        ("v339", "bot.runtime_protective_exit_broker_health_v339_patch", "NIJA_RUNTIME_PROTECTIVE_EXIT_BROKER_HEALTH_V339_READY"),
     )
     outcomes = {}
     previous = core_ready
@@ -84,7 +86,7 @@ def install_import_hook() -> bool:
     os.environ["NIJA_CANONICAL_PROFITABILITY_CHAIN_READY"] = "1" if ready else "0"
     if ready:
         LOGGER.critical(
-            "CANONICAL_PROFITABILITY_CHAIN_READY marker=%s v324=true v325=true v326=true v327=true v328=true v329=true v330=true v331=true v332=true v333=true v334=true v335=true v336=true v337=true v338=true "
+            "CANONICAL_PROFITABILITY_CHAIN_READY marker=%s v324=true v325=true v326=true v327=true v328=true v329=true v330=true v331=true v332=true v333=true v334=true v335=true v336=true v337=true v338=true v339=true "
             "current_cost_economics=true current_us_fee_fallbacks=true short_margin_proof=true "
             "terminal_margin_integrity=true cost_aware_routing=true confirmed_fill_truth=true "
             "measured_slippage_learning=true unknown_slippage_not_zero=true authoritative_entry_fee=true "
@@ -96,6 +98,7 @@ def install_import_hook() -> bool:
             "rejected_submission_not_fill=true immediate_empty_position_false_fill_blocked=true "
             "protective_exit_startup_authority_bridge=true exact_writer_nonce_health_required=true "
             "canonical_exit_pipeline_late_binding=true circular_import_recovery=true "
+            "exact_exit_broker_health=true global_dispatch_health_not_promoted=true "
             "global_lifecycle_mutated=false spot_fallback=false confirmed_short_fill_required=true "
             "safety_gates_bypassed=false",
             MARKER,
