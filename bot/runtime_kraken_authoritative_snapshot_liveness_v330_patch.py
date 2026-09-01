@@ -20,6 +20,9 @@ v330 repairs that epoch mismatch without weakening provenance:
   Kraken PLATFORM broker whose authoritative snapshot is still current but has
   reached v285's existing proactive refresh interval.  The existing v108/v285
   reconciliation single-flight remains the only worker that performs refresh;
+* v342 is chained after v330 so position-read retry budgets, stale-flight age,
+  profit-target cost-basis sanity, and v320 wrapper idempotency converge before
+  this liveness surface can report ready;
 * position snapshot TTL, Kraken rate intervals, transport timeouts, credential
   locks, nonce ordering, capital truth, execution proof, writer/risk/kill-switch,
   order/fill and protective-exit gates are unchanged.
@@ -250,6 +253,27 @@ def _register_manifest() -> bool:
         return False
 
 
+def _install_execution_position_convergence_v342() -> bool:
+    """Install the terminal fail-closed position-proof convergence repair."""
+    try:
+        module = importlib.import_module("bot.runtime_execution_position_convergence_v342_patch")
+        installer = getattr(module, "install_import_hook", None) or getattr(module, "install", None)
+        if not callable(installer):
+            return False
+        return bool(installer())
+    except Exception as exc:
+        LOGGER.critical(
+            "KRAKEN_AUTHORITATIVE_SNAPSHOT_V330_V342_CHAIN_FAILED marker=%s error=%s:%s "
+            "trading_fail_closed=true position_success_fabricated=false execution_proof_fabricated=false "
+            "forced_activation=false safety_gates_bypassed=false",
+            MARKER,
+            type(exc).__name__,
+            exc,
+            exc_info=True,
+        )
+        return False
+
+
 def reconcile_once() -> dict[str, bool]:
     timeout_recovery = _patch_timeout_epoch_recovery()
     proactive_refresh = _patch_proactive_kraken_refresh()
@@ -265,9 +289,11 @@ def install() -> bool:
         try:
             state = reconcile_once()
             manifest = _register_manifest()
-            ready = bool(state.get("ready") and manifest)
+            v342 = _install_execution_position_convergence_v342()
+            ready = bool(state.get("ready") and manifest and v342)
         except Exception as exc:
             state = {"ready": False}
+            v342 = False
             ready = False
             LOGGER.critical(
                 "KRAKEN_AUTHORITATIVE_SNAPSHOT_LIVENESS_V330_NOT_READY marker=%s error=%s:%s "
@@ -285,6 +311,7 @@ def install() -> bool:
                 "same_credential_only=true old_worker_cancelled=false old_flight_removed=false "
                 "duplicate_private_call=false proactive_kraken_refresh=true "
                 "v285_refresh_interval_reused=true snapshot_ttl_unchanged=true "
+                "execution_position_convergence_v342=true "
                 "rate_interval_unchanged=true transport_timeout_unchanged=true nonce_ordering_unchanged=true "
                 "position_readiness_fabricated=false execution_proof_fabricated=false "
                 "writer_nonce_risk_capital_killswitch_order_fill_gates_unchanged=true "
@@ -307,4 +334,5 @@ __all__ = [
     "_flight_started_at",
     "_patch_timeout_epoch_recovery",
     "_patch_proactive_kraken_refresh",
+    "_install_execution_position_convergence_v342",
 ]
