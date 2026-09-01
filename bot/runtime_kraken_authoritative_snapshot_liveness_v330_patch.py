@@ -268,6 +268,14 @@ def _install_position_read_liveness_v342() -> bool:
         LOGGER.critical(
             "KRAKEN_AUTHORITATIVE_V330_V342_CHAIN_FAILED marker=%s error=%s:%s "
             "trading_fail_closed=true forced_activation=false safety_gates_bypassed=false",
+            MARKER,
+            type(exc).__name__,
+            exc,
+            exc_info=True,
+        )
+        return False
+
+
 def _install_execution_position_convergence_v342() -> bool:
     """Install the terminal fail-closed position-proof convergence repair."""
     try:
