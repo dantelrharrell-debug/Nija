@@ -252,7 +252,7 @@ def _patch_pipeline() -> bool:
         @wraps(base_snapshot)
         def protective_exit_snapshot_v337():
             snap = base_snapshot()
-            if bool(getattr(snap, "ready", False)) or not _trusted_close():
+            if (bool(getattr(snap, "ready", False)) and bool(getattr(snap, "dispatch_enabled", True))) or not _trusted_close():
                 return snap
             ok, reason, current = _hard_exit_authority_proof()
             if not ok:
@@ -266,12 +266,13 @@ def _patch_pipeline() -> bool:
                     getattr(current, "reason", "unknown"),
                 )
                 return snap
-            bridged = replace(current, ready=True)
+            bridged = replace(current, ready=True, dispatch_enabled=True)
             LOGGER.critical(
                 "PROTECTIVE_EXIT_AUTHORITY_V337_SNAPSHOT_BRIDGED marker=%s lifecycle=%s coordinator=%s "
                 "runtime_reason=%s exact_writer=true startup_write_authority=true nonce_ready=true "
                 "broker_health_ready=true kill_switch_clear=true seak_clear=true circuit_clear=true "
-                "global_lifecycle_mutated=false entry_authority_unchanged=true safety_gates_bypassed=false",
+                "local_dispatch_enabled=true global_dispatch_mutated=false global_lifecycle_mutated=false "
+                "entry_authority_unchanged=true safety_gates_bypassed=false",
                 MARKER,
                 getattr(current, "lifecycle_phase", "unknown"),
                 getattr(current, "coordinator_state", "unknown"),
@@ -283,8 +284,6 @@ def _patch_pipeline() -> bool:
         setattr(protective_exit_snapshot_v337, "__wrapped__", base_snapshot)
         pipeline.runtime_authority_snapshot = protective_exit_snapshot_v337
 
-    # Bind pipeline aliases to the authority-level wrappers.  This survives any
-    # subsequent module that refreshes its imports from execution_authority_context.
     eac = importlib.import_module("bot.execution_authority_context")
     pipeline.can_execute = eac.can_execute
     pipeline.assert_execution_dispatch_permitted = eac.assert_execution_dispatch_permitted
@@ -335,9 +334,9 @@ def install_import_hook() -> bool:
             "startup_write_authority_required=true nonce_required=true broker_health_required=true "
             "kill_switch_clear_required=true seak_clear_required=true circuit_clear_required=true "
             "authority_source_binding=true pipeline_alias_binding=true initial_lifecycle_gate_bridge=true "
-            "lifecycle_global_epoch_bridge_only=true global_lifecycle_mutated=false "
-            "ordinary_entries_unchanged=true ordinary_shorts_unchanged=true "
-            "ecel_risk_slippage_minimum_order_ack_fill_gates_unchanged=true "
+            "trusted_close_local_dispatch_bridge=true lifecycle_global_epoch_bridge_only=true "
+            "global_dispatch_mutated=false global_lifecycle_mutated=false ordinary_entries_unchanged=true "
+            "ordinary_shorts_unchanged=true ecel_risk_slippage_minimum_order_ack_fill_gates_unchanged=true "
             "forced_live=false forced_exit=false safety_gates_bypassed=false",
             "READY" if ready else "NOT_READY", MARKER, str(ready).lower(),
         )
