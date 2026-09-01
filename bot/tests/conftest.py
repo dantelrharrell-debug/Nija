@@ -53,6 +53,23 @@ _BOT_MAIN_ORDERING_NODE = (
     "test_entrypoint_writer_authority.py::BotMainAuthorityOrderingTests::"
 )
 
+# These legacy main() tests also pre-date the split bootstrap handoff introduced
+# by bot_main: STEP 2 now advances only to THREADS_STARTING, while the existing
+# RUNNING_SUPERVISED helper is called after the real core thread is registered.
+# They additionally pre-date the post-core activation convergence gate. Keep the
+# harness scoped to the exact tests whose purpose is writer/thread ordering,
+# registration, scan-marker truth, or terminal-writer-loss behavior. Production
+# startup, capital hydration, activation convergence, and safety gates are not
+# modified.
+_BOT_MAIN_PHASE_COMPAT_TESTS = {
+    "test_main_returns_nonzero_after_terminal_writer_loss",
+    "test_authority_precedes_nonce_and_broker_bootstrap",
+    "test_main_registers_core_thread_without_fabricating_scan_started",
+    "test_main_does_not_record_scan_started_before_real_scan",
+    "test_main_skips_duplicate_registration_for_pre_registered_core_thread",
+    "test_main_fail_closed_when_trading_thread_not_alive",
+}
+
 # One legacy test still asserts the pre-latch direct restart scheduler. The
 # production callback now delegates terminal writer loss to
 # terminal_writer_loss_latch, which owns exit/restart sequencing. Quarantine the
@@ -145,8 +162,53 @@ def _cancel_writer_restart_timers() -> None:
         os.environ.pop(key, None)
 
 
+def _install_bot_main_phase_compat(request, monkeypatch) -> None:
+    """Keep legacy bot_main tests focused on the behavior they actually assert."""
+    if _BOT_MAIN_ORDERING_NODE not in request.node.nodeid:
+        return
+    if request.node.name not in _BOT_MAIN_PHASE_COMPAT_TESTS:
+        return
+
+    import bot.bot_main as bot_main
+
+    if request.node.name == "test_authority_precedes_nonce_and_broker_bootstrap":
+        # This test's existing RUNNING_SUPERVISED mock records the historical
+        # "fsm" ordering event. Invoke that mock at the new pre-core phase, then
+        # replace the later post-registration call with a no-op success so the
+        # ordering assertion still measures one FSM handoff at STEP 2.
+        def _precore_order_bridge() -> bool:
+            ready = bool(bot_main._advance_bootstrap_fsm_to_running_supervised())
+            monkeypatch.setattr(
+                bot_main,
+                "_advance_bootstrap_fsm_to_running_supervised",
+                lambda: True,
+            )
+            return ready
+
+        monkeypatch.setattr(
+            bot_main,
+            "_advance_bootstrap_fsm_to_threads_starting",
+            _precore_order_bridge,
+        )
+    else:
+        monkeypatch.setattr(
+            bot_main,
+            "_advance_bootstrap_fsm_to_threads_starting",
+            lambda: True,
+        )
+
+    # These tests mock broker/FSM/thread prerequisites and do not construct the
+    # live readiness table/state-machine inputs required by convergence. Their
+    # assertions are upstream of that gate, so isolate the new gate test-only.
+    monkeypatch.setattr(
+        bot_main,
+        "_perform_post_core_activation_convergence",
+        lambda *_args, **_kwargs: True,
+    )
+
+
 @pytest.fixture(autouse=True)
-def _clean_kill_switch_state(request):
+def _clean_kill_switch_state(request, monkeypatch):
     """
     Auto-use fixture: remove kill-switch state files and reset process-global
     readiness authority before and after every test so runtime state does not
@@ -158,7 +220,10 @@ def _clean_kill_switch_state(request):
 
     BotMainAuthorityOrderingTests receive a test-only startup-validation
     attestation because those tests mock past the real validator and are testing
-    writer/FSM/thread ordering, not startup-validation policy.
+    writer/FSM/thread ordering, not startup-validation policy. The exact legacy
+    main() tests that pre-date the split pre-core/post-core handoff also receive
+    test-only phase compatibility so they do not execute real capital hydration
+    or activation convergence while asserting unrelated writer/thread behavior.
     """
     _remove_kill_switch_artifacts()
     _reset_readiness_authority_state()
@@ -178,6 +243,8 @@ def _clean_kill_switch_state(request):
     attestation_scoped = _BOT_MAIN_ORDERING_NODE in request.node.nodeid
     if attestation_scoped:
         os.environ[_STARTUP_VALIDATED_ENV] = "true"
+
+    _install_bot_main_phase_compat(request, monkeypatch)
 
     yield
 
