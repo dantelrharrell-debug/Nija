@@ -17,6 +17,8 @@ kill-switch coordinator and v143 provenance chain are both ready, so v193 cannot
 make the pre-core v98 umbrella fail before its dependencies exist.
 v213 patches kill-switch file persistence before the deferred recovery chain is
 armed so an existing EMERGENCY_STOP marker is never rewritten on restart.
+v342 replaces v117's one-size-fits-all position budget with broker-specific
+bounded generations and makes trusted unit-sized closes quantity-authoritative.
 """
 from __future__ import annotations
 
@@ -69,6 +71,10 @@ def install() -> bool:
         ("platform_position_sync_v108_patch", "V108"),
         ("runtime_convergence_v116_patch", "V116"),
         ("position_fetch_generation_v117_patch", "V117"),
+        # v342 owns the terminal broker-specific generation wrapper. It preserves
+        # v117 single-flight/late-result truth while preventing Coinbase and
+        # intentionally paced Kraken reads from being judged by one 12s budget.
+        ("runtime_execution_convergence_v342_patch", "V342"),
         # v192 extends the already-installed v117/v191 dispatch before bot_main
         # is imported. It adds no new global import hook and preserves the exact
         # execution proof while suppressing restart for healthy pending states.
@@ -107,7 +113,7 @@ def install() -> bool:
     os.environ["NIJA_POSITION_SYNC_TIMEOUT_V98_INSTALLED"] = "1"
     _INSTALLED = True
     LOGGER.critical(
-        "POSITION_SYNC_TIMEOUT_V98_INSTALLED marker=%s default_timeout_s=%.1f explicit_env_override_preserved=true account_isolation_v99=true startup_publication_bootstrap_v105=true capital_refresh_reentrancy_v106=true startup_hook_nonce_v107=true kraken_read_timeout_v121=true kraken_position_sync_prereq_v122=true platform_position_sync_v108=true runtime_convergence_v116=true position_fetch_generation_v117=true post_core_recoverable_pending_v192=true kill_switch_file_provenance_v213=true kill_switch_transactional_recovery_v194_deferred=true terminal_writer_loss_seak_v118=true preactivation_position_sync_v119=true core_supervised_pending_v120=true canonical_import_shield_v123=true canonical_strategy_startup_bound_v124=true strategy_import_cycle_v104=true strategy_class_recovery_v100=true passive_strategy_recovery_v102=true startup_convergence_v103=true safety_gates_unchanged=true",
+        "POSITION_SYNC_TIMEOUT_V98_INSTALLED marker=%s default_timeout_s=%.1f explicit_env_override_preserved=true account_isolation_v99=true startup_publication_bootstrap_v105=true capital_refresh_reentrancy_v106=true startup_hook_nonce_v107=true kraken_read_timeout_v121=true kraken_position_sync_prereq_v122=true platform_position_sync_v108=true runtime_convergence_v116=true position_fetch_generation_v117=true runtime_execution_convergence_v342=true post_core_recoverable_pending_v192=true kill_switch_file_provenance_v213=true kill_switch_transactional_recovery_v194_deferred=true terminal_writer_loss_seak_v118=true preactivation_position_sync_v119=true core_supervised_pending_v120=true canonical_import_shield_v123=true canonical_strategy_startup_bound_v124=true strategy_import_cycle_v104=true strategy_class_recovery_v100=true passive_strategy_recovery_v102=true startup_convergence_v103=true safety_gates_unchanged=true",
         MARKER,
         _DEFAULT_TIMEOUT_S,
     )
