@@ -101,14 +101,7 @@ def _hard_exit_authority_proof() -> tuple[bool, str, Any]:
 
 
 def _bridge_initial_authority_decision(decision: Any) -> Any:
-    """Bridge only the first lifecycle denial for a trusted risk-reducing close.
-
-    The normal can_execute() path returns immediately at lifecycle Gate 0, so
-    the pipeline never reaches v337's later dispatch bridge.  For a trusted
-    close only, re-prove hard write safety and the stability governor, then
-    construct a scope-local allowed decision.  This does not mutate the global
-    lifecycle and does not alter downstream order validation.
-    """
+    """Bridge only the first lifecycle denial for a trusted risk-reducing close."""
     if bool(getattr(decision, "allowed", False)) or not _trusted_close():
         return decision
 
@@ -193,12 +186,64 @@ def _bridge_initial_authority_decision(decision: Any) -> Any:
     return bridged
 
 
+def _make_dispatch_bridge(base_assert):
+    @wraps(base_assert)
+    def protective_exit_dispatch_v337() -> None:
+        if not _trusted_close():
+            return base_assert()
+        ok, reason, snap = _hard_exit_authority_proof()
+        if not ok:
+            eac = importlib.import_module("bot.execution_authority_context")
+            raise eac.ExecutionBlocked(f"protective_exit_authority:{reason}")
+        LOGGER.critical(
+            "PROTECTIVE_EXIT_AUTHORITY_V337_DISPATCH_GRANTED marker=%s lifecycle=%s coordinator=%s "
+            "exact_writer=true startup_write_authority=true nonce_ready=true broker_health_ready=true "
+            "kill_switch_clear=true seak_clear=true circuit_clear=true risk_reducing_exit_only=true "
+            "ordinary_execution_unchanged=true global_lifecycle_mutated=false safety_gates_bypassed=false",
+            MARKER,
+            getattr(snap, "lifecycle_phase", "unknown"),
+            getattr(snap, "coordinator_state", "unknown"),
+        )
+        return None
+
+    setattr(protective_exit_dispatch_v337, _ASSERT_ATTR, True)
+    setattr(protective_exit_dispatch_v337, "__wrapped__", base_assert)
+    return protective_exit_dispatch_v337
+
+
+def _patch_authority_module() -> bool:
+    """Patch the source authority module so later import/rebinds retain v337."""
+    eac = importlib.import_module("bot.execution_authority_context")
+    current_can_execute = getattr(eac, "can_execute", None)
+    current_assert = getattr(eac, "assert_execution_dispatch_permitted", None)
+    if not callable(current_can_execute) or not callable(current_assert):
+        return False
+
+    if not bool(getattr(current_can_execute, _CAN_EXECUTE_ATTR, False)):
+        base_can_execute = current_can_execute
+
+        @wraps(base_can_execute)
+        def authority_can_execute_v337(*args, **kwargs):
+            return _bridge_initial_authority_decision(base_can_execute(*args, **kwargs))
+
+        setattr(authority_can_execute_v337, _CAN_EXECUTE_ATTR, True)
+        setattr(authority_can_execute_v337, "__wrapped__", base_can_execute)
+        eac.can_execute = authority_can_execute_v337
+
+    current_assert = getattr(eac, "assert_execution_dispatch_permitted", None)
+    if callable(current_assert) and not bool(getattr(current_assert, _ASSERT_ATTR, False)):
+        eac.assert_execution_dispatch_permitted = _make_dispatch_bridge(current_assert)
+
+    return bool(
+        getattr(getattr(eac, "can_execute", None), _CAN_EXECUTE_ATTR, False)
+        and getattr(getattr(eac, "assert_execution_dispatch_permitted", None), _ASSERT_ATTR, False)
+    )
+
+
 def _patch_pipeline() -> bool:
     pipeline = importlib.import_module("bot.execution_pipeline")
     original_snapshot = getattr(pipeline, "runtime_authority_snapshot", None)
-    original_can_execute = getattr(pipeline, "can_execute", None)
-    original_assert = getattr(pipeline, "assert_execution_dispatch_permitted", None)
-    if not callable(original_snapshot) or not callable(original_can_execute) or not callable(original_assert):
+    if not callable(original_snapshot):
         return False
 
     if not bool(getattr(original_snapshot, _SNAPSHOT_ATTR, False)):
@@ -238,44 +283,11 @@ def _patch_pipeline() -> bool:
         setattr(protective_exit_snapshot_v337, "__wrapped__", base_snapshot)
         pipeline.runtime_authority_snapshot = protective_exit_snapshot_v337
 
-    original_can_execute = getattr(pipeline, "can_execute", None)
-    if callable(original_can_execute) and not bool(getattr(original_can_execute, _CAN_EXECUTE_ATTR, False)):
-        base_can_execute = original_can_execute
-
-        @wraps(base_can_execute)
-        def protective_exit_can_execute_v337(*args, **kwargs):
-            return _bridge_initial_authority_decision(base_can_execute(*args, **kwargs))
-
-        setattr(protective_exit_can_execute_v337, _CAN_EXECUTE_ATTR, True)
-        setattr(protective_exit_can_execute_v337, "__wrapped__", base_can_execute)
-        pipeline.can_execute = protective_exit_can_execute_v337
-
-    original_assert = getattr(pipeline, "assert_execution_dispatch_permitted", None)
-    if callable(original_assert) and not bool(getattr(original_assert, _ASSERT_ATTR, False)):
-        base_assert = original_assert
-
-        @wraps(base_assert)
-        def protective_exit_dispatch_v337() -> None:
-            if not _trusted_close():
-                return base_assert()
-            ok, reason, snap = _hard_exit_authority_proof()
-            if not ok:
-                eac = importlib.import_module("bot.execution_authority_context")
-                raise eac.ExecutionBlocked(f"protective_exit_authority:{reason}")
-            LOGGER.critical(
-                "PROTECTIVE_EXIT_AUTHORITY_V337_DISPATCH_GRANTED marker=%s lifecycle=%s coordinator=%s "
-                "exact_writer=true startup_write_authority=true nonce_ready=true broker_health_ready=true "
-                "kill_switch_clear=true seak_clear=true circuit_clear=true risk_reducing_exit_only=true "
-                "ordinary_execution_unchanged=true global_lifecycle_mutated=false safety_gates_bypassed=false",
-                MARKER,
-                getattr(snap, "lifecycle_phase", "unknown"),
-                getattr(snap, "coordinator_state", "unknown"),
-            )
-            return None
-
-        setattr(protective_exit_dispatch_v337, _ASSERT_ATTR, True)
-        setattr(protective_exit_dispatch_v337, "__wrapped__", base_assert)
-        pipeline.assert_execution_dispatch_permitted = protective_exit_dispatch_v337
+    # Bind pipeline aliases to the authority-level wrappers.  This survives any
+    # subsequent module that refreshes its imports from execution_authority_context.
+    eac = importlib.import_module("bot.execution_authority_context")
+    pipeline.can_execute = eac.can_execute
+    pipeline.assert_execution_dispatch_permitted = eac.assert_execution_dispatch_permitted
 
     return bool(
         getattr(getattr(pipeline, "runtime_authority_snapshot", None), _SNAPSHOT_ATTR, False)
@@ -303,9 +315,10 @@ def install_import_hook() -> bool:
         try:
             if os.environ.get("NIJA_RUNTIME_EXIT_SUBMISSION_FAILURE_TRUTH_V336_READY") != "1":
                 raise RuntimeError("v336_not_ready")
-            patched = _patch_pipeline()
+            authority_patched = _patch_authority_module()
+            pipeline_patched = _patch_pipeline()
             manifest = _register_manifest()
-            ready = bool(patched and manifest)
+            ready = bool(authority_patched and pipeline_patched and manifest)
         except Exception as exc:
             ready = False
             LOGGER.exception(
@@ -321,8 +334,9 @@ def install_import_hook() -> bool:
             "trusted_protective_close_only=true exact_distributed_writer_required=true "
             "startup_write_authority_required=true nonce_required=true broker_health_required=true "
             "kill_switch_clear_required=true seak_clear_required=true circuit_clear_required=true "
-            "initial_lifecycle_gate_bridge=true lifecycle_global_epoch_bridge_only=true "
-            "global_lifecycle_mutated=false ordinary_entries_unchanged=true ordinary_shorts_unchanged=true "
+            "authority_source_binding=true pipeline_alias_binding=true initial_lifecycle_gate_bridge=true "
+            "lifecycle_global_epoch_bridge_only=true global_lifecycle_mutated=false "
+            "ordinary_entries_unchanged=true ordinary_shorts_unchanged=true "
             "ecel_risk_slippage_minimum_order_ack_fill_gates_unchanged=true "
             "forced_live=false forced_exit=false safety_gates_bypassed=false",
             "READY" if ready else "NOT_READY", MARKER, str(ready).lower(),
