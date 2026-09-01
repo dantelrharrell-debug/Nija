@@ -83,3 +83,47 @@ def test_supervised_pending_does_not_mask_unhealthy_writer(monkeypatch):
 
     assert v117._patch_bot_main() is True
     assert fake_module._perform_post_core_activation_convergence(runtime, thread) is False
+
+
+def test_coalesced_waiters_all_receive_the_fresh_snapshot(monkeypatch):
+    """Two concurrent callers share one flight; neither result may be discarded.
+
+    Regression: the waiter that lost the ``_FLIGHTS`` pop race was told its
+    freshly completed snapshot was stale (``current_generation=none``), which
+    blocked user position reconciliation from recovering.
+    """
+    monkeypatch.setenv("NIJA_POSITION_FETCH_TIMEOUT_S", "5")
+    monkeypatch.setenv("NIJA_POSITION_FETCH_STALE_GENERATION_S", "30")
+
+    both_waiting = threading.Event()
+    calls = []
+
+    def raw(self):
+        calls.append(1)
+        both_waiting.wait(timeout=5.0)
+        return [{"symbol": "FRESH"}]
+
+    wrapped = v117._bounded_generation(raw, "kraken")
+    broker = object()
+    results: list[object] = []
+    errors: list[BaseException] = []
+
+    def call():
+        try:
+            results.append(wrapped(broker))
+        except BaseException as exc:  # pragma: no cover - failure path
+            errors.append(exc)
+
+    threads = [threading.Thread(target=call) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    time.sleep(0.2)
+    both_waiting.set()
+    for thread in threads:
+        thread.join(timeout=5.0)
+
+    assert errors == []
+    assert results == [[{"symbol": "FRESH"}], [{"symbol": "FRESH"}]]
+    assert len(calls) == 1
+    with v117._LOCK:
+        assert id(broker) not in v117._FLIGHTS
