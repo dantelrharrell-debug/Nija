@@ -1,15 +1,19 @@
 """Heartbeat-only Coinbase micro-cap proof bridge (v341).
 
 The startup execution heartbeat must produce a genuine broker ACK/fill before
-execution readiness can become true.  Coinbase's canonical minimum-notional gate
-already supports micro-cap balances, but two heartbeat-adjacent guards retained a
-legacy $10/$12 Coinbase floor.  With a hydrated Coinbase quote balance below that
-legacy floor, the heartbeat could never reach the unchanged execution pipeline.
+execution readiness can become true. Coinbase's canonical minimum-notional gate
+already supports micro-cap balances, but heartbeat-adjacent routing retained a
+legacy $10/$12 Coinbase floor and the v322 candidate filter inherited the ordinary
+active-venue publication. With a hydrated Coinbase quote balance below that legacy
+floor, the heartbeat could never reach the unchanged execution pipeline even though
+NIJA's canonical Coinbase micro-cap policy explicitly permitted the order size.
 
 v341 is deliberately narrow:
 - only the verified startup heartbeat may use the existing Coinbase micro-cap floor;
 - ordinary entries retain their existing routing semantics;
 - cached/hydrated balance only is used for heartbeat sizing/selection (no broker I/O);
+- when v274's startup fallback regime is already active, Coinbase may be considered
+  as a heartbeat-only candidate without mutating NIJA_ACTIVE_LIVE_VENUES;
 - the canonical MinimumNotionalGate still validates the order;
 - spendable cash, ECEL, risk, writer, nonce, kill switch, broker health, order ACK,
   fill verification, position sync, and capital gates remain authoritative.
@@ -30,6 +34,7 @@ MARKER = "20260901-heartbeat-microcap-proof-v341"
 RELEASE_ID = "20260901-runtime-convergence-v341"
 _READY_FLAG = "NIJA_HEARTBEAT_MICROCAP_PROOF_V341_READY"
 _PATCH_ATTR = "_nija_heartbeat_microcap_proof_v341"
+_SELECTOR_ATTR = "_nija_heartbeat_microcap_selector_v341"
 _ALLOWED_REASONS = {"HEARTBEAT_TRADE", "HEARTBEAT_TRADE_CLOSE"}
 
 
@@ -197,7 +202,111 @@ def _patch_trading_strategy() -> bool:
         setattr(_is_broker_eligible_for_entry, "_nija_spendable_quote_gate", True)
         setattr(cls, "_is_broker_eligible_for_entry", _is_broker_eligible_for_entry)
 
-    return bool(getattr(getattr(cls, "_resolve_heartbeat_trade_amount_usd", None), _PATCH_ATTR, False))
+    # v322 receives only the ordinary active-venue publication.  If that set
+    # contains an underfunded Kraken but omits a legitimately executable
+    # Coinbase micro-cap account, v341 may add Coinbase only as a startup
+    # heartbeat candidate.  It does not mutate global venue readiness.
+    current_selector = getattr(cls, "_get_heartbeat_broker", None)
+    if callable(current_selector) and not getattr(current_selector, _SELECTOR_ATTR, False):
+        @wraps(current_selector)
+        def _get_heartbeat_broker(self: Any):
+            selected = current_selector(self)
+            if selected is not None or threading.current_thread().name != "HeartbeatTrade":
+                return selected
+
+            try:
+                v274 = importlib.import_module("bot.runtime_heartbeat_live_venue_selection_v274_patch")
+                fallback_resolver = getattr(v274, "_live_venue_fallback_set", None)
+                candidate_resolver = getattr(v274, "_candidate_brokers", None)
+                if not callable(fallback_resolver) or not callable(candidate_resolver):
+                    return None
+                allowed, live_venues, fallback_reason = fallback_resolver()
+                if not allowed:
+                    return None
+                candidates = dict(candidate_resolver(self) or {})
+            except Exception:
+                return None
+
+            for broker in candidates.values():
+                if broker is None or _broker_key(self, broker) != "coinbase":
+                    continue
+                if not bool(getattr(broker, "connected", False)) or bool(getattr(broker, "exit_only_mode", False)):
+                    continue
+                if hasattr(broker, "position_tracker") and getattr(broker, "position_tracker") is None:
+                    continue
+
+                balance, source = _cached_balance(self, broker, "coinbase")
+                if balance is None or balance <= 0.0:
+                    continue
+                floor = _coinbase_floor(balance)
+                if floor >= 10.0:
+                    continue
+                try:
+                    required = float(self._resolve_heartbeat_trade_amount_usd(broker) or 0.0)
+                except Exception:
+                    continue
+                spendable = max(0.0, balance * (1.0 - _buffer_pct()))
+                if required <= 0.0 or spendable + 1e-9 < required:
+                    LOGGER.warning(
+                        "HEARTBEAT_MICROCAP_V341_SELECTOR_DEFERRED marker=%s venue=coinbase "
+                        "balance=%.2f spendable=%.2f required=%.2f floor=%.2f source=%s "
+                        "selection_only=true broker_io=false trading_fail_closed=true "
+                        "readiness_granted=false execution_proof_fabricated=false "
+                        "safety_gates_bypassed=false",
+                        MARKER, balance, spendable, required, floor, source,
+                    )
+                    continue
+
+                eligible_fn = getattr(self, "_is_broker_eligible_for_entry", None)
+                if not callable(eligible_fn):
+                    continue
+                try:
+                    eligible, detail = eligible_fn(broker)
+                except Exception:
+                    continue
+                if not eligible:
+                    continue
+
+                self.broker = broker
+                broker_manager = getattr(self, "broker_manager", None)
+                if broker_manager is not None:
+                    try:
+                        broker_manager.active_broker = broker
+                    except Exception:
+                        pass
+                LOGGER.critical(
+                    "HEARTBEAT_MICROCAP_V341_SELECTOR_BRIDGE marker=%s venue=coinbase "
+                    "balance=%.2f spendable=%.2f required=%.2f floor=%.2f source=%s "
+                    "v274_active=%s fallback_reason=%s eligibility=%s "
+                    "selection_only=true ordinary_active_venue_publication_unchanged=true "
+                    "global_venue_readiness_not_mutated=true downstream_capital_authorization_required=true "
+                    "ecel_risk_writer_nonce_killswitch_min_notional_order_ack_fill_gates_unchanged=true "
+                    "readiness_granted=false execution_proof_fabricated=false forced_trade=false "
+                    "forced_activation=false safety_gates_bypassed=false",
+                    MARKER,
+                    balance,
+                    spendable,
+                    required,
+                    floor,
+                    source,
+                    ",".join(live_venues),
+                    fallback_reason,
+                    detail,
+                )
+                return broker
+            return None
+
+        setattr(_get_heartbeat_broker, _SELECTOR_ATTR, True)
+        setattr(_get_heartbeat_broker, _PATCH_ATTR, True)
+        # Preserve v274 idempotence on repeated install passes. v341 wraps the
+        # already-installed v274 selector and must remain the terminal selector.
+        setattr(_get_heartbeat_broker, "_nija_heartbeat_live_venue_selection_v274", True)
+        setattr(cls, "_get_heartbeat_broker", _get_heartbeat_broker)
+
+    resolver_ready = bool(getattr(getattr(cls, "_resolve_heartbeat_trade_amount_usd", None), _PATCH_ATTR, False))
+    eligible_ready = bool(getattr(getattr(cls, "_is_broker_eligible_for_entry", None), _PATCH_ATTR, False))
+    selector_ready = bool(getattr(getattr(cls, "_get_heartbeat_broker", None), _SELECTOR_ATTR, False))
+    return bool(resolver_ready and eligible_ready and selector_ready)
 
 
 def _patch_execution_engine() -> bool:
@@ -325,6 +434,7 @@ def install() -> bool:
         LOGGER.critical(
             "HEARTBEAT_MICROCAP_V341_READY marker=%s ready=true "
             "coinbase_microcap_existing_policy_only=true heartbeat_only=true cached_balance_only=true "
+            "heartbeat_selector_bridge=true ordinary_active_venue_publication_unchanged=true "
             "ordinary_entries_unchanged=true canonical_min_notional_required=true "
             "ecel_risk_writer_nonce_killswitch_order_ack_fill_gates_unchanged=true "
             "execution_proof_fabricated=false forced_trade=false forced_activation=false "
