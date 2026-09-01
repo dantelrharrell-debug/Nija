@@ -24,6 +24,12 @@ v330 repairs that epoch mismatch without weakening provenance:
   locks, nonce ordering, capital truth, execution proof, writer/risk/kill-switch,
   order/fill and protective-exit gates are unchanged.
 
+v342 is chained from this already-canonical installer. It removes redundant
+Coinbase per-position market reads and allows only fresh authenticated
+same-credential Kraken Balance observations to satisfy redundant stale-flight
+joiners. v342 does not extend TTLs, fabricate position/capital truth, or grant
+execution authority.
+
 No Balance response, position, freshness, readiness, fill, execution proof, or
 activation state is fabricated.
 """
@@ -250,13 +256,32 @@ def _register_manifest() -> bool:
         return False
 
 
+def _install_position_read_liveness_v342() -> bool:
+    try:
+        module = importlib.import_module("bot.runtime_position_read_liveness_v342_patch")
+        installer = getattr(module, "install_import_hook", None) or getattr(module, "install", None)
+        return bool(callable(installer) and installer())
+    except Exception as exc:
+        LOGGER.critical(
+            "KRAKEN_AUTHORITATIVE_V330_V342_CHAIN_FAILED marker=%s error=%s:%s "
+            "trading_fail_closed=true forced_activation=false safety_gates_bypassed=false",
+            MARKER,
+            type(exc).__name__,
+            exc,
+            exc_info=True,
+        )
+        return False
+
+
 def reconcile_once() -> dict[str, bool]:
     timeout_recovery = _patch_timeout_epoch_recovery()
     proactive_refresh = _patch_proactive_kraken_refresh()
+    v342 = _install_position_read_liveness_v342()
     return {
         "timeout_recovery": bool(timeout_recovery),
         "proactive_refresh": bool(proactive_refresh),
-        "ready": bool(timeout_recovery and proactive_refresh),
+        "position_read_liveness_v342": bool(v342),
+        "ready": bool(timeout_recovery and proactive_refresh and v342),
     }
 
 
@@ -284,8 +309,9 @@ def install() -> bool:
                 "same_flight_epoch_timeout_recovery=true authenticated_balance_only=true "
                 "same_credential_only=true old_worker_cancelled=false old_flight_removed=false "
                 "duplicate_private_call=false proactive_kraken_refresh=true "
-                "v285_refresh_interval_reused=true snapshot_ttl_unchanged=true "
-                "rate_interval_unchanged=true transport_timeout_unchanged=true nonce_ordering_unchanged=true "
+                "v285_refresh_interval_reused=true position_read_liveness_v342=true "
+                "snapshot_ttl_unchanged=true rate_interval_unchanged=true "
+                "transport_timeout_unchanged=true nonce_ordering_unchanged=true "
                 "position_readiness_fabricated=false execution_proof_fabricated=false "
                 "writer_nonce_risk_capital_killswitch_order_fill_gates_unchanged=true "
                 "forced_activation=false safety_gates_bypassed=false",
@@ -307,4 +333,5 @@ __all__ = [
     "_flight_started_at",
     "_patch_timeout_epoch_recovery",
     "_patch_proactive_kraken_refresh",
+    "_install_position_read_liveness_v342",
 ]
