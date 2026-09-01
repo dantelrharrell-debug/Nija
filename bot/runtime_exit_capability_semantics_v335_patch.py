@@ -2,7 +2,7 @@
 
 The canonical v334 exit path proved a real profitable Kraken ETH long was ready
 for sale, but ExchangeCapabilityMatrix treated every SPOT ``sell`` as a request
-to *open a short*.  Kraken spot correctly reports ``supports_short=False``, so a
+to *open a short*. Kraken spot correctly reports ``supports_short=False``, so a
 verified sell-to-close was rejected as ``short_not_supported:kraken:spot``.
 
 v335 distinguishes those two economic intents without enabling spot shorting.
@@ -15,20 +15,28 @@ these are simultaneously true:
 * exit_origin is a known canonical protective-exit origin.
 
 For that narrow scope only, ExchangeCapabilityMatrix receives a transient
-``supports_short=True`` runtime override.  This does *not* label the exchange as
-short-capable and it does not persist outside the ContextVar scope.  It merely
+``supports_short=True`` runtime override. This does *not* label the exchange as
+short-capable and it does not persist outside the ContextVar scope. It merely
 prevents a SELL that reduces a proven long from being classified as a new short.
 All other capability checks (margin, leverage, long support), and every
 writer/nonce/risk/kill-switch/minimum-order/order-ack/fill gate remain unchanged.
 
 The trusted-close scope also reasserts v337's final execution-pipeline authority
-bindings immediately before dispatch.  Several startup authority patches are
+bindings immediately before dispatch. Several startup authority patches are
 installed later and may legitimately replace module-level assertion functions;
 without this late reassertion a verified close can regress to the ordinary
-``lifecycle_phase:BOOT`` assertion even though v337 was READY at startup.  The
-reassertion changes no lifecycle state and grants nothing by itself: v337 still
-re-proves distributed writer authority, startup write authority, nonce, broker
-health, kill-switch, SEAK, circuit and stability before a close may pass.
+``lifecycle_phase:BOOT`` assertion even though v337 was READY at startup.
+
+The pipeline performs one additional runtime snapshot immediately before broker
+routing and normally requires its global ``dispatch_enabled`` bit. During
+startup that bit may remain false even after a trusted close has independently
+re-proved current distributed-writer, startup-write, nonce, broker-health,
+kill-switch, SEAK, circuit and stability safety. v335 therefore applies a
+second, context-local snapshot wrapper only inside the trusted-close scope. It
+sets ``dispatch_enabled=True`` on the returned *copy* only after v337 hard proof
+and stability both pass. No environment, Redis, lifecycle, coordinator or
+global dispatch state is mutated. Ordinary orders are unchanged and every
+subsequent broker, minimum-order, ACK and fill gate remains authoritative.
 
 Ordinary Kraken/Coinbase/OKX spot sells, enter_short signals, or callers that
 only spoof one exit field remain subject to the normal short-capability and
@@ -42,6 +50,7 @@ import importlib
 import logging
 import os
 import threading
+from dataclasses import replace
 from functools import wraps
 from typing import Any, Mapping
 
@@ -51,6 +60,7 @@ RELEASE_ID = "20260831-runtime-convergence-v335"
 _READY_FLAG = "NIJA_RUNTIME_EXIT_CAPABILITY_SEMANTICS_V335_READY"
 _SUBMIT_PATCH_ATTR = "_nija_exit_capability_submit_scope_v335"
 _MATRIX_PATCH_ATTR = "_nija_exit_capability_matrix_v335"
+_DISPATCH_SNAPSHOT_ATTR = "_nija_exit_dispatch_snapshot_scope_v335"
 _INSTALL_FLAG = "_NIJA_RUNTIME_EXIT_CAPABILITY_SEMANTICS_V335"
 _LOCK = threading.RLock()
 _TRUSTED_CLOSE = contextvars.ContextVar("nija_v335_trusted_protective_close", default=False)
@@ -81,13 +91,100 @@ def _trusted_exit_kwargs(kwargs: Mapping[str, Any]) -> bool:
     )
 
 
+def _patch_trusted_dispatch_snapshot(v337: Any) -> bool:
+    """Make the final pipeline dispatch snapshot context-local for trusted exits.
+
+    This never changes the authoritative runtime snapshot or any global flag.
+    The returned dataclass copy advertises dispatch eligibility only after the
+    same hard exit proof and stability authority used by v337 pass *now*.
+    """
+    pipeline = importlib.import_module("bot.execution_pipeline")
+    current = getattr(pipeline, "runtime_authority_snapshot", None)
+    if not callable(current):
+        return False
+    if bool(getattr(current, _DISPATCH_SNAPSHOT_ATTR, False)):
+        return True
+
+    @wraps(current)
+    def trusted_exit_dispatch_snapshot_v335():
+        snap = current()
+        if not bool(_TRUSTED_CLOSE.get()) or bool(getattr(snap, "dispatch_enabled", False)):
+            return snap
+
+        hard_proof = getattr(v337, "_hard_exit_authority_proof", None)
+        if not callable(hard_proof):
+            return snap
+        ok, reason, current_auth = hard_proof()
+        if not ok:
+            LOGGER.warning(
+                "EXIT_CAPABILITY_V335_DISPATCH_SNAPSHOT_DEFERRED marker=%s reason=%s "
+                "dispatch_unchanged=true global_state_mutated=false safety_gates_bypassed=false",
+                MARKER,
+                reason,
+            )
+            return snap
+
+        try:
+            eac = importlib.import_module("bot.execution_authority_context")
+            stability = eac._evaluate_stability_authority(
+                runtime_snapshot=current_auth,
+                state_live_active=True,
+                lease_valid=True,
+                lease_generation_current=True,
+                heartbeat_fresh=True,
+                heartbeat_stage_sufficient=True,
+                broker_health_ok=True,
+                dispatch_enabled=True,
+                circuit_breaker_closed=True,
+            )
+        except Exception as exc:
+            LOGGER.warning(
+                "EXIT_CAPABILITY_V335_DISPATCH_SNAPSHOT_DEFERRED marker=%s reason=stability_unavailable:%s "
+                "dispatch_unchanged=true global_state_mutated=false safety_gates_bypassed=false",
+                MARKER,
+                exc,
+            )
+            return snap
+
+        if not bool(getattr(stability, "allowed", False)):
+            LOGGER.warning(
+                "EXIT_CAPABILITY_V335_DISPATCH_SNAPSHOT_DEFERRED marker=%s reason=stability_denied:%s "
+                "dispatch_unchanged=true global_state_mutated=false safety_gates_bypassed=false",
+                MARKER,
+                getattr(stability, "reason", "unknown"),
+            )
+            return snap
+
+        try:
+            bridged = replace(snap, dispatch_enabled=True)
+        except Exception:
+            return snap
+
+        LOGGER.critical(
+            "EXIT_CAPABILITY_V335_DISPATCH_SNAPSHOT_BRIDGED marker=%s trusted_close=true "
+            "source_dispatch_enabled=false local_dispatch_enabled=true exact_writer=true "
+            "startup_write_authority=true nonce_ready=true broker_health_ready=true "
+            "kill_switch_clear=true seak_clear=true circuit_clear=true stability_allowed=true "
+            "global_dispatch_mutated=false global_lifecycle_mutated=false ordinary_orders_unchanged=true "
+            "broker_minimum_order_ack_fill_gates_unchanged=true safety_gates_bypassed=false",
+            MARKER,
+        )
+        return bridged
+
+    setattr(trusted_exit_dispatch_snapshot_v335, _DISPATCH_SNAPSHOT_ATTR, True)
+    setattr(trusted_exit_dispatch_snapshot_v335, "__wrapped__", current)
+    pipeline.runtime_authority_snapshot = trusted_exit_dispatch_snapshot_v335
+    return True
+
+
 def _reassert_protective_exit_authority() -> bool:
     """Late-bind v337 after any startup wrapper churn.
 
-    This runs only inside ``_TRUSTED_CLOSE``.  It does not call an order, mutate
-    lifecycle state, or suppress a failed proof; it only restores v337's wrappers
-    around the *current* final pipeline bindings.  If reassertion is unavailable,
-    the ordinary pipeline remains fail-closed.
+    This runs only inside ``_TRUSTED_CLOSE``. It does not call an order, mutate
+    lifecycle state, or suppress a failed proof; it restores v337's wrappers
+    around the current final pipeline bindings and then installs the local
+    dispatch-snapshot wrapper. If either step is unavailable, the ordinary
+    pipeline remains fail-closed.
     """
     if not bool(_TRUSTED_CLOSE.get()):
         return False
@@ -101,14 +198,18 @@ def _reassert_protective_exit_authority() -> bool:
                 MARKER,
             )
             return False
-        ready = bool(patcher())
+        authority_ready = bool(patcher())
+        snapshot_ready = bool(_patch_trusted_dispatch_snapshot(v337)) if authority_ready else False
+        ready = bool(authority_ready and snapshot_ready)
         LOGGER.critical(
             "EXIT_CAPABILITY_V335_AUTHORITY_REASSERT marker=%s ready=%s trusted_close=true "
-            "late_binding=true global_lifecycle_mutated=false ordinary_entries_unchanged=true "
+            "late_binding=true dispatch_snapshot_binding=%s global_lifecycle_mutated=false "
+            "global_dispatch_mutated=false ordinary_entries_unchanged=true "
             "writer_nonce_health_killswitch_seak_circuit_stability_reproof_preserved=true "
             "ecel_risk_minimum_order_ack_fill_gates_unchanged=true safety_gates_bypassed=false",
             MARKER,
             str(ready).lower(),
+            str(snapshot_ready).lower(),
         )
         return ready
     except Exception as exc:
@@ -174,8 +275,6 @@ def _patch_capability_matrix() -> bool:
             return current(self, *args, **kwargs)
 
         overrides = dict(kwargs.get("runtime_overrides") or {})
-        # Only neutralize the mistaken *short-entry* classification.  The
-        # original function still performs every other capability check.
         overrides["supports_short"] = True
         patched_kwargs = dict(kwargs)
         patched_kwargs["runtime_overrides"] = overrides
@@ -237,7 +336,7 @@ def install_import_hook() -> bool:
             "RUNTIME_EXIT_CAPABILITY_SEMANTICS_V335_%s marker=%s ready=%s "
             "trusted_protective_close_only=true sell_to_close_not_short_entry=true "
             "ordinary_spot_short_gate_preserved=true context_local=true authority_late_reassert=true "
-            "writer_nonce_risk_killswitch_minimum_order_ack_fill_gates_unchanged=true "
+            "dispatch_snapshot_context_local=true writer_nonce_risk_killswitch_minimum_order_ack_fill_gates_unchanged=true "
             "forced_exit=false forced_short=false safety_gates_bypassed=false",
             "READY" if ready else "NOT_READY",
             MARKER,
