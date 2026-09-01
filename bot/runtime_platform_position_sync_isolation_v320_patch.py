@@ -2,7 +2,7 @@
 
 Production generation 5053 proved all three PLATFORM brokers (Coinbase, Kraken,
 OKX) had current authoritative v285 snapshots, complete reconciliation and
-protective exits.  Canonical ``position_sync_ready`` nevertheless regressed to
+protective exits. Canonical ``position_sync_ready`` nevertheless regressed to
 false when Daivon/Tania user-account Kraken reconciliation remained incomplete.
 That contradicts the existing v281/v282 contract, which explicitly keeps user
 entries fail closed while preserving ``platform_activation_unchanged=true`` and
@@ -10,19 +10,23 @@ entries fail closed while preserving ``platform_activation_unchanged=true`` and
 
 v320 restores that intended boundary without weakening position proof:
 
-* v285 remains the proof owner.  Its strong proof still requires current
+* v285 remains the proof owner. Its strong proof still requires current
   authoritative fetch, adoption and non-stale snapshot truth.
 * after v285 installs its strong ``v95.position_sync_status`` wrapper, v320
   filters only the *canonical platform activation* status to ``platform:*``
-  rows.  Every connected platform row must still be strong-proof ready.
+  rows. Every connected platform row must still be strong-proof ready.
 * v281/v282/v283 retain the all-account denominator and continue to block each
   unproven user account from new entries while preserving exits.
+* v323 liveness hardening reuses v285's existing proactive refresh interval to
+  dispatch the established authoritative platform reconciliation worker before
+  a current snapshot reaches its unchanged expiry. It does not grant
+  readiness, extend freshness, or perform broker I/O itself.
 * v321 is chained after the isolation hook so stale PLATFORM snapshots are
   redispatched through v285 strong proof and a heartbeat cannot repeatedly
   select a canonically-ready broker whose v210 auth read is already in flight.
 
 No user readiness is fabricated and no user broker is marked synchronized.
-No platform broker can be omitted from the platform denominator.  Writer,
+No platform broker can be omitted from the platform denominator. Writer,
 nonce, capital, risk, kill-switch, order/fill, snapshot-age and protective-exit
 gates are unchanged.
 """
@@ -40,9 +44,11 @@ from typing import Any
 
 LOGGER = logging.getLogger("nija.runtime_platform_position_sync_isolation_v320")
 MARKER = "20260831-platform-position-sync-isolation-v320"
+REFRESH_MARKER = "20260831-platform-position-proactive-refresh-v323"
 RELEASE_ID = "20260831-runtime-convergence-v320"
 _READY_FLAG = "NIJA_RUNTIME_PLATFORM_POSITION_SYNC_ISOLATION_V320_READY"
 _PATCH_ATTR = "_nija_platform_position_sync_isolation_v320"
+_REFRESH_PATCH_ATTR = "_nija_platform_position_proactive_refresh_v323"
 _IMPORT_HOOK_FLAG = "_NIJA_PLATFORM_POSITION_SYNC_ISOLATION_V320_IMPORT_HOOK"
 _LOCK = threading.RLock()
 
@@ -126,14 +132,98 @@ def _patch_v95_after_v285() -> bool:
     return True
 
 
+def _patch_v285_platform_refresh(module: ModuleType) -> bool:
+    """Queue authoritative reads before still-valid platform snapshots expire.
+
+    v285 already defines the refresh interval (55% of the snapshot TTL) and v108
+    owns the single-flight read/reconciliation worker. This adapter only widens
+    v285's discovery set to include a current snapshot once it reaches that
+    refresh interval. Readiness still comes exclusively from v285 strong proof.
+    """
+    current = getattr(module, "_platform_candidates", None)
+    snapshot_status = getattr(module, "_snapshot_status", None)
+    refresh_interval = getattr(module, "_refresh_interval_s", None)
+    connected = getattr(module, "_connected", None)
+    label = getattr(module, "_label", None)
+    if not callable(current) or not callable(snapshot_status) or not callable(refresh_interval):
+        return False
+    if bool(getattr(current, _REFRESH_PATCH_ATTR, False)):
+        return True
+    original = current
+
+    @wraps(original)
+    def platform_candidates_v323(manager: Any) -> list[tuple[str, Any]]:
+        try:
+            found = list(original(manager) or [])
+        except Exception:
+            found = []
+        seen = {id(broker) for _name, broker in found if broker is not None}
+        try:
+            refresh_after_s = max(1.0, float(refresh_interval()))
+        except Exception:
+            return found
+        try:
+            platform = getattr(manager, "platform_brokers", {}) or {}
+            if callable(platform):
+                platform = platform()
+            platform_items = tuple(dict(platform or {}).items())
+        except Exception:
+            return found
+
+        for broker_type, broker in platform_items:
+            if broker is None or id(broker) in seen:
+                continue
+            try:
+                is_connected = (
+                    bool(connected(broker))
+                    if callable(connected)
+                    else bool(getattr(broker, "connected", False))
+                )
+            except Exception:
+                is_connected = False
+            if not is_connected:
+                continue
+            try:
+                snapshot_ok, _reason, _rows, age_s, _generation = snapshot_status(broker)
+                age_s = float(age_s)
+            except Exception:
+                continue
+            if not snapshot_ok or age_s < refresh_after_s:
+                continue
+            try:
+                broker_name = str(
+                    label(broker_type) if callable(label) else broker_type
+                ).strip().lower()
+            except Exception:
+                broker_name = str(broker_type or "unknown").strip().lower()
+            found.append((broker_name or "unknown", broker))
+            seen.add(id(broker))
+        return found
+
+    platform_candidates_v323.__name__ = "platform_candidates_v323"
+    setattr(platform_candidates_v323, _REFRESH_PATCH_ATTR, True)
+    setattr(platform_candidates_v323, "__wrapped__", original)
+    module._platform_candidates = platform_candidates_v323
+    LOGGER.critical(
+        "PLATFORM_POSITION_PROACTIVE_REFRESH_V323_PATCHED marker=%s "
+        "v285_refresh_interval_reused=true proactive_refresh_before_expiry=true "
+        "v108_single_flight_preserved=true snapshot_ttl_unchanged=true "
+        "readiness_fabricated=false broker_io=false forced_trade=false "
+        "forced_activation=false safety_gates_bypassed=false",
+        REFRESH_MARKER,
+    )
+    return True
+
+
 def _patch_v285(module: ModuleType) -> bool:
     current = getattr(module, "_patch_v95_status", None)
     if not callable(current):
         return False
+    refresh_ready = _patch_v285_platform_refresh(module)
     if bool(getattr(current, _PATCH_ATTR, False)):
         # Re-assert in case another idempotent installer replay replaced v95.
         _patch_v95_after_v285()
-        return True
+        return bool(refresh_ready)
     original = current
 
     @wraps(original)
@@ -158,7 +248,7 @@ def _patch_v285(module: ModuleType) -> bool:
     # If v285 was already installed before v320 appeared, apply the isolation
     # adapter immediately to the existing strong status wrapper.
     _patch_v95_after_v285()
-    return True
+    return bool(refresh_ready)
 
 
 def _patch_loaded() -> bool:
@@ -243,6 +333,7 @@ def install() -> bool:
             "PLATFORM_POSITION_SYNC_ISOLATION_V320_READY marker=%s ready=true "
             "v285_strong_proof_preserved=true all_connected_platform_required=true "
             "v281_v282_v283_all_account_coverage_unchanged=true "
+            "proactive_platform_refresh_v323=true snapshot_ttl_unchanged=true "
             "user_entries_fail_closed=true user_exits_preserved=true "
             "user_readiness_fabricated=false platform_readiness_fabricated=false "
             "activation_liveness_v321=true "
@@ -259,10 +350,12 @@ def install_import_hook() -> bool:
 
 __all__ = [
     "MARKER",
+    "REFRESH_MARKER",
     "RELEASE_ID",
     "install",
     "install_import_hook",
     "_patch_v285",
+    "_patch_v285_platform_refresh",
     "_patch_v95_after_v285",
     "_is_v285_strong_status",
     "_install_activation_liveness_v321",
