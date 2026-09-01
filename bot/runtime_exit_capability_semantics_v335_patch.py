@@ -21,8 +21,18 @@ prevents a SELL that reduces a proven long from being classified as a new short.
 All other capability checks (margin, leverage, long support), and every
 writer/nonce/risk/kill-switch/minimum-order/order-ack/fill gate remain unchanged.
 
+The trusted-close scope also reasserts v337's final execution-pipeline authority
+bindings immediately before dispatch.  Several startup authority patches are
+installed later and may legitimately replace module-level assertion functions;
+without this late reassertion a verified close can regress to the ordinary
+``lifecycle_phase:BOOT`` assertion even though v337 was READY at startup.  The
+reassertion changes no lifecycle state and grants nothing by itself: v337 still
+re-proves distributed writer authority, startup write authority, nonce, broker
+health, kill-switch, SEAK, circuit and stability before a close may pass.
+
 Ordinary Kraken/Coinbase/OKX spot sells, enter_short signals, or callers that
-only spoof one exit field remain subject to the normal short-capability check.
+only spoof one exit field remain subject to the normal short-capability and
+execution-authority checks.
 """
 from __future__ import annotations
 
@@ -71,6 +81,47 @@ def _trusted_exit_kwargs(kwargs: Mapping[str, Any]) -> bool:
     )
 
 
+def _reassert_protective_exit_authority() -> bool:
+    """Late-bind v337 after any startup wrapper churn.
+
+    This runs only inside ``_TRUSTED_CLOSE``.  It does not call an order, mutate
+    lifecycle state, or suppress a failed proof; it only restores v337's wrappers
+    around the *current* final pipeline bindings.  If reassertion is unavailable,
+    the ordinary pipeline remains fail-closed.
+    """
+    if not bool(_TRUSTED_CLOSE.get()):
+        return False
+    try:
+        v337 = importlib.import_module("bot.runtime_protective_exit_authority_bridge_v337_patch")
+        patcher = getattr(v337, "_patch_pipeline", None)
+        if not callable(patcher):
+            LOGGER.warning(
+                "EXIT_CAPABILITY_V335_AUTHORITY_REASSERT_DEFERRED marker=%s reason=v337_patcher_unavailable "
+                "ordinary_authority_unchanged=true safety_gates_bypassed=false",
+                MARKER,
+            )
+            return False
+        ready = bool(patcher())
+        LOGGER.critical(
+            "EXIT_CAPABILITY_V335_AUTHORITY_REASSERT marker=%s ready=%s trusted_close=true "
+            "late_binding=true global_lifecycle_mutated=false ordinary_entries_unchanged=true "
+            "writer_nonce_health_killswitch_seak_circuit_stability_reproof_preserved=true "
+            "ecel_risk_minimum_order_ack_fill_gates_unchanged=true safety_gates_bypassed=false",
+            MARKER,
+            str(ready).lower(),
+        )
+        return ready
+    except Exception as exc:
+        LOGGER.warning(
+            "EXIT_CAPABILITY_V335_AUTHORITY_REASSERT_DEFERRED marker=%s reason=%s:%s "
+            "ordinary_authority_unchanged=true safety_gates_bypassed=false",
+            MARKER,
+            type(exc).__name__,
+            exc,
+        )
+        return False
+
+
 def _patch_submitter() -> bool:
     module = importlib.import_module("bot.pipeline_order_submitter")
     current = getattr(module, "submit_market_order_via_pipeline", None)
@@ -94,6 +145,7 @@ def _patch_submitter() -> bool:
                 _norm(kwargs.get("position_effect")),
                 _norm((kwargs.get("metadata_override") or {}).get("exit_origin")),
             )
+            _reassert_protective_exit_authority()
             return current(*args, **kwargs)
         finally:
             _TRUSTED_CLOSE.reset(token)
@@ -144,8 +196,6 @@ def _patch_capability_matrix() -> bool:
     setattr(enforce_close_semantics, _MATRIX_PATCH_ATTR, True)
     setattr(enforce_close_semantics, "__wrapped__", current)
     cls.enforce_order_capabilities = enforce_close_semantics
-    # Patch the process singleton explicitly as well; method lookup normally
-    # handles this, but recording the class change makes the invariant clear.
     return True
 
 
@@ -186,7 +236,7 @@ def install_import_hook() -> bool:
         log(
             "RUNTIME_EXIT_CAPABILITY_SEMANTICS_V335_%s marker=%s ready=%s "
             "trusted_protective_close_only=true sell_to_close_not_short_entry=true "
-            "ordinary_spot_short_gate_preserved=true context_local=true "
+            "ordinary_spot_short_gate_preserved=true context_local=true authority_late_reassert=true "
             "writer_nonce_risk_killswitch_minimum_order_ack_fill_gates_unchanged=true "
             "forced_exit=false forced_short=false safety_gates_bypassed=false",
             "READY" if ready else "NOT_READY",
@@ -202,5 +252,5 @@ def install() -> bool:
 
 __all__ = [
     "MARKER", "RELEASE_ID", "install", "install_import_hook",
-    "_trusted_exit_kwargs", "_TRUSTED_CLOSE",
+    "_trusted_exit_kwargs", "_TRUSTED_CLOSE", "_reassert_protective_exit_authority",
 ]
