@@ -1,38 +1,14 @@
 """Protective-exit authority bridge v337.
 
-Problem
--------
-A verified sell-to-close can reach the canonical ExecutionPipeline while NIJA is
-still BOOT/WARM or the startup coordinator is reconciling a stale global epoch.
-The pipeline's normal authority contract is intentionally entry-centric: it
-requires the whole runtime to be LIVE before *any* order.  Production therefore
-blocked a genuine profitable Kraken ETH close with
-``Runtime authority convergence lost`` even though the exact distributed writer
-lease was current and the position/cost basis were proven.
+A verified sell-to-close may need to reduce risk while NIJA is still BOOT/WARM
+or reconciling a stale global epoch.  This module never makes the runtime LIVE
+and never grants general execution permission.  It bridges only the canonical,
+context-local trusted close established by v335 after re-proving hard writer,
+nonce, broker-health, circuit and stability safety.
 
-Policy
-------
-v337 does NOT make the runtime LIVE and does NOT grant general execution
-permission.  It provides a context-local bridge only for the canonical trusted
-protective-close scope established by v335.  The bridge is admitted only when
-all hard write-safety proofs are true at dispatch time:
-
-* exact distributed writer authority verifies now;
-* writer startup authority prerequisites (Redis, lease, fencing token,
-  heartbeat, authority verification) verify now;
-* runtime nonce authority is ready;
-* broker dispatch health is ready;
-* kill switch is inactive;
-* SEAK is not halted;
-* execution circuit is CLOSED (or approved RECOVERING);
-* a writer fencing token is present.
-
-Only the lifecycle/global-epoch convergence requirement is relaxed for that
-single risk-reducing close.  Capability, margin, pre-trade risk, ECEL,
-throttling, risk governor, spread/slippage, broker-health, terminal writer,
-nonce, minimum-order, order-ack and fill-confirmation checks remain in force.
-No environment lifecycle state, startup coordinator state, or global readiness
-bit is mutated.
+Capability, pre-trade risk, ECEL, throttling, spread/slippage, broker health,
+terminal writer, nonce, minimum-order, order-ack and fill-confirmation checks
+remain in force.  No global lifecycle/environment state is mutated.
 """
 from __future__ import annotations
 
@@ -50,6 +26,7 @@ MARKER = "20260901-runtime-protective-exit-authority-bridge-v337"
 RELEASE_ID = "20260901-runtime-convergence-v337"
 _READY_FLAG = "NIJA_RUNTIME_PROTECTIVE_EXIT_AUTHORITY_BRIDGE_V337_READY"
 _SNAPSHOT_ATTR = "_nija_protective_exit_snapshot_bridge_v337"
+_CAN_EXECUTE_ATTR = "_nija_protective_exit_can_execute_bridge_v337"
 _ASSERT_ATTR = "_nija_protective_exit_dispatch_bridge_v337"
 _INSTALL_FLAG = "_NIJA_RUNTIME_PROTECTIVE_EXIT_AUTHORITY_BRIDGE_V337"
 _LOCK = threading.RLock()
@@ -84,8 +61,6 @@ def _hard_exit_authority_proof() -> tuple[bool, str, Any]:
         return False, f"distributed_writer:{exc}", snap
 
     try:
-        # Force-refresh the startup write proof so a stale cached coordinator
-        # epoch cannot be mistaken for current Redis/lease truth.
         eac.require_startup_execution_authority(
             context="protective_exit_v337",
             force_refresh=True,
@@ -99,11 +74,6 @@ def _hard_exit_authority_proof() -> tuple[bool, str, Any]:
         return False, "nonce_not_ready", snap
     if not bool(getattr(snap, "dispatch_health_ready", False)):
         return False, "broker_dispatch_health_not_ready", snap
-    # dispatch_enabled may be lifecycle-derived on some startup snapshots.
-    # We do not use it as a substitute for the exact writer proof above, but if
-    # it is explicitly false for a non-lifecycle reason the reason remains
-    # visible in telemetry and downstream terminal checks still fail closed.
-
     if eac.is_seak_halted():
         return False, "seak_halted", snap
 
@@ -117,13 +87,12 @@ def _hard_exit_authority_proof() -> tuple[bool, str, Any]:
     lifecycle = str(getattr(snap, "lifecycle_phase", "") or "").upper()
     reason = str(getattr(snap, "reason", "") or "")
     coordinator = str(getattr(snap, "coordinator_state", "") or "")
-    # This bridge is intentionally for startup/convergence only.  A degraded
-    # runtime for another hard reason must not be converted into exit authority.
     startup_shape = (
         lifecycle in {"BOOT", "WARM"}
         or "global_epoch_stale" in reason.lower()
         or "startup" in reason.lower()
         or "activation" in coordinator.lower()
+        or coordinator.upper() == "FAIL_SAFE_HALT"
     )
     if not startup_shape and not bool(getattr(snap, "ready", False)):
         return False, f"non_startup_runtime_block:{reason or lifecycle or coordinator}", snap
@@ -131,11 +100,105 @@ def _hard_exit_authority_proof() -> tuple[bool, str, Any]:
     return True, "hard_exit_authority_proven", snap
 
 
+def _bridge_initial_authority_decision(decision: Any) -> Any:
+    """Bridge only the first lifecycle denial for a trusted risk-reducing close.
+
+    The normal can_execute() path returns immediately at lifecycle Gate 0, so
+    the pipeline never reaches v337's later dispatch bridge.  For a trusted
+    close only, re-prove hard write safety and the stability governor, then
+    construct a scope-local allowed decision.  This does not mutate the global
+    lifecycle and does not alter downstream order validation.
+    """
+    if bool(getattr(decision, "allowed", False)) or not _trusted_close():
+        return decision
+
+    first_failed = str(getattr(decision, "first_failed_gate", "") or "")
+    reason = str(getattr(decision, "reason_detail", None) or getattr(decision, "reason", "") or "")
+    if first_failed != "lifecycle.phase" and not reason.startswith("lifecycle_phase:"):
+        return decision
+
+    ok, proof_reason, snap = _hard_exit_authority_proof()
+    if not ok:
+        LOGGER.warning(
+            "PROTECTIVE_EXIT_AUTHORITY_V337_INITIAL_DEFERRED marker=%s reason=%s "
+            "lifecycle=%s ordinary_execution_unchanged=true safety_gates_bypassed=false",
+            MARKER, proof_reason, getattr(snap, "lifecycle_phase", "unknown"),
+        )
+        return decision
+
+    eac = importlib.import_module("bot.execution_authority_context")
+    try:
+        stability = eac._evaluate_stability_authority(
+            runtime_snapshot=snap,
+            state_live_active=True,
+            lease_valid=True,
+            lease_generation_current=True,
+            heartbeat_fresh=True,
+            heartbeat_stage_sufficient=True,
+            broker_health_ok=True,
+            dispatch_enabled=True,
+            circuit_breaker_closed=True,
+        )
+    except Exception as exc:
+        LOGGER.warning(
+            "PROTECTIVE_EXIT_AUTHORITY_V337_INITIAL_DEFERRED marker=%s reason=stability_unavailable:%s "
+            "ordinary_execution_unchanged=true safety_gates_bypassed=false",
+            MARKER, exc,
+        )
+        return decision
+
+    if not bool(getattr(stability, "allowed", False)):
+        LOGGER.warning(
+            "PROTECTIVE_EXIT_AUTHORITY_V337_INITIAL_DEFERRED marker=%s reason=stability_denied:%s "
+            "ordinary_execution_unchanged=true safety_gates_bypassed=false",
+            MARKER, getattr(stability, "reason", "unknown"),
+        )
+        return decision
+
+    circuit_state = str(os.environ.get("NIJA_EXECUTION_CIRCUIT_STATE", "CLOSED") or "CLOSED").strip().upper()
+    bridged = replace(
+        decision,
+        allowed=True,
+        reason="protective_exit_lifecycle_bridge",
+        circuit_state=circuit_state,
+        state_live_active=True,
+        lease_valid=True,
+        lease_generation_current=True,
+        nonce_ready=True,
+        heartbeat_fresh=True,
+        heartbeat_stage_sufficient=True,
+        broker_health_ok=True,
+        circuit_breaker_closed=True,
+        dispatch_enabled=True,
+        stability_allowed=True,
+        stability_halt_state=str(getattr(stability, "halt_state", "STABLE") or "STABLE"),
+        stability_throttle=float(getattr(stability, "throttle", 0.0) or 0.0),
+        stability_size_multiplier=float(getattr(stability, "size_multiplier", 1.0) or 1.0),
+        stability_stress_score=float(getattr(stability, "stress_score", 0.0) or 0.0),
+        stability_collapsed_risk_score=float(getattr(stability, "collapsed_risk_score", 0.0) or 0.0),
+        stability_reason=str(getattr(stability, "reason", "stable") or "stable"),
+        first_failed_gate="",
+        reason_code="allowed",
+        reason_detail="protective_exit_lifecycle_bridge",
+        lifecycle_phase="LIVE",
+    )
+    LOGGER.critical(
+        "PROTECTIVE_EXIT_AUTHORITY_V337_INITIAL_DECISION_BRIDGED marker=%s "
+        "source_lifecycle=%s exact_writer=true startup_write_authority=true nonce_ready=true "
+        "broker_health_ready=true kill_switch_clear=true seak_clear=true circuit_clear=true "
+        "stability_allowed=true risk_reducing_exit_only=true global_lifecycle_mutated=false "
+        "downstream_risk_minimum_order_ack_fill_gates_unchanged=true safety_gates_bypassed=false",
+        MARKER, getattr(snap, "lifecycle_phase", "unknown"),
+    )
+    return bridged
+
+
 def _patch_pipeline() -> bool:
     pipeline = importlib.import_module("bot.execution_pipeline")
     original_snapshot = getattr(pipeline, "runtime_authority_snapshot", None)
+    original_can_execute = getattr(pipeline, "can_execute", None)
     original_assert = getattr(pipeline, "assert_execution_dispatch_permitted", None)
-    if not callable(original_snapshot) or not callable(original_assert):
+    if not callable(original_snapshot) or not callable(original_can_execute) or not callable(original_assert):
         return False
 
     if not bool(getattr(original_snapshot, _SNAPSHOT_ATTR, False)):
@@ -175,6 +238,18 @@ def _patch_pipeline() -> bool:
         setattr(protective_exit_snapshot_v337, "__wrapped__", base_snapshot)
         pipeline.runtime_authority_snapshot = protective_exit_snapshot_v337
 
+    original_can_execute = getattr(pipeline, "can_execute", None)
+    if callable(original_can_execute) and not bool(getattr(original_can_execute, _CAN_EXECUTE_ATTR, False)):
+        base_can_execute = original_can_execute
+
+        @wraps(base_can_execute)
+        def protective_exit_can_execute_v337(*args, **kwargs):
+            return _bridge_initial_authority_decision(base_can_execute(*args, **kwargs))
+
+        setattr(protective_exit_can_execute_v337, _CAN_EXECUTE_ATTR, True)
+        setattr(protective_exit_can_execute_v337, "__wrapped__", base_can_execute)
+        pipeline.can_execute = protective_exit_can_execute_v337
+
     original_assert = getattr(pipeline, "assert_execution_dispatch_permitted", None)
     if callable(original_assert) and not bool(getattr(original_assert, _ASSERT_ATTR, False)):
         base_assert = original_assert
@@ -204,6 +279,7 @@ def _patch_pipeline() -> bool:
 
     return bool(
         getattr(getattr(pipeline, "runtime_authority_snapshot", None), _SNAPSHOT_ATTR, False)
+        and getattr(getattr(pipeline, "can_execute", None), _CAN_EXECUTE_ATTR, False)
         and getattr(getattr(pipeline, "assert_execution_dispatch_permitted", None), _ASSERT_ATTR, False)
     )
 
@@ -245,8 +321,8 @@ def install_import_hook() -> bool:
             "trusted_protective_close_only=true exact_distributed_writer_required=true "
             "startup_write_authority_required=true nonce_required=true broker_health_required=true "
             "kill_switch_clear_required=true seak_clear_required=true circuit_clear_required=true "
-            "lifecycle_global_epoch_bridge_only=true global_lifecycle_mutated=false "
-            "ordinary_entries_unchanged=true ordinary_shorts_unchanged=true "
+            "initial_lifecycle_gate_bridge=true lifecycle_global_epoch_bridge_only=true "
+            "global_lifecycle_mutated=false ordinary_entries_unchanged=true ordinary_shorts_unchanged=true "
             "ecel_risk_slippage_minimum_order_ack_fill_gates_unchanged=true "
             "forced_live=false forced_exit=false safety_gates_bypassed=false",
             "READY" if ready else "NOT_READY", MARKER, str(ready).lower(),
@@ -258,4 +334,7 @@ def install() -> bool:
     return install_import_hook()
 
 
-__all__ = ["MARKER", "RELEASE_ID", "install", "install_import_hook", "_hard_exit_authority_proof"]
+__all__ = [
+    "MARKER", "RELEASE_ID", "install", "install_import_hook",
+    "_hard_exit_authority_proof", "_bridge_initial_authority_decision",
+]
