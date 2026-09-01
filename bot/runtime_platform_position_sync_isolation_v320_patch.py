@@ -21,6 +21,9 @@ v320 restores that intended boundary without weakening position proof:
   dispatch the established authoritative platform reconciliation worker before
   a current snapshot reaches its unchanged expiry. It does not grant
   readiness, extend freshness, or perform broker I/O itself.
+* v321 is chained after the isolation hook so stale PLATFORM snapshots are
+  redispatched through v285 strong proof and a heartbeat cannot repeatedly
+  select a canonically-ready broker whose v210 auth read is already in flight.
 
 No user readiness is fabricated and no user broker is marked synchronized.
 No platform broker can be omitted from the platform denominator. Writer,
@@ -274,6 +277,26 @@ def _register_manifest() -> bool:
         return False
 
 
+def _install_activation_liveness_v321() -> bool:
+    try:
+        module = importlib.import_module("bot.runtime_activation_liveness_v321_patch")
+        installer = getattr(module, "install_import_hook", None) or getattr(module, "install", None)
+        if not callable(installer):
+            return False
+        return bool(installer())
+    except Exception as exc:
+        LOGGER.critical(
+            "PLATFORM_POSITION_SYNC_ISOLATION_V320_V321_CHAIN_FAILED marker=%s error=%s:%s "
+            "trading_fail_closed=true readiness_fabricated=false execution_proof_fabricated=false "
+            "forced_activation=false safety_gates_bypassed=false",
+            MARKER,
+            type(exc).__name__,
+            exc,
+            exc_info=True,
+        )
+        return False
+
+
 def install() -> bool:
     with _LOCK:
         _patch_loaded()
@@ -292,14 +315,17 @@ def install() -> bool:
             setattr(builtins, _IMPORT_HOOK_FLAG, True)
 
         manifest = _register_manifest()
-        ready = bool(manifest)
+        v321 = _install_activation_liveness_v321()
+        ready = bool(manifest and v321)
         os.environ[_READY_FLAG] = "1" if ready else "0"
         if not ready:
             LOGGER.critical(
                 "PLATFORM_POSITION_SYNC_ISOLATION_V320_NOT_READY marker=%s "
-                "reason=manifest_registration_failed trading_fail_closed=true "
+                "manifest_ready=%s activation_liveness_v321=%s trading_fail_closed=true "
                 "user_isolation_not_claimed=true safety_gates_bypassed=false",
                 MARKER,
+                str(manifest).lower(),
+                str(v321).lower(),
             )
             return False
 
@@ -310,6 +336,7 @@ def install() -> bool:
             "proactive_platform_refresh_v323=true snapshot_ttl_unchanged=true "
             "user_entries_fail_closed=true user_exits_preserved=true "
             "user_readiness_fabricated=false platform_readiness_fabricated=false "
+            "activation_liveness_v321=true "
             "writer_nonce_capital_risk_killswitch_order_fill_snapshot_ttl_unchanged=true "
             "forced_activation=false safety_gates_bypassed=false",
             MARKER,
@@ -331,4 +358,5 @@ __all__ = [
     "_patch_v285_platform_refresh",
     "_patch_v95_after_v285",
     "_is_v285_strong_status",
+    "_install_activation_liveness_v321",
 ]
