@@ -38,6 +38,17 @@ and stability both pass. No environment, Redis, lifecycle, coordinator or
 global dispatch state is mutated. Ordinary orders are unchanged and every
 subsequent broker, minimum-order, ACK and fill gate remains authoritative.
 
+Finally, v328's confirmed-fill direct-dispatch wrapper historically forced every
+crypto direct order to ``size_type=quote`` and passed the USD notional as the
+broker quantity. For an explicit base-sized protective close this converted a
+validated 0.09565 ETH close into a 234.97 ETH Kraken volume and produced a real
+``EOrder:Insufficient funds`` rejection. v335 now preserves base units only for
+the same trusted protective-close context. The submitted base quantity is the
+smaller of the verified held quantity and the ECEL-adjusted notional divided by
+the verified price hint. If either proof is unavailable, the close fails
+closed rather than guessing units. Ordinary quote-sized entries remain
+unchanged.
+
 Ordinary Kraken/Coinbase/OKX spot sells, enter_short signals, or callers that
 only spoof one exit field remain subject to the normal short-capability and
 execution-authority checks.
@@ -47,6 +58,7 @@ from __future__ import annotations
 import builtins
 import contextvars
 import importlib
+import inspect
 import logging
 import os
 import threading
@@ -61,6 +73,7 @@ _READY_FLAG = "NIJA_RUNTIME_EXIT_CAPABILITY_SEMANTICS_V335_READY"
 _SUBMIT_PATCH_ATTR = "_nija_exit_capability_submit_scope_v335"
 _MATRIX_PATCH_ATTR = "_nija_exit_capability_matrix_v335"
 _DISPATCH_SNAPSHOT_ATTR = "_nija_exit_dispatch_snapshot_scope_v335"
+_BASE_DISPATCH_ATTR = "_nija_exit_base_dispatch_scope_v335"
 _INSTALL_FLAG = "_NIJA_RUNTIME_EXIT_CAPABILITY_SEMANTICS_V335"
 _LOCK = threading.RLock()
 _TRUSTED_CLOSE = contextvars.ContextVar("nija_v335_trusted_protective_close", default=False)
@@ -73,6 +86,16 @@ _ALLOWED_ORIGINS = {
 
 def _norm(value: Any) -> str:
     return str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+
+
+def _float(value: Any, default: float = 0.0) -> float:
+    try:
+        parsed = float(value)
+    except Exception:
+        return default
+    if parsed != parsed or parsed in {float("inf"), float("-inf")}:
+        return default
+    return parsed
 
 
 def _trusted_exit_kwargs(kwargs: Mapping[str, Any]) -> bool:
@@ -89,6 +112,114 @@ def _trusted_exit_kwargs(kwargs: Mapping[str, Any]) -> bool:
         and metadata.get("closing_position") is True
         and origin in _ALLOWED_ORIGINS
     )
+
+
+def _patch_confirmed_fill_base_dispatch() -> bool:
+    """Preserve explicit base units at v328's direct broker terminal.
+
+    v328 remains authoritative for confirmed-fill truth. This wrapper changes
+    only the quantity/size_type presented to the broker while the trusted close
+    ContextVar is active. It never promotes an ACK to a fill.
+    """
+    try:
+        v328 = importlib.import_module("bot.runtime_confirmed_fill_profitability_v328_patch")
+    except Exception:
+        return False
+    current = getattr(v328, "_submit_direct", None)
+    if not callable(current):
+        return False
+    if bool(getattr(current, _BASE_DISPATCH_ATTR, False)):
+        return True
+
+    @wraps(current)
+    def submit_direct_with_base_exit_v335(
+        broker: Any,
+        symbol: str,
+        side: str,
+        size_usd: float,
+        metadata: Mapping[str, Any],
+    ):
+        meta = dict(metadata or {})
+        if not bool(_TRUSTED_CLOSE.get()):
+            return current(broker, symbol, side, size_usd, meta)
+
+        side_norm = _norm(side)
+        if side_norm != "sell":
+            # Current trusted universal close path is long-spot sell-to-close.
+            # Do not invent base semantics for buy-to-cover/margin paths.
+            return current(broker, symbol, side, size_usd, meta)
+
+        verified_qty = _float(meta.get("verified_position_quantity"), 0.0)
+        price = _float(
+            meta.get("price_hint_usd")
+            or meta.get("reference_price_usd")
+            or meta.get("pretrade_price"),
+            0.0,
+        )
+        adjusted_notional = _float(size_usd, 0.0)
+        if verified_qty <= 0.0:
+            raise RuntimeError("trusted protective exit base quantity unproven")
+        if price <= 0.0 or adjusted_notional <= 0.0:
+            raise RuntimeError("trusted protective exit ECEL base conversion unproven")
+
+        ecel_qty = adjusted_notional / price
+        base_qty = min(verified_qty, ecel_qty)
+        if base_qty <= 0.0:
+            raise RuntimeError("trusted protective exit compiled base quantity invalid")
+
+        submit = getattr(broker, "place_market_order", None)
+        if not callable(submit):
+            submit = getattr(broker, "execute_order", None)
+        if not callable(submit):
+            submit = getattr(broker, "place_order", None)
+        if not callable(submit):
+            raise RuntimeError(f"Broker {broker!r} has no market-order submit method")
+
+        trace_id = str(meta.get("decision_trace_id") or meta.get("trace_id") or "")
+        submit_kwargs: dict[str, Any] = {"size_type": "base"}
+        if trace_id:
+            try:
+                sig = inspect.signature(submit)
+                if "decision_trace_id" in sig.parameters:
+                    submit_kwargs["decision_trace_id"] = trace_id
+            except (TypeError, ValueError):
+                pass
+
+        LOGGER.critical(
+            "EXIT_CAPABILITY_V335_BASE_SIZE_PRESERVED marker=%s symbol=%s side=%s "
+            "verified_qty=%.12f ecel_qty=%.12f submitted_qty=%.12f size_type=base "
+            "adjusted_notional=%.8f price_hint=%.10f quote_notional_as_base=false "
+            "ordinary_orders_unchanged=true ack_fill_truth_unchanged=true safety_gates_bypassed=false",
+            MARKER,
+            symbol,
+            side_norm,
+            verified_qty,
+            ecel_qty,
+            base_qty,
+            adjusted_notional,
+            price,
+        )
+        try:
+            return submit(symbol, side, float(base_qty), **submit_kwargs)
+        except TypeError:
+            try:
+                return submit(
+                    symbol=symbol,
+                    side=side,
+                    quantity=float(base_qty),
+                    **submit_kwargs,
+                )
+            except TypeError as exc:
+                # Never fall back to an ambiguous positional submit for an
+                # explicit base close; doing so can reintroduce the unit bug.
+                raise RuntimeError(
+                    f"trusted protective exit broker lacks explicit base-size contract: {exc}"
+                ) from exc
+
+    setattr(submit_direct_with_base_exit_v335, _BASE_DISPATCH_ATTR, True)
+    setattr(submit_direct_with_base_exit_v335, "__wrapped__", current)
+    v328._submit_direct = submit_direct_with_base_exit_v335
+    return True
 
 
 def _patch_trusted_dispatch_snapshot(v337: Any) -> bool:
@@ -178,14 +309,7 @@ def _patch_trusted_dispatch_snapshot(v337: Any) -> bool:
 
 
 def _reassert_protective_exit_authority() -> bool:
-    """Late-bind v337 after any startup wrapper churn.
-
-    This runs only inside ``_TRUSTED_CLOSE``. It does not call an order, mutate
-    lifecycle state, or suppress a failed proof; it restores v337's wrappers
-    around the current final pipeline bindings and then installs the local
-    dispatch-snapshot wrapper. If either step is unavailable, the ordinary
-    pipeline remains fail-closed.
-    """
+    """Late-bind protective-exit authority after any startup wrapper churn."""
     if not bool(_TRUSTED_CLOSE.get()):
         return False
     try:
@@ -200,16 +324,18 @@ def _reassert_protective_exit_authority() -> bool:
             return False
         authority_ready = bool(patcher())
         snapshot_ready = bool(_patch_trusted_dispatch_snapshot(v337)) if authority_ready else False
-        ready = bool(authority_ready and snapshot_ready)
+        base_ready = bool(_patch_confirmed_fill_base_dispatch())
+        ready = bool(authority_ready and snapshot_ready and base_ready)
         LOGGER.critical(
             "EXIT_CAPABILITY_V335_AUTHORITY_REASSERT marker=%s ready=%s trusted_close=true "
-            "late_binding=true dispatch_snapshot_binding=%s global_lifecycle_mutated=false "
-            "global_dispatch_mutated=false ordinary_entries_unchanged=true "
+            "late_binding=true dispatch_snapshot_binding=%s base_size_binding=%s "
+            "global_lifecycle_mutated=false global_dispatch_mutated=false ordinary_entries_unchanged=true "
             "writer_nonce_health_killswitch_seak_circuit_stability_reproof_preserved=true "
             "ecel_risk_minimum_order_ack_fill_gates_unchanged=true safety_gates_bypassed=false",
             MARKER,
             str(ready).lower(),
             str(snapshot_ready).lower(),
+            str(base_ready).lower(),
         )
         return ready
     except Exception as exc:
@@ -319,8 +445,9 @@ def install_import_hook() -> bool:
                 raise RuntimeError("v334_not_ready")
             matrix_ready = _patch_capability_matrix()
             submitter_ready = _patch_submitter()
+            base_ready = _patch_confirmed_fill_base_dispatch()
             manifest_ready = _register_manifest()
-            ready = bool(matrix_ready and submitter_ready and manifest_ready)
+            ready = bool(matrix_ready and submitter_ready and base_ready and manifest_ready)
         except Exception as exc:
             ready = False
             LOGGER.exception(
@@ -336,7 +463,8 @@ def install_import_hook() -> bool:
             "RUNTIME_EXIT_CAPABILITY_SEMANTICS_V335_%s marker=%s ready=%s "
             "trusted_protective_close_only=true sell_to_close_not_short_entry=true "
             "ordinary_spot_short_gate_preserved=true context_local=true authority_late_reassert=true "
-            "dispatch_snapshot_context_local=true writer_nonce_risk_killswitch_minimum_order_ack_fill_gates_unchanged=true "
+            "dispatch_snapshot_context_local=true base_size_terminal_preserved=true "
+            "writer_nonce_risk_killswitch_minimum_order_ack_fill_gates_unchanged=true "
             "forced_exit=false forced_short=false safety_gates_bypassed=false",
             "READY" if ready else "NOT_READY",
             MARKER,
@@ -352,4 +480,5 @@ def install() -> bool:
 __all__ = [
     "MARKER", "RELEASE_ID", "install", "install_import_hook",
     "_trusted_exit_kwargs", "_TRUSTED_CLOSE", "_reassert_protective_exit_authority",
+    "_patch_confirmed_fill_base_dispatch",
 ]
