@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 
 
-def test_canonical_profitability_chain_requires_v336(monkeypatch):
+def test_canonical_profitability_chain_requires_v337(monkeypatch):
     from bot import runtime_all_in_profitability_authority_v324_patch as chain
 
     calls = []
@@ -22,6 +22,7 @@ def test_canonical_profitability_chain_requires_v336(monkeypatch):
         "bot.runtime_canonical_exit_submission_v334_patch": "NIJA_RUNTIME_CANONICAL_EXIT_SUBMISSION_V334_READY",
         "bot.runtime_exit_capability_semantics_v335_patch": "NIJA_RUNTIME_EXIT_CAPABILITY_SEMANTICS_V335_READY",
         "bot.runtime_exit_submission_failure_truth_v336_patch": "NIJA_RUNTIME_EXIT_SUBMISSION_FAILURE_TRUTH_V336_READY",
+        "bot.runtime_protective_exit_authority_bridge_v337_patch": "NIJA_RUNTIME_PROTECTIVE_EXIT_AUTHORITY_BRIDGE_V337_READY",
     }
 
     def fake_install(module_name: str, ready_env: str) -> bool:
@@ -37,13 +38,13 @@ def test_canonical_profitability_chain_requires_v336(monkeypatch):
     assert os.environ["NIJA_CANONICAL_PROFITABILITY_CHAIN_READY"] == "1"
 
 
-def test_canonical_profitability_chain_fails_closed_when_v336_not_ready(monkeypatch):
+def test_canonical_profitability_chain_fails_closed_when_v337_not_ready(monkeypatch):
     from bot import runtime_all_in_profitability_authority_v324_patch as chain
 
     monkeypatch.setattr(chain._core, "install_import_hook", lambda: True)
 
     def fake_install(module_name: str, ready_env: str) -> bool:
-        return module_name != "bot.runtime_exit_submission_failure_truth_v336_patch"
+        return module_name != "bot.runtime_protective_exit_authority_bridge_v337_patch"
 
     monkeypatch.setattr(chain, "_install_required", fake_install)
 
