@@ -1,0 +1,5 @@
+# Runtime liveness/execution proof artifacts must never be committed.
+heartbeat_verified.flag
+heartbeat_verified.flag.*
+authority_heartbeat.flag
+authority_heartbeat.flag.*
