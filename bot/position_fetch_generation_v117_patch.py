@@ -176,8 +176,15 @@ def _bounded_generation(method: Callable[..., Any], broker_name: str) -> Callabl
 
         with _LOCK:
             current = _FLIGHTS.get(key)
-            authoritative_generation = current is flight and not bool(flight.get("superseded"))
-            if authoritative_generation:
+            # The flight result is authoritative unless the generation was
+            # explicitly superseded for staleness.  Coalesced waiters share a
+            # single flight, so only the first waiter to reach this point can
+            # observe ``current is flight``; the others must not have their
+            # freshly completed snapshot discarded (that produced
+            # ``current_generation=none`` stale discards and blocked user
+            # position reconciliation from recovering).
+            authoritative_generation = not bool(flight.get("superseded"))
+            if current is flight:
                 _FLIGHTS.pop(key, None)
 
         if not authoritative_generation:

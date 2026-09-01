@@ -96,6 +96,12 @@ def _patch_rejection_gate() -> bool:
                 "sample_sufficient": False,
             }
             if rejected:
+                sampler = getattr(self, "_recent_rejection_samples", None)
+                if callable(sampler):
+                    try:
+                        detail["rejection_samples"] = sampler()
+                    except Exception:
+                        LOGGER.debug("V222 rejection sample enrichment failed", exc_info=True)
                 return gate_result(
                     "order_rejection",
                     gate_status.YELLOW,

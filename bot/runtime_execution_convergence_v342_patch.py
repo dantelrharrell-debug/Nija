@@ -182,8 +182,12 @@ def _broker_bounded_generation(method: Callable[..., Any], broker: str) -> Calla
 
         with _LOCK:
             current = _FLIGHTS.get(key)
-            authoritative = current is flight and not bool(flight.get("superseded"))
-            if authoritative:
+            # Coalesced waiters share one flight: only the first waiter can see
+            # ``current is flight``.  Discard results solely when the generation
+            # was explicitly superseded for staleness, otherwise a valid
+            # snapshot is thrown away with ``current_generation=none``.
+            authoritative = not bool(flight.get("superseded"))
+            if current is flight:
                 _FLIGHTS.pop(key, None)
 
         if not authoritative:

@@ -450,6 +450,12 @@ class ExchangeKillSwitchProtector:
         # ---- Order-rejection gate state ----
         # Each entry: True = accepted, False = rejected
         self._order_results: Deque[bool] = deque(maxlen=self._cfg.order_window_size)
+        # Bounded diagnostic ring of the rejections that populated the window
+        # above.  The rate alone is not actionable — operators need the exact
+        # exchange rejection message that halted trading.
+        self._order_rejection_samples: Deque[Dict[str, object]] = deque(
+            maxlen=max(5, self._cfg.order_window_size)
+        )
 
         # ---- Latency gate state ----
         self._latencies_ms: Deque[float] = deque(maxlen=self._cfg.latency_window_size)
@@ -529,9 +535,16 @@ class ExchangeKillSwitchProtector:
         """
         with self._lock:
             self._order_results.append(accepted)
+            if not accepted:
+                self._order_rejection_samples.append(
+                    {
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "order_id": str(order_id or "")[:256],
+                    }
+                )
 
         if not accepted:
-            logger.debug("⚠️  Order rejected: %s", order_id)
+            logger.warning("⚠️  Order rejected: order_id=%s", str(order_id or "")[:256])
         self._evaluate_and_maybe_trigger("order_rejection")
 
     def record_fill_event(self, order_id: str, fill_qty: float = 0.0) -> None:
@@ -737,6 +750,47 @@ class ExchangeKillSwitchProtector:
 
         return GateResult("price_feed", GateStatus.GREEN, "Price feeds healthy", detail)
 
+    def _recent_rejection_samples(self, limit: int = 10) -> List[Dict[str, object]]:
+        """
+        Return the most recent order rejections with whatever provenance is
+        available (symbol/side/exchange reason when the execution pipeline
+        recorded it, otherwise the order id alone).
+
+        This is diagnostic only — it never influences gate thresholds.
+        """
+        with self._lock:
+            provenance = list(getattr(self, "_nija_order_result_provenance_v258", ()) or ())
+            local = list(getattr(self, "_order_rejection_samples", ()) or ())
+
+        samples: List[Dict[str, object]] = []
+        for entry in provenance:
+            if not isinstance(entry, dict) or entry.get("accepted"):
+                continue
+            samples.append(
+                {
+                    "order_id": str(entry.get("order_id", ""))[:256],
+                    "symbol": str(entry.get("symbol", ""))[:64],
+                    "side": str(entry.get("side", ""))[:32],
+                    "reason": str(entry.get("reason", ""))[:512] or "unavailable",
+                    "source": str(entry.get("source", ""))[:64],
+                }
+            )
+
+        if not samples:
+            samples = [
+                {
+                    "order_id": str(entry.get("order_id", ""))[:256],
+                    "symbol": "",
+                    "side": "",
+                    "reason": "unavailable",
+                    "source": "recorder",
+                }
+                for entry in local
+                if isinstance(entry, dict)
+            ]
+
+        return samples[-max(1, int(limit)):]
+
     def _gate_order_rejection(self) -> GateResult:
         """Gate 3: rolling order-rejection rate."""
         cfg = self._cfg
@@ -753,11 +807,20 @@ class ExchangeKillSwitchProtector:
 
         detail = {
             "window_orders": total,
-            "rejected": rejected,
             "rejection_rate_pct": round(rate * 100, 1),
+            "rejected": rejected,
         }
+        if rejected:
+            detail["rejection_samples"] = self._recent_rejection_samples()
 
         if rate >= cfg.order_reject_rate_threshold:
+            logger.critical(
+                "EXCHANGE_ORDER_REJECTION_GATE_RED rejected=%d/%d rate_pct=%.1f samples=%s",
+                rejected,
+                total,
+                rate * 100,
+                detail.get("rejection_samples", []),
+            )
             return GateResult(
                 "order_rejection", GateStatus.RED,
                 f"Order rejection rate {rate*100:.1f}% ≥ {cfg.order_reject_rate_threshold*100:.0f}% "
@@ -765,6 +828,13 @@ class ExchangeKillSwitchProtector:
                 detail,
             )
         if rate >= cfg.order_reject_rate_caution:
+            logger.warning(
+                "EXCHANGE_ORDER_REJECTION_GATE_YELLOW rejected=%d/%d rate_pct=%.1f samples=%s",
+                rejected,
+                total,
+                rate * 100,
+                detail.get("rejection_samples", []),
+            )
             return GateResult(
                 "order_rejection", GateStatus.YELLOW,
                 f"Order rejection elevated: {rate*100:.1f}% ({rejected}/{total} orders)",
@@ -910,6 +980,8 @@ class ExchangeKillSwitchProtector:
             self._consecutive_api_errors = 0
             self._price_state.clear()
             self._order_results.clear()
+            if hasattr(self, "_order_rejection_samples"):
+                self._order_rejection_samples.clear()
             self._latencies_ms.clear()
             self._fill_counts.clear()
             self._order_counts.clear()

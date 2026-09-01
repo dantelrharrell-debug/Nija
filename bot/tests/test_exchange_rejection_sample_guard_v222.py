@@ -104,3 +104,15 @@ def test_minimum_samples_is_bounded(monkeypatch):
 
     monkeypatch.setenv("NIJA_ORDER_REJECT_MIN_SAMPLES", "99")
     assert v222._minimum_samples(cfg) == 4
+
+
+def test_insufficient_sample_gate_still_exposes_rejection_reasons(tmp_path):
+    protector = _protector(tmp_path)
+    protector.record_order_result("bad-1", accepted=False)
+
+    gate = protector._gate_order_rejection()
+
+    assert gate.status == GateStatus.YELLOW
+    samples = gate.detail["rejection_samples"]
+    assert samples
+    assert samples[-1]["order_id"] == "bad-1"

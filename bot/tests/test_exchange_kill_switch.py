@@ -237,6 +237,51 @@ class TestOrderRejectionGate:
         # Window size is 10 → only last 10 (all good) should be visible
         assert gate.status == GateStatus.GREEN
 
+    def test_red_gate_detail_exposes_rejected_order_ids(self, eksp):
+        for i in range(5):
+            eksp.record_order_result(f"ok-{i}", accepted=True)
+        for i in range(5):
+            eksp.record_order_result(f"bad-{i}", accepted=False)
+        gate = eksp._gate_order_rejection()
+        assert gate.status == GateStatus.RED
+        samples = gate.detail["rejection_samples"]
+        assert [s["order_id"] for s in samples] == [f"bad-{i}" for i in range(5)]
+        assert all(s["reason"] == "unavailable" for s in samples)
+
+    def test_gate_detail_prefers_pipeline_rejection_provenance(self, eksp):
+        from collections import deque
+
+        for i in range(5):
+            eksp.record_order_result(f"ok-{i}", accepted=True)
+        for i in range(5):
+            eksp.record_order_result(f"bad-{i}", accepted=False)
+        eksp._nija_order_result_provenance_v258 = deque(
+            [
+                {"order_id": "ok-1", "accepted": True, "symbol": "BTC/USD", "side": "buy", "reason": ""},
+                {
+                    "order_id": "bad-1",
+                    "accepted": False,
+                    "symbol": "SOL/USD",
+                    "side": "buy",
+                    "reason": "EOrder:Insufficient funds",
+                    "source": "execution_pipeline",
+                },
+            ]
+        )
+        gate = eksp._gate_order_rejection()
+        samples = gate.detail["rejection_samples"]
+        assert len(samples) == 1
+        assert samples[0]["reason"] == "EOrder:Insufficient funds"
+        assert samples[0]["symbol"] == "SOL/USD"
+        assert samples[0]["side"] == "buy"
+
+    def test_green_gate_has_no_rejection_samples(self, eksp):
+        for i in range(5):
+            eksp.record_order_result(f"ok-{i}", accepted=True)
+        gate = eksp._gate_order_rejection()
+        assert gate.status == GateStatus.GREEN
+        assert "rejection_samples" not in gate.detail
+
 
 # ---------------------------------------------------------------------------
 # Gate 4 — API latency
