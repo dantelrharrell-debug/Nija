@@ -1,24 +1,8 @@
 """Canonical NIJA profitability authority chain.
 
 The verified v324 economics live in ``runtime_all_in_profitability_authority_v324_core``.
-This canonical import path applies current U.S. public fee fallbacks and then
-requires the proof-gated Kraken short path (v325), terminal short integrity
-(v326), current-cost broker routing (v327), confirmed-fill/slippage truth
-(v328), authoritative entry-fee/short-ledger bookkeeping (v329), capital
-recycling / just-in-time exit proof (v330), canonical exit broker rebinding
-(v331), JIT reconciliation-conflict recovery (v332), canonical public
-market-price convergence for exits (v333), canonical protective-exit
-submission through the explicit exit pipeline (v334), protective-close
-capability semantics (v335), rejected-submission fill truth (v336), the
-hard-proof protective-exit authority bridge (v337), canonical exit pipeline
-late binding (v338), exact-broker protective-exit health (v339), the hard-proof
-LIVE_PENDING_CONFIRMATION state-machine bridge (v340), verified base-unit
-terminal integrity for Kraken protective closes (v341), funded heartbeat plus
-protective-exit terminal recovery (v342), verified-position exit quantity
-clamping plus signature-safe broker submission (v343), Coinbase missing-
-increment plus deterministic rejection-provenance recovery (v344), and nested
-Coinbase ACK/fill reconciliation plus dust rejection truth (v345) in the same
-writer process.
+This canonical import path applies current U.S. public fee fallbacks and requires
+all execution/profitability hardening through v346 in the same writer process.
 """
 from __future__ import annotations
 
@@ -80,6 +64,7 @@ def install_import_hook() -> bool:
         ("v343", "bot.runtime_exit_quantity_safety_v343_patch", "NIJA_RUNTIME_EXIT_QUANTITY_SAFETY_V343_READY"),
         ("v344", "bot.runtime_coinbase_exit_recovery_v344_patch", "NIJA_RUNTIME_COINBASE_EXIT_RECOVERY_V344_READY"),
         ("v345", "bot.runtime_coinbase_fill_truth_v345_patch", "NIJA_RUNTIME_COINBASE_FILL_TRUTH_V345_READY"),
+        ("v346", "bot.runtime_execution_position_readiness_v346_patch", "NIJA_RUNTIME_EXECUTION_POSITION_READINESS_V346_READY"),
     )
     outcomes = {}
     previous = core_ready
@@ -98,28 +83,20 @@ def install_import_hook() -> bool:
     os.environ["NIJA_CANONICAL_PROFITABILITY_CHAIN_READY"] = "1" if ready else "0"
     if ready:
         LOGGER.critical(
-            "CANONICAL_PROFITABILITY_CHAIN_READY marker=%s v324=true v325=true v326=true v327=true v328=true v329=true v330=true v331=true v332=true v333=true v334=true v335=true v336=true v337=true v338=true v339=true v340=true v341=true v342=true v343=true v344=true v345=true "
-            "current_cost_economics=true current_us_fee_fallbacks=true short_margin_proof=true "
-            "terminal_margin_integrity=true cost_aware_routing=true confirmed_fill_truth=true "
-            "measured_slippage_learning=true unknown_slippage_not_zero=true authoritative_entry_fee=true "
-            "authoritative_short_ledger_side=true capital_recycling_exit=true jit_exit_position_proof=true "
-            "aged_profit_target_decay=true entry_free_cash_reserve=true canonical_exit_broker_rebinding=true "
-            "jit_symbol_absence_reproof=true jit_quantity_conflict_reproof=true canonical_exit_market_price=true "
-            "canonical_exit_pipeline_submission=true base_quantity_compilation=true empty_order_id_pending_blocked=true "
-            "sell_to_close_not_short_entry=true ordinary_spot_short_gate_preserved=true "
-            "rejected_submission_not_fill=true immediate_empty_position_false_fill_blocked=true "
+            "CANONICAL_PROFITABILITY_CHAIN_READY marker=%s "
+            "v324=true v325=true v326=true v327=true v328=true v329=true v330=true v331=true "
+            "v332=true v333=true v334=true v335=true v336=true v337=true v338=true v339=true "
+            "v340=true v341=true v342=true v343=true v344=true v345=true v346=true "
+            "confirmed_fill_truth=true measured_slippage_learning=true authoritative_entry_fee=true "
+            "capital_recycling_exit=true canonical_exit_broker_rebinding=true canonical_exit_market_price=true "
+            "canonical_exit_pipeline_submission=true rejected_submission_not_fill=true "
             "protective_exit_startup_authority_bridge=true exact_writer_nonce_health_required=true "
-            "canonical_exit_pipeline_late_binding=true circular_import_recovery=true "
-            "exact_exit_broker_health=true global_dispatch_health_not_promoted=true "
-            "protective_exit_state_machine_bridge=true live_pending_confirmation_only=true "
-            "protective_exit_base_quantity_terminal=true quote_as_base_blocked=true oversell_guard=true "
-            "heartbeat_funded_terminal_selection=true underfunded_selected_venue_rejected=true "
-            "protective_exit_base_terminal_reasserted=true verified_position_caps_exit=true "
-            "ambiguous_typeerror_retry=false internal_typeerror_preserved=true "
+            "protective_exit_state_machine_bridge=true protective_exit_base_quantity_terminal=true "
+            "oversell_guard=true verified_position_caps_exit=true ambiguous_typeerror_retry=false "
             "coinbase_missing_increment_repaired=true deterministic_exit_rejects_not_exchange_health=true "
-            "polluted_five_sample_latch_exact_recovery=true nested_coinbase_order_id=true "
-            "coinbase_read_only_fill_reconciliation=true ack_alone_not_fill=true dust_not_exchange_health=true "
-            "global_lifecycle_mutated=false spot_fallback=false confirmed_short_fill_required=true "
+            "nested_coinbase_order_id=true coinbase_read_only_fill_reconciliation=true ack_alone_not_fill=true "
+            "canonical_confirmed_fill_execution_proof=true stale_platform_snapshot_authoritative_refresh=true "
+            "snapshot_ttl_unchanged=true forced_activation=false execution_proof_fabricated=false "
             "safety_gates_bypassed=false",
             MARKER,
         )
