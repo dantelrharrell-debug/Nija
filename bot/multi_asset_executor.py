@@ -253,10 +253,28 @@ class CoinbaseBrokerAdapter(BrokerAdapter):
                 "side": side,
             }
         try:
+            # The Coinbase SDK requires ``client_order_id`` and an explicit
+            # ``base_size`` (base-asset quantity) for market orders.  Omitting
+            # either raises a local TypeError before the exchange is contacted.
+            import uuid
+            client_order_id = f"nija-{uuid.uuid4().hex[:24]}"
+            base_size = float(size)
+            if base_size <= 0:
+                return {
+                    "status": "ERROR",
+                    "error": "INTERNAL_DISPATCH_FAILURE",
+                    "failure_stage": "pre_broker_submission",
+                    "exchange_contacted": False,
+                    "message": f"non-positive base_size for {symbol}",
+                }
             if side.upper() == "BUY":
-                resp = self._client.market_order_buy(product_id=symbol, base_size=str(size))
+                resp = self._client.market_order_buy(
+                    client_order_id, product_id=symbol, base_size=str(base_size)
+                )
             else:
-                resp = self._client.market_order_sell(product_id=symbol, base_size=str(size))
+                resp = self._client.market_order_sell(
+                    client_order_id, product_id=symbol, base_size=str(base_size)
+                )
             return resp if isinstance(resp, dict) else {"order_id": str(resp), "status": "SUBMITTED"}
         except Exception as exc:
             logger.error("[Coinbase] order error: %s", exc)

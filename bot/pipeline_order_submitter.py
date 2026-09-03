@@ -271,7 +271,9 @@ def submit_market_order_via_pipeline(
 
     size_usd = max(0.0, _float(quantity))
     price_hint_usd: Optional[float] = None
+    base_quantity: Optional[float] = None
     if str(size_type or "quote").lower() == "base":
+        base_quantity = max(0.0, _float(quantity))
         try:
             price_hint_usd = _float(getattr(broker, "get_current_price")(symbol))
         except Exception:
@@ -320,7 +322,16 @@ def submit_market_order_via_pipeline(
         "leverage": leverage,
         "reduce_only": reduce_only,
         "margin_mode": margin_mode,
+        # Preserve the explicit base-asset quantity end-to-end so the broker
+        # terminal never has to reconstruct base_size from a USD notional.
+        "size_type": str(size_type or "quote").lower(),
+        "intent_type": resolved_intent,
+        "position_effect": position_effect or ("close" if resolved_intent in {"exit", "reduce"} else None),
+        "price_hint_usd": price_hint_usd,
     }
+    if base_quantity is not None and base_quantity > 0:
+        metadata["base_quantity"] = base_quantity
+        metadata["owned_base_qty"] = base_quantity
     metadata.update(dict(metadata_override or {}))
 
     request = PipelineRequest(
@@ -339,6 +350,8 @@ def submit_market_order_via_pipeline(
         leverage=leverage if leverage > 1 else None,
         margin_mode=margin_mode,
         reduce_only=bool(reduce_only),
+        units=base_quantity if (base_quantity or 0) > 0 else None,
+        unit_type="base" if (base_quantity or 0) > 0 else None,
         metadata=metadata,
     )
 
@@ -372,20 +385,46 @@ def submit_market_order_via_pipeline(
             "margin": leverage > 1,
             "intent_type": resolved_intent,
         }
-    return {
+    fill_price = _float(getattr(result, "fill_price", 0.0))
+    filled_size_usd = _float(getattr(result, "filled_size_usd", 0.0))
+    broker_order_id = str(getattr(result, "order_id", "") or "").strip()
+
+    # A successful submission requires genuine acknowledgment evidence.  Never
+    # fabricate an order ID or a fill: without a real fill price the caller must
+    # reconcile, not assume the position was closed.
+    if fill_price <= 0.0:
+        logger.error(
+            "PIPELINE_ORDER_UNACKNOWLEDGED account=%s broker=%s symbol=%s side=%s "
+            "order_id=%s fill_price=%.10f filled_size_usd=%.8f fill_fabricated=false",
+            account_id, preferred_broker, symbol, side_norm,
+            broker_order_id or "none", fill_price, filled_size_usd,
+        )
+        return {
+            "status": "error",
+            "error": "unacknowledged_submission: no confirmed fill price returned by broker",
+            "symbol": symbol,
+            "side": side_norm,
+            "account_id": account_id,
+            "order_id": broker_order_id,
+            "intent_type": resolved_intent,
+        }
+
+    payload: Dict[str, Any] = {
         "status": "filled",
-        "order_id": "pipeline",
         "symbol": symbol,
         "side": side_norm,
         "account_id": account_id,
-        "filled_price": result.fill_price,
-        "filled_size_usd": result.filled_size_usd,
+        "filled_price": fill_price,
+        "filled_size_usd": filled_size_usd,
         "broker": result.broker,
         "leverage": leverage,
         "margin": leverage > 1,
         "reduce_only": bool(reduce_only),
         "intent_type": resolved_intent,
     }
+    if broker_order_id:
+        payload["order_id"] = broker_order_id
+    return payload
 
 
 __all__ = ["submit_market_order_via_pipeline"]

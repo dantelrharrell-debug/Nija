@@ -64,6 +64,8 @@ class CompileRequest:
     intent_type: Optional[str] = None
     price_hint_usd: Optional[float] = None
     account_id: str = "default"
+    position_effect: Optional[str] = None
+    owned_base_qty: Optional[float] = None
 
 
 @dataclass
@@ -637,11 +639,29 @@ class ECELExecutionCompiler:
         # ---------------------------------------------------------------------------
         # Step 1: Establish working notional (at least min notional)
         # ---------------------------------------------------------------------------
+        # A closing SELL is sized by the authoritative owned quantity, never by
+        # the venue minimum.  Bumping a closing sell up to ``min_notional_usd``
+        # or ``min_base_size`` would oversell the position (or open a short).
+        is_closing_sell = bool(
+            side == "sell"
+            and (
+                bool(req.reduce_only)
+                or str(req.intent_type or "").strip().lower() in ("exit", "reduce")
+                or str(req.position_effect or "").strip().lower() in ("close", "reduce")
+            )
+        )
+        owned_base_qty = self._to_decimal(req.owned_base_qty) if req.owned_base_qty else None
+        if owned_base_qty is not None and owned_base_qty <= 0:
+            owned_base_qty = None
+
         if (req.sizing_mode or "").lower() == "units" and req.desired_units is not None:
             raw_units = self._to_decimal(req.desired_units)
             if raw_units <= 0:
                 return self._reject("ZERO_UNITS", broker, symbol, side, rule, desired_units=req.desired_units)
             compiled_notional = float(raw_units * self._to_decimal(req.price_hint_usd or 0.0))
+        elif is_closing_sell:
+            # Never inflate a position-reducing sell.
+            compiled_notional = float(desired_notional)
         else:
             compiled_notional = float(max(desired_notional, self._to_decimal(rule.min_notional_usd)))
 
@@ -668,8 +688,29 @@ class ECELExecutionCompiler:
         raw_base = compiled_notional / max(compiled_price, 1e-12)
         compiled_base = self.precision.compile_base_size(raw_base, rule)
 
-        # Bump up to min_base if below (rounding down can produce sub-min sizes)
-        if compiled_base < rule.min_base_size:
+        # ── Oversell guard ────────────────────────────────────────────────
+        # A closing SELL can never be rounded or increased above the
+        # authoritative owned quantity.
+        if is_closing_sell and owned_base_qty is not None:
+            owned_float = float(owned_base_qty)
+            if compiled_base > owned_float:
+                compiled_base = self.precision.compile_base_size(owned_float, rule)
+            if compiled_base < rule.min_base_size:
+                # Do NOT increase to min_base_size: that would oversell or open
+                # a short.  Preserve the position for later reconciliation.
+                return self._reject(
+                    "BELOW_MINIMUM_EXIT_NON_EXECUTABLE", broker, symbol, side, rule,
+                    owned_qty=owned_float,
+                    minimum_qty=rule.min_base_size,
+                    attempted_qty=compiled_base,
+                    reason_detail=(
+                        "owned quantity is below the venue minimum; the exit is withheld, "
+                        "the quantity is never increased to the minimum, and the position "
+                        "is preserved for later reconciliation"
+                    ),
+                )
+        elif compiled_base < rule.min_base_size:
+            # Bump up to min_base if below (rounding down can produce sub-min sizes)
             compiled_base = self.precision.compile_base_size(rule.min_base_size, rule)
 
         # Max-size guard
