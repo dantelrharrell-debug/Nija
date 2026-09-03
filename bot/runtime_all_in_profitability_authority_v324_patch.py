@@ -2,7 +2,7 @@
 
 The verified v324 economics live in ``runtime_all_in_profitability_authority_v324_core``.
 This canonical import path applies current U.S. public fee fallbacks and requires
-all execution/profitability hardening through v348 in the same writer process.
+all execution/profitability hardening through v349 in the same writer process.
 """
 from __future__ import annotations
 
@@ -67,6 +67,7 @@ def install_import_hook() -> bool:
         ("v346", "bot.runtime_execution_position_readiness_v346_patch", "NIJA_RUNTIME_EXECUTION_POSITION_READINESS_V346_READY"),
         ("v347", "bot.runtime_execution_activation_protection_v347_patch", "NIJA_RUNTIME_EXECUTION_ACTIVATION_PROTECTION_V347_READY"),
         ("v348", "bot.runtime_position_protection_liveness_v348_patch", "NIJA_RUNTIME_POSITION_PROTECTION_LIVENESS_V348_READY"),
+        ("v349", "bot.runtime_terminal_exit_heartbeat_truth_v349_patch", "NIJA_RUNTIME_TERMINAL_EXIT_HEARTBEAT_TRUTH_V349_READY"),
     )
     outcomes = {}
     previous = core_ready
@@ -88,17 +89,19 @@ def install_import_hook() -> bool:
             "CANONICAL_PROFITABILITY_CHAIN_READY marker=%s "
             "v324=true v325=true v326=true v327=true v328=true v329=true v330=true v331=true "
             "v332=true v333=true v334=true v335=true v336=true v337=true v338=true v339=true "
-            "v340=true v341=true v342=true v343=true v344=true v345=true v346=true v347=true v348=true "
+            "v340=true v341=true v342=true v343=true v344=true v345=true v346=true v347=true v348=true v349=true "
             "confirmed_fill_truth=true measured_slippage_learning=true authoritative_entry_fee=true "
             "capital_recycling_exit=true canonical_exit_broker_rebinding=true canonical_exit_market_price=true "
             "canonical_exit_pipeline_submission=true rejected_submission_not_fill=true "
             "protective_exit_startup_authority_bridge=true exact_writer_nonce_health_required=true "
             "protective_exit_state_machine_bridge=true protective_exit_base_quantity_terminal=true "
-            "oversell_guard=true verified_position_caps_exit=true ambiguous_typeerror_retry=false "
+            "oversell_guard=true verified_position_caps_exit=true post_ecel_holdings_firewall=true "
+            "below_min_exit_deferred=true ambiguous_typeerror_retry=false "
             "coinbase_missing_increment_repaired=true deterministic_exit_rejects_not_exchange_health=true "
             "nested_coinbase_order_id=true coinbase_read_only_fill_reconciliation=true ack_alone_not_fill=true "
             "canonical_confirmed_fill_execution_proof=true stale_platform_snapshot_authoritative_refresh=true "
             "confirmed_fill_immediate_activation_wakeup=true terminal_v108_stale_snapshot_dispatch=true "
+            "heartbeat_local_deferral_not_exchange_rejection=true explicit_exchange_rejections_unchanged=true "
             "take_profit_preserved=true stop_loss_preserved=true trailing_take_profit_preserved=true "
             "trailing_stop_preserved=true auto_exit_reconciler_preserved=true dust_policy_unchanged=true "
             "snapshot_ttl_unchanged=true stale_promoted=false forced_trade=false forced_activation=false "
