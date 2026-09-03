@@ -5552,9 +5552,76 @@ class CoinbaseBroker(BaseBroker):
                             base_size=str(base_size_rounded)
                         )
                 else:
-                    # Use quote_size for SELL (less common, but supported)
-                    quote_size_rounded = round(quantity, 2)
-                    logger.info(f"📤 Placing SELL order: {symbol}, quote_size=${quote_size_rounded:.2f}")
+                    # CANONICAL SELL CONTRACT: Coinbase ``market_order_sell`` requires an
+                    # explicit ``base_size`` (base-asset quantity).  A USD notional must
+                    # NEVER be forwarded here — doing so previously raised
+                    # ``TypeError: market_order_sell() missing 1 required positional
+                    # argument: 'base_size'`` inside the execution pipeline, which was
+                    # then misreported as an exchange rejection.
+                    #
+                    # Convert the requested quote notional into a validated base-asset
+                    # quantity (capped by the owned balance) before submitting.
+                    quote_notional = round(float(quantity), 2)
+                    logger.info(
+                        f"📤 SELL requested with quote notional ${quote_notional:.2f} for {symbol} — "
+                        f"converting to explicit base_size (Coinbase requires base_size for sells)"
+                    )
+                    try:
+                        reference_price = float(self.get_current_price(symbol) or 0.0)
+                    except Exception as price_err:
+                        logger.error(f"❌ Cannot resolve reference price for {symbol}: {price_err}")
+                        reference_price = 0.0
+
+                    if reference_price <= 0:
+                        return {
+                            "status": "error",
+                            "error": "INTERNAL_DISPATCH_FAILURE",
+                            "failure_stage": "pre_broker_submission",
+                            "exchange_contacted": False,
+                            "message": (
+                                f"SELL {symbol} received a USD notional but no reference price is "
+                                f"available to derive base_size; order was not submitted."
+                            ),
+                            "partial_fill": False,
+                            "filled_pct": 0.0,
+                        }
+
+                    derived_base = quote_notional / reference_price
+                    owned_base = 0.0
+                    try:
+                        balance_snapshot = self._get_account_balance_detailed()
+                        owned_base = float(
+                            ((balance_snapshot or {}).get('crypto', {}) or {}).get(
+                                symbol.split('-')[0].upper(), 0.0
+                            )
+                        )
+                    except Exception as bal_err:
+                        logger.warning(f"⚠️ Could not resolve owned balance for {symbol}: {bal_err}")
+
+                    # A SELL can never exceed the authoritative owned quantity.
+                    if owned_base > 0:
+                        derived_base = min(derived_base, owned_base)
+
+                    if derived_base <= 0:
+                        return {
+                            "status": "error",
+                            "error": "INTERNAL_DISPATCH_FAILURE",
+                            "failure_stage": "pre_broker_submission",
+                            "exchange_contacted": False,
+                            "message": (
+                                f"SELL {symbol} derived a non-positive base_size "
+                                f"(notional=${quote_notional:.2f} price={reference_price} "
+                                f"owned={owned_base}); order was not submitted."
+                            ),
+                            "partial_fill": False,
+                            "filled_pct": 0.0,
+                        }
+
+                    derived_base = float(f"{derived_base:.8f}")
+                    logger.info(
+                        f"📤 Placing SELL order: {symbol}, base_size={derived_base} "
+                        f"(derived from ${quote_notional:.2f} @ {reference_price}, owned={owned_base})"
+                    )
                     if self.portfolio_uuid:
                         logger.info(f"   Routing to portfolio: {self.portfolio_uuid[:8]}...")
 
@@ -5562,7 +5629,7 @@ class CoinbaseBroker(BaseBroker):
                         self.client.market_order_sell,
                         client_order_id,
                         product_id=symbol,
-                        quote_size=str(quote_size_rounded)
+                        base_size=str(derived_base)
                     )
 
             # CRITICAL: Parse order response to check for success/failure

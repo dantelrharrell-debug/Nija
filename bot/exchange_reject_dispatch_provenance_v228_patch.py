@@ -95,6 +95,13 @@ _NON_EXCHANGE_MARKERS = (
     "confirmed_order_rejected:ack_timeout",
     "ack_timeout_no_confirmed_fill",
     "terminal_reject_status:unfilled",
+    # Local / pre-dispatch defects: the exchange was never contacted.
+    "internal_dispatch_failure",
+    "below_minimum_exit_non_executable",
+    "missing 1 required positional argument",
+    "missing required positional argument",
+    "unexpected keyword argument",
+    "positional arguments but",
 )
 
 

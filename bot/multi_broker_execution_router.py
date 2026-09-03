@@ -68,6 +68,119 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 logger = logging.getLogger("nija.multi_broker_router")
 
+try:
+    from bot.execution_dispatch_contract import (
+        InternalDispatchFailure as _InternalDispatchFailure,
+        NonExecutableExitQuantity as _NonExecutableExitQuantity,
+        is_closing_sell as _is_closing_sell,
+        resolve_sell_base_quantity as _resolve_sell_base_quantity,
+    )
+except ImportError:  # pragma: no cover - flat-import fallback
+    from execution_dispatch_contract import (  # type: ignore[no-redef]
+        InternalDispatchFailure as _InternalDispatchFailure,
+        NonExecutableExitQuantity as _NonExecutableExitQuantity,
+        is_closing_sell as _is_closing_sell,
+        resolve_sell_base_quantity as _resolve_sell_base_quantity,
+    )
+
+
+def _venue_minimum_base_qty(broker: Any, symbol: str, metadata: Dict[str, Any]) -> Optional[float]:
+    """Best-effort venue minimum base quantity for *symbol*.
+
+    Returns ``None`` when the venue minimum is unknown; the caller then relies
+    on the venue's own rejection instead of guessing.
+    """
+    for key in ("min_base_size", "minimum_qty", "min_qty", "venue_min_base_qty"):
+        value = (metadata or {}).get(key)
+        if value is not None:
+            try:
+                parsed = float(value)
+            except (TypeError, ValueError):
+                continue
+            if parsed > 0:
+                return parsed
+    getter = getattr(broker, "get_min_base_size", None)
+    if callable(getter):
+        try:
+            parsed = float(getter(symbol) or 0.0)
+            if parsed > 0:
+                return parsed
+        except Exception:
+            return None
+    return None
+
+
+def _register_below_minimum_exit(
+    broker_label: str,
+    symbol: str,
+    metadata: Dict[str, Any],
+    dust: Any,
+) -> None:
+    """Surface an exchange-enforced dust position to the recovery coordinator.
+
+    The position is preserved, never resized upward, and new purchases of the
+    same symbol are blocked so NIJA cannot repeatedly create unexitable
+    positions.  Failures here must never mask the original diagnostic.
+    """
+    try:
+        from bot.staged_recovery_authority import get_recovery_coordinator
+
+        get_recovery_coordinator().record_below_minimum_position(
+            broker_label,
+            str((metadata or {}).get("account_id") or "default"),
+            symbol=symbol,
+            owned_qty=float(getattr(dust, "owned_qty", 0.0) or 0.0),
+            minimum_qty=float(getattr(dust, "minimum_qty", 0.0) or 0.0),
+        )
+    except Exception:  # pragma: no cover - diagnostics must never mask the exit
+        logger.debug("BELOW_MINIMUM_EXIT_REGISTRATION_SKIPPED symbol=%s", symbol, exc_info=True)
+
+
+def _invoke_broker_submit(
+    submit: Callable[..., Any],
+    symbol: str,
+    side: str,
+    size: float,
+    submit_kwargs: Dict[str, Any],
+) -> Any:
+    """Call *submit* using the adapter's actual signature.
+
+    The binding shape is resolved from the callable's signature rather than by
+    catching ``TypeError``.  Catching ``TypeError`` around the call would also
+    swallow argument-binding defects raised *inside* the adapter (for example a
+    Coinbase SDK ``market_order_sell`` missing ``base_size``) and silently
+    re-dispatch the same broken order, turning a local defect into repeated
+    "exchange rejections".
+    """
+    try:
+        signature = inspect.signature(submit)
+    except (TypeError, ValueError):
+        signature = None
+
+    if signature is not None:
+        parameters = signature.parameters
+        accepts_kwargs = any(
+            p.kind is inspect.Parameter.VAR_KEYWORD for p in parameters.values()
+        )
+        filtered = {
+            key: value
+            for key, value in submit_kwargs.items()
+            if accepts_kwargs or key in parameters
+        }
+        positional = [
+            name
+            for name, p in parameters.items()
+            if name != "self"
+            and p.kind
+            in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+        ]
+        if positional[:3] == ["symbol", "side", "quantity"] or len(positional) >= 3:
+            return submit(symbol, side, float(size), **filtered)
+        return submit(symbol=symbol, side=side, quantity=float(size), **filtered)
+
+    return submit(symbol, side, float(size), **submit_kwargs)
+
+
 # Keep both import paths bound to the same module object so the execution
 # router registry remains a true process-wide singleton.
 if __name__ == "bot.multi_broker_execution_router":
@@ -317,6 +430,7 @@ class RouteResult:
     fill_price: float = 0.0
     filled_size_usd: float = 0.0
     order_type: str = "MARKET"
+    order_id: str = ""
     latency_ms: float = 0.0
     retries: int = 0
     error: Optional[str] = None
@@ -1462,15 +1576,38 @@ class MultiBrokerExecutionRouter:
                 or getattr(broker, "NAME", None)
                 or type(broker).__name__
             ).lower()
+
+            # ── Canonical sell contract ──────────────────────────────────
+            # A closing SELL must always carry an explicit, validated
+            # base-asset quantity.  Passing USD notional where base_size is
+            # required raises a local TypeError inside the broker adapter,
+            # which was previously misreported as an exchange rejection.
+            submit_size = float(size_usd or 0.0)
+            submit_kwargs: Dict[str, Any] = {"size_type": "quote"}
+            if _is_closing_sell(side, metadata):
+                try:
+                    submit_size = _resolve_sell_base_quantity(
+                        symbol=symbol,
+                        size_usd=float(size_usd or 0.0),
+                        metadata=metadata,
+                        minimum_qty=_venue_minimum_base_qty(broker, symbol, metadata),
+                    )
+                except _NonExecutableExitQuantity as dust:
+                    _register_below_minimum_exit(_broker_label, symbol, metadata, dust)
+                    raise
+                submit_kwargs["size_type"] = "base"
+
             logger.critical(
-                "BROKER_SUBMIT_ATTEMPT trace_id=%s broker=%s symbol=%s side=%s size_usd=%.2f submit=place_market_order",
+                "BROKER_SUBMIT_ATTEMPT trace_id=%s broker=%s symbol=%s side=%s size_usd=%.2f "
+                "submit_size=%.12f size_type=%s submit=place_market_order",
                 _trace_id or "n/a",
                 _broker_label,
                 symbol,
                 side,
                 float(size_usd or 0.0),
+                submit_size,
+                submit_kwargs["size_type"],
             )
-            submit_kwargs = {"size_type": "quote"}
             if _trace_id:
                 try:
                     _sig = inspect.signature(submit)
@@ -1478,12 +1615,14 @@ class MultiBrokerExecutionRouter:
                         submit_kwargs["decision_trace_id"] = _trace_id
                 except (TypeError, ValueError):
                     pass
-            result = submit(symbol, side, float(size_usd), **submit_kwargs)
-        except TypeError:
-            try:
-                result = submit(symbol=symbol, side=side, quantity=float(size_usd), **submit_kwargs)
-            except TypeError:
-                result = submit(symbol, side, float(size_usd))
+            result = _invoke_broker_submit(submit, symbol, side, submit_size, submit_kwargs)
+        except _InternalDispatchFailure:
+            raise
+        except TypeError as exc:
+            # Argument-binding failures are local defects, never venue rejections.
+            raise _InternalDispatchFailure(
+                f"broker_submit_argument_binding symbol={symbol} side={side} error={exc}"
+            ) from exc
 
         if isinstance(result, tuple) and len(result) >= 2:
             return float(result[0] or 0.0), float(result[1] or size_usd)
@@ -1513,13 +1652,15 @@ class MultiBrokerExecutionRouter:
             result,
         )
 
+        # A genuine acknowledgment is required.  The reference price hint is
+        # only ever used to value a fill that the broker already acknowledged
+        # with a real order id — it must never manufacture a fill on its own.
         fill_price = float(
             result.get("filled_price")
             or result.get("average_filled_price")
             or result.get("average_fill_price")
             or result.get("avg_price")
             or result.get("price")
-            or metadata.get("price_hint_usd")
             or 0.0
         )
         filled_usd = float(
@@ -1531,10 +1672,14 @@ class MultiBrokerExecutionRouter:
         )
 
         order_id = result.get("order_id") or result.get("id") or result.get("exchange_order_id")
-        if fill_price <= 0 and order_id:
+        if not order_id:
+            raise RuntimeError(
+                f"Broker response carries no exchange order id — order not acknowledged: {result!r}"
+            )
+        if fill_price <= 0:
             fill_price = float(metadata.get("price_hint_usd") or 0.0)
         if fill_price <= 0:
-            raise RuntimeError(f"Broker order acknowledged without fill price/order id: {result!r}")
+            raise RuntimeError(f"Broker order acknowledged without fill price: {result!r}")
         return fill_price, filled_usd
 
     @staticmethod

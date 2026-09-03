@@ -68,6 +68,7 @@ import concurrent.futures
 import logging
 import os
 import random
+import sys
 import threading
 import time
 from decimal import Decimal
@@ -77,6 +78,67 @@ from typing import Any, Dict, List, Optional
 from contextlib import contextmanager
 
 logger = logging.getLogger("nija.execution_pipeline")
+
+# Keep both import paths bound to the same module object.  Production logs
+# reported ``alias_same_object=false``: a separately loaded ``execution_pipeline``
+# alias meant rejection-provenance guards, the singleton and the corrected
+# dispatch contract could diverge between the two identities.
+if __name__ == "bot.execution_pipeline":
+    sys.modules.setdefault("execution_pipeline", sys.modules[__name__])
+elif __name__ == "execution_pipeline":
+    sys.modules.setdefault("bot.execution_pipeline", sys.modules[__name__])
+
+try:
+    from bot.execution_dispatch_contract import (
+        INTERNAL_DISPATCH_FAILURE,
+        is_internal_dispatch_failure,
+        resolve_owned_base_quantity,
+    )
+except ImportError:  # pragma: no cover - flat-import fallback
+    try:
+        from execution_dispatch_contract import (  # type: ignore[no-redef]
+            INTERNAL_DISPATCH_FAILURE,
+            is_internal_dispatch_failure,
+            resolve_owned_base_quantity,
+        )
+    except ImportError:  # pragma: no cover
+        INTERNAL_DISPATCH_FAILURE = "INTERNAL_DISPATCH_FAILURE"
+
+        def is_internal_dispatch_failure(error: Any) -> bool:  # type: ignore[misc]
+            return INTERNAL_DISPATCH_FAILURE.lower() in str(error or "").lower()
+
+        def resolve_owned_base_quantity(metadata: Any) -> Optional[float]:  # type: ignore[misc]
+            return None
+
+
+def _resolve_owned_base_qty(request: Any) -> Optional[float]:
+    """Return the authoritative owned base quantity for a position-reducing order."""
+    metadata = dict(getattr(request, "metadata", {}) or {})
+    owned = resolve_owned_base_quantity(metadata)
+    if owned is not None:
+        return owned
+    units = getattr(request, "units", None)
+    unit_type = str(getattr(request, "unit_type", "") or "").strip().lower()
+    if units and unit_type in {"base", "base_asset", ""}:
+        try:
+            parsed = float(units)
+        except (TypeError, ValueError):
+            return None
+        if parsed > 0 and str(getattr(request, "intent_type", "")).lower() in {"exit", "reduce"}:
+            return parsed
+    return None
+
+
+def _build_compile_request(factory: Any, kwargs: Dict[str, Any]) -> Any:
+    """Instantiate an ECEL ``CompileRequest`` tolerating older field sets."""
+    try:
+        return factory(**kwargs)
+    except TypeError:
+        supported = getattr(factory, "__dataclass_fields__", None)
+        if not supported:
+            raise
+        return factory(**{k: v for k, v in kwargs.items() if k in supported})
+
 
 try:
     from bot.pipeline_request_contract import (
@@ -449,6 +511,7 @@ class PipelineResult:
     fill_price: float = 0.0
     filled_size_usd: float = 0.0
     broker: str = ""
+    order_id: str = ""
     latency_ms: float = 0.0
     error: str = ""
     throttled: bool = False
@@ -1450,7 +1513,7 @@ class ExecutionPipeline:
         if self._ecel is not None:
             try:
                 broker_hint = (working_request.preferred_broker or "coinbase").lower()
-                compile_req = self._ecel_mod.CompileRequest(  # type: ignore[attr-defined]
+                _compile_kwargs = dict(
                     broker=broker_hint,
                     symbol=working_request.symbol,
                     side=self._normalise_side(working_request.side),
@@ -1465,6 +1528,12 @@ class ExecutionPipeline:
                     intent_type=getattr(working_request, "intent_type", None),
                     price_hint_usd=working_request.price_hint_usd,
                     account_id=working_request.account_id,
+                    position_effect=getattr(working_request, "position_effect", None),
+                    owned_base_qty=_resolve_owned_base_qty(working_request),
+                )
+                compile_req = _build_compile_request(
+                    self._ecel_mod.CompileRequest,  # type: ignore[attr-defined]
+                    _compile_kwargs,
                 )
                 compiled = self._ecel.compile(compile_req)
                 if not compiled.accepted:
@@ -1912,6 +1981,17 @@ class ExecutionPipeline:
             reason=error or "unknown exchange rejection",
         )
 
+        # A local/pre-dispatch failure is never an exchange rejection and must
+        # not trip the ECEL anomaly circuit breaker.
+        if is_internal_dispatch_failure(error):
+            logger.error(
+                "🛠️ INTERNAL_DISPATCH_FAILURE (pre-broker-submission) | symbol=%s error=%s "
+                "| exchange_contacted=false exchange_rejection_recorded=false",
+                getattr(request, "symbol", "unknown"),
+                error,
+            )
+            return
+
         # Classify the error before deciding whether to raise.
         blocker = BlockerType.UNKNOWN
         is_soft = False
@@ -1952,6 +2032,16 @@ class ExecutionPipeline:
             "seak halted",
             "trading blocked",
         )
+        if is_internal_dispatch_failure(reason_text):
+            logger.critical(
+                "INTERNAL_DISPATCH_FAILURE classification=internal_pre_dispatch "
+                "exchange_contacted=false exchange_rejection_sample_recorded=false "
+                "symbol=%s side=%s reason=%s",
+                symbol,
+                side,
+                reason,
+            )
+            return
         if any(marker in reason_text for marker in non_exchange_rejection_markers):
             logger.debug(
                 "ExecutionPipeline: skipping exchange rejection telemetry for non-exchange block "
@@ -2237,6 +2327,7 @@ class ExecutionPipeline:
                             fill_price=getattr(res, "fill_price", 0.0),
                             filled_size_usd=getattr(res, "filled_size_usd", 0.0),
                             broker=getattr(res, "broker", ""),
+                            order_id=str(getattr(res, "order_id", "") or ""),
                             latency_ms=(time.monotonic() - t_start) * 1000,
                             error=getattr(res, "error", "") or "",
                         )
@@ -2304,6 +2395,7 @@ class ExecutionPipeline:
                             size_usd=request.size_usd,
                             fill_price=getattr(res, "fill_price", 0.0),
                             filled_size_usd=getattr(res, "filled_size_usd", 0.0),
+                            order_id=str(getattr(res, "order_id", "") or ""),
                             latency_ms=(time.monotonic() - t_start) * 1000,
                             error=getattr(res, "error", "") or "",
                         )
