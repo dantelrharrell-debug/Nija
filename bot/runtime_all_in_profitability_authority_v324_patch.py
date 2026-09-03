@@ -2,7 +2,7 @@
 
 The verified v324 economics live in ``runtime_all_in_profitability_authority_v324_core``.
 This canonical import path applies current U.S. public fee fallbacks and requires
-all execution/profitability hardening through v346 in the same writer process.
+all execution/profitability hardening through v347 in the same writer process.
 """
 from __future__ import annotations
 
@@ -65,6 +65,7 @@ def install_import_hook() -> bool:
         ("v344", "bot.runtime_coinbase_exit_recovery_v344_patch", "NIJA_RUNTIME_COINBASE_EXIT_RECOVERY_V344_READY"),
         ("v345", "bot.runtime_coinbase_fill_truth_v345_patch", "NIJA_RUNTIME_COINBASE_FILL_TRUTH_V345_READY"),
         ("v346", "bot.runtime_execution_position_readiness_v346_patch", "NIJA_RUNTIME_EXECUTION_POSITION_READINESS_V346_READY"),
+        ("v347", "bot.runtime_execution_activation_protection_v347_patch", "NIJA_RUNTIME_EXECUTION_ACTIVATION_PROTECTION_V347_READY"),
     )
     outcomes = {}
     previous = core_ready
@@ -86,7 +87,7 @@ def install_import_hook() -> bool:
             "CANONICAL_PROFITABILITY_CHAIN_READY marker=%s "
             "v324=true v325=true v326=true v327=true v328=true v329=true v330=true v331=true "
             "v332=true v333=true v334=true v335=true v336=true v337=true v338=true v339=true "
-            "v340=true v341=true v342=true v343=true v344=true v345=true v346=true "
+            "v340=true v341=true v342=true v343=true v344=true v345=true v346=true v347=true "
             "confirmed_fill_truth=true measured_slippage_learning=true authoritative_entry_fee=true "
             "capital_recycling_exit=true canonical_exit_broker_rebinding=true canonical_exit_market_price=true "
             "canonical_exit_pipeline_submission=true rejected_submission_not_fill=true "
@@ -96,6 +97,9 @@ def install_import_hook() -> bool:
             "coinbase_missing_increment_repaired=true deterministic_exit_rejects_not_exchange_health=true "
             "nested_coinbase_order_id=true coinbase_read_only_fill_reconciliation=true ack_alone_not_fill=true "
             "canonical_confirmed_fill_execution_proof=true stale_platform_snapshot_authoritative_refresh=true "
+            "confirmed_fill_immediate_activation_wakeup=true protective_coverage_audit=true "
+            "take_profit_preserved=true stop_loss_preserved=true trailing_take_profit_preserved=true "
+            "trailing_stop_preserved=true auto_exit_reconciler_preserved=true dust_policy_unchanged=true "
             "snapshot_ttl_unchanged=true forced_activation=false execution_proof_fabricated=false "
             "safety_gates_bypassed=false",
             MARKER,
