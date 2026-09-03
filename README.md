@@ -1,16 +1,16 @@
-# NIJA AI Trading LLC — Production Success, Current Runtime & Recovery Anchor
+# NIJA AI Trading LLC — Current Success State & Recovery Anchor
 
-**Status date:** August 22, 2026 (America/Los_Angeles; latest runtime evidence is August 23, 2026 UTC)
+**Status date:** September 3, 2026 (UTC)
+
+**Current repository recovery checkpoint:** `760a43710d39156d78771e8833dd7e0633f2e0ce`
 
 **Current deployed production-readiness runtime:** `6d3c8e37b02e6b4a3679c34fc0450d4c53ed064e`
-
-**Current runtime generation observed healthy:** `4648`
 
 **Immutable explicit-gate recovery checkpoint:** `740c98dc94374bb1ed770ff96a5eafabfd32681b`
 
 **Immutable recovery branch:** `recovery/100-prod-readiness-20260822`
 
-This README is the durable production and recovery anchor for NIJA. It records both the latest verified production runtime and the immutable August 22 recovery checkpoint so production can be restored without weakening safety controls.
+This README is the durable production and recovery anchor for NIJA. It records the latest successful repository checkpoint, the latest verified production runtime, and the immutable explicit-gate checkpoint so production can be restored without weakening safety controls.
 
 > The current v188 deployment (`6d3c8e37...`) reproduced the operational production-readiness state: writer/core healthy, Kraken/Coinbase/OKX connected, authoritative reconciliation `CLEAN_START`, position sync 3/3, fresh complete capital 3/3, kill switch inactive, `LIVE_ACTIVE`, strict live dispatch ready, and the strategy trade cycle invoked through the normal runtime path. The latest log slice does **not** contain the literal `EXECUTION_ALLOWED: TRUE` line and does **not** contain a new broker order ID/fill. The immutable August 22 checkpoint remains the canonical explicit-gate proof because it includes `EXECUTION_ALLOWED: TRUE`.
 
@@ -18,7 +18,26 @@ NIJA does not guarantee trades, fills, profits, income, or returns. Never manufa
 
 ---
 
-## 1. Latest Verified Production Runtime — v188
+## 1. Current Repository Success Checkpoint — v348
+
+The current codebase is green at the following immutable checkpoint:
+
+```text
+commit=760a43710d39156d78771e8833dd7e0633f2e0ce
+short_commit=760a437
+date=2026-09-02
+change=test v348 stale platform dispatch and safety invariants
+```
+
+This checkpoint contains the v348 regression coverage for stale platform position dispatch. The tests confirm that stale candidates are deduplicated, the existing worker is reused asynchronously, and recovery does not grant position or execution readiness, promote stale data, or force trades.
+
+This is the **current code/repository recovery point**, not a claim that v348 has been deployed or that a new order/fill occurred. To return to this exact code state after investigating a later failure, preserve the commit above and restore it through the normal Git/GitHub deployment process. Re-run the repository's applicable tests and re-establish all production gates from current broker evidence; never restore readiness from this README alone.
+
+The last verified deployed operational runtime remains v188 (`6d3c8e37...`), and the immutable `EXECUTION_ALLOWED: TRUE` proof remains the August 22 checkpoint below.
+
+---
+
+## 2. Latest Verified Production Runtime — v188
 
 Current deployed SHA:
 
@@ -211,7 +230,7 @@ This is **not a global runtime blocker**. It is correct fail-safe behavior for t
 
 ---
 
-## 2. August 22, 2026 — Immutable 100/100 Explicit-Gate Baseline
+## 3. August 22, 2026 — Immutable 100/100 Explicit-Gate Baseline
 
 The immutable successful production lineage is anchored to:
 
@@ -283,7 +302,7 @@ state={'execution': True, 'startup': True, 'okx': True}
 
 ---
 
-## 3. Current Recovery Hierarchy
+## 4. Current Recovery Hierarchy
 
 Use this order when recovering production:
 
@@ -300,7 +319,7 @@ Do not force-move or rewrite the immutable recovery branch merely because a newe
 
 ---
 
-## 4. Exact Recovery Target
+## 5. Exact Recovery Target
 
 If production regresses, the target is not merely `LIVE_ACTIVE`. Restore the full evidence chain below:
 
@@ -330,7 +349,7 @@ Do not skip failed steps by forcing later states.
 
 ---
 
-## 5. Recovery Rollback Procedure
+## 6. Recovery Rollback Procedure
 
 ### A. Preserve evidence first
 
@@ -382,7 +401,7 @@ EXECUTION_ALLOWED: TRUE (strongest explicit-gate proof)
 
 ---
 
-## 6. Critical Recovery Lineage — v169 through v188
+## 7. Critical Recovery Lineage — v169 through v188
 
 The current production hardening lineage includes:
 
@@ -431,7 +450,7 @@ Do not assume a future failure requires a new numbered patch. First determine wh
 
 ---
 
-## 7. Kraken-Specific Recovery Contract
+## 8. Kraken-Specific Recovery Contract
 
 Kraken was the final repeated capital-readiness problem before the immutable 100/100 checkpoint.
 
@@ -462,7 +481,7 @@ Current canonical generation context and effective Kraken valuation coverage mus
 
 ---
 
-## 8. Position & Held-Trade Recovery Contract
+## 9. Position & Held-Trade Recovery Contract
 
 A healthy runtime must prove real position adoption/fetch, not copied or synthetic readiness.
 
@@ -492,7 +511,7 @@ Do not create duplicate exit workers that could double-sell a position.
 
 ---
 
-## 9. Exit-Protection Stack That Must Be Preserved
+## 10. Exit-Protection Stack That Must Be Preserved
 
 Current production code contains the following protections:
 
@@ -512,7 +531,7 @@ Never mark a position closed or fabricate an exit fill without broker/exchange e
 
 ---
 
-## 10. Safety-Critical Contracts — Never Weaken These to Recover Faster
+## 11. Safety-Critical Contracts — Never Weaken These to Recover Faster
 
 - Single-writer fencing remains authoritative.
 - Writer generation/token must be current.
@@ -534,7 +553,7 @@ Never mark a position closed or fabricate an exit fill without broker/exchange e
 
 ---
 
-## 11. Known Non-Blocking / Transient Signals
+## 12. Known Non-Blocking / Transient Signals
 
 Healthy runtime may still show installer/reset/replay messages such as:
 
@@ -562,7 +581,7 @@ Likewise, market-data quality blocks, insufficient candle history, low volume, s
 
 ---
 
-## 12. Definition of Production Readiness
+## 13. Definition of Production Readiness
 
 ### Current v188 operational production proof
 
@@ -621,7 +640,7 @@ Do not force a trade merely to satisfy this checklist.
 
 ---
 
-## 13. When Everything Is Working
+## 14. When Everything Is Working
 
 If production matches the v188 current runtime or the immutable August 22 recovery target, **stop patching unless a concrete defect appears**.
 
@@ -656,7 +675,7 @@ Preserving a proven working runtime is safer than continuously modifying it with
 
 ---
 
-## 14. Historical Recovery Anchors
+## 15. Historical Recovery Anchors
 
 Prior August 13 recovery checkpoint:
 
