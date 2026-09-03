@@ -2,7 +2,7 @@
 
 The verified v324 economics live in ``runtime_all_in_profitability_authority_v324_core``.
 This canonical import path applies current U.S. public fee fallbacks and requires
-all execution/profitability hardening through v353 in the same writer process.
+all execution/profitability hardening through v354 in the same writer process.
 """
 from __future__ import annotations
 
@@ -72,6 +72,7 @@ def install_import_hook() -> bool:
         ("v351", "bot.runtime_heartbeat_verification_truth_v351_patch", "NIJA_RUNTIME_HEARTBEAT_VERIFICATION_TRUTH_V351_READY"),
         ("v352", "bot.runtime_kraken_btnl_reduce_only_v352_patch", "NIJA_RUNTIME_KRAKEN_BTNL_REDUCE_ONLY_V352_READY"),
         ("v353", "bot.runtime_kraken_btnl_leveraged_v353_patch", "NIJA_RUNTIME_KRAKEN_BTNL_LEVERAGED_V353_READY"),
+        ("v354", "bot.runtime_kraken_margin_exit_authority_v354_patch", "NIJA_RUNTIME_KRAKEN_MARGIN_EXIT_AUTHORITY_V354_READY"),
     )
     outcomes = {}
     previous = core_ready
@@ -93,7 +94,7 @@ def install_import_hook() -> bool:
             "CANONICAL_PROFITABILITY_CHAIN_READY marker=%s "
             "v324=true v325=true v326=true v327=true v328=true v329=true v330=true v331=true "
             "v332=true v333=true v334=true v335=true v336=true v337=true v338=true v339=true "
-            "v340=true v341=true v342=true v343=true v344=true v345=true v346=true v347=true v348=true v349=true v350=true v351=true v352=true v353=true "
+            "v340=true v341=true v342=true v343=true v344=true v345=true v346=true v347=true v348=true v349=true v350=true v351=true v352=true v353=true v354=true "
             "confirmed_fill_truth=true measured_slippage_learning=true authoritative_entry_fee=true "
             "capital_recycling_exit=true canonical_exit_broker_rebinding=true canonical_exit_market_price=true "
             "canonical_exit_pipeline_submission=true rejected_submission_not_fill=true "
@@ -108,7 +109,8 @@ def install_import_hook() -> bool:
             "confirmed_fill_immediate_activation_wakeup=true terminal_v108_stale_snapshot_dispatch=true "
             "heartbeat_local_deferral_not_exchange_rejection=true heartbeat_ack_timeout_not_exchange_rejection=true "
             "heartbeat_stage_helpers_terminal_reasserted=true kraken_btnl_non_ecp_retry=true "
-            "kraken_btnl_all_leveraged_non_ecp_retry=true explicit_other_exchange_rejections_unchanged=true "
+            "kraken_btnl_all_leveraged_non_ecp_retry=true pending_open_not_margin_exit_authority=true "
+            "explicit_other_exchange_rejections_unchanged=true "
             "take_profit_preserved=true stop_loss_preserved=true trailing_take_profit_preserved=true "
             "trailing_stop_preserved=true auto_exit_reconciler_preserved=true dust_policy_unchanged=true "
             "snapshot_ttl_unchanged=true stale_promoted=false forced_trade=false forced_activation=false "
