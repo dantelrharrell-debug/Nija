@@ -123,6 +123,7 @@ class RecoveryCoordinator:
         self._quarantined_accounts: Dict[str, str] = {}
         self._quarantined_brokers: Dict[str, str] = {}
         self._global_entry_block: str = ""
+        self._below_minimum: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
 
     # -- staged recovery ------------------------------------------------
 
@@ -384,18 +385,97 @@ class RecoveryCoordinator:
                     return False, f"account_quarantined:{reason}"
             return True, "allowed"
 
+    # -- below-minimum positions ---------------------------------------
+
+    def record_below_minimum_position(
+        self, broker: str, account_id: str, *, symbol: str, owned_qty: float, minimum_qty: float
+    ) -> None:
+        """Record an exchange-enforced dust position that cannot be exited.
+
+        New purchases of the same symbol on the same scope are blocked so NIJA
+        cannot repeatedly create unexitable positions.
+        """
+        with self._lock:
+            key = (
+                str(broker or "").strip().lower(),
+                str(account_id or "default").strip().lower(),
+                str(symbol or "").strip().upper(),
+            )
+            self._below_minimum[key] = {
+                "broker": key[0],
+                "account_id": key[1],
+                "symbol": key[2],
+                "owned_qty": float(owned_qty),
+                "minimum_qty": float(minimum_qty),
+                "executable_stop_protection": False,
+                "recorded_at": time.time(),
+            }
+        logger.critical(
+            "BELOW_MINIMUM_EXIT_REGISTERED broker=%s account=%s symbol=%s owned_qty=%.12f "
+            "minimum_qty=%.12f new_entries_blocked_for_symbol=true "
+            "executable_stop_protection=false position_preserved=true",
+            broker, account_id, symbol, float(owned_qty), float(minimum_qty),
+        )
+
+    def clear_below_minimum_position(self, broker: str, account_id: str, symbol: str) -> None:
+        """Clear a dust marking after a recheck proves the position is executable."""
+        with self._lock:
+            self._below_minimum.pop(
+                (
+                    str(broker or "").strip().lower(),
+                    str(account_id or "default").strip().lower(),
+                    str(symbol or "").strip().upper(),
+                ),
+                None,
+            )
+
+    def below_minimum_positions(self) -> List[Dict[str, Any]]:
+        """Administrator dashboard feed of below-minimum positions."""
+        with self._lock:
+            return list(self._below_minimum.values())
+
+    def purchase_allowed(self, broker: str, account_id: str, symbol: str) -> Tuple[bool, str]:
+        """Return whether a *new purchase* of *symbol* may be opened."""
+        allowed, reason = self.entries_allowed(broker, account_id)
+        if not allowed:
+            return False, reason
+        with self._lock:
+            key = (
+                str(broker or "").strip().lower(),
+                str(account_id or "default").strip().lower(),
+                str(symbol or "").strip().upper(),
+            )
+            if key in self._below_minimum:
+                return False, "below_minimum_exit_position_exists"
+        return True, "allowed"
+
     # -- reporting ------------------------------------------------------
 
     def protection_report(self) -> Dict[str, Any]:
         """Per-account protection report used for production-readiness sign-off."""
         with self._lock:
             accounts = [scope.as_dict() for scope in self._scopes.values()]
+            dust = list(self._below_minimum.values())
+            production_ready = bool(
+                self._stage is RecoveryStage.FULL_TRADING
+                and not self._global_entry_block
+                and accounts
+                and all(
+                    scope["exit_dispatch_verified"]
+                    and scope["positions_verified"]
+                    and scope["exit_path_healthy"]
+                    and not scope["quarantined"]
+                    for scope in accounts
+                )
+            )
             return {
                 "stage": self._stage.value,
                 "global_entry_block": self._global_entry_block,
                 "quarantined_accounts": dict(self._quarantined_accounts),
                 "quarantined_brokers": dict(self._quarantined_brokers),
                 "accounts": accounts,
+                "below_minimum_positions": dust,
+                "production_ready": production_ready,
             }
 
 

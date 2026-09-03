@@ -76,6 +76,20 @@ class StopLossLifecycle:
             and self.filled_at is not None
         )
 
+    @property
+    def ack_latency_seconds(self) -> Optional[float]:
+        """Seconds from stop detection to genuine broker acknowledgment."""
+        if self.broker_acknowledged_at is None or self.stop_detected_at is None:
+            return None
+        return self.broker_acknowledged_at - self.stop_detected_at
+
+    @property
+    def fill_latency_seconds(self) -> Optional[float]:
+        """Seconds from stop detection to confirmed fill."""
+        if self.filled_at is None or self.stop_detected_at is None:
+            return None
+        return self.filled_at - self.stop_detected_at
+
     def as_dict(self) -> Dict[str, Any]:
         return {
             "idempotency_key": self.idempotency_key,
@@ -94,6 +108,8 @@ class StopLossLifecycle:
             "attempts": self.attempts,
             "last_error": self.last_error,
             "executed": self.executed,
+            "ack_latency_seconds": self.ack_latency_seconds,
+            "fill_latency_seconds": self.fill_latency_seconds,
         }
 
 

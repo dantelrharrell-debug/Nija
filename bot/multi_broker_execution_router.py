@@ -110,6 +110,32 @@ def _venue_minimum_base_qty(broker: Any, symbol: str, metadata: Dict[str, Any]) 
     return None
 
 
+def _register_below_minimum_exit(
+    broker_label: str,
+    symbol: str,
+    metadata: Dict[str, Any],
+    dust: Any,
+) -> None:
+    """Surface an exchange-enforced dust position to the recovery coordinator.
+
+    The position is preserved, never resized upward, and new purchases of the
+    same symbol are blocked so NIJA cannot repeatedly create unexitable
+    positions.  Failures here must never mask the original diagnostic.
+    """
+    try:
+        from bot.staged_recovery_authority import get_recovery_coordinator
+
+        get_recovery_coordinator().record_below_minimum_position(
+            broker_label,
+            str((metadata or {}).get("account_id") or "default"),
+            symbol=symbol,
+            owned_qty=float(getattr(dust, "owned_qty", 0.0) or 0.0),
+            minimum_qty=float(getattr(dust, "minimum_qty", 0.0) or 0.0),
+        )
+    except Exception:  # pragma: no cover - diagnostics must never mask the exit
+        logger.debug("BELOW_MINIMUM_EXIT_REGISTRATION_SKIPPED symbol=%s", symbol, exc_info=True)
+
+
 def _invoke_broker_submit(
     submit: Callable[..., Any],
     symbol: str,
@@ -1559,12 +1585,16 @@ class MultiBrokerExecutionRouter:
             submit_size = float(size_usd or 0.0)
             submit_kwargs: Dict[str, Any] = {"size_type": "quote"}
             if _is_closing_sell(side, metadata):
-                submit_size = _resolve_sell_base_quantity(
-                    symbol=symbol,
-                    size_usd=float(size_usd or 0.0),
-                    metadata=metadata,
-                    minimum_qty=_venue_minimum_base_qty(broker, symbol, metadata),
-                )
+                try:
+                    submit_size = _resolve_sell_base_quantity(
+                        symbol=symbol,
+                        size_usd=float(size_usd or 0.0),
+                        metadata=metadata,
+                        minimum_qty=_venue_minimum_base_qty(broker, symbol, metadata),
+                    )
+                except _NonExecutableExitQuantity as dust:
+                    _register_below_minimum_exit(_broker_label, symbol, metadata, dust)
+                    raise
                 submit_kwargs["size_type"] = "base"
 
             logger.critical(
@@ -1622,13 +1652,15 @@ class MultiBrokerExecutionRouter:
             result,
         )
 
+        # A genuine acknowledgment is required.  The reference price hint is
+        # only ever used to value a fill that the broker already acknowledged
+        # with a real order id — it must never manufacture a fill on its own.
         fill_price = float(
             result.get("filled_price")
             or result.get("average_filled_price")
             or result.get("average_fill_price")
             or result.get("avg_price")
             or result.get("price")
-            or metadata.get("price_hint_usd")
             or 0.0
         )
         filled_usd = float(
@@ -1640,10 +1672,14 @@ class MultiBrokerExecutionRouter:
         )
 
         order_id = result.get("order_id") or result.get("id") or result.get("exchange_order_id")
-        if fill_price <= 0 and order_id:
+        if not order_id:
+            raise RuntimeError(
+                f"Broker response carries no exchange order id — order not acknowledged: {result!r}"
+            )
+        if fill_price <= 0:
             fill_price = float(metadata.get("price_hint_usd") or 0.0)
         if fill_price <= 0:
-            raise RuntimeError(f"Broker order acknowledged without fill price/order id: {result!r}")
+            raise RuntimeError(f"Broker order acknowledged without fill price: {result!r}")
         return fill_price, filled_usd
 
     @staticmethod
