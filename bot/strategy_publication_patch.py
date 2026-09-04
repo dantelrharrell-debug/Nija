@@ -417,21 +417,20 @@ def _publish(strategy: Any) -> None:
         bool(getattr(strategy, "nija_core_loop", None)),
         len(getattr(strategy, "symbols", []) or []),
     )
-    # Publish readiness-table keys so the startup coordinator sees strategy and
-    # execution as live evidence rather than waiting for a TradingStrategy.__init__
-    # re-run (which never fires for an existing hydrated strategy).
+    # Strategy publication proves only that a live strategy is wired to an
+    # entry-ready broker. It does not prove that any order filled. Canonical
+    # execution readiness remains owned by the confirmed-fill proof path
+    # (v169/v231/v238/v346 and successors), even during module reload/startup.
     try:
         try:
             from bot.readiness_table import mark_ready as _rt_mark
         except ImportError:
             from readiness_table import mark_ready as _rt_mark  # type: ignore[import]
         _rt_mark("strategy_ready")
-        if _strategy_has_entry_broker(strategy):
-            _rt_mark("execution_ready")
         logger.debug(
             "STRATEGY_PUBLICATION_READINESS_PUBLISHED "
-            "strategy_ready=true execution_ready=%s",
-            _strategy_has_entry_broker(strategy),
+            "strategy_ready=true execution_ready_unchanged=true "
+            "execution_proof_owner=canonical_v169_v231_v238_v346"
         )
     except Exception as _rt_exc:
         logger.debug("STRATEGY_PUBLICATION_READINESS_MARK_FAILED err=%s", _rt_exc)
