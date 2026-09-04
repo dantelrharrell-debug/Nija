@@ -261,10 +261,18 @@ if state_path.exists():
 else:
     print(f"Readiness state file not found: {state_path}")
 
+# An explicit operator-requested safe-off state is healthy maintenance mode, not a
+# deployment failure.  This lets Render replace a live instance while all order
+# entry remains disabled.  Broker credentials and Redis are still reported above.
+safe_off = not _is_true("LIVE_TRADING") and not _is_true("LIVE_CAPITAL_VERIFIED")
 fatal = bool(bad_shared_true or bad_shared_false or not redis_present or not ready_brokers)
-if fatal:
+if fatal and not safe_off:
     print("\nRESULT: INDEPENDENT-BROKER CONFIGURATION INCOMPLETE")
     sys.exit(2)
+if safe_off:
+    print("\nRESULT: SAFE-OFF MAINTENANCE MODE")
+    print("Live trading and capital verification are disabled; startup may remain healthy without order authority.")
+    sys.exit(0)
 
 print("\nRESULT: AT LEAST ONE BROKER IS CONFIGURED")
 print("Each remaining broker will activate or remain isolated according to its own connection state.")
