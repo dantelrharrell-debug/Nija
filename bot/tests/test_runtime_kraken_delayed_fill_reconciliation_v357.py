@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from enum import Enum
+
 from bot import runtime_kraken_delayed_fill_reconciliation_v357_patch as v357
 
 
@@ -182,3 +184,40 @@ def test_existing_fill_specific_evidence_is_preserved_without_replacement():
     )
     assert result == original
     assert broker.calls == []
+
+
+def test_private_reads_use_kraken_monitoring_category_not_plain_string(monkeypatch):
+    class Category(Enum):
+        MONITORING = "monitoring"
+
+    seen = []
+
+    class StrictKrakenBroker:
+        broker_type = "kraken"
+
+        def _kraken_private_call(self, method, params=None, category=None):
+            # Production rate/fairness wrappers access category.value.  This
+            # reproduces the failure that occurred when v357 passed "query".
+            seen.append((method, category.value))
+            return {
+                "error": [],
+                "result": {
+                    "ORDER-8": {
+                        "status": "closed",
+                        "vol_exec": "0.0115",
+                        "cost": "28.75",
+                    }
+                },
+            }
+
+    monkeypatch.setattr(v357, "_monitoring_category", lambda: Category.MONITORING)
+    result = v357._enrich_kraken_final_order(
+        StrictKrakenBroker(),
+        {"status": "filled", "order_id": "ORDER-8"},
+        symbol="ETH-USD",
+        side="buy",
+    )
+
+    assert seen == [("QueryOrders", "monitoring")]
+    assert result["kraken_query_order_reconciled"] is True
+    assert result["filled_size_usd"] == 28.75
