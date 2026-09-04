@@ -81,6 +81,7 @@ def install_import_hook() -> bool:
         ("v360", "bot.runtime_supervised_thread_proof_v360_patch", "NIJA_RUNTIME_SUPERVISED_THREAD_PROOF_V360_READY"),
         ("v361", "bot.runtime_execution_authority_proof_gate_v361_patch", "NIJA_RUNTIME_EXECUTION_AUTHORITY_PROOF_GATE_V361_READY"),
         ("v362", "bot.runtime_stale_live_execution_proof_v362_patch", "NIJA_RUNTIME_STALE_LIVE_EXECUTION_PROOF_V362_READY"),
+        ("v363", "bot.runtime_kraken_deferred_fill_proof_recovery_v363_patch", "NIJA_RUNTIME_KRAKEN_DEFERRED_FILL_PROOF_RECOVERY_V363_READY"),
         ("v363", "bot.runtime_bootstrap_execution_proof_alignment_v363_patch", "NIJA_RUNTIME_BOOTSTRAP_EXECUTION_PROOF_ALIGNMENT_V363_READY"),
     )
     outcomes = {}
@@ -125,6 +126,7 @@ def install_import_hook() -> bool:
             "bootstrap_execution_authority_requires_canonical_execution_proof=true "
             "execution_contract_snapshot_repair_requires_canonical_execution_proof=true "
             "kraken_queryorders_fill_fields_required=true kraken_trade_history_ordertxid_exact_match=true "
+            "kraken_deferred_fill_proof_recovery=true durable_pending_fill_proof_registry=true "
             "heartbeat_local_deferral_not_exchange_rejection=true heartbeat_ack_timeout_not_exchange_rejection=true "
             "heartbeat_stage_helpers_terminal_reasserted=true kraken_btnl_non_ecp_retry=true "
             "kraken_btnl_all_leveraged_non_ecp_retry=true pending_open_not_margin_exit_authority=true "
