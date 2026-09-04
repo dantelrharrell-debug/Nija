@@ -299,6 +299,47 @@ def _platform_scope_drawdown(account_balance: float) -> Tuple[str, float, bool, 
     return level, position_multiplier, recovery_halted, ""
 
 
+def get_account_recovery_snapshot(broker: Any) -> Dict[str, Any]:
+    """Return an authoritative, account-local recovery snapshot for exit logic."""
+    scope, is_platform = _scope_for_broker(broker)
+    if is_platform:
+        level, multiplier, halted, reason = _platform_scope_drawdown(0.0)
+        equity = 0.0
+        peak = 0.0
+        drawdown_pct = 0.0
+        with _SCOPE_LOCK:
+            breaker = _PLATFORM_BREAKER
+        if breaker is not None:
+            try:
+                report = dict(breaker.get_report() or {})
+                equity = _finite_positive(report.get("current_equity"))
+                peak = _finite_positive(report.get("peak_equity"))
+                drawdown_pct = float(report.get("drawdown_pct", 0.0) or 0.0)
+            except Exception:
+                pass
+    else:
+        equity = 0.0
+        for attr in ("_last_known_balance", "last_known_balance", "cached_balance", "balance"):
+            equity = max(equity, _finite_positive(getattr(broker, attr, 0.0)))
+        level, multiplier, halted, reason = _user_scope_drawdown(scope, equity)
+        with _SCOPE_LOCK:
+            state = dict(_USER_SCOPE_STATE.get(scope) or {})
+        peak = _finite_positive(state.get("peak"))
+        drawdown_pct = max(0.0, ((peak - equity) / peak) * 100.0) if peak > 0.0 else 0.0
+    return {
+        "scope": scope,
+        "is_platform": is_platform,
+        "level": level,
+        "in_recovery": level not in {"CLEAR", "UNKNOWN"},
+        "halted": bool(halted),
+        "position_size_multiplier": float(multiplier),
+        "equity": float(equity),
+        "peak": float(peak),
+        "drawdown_pct": float(drawdown_pct),
+        "reason": reason,
+    }
+
+
 def _patch_drawdown_module(module: ModuleType) -> bool:
     cls = getattr(module, "DrawdownRiskController", None)
     if not isinstance(cls, type):
@@ -563,6 +604,7 @@ __all__ = [
     "_scope_for_broker",
     "_user_scope_drawdown",
     "_platform_scope_drawdown",
+    "get_account_recovery_snapshot",
     "_patch_drawdown_module",
     "_patch_trading_strategy_module",
 ]
