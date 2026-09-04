@@ -77,13 +77,34 @@ def _status(result: Mapping[str, Any]) -> str:
     return _norm(result.get("status") or result.get("state"))
 
 
+def _monitoring_category() -> Any:
+    """Return the canonical Kraken monitoring enum used by private reads.
+
+    ``KrakenBroker._kraken_private_call`` expects ``KrakenAPICategory`` and
+    several rate/fairness wrappers read ``category.value``.  Passing a plain
+    string here therefore fails before QueryOrders/TradesHistory can execute.
+    Resolve the same enum used by the broker and by v304/v297; if unavailable,
+    omit the category rather than inventing a string substitute.
+    """
+    try:
+        module = importlib.import_module("bot.broker_manager")
+        enum_cls = getattr(module, "KrakenAPICategory", None)
+        return getattr(enum_cls, "MONITORING", None) if enum_cls is not None else None
+    except Exception:
+        return None
+
+
 def _private_read(broker: Any, method: str, params: dict[str, Any]) -> dict[str, Any]:
     """Issue one authenticated read through the broker's canonical private path."""
     caller = getattr(broker, "_kraken_private_call", None)
     if callable(caller):
-        try:
-            value = caller(method, dict(params), category="query")
-        except TypeError:
+        category = _monitoring_category()
+        if category is not None:
+            try:
+                value = caller(method, dict(params), category=category)
+            except TypeError:
+                value = caller(method, dict(params))
+        else:
             value = caller(method, dict(params))
         return dict(value) if isinstance(value, Mapping) else {}
 
@@ -320,7 +341,7 @@ def install_import_hook() -> bool:
             "queryorders_exact_order_required=true trade_history_ordertxid_exact_match=true "
             "final_status_required=true positive_fill_quantity_required=true positive_fill_cost_required=true "
             "position_appearance_not_fill=true ack_not_fill=true requested_notional_promoted=false "
-            "market_price_promoted=false writer_nonce_risk_capital_position_killswitch_ecel_broker_health_" 
+            "market_price_promoted=false writer_nonce_risk_capital_position_killswitch_ecel_broker_health_"
             "minimum_order_fill_gates_unchanged=true protective_exits_unchanged=true forced_trade=false "
             "forced_activation=false execution_proof_fabricated=false safety_gates_bypassed=false",
             "READY" if ready else "NOT_READY", MARKER, str(ready).lower(),
