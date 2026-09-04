@@ -467,8 +467,13 @@ class TradingStrategy:
         self._wiring_recovery_last_attempt = 0.0
 
         # Heartbeat trade state
+        # Live heartbeat orders are capital-bearing orders, not health checks.
+        # Require a second, explicit operator opt-in so HEARTBEAT_TRADE alone can
+        # never grant privileged real-order authority.
         self._heartbeat_trade_enabled: bool = (
             os.environ.get("HEARTBEAT_TRADE", "false").strip().lower()
+            in ("1", "true", "yes", "enabled")
+            and os.environ.get("NIJA_ALLOW_LIVE_HEARTBEAT_ORDERS", "false").strip().lower()
             in ("1", "true", "yes", "enabled")
         )
         self._heartbeat_trade_completed: bool = False
@@ -1092,7 +1097,11 @@ class TradingStrategy:
             )
             time.sleep(first_delay_s)
         attempt = 1
-        while True:
+        try:
+            max_attempts = max(1, int(os.environ.get("NIJA_HEARTBEAT_MAX_ATTEMPTS", "1") or "1"))
+        except (TypeError, ValueError):
+            max_attempts = 1
+        while attempt <= max_attempts:
             try:
                 success = self._execute_heartbeat_trade()
                 with self._heartbeat_trade_lock:
@@ -1136,6 +1145,12 @@ class TradingStrategy:
                         retry_backoff_max_s,
                         retry_interval_s * float(2 ** min(attempt - 1, 10)),
                     )
+            if attempt >= max_attempts:
+                logger.critical(
+                    "⛔ Heartbeat verification stopped after %d attempt(s); no further capital-bearing retries",
+                    attempt,
+                )
+                return
             attempt += 1
             time.sleep(sleep_s)
 
