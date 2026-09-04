@@ -175,15 +175,41 @@ def _canonical_platform_equity() -> Tuple[bool, float, int, str]:
     return True, equity, valid_brokers, "canonical_capital_authority"
 
 
+def _env_pct(name: str, default: float) -> float:
+    try:
+        value = float(os.environ.get(name, str(default)))
+    except (TypeError, ValueError, OverflowError):
+        value = default
+    return max(0.0, min(100.0, value))
+
+
 def _level_from_drawdown(drawdown_pct: float) -> Tuple[str, float, bool]:
-    if drawdown_pct >= 20.0:
+    """Account-local envelope aligned with the canonical portfolio breaker.
+
+    Any material equity deficit enters RECOVERY and uses reduced risk.  The
+    ordinary signal, execution, fee, liquidity, writer, nonce, and broker gates
+    still have to approve the candidate; a projected recovery is never treated
+    as guaranteed profit and never bypasses a safety gate.
+    """
+    recovery = _env_pct("NIJA_ACCOUNT_RECOVERY_TRIGGER_PCT", 0.10)
+    caution = _env_pct("NIJA_DRAWDOWN_CAUTION_PCT", 1.0)
+    warning = _env_pct("NIJA_DRAWDOWN_WARNING_PCT", 2.0)
+    danger = _env_pct("NIJA_DRAWDOWN_DANGER_PCT", 3.0)
+    halt = _env_pct("NIJA_DRAWDOWN_HALT_PCT", 5.0)
+    if not (0.0 <= recovery <= caution < warning < danger < halt):
+        recovery, caution, warning, danger, halt = 0.10, 1.0, 2.0, 3.0, 5.0
+
+    if drawdown_pct >= halt:
         return "HALT", 0.0, True
-    if drawdown_pct >= 15.0:
-        return "DANGER", 0.25, False
-    if drawdown_pct >= 10.0:
-        return "WARNING", 0.50, False
-    if drawdown_pct >= 5.0:
-        return "CAUTION", 0.75, False
+    if drawdown_pct >= danger:
+        return "DANGER", 0.10, False
+    if drawdown_pct >= warning:
+        return "WARNING", 0.15, False
+    if drawdown_pct >= caution:
+        return "CAUTION", 0.20, False
+    if drawdown_pct >= recovery:
+        multiplier = _env_pct("NIJA_ACCOUNT_RECOVERY_SIZE_PCT", 25.0) / 100.0
+        return "RECOVERY", min(0.50, max(0.05, multiplier)), False
     return "CLEAR", 1.0, False
 
 
@@ -243,8 +269,19 @@ def _platform_scope_drawdown(account_balance: float) -> Tuple[str, float, bool, 
         breaker = _PLATFORM_BREAKER
 
     decision = breaker.update_equity(equity)
+    drawdown_pct = float(getattr(decision, "drawdown_pct", 0.0) or 0.0)
     level = str(getattr(getattr(decision, "level", "CLEAR"), "value", getattr(decision, "level", "CLEAR")))
     level = level.split(".")[-1].upper()
+    position_multiplier = float(getattr(decision, "position_size_multiplier", 1.0) or 1.0)
+    recovery_level, recovery_multiplier, recovery_halted = _level_from_drawdown(drawdown_pct)
+    if recovery_level == "RECOVERY" and bool(getattr(decision, "allow_new_entries", True)):
+        level = recovery_level
+        position_multiplier = min(position_multiplier, recovery_multiplier)
+        LOGGER.warning(
+            "PLATFORM_BREAK_EVEN_RECOVERY_V64 marker=%s canonical_equity=%.2f drawdown_pct=%.4f "
+            "entry_size_multiplier=%.2f exits_unchanged=true safety_gates_unchanged=true",
+            MARKER, equity, drawdown_pct, position_multiplier,
+        )
     LOGGER.info(
         "PLATFORM_DRAWDOWN_V64_EVALUATED marker=%s canonical_equity=%.2f broker_balance_ignored=%.2f "
         "valid_brokers=%d level=%s drawdown_pct=%.2f",
@@ -259,7 +296,7 @@ def _platform_scope_drawdown(account_balance: float) -> Tuple[str, float, bool, 
         return level, 0.0, True, (
             f"Platform portfolio drawdown halted: {float(getattr(decision, 'drawdown_pct', 0.0) or 0.0):.1f}%"
         )
-    return level, float(getattr(decision, "position_size_multiplier", 1.0) or 1.0), False, ""
+    return level, position_multiplier, recovery_halted, ""
 
 
 def _patch_drawdown_module(module: ModuleType) -> bool:
