@@ -710,8 +710,26 @@ class ECELExecutionCompiler:
                     ),
                 )
         elif compiled_base < rule.min_base_size:
-            # Bump up to min_base if below (rounding down can produce sub-min sizes)
-            compiled_base = self.precision.compile_base_size(rule.min_base_size, rule)
+            # New positions need a small base-quantity reserve above the venue
+            # minimum.  Entering at the exact floor can become uncloseable when
+            # a venue deducts base-denominated fees or precision truncates the
+            # acquired quantity.  Closing orders are never increased here.
+            try:
+                reserve_pct = float(os.environ.get(
+                    "NIJA_ENTRY_EXIT_QTY_RESERVE_PCT",
+                    os.environ.get("NIJA_KRAKEN_PAIR_MIN_BASE_BUFFER_PCT", "0.03")
+                    if broker == "kraken" else "0.01",
+                ))
+            except (TypeError, ValueError, OverflowError):
+                reserve_pct = 0.03 if broker == "kraken" else 0.01
+            reserve_pct = min(0.25, max(0.0, reserve_pct))
+            reserve_qty = rule.min_base_size * (1.0 + reserve_pct)
+            compiled_base = self.precision.compile_base_size(reserve_qty, rule)
+            if compiled_base <= rule.min_base_size and reserve_pct > 0.0:
+                compiled_base = self.precision.compile_base_size(
+                    reserve_qty + max(rule.base_step_size, 10 ** (-rule.base_precision)),
+                    rule,
+                )
 
         # Max-size guard
         if rule.max_base_size is not None and compiled_base > rule.max_base_size:
