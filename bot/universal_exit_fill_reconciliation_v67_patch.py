@@ -59,7 +59,27 @@ _FAILED_STATES = {
 }
 _PENDING: dict[tuple[int, str, str], dict[str, Any]] = {}
 _PENDING_LOCK = threading.RLock()
+# Terminal local rejects must not be resubmitted on every supervisor scan.
+# The key is process-local and includes broker identity, position id, and symbol.
+_RETRY_AFTER: dict[tuple[int, str, str], float] = {}
 _LAST_DELEGATE_LOG = 0.0
+
+_BELOW_MINIMUM_REJECT = "below_minimum_exit_non_executable"
+
+
+def _terminal_retry_cooldown_s(result: Mapping[str, Any]) -> float:
+    """Return a bounded retry delay for deterministic, non-executable exits."""
+    detail = " ".join(
+        str(result.get(key) or "") for key in ("error", "reason", "reason_code", "message")
+    ).strip().lower()
+    if _BELOW_MINIMUM_REJECT not in detail:
+        return 0.0
+    try:
+        configured = float(os.environ.get("NIJA_BELOW_MINIMUM_EXIT_RETRY_S", "900"))
+    except (TypeError, ValueError, OverflowError):
+        configured = 900.0
+    # Never allow a bad environment value to restore a hot retry loop.
+    return min(86400.0, max(60.0, configured))
 
 
 def _norm(value: Any) -> str:
@@ -473,6 +493,18 @@ def _safe_scan_broker(universal: ModuleType, broker: Any) -> int:
         if not hit:
             continue
 
+        # A deterministic below-minimum rejection cannot become executable a
+        # few seconds later.  Re-evaluate periodically so a deposit, conversion,
+        # or venue-rule refresh can recover it without hammering private APIs.
+        now = time.time()
+        with _PENDING_LOCK:
+            retry_after = _RETRY_AFTER.get(key, 0.0)
+            if retry_after and retry_after <= now:
+                _RETRY_AFTER.pop(key, None)
+                retry_after = 0.0
+        if retry_after > now:
+            continue
+
         active_key = f"{id(broker)}:{pid}:{symbol}"
         if active_key in universal._ACTIVE:
             continue
@@ -499,10 +531,22 @@ def _safe_scan_broker(universal: ModuleType, broker: Any) -> int:
                 )
                 continue
             if _is_terminal_failure(result):
-                LOGGER.error(
-                    "UNIVERSAL_EXIT_V67_SUBMISSION_REJECTED marker=%s venue=%s account=%s symbol=%s status=%s error=%s",
-                    MARKER, venue, account, symbol, _status(result), result.get("error", result),
-                )
+                cooldown_s = _terminal_retry_cooldown_s(result)
+                if cooldown_s > 0.0:
+                    with _PENDING_LOCK:
+                        _RETRY_AFTER[key] = time.time() + cooldown_s
+                    LOGGER.error(
+                        "UNIVERSAL_EXIT_V67_NON_EXECUTABLE_QUARANTINED marker=%s venue=%s account=%s "
+                        "symbol=%s status=%s error=%s retry_after_s=%.0f tracker_preserved=true "
+                        "quantity_increased=false short_created=false",
+                        MARKER, venue, account, symbol, _status(result),
+                        result.get("error", result), cooldown_s,
+                    )
+                else:
+                    LOGGER.error(
+                        "UNIVERSAL_EXIT_V67_SUBMISSION_REJECTED marker=%s venue=%s account=%s symbol=%s status=%s error=%s",
+                        MARKER, venue, account, symbol, _status(result), result.get("error", result),
+                    )
                 continue
 
             with _PENDING_LOCK:
