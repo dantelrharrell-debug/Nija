@@ -2,7 +2,7 @@
 
 The verified v324 economics live in ``runtime_all_in_profitability_authority_v324_core``.
 This canonical import path applies current U.S. public fee fallbacks and requires
-all execution/profitability hardening through v363 in the same writer process.
+all execution/profitability hardening through v364 in the same writer process.
 """
 from __future__ import annotations
 
@@ -83,6 +83,7 @@ def install_import_hook() -> bool:
         ("v362", "bot.runtime_stale_live_execution_proof_v362_patch", "NIJA_RUNTIME_STALE_LIVE_EXECUTION_PROOF_V362_READY"),
         ("v363", "bot.runtime_kraken_deferred_fill_proof_recovery_v363_patch", "NIJA_RUNTIME_KRAKEN_DEFERRED_FILL_PROOF_RECOVERY_V363_READY"),
         ("v363", "bot.runtime_bootstrap_execution_proof_alignment_v363_patch", "NIJA_RUNTIME_BOOTSTRAP_EXECUTION_PROOF_ALIGNMENT_V363_READY"),
+        ("v364", "bot.runtime_kraken_openpositions_margin_reconciliation_v364_patch", "NIJA_RUNTIME_KRAKEN_OPENPOSITIONS_MARGIN_RECONCILIATION_V364_READY"),
     )
     outcomes = {}
     previous = core_ready
@@ -104,7 +105,7 @@ def install_import_hook() -> bool:
             "CANONICAL_PROFITABILITY_CHAIN_READY marker=%s "
             "v324=true v325=true v326=true v327=true v328=true v329=true v330=true v331=true "
             "v332=true v333=true v334=true v335=true v336=true v337=true v338=true v339=true "
-            "v340=true v341=true v342=true v343=true v344=true v345=true v346=true v347=true v348=true v349=true v350=true v351=true v352=true v353=true v354=true v355=true v356=true v357=true v358=true v359=true v360=true v361=true v362=true v363=true "
+            "v340=true v341=true v342=true v343=true v344=true v345=true v346=true v347=true v348=true v349=true v350=true v351=true v352=true v353=true v354=true v355=true v356=true v357=true v358=true v359=true v360=true v361=true v362=true v363=true v364=true "
             "confirmed_fill_truth=true measured_slippage_learning=true authoritative_entry_fee=true "
             "capital_recycling_exit=true canonical_exit_broker_rebinding=true canonical_exit_market_price=true "
             "canonical_exit_pipeline_submission=true rejected_submission_not_fill=true "
@@ -130,6 +131,8 @@ def install_import_hook() -> bool:
             "heartbeat_local_deferral_not_exchange_rejection=true heartbeat_ack_timeout_not_exchange_rejection=true "
             "heartbeat_stage_helpers_terminal_reasserted=true kraken_btnl_non_ecp_retry=true "
             "kraken_btnl_all_leveraged_non_ecp_retry=true pending_open_not_margin_exit_authority=true "
+            "kraken_openpositions_margin_state_reconciliation=true margin_exit_broker_remaining_quantity_cap=true "
+            "openpositions_not_execution_fill_proof=true spot_balance_snapshot_ownership_unchanged=true "
             "explicit_other_exchange_rejections_unchanged=true "
             "take_profit_preserved=true stop_loss_preserved=true trailing_take_profit_preserved=true "
             "trailing_stop_preserved=true auto_exit_reconciler_preserved=true dust_policy_unchanged=true "
