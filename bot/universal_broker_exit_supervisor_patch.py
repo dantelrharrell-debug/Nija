@@ -165,8 +165,89 @@ def _fee_aware_profit_target(broker: Any, pos: dict[str, Any]) -> float:
     return entry * (1.0 + _venue_cost_pct(broker) + minimum_net)
 
 
+def _account_recovery_snapshot(broker: Any) -> dict[str, Any]:
+    try:
+        module = importlib.import_module("bot.broker_account_isolation_v64_patch")
+        getter = getattr(module, "get_account_recovery_snapshot", None)
+        if callable(getter):
+            return dict(getter(broker) or {})
+    except Exception as exc:
+        logger.debug("RECOVERY_EXIT_STATE_UNAVAILABLE broker=%s error=%s", auto_exit._broker_label(broker), exc)
+    return {}
+
+
+def _recovery_position_trigger(
+    broker: Any,
+    pos: dict[str, Any],
+    market: float,
+) -> tuple[bool, str, float]:
+    """Tighten held-position protection during account drawdown.
+
+    This never changes quantity, adds exposure, raises leverage, averages down,
+    or widens a stop.  Profit exits remain fee/slippage positive.
+    """
+    snapshot = _account_recovery_snapshot(broker)
+    if not bool(snapshot.get("in_recovery", False)):
+        return False, "", 0.0
+    if not _operator_basis_verified(pos):
+        return False, "", 0.0
+
+    entry = auto_exit._entry_price(pos)
+    side = auto_exit._side(pos.get("side"), pos)
+    if entry <= 0.0 or market <= 0.0:
+        return False, "", 0.0
+
+    max_loss = max(0.001, min(0.05, _f(os.environ.get("NIJA_RECOVERY_MAX_POSITION_LOSS_PCT"), 0.0075)))
+    minimum_net = max(0.0005, min(0.02, _f(os.environ.get("NIJA_RECOVERY_MIN_NET_PROFIT_PCT"), 0.0010)))
+    activation = max(
+        _venue_cost_pct(broker) + minimum_net,
+        max(0.001, _f(os.environ.get("NIJA_RECOVERY_PROFIT_LOCK_ACTIVATION_PCT"), 0.0060)),
+    )
+    callback = max(0.001, min(0.02, _f(os.environ.get("NIJA_RECOVERY_TRAILING_CALLBACK_PCT"), 0.0025)))
+
+    if side in {"long", "buy"}:
+        stop = entry * (1.0 - max_loss)
+        net_floor = entry * (1.0 + _venue_cost_pct(broker) + minimum_net)
+        if market <= stop:
+            return True, "recovery_max_loss_cap", stop
+        high = _f(auto_exit._HIGH_WATER.get(auto_exit._position_key(pos)), market)
+        if high >= entry * (1.0 + activation) and market >= net_floor and market <= high * (1.0 - callback):
+            return True, "recovery_trailing_net_profit_lock", max(net_floor, high * (1.0 - callback))
+        if market >= net_floor:
+            return True, "recovery_fee_aware_profit_harvest", net_floor
+    else:
+        stop = entry * (1.0 + max_loss)
+        net_floor = entry / max(1e-12, 1.0 + _venue_cost_pct(broker) + minimum_net)
+        if market >= stop:
+            return True, "recovery_max_loss_cap", stop
+        low = _f(auto_exit._HIGH_WATER.get(auto_exit._position_key(pos)), market)
+        # Some legacy trackers store a high-water value for both directions.
+        # Immediate net-positive harvesting below is authoritative for shorts.
+        if market <= net_floor:
+            return True, "recovery_fee_aware_profit_harvest", net_floor
+
+    return False, "", 0.0
+
+
 def _trigger(broker: Any, pos: dict[str, Any], market: float) -> tuple[bool, str, float]:
     hit, reason, target = auto_exit._trigger(pos, market)
+    # Existing loss protection always keeps priority.  During recovery, defer
+    # ordinary profit targets long enough to apply the fee-aware recovery lock.
+    reason_norm = str(reason or "").strip().lower()
+    protective = any(token in reason_norm for token in ("stop_loss", "trailing_stop", "loss_cap", "liquidation"))
+    if hit and protective:
+        return hit, reason, target
+
+    recovery_hit, recovery_reason, recovery_target = _recovery_position_trigger(broker, pos, market)
+    if recovery_hit:
+        logger.critical(
+            "ACCOUNT_RECOVERY_EXIT_AMPLIFIED marker=%s venue=%s account=%s symbol=%s "
+            "reason=%s target=%.8f market=%.8f exposure_added=false leverage_increased=false "
+            "stop_widened=false fee_slippage_floor=true",
+            _MARKER, auto_exit._broker_label(broker), _account_label(broker),
+            auto_exit._sym(pos.get("symbol")), recovery_reason, recovery_target, market,
+        )
+        return recovery_hit, recovery_reason, recovery_target
     if hit:
         return hit, reason, target
     side = auto_exit._side(pos.get("side"), pos)
