@@ -37,7 +37,7 @@ def test_aggregates_multiple_same_direction_open_positions():
         "error": [],
         "result": {
             "A": {"pair": "XETHZUSD", "type": "buy", "vol": "0.2", "vol_closed": "0", "value": "500", "cost": "500", "margin": "250"},
-            "B": {"pair": "ETHUSD", "type": "buy", "vol": "0.3", "vol_closed": "0.1", "value": "450", "cost": "600", "margin": "300"},
+            "B": {"pair": "XETHZUSD", "type": "buy", "vol": "0.3", "vol_closed": "0.1", "value": "450", "cost": "600", "margin": "300"},
         },
     }
     truth = v364._extract_long_margin_truth(response, "ETH-USD")
