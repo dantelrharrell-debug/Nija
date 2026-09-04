@@ -110,15 +110,30 @@ except ImportError:
 # Configuration
 # ---------------------------------------------------------------------------
 
+def _env_pct(name: str, default: float) -> float:
+    """Read a finite positive percentage without allowing unsafe zero values."""
+    try:
+        value = float(os.environ.get(name, str(default)) or default)
+    except (TypeError, ValueError):
+        value = default
+    return max(0.1, min(100.0, value))
+
+
 @dataclass
 class DrawdownCBConfig:
-    """Tunable thresholds for the global drawdown circuit breaker."""
-    caution_pct: float = 5.0       # % drawdown → CAUTION
-    warning_pct: float = 10.0      # % drawdown → WARNING
-    danger_pct: float = 15.0       # % drawdown → DANGER
-    halt_pct: float = 20.0         # % drawdown → HALT (all entries blocked)
-    recovery_pct: float = 3.0      # % equity recovery needed to step up one level
-    recovery_wins: int = 3         # Consecutive wins needed alongside recovery_pct
+    """Tunable, percentage-based thresholds for the global drawdown breaker."""
+    caution_pct: float = _env_pct("NIJA_DRAWDOWN_CAUTION_PCT", 1.0)
+    warning_pct: float = _env_pct("NIJA_DRAWDOWN_WARNING_PCT", 2.0)
+    danger_pct: float = _env_pct("NIJA_DRAWDOWN_DANGER_PCT", 3.0)
+    halt_pct: float = _env_pct("NIJA_DRAWDOWN_HALT_PCT", 5.0)
+    recovery_pct: float = _env_pct("NIJA_DRAWDOWN_RECOVERY_PCT", 2.0)
+    recovery_wins: int = max(1, int(os.environ.get("NIJA_DRAWDOWN_RECOVERY_WINS", "3") or "3"))
+
+    def __post_init__(self) -> None:
+        if not (self.caution_pct < self.warning_pct < self.danger_pct < self.halt_pct):
+            raise ValueError(
+                "drawdown thresholds must increase: caution < warning < danger < halt"
+            )
 
 
 # ---------------------------------------------------------------------------
