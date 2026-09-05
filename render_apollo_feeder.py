@@ -372,6 +372,7 @@ def run_sync() -> dict[str, int]:
         "errors": 0,
     }
 
+    reached_cursor = False
     for page in range(1, _pages_per_sync() + 1):
         response = _apollo_request(
             "/contacts/search",
@@ -389,8 +390,16 @@ def run_sync() -> dict[str, int]:
         for contact in contacts:
             if not isinstance(contact, dict):
                 continue
-            counts["contacts_scanned"] += 1
             updated_at = str(contact.get("updated_at", "") or "")
+            # Apollo returns contacts newest-first. Once a persisted cursor is
+            # reached, every remaining row/page is already known. Stop before
+            # mirroring or queue evaluation so idle polls consume one search call
+            # instead of repeatedly walking historical pages.
+            if cursor and updated_at and updated_at <= cursor:
+                reached_cursor = True
+                break
+
+            counts["contacts_scanned"] += 1
             if updated_at and (not newest_seen or updated_at > newest_seen):
                 newest_seen = updated_at
 
@@ -403,9 +412,6 @@ def run_sync() -> dict[str, int]:
                 counts["website_lead_errors"] += 1
             elif mirror_result == "website_lead_missing_email":
                 counts["website_lead_missing_email"] += 1
-
-            if cursor and updated_at and updated_at <= cursor:
-                continue
 
             counts["contacts_seen"] += 1
             payload, reason = _contact_payload(contact)
@@ -422,7 +428,7 @@ def run_sync() -> dict[str, int]:
             else:
                 counts["queued_or_refreshed"] += 1
 
-        if len(contacts) < 100:
+        if reached_cursor or len(contacts) < 100:
             break
 
     _save_state(newest_seen, counts)
@@ -463,9 +469,11 @@ def _worker() -> None:
                 flush=True,
             )
         except Exception as exc:
-            _LAST_ERROR = type(exc).__name__
+            detail = str(exc).strip().replace("\n", " ")[:160] if isinstance(exc, RuntimeError) else type(exc).__name__
+            _LAST_ERROR = detail or type(exc).__name__
             print(
-                f"APOLLO_NIJA_FEEDER state=sync_error error={type(exc).__name__} fail_closed=true",
+                f"APOLLO_NIJA_FEEDER state=sync_error error={type(exc).__name__} "
+                f"detail={_LAST_ERROR.replace(' ', '_')} fail_closed=true",
                 flush=True,
             )
         time.sleep(_poll_seconds())
