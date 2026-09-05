@@ -13,6 +13,11 @@ readiness.  When a local LIVE_ACTIVE state is observed without canonical
 LIVE_PENDING_CONFIRMATION and revokes local dispatch flags.  The next cycle
 must pass the unchanged canonical activation/proof chain naturally.
 
+The stale-LIVE guard also covers ordinary ``get_current_state()`` reads so a
+locally stale LIVE_ACTIVE label cannot leak into reconciliation or monitoring
+between activation attempts.  Read-time demotion uses the same fail-closed
+canonical proof check and never promotes readiness or execution authority.
+
 ACK/status/order-id remains insufficient for fill proof.  Writer, nonce, risk,
 capital, position-sync, ECEL, broker-health, minimum-order, fill-verification,
 kill-switch, rejection, quantity, and protective-exit gates are unchanged.
@@ -24,12 +29,14 @@ import logging
 import os
 import threading
 import time
+from functools import wraps
 from typing import Any
 
 LOGGER = logging.getLogger("nija.runtime_stale_live_execution_proof_v362")
 MARKER = "20260904-runtime-stale-live-execution-proof-v362"
 _READY_FLAG = "NIJA_RUNTIME_STALE_LIVE_EXECUTION_PROOF_V362_READY"
 _PATCH_ATTR = "_nija_stale_live_execution_proof_v362"
+_PATCH_READ_ATTR = "_nija_stale_live_execution_proof_v362_read_guard"
 _LOCK = threading.RLock()
 
 
@@ -132,12 +139,14 @@ def _patch_trading_state_machine() -> bool:
 
     commit_current = getattr(cls, "commit_activation", None)
     activate_current = getattr(cls, "activate_live_trading", None)
-    if not callable(commit_current) or not callable(activate_current):
+    read_current = getattr(cls, "get_current_state", None)
+    if not callable(commit_current) or not callable(activate_current) or not callable(read_current):
         return False
 
     if not bool(getattr(commit_current, _PATCH_ATTR, False)):
         commit_original = commit_current
 
+        @wraps(commit_original)
         def commit_activation_v362(self: Any, *args: Any, **kwargs: Any) -> bool:
             if _revoke_stale_live_authority(self, module, trigger="commit_activation"):
                 # One fail-closed cycle after revocation.  The following cycle
@@ -152,6 +161,7 @@ def _patch_trading_state_machine() -> bool:
     if not bool(getattr(activate_current, _PATCH_ATTR, False)):
         activate_original = activate_current
 
+        @wraps(activate_original)
         def activate_live_trading_v362(self: Any, *args: Any, **kwargs: Any) -> bool:
             if _revoke_stale_live_authority(self, module, trigger="activate_live_trading"):
                 return False
@@ -160,6 +170,18 @@ def _patch_trading_state_machine() -> bool:
         setattr(activate_live_trading_v362, _PATCH_ATTR, True)
         setattr(activate_live_trading_v362, "__wrapped__", activate_original)
         cls.activate_live_trading = activate_live_trading_v362
+
+    if not bool(getattr(read_current, _PATCH_READ_ATTR, False)):
+        read_original = read_current
+
+        @wraps(read_original)
+        def get_current_state_v362(self: Any, *args: Any, **kwargs: Any) -> Any:
+            _revoke_stale_live_authority(self, module, trigger="get_current_state")
+            return read_original(self, *args, **kwargs)
+
+        setattr(get_current_state_v362, _PATCH_READ_ATTR, True)
+        setattr(get_current_state_v362, "__wrapped__", read_original)
+        cls.get_current_state = get_current_state_v362
 
     # If the singleton already exists, revoke stale state immediately without
     # constructing a new state machine as a side effect of installation.
@@ -198,7 +220,8 @@ def install_import_hook() -> bool:
             LOGGER.critical(
                 "RUNTIME_STALE_LIVE_EXECUTION_PROOF_V362_READY marker=%s ready=true "
                 "canonical_execution_ready_required_for_local_live_authority=true "
-                "stale_live_demotes_to_pending=true local_dispatch_revoked=true ack_not_fill=true "
+                "stale_live_demotes_to_pending=true local_dispatch_revoked=true "
+                "stale_live_read_guard=true ack_not_fill=true "
                 "execution_ready_unchanged=true execution_proof_fabricated=false forced_activation=false "
                 "writer_nonce_risk_capital_position_sync_ecel_broker_health_minimum_order_fill_gates_unchanged=true "
                 "kill_switch_unchanged=true rejection_latches_unchanged=true exit_quantities_unchanged=true "
