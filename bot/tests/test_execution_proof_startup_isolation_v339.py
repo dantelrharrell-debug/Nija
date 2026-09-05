@@ -55,9 +55,21 @@ def test_v238_patch_requires_v169_and_explicit_execution_provenance():
     patched = patcher.patch_v238_text(source)
 
     assert "v169_provenance_guard_not_ready" in patched
-    assert 'source != "heartbeat_trade"' in patched
+    assert 'allowed_sources = {"heartbeat_trade", "canonical_confirmed_fill"}' in patched
+    assert 'source not in allowed_sources' in patched
     assert 'kind != "execution_probe"' in patched
-    assert "verified_v169_execution_probe" in patched
+    assert "verified_v169_execution_probe:source=" in patched
+
+
+def test_v238_patch_preserves_render_compatibility_token():
+    patcher = _load_patcher()
+    source = (ROOT / "bot" / "runtime_heartbeat_marker_convergence_v238_patch.py").read_text(
+        encoding="utf-8"
+    )
+    patched = patcher.patch_v238_text(source)
+
+    # render_entrypoint.sh still validates that the historical hardening token exists.
+    assert 'source != "heartbeat_trade"' in patched
 
 
 def test_v339_source_transformations_are_idempotent():
