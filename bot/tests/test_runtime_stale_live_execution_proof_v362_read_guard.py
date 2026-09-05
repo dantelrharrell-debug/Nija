@@ -14,6 +14,7 @@ def _fresh_module():
 def test_get_current_state_demotes_stale_live_without_execution_proof(monkeypatch):
     patch = _fresh_module()
     tsm = importlib.import_module("bot.trading_state_machine")
+    original_import = importlib.import_module
 
     monkeypatch.setattr(patch, "_canonical_execution_ready", lambda: (False, "canonical_execution_proof_pending"))
 
@@ -45,7 +46,11 @@ def test_get_current_state_demotes_stale_live_without_execution_proof(monkeypatc
         TradingStateMachine=FakeMachine,
         _state_machine=None,
     )
-    monkeypatch.setattr(patch.importlib, "import_module", lambda name: fake_module if name == "bot.trading_state_machine" else importlib.import_module(name))
+    monkeypatch.setattr(
+        patch.importlib,
+        "import_module",
+        lambda name: fake_module if name == "bot.trading_state_machine" else original_import(name),
+    )
 
     assert patch._patch_trading_state_machine() is True
     machine = FakeMachine()
@@ -62,6 +67,7 @@ def test_get_current_state_demotes_stale_live_without_execution_proof(monkeypatc
 def test_get_current_state_preserves_live_when_canonical_execution_ready(monkeypatch):
     patch = _fresh_module()
     tsm = importlib.import_module("bot.trading_state_machine")
+    original_import = importlib.import_module
 
     monkeypatch.setattr(patch, "_canonical_execution_ready", lambda: (True, "canonical_execution_ready"))
 
@@ -87,7 +93,11 @@ def test_get_current_state_preserves_live_when_canonical_execution_ready(monkeyp
         TradingStateMachine=FakeMachine,
         _state_machine=None,
     )
-    monkeypatch.setattr(patch.importlib, "import_module", lambda name: fake_module if name == "bot.trading_state_machine" else importlib.import_module(name))
+    monkeypatch.setattr(
+        patch.importlib,
+        "import_module",
+        lambda name: fake_module if name == "bot.trading_state_machine" else original_import(name),
+    )
 
     assert patch._patch_trading_state_machine() is True
     machine = FakeMachine()
