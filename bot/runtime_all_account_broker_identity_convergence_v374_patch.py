@@ -21,9 +21,10 @@ platform/user broker owns account-scoped position state and stale tracker rows
 can only be removed from a fresh authoritative snapshot. v377 then materializes
 NIJA's symbol-only PositionTracker interface into universal local position rows,
 v375 applies the fixed/trailing four-way policy, v376 gates every selected
-canonical broker, v379 publishes registered-user live protection proof, and
-v380 adds reduce-only native Kraken fixed SL/TP backup while retaining NIJA's
-software TSL/TTP monitor.
+canonical broker, v381 bridges synthetic Kraken margin symbols to exchange pair
+lookups, v379 publishes registered-user live protection proof, and v380 adds
+reduce-only native Kraken fixed SL/TP backup while retaining NIJA's software
+TSL/TTP monitor.
 """
 from __future__ import annotations
 
@@ -188,6 +189,10 @@ def _install_v376() -> bool:
     return _install_module("bot.runtime_universal_four_way_scope_v376_patch", "V376")
 
 
+def _install_v381() -> bool:
+    return _install_module("bot.runtime_kraken_margin_pair_resolution_v381_patch", "V381")
+
+
 def _install_v379() -> bool:
     return _install_module("bot.runtime_registered_user_protection_proof_v379_patch", "V379")
 
@@ -202,14 +207,16 @@ def install_import_hook() -> bool:
     materialization_ready = _install_v377() if identity_ready else False
     policy_ready = _install_v375() if materialization_ready else False
     scope_ready = _install_v376() if policy_ready else False
+    pair_resolution_ready = _install_v381() if scope_ready else False
     user_proof_installed = _install_v379() if scope_ready else False
-    native_backup_installed = _install_v380() if scope_ready else False
+    native_backup_installed = _install_v380() if scope_ready and pair_resolution_ready else False
     ready = bool(
         account_scope_ready
         and identity_ready
         and materialization_ready
         and policy_ready
         and scope_ready
+        and pair_resolution_ready
         and user_proof_installed
         and native_backup_installed
     )
@@ -225,8 +232,9 @@ def install_import_hook() -> bool:
     LOGGER.critical(
         "RUNTIME_ALL_ACCOUNT_BROKER_IDENTITY_CONVERGENCE_V374_%s marker=%s ready=%s "
         "account_scoped_position_v289=%s identity_ready=%s position_materialization_v377=%s "
-        "universal_four_way_policy_v375=%s universal_scope_v376=%s registered_user_proof_v379=%s "
-        "kraken_native_margin_backup_v380=%s connected_object_preferred=true startup_fetch_proof_preferred=true "
+        "universal_four_way_policy_v375=%s universal_scope_v376=%s kraken_pair_resolution_v381=%s "
+        "registered_user_proof_v379=%s kraken_native_margin_backup_v380=%s "
+        "connected_object_preferred=true startup_fetch_proof_preferred=true "
         "startup_adoption_preferred=true authoritative_stale_cleanup_reasserted=true "
         "broker_io_identity_patch=false manager_registry_mutation=false safety_gates_bypassed=false",
         "READY" if ready else "NOT_READY",
@@ -237,6 +245,7 @@ def install_import_hook() -> bool:
         str(materialization_ready).lower(),
         str(policy_ready).lower(),
         str(scope_ready).lower(),
+        str(pair_resolution_ready).lower(),
         str(user_proof_installed).lower(),
         str(native_backup_installed).lower(),
     )
@@ -257,6 +266,7 @@ __all__ = [
     "_install_v377",
     "_install_v375",
     "_install_v376",
+    "_install_v381",
     "_install_v379",
     "_install_v380",
 ]
