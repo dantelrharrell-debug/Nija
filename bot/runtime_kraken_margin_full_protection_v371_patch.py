@@ -2,10 +2,15 @@
 
 Every authenticated Kraken margin position must have the same protective
 contract used by the rest of NIJA: fixed stop-loss, fixed take-profit,
-trailing stop-loss, and trailing take-profit.  Fixed targets reuse NIJA's
-existing v367/v239 policies; trailing settings reuse the global NIJA trailing
-policy.  Coverage is fail-closed unless all four protections cover the same
-authenticated remaining position.
+trailing stop-loss, and trailing take-profit. Fixed targets reuse NIJA's
+existing v367/v239 policies and trailing settings reuse the global NIJA
+trailing policy.
+
+Kraken's authenticated native-order proof currently exposes fixed stop-loss
+and fixed take-profit coverage. Trailing protection is therefore certified
+only through the live account-local software margin monitor. Native fixed
+orders may be combined with that software trailing monitor, but this module
+never fabricates native trailing-order proof.
 
 This patch does not create exposure, fabricate fills, or bypass writer, nonce,
 kill-switch, risk, broker-health, quantity, minimum-order, or terminal submit
@@ -244,8 +249,6 @@ def _patch_margin_coverage_truth() -> bool:
             identity_verified = bool(row.get("software_protection_identity_verified"))
             native_stop = bool(row.get("native_stop_loss_verified"))
             native_tp = bool(row.get("native_take_profit_verified"))
-            native_trailing_stop = bool(row.get("native_trailing_stop_verified"))
-            native_trailing_tp = bool(row.get("native_trailing_take_profit_verified"))
             software_monitor = bool(row.get("software_exit_monitor_verified"))
 
             software_stop = bool(
@@ -267,8 +270,11 @@ def _patch_margin_coverage_truth() -> bool:
 
             stop_verified = bool(native_stop or software_stop)
             take_profit_verified = bool(native_tp or software_tp)
-            trailing_stop_verified = bool(native_trailing_stop or software_trailing_stop)
-            trailing_take_profit_verified = bool(native_trailing_tp or software_trailing_tp)
+            # v367 currently proves only native fixed stop/TP orders. Do not
+            # manufacture native trailing proof: trailing legs require the live
+            # authenticated account-local software monitor.
+            trailing_stop_verified = software_trailing_stop
+            trailing_take_profit_verified = software_trailing_tp
             verified = bool(
                 identity_verified
                 and stop_verified
@@ -277,27 +283,10 @@ def _patch_margin_coverage_truth() -> bool:
                 and trailing_take_profit_verified
             )
 
-            if (
-                verified
-                and native_stop
-                and native_tp
-                and native_trailing_stop
-                and native_trailing_tp
-            ):
-                mode = "native_exchange_four_way"
-            elif (
-                verified
-                and software_stop
-                and software_tp
-                and software_trailing_stop
-                and software_trailing_tp
-                and not any(
-                    (native_stop, native_tp, native_trailing_stop, native_trailing_tp)
-                )
-            ):
-                mode = "software_margin_monitor_four_way"
+            if verified and (native_stop or native_tp):
+                mode = "hybrid_native_fixed_software_trailing"
             elif verified:
-                mode = "hybrid_native_software_four_way"
+                mode = "software_margin_monitor_four_way"
             else:
                 mode = "unverified"
 
@@ -306,10 +295,6 @@ def _patch_margin_coverage_truth() -> bool:
                 attached.append("native_stop_loss")
             if native_tp:
                 attached.append("native_take_profit")
-            if native_trailing_stop:
-                attached.append("native_trailing_stop_loss")
-            if native_trailing_tp:
-                attached.append("native_trailing_take_profit")
             if software_stop:
                 attached.append("kraken_margin_software_stop_loss")
             if software_tp:
@@ -355,8 +340,8 @@ def _patch_margin_coverage_truth() -> bool:
                 "quantity=%.12f position_ids=%s identity_verified=%s "
                 "stop_verified=%s take_profit_verified=%s trailing_stop_verified=%s "
                 "trailing_take_profit_verified=%s protective_exit_verified=%s mode=%s "
-                "full_remaining_position_required=true terminal_submit_gates_preserved=true "
-                "safety_gates_bypassed=false",
+                "native_trailing_proof_fabricated=false full_remaining_position_required=true "
+                "terminal_submit_gates_preserved=true safety_gates_bypassed=false",
                 MARKER,
                 account,
                 symbol,
@@ -431,9 +416,9 @@ def install_import_hook() -> bool:
         log(
             "RUNTIME_KRAKEN_MARGIN_FULL_PROTECTION_V371_%s marker=%s ready=%s "
             "four_way_required=true fixed_stop_loss=true fixed_take_profit=true "
-            "trailing_stop_loss=true trailing_take_profit=true "
-            "exact_openposition_ids_required=true "
-            "software_stop_existing_hard_loss_policy=true "
+            "trailing_stop_loss=software_monitor trailing_take_profit=software_monitor "
+            "native_fixed_orders_may_combine=true native_trailing_proof_fabricated=false "
+            "exact_openposition_ids_required=true software_stop_existing_hard_loss_policy=true "
             "software_take_profit_existing_v239_policy=true "
             "tp1_default_pct=0.005 tp2_default_pct=0.010 tp3_default_pct=0.020 "
             "v364_terminal_remaining_quantity_cap_unchanged=true "
