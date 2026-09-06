@@ -1,3 +1,4 @@
+# Regression coverage: never force a trade merely to manufacture user proof.
 from bot import runtime_registered_user_protection_proof_v379_patch as v379
 
 
