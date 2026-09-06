@@ -10,11 +10,12 @@ from __future__ import annotations
 import builtins
 import logging
 import os
+import sys
 from types import ModuleType
 from typing import Any, Callable
 
 logger = logging.getLogger("nija.exit_protection_assurance")
-_MARKER = "20260720-exit-protection-assurance-v1"
+_MARKER = "20260905-exit-protection-assurance-v1b"
 _PATCHED = "__nija_exit_protection_assurance_v1__"
 _HOOK = "_NIJA_EXIT_PROTECTION_ASSURANCE_IMPORT_HOOK_V1"
 
@@ -105,14 +106,18 @@ def _patch(module: ModuleType) -> bool:
     return True
 
 
-def install_import_hook() -> None:
-    import sys
+def _patch_loaded_auto_exit() -> bool:
+    changed = False
+    for candidate_name in ("bot.auto_exit_sl_tp_runtime_patch", "auto_exit_sl_tp_runtime_patch"):
+        candidate = sys.modules.get(candidate_name)
+        if isinstance(candidate, ModuleType):
+            changed = bool(_patch(candidate)) or changed
+    return changed
 
+
+def install_import_hook() -> None:
     _configure()
-    for name in ("bot.auto_exit_sl_tp_runtime_patch", "auto_exit_sl_tp_runtime_patch"):
-        module = sys.modules.get(name)
-        if isinstance(module, ModuleType):
-            _patch(module)
+    _patch_loaded_auto_exit()
 
     if getattr(builtins, _HOOK, False):
         return
@@ -121,10 +126,17 @@ def install_import_hook() -> None:
     def hook(name: str, globals=None, locals=None, fromlist=(), level: int = 0):
         module = original_import(name, globals, locals, fromlist, level)
         try:
-            if name.endswith("auto_exit_sl_tp_runtime_patch"):
-                candidate = sys.modules.get(name)
-                if isinstance(candidate, ModuleType):
-                    _patch(candidate)
+            # `from bot import auto_exit_sl_tp_runtime_patch` invokes
+            # __import__("bot", fromlist=("auto_exit_sl_tp_runtime_patch",)).
+            # Inspect both the direct name and fromlist so the fallback assurance
+            # cannot be skipped by the import style used by NIJA supervisors.
+            direct = name.endswith("auto_exit_sl_tp_runtime_patch")
+            from_bot = name in {"bot", ""} and any(
+                str(item).endswith("auto_exit_sl_tp_runtime_patch")
+                for item in (fromlist or ())
+            )
+            if direct or from_bot:
+                _patch_loaded_auto_exit()
         except Exception:
             logger.exception("EXIT_PROTECTION_ASSURANCE_PATCH_FAILED marker=%s module=%s", _MARKER, name)
         return module

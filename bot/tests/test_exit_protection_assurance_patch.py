@@ -9,6 +9,7 @@ def test_short_trailing_profit_is_symmetric(monkeypatch):
     auto_exit = importlib.import_module("bot.auto_exit_sl_tp_runtime_patch")
     assurance = importlib.import_module("exit_protection_assurance_patch")
     assert assurance._patch(auto_exit)
+    auto_exit._HIGH_WATER.clear()
 
     position = {
         "position_id": "short-1",
