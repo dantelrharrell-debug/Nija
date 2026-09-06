@@ -35,8 +35,6 @@ def _margin_row(**overrides):
         "position_ids": ("POS1", "POS2", "POS3", "POS4", "POS5", "POS6"),
         "native_stop_loss_verified": False,
         "native_take_profit_verified": False,
-        "native_trailing_stop_verified": False,
-        "native_trailing_take_profit_verified": False,
         "software_exit_monitor_verified": True,
     }
     row.update(overrides)
@@ -170,7 +168,7 @@ def test_software_monitor_without_authenticated_position_ids_fails_closed(monkey
     monkeypatch.setattr(v366, "margin_coverage_rows", original)
 
 
-def test_native_fixed_only_no_longer_certifies_four_way(monkeypatch):
+def test_native_fixed_only_does_not_certify_trailing_protection(monkeypatch):
     import bot.runtime_kraken_margin_canonical_coverage_v366_patch as v366
 
     original = v366.margin_coverage_rows
@@ -197,7 +195,7 @@ def test_native_fixed_only_no_longer_certifies_four_way(monkeypatch):
     monkeypatch.setattr(v366, "margin_coverage_rows", original)
 
 
-def test_native_four_way_covering_authenticated_position_is_verified(monkeypatch):
+def test_native_fixed_plus_software_trailing_monitor_is_hybrid(monkeypatch):
     import bot.runtime_kraken_margin_canonical_coverage_v366_patch as v366
 
     original = v366.margin_coverage_rows
@@ -206,9 +204,7 @@ def test_native_four_way_covering_authenticated_position_is_verified(monkeypatch
         return [_margin_row(
             native_stop_loss_verified=True,
             native_take_profit_verified=True,
-            native_trailing_stop_verified=True,
-            native_trailing_take_profit_verified=True,
-            software_exit_monitor_verified=False,
+            software_exit_monitor_verified=True,
         )], []
 
     monkeypatch.setattr(v366, "margin_coverage_rows", base)
@@ -221,6 +217,10 @@ def test_native_four_way_covering_authenticated_position_is_verified(monkeypatch
     assert row["protective_trailing_stop_verified"] is True
     assert row["protective_trailing_take_profit_verified"] is True
     assert row["protective_exit_verified"] is True
-    assert row["protective_exit_mode"] == "native_exchange_four_way"
+    assert row["protective_exit_mode"] == "hybrid_native_fixed_software_trailing"
+    assert "native_stop_loss" in row["exit_protections_attached"]
+    assert "native_take_profit" in row["exit_protections_attached"]
+    assert "kraken_margin_software_trailing_stop_loss" in row["exit_protections_attached"]
+    assert "kraken_margin_software_trailing_take_profit" in row["exit_protections_attached"]
     assert reasons == []
     monkeypatch.setattr(v366, "margin_coverage_rows", original)
