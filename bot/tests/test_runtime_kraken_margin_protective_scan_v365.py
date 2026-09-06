@@ -164,6 +164,29 @@ def test_openpositions_error_fails_closed():
     assert reason.startswith("openpositions_rejected:")
 
 
+def test_proxy_broker_keeps_live_margin_position_visible():
+    target = Broker({
+        "error": [],
+        "result": {
+            "TX": {
+                "pair": "XETHZUSD", "type": "buy", "vol": "0.1",
+                "vol_closed": "0", "cost": "250",
+            }
+        },
+    })
+
+    class Proxy:
+        def __init__(self, broker):
+            self._broker = broker
+
+    rows, reason = v365._openposition_rows(Proxy(target))
+
+    assert reason == "ok"
+    assert rows[0]["symbol"] == "ETH-USD"
+    assert rows[0]["quantity"] == pytest.approx(0.1)
+    assert target.calls == [("OpenPositions", {"docalcs": "true"})]
+
+
 def test_parser_does_not_mutate_execution_readiness(monkeypatch):
     monkeypatch.setenv("NIJA_EXECUTION_READY", "0")
     broker = Broker({

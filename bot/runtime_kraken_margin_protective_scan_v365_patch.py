@@ -65,7 +65,11 @@ def _openposition_rows(broker: Any) -> tuple[list[MutableMapping[str, Any]], str
     remaining legs for a pair; yielding the ids individually and later de-duping
     by symbol protects only the first leg.
     """
-    call = getattr(broker, "_kraken_api_call", None)
+    try:
+        coverage = importlib.import_module("bot.runtime_kraken_margin_canonical_coverage_v366_patch")
+        call = getattr(coverage, "_private_call")(broker)
+    except Exception:
+        call = None
     if not callable(call):
         return [], "private_api_unavailable"
     try:
