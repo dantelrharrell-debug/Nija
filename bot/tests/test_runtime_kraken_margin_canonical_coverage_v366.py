@@ -67,7 +67,7 @@ def _reset(monkeypatch):
 def test_open_eth_margin_long_visible_in_canonical_coverage():
     broker = Broker(_payload({"TX-1": ETH_ROW}))
     rows, reasons = v366.margin_coverage_rows("platform:kraken", broker)
-    assert reasons == []
+    assert "kraken_margin_protective_exit_unverified:ETH-USD" in reasons
     assert len(rows) == 1
     row = rows[0]
     assert row["account"] == "platform:kraken"
@@ -76,13 +76,12 @@ def test_open_eth_margin_long_visible_in_canonical_coverage():
     assert row["margin_position"] is True
     assert row["source"] == "kraken_open_positions"
     assert row["protective_exit_required"] is True
-    assert row["protective_exit_verified"] is True
+    assert row["protective_exit_verified"] is False
     assert row["side"] == "long"
     assert row["leverage"] == 2
     assert abs(row["quantity"] - 0.13742703) < 1e-12
     assert abs(row["entry_price"] - (343.393906 / 0.13742703)) < 1e-9
-    assert "stop_loss" in row["exit_protections_attached"]
-    assert "trailing_take_profit" in row["exit_protections_attached"]
+    assert row["exit_protections_attached"] == ()
 
 
 # B. Margin exposure never enters ordinary spot Balance holdings.
@@ -235,7 +234,8 @@ def test_multiple_accounts_remain_isolated(monkeypatch):
     )
     by_account = {(row["account"], row["symbol"]) for row in merged["positions"]}
     assert by_account == {("platform:kraken", "ETH-USD"), ("user:u1:kraken", "BTC-USD")}
-    assert merged["ready"] is True
+    assert merged["ready"] is False
+    assert set(merged["pending"]) == {"platform:kraken", "user:u1:kraken"}
 
 
 def test_multiple_lots_for_same_symbol_aggregate_safely():

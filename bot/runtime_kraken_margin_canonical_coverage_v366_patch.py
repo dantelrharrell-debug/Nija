@@ -472,13 +472,13 @@ def margin_coverage_rows(account: Any, broker: Any) -> Tuple[list, list]:
             "authoritative_snapshot_current": True,
             "spot_holding": False,
             "protective_exit_required": True,
-            "protective_exit_verified": verified,
+            "protective_exit_verified": False,
             "broker_position_state_only": True,
             "confirmed_fill_proof": False,
-            "exit_protections_attached": (
-                ("stop_loss", "take_profit", "trailing_take_profit", "trailing_stop", "auto_exit_reconciler")
-                if verified else ()
-            ),
+            # OpenPositions proves exposure identity/cost only. Protection is
+            # certified later by v367/v371 from authenticated native orders or
+            # the live account-local software monitor.
+            "exit_protections_attached": (),
         }
         rows.append(row)
         LOGGER.critical(
@@ -487,19 +487,24 @@ def margin_coverage_rows(account: Any, broker: Any) -> Tuple[list, list]:
             "margin_position=true protective_exit_required=true protective_exit_verified=%s "
             "safety_gates_bypassed=false fill_fabricated=false spot_tracker_mutated=false",
             MARKER, key, venue, symbol, ",".join(row["position_ids"]) or "unknown",
-            quantity, entry_price, cost_basis, row["leverage"], _SOURCE, str(verified).lower(),
+            quantity, entry_price, cost_basis, row["leverage"], _SOURCE, "false",
         )
         LOGGER.critical(
             "KRAKEN_MARGIN_POSITION_PROTECTIVE_COVERAGE marker=%s account=%s symbol=%s quantity=%.12f "
             "entry_price=%.8f side=long source=%s margin_position=true protective_exit_required=true "
-            "protective_exit_verified=%s canonical_coverage=true safety_gates_bypassed=false "
+            "protective_exit_verified=%s canonical_coverage=false safety_gates_bypassed=false "
             "fill_fabricated=false spot_tracker_mutated=false",
-            MARKER, key, symbol, quantity, entry_price, _SOURCE, str(verified).lower(),
+            MARKER, key, symbol, quantity, entry_price, _SOURCE, "false",
         )
     reasons = [
         f"margin_position_cost_basis_unverified:{row['symbol']}"
         for row in rows if not row["cost_basis_verified"]
     ]
+    # Exposure visibility is not protection proof. A later verifier must remove
+    # this reason only after all required protection legs are proven.
+    reasons.extend(
+        f"kraken_margin_protective_exit_unverified:{row['symbol']}" for row in rows
+    )
     return rows, reasons
 
 
