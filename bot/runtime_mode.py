@@ -3,8 +3,9 @@ NIJA Runtime Mode Resolution
 ============================
 
 Centralized resolution of DRY_RUN_MODE, PAPER_MODE, LIVE_CAPITAL_VERIFIED, and
-LIVE_TRADING (alias). This helper provides a single authoritative view of the
-active runtime mode to prevent divergent interpretations across subsystems.
+LIVE_TRADING. LIVE_CAPITAL_VERIFIED is the canonical authorization gate for
+real-money execution. LIVE_TRADING is retained only as legacy/requested intent
+for diagnostics and must never authorize live dispatch by itself.
 """
 
 from __future__ import annotations
@@ -54,30 +55,47 @@ class RuntimeModeResolution:
 
 
 def resolve_runtime_mode() -> RuntimeModeResolution:
-    """Resolve the effective runtime mode using a single shared priority."""
+    """Resolve runtime mode with fail-closed canonical live authorization.
+
+    ``LIVE_TRADING`` is treated as a legacy/requested-live signal only. Real
+    execution is authorized exclusively by ``LIVE_CAPITAL_VERIFIED``. Dry-run
+    and paper modes always take precedence over live authorization.
+    """
     dry_run = _env_truthy("DRY_RUN_MODE")
     paper = _env_truthy("PAPER_MODE")
     live_capital_verified = _env_truthy("LIVE_CAPITAL_VERIFIED")
     live_trading = _env_truthy("LIVE_TRADING")
-    live_authorized = live_capital_verified or live_trading
+
+    # Canonical real-money authorization. Do not broaden this to LIVE_TRADING:
+    # several execution gates intentionally treat LIVE_CAPITAL_VERIFIED as the
+    # explicit operator-controlled master switch.
+    live_authorized = live_capital_verified
+    live_requested = live_capital_verified or live_trading
 
     conflicts = []
-    if dry_run and live_authorized:
+    if dry_run and live_requested:
         conflicts.append("dry_run_vs_live")
-    if paper and live_authorized:
+    if paper and live_requested:
         conflicts.append("paper_vs_live")
     if dry_run and paper:
         conflicts.append("dry_run_vs_paper")
+    if live_trading and not live_capital_verified:
+        conflicts.append("live_trading_without_capital_verification")
 
+    # Fail closed: simulation modes override live authorization, and a legacy
+    # LIVE_TRADING request without canonical verification remains monitor-only.
     if dry_run:
         mode = "dry_run"
         source = "DRY_RUN_MODE"
-    elif live_authorized:
-        mode = "live"
-        source = "LIVE_CAPITAL_VERIFIED" if live_capital_verified else "LIVE_TRADING"
     elif paper:
         mode = "paper"
         source = "PAPER_MODE"
+    elif live_authorized:
+        mode = "live"
+        source = "LIVE_CAPITAL_VERIFIED"
+    elif live_trading:
+        mode = "monitor"
+        source = "LIVE_TRADING_REQUESTED_NOT_AUTHORIZED"
     else:
         mode = "monitor"
         source = "none"
