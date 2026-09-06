@@ -11,10 +11,13 @@ an exit is even evaluated.
 v365 changes only that candidate-read boundary.  It augments
 ``kraken_all_account_exit_runtime_patch._position_rows`` with authenticated
 Kraken ``OpenPositions`` long rows that contain positive broker quantity and
-positive broker cost.  It does not mutate the spot tracker, does not create an
-execution fill, does not grant execution readiness, and does not submit an
-order.  v364 remains the terminal margin-ledger reconciliation and authoritative
-remaining-quantity cap before any SELL.
+positive broker cost.  Multiple Kraken position ids for the same pair are
+aggregated into one authoritative scanner row so stop-loss/take-profit evaluation
+covers the full remaining margin quantity rather than only the first leg.  It
+does not mutate the spot tracker, does not create an execution fill, does not
+grant execution readiness, and does not submit an order.  v364 remains the
+terminal margin-ledger reconciliation and authoritative remaining-quantity cap
+before any SELL.
 """
 from __future__ import annotations
 
@@ -55,6 +58,13 @@ def _canonical_symbol(value: Any) -> str:
 
 
 def _openposition_rows(broker: Any) -> tuple[list[MutableMapping[str, Any]], str]:
+    """Return one aggregate long-margin row per canonical Kraken pair.
+
+    Kraken can represent one user-visible margin position as several independent
+    ``OpenPositions`` ids.  The protective scanner must evaluate the sum of all
+    remaining legs for a pair; yielding the ids individually and later de-duping
+    by symbol protects only the first leg.
+    """
     call = getattr(broker, "_kraken_api_call", None)
     if not callable(call):
         return [], "private_api_unavailable"
@@ -73,7 +83,7 @@ def _openposition_rows(broker: Any) -> tuple[list[MutableMapping[str, Any]], str
     if not isinstance(result, Mapping):
         return [], "invalid_result"
 
-    rows: list[MutableMapping[str, Any]] = []
+    aggregates: dict[str, MutableMapping[str, Any]] = {}
     for position_id, raw in result.items():
         if not isinstance(raw, Mapping):
             continue
@@ -88,29 +98,61 @@ def _openposition_rows(broker: Any) -> tuple[list[MutableMapping[str, Any]], str
         cost = max(0.0, _f(raw.get("cost")))
         if not symbol or vol <= _EPS or remaining <= _EPS or cost <= _EPS:
             continue
-        entry = cost / vol
+
+        remaining_cost = cost * min(1.0, remaining / vol)
+        if remaining_cost <= _EPS:
+            continue
+
+        row = aggregates.get(symbol)
+        if row is None:
+            row = {
+                "symbol": symbol,
+                "quantity": 0.0,
+                "qty": 0.0,
+                "side": "long",
+                "cost_basis_usd": 0.0,
+                "cost_basis_verified": True,
+                "auto_exit_blocked": False,
+                "position_ids": [],
+                "kraken_margin_openpositions": True,
+                "broker_position_state_only": True,
+                "confirmed_fill_proof": False,
+            }
+            aggregates[symbol] = row
+
+        row["quantity"] = _f(row.get("quantity")) + remaining
+        row["qty"] = _f(row.get("qty")) + remaining
+        row["cost_basis_usd"] = _f(row.get("cost_basis_usd")) + remaining_cost
+        ids = row.get("position_ids")
+        if isinstance(ids, list):
+            ids.append(str(position_id))
+
+        leverage = max(0.0, _f(raw.get("leverage")))
+        if leverage > 0.0:
+            row["leverage"] = max(_f(row.get("leverage"), 0.0), leverage)
+
+        opentm = _f(raw.get("opentm"))
+        prior_open = _f(row.get("kraken_open_time_epoch"))
+        if opentm > 0.0 and (prior_open <= 0.0 or opentm < prior_open):
+            row["kraken_open_time_epoch"] = opentm
+
+    rows: list[MutableMapping[str, Any]] = []
+    for symbol in sorted(aggregates):
+        row = aggregates[symbol]
+        quantity = max(0.0, _f(row.get("quantity")))
+        cost_basis = max(0.0, _f(row.get("cost_basis_usd")))
+        if quantity <= _EPS or cost_basis <= _EPS:
+            continue
+        entry = cost_basis / quantity
         if entry <= _EPS:
             continue
-        row: MutableMapping[str, Any] = {
-            "symbol": symbol,
-            "quantity": remaining,
-            "qty": remaining,
-            "side": "long",
-            "entry_price": entry,
-            "avg_entry_price": entry,
-            "cost_basis_usd": cost * min(1.0, remaining / vol),
-            "cost_basis_verified": True,
-            "auto_exit_blocked": False,
-            "position_id": str(position_id),
-            "kraken_margin_openpositions": True,
-            "broker_position_state_only": True,
-            "confirmed_fill_proof": False,
-        }
-        opentm = _f(raw.get("opentm"))
-        if opentm > 0:
-            # Existing scanner accepts ISO datetime strings; preserve raw epoch separately.
-            row["kraken_open_time_epoch"] = opentm
+        ids = tuple(sorted(str(value) for value in row.get("position_ids", []) if str(value)))
+        row["position_ids"] = ids
+        row["position_id"] = ",".join(ids)
+        row["entry_price"] = entry
+        row["avg_entry_price"] = entry
         rows.append(row)
+
     return rows, "ok"
 
 
@@ -156,9 +198,10 @@ def _patch_position_rows() -> bool:
             yielded.add(symbol)
             LOGGER.critical(
                 "KRAKEN_MARGIN_PROTECTIVE_SCAN_V365_POSITION_VISIBLE marker=%s symbol=%s "
-                "quantity=%.12f entry=%.8f broker_position_state_only=true "
+                "quantity=%.12f entry=%.8f position_ids=%s broker_position_state_only=true "
                 "confirmed_fill_proof=false tracker_mutation=false order_submitted=false",
                 MARKER, symbol, _f(row.get("quantity")), _f(row.get("entry_price")),
+                row.get("position_ids", ()),
             )
             yield row
 
@@ -194,10 +237,11 @@ def install_import_hook() -> bool:
     os.environ[_READY_FLAG] = "1" if ready else "0"
     (LOGGER.critical if ready else LOGGER.error)(
         "RUNTIME_KRAKEN_MARGIN_PROTECTIVE_SCAN_V365_%s marker=%s ready=%s "
-        "openpositions_long_visibility=true spot_tracker_mutation=false ack_not_fill=true "
-        "execution_ready_unchanged=true v364_terminal_quantity_cap_required=true "
-        "short_authority_unchanged=true forced_trade=false forced_activation=false "
-        "kill_switch_unchanged=true rejection_history_unchanged=true "
+        "openpositions_long_visibility=true openpositions_same_pair_aggregation=true "
+        "spot_tracker_mutation=false ack_not_fill=true execution_ready_unchanged=true "
+        "v364_terminal_quantity_cap_required=true short_authority_unchanged=true "
+        "forced_trade=false forced_activation=false kill_switch_unchanged=true "
+        "rejection_history_unchanged=true "
         "writer_nonce_risk_capital_position_sync_ecel_broker_health_minimum_order_ack_fill_gates_unchanged=true "
         "safety_gates_bypassed=false",
         "READY" if ready else "NOT_READY", MARKER, str(ready).lower(),
