@@ -16,15 +16,19 @@ For duplicate user-account objects it prefers the object with the strongest
 already-existing local truth: connected, startup fetch proof, startup adoption,
 and a current v285 snapshot timestamp. Platform identities are unchanged.
 
-The convergence chain now deliberately reasserts v289 first so every canonical
+The convergence chain deliberately reasserts v289 first so every canonical
 platform/user broker owns account-scoped position state and stale tracker rows
 can only be removed from a fresh authoritative snapshot. v377 then materializes
-NIJA's symbol-only PositionTracker interface into universal local position rows,
-v375 applies the fixed/trailing four-way policy, v376 gates every selected
-canonical broker, v381 bridges synthetic Kraken margin symbols to exchange pair
-lookups, v379 publishes registered-user live protection proof, and v380 adds
-reduce-only native Kraken fixed SL/TP backup while retaining NIJA's software
-TSL/TTP monitor.
+NIJA's symbol-only PositionTracker interface into universal local position rows.
+
+Kraken-native backup bootstrap is intentionally independent from the later v375
+universal-policy reassertion: v381 bridges synthetic Kraken margin symbols to
+exchange pair lookups and starts v380 while the already-live v366/v367/v371
+margin protection stack remains authoritative. v379's observational registered-
+user proof monitor is also started before the later policy reassertion; it stays
+PENDING until v281 exposes complete four-way proof and never manufactures a
+trade or fill. v375/v376 then reassert the universal four-way policy/scope for
+new exposure. Existing software exits remain fail-closed throughout.
 """
 from __future__ import annotations
 
@@ -205,20 +209,41 @@ def install_import_hook() -> bool:
     account_scope_ready = _install_v289()
     identity_ready = _patch_v281() if account_scope_ready else False
     materialization_ready = _install_v377() if identity_ready else False
+
+    # v381 starts/reasserts v380 itself.  Do this before v375 because native
+    # fixed SL/TP backup depends on the already-live Kraken margin stack and
+    # pair resolver, not on v375's synchronous all-account policy audit.
+    pair_resolution_ready = _install_v381() if materialization_ready else False
+    native_backup_installed = bool(pair_resolution_ready)
+
+    # v379 is observational.  Starting it early is safe: it remains PENDING
+    # until v281 has authoritative four-way rows and never opens/closes trades.
+    user_proof_installed = _install_v379() if materialization_ready else False
+
+    LOGGER.critical(
+        "ALL_ACCOUNT_BROKER_IDENTITY_V374_AUXILIARY_MONITORS_STARTED marker=%s "
+        "kraken_pair_resolution_v381=%s kraken_native_margin_backup_v380=%s "
+        "registered_user_proof_v379=%s before_v375_reassert=true "
+        "software_margin_protection_remains_authoritative=true forced_trade=false "
+        "new_exposure=false safety_gates_bypassed=false",
+        MARKER,
+        str(pair_resolution_ready).lower(),
+        str(native_backup_installed).lower(),
+        str(user_proof_installed).lower(),
+    )
+
     policy_ready = _install_v375() if materialization_ready else False
     scope_ready = _install_v376() if policy_ready else False
-    pair_resolution_ready = _install_v381() if scope_ready else False
-    user_proof_installed = _install_v379() if scope_ready else False
-    native_backup_installed = _install_v380() if scope_ready and pair_resolution_ready else False
+
     ready = bool(
         account_scope_ready
         and identity_ready
         and materialization_ready
+        and pair_resolution_ready
+        and native_backup_installed
+        and user_proof_installed
         and policy_ready
         and scope_ready
-        and pair_resolution_ready
-        and user_proof_installed
-        and native_backup_installed
     )
     os.environ[_READY_FLAG] = "1" if ready else "0"
     if identity_ready:
@@ -232,8 +257,8 @@ def install_import_hook() -> bool:
     LOGGER.critical(
         "RUNTIME_ALL_ACCOUNT_BROKER_IDENTITY_CONVERGENCE_V374_%s marker=%s ready=%s "
         "account_scoped_position_v289=%s identity_ready=%s position_materialization_v377=%s "
-        "universal_four_way_policy_v375=%s universal_scope_v376=%s kraken_pair_resolution_v381=%s "
-        "registered_user_proof_v379=%s kraken_native_margin_backup_v380=%s "
+        "kraken_pair_resolution_v381=%s kraken_native_margin_backup_v380=%s "
+        "registered_user_proof_v379=%s universal_four_way_policy_v375=%s universal_scope_v376=%s "
         "connected_object_preferred=true startup_fetch_proof_preferred=true "
         "startup_adoption_preferred=true authoritative_stale_cleanup_reasserted=true "
         "broker_io_identity_patch=false manager_registry_mutation=false safety_gates_bypassed=false",
@@ -243,11 +268,11 @@ def install_import_hook() -> bool:
         str(account_scope_ready).lower(),
         str(identity_ready).lower(),
         str(materialization_ready).lower(),
+        str(pair_resolution_ready).lower(),
+        str(native_backup_installed).lower(),
+        str(user_proof_installed).lower(),
         str(policy_ready).lower(),
         str(scope_ready).lower(),
-        str(pair_resolution_ready).lower(),
-        str(user_proof_installed).lower(),
-        str(native_backup_installed).lower(),
     )
     return ready
 
