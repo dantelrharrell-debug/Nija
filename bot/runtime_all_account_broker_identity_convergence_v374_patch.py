@@ -18,9 +18,11 @@ and a current v285 snapshot timestamp. Platform identities are unchanged.
 
 v377 is chained after identity convergence to materialize NIJA's symbol-only
 PositionTracker interface into universal local position rows. v375 then applies
-the fixed/trailing four-way policy, and v376 requires every connected canonical
+the fixed/trailing four-way policy, v376 requires every connected canonical
 broker and future registered broker to prove the universal read/price/close
-interfaces before new exposure can execute.
+interfaces before new exposure can execute, and v378 completes safe stale
+Coinbase tracker reconciliation plus continuous registered-user/native-backup
+protection proof.
 """
 from __future__ import annotations
 
@@ -181,12 +183,17 @@ def _install_v376() -> bool:
     return _install_module("bot.runtime_universal_four_way_scope_v376_patch", "V376")
 
 
+def _install_v378() -> bool:
+    return _install_module("bot.runtime_protection_completion_v378_patch", "V378")
+
+
 def install_import_hook() -> bool:
     identity_ready = _patch_v281()
     materialization_ready = _install_v377() if identity_ready else False
     policy_ready = _install_v375() if materialization_ready else False
     scope_ready = _install_v376() if policy_ready else False
-    ready = bool(identity_ready and materialization_ready and policy_ready and scope_ready)
+    completion_ready = _install_v378() if scope_ready else False
+    ready = bool(identity_ready and materialization_ready and policy_ready and scope_ready and completion_ready)
     os.environ[_READY_FLAG] = "1" if ready else "0"
     if identity_ready:
         try:
@@ -199,9 +206,9 @@ def install_import_hook() -> bool:
     LOGGER.critical(
         "RUNTIME_ALL_ACCOUNT_BROKER_IDENTITY_CONVERGENCE_V374_%s marker=%s ready=%s "
         "identity_ready=%s position_materialization_v377=%s universal_four_way_policy_v375=%s "
-        "universal_scope_v376=%s connected_object_preferred=true startup_fetch_proof_preferred=true "
-        "startup_adoption_preferred=true broker_io=false manager_registry_mutation=false "
-        "safety_gates_bypassed=false",
+        "universal_scope_v376=%s protection_completion_v378=%s connected_object_preferred=true "
+        "startup_fetch_proof_preferred=true startup_adoption_preferred=true broker_io=false "
+        "manager_registry_mutation=false safety_gates_bypassed=false",
         "READY" if ready else "NOT_READY",
         MARKER,
         str(ready).lower(),
@@ -209,6 +216,7 @@ def install_import_hook() -> bool:
         str(materialization_ready).lower(),
         str(policy_ready).lower(),
         str(scope_ready).lower(),
+        str(completion_ready).lower(),
     )
     return ready
 
@@ -226,4 +234,5 @@ __all__ = [
     "_install_v377",
     "_install_v375",
     "_install_v376",
+    "_install_v378",
 ]
