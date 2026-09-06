@@ -38,15 +38,19 @@ canonical strategy publisher reuses an already-created TradingStrategy instead
 of re-running its constructor, the existing heartbeat scheduler is re-armed if
 policy requires it and its verifier thread is absent/dead. v203 does not write
 proof, grant authority, or bypass any execution gate.
-v204 is installed after v203 and repairs stale import-time pipeline bindings in
-the canonical order submitter. If an early circular/import-order failure cached
-``PipelineRequest`` or ``get_execution_pipeline`` as unavailable, v204 rebinds
-those symbols lazily from the canonical execution pipeline at real order time.
-If the pipeline is still unavailable the existing fail-closed rejection remains.
-v206 is installed after v204 and repairs only Kraken legacy REST pair identity
-before ECEL contract lookup (for example XETHZUSD -> ETH-USD and XXBTZUSD ->
-XBT-USD). Existing ECEL contract rules and minimums remain authoritative and all
-writer/nonce/risk/kill-switch/capital/position/order/fill gates remain unchanged.
+v204 repairs stale import-time pipeline bindings in the canonical order
+submitter. v206 repairs Kraken legacy REST pair identity before ECEL contract
+lookup (for example XETHZUSD -> ETH-USD and XXBTZUSD -> XBT-USD).
+
+Production on 2026-09-06 showed v203 can legitimately be not-ready when live
+heartbeat orders are explicitly disabled. The prior installer returned at that
+point, so v204/v206 were never attempted and a normal protective Kraken ETH
+exit was rejected by ECEL as XETHZ-USD / NO_CONTRACT_RULE. v196 now attempts
+v204 and v206 independently even when a heartbeat-only companion is not ready.
+The overall v196 readiness still remains the conjunction of every companion, so
+no heartbeat readiness is fabricated. Existing ECEL contract rules and minimums
+remain authoritative and all writer/nonce/risk/kill-switch/capital/position/
+order/fill gates remain unchanged.
 """
 from __future__ import annotations
 
@@ -110,70 +114,121 @@ setattr(_structurally_cacheable_execution_frame, _PATCH_ATTR, True)
 
 
 def _install_v197() -> bool:
-    """Install heartbeat bridge plus v210/v202/v207/v203/v204/v206 repairs."""
+    """Install all companion repairs without letting heartbeat-only readiness skip ECEL safety."""
+    v197_ready = False
+    v210_ready = False
+    v202_ready = False
+    v207_ready = False
+    v203_ready = False
+    v204_ready = False
+    v206_ready = False
+
     try:
         module = importlib.import_module("bot.runtime_heartbeat_probe_pipeline_bridge_v197_patch")
         installer = getattr(module, "install", None) or getattr(module, "install_import_hook", None)
-        if not callable(installer):
-            return False
-        v197_ready = bool(installer()) and os.environ.get(_V197_READY_FLAG, "0").strip() == "1"
-        if not v197_ready:
-            return False
+        v197_ready = bool(callable(installer) and installer()) and os.environ.get(_V197_READY_FLAG, "0").strip() == "1"
+    except Exception as exc:
+        LOGGER.warning(
+            "RUNTIME_PHASE3_EXECUTION_FRAME_HANDOFF_V196_COMPANION_DEFERRED marker=%s companion=v197 error=%s:%s",
+            MARKER, type(exc).__name__, exc,
+        )
 
+    try:
         auth_bound = importlib.import_module("bot.runtime_heartbeat_auth_probe_bound_v210_patch")
         auth_bound_installer = getattr(auth_bound, "install", None) or getattr(auth_bound, "install_import_hook", None)
-        if not callable(auth_bound_installer):
-            return False
-        v210_ready = bool(auth_bound_installer()) and os.environ.get(_V210_READY_FLAG, "0").strip() == "1"
-        if not v210_ready:
-            return False
+        v210_ready = bool(callable(auth_bound_installer) and auth_bound_installer()) and os.environ.get(_V210_READY_FLAG, "0").strip() == "1"
+    except Exception as exc:
+        LOGGER.warning(
+            "RUNTIME_PHASE3_EXECUTION_FRAME_HANDOFF_V196_COMPANION_DEFERRED marker=%s companion=v210 error=%s:%s",
+            MARKER, type(exc).__name__, exc,
+        )
 
+    try:
         wakeup = importlib.import_module("bot.runtime_heartbeat_position_sync_wakeup_v202_patch")
         wakeup_installer = getattr(wakeup, "install", None) or getattr(wakeup, "install_import_hook", None)
-        if not callable(wakeup_installer):
-            return False
-        v202_ready = bool(wakeup_installer()) and os.environ.get(_V202_READY_FLAG, "0").strip() == "1"
-        if not v202_ready:
-            return False
+        v202_ready = bool(callable(wakeup_installer) and wakeup_installer()) and os.environ.get(_V202_READY_FLAG, "0").strip() == "1"
+    except Exception as exc:
+        LOGGER.warning(
+            "RUNTIME_PHASE3_EXECUTION_FRAME_HANDOFF_V196_COMPANION_DEFERRED marker=%s companion=v202 error=%s:%s",
+            MARKER, type(exc).__name__, exc,
+        )
 
+    try:
         nonblocking_lookup = importlib.import_module("bot.runtime_precore_strategy_lookup_v207_patch")
         nonblocking_installer = getattr(nonblocking_lookup, "install", None) or getattr(nonblocking_lookup, "install_import_hook", None)
-        if not callable(nonblocking_installer):
-            return False
-        v207_ready = bool(nonblocking_installer()) and os.environ.get(_V207_READY_FLAG, "0").strip() == "1"
-        if not v207_ready:
-            return False
+        v207_ready = bool(callable(nonblocking_installer) and nonblocking_installer()) and os.environ.get(_V207_READY_FLAG, "0").strip() == "1"
+    except Exception as exc:
+        LOGGER.warning(
+            "RUNTIME_PHASE3_EXECUTION_FRAME_HANDOFF_V196_COMPANION_DEFERRED marker=%s companion=v207 error=%s:%s",
+            MARKER, type(exc).__name__, exc,
+        )
 
+    # Heartbeat re-arm can be not-ready by policy when live heartbeat orders are
+    # explicitly disabled.  That state must not suppress ordinary execution
+    # pipeline or Kraken ECEL symbol-safety installation below.
+    try:
         rearm = importlib.import_module("bot.runtime_existing_strategy_heartbeat_rearm_v203_patch")
         rearm_installer = getattr(rearm, "install", None) or getattr(rearm, "install_import_hook", None)
-        if not callable(rearm_installer):
-            return False
-        v203_ready = bool(rearm_installer()) and os.environ.get(_V203_READY_FLAG, "0").strip() == "1"
-        if not v203_ready:
-            return False
+        v203_ready = bool(callable(rearm_installer) and rearm_installer()) and os.environ.get(_V203_READY_FLAG, "0").strip() == "1"
+    except Exception as exc:
+        LOGGER.info(
+            "RUNTIME_PHASE3_EXECUTION_FRAME_HANDOFF_V196_HEARTBEAT_REARM_DEFERRED marker=%s error=%s:%s",
+            MARKER, type(exc).__name__, exc,
+        )
 
+    try:
         late_bind = importlib.import_module("bot.runtime_execution_pipeline_late_binding_v204_patch")
         late_bind_installer = getattr(late_bind, "install", None) or getattr(late_bind, "install_import_hook", None)
-        if not callable(late_bind_installer):
-            return False
-        v204_ready = bool(late_bind_installer()) and os.environ.get(_V204_READY_FLAG, "0").strip() == "1"
-        if not v204_ready:
-            return False
+        v204_ready = bool(callable(late_bind_installer) and late_bind_installer()) and os.environ.get(_V204_READY_FLAG, "0").strip() == "1"
+    except Exception as exc:
+        LOGGER.warning(
+            "RUNTIME_PHASE3_EXECUTION_FRAME_HANDOFF_V196_COMPANION_DEFERRED marker=%s companion=v204 error=%s:%s",
+            MARKER, type(exc).__name__, exc,
+        )
 
+    try:
         ecel_symbols = importlib.import_module("bot.runtime_kraken_ecel_symbol_canonicalization_v206_patch")
         ecel_installer = getattr(ecel_symbols, "install", None) or getattr(ecel_symbols, "install_import_hook", None)
-        if not callable(ecel_installer):
-            return False
-        return bool(ecel_installer()) and os.environ.get(_V206_READY_FLAG, "0").strip() == "1"
+        v206_ready = bool(callable(ecel_installer) and ecel_installer()) and os.environ.get(_V206_READY_FLAG, "0").strip() == "1"
+        if v206_ready:
+            LOGGER.critical(
+                "RUNTIME_PHASE3_EXECUTION_FRAME_HANDOFF_V196_ECEL_INDEPENDENT_READY marker=%s "
+                "v203_ready=%s v206_ready=true kraken_native_exit_symbols_canonicalized=true "
+                "contract_rules_unchanged=true safety_gates_bypassed=false",
+                MARKER,
+                str(v203_ready).lower(),
+            )
     except Exception as exc:
         LOGGER.critical(
-            "RUNTIME_PHASE3_EXECUTION_FRAME_HANDOFF_V196_HEARTBEAT_CHAIN_FAILED marker=%s "
-            "error=%s:%s trading_fail_closed=true",
-            MARKER,
-            type(exc).__name__,
-            exc,
+            "RUNTIME_PHASE3_EXECUTION_FRAME_HANDOFF_V196_ECEL_INSTALL_FAILED marker=%s error=%s:%s "
+            "trading_fail_closed=true",
+            MARKER, type(exc).__name__, exc,
         )
-        return False
+
+    ready = bool(
+        v197_ready
+        and v210_ready
+        and v202_ready
+        and v207_ready
+        and v203_ready
+        and v204_ready
+        and v206_ready
+    )
+    if not ready:
+        LOGGER.critical(
+            "RUNTIME_PHASE3_EXECUTION_FRAME_HANDOFF_V196_HEARTBEAT_CHAIN_FAILED marker=%s "
+            "v197=%s v210=%s v202=%s v207=%s v203=%s v204=%s v206=%s "
+            "ecel_attempted_independently=true trading_fail_closed=true",
+            MARKER,
+            str(v197_ready).lower(),
+            str(v210_ready).lower(),
+            str(v202_ready).lower(),
+            str(v207_ready).lower(),
+            str(v203_ready).lower(),
+            str(v204_ready).lower(),
+            str(v206_ready).lower(),
+        )
+    return ready
 
 
 def install() -> bool:
