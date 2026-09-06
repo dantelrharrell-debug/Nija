@@ -18,7 +18,10 @@ The patch:
   authenticated OpenOrders read succeeds; terminal submit gates remain unchanged;
 * requires v371 full stop-loss/take-profit truth before v368 can publish ready;
 * preserves fail-closed behavior whenever exact broker, writer, nonce, kill switch,
-  circuit, fencing, or terminal execution requirements are not proven.
+  circuit, fencing, or terminal execution requirements are not proven;
+* runs post-ready v372/v373 authenticated proof recovery asynchronously so slow
+  private Kraken reads cannot hold the canonical startup thread after v368 and
+  v371 have already genuinely proven protection ready.
 """
 from __future__ import annotations
 
@@ -37,6 +40,7 @@ _READY_FLAG = "NIJA_RUNTIME_KRAKEN_MARGIN_PROTECTION_AUTHORITY_V368_READY"
 _PATCH_ATTR = "_nija_v368_kraken_margin_protection_authority"
 _LOCK = threading.RLock()
 _BROKER_SCOPE: ContextVar[Any] = ContextVar("nija_v368_margin_coverage_broker", default=None)
+_POST_READY_THREAD: threading.Thread | None = None
 
 
 def _v367():
@@ -78,7 +82,6 @@ def _patch_software_protection_status() -> bool:
 
     @wraps(current)
     def scoped_software_status():
-        # Preserve v367's monitor/wiring requirements first.
         if not bool(getattr(v367, "_monitor_alive", lambda: False)()):
             return False, "margin_monitor_not_alive"
         if not bool(getattr(v367, "_margin_scan_wiring_ready", lambda: False)()):
@@ -198,13 +201,10 @@ def _install_full_protection_v371() -> bool:
             MARKER, type(exc).__name__, exc,
         )
         return False
-def _install_v372() -> bool:
-    """Install the post-v368 read-only execution-proof liveness repair.
 
-    v372 does not grant execution readiness. It only makes v367 reuse v366's
-    authenticated OpenPositions observation so exact QueryOrders proof can reach
-    the existing v328/v346 verifier after a clean redeploy.
-    """
+
+def _install_v372() -> bool:
+    """Install the post-v368 read-only execution-proof liveness repair."""
     try:
         module = importlib.import_module("bot.runtime_kraken_margin_execution_proof_liveness_v372_patch")
         install = getattr(module, "install_import_hook", None)
@@ -220,12 +220,7 @@ def _install_v372() -> bool:
 
 
 def _install_v373() -> bool:
-    """Install v373 only after v372 is genuinely ready.
-
-    v373 changes only the recovery retry stop condition: it keeps authenticated
-    Kraken proof recovery alive until the canonical readiness table reports
-    execution_ready=true. It does not write readiness or bypass any safety gate.
-    """
+    """Install v373 only after v372 is genuinely ready."""
     try:
         if os.environ.get("NIJA_RUNTIME_KRAKEN_MARGIN_EXECUTION_PROOF_LIVENESS_V372_READY") != "1":
             return False
@@ -255,6 +250,51 @@ def _wake_runtime() -> None:
             audit()
     except Exception:
         LOGGER.debug("v368 coverage wake deferred", exc_info=True)
+
+
+def _post_ready_liveness_worker() -> None:
+    """Run slow authenticated liveness work after protection readiness returns.
+
+    v368/v371 protection readiness is already genuine before this worker starts.
+    v372/v373 perform read-only authenticated recovery and own their own ready
+    flags. Running them here prevents slow Kraken private reads from pinning the
+    canonical startup thread while preserving their fail-closed semantics.
+    """
+    v372_ready = _install_v372()
+    LOGGER.info(
+        "KRAKEN_MARGIN_EXECUTION_PROOF_V372_INSTALL_RESULT marker=%s ready=%s "
+        "async_post_ready=true v368_ready_unchanged=true trading_fail_closed_if_false=true",
+        MARKER, str(v372_ready).lower(),
+    )
+    v373_ready = _install_v373() if v372_ready else False
+    LOGGER.info(
+        "KRAKEN_MARGIN_EXECUTION_READINESS_V373_INSTALL_RESULT marker=%s ready=%s "
+        "v372_ready=%s async_post_ready=true v368_ready_unchanged=true trading_fail_closed_if_false=true",
+        MARKER, str(v373_ready).lower(), str(v372_ready).lower(),
+    )
+    _wake_runtime()
+
+
+def _start_post_ready_liveness_async() -> bool:
+    global _POST_READY_THREAD
+    with _LOCK:
+        if _POST_READY_THREAD is not None and _POST_READY_THREAD.is_alive():
+            return True
+        _POST_READY_THREAD = threading.Thread(
+            target=_post_ready_liveness_worker,
+            name="KrakenMarginPostReadyLivenessV374",
+            daemon=True,
+        )
+        _POST_READY_THREAD.start()
+        started = bool(_POST_READY_THREAD.is_alive())
+    LOGGER.critical(
+        "KRAKEN_MARGIN_POST_READY_LIVENESS_V374_%s marker=%s "
+        "startup_thread_blocked=false v368_ready_unchanged=true v371_full_protection_preserved=true "
+        "authenticated_read_only_recovery=true readiness_fabricated=false execution_proof_fabricated=false "
+        "forced_activation=false safety_gates_bypassed=false",
+        "STARTED" if started else "DEFERRED", MARKER,
+    )
+    return started
 
 
 def install_import_hook() -> bool:
@@ -292,19 +332,7 @@ def install_import_hook() -> bool:
             str(authority_ready).lower(), str(full_protection).lower(),
         )
         if ready:
-            v372_ready = _install_v372()
-            LOGGER.info(
-                "KRAKEN_MARGIN_EXECUTION_PROOF_V372_INSTALL_RESULT marker=%s ready=%s "
-                "v368_ready_unchanged=true trading_fail_closed_if_false=true",
-                MARKER, str(v372_ready).lower(),
-            )
-            v373_ready = _install_v373() if v372_ready else False
-            LOGGER.info(
-                "KRAKEN_MARGIN_EXECUTION_READINESS_V373_INSTALL_RESULT marker=%s ready=%s "
-                "v372_ready=%s v368_ready_unchanged=true trading_fail_closed_if_false=true",
-                MARKER, str(v373_ready).lower(), str(v372_ready).lower(),
-            )
-            _wake_runtime()
+            _start_post_ready_liveness_async()
         return ready
 
 
@@ -314,5 +342,5 @@ def install() -> bool:
 
 __all__ = [
     "MARKER", "RELEASE_ID", "install", "install_import_hook", "_exact_scoped_authority",
-    "_install_full_protection_v371",
+    "_install_full_protection_v371", "_start_post_ready_liveness_async",
 ]
