@@ -17,6 +17,8 @@ The patch:
   account during transient stale ``connected`` bookkeeping, but only after a real
   authenticated OpenOrders read succeeds; terminal submit gates remain unchanged;
 * requires v371 full stop-loss/take-profit truth before v368 can publish ready;
+* starts v381/v380 native fixed SL/TP backup and v379 registered-user proof from
+  the already-proven v368/v371 post-ready worker, independent of late v374 entry;
 * preserves fail-closed behavior whenever exact broker, writer, nonce, kill switch,
   circuit, fencing, or terminal execution requirements are not proven;
 * runs post-ready v372/v373 authenticated proof recovery asynchronously so slow
@@ -203,6 +205,36 @@ def _install_full_protection_v371() -> bool:
         return False
 
 
+def _install_native_backup_v381() -> bool:
+    """Start v381 pair resolution; v381 idempotently starts/reasserts v380."""
+    try:
+        module = importlib.import_module("bot.runtime_kraken_margin_pair_resolution_v381_patch")
+        install = getattr(module, "install_import_hook", None) or getattr(module, "install", None)
+        return bool(callable(install) and install())
+    except Exception as exc:
+        LOGGER.exception(
+            "KRAKEN_MARGIN_NATIVE_BACKUP_V381_INSTALL_DEFERRED marker=%s error=%s:%s "
+            "software_four_way_protection_preserved=true trading_fail_closed=true safety_gates_bypassed=false",
+            MARKER, type(exc).__name__, exc,
+        )
+        return False
+
+
+def _install_registered_user_proof_v379() -> bool:
+    """Start the observational registered-user four-way proof monitor."""
+    try:
+        module = importlib.import_module("bot.runtime_registered_user_protection_proof_v379_patch")
+        install = getattr(module, "install_import_hook", None) or getattr(module, "install", None)
+        return bool(callable(install) and install())
+    except Exception as exc:
+        LOGGER.exception(
+            "REGISTERED_USER_PROTECTION_PROOF_V379_INSTALL_DEFERRED marker=%s error=%s:%s "
+            "forced_trade=false position_proof_fabricated=false trading_fail_closed=true safety_gates_bypassed=false",
+            MARKER, type(exc).__name__, exc,
+        )
+        return False
+
+
 def _install_v372() -> bool:
     """Install the post-v368 read-only execution-proof liveness repair."""
     try:
@@ -253,13 +285,29 @@ def _wake_runtime() -> None:
 
 
 def _post_ready_liveness_worker() -> None:
-    """Run slow authenticated liveness work after protection readiness returns.
+    """Run slow authenticated liveness/protection work after v368/v371 are ready.
 
-    v368/v371 protection readiness is already genuine before this worker starts.
-    v372/v373 perform read-only authenticated recovery and own their own ready
-    flags. Running them here prevents slow Kraken private reads from pinning the
-    canonical startup thread while preserving their fail-closed semantics.
+    Native fixed backup and registered-user proof are deliberately started here:
+    this worker is guaranteed by the already-live Kraken software four-way stack,
+    does not hold the canonical startup thread, and does not depend on late v374.
+    v381/v380 retain authenticated OpenPositions/OpenOrders, reduce-only,
+    idempotency and ACK-not-proof semantics. v379 remains observational only.
     """
+    native_ready = _install_native_backup_v381()
+    LOGGER.critical(
+        "KRAKEN_MARGIN_NATIVE_BACKUP_V381_INSTALL_RESULT marker=%s ready=%s "
+        "async_post_v371=true software_four_way_protection_preserved=true "
+        "reduce_only_unchanged=true openorders_proof_required=true safety_gates_bypassed=false",
+        MARKER, str(native_ready).lower(),
+    )
+    user_proof_ready = _install_registered_user_proof_v379()
+    LOGGER.critical(
+        "REGISTERED_USER_PROTECTION_PROOF_V379_INSTALL_RESULT marker=%s ready=%s "
+        "async_post_v371=true observational_only=true forced_trade=false "
+        "position_proof_fabricated=false safety_gates_bypassed=false",
+        MARKER, str(user_proof_ready).lower(),
+    )
+
     v372_ready = _install_v372()
     LOGGER.info(
         "KRAKEN_MARGIN_EXECUTION_PROOF_V372_INSTALL_RESULT marker=%s ready=%s "
@@ -282,14 +330,15 @@ def _start_post_ready_liveness_async() -> bool:
             return True
         _POST_READY_THREAD = threading.Thread(
             target=_post_ready_liveness_worker,
-            name="KrakenMarginPostReadyLivenessV374",
+            name="KrakenMarginPostReadyLivenessV383",
             daemon=True,
         )
         _POST_READY_THREAD.start()
         started = bool(_POST_READY_THREAD.is_alive())
     LOGGER.critical(
-        "KRAKEN_MARGIN_POST_READY_LIVENESS_V374_%s marker=%s "
+        "KRAKEN_MARGIN_POST_READY_LIVENESS_V383_%s marker=%s "
         "startup_thread_blocked=false v368_ready_unchanged=true v371_full_protection_preserved=true "
+        "native_backup_v381_v380_async=true registered_user_proof_v379_async=true "
         "authenticated_read_only_recovery=true readiness_fabricated=false execution_proof_fabricated=false "
         "forced_activation=false safety_gates_bypassed=false",
         "STARTED" if started else "DEFERRED", MARKER,
@@ -342,5 +391,6 @@ def install() -> bool:
 
 __all__ = [
     "MARKER", "RELEASE_ID", "install", "install_import_hook", "_exact_scoped_authority",
-    "_install_full_protection_v371", "_start_post_ready_liveness_async",
+    "_install_full_protection_v371", "_install_native_backup_v381",
+    "_install_registered_user_proof_v379", "_start_post_ready_liveness_async",
 ]
