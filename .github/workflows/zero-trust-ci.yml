@@ -206,6 +206,9 @@ jobs:
               tests/imports_smoke_test.py
               bot/tests/test_source_runtime_guard_bootstrap.py
               bot/tests/test_render_prebot_writer_handoff.py
+              bot/tests/test_exit_protection_assurance_patch.py
+              bot/tests/test_runtime_universal_four_way_policy_v375.py
+              bot/tests/test_runtime_kraken_margin_full_protection_v371.py
     steps:
       - name: Harden Runner
         uses: step-security/harden-runner@v2
