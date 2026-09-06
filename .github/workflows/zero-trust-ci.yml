@@ -209,6 +209,7 @@ jobs:
               bot/tests/test_exit_protection_assurance_patch.py
               bot/tests/test_runtime_universal_four_way_policy_v375.py
               bot/tests/test_runtime_universal_four_way_scope_v376.py
+              bot/tests/test_runtime_universal_position_materialization_v377.py
               bot/tests/test_runtime_kraken_margin_full_protection_v371.py
     steps:
       - name: Harden Runner
