@@ -20,22 +20,30 @@ allowed when all proof-backed pre-core prerequisites are currently true:
 * no process-exit/shutdown request is active.
 
 v198 corrects a circular pre-core dependency exposed in production on
-2026-08-23.  Canonical broker prebootstrap v22 deliberately hands off before
+2026-08-23. Canonical broker prebootstrap v22 deliberately hands off before
 nonce readiness because nonce authority remains a downstream execution gate.
 The prior v124 proof added ``nonce_ready`` back as a prerequisite for merely
-skipping legacy SelfHealingStartup.  On a fresh process that could route startup
+skipping legacy SelfHealingStartup. On a fresh process that could route startup
 back into the exact legacy compatibility path v124 was designed to avoid, leaving
 BootstrapFSM at LOCK_ACQUIRED until the 600-second core-registration watchdog
 released writer authority.
 
 Nonce readiness is therefore observational at this handoff, not granted or
-fabricated.  The real core may register while ``nonce_ready`` is false, but all
+fabricated. The real core may register while ``nonce_ready`` is false, but all
 normal order dispatch remains fail-closed on the existing nonce authority gates.
 Position synchronization, strategy readiness, execution readiness, bootstrap
 finalization, and dispatch authority remain owned by their existing downstream
-activation gates after the real core thread is registered. If any actual
-pre-core proof is absent, the original SelfHealingStartup path runs unchanged.
-The patch never fabricates readiness or grants execution authority.
+activation gates after the real core thread is registered.
+
+v374 adds one bounded liveness correction for fresh production processes. The
+prebootstrap can complete a few seconds before the asynchronous, proof-backed
+capital/risk readiness publication catches up. Falling immediately into the
+legacy SelfHealingStartup path during that small gap can hold the canonical core
+registration for the full 600-second writer deadline. The canonical fast path
+now waits a bounded period for those *real* readiness bits to become true before
+using the unchanged legacy fallback. The wait performs no broker writes, grants
+no readiness, and never fabricates authority. If the proofs do not arrive within
+the bound, the original SelfHealingStartup path still runs fail closed.
 """
 from __future__ import annotations
 
@@ -43,6 +51,7 @@ import logging
 import os
 import sys
 import threading
+import time
 from functools import wraps
 from types import ModuleType
 from typing import Any
@@ -50,6 +59,7 @@ from typing import Any
 LOGGER = logging.getLogger("nija.canonical_self_healing_handoff_v124")
 MARKER = "20260816-canonical-self-healing-handoff-v124"
 V198_MARKER = "20260823-precore-nonce-handoff-v198"
+V374_MARKER = "20260906-canonical-precore-proof-wait-v374"
 RELEASE_ID = "20260816-runtime-convergence-v124"
 _FLAG = "NIJA_CANONICAL_SELF_HEALING_HANDOFF_V124_INSTALLED"
 _V198_FLAG = "NIJA_PRECORE_NONCE_HANDOFF_V198_READY"
@@ -60,8 +70,8 @@ _INSTALLED = False
 _TRUE = {"1", "true", "yes", "on", "enabled", "y"}
 
 # v198: these are exactly the proof-backed prerequisites that canonical broker
-# prebootstrap v22 establishes before bot_main reaches Step 1.  nonce_ready is
-# intentionally not a core-registration prerequisite.  It remains mandatory at
+# prebootstrap v22 establishes before bot_main reaches Step 1. nonce_ready is
+# intentionally not a core-registration prerequisite. It remains mandatory at
 # the downstream execution-authority/order gates.
 _REQUIRED_READINESS = (
     "broker_connected",
@@ -183,6 +193,68 @@ def _fast_handoff_proof(module: ModuleType | None = None) -> tuple[bool, Any | N
     )
 
 
+def _fast_handoff_wait_s() -> float:
+    try:
+        value = float(os.environ.get("NIJA_CANONICAL_FAST_HANDOFF_WAIT_S", "45") or 45.0)
+    except (TypeError, ValueError):
+        value = 45.0
+    return max(0.0, min(120.0, value))
+
+
+def _retryable_precore_detail(detail: str) -> bool:
+    text = str(detail or "")
+    return bool(
+        text.startswith("readiness_false:")
+        or text.startswith("connected_broker_missing:")
+        or text == "connected_broker_selection_failed"
+    )
+
+
+def _wait_for_fast_handoff(module: ModuleType | None = None) -> tuple[bool, Any | None, str, str]:
+    """Wait only for real asynchronous pre-core proofs, never fabricate them."""
+    budget_s = _fast_handoff_wait_s()
+    started = time.monotonic()
+    last_log = -10.0
+    while True:
+        ok, broker, broker_name, detail = _fast_handoff_proof(module)
+        if ok:
+            elapsed = time.monotonic() - started
+            LOGGER.critical(
+                "CANONICAL_PRECORE_PROOF_WAIT_V374_READY marker=%s elapsed_s=%.2f budget_s=%.2f detail=%s "
+                "readiness_observed=true readiness_fabricated=false broker_io_write=false core_registration_next=true",
+                V374_MARKER,
+                elapsed,
+                budget_s,
+                detail,
+            )
+            return ok, broker, broker_name, detail
+
+        elapsed = time.monotonic() - started
+        if _shutdown_requested(module) or not _retryable_precore_detail(detail) or elapsed >= budget_s:
+            if elapsed >= budget_s and _retryable_precore_detail(detail):
+                LOGGER.warning(
+                    "CANONICAL_PRECORE_PROOF_WAIT_V374_TIMEOUT marker=%s elapsed_s=%.2f budget_s=%.2f last_detail=%s "
+                    "action=legacy_self_healing_fallback readiness_fabricated=false execution_authority_granted=false",
+                    V374_MARKER,
+                    elapsed,
+                    budget_s,
+                    detail,
+                )
+            return ok, broker, broker_name, detail
+
+        if elapsed - last_log >= 10.0:
+            last_log = elapsed
+            LOGGER.info(
+                "CANONICAL_PRECORE_PROOF_WAIT_V374_PENDING marker=%s elapsed_s=%.2f budget_s=%.2f detail=%s "
+                "broker_io_write=false execution_authority_granted=false",
+                V374_MARKER,
+                elapsed,
+                budget_s,
+                detail,
+            )
+        time.sleep(min(0.5, max(0.0, budget_s - elapsed)))
+
+
 def _patch_bot_main(module: ModuleType | None = None) -> bool:
     module = module or sys.modules.get("bot.bot_main") or sys.modules.get("bot_main")
     if not isinstance(module, ModuleType):
@@ -199,7 +271,7 @@ def _patch_bot_main(module: ModuleType | None = None) -> bool:
 
     @wraps(current)
     def run_self_healing_startup_v124(*args: Any, **kwargs: Any):
-        ok, broker, broker_name, detail = _fast_handoff_proof(module)
+        ok, broker, broker_name, detail = _wait_for_fast_handoff(module)
         if ok:
             # Explicitly preserve fail-closed execution truth. Step 2/3 and the
             # existing post-core convergence own all later readiness/authority,
@@ -325,7 +397,7 @@ def install() -> bool:
         _INSTALLED = True
         LOGGER.critical(
             "CANONICAL_SELF_HEALING_HANDOFF_V124_INSTALLED marker=%s release=%s "
-            "proof_backed_fast_handoff=true fallback_preserved=true execution_gates_unchanged=true",
+            "proof_backed_fast_handoff=true bounded_real_proof_wait_v374=true fallback_preserved=true execution_gates_unchanged=true",
             MARKER,
             RELEASE_ID,
         )
@@ -347,10 +419,13 @@ def install_import_hook() -> bool:
 __all__ = [
     "MARKER",
     "V198_MARKER",
+    "V374_MARKER",
     "RELEASE_ID",
     "install",
     "install_import_hook",
     "_fast_handoff_proof",
+    "_fast_handoff_wait_s",
+    "_wait_for_fast_handoff",
     "_patch_bot_main",
     "_patch_wiring_reinstall_churn",
 ]
