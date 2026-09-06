@@ -140,8 +140,13 @@ def _patch_trading_state_machine() -> bool:
     commit_current = getattr(cls, "commit_activation", None)
     activate_current = getattr(cls, "activate_live_trading", None)
     read_current = getattr(cls, "get_current_state", None)
-    if not callable(commit_current) or not callable(activate_current) or not callable(read_current):
+    # The commit/activation guards are the core fail-closed safety boundary.
+    # Install them even when a legacy/test double lacks get_current_state().
+    # Read-guard readiness remains false in that case so release readiness does
+    # not overstate protection, but the older execution guards are never lost.
+    if not callable(commit_current) or not callable(activate_current):
         return False
+    read_guard_ready = callable(read_current)
 
     if not bool(getattr(commit_current, _PATCH_ATTR, False)):
         commit_original = commit_current
@@ -171,7 +176,7 @@ def _patch_trading_state_machine() -> bool:
         setattr(activate_live_trading_v362, "__wrapped__", activate_original)
         cls.activate_live_trading = activate_live_trading_v362
 
-    if not bool(getattr(read_current, _PATCH_READ_ATTR, False)):
+    if read_guard_ready and not bool(getattr(read_current, _PATCH_READ_ATTR, False)):
         read_original = read_current
 
         @wraps(read_original)
@@ -182,13 +187,20 @@ def _patch_trading_state_machine() -> bool:
         setattr(get_current_state_v362, _PATCH_READ_ATTR, True)
         setattr(get_current_state_v362, "__wrapped__", read_original)
         cls.get_current_state = get_current_state_v362
+    elif not read_guard_ready:
+        LOGGER.critical(
+            "RUNTIME_STALE_LIVE_EXECUTION_PROOF_V362_READ_GUARD_UNAVAILABLE "
+            "marker=%s core_commit_activate_guards_installed=true "
+            "read_guard_ready=false fail_closed=true",
+            MARKER,
+        )
 
     # If the singleton already exists, revoke stale state immediately without
     # constructing a new state machine as a side effect of installation.
     existing = getattr(module, "_state_machine", None)
     if existing is not None:
         _revoke_stale_live_authority(existing, module, trigger="install_existing_singleton")
-    return True
+    return read_guard_ready
 
 
 def _patch_release_manifest() -> bool:
