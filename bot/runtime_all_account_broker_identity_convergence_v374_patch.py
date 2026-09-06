@@ -16,10 +16,10 @@ For duplicate user-account objects it prefers the object with the strongest
 already-existing local truth: connected, startup fetch proof, startup adoption,
 and a current v285 snapshot timestamp. Platform identities are unchanged.
 
-v375 is chained after identity convergence so universal fixed/trailing SL/TP
-policy is required for platform and registered-user exits. v376 is chained
-after v375 so every currently connected canonical broker, including future
-broker/user registrations, must expose the universal position/price/close
+v377 is chained after identity convergence to materialize NIJA's symbol-only
+PositionTracker interface into universal local position rows. v375 then applies
+the fixed/trailing four-way policy, and v376 requires every connected canonical
+broker and future registered broker to prove the universal read/price/close
 interfaces before new exposure can execute.
 """
 from __future__ import annotations
@@ -169,6 +169,10 @@ def _install_module(module_name: str, label: str) -> bool:
         return False
 
 
+def _install_v377() -> bool:
+    return _install_module("bot.runtime_universal_position_materialization_v377_patch", "V377")
+
+
 def _install_v375() -> bool:
     return _install_module("bot.runtime_universal_sl_tp_policy_v375_patch", "V375")
 
@@ -179,9 +183,10 @@ def _install_v376() -> bool:
 
 def install_import_hook() -> bool:
     identity_ready = _patch_v281()
-    policy_ready = _install_v375() if identity_ready else False
+    materialization_ready = _install_v377() if identity_ready else False
+    policy_ready = _install_v375() if materialization_ready else False
     scope_ready = _install_v376() if policy_ready else False
-    ready = bool(identity_ready and policy_ready and scope_ready)
+    ready = bool(identity_ready and materialization_ready and policy_ready and scope_ready)
     os.environ[_READY_FLAG] = "1" if ready else "0"
     if identity_ready:
         try:
@@ -193,14 +198,15 @@ def install_import_hook() -> bool:
             pass
     LOGGER.critical(
         "RUNTIME_ALL_ACCOUNT_BROKER_IDENTITY_CONVERGENCE_V374_%s marker=%s ready=%s "
-        "identity_ready=%s universal_four_way_policy_v375=%s universal_scope_v376=%s "
-        "connected_object_preferred=true startup_fetch_proof_preferred=true "
+        "identity_ready=%s position_materialization_v377=%s universal_four_way_policy_v375=%s "
+        "universal_scope_v376=%s connected_object_preferred=true startup_fetch_proof_preferred=true "
         "startup_adoption_preferred=true broker_io=false manager_registry_mutation=false "
         "safety_gates_bypassed=false",
         "READY" if ready else "NOT_READY",
         MARKER,
         str(ready).lower(),
         str(identity_ready).lower(),
+        str(materialization_ready).lower(),
         str(policy_ready).lower(),
         str(scope_ready).lower(),
     )
@@ -217,6 +223,7 @@ __all__ = [
     "install_import_hook",
     "_score",
     "_candidate_user_brokers",
+    "_install_v377",
     "_install_v375",
     "_install_v376",
 ]
