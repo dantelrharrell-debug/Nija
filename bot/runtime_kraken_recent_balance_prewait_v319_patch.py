@@ -1,4 +1,4 @@
-"""Pre-activation Kraken recent-Balance prewait reuse v319.
+"""Kraken recent-Balance prewait reuse v319.
 
 Generation 5052 proved the v318 ordering repair: PLATFORM authoritative reads now
 enter the priority gate immediately, but Kraken's legitimate monitoring rate
@@ -6,15 +6,22 @@ interval can still require ~58 seconds of prewait while the authoritative
 position caller remains bounded to 5 seconds. Shortening that exchange pacing or
 extending startup until a full additional interval would weaken liveness/safety.
 
-v319 instead reuses a genuine authenticated same-credential ``Balance`` response
-already observed by v312 when all of the following are true:
+v319 reuses a genuine authenticated same-credential ``Balance`` response already
+observed by v312 when all of the following are true:
 
-* canonical runtime has not reached LIVE_ACTIVE;
 * v312 has a structurally valid, credential-proven Balance observation;
 * that observation is still inside v312's existing short cache TTL (10 seconds
   by default, hard-capped at 30 seconds and well below v285's 90-second position
   snapshot TTL);
 * a new v286 authoritative flight is about to issue a redundant Balance call.
+
+The same provenance-safe reuse now applies both before activation and while the
+runtime is LIVE_ACTIVE. Production on 2026-09-06 showed that restricting this
+handoff to preactivation allowed a genuine platform Kraken snapshot to expire
+while a redundant authenticated Balance flight waited behind Kraken's preserved
+monitoring interval. Reusing the already-authenticated, same-credential, short-
+TTL observation removes that redundant wait without extending freshness or
+inventing position state.
 
 Only the new-flight pre-read path is changed. Existing-flight timeout recovery
 keeps v312's stricter same-epoch rule. The authenticated payload is converted by
@@ -30,13 +37,12 @@ surface. The v321 observer extension in this module records that already-issued
 successful canonical response through v312's existing credential-proven cache.
 It never starts another broker call and never changes the response or exception
 semantics. That lets the existing v312/v319 handoff eliminate the otherwise
-redundant ~58 second monitoring prewait.
+redundant monitoring prewait.
 
-v320 is chained from this already-canonical fast-path installer. It does not
-change v319's Kraken behavior; it arms the platform/user position-readiness
-isolation hook so v285's strong all-account proof can continue protecting each
-user account without letting an unproven user revoke otherwise-valid PLATFORM
-activation.
+v320 is chained from this already-canonical fast-path installer. It arms the
+platform/user position-readiness isolation hook so v285's strong all-account
+proof can continue protecting each user account without letting an unproven user
+revoke otherwise-valid PLATFORM activation.
 
 v330 is also chained here after v320. It keeps the same fail-closed contract and
 repairs only Kraken authoritative Balance/snapshot liveness: a timed-out retry
@@ -77,6 +83,7 @@ def _broker_module() -> Any:
 
 
 def _preactivation() -> bool:
+    """Legacy diagnostic helper retained for compatibility; reuse is no longer gated by it."""
     state = str(os.environ.get("NIJA_RUNTIME_TRADING_STATE", "") or "").strip().upper()
     return state != "LIVE_ACTIVE"
 
@@ -185,9 +192,6 @@ def _patch_v286_new_flight() -> bool:
 
     @wraps(original)
     def finish_auth_flight_v319(flight: dict[str, Any], broker: Any) -> None:
-        if not _preactivation():
-            return original(flight, broker)
-
         observation = _recent_observation(broker)
         if observation is None:
             return original(flight, broker)
@@ -211,7 +215,7 @@ def _patch_v286_new_flight() -> bool:
             LOGGER.critical(
                 "KRAKEN_RECENT_BALANCE_PREWAIT_V319_REUSED marker=%s account=%s held_assets=%d "
                 "observation_age_s=%.3f pre_attempt_age_s=%.3f authenticated_balance=true "
-                "same_credential=true credential_proven=true preactivation_only=true "
+                "same_credential=true credential_proven=true live_active_allowed=true "
                 "v312_cache_ttl_unchanged=true position_snapshot_ttl_unchanged=true "
                 "redundant_rate_prewait_eliminated=true configured_rate_interval_unchanged=true "
                 "transport_timeout_unchanged=true nonce_ordering_unchanged=true "
@@ -320,14 +324,14 @@ def install() -> bool:
     if ready:
         LOGGER.critical(
             "KRAKEN_RECENT_BALANCE_PREWAIT_V319_READY marker=%s ready=true "
-            "preactivation_only=true authenticated_balance_only=true same_credential_only=true "
+            "live_active_reuse_allowed=true authenticated_balance_only=true same_credential_only=true "
             "v312_cache_ttl_unchanged=true position_snapshot_ttl_unchanged=true "
             "same_epoch_timeout_recovery_unchanged=true configured_rate_interval_unchanged=true "
             "transport_timeout_unchanged=true nonce_ordering_unchanged=true lock_bypass=false "
             "lock_force_release=false position_success_fabricated=false balance_fabricated=false "
-            "readiness_granted=false execution_proof_fabricated=false forced_activation=false "
-            "canonical_balance_observer_v321=true platform_position_isolation_v320=true "
-            "kraken_authoritative_snapshot_liveness_v330=true "
+            "readiness_granted=false execution_proof_fabricated=false forced_trade=false "
+            "forced_activation=false canonical_balance_observer_v321=true "
+            "platform_position_isolation_v320=true kraken_authoritative_snapshot_liveness_v330=true "
             "writer_nonce_risk_capital_killswitch_order_fill_gates_unchanged=true "
             "safety_gates_bypassed=false",
             MARKER,
