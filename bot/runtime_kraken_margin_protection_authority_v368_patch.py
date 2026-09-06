@@ -16,6 +16,7 @@ The patch:
 * allows the dedicated margin monitor to keep observing an authenticated Kraken
   account during transient stale ``connected`` bookkeeping, but only after a real
   authenticated OpenOrders read succeeds; terminal submit gates remain unchanged;
+* requires v371 full stop-loss/take-profit truth before v368 can publish ready;
 * preserves fail-closed behavior whenever exact broker, writer, nonce, kill switch,
   circuit, fencing, or terminal execution requirements are not proven.
 """
@@ -185,6 +186,20 @@ def _register_manifest() -> bool:
         return False
 
 
+def _install_full_protection_v371() -> bool:
+    """Install the final fail-closed SL+TP truth layer after exact broker scoping."""
+    try:
+        v371 = importlib.import_module("bot.runtime_kraken_margin_full_protection_v371_patch")
+        install = getattr(v371, "install_import_hook", None) or getattr(v371, "install", None)
+        return bool(callable(install) and install())
+    except Exception as exc:
+        LOGGER.exception(
+            "KRAKEN_MARGIN_FULL_PROTECTION_V371_CHAIN_FAILED marker=%s error=%s:%s fail_closed=true",
+            MARKER, type(exc).__name__, exc,
+        )
+        return False
+
+
 def _wake_runtime() -> None:
     # Re-run only existing read-only/protection reconciliation surfaces.
     try:
@@ -209,9 +224,13 @@ def install_import_hook() -> bool:
             coverage = _patch_margin_coverage_broker_scope()
             readers = _patch_account_brokers_authenticated_read_fallback()
             manifest = _register_manifest()
-            ready = bool(software and coverage and readers and manifest)
+            authority_ready = bool(software and coverage and readers and manifest)
+            full_protection = _install_full_protection_v371() if authority_ready else False
+            ready = bool(authority_ready and full_protection)
         except Exception as exc:
             ready = False
+            authority_ready = False
+            full_protection = False
             LOGGER.exception(
                 "RUNTIME_KRAKEN_MARGIN_PROTECTION_AUTHORITY_V368_INSTALL_FAILED marker=%s error=%s:%s "
                 "trading_fail_closed=true global_execution_ready_unchanged=true safety_gates_bypassed=false",
@@ -222,11 +241,13 @@ def install_import_hook() -> bool:
         log = LOGGER.critical if ready else LOGGER.error
         log(
             "RUNTIME_KRAKEN_MARGIN_PROTECTION_AUTHORITY_V368_%s marker=%s ready=%s "
-            "exact_broker_scope=true v339_broker_local_reproof=true authenticated_read_fallback=true "
-            "global_dispatch_health_not_promoted=true execution_ready_unchanged=true "
-            "writer_nonce_killswitch_seak_circuit_fencing_terminal_gates_preserved=true "
+            "authority_ready=%s full_protection_v371=%s exact_broker_scope=true "
+            "v339_broker_local_reproof=true authenticated_read_fallback=true "
+            "stop_and_take_profit_both_required=true global_dispatch_health_not_promoted=true "
+            "execution_ready_unchanged=true writer_nonce_killswitch_seak_circuit_fencing_terminal_gates_preserved=true "
             "forced_trade=false forced_exit=false execution_proof_fabricated=false safety_gates_bypassed=false",
             "READY" if ready else "NOT_READY", MARKER, str(ready).lower(),
+            str(authority_ready).lower(), str(full_protection).lower(),
         )
         if ready:
             _wake_runtime()
@@ -237,4 +258,7 @@ def install() -> bool:
     return install_import_hook()
 
 
-__all__ = ["MARKER", "RELEASE_ID", "install", "install_import_hook", "_exact_scoped_authority"]
+__all__ = [
+    "MARKER", "RELEASE_ID", "install", "install_import_hook", "_exact_scoped_authority",
+    "_install_full_protection_v371",
+]
