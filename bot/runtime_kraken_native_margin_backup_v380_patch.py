@@ -1,35 +1,28 @@
 """Kraken native fixed SL/TP backup for authenticated margin positions v380.
 
-This is a supplemental exchange-side safety layer above NIJA's existing v371
-software SL/TP/TSL/TTP monitor.  It arms only fixed stop-loss and fixed
- take-profit orders at Kraken; trailing stop-loss and trailing take-profit remain
-under the already-verified NIJA software monitor.
+Supplement NIJA's v371 software SL/TP/TSL/TTP monitor with exchange-side fixed
+stop-loss and take-profit orders. Trailing protection remains software-owned.
 
 Safety invariants:
-* only broker-authenticated OpenPositions rows are eligible;
+* only authenticated OpenPositions exposure is eligible;
 * only existing long margin exposure is handled by this release;
-* every order is SELL + reduce_only and carries the position leverage;
-* current price must be strictly between the stop and TP trigger, so a stale
-  conditional order is never used instead of an already-due software exit;
-* OpenOrders is checked before every submit and again after submit; an AddOrder
-  acknowledgement alone is never promoted to native protection proof;
-* stop is armed before take-profit so partial hardening always prioritises loss
-  containment;
-* private AddOrder travels through the canonical Kraken private-call boundary,
-  preserving writer/nonce/rate/fencing authority;
-* no new exposure, forced trade, fill, or profit is fabricated.
-
-Kraken reduce_only guarantees these protective orders cannot increase or open a
-position after the margin exposure has been reduced/closed.
+* every native order is SELL + reduce_only and carries position leverage;
+* current price must be strictly between stop and TP before arming;
+* OpenOrders is checked before and after AddOrder; ACK/txid alone is not proof;
+* stop is armed before take-profit;
+* deterministic Kraken cl_ord_id values make the armer idempotent and allow
+  stale NIJA-native orders to be cancelled after matching margin exposure ends;
+* private calls preserve canonical writer/nonce/rate/fencing authority;
+* no exposure, fill, execution readiness, or profit is fabricated.
 """
 from __future__ import annotations
 
+import hashlib
 import importlib
 import logging
 import math
 import os
 import threading
-import time
 from collections.abc import Mapping
 from typing import Any
 
@@ -43,6 +36,8 @@ _STOP = threading.Event()
 _LAST_SIGNATURE = ""
 _EPS = 1e-12
 _TRUE = {"1", "true", "yes", "on", "enabled", "y"}
+_PREFIX_SL = "njsl"
+_PREFIX_TP = "njtp"
 
 
 def _truthy(value: Any, default: str = "true") -> bool:
@@ -88,14 +83,28 @@ def _private_call(broker: Any):
         return None
 
 
+def _category(name: str) -> Any:
+    try:
+        profiles = importlib.import_module("bot.kraken_rate_profiles")
+        enum = getattr(profiles, "KrakenAPICategory", None)
+        return getattr(enum, name, None) if enum is not None else None
+    except Exception:
+        return None
+
+
+def _call(broker: Any, method: str, params: dict[str, Any], category_name: str) -> Any:
+    call = _private_call(broker)
+    if not callable(call):
+        raise RuntimeError("kraken_private_api_unavailable")
+    category = _category(category_name)
+    return call(method, params, category=category) if category is not None else call(method, params)
+
+
 def _native_truth(account: str, broker: Any) -> tuple[bool, dict[str, dict[str, Any]], str]:
     v367 = _v367()
-    try:
-        cache = getattr(v367, "_NATIVE_CACHE", None)
-        if isinstance(cache, dict):
-            cache.pop(str(account), None)
-    except Exception:
-        pass
+    cache = getattr(v367, "_NATIVE_CACHE", None)
+    if isinstance(cache, dict):
+        cache.pop(str(account), None)
     probe = getattr(v367, "_native_protection", None)
     if not callable(probe):
         return False, {}, "v367_native_probe_unavailable"
@@ -110,14 +119,18 @@ def _pair_and_price(broker: Any, symbol: str) -> tuple[str, float]:
     if not callable(resolver) or not callable(price_fn):
         return "", 0.0
     pair = str(resolver(broker, symbol) or "").strip()
-    if not pair:
-        return "", 0.0
-    return pair, max(0.0, _f(price_fn(broker, pair)))
+    return (pair, max(0.0, _f(price_fn(broker, pair)))) if pair else ("", 0.0)
 
 
 def _fmt(value: float) -> str:
     text = f"{float(value):.12f}".rstrip("0").rstrip(".")
     return text or "0"
+
+
+def _client_id(account: str, symbol: str, leg: str) -> str:
+    digest = hashlib.sha1(f"{account}|{symbol}".encode("utf-8")).hexdigest()[:12]
+    prefix = _PREFIX_SL if leg == "stop-loss" else _PREFIX_TP
+    return f"{prefix}{digest}"[:18]
 
 
 def _submit_reduce_only(
@@ -128,11 +141,9 @@ def _submit_reduce_only(
     leverage: int,
     ordertype: str,
     trigger: float,
+    client_id: str = "",
 ) -> tuple[bool, tuple[str, ...], str]:
-    call = _private_call(broker)
-    if not callable(call):
-        return False, (), "kraken_private_api_unavailable"
-    params = {
+    params: dict[str, Any] = {
         "pair": pair,
         "type": "sell",
         "ordertype": ordertype,
@@ -142,15 +153,10 @@ def _submit_reduce_only(
     }
     if leverage > 1:
         params["leverage"] = str(leverage)
+    if client_id:
+        params["cl_ord_id"] = str(client_id)[:18]
     try:
-        category = None
-        try:
-            profiles = importlib.import_module("bot.kraken_rate_profiles")
-            enum = getattr(profiles, "KrakenAPICategory", None)
-            category = getattr(enum, "EXIT", None) if enum is not None else None
-        except Exception:
-            category = None
-        payload = call("AddOrder", params, category=category) if category is not None else call("AddOrder", params)
+        payload = _call(broker, "AddOrder", params, "EXIT")
     except Exception as exc:
         return False, (), f"addorder_exception:{type(exc).__name__}:{exc}"
     if not isinstance(payload, Mapping):
@@ -179,9 +185,8 @@ def _row_targets(raw: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _arm_position(account: str, broker: Any, raw: Mapping[str, Any]) -> dict[str, Any]:
-    v366 = _v366()
     row = _row_targets(raw)
-    symbol = str(v366.canonical_symbol(row.get("symbol")) or "").strip()
+    symbol = str(_v366().canonical_symbol(row.get("symbol")) or "").strip()
     quantity = max(0.0, _f(row.get("remaining_units", row.get("quantity"))))
     entry = max(0.0, _f(row.get("entry_price", row.get("avg_entry_price"))))
     stop = max(0.0, _f(row.get("stop_loss")))
@@ -189,18 +194,10 @@ def _arm_position(account: str, broker: Any, raw: Mapping[str, Any]) -> dict[str
     leverage = max(1, min(5, int(_f(row.get("leverage"), 1.0) or 1.0)))
     ids = tuple(str(item) for item in tuple(row.get("position_ids", ()) or ()) if str(item))
     base = {
-        "account": account,
-        "symbol": symbol,
-        "quantity": quantity,
-        "entry": entry,
-        "stop": stop,
-        "take_profit": tp,
-        "leverage": leverage,
-        "position_ids": ids,
-        "stop_armed": False,
-        "take_profit_armed": False,
-        "native_backup_verified": False,
-        "submitted": (),
+        "account": account, "symbol": symbol, "quantity": quantity, "entry": entry,
+        "stop": stop, "take_profit": tp, "leverage": leverage, "position_ids": ids,
+        "stop_armed": False, "take_profit_armed": False,
+        "native_backup_verified": False, "submitted": (),
     }
     if not symbol or quantity <= _EPS or entry <= _EPS or not ids:
         return {**base, "reason": "position_identity_unproven"}
@@ -210,13 +207,10 @@ def _arm_position(account: str, broker: Any, raw: Mapping[str, Any]) -> dict[str
         return {**base, "reason": "protective_targets_invalid"}
 
     pair, current = _pair_and_price(broker, symbol)
-    base["pair"] = pair
-    base["current_price"] = current
+    base.update({"pair": pair, "current_price": current})
     if not pair or current <= _EPS:
         return {**base, "reason": "current_price_or_pair_unproven"}
     if not (stop < current < tp):
-        # A target is already due.  Do not park a stale conditional order; the
-        # existing v367 software monitor owns the immediate exit decision.
         return {**base, "reason": "trigger_already_crossed_software_exit_owns_due_action"}
 
     native_ok, native_rows, native_reason = _native_truth(account, broker)
@@ -232,9 +226,10 @@ def _arm_position(account: str, broker: Any, raw: Mapping[str, Any]) -> dict[str
         ok, txids, reason = _submit_reduce_only(
             broker, pair=pair, quantity=quantity, leverage=leverage,
             ordertype="stop-loss", trigger=stop,
+            client_id=_client_id(account, symbol, "stop-loss"),
         )
         if not ok:
-            return {**base, "stop_armed": False, "take_profit_armed": tp_armed, "reason": f"stop_submit_failed:{reason}"}
+            return {**base, "take_profit_armed": tp_armed, "reason": f"stop_submit_failed:{reason}"}
         submitted.append(("stop-loss", txids))
         native_ok, native_rows, native_reason = _native_truth(account, broker)
         native = native_rows.get(symbol, {}) if native_ok else {}
@@ -246,11 +241,12 @@ def _arm_position(account: str, broker: Any, raw: Mapping[str, Any]) -> dict[str
         ok, txids, reason = _submit_reduce_only(
             broker, pair=pair, quantity=quantity, leverage=leverage,
             ordertype="take-profit", trigger=tp,
+            client_id=_client_id(account, symbol, "take-profit"),
         )
         if not ok:
             return {
-                **base, "stop_armed": stop_armed, "take_profit_armed": False,
-                "submitted": tuple(submitted), "reason": f"take_profit_submit_failed:{reason}",
+                **base, "stop_armed": stop_armed, "submitted": tuple(submitted),
+                "reason": f"take_profit_submit_failed:{reason}",
             }
         submitted.append(("take-profit", txids))
 
@@ -260,22 +256,60 @@ def _arm_position(account: str, broker: Any, raw: Mapping[str, Any]) -> dict[str
     tp_armed = bool(native_ok and max(0.0, _f(native.get("take_profit_qty"))) + tolerance >= quantity)
     verified = bool(stop_armed and tp_armed)
     return {
-        **base,
-        "stop_armed": stop_armed,
-        "take_profit_armed": tp_armed,
-        "native_backup_verified": verified,
-        "submitted": tuple(submitted),
+        **base, "stop_armed": stop_armed, "take_profit_armed": tp_armed,
+        "native_backup_verified": verified, "submitted": tuple(submitted),
         "reason": "ok" if verified else f"post_submit_openorders_unproven:{native_reason}",
     }
+
+
+def _cleanup_orphans(account: str, broker: Any, active_symbols: set[str]) -> tuple[str, ...]:
+    """Cancel only v380-tagged orders whose authenticated margin symbol is absent."""
+    try:
+        payload = _call(broker, "OpenOrders", {"trades": "false"}, "QUERY")
+    except Exception:
+        return ()
+    if not isinstance(payload, Mapping) or payload.get("error"):
+        return ()
+    result = payload.get("result") or {}
+    opened = result.get("open", result) if isinstance(result, Mapping) else {}
+    if not isinstance(opened, Mapping):
+        return ()
+    cancelled: list[str] = []
+    for order_id, raw in opened.items():
+        if not isinstance(raw, Mapping):
+            continue
+        client_id = str(raw.get("cl_ord_id") or raw.get("cl_ordid") or "").strip()
+        if not client_id.startswith((_PREFIX_SL, _PREFIX_TP)):
+            continue
+        descr = raw.get("descr") if isinstance(raw.get("descr"), Mapping) else {}
+        symbol = str(_v366().canonical_symbol(descr.get("pair") or raw.get("pair")) or "")
+        if not symbol or symbol in active_symbols:
+            continue
+        if client_id not in {
+            _client_id(account, symbol, "stop-loss"),
+            _client_id(account, symbol, "take-profit"),
+        }:
+            continue
+        try:
+            response = _call(broker, "CancelOrder", {"txid": str(order_id)}, "EXIT")
+        except Exception:
+            continue
+        if isinstance(response, Mapping) and not (response.get("error") or []):
+            cancelled.append(str(order_id))
+    if cancelled:
+        LOGGER.critical(
+            "KRAKEN_NATIVE_MARGIN_BACKUP_V380_ORPHANS_CANCELLED marker=%s account=%s order_ids=%s "
+            "client_tag_match=true exposure_absent=true unrelated_orders_untouched=true safety_gates_bypassed=false",
+            MARKER, account, tuple(cancelled),
+        )
+    return tuple(cancelled)
 
 
 def reconcile_once() -> dict[str, Any]:
     if not _truthy(os.environ.get("NIJA_KRAKEN_NATIVE_MARGIN_BACKUP_ENABLED", "true")):
         os.environ[_READY_FLAG] = "0"
         return {"ready": False, "enabled": False, "accounts": {}, "reason": "disabled"}
-    v366 = _v366()
-    v367 = _v367()
-    brokers_fn = getattr(v367, "_account_brokers", None)
+    brokers_fn = getattr(_v367(), "_account_brokers", None)
     if not callable(brokers_fn):
         return {"ready": False, "enabled": True, "accounts": {}, "reason": "account_brokers_unavailable"}
 
@@ -284,28 +318,27 @@ def reconcile_once() -> dict[str, Any]:
     all_margin_verified = True
     for account, broker in list(brokers_fn() or []):
         try:
-            ok, positions, reason = v366.fetch_margin_positions(broker, account=account, force=True)
+            ok, positions, reason = _v366().fetch_margin_positions(broker, account=account, force=True)
         except Exception as exc:
             ok, positions, reason = False, {}, f"openpositions_exception:{type(exc).__name__}:{exc}"
         if not ok:
             account_results[str(account)] = {"ready": False, "positions": (), "reason": reason}
-            # Unproven read cannot be treated as no exposure.
             all_margin_verified = False
             continue
-        position_results = []
+        active_symbols = {str(_v366().canonical_symbol(symbol) or "") for symbol in dict(positions or {})}
+        cancelled = _cleanup_orphans(str(account), broker, active_symbols)
+        proofs = []
         for raw in dict(positions or {}).values():
             any_margin = True
             proof = _arm_position(str(account), broker, raw)
-            position_results.append(proof)
+            proofs.append(proof)
             all_margin_verified = bool(all_margin_verified and proof.get("native_backup_verified"))
         account_results[str(account)] = {
-            "ready": all(bool(item.get("native_backup_verified")) for item in position_results) if position_results else True,
-            "positions": tuple(position_results),
-            "reason": "ok" if position_results else "no_open_margin_positions",
+            "ready": all(bool(item.get("native_backup_verified")) for item in proofs) if proofs else True,
+            "positions": tuple(proofs), "cancelled_orphans": cancelled,
+            "reason": "ok" if proofs else "no_open_margin_positions",
         }
 
-    # Ready means every authenticated Kraken margin exposure observed this cycle
-    # has exchange-verified native fixed SL+TP.  No-margin is a safe idle state.
     ready = bool(all_margin_verified)
     os.environ[_READY_FLAG] = "1" if ready else "0"
     return {"ready": ready, "enabled": True, "any_margin": any_margin, "accounts": account_results}
@@ -329,7 +362,8 @@ def audit_once() -> dict[str, Any]:
             "KRAKEN_NATIVE_MARGIN_BACKUP_V380_%s marker=%s state=%s "
             "native_fixed_stop_loss=true native_fixed_take_profit=true software_tsl_ttp_unchanged=true "
             "reduce_only_required=true authenticated_openpositions_required=true openorders_post_submit_proof_required=true "
-            "ack_not_protection_proof=true forced_trade=false new_exposure=false safety_gates_bypassed=false",
+            "client_order_id_idempotency=true orphan_cleanup=true ack_not_protection_proof=true "
+            "forced_trade=false new_exposure=false safety_gates_bypassed=false",
             "READY" if result.get("ready") else "PENDING", MARKER, result,
         )
     try:
@@ -360,13 +394,11 @@ def install_import_hook() -> bool:
             _STOP.clear()
             _THREAD = threading.Thread(target=_worker, name="KrakenNativeMarginBackupV380", daemon=True)
             _THREAD.start()
-    # Do one immediate pass after the worker is alive.  Failures leave software
-    # protection intact and the native readiness flag false; they never bypass
-    # the canonical private-call safety boundary.
     audit_once()
     LOGGER.critical(
         "RUNTIME_KRAKEN_NATIVE_MARGIN_BACKUP_V380_INSTALLED marker=%s enabled=%s monitor_alive=%s "
-        "native_fixed_only=true trailing_remains_software=true reduce_only=true safety_gates_bypassed=false",
+        "native_fixed_only=true trailing_remains_software=true reduce_only=true client_id_idempotency=true "
+        "orphan_cleanup=true safety_gates_bypassed=false",
         MARKER,
         str(_truthy(os.environ.get("NIJA_KRAKEN_NATIVE_MARGIN_BACKUP_ENABLED", "true"))).lower(),
         str(bool(_THREAD and _THREAD.is_alive())).lower(),
@@ -382,4 +414,7 @@ def stop() -> None:
     _STOP.set()
 
 
-__all__ = ["MARKER", "install", "install_import_hook", "audit_once", "reconcile_once", "stop"]
+__all__ = [
+    "MARKER", "install", "install_import_hook", "audit_once", "reconcile_once", "stop",
+    "_client_id", "_submit_reduce_only", "_arm_position", "_cleanup_orphans",
+]
