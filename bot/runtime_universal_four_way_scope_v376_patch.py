@@ -9,20 +9,23 @@ Safety contract
 ---------------
 * Fixed stop-loss, fixed take-profit, trailing stop-loss, and trailing
   take-profit remain mandatory before new exposure can execute.
-* Every currently connected canonical broker must expose the exact interfaces
-  used by the universal software exit monitor: position read, market price
-  read, and position-closing order submission.
+* Every selected canonical broker must expose the exact interfaces used by the
+  universal software exit monitor: position read, market price read, and
+  position-closing order submission.
 * Every canonical broker object is reconciled into the universal supervisor,
   including brokers added for future users or future broker integrations.
 * The rule is asset-class agnostic. Current canonical classes (crypto, equity,
   futures, options) and future metadata values receive the same four-way row
   contract; no market is exempted here.
 * Existing exit/reduce requests always remain allowed.
+* Account-local isolation is preserved: a broken user broker blocks that user's
+  new exposure, not unrelated safe platform/user accounts. Broadcast/all-account
+  requests still require every selected connected account to pass.
 * v375's legacy trigger ordering is preserved. v376 supplements the missing
   trailing leg only after the pre-existing trigger declines to exit, avoiding
   premature synthesized TP exits and preserving fee-aware downstream floors.
 * No position, price, fill, connectivity, account identity, or broker
-  capability is fabricated. If a connected broker cannot prove the required
+  capability is fabricated. If a selected broker cannot prove the required
   interfaces, new exposure fails closed.
 * v376 remains an independent per-entry scope gate above v265 rather than a
   dependency inside v265's own readiness calculation. This avoids a circular
@@ -66,6 +69,14 @@ def _f(value: Any, default: float = 0.0) -> float:
         return default
 
 
+def _norm(value: Any) -> str:
+    raw = getattr(value, "value", value)
+    text = str(raw or "").strip().lower()
+    if "." in text:
+        text = text.rsplit(".", 1)[-1]
+    return text.replace("/", "-").replace("_", "-")
+
+
 def _connected(broker: Any) -> bool:
     if broker is None:
         return False
@@ -81,12 +92,12 @@ def _broker_label(broker: Any) -> str:
         auto_exit = importlib.import_module("bot.auto_exit_sl_tp_runtime_patch")
         label = getattr(auto_exit, "_broker_label", None)
         if callable(label):
-            return str(label(broker) or "unknown").strip().lower()
+            return _norm(label(broker) or "unknown")
     except Exception:
         pass
     raw = getattr(getattr(broker, "broker_type", None), "value", None)
     raw = raw or getattr(broker, "broker_type", None)
-    return str(raw or type(broker).__name__).strip().lower()
+    return _norm(raw or type(broker).__name__)
 
 
 def _manager() -> Any:
@@ -140,12 +151,14 @@ def _canonical_brokers() -> list[Any]:
 
 def _position_read_capable(broker: Any) -> bool:
     tracker = getattr(broker, "position_tracker", None)
-    if tracker is not None and any(
-        callable(getattr(tracker, name, None))
-        for name in ("get_all_positions", "get_open_positions", "list_positions")
-    ):
-        return True
-    return any(hasattr(broker, attr) for attr in ("positions", "open_positions", "tracked_positions"))
+    if tracker is not None:
+        if any(callable(getattr(tracker, name, None)) for name in ("get_open_positions", "list_positions")):
+            return True
+        if callable(getattr(tracker, "get_all_positions", None)) and callable(getattr(tracker, "get_position", None)):
+            return True
+        if isinstance(getattr(tracker, "positions", None), Mapping):
+            return True
+    return any(isinstance(getattr(broker, attr, None), (Mapping, list, tuple, set)) for attr in ("positions", "open_positions", "tracked_positions"))
 
 
 def _price_read_capable(broker: Any) -> bool:
@@ -224,8 +237,6 @@ def _asset_scope_self_test() -> tuple[bool, dict[str, bool]]:
         return False, {"policy_import": False}
 
     outcomes: dict[str, bool] = {}
-    # The synthetic future label is deliberately outside today's request enum;
-    # v376 verifies that the protection layer itself has no asset-class bypass.
     for asset_class in (*_asset_classes(), "future_market"):
         row = policy(
             {
@@ -251,16 +262,67 @@ def _asset_scope_self_test() -> tuple[bool, dict[str, bool]]:
     return all(outcomes.values()), outcomes
 
 
-def _scope_truth() -> tuple[bool, dict[str, Any]]:
-    brokers = _canonical_brokers()
-    supervisor_ready, registered_ids = _reconcile_supervisor(brokers)
-    connected = [broker for broker in brokers if _connected(broker)]
-    capability_rows = [_broker_capability(broker) for broker in connected]
-    capability_ok = all(
-        row["position_read"] and row["price_read"] and row["close_write"]
-        for row in capability_rows
+def _request_is_broadcast(request: Any) -> bool:
+    if request is None:
+        return False
+    account = _norm(getattr(request, "account_id", ""))
+    metadata = dict(getattr(request, "metadata", {}) or {})
+    return bool(
+        account in {"all", "broadcast", "all-accounts"}
+        or metadata.get("broadcast_all_accounts") is True
+        or metadata.get("all_accounts") is True
+        or metadata.get("copy_to_all_accounts") is True
     )
-    registration_ok = all(id(broker) in registered_ids for broker in connected)
+
+
+def _select_expected_accounts(request: Any, expected: Mapping[str, Any]) -> tuple[dict[str, Any], str]:
+    """Resolve the account-local denominator for one execution request."""
+    all_rows = {str(key): broker for key, broker in dict(expected or {}).items()}
+    if request is None:
+        return all_rows, "background_audit"
+    if _request_is_broadcast(request):
+        return all_rows, "broadcast"
+
+    account_raw = str(getattr(request, "account_id", "") or "").strip()
+    account = _norm(account_raw)
+    preferred = _norm(getattr(request, "preferred_broker", ""))
+
+    # The canonical request default is a platform request unless a broadcaster
+    # explicitly marks all-account fanout in metadata.
+    if account in {"", "default", "platform", "master"}:
+        selected = {key: broker for key, broker in all_rows.items() if key.startswith("platform:")}
+        mode = "platform_default"
+    elif account_raw in all_rows:
+        selected = {account_raw: all_rows[account_raw]}
+        mode = "exact_account"
+    elif account.startswith("platform:"):
+        selected = {key: broker for key, broker in all_rows.items() if _norm(key) == account}
+        mode = "platform_account"
+    elif account.startswith("user:"):
+        selected = {key: broker for key, broker in all_rows.items() if _norm(key) == account or _norm(key).startswith(account + ":")}
+        mode = "user_account"
+    elif f"platform:{account}" in {_norm(key) for key in all_rows}:
+        selected = {key: broker for key, broker in all_rows.items() if _norm(key) == f"platform:{account}"}
+        mode = "platform_venue_alias"
+    else:
+        user_prefix = f"user:{account}:"
+        selected = {key: broker for key, broker in all_rows.items() if _norm(key).startswith(user_prefix)}
+        mode = "user_id_alias"
+
+    if preferred:
+        selected = {
+            key: broker
+            for key, broker in selected.items()
+            if _norm(key).endswith(":" + preferred) or _broker_label(broker) == preferred
+        }
+        mode += "+preferred_broker"
+    return selected, mode
+
+
+def _scope_truth(request: Any = None) -> tuple[bool, dict[str, Any]]:
+    expected = _expected_accounts()
+    all_brokers = _canonical_brokers()
+    supervisor_ready, registered_ids = _reconcile_supervisor(all_brokers)
     asset_ready, asset_details = _asset_scope_self_test()
 
     try:
@@ -271,27 +333,67 @@ def _scope_truth() -> tuple[bool, dict[str, Any]]:
         supervisor_started = False
 
     v375_ready = _truthy(os.environ.get("NIJA_RUNTIME_UNIVERSAL_SL_TP_POLICY_V375_READY"))
-    ready = bool(
-        v375_ready
-        and supervisor_ready
-        and supervisor_started
-        and asset_ready
-        and (not connected or (capability_ok and registration_ok))
-    )
+    selected, selection_mode = _select_expected_accounts(request, expected)
+
+    capability_rows: list[dict[str, Any]] = []
+    selected_ready = True
+    if request is not None:
+        if not selected:
+            selected_ready = False
+        for account_key, broker in selected.items():
+            row = {"account": account_key, **_broker_capability(broker)} if broker is not None else {
+                "account": account_key,
+                "broker": _norm(account_key.rsplit(":", 1)[-1]),
+                "class": "missing",
+                "connected": False,
+                "position_read": False,
+                "price_read": False,
+                "close_write": False,
+            }
+            row["registered"] = bool(broker is not None and id(broker) in registered_ids)
+            row_ready = bool(
+                broker is not None
+                and row["connected"]
+                and row["position_read"]
+                and row["price_read"]
+                and row["close_write"]
+                and row["registered"]
+            )
+            row["four_way_scope_ready"] = row_ready
+            capability_rows.append(row)
+            selected_ready = bool(selected_ready and row_ready)
+    else:
+        # Background readiness proves the protection service itself is installed.
+        # Individual account capability remains request-scoped so a broken user
+        # cannot revoke unrelated safe platform/user execution.
+        for account_key, broker in expected.items():
+            if broker is None or not _connected(broker):
+                continue
+            row = {"account": account_key, **_broker_capability(broker)}
+            row["registered"] = id(broker) in registered_ids
+            row["four_way_scope_ready"] = bool(
+                row["position_read"] and row["price_read"] and row["close_write"] and row["registered"]
+            )
+            capability_rows.append(row)
+
+    service_ready = bool(v375_ready and supervisor_ready and supervisor_started and asset_ready)
+    ready = bool(service_ready and (selected_ready if request is not None else True))
     details = {
         "v375_ready": v375_ready,
         "supervisor_ready": supervisor_ready,
         "supervisor_started": supervisor_started,
-        "connected_brokers": len(connected),
-        "registered_connected": registration_ok,
-        "broker_capability": capability_ok,
-        "capabilities": capability_rows,
         "asset_scope_ready": asset_ready,
         "asset_scope": asset_details,
-        "expected_accounts": len(_expected_accounts()),
-        "canonical_broker_objects": len(brokers),
+        "selection_mode": selection_mode,
+        "selected_accounts": tuple(selected),
+        "selected_ready": selected_ready if request is not None else None,
+        "capabilities": capability_rows,
+        "expected_accounts": len(expected),
+        "canonical_broker_objects": len(all_brokers),
+        "account_local_isolation": True,
     }
-    os.environ[_READY_FLAG] = "1" if ready else "0"
+    if request is None:
+        os.environ[_READY_FLAG] = "1" if ready else "0"
     return ready, details
 
 
@@ -332,8 +434,6 @@ def _patch_trigger_compatibility() -> bool:
         return True
 
     def compatible_trigger(pos: dict[str, Any], price: float) -> tuple[bool, str, float]:
-        # Preserve NIJA's established trigger ordering exactly. This keeps the
-        # legacy profit-lock and fee-floor interaction intact.
         hit, reason, target = base(pos, price)
         if hit:
             return bool(hit), str(reason or ""), _f(target)
@@ -403,7 +503,7 @@ def _pipeline_denial(module: ModuleType, request: Any, details: Mapping[str, Any
         size = getattr(request, "notional_usd", 0.0)
     LOGGER.critical(
         "UNIVERSAL_FOUR_WAY_SCOPE_ENTRY_BLOCKED marker=%s account=%s broker=%s asset_class=%s "
-        "symbol=%s side=%s reason=connected_broker_protection_scope_unproven exits_still_allowed=true details=%s",
+        "symbol=%s side=%s reason=selected_broker_protection_scope_unproven exits_still_allowed=true details=%s",
         MARKER,
         getattr(request, "account_id", ""),
         getattr(request, "preferred_broker", ""),
@@ -417,7 +517,7 @@ def _pipeline_denial(module: ModuleType, request: Any, details: Mapping[str, Any
         symbol=str(getattr(request, "symbol", "") or ""),
         side=str(getattr(request, "side", "") or ""),
         size_usd=float(size or 0.0),
-        error="UniversalFourWayScope deny: four-way protective exit coverage unavailable",
+        error="UniversalFourWayScope deny: selected account lacks four-way protective exit coverage",
     )
 
 
@@ -436,7 +536,7 @@ def _patch_execution_pipeline() -> bool:
     def execute_v376(self: Any, request: Any):
         if _is_exit_request(request):
             return current(self, request)
-        ready, details = _scope_truth()
+        ready, details = _scope_truth(request)
         if ready:
             return current(self, request)
         return _pipeline_denial(module, request, details)
@@ -448,18 +548,12 @@ def _patch_execution_pipeline() -> bool:
 
 
 def _patch_v265_stack_truth() -> bool:
-    """Keep v376 independent so transient failures can recover without a cycle.
-
-    v265 remains the baseline protective-exit authority and is already required
-    by v375. v376 enforces the broader all-broker/all-market scope directly at
-    every non-exit ExecutionPipeline.execute call. Nesting v376 back into v265
-    would make each guard depend on the other after a transient failure.
-    """
+    """Keep v376 independent so transient failures can recover without a cycle."""
     return True
 
 
 def reassert() -> bool:
-    """Reconcile all current brokers and fail closed for future exposure gaps."""
+    """Reconcile all current brokers and keep account-local entry gating ready."""
     with _LOCK:
         try:
             v375 = importlib.import_module("bot.runtime_universal_sl_tp_policy_v375_patch")
@@ -471,8 +565,8 @@ def reassert() -> bool:
             trigger_ready = _patch_trigger_compatibility() if v375_ready else False
             pipeline_ready = _patch_execution_pipeline() if v375_ready else False
             independent_scope_ready = _patch_v265_stack_truth() if v375_ready else False
-            scope_ready, details = _scope_truth() if v375_ready else (False, {"v375_ready": False})
-            os.environ[_READY_FLAG] = "1" if scope_ready else "0"
+            service_scope_ready, details = _scope_truth(None) if v375_ready else (False, {"v375_ready": False})
+            os.environ[_READY_FLAG] = "1" if service_scope_ready else "0"
 
             authority_ready = _truthy(os.environ.get("NIJA_PROTECTIVE_EXIT_AUTHORITY_V265_READY"))
             ready = bool(
@@ -480,7 +574,7 @@ def reassert() -> bool:
                 and trigger_ready
                 and pipeline_ready
                 and independent_scope_ready
-                and scope_ready
+                and service_scope_ready
                 and authority_ready
             )
             os.environ[_READY_FLAG] = "1" if ready else "0"
@@ -490,7 +584,7 @@ def reassert() -> bool:
                 "scope=platform_and_all_registered_users broker_scope=all_canonical_and_future_registered_brokers "
                 "asset_scope=%s future_market_policy_agnostic=true long_short=true spot_margin_futures_options_equity=true "
                 "fixed_sl=true fixed_tp=true trailing_sl=true trailing_tp=true broker_capability_fail_closed=true "
-                "entry_gate=true exits_preserved=true v265_baseline_authority=%s "
+                "entry_gate=account_local exits_preserved=true v265_baseline_authority=%s "
                 "scope_gate_independent=true thresholds_unchanged=true safety_gates_bypassed=false details=%s",
                 "READY" if ready else "NOT_READY",
                 MARKER,
@@ -544,6 +638,7 @@ __all__ = [
     "_asset_classes",
     "_asset_scope_self_test",
     "_broker_capability",
+    "_select_expected_accounts",
     "_scope_truth",
     "_patch_trigger_compatibility",
     "_patch_execution_pipeline",
