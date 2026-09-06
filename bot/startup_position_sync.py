@@ -25,6 +25,7 @@ logger = logging.getLogger("nija")
 _LAST_COMPLETED_STRATEGY: Any = None
 
 _ENTRY_PRICE_BOUND_MARKER = "20260829-position-entry-price-bound-v279"
+_DUST_SYNC_MARKER = "20260905-startup-dust-adoption-v371"
 _ENTRY_PRICE_FLIGHT_LOCK = threading.RLock()
 _ENTRY_PRICE_FLIGHTS: Dict[Tuple[int, str], Dict[str, Any]] = {}
 
@@ -301,6 +302,23 @@ def _position_changed(existing: Optional[Dict], quantity: float, entry_price: fl
     return qty_changed or entry_changed
 
 
+def _policy_dust_excluded(position: Optional[Dict]) -> bool:
+    """Return true only for a row fully classified by NIJA's canonical dust policy.
+
+    Dust rows remain visible and unverified; they simply do not require cost-basis
+    reconciliation or protective exits.  Requiring every exclusion flag prevents
+    a partial/malformed classification from weakening startup fail-closed behavior.
+    """
+    return bool(
+        isinstance(position, dict)
+        and str(position.get("classification", "") or "").strip().upper() == "DUST"
+        and position.get("exclude_from_reconciliation") is True
+        and position.get("exclude_from_auto_exit") is True
+        and position.get("exclude_from_strategy") is True
+        and position.get("exclude_from_position_limit") is True
+    )
+
+
 def _adopt_broker_positions(broker: Any, broker_name: str, eps: Optional[Any]) -> int:
     """Fetch and exactly reconcile open positions for one broker."""
     tracker = getattr(broker, "position_tracker", None)
@@ -359,6 +377,7 @@ def _adopt_broker_positions(broker: Any, broker_name: str, eps: Optional[Any]) -
     skipped_invalid = 0
     errors = 0
     successful_symbols: list[str] = []
+    dust_excluded_symbols: list[str] = []
 
     for pos in positions:
         try:
@@ -404,7 +423,9 @@ def _adopt_broker_positions(broker: Any, broker_name: str, eps: Optional[Any]) -
             if callable(exact_sync):
                 # exact_sync may retain an unverified quantity snapshot for
                 # visibility. That is useful, but it must not count as startup
-                # adoption until cost basis is genuinely verified.
+                # adoption until cost basis is genuinely verified, except for a
+                # row that the canonical dust policy explicitly excludes from
+                # reconciliation and auto-exit requirements.
                 ok = bool(
                     exact_sync(
                         symbol=symbol,
@@ -453,6 +474,28 @@ def _adopt_broker_positions(broker: Any, broker_name: str, eps: Optional[Any]) -
                 and final_position.get("cost_basis_verified") is True
                 and _safe_float(final_position.get("entry_price")) > 0
             )
+            if not cost_basis_verified and _policy_dust_excluded(final_position):
+                dust_excluded_symbols.append(symbol)
+                if changed:
+                    reconciled += 1
+                else:
+                    unchanged += 1
+                logger.critical(
+                    "POSITION_SYNC_DUST_POLICY_V371_RESOLVED marker=%s broker=%s symbol=%s "
+                    "qty=%.8f current=$%.8f broker_value=$%.8f classification=DUST "
+                    "quantity_snapshot_adopted=true cost_basis_verified=false "
+                    "protective_exit_required=false auto_exit_blocked_unchanged=true "
+                    "position_visible=true entry_price_fabricated=false "
+                    "protective_exit_fabricated=false safety_gates_bypassed=false",
+                    _DUST_SYNC_MARKER,
+                    broker_name,
+                    symbol,
+                    quantity,
+                    current_price,
+                    broker_value,
+                )
+                continue
+
             if not cost_basis_verified:
                 errors += 1
                 logger.critical(
@@ -495,16 +538,18 @@ def _adopt_broker_positions(broker: Any, broker_name: str, eps: Optional[Any]) -
             )
 
     after_count = _tracker_count(tracker)
+    resolved_symbols = list(dict.fromkeys(successful_symbols + dust_excluded_symbols))
     fully_synced = bool(
-        len(successful_symbols) == len(positions)
+        len(resolved_symbols) == len(positions)
         and errors == 0
         and skipped_invalid == 0
     )
     setattr(broker, "_startup_position_sync_adopted", fully_synced)
-    setattr(broker, "_startup_position_sync_symbols", tuple(sorted(successful_symbols)))
+    setattr(broker, "_startup_position_sync_symbols", tuple(sorted(resolved_symbols)))
+    setattr(broker, "_startup_position_sync_dust_symbols_v371", tuple(sorted(dust_excluded_symbols)))
     logger.info(
         "EXCHANGE_POSITION_SYNC broker=%s fetched=%d reconciled=%d unchanged=%d skipped_invalid=%d errors=%d "
-        "tracked_before=%d tracked_after=%d marked_synced=%s verified_symbols=%d/%d",
+        "tracked_before=%d tracked_after=%d marked_synced=%s verified_symbols=%d dust_excluded=%d resolved_symbols=%d/%d",
         broker_name,
         len(positions),
         reconciled,
@@ -515,6 +560,8 @@ def _adopt_broker_positions(broker: Any, broker_name: str, eps: Optional[Any]) -
         after_count,
         fully_synced,
         len(successful_symbols),
+        len(dust_excluded_symbols),
+        len(resolved_symbols),
         len(positions),
     )
     return reconciled
@@ -616,5 +663,6 @@ __all__ = [
     "_collect_connected_brokers",
     "_entry_price_timeout_s",
     "_legacy_duplicate_snapshot_detected",
+    "_policy_dust_excluded",
     "_LAST_COMPLETED_STRATEGY",
 ]
