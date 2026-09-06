@@ -16,8 +16,11 @@ For duplicate user-account objects it prefers the object with the strongest
 already-existing local truth: connected, startup fetch proof, startup adoption,
 and a current v285 snapshot timestamp. Platform identities are unchanged.
 
-v375 is chained after identity convergence so universal SL/TP policy becomes a
-required post-convergence safety layer for platform and registered-user exits.
+v375 is chained after identity convergence so universal fixed/trailing SL/TP
+policy is required for platform and registered-user exits. v376 is chained
+after v375 so every currently connected canonical broker, including future
+broker/user registrations, must expose the universal position/price/close
+interfaces before new exposure can execute.
 """
 from __future__ import annotations
 
@@ -147,26 +150,38 @@ def _patch_v281() -> bool:
     return True
 
 
-def _install_v375() -> bool:
+def _install_module(module_name: str, label: str) -> bool:
     try:
-        v375 = importlib.import_module("bot.runtime_universal_sl_tp_policy_v375_patch")
-        installer = getattr(v375, "install_import_hook", None)
+        module = importlib.import_module(module_name)
+        installer = getattr(module, "install_import_hook", None)
         if not callable(installer):
-            installer = getattr(v375, "install", None)
+            installer = getattr(module, "install", None)
         return bool(callable(installer) and installer())
     except Exception as exc:
         LOGGER.exception(
-            "ALL_ACCOUNT_BROKER_IDENTITY_V374_V375_FAILED marker=%s error=%s:%s "
+            "ALL_ACCOUNT_BROKER_IDENTITY_V374_%s_FAILED marker=%s error=%s:%s "
             "new_entries_fail_closed=true existing_exits_preserved=true",
-            MARKER, type(exc).__name__, exc,
+            label,
+            MARKER,
+            type(exc).__name__,
+            exc,
         )
         return False
+
+
+def _install_v375() -> bool:
+    return _install_module("bot.runtime_universal_sl_tp_policy_v375_patch", "V375")
+
+
+def _install_v376() -> bool:
+    return _install_module("bot.runtime_universal_four_way_scope_v376_patch", "V376")
 
 
 def install_import_hook() -> bool:
     identity_ready = _patch_v281()
     policy_ready = _install_v375() if identity_ready else False
-    ready = bool(identity_ready and policy_ready)
+    scope_ready = _install_v376() if policy_ready else False
+    ready = bool(identity_ready and policy_ready and scope_ready)
     os.environ[_READY_FLAG] = "1" if ready else "0"
     if identity_ready:
         try:
@@ -178,14 +193,16 @@ def install_import_hook() -> bool:
             pass
     LOGGER.critical(
         "RUNTIME_ALL_ACCOUNT_BROKER_IDENTITY_CONVERGENCE_V374_%s marker=%s ready=%s "
-        "identity_ready=%s universal_sl_tp_policy_v375=%s connected_object_preferred=true "
-        "startup_fetch_proof_preferred=true startup_adoption_preferred=true "
-        "broker_io=false manager_registry_mutation=false safety_gates_bypassed=false",
+        "identity_ready=%s universal_four_way_policy_v375=%s universal_scope_v376=%s "
+        "connected_object_preferred=true startup_fetch_proof_preferred=true "
+        "startup_adoption_preferred=true broker_io=false manager_registry_mutation=false "
+        "safety_gates_bypassed=false",
         "READY" if ready else "NOT_READY",
         MARKER,
         str(ready).lower(),
         str(identity_ready).lower(),
         str(policy_ready).lower(),
+        str(scope_ready).lower(),
     )
     return ready
 
@@ -194,4 +211,12 @@ def install() -> bool:
     return install_import_hook()
 
 
-__all__ = ["MARKER", "install", "install_import_hook", "_score", "_candidate_user_brokers"]
+__all__ = [
+    "MARKER",
+    "install",
+    "install_import_hook",
+    "_score",
+    "_candidate_user_brokers",
+    "_install_v375",
+    "_install_v376",
+]
