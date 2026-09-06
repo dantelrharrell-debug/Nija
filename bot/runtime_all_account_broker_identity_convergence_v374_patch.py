@@ -23,6 +23,14 @@ broker and future registered broker to prove the universal read/price/close
 interfaces before new exposure can execute, and v378 completes safe stale
 Coinbase tracker reconciliation plus continuous registered-user/native-backup
 protection proof.
+The convergence chain now deliberately reasserts v289 first so every canonical
+platform/user broker owns account-scoped position state and stale tracker rows
+can only be removed from a fresh authoritative snapshot. v377 then materializes
+NIJA's symbol-only PositionTracker interface into universal local position rows,
+v375 applies the fixed/trailing four-way policy, v376 gates every selected
+canonical broker, v379 publishes registered-user live protection proof, and
+v380 adds reduce-only native Kraken fixed SL/TP backup while retaining NIJA's
+software TSL/TTP monitor.
 """
 from __future__ import annotations
 
@@ -171,6 +179,10 @@ def _install_module(module_name: str, label: str) -> bool:
         return False
 
 
+def _install_v289() -> bool:
+    return _install_module("bot.runtime_account_scoped_position_state_v289_patch", "V289")
+
+
 def _install_v377() -> bool:
     return _install_module("bot.runtime_universal_position_materialization_v377_patch", "V377")
 
@@ -185,15 +197,33 @@ def _install_v376() -> bool:
 
 def _install_v378() -> bool:
     return _install_module("bot.runtime_protection_completion_v378_patch", "V378")
+def _install_v379() -> bool:
+    return _install_module("bot.runtime_registered_user_protection_proof_v379_patch", "V379")
+
+
+def _install_v380() -> bool:
+    return _install_module("bot.runtime_kraken_native_margin_backup_v380_patch", "V380")
 
 
 def install_import_hook() -> bool:
-    identity_ready = _patch_v281()
+    account_scope_ready = _install_v289()
+    identity_ready = _patch_v281() if account_scope_ready else False
     materialization_ready = _install_v377() if identity_ready else False
     policy_ready = _install_v375() if materialization_ready else False
     scope_ready = _install_v376() if policy_ready else False
     completion_ready = _install_v378() if scope_ready else False
     ready = bool(identity_ready and materialization_ready and policy_ready and scope_ready and completion_ready)
+    user_proof_installed = _install_v379() if scope_ready else False
+    native_backup_installed = _install_v380() if scope_ready else False
+    ready = bool(
+        account_scope_ready
+        and identity_ready
+        and materialization_ready
+        and policy_ready
+        and scope_ready
+        and user_proof_installed
+        and native_backup_installed
+    )
     os.environ[_READY_FLAG] = "1" if ready else "0"
     if identity_ready:
         try:
@@ -209,14 +239,22 @@ def install_import_hook() -> bool:
         "universal_scope_v376=%s protection_completion_v378=%s connected_object_preferred=true "
         "startup_fetch_proof_preferred=true startup_adoption_preferred=true broker_io=false "
         "manager_registry_mutation=false safety_gates_bypassed=false",
+        "account_scoped_position_v289=%s identity_ready=%s position_materialization_v377=%s "
+        "universal_four_way_policy_v375=%s universal_scope_v376=%s registered_user_proof_v379=%s "
+        "kraken_native_margin_backup_v380=%s connected_object_preferred=true startup_fetch_proof_preferred=true "
+        "startup_adoption_preferred=true authoritative_stale_cleanup_reasserted=true "
+        "broker_io_identity_patch=false manager_registry_mutation=false safety_gates_bypassed=false",
         "READY" if ready else "NOT_READY",
         MARKER,
         str(ready).lower(),
+        str(account_scope_ready).lower(),
         str(identity_ready).lower(),
         str(materialization_ready).lower(),
         str(policy_ready).lower(),
         str(scope_ready).lower(),
         str(completion_ready).lower(),
+        str(user_proof_installed).lower(),
+        str(native_backup_installed).lower(),
     )
     return ready
 
@@ -231,8 +269,11 @@ __all__ = [
     "install_import_hook",
     "_score",
     "_candidate_user_brokers",
+    "_install_v289",
     "_install_v377",
     "_install_v375",
     "_install_v376",
     "_install_v378",
+    "_install_v379",
+    "_install_v380",
 ]
