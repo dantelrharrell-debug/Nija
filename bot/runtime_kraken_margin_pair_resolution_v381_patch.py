@@ -2,13 +2,14 @@
 
 Kraken OpenPositions rows are intentionally carried through NIJA with an exact
 synthetic identity such as ``ETHUSD:BTNL`` so the software protection stack can
-bind to the authoritative margin exposure.  Kraken public AssetPairs/Ticker,
+bind to the authoritative margin exposure. Kraken public AssetPairs/Ticker,
 however, accept the exchange pair (for example ``ETHUSD``) rather than NIJA's
-``:<position-tag>`` suffix.  v380 therefore failed closed at pair/price proof.
+``:<position-tag>`` suffix.
 
-This patch changes pair lookup only.  Position identity, quantity, side,
-leverage, protective targets, writer/nonce/risk/kill-switch gates, OpenOrders
-proof, reduce-only order semantics, and fill/ACK truth are unchanged.
+Before native backup starts, v381 now also installs v384. That repair stabilizes
+exact-broker health scope across v367/v368 reassertions and resolves registered-
+user Kraken proxies to their concrete adapters for authoritative private reads.
+No global health state is promoted and no execution gate is bypassed.
 """
 from __future__ import annotations
 
@@ -65,6 +66,21 @@ def _patch_pair_resolver() -> bool:
     return True
 
 
+def _install_liveness_v384() -> bool:
+    try:
+        module = importlib.import_module("bot.runtime_kraken_health_user_refresh_v384_patch")
+        installer = getattr(module, "install_import_hook", None) or getattr(module, "install", None)
+        return bool(callable(installer) and installer())
+    except Exception as exc:
+        LOGGER.exception(
+            "KRAKEN_MARGIN_PAIR_V381_V384_INSTALL_FAILED marker=%s error=%s:%s "
+            "native_backup_deferred=true software_four_way_protection_preserved=true "
+            "trading_fail_closed=true safety_gates_bypassed=false",
+            MARKER, type(exc).__name__, exc,
+        )
+        return False
+
+
 def _reassert_v380() -> bool:
     try:
         v380 = importlib.import_module("bot.runtime_kraken_native_margin_backup_v380_patch")
@@ -84,18 +100,20 @@ def _reassert_v380() -> bool:
 
 
 def install_import_hook() -> bool:
-    pair_ready = _patch_pair_resolver()
+    liveness_ready = _install_liveness_v384()
+    pair_ready = _patch_pair_resolver() if liveness_ready else False
     native_worker_ready = _reassert_v380() if pair_ready else False
-    ready = bool(pair_ready and native_worker_ready)
+    ready = bool(liveness_ready and pair_ready and native_worker_ready)
     os.environ[_READY_FLAG] = "1" if ready else "0"
     LOGGER.critical(
         "RUNTIME_KRAKEN_MARGIN_PAIR_RESOLUTION_V381_%s marker=%s ready=%s "
-        "synthetic_suffix_lookup_only=true position_identity_unchanged=true v380_reasserted=%s "
-        "reduce_only_unchanged=true openorders_proof_unchanged=true writer_nonce_risk_killswitch_unchanged=true "
-        "safety_gates_bypassed=false",
+        "v384_health_user_refresh=%s synthetic_suffix_lookup_only=true position_identity_unchanged=true "
+        "v380_reasserted=%s reduce_only_unchanged=true openorders_proof_unchanged=true "
+        "writer_nonce_risk_killswitch_unchanged=true safety_gates_bypassed=false",
         "READY" if ready else "NOT_READY",
         MARKER,
         str(ready).lower(),
+        str(liveness_ready).lower(),
         str(native_worker_ready).lower(),
     )
     return ready
@@ -105,4 +123,7 @@ def install() -> bool:
     return install_import_hook()
 
 
-__all__ = ["MARKER", "install", "install_import_hook", "_lookup_symbol", "_patch_pair_resolver"]
+__all__ = [
+    "MARKER", "install", "install_import_hook", "_lookup_symbol",
+    "_patch_pair_resolver", "_install_liveness_v384",
+]
