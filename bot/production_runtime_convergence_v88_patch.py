@@ -168,6 +168,9 @@ def _install_kraken_user_supervision() -> bool:
             from bot import runtime_authoritative_position_coverage_v285_patch as v285
             installed = bool(v285.install_import_hook())
         if installed:
+            from bot import runtime_all_account_broker_identity_convergence_v374_patch as v374
+            installed = bool(v374.install_import_hook())
+        if installed:
             from bot import runtime_kraken_position_refresh_liveness_v286_patch as v286
             installed = bool(v286.install_import_hook())
         if installed:
@@ -227,10 +230,11 @@ def _install_kraken_user_supervision() -> bool:
         with _LOCK:
             _KRAKEN_SUPERVISION_INSTALLED = True
         LOGGER.critical(
-            "KRAKEN_USER_SUPERVISION_V88_CHAINED marker=%s source=v86+v90+v266+v282+v285+v286+v287+v288+v289+v290+v292+v293+v294+v295+v296+v297+v298+v299+v312+v302+v303 "
+            "KRAKEN_USER_SUPERVISION_V88_CHAINED marker=%s source=v86+v90+v266+v282+v285+v374+v286+v287+v288+v289+v290+v292+v293+v294+v295+v296+v297+v298+v299+v312+v302+v303 "
             "authenticated_reconnect_only=true canonical_rebuild=true writer_scoped=true "
             "state_sensitive_diagnostics=true connected_poll_private_io_bounded=true "
             "authoritative_user_position_proof_required=true current_snapshot_required=true "
+            "all_account_broker_identity_convergence=true duplicate_user_broker_identity_fail_closed=true "
             "quantity_reconciliation_required=true all_account_coverage_periodic=true "
             "kraken_read_rate_wait_outside_global_lock=true raw_balance_position_enumeration=true "
             "rate_profile_aware_stale_flight_retirement=true bulk_startup_cost_basis=true "
@@ -319,6 +323,7 @@ def install_import_hook() -> bool:
         "PRODUCTION_RUNTIME_CONVERGENCE_V88_INSTALLED marker=%s circuit_classification=true "
         "kraken_user_supervision=true kraken_user_rebuild_v90=true all_account_connectivity_v266=true "
         "kraken_user_position_eligibility_v282=true authoritative_position_coverage_v285=true "
+        "all_account_broker_identity_convergence_v374=true "
         "kraken_position_refresh_liveness_v286=true kraken_position_flight_recovery_v287=true "
         "kraken_cost_basis_bulk_v288=true account_scoped_position_state_v289=true "
         "kraken_read_contention_recovery_v290=true kraken_transport_timeout_v292=true "
