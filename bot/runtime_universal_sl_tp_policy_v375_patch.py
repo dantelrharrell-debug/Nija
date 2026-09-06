@@ -160,7 +160,6 @@ def _policy_row(raw: Any) -> Any:
     row["software_take_profit_available"] = tp_ok
     row["software_trailing_stop_available"] = trailing_stop_ok
     row["software_trailing_take_profit_available"] = trailing_tp_ok
-    # Backward compatibility: existing consumers still read this fixed-leg flag.
     row["universal_sl_tp_policy_complete"] = bool(stop_ok and tp_ok)
     row["universal_four_way_policy_complete"] = bool(
         stop_ok and tp_ok and trailing_stop_ok and trailing_tp_ok
@@ -188,11 +187,7 @@ def _select_trailing_candidate(
             if long_side
             else extreme <= entry * (1.0 - activation)
         )
-        threshold = (
-            extreme * (1.0 - distance)
-            if long_side
-            else extreme * (1.0 + distance)
-        )
+        threshold = extreme * (1.0 - distance) if long_side else extreme * (1.0 + distance)
         crossed = price <= threshold if long_side else price >= threshold
         if armed and crossed:
             candidates.append((threshold, 1, "trailing_stop_loss"))
@@ -205,19 +200,13 @@ def _select_trailing_candidate(
             if long_side
             else extreme <= entry * (1.0 - activation)
         )
-        threshold = (
-            extreme * (1.0 - callback)
-            if long_side
-            else extreme * (1.0 + callback)
-        )
+        threshold = extreme * (1.0 - callback) if long_side else extreme * (1.0 + callback)
         crossed = price <= threshold if long_side else price >= threshold
         if armed and crossed:
             candidates.append((threshold, 0, "profit_lock_trailing_exit"))
 
     if not candidates:
         return False, "", 0.0
-    # Use the tighter protective boundary. Equal thresholds preserve the
-    # established profit-lock reason for dashboard/log compatibility.
     if long_side:
         threshold, _priority, reason = max(candidates, key=lambda item: (item[0], -item[1]))
     else:
@@ -226,6 +215,13 @@ def _select_trailing_candidate(
 
 
 def _four_way_trigger(pos: dict[str, Any], price: float) -> tuple[bool, str, float]:
+    """Supplement the legacy trigger with the two trailing legs only.
+
+    Fixed SL/TP and NIJA's established long profit-lock sequencing remain owned by
+    the captured legacy trigger.  This helper is intentionally called only after
+    that trigger returns no hit, preventing synthesized v239 targets from preempting
+    the existing profit-lock path while still adding symmetric trailing SL/TP.
+    """
     auto_exit = importlib.import_module("bot.auto_exit_sl_tp_runtime_patch")
     row = _policy_row(pos)
     if not isinstance(row, Mapping) or price <= 0.0:
@@ -238,15 +234,6 @@ def _four_way_trigger(pos: dict[str, Any], price: float) -> tuple[bool, str, flo
     side_fn = getattr(auto_exit, "_side", None)
     side = str(side_fn(row.get("side"), dict(row)) if callable(side_fn) else row.get("side") or "").lower()
     long_side = side in {"long", "buy"}
-
-    stop = _f(row.get("stop_loss"))
-    if stop > _EPS and ((long_side and price <= stop) or (not long_side and price >= stop)):
-        return True, "stop_loss:universal_four_way_policy", stop
-
-    for name in ("take_profit_1", "take_profit_2", "take_profit_3", "take_profit"):
-        target = _f(row.get(name))
-        if target > _EPS and ((long_side and price >= target) or (not long_side and price <= target)):
-            return True, name, target
 
     key_fn = getattr(auto_exit, "_position_key", None)
     water = getattr(auto_exit, "_HIGH_WATER", None)
@@ -333,6 +320,13 @@ def _patch_auto_exit_trigger() -> bool:
 
     @wraps(current)
     def trigger_v375(pos: dict[str, Any], price: float):
+        result = current(pos, price)
+        try:
+            hit = bool(result[0])
+        except Exception:
+            return result
+        if hit:
+            return result
         return _four_way_trigger(pos, price)
 
     setattr(trigger_v375, _PATCH_ATTR, True)
