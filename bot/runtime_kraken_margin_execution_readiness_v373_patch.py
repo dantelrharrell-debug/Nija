@@ -14,6 +14,12 @@ to ask v372 for authenticated opening-order candidates, exact-query each candida
 through Kraken QueryOrders, and submit only exact final positive-fill evidence to
 the existing v328/v346 verifier chain.
 
+The canonical-fast startup path can intentionally defer the larger post-import
+convergence chain that normally installs v169.  Therefore each v373 recovery
+cycle also re-invokes v169's real installer until that module itself publishes
+its genuine ready flag.  v373 never writes that flag and never treats import
+success as readiness.
+
 It does not mark readiness, write an execution marker directly, fabricate a fill,
 promote OpenPositions/ACK/current price/requested notional, place an order, force
 activation, or weaken any writer/nonce/risk/capital/position/kill-switch/ECEL/
@@ -32,6 +38,7 @@ LOGGER = logging.getLogger("nija.runtime_kraken_margin_execution_readiness_v373"
 MARKER = "20260905-runtime-kraken-margin-execution-readiness-v373"
 RELEASE_ID = "20260905-runtime-convergence-v373"
 _READY_FLAG = "NIJA_RUNTIME_KRAKEN_MARGIN_EXECUTION_READINESS_V373_READY"
+_V169_READY_FLAG = "NIJA_RUNTIME_EXECUTION_CAPITAL_INTEGRITY_V169_READY"
 _PATCH_ATTR = "_nija_v373_margin_execution_readiness"
 _LOCK = threading.RLock()
 
@@ -57,6 +64,39 @@ def _canonical_execution_ready() -> bool:
         return False
 
 
+def _ensure_v169_ready() -> tuple[bool, str]:
+    """Run v169's genuine installer until its own ready flag is published.
+
+    This function deliberately does not set the v169 environment flag.  The
+    v169 module owns that truth and publishes it only after all execution,
+    authority, import-reassertion, capital-preseed and manifest surfaces install.
+    """
+    if os.environ.get(_V169_READY_FLAG) == "1":
+        return True, "already_ready"
+    try:
+        module = importlib.import_module("bot.runtime_execution_capital_integrity_v169_patch")
+        installer = getattr(module, "install", None) or getattr(module, "install_import_hook", None)
+        if not callable(installer):
+            return False, "v169_installer_unavailable"
+        installed = bool(installer())
+        genuinely_ready = bool(installed and os.environ.get(_V169_READY_FLAG) == "1")
+        if genuinely_ready:
+            LOGGER.critical(
+                "KRAKEN_MARGIN_EXECUTION_READINESS_V373_V169_READY marker=%s "
+                "v169_installer_returned=true v169_ready_flag=true readiness_fabricated=false "
+                "execution_proof_fabricated=false safety_gates_bypassed=false",
+                MARKER,
+            )
+            return True, "v169_genuine_install_ready"
+        return False, (
+            "v169_install_not_ready:"
+            f"installer_returned={str(installed).lower()}:"
+            f"ready_flag={os.environ.get(_V169_READY_FLAG, 'missing')}"
+        )
+    except Exception as exc:
+        return False, f"v169_install_exception:{type(exc).__name__}:{exc}"
+
+
 def recover_execution_proof_once() -> int:
     """Retry exact Kraken proof until canonical execution readiness is true."""
     if _canonical_execution_ready():
@@ -64,9 +104,22 @@ def recover_execution_proof_once() -> int:
 
     v367 = _v367()
     v372 = _v372()
+    log_due = getattr(v372, "_log_due", lambda _key, interval_s=30.0: True)
+
+    v169_ready, v169_detail = _ensure_v169_ready()
+    if not v169_ready:
+        if log_due("v373:v169_not_ready"):
+            LOGGER.info(
+                "KRAKEN_MARGIN_EXECUTION_READINESS_V373_DEFERRED marker=%s "
+                "reason=v169_provenance_guard_not_ready detail=%s execution_ready=false "
+                "v169_ready_flag_not_written_here=true trading_fail_closed=true "
+                "execution_proof_fabricated=false safety_gates_bypassed=false",
+                MARKER, v169_detail,
+            )
+        return 0
+
     brokers_fn = getattr(v367, "_account_brokers", None)
     brokers = list(brokers_fn() or []) if callable(brokers_fn) else []
-    log_due = getattr(v372, "_log_due", lambda _key, interval_s=30.0: True)
     if not brokers:
         if log_due("v373:no_brokers"):
             LOGGER.info(
@@ -239,6 +292,7 @@ def install_import_hook() -> bool:
         (LOGGER.critical if ready else LOGGER.error)(
             "RUNTIME_KRAKEN_MARGIN_EXECUTION_READINESS_V373_%s marker=%s ready=%s "
             "canonical_execution_ready_is_only_stop_condition=true transient_marker_does_not_stop_recovery=true "
+            "v169_genuine_installer_reasserted=true v169_ready_flag_not_written_here=true "
             "exact_queryorders_match_required=true final_status_required=true positive_fill_quantity_required=true "
             "positive_fill_cost_required=true canonical_v328_verifier_required=true canonical_v346_marker_owner=true "
             "readiness_not_written_here=true ack_not_fill=true openpositions_not_fill=true current_price_not_fill=true "
@@ -259,4 +313,7 @@ def install() -> bool:
     return install_import_hook()
 
 
-__all__ = ["MARKER", "RELEASE_ID", "install", "install_import_hook", "recover_execution_proof_once"]
+__all__ = [
+    "MARKER", "RELEASE_ID", "install", "install_import_hook",
+    "recover_execution_proof_once", "_ensure_v169_ready",
+]
