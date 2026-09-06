@@ -15,11 +15,19 @@ and terminal broker adapter still execute their existing broker-health checks.
 The substitution is permitted only when:
 * v335's full protective-close metadata is present;
 * the exact broker object is carried by the canonical submitter call;
-* that broker exposes a positive local connection/health state;
+* that broker, or the concrete broker behind a known NIJA proxy, exposes a
+  positive local connection/health state;
 * v337's remaining hard proofs are re-verified: distributed writer, startup
   writer prerequisites, nonce, kill switch, SEAK, circuit and fencing token;
 * the runtime block is startup/activation convergence rather than an unrelated
   degraded/corrupt state.
+
+Proxy handling is intentionally conservative.  Only the same known broker
+wrapper attributes used by the canonical Kraken position-state path are
+followed.  The deepest concrete broker is authoritative; a stale wrapper
+``connected=False`` may no longer veto a healthy concrete adapter, while a stale
+wrapper ``connected=True`` cannot promote an unhealthy concrete adapter.  Proxy
+cycles and over-deep chains fail closed.
 """
 from __future__ import annotations
 
@@ -41,6 +49,8 @@ _PROOF_ATTR = "_nija_exact_exit_broker_proof_v339"
 _INSTALL_FLAG = "_NIJA_RUNTIME_PROTECTIVE_EXIT_BROKER_HEALTH_V339"
 _LOCK = threading.RLock()
 _BROKER = contextvars.ContextVar("nija_v339_exact_exit_broker", default=None)
+_PROXY_ATTRS = ("_broker", "_real_broker", "_target", "broker")
+_PROXY_MAX_DEPTH = 6
 
 
 def _truthy(value: Any) -> bool | None:
@@ -64,7 +74,8 @@ def _trusted_kwargs(kwargs: Mapping[str, Any]) -> bool:
         return False
 
 
-def _exact_broker_health(broker: Any) -> tuple[bool, str]:
+def _local_broker_health(broker: Any) -> tuple[bool, str]:
+    """Read side-effect-free health from one concrete broker object."""
     if broker is None:
         return False, "broker_missing"
 
@@ -98,6 +109,66 @@ def _exact_broker_health(broker: Any) -> tuple[bool, str]:
             return False, f"broker_local:{attr}=false"
 
     return False, "exact_broker_health_unproven"
+
+
+def _exact_broker_health(broker: Any) -> tuple[bool, str]:
+    """Prove health on the concrete broker behind known NIJA proxy wrappers.
+
+    Kraken canonical position coverage v366 already resolves these exact wrapper
+    attributes before authenticated read-only calls.  Protective-exit health must
+    resolve the same object boundary, but it still requires positive local
+    broker health and never treats a successful read as execution health.
+    """
+    if broker is None:
+        return False, "broker_missing"
+
+    current = broker
+    seen: set[int] = set()
+    path: list[str] = []
+
+    for _depth in range(_PROXY_MAX_DEPTH):
+        identity = id(current)
+        if identity in seen:
+            return False, "broker_proxy_cycle"
+        seen.add(identity)
+
+        nxt = None
+        nxt_attr = ""
+        for attr in _PROXY_ATTRS:
+            try:
+                candidate = getattr(current, attr, None)
+            except Exception:
+                candidate = None
+            if candidate is not None and candidate is not current:
+                nxt = candidate
+                nxt_attr = attr
+                break
+
+        if nxt is None:
+            ok, reason = _local_broker_health(current)
+            if not path:
+                return ok, reason
+            return ok, f"broker_proxy:{'->'.join(path)}->{reason}"
+
+        if id(nxt) in seen:
+            return False, "broker_proxy_cycle"
+        path.append(nxt_attr)
+        current = nxt
+
+    # If another known wrapper is still present after the depth budget, do not
+    # guess which object is authoritative.
+    for attr in _PROXY_ATTRS:
+        try:
+            candidate = getattr(current, attr, None)
+        except Exception:
+            candidate = None
+        if candidate is not None and candidate is not current:
+            return False, "broker_proxy_depth_exceeded"
+
+    ok, reason = _local_broker_health(current)
+    if not path:
+        return ok, reason
+    return ok, f"broker_proxy:{'->'.join(path)}->{reason}"
 
 
 def _patch_submitter_scope() -> bool:
