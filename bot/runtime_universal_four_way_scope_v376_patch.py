@@ -24,6 +24,10 @@ Safety contract
 * No position, price, fill, connectivity, account identity, or broker
   capability is fabricated. If a connected broker cannot prove the required
   interfaces, new exposure fails closed.
+* v376 remains an independent per-entry scope gate above v265 rather than a
+  dependency inside v265's own readiness calculation. This avoids a circular
+  recovery lock after a transient broker outage while preserving v265 as the
+  baseline protective-exit authority.
 """
 from __future__ import annotations
 
@@ -41,7 +45,6 @@ LOGGER = logging.getLogger("nija.runtime_universal_four_way_scope_v376")
 MARKER = "20260906-universal-four-way-scope-v376"
 _READY_FLAG = "NIJA_RUNTIME_UNIVERSAL_FOUR_WAY_SCOPE_V376_READY"
 _TRIGGER_PATCH_ATTR = "_nija_universal_four_way_scope_trigger_v376"
-_STACK_PATCH_ATTR = "_nija_universal_four_way_scope_stack_v376"
 _PIPELINE_PATCH_ATTR = "_nija_universal_four_way_scope_pipeline_v376"
 _LOCK = threading.RLock()
 _THREAD: threading.Thread | None = None
@@ -329,8 +332,8 @@ def _patch_trigger_compatibility() -> bool:
         return True
 
     def compatible_trigger(pos: dict[str, Any], price: float) -> tuple[bool, str, float]:
-        # First preserve NIJA's established trigger ordering exactly. This keeps
-        # the legacy profit-lock and fee-floor interaction intact.
+        # Preserve NIJA's established trigger ordering exactly. This keeps the
+        # legacy profit-lock and fee-floor interaction intact.
         hit, reason, target = base(pos, price)
         if hit:
             return bool(hit), str(reason or ""), _f(target)
@@ -445,24 +448,13 @@ def _patch_execution_pipeline() -> bool:
 
 
 def _patch_v265_stack_truth() -> bool:
-    v265 = importlib.import_module("bot.runtime_protective_exit_authority_v265_patch")
-    current = getattr(v265, "_stack_truth", None)
-    if not callable(current):
-        return False
-    if bool(getattr(current, _STACK_PATCH_ATTR, False)):
-        return True
+    """Keep v376 independent so transient failures can recover without a cycle.
 
-    @wraps(current)
-    def stack_truth_v376():
-        ready, details = current()
-        details = dict(details or {})
-        scope_ready = _truthy(os.environ.get(_READY_FLAG))
-        details["universal_four_way_scope_v376"] = scope_ready
-        return bool(ready and scope_ready), details
-
-    setattr(stack_truth_v376, _STACK_PATCH_ATTR, True)
-    setattr(stack_truth_v376, "__wrapped__", current)
-    v265._stack_truth = stack_truth_v376
+    v265 remains the baseline protective-exit authority and is already required
+    by v375. v376 enforces the broader all-broker/all-market scope directly at
+    every non-exit ExecutionPipeline.execute call. Nesting v376 back into v265
+    would make each guard depend on the other after a transient failure.
+    """
     return True
 
 
@@ -478,21 +470,16 @@ def reassert() -> bool:
 
             trigger_ready = _patch_trigger_compatibility() if v375_ready else False
             pipeline_ready = _patch_execution_pipeline() if v375_ready else False
-            stack_ready = _patch_v265_stack_truth() if v375_ready else False
+            independent_scope_ready = _patch_v265_stack_truth() if v375_ready else False
             scope_ready, details = _scope_truth() if v375_ready else (False, {"v375_ready": False})
             os.environ[_READY_FLAG] = "1" if scope_ready else "0"
 
-            authority_ready = False
-            if v375_ready and trigger_ready and pipeline_ready and stack_ready and scope_ready:
-                v265 = importlib.import_module("bot.runtime_protective_exit_authority_v265_patch")
-                reassert_v265 = getattr(v265, "reassert", None)
-                authority_ready = bool(callable(reassert_v265) and reassert_v265())
-
+            authority_ready = _truthy(os.environ.get("NIJA_PROTECTIVE_EXIT_AUTHORITY_V265_READY"))
             ready = bool(
                 v375_ready
                 and trigger_ready
                 and pipeline_ready
-                and stack_ready
+                and independent_scope_ready
                 and scope_ready
                 and authority_ready
             )
@@ -503,11 +490,13 @@ def reassert() -> bool:
                 "scope=platform_and_all_registered_users broker_scope=all_canonical_and_future_registered_brokers "
                 "asset_scope=%s future_market_policy_agnostic=true long_short=true spot_margin_futures_options_equity=true "
                 "fixed_sl=true fixed_tp=true trailing_sl=true trailing_tp=true broker_capability_fail_closed=true "
-                "entry_gate=true exits_preserved=true thresholds_unchanged=true safety_gates_bypassed=false details=%s",
+                "entry_gate=true exits_preserved=true v265_baseline_authority=%s "
+                "scope_gate_independent=true thresholds_unchanged=true safety_gates_bypassed=false details=%s",
                 "READY" if ready else "NOT_READY",
                 MARKER,
                 str(ready).lower(),
                 ",".join(_asset_classes()),
+                str(authority_ready).lower(),
                 details,
             )
             return ready
