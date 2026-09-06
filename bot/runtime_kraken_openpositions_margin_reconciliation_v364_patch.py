@@ -165,7 +165,11 @@ def _known_margin_intent(row: Mapping[str, Any]) -> bool:
 
 
 def _reconcile_open_position(broker: Any, account_id: str, symbol: str) -> Dict[str, Any]:
-    api_call = getattr(broker, "_kraken_api_call", None)
+    try:
+        coverage = importlib.import_module("bot.runtime_kraken_margin_canonical_coverage_v366_patch")
+        api_call = getattr(coverage, "_private_call")(broker)
+    except Exception:
+        api_call = None
     if not callable(api_call):
         return {"ok": False, "reason": "kraken_private_api_unavailable"}
     try:

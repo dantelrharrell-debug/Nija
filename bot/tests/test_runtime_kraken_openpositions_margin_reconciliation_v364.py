@@ -86,6 +86,48 @@ def test_known_margin_intent_requires_leverage_and_live_lifecycle():
     assert v364._known_margin_intent({"lifecycle_status": "pending_open", "leverage": 1}) is False
 
 
+def test_proxy_broker_reconciles_live_margin_position(monkeypatch):
+    response = {
+        "error": [],
+        "result": {
+            "TX-ETH": {
+                "pair": "XETHZUSD", "type": "buy", "vol": "0.5",
+                "vol_closed": "0.1", "cost": "1200", "value": "1000", "margin": "600",
+            }
+        },
+    }
+
+    class Target:
+        def _kraken_api_call(self, method, params):
+            assert method == "OpenPositions"
+            assert params == {"docalcs": "true"}
+            return response
+
+    class Proxy:
+        def __init__(self):
+            self._broker = Target()
+
+    class Ledger:
+        def reconcile_snapshot(self, **kwargs):
+            assert kwargs["broker_units"] == 0.4
+            return {"record": {"lifecycle_status": "open", "leverage": 2}}
+
+    ledger_module = type("LedgerModule", (), {"get_margin_position_ledger": staticmethod(lambda: Ledger())})
+    real_import = importlib.import_module
+
+    def module_import(name):
+        if name == "bot.margin_position_ledger":
+            return ledger_module
+        return real_import(name)
+
+    monkeypatch.setattr(v364.importlib, "import_module", module_import)
+    truth = v364._reconcile_open_position(Proxy(), "platform:kraken", "ETH-USD")
+
+    assert truth["ok"] is True
+    assert truth["found"] is True
+    assert truth["remaining_units"] == 0.4
+
+
 def test_extract_does_not_touch_execution_readiness_environment(monkeypatch):
     monkeypatch.setenv("NIJA_EXECUTION_READY", "0")
     monkeypatch.setenv("NIJA_TRADING_ENGINE_READY", "0")
