@@ -72,6 +72,15 @@ def test_accepted_order_id_is_not_a_fill():
     assert assurance._filled_result({"status": "", "filled_qty": "0.25"}) is True
 
 
+def test_patched_auto_exit_predicate_keeps_real_fills(monkeypatch):
+    auto_exit = importlib.import_module("bot.auto_exit_sl_tp_runtime_patch")
+    assurance = importlib.import_module("exit_protection_assurance_patch")
+    assert assurance._patch(auto_exit)
+
+    assert auto_exit._ok({"status": "accepted", "order_id": "OID-ACK"}) is False
+    assert auto_exit._ok({"status": "filled", "order_id": "OID-FILL"}) is True
+
+
 def test_protection_defaults_are_enabled(monkeypatch):
     for key in (
         "NIJA_AUTO_EXIT_SL_TP_ENABLED",
