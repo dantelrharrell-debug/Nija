@@ -24,7 +24,9 @@ def test_v319_reuses_only_authenticated_v312_observation_without_rate_bypass() -
     assert "_fresh_observation" in text
     assert "not_before=0.0" in text
     assert "NIJA_RUNTIME_KRAKEN_BALANCE_EPOCH_HANDOFF_V312_READY" in text
-    assert 'state != "LIVE_ACTIVE"' in text
+    assert "live_active_allowed=true" in text
+    assert "live_active_reuse_allowed=true" in text
+    assert "if not _preactivation():" not in text
     assert "configured_rate_interval_unchanged=true" in text
     assert "v312_cache_ttl_unchanged=true" in text
     assert "position_snapshot_ttl_unchanged=true" in text
