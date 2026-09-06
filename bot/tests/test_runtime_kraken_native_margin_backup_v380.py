@@ -38,8 +38,8 @@ def test_native_backup_arms_stop_before_take_profit_and_reproves(monkeypatch):
             }
         }, "ok"
 
-    def submit(broker, *, pair, quantity, leverage, ordertype, trigger):
-        calls.append((pair, quantity, leverage, ordertype, trigger))
+    def submit(broker, *, pair, quantity, leverage, ordertype, trigger, client_id=""):
+        calls.append((pair, quantity, leverage, ordertype, trigger, client_id))
         if ordertype == "stop-loss":
             state["stop"] = True
         elif ordertype == "take-profit":
@@ -54,6 +54,10 @@ def test_native_backup_arms_stop_before_take_profit_and_reproves(monkeypatch):
     assert [call[3] for call in calls] == ["stop-loss", "take-profit"]
     assert calls[0][1] == 0.1
     assert calls[0][2] == 2
+    assert calls[0][5].startswith("njsl")
+    assert calls[1][5].startswith("njtp")
+    assert len(calls[0][5]) <= 18
+    assert len(calls[1][5]) <= 18
 
 
 def test_crossed_trigger_never_parks_stale_native_order(monkeypatch):
@@ -78,7 +82,7 @@ def test_short_position_fails_closed_without_submission(monkeypatch):
     assert calls == []
 
 
-def test_submit_payload_is_sell_reduce_only(monkeypatch):
+def test_submit_payload_is_sell_reduce_only_and_client_tagged(monkeypatch):
     captured = {}
 
     class Broker:
@@ -88,9 +92,10 @@ def test_submit_payload_is_sell_reduce_only(monkeypatch):
             return {"error": [], "result": {"txid": ["ORDER1"]}}
 
     monkeypatch.setattr(v380, "_private_call", lambda broker: broker._kraken_private_call)
+    client_id = v380._client_id("platform:kraken", "ETH-USD", "stop-loss")
     ok, txids, reason = v380._submit_reduce_only(
         Broker(), pair="ETHUSD", quantity=0.1, leverage=2,
-        ordertype="stop-loss", trigger=2475.0,
+        ordertype="stop-loss", trigger=2475.0, client_id=client_id,
     )
     assert ok is True
     assert txids == ("ORDER1",)
@@ -100,3 +105,33 @@ def test_submit_payload_is_sell_reduce_only(monkeypatch):
     assert captured["params"]["reduce_only"] is True
     assert captured["params"]["leverage"] == "2"
     assert captured["params"]["ordertype"] == "stop-loss"
+    assert captured["params"]["cl_ord_id"] == client_id
+
+
+def test_orphan_cleanup_cancels_only_matching_nija_native_order(monkeypatch):
+    _install_fake_policy_modules(monkeypatch)
+    account = "platform:kraken"
+    stale_id = v380._client_id(account, "ETH-USD", "stop-loss")
+    calls = []
+
+    def private_call(broker, method, params, category_name):
+        calls.append((method, dict(params)))
+        if method == "OpenOrders":
+            return {
+                "error": [],
+                "result": {
+                    "open": {
+                        "N1": {"cl_ord_id": stale_id, "descr": {"pair": "ETH-USD"}},
+                        "OTHER": {"cl_ord_id": "manual-order", "descr": {"pair": "ETH-USD"}},
+                    }
+                },
+            }
+        if method == "CancelOrder":
+            return {"error": [], "result": {"count": 1}}
+        raise AssertionError(method)
+
+    monkeypatch.setattr(v380, "_call", private_call)
+    cancelled = v380._cleanup_orphans(account, object(), set())
+    assert cancelled == ("N1",)
+    cancel_calls = [params for method, params in calls if method == "CancelOrder"]
+    assert cancel_calls == [{"txid": "N1"}]
