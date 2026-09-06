@@ -6,6 +6,11 @@ configuration. Missing or incomplete credentials for another brokerage are
 reported as degraded and that brokerage is excluded; they never stop a healthy
 brokerage from starting.
 
+Runtime-derived proof such as ``LIVE_CAPITAL_VERIFIED`` is reported here but is
+not a bootstrap configuration prerequisite. A new process must be allowed to
+start before it can re-prove live capital; all downstream trading gates remain
+fail-closed until that proof becomes true.
+
 Run with ``python3 -S`` to avoid triggering NIJA's site-customise trading hooks
 before writer authority has been established.
 """
@@ -52,7 +57,6 @@ BROKERS = {
 
 SHARED_TRUE_FLAGS = (
     "LIVE_TRADING",
-    "LIVE_CAPITAL_VERIFIED",
     "NIJA_BROKER_INDEPENDENT_LIVE_EXECUTION",
     "NIJA_INDEPENDENT_BROKER_TRADING",
     "NIJA_REQUIRE_DISTRIBUTED_LOCK",
@@ -60,6 +64,7 @@ SHARED_TRUE_FLAGS = (
     "NIJA_STRICT_REDIS_LEASE",
 )
 SHARED_FALSE_FLAGS = ("DRY_RUN_MODE", "PAPER_MODE")
+RUNTIME_DERIVED_FLAGS = ("LIVE_CAPITAL_VERIFIED",)
 
 
 def _is_true(name: str) -> bool:
@@ -206,8 +211,11 @@ print("READY BROKERS:", ", ".join(ready_brokers) or "none")
 print("DEGRADED BROKERS:", ", ".join(degraded_brokers) or "none")
 print("LEGACY CROSS-VENUE GATE:", os.getenv("NIJA_REQUIRE_SECONDARY_VENUES_READY", "false"))
 
-for name in SHARED_TRUE_FLAGS + SHARED_FALSE_FLAGS:
+for name in SHARED_TRUE_FLAGS + SHARED_FALSE_FLAGS + RUNTIME_DERIVED_FLAGS:
     print(f"{name}: {os.getenv(name, 'UNSET')}")
+
+if not _is_true("LIVE_CAPITAL_VERIFIED"):
+    print("RUNTIME PROOF PENDING: LIVE_CAPITAL_VERIFIED (re-proven after bootstrap; trading remains fail-closed)")
 
 redis_present = any(
     os.getenv(name, "").strip()
@@ -262,8 +270,8 @@ else:
     print(f"Readiness state file not found: {state_path}")
 
 # An explicit operator-requested safe-off state is healthy maintenance mode, not a
-# deployment failure.  This lets Render replace a live instance while all order
-# entry remains disabled.  Broker credentials and Redis are still reported above.
+# deployment failure. This lets Render replace a live instance while all order
+# entry remains disabled. Broker credentials and Redis are still reported above.
 safe_off = not _is_true("LIVE_TRADING") and not _is_true("LIVE_CAPITAL_VERIFIED")
 fatal = bool(bad_shared_true or bad_shared_false or not redis_present or not ready_brokers)
 if fatal and not safe_off:
