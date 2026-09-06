@@ -31,6 +31,9 @@ class _Tracker:
     def get_all_positions(self):
         return []
 
+    def get_position(self, _symbol):
+        return None
+
 
 class _FutureBroker:
     broker_type = "future_broker"
@@ -49,6 +52,37 @@ class _FutureBroker:
 
 class _NoCloseBroker(_FutureBroker):
     execute_order = None
+
+
+class _PlatformBroker(_FutureBroker):
+    broker_type = "kraken"
+    account_id = "platform"
+
+
+def _request(account_id, preferred_broker=None, **metadata):
+    return SimpleNamespace(
+        intent_type="entry",
+        position_effect="open",
+        metadata=metadata,
+        account_id=account_id,
+        preferred_broker=preferred_broker,
+        asset_class="futures",
+        symbol="ES",
+        side="buy",
+        size_usd=100.0,
+        notional_usd=100.0,
+    )
+
+
+def _patch_scope_dependencies(monkeypatch, expected, registered):
+    monkeypatch.setattr(v376, "_expected_accounts", lambda: dict(expected))
+    monkeypatch.setattr(v376, "_canonical_brokers", lambda: [broker for broker in expected.values() if broker is not None])
+    monkeypatch.setattr(v376, "_reconcile_supervisor", lambda _brokers=None: (True, set(registered)))
+    monkeypatch.setattr(v376, "_asset_scope_self_test", lambda: (True, {"crypto": True, "future_market": True}))
+
+    import bot.universal_broker_exit_supervisor_patch as supervisor
+
+    monkeypatch.setitem(supervisor._STATE, "started", True)
 
 
 def test_asset_scope_covers_every_canonical_class_and_future_market_label():
@@ -79,6 +113,7 @@ def test_policy_is_trade_type_and_market_metadata_agnostic():
                 "asset_class": asset_class,
                 "trade_type": trade_type,
                 "leverage": 3 if trade_type in {"margin", "perpetual_future"} else 1,
+                "order_type": "limit" if asset_class == "equity" else "market",
             }
         )
         assert row["asset_class"] == asset_class
@@ -93,44 +128,78 @@ def test_policy_is_trade_type_and_market_metadata_agnostic():
 def test_future_broker_contract_is_structural_not_name_based():
     capability = v376._broker_capability(_FutureBroker())
 
-    assert capability["broker"] == "future_broker"
+    assert capability["broker"] == "future-broker"
     assert capability["position_read"] is True
     assert capability["price_read"] is True
     assert capability["close_write"] is True
 
 
-def test_connected_broker_without_close_path_fails_scope(monkeypatch):
+def test_selected_user_broker_without_close_path_fails_scope(monkeypatch):
     broker = _NoCloseBroker()
-    monkeypatch.setattr(v376, "_canonical_brokers", lambda: [broker])
-    monkeypatch.setattr(v376, "_expected_accounts", lambda: {"user:future:future_broker": broker})
-    monkeypatch.setattr(v376, "_reconcile_supervisor", lambda _brokers=None: (True, {id(broker)}))
-    monkeypatch.setattr(v376, "_asset_scope_self_test", lambda: (True, {"crypto": True}))
+    expected = {"user:future:future-broker": broker}
+    _patch_scope_dependencies(monkeypatch, expected, {id(broker)})
 
-    import bot.universal_broker_exit_supervisor_patch as supervisor
-
-    monkeypatch.setitem(supervisor._STATE, "started", True)
-    ready, details = v376._scope_truth()
+    ready, details = v376._scope_truth(_request("user:future", "future_broker"))
 
     assert ready is False
-    assert details["broker_capability"] is False
+    assert details["selected_ready"] is False
     assert details["capabilities"][0]["close_write"] is False
 
 
-def test_connected_future_broker_with_all_interfaces_passes_scope(monkeypatch):
+def test_selected_future_broker_with_all_interfaces_passes_scope(monkeypatch):
     broker = _FutureBroker()
-    monkeypatch.setattr(v376, "_canonical_brokers", lambda: [broker])
-    monkeypatch.setattr(v376, "_expected_accounts", lambda: {"user:future:future_broker": broker})
-    monkeypatch.setattr(v376, "_reconcile_supervisor", lambda _brokers=None: (True, {id(broker)}))
-    monkeypatch.setattr(v376, "_asset_scope_self_test", lambda: (True, {"crypto": True, "future_market": True}))
+    expected = {"user:future:future-broker": broker}
+    _patch_scope_dependencies(monkeypatch, expected, {id(broker)})
 
-    import bot.universal_broker_exit_supervisor_patch as supervisor
-
-    monkeypatch.setitem(supervisor._STATE, "started", True)
-    ready, details = v376._scope_truth()
+    ready, details = v376._scope_truth(_request("user:future", "future_broker"))
 
     assert ready is True
-    assert details["registered_connected"] is True
-    assert details["broker_capability"] is True
+    assert details["selected_ready"] is True
+    assert details["capabilities"][0]["registered"] is True
+    assert details["capabilities"][0]["four_way_scope_ready"] is True
+
+
+def test_broken_user_does_not_block_safe_platform_request(monkeypatch):
+    platform = _PlatformBroker()
+    broken_user = _NoCloseBroker()
+    expected = {
+        "platform:kraken": platform,
+        "user:broken:future-broker": broken_user,
+    }
+    _patch_scope_dependencies(monkeypatch, expected, {id(platform), id(broken_user)})
+
+    ready, details = v376._scope_truth(_request("platform", "kraken"))
+
+    assert ready is True
+    assert details["selection_mode"].startswith("platform_default")
+    assert details["selected_accounts"] == ("platform:kraken",)
+
+
+def test_broadcast_request_fails_if_any_selected_account_is_unprotected(monkeypatch):
+    platform = _PlatformBroker()
+    broken_user = _NoCloseBroker()
+    expected = {
+        "platform:kraken": platform,
+        "user:broken:future-broker": broken_user,
+    }
+    _patch_scope_dependencies(monkeypatch, expected, {id(platform), id(broken_user)})
+
+    ready, details = v376._scope_truth(_request("broadcast", None, broadcast_all_accounts=True))
+
+    assert ready is False
+    assert details["selection_mode"] == "broadcast"
+    assert len(details["selected_accounts"]) == 2
+
+
+def test_unknown_future_account_fails_closed(monkeypatch):
+    platform = _PlatformBroker()
+    expected = {"platform:kraken": platform}
+    _patch_scope_dependencies(monkeypatch, expected, {id(platform)})
+
+    ready, details = v376._scope_truth(_request("user:not-yet-registered", "future_broker"))
+
+    assert ready is False
+    assert details["selected_accounts"] == ()
 
 
 def test_v376_preserves_legacy_profit_lock_ordering_before_supplemental_trailing():
@@ -148,8 +217,6 @@ def test_v376_preserves_legacy_profit_lock_ordering_before_supplemental_trailing
     }
     auto_exit._HIGH_WATER.clear()
 
-    # Existing NIJA behavior: +1% arms the profit lock but must not immediately
-    # exit merely because the v239 fallback target exists.
     assert auto_exit._trigger(pos, 101.0)[0] is False
     hit, reason, _target = auto_exit._trigger(pos, 100.60)
 
@@ -168,26 +235,15 @@ def test_pipeline_denial_is_fail_closed_but_exit_detection_is_preserved():
 
     module = ModuleType("fake_execution_pipeline")
     module.PipelineResult = PipelineResult
-    entry = SimpleNamespace(
-        intent_type="entry",
-        position_effect="open",
-        metadata={},
-        account_id="user:future",
-        preferred_broker="future_broker",
-        asset_class="futures",
-        symbol="ES",
-        side="buy",
-        size_usd=100.0,
-        notional_usd=100.0,
-    )
+    entry = _request("user:future", "future_broker")
     exit_request = SimpleNamespace(
         intent_type="exit",
         position_effect="close",
         metadata={"closing_position": True},
     )
 
-    denied = v376._pipeline_denial(module, entry, {"broker_capability": False})
+    denied = v376._pipeline_denial(module, entry, {"selected_ready": False})
 
     assert denied.success is False
-    assert "four-way protective exit coverage unavailable" in denied.error
+    assert "selected account lacks four-way protective exit coverage" in denied.error
     assert v376._is_exit_request(exit_request) is True
