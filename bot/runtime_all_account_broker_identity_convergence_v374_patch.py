@@ -15,6 +15,9 @@ protection, capital, nonce, writer authority, fills, or execution readiness.
 For duplicate user-account objects it prefers the object with the strongest
 already-existing local truth: connected, startup fetch proof, startup adoption,
 and a current v285 snapshot timestamp. Platform identities are unchanged.
+
+v375 is chained after identity convergence so universal SL/TP policy becomes a
+required post-convergence safety layer for platform and registered-user exits.
 """
 from __future__ import annotations
 
@@ -144,10 +147,28 @@ def _patch_v281() -> bool:
     return True
 
 
+def _install_v375() -> bool:
+    try:
+        v375 = importlib.import_module("bot.runtime_universal_sl_tp_policy_v375_patch")
+        installer = getattr(v375, "install_import_hook", None)
+        if not callable(installer):
+            installer = getattr(v375, "install", None)
+        return bool(callable(installer) and installer())
+    except Exception as exc:
+        LOGGER.exception(
+            "ALL_ACCOUNT_BROKER_IDENTITY_V374_V375_FAILED marker=%s error=%s:%s "
+            "new_entries_fail_closed=true existing_exits_preserved=true",
+            MARKER, type(exc).__name__, exc,
+        )
+        return False
+
+
 def install_import_hook() -> bool:
-    ready = _patch_v281()
+    identity_ready = _patch_v281()
+    policy_ready = _install_v375() if identity_ready else False
+    ready = bool(identity_ready and policy_ready)
     os.environ[_READY_FLAG] = "1" if ready else "0"
-    if ready:
+    if identity_ready:
         try:
             v281 = importlib.import_module("bot.runtime_all_account_position_exit_coverage_v281_patch")
             audit = getattr(v281, "audit_once", None)
@@ -156,14 +177,17 @@ def install_import_hook() -> bool:
         except Exception:
             pass
     LOGGER.critical(
-        "RUNTIME_ALL_ACCOUNT_BROKER_IDENTITY_CONVERGENCE_V374_READY marker=%s ready=%s "
-        "connected_object_preferred=true startup_fetch_proof_preferred=true "
-        "startup_adoption_preferred=true broker_io=false manager_registry_mutation=false "
-        "safety_gates_bypassed=false",
+        "RUNTIME_ALL_ACCOUNT_BROKER_IDENTITY_CONVERGENCE_V374_%s marker=%s ready=%s "
+        "identity_ready=%s universal_sl_tp_policy_v375=%s connected_object_preferred=true "
+        "startup_fetch_proof_preferred=true startup_adoption_preferred=true "
+        "broker_io=false manager_registry_mutation=false safety_gates_bypassed=false",
+        "READY" if ready else "NOT_READY",
         MARKER,
-        str(bool(ready)).lower(),
+        str(ready).lower(),
+        str(identity_ready).lower(),
+        str(policy_ready).lower(),
     )
-    return bool(ready)
+    return ready
 
 
 def install() -> bool:
