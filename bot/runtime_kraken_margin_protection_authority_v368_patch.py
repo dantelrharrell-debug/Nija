@@ -185,6 +185,27 @@ def _register_manifest() -> bool:
         return False
 
 
+def _install_v372() -> bool:
+    """Install the post-v368 read-only execution-proof liveness repair.
+
+    v372 does not grant execution readiness. It only makes v367 reuse v366's
+    authenticated OpenPositions observation so exact QueryOrders proof can reach
+    the existing v328/v346 verifier after a clean redeploy.
+    """
+    try:
+        module = importlib.import_module("bot.runtime_kraken_margin_execution_proof_liveness_v372_patch")
+        install = getattr(module, "install_import_hook", None)
+        ready = bool(install()) if callable(install) else False
+    except Exception as exc:
+        ready = False
+        LOGGER.exception(
+            "KRAKEN_MARGIN_EXECUTION_PROOF_V372_INSTALL_DEFERRED marker=%s error=%s:%s "
+            "trading_fail_closed=true execution_proof_fabricated=false safety_gates_bypassed=false",
+            MARKER, type(exc).__name__, exc,
+        )
+    return ready
+
+
 def _wake_runtime() -> None:
     # Re-run only existing read-only/protection reconciliation surfaces.
     try:
@@ -229,6 +250,12 @@ def install_import_hook() -> bool:
             "READY" if ready else "NOT_READY", MARKER, str(ready).lower(),
         )
         if ready:
+            v372_ready = _install_v372()
+            LOGGER.info(
+                "KRAKEN_MARGIN_EXECUTION_PROOF_V372_INSTALL_RESULT marker=%s ready=%s "
+                "v368_ready_unchanged=true trading_fail_closed_if_false=true",
+                MARKER, str(v372_ready).lower(),
+            )
             _wake_runtime()
         return ready
 
