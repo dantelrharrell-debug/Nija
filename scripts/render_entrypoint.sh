@@ -51,6 +51,7 @@ python3 -S scripts/apply_execution_proof_startup_isolation_v339.py
 python3 -S scripts/apply_execution_proof_freshness_truth_v375.py
 python3 -S scripts/apply_activation_publication_fast_path_v376.py
 python3 -S scripts/apply_kraken_coverage_truth_fairness_v385.py
+python3 -S scripts/apply_user_readiness_deadline_convergence_v390.py
 python3 -S scripts/apply_kraken_margin_four_way_supervisor_v387.py
 python3 -S scripts/apply_writer_generation_handoff_v45.py
 python3 -S scripts/apply_render_signal_forwarding_v262.py
@@ -70,6 +71,7 @@ python3 -S -m py_compile \
     bot/kraken_connection_convergence_v44_patch.py \
     bot/kraken_all_account_supervision_v86.py \
     bot/runtime_authoritative_position_coverage_v285_patch.py \
+    bot/runtime_kraken_cost_basis_bulk_v288_patch.py \
     bot/runtime_kraken_margin_canonical_coverage_v366_patch.py \
     bot/runtime_kraken_margin_protection_truth_v367_patch.py \
     bot/runtime_kraken_margin_four_way_supervisor_v387_patch.py \
@@ -92,6 +94,7 @@ python3 -S -m py_compile \
     scripts/apply_execution_proof_freshness_truth_v375.py \
     scripts/apply_activation_publication_fast_path_v376.py \
     scripts/apply_kraken_coverage_truth_fairness_v385.py \
+    scripts/apply_user_readiness_deadline_convergence_v390.py \
     scripts/apply_kraken_margin_four_way_supervisor_v387.py \
     scripts/apply_writer_generation_handoff_v45.py \
     scripts/apply_render_signal_forwarding_v262.py \
@@ -124,7 +127,8 @@ grep -Fq 'READINESS_PROOF_CONVERGENCE_V134' bot/bot.py
 grep -Fq 'ACTIVATION_STOP_CAPITAL_FRESHNESS_V135' bot/bot.py
 grep -Fq 'ACTIVATION_PUBLICATION_CONVERGENCE_V136' bot/bot.py
 grep -Fq 'KRAKEN_MARGIN_POSITION_PROTECTION_PENDING_V385' bot/runtime_kraken_margin_canonical_coverage_v366_patch.py
-grep -Fq 'AUTHORITATIVE_USER_POSITION_V385_FAIR_REFRESH' bot/runtime_authoritative_position_coverage_v285_patch.py
+grep -Fq 'AUTHORITATIVE_USER_POSITION_V390_DEADLINE_REFRESH' bot/runtime_authoritative_position_coverage_v285_patch.py
+grep -Fq 'KRAKEN_COST_BASIS_V390_USER_RECONCILE_DUE' bot/runtime_kraken_cost_basis_bulk_v288_patch.py
 grep -Fq 'KRAKEN_MARGIN_FOUR_WAY_SUPERVISOR_V387' bot/bot.py
 grep -Fq 'KRAKEN_MARGIN_FOUR_WAY_SUPERVISOR_V387_READY' bot/runtime_kraken_margin_four_way_supervisor_v387_patch.py
 grep -Fq 'bind_entrypoint_writer_authority_aliases(runtime)' bot/bot_main.py
@@ -136,7 +140,7 @@ grep -Fq 'handle_outreach_extension_post(self)' render_liveness_server.py
 grep -Fq 'handle_outreach_post(self)' render_liveness_server.py
 grep -Fq 'start_justcall_webhook_autoconfig()' render_liveness_server.py
 
-echo "🧭 RENDER_ENTRYPOINT_CANONICAL_HANDOFF_READY marker=20260907-kraken-margin-four-way-supervisor-v387 launcher=canonical_runtime_launcher_v26 writer_generation_handoff=v45 writer_first=v59 execution_proof_startup_isolation=v339 execution_proof_freshness_truth=v375 activation_publication_fast_path=v376 kraken_coverage_truth_fairness=v385 kraken_margin_four_way_supervisor=v387 native_backup_started=false orders_submitted=false signal_forwarding=v262 single_identity=true singleton_alias_convergence=v91 kraken_nonce_authority_gate=v91 direct_broker_prebootstrap=v27 outreach_frontdoor=v3 signed_webhook=true webhook_autoconfig=true campaign_compliance_fail_closed=true"
+echo "🧭 RENDER_ENTRYPOINT_CANONICAL_HANDOFF_READY marker=20260907-user-readiness-deadline-convergence-v390 launcher=canonical_runtime_launcher_v26 writer_generation_handoff=v45 writer_first=v59 execution_proof_startup_isolation=v339 execution_proof_freshness_truth=v375 activation_publication_fast_path=v376 kraken_coverage_truth_fairness=v385 user_readiness_deadline_convergence=v390 kraken_margin_four_way_supervisor=v387 native_backup_started=false orders_submitted=false signal_forwarding=v262 single_identity=true singleton_alias_convergence=v91 kraken_nonce_authority_gate=v91 direct_broker_prebootstrap=v27 outreach_frontdoor=v3 signed_webhook=true webhook_autoconfig=true campaign_compliance_fail_closed=true"
 unset NIJA_DEFER_RUNTIME_SITE_HOOKS
 
 exec bash scripts/production_bootstrap.sh "$@"
