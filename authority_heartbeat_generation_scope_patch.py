@@ -6,9 +6,14 @@ make the platform heartbeat appear stale even while the platform lease remained
 healthy.  This repair reads the platform key's own lease version through the
 already-scoped writer generation tracker and never copies the global counter
 into platform writer lineage.
+
+September 7 v382 hardening is installed from this always-loaded source guard as
+well: diagnostic authority-status metadata changes must not invalidate the
+canonical execution epoch when the boolean authority truth remains unchanged.
 """
 from __future__ import annotations
 
+import importlib
 import json
 import logging
 import os
@@ -23,6 +28,32 @@ MARKER = "20260713a"
 _LOCK = threading.RLock()
 _INSTALLED = False
 _WATCHDOG_STARTED = False
+
+
+def _install_authority_status_epoch_stability_v382() -> bool:
+    """Install the fail-closed v382 coordinator edge-trigger repair."""
+    try:
+        module = importlib.import_module("bot.authority_status_epoch_stability_v382_patch")
+        installer = getattr(module, "install_import_hook", None) or getattr(module, "install", None)
+        if not callable(installer):
+            raise RuntimeError("v382 installer missing")
+        if not bool(installer()):
+            raise RuntimeError("v382 installer returned false")
+        logger.critical(
+            "AUTHORITY_HEARTBEAT_SCOPE_V382_READY marker=20260907-authority-status-epoch-stability-v382 "
+            "authority_truth_edge_invalidating=true status_metadata_noninvalidating=true "
+            "forced_activation=false safety_gates_bypassed=false"
+        )
+        return True
+    except Exception as exc:
+        os.environ["NIJA_AUTHORITY_STATUS_EPOCH_STABILITY_V382_READY"] = "0"
+        logger.critical(
+            "AUTHORITY_HEARTBEAT_SCOPE_V382_FAILED marker=20260907-authority-status-epoch-stability-v382 "
+            "error=%s trading_fail_closed=true",
+            exc,
+            exc_info=True,
+        )
+        return False
 
 
 def _platform_generation() -> tuple[int, str]:
@@ -149,6 +180,7 @@ def _watchdog() -> None:
 def install() -> bool:
     global _INSTALLED, _WATCHDOG_STARTED
     with _LOCK:
+        v382_ok = _install_authority_status_epoch_stability_v382()
         _INSTALLED = _try_loaded() or _INSTALLED
         if not _WATCHDOG_STARTED:
             _WATCHDOG_STARTED = True
@@ -159,10 +191,16 @@ def install() -> bool:
             ).start()
         os.environ["NIJA_AUTHORITY_HEARTBEAT_GENERATION_SCOPE_INSTALLED"] = "1"
         logger.warning(
-            "AUTHORITY_HEARTBEAT_GENERATION_SCOPE_REPAIR_INSTALLED marker=%s patched=%s",
+            "AUTHORITY_HEARTBEAT_GENERATION_SCOPE_REPAIR_INSTALLED marker=%s patched=%s v382=%s",
             MARKER,
             _INSTALLED,
+            v382_ok,
         )
+        if not v382_ok:
+            # This guard is a safety-stability dependency in live mode. Returning
+            # false lets the source-runtime bootstrap fail closed instead of
+            # silently running the known commit-churn defect.
+            return False
         return True
 
 
@@ -170,4 +208,10 @@ def installed() -> bool:
     return _INSTALLED or _WATCHDOG_STARTED
 
 
-__all__ = ["install", "installed", "_patch_module", "_platform_generation"]
+__all__ = [
+    "install",
+    "installed",
+    "_patch_module",
+    "_platform_generation",
+    "_install_authority_status_epoch_stability_v382",
+]
