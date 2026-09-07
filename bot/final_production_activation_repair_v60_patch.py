@@ -351,8 +351,11 @@ def _strict_runtime_ready(runtime: Any, core: Any) -> tuple[bool, list[str]]:
                 blockers.append("live_active")
             if not bool(getattr(sm, "get_activation_committed")()):
                 blockers.append("activation_committed")
-            if not bool(sm.can_execute()):
-                blockers.append("can_execute")
+            authority_probe = getattr(sm, "has_execution_authority", None)
+            if not callable(authority_probe):
+                blockers.append("dispatch_authority_probe_missing")
+            elif not bool(authority_probe()):
+                blockers.append("dispatch_authority")
     except Exception:
         blockers.append("state_machine_probe")
     return not blockers, blockers
