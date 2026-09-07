@@ -116,6 +116,7 @@ scripts/*
 !scripts/apply_activation_publication_fast_path_v376.py
 !scripts/apply_kraken_coverage_truth_fairness_v385.py
 !scripts/apply_user_readiness_deadline_convergence_v390.py
+!scripts/apply_kraken_authoritative_wait_v398.py
 !scripts/apply_kraken_margin_protection_chain_v386.py
 !scripts/apply_kraken_margin_four_way_supervisor_v387.py
 !scripts/apply_protection_binding_precision_v391.py
