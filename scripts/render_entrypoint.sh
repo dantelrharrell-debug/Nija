@@ -49,6 +49,7 @@ python3 -S scripts/apply_startup_handoff_fix.py
 python3 -S scripts/apply_canonical_launcher_v26.py
 python3 -S scripts/apply_execution_proof_startup_isolation_v339.py
 python3 -S scripts/apply_execution_proof_freshness_truth_v375.py
+python3 -S scripts/apply_activation_publication_fast_path_v376.py
 python3 -S scripts/apply_writer_generation_handoff_v45.py
 python3 -S scripts/apply_render_signal_forwarding_v262.py
 python3 -S scripts/apply_render_outreach_frontdoor.py
@@ -83,6 +84,7 @@ python3 -S -m py_compile \
     scripts/apply_canonical_launcher_v26.py \
     scripts/apply_execution_proof_startup_isolation_v339.py \
     scripts/apply_execution_proof_freshness_truth_v375.py \
+    scripts/apply_activation_publication_fast_path_v376.py \
     scripts/apply_writer_generation_handoff_v45.py \
     scripts/apply_render_signal_forwarding_v262.py \
     scripts/apply_render_outreach_frontdoor.py \
@@ -110,6 +112,9 @@ grep -Fq '_quarantine_authority_execution_marker()' bot/runtime_execution_capita
 grep -Fq 'v169_provenance_guard_not_ready' bot/runtime_heartbeat_marker_convergence_v238_patch.py
 grep -Fq 'verified_v169_execution_probe' bot/runtime_heartbeat_marker_convergence_v238_patch.py
 grep -Fq 'DIRECT_EXECUTION_FRESHNESS_V375_STALE' bot/runtime_heartbeat_marker_convergence_v238_patch.py
+grep -Fq 'READINESS_PROOF_CONVERGENCE_V134' bot/bot.py
+grep -Fq 'ACTIVATION_STOP_CAPITAL_FRESHNESS_V135' bot/bot.py
+grep -Fq 'ACTIVATION_PUBLICATION_CONVERGENCE_V136' bot/bot.py
 grep -Fq 'bind_entrypoint_writer_authority_aliases(runtime)' bot/bot_main.py
 grep -Fq 'NIJA_ENTRYPOINT_WRITER_MODULE_IDENTITY_CONVERGED' bot/entrypoint_writer_authority.py
 grep -Fq 'heartbeat_telemetry_mutation=false' bot/broker_manager.py
@@ -119,7 +124,7 @@ grep -Fq 'handle_outreach_extension_post(self)' render_liveness_server.py
 grep -Fq 'handle_outreach_post(self)' render_liveness_server.py
 grep -Fq 'start_justcall_webhook_autoconfig()' render_liveness_server.py
 
-echo "🧭 RENDER_ENTRYPOINT_CANONICAL_HANDOFF_READY marker=20260907-execution-proof-freshness-truth-v375 launcher=canonical_runtime_launcher_v26 writer_generation_handoff=v45 writer_first=v59 execution_proof_startup_isolation=v339 execution_proof_freshness_truth=v375 signal_forwarding=v262 single_identity=true singleton_alias_convergence=v91 kraken_nonce_authority_gate=v91 direct_broker_prebootstrap=v27 outreach_frontdoor=v3 signed_webhook=true webhook_autoconfig=true campaign_compliance_fail_closed=true"
+echo "🧭 RENDER_ENTRYPOINT_CANONICAL_HANDOFF_READY marker=20260907-activation-publication-fast-path-v376 launcher=canonical_runtime_launcher_v26 writer_generation_handoff=v45 writer_first=v59 execution_proof_startup_isolation=v339 execution_proof_freshness_truth=v375 activation_publication_fast_path=v376 signal_forwarding=v262 single_identity=true singleton_alias_convergence=v91 kraken_nonce_authority_gate=v91 direct_broker_prebootstrap=v27 outreach_frontdoor=v3 signed_webhook=true webhook_autoconfig=true campaign_compliance_fail_closed=true"
 unset NIJA_DEFER_RUNTIME_SITE_HOOKS
 
 exec bash scripts/production_bootstrap.sh "$@"
