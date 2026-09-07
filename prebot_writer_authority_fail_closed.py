@@ -10,9 +10,11 @@ acquires the exact same canonical writer authority before any ``bot.*`` import.
 from __future__ import annotations
 
 import builtins
+import importlib.util
 import logging
 import os
 import sys
+from pathlib import Path
 from types import ModuleType
 from typing import Any
 
@@ -63,6 +65,32 @@ def _bridge_canonical_runtime(runtime: Any) -> None:
     )
 
 
+def _install_authority_status_epoch_stability() -> None:
+    """Install v382 before StartupCoordinator can receive authority telemetry."""
+
+    module_name = "nija_authority_status_epoch_stability_v382_patch"
+    module = sys.modules.get(module_name)
+    if module is None:
+        patch_path = Path(__file__).resolve().parent / "bot" / "authority_status_epoch_stability_v382_patch.py"
+        spec = importlib.util.spec_from_file_location(module_name, patch_path)
+        if spec is None or spec.loader is None:
+            raise RuntimeError(f"could not load authority epoch stability patch: {patch_path}")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[module_name] = module
+        spec.loader.exec_module(module)
+
+    installer = getattr(module, "install_import_hook", None) or getattr(module, "install", None)
+    if not callable(installer) or not bool(installer()):
+        raise RuntimeError("authority status epoch stability v382 installer returned false")
+
+    logger.critical(
+        "PREBOT_AUTHORITY_STATUS_EPOCH_STABILITY_V382_READY "
+        "marker=20260907-authority-status-epoch-stability-v382 "
+        "authority_truth_edge_invalidating=true status_metadata_noninvalidating=true "
+        "safety_gates_bypassed=false"
+    )
+
+
 def install(*, defer_if_render: bool = False) -> Any:
     """Acquire canonical authority or deliberately defer the Render ``.pth`` wait.
 
@@ -95,6 +123,7 @@ def install(*, defer_if_render: bool = False) -> Any:
         runtime = bootstrap.install()
         if runtime is not None:
             _bridge_canonical_runtime(runtime)
+            _install_authority_status_epoch_stability()
             os.environ["NIJA_PREBOT_WRITER_AUTHORITY_DEFERRED"] = "0"
             import venue_readiness_execution_repair_patch as venue_repair
 
@@ -125,4 +154,8 @@ def install(*, defer_if_render: bool = False) -> Any:
         os._exit(78)
 
 
-__all__ = ["install", "_bridge_canonical_runtime"]
+__all__ = [
+    "install",
+    "_bridge_canonical_runtime",
+    "_install_authority_status_epoch_stability",
+]
