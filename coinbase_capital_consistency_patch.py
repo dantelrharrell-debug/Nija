@@ -10,6 +10,8 @@ _NAME = "nija_coinbase_capital_consistency_patch"
 _PATH = _ROOT / "bot" / "coinbase_capital_consistency_patch.py"
 _REHYDRATE_NAME = "nija_coinbase_capital_readonly_rehydrate_v388_patch"
 _REHYDRATE_PATH = _ROOT / "bot" / "coinbase_capital_readonly_rehydrate_v388_patch.py"
+_ALIAS_NAME = "nija_coinbase_capital_rehydrate_alias_v389_patch"
+_ALIAS_PATH = _ROOT / "bot" / "coinbase_capital_rehydrate_alias_v389_patch.py"
 
 
 def _load_named(name: str, path: pathlib.Path):
@@ -34,7 +36,9 @@ def install() -> bool:
     main_ok = bool(main.install())
     rehydrate = _load_named(_REHYDRATE_NAME, _REHYDRATE_PATH)
     rehydrate_ok = bool(rehydrate.install())
-    return main_ok and rehydrate_ok
+    alias = _load_named(_ALIAS_NAME, _ALIAS_PATH)
+    alias_ok = bool(alias.install())
+    return main_ok and rehydrate_ok and alias_ok
 
 
 install()
