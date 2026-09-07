@@ -1,20 +1,24 @@
 #!/usr/bin/env python3
-"""Apply NIJA protection binding + Kraken native-price precision repair v391.
+"""Apply NIJA protection binding + Kraken native-order repair v391/v392.
 
-This build-time patch is deliberately fail-closed and idempotent. It fixes two
-production issues without weakening any protection requirement:
+This build-time patch is deliberately fail-closed and idempotent. It fixes
+production protection issues without weakening any protection requirement:
 
 1. The generic trailing-stop monitor no longer reports a fully unbound,
    position-incapable ExecutionEngine as an actionable unprotected position.
-   A broker-bound engine with no ledger, or a broker-less engine that can see
-   open ledger positions, remains an ERROR and is never treated as protected.
-2. Kraken native margin backup SL/TP trigger prices are formatted using the
+2. A broker-bound ExecutionEngine created before the trade-ledger DB becomes
+   available can late-bind the canonical ledger on a later protection scan.
+3. Kraken native margin backup SL/TP trigger prices are formatted using the
    authenticated broker's public AssetPairs pair_decimals metadata (cached),
-   with the existing ECEL Kraken schema as a conservative fallback. Quantity
-   formatting, reduce_only, leverage, OpenOrders post-submit verification, and
-   all four-way software protection remain unchanged.
+   with the existing ECEL Kraken schema as a conservative fallback.
+4. Kraken ``cl_ord_id not unique`` is recovered without blind duplicate-order
+   submission: OpenOrders is re-proved first; an existing matching client ID is
+   adopted for post-submit proof, otherwise one scoped collision ID is rotated
+   and retried. Rotated NIJA IDs remain eligible for orphan cleanup.
 
-No trade is opened, closed, resized, or fabricated by this patch.
+Quantity formatting, reduce_only, leverage, authenticated OpenPositions,
+OpenOrders post-submit verification, and all four-way software protection stay
+fail-closed. No trade is opened, closed, resized, or fabricated by this patch.
 """
 from __future__ import annotations
 
@@ -25,6 +29,7 @@ ROOT = Path(__file__).resolve().parents[1]
 TRAILING = ROOT / "bot" / "trailing_stop_loss_runtime_patch.py"
 NATIVE = ROOT / "bot" / "runtime_kraken_native_margin_backup_v380_patch.py"
 MARKER = "20260907-protection-binding-precision-v391"
+RECOVERY_MARKER = "20260907-kraken-client-id-ledger-rebind-v392"
 
 
 def _replace_once(path: Path, old: str, new: str, marker: str) -> bool:
@@ -33,14 +38,14 @@ def _replace_once(path: Path, old: str, new: str, marker: str) -> bool:
         return False
     count = text.count(old)
     if count != 1:
-        raise RuntimeError(f"v391 expected exactly one source block in {path}, found {count}")
+        raise RuntimeError(f"v391/v392 expected exactly one source block in {path}, found {count}")
     path.write_text(text.replace(old, new, 1), encoding="utf-8")
     return True
 
 
 def patch_trailing() -> bool:
     old = '''    ledger = getattr(engine, "trade_ledger", None)\n    broker = getattr(engine, "broker_client", None) or getattr(engine, "broker", None)\n    if ledger is None or broker is None:\n        logger.error("TRAILING_STOP_ENGINE_UNPROTECTED missing_ledger_or_broker engine=%s", type(engine).__name__)\n        return 0\n    try:\n        positions = ledger.get_open_positions()\n    except Exception as exc:\n        logger.warning("TRAILING_STOP_SCAN_OPEN_POSITIONS_FAILED engine=%s err=%s", type(engine).__name__, exc)\n        return 0\n'''
-    new = '''    # PROTECTION_BINDING_PRECISION_V391 marker=20260907-protection-binding-precision-v391\n    ledger = getattr(engine, "trade_ledger", None)\n    broker = getattr(engine, "broker_client", None) or getattr(engine, "broker", None)\n    if ledger is None:\n        if broker is None:\n            # A completely unbound ExecutionEngine cannot own or execute an\n            # actionable position. Keep it registered for a later binding, but\n            # do not emit a false protection failure while it is inert.\n            logger.debug(\n                "TRAILING_STOP_ENGINE_DEFERRED_V391 missing_ledger_and_broker engine=%s marker=20260907-protection-binding-precision-v391",\n                type(engine).__name__,\n            )\n        else:\n            # Broker-bound with no ledger is materially different: we cannot\n            # prove the broker's actionable positions are represented locally.\n            # Keep that state fail-closed and visible.\n            logger.error(\n                "TRAILING_STOP_ENGINE_UNPROTECTED missing_ledger broker_bound=true engine=%s marker=20260907-protection-binding-precision-v391",\n                type(engine).__name__,\n            )\n        return 0\n    try:\n        positions = ledger.get_open_positions()\n    except Exception as exc:\n        logger.warning("TRAILING_STOP_SCAN_OPEN_POSITIONS_FAILED engine=%s err=%s", type(engine).__name__, exc)\n        return 0\n    if broker is None:\n        open_count = len(positions or [])\n        if open_count:\n            # Do not hide a real protection gap: a broker-less engine that can\n            # see positions is still actionable and remains an ERROR.\n            logger.error(\n                "TRAILING_STOP_ENGINE_UNPROTECTED missing_broker engine=%s open_positions=%d marker=20260907-protection-binding-precision-v391",\n                type(engine).__name__, open_count,\n            )\n        else:\n            # ExecutionEngine() is legitimately constructed without a broker in\n            # several non-execution paths. With zero positions it is not an\n            # actionable protection failure; keep it registered so a later\n            # broker binding becomes scannable automatically.\n            logger.debug(\n                "TRAILING_STOP_ENGINE_DEFERRED_V391 missing_broker engine=%s open_positions=0 marker=20260907-protection-binding-precision-v391",\n                type(engine).__name__,\n            )\n        return 0\n'''
+    new = '''    # PROTECTION_BINDING_PRECISION_V391 marker=20260907-protection-binding-precision-v391\n    # KRAKEN_CLIENT_ID_LEDGER_REBIND_V392 marker=20260907-kraken-client-id-ledger-rebind-v392\n    ledger = getattr(engine, "trade_ledger", None)\n    broker = getattr(engine, "broker_client", None) or getattr(engine, "broker", None)\n    if ledger is None and broker is not None:\n        # ExecutionEngine instances can be constructed before the ledger module\n        # finishes initializing during Render startup. Rebind only to the\n        # canonical ledger factory; never synthesize a ledger or position.\n        factory = None\n        try:\n            from bot.trade_ledger_db import get_trade_ledger_db as factory\n        except Exception:\n            try:\n                from trade_ledger_db import get_trade_ledger_db as factory\n            except Exception:\n                factory = None\n        if callable(factory):\n            try:\n                candidate = factory()\n                if candidate is not None and callable(getattr(candidate, "get_open_positions", None)):\n                    setattr(engine, "trade_ledger", candidate)\n                    ledger = candidate\n                    logger.critical(\n                        "TRAILING_STOP_ENGINE_LEDGER_REBOUND_V392 engine=%s broker_bound=true "\n                        "canonical_factory=true synthetic_ledger=false marker=20260907-kraken-client-id-ledger-rebind-v392",\n                        type(engine).__name__,\n                    )\n            except Exception as exc:\n                logger.warning(\n                    "TRAILING_STOP_ENGINE_LEDGER_REBIND_FAILED_V392 engine=%s err=%s "\n                    "marker=20260907-kraken-client-id-ledger-rebind-v392",\n                    type(engine).__name__, exc,\n                )\n    if ledger is None:\n        if broker is None:\n            # A completely unbound ExecutionEngine cannot own or execute an\n            # actionable position. Keep it registered for a later binding, but\n            # do not emit a false protection failure while it is inert.\n            logger.debug(\n                "TRAILING_STOP_ENGINE_DEFERRED_V391 missing_ledger_and_broker engine=%s marker=20260907-protection-binding-precision-v391",\n                type(engine).__name__,\n            )\n        else:\n            # Broker-bound with no ledger is materially different: we cannot\n            # prove the broker's actionable positions are represented locally.\n            # Keep that state fail-closed and visible.\n            logger.error(\n                "TRAILING_STOP_ENGINE_UNPROTECTED missing_ledger broker_bound=true engine=%s marker=20260907-protection-binding-precision-v391",\n                type(engine).__name__,\n            )\n        return 0\n    try:\n        positions = ledger.get_open_positions()\n    except Exception as exc:\n        logger.warning("TRAILING_STOP_SCAN_OPEN_POSITIONS_FAILED engine=%s err=%s", type(engine).__name__, exc)\n        return 0\n    if broker is None:\n        open_count = len(positions or [])\n        if open_count:\n            # Do not hide a real protection gap: a broker-less engine that can\n            # see positions is still actionable and remains an ERROR.\n            logger.error(\n                "TRAILING_STOP_ENGINE_UNPROTECTED missing_broker engine=%s open_positions=%d marker=20260907-protection-binding-precision-v391",\n                type(engine).__name__, open_count,\n            )\n        else:\n            # ExecutionEngine() is legitimately constructed without a broker in\n            # several non-execution paths. With zero positions it is not an\n            # actionable protection failure; keep it registered so a later\n            # broker binding becomes scannable automatically.\n            logger.debug(\n                "TRAILING_STOP_ENGINE_DEFERRED_V391 missing_broker engine=%s open_positions=0 marker=20260907-protection-binding-precision-v391",\n                type(engine).__name__,\n            )\n        return 0\n'''
     return _replace_once(
         TRAILING, old, new,
         "PROTECTION_BINDING_PRECISION_V391 marker=20260907-protection-binding-precision-v391",
@@ -73,25 +78,77 @@ def patch_native_precision() -> bool:
     return True
 
 
+def patch_native_client_id_recovery() -> bool:
+    text = NATIVE.read_text(encoding="utf-8")
+    marker = "KRAKEN_NATIVE_MARGIN_CLIENT_ID_RECOVERY_V392"
+    if marker in text:
+        return False
+
+    old_globals = '''_PREFIX_SL = "njsl"\n_PREFIX_TP = "njtp"\n'''
+    new_globals = '''_PREFIX_SL = "njsl"\n_PREFIX_TP = "njtp"\n# KRAKEN_NATIVE_MARGIN_CLIENT_ID_RECOVERY_V392 marker=20260907-kraken-client-id-ledger-rebind-v392\n_CLIENT_ID_ROTATION_V392: dict[tuple[str, str, str], int] = {}\n_CLIENT_ID_SALT_V392 = hashlib.sha1(os.urandom(16)).hexdigest()[:7]\n'''
+    if text.count(old_globals) != 1:
+        raise RuntimeError("v392 native client-id globals anchor missing or ambiguous")
+    text = text.replace(old_globals, new_globals, 1)
+
+    old_client = '''def _client_id(account: str, symbol: str, leg: str) -> str:\n    digest = hashlib.sha1(f"{account}|{symbol}".encode("utf-8")).hexdigest()[:12]\n    prefix = _PREFIX_SL if leg == "stop-loss" else _PREFIX_TP\n    return f"{prefix}{digest}"[:18]\n\n\n'''
+    new_client = '''def _client_id(account: str, symbol: str, leg: str) -> str:\n    digest = hashlib.sha1(f"{account}|{symbol}".encode("utf-8")).hexdigest()[:12]\n    prefix = _PREFIX_SL if leg == "stop-loss" else _PREFIX_TP\n    return f"{prefix}{digest}"[:18]\n\n\ndef _client_id_scope_v392(account: str, symbol: str, leg: str) -> str:\n    digest = hashlib.sha1(f"{account}|{symbol}".encode("utf-8")).hexdigest()[:7]\n    prefix = _PREFIX_SL if leg == "stop-loss" else _PREFIX_TP\n    return f"{prefix}{digest}"\n\n\ndef _rotated_client_id_v392(account: str, symbol: str, leg: str) -> str:\n    key = (str(account), str(symbol), str(leg))\n    with _LOCK:\n        counter = int(_CLIENT_ID_ROTATION_V392.get(key, 0)) + 1\n        _CLIENT_ID_ROTATION_V392[key] = counter\n    suffix = hashlib.sha1(f"{_CLIENT_ID_SALT_V392}|{counter}".encode("utf-8")).hexdigest()[:7]\n    return f"{_client_id_scope_v392(account, symbol, leg)}{suffix}"[:18]\n\n\ndef _client_id_open_v392(broker: Any, client_id: str) -> tuple[bool, tuple[str, ...], str]:\n    """Re-prove whether a colliding client ID is already an open Kraken order."""\n    try:\n        payload = _call(broker, "OpenOrders", {"trades": "false"}, "QUERY")\n    except Exception as exc:\n        return False, (), f"openorders_exception:{type(exc).__name__}:{exc}"\n    if not isinstance(payload, Mapping):\n        return False, (), "invalid_openorders_payload"\n    errors = payload.get("error") or []\n    if isinstance(errors, str):\n        errors = [errors]\n    if errors:\n        return False, (), "openorders_rejected:" + ",".join(str(item) for item in errors)\n    result = payload.get("result") or {}\n    opened = result.get("open", result) if isinstance(result, Mapping) else {}\n    if not isinstance(opened, Mapping):\n        return False, (), "invalid_openorders_open"\n    matches: list[str] = []\n    wanted = str(client_id or "").strip()\n    for order_id, raw in opened.items():\n        if not isinstance(raw, Mapping):\n            continue\n        seen = str(raw.get("cl_ord_id") or raw.get("cl_ordid") or "").strip()\n        if wanted and seen == wanted:\n            matches.append(str(order_id))\n    return True, tuple(sorted(matches)), "ok"\n\n\n'''
+    if text.count(old_client) != 1:
+        raise RuntimeError("v392 native _client_id anchor missing or ambiguous")
+    text = text.replace(old_client, new_client, 1)
+
+    old_tail = '''    if not txids:\n        return False, (), "addorder_ack_without_txid"\n    return True, txids, "ok"\n\n\ndef _row_targets(raw: Mapping[str, Any]) -> dict[str, Any]:\n'''
+    new_tail = '''    if not txids:\n        return False, (), "addorder_ack_without_txid"\n    return True, txids, "ok"\n\n\ndef _submit_reduce_only_with_recovery_v392(\n    account: str,\n    symbol: str,\n    broker: Any,\n    *,\n    pair: str,\n    quantity: float,\n    leverage: int,\n    ordertype: str,\n    trigger: float,\n) -> tuple[bool, tuple[str, ...], str]:\n    """Submit one NIJA native protective leg with collision-safe recovery.\n\n    A duplicate client ID is never treated as permission to blindly add a\n    second protective order. OpenOrders is re-proved first. If the exact ID is\n    already open, its Kraken order ID is adopted and the caller's mandatory\n    post-submit coverage proof decides whether that order is actually valid. If\n    the exact ID is absent, a scoped rotated ID is submitted once.\n    """\n    primary_id = _client_id(account, symbol, ordertype)\n    ok, txids, reason = _submit_reduce_only(\n        broker, pair=pair, quantity=quantity, leverage=leverage,\n        ordertype=ordertype, trigger=trigger, client_id=primary_id,\n    )\n    if ok or "cl_ord_id not unique" not in str(reason).lower():\n        return ok, txids, reason\n\n    with _LOCK:\n        proven, existing_ids, probe_reason = _client_id_open_v392(broker, primary_id)\n        if not proven:\n            return False, (), f"client_id_collision_openorders_unproven:{probe_reason}"\n        if existing_ids:\n            LOGGER.warning(\n                "KRAKEN_NATIVE_MARGIN_CLIENT_ID_COLLISION_ADOPTED_V392 account=%s symbol=%s leg=%s "\n                "client_id=%s order_ids=%s post_submit_proof_required=true blind_duplicate_submit=false "\n                "marker=20260907-kraken-client-id-ledger-rebind-v392",\n                account, symbol, ordertype, primary_id, existing_ids,\n            )\n            return True, existing_ids, "client_id_collision_existing_open_order"\n\n        rotated_id = _rotated_client_id_v392(account, symbol, ordertype)\n        ok, txids, retry_reason = _submit_reduce_only(\n            broker, pair=pair, quantity=quantity, leverage=leverage,\n            ordertype=ordertype, trigger=trigger, client_id=rotated_id,\n        )\n        if ok:\n            LOGGER.critical(\n                "KRAKEN_NATIVE_MARGIN_CLIENT_ID_ROTATED_V392 account=%s symbol=%s leg=%s "\n                "old_client_id=%s new_client_id=%s order_ids=%s openorders_old_id_absent=true "\n                "post_submit_proof_required=true reduce_only_unchanged=true marker=20260907-kraken-client-id-ledger-rebind-v392",\n                account, symbol, ordertype, primary_id, rotated_id, txids,\n            )\n        return ok, txids, retry_reason\n\n\ndef _row_targets(raw: Mapping[str, Any]) -> dict[str, Any]:\n'''
+    if text.count(old_tail) != 1:
+        raise RuntimeError("v392 native submit helper anchor missing or ambiguous")
+    text = text.replace(old_tail, new_tail, 1)
+
+    old_stop = '''        ok, txids, reason = _submit_reduce_only(\n            broker, pair=pair, quantity=quantity, leverage=leverage,\n            ordertype="stop-loss", trigger=stop,\n            client_id=_client_id(account, symbol, "stop-loss"),\n        )\n'''
+    new_stop = '''        ok, txids, reason = _submit_reduce_only_with_recovery_v392(\n            account, symbol, broker, pair=pair, quantity=quantity, leverage=leverage,\n            ordertype="stop-loss", trigger=stop,\n        )\n'''
+    if text.count(old_stop) != 1:
+        raise RuntimeError("v392 native stop submit anchor missing or ambiguous")
+    text = text.replace(old_stop, new_stop, 1)
+
+    old_tp = '''        ok, txids, reason = _submit_reduce_only(\n            broker, pair=pair, quantity=quantity, leverage=leverage,\n            ordertype="take-profit", trigger=tp,\n            client_id=_client_id(account, symbol, "take-profit"),\n        )\n'''
+    new_tp = '''        ok, txids, reason = _submit_reduce_only_with_recovery_v392(\n            account, symbol, broker, pair=pair, quantity=quantity, leverage=leverage,\n            ordertype="take-profit", trigger=tp,\n        )\n'''
+    if text.count(old_tp) != 1:
+        raise RuntimeError("v392 native take-profit submit anchor missing or ambiguous")
+    text = text.replace(old_tp, new_tp, 1)
+
+    old_cleanup = '''        if client_id not in {\n            _client_id(account, symbol, "stop-loss"),\n            _client_id(account, symbol, "take-profit"),\n        }:\n            continue\n'''
+    new_cleanup = '''        client_scopes = (\n            _client_id_scope_v392(account, symbol, "stop-loss"),\n            _client_id_scope_v392(account, symbol, "take-profit"),\n        )\n        if not any(client_id.startswith(scope) for scope in client_scopes):\n            continue\n'''
+    if text.count(old_cleanup) != 1:
+        raise RuntimeError("v392 native orphan cleanup anchor missing or ambiguous")
+    NATIVE.write_text(text.replace(old_cleanup, new_cleanup, 1), encoding="utf-8")
+    return True
+
+
 def main() -> int:
     changed_trailing = patch_trailing()
     changed_native = patch_native_precision()
+    changed_client_id = patch_native_client_id_recovery()
     for path in (TRAILING, NATIVE):
         py_compile.compile(str(path), doraise=True)
     trailing_text = TRAILING.read_text(encoding="utf-8")
     native_text = NATIVE.read_text(encoding="utf-8")
     if "TRAILING_STOP_ENGINE_DEFERRED_V391" not in trailing_text:
         raise RuntimeError("v391 trailing marker verification failed")
+    if "TRAILING_STOP_ENGINE_LEDGER_REBOUND_V392" not in trailing_text:
+        raise RuntimeError("v392 trailing ledger-rebind marker verification failed")
     if "KRAKEN_NATIVE_MARGIN_PRICE_PRECISION_V391" not in native_text:
         raise RuntimeError("v391 Kraken native precision marker verification failed")
+    if "KRAKEN_NATIVE_MARGIN_CLIENT_ID_RECOVERY_V392" not in native_text:
+        raise RuntimeError("v392 Kraken client-id recovery marker verification failed")
     print(
         "PROTECTION_BINDING_PRECISION_V391_READY "
-        f"marker={MARKER} trailing_changed={str(changed_trailing).lower()} "
+        f"marker={MARKER} recovery_marker={RECOVERY_MARKER} "
+        f"trailing_changed={str(changed_trailing).lower()} "
         f"native_precision_changed={str(changed_native).lower()} "
-        "broker_bound_missing_ledger_fail_closed=true actionable_missing_broker_fail_closed=true "
+        f"client_id_recovery_changed={str(changed_client_id).lower()} "
+        "broker_bound_missing_ledger_late_rebind=true actionable_missing_broker_fail_closed=true "
         "fully_unbound_engine_not_actionable=true kraken_pair_decimals=true "
-        "quantity_precision_unchanged=true reduce_only_unchanged=true "
-        "openorders_proof_unchanged=true software_four_way_unchanged=true "
+        "client_id_collision_openorders_reproof=true client_id_rotation_after_absence_only=true "
+        "rotated_id_orphan_cleanup=true quantity_precision_unchanged=true reduce_only_unchanged=true "
+        "openorders_post_submit_proof_unchanged=true software_four_way_unchanged=true "
         "orders_submitted_by_patcher=false safety_gates_bypassed=false"
     )
     return 0
