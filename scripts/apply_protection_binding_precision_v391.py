@@ -4,11 +4,10 @@
 This build-time patch is deliberately fail-closed and idempotent. It fixes two
 production issues without weakening any protection requirement:
 
-1. The generic trailing-stop monitor no longer reports an unbound
-   ExecutionEngine as an actionable unprotected position when that engine has
-   no open ledger positions. A missing ledger or a broker-less engine that
-   actually sees open positions remains an ERROR and is never treated as
-   protected.
+1. The generic trailing-stop monitor no longer reports a fully unbound,
+   position-incapable ExecutionEngine as an actionable unprotected position.
+   A broker-bound engine with no ledger, or a broker-less engine that can see
+   open ledger positions, remains an ERROR and is never treated as protected.
 2. Kraken native margin backup SL/TP trigger prices are formatted using the
    authenticated broker's public AssetPairs pair_decimals metadata (cached),
    with the existing ECEL Kraken schema as a conservative fallback. Quantity
@@ -41,7 +40,7 @@ def _replace_once(path: Path, old: str, new: str, marker: str) -> bool:
 
 def patch_trailing() -> bool:
     old = '''    ledger = getattr(engine, "trade_ledger", None)\n    broker = getattr(engine, "broker_client", None) or getattr(engine, "broker", None)\n    if ledger is None or broker is None:\n        logger.error("TRAILING_STOP_ENGINE_UNPROTECTED missing_ledger_or_broker engine=%s", type(engine).__name__)\n        return 0\n    try:\n        positions = ledger.get_open_positions()\n    except Exception as exc:\n        logger.warning("TRAILING_STOP_SCAN_OPEN_POSITIONS_FAILED engine=%s err=%s", type(engine).__name__, exc)\n        return 0\n'''
-    new = '''    # PROTECTION_BINDING_PRECISION_V391 marker=20260907-protection-binding-precision-v391\n    ledger = getattr(engine, "trade_ledger", None)\n    broker = getattr(engine, "broker_client", None) or getattr(engine, "broker", None)\n    if ledger is None:\n        # A missing ledger means we cannot prove whether this engine owns an\n        # actionable position. Keep this fail-closed and visible.\n        logger.error("TRAILING_STOP_ENGINE_UNPROTECTED missing_ledger engine=%s marker=20260907-protection-binding-precision-v391", type(engine).__name__)\n        return 0\n    try:\n        positions = ledger.get_open_positions()\n    except Exception as exc:\n        logger.warning("TRAILING_STOP_SCAN_OPEN_POSITIONS_FAILED engine=%s err=%s", type(engine).__name__, exc)\n        return 0\n    if broker is None:\n        open_count = len(positions or [])\n        if open_count:\n            # Do not hide a real protection gap: a broker-less engine that can\n            # see positions is still actionable and remains an ERROR.\n            logger.error(\n                "TRAILING_STOP_ENGINE_UNPROTECTED missing_broker engine=%s open_positions=%d marker=20260907-protection-binding-precision-v391",\n                type(engine).__name__, open_count,\n            )\n        else:\n            # ExecutionEngine() is legitimately constructed without a broker in\n            # several non-execution paths. With zero positions it is not an\n            # actionable protection failure; keep it registered so a later\n            # broker binding becomes scannable automatically.\n            logger.debug(\n                "TRAILING_STOP_ENGINE_DEFERRED_V391 missing_broker engine=%s open_positions=0 marker=20260907-protection-binding-precision-v391",\n                type(engine).__name__,\n            )\n        return 0\n'''
+    new = '''    # PROTECTION_BINDING_PRECISION_V391 marker=20260907-protection-binding-precision-v391\n    ledger = getattr(engine, "trade_ledger", None)\n    broker = getattr(engine, "broker_client", None) or getattr(engine, "broker", None)\n    if ledger is None:\n        if broker is None:\n            # A completely unbound ExecutionEngine cannot own or execute an\n            # actionable position. Keep it registered for a later binding, but\n            # do not emit a false protection failure while it is inert.\n            logger.debug(\n                "TRAILING_STOP_ENGINE_DEFERRED_V391 missing_ledger_and_broker engine=%s marker=20260907-protection-binding-precision-v391",\n                type(engine).__name__,\n            )\n        else:\n            # Broker-bound with no ledger is materially different: we cannot\n            # prove the broker's actionable positions are represented locally.\n            # Keep that state fail-closed and visible.\n            logger.error(\n                "TRAILING_STOP_ENGINE_UNPROTECTED missing_ledger broker_bound=true engine=%s marker=20260907-protection-binding-precision-v391",\n                type(engine).__name__,\n            )\n        return 0\n    try:\n        positions = ledger.get_open_positions()\n    except Exception as exc:\n        logger.warning("TRAILING_STOP_SCAN_OPEN_POSITIONS_FAILED engine=%s err=%s", type(engine).__name__, exc)\n        return 0\n    if broker is None:\n        open_count = len(positions or [])\n        if open_count:\n            # Do not hide a real protection gap: a broker-less engine that can\n            # see positions is still actionable and remains an ERROR.\n            logger.error(\n                "TRAILING_STOP_ENGINE_UNPROTECTED missing_broker engine=%s open_positions=%d marker=20260907-protection-binding-precision-v391",\n                type(engine).__name__, open_count,\n            )\n        else:\n            # ExecutionEngine() is legitimately constructed without a broker in\n            # several non-execution paths. With zero positions it is not an\n            # actionable protection failure; keep it registered so a later\n            # broker binding becomes scannable automatically.\n            logger.debug(\n                "TRAILING_STOP_ENGINE_DEFERRED_V391 missing_broker engine=%s open_positions=0 marker=20260907-protection-binding-precision-v391",\n                type(engine).__name__,\n            )\n        return 0\n'''
     return _replace_once(
         TRAILING, old, new,
         "PROTECTION_BINDING_PRECISION_V391 marker=20260907-protection-binding-precision-v391",
@@ -89,8 +88,8 @@ def main() -> int:
         "PROTECTION_BINDING_PRECISION_V391_READY "
         f"marker={MARKER} trailing_changed={str(changed_trailing).lower()} "
         f"native_precision_changed={str(changed_native).lower()} "
-        "missing_ledger_fail_closed=true actionable_missing_broker_fail_closed=true "
-        "empty_unbound_engine_not_actionable=true kraken_pair_decimals=true "
+        "broker_bound_missing_ledger_fail_closed=true actionable_missing_broker_fail_closed=true "
+        "fully_unbound_engine_not_actionable=true kraken_pair_decimals=true "
         "quantity_precision_unchanged=true reduce_only_unchanged=true "
         "openorders_proof_unchanged=true software_four_way_unchanged=true "
         "orders_submitted_by_patcher=false safety_gates_bypassed=false"
