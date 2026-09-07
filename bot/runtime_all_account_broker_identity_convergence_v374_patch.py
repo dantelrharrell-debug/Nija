@@ -27,8 +27,10 @@ exchange pair lookups and starts v380 while the already-live v366/v367/v371
 margin protection stack remains authoritative. v379's observational registered-
 user proof monitor is also started before the later policy reassertion; it stays
 PENDING until v281 exposes complete four-way proof and never manufactures a
-trade or fill. v375/v376 then reassert the universal four-way policy/scope for
-new exposure. Existing software exits remain fail-closed throughout.
+trade or fill. v375 establishes the universal four-way contract, v390 converges
+its synthesized exits onto the research-informed ATR/R-multiple policy, and v376
+then verifies universal broker/asset scope for new exposure. Existing software
+exits remain fail-closed throughout.
 """
 from __future__ import annotations
 
@@ -189,6 +191,10 @@ def _install_v375() -> bool:
     return _install_module("bot.runtime_universal_sl_tp_policy_v375_patch", "V375")
 
 
+def _install_v390() -> bool:
+    return _install_module("bot.runtime_adaptive_exit_policy_v390_patch", "V390")
+
+
 def _install_v376() -> bool:
     return _install_module("bot.runtime_universal_four_way_scope_v376_patch", "V376")
 
@@ -210,13 +216,13 @@ def install_import_hook() -> bool:
     identity_ready = _patch_v281() if account_scope_ready else False
     materialization_ready = _install_v377() if identity_ready else False
 
-    # v381 starts/reasserts v380 itself.  Do this before v375 because native
+    # v381 starts/reasserts v380 itself. Do this before v375 because native
     # fixed SL/TP backup depends on the already-live Kraken margin stack and
     # pair resolver, not on v375's synchronous all-account policy audit.
     pair_resolution_ready = _install_v381() if materialization_ready else False
     native_backup_installed = bool(pair_resolution_ready)
 
-    # v379 is observational.  Starting it early is safe: it remains PENDING
+    # v379 is observational. Starting it early is safe: it remains PENDING
     # until v281 has authoritative four-way rows and never opens/closes trades.
     user_proof_installed = _install_v379() if materialization_ready else False
 
@@ -233,7 +239,8 @@ def install_import_hook() -> bool:
     )
 
     policy_ready = _install_v375() if materialization_ready else False
-    scope_ready = _install_v376() if policy_ready else False
+    adaptive_exit_ready = _install_v390() if policy_ready else False
+    scope_ready = _install_v376() if adaptive_exit_ready else False
 
     ready = bool(
         account_scope_ready
@@ -243,6 +250,7 @@ def install_import_hook() -> bool:
         and native_backup_installed
         and user_proof_installed
         and policy_ready
+        and adaptive_exit_ready
         and scope_ready
     )
     os.environ[_READY_FLAG] = "1" if ready else "0"
@@ -258,7 +266,8 @@ def install_import_hook() -> bool:
         "RUNTIME_ALL_ACCOUNT_BROKER_IDENTITY_CONVERGENCE_V374_%s marker=%s ready=%s "
         "account_scoped_position_v289=%s identity_ready=%s position_materialization_v377=%s "
         "kraken_pair_resolution_v381=%s kraken_native_margin_backup_v380=%s "
-        "registered_user_proof_v379=%s universal_four_way_policy_v375=%s universal_scope_v376=%s "
+        "registered_user_proof_v379=%s universal_four_way_policy_v375=%s "
+        "adaptive_exit_policy_v390=%s universal_scope_v376=%s "
         "connected_object_preferred=true startup_fetch_proof_preferred=true "
         "startup_adoption_preferred=true authoritative_stale_cleanup_reasserted=true "
         "broker_io_identity_patch=false manager_registry_mutation=false safety_gates_bypassed=false",
@@ -272,6 +281,7 @@ def install_import_hook() -> bool:
         str(native_backup_installed).lower(),
         str(user_proof_installed).lower(),
         str(policy_ready).lower(),
+        str(adaptive_exit_ready).lower(),
         str(scope_ready).lower(),
     )
     return ready
@@ -290,6 +300,7 @@ __all__ = [
     "_install_v289",
     "_install_v377",
     "_install_v375",
+    "_install_v390",
     "_install_v376",
     "_install_v381",
     "_install_v379",
