@@ -1,20 +1,21 @@
-"""Non-ordering Kraken margin four-way certification supervisor v387.
+"""Kraken margin four-way certification supervisor v387.
 
 Canonical fast-path startup can install v367 without subsequently installing the
 exact-broker scoping from v368 and the final v371 four-way protection truth.
-This supervisor is deliberately observational/protective only: it waits until
-v367 is genuinely ready, applies only v368's exact-broker/read-scoping wrappers,
-then installs v371's SL/TP/trailing-SL/trailing-TP certification layer.
+This supervisor waits until v367 is genuinely ready, applies only v368's
+exact-broker/read-scoping wrappers, then installs v371's SL/TP/trailing-SL/
+trailing-TP certification layer.
+
+After v367 + v368 exact-broker scope + v371 + v388 are genuinely ready, the
+supervisor starts v368's existing post-ready liveness worker. That worker is the
+canonical owner for v381/v380 native fixed reduce-only SL/TP backup and registered
+user proof. This preserves authenticated OpenPositions/OpenOrders, reduce-only,
+idempotency, ACK-not-proof semantics, terminal submit gates, and the software
+four-way protection stack. The supervisor itself still submits no order.
 
 It also installs v388, the research-grounded adaptive four-way exit policy, at
 startup and reasserts it after v371 so platform and registered-user exit geometry
 uses the same ATR/R policy across Kraken, Coinbase, and OKX.
-
-It intentionally does NOT call v368.install_import_hook(), because that full
-installer also starts later native-backup work that may submit reduce-only
-protective orders. v387 itself submits no orders, creates no exposure, fabricates
-no fills/protection/readiness, changes no freshness TTLs, and grants no execution
-or activation authority.
 """
 from __future__ import annotations
 
@@ -25,6 +26,7 @@ import threading
 
 LOGGER = logging.getLogger("nija.runtime_kraken_margin_four_way_supervisor_v387")
 MARKER = "20260907-kraken-margin-four-way-supervisor-v387"
+HANDOFF_MARKER = "20260907-kraken-native-backup-handoff-v393"
 _READY_FLAG = "NIJA_KRAKEN_MARGIN_FOUR_WAY_SUPERVISOR_V387_READY"
 _LOCK = threading.RLock()
 _THREAD: threading.Thread | None = None
@@ -81,14 +83,27 @@ def _attempt_nonordering_chain() -> tuple[bool, str]:
         if not adaptive_ready:
             return False, "v388_not_ready_after_v371"
 
+        # v393: once the complete software protection chain is proven, start
+        # v368's canonical post-ready worker. That worker owns v381/v380 and
+        # retains every authenticated/readback/reduce-only/terminal gate. Do not
+        # call v380 directly and do not submit from this supervisor.
+        post_ready = getattr(v368, "_start_post_ready_liveness_async", None)
+        if not callable(post_ready):
+            return False, "v368_post_ready_surface_unavailable"
+        post_ready_started = bool(post_ready())
+        if not post_ready_started:
+            return False, "v368_post_ready_worker_not_started"
+
         LOGGER.critical(
-            "KRAKEN_MARGIN_FOUR_WAY_SUPERVISOR_V387_READY marker=%s "
+            "KRAKEN_MARGIN_FOUR_WAY_SUPERVISOR_V387_READY marker=%s handoff_marker=%s "
             "v367_ready=true v368_exact_broker_scope=true v371_four_way_ready=true "
-            "v388_research_adaptive_exit_ready=true "
-            "full_v368_installer_called=false native_backup_started=false orders_submitted=false "
-            "execution_authority_unchanged=true activation_unchanged=true freshness_unchanged=true "
-            "risk_gates_unchanged=true protection_fabricated=false safety_gates_bypassed=false",
-            MARKER,
+            "v388_research_adaptive_exit_ready=true post_ready_worker_started=true "
+            "native_backup_v381_v380_async=true full_v368_installer_called=false "
+            "supervisor_orders_submitted=false reduce_only_unchanged=true "
+            "openpositions_openorders_proof_unchanged=true execution_authority_unchanged=true "
+            "activation_unchanged=true freshness_unchanged=true risk_gates_unchanged=true "
+            "protection_fabricated=false safety_gates_bypassed=false",
+            MARKER, HANDOFF_MARKER,
         )
         return True, "ready"
     except Exception as exc:
@@ -145,11 +160,12 @@ def install_import_hook() -> bool:
         _THREAD.start()
         started = bool(_THREAD.is_alive())
     LOGGER.critical(
-        "KRAKEN_MARGIN_FOUR_WAY_SUPERVISOR_V387_STARTED marker=%s started=%s "
+        "KRAKEN_MARGIN_FOUR_WAY_SUPERVISOR_V387_STARTED marker=%s handoff_marker=%s started=%s "
         "v388_adaptive_started=%s waits_for_v367=true nonordering_chain=true "
-        "native_backup_started=false orders_submitted=false trading_fail_closed_until_v371=true "
-        "safety_gates_bypassed=false",
+        "native_backup_deferred_until_v371=true supervisor_orders_submitted=false "
+        "trading_fail_closed_until_v371=true safety_gates_bypassed=false",
         MARKER,
+        HANDOFF_MARKER,
         str(started).lower(),
         str(adaptive_started).lower(),
     )
@@ -160,4 +176,4 @@ def install() -> bool:
     return install_import_hook()
 
 
-__all__ = ["MARKER", "install", "install_import_hook"]
+__all__ = ["MARKER", "HANDOFF_MARKER", "install", "install_import_hook"]
