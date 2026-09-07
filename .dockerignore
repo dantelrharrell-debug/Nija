@@ -118,6 +118,7 @@ scripts/*
 !scripts/apply_user_readiness_deadline_convergence_v390.py
 !scripts/apply_kraken_margin_protection_chain_v386.py
 !scripts/apply_kraken_margin_four_way_supervisor_v387.py
+!scripts/apply_protection_binding_precision_v391.py
 !scripts/apply_writer_generation_handoff_v45.py
 !scripts/apply_render_signal_forwarding_v262.py
 !scripts/apply_render_outreach_frontdoor.py
