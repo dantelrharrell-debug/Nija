@@ -113,6 +113,7 @@ scripts/*
 !scripts/apply_canonical_launcher_v26.py
 !scripts/apply_execution_proof_startup_isolation_v339.py
 !scripts/apply_execution_proof_freshness_truth_v375.py
+!scripts/apply_activation_publication_fast_path_v376.py
 !scripts/apply_writer_generation_handoff_v45.py
 !scripts/apply_render_signal_forwarding_v262.py
 !scripts/apply_render_outreach_frontdoor.py
