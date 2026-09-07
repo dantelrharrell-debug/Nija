@@ -11,6 +11,12 @@ OpenOrders proof venue-exact. v395 preserves authenticated ``:BTNL`` identity
 through emergency software exits while allowing only their read-only price
 lookup to use the standard pair.
 
+Once all routing/liveness layers are ready, v381 schedules one immediate v380
+audit so an exposed authenticated margin position does not wait for the normal
+background poll interval before a correctly-routed native protection attempt.
+The audit uses v380's existing authenticated OpenPositions/OpenOrders, reduce-
+only, leverage, trigger, writer/nonce/risk, and post-submit proof gates.
+
 No global health state is promoted and no execution gate is bypassed.
 """
 from __future__ import annotations
@@ -18,6 +24,7 @@ from __future__ import annotations
 import importlib
 import logging
 import os
+import threading
 from functools import wraps
 from typing import Any
 
@@ -26,6 +33,8 @@ MARKER = "20260906-kraken-margin-pair-resolution-v381"
 _READY_FLAG = "NIJA_RUNTIME_KRAKEN_MARGIN_PAIR_RESOLUTION_V381_READY"
 _PATCH_ATTR = "_nija_kraken_margin_pair_resolution_v381"
 _QUOTES = ("USDT", "USDC", "USD", "EUR")
+_IMMEDIATE_RECONCILE_LOCK = threading.Lock()
+_IMMEDIATE_RECONCILE_STARTED = False
 
 
 def _lookup_symbol(value: Any) -> str:
@@ -132,22 +141,76 @@ def _reassert_v380() -> bool:
         return False
 
 
+def _schedule_immediate_v380_reconcile() -> bool:
+    """Run one v380 audit promptly after exact BTNL routing is installed.
+
+    This does not bypass any v380 condition. The audit itself must obtain fresh
+    authenticated OpenPositions/OpenOrders proof and all existing terminal
+    submit gates before an order can be sent. If the hard stop is already
+    crossed, v380 still defers to the software emergency-exit authority.
+    """
+    global _IMMEDIATE_RECONCILE_STARTED
+    with _IMMEDIATE_RECONCILE_LOCK:
+        if _IMMEDIATE_RECONCILE_STARTED:
+            return True
+        _IMMEDIATE_RECONCILE_STARTED = True
+
+    def _runner() -> None:
+        try:
+            v380 = importlib.import_module("bot.runtime_kraken_native_margin_backup_v380_patch")
+            audit = getattr(v380, "audit_once", None)
+            if not callable(audit):
+                LOGGER.error(
+                    "KRAKEN_MARGIN_PAIR_V381_IMMEDIATE_RECONCILE_UNAVAILABLE marker=%s "
+                    "native_backup_polling_preserved=true safety_gates_bypassed=false",
+                    MARKER,
+                )
+                return
+            result = audit()
+            LOGGER.critical(
+                "KRAKEN_MARGIN_PAIR_V381_IMMEDIATE_RECONCILE_COMPLETE marker=%s ready=%s "
+                "authenticated_v380_audit=true reduce_only_unchanged=true openorders_post_submit_proof_required=true "
+                "new_exposure=false safety_gates_bypassed=false",
+                MARKER, str(bool(isinstance(result, dict) and result.get("ready"))).lower(),
+            )
+        except Exception as exc:
+            LOGGER.exception(
+                "KRAKEN_MARGIN_PAIR_V381_IMMEDIATE_RECONCILE_FAILED marker=%s error=%s:%s "
+                "native_backup_polling_preserved=true trading_fail_closed=true safety_gates_bypassed=false",
+                MARKER, type(exc).__name__, exc,
+            )
+
+    threading.Thread(
+        target=_runner,
+        name="nija-kraken-native-margin-immediate-reconcile-v396",
+        daemon=True,
+    ).start()
+    LOGGER.critical(
+        "KRAKEN_MARGIN_PAIR_V381_IMMEDIATE_RECONCILE_SCHEDULED marker=%s "
+        "wait_for_poll_interval=false authenticated_v380_audit=true existing_gates_unchanged=true "
+        "new_exposure=false safety_gates_bypassed=false",
+        MARKER,
+    )
+    return True
+
+
 def install_import_hook() -> bool:
     liveness_ready = _install_liveness_v384()
     pair_ready = _patch_pair_resolver() if liveness_ready else False
     btnl_routing_ready = _install_btnl_routing_v394() if pair_ready else False
     btnl_exit_ready = _install_btnl_exit_identity_v395() if btnl_routing_ready else False
     native_worker_ready = _reassert_v380() if btnl_exit_ready else False
+    immediate_reconcile_ready = _schedule_immediate_v380_reconcile() if native_worker_ready else False
     ready = bool(
         liveness_ready and pair_ready and btnl_routing_ready
-        and btnl_exit_ready and native_worker_ready
+        and btnl_exit_ready and native_worker_ready and immediate_reconcile_ready
     )
     os.environ[_READY_FLAG] = "1" if ready else "0"
     LOGGER.critical(
         "RUNTIME_KRAKEN_MARGIN_PAIR_RESOLUTION_V381_%s marker=%s ready=%s "
         "v384_health_user_refresh=%s synthetic_suffix_public_lookup_only=true position_identity_unchanged=true "
         "v394_btnl_private_order_routing=%s v395_btnl_software_exit_identity=%s "
-        "v380_reasserted=%s reduce_only_unchanged=true openorders_proof_venue_exact=true "
+        "v380_reasserted=%s immediate_v380_reconcile=%s reduce_only_unchanged=true openorders_proof_venue_exact=true "
         "writer_nonce_risk_killswitch_unchanged=true safety_gates_bypassed=false",
         "READY" if ready else "NOT_READY",
         MARKER,
@@ -156,6 +219,7 @@ def install_import_hook() -> bool:
         str(btnl_routing_ready).lower(),
         str(btnl_exit_ready).lower(),
         str(native_worker_ready).lower(),
+        str(immediate_reconcile_ready).lower(),
     )
     return ready
 
@@ -167,5 +231,5 @@ def install() -> bool:
 __all__ = [
     "MARKER", "install", "install_import_hook", "_lookup_symbol",
     "_patch_pair_resolver", "_install_liveness_v384", "_install_btnl_routing_v394",
-    "_install_btnl_exit_identity_v395",
+    "_install_btnl_exit_identity_v395", "_schedule_immediate_v380_reconcile",
 ]
