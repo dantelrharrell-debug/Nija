@@ -1,20 +1,28 @@
 # NIJA AI Trading LLC — Current Success State & Recovery Anchor
 
-**Status date:** September 6, 2026 (UTC)
+**Status date:** September 7, 2026 (UTC)
 
 **Preferred current recovery checkpoint:** `3b48c533d191d8ce81d2166b14d3ef0946600c92`
 
+**September 7 v382 verified hardening candidate:** `b003b7a0faa9bea9a68b884f3b4460a05bbf7608`
+
+**September 7 candidate writer generation:** `5472`
+
+**September 7 candidate instance:** `srv-d98dsr5aeets73fpbaqg-rhv5q`
+
 **Kraken ECEL exit-symbol repair parent:** `09f13a0f2b4f189e7fb76de0cdb0035552f9b8ed`
 
-**Verified production writer generation:** `5460`
+**Verified production writer generation for preferred recovery anchor:** `5460`
 
-**Verified production instance:** `srv-d98dsr5aeets73fpbaqg-xdvzm`
+**Verified production instance for preferred recovery anchor:** `srv-d98dsr5aeets73fpbaqg-xdvzm`
 
 **Immutable August 22 explicit-gate checkpoint:** `740c98dc94374bb1ed770ff96a5eafabfd32681b`
 
 **Immutable recovery branch:** `recovery/100-prod-readiness-20260822`
 
 This README is the durable production and recovery anchor for **Nija_Trading_Bot**. Its purpose is to make it possible to return to the September 6 verified success state without forcing trades, weakening safety controls, fabricating readiness, or reintroducing the heartbeat duplicate-order problem.
+
+The September 7 v382 deployment is documented separately as a verified hardening candidate. It has proved writer acquisition, canonical installer wiring, metadata-only authority epoch stability, live capital hydration, Kraken execution-proof recovery without a new order, and preserved safety gates. It has **not yet replaced the September 6 preferred recovery checkpoint** because the fresh generation-5472 process had not yet independently re-proven the full `STARTUP_VALIDATED -> core registered -> position_sync_ready -> EXECUTION_ALLOWED -> LIVE_ACTIVE -> live scan` chain at the time of this update.
 
 NIJA does not guarantee trades, fills, profits, income, or returns. A healthy live system may correctly submit no order when market, risk, liquidity, capital, broker-minimum, position, or safety gates reject all candidates.
 
@@ -65,6 +73,192 @@ This is now the **preferred recovery target** because it proved all of the follo
 - safety gates preserved.
 
 Do not replace this recovery anchor merely because a later commit exists. Promote a newer checkpoint only after the same complete evidence chain is independently re-proven.
+
+---
+
+## 1A. September 7, 2026 — Authority Epoch Stability v382 Hardening
+
+The September 7 repair addresses a separate runtime-stability defect that appeared **after** the bot had already reached `LIVE_ACTIVE`: the canonical dispatch commit could repeatedly fall from a positive commit version to `0`, after which the existing v92 repair rebuilt it.
+
+### Root cause
+
+`StartupCoordinator.record_authority()` treated both of these as safety-authority changes:
+
+1. an actual boolean authority truth change (`ready=True <-> False`), and
+2. a diagnostic `authority_status` dictionary change while `ready` remained the same.
+
+Healthy publishers legitimately report different metadata dictionaries, for example:
+
+```text
+ready=True status={'source': 'authority_heartbeat'}
+ready=True status={'current_state': 'LIVE_ACTIVE'}
+```
+
+Before v382, that metadata-only alternation could advance `global_epoch` and revoke the canonical activation commit even though authority had never become false.
+
+### v382 safety semantics
+
+The repair keeps metadata observable while restoring correct edge-trigger semantics:
+
+```text
+metadata-only status change:
+  authority_version increments
+  AUTHORITY_REFRESHED remains published
+  global_epoch does NOT advance
+  activation commit is preserved
+
+actual authority truth change:
+  authority_version increments
+  global_epoch advances
+  prior activation commit is revoked
+  runtime remains fail-closed until canonical gates reconverge
+```
+
+No kill-switch, nonce, dispatch-health, capital, position, risk, execution-proof, minimum-order, ACK, fill, or protective-exit gate is weakened.
+
+### Commit lineage
+
+The September 7 hardening lineage is:
+
+```text
+3fa52ef5b28251c971735142363623b2f4fd9a07  Harden authority status epoch stability
+be59020c5539fd1dfaec74c9557369dec7dcdce9  Add focused metadata-preserve / authority-loss tests
+38230c81e73a9587f82de500e1cc3c2b3aba5d24  Initial pre-bot wiring
+4b39d9c5bc8358735a26d52fd406c64d6ec55211  Source/heartbeat-scope wiring hardening
+b003b7a0faa9bea9a68b884f3b4460a05bbf7608  Canonical launcher wiring used by production
+```
+
+`b003b7a0faa9bea9a68b884f3b4460a05bbf7608` is the first September 7 candidate that production proved was installing v382 from the actual canonical runtime launcher before `StartupCoordinator` import.
+
+### Production proof on generation 5472
+
+The replacement container waited for the prior Render writer to exit and for the Redis lease TTL to expire normally. The lock was **not** force-cleared. It then acquired:
+
+```text
+WRITER_LOCK_ACQUIRED
+writer_generation=5472
+writer_token_prefix=4159
+instance=srv-d98dsr5aeets73fpbaqg-rhv5q
+```
+
+The canonical front door attested the guard:
+
+```text
+CANONICAL_AUTHORITY_STATUS_EPOCH_V382_READY
+marker=20260907-authority-status-epoch-stability-v382
+status_metadata_noninvalidating=true
+authority_truth_edge_invalidating=true
+forced_activation=false
+safety_gates_bypassed=false
+```
+
+After the coordinator loaded, the class itself was patched:
+
+```text
+AUTHORITY_STATUS_EPOCH_STABILITY_V382_PATCHED
+status_metadata_noninvalidating=true
+authority_truth_edge_invalidating=true
+forced_activation=false
+safety_gates_bypassed=false
+```
+
+A real metadata-only authority refresh then exercised the repaired path:
+
+```text
+AUTHORITY_STATUS_METADATA_STABLE_V382
+ready=True
+authority_version=2
+global_epoch=3
+commit_version=0
+status_keys=['source']
+commit_preserved=true
+safety_gates_preserved=true
+```
+
+The commit version was still `0` in that line because the fresh replacement had **not yet earned its first activation commit**. The important proof is that the metadata-only update did not revoke or mutate the commit latch and explicitly reported `commit_preserved=true`.
+
+### Execution proof recovered without a verification order
+
+The fresh generation-5472 runtime recovered a genuine historical Kraken fill:
+
+```text
+CANONICAL_FILL_EXECUTION_PROOF_V346_RECORDED
+order_id=OOB2WA-467F2-AMNXTN
+symbol=XETHZUSD
+side=sell
+fill_price=2517.3808304423
+filled_usd=57.41179000
+source=canonical_confirmed_fill
+execution_proof_fabricated=false
+safety_gates_bypassed=false
+```
+
+Then:
+
+```text
+EXECUTION_PROOF_RESTART_V346_RECOVERED
+order_id=OOB2WA-467F2-AMNXTN
+writer_generation=5472
+authenticated_history=true
+exact_order_id=true
+final_status=true
+positive_fill_quantity=true
+positive_fill_cost=true
+no_order_submitted=true
+heartbeat_trade_required=false
+execution_proof_fabricated=false
+safety_gates_bypassed=false
+```
+
+The live heartbeat order runner remained explicitly prevented from placing a capital-bearing verification order:
+
+```text
+HEARTBEAT_RUNNER_V374_STOPPED
+reason=NIJA_ALLOW_LIVE_HEARTBEAT_ORDERS_false
+capital_bearing_retry_loop=false
+order_submitted=false
+read_only_execution_proof_recovery_preserved=true
+```
+
+### Current candidate state when this README was updated
+
+The generation-5472 process had current Kraken capital and platform connectivity, including approximately:
+
+```text
+Kraken capital=$207.07
+capital snapshot accepted=true
+Capital CSM READY
+platform Kraken connected=true
+platform Coinbase connected=true
+```
+
+However, full production success had **not** yet been re-certified because current readiness still showed:
+
+```text
+ACTIVATION_COMMIT_V116_PENDING
+pending=['bootstrap_ready', 'position_sync_ready']
+direct_live_bypass=false
+
+RUNTIME_AUTHORITY_CONVERGENCE_WAITING
+detail=core_thread_not_alive:startup_not_complete
+
+WRITER_LOCK_RENEWED
+generation=5472
+core_thread_alive=False
+core_thread_registered=False
+core_thread_reason=startup_not_registered
+```
+
+and the latest Kraken position-sync freshness path had temporarily returned:
+
+```text
+POSITION_SYNC_V96_READINESS
+ready=false
+pending=['platform:kraken']
+activation_blocked=true
+```
+
+That is the correct fail-closed behavior. **Do not force `LIVE_ACTIVE`, fabricate `position_sync_ready`, or mark b003 as the preferred rollback checkpoint until the full success chain is re-proven on a fresh process.**
 
 ---
 
@@ -526,6 +720,15 @@ EXECUTION_AUTHORITY_READY
 TRADING LOOP ACTIVE — FIRST TICK REACHED
 ```
 
+For September 7 v382 descendants, additionally require:
+
+```text
+CANONICAL_AUTHORITY_STATUS_EPOCH_V382_READY
+AUTHORITY_STATUS_EPOCH_STABILITY_V382_PATCHED
+```
+
+After the first positive activation commit exists, observe metadata-only authority refreshes and confirm they do not repeatedly drive the canonical commit version to `0`. An actual authority loss must still revoke the commit and fail closed.
+
 ### H. Verify the exit stack
 
 Require:
@@ -587,6 +790,27 @@ Use this checklist before declaring Nija_Trading_Bot fully restored:
 
 This is stronger than the earlier September 3 v188 README state because the September 6 runtime additionally proved `EXECUTION_ALLOWED: TRUE`, restart-proof recovery from authenticated history, a fresh writer/core startup on generation 5460, and a completed live scan on the repaired runtime.
 
+### September 7 v382 promotion checklist
+
+Do **not** promote `b003b7a0faa9bea9a68b884f3b4460a05bbf7608` or a descendant over the September 6 anchor until a single fresh writer generation proves all of these together:
+
+- [x] Canonical v382 launcher marker present.
+- [x] v382 patched `StartupCoordinator.record_authority`.
+- [x] Metadata-only authority refresh observed with `commit_preserved=true`.
+- [x] Clean writer handoff; no forced Redis lock clear.
+- [x] Authenticated execution proof recovered with `no_order_submitted=true`.
+- [x] Broker-backed capital hydrated.
+- [ ] `STARTUP_VALIDATED` on the same fresh process.
+- [ ] Real core thread registered and alive.
+- [ ] Current authoritative Kraken position sync ready.
+- [ ] `bootstrap_ready=True` and `position_sync_ready=True`.
+- [ ] `pending=[]`.
+- [ ] `EXECUTION_ALLOWED: TRUE`.
+- [ ] Positive activation commit remains stable across metadata-only status changes.
+- [ ] `LIVE_ACTIVE` with runtime authority `EXECUTING`.
+- [ ] Live market scan completed.
+- [ ] Kraken held-position protection re-verified on the fully active process.
+
 ---
 
 ## 9. Safety-Critical Contracts — Never Weaken These to Recover Faster
@@ -609,6 +833,8 @@ This is stronger than the earlier September 3 v188 README state because the Sept
 - `EXECUTION_ALLOWED` must come only through the canonical state machine/gates.
 - Order submission/fill state must come from broker/exchange evidence.
 - User capital must never be mixed into platform capital.
+- Authority diagnostic metadata must not invalidate the safety epoch while boolean authority truth is unchanged.
+- A real boolean authority loss must still invalidate the epoch and revoke the prior activation commit.
 - Do not lower market-quality, risk, spread, volume, signal, or minimum-order thresholds merely to force a trade.
 - Do not create duplicate exit workers that could double-sell.
 - Do not create duplicate heartbeat verification trades to prove liveness.
@@ -643,6 +869,8 @@ market_data_healthy=True
 
 A transient local/ancillary Kraken adapter price failure is different from loss of the canonical platform Kraken broker. Judge final current truth, not one isolated log line.
 
+For the September 7 generation-5472 candidate, `position_sync_ready` and `bootstrap_ready` are currently genuine blockers, not signals to suppress. The runtime is expected to remain fail-closed until they become current and true.
+
 ---
 
 ## 11. Historical Recovery Anchors
@@ -673,7 +901,18 @@ commit=3b48c533d191d8ce81d2166b14d3ef0946600c92
 runtime_generation=5460
 ```
 
-**This is the preferred current recovery point.**
+**This remains the preferred current recovery point.**
+
+### September 7 v382 verified hardening candidate
+
+```text
+commit=b003b7a0faa9bea9a68b884f3b4460a05bbf7608
+runtime_generation=5472
+instance=srv-d98dsr5aeets73fpbaqg-rhv5q
+status=verified_v382_wiring_and_partial_startup_evidence_not_yet_full_recovery_anchor
+```
+
+This candidate must not replace the September 6 anchor until the unchecked promotion criteria in Section 8 are proven on one fresh process.
 
 If a later deployment regresses, first determine whether the cause is transient broker latency, stale state, deployment handoff, account-side behavior, market quality, or a real code defect. Roll back only when evidence supports it.
 
@@ -696,6 +935,7 @@ insufficient candle history
 risk rejected a candidate
 broker private-read contention recovered on retry
 installer replay emitted a temporary fail-closed reset
+diagnostic authority status metadata changed while authority_ready stayed true
 ```
 
 Change code only when evidence shows a real defect such as:
@@ -705,6 +945,7 @@ writer/core/readiness truth regresses persistently
 authoritative broker sync cannot recover
 execution proof cannot be rebuilt from valid authenticated history
 EXECUTION_ALLOWED remains false despite all required genuine proofs
+metadata-only authority refresh repeatedly revokes a positive activation commit
 an EXECUTE decision never reaches the broker adapter despite passing all gates
 broker acknowledgment/fill state is mishandled
 position reconciliation loses a real filled position
