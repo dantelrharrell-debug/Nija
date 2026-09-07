@@ -11,6 +11,13 @@ freshness check against v169's canonical execution-marker path and the unchanged
 trading-state-machine freshness policy.  A stale/malformed/missing marker is
 reported pending and activation reconciliation is not woken by v238.
 
+The same Render startup patcher also applies the v385 ordering-only liveness
+repair to v368.  Once four-way Kraken margin protection is genuinely ready,
+v372/v373 authenticated execution-proof recovery now runs before the slower
+native-backup and registered-user proof bootstrap work.  No readiness bit or
+execution marker is written by the ordering repair; the existing v328/v346/v169
+canonical proof chain remains the only authority.
+
 This patch never submits an order, enables heartbeat trading, changes the
 30-minute default, changes readiness, clears a circuit breaker, forces
 activation, or weakens writer/nonce/risk/capital/position/kill-switch/ECEL/
@@ -22,7 +29,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 V238_PATH = ROOT / "bot" / "runtime_heartbeat_marker_convergence_v238_patch.py"
+V368_PATH = ROOT / "bot" / "runtime_kraken_margin_protection_authority_v368_patch.py"
 MARKER = "20260907-execution-proof-freshness-truth-v375"
+ORDER_MARKER = "KRAKEN_MARGIN_EXECUTION_LIVENESS_V385_PRIMED"
 
 
 def patch_v238_text(text: str) -> str:
@@ -41,14 +50,65 @@ def patch_v238_text(text: str) -> str:
     return text
 
 
+def patch_v368_text(text: str) -> str:
+    """Move authenticated v372/v373 recovery ahead of slow post-ready backup work."""
+    if ORDER_MARKER in text:
+        return text
+
+    function_anchor = "def _post_ready_liveness_worker() -> None:\n"
+    native_anchor = "    native_ready = _install_native_backup_v381()\n"
+    proof_anchor = "    v372_ready = _install_v372()\n"
+    wake_anchor = "    _wake_runtime()\n"
+
+    function_pos = text.find(function_anchor)
+    if function_pos < 0:
+        raise RuntimeError("v385 v368 post-ready worker anchor missing")
+    native_pos = text.find(native_anchor, function_pos)
+    if native_pos < 0:
+        raise RuntimeError("v385 v368 native-backup anchor missing")
+    proof_pos = text.find(proof_anchor, native_pos)
+    if proof_pos < 0:
+        raise RuntimeError("v385 v368 v372 proof anchor missing")
+    wake_pos = text.find(wake_anchor, proof_pos)
+    if wake_pos < 0:
+        raise RuntimeError("v385 v368 wake anchor missing")
+    wake_end = wake_pos + len(wake_anchor)
+
+    proof_block = text[proof_pos:wake_end]
+    without_late_block = text[:proof_pos] + text[wake_end:]
+    native_pos = without_late_block.find(native_anchor, function_pos)
+    if native_pos < 0:
+        raise RuntimeError("v385 v368 native-backup anchor lost during reorder")
+
+    primed_block = (
+        f"    # {ORDER_MARKER}: authenticated execution recovery must not wait behind slow backup I/O.\n"
+        + proof_block
+        + "\n"
+    )
+    patched = without_late_block[:native_pos] + primed_block + without_late_block[native_pos:]
+
+    if patched.find(proof_anchor, function_pos) > patched.find(native_anchor, function_pos):
+        raise RuntimeError("v385 execution recovery reorder failed")
+    if patched.count(proof_anchor) != text.count(proof_anchor):
+        raise RuntimeError("v385 execution recovery block duplication detected")
+    return patched
+
+
 def main() -> None:
     original = V238_PATH.read_text(encoding="utf-8")
     patched = patch_v238_text(original)
     if patched != original:
         V238_PATH.write_text(patched, encoding="utf-8")
+
+    v368_original = V368_PATH.read_text(encoding="utf-8")
+    v368_patched = patch_v368_text(v368_original)
+    if v368_patched != v368_original:
+        V368_PATH.write_text(v368_patched, encoding="utf-8")
+
     print(
         "EXECUTION_PROOF_FRESHNESS_TRUTH_V375_APPLIED "
         f"marker={MARKER} direct_marker_freshness_required=true "
+        "kraken_margin_execution_liveness_v385=primed_before_native_backup "
         "marker_mutated=false max_age_unchanged=true no_order_submitted=true "
         "heartbeat_orders_enabled=false readiness_written=false forced_activation=false "
         "safety_gates_bypassed=false"
