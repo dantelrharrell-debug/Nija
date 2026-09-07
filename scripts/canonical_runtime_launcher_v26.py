@@ -12,6 +12,11 @@ loads use CPython's canonical frozen import primitive so historical
 ``importlib.import_module`` wrappers cannot recursively re-enter ``bot.bot``
 before the writer-first handoff completes. Runtime hooks and all fail-closed
 writer/nonce/risk/kill-switch checks remain authoritative.
+
+September 7 v382 is installed by path from this canonical front door before the
+coordinator module can be imported. It makes authority epoch invalidation depend
+on actual boolean authority truth changes rather than diagnostic status metadata
+changes, preventing valid LIVE dispatch commits from oscillating to version 0.
 """
 from __future__ import annotations
 
@@ -43,6 +48,7 @@ V43_PATH = ROOT / "bot" / "capital_publication_convergence_v43_patch.py"
 V44_PATH = ROOT / "bot" / "kraken_connection_convergence_v44_patch.py"
 V18_PATH = ROOT / "bot" / "production_corrective_set_v18_patch.py"
 V19_PATH = ROOT / "bot" / "entrypoint_writer_epoch_recovery_v19_patch.py"
+V382_PATH = ROOT / "bot" / "authority_status_epoch_stability_v382_patch.py"
 RENDER_MEMORY_GUARD_PATH = ROOT / "scripts" / "render_memory_pressure_guard.py"
 MAIN_PATH = ROOT / "main.py"
 LOGGER = logging.getLogger("nija.canonical_runtime_launcher")
@@ -86,6 +92,28 @@ def _load_module_by_path(module_name: str, path: Path) -> ModuleType:
     module = importlib.util.module_from_spec(spec)
     sys.modules[module_name] = module
     spec.loader.exec_module(module)
+    return module
+
+
+def _install_authority_status_epoch_stability_v382() -> ModuleType:
+    """Install v382 before StartupCoordinator can be imported by runtime fanout."""
+    if not V382_PATH.is_file():
+        raise RuntimeError(f"authority status epoch stability v382 missing: {V382_PATH}")
+    module = _load_module_by_path(
+        "nija_authority_status_epoch_stability_v382_prebot",
+        V382_PATH,
+    )
+    installer: Any = getattr(module, "install_import_hook", None) or getattr(module, "install", None)
+    if not callable(installer) or not bool(installer()):
+        raise RuntimeError("authority status epoch stability v382 installer failed")
+    if os.environ.get("NIJA_AUTHORITY_STATUS_EPOCH_STABILITY_V382_READY") != "1":
+        raise RuntimeError("authority status epoch stability v382 did not attest ready")
+    LOGGER.critical(
+        "CANONICAL_AUTHORITY_STATUS_EPOCH_V382_READY "
+        "marker=20260907-authority-status-epoch-stability-v382 "
+        "status_metadata_noninvalidating=true authority_truth_edge_invalidating=true "
+        "forced_activation=false safety_gates_bypassed=false"
+    )
     return module
 
 
@@ -256,6 +284,7 @@ def _install_production_corrective_set() -> ModuleType:
 def install_canonical_startup_guard() -> ModuleType:
     if "bot.bot_main" in sys.modules:
         raise RuntimeError("bot.bot_main loaded before canonical launcher guard; startup ordering unsafe")
+    _install_authority_status_epoch_stability_v382()
     module = _load_module_by_path("nija_canonical_broker_startup_convergence_v24_prebot", V24_PATH)
     installer: Any = getattr(module, "install_import_hook", None) or getattr(module, "install", None)
     if not callable(installer) or not bool(installer()):
