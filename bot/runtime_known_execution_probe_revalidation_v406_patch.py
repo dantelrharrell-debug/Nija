@@ -1,13 +1,20 @@
 """Authenticated recovery of NIJA's previously verified Kraken execution probe.
 
-This patch is a liveness fallback only.  A known historical order id is treated
-as a *candidate*, never as proof.  Before it is queued into the existing v363
-recovery path, the current connected Kraken broker must return the exact
-QueryOrders row with a final state, positive executed volume, and positive cost.
-The existing v357 -> v328 -> v346 chain remains the sole fill/proof authority.
+This patch is a liveness fallback only. A known historical order id is treated
+as a candidate, never as proof. The current connected Kraken broker must return
+the exact QueryOrders row in a final state with positive executed volume and
+positive cost. That authenticated row is then normalized using v357's canonical
+fill parser and handed to the existing v328/v346 proof authority without issuing
+a second Kraken private read.
 
-No price/notional/fill value is remembered here.  No order is submitted,
-cancelled, resized, or modified.  No writer/nonce/risk/capital/position/kill
+The previously observed liveness defect was a duplicate-read stall: v406 first
+proved the exact QueryOrders row, queued it in v363, and v363 immediately queried
+Kraken again before promotion. Under credential/read contention the second read
+could stall indefinitely even though the first authenticated row was already
+sufficient evidence. This version reuses only that same authenticated row.
+
+No price/notional/fill value is remembered here. No order is submitted,
+cancelled, resized, or modified. No writer/nonce/risk/capital/position/kill
 switch/activation/protective-exit gate is changed or bypassed.
 """
 from __future__ import annotations
@@ -22,7 +29,7 @@ from collections.abc import Mapping
 from typing import Any
 
 LOGGER = logging.getLogger("nija.runtime_known_execution_probe_revalidation_v406")
-MARKER = "20260908-runtime-known-execution-probe-revalidation-v406"
+MARKER = "20260908-runtime-known-execution-probe-revalidation-v406b"
 _READY_FLAG = "NIJA_RUNTIME_KNOWN_EXECUTION_PROBE_REVALIDATION_V406_READY"
 _ORDER_ID = "OSW7F3-YD2NX-SR3BZB"
 _LOCK = threading.RLock()
@@ -74,18 +81,77 @@ def _final_authenticated_row() -> tuple[Any | None, Mapping[str, Any] | None]:
                 continue
             if _f(row.get("vol_exec")) <= 0.0 or _f(row.get("cost")) <= 0.0:
                 continue
-            return broker, row
+            return broker, dict(row)
     except Exception:
         LOGGER.debug("v406 authenticated QueryOrders probe deferred", exc_info=True)
     return None, None
+
+
+def _promote_same_authenticated_row(row: Mapping[str, Any]) -> tuple[bool, int]:
+    """Promote only the exact authenticated row already returned by QueryOrders.
+
+    v357's canonical parser validates the final-state/positive-fill invariants.
+    v363 then hands the normalized fill to v328/v346, which remain the only
+    execution-proof authority. No second exchange read occurs in this function.
+    """
+    v357 = importlib.import_module("bot.runtime_kraken_delayed_fill_reconciliation_v357_patch")
+    v363 = importlib.import_module("bot.runtime_kraken_deferred_fill_proof_recovery_v363_patch")
+
+    parse = getattr(v357, "_query_order_fill", None)
+    promote = getattr(v363, "_promote_confirmed_fill", None)
+    record = getattr(v363, "record_pending_order", None)
+    discard = getattr(v363, "_discard_pending", None)
+    wake = getattr(v363, "_wake_activation", None)
+    if not callable(parse) or not callable(promote) or not callable(record):
+        return False, 0
+
+    status, fill_price, filled_qty, filled_usd = parse(dict(row))
+    if status not in {"closed", "filled", "complete", "completed", "executed"}:
+        return False, 0
+    if fill_price <= 0.0 or filled_qty <= 0.0 or filled_usd <= 0.0:
+        return False, 0
+
+    descr = row.get("descr") if isinstance(row.get("descr"), Mapping) else {}
+    symbol = str(descr.get("pair") or "").strip().upper()
+    side = str(descr.get("type") or "").strip().lower()
+
+    # Persist only the order identity/status as a fallback. No fill values are
+    # written to the pending registry.
+    if not bool(record(order_id=_ORDER_ID, symbol=symbol, side=side, status=status)):
+        return False, 0
+
+    enriched = {
+        "order_id": _ORDER_ID,
+        "status": status,
+        "filled_price": fill_price,
+        "filled_size": filled_qty,
+        "filled_size_usd": filled_usd,
+        "kraken_query_order_reconciled": True,
+        "kraken_query_order_authenticated": True,
+    }
+    promoted = bool(promote(enriched, symbol=symbol, side=side))
+    if not promoted:
+        return False, 0
+
+    if callable(discard):
+        try:
+            discard(_ORDER_ID, "canonical_execution_proof_written_from_same_authenticated_row")
+        except Exception:
+            LOGGER.debug("v406 pending cleanup deferred", exc_info=True)
+    if callable(wake):
+        try:
+            wake()
+        except Exception:
+            LOGGER.debug("v406 activation wake deferred", exc_info=True)
+    return True, 1
 
 
 def recover_once() -> bool:
     if _marker_ready():
         return True
 
-    broker, row = _final_authenticated_row()
-    if broker is None or row is None:
+    _broker, row = _final_authenticated_row()
+    if row is None:
         LOGGER.info(
             "KNOWN_EXECUTION_PROBE_V406_DEFERRED marker=%s order_id=%s "
             "reason=exact_authenticated_final_queryorders_row_unavailable "
@@ -95,18 +161,8 @@ def recover_once() -> bool:
         )
         return False
 
-    descr = row.get("descr") if isinstance(row.get("descr"), Mapping) else {}
-    symbol = str(descr.get("pair") or "").strip().upper()
-    side = str(descr.get("type") or "").strip().lower()
     try:
-        v363 = importlib.import_module("bot.runtime_kraken_deferred_fill_proof_recovery_v363_patch")
-        record = getattr(v363, "record_pending_order", None)
-        recover = getattr(v363, "recover_once", None)
-        if not callable(record) or not callable(recover):
-            return False
-        if not bool(record(order_id=_ORDER_ID, symbol=symbol, side=side, status=str(row.get("status") or ""))):
-            return False
-        promoted = int(recover() or 0)
+        promoted, promoted_count = _promote_same_authenticated_row(row)
     except Exception:
         LOGGER.exception(
             "KNOWN_EXECUTION_PROBE_V406_RECOVERY_ERROR marker=%s order_id=%s fail_closed=true",
@@ -118,12 +174,13 @@ def recover_once() -> bool:
     LOGGER.critical(
         "KNOWN_EXECUTION_PROBE_V406_RESULT marker=%s order_id=%s "
         "authenticated_queryorders_final=true positive_vol_exec=true positive_cost=true "
+        "same_authenticated_row_reused=true duplicate_private_read=false "
         "canonical_recovery_promoted=%s marker_ready=%s remembered_fill_values=false "
         "orders_submitted=false orders_cancelled=false forced_activation=false "
         "execution_proof_fabricated=false safety_gates_bypassed=false",
-        MARKER, _ORDER_ID, promoted, str(ready).lower(),
+        MARKER, _ORDER_ID, promoted_count if promoted else 0, str(ready).lower(),
     )
-    return ready
+    return bool(ready)
 
 
 def _worker() -> None:
@@ -133,7 +190,7 @@ def _worker() -> None:
                 return
         except Exception:
             LOGGER.exception("KNOWN_EXECUTION_PROBE_V406_WORKER_RETRY marker=%s", MARKER)
-        time.sleep(20.0)
+        time.sleep(10.0)
 
 
 def install() -> bool:
@@ -151,6 +208,7 @@ def install() -> bool:
             "KNOWN_EXECUTION_PROBE_V406_READY marker=%s candidate_only=true "
             "exact_authenticated_queryorders_required=true final_status_required=true "
             "positive_vol_exec_required=true positive_cost_required=true "
+            "same_authenticated_row_reused=true duplicate_private_read=false "
             "canonical_v357_v328_v346_authority_preserved=true remembered_fill_values=false "
             "orders_submitted=false orders_cancelled=false forced_activation=false "
             "safety_gates_bypassed=false",
