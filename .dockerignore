@@ -111,6 +111,7 @@ scripts/*
 !scripts/render_entrypoint.sh
 !scripts/apply_startup_handoff_fix.py
 !scripts/apply_canonical_launcher_v26.py
+!scripts/apply_kraken_recovery_coordinator_single_owner_v400.py
 !scripts/apply_execution_proof_startup_isolation_v339.py
 !scripts/apply_execution_proof_freshness_truth_v375.py
 !scripts/apply_activation_publication_fast_path_v376.py
