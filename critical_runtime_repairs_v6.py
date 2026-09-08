@@ -27,6 +27,7 @@ _REQUIRED = (
     "bot.phase3_admission_trace_repair_patch",
     "bot.runtime_market_data_entry_failclosed_v403_patch",
     "bot.runtime_live_safety_convergence_v404_patch",
+    "bot.runtime_execution_breaker_recovery_v405_patch",
     "bot.final_account_router_exit_convergence_patch",
 )
 
@@ -67,12 +68,13 @@ def install() -> bool:
         os.environ["NIJA_OKX_ROUTER_CONVERGENCE_REQUIRED"] = "1"
         os.environ["NIJA_MARKET_DATA_ENTRY_FAILCLOSED_REQUIRED"] = "1"
         os.environ["NIJA_RUNTIME_LIVE_SAFETY_CONVERGENCE_V404_REQUIRED"] = "1"
+        os.environ["NIJA_RUNTIME_EXECUTION_BREAKER_RECOVERY_V405_REQUIRED"] = "1"
         _INSTALLED = True
         logger.critical(
             "CRITICAL_RUNTIME_REPAIRS_V6_READY marker=%s modules=%s "
             "phase3_handoff=true execution_completion=true admission_trace=true "
             "market_data_entry_failclosed=true live_safety_convergence_v404=true "
-            "okx_router_convergence=true fail_closed=true",
+            "execution_breaker_recovery_v405=true okx_router_convergence=true fail_closed=true",
             _MARKER,
             ",".join(completed),
         )
