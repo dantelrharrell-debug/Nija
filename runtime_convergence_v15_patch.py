@@ -200,6 +200,30 @@ def _ensure_downstream_risk() -> bool:
         return False
 
 
+def _ensure_market_data_entry_failclosed() -> bool:
+    """Install/reassert v403 on the active Phase-3 entry boundary only."""
+    try:
+        patch = importlib.import_module("bot.runtime_market_data_entry_failclosed_v403_patch")
+        installer = getattr(patch, "install", None) or getattr(patch, "install_import_hook", None)
+        if not callable(installer) or not bool(installer()):
+            return False
+        patch_loaded = getattr(patch, "_patch_loaded", None)
+        if callable(patch_loaded):
+            patch_loaded()
+        for module in _core_modules():
+            cls = getattr(module, "NijaCoreLoop", None)
+            method = getattr(cls, "_phase3_scan_and_enter", None) if isinstance(cls, type) else None
+            if callable(method) and bool(getattr(method, "_nija_market_data_entry_failclosed_v403", False)):
+                os.environ["NIJA_MARKET_DATA_ENTRY_FAILCLOSED_READY"] = "1"
+                return True
+        os.environ["NIJA_MARKET_DATA_ENTRY_FAILCLOSED_READY"] = "0"
+        return False
+    except Exception:
+        os.environ["NIJA_MARKET_DATA_ENTRY_FAILCLOSED_READY"] = "0"
+        logger.debug("market-data entry fail-closed convergence deferred", exc_info=True)
+        return False
+
+
 def _ensure_scan_chain() -> bool:
     try:
         convergence = importlib.import_module("scan_wrapper_convergence_repair_patch")
@@ -312,6 +336,7 @@ def _cycle() -> dict[str, bool]:
     okx = _ensure_okx_patch_idempotence()
     risk = _ensure_downstream_risk()
     zero_signal = _ensure_zero_signal_state()
+    market_data_entry_failclosed = _ensure_market_data_entry_failclosed()
     scan = _ensure_scan_chain()
     release = _publish_release()
     activation = _activation_step(release)
@@ -319,6 +344,7 @@ def _cycle() -> dict[str, bool]:
         "okx_idempotent": okx,
         "risk": risk,
         "zero_signal": zero_signal,
+        "market_data_entry_failclosed": market_data_entry_failclosed,
         "scan": scan,
         "release": release,
         "activation": activation,
@@ -371,6 +397,7 @@ __all__ = [
     "_ensure_okx_patch_idempotence",
     "_ensure_zero_signal_state",
     "_ensure_downstream_risk",
+    "_ensure_market_data_entry_failclosed",
     "_ensure_scan_chain",
     "_publish_release",
     "_activation_step",
