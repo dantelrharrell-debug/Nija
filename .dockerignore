@@ -114,6 +114,8 @@ scripts/*
 !scripts/apply_kraken_recovery_coordinator_single_owner_v400.py
 !scripts/apply_execution_proof_startup_isolation_v339.py
 !scripts/apply_execution_proof_freshness_truth_v375.py
+!scripts/apply_execution_proof_recovery_retry_v401.py
+!scripts/apply_execution_verification_source_alignment_v402.py
 !scripts/apply_activation_publication_fast_path_v376.py
 !scripts/apply_kraken_coverage_truth_fairness_v385.py
 !scripts/apply_user_readiness_deadline_convergence_v390.py
