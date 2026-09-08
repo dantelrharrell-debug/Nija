@@ -13,6 +13,13 @@ export NIJA_ALLOW_LIVE_HEARTBEAT_ORDERS=false
 export NIJA_FORCE_ACTIVATION=false
 export FORCE_TRADE=false
 
+# Bound the live scan to the number of symbols the current OHLC path can service
+# inside the existing phase-3 deadline. This reduces data-insufficient cycles
+# without weakening any risk, execution, position-sync, or protective-exit gate.
+export NIJA_MAX_SCAN_SYMBOLS=20
+export NIJA_MARKET_DATA_STABILITY_PATCH=true
+export NIJA_PHASE3_FETCH_DEADLINE_SKIP_ENABLED=true
+
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT_DIR}"
 
