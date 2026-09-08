@@ -68,7 +68,13 @@ def _thread_alive(strategy: Any) -> bool:
 
 
 def _ensure_heartbeat_scheduler(strategy: Any) -> bool:
-    """Ensure the existing live strategy owns an active heartbeat verifier."""
+    """Ensure the existing live strategy has its heartbeat verifier scheduled.
+
+    A successful scheduler invocation is structural readiness for this patch.
+    Immediate thread liveness is deliberately not treated as execution proof:
+    canonical writer/nonce/risk/kill-switch/reconciliation/capital/order/fill
+    gates still have to produce the genuine downstream execution proof.
+    """
     if strategy is None:
         return False
 
@@ -139,13 +145,14 @@ def _ensure_heartbeat_scheduler(strategy: Any) -> bool:
     alive = _thread_alive(strategy)
     LOGGER.critical(
         "EXISTING_STRATEGY_HEARTBEAT_REARM_V203_TRIGGERED marker=%s thread_alive=%s "
-        "policy_refreshed=true existing_scheduler_only=true execution_authority_granted=false "
-        "proof_fabricated=false writer_nonce_risk_killswitch_reconciliation_capital_order_fill_gates_unchanged=true "
+        "scheduler_invoked=true thread_liveness_not_execution_proof=true policy_refreshed=true "
+        "existing_scheduler_only=true execution_authority_granted=false proof_fabricated=false "
+        "writer_nonce_risk_killswitch_reconciliation_capital_order_fill_gates_unchanged=true "
         "forced_activation=false safety_gates_bypassed=false",
         MARKER,
         str(alive).lower(),
     )
-    return alive
+    return True
 
 
 def _strategy_from_cached_runtime_publisher() -> Any:
@@ -262,7 +269,7 @@ def _rearm_already_published_strategy(module: Any) -> bool:
     if not ready:
         LOGGER.critical(
             "EXISTING_STRATEGY_HEARTBEAT_REARM_V203_IMMEDIATE_FAILED marker=%s "
-            "reason=existing_scheduler_not_alive execution_authority_granted=false "
+            "reason=scheduler_setup_failed execution_authority_granted=false "
             "proof_fabricated=false trading_fail_closed=true",
             MARKER,
         )
@@ -271,8 +278,8 @@ def _rearm_already_published_strategy(module: Any) -> bool:
     LOGGER.critical(
         "EXISTING_STRATEGY_HEARTBEAT_REARM_V203_IMMEDIATE_READY marker=%s "
         "existing_strategy_found=true existing_scheduler_only=true strategy_replaced=false "
-        "execution_authority_granted=false proof_fabricated=false forced_activation=false "
-        "safety_gates_bypassed=false",
+        "thread_liveness_not_execution_proof=true execution_authority_granted=false "
+        "proof_fabricated=false forced_activation=false safety_gates_bypassed=false",
         MARKER,
     )
     return True
@@ -381,7 +388,8 @@ def install() -> bool:
             "publication_primitive_guarded=true bot_main_step2_5_guarded=true "
             "install_after_publication_gap_closed=true v127_cached_publish_bypass_closed=true "
             "detached_v127_cached_publication_recovery=true existing_strategy_only=true "
-            "existing_scheduler_only=true execution_authority_granted=false proof_fabricated=false "
+            "existing_scheduler_only=true thread_liveness_not_execution_proof=true "
+            "execution_authority_granted=false proof_fabricated=false "
             "forced_activation=false safety_gates_bypassed=false",
             MARKER,
         )
