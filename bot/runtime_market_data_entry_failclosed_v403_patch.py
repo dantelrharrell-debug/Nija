@@ -1,8 +1,10 @@
 """Fail closed live Phase-3 entries whenever canonical market-data health is false.
 
 This patch is deliberately entry-only: protective exits, reconciliation, and broker
-position management are untouched. It does not grant readiness, submit orders,
-clear latches, or modify market-data thresholds.
+position management are untouched. It checks health both when Phase-3 starts and
+again on the same thread immediately before the Phase-3 Apex ``execute_action``
+boundary. It does not grant readiness, submit orders, clear latches, or modify
+market-data thresholds.
 """
 from __future__ import annotations
 
@@ -19,7 +21,9 @@ from typing import Any
 LOGGER = logging.getLogger("nija.runtime_market_data_entry_failclosed_v403")
 MARKER = "20260908-runtime-market-data-entry-failclosed-v403"
 _ATTR = "_nija_market_data_entry_failclosed_v403"
+_PREDISPATCH_ATTR = "_nija_market_data_predispatch_failclosed_v403"
 _LOCK = threading.RLock()
+_TLS = threading.local()
 _HOOK = False
 _MONITOR = False
 
@@ -34,6 +38,52 @@ def _health() -> tuple[bool, dict[str, Any]]:
         return bool(healthy), dict(detail or {})
     except Exception as exc:
         return False, {"health_probe_error": f"{type(exc).__name__}:{exc}"}
+
+
+def _patch_apex_execute(apex: Any) -> bool:
+    """Guard Apex submission only while the calling thread is inside Phase-3.
+
+    Protective exits do not run under the Phase-3 thread-local entry context, so
+    this final check cannot suppress exit/reconciliation traffic.
+    """
+    if apex is None:
+        return False
+    cls = type(apex)
+    current = getattr(cls, "execute_action", None)
+    if not callable(current):
+        return False
+    if bool(getattr(current, _PREDISPATCH_ATTR, False)):
+        return True
+
+    original = current
+
+    @wraps(original)
+    def execute_action_market_health_gate(self: Any, analysis: Any, symbol: str, *args: Any, **kwargs: Any):
+        if bool(getattr(_TLS, "phase3_entry_context", False)):
+            healthy, detail = _health()
+            if not healthy:
+                LOGGER.critical(
+                    "ENTRY_BLOCKED_PRE_DISPATCH reason=market_data_unhealthy marker=%s symbol=%s detail=%s "
+                    "phase3_entry=true entry_fail_closed=true exits_unchanged=true orders_submitted=false "
+                    "forced_activation=false safety_gates_bypassed=false",
+                    MARKER,
+                    symbol,
+                    detail,
+                )
+                return False
+        return original(self, analysis, symbol, *args, **kwargs)
+
+    setattr(execute_action_market_health_gate, _PREDISPATCH_ATTR, True)
+    setattr(execute_action_market_health_gate, "__wrapped__", original)
+    setattr(cls, "execute_action", execute_action_market_health_gate)
+    LOGGER.critical(
+        "RUNTIME_MARKET_DATA_PREDISPATCH_V403_PATCHED marker=%s apex_class=%s "
+        "thread_local_phase3_only=true exits_unchanged=true thresholds_unchanged=true "
+        "orders_submitted=false forced_activation=false safety_gates_bypassed=false",
+        MARKER,
+        cls.__name__,
+    )
+    return True
 
 
 def _patch_module(module: Any) -> bool:
@@ -67,19 +117,32 @@ def _patch_module(module: Any) -> bool:
                 "ENTRY_BLOCKED reason=market_data_unhealthy marker=%s blocked=%d detail=%s "
                 "entry_fail_closed=true exits_unchanged=true orders_submitted=false "
                 "forced_activation=false safety_gates_bypassed=false",
-                MARKER, blocked, detail,
+                MARKER,
+                blocked,
+                detail,
             )
             return (0, blocked, 0, {"market_data_unhealthy": blocked})
-        return original(self, *args, **kwargs)
+
+        apex = getattr(self, "apex", None)
+        with _LOCK:
+            _patch_apex_execute(apex)
+
+        previous = bool(getattr(_TLS, "phase3_entry_context", False))
+        _TLS.phase3_entry_context = True
+        try:
+            return original(self, *args, **kwargs)
+        finally:
+            _TLS.phase3_entry_context = previous
 
     setattr(phase3_market_health_gate, _ATTR, True)
     setattr(phase3_market_health_gate, "__wrapped__", original)
     setattr(cls, "_phase3_scan_and_enter", phase3_market_health_gate)
     LOGGER.critical(
         "RUNTIME_MARKET_DATA_ENTRY_FAILCLOSED_V403_PATCHED marker=%s module=%s "
-        "phase3_entries_only=true protective_exits_unchanged=true thresholds_unchanged=true "
-        "orders_submitted=false forced_activation=false safety_gates_bypassed=false",
-        MARKER, getattr(module, "__name__", "unknown"),
+        "phase3_start_gate=true phase3_predispatch_gate=true protective_exits_unchanged=true "
+        "thresholds_unchanged=true orders_submitted=false forced_activation=false safety_gates_bypassed=false",
+        MARKER,
+        getattr(module, "__name__", "unknown"),
     )
     return True
 
@@ -91,7 +154,7 @@ def _patch_loaded() -> int:
             try:
                 count += int(_patch_module(module))
             except Exception:
-                pass
+                LOGGER.debug("V403_LOADED_PATCH_RETRY module=%s", name, exc_info=True)
     return count
 
 
@@ -141,8 +204,9 @@ def install() -> bool:
         _install_monitor()
         LOGGER.critical(
             "RUNTIME_MARKET_DATA_ENTRY_FAILCLOSED_V403_READY marker=%s ready=true "
-            "phase3_entries_only=true protective_exits_unchanged=true thresholds_unchanged=true "
-            "orders_submitted=false forced_activation=false safety_gates_bypassed=false",
+            "phase3_start_gate=true phase3_predispatch_gate=true thread_local_entry_context=true "
+            "protective_exits_unchanged=true thresholds_unchanged=true orders_submitted=false "
+            "forced_activation=false safety_gates_bypassed=false",
             MARKER,
         )
         return True
