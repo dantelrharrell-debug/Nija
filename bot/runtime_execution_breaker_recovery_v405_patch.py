@@ -140,6 +140,20 @@ def _worker() -> None:
         time.sleep(2.0)
 
 
+def _install_authenticated_probe_revalidation() -> bool:
+    """Start v406, which can only recover proof from live exact QueryOrders evidence."""
+    try:
+        module = importlib.import_module("bot.runtime_known_execution_probe_revalidation_v406_patch")
+        installer = getattr(module, "install", None)
+        return bool(installer()) if callable(installer) else False
+    except Exception:
+        LOGGER.exception(
+            "EXECUTION_BREAKER_RECOVERY_V405_V406_INSTALL_ERROR marker=%s trading_fail_closed=true",
+            MARKER,
+        )
+        return False
+
+
 def install() -> bool:
     global _THREAD
     with _LOCK:
@@ -159,6 +173,14 @@ def install() -> bool:
                 LOGGER.error("EXECUTION_BREAKER_RECOVERY_V405_NOT_READY marker=%s reason=tsm_contract_missing", MARKER)
                 return False
 
+            if not _install_authenticated_probe_revalidation():
+                os.environ[_READY_FLAG] = "0"
+                LOGGER.error(
+                    "EXECUTION_BREAKER_RECOVERY_V405_NOT_READY marker=%s reason=v406_revalidation_install_failed",
+                    MARKER,
+                )
+                return False
+
             if _THREAD is None or not _THREAD.is_alive():
                 _THREAD = threading.Thread(
                     target=_worker,
@@ -171,8 +193,9 @@ def install() -> bool:
             LOGGER.critical(
                 "EXECUTION_BREAKER_RECOVERY_V405_READY marker=%s heartbeat_only=true "
                 "fresh_verification_required=true strict_writer_nonce_required=true kill_switch_clear_required=true "
-                "freshness_extended=false threshold_changed=false authority_granted=false state_changed=false "
-                "orders_submitted=false orders_cancelled=false forced_activation=false safety_gates_bypassed=false",
+                "authenticated_probe_revalidation_v406=true freshness_extended=false threshold_changed=false "
+                "authority_granted=false state_changed=false orders_submitted=false orders_cancelled=false "
+                "forced_activation=false safety_gates_bypassed=false",
                 MARKER,
             )
             return True
