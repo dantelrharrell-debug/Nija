@@ -1,19 +1,18 @@
-"""Fail-closed recovery for a stale heartbeat-verification circuit-breaker latch.
+"""Fail-closed recovery for stale execution verification and live-safety liveness.
 
-Production can legitimately observe a stale execution verification sample and trip
-its activation circuit breaker. Later, a genuine canonical execution proof can
-become current again, while the old heartbeat-verification breaker remains
-latched and continues rejecting normal activation attempts.
+v405 clears only a recovered heartbeat-verification circuit-breaker latch, and
+only after current canonical verification, strict writer/nonce authority, and a
+clear kill switch are all proven. It also installs the authenticated v406 proof
+revalidation path and the existing v404 live-safety convergence path.
 
-v405 clears *only* the heartbeat_verification breaker bucket, and only after:
-- the canonical heartbeat/execution verification status is currently true,
-- strict writer/nonce authority is currently true, and
-- the kill switch is currently clear.
+v404 does not grant execution authority or relax any proof. It only keeps market
+telemetry fail-closed, suppresses the known stalled-writer WAITING false positive
+when the writer is already provably healthy/LIVE_ACTIVE, and tightens authenticated
+Kraken user-position refresh scheduling without extending the authoritative
+snapshot TTL.
 
-It does not extend freshness, change breaker thresholds, mark readiness, grant
-execution authority, change trading state, write a proof marker, place/cancel an
-order, or bypass any activation gate. Normal activation must still pass every
-canonical gate after the stale latch is cleared.
+No freshness is extended, no threshold is changed, no readiness is fabricated,
+no proof marker is fabricated, and no order is submitted/cancelled by this patch.
 """
 from __future__ import annotations
 
@@ -79,7 +78,7 @@ def _clear_recovered_heartbeat_latch_once() -> bool:
     if "heartbeat_verification" not in reason.lower():
         return False
 
-    verification_ready, verification_detail, verification_meta = _verification_current(tsm)
+    verification_ready, _verification_detail, verification_meta = _verification_current(tsm)
     if not verification_ready:
         return False
 
@@ -106,8 +105,7 @@ def _clear_recovered_heartbeat_latch_once() -> bool:
             if str(key or "").strip().lower() == "heartbeat_verification":
                 counts.pop(key, None)
 
-        # Never clear another breaker category. If any non-heartbeat breaker
-        # remains, preserve the trip and let that safety condition stay authoritative.
+        # Never clear another breaker category.
         if counts:
             return False
 
@@ -141,7 +139,7 @@ def _worker() -> None:
 
 
 def _install_authenticated_probe_revalidation() -> bool:
-    """Start v406, which can only recover proof from live exact QueryOrders evidence."""
+    """Start v406, which can only recover proof from exact authenticated evidence."""
     try:
         module = importlib.import_module("bot.runtime_known_execution_probe_revalidation_v406_patch")
         installer = getattr(module, "install", None)
@@ -149,6 +147,28 @@ def _install_authenticated_probe_revalidation() -> bool:
     except Exception:
         LOGGER.exception(
             "EXECUTION_BREAKER_RECOVERY_V405_V406_INSTALL_ERROR marker=%s trading_fail_closed=true",
+            MARKER,
+        )
+        return False
+
+
+def _install_live_safety_convergence() -> bool:
+    """Install v404 on the active convergence path; v404 itself remains fail-closed."""
+    try:
+        module = importlib.import_module("bot.runtime_live_safety_convergence_v404_patch")
+        installer = getattr(module, "install", None)
+        ready = bool(installer()) if callable(installer) else False
+        if not ready:
+            LOGGER.warning(
+                "EXECUTION_BREAKER_RECOVERY_V405_V404_DEFERRED marker=%s "
+                "trading_fail_closed=true snapshot_ttl_unchanged=true",
+                MARKER,
+            )
+        return ready
+    except Exception:
+        LOGGER.exception(
+            "EXECUTION_BREAKER_RECOVERY_V405_V404_INSTALL_ERROR marker=%s "
+            "trading_fail_closed=true snapshot_ttl_unchanged=true",
             MARKER,
         )
         return False
@@ -181,6 +201,11 @@ def install() -> bool:
                 )
                 return False
 
+            # v404 may defer until its target modules are loaded. runtime_convergence_v15
+            # calls this installer repeatedly, so it is safely retried without making
+            # execution readiness depend on a diagnostic/scheduling patch.
+            live_safety_ready = _install_live_safety_convergence()
+
             if _THREAD is None or not _THREAD.is_alive():
                 _THREAD = threading.Thread(
                     target=_worker,
@@ -193,10 +218,11 @@ def install() -> bool:
             LOGGER.critical(
                 "EXECUTION_BREAKER_RECOVERY_V405_READY marker=%s heartbeat_only=true "
                 "fresh_verification_required=true strict_writer_nonce_required=true kill_switch_clear_required=true "
-                "authenticated_probe_revalidation_v406=true freshness_extended=false threshold_changed=false "
-                "authority_granted=false state_changed=false orders_submitted=false orders_cancelled=false "
-                "forced_activation=false safety_gates_bypassed=false",
+                "authenticated_probe_revalidation_v406=true live_safety_v404=%s "
+                "freshness_extended=false threshold_changed=false authority_granted=false state_changed=false "
+                "orders_submitted=false orders_cancelled=false forced_activation=false safety_gates_bypassed=false",
                 MARKER,
+                str(live_safety_ready).lower(),
             )
             return True
         except Exception as exc:
@@ -212,4 +238,10 @@ def install() -> bool:
 
 install_import_hook = install
 
-__all__ = ["MARKER", "install", "install_import_hook", "_clear_recovered_heartbeat_latch_once"]
+__all__ = [
+    "MARKER",
+    "install",
+    "install_import_hook",
+    "_clear_recovered_heartbeat_latch_once",
+    "_install_live_safety_convergence",
+]
