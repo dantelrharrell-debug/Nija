@@ -5,13 +5,10 @@
 
 set -euo pipefail
 
-# Emergency capital-protection containment (2026-09-07): force the execution
-# firewall to SAFE_MODE so new entries are blocked while exits/stops remain
-# available. Keep automatic recovery disabled until Kraken position/capital
-# freshness is repaired and independently verified.
-export NIJA_SAFE_MODE_ANOMALY_THRESHOLD=0
-export NIJA_HALT_ANOMALY_THRESHOLD=999999
-export NIJA_RECOVERY_CLEAN_FILLS=999999
+# Guarded live-trading policy after the 2026-09-07 Kraken repair verification.
+# The temporary forced SAFE_MODE thresholds have been removed; all canonical
+# broker/capital/risk/position-sync/protection/market-data gates remain active.
+# Recovery/heartbeat orders and forced activation/trading remain prohibited.
 export NIJA_ALLOW_LIVE_HEARTBEAT_ORDERS=false
 export NIJA_FORCE_ACTIVATION=false
 export FORCE_TRADE=false
