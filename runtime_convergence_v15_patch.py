@@ -224,6 +224,19 @@ def _ensure_market_data_entry_failclosed() -> bool:
         return False
 
 
+def _ensure_execution_breaker_recovery() -> bool:
+    """Install/reassert v405; recovery itself remains strictly proof-gated."""
+    try:
+        patch = importlib.import_module("bot.runtime_execution_breaker_recovery_v405_patch")
+        installer = getattr(patch, "install", None) or getattr(patch, "install_import_hook", None)
+        if not callable(installer) or not bool(installer()):
+            return False
+        return _truthy("NIJA_RUNTIME_EXECUTION_BREAKER_RECOVERY_V405_READY")
+    except Exception:
+        logger.debug("execution-breaker recovery convergence deferred", exc_info=True)
+        return False
+
+
 def _ensure_scan_chain() -> bool:
     try:
         convergence = importlib.import_module("scan_wrapper_convergence_repair_patch")
@@ -337,6 +350,7 @@ def _cycle() -> dict[str, bool]:
     risk = _ensure_downstream_risk()
     zero_signal = _ensure_zero_signal_state()
     market_data_entry_failclosed = _ensure_market_data_entry_failclosed()
+    execution_breaker_recovery = _ensure_execution_breaker_recovery()
     scan = _ensure_scan_chain()
     release = _publish_release()
     activation = _activation_step(release)
@@ -345,6 +359,7 @@ def _cycle() -> dict[str, bool]:
         "risk": risk,
         "zero_signal": zero_signal,
         "market_data_entry_failclosed": market_data_entry_failclosed,
+        "execution_breaker_recovery": execution_breaker_recovery,
         "scan": scan,
         "release": release,
         "activation": activation,
@@ -398,6 +413,7 @@ __all__ = [
     "_ensure_zero_signal_state",
     "_ensure_downstream_risk",
     "_ensure_market_data_entry_failclosed",
+    "_ensure_execution_breaker_recovery",
     "_ensure_scan_chain",
     "_publish_release",
     "_activation_step",
