@@ -62,6 +62,7 @@ _promote_secret_alias KRAKEN_PLATFORM_API_SECRET \
 export NIJA_DEFER_RUNTIME_SITE_HOOKS=1
 python3 -S scripts/apply_startup_handoff_fix.py
 python3 -S scripts/apply_canonical_launcher_v26.py
+python3 -S scripts/apply_kraken_recovery_coordinator_single_owner_v400.py
 python3 -S scripts/apply_execution_proof_startup_isolation_v339.py
 python3 -S scripts/apply_execution_proof_freshness_truth_v375.py
 python3 -S scripts/apply_activation_publication_fast_path_v376.py
@@ -111,6 +112,7 @@ python3 -S -m py_compile \
     scripts/canonical_runtime_launcher_v26.py \
     scripts/render_memory_pressure_guard.py \
     scripts/apply_canonical_launcher_v26.py \
+    scripts/apply_kraken_recovery_coordinator_single_owner_v400.py \
     scripts/apply_execution_proof_startup_isolation_v339.py \
     scripts/apply_execution_proof_freshness_truth_v375.py \
     scripts/apply_activation_publication_fast_path_v376.py \
@@ -135,6 +137,8 @@ grep -Fq 'RENDER_RUNTIME_SIGNAL_FORWARDED marker=20260828-render-signal-forwardi
 grep -Fq '_RENDER_RUNTIME_CHILD_PID=$!' start.sh
 grep -Fq 'kill -TERM "${_RENDER_RUNTIME_CHILD_PID}"' start.sh
 grep -Fq 'DIRECT_CANONICAL_BROKER_PREBOOTSTRAP_V27_READY' bot/bot_main.py
+grep -Fq '20260907-kraken-recovery-coordinator-single-owner-v400' bot/canonical_broker_startup_convergence_v24.py
+grep -Fq 'waiting_for_canonical_bot_main_prebootstrap_owner' bot/canonical_broker_startup_convergence_v24.py
 grep -Fq 'V45_PATH = ROOT / "bot" / "writer_generation_handoff_v45_patch.py"' scripts/canonical_runtime_launcher_v26.py
 grep -Fq '_install_writer_generation_handoff_v45()' scripts/canonical_runtime_launcher_v26.py
 grep -Fq 'CANONICAL_EARLY_WRITER_BOOTSTRAP_VERIFIED' scripts/canonical_runtime_launcher_v26.py
@@ -168,7 +172,7 @@ grep -Fq 'handle_outreach_extension_post(self)' render_liveness_server.py
 grep -Fq 'handle_outreach_post(self)' render_liveness_server.py
 grep -Fq 'start_justcall_webhook_autoconfig()' render_liveness_server.py
 
-echo "🧭 RENDER_ENTRYPOINT_CANONICAL_HANDOFF_READY marker=20260907-kraken-inflight-readiness-v399 launcher=canonical_runtime_launcher_v26 writer_generation_handoff=v45 writer_first=v59 execution_proof_startup_isolation=v339 execution_proof_freshness_truth=v375 activation_publication_fast_path=v376 kraken_coverage_truth_fairness=v385 user_readiness_deadline_convergence=v390 kraken_authoritative_wait=v398 kraken_inflight_readiness=v399 kraken_margin_four_way_supervisor=v387 protection_binding_precision=v391 native_backup_started=false orders_submitted=false signal_forwarding=v262 single_identity=true singleton_alias_convergence=v91 kraken_nonce_authority_gate=v91 direct_broker_prebootstrap=v27 outreach_frontdoor=v3 signed_webhook=true webhook_autoconfig=true campaign_compliance_fail_closed=true"
+echo "🧭 RENDER_ENTRYPOINT_CANONICAL_HANDOFF_READY marker=20260907-kraken-inflight-readiness-v399 launcher=canonical_runtime_launcher_v26 writer_generation_handoff=v45 writer_first=v59 execution_proof_startup_isolation=v339 execution_proof_freshness_truth=v375 activation_publication_fast_path=v376 kraken_coverage_truth_fairness=v385 user_readiness_deadline_convergence=v390 kraken_authoritative_wait=v398 kraken_inflight_readiness=v399 kraken_recovery_coordinator_single_owner=v400 kraken_margin_four_way_supervisor=v387 protection_binding_precision=v391 native_backup_started=false orders_submitted=false signal_forwarding=v262 single_identity=true singleton_alias_convergence=v91 kraken_nonce_authority_gate=v91 direct_broker_prebootstrap=v27 outreach_frontdoor=v3 signed_webhook=true webhook_autoconfig=true campaign_compliance_fail_closed=true"
 unset NIJA_DEFER_RUNTIME_SITE_HOOKS
 
 exec bash scripts/production_bootstrap.sh "$@"
