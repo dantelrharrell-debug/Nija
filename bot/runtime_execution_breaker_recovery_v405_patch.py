@@ -3,13 +3,18 @@
 v405 clears only a recovered heartbeat-verification circuit-breaker latch, and
 only after current canonical verification, strict writer/nonce authority, and a
 clear kill switch are all proven. It also installs the authenticated v406 proof
-revalidation path and the existing v404 live-safety convergence path.
+revalidation path, the existing v404 live-safety convergence path, and v409's
+portfolio-equity correction for the global drawdown breaker.
 
 v404 does not grant execution authority or relax any proof. It only keeps market
 telemetry fail-closed, suppresses the known stalled-writer WAITING false positive
 when the writer is already provably healthy/LIVE_ACTIVE, and tightens authenticated
 Kraken user-position refresh scheduling without extending the authoritative
 snapshot TTL.
+
+v409 changes no risk threshold. It only prevents authoritative Coinbase platform
+holdings from disappearing from portfolio equity when CapitalAuthority publishes
+spendable cash, while leaving Kraken authenticated TradeBalance equity untouched.
 
 No freshness is extended, no threshold is changed, no readiness is fabricated,
 no proof marker is fabricated, and no order is submitted/cancelled by this patch.
@@ -174,6 +179,26 @@ def _install_live_safety_convergence() -> bool:
         return False
 
 
+def _install_drawdown_portfolio_equity() -> bool:
+    """Install v409; any unavailable proof leaves the drawdown stop fail-closed."""
+    try:
+        module = importlib.import_module("bot.runtime_drawdown_portfolio_equity_v409_patch")
+        installer = getattr(module, "install", None)
+        ready = bool(installer()) if callable(installer) else False
+        if not ready:
+            LOGGER.warning(
+                "EXECUTION_BREAKER_RECOVERY_V405_V409_DEFERRED marker=%s trading_fail_closed=true drawdown_threshold_unchanged=true",
+                MARKER,
+            )
+        return ready
+    except Exception:
+        LOGGER.exception(
+            "EXECUTION_BREAKER_RECOVERY_V405_V409_INSTALL_ERROR marker=%s trading_fail_closed=true drawdown_threshold_unchanged=true",
+            MARKER,
+        )
+        return False
+
+
 def install() -> bool:
     global _THREAD
     with _LOCK:
@@ -201,10 +226,11 @@ def install() -> bool:
                 )
                 return False
 
-            # v404 may defer until its target modules are loaded. runtime_convergence_v15
-            # calls this installer repeatedly, so it is safely retried without making
-            # execution readiness depend on a diagnostic/scheduling patch.
+            # v404/v409 may defer until their target modules and authoritative
+            # snapshots are loaded. runtime_convergence_v15 calls this installer
+            # repeatedly, so both are retried without granting execution authority.
             live_safety_ready = _install_live_safety_convergence()
+            drawdown_equity_ready = _install_drawdown_portfolio_equity()
 
             if _THREAD is None or not _THREAD.is_alive():
                 _THREAD = threading.Thread(
@@ -218,11 +244,12 @@ def install() -> bool:
             LOGGER.critical(
                 "EXECUTION_BREAKER_RECOVERY_V405_READY marker=%s heartbeat_only=true "
                 "fresh_verification_required=true strict_writer_nonce_required=true kill_switch_clear_required=true "
-                "authenticated_probe_revalidation_v406=true live_safety_v404=%s "
+                "authenticated_probe_revalidation_v406=true live_safety_v404=%s drawdown_portfolio_equity_v409=%s "
                 "freshness_extended=false threshold_changed=false authority_granted=false state_changed=false "
                 "orders_submitted=false orders_cancelled=false forced_activation=false safety_gates_bypassed=false",
                 MARKER,
                 str(live_safety_ready).lower(),
+                str(drawdown_equity_ready).lower(),
             )
             return True
         except Exception as exc:
@@ -244,4 +271,5 @@ __all__ = [
     "install_import_hook",
     "_clear_recovered_heartbeat_latch_once",
     "_install_live_safety_convergence",
+    "_install_drawdown_portfolio_equity",
 ]
