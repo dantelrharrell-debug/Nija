@@ -9,15 +9,19 @@ callable after v346 patched v285's candidate helper.
 v348 repairs the terminal dispatch boundary without weakening readiness:
 
 * v108 discovery is reasserted to UNION its existing result with v285's current
-  strong-proof candidates.  A stale/missing connected platform snapshot is
+  strong-proof candidates. A stale/missing connected platform snapshot is
   therefore visible to the actual authoritative worker regardless of wrapper
   install order.
-* when stale candidates exist and no v108 worker owns that exact manager/broker
-  key, v348 starts the EXISTING v108 authoritative reconciliation worker.  It
-  never performs broker reads itself and never grants readiness.
+* current authoritative snapshots are also scheduled for proactive refresh at
+  v285's existing refresh interval (55% of the unchanged snapshot TTL). This
+  gives the same bounded authoritative worker time to complete before the 90s
+  readiness TTL expires instead of waiting for readiness to fail first.
+* when a refresh candidate exists and no v108 worker owns that exact
+  manager/broker key, v348 starts the EXISTING v108 authoritative reconciliation
+  worker. It never performs broker reads itself and never grants readiness.
 * after authoritative position recovery, v281 remains the sole owner of
   stop-loss, take-profit, trailing take-profit, trailing-stop and auto-exit
-  protection adoption.  v348 only wakes/audits the existing coverage path.
+  protection adoption. v348 only wakes/audits the existing coverage path.
 * the genuine execution marker policy from v346/v347 is unchanged: no ACK,
   connected state, requested notional, market price, stale fill, or writer
   heartbeat can satisfy execution_ready.
@@ -45,20 +49,69 @@ _LOCK = threading.RLock()
 _THREAD: threading.Thread | None = None
 
 
+def _proactive_platform_candidates(manager: Any) -> list[tuple[str, Any]]:
+    """Return connected platform brokers whose current snapshot is due refresh.
+
+    This is liveness scheduling only. It does not change snapshot validity or
+    readiness: v285 remains authoritative for both.
+    """
+    found: list[tuple[str, Any]] = []
+    try:
+        v285 = importlib.import_module("bot.runtime_authoritative_position_coverage_v285_patch")
+        interval_fn = getattr(v285, "_refresh_interval_s", None)
+        refresh_after_s = float(interval_fn()) if callable(interval_fn) else 49.5
+        refresh_after_s = max(10.0, refresh_after_s)
+        platform = getattr(manager, "platform_brokers", {}) or {}
+        if callable(platform):
+            platform = platform()
+        for broker_type, broker in dict(platform or {}).items():
+            if broker is None:
+                continue
+            connected = getattr(broker, "connected", False)
+            try:
+                connected = connected() if callable(connected) else connected
+            except Exception:
+                connected = False
+            if not bool(connected):
+                continue
+            if getattr(broker, "_nija_authoritative_position_snapshot_fetch_ok_v285", None) is not True:
+                continue
+            try:
+                at = float(getattr(broker, "_nija_authoritative_position_snapshot_at_monotonic_v285", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                at = 0.0
+            if at <= 0.0:
+                continue
+            age_s = max(0.0, time.monotonic() - at)
+            if age_s < refresh_after_s:
+                continue
+            raw_name = getattr(broker_type, "value", broker_type)
+            name = str(raw_name or "unknown").strip().lower()
+            if "." in name:
+                name = name.rsplit(".", 1)[-1]
+            found.append((name or "unknown", broker))
+            LOGGER.info(
+                "POSITION_REFRESH_V348_PROACTIVE_DUE marker=%s broker=%s age_s=%.3f refresh_after_s=%.3f "
+                "snapshot_ttl_unchanged=true readiness_granted=false",
+                MARKER, name or "unknown", age_s, refresh_after_s,
+            )
+    except Exception:
+        return []
+    return found
+
+
 def _candidate_union(manager: Any, existing: list[tuple[str, Any]] | None = None) -> list[tuple[str, Any]]:
-    """Union current v108 results with v285 strong-proof candidates."""
+    """Union v108, v285 stale/missing, and proactive refresh candidates."""
     found: list[tuple[str, Any]] = list(existing or [])
     seen = {id(broker) for _name, broker in found if broker is not None}
     try:
         v285 = importlib.import_module("bot.runtime_authoritative_position_coverage_v285_patch")
         resolver = getattr(v285, "_platform_candidates", None)
-        if not callable(resolver):
-            return found
-        extra = list(resolver(manager) or [])
+        extra = list(resolver(manager) or []) if callable(resolver) else []
     except Exception:
-        return found
+        extra = []
 
-    for name, broker in extra:
+    for name, broker in extra + _proactive_platform_candidates(manager):
         if broker is None or id(broker) in seen:
             continue
         found.append((str(name or "unknown").strip().lower(), broker))
@@ -67,7 +120,7 @@ def _candidate_union(manager: Any, existing: list[tuple[str, Any]] | None = None
 
 
 def _patch_v108_discovery() -> bool:
-    """Reassert stale/missing strong-proof discovery at the terminal v108 boundary."""
+    """Reassert authoritative refresh discovery at the terminal v108 boundary."""
     v108 = importlib.import_module("bot.platform_position_sync_v108_patch")
     current = getattr(v108, "_connected_unsynced_platform_brokers", None)
     if not callable(current):
@@ -85,7 +138,7 @@ def _patch_v108_discovery() -> bool:
         if len(union) > len(base):
             LOGGER.info(
                 "POSITION_REFRESH_V348_DISCOVERY_RESTORED marker=%s base=%d union=%d "
-                "v285_strong_proof_only=true stale_promoted=false readiness_granted=false",
+                "v285_strong_proof_or_proactive_due=true stale_promoted=false readiness_granted=false",
                 MARKER, len(base), len(union),
             )
         return union
@@ -97,7 +150,7 @@ def _patch_v108_discovery() -> bool:
 
 
 def _dispatch_authoritative_workers() -> int:
-    """Start only the existing v108 worker for uncovered stale candidates."""
+    """Start only the existing v108 worker for uncovered refresh candidates."""
     try:
         v161 = importlib.import_module("bot.runtime_capital_position_convergence_v161_patch")
         manager_fn = getattr(v161, "_canonical_manager", None)
@@ -133,7 +186,7 @@ def _dispatch_authoritative_workers() -> int:
         try:
             thread = threading.Thread(
                 target=worker,
-                args=(manager, str(broker_name or "unknown"), broker, key, "v348_stale_snapshot_recovery"),
+                args=(manager, str(broker_name or "unknown"), broker, key, "v348_authoritative_snapshot_refresh"),
                 name=f"V348PositionRefresh-{str(broker_name or 'unknown')}",
                 daemon=True,
             )
@@ -141,8 +194,8 @@ def _dispatch_authoritative_workers() -> int:
             started += 1
             LOGGER.critical(
                 "POSITION_REFRESH_V348_WORKER_STARTED marker=%s broker=%s key=%s "
-                "existing_v108_worker=true authoritative_fetch_required=true readiness_granted=false "
-                "snapshot_ttl_unchanged=true synthetic_success=false safety_gates_bypassed=false",
+                "existing_v108_worker=true authoritative_fetch_required=true proactive_before_ttl=true "
+                "readiness_granted=false snapshot_ttl_unchanged=true synthetic_success=false safety_gates_bypassed=false",
                 MARKER, str(broker_name or "unknown"), key,
             )
         except Exception as exc:
@@ -152,8 +205,7 @@ def _dispatch_authoritative_workers() -> int:
             except Exception:
                 pass
             LOGGER.warning(
-                "POSITION_REFRESH_V348_WORKER_START_FAILED marker=%s broker=%s error=%s:%s "
-                "trading_fail_closed=true",
+                "POSITION_REFRESH_V348_WORKER_START_FAILED marker=%s broker=%s error=%s:%s trading_fail_closed=true",
                 MARKER, str(broker_name or "unknown"), type(exc).__name__, exc,
             )
     return started
@@ -226,7 +278,7 @@ def install_import_hook() -> bool:
         log = LOGGER.critical if ready else LOGGER.error
         log(
             "RUNTIME_POSITION_PROTECTION_LIVENESS_V348_%s marker=%s ready=%s "
-            "terminal_v108_discovery=%s manifest=%s authoritative_worker_only=true "
+            "terminal_v108_discovery=%s manifest=%s authoritative_worker_only=true proactive_refresh_before_ttl=true "
             "take_profit_owner=v281 stop_loss_owner=v281 trailing_take_profit_owner=v281 "
             "trailing_stop_owner=v281 auto_exit_reconciler_owner=v281 dust_policy_unchanged=true "
             "snapshot_ttl_unchanged=true stale_promoted=false execution_marker_policy_unchanged=true "
