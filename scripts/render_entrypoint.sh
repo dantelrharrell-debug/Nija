@@ -8,8 +8,10 @@ set -euo pipefail
 # Guarded live-trading policy after the 2026-09-07 Kraken repair verification.
 # The temporary forced SAFE_MODE thresholds have been removed; all canonical
 # broker/capital/risk/position-sync/protection/market-data gates remain active.
-# Recovery/heartbeat orders and forced activation/trading remain prohibited.
-export NIJA_ALLOW_LIVE_HEARTBEAT_ORDERS=false
+# Recovery/heartbeat orders require an explicit Render opt-in; forced
+# activation/trading remain prohibited. Preserve a dashboard value instead of
+# overwriting it during every startup.
+export NIJA_ALLOW_LIVE_HEARTBEAT_ORDERS="${NIJA_ALLOW_LIVE_HEARTBEAT_ORDERS:-false}"
 export NIJA_FORCE_ACTIVATION=false
 export FORCE_TRADE=false
 
