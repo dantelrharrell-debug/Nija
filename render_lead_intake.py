@@ -386,10 +386,19 @@ def handle_lead_intake_post(handler: Any) -> bool:
         try:
             account = _lookup_user_by_email(email)
         except OSError:
+            # Account lookup is enrichment for lead routing, not a prerequisite
+            # for acknowledging and emailing a valid lead. Report degraded state
+            # without fabricating whether the account exists, and avoid provider
+            # retry loops that can duplicate downstream customer messages.
             _send_json(
                 handler,
-                503,
-                {"error": "NIJA account lookup is temporarily unavailable", "lookup_available": False},
+                200,
+                {
+                    "lookup_available": False,
+                    "exists": None,
+                    "email_normalized": True,
+                    "warning": "NIJA account lookup is temporarily unavailable",
+                },
             )
             return True
         response: dict[str, Any] = {
