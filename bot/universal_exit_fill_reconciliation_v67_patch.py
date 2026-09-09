@@ -75,9 +75,9 @@ def _terminal_retry_cooldown_s(result: Mapping[str, Any]) -> float:
     if _BELOW_MINIMUM_REJECT not in detail:
         return 0.0
     try:
-        configured = float(os.environ.get("NIJA_BELOW_MINIMUM_EXIT_RETRY_S", "900"))
+        configured = float(os.environ.get("NIJA_BELOW_MINIMUM_EXIT_RETRY_S", "86400"))
     except (TypeError, ValueError, OverflowError):
-        configured = 900.0
+        configured = 86400.0
     # Never allow a bad environment value to restore a hot retry loop.
     return min(86400.0, max(60.0, configured))
 
