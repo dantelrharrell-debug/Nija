@@ -2,7 +2,7 @@
 
 Production after v347 showed v346 installed but connected platform Coinbase and
 Kraken snapshots could still age past the unchanged 90s authoritative TTL while
-v285 reported ``platform_refresh_workers=0``.  The cause is wrapper ordering at
+v285 reported ``platform_refresh_workers=0``. The cause is wrapper ordering at
 the v108 discovery boundary: later convergence patches can replace the discovery
 callable after v346 patched v285's candidate helper.
 
@@ -19,12 +19,14 @@ v348 repairs the terminal dispatch boundary without weakening readiness:
 * when a refresh candidate exists and no v108 worker owns that exact
   manager/broker key, v348 starts the EXISTING v108 authoritative reconciliation
   worker. It never performs broker reads itself and never grants readiness.
+* a Kraken v288 bulk trade-history cost-basis flight that remains unfinished
+  past a bounded stale threshold may be retired exactly once per broker. The
+  next normal reconciliation may then start one fresh authenticated read. A
+  second retirement is forbidden until a newer genuine v288 cache result proves
+  recovery.
 * after authoritative position recovery, v281 remains the sole owner of
   stop-loss, take-profit, trailing take-profit, trailing-stop and auto-exit
   protection adoption. v348 only wakes/audits the existing coverage path.
-* the genuine execution marker policy from v346/v347 is unchanged: no ACK,
-  connected state, requested notional, market price, stale fill, or writer
-  heartbeat can satisfy execution_ready.
 
 No snapshot TTL is extended, no stale snapshot is promoted, no position or cost
 basis is fabricated, no trade is forced, and no writer/nonce/risk/capital/
@@ -47,14 +49,11 @@ _READY_FLAG = "NIJA_RUNTIME_POSITION_PROTECTION_LIVENESS_V348_READY"
 _DISCOVERY_PATCH = "_nija_v348_terminal_stale_platform_discovery"
 _LOCK = threading.RLock()
 _THREAD: threading.Thread | None = None
+_COST_BASIS_ESCAPE: dict[int, float] = {}
 
 
 def _proactive_platform_candidates(manager: Any) -> list[tuple[str, Any]]:
-    """Return connected platform brokers whose current snapshot is due refresh.
-
-    This is liveness scheduling only. It does not change snapshot validity or
-    readiness: v285 remains authoritative for both.
-    """
+    """Return connected platform brokers whose current snapshot is due refresh."""
     found: list[tuple[str, Any]] = []
     try:
         v285 = importlib.import_module("bot.runtime_authoritative_position_coverage_v285_patch")
@@ -117,6 +116,76 @@ def _candidate_union(manager: Any, existing: list[tuple[str, Any]] | None = None
         found.append((str(name or "unknown").strip().lower(), broker))
         seen.add(id(broker))
     return found
+
+
+def _kraken_bulk_stale_after_s() -> float:
+    try:
+        value = float(os.environ.get("NIJA_KRAKEN_BULK_ENTRY_PRICE_STALE_FLIGHT_S", "90") or 90.0)
+    except (TypeError, ValueError):
+        value = 90.0
+    return max(30.0, min(300.0, value))
+
+
+def _recover_stale_kraken_cost_basis_flights() -> int:
+    """Retire at most one stale v288 bulk history flight per broker until recovery."""
+    try:
+        v288 = importlib.import_module("bot.runtime_kraken_cost_basis_bulk_v288_patch")
+        flights = getattr(v288, "_BULK_FLIGHTS", None)
+        cache = getattr(v288, "_BULK_CACHE", None)
+        lock = getattr(v288, "_FLIGHT_LOCK", None)
+        if not isinstance(flights, dict) or not isinstance(cache, dict) or lock is None:
+            return 0
+    except Exception:
+        return 0
+
+    retired = 0
+    now = time.monotonic()
+    stale_after_s = _kraken_bulk_stale_after_s()
+    try:
+        with lock:
+            for key, escaped_at in list(_COST_BASIS_ESCAPE.items()):
+                row = cache.get(key)
+                try:
+                    stored_at = float((row or {}).get("stored_at", 0.0) or 0.0) if isinstance(row, dict) else 0.0
+                except (TypeError, ValueError):
+                    stored_at = 0.0
+                if stored_at > escaped_at:
+                    _COST_BASIS_ESCAPE.pop(key, None)
+                    LOGGER.critical(
+                        "KRAKEN_COST_BASIS_V348_STALE_FLIGHT_RECOVERED marker=%s broker_key=%s "
+                        "genuine_cache_newer_than_escape=true synthetic_entry=false safety_gates_bypassed=false",
+                        MARKER, key,
+                    )
+
+            for key, flight in list(flights.items()):
+                if key in _COST_BASIS_ESCAPE or not isinstance(flight, dict):
+                    continue
+                event = flight.get("event")
+                if event is not None and bool(getattr(event, "is_set", lambda: False)()):
+                    continue
+                try:
+                    started_at = float(flight.get("started_at", 0.0) or 0.0)
+                except (TypeError, ValueError):
+                    started_at = 0.0
+                if started_at <= 0.0:
+                    continue
+                age_s = max(0.0, now - started_at)
+                if age_s < stale_after_s:
+                    continue
+                if flights.get(key) is not flight:
+                    continue
+                flights.pop(key, None)
+                _COST_BASIS_ESCAPE[key] = now
+                retired += 1
+                LOGGER.critical(
+                    "KRAKEN_COST_BASIS_V348_STALE_FLIGHT_ESCAPE marker=%s broker_key=%s age_s=%.1f stale_after_s=%.1f "
+                    "single_escape_until_genuine_cache=true old_worker_result_not_promoted=true cost_basis_verified=false "
+                    "current_price_fallback=false forced_trade=false safety_gates_bypassed=false",
+                    MARKER, key, age_s, stale_after_s,
+                )
+    except Exception:
+        return retired
+    return retired
 
 
 def _patch_v108_discovery() -> bool:
@@ -247,6 +316,7 @@ def _register_manifest() -> bool:
 def _worker_loop() -> None:
     while True:
         try:
+            _recover_stale_kraken_cost_basis_flights()
             _patch_v108_discovery()
             _dispatch_authoritative_workers()
             _wake_coverage_and_activation()
@@ -270,6 +340,7 @@ def install_import_hook() -> bool:
         ready = bool(discovery_ready and manifest_ready)
         os.environ[_READY_FLAG] = "1" if ready else "0"
         if ready:
+            _recover_stale_kraken_cost_basis_flights()
             _dispatch_authoritative_workers()
             _wake_coverage_and_activation()
             if _THREAD is None or not _THREAD.is_alive():
@@ -279,10 +350,10 @@ def install_import_hook() -> bool:
         log(
             "RUNTIME_POSITION_PROTECTION_LIVENESS_V348_%s marker=%s ready=%s "
             "terminal_v108_discovery=%s manifest=%s authoritative_worker_only=true proactive_refresh_before_ttl=true "
-            "take_profit_owner=v281 stop_loss_owner=v281 trailing_take_profit_owner=v281 "
-            "trailing_stop_owner=v281 auto_exit_reconciler_owner=v281 dust_policy_unchanged=true "
+            "kraken_bulk_cost_basis_single_stale_escape=true take_profit_owner=v281 stop_loss_owner=v281 "
+            "trailing_take_profit_owner=v281 trailing_stop_owner=v281 auto_exit_reconciler_owner=v281 dust_policy_unchanged=true "
             "snapshot_ttl_unchanged=true stale_promoted=false execution_marker_policy_unchanged=true "
-            "forced_trade=false forced_activation=false position_success_fabricated=false "
+            "forced_trade=false forced_activation=false position_success_fabricated=false cost_basis_fabricated=false "
             "writer_nonce_capital_risk_killswitch_ecel_minimum_quantity_order_fill_gates_unchanged=true "
             "safety_gates_bypassed=false",
             "READY" if ready else "NOT_READY", MARKER, str(ready).lower(),
