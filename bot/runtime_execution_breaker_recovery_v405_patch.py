@@ -3,18 +3,9 @@
 v405 clears only a recovered heartbeat-verification circuit-breaker latch, and
 only after current canonical verification, strict writer/nonce authority, and a
 clear kill switch are all proven. It also installs the authenticated v406 proof
-revalidation path, the existing v404 live-safety convergence path, and v409's
-portfolio-equity correction for the global drawdown breaker.
-
-v404 does not grant execution authority or relax any proof. It only keeps market
-telemetry fail-closed, suppresses the known stalled-writer WAITING false positive
-when the writer is already provably healthy/LIVE_ACTIVE, and tightens authenticated
-Kraken user-position refresh scheduling without extending the authoritative
-snapshot TTL.
-
-v409 changes no risk threshold. It only prevents authoritative Coinbase platform
-holdings from disappearing from portfolio equity when CapitalAuthority publishes
-spendable cash, while leaving Kraken authenticated TradeBalance equity untouched.
+revalidation path, the existing v404 live-safety convergence path, v409's
+portfolio-equity correction for the global drawdown breaker, and v410's
+deterministic user-sharding/capacity admission layer.
 
 No freshness is extended, no threshold is changed, no readiness is fabricated,
 no proof marker is fabricated, and no order is submitted/cancelled by this patch.
@@ -110,7 +101,6 @@ def _clear_recovered_heartbeat_latch_once() -> bool:
             if str(key or "").strip().lower() == "heartbeat_verification":
                 counts.pop(key, None)
 
-        # Never clear another breaker category.
         if counts:
             return False
 
@@ -144,56 +134,58 @@ def _worker() -> None:
 
 
 def _install_authenticated_probe_revalidation() -> bool:
-    """Start v406, which can only recover proof from exact authenticated evidence."""
     try:
         module = importlib.import_module("bot.runtime_known_execution_probe_revalidation_v406_patch")
         installer = getattr(module, "install", None)
         return bool(installer()) if callable(installer) else False
     except Exception:
-        LOGGER.exception(
-            "EXECUTION_BREAKER_RECOVERY_V405_V406_INSTALL_ERROR marker=%s trading_fail_closed=true",
-            MARKER,
-        )
+        LOGGER.exception("EXECUTION_BREAKER_RECOVERY_V405_V406_INSTALL_ERROR marker=%s trading_fail_closed=true", MARKER)
         return False
 
 
 def _install_live_safety_convergence() -> bool:
-    """Install v404 on the active convergence path; v404 itself remains fail-closed."""
     try:
         module = importlib.import_module("bot.runtime_live_safety_convergence_v404_patch")
         installer = getattr(module, "install", None)
         ready = bool(installer()) if callable(installer) else False
         if not ready:
-            LOGGER.warning(
-                "EXECUTION_BREAKER_RECOVERY_V405_V404_DEFERRED marker=%s "
-                "trading_fail_closed=true snapshot_ttl_unchanged=true",
-                MARKER,
-            )
+            LOGGER.warning("EXECUTION_BREAKER_RECOVERY_V405_V404_DEFERRED marker=%s trading_fail_closed=true snapshot_ttl_unchanged=true", MARKER)
         return ready
     except Exception:
-        LOGGER.exception(
-            "EXECUTION_BREAKER_RECOVERY_V405_V404_INSTALL_ERROR marker=%s "
-            "trading_fail_closed=true snapshot_ttl_unchanged=true",
-            MARKER,
-        )
+        LOGGER.exception("EXECUTION_BREAKER_RECOVERY_V405_V404_INSTALL_ERROR marker=%s trading_fail_closed=true snapshot_ttl_unchanged=true", MARKER)
         return False
 
 
 def _install_drawdown_portfolio_equity() -> bool:
-    """Install v409; any unavailable proof leaves the drawdown stop fail-closed."""
     try:
         module = importlib.import_module("bot.runtime_drawdown_portfolio_equity_v409_patch")
         installer = getattr(module, "install", None)
         ready = bool(installer()) if callable(installer) else False
         if not ready:
+            LOGGER.warning("EXECUTION_BREAKER_RECOVERY_V405_V409_DEFERRED marker=%s trading_fail_closed=true drawdown_threshold_unchanged=true", MARKER)
+        return ready
+    except Exception:
+        LOGGER.exception("EXECUTION_BREAKER_RECOVERY_V405_V409_INSTALL_ERROR marker=%s trading_fail_closed=true drawdown_threshold_unchanged=true", MARKER)
+        return False
+
+
+def _install_user_sharding_capacity() -> bool:
+    """Install v410. It affects connection admission only, never existing exits."""
+    try:
+        module = importlib.import_module("bot.runtime_user_sharding_capacity_v410_patch")
+        installer = getattr(module, "install", None)
+        ready = bool(installer()) if callable(installer) else False
+        if not ready:
             LOGGER.warning(
-                "EXECUTION_BREAKER_RECOVERY_V405_V409_DEFERRED marker=%s trading_fail_closed=true drawdown_threshold_unchanged=true",
+                "EXECUTION_BREAKER_RECOVERY_V405_V410_DEFERRED marker=%s "
+                "new_user_connections_fail_closed=true existing_positions_untouched=true",
                 MARKER,
             )
         return ready
     except Exception:
         LOGGER.exception(
-            "EXECUTION_BREAKER_RECOVERY_V405_V409_INSTALL_ERROR marker=%s trading_fail_closed=true drawdown_threshold_unchanged=true",
+            "EXECUTION_BREAKER_RECOVERY_V405_V410_INSTALL_ERROR marker=%s "
+            "new_user_connections_fail_closed=true existing_positions_untouched=true",
             MARKER,
         )
         return False
@@ -220,24 +212,15 @@ def install() -> bool:
 
             if not _install_authenticated_probe_revalidation():
                 os.environ[_READY_FLAG] = "0"
-                LOGGER.error(
-                    "EXECUTION_BREAKER_RECOVERY_V405_NOT_READY marker=%s reason=v406_revalidation_install_failed",
-                    MARKER,
-                )
+                LOGGER.error("EXECUTION_BREAKER_RECOVERY_V405_NOT_READY marker=%s reason=v406_revalidation_install_failed", MARKER)
                 return False
 
-            # v404/v409 may defer until their target modules and authoritative
-            # snapshots are loaded. runtime_convergence_v15 calls this installer
-            # repeatedly, so both are retried without granting execution authority.
             live_safety_ready = _install_live_safety_convergence()
             drawdown_equity_ready = _install_drawdown_portfolio_equity()
+            user_sharding_ready = _install_user_sharding_capacity()
 
             if _THREAD is None or not _THREAD.is_alive():
-                _THREAD = threading.Thread(
-                    target=_worker,
-                    name="ExecutionBreakerRecoveryV405",
-                    daemon=True,
-                )
+                _THREAD = threading.Thread(target=_worker, name="ExecutionBreakerRecoveryV405", daemon=True)
                 _THREAD.start()
 
             os.environ[_READY_FLAG] = "1"
@@ -245,21 +228,17 @@ def install() -> bool:
                 "EXECUTION_BREAKER_RECOVERY_V405_READY marker=%s heartbeat_only=true "
                 "fresh_verification_required=true strict_writer_nonce_required=true kill_switch_clear_required=true "
                 "authenticated_probe_revalidation_v406=true live_safety_v404=%s drawdown_portfolio_equity_v409=%s "
-                "freshness_extended=false threshold_changed=false authority_granted=false state_changed=false "
+                "user_sharding_capacity_v410=%s freshness_extended=false threshold_changed=false authority_granted=false state_changed=false "
                 "orders_submitted=false orders_cancelled=false forced_activation=false safety_gates_bypassed=false",
                 MARKER,
                 str(live_safety_ready).lower(),
                 str(drawdown_equity_ready).lower(),
+                str(user_sharding_ready).lower(),
             )
             return True
         except Exception as exc:
             os.environ[_READY_FLAG] = "0"
-            LOGGER.exception(
-                "EXECUTION_BREAKER_RECOVERY_V405_INSTALL_ERROR marker=%s error=%s:%s trading_fail_closed=true",
-                MARKER,
-                type(exc).__name__,
-                exc,
-            )
+            LOGGER.exception("EXECUTION_BREAKER_RECOVERY_V405_INSTALL_ERROR marker=%s error=%s:%s trading_fail_closed=true", MARKER, type(exc).__name__, exc)
             return False
 
 
@@ -272,4 +251,5 @@ __all__ = [
     "_clear_recovered_heartbeat_latch_once",
     "_install_live_safety_convergence",
     "_install_drawdown_portfolio_equity",
+    "_install_user_sharding_capacity",
 ]
