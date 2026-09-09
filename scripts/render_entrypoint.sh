@@ -11,6 +11,7 @@ set -euo pipefail
 # Live heartbeat proof orders are enabled for circuit-breaker recovery; forced
 # activation/trading remain prohibited and all canonical safety gates apply.
 export NIJA_ALLOW_LIVE_HEARTBEAT_ORDERS=true
+export HEARTBEAT_TRADE=true
 export NIJA_FORCE_ACTIVATION=false
 export FORCE_TRADE=false
 
