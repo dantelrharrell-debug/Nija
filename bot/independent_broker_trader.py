@@ -928,6 +928,32 @@ class IndependentBrokerTrader:
         except Exception as exc:
             return False, f"authority_guard_unavailable:{type(exc).__name__}:{exc}"
 
+    @staticmethod
+    def _enforce_platform_entry_lock(broker, broker_name: str) -> bool:
+        """Reassert operator-requested exit-only mode before every platform cycle.
+
+        The broker remains connected so position discovery and protective exits
+        continue. Only new-entry eligibility is revoked.
+        """
+        if NIJA_PLATFORM_TRADING_ENABLED:
+            return False
+        try:
+            broker.exit_only_mode = True
+            broker.mode = "PASSIVE"
+        except Exception as exc:
+            logger.critical(
+                "PLATFORM_ENTRY_LOCK_FAILED broker=%s reason=%s fail_closed=true",
+                broker_name,
+                f"{type(exc).__name__}:{exc}",
+            )
+            raise
+        logger.critical(
+            "PLATFORM_ENTRY_LOCK_ENFORCED broker=%s exit_only_mode=true "
+            "new_entries=false protective_exits_preserved=true",
+            broker_name,
+        )
+        return True
+
     def _execute_trading_cycle(
         self,
         broker_type,
@@ -1018,6 +1044,7 @@ class IndependentBrokerTrader:
 
     def _run_platform_cycle(self, broker_type, broker, broker_name: str, cycle_count: int) -> float:
         """Run exactly one platform broker scan cycle and return the next sleep interval."""
+        self._enforce_platform_entry_lock(broker, broker_name)
         authority_ok, authority_reason = self._require_exact_cycle_authority(
             "independent_broker_trader.platform_scan"
         )
