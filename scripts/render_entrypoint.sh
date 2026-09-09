@@ -72,6 +72,7 @@ python3 -S scripts/apply_execution_verification_source_alignment_v402.py
 python3 -S scripts/apply_activation_publication_fast_path_v376.py
 python3 -S scripts/apply_kraken_coverage_truth_fairness_v385.py
 python3 -S scripts/apply_user_readiness_deadline_convergence_v390.py
+python3 -S scripts/apply_user_refresh_stale_inflight_v409.py
 python3 -S scripts/apply_kraken_authoritative_wait_v398.py
 python3 -S scripts/apply_kraken_inflight_readiness_v399.py
 python3 -S scripts/apply_kraken_margin_four_way_supervisor_v387.py
@@ -125,6 +126,7 @@ python3 -S -m py_compile \
     scripts/apply_activation_publication_fast_path_v376.py \
     scripts/apply_kraken_coverage_truth_fairness_v385.py \
     scripts/apply_user_readiness_deadline_convergence_v390.py \
+    scripts/apply_user_refresh_stale_inflight_v409.py \
     scripts/apply_kraken_authoritative_wait_v398.py \
     scripts/apply_kraken_inflight_readiness_v399.py \
     scripts/apply_kraken_margin_four_way_supervisor_v387.py \
@@ -165,6 +167,7 @@ grep -Fq 'ACTIVATION_STOP_CAPITAL_FRESHNESS_V135' bot/bot.py
 grep -Fq 'ACTIVATION_PUBLICATION_CONVERGENCE_V136' bot/bot.py
 grep -Fq 'KRAKEN_MARGIN_POSITION_PROTECTION_PENDING_V385' bot/runtime_kraken_margin_canonical_coverage_v366_patch.py
 grep -Fq 'AUTHORITATIVE_USER_POSITION_V390_DEADLINE_REFRESH' bot/runtime_authoritative_position_coverage_v285_patch.py
+grep -Fq 'AUTHORITATIVE_USER_POSITION_V409_STALE_FLIGHT_RETIRED' bot/runtime_authoritative_position_coverage_v285_patch.py
 grep -Fq 'KRAKEN_COST_BASIS_V390_USER_RECONCILE_DUE' bot/runtime_kraken_cost_basis_bulk_v288_patch.py
 grep -Fq 'KRAKEN_MARGIN_FOUR_WAY_SUPERVISOR_V387' bot/bot.py
 grep -Fq 'KRAKEN_MARGIN_FOUR_WAY_SUPERVISOR_V387_READY' bot/runtime_kraken_margin_four_way_supervisor_v387_patch.py
@@ -181,7 +184,7 @@ grep -Fq 'handle_outreach_extension_post(self)' render_liveness_server.py
 grep -Fq 'handle_outreach_post(self)' render_liveness_server.py
 grep -Fq 'start_justcall_webhook_autoconfig()' render_liveness_server.py
 
-echo "🧭 RENDER_ENTRYPOINT_CANONICAL_HANDOFF_READY marker=20260908-execution-verification-source-alignment-v402 launcher=canonical_runtime_launcher_v26 writer_generation_handoff=v45 writer_first=v59 execution_proof_startup_isolation=v339 execution_proof_freshness_truth=v375 execution_proof_recovery_retry=v401 execution_verification_source_alignment=v402 activation_publication_fast_path=v376 kraken_coverage_truth_fairness=v385 user_readiness_deadline_convergence=v390 kraken_authoritative_wait=v398 kraken_inflight_readiness=v399 kraken_recovery_coordinator_single_owner=v400 kraken_margin_four_way_supervisor=v387 protection_binding_precision=v391 native_backup_started=false orders_submitted=false signal_forwarding=v262 single_identity=true singleton_alias_convergence=v91 kraken_nonce_authority_gate=v91 direct_broker_prebootstrap=v27 outreach_frontdoor=v3 signed_webhook=true webhook_autoconfig=true campaign_compliance_fail_closed=true"
+echo "🧭 RENDER_ENTRYPOINT_CANONICAL_HANDOFF_READY marker=20260909-user-refresh-stale-inflight-v409 launcher=canonical_runtime_launcher_v26 writer_generation_handoff=v45 writer_first=v59 execution_proof_startup_isolation=v339 execution_proof_freshness_truth=v375 execution_proof_recovery_retry=v401 execution_verification_source_alignment=v402 activation_publication_fast_path=v376 kraken_coverage_truth_fairness=v385 user_readiness_deadline_convergence=v390 user_refresh_stale_inflight=v409 kraken_authoritative_wait=v398 kraken_inflight_readiness=v399 kraken_recovery_coordinator_single_owner=v400 kraken_margin_four_way_supervisor=v387 protection_binding_precision=v391 native_backup_started=false orders_submitted=false signal_forwarding=v262 single_identity=true singleton_alias_convergence=v91 kraken_nonce_authority_gate=v91 direct_broker_prebootstrap=v27 outreach_frontdoor=v3 signed_webhook=true webhook_autoconfig=true campaign_compliance_fail_closed=true"
 unset NIJA_DEFER_RUNTIME_SITE_HOOKS
 
 exec bash scripts/production_bootstrap.sh "$@"
