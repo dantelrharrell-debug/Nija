@@ -51,6 +51,7 @@ _PATCH_ATTR = "_nija_platform_position_sync_isolation_v320"
 _REFRESH_PATCH_ATTR = "_nija_platform_position_proactive_refresh_v323"
 _IMPORT_HOOK_FLAG = "_NIJA_PLATFORM_POSITION_SYNC_ISOLATION_V320_IMPORT_HOOK"
 _LOCK = threading.RLock()
+_CONVERGENCE_THREAD: threading.Thread | None = None
 
 
 def _is_v285_strong_status(callable_obj: Any) -> bool:
@@ -297,6 +298,36 @@ def _install_activation_liveness_v321() -> bool:
         return False
 
 
+
+def _position_readiness_convergence_worker() -> None:
+    """Keep canonical readiness aligned with current v285 platform proof."""
+    while True:
+        try:
+            v95 = importlib.import_module("bot.position_sync_core_handoff_v95_patch")
+            v96 = importlib.import_module("bot.position_sync_dispatch_authority_v96_patch")
+            manager = v95._canonical_manager()
+            if manager is not None:
+                v96.publish_position_sync_readiness(
+                    manager,
+                    source="platform_isolation_v320_convergence",
+                )
+        except Exception:
+            LOGGER.debug("v320 readiness convergence pulse deferred", exc_info=True)
+        threading.Event().wait(5.0)
+
+
+def _start_position_readiness_convergence_worker() -> bool:
+    global _CONVERGENCE_THREAD
+    if _CONVERGENCE_THREAD is None or not _CONVERGENCE_THREAD.is_alive():
+        _CONVERGENCE_THREAD = threading.Thread(
+            target=_position_readiness_convergence_worker,
+            name="PlatformPositionReadinessConvergenceV320",
+            daemon=True,
+        )
+        _CONVERGENCE_THREAD.start()
+    return True
+
+
 def install() -> bool:
     with _LOCK:
         _patch_loaded()
@@ -316,7 +347,8 @@ def install() -> bool:
 
         manifest = _register_manifest()
         v321 = _install_activation_liveness_v321()
-        ready = bool(manifest and v321)
+        convergence = _start_position_readiness_convergence_worker()
+        ready = bool(manifest and v321 and convergence)
         os.environ[_READY_FLAG] = "1" if ready else "0"
         if not ready:
             LOGGER.critical(
@@ -336,7 +368,7 @@ def install() -> bool:
             "proactive_platform_refresh_v323=true snapshot_ttl_unchanged=true "
             "user_entries_fail_closed=true user_exits_preserved=true "
             "user_readiness_fabricated=false platform_readiness_fabricated=false "
-            "activation_liveness_v321=true "
+            "activation_liveness_v321=true canonical_readiness_convergence=true "
             "writer_nonce_capital_risk_killswitch_order_fill_snapshot_ttl_unchanged=true "
             "forced_activation=false safety_gates_bypassed=false",
             MARKER,
