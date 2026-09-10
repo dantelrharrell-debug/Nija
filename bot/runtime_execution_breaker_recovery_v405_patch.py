@@ -4,8 +4,9 @@ v405 clears only a recovered heartbeat-verification circuit-breaker latch, and
 only after current canonical verification, strict writer/nonce authority, and a
 clear kill switch are all proven. It also installs the authenticated v406 proof
 revalidation path, the existing v404 live-safety convergence path, v409's
-portfolio-equity correction, v410's user-sharding/capacity layer, and v412's
-confirmed-fill realized-P&L reconciliation layer.
+portfolio-equity correction, v410's user-sharding/capacity layer, v412's
+confirmed-fill realized-P&L reconciliation layer, and v413's authenticated
+Kraken fee bridge.
 
 No freshness is extended, no threshold is changed, no readiness is fabricated,
 no proof marker is fabricated, and no order is submitted/cancelled by this patch.
@@ -148,6 +149,10 @@ def _install_realized_pnl_reconciliation() -> bool:
     return _install_module("bot.runtime_realized_pnl_reconciliation_v412_patch", "V412")
 
 
+def _install_kraken_fee_pnl_bridge() -> bool:
+    return _install_module("bot.runtime_kraken_fee_pnl_bridge_v413_patch", "V413")
+
+
 def install() -> bool:
     global _THREAD
     with _LOCK:
@@ -169,14 +174,15 @@ def install() -> bool:
             drawdown_equity_ready = _install_drawdown_portfolio_equity()
             user_sharding_ready = _install_user_sharding_capacity()
             realized_pnl_ready = _install_realized_pnl_reconciliation()
+            kraken_fee_pnl_ready = _install_kraken_fee_pnl_bridge()
             if _THREAD is None or not _THREAD.is_alive():
                 _THREAD = threading.Thread(target=_worker, name="ExecutionBreakerRecoveryV405", daemon=True)
                 _THREAD.start()
             os.environ[_READY_FLAG] = "1"
             LOGGER.critical(
-                "EXECUTION_BREAKER_RECOVERY_V405_READY marker=%s heartbeat_only=true fresh_verification_required=true strict_writer_nonce_required=true kill_switch_clear_required=true authenticated_probe_revalidation_v406=true live_safety_v404=%s drawdown_portfolio_equity_v409=%s user_sharding_capacity_v410=%s realized_pnl_v412=%s freshness_extended=false threshold_changed=false authority_granted=false state_changed=false orders_submitted=false orders_cancelled=false forced_activation=false safety_gates_bypassed=false",
+                "EXECUTION_BREAKER_RECOVERY_V405_READY marker=%s heartbeat_only=true fresh_verification_required=true strict_writer_nonce_required=true kill_switch_clear_required=true authenticated_probe_revalidation_v406=true live_safety_v404=%s drawdown_portfolio_equity_v409=%s user_sharding_capacity_v410=%s realized_pnl_v412=%s kraken_fee_pnl_v413=%s freshness_extended=false threshold_changed=false authority_granted=false state_changed=false orders_submitted=false orders_cancelled=false forced_activation=false safety_gates_bypassed=false",
                 MARKER, str(live_safety_ready).lower(), str(drawdown_equity_ready).lower(),
-                str(user_sharding_ready).lower(), str(realized_pnl_ready).lower(),
+                str(user_sharding_ready).lower(), str(realized_pnl_ready).lower(), str(kraken_fee_pnl_ready).lower(),
             )
             return True
         except Exception as exc:
@@ -191,4 +197,5 @@ __all__ = [
     "MARKER", "install", "install_import_hook", "_clear_recovered_heartbeat_latch_once",
     "_install_live_safety_convergence", "_install_drawdown_portfolio_equity",
     "_install_user_sharding_capacity", "_install_realized_pnl_reconciliation",
+    "_install_kraken_fee_pnl_bridge",
 ]
