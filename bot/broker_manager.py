@@ -11850,6 +11850,10 @@ class KrakenBroker(BaseBroker):
                     except (TypeError, ValueError):
                         min_trade_floor = 10.0
 
+                    try:
+                        allocation_pct = float(os.getenv('MAX_TRADE_PERCENT', '0.10')) * 100.0
+                    except (TypeError, ValueError):
+                        allocation_pct = 10.0
 
                     logging.info(f"💰 Pre-flight balance check for {symbol}:")
                     logging.info(f"   Available: ${trading_balance:.2f}")
