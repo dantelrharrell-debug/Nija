@@ -164,9 +164,6 @@ def _supersede_with_observation_fence(guard: Any, broker_map: dict[str, Any]) ->
 
             orphans = v161._prune_orphans(bid)
             max_orphans = int(v161._max_orphaned_flights())
-            # Once a previously allowed +1 recovery orphan has exited, permit a
-            # later bounded recovery again. Never permit more than max+1 live
-            # retired workers at one time.
             if len(orphans) <= max_orphans:
                 _SATURATION_RECOVERY_USED.discard(bid)
 
@@ -263,6 +260,24 @@ def install() -> bool:
                 required["runtime_capital_late_observation_fence_v162"] = _READY_FLAG
         except Exception:
             os.environ[_READY_FLAG] = "0"
+            return False
+
+        # Install the v391 proof bridge after v162 owns the stale-flight wrapper.
+        # This adds only a timestamp-preserving CapitalAuthority proof source;
+        # it does not refresh balances, extend freshness, or grant execution.
+        try:
+            bridge = importlib.import_module("bot.runtime_kraken_stale_flight_authority_bridge_v391_patch")
+            bridge_install = getattr(bridge, "install", None)
+            if not callable(bridge_install) or not bool(bridge_install()):
+                raise RuntimeError("v391_install_failed")
+        except Exception as exc:
+            os.environ[_READY_FLAG] = "0"
+            LOGGER.error(
+                "RUNTIME_CAPITAL_LATE_OBSERVATION_FENCE_V162_BRIDGE_FAILED marker=%s error=%s:%s trading_fail_closed=true",
+                MARKER,
+                type(exc).__name__,
+                exc,
+            )
             return False
 
         os.environ[_READY_FLAG] = "1"
