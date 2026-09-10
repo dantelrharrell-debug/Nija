@@ -7,6 +7,7 @@ and its native position tracker is scanned for platform and user holdings.
 from __future__ import annotations
 
 import builtins
+import importlib
 import logging
 import os
 import sys
@@ -154,11 +155,7 @@ def _fee_aware_profit_target(broker: Any, pos: dict[str, Any]) -> float:
     entry = auto_exit._entry_price(pos)
     if entry <= 0:
         return 0.0
-    explicit = max(
-        _f(pos.get("take_profit")),
-        _f(pos.get("take_profit_1")),
-        _f(pos.get("profit_target")),
-    )
+    explicit = max(_f(pos.get("take_profit")), _f(pos.get("take_profit_1")), _f(pos.get("profit_target")))
     if explicit > 0:
         return explicit
     minimum_net = max(0.0, _f(os.environ.get("NIJA_MINIMUM_NET_PROFIT_PCT"), 0.004))
@@ -176,35 +173,19 @@ def _account_recovery_snapshot(broker: Any) -> dict[str, Any]:
     return {}
 
 
-def _recovery_position_trigger(
-    broker: Any,
-    pos: dict[str, Any],
-    market: float,
-) -> tuple[bool, str, float]:
-    """Tighten held-position protection during account drawdown.
-
-    This never changes quantity, adds exposure, raises leverage, averages down,
-    or widens a stop.  Profit exits remain fee/slippage positive.
-    """
+def _recovery_position_trigger(broker: Any, pos: dict[str, Any], market: float) -> tuple[bool, str, float]:
+    """Tighten held-position protection during account drawdown without adding exposure."""
     snapshot = _account_recovery_snapshot(broker)
-    if not bool(snapshot.get("in_recovery", False)):
+    if not bool(snapshot.get("in_recovery", False)) or not _operator_basis_verified(pos):
         return False, "", 0.0
-    if not _operator_basis_verified(pos):
-        return False, "", 0.0
-
     entry = auto_exit._entry_price(pos)
     side = auto_exit._side(pos.get("side"), pos)
     if entry <= 0.0 or market <= 0.0:
         return False, "", 0.0
-
     max_loss = max(0.001, min(0.05, _f(os.environ.get("NIJA_RECOVERY_MAX_POSITION_LOSS_PCT"), 0.0075)))
     minimum_net = max(0.0005, min(0.02, _f(os.environ.get("NIJA_RECOVERY_MIN_NET_PROFIT_PCT"), 0.0010)))
-    activation = max(
-        _venue_cost_pct(broker) + minimum_net,
-        max(0.001, _f(os.environ.get("NIJA_RECOVERY_PROFIT_LOCK_ACTIVATION_PCT"), 0.0060)),
-    )
+    activation = max(_venue_cost_pct(broker) + minimum_net, max(0.001, _f(os.environ.get("NIJA_RECOVERY_PROFIT_LOCK_ACTIVATION_PCT"), 0.0060)))
     callback = max(0.001, min(0.02, _f(os.environ.get("NIJA_RECOVERY_TRAILING_CALLBACK_PCT"), 0.0025)))
-
     if side in {"long", "buy"}:
         stop = entry * (1.0 - max_loss)
         net_floor = entry * (1.0 + _venue_cost_pct(broker) + minimum_net)
@@ -220,33 +201,20 @@ def _recovery_position_trigger(
         net_floor = entry / max(1e-12, 1.0 + _venue_cost_pct(broker) + minimum_net)
         if market >= stop:
             return True, "recovery_max_loss_cap", stop
-        low = _f(auto_exit._HIGH_WATER.get(auto_exit._position_key(pos)), market)
-        # Some legacy trackers store a high-water value for both directions.
-        # Immediate net-positive harvesting below is authoritative for shorts.
         if market <= net_floor:
             return True, "recovery_fee_aware_profit_harvest", net_floor
-
     return False, "", 0.0
 
 
 def _trigger(broker: Any, pos: dict[str, Any], market: float) -> tuple[bool, str, float]:
     hit, reason, target = auto_exit._trigger(pos, market)
-    # Existing loss protection always keeps priority.  During recovery, defer
-    # ordinary profit targets long enough to apply the fee-aware recovery lock.
     reason_norm = str(reason or "").strip().lower()
     protective = any(token in reason_norm for token in ("stop_loss", "trailing_stop", "loss_cap", "liquidation"))
     if hit and protective:
         return hit, reason, target
-
     recovery_hit, recovery_reason, recovery_target = _recovery_position_trigger(broker, pos, market)
     if recovery_hit:
-        logger.critical(
-            "ACCOUNT_RECOVERY_EXIT_AMPLIFIED marker=%s venue=%s account=%s symbol=%s "
-            "reason=%s target=%.8f market=%.8f exposure_added=false leverage_increased=false "
-            "stop_widened=false fee_slippage_floor=true",
-            _MARKER, auto_exit._broker_label(broker), _account_label(broker),
-            auto_exit._sym(pos.get("symbol")), recovery_reason, recovery_target, market,
-        )
+        logger.critical("ACCOUNT_RECOVERY_EXIT_AMPLIFIED marker=%s venue=%s account=%s symbol=%s reason=%s target=%.8f market=%.8f exposure_added=false leverage_increased=false stop_widened=false fee_slippage_floor=true", _MARKER, auto_exit._broker_label(broker), _account_label(broker), auto_exit._sym(pos.get("symbol")), recovery_reason, recovery_target, market)
         return recovery_hit, recovery_reason, recovery_target
     if hit:
         return hit, reason, target
@@ -262,19 +230,6 @@ def _trigger(broker: Any, pos: dict[str, Any], market: float) -> tuple[bool, str
                 short_target = entry / max(1e-12, (1.0 + _venue_cost_pct(broker) + minimum_net))
                 if market <= short_target:
                     return True, "operator_net_profit_exit", short_target
-        elif entry > 0:
-            logger.warning(
-                "OPERATOR_NET_PROFIT_EXIT_SKIPPED_UNVERIFIED marker=%s venue=%s account=%s symbol=%s "
-                "entry=%.8f qty=%.8f cost_basis_verified=%s auto_exit_blocked=%s",
-                _OPERATOR_MARKER,
-                auto_exit._broker_label(broker),
-                _account_label(broker),
-                auto_exit._sym(pos.get("symbol")),
-                entry,
-                auto_exit._quantity(pos),
-                pos.get("cost_basis_verified"),
-                bool(pos.get("auto_exit_blocked", False)),
-            )
     profit_target = _fee_aware_profit_target(broker, pos)
     if profit_target > 0:
         if side in {"long", "buy"} and market >= profit_target:
@@ -298,12 +253,7 @@ def _mark_closed(broker: Any, pos: dict[str, Any], order: dict[str, Any], reason
             method = getattr(owner, name, None)
             if not callable(method):
                 continue
-            attempts = (
-                {"position_id": pid, "symbol": symbol, "exit_price": fill, "exit_fee": fee, "exit_reason": reason, "order_id": order_id, "broker": auto_exit._broker_label(broker)},
-                {"symbol": symbol, "exit_price": fill, "reason": reason},
-                {"symbol": symbol},
-            )
-            for kwargs in attempts:
+            for kwargs in ({"position_id": pid, "symbol": symbol, "exit_price": fill, "exit_fee": fee, "exit_reason": reason, "order_id": order_id, "broker": auto_exit._broker_label(broker)}, {"symbol": symbol, "exit_price": fill, "reason": reason}, {"symbol": symbol}):
                 try:
                     method(**kwargs)
                     return
@@ -317,17 +267,6 @@ def _scan_broker(broker: Any) -> int:
     closed = 0
     account = _account_label(broker)
     venue = auto_exit._broker_label(broker)
-    if _operator_profit_exit_active():
-        logger.critical(
-            "OPERATOR_NET_PROFIT_EXIT_REQUEST_ACTIVE marker=%s venue=%s account=%s request_id=%s "
-            "until_epoch=%s fee_slippage_reserve_preserved=true minimum_order_unchanged=true "
-            "fill_confirmation_required=true loss_liquidation=false",
-            _OPERATOR_MARKER,
-            venue,
-            account,
-            str(os.environ.get("NIJA_OPERATOR_NET_PROFIT_EXIT_REQUEST_ID", "unspecified") or "unspecified"),
-            str(os.environ.get("NIJA_OPERATOR_NET_PROFIT_EXIT_UNTIL_EPOCH", "") or ""),
-        )
     for pos in _tracker_positions(broker):
         symbol = auto_exit._sym(pos.get("symbol"))
         pid = str(pos.get("position_id") or symbol)
@@ -337,40 +276,27 @@ def _scan_broker(broker: Any) -> int:
         entry = auto_exit._entry_price(pos)
         qty = auto_exit._quantity(pos)
         if entry <= 0 or qty <= 0:
-            logger.warning("UNIVERSAL_EXIT_SKIPPED_UNVERIFIED_POSITION marker=%s venue=%s account=%s symbol=%s entry=%.8f qty=%.8f", _MARKER, venue, account, symbol, entry, qty)
             continue
         market = auto_exit._price(broker, symbol)
         if market <= 0:
-            logger.warning("UNIVERSAL_EXIT_PRICE_UNAVAILABLE marker=%s venue=%s account=%s symbol=%s", _MARKER, venue, account, symbol)
             continue
         hit, reason, target = _trigger(broker, pos, market)
-        side = auto_exit._side(pos.get("side"), pos)
-        unrealized = (market - entry) * qty if side in {"long", "buy"} else (entry - market) * qty
         if not hit:
             continue
         _ACTIVE.add(key)
-        logger.critical(
-            "UNIVERSAL_BROKER_EXIT_TRIGGER marker=%s venue=%s account=%s symbol=%s reason=%s target=%.8f market=%.8f entry=%.8f qty=%.8f unrealized=$%+.2f",
-            _MARKER, venue, account, symbol, reason, target, market, entry, qty, unrealized,
-        )
         order = auto_exit._exit_order(broker, pos, market)
         if not auto_exit._ok(order):
-            logger.error("UNIVERSAL_BROKER_EXIT_FAILED marker=%s venue=%s account=%s symbol=%s reason=%s error=%s", _MARKER, venue, account, symbol, reason, order)
             _ACTIVE.discard(key)
             continue
         _mark_closed(broker, pos, order, reason, market)
         closed += 1
         auto_exit._HIGH_WATER.pop(auto_exit._position_key(pos), None)
-        logger.critical("UNIVERSAL_BROKER_EXIT_CONFIRMED marker=%s venue=%s account=%s symbol=%s reason=%s order_id=%s", _MARKER, venue, account, symbol, reason, auto_exit._get(order, "order_id", "id", "txid", default=""))
         _ACTIVE.discard(key)
     return closed
 
 
 def _logical_identity(broker: Any) -> tuple[str, str]:
-    return (
-        str(auto_exit._broker_label(broker) or "unknown").strip().lower(),
-        str(_account_label(broker) or "platform").strip().lower(),
-    )
+    return (str(auto_exit._broker_label(broker) or "unknown").strip().lower(), str(_account_label(broker) or "platform").strip().lower())
 
 
 def _registered_values() -> list[Any]:
@@ -390,56 +316,22 @@ def _register_broker(broker: Any) -> None:
     if broker is None:
         return
     identity = _logical_identity(broker)
-    replaced = None
     with _LOCK:
         for existing in _registered_values():
             if existing is broker:
-                _start()
-                return
-            if _logical_identity(existing) == identity:
-                if type(existing) is type(broker):
-                    if identity not in _DUPLICATE_ACCOUNTS:
-                        logger.info(
-                            "UNIVERSAL_BROKER_EXIT_DUPLICATE_SKIPPED marker=%s venue=%s account=%s class=%s",
-                            _MARKER,
-                            identity[0],
-                            identity[1],
-                            type(broker).__name__,
-                        )
-                        _DUPLICATE_ACCOUNTS.add(identity)
-                    _start()
-                    return
-                replaced = existing
-                _discard_broker(existing)
+                _start(); return
+            if _logical_identity(existing) == identity and type(existing) is type(broker):
+                _start(); return
         try:
             _BROKERS.add(broker)
         except TypeError:
             _STRONG_BROKERS.append(broker)
-        _DUPLICATE_ACCOUNTS.discard(identity)
-    if replaced is not None:
-        logger.warning(
-            "UNIVERSAL_BROKER_EXIT_REPLACED marker=%s venue=%s account=%s old_class=%s new_class=%s",
-            _MARKER,
-            identity[0],
-            identity[1],
-            type(replaced).__name__,
-            type(broker).__name__,
-        )
-    else:
-        logger.info(
-            "UNIVERSAL_BROKER_EXIT_REGISTERED marker=%s venue=%s account=%s class=%s",
-            _MARKER,
-            identity[0],
-            identity[1],
-            type(broker).__name__,
-        )
     _start()
 
 
 def _snapshot() -> list[Any]:
-    values = _registered_values()
     latest: dict[tuple[str, str], Any] = {}
-    for broker in values:
+    for broker in _registered_values():
         if broker is not None:
             latest[_logical_identity(broker)] = broker
     return list(latest.values())
@@ -451,14 +343,11 @@ def _start() -> None:
         return
     with _LOCK:
         if bool(_STATE["started"]):
-            _STARTED = True
-            return
+            _STARTED = True; return
         _STATE["started"] = True
         _STARTED = True
     interval = max(1.0, _f(os.environ.get("NIJA_UNIVERSAL_EXIT_POLL_SECONDS"), 3.0))
-
     def loop() -> None:
-        logger.critical("UNIVERSAL_BROKER_EXIT_SUPERVISOR_STARTED marker=%s interval_s=%.2f platform_and_users=true venues=kraken,coinbase,okx", _MARKER, interval)
         while _truthy("NIJA_UNIVERSAL_BROKER_EXIT_ENABLED", "true"):
             for broker in _snapshot():
                 try:
@@ -466,16 +355,12 @@ def _start() -> None:
                 except Exception as exc:
                     logger.exception("UNIVERSAL_BROKER_EXIT_SCAN_FAILED marker=%s class=%s err=%s", _MARKER, type(broker).__name__, exc)
             time.sleep(interval)
-
     threading.Thread(target=loop, name="UniversalBrokerExitSupervisor", daemon=True).start()
 
 
 def _patch_module(module: Any) -> bool:
     patched = False
-    for class_name in (
-        "KrakenBroker", "KrakenBrokerAdapter", "CoinbaseBroker", "CoinbaseBrokerAdapter",
-        "_CoinbaseInvalidProductFilter", "OKXBroker", "OKXBrokerAdapter",
-    ):
+    for class_name in ("KrakenBroker", "KrakenBrokerAdapter", "CoinbaseBroker", "CoinbaseBrokerAdapter", "_CoinbaseInvalidProductFilter", "OKXBroker", "OKXBrokerAdapter"):
         cls = getattr(module, class_name, None)
         if not isinstance(cls, type) or getattr(cls, _PATCHED, False):
             continue
@@ -483,20 +368,16 @@ def _patch_module(module: Any) -> bool:
         if callable(original_init):
             @wraps(original_init)
             def init(self: Any, *args: Any, __orig=original_init, **kwargs: Any):
-                __orig(self, *args, **kwargs)
-                _register_broker(self)
+                __orig(self, *args, **kwargs); _register_broker(self)
             cls.__init__ = init
         original_connect = getattr(cls, "connect", None)
         if callable(original_connect):
             @wraps(original_connect)
             def connect(self: Any, *args: Any, __orig=original_connect, **kwargs: Any):
-                result = __orig(self, *args, **kwargs)
-                _register_broker(self)
-                return result
+                result = __orig(self, *args, **kwargs); _register_broker(self); return result
             cls.connect = connect
         setattr(cls, _PATCHED, True)
         patched = True
-        logger.warning("UNIVERSAL_BROKER_EXIT_CLASS_PATCHED marker=%s class=%s", _MARKER, class_name)
     return patched
 
 
@@ -515,7 +396,6 @@ def install_import_hook() -> None:
         os.environ["NIJA_UNIVERSAL_BROKER_EXIT_SUPERVISOR_INSTALLED"] = "1"
         return
     original_import = builtins.__import__
-
     def hook(name: str, globals=None, locals=None, fromlist=(), level: int = 0):
         module = original_import(name, globals, locals, fromlist, level)
         try:
@@ -523,14 +403,12 @@ def install_import_hook() -> None:
             for loaded in list(sys.modules.values()):
                 if loaded is not None:
                     _patch_module(loaded)
-        except Exception as exc:
-            logger.warning("UNIVERSAL_BROKER_EXIT_IMPORT_PATCH_FAILED marker=%s module=%s err=%s", _MARKER, name, exc)
+        except Exception:
+            pass
         return module
-
     builtins.__import__ = hook
     setattr(builtins, "_NIJA_UNIVERSAL_BROKER_EXIT_IMPORT_HOOK_V1", True)
     os.environ["NIJA_UNIVERSAL_BROKER_EXIT_SUPERVISOR_INSTALLED"] = "1"
-    logger.critical("UNIVERSAL_BROKER_EXIT_SUPERVISOR_INSTALLED marker=%s broker_native=true platform_and_users=true", _MARKER)
 
 
 def install() -> None:
