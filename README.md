@@ -1,6 +1,8 @@
 # NIJA AI Trading LLC — Current Success State & Recovery Anchor
 
-**Status date:** September 7, 2026 (UTC)
+**Status date:** September 10, 2026 (UTC)
+
+**September 10 Coinbase/Kraken loss-recovery repair merged:** `f6efa3a4c439020869ee6b1c1164bd1cd219dda4`
 
 **Preferred current recovery checkpoint:** `3b48c533d191d8ce81d2166b14d3ef0946600c92`
 
@@ -21,6 +23,26 @@
 **Immutable recovery branch:** `recovery/100-prod-readiness-20260822`
 
 This README is the durable production and recovery anchor for **Nija_Trading_Bot**. Its purpose is to make it possible to return to the September 6 verified success state without forcing trades, weakening safety controls, fabricating readiness, or reintroducing the heartbeat duplicate-order problem.
+
+## September 10, 2026 — Coinbase/Kraken funded-account loss incident repair
+
+A code-level defect was confirmed in `bot/universal_broker_exit_supervisor_patch.py`: `_account_recovery_snapshot()` calls `importlib.import_module("bot.broker_account_isolation_v64_patch")`, but the module did not import `importlib`. Because that path catches exceptions and returns an empty snapshot, account drawdown recovery logic could silently fail to activate even though the tighter recovery exit behavior existed.
+
+The repair was merged to `main` in:
+
+```text
+f6efa3a4c439020869ee6b1c1164bd1cd219dda4
+Restore Coinbase/Kraken drawdown recovery exit path
+```
+
+The merged change intentionally contains only:
+
+- the missing `import importlib`, and
+- a regression test proving the recovery snapshot can reach `broker_account_isolation_v64_patch`.
+
+The repair preserves existing stop-loss priority, fee/slippage-aware profit floors, broker/account isolation, position sizing, minimum-order rules, writer authority, nonce protection, and all other safety gates. It does not force trades, widen stops, add leverage, average down, fabricate PnL, or guarantee profit.
+
+**Verification boundary:** this commit proves the repository defect is repaired. It does **not** by itself prove that Coinbase or Kraken balances have recovered, that future trades will be profitable, or that a production deployment is currently running this exact commit. Live success must be confirmed from current broker-backed balances, realized PnL, open positions, production commit/generation, and post-deploy logs.
 
 The September 7 v382 deployment is documented separately as a verified hardening candidate. It has proved writer acquisition, canonical installer wiring, metadata-only authority epoch stability, live capital hydration, Kraken execution-proof recovery without a new order, and preserved safety gates. It has **not yet replaced the September 6 preferred recovery checkpoint** because the fresh generation-5472 process had not yet independently re-proven the full `STARTUP_VALIDATED -> core registered -> position_sync_ready -> EXECUTION_ALLOWED -> LIVE_ACTIVE -> live scan` chain at the time of this update.
 
