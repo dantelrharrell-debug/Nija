@@ -99,7 +99,7 @@ def test_old_retired_sequence_cannot_replace_fenced_observation():
     # previous is None or broker_seq >= previous.sequence.
     fenced = Observation(242.0, 100.0, 200.0, 6)
     retired_sequence = 5
-    assert retired_sequence >= fenced.sequence is False
+    assert not (retired_sequence >= fenced.sequence)
 
 
 def test_saturation_recovery_allows_one_bounded_overcap_with_fresh_evidence(monkeypatch):
