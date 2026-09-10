@@ -2,24 +2,25 @@
 
 Production evidence on 2026-09-03 exposed two final safety/liveness defects:
 
-* an authoritative 35.34862 CELO protective close was enlarged by ECEL to the
-  venue minimum of 70 CELO.  v343 caps the earlier v341 base-quantity path, but
-  a later ECEL compile can still enlarge the effective order.  v349 adds a
-  post-ECEL, pre-broker terminal firewall: a protective SELL-to-close may never
-  exceed independently verified holdings.  If the venue minimum cannot be met
-  without overselling, the order is deterministically deferred; it is never
-  rounded up and never dispatched.
+* an authoritative protective close could be enlarged by a later ECEL compile.
+  v349 adds a post-ECEL, pre-broker terminal firewall: a protective SELL-to-close
+  may never exceed independently verified holdings. If the venue minimum cannot
+  be met without overselling, the order is deterministically deferred.
 * heartbeat BUY attempts with a generic local ``status=error`` were reported as
-  exchange ``rejected_orders`` unconditionally.  Five local/pre-dispatch
-  failures could therefore trip the execution circuit breaker before a genuine
-  execution proof was possible.  v349 records the actual heartbeat pipeline
-  result and excludes only proven local/pre-dispatch deferrals from the
-  exchange-rejection breaker.  Explicit/unknown exchange failures remain
-  unchanged and continue to count.
+  exchange ``rejected_orders`` unconditionally. Five local/pre-dispatch failures
+  could therefore trip the execution circuit breaker before genuine execution
+  proof was possible. v349 records the actual heartbeat pipeline result and
+  excludes only proven local/pre-dispatch deferrals from the exchange-rejection
+  breaker. Explicit/unknown exchange failures remain unchanged and count.
 
-No readiness, position, ACK, fill, broker response or protective coverage is
-fabricated.  The patch never clears a circuit breaker, never forces a trade or
-activation, never bypasses ECEL/minimum rules, and never enlarges an exit.
+2026-09-10 production convergence:
+The canonical runtime performs additional late imports/monkey patches after the
+initial v349 installation. Those assignments can replace the v349 wrappers while
+leaving the READY environment flag set. A bounded daemon re-anchor now verifies
+the heartbeat submit-provenance and anomaly wrappers periodically and restores
+only those wrappers when a late assignment replaced them. It never clears a
+circuit breaker, never changes rejection thresholds, never grants execution
+authority, and never submits an order.
 """
 from __future__ import annotations
 
@@ -44,6 +45,9 @@ _LOG_PATCH = "_nija_v349_post_ecel_capture"
 _GATE_PATCH = "_nija_v349_terminal_exit_firewall"
 _HB_SUBMIT_PATCH = "_nija_v349_heartbeat_submit_provenance"
 _ANOMALY_PATCH = "_nija_v349_heartbeat_rejection_truth"
+_REANCHOR_INTERVAL_S = 1.0
+_REANCHOR_THREAD: threading.Thread | None = None
+_REANCHOR_THREAD_LOCK = threading.Lock()
 
 
 def _f(value: Any, default: float = 0.0) -> float:
@@ -170,6 +174,7 @@ _LOCAL_HEARTBEAT_ERROR_MARKERS = (
     "pre-trade",
     "risk gate",
     "risk blocked",
+    "riskgovernor blocked",
     "capitalauthorization",
     "capital authorization",
     "position sync",
@@ -186,6 +191,7 @@ _LOCAL_HEARTBEAT_ERROR_MARKERS = (
     "nonce",
     "reconciliation",
     "broker health",
+    "auth probe timed out",
 )
 
 
@@ -248,14 +254,11 @@ def _proven_local_heartbeat_error(detail: str) -> tuple[bool, str]:
     error = str(result.get("error") or "").strip().lower()
     status = str(result.get("status") or "").strip().lower()
     # Never suppress an explicit exchange acknowledgement/order id or an
-    # explicit rejected status.  Unknown errors continue to count fail-closed.
+    # explicit rejected status. Unknown errors continue to count fail-closed.
     if order_id or status == "rejected":
         return False, "exchange_provenance_present"
     if any(marker in error for marker in _LOCAL_HEARTBEAT_ERROR_MARKERS):
         return True, error[:240]
-    # Stage insufficiency after an accepted order is a verification/fill
-    # problem, not an order rejection.  Keep fill/partial-fill handling intact
-    # but do not poison the rejected-order counter.
     if text.startswith("heartbeat_stage_insufficient") and status not in {"rejected", "error", "failed"}:
         return True, f"verification_stage_only status={status or 'unknown'}"
     return False, "unclassified_error"
@@ -295,6 +298,47 @@ def _patch_execution_anomaly_truth() -> bool:
     return True
 
 
+def _reanchor_once() -> tuple[bool, bool]:
+    """Restore only wrappers that were replaced by a late runtime assignment."""
+    heartbeat = _patch_heartbeat_submit_provenance()
+    anomaly = _patch_execution_anomaly_truth()
+    return heartbeat, anomaly
+
+
+def _reanchor_loop() -> None:
+    while True:
+        time.sleep(_REANCHOR_INTERVAL_S)
+        try:
+            heartbeat, anomaly = _reanchor_once()
+            if heartbeat and anomaly:
+                os.environ[_READY_FLAG] = "1"
+        except Exception as exc:
+            # Fail closed: never mutate breaker state or execution authority.
+            LOGGER.debug("V349_REANCHOR_RETRY error=%s:%s", type(exc).__name__, exc)
+
+
+def _ensure_reanchor_thread() -> bool:
+    global _REANCHOR_THREAD
+    with _REANCHOR_THREAD_LOCK:
+        if _REANCHOR_THREAD is not None and _REANCHOR_THREAD.is_alive():
+            return True
+        thread = threading.Thread(
+            target=_reanchor_loop,
+            name="nija-v349-rejection-truth-reanchor",
+            daemon=True,
+        )
+        thread.start()
+        _REANCHOR_THREAD = thread
+        LOGGER.critical(
+            "HEARTBEAT_REJECTION_V349_REANCHOR_STARTED marker=%s interval_s=%.1f "
+            "rejection_threshold_unchanged=true circuit_breaker_not_cleared=true "
+            "execution_authority_unchanged=true orders_submitted=false safety_gates_bypassed=false",
+            MARKER,
+            _REANCHOR_INTERVAL_S,
+        )
+        return thread.is_alive()
+
+
 def _register_manifest() -> bool:
     try:
         manifest = importlib.import_module("bot.runtime_release_manifest_patch")
@@ -309,30 +353,31 @@ def _register_manifest() -> bool:
 
 def install_import_hook() -> bool:
     with _LOCK:
-        terminal = heartbeat = anomaly = manifest = False
+        terminal = heartbeat = anomaly = manifest = reanchor = False
         try:
             terminal = _patch_pipeline_terminal_firewall()
             heartbeat = _patch_heartbeat_submit_provenance()
             anomaly = _patch_execution_anomaly_truth()
             manifest = _register_manifest()
+            reanchor = _ensure_reanchor_thread()
         except Exception as exc:
             LOGGER.exception(
                 "RUNTIME_TERMINAL_EXIT_HEARTBEAT_TRUTH_V349_INSTALL_ERROR marker=%s error=%s:%s fail_closed=true",
                 MARKER, type(exc).__name__, exc,
             )
-        ready = bool(terminal and heartbeat and anomaly and manifest)
+        ready = bool(terminal and heartbeat and anomaly and manifest and reanchor)
         os.environ[_READY_FLAG] = "1" if ready else "0"
         log = LOGGER.critical if ready else LOGGER.error
         log(
             "RUNTIME_TERMINAL_EXIT_HEARTBEAT_TRUTH_V349_%s marker=%s ready=%s "
             "post_ecel_holdings_firewall=%s heartbeat_submit_provenance=%s heartbeat_rejection_truth=%s manifest=%s "
-            "exit_never_enlarged=true below_min_exit_deferred=true broker_dispatch_on_oversell=false "
+            "late_binding_reanchor=%s exit_never_enlarged=true below_min_exit_deferred=true broker_dispatch_on_oversell=false "
             "explicit_exchange_rejections_unchanged=true unknown_heartbeat_errors_fail_closed=true "
-            "circuit_breaker_not_cleared=true confirmed_fill_required=true forced_trade=false forced_activation=false "
-            "writer_nonce_risk_capital_killswitch_position_sync_ecel_broker_health_order_ack_fill_gates_unchanged=true "
-            "safety_gates_bypassed=false",
+            "circuit_breaker_not_cleared=true rejection_threshold_unchanged=true confirmed_fill_required=true "
+            "forced_trade=false forced_activation=false writer_nonce_risk_capital_killswitch_position_sync_ecel_"
+            "broker_health_order_ack_fill_gates_unchanged=true safety_gates_bypassed=false",
             "READY" if ready else "NOT_READY", MARKER, str(ready).lower(), str(terminal).lower(),
-            str(heartbeat).lower(), str(anomaly).lower(), str(manifest).lower(),
+            str(heartbeat).lower(), str(anomaly).lower(), str(manifest).lower(), str(reanchor).lower(),
         )
         return ready
 
