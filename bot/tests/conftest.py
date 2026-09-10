@@ -79,6 +79,7 @@ _BOT_MAIN_DIRECT_HANDOFF_TESTS = {
     "test_running_supervised_handoff_publishes_thread_evidence",
     "test_running_supervised_handoff_fails_closed_without_thread_evidence",
 }
+_BOT_MAIN_BASE_HANDOFF = None
 
 # One legacy test still asserts the pre-latch direct restart scheduler. The
 # production callback now delegates terminal writer loss to
@@ -187,18 +188,27 @@ def _unwrap_wrapped_callable(value):
 
 def _install_bot_main_phase_compat(request, monkeypatch) -> None:
     """Keep legacy bot_main tests focused on the behavior they actually assert."""
+    global _BOT_MAIN_BASE_HANDOFF
+
     if _BOT_MAIN_ORDERING_NODE not in request.node.nodeid:
         return
 
     import bot.bot_main as bot_main
 
+    # Capture the canonical implementation before an earlier ordering test can
+    # leave a temporary Mock attached through import/patch teardown ordering.
+    # The saved callable is test-only and still resolves module globals at call
+    # time, so focused tests can patch the evidence publisher normally.
+    current_handoff = bot_main._advance_bootstrap_fsm_to_running_supervised
+    unwrapped_handoff = _unwrap_wrapped_callable(current_handoff)
+    if _BOT_MAIN_BASE_HANDOFF is None and not hasattr(unwrapped_handoff, "mock_calls"):
+        _BOT_MAIN_BASE_HANDOFF = unwrapped_handoff
+
     if request.node.name in _BOT_MAIN_DIRECT_HANDOFF_TESTS:
         # Runtime activation patches may wrap the base handoff with additional
         # live-writer/core requirements. These two tests are specifically about
         # the base helper's evidence publication contract, so isolate that unit.
-        direct_handoff = _unwrap_wrapped_callable(
-            bot_main._advance_bootstrap_fsm_to_running_supervised
-        )
+        direct_handoff = _BOT_MAIN_BASE_HANDOFF or unwrapped_handoff
         monkeypatch.setattr(
             bot_main,
             "_advance_bootstrap_fsm_to_running_supervised",
