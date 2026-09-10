@@ -4284,6 +4284,12 @@ class ExecutionEngine:
                     'symbol': symbol,
                     'side': side,
                     'market_regime': _regime,
+                    'strategy_name': str(
+                        take_profit_levels.get('strategy_name')
+                        or take_profit_levels.get('strategy')
+                        or 'APEX_V71'
+                    ),
+                    'entry_confidence': take_profit_levels.get('confidence'),
                     'expectancy_bucket': _expectancy_bucket,
                     'entry_price': final_entry_price,
                     'position_size': position_size,
@@ -4302,7 +4308,8 @@ class ExecutionEngine:
                     'tp2_hit': False,
                     'breakeven_moved': False,
                     'remaining_size': 1.0,  # 100%
-                    'peak_profit_pct': 0.0  # Track peak profit for protection
+                    'peak_profit_pct': 0.0,  # Track peak profit for protection
+                    'max_adverse_excursion_pct': 0.0,
                 }
 
                 # 🎯 EXECUTION INTELLIGENCE: Record actual execution for learning
@@ -4850,6 +4857,47 @@ class ExecutionEngine:
                                 symbol, _wt_err,
                             )
 
+                    # ── REGIME PERFORMANCE CALIBRATION — SHADOW ONLY ────────
+                    # Records full-close outcomes and emits bounded recommendations.
+                    # Nothing in the execution/risk path consumes these values.
+                    try:
+                        from bot.regime_performance_calibrator import (
+                            get_regime_performance_calibrator as _get_rpc,
+                        )
+
+                        _rpc_size = float(position.get('position_size', 0.0) or 0.0)
+                        _rpc_actual_fill = self._extract_fill_price(result, symbol) if result else None
+                        _rpc_slippage_return = 0.0
+                        if _rpc_actual_fill and _rpc_actual_fill > 0.0 and exit_price > 0.0:
+                            if position.get('side', 'long') == 'long':
+                                _rpc_slippage_return = max(0.0, (exit_price - _rpc_actual_fill) / exit_price)
+                            else:
+                                _rpc_slippage_return = max(0.0, (_rpc_actual_fill - exit_price) / exit_price)
+                        _rpc_fee_return = float(self._get_broker_round_trip_fee())
+                        _rpc_peak = max(0.0, float(position.get('peak_profit_pct', 0.0) or 0.0))
+                        _rpc_mae = min(0.0, float(position.get('max_adverse_excursion_pct', 0.0) or 0.0))
+                        _rpc_broker = resolve_broker_label(self.broker_client) if self.broker_client else "unknown"
+                        _get_rpc().record_closed_trade(
+                            symbol=symbol,
+                            regime=position.get('market_regime', 'default'),
+                            strategy=position.get('strategy_name', 'APEX_V71'),
+                            broker=_rpc_broker,
+                            side=position.get('side', 'long'),
+                            net_return=float(net_pnl_pct),
+                            gross_return=float(gross_pnl_pct),
+                            execution_cost_return=_rpc_fee_return + _rpc_slippage_return,
+                            mfe_return=_rpc_peak,
+                            mae_return=_rpc_mae,
+                            exit_reason=reason,
+                            confidence=position.get('entry_confidence'),
+                        )
+                    except Exception as _rpc_err:
+                        logger.debug(
+                            "RegimePerformanceCalibrator record skipped for %s: %s",
+                            symbol,
+                            _rpc_err,
+                        )
+
                     # FIX #1: Unlock after final settlement (position fully closed)
                     with self._get_closing_lock():
                         self.closing_positions.discard(symbol)
@@ -5083,6 +5131,9 @@ class ExecutionEngine:
         if gross_profit_pct > peak_profit:
             position['peak_profit_pct'] = gross_profit_pct
             peak_profit = gross_profit_pct
+        adverse_excursion = float(position.get('max_adverse_excursion_pct', 0.0) or 0.0)
+        if gross_profit_pct < adverse_excursion:
+            position['max_adverse_excursion_pct'] = gross_profit_pct
 
         # If we've hit significant profit (>2% gross) but are now giving it back,
         # protect at least 50% of peak profit

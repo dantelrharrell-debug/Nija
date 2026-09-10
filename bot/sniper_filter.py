@@ -310,6 +310,28 @@ class SniperFilter:
                 )
             except Exception:
                 pass
+
+        # Regime calibration may only tighten this floor in the first
+        # live-capable release.  Two explicit environment gates and sufficient
+        # per-regime history are required; otherwise the delta is exactly zero.
+        try:
+            from bot.regime_performance_calibrator import (
+                get_regime_performance_calibrator as _get_rpc,
+            )
+
+            _rpc_controls = _get_rpc().get_live_controls(
+                getattr(regime, "value", regime) if regime else "default",
+                "APEX_V71",
+            )
+            if _rpc_controls["active"]:
+                _weak_floor = min(
+                    0.99,
+                    _weak_floor + float(_rpc_controls["confidence_threshold_delta"]),
+                )
+                details["regime_calibration_active"] = True
+                details["regime_calibration_sample_size"] = _rpc_controls["sample_size"]
+        except Exception:
+            pass
         details["weak_floor_used"] = round(_weak_floor, 4)
 
         # ── 0. Minimum data guard (hard block — can't score without data) ──────
