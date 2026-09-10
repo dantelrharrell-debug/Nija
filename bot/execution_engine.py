@@ -4857,15 +4857,14 @@ class ExecutionEngine:
                                 symbol, _wt_err,
                             )
 
-                    # ── REGIME PERFORMANCE CALIBRATION — SHADOW ONLY ────────
+                    # ── REGIME PERFORMANCE CALIBRATION — OBSERVATION ────────
                     # Records full-close outcomes and emits bounded recommendations.
-                    # Nothing in the execution/risk path consumes these values.
+                    # Live consumers remain double-gated and fail closed to neutral.
                     try:
                         from bot.regime_performance_calibrator import (
                             get_regime_performance_calibrator as _get_rpc,
                         )
 
-                        _rpc_size = float(position.get('position_size', 0.0) or 0.0)
                         _rpc_actual_fill = self._extract_fill_price(result, symbol) if result else None
                         _rpc_slippage_return = 0.0
                         if _rpc_actual_fill and _rpc_actual_fill > 0.0 and exit_price > 0.0:
