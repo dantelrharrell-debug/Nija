@@ -760,6 +760,23 @@ class NijaAIEngine:
                 except Exception:
                     pass
 
+            # ── Regime calibration live controls (double-gated, downside-only) ─
+            try:
+                from bot.regime_performance_calibrator import (
+                    get_regime_performance_calibrator as _get_rpc,
+                )
+
+                _rpc_controls = _get_rpc().get_live_controls(_regime_str, "APEX_V71")
+                if _rpc_controls["active"]:
+                    mult *= float(_rpc_controls["position_size_multiplier"])
+                    mult = max(0.20, min(2.00, mult))
+                    breakdown["regime_calibration_size_multiplier"] = _rpc_controls[
+                        "position_size_multiplier"
+                    ]
+                    breakdown["regime_calibration_sample_size"] = _rpc_controls["sample_size"]
+            except Exception as _rpc_exc:
+                logger.debug("Regime calibration sizing skipped for %s: %s", symbol, _rpc_exc)
+
             # Propagate expected_win_rate into metadata so downstream
             # fallback payload repair can read it without re-estimating.
             # Estimate: floor=0.52, cap=0.68, scaled linearly from score.
