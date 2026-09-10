@@ -136,7 +136,7 @@ def _fresh_broker_observation(guard: Any, v161: Any, broker_id: str, broker: Any
 
 
 def _supersede_with_observation_fence(guard: Any, broker_map: dict[str, Any]) -> None:
-    """v161 stale-flight rotation plus a cache-generation fence."""
+    """Apply stale-flight fencing with one bounded, fresh-observation recovery."""
     v161 = _v161()
     in_flight = getattr(guard, "_IN_FLIGHT", None)
     in_flight_lock = getattr(guard, "_IN_FLIGHT_LOCK", None)
