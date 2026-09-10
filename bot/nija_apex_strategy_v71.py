@@ -1239,6 +1239,22 @@ class NIJAApexStrategyV71:
         confidence = min(score / MAX_ENTRY_SCORE, 1.0)
         confidence = float(scalar(confidence))
 
+        # Fail closed before adaptive sizing.  Previously this threshold was
+        # advisory only, and the adaptive-minimum bumped path returned early,
+        # allowing weak signals to be enlarged and executed.
+        _effective_min_confidence = getattr(self, '_hf_min_confidence', MIN_CONFIDENCE)
+        if confidence < _effective_min_confidence:
+            reason = (
+                f"Confidence below mandatory floor: {confidence:.2f} < "
+                f"{_effective_min_confidence:.2f}"
+            )
+            logger.info("   Trade quality gate: %s", reason)
+            return {
+                "valid": False,
+                "reason": reason,
+                "confidence": confidence,
+            }
+
         # ── Adaptive minimum sizing (Mar 2026) ──────────────────────────────
         # Use the adaptive minimum sizer when available; fall back to the
         # original static broker-minimum check for robustness.
@@ -1294,15 +1310,6 @@ class NIJAApexStrategyV71:
                     ),
                     "confidence": 0.0,
                 }
-
-        # ── Confidence threshold gate ────────────────────────────────────────
-        # Logged as advisory — no longer a hard block.
-        _effective_min_confidence = getattr(self, '_hf_min_confidence', MIN_CONFIDENCE)
-        if confidence < _effective_min_confidence:
-            logger.info(
-                f"   ⚠️  Low confidence advisory: {confidence:.2f} < "
-                f"{_effective_min_confidence:.2f} (proceeding with reduced size)"
-            )
 
         logger.info(
             f"   ✅ Trade approved: Size=${position_size:.2f}, "
