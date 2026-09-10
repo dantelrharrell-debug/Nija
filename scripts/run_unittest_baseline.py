@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 import sys
 import threading
@@ -13,8 +14,17 @@ from urllib.parse import unquote
 FailureKey = tuple[str, str]
 _KINDS = {"FAIL", "ERROR"}
 _TEST_ONLY_RESTART_THREAD_NAMES = frozenset({
+    "entrypoint-writer-unhandled-loss-restart",
+    "entrypoint-writer-unhandled-loss-restart-v300",
     "terminal-writer-loss-forced-restart",
+    "writer-authority-forced-restart",
 })
+_TEST_RESTART_GRACE_ENV_NAMES = (
+    "NIJA_WRITER_AUTHORITY_FALLBACK_RESTART_GRACE_S",
+    "NIJA_WRITER_AUTHORITY_RESTART_GRACE_S",
+    "NIJA_CORE_REGISTRATION_RESTART_GRACE_S",
+)
+_TEST_RESTART_GRACE_S = "3600"
 
 
 def _parse_baseline(path: Path) -> set[FailureKey]:
@@ -117,6 +127,13 @@ def main(argv: list[str] | None = None) -> int:
     except (OSError, ValueError) as exc:
         print(f"CI_BASELINE_INVALID: {exc}", file=sys.stderr)
         return 2
+
+    # A few writer-authority tests intentionally arm production os._exit(75)
+    # fallbacks. Keep those callbacks far outside the test duration and cancel
+    # their explicitly named timers between cases. Production defaults and
+    # behavior are untouched because this environment exists only in CI.
+    for env_name in _TEST_RESTART_GRACE_ENV_NAMES:
+        os.environ.setdefault(env_name, _TEST_RESTART_GRACE_S)
 
     _reset_terminal_writer_loss_test_state()
     suite = unittest.defaultTestLoader.discover(

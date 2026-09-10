@@ -33,16 +33,6 @@ count falls back to the configured cap or lower.
 
 No capital value is invented, no stale value is refreshed, and no trading gate
 is bypassed.
-Production on 2026-09-09 exposed a second liveness edge: when the normal orphan
-cap was already full, a third stale Kraken flight was reused forever. This file
-now permits one hard-saturation recovery probe per broker. The stuck current
-flight is sequence-fenced before removal and retained separately, so its late
-result cannot become authoritative. A second escape is forbidden until a newer
-authoritative observation proves that the recovery probe completed. This keeps
-recovery bounded instead of creating an unbounded thread leak.
-
-No capital value is invented, no stale value is refreshed, no existing orphan
-cap is raised, and no trading gate is bypassed.
 """
 from __future__ import annotations
 
@@ -61,56 +51,10 @@ _PATCH_ATTR = "_nija_runtime_capital_late_observation_fence_v162"
 _READY_FLAG = "NIJA_RUNTIME_CAPITAL_LATE_OBSERVATION_FENCE_V162_READY"
 _LOCK = threading.RLock()
 _SATURATION_RECOVERY_USED: set[str] = set()
-_SATURATION_ESCAPE: dict[str, dict[str, Any]] = {}
 
 
 def _v161():
     return importlib.import_module("bot.runtime_capital_position_convergence_v161_patch")
-
-
-def _hard_saturation_after_seconds(stale_after_s: float) -> float:
-    raw = str(os.environ.get("NIJA_CAPITAL_HARD_SATURATION_AFTER_S", "") or "").strip()
-    default = max(180.0, float(stale_after_s) * 3.0)
-    if raw:
-        try:
-            requested = float(raw)
-        except (TypeError, ValueError):
-            requested = default
-    else:
-        requested = default
-    return max(float(stale_after_s) + 10.0, min(requested, 900.0))
-
-
-def _escape_recovered(guard: Any, broker_id: str) -> bool:
-    bid = str(broker_id).strip().lower()
-    state = _SATURATION_ESCAPE.get(bid)
-    if not isinstance(state, dict):
-        return False
-    observations = getattr(guard, "_OBSERVATIONS", None)
-    if not isinstance(observations, dict):
-        return False
-    observation = observations.get(bid)
-    if observation is None:
-        return False
-    try:
-        observation_sequence = int(getattr(observation, "sequence", 0) or 0)
-        fence_sequence = int(state.get("fence_sequence", 0) or 0)
-        observed_monotonic = float(getattr(observation, "observed_monotonic", 0.0) or 0.0)
-        escaped_monotonic = float(state.get("escaped_monotonic", 0.0) or 0.0)
-    except (TypeError, ValueError):
-        return False
-    if observation_sequence <= fence_sequence or observed_monotonic <= escaped_monotonic:
-        return False
-    _SATURATION_ESCAPE.pop(bid, None)
-    LOGGER.critical(
-        "CAPITAL_V162_SATURATION_RECOVERED marker=%s broker=%s observation_sequence=%d "
-        "prior_fence_sequence=%d newer_authoritative_observation=true escape_rearmed=true",
-        MARKER,
-        bid,
-        observation_sequence,
-        fence_sequence,
-    )
-    return True
 
 
 def _fence_observation(guard: Any, broker_id: str, retired_sequence: int) -> int:
@@ -192,7 +136,7 @@ def _fresh_broker_observation(guard: Any, v161: Any, broker_id: str, broker: Any
 
 
 def _supersede_with_observation_fence(guard: Any, broker_map: dict[str, Any]) -> None:
-    """v161 stale-flight rotation plus cache fencing and bounded saturation recovery."""
+    """v161 stale-flight rotation plus a cache-generation fence."""
     v161 = _v161()
     in_flight = getattr(guard, "_IN_FLIGHT", None)
     in_flight_lock = getattr(guard, "_IN_FLIGHT_LOCK", None)
@@ -203,7 +147,6 @@ def _supersede_with_observation_fence(guard: Any, broker_map: dict[str, Any]) ->
     with in_flight_lock:
         for broker_id, broker in broker_map.items():
             bid = str(broker_id).strip().lower()
-            _escape_recovered(guard, bid)
             flight = in_flight.get(bid)
             if flight is None:
                 continue
@@ -238,13 +181,6 @@ def _supersede_with_observation_fence(guard: Any, broker_map: dict[str, Any]) ->
                         "CAPITAL_V162_STALE_FLIGHT_ROTATION_CAPPED marker=%s broker=%s age_s=%.2f "
                         "stale_after_s=%.2f live_orphans=%d max_orphans=%d current_reused=true "
                         "bounded_recovery_available=%s",
-                hard_after_s = _hard_saturation_after_seconds(stale_after_s)
-                escape_active = isinstance(_SATURATION_ESCAPE.get(bid), dict)
-                if age_s < hard_after_s or escape_active:
-                    LOGGER.warning(
-                        "CAPITAL_V162_STALE_FLIGHT_ROTATION_CAPPED marker=%s broker=%s age_s=%.2f "
-                        "stale_after_s=%.2f hard_after_s=%.2f live_orphans=%d max_orphans=%d "
-                        "escape_active=%s current_reused=true",
                         MARKER,
                         bid,
                         age_s,
@@ -252,10 +188,6 @@ def _supersede_with_observation_fence(guard: Any, broker_map: dict[str, Any]) ->
                         len(orphans),
                         max_orphans,
                         str(bid not in _SATURATION_RECOVERY_USED).lower(),
-                        hard_after_s,
-                        len(orphans),
-                        max_orphans,
-                        str(escape_active).lower(),
                     )
                     continue
                 if in_flight.get(bid) is not flight:
@@ -275,27 +207,12 @@ def _supersede_with_observation_fence(guard: Any, broker_map: dict[str, Any]) ->
                     "new_fetch_allowed=true freshness_extended=false readiness_granted=false "
                     "safety_gates_bypassed=false",
                     SATURATION_MARKER,
-                retired_sequence = int(getattr(flight, "sequence", 0) or 0)
-                fence_sequence = _fence_observation(guard, bid, retired_sequence)
-                in_flight.pop(bid, None)
-                _SATURATION_ESCAPE[bid] = {
-                    "flight": flight,
-                    "fence_sequence": fence_sequence,
-                    "escaped_monotonic": now,
-                }
-                LOGGER.critical(
-                    "CAPITAL_V162_HARD_SATURATION_ESCAPE marker=%s broker=%s retired_sequence=%d "
-                    "fence_sequence=%d age_s=%.2f stale_after_s=%.2f hard_after_s=%.2f "
-                    "live_orphans=%d max_orphans=%d one_probe_only=true late_observation_fenced=true "
-                    "new_fetch_allowed=true orphan_cap_unchanged=true freshness_extended=false "
-                    "readiness_granted=false safety_gates_bypassed=false",
                     MARKER,
                     bid,
                     retired_sequence,
                     fence_sequence,
                     age_s,
                     stale_after_s,
-                    hard_after_s,
                     len(orphans),
                     max_orphans,
                 )
@@ -353,8 +270,6 @@ def install() -> bool:
             "RUNTIME_CAPITAL_LATE_OBSERVATION_FENCE_V162 marker=%s ready=true "
             "retired_worker_cache_write_fenced=true saturation_recovery_marker=%s "
             "bounded_overcommit_max=1 freshness_extended=false safety_gates_bypassed=false",
-            "retired_worker_cache_write_fenced=true hard_saturation_escape_bounded=true "
-            "orphan_cap_unchanged=true freshness_extended=false safety_gates_bypassed=false",
             MARKER,
             SATURATION_MARKER,
         )
@@ -373,10 +288,4 @@ __all__ = [
     "_fence_observation",
     "_fresh_broker_observation",
     "_supersede_with_observation_fence",
-    "install",
-    "install_import_hook",
-    "_fence_observation",
-    "_supersede_with_observation_fence",
-    "_hard_saturation_after_seconds",
-    "_escape_recovered",
 ]

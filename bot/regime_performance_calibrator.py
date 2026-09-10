@@ -1,9 +1,9 @@
 """Shadow-mode regime-aware performance calibration for NIJA.
 
 This module observes fully closed trades and produces bounded, statistically
-shrunk recommendations.  It never places orders and its recommendations are
-not consumed by the live execution path.  That separation is intentional:
-strategy and risk changes require an explicit backtest and human review.
+shrunk recommendations. It never places orders. Live execution may consume
+downside-only controls only after both operator gates are enabled and the
+bucket meets the minimum sample requirement; otherwise controls are neutral.
 """
 
 from __future__ import annotations
