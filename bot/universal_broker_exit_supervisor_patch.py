@@ -7,6 +7,7 @@ and its native position tracker is scanned for platform and user holdings.
 from __future__ import annotations
 
 import builtins
+import importlib
 import logging
 import os
 import sys
