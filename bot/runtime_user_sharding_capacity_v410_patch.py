@@ -12,6 +12,7 @@ Safety properties:
 - overflow users are not connected for new entries on that worker
 - already-connected brokers/positions are never deleted or disconnected
 - no order is submitted/cancelled and no execution authority is granted
+- v411 continuously publishes SCALE_REQUIRED when enabled-user capacity is exceeded
 """
 from __future__ import annotations
 
@@ -97,6 +98,19 @@ def _loader() -> Any:
     return loader
 
 
+def _install_capacity_signal() -> bool:
+    try:
+        module = importlib.import_module("bot.runtime_capacity_autoscale_signal_v411_patch")
+        installer = getattr(module, "install", None)
+        return bool(installer()) if callable(installer) else False
+    except Exception:
+        LOGGER.exception(
+            "USER_SHARD_V410_V411_INSTALL_ERROR marker=%s overflow_admission_fail_closed=true",
+            MARKER,
+        )
+        return False
+
+
 def _patch_manager_class(cls: type) -> bool:
     original = getattr(cls, "connect_users_from_config", None)
     if not callable(original):
@@ -105,8 +119,6 @@ def _patch_manager_class(cls: type) -> bool:
         return True
 
     def guarded(self: Any, *args: Any, **kwargs: Any) -> Any:
-        # Serialize loader substitution within a process.  This guard changes no
-        # global trading state and exists only around configuration discovery.
         with _CALL_LOCK:
             try:
                 loader = _loader()
@@ -138,10 +150,6 @@ def _patch_manager_class(cls: type) -> bool:
                     overflow_ids[:20],
                 )
 
-            # Patch only this singleton loader instance for the duration of the
-            # canonical method.  The original connection logic, platform-first
-            # checks, nonce resync, capital audit, and broker construction remain
-            # authoritative and unchanged.
             def local_enabled_users() -> List[Any]:
                 return list(admitted)
 
@@ -156,6 +164,19 @@ def _patch_manager_class(cls: type) -> bool:
                 setattr(self, "_nija_user_shard_overflow_v410", tuple(overflow_ids))
             except Exception:
                 pass
+
+            # Re-publish the global capacity state after every canonical user
+            # connection pass so onboarding changes become visible immediately.
+            try:
+                signal = importlib.import_module("bot.runtime_capacity_autoscale_signal_v411_patch")
+                publish = getattr(signal, "publish_capacity_state", None)
+                if callable(publish):
+                    publish()
+            except Exception:
+                LOGGER.exception(
+                    "USER_SHARD_V410_V411_PUBLISH_ERROR marker=%s overflow_admission_fail_closed=true",
+                    MARKER,
+                )
 
             os.environ[_READY_FLAG] = "1"
             LOGGER.critical(
@@ -181,7 +202,6 @@ def _patch_manager_class(cls: type) -> bool:
 def install() -> bool:
     with _LOCK:
         try:
-            # Validate configuration even if MABM has not loaded yet.
             shard_count, shard_index, max_users = _config()
             module = importlib.import_module("bot.multi_account_broker_manager")
             cls = getattr(module, "MultiAccountBrokerManager", None)
@@ -192,15 +212,17 @@ def install() -> bool:
                     MARKER,
                 )
                 return False
+            capacity_signal_ready = _install_capacity_signal()
             os.environ[_READY_FLAG] = "1"
             LOGGER.critical(
                 "USER_SHARD_V410_READY marker=%s shard=%s/%s max_users_per_shard=%s stable_hash=sha256 "
-                "platform_writer_unchanged=true risk_gates_unchanged=true exits_unchanged=true "
+                "capacity_signal_v411=%s platform_writer_unchanged=true risk_gates_unchanged=true exits_unchanged=true "
                 "orders_submitted=false forced_activation=false safety_gates_bypassed=false",
                 MARKER,
                 shard_index,
                 shard_count,
                 max_users,
+                str(capacity_signal_ready).lower(),
             )
             return True
         except Exception as exc:

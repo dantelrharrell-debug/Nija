@@ -4,8 +4,8 @@ v405 clears only a recovered heartbeat-verification circuit-breaker latch, and
 only after current canonical verification, strict writer/nonce authority, and a
 clear kill switch are all proven. It also installs the authenticated v406 proof
 revalidation path, the existing v404 live-safety convergence path, v409's
-portfolio-equity correction for the global drawdown breaker, and v410's
-deterministic user-sharding/capacity admission layer.
+portfolio-equity correction, v410's user-sharding/capacity layer, and v412's
+confirmed-fill realized-P&L reconciliation layer.
 
 No freshness is extended, no threshold is changed, no readiness is fabricated,
 no proof marker is fabricated, and no order is submitted/cancelled by this patch.
@@ -69,57 +69,39 @@ def _clear_recovered_heartbeat_latch_once() -> bool:
     tsm = _tsm()
     if not bool(getattr(tsm, "_EXECUTION_CIRCUIT_BREAKER_TRIPPED", False)):
         return False
-
     reason = str(getattr(tsm, "_EXECUTION_CIRCUIT_BREAKER_REASON", "") or "")
     if "heartbeat_verification" not in reason.lower():
         return False
-
     verification_ready, _verification_detail, verification_meta = _verification_current(tsm)
     if not verification_ready:
         return False
-
     authority_ready, authority_detail = _strict_writer_nonce_ready(tsm)
     if not authority_ready:
         return False
-
     kill_clear, kill_detail = _kill_switch_clear()
     if not kill_clear:
         return False
-
     lock = getattr(tsm, "_EXECUTION_CIRCUIT_BREAKER_LOCK", None)
     counts = getattr(tsm, "_EXECUTION_CIRCUIT_BREAKER_COUNTS", None)
     if lock is None or not isinstance(counts, dict):
         return False
-
     with lock:
         current_reason = str(getattr(tsm, "_EXECUTION_CIRCUIT_BREAKER_REASON", "") or "")
         if "heartbeat_verification" not in current_reason.lower():
             return False
-
         prior_counts = dict(counts)
         for key in list(counts):
             if str(key or "").strip().lower() == "heartbeat_verification":
                 counts.pop(key, None)
-
         if counts:
             return False
-
         setattr(tsm, "_EXECUTION_CIRCUIT_BREAKER_TRIPPED", False)
         setattr(tsm, "_EXECUTION_CIRCUIT_BREAKER_REASON", "")
-
     LOGGER.critical(
-        "EXECUTION_BREAKER_RECOVERY_V405_CLEARED marker=%s prior_reason=%s prior_counts=%s "
-        "verification_source=%s verification_age_s=%s writer_nonce=%s kill_switch=%s "
-        "freshness_extended=false threshold_changed=false readiness_marked=false "
-        "authority_granted=false trading_state_changed=false proof_written=false "
-        "order_submitted=false order_cancelled=false forced_activation=false safety_gates_bypassed=false",
-        MARKER,
-        reason,
-        prior_counts,
+        "EXECUTION_BREAKER_RECOVERY_V405_CLEARED marker=%s prior_reason=%s prior_counts=%s verification_source=%s verification_age_s=%s writer_nonce=%s kill_switch=%s freshness_extended=false threshold_changed=false readiness_marked=false authority_granted=false trading_state_changed=false proof_written=false order_submitted=false order_cancelled=false forced_activation=false safety_gates_bypassed=false",
+        MARKER, reason, prior_counts,
         str(verification_meta.get("verification_source") or verification_meta.get("source") or "primary"),
-        str(verification_meta.get("age_s", "unknown")),
-        authority_detail or "ready",
-        kill_detail,
+        str(verification_meta.get("age_s", "unknown")), authority_detail or "ready", kill_detail,
     )
     return True
 
@@ -133,62 +115,37 @@ def _worker() -> None:
         time.sleep(2.0)
 
 
-def _install_authenticated_probe_revalidation() -> bool:
+def _install_module(module_name: str, label: str) -> bool:
     try:
-        module = importlib.import_module("bot.runtime_known_execution_probe_revalidation_v406_patch")
-        installer = getattr(module, "install", None)
-        return bool(installer()) if callable(installer) else False
+        module = importlib.import_module(module_name)
+        installer = getattr(module, "install", None) or getattr(module, "install_import_hook", None)
+        ready = bool(installer()) if callable(installer) else False
+        if not ready:
+            LOGGER.warning("EXECUTION_BREAKER_RECOVERY_V405_%s_DEFERRED marker=%s fail_closed=true", label, MARKER)
+        return ready
     except Exception:
-        LOGGER.exception("EXECUTION_BREAKER_RECOVERY_V405_V406_INSTALL_ERROR marker=%s trading_fail_closed=true", MARKER)
+        LOGGER.exception("EXECUTION_BREAKER_RECOVERY_V405_%s_INSTALL_ERROR marker=%s fail_closed=true", label, MARKER)
         return False
+
+
+def _install_authenticated_probe_revalidation() -> bool:
+    return _install_module("bot.runtime_known_execution_probe_revalidation_v406_patch", "V406")
 
 
 def _install_live_safety_convergence() -> bool:
-    try:
-        module = importlib.import_module("bot.runtime_live_safety_convergence_v404_patch")
-        installer = getattr(module, "install", None)
-        ready = bool(installer()) if callable(installer) else False
-        if not ready:
-            LOGGER.warning("EXECUTION_BREAKER_RECOVERY_V405_V404_DEFERRED marker=%s trading_fail_closed=true snapshot_ttl_unchanged=true", MARKER)
-        return ready
-    except Exception:
-        LOGGER.exception("EXECUTION_BREAKER_RECOVERY_V405_V404_INSTALL_ERROR marker=%s trading_fail_closed=true snapshot_ttl_unchanged=true", MARKER)
-        return False
+    return _install_module("bot.runtime_live_safety_convergence_v404_patch", "V404")
 
 
 def _install_drawdown_portfolio_equity() -> bool:
-    try:
-        module = importlib.import_module("bot.runtime_drawdown_portfolio_equity_v409_patch")
-        installer = getattr(module, "install", None)
-        ready = bool(installer()) if callable(installer) else False
-        if not ready:
-            LOGGER.warning("EXECUTION_BREAKER_RECOVERY_V405_V409_DEFERRED marker=%s trading_fail_closed=true drawdown_threshold_unchanged=true", MARKER)
-        return ready
-    except Exception:
-        LOGGER.exception("EXECUTION_BREAKER_RECOVERY_V405_V409_INSTALL_ERROR marker=%s trading_fail_closed=true drawdown_threshold_unchanged=true", MARKER)
-        return False
+    return _install_module("bot.runtime_drawdown_portfolio_equity_v409_patch", "V409")
 
 
 def _install_user_sharding_capacity() -> bool:
-    """Install v410. It affects connection admission only, never existing exits."""
-    try:
-        module = importlib.import_module("bot.runtime_user_sharding_capacity_v410_patch")
-        installer = getattr(module, "install", None)
-        ready = bool(installer()) if callable(installer) else False
-        if not ready:
-            LOGGER.warning(
-                "EXECUTION_BREAKER_RECOVERY_V405_V410_DEFERRED marker=%s "
-                "new_user_connections_fail_closed=true existing_positions_untouched=true",
-                MARKER,
-            )
-        return ready
-    except Exception:
-        LOGGER.exception(
-            "EXECUTION_BREAKER_RECOVERY_V405_V410_INSTALL_ERROR marker=%s "
-            "new_user_connections_fail_closed=true existing_positions_untouched=true",
-            MARKER,
-        )
-        return False
+    return _install_module("bot.runtime_user_sharding_capacity_v410_patch", "V410")
+
+
+def _install_realized_pnl_reconciliation() -> bool:
+    return _install_module("bot.runtime_realized_pnl_reconciliation_v412_patch", "V412")
 
 
 def install() -> bool:
@@ -196,44 +153,30 @@ def install() -> bool:
     with _LOCK:
         try:
             tsm = _tsm()
-            required = all(
-                hasattr(tsm, attr)
-                for attr in (
-                    "_heartbeat_verification_status",
-                    "_runtime_writer_nonce_ready",
-                    "_EXECUTION_CIRCUIT_BREAKER_LOCK",
-                    "_EXECUTION_CIRCUIT_BREAKER_COUNTS",
-                )
-            )
+            required = all(hasattr(tsm, attr) for attr in (
+                "_heartbeat_verification_status", "_runtime_writer_nonce_ready",
+                "_EXECUTION_CIRCUIT_BREAKER_LOCK", "_EXECUTION_CIRCUIT_BREAKER_COUNTS",
+            ))
             if not required:
                 os.environ[_READY_FLAG] = "0"
                 LOGGER.error("EXECUTION_BREAKER_RECOVERY_V405_NOT_READY marker=%s reason=tsm_contract_missing", MARKER)
                 return False
-
             if not _install_authenticated_probe_revalidation():
                 os.environ[_READY_FLAG] = "0"
                 LOGGER.error("EXECUTION_BREAKER_RECOVERY_V405_NOT_READY marker=%s reason=v406_revalidation_install_failed", MARKER)
                 return False
-
             live_safety_ready = _install_live_safety_convergence()
             drawdown_equity_ready = _install_drawdown_portfolio_equity()
             user_sharding_ready = _install_user_sharding_capacity()
-
+            realized_pnl_ready = _install_realized_pnl_reconciliation()
             if _THREAD is None or not _THREAD.is_alive():
                 _THREAD = threading.Thread(target=_worker, name="ExecutionBreakerRecoveryV405", daemon=True)
                 _THREAD.start()
-
             os.environ[_READY_FLAG] = "1"
             LOGGER.critical(
-                "EXECUTION_BREAKER_RECOVERY_V405_READY marker=%s heartbeat_only=true "
-                "fresh_verification_required=true strict_writer_nonce_required=true kill_switch_clear_required=true "
-                "authenticated_probe_revalidation_v406=true live_safety_v404=%s drawdown_portfolio_equity_v409=%s "
-                "user_sharding_capacity_v410=%s freshness_extended=false threshold_changed=false authority_granted=false state_changed=false "
-                "orders_submitted=false orders_cancelled=false forced_activation=false safety_gates_bypassed=false",
-                MARKER,
-                str(live_safety_ready).lower(),
-                str(drawdown_equity_ready).lower(),
-                str(user_sharding_ready).lower(),
+                "EXECUTION_BREAKER_RECOVERY_V405_READY marker=%s heartbeat_only=true fresh_verification_required=true strict_writer_nonce_required=true kill_switch_clear_required=true authenticated_probe_revalidation_v406=true live_safety_v404=%s drawdown_portfolio_equity_v409=%s user_sharding_capacity_v410=%s realized_pnl_v412=%s freshness_extended=false threshold_changed=false authority_granted=false state_changed=false orders_submitted=false orders_cancelled=false forced_activation=false safety_gates_bypassed=false",
+                MARKER, str(live_safety_ready).lower(), str(drawdown_equity_ready).lower(),
+                str(user_sharding_ready).lower(), str(realized_pnl_ready).lower(),
             )
             return True
         except Exception as exc:
@@ -245,11 +188,7 @@ def install() -> bool:
 install_import_hook = install
 
 __all__ = [
-    "MARKER",
-    "install",
-    "install_import_hook",
-    "_clear_recovered_heartbeat_latch_once",
-    "_install_live_safety_convergence",
-    "_install_drawdown_portfolio_equity",
-    "_install_user_sharding_capacity",
+    "MARKER", "install", "install_import_hook", "_clear_recovered_heartbeat_latch_once",
+    "_install_live_safety_convergence", "_install_drawdown_portfolio_equity",
+    "_install_user_sharding_capacity", "_install_realized_pnl_reconciliation",
 ]

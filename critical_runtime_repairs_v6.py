@@ -13,7 +13,8 @@ _LOCK = threading.RLock()
 _INSTALLED = False
 
 # Order is intentional: normalize runtime identity and account state first, then
-# repair scan data, candidate handoff, execution telemetry, and broker routing.
+# repair scan data, candidate handoff, execution telemetry, broker routing, and
+# finally reconcile already-confirmed fills into the existing realized-P&L ledger.
 _REQUIRED = (
     "runtime_patch_idempotence_guard",
     "account_capital_isolation_v4_patch",
@@ -28,6 +29,7 @@ _REQUIRED = (
     "bot.runtime_market_data_entry_failclosed_v403_patch",
     "bot.runtime_live_safety_convergence_v404_patch",
     "bot.runtime_execution_breaker_recovery_v405_patch",
+    "bot.runtime_realized_pnl_reconciliation_v412_patch",
     "bot.final_account_router_exit_convergence_patch",
 )
 
@@ -69,12 +71,14 @@ def install() -> bool:
         os.environ["NIJA_MARKET_DATA_ENTRY_FAILCLOSED_REQUIRED"] = "1"
         os.environ["NIJA_RUNTIME_LIVE_SAFETY_CONVERGENCE_V404_REQUIRED"] = "1"
         os.environ["NIJA_RUNTIME_EXECUTION_BREAKER_RECOVERY_V405_REQUIRED"] = "1"
+        os.environ["NIJA_REALIZED_PNL_RECONCILIATION_V412_REQUIRED"] = "1"
         _INSTALLED = True
         logger.critical(
             "CRITICAL_RUNTIME_REPAIRS_V6_READY marker=%s modules=%s "
             "phase3_handoff=true execution_completion=true admission_trace=true "
             "market_data_entry_failclosed=true live_safety_convergence_v404=true "
-            "execution_breaker_recovery_v405=true okx_router_convergence=true fail_closed=true",
+            "execution_breaker_recovery_v405=true realized_pnl_reconciliation_v412=true "
+            "okx_router_convergence=true fail_closed=true",
             _MARKER,
             ",".join(completed),
         )
