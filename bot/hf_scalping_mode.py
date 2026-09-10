@@ -296,6 +296,9 @@ class HFScalpingMode:
         # which safely clears the execution engine's MIN_TP_PCT of 0.800%.
         floors = {
             "cycle_interval_seconds": 60,
+            # Deployment configuration must not admit effectively random
+            # entries by lowering the common confidence threshold.
+            "min_confidence": 0.15,
             "kraken_min_confidence": 0.15,
             "volume_min_threshold": 0.002,
             "min_trend_confirmation": 2,
