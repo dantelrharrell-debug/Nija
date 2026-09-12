@@ -27,6 +27,7 @@ class UnittestBaselineRunnerTests(unittest.TestCase):
                 root = Path(directory)
                 baseline = root / "baseline.txt"
                 baseline.write_text("", encoding="utf-8")
+                (root / "__init__.py").write_text("", encoding="utf-8")
                 (root / "test_restart_grace.py").write_text(
                     "import os\n"
                     "import unittest\n\n"
