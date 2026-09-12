@@ -103,6 +103,7 @@ ERROR bot.tests.test%5Fforce%5Factivation%5Flifecycle.TestForceActivationCompati
 ERROR bot.tests.test%5Fkraken%5Fall%5Faccount%5Fsupervision%5Fv86.KrakenAllAccountSupervisionV86Tests.test%5Freconnect%5Ffails%5Fclosed%5Fwithout%5Fwriter%5Fproof
 ERROR bot.tests.test%5Flifecycle%5Fphase%5Fgate.TestLifecyclePhaseOnSnapshot.test%5Flive%5Fphase%5Fafter%5Fcommit
 ERROR bot.tests.test%5Fredis%5Fruntime%5Ffallback%5Fbudget.TestRedisRuntimeFallbackBudget.test%5Fconnect%5Fredis%5Fwith%5Ffallback%5Fhonors%5Ftotal%5Fbudget
+FAIL bot.tests.test%5Fproduction%5Ffreshness%5Fscan%5Fconvergence%5Fv93.ProductionFreshnessScanConvergenceV93Tests.test%5Flive%5Fscan%5Fowner%5Fis%5Fnever%5Freplaced
 ERROR bot.tests.test%5Fstartup%5Fconvergence%5Fv103.StartupConvergenceV103Tests.test%5Freconciliation%5Fguard%5Fcoalesces%5Fnested%5Fcall
 ERROR bot.tests.test%5Fstartup%5Fcoordinator.TestStartupCoordinator.test%5Ffinalize%5Factivation%5Fcommit%5Fwith%5Fzero%5Fsnapshot%5Fversion%5Fstill%5Flatches%5Fdispatch
 ERROR bot.tests.test%5Fstartup%5Fcoordinator.TestStartupCoordinator.test%5Fglobal%5Fgate%5Fregression%5Frevokes%5Fdispatch%5Fcommit
