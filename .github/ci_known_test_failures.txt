@@ -167,7 +167,6 @@ FAIL bot.tests.test%5Forder%5Fdispatch%5Fauthority%5Fgates.TestExecutionPipeline
 FAIL bot.tests.test%5Forder%5Fdispatch%5Fauthority%5Fgates.TestExecutionPipelineAuthorityHalts.test%5Fexecute%5Fblocks%5Fwhen%5Fseak%5Fhalted
 FAIL bot.tests.test%5Forder%5Fdispatch%5Fauthority%5Fgates.TestExecutionPipelineAuthorityHalts.test%5Fexecute%5Fnormalizes%5Fuppercase%5Fmarket%5Forder%5Fbefore%5Fcontract%5Fvalidation
 FAIL bot.tests.test%5Fposition%5Fsync%5Fdispatch%5Fauthority%5Fv96.PositionSyncDispatchAuthorityV96Tests.test%5Finstaller%5Freplay%5Fdoes%5Fnot%5Frepublish%5Fartificial%5Ffail%5Fclosed%5Fstate
-FAIL bot.tests.test%5Fproduction%5Ffreshness%5Fscan%5Fconvergence%5Fv93.ProductionFreshnessScanConvergenceV93Tests.test%5Flive%5Fscan%5Fowner%5Fis%5Fnever%5Freplaced
 FAIL bot.tests.test%5Fruntime%5Fauthority%5Fnonce%5Ftruth%5Fconvergence%5Fv231.AuthorityNonceTruthV231Tests.test%5Factive%5Fkraken%5Frevokes%5Ffalse%5Fcoinbase%5Fnonce%5Fshortcut
 FAIL bot.tests.test%5Fruntime%5Fauthority%5Fnonce%5Ftruth%5Fconvergence%5Fv231.AuthorityNonceTruthV231Tests.test%5Fcollect%5Fkeeps%5Fcurrent%5Fauthority%5Ftrue%5Fwhile%5Fnonce%5Fis%5Fpending
 FAIL bot.tests.test%5Fruntime%5Fauthority%5Fnonce%5Ftruth%5Fconvergence%5Fv231.AuthorityNonceTruthV231Tests.test%5Fexecution%5Frequires%5Fboth%5Fauthority%5Fand%5Fnonce
