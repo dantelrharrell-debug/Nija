@@ -132,20 +132,31 @@ def main(argv: list[str] | None = None) -> int:
     # fallbacks. Keep those callbacks far outside the test duration and cancel
     # their explicitly named timers between cases. Production defaults and
     # behavior are untouched because this environment exists only in CI.
-    for env_name in _TEST_RESTART_GRACE_ENV_NAMES:
-        os.environ.setdefault(env_name, _TEST_RESTART_GRACE_S)
+    saved_restart_grace = {
+        env_name: os.environ.get(env_name)
+        for env_name in _TEST_RESTART_GRACE_ENV_NAMES
+    }
+    try:
+        for env_name in _TEST_RESTART_GRACE_ENV_NAMES:
+            os.environ[env_name] = _TEST_RESTART_GRACE_S
 
-    _reset_terminal_writer_loss_test_state()
-    suite = unittest.defaultTestLoader.discover(
-        start_dir=args.start_dir,
-        pattern=args.pattern,
-    )
-    runner = unittest.TextTestRunner(
-        verbosity=2,
-        resultclass=_IsolatedTextTestResult,
-    )
-    result = runner.run(suite)
-    _reset_terminal_writer_loss_test_state()
+        _reset_terminal_writer_loss_test_state()
+        suite = unittest.defaultTestLoader.discover(
+            start_dir=args.start_dir,
+            pattern=args.pattern,
+        )
+        runner = unittest.TextTestRunner(
+            verbosity=2,
+            resultclass=_IsolatedTextTestResult,
+        )
+        result = runner.run(suite)
+        _reset_terminal_writer_loss_test_state()
+    finally:
+        for env_name, previous in saved_restart_grace.items():
+            if previous is None:
+                os.environ.pop(env_name, None)
+            else:
+                os.environ[env_name] = previous
 
     observed = _observed_failures(result)
     unexpected = observed - baseline
