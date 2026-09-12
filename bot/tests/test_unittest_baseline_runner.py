@@ -23,7 +23,9 @@ class UnittestBaselineRunnerTests(unittest.TestCase):
             for name in _TEST_RESTART_GRACE_ENV_NAMES:
                 os.environ[name] = "5"
 
-            with tempfile.TemporaryDirectory() as directory:
+            # The CI sitecustomize guard permits discovery only inside the
+            # checked-out project tree. Keep this synthetic suite inside it.
+            with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory:
                 root = Path(directory)
                 baseline = root / "baseline.txt"
                 baseline.write_text("", encoding="utf-8")
