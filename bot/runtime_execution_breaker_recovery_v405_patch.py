@@ -1,12 +1,12 @@
 """Fail-closed recovery for stale execution verification and live-safety liveness.
 
 v405 clears only a recovered heartbeat-verification circuit-breaker latch, and
-only after current canonical verification, strict writer/nonce authority, and a
-clear kill switch are all proven. It also installs the authenticated v406 proof
-revalidation path, the existing v404 live-safety convergence path, v409's
-portfolio-equity correction, v410's user-sharding/capacity layer, v412's
-confirmed-fill realized-P&L reconciliation layer, and v413's authenticated
-Kraken fee bridge.
+only after current canonical verification, strict writer/nonce authority, and
+a clear kill switch are all proven. It also installs the authenticated v406
+proof revalidation path, the existing v404 live-safety convergence path, v414's
+hardened original-baseline drawdown recovery (which installs v409's portfolio-
+equity correction), v410's user-sharding/capacity layer, v412's confirmed-fill
+realized-P&L reconciliation layer, and v413's authenticated Kraken fee bridge.
 
 No freshness is extended, no threshold is changed, no readiness is fabricated,
 no proof marker is fabricated, and no order is submitted/cancelled by this patch.
@@ -138,7 +138,8 @@ def _install_live_safety_convergence() -> bool:
 
 
 def _install_drawdown_portfolio_equity() -> bool:
-    return _install_module("bot.runtime_drawdown_portfolio_equity_v409_patch", "V409")
+    # v414 installs v409 only after replacing v409's restart-unsafe recovery proof.
+    return _install_module("bot.runtime_drawdown_stop_provenance_v414_patch", "V414")
 
 
 def _install_user_sharding_capacity() -> bool:
@@ -180,7 +181,7 @@ def install() -> bool:
                 _THREAD.start()
             os.environ[_READY_FLAG] = "1"
             LOGGER.critical(
-                "EXECUTION_BREAKER_RECOVERY_V405_READY marker=%s heartbeat_only=true fresh_verification_required=true strict_writer_nonce_required=true kill_switch_clear_required=true authenticated_probe_revalidation_v406=true live_safety_v404=%s drawdown_portfolio_equity_v409=%s user_sharding_capacity_v410=%s realized_pnl_v412=%s kraken_fee_pnl_v413=%s freshness_extended=false threshold_changed=false authority_granted=false state_changed=false orders_submitted=false orders_cancelled=false forced_activation=false safety_gates_bypassed=false",
+                "EXECUTION_BREAKER_RECOVERY_V405_READY marker=%s heartbeat_only=true fresh_verification_required=true strict_writer_nonce_required=true kill_switch_clear_required=true authenticated_probe_revalidation_v406=true live_safety_v404=%s drawdown_stop_provenance_v414=%s user_sharding_capacity_v410=%s realized_pnl_v412=%s kraken_fee_pnl_v413=%s freshness_extended=false threshold_changed=false authority_granted=false state_changed=false orders_submitted=false orders_cancelled=false forced_activation=false safety_gates_bypassed=false",
                 MARKER, str(live_safety_ready).lower(), str(drawdown_equity_ready).lower(),
                 str(user_sharding_ready).lower(), str(realized_pnl_ready).lower(), str(kraken_fee_pnl_ready).lower(),
             )
