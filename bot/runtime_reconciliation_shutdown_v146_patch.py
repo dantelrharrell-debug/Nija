@@ -15,6 +15,16 @@ never overwritten.
 The companion source changes in ``nija_core_loop`` and ``bot_main`` make normal
 core-loop waits interruptible so a failed startup can release writer authority
 without waiting on an unrelated 30/150 second sleep.
+
+2026-09-13 refresh-stability amendment (v410): runtime refreshes may temporarily
+clear the legacy ``_startup_position_sync_fetch_ok`` bit while the exact same
+authenticated Kraken refresh remains in flight.  The newer v285/v399 strong
+position-proof contract can distinguish that bounded in-flight state from a
+completed failure.  Reconciliation therefore accepts that stronger proof only
+when the legacy bit is absent/false.  Stale snapshots, completed failures,
+disconnections, missing proof, and every terminal reconciliation outcome remain
+fail closed.  No snapshot timestamp, readiness bit, risk gate, execution
+authority, order, or fill is fabricated by this amendment.
 """
 from __future__ import annotations
 
@@ -30,6 +40,7 @@ from typing import Any
 LOGGER = logging.getLogger("nija.runtime_reconciliation_shutdown_v146")
 MARKER = "20260818-runtime-reconciliation-shutdown-v146"
 RELEASE_ID = "20260818-runtime-convergence-v146"
+REFRESH_STABILITY_MARKER = "20260913-reconciliation-refresh-stability-v410"
 _FLAG = "NIJA_RUNTIME_RECONCILIATION_SHUTDOWN_V146_READY"
 _PATCH_ATTR = "_nija_runtime_reconciliation_shutdown_v146"
 _LOCK = threading.RLock()
@@ -46,6 +57,55 @@ _TERMINAL_FAILURE_STATUSES = {
 
 def _truthy(value: str | None) -> bool:
     return str(value or "").strip().lower() in _TRUE
+
+
+def _broker_fetch_proof_ready(broker: Any) -> tuple[bool, str]:
+    """Return current authenticated fetch proof without inventing readiness.
+
+    v146 historically required the legacy startup fetch bit to remain True for
+    the lifetime of the process.  Later runtime refresh layers intentionally
+    clear that bit while a genuine authenticated refresh is in flight.  When
+    that happens, defer to v285's strong proof contract.  In production v399
+    narrows its transient acceptance to the exact active Kraken flight, a
+    current snapshot under the unchanged TTL, prior-good proof, and no flight
+    error.  If v285/v399 is missing, rejects the broker, or raises, v146 remains
+    fail closed exactly as before.
+    """
+    if getattr(broker, "_startup_position_sync_fetch_ok", None) is True:
+        return True, "startup_position_sync_fetch_ok"
+
+    exact = str(getattr(broker, "_startup_position_sync_error", "") or "").strip()
+    try:
+        v285 = importlib.import_module(
+            "bot.runtime_authoritative_position_coverage_v285_patch"
+        )
+        strong_proof = getattr(v285, "_strong_broker_proof", None)
+        if callable(strong_proof):
+            ready, reason = strong_proof(broker)
+            reason_text = str(reason or "").strip()
+            if bool(ready):
+                LOGGER.debug(
+                    "STARTUP_RECONCILIATION_V410_STRONG_FETCH_PROOF_ACCEPTED "
+                    "marker=%s reason=%s legacy_fetch_ok=%s "
+                    "snapshot_timestamp_unchanged=true snapshot_ttl_unchanged=true "
+                    "readiness_fabricated=false safety_gates_bypassed=false",
+                    REFRESH_STABILITY_MARKER,
+                    reason_text or "authoritative_current_position_snapshot",
+                    str(getattr(broker, "_startup_position_sync_fetch_ok", None)),
+                )
+                return True, reason_text or "authoritative_current_position_snapshot"
+            if reason_text:
+                return False, reason_text
+    except Exception as exc:
+        LOGGER.debug(
+            "STARTUP_RECONCILIATION_V410_STRONG_FETCH_PROOF_UNAVAILABLE "
+            "marker=%s error=%s:%s fail_closed=true",
+            REFRESH_STABILITY_MARKER,
+            type(exc).__name__,
+            exc,
+        )
+
+    return False, exact or "authoritative_position_fetch_unproven"
 
 
 def _position_sync_truth(module: ModuleType, manager: Any) -> tuple[bool, list[str], dict[str, bool]]:
@@ -80,7 +140,7 @@ def _position_sync_truth(module: ModuleType, manager: Any) -> tuple[bool, list[s
         fetch_pending = sorted(
             str(name)
             for name, broker in connected.items()
-            if getattr(broker, "_startup_position_sync_fetch_ok", None) is not True
+            if not _broker_fetch_proof_ready(broker)[0]
         )
         all_pending = sorted(
             set(str(name) for name in (pending or []))
@@ -313,10 +373,11 @@ def install_import_hook() -> bool:
             LOGGER.info(
                 "RUNTIME_RECONCILIATION_SHUTDOWN_V146_INSTALLED marker=%s "
                 "release=%s authoritative_position_bridge=true "
-                "zero_broker_fail_closed=true discrepancy_preserved=true "
+                "refresh_stability=%s zero_broker_fail_closed=true discrepancy_preserved=true "
                 "shutdown_interruptible=true",
                 MARKER,
                 RELEASE_ID,
+                REFRESH_STABILITY_MARKER,
             )
         return ready
 
@@ -328,8 +389,10 @@ def install() -> bool:
 __all__ = [
     "MARKER",
     "RELEASE_ID",
+    "REFRESH_STABILITY_MARKER",
     "install",
     "install_import_hook",
+    "_broker_fetch_proof_ready",
     "_position_sync_truth",
     "_publish_reconciliation_truth",
     "_patch_position_sync_publication",
