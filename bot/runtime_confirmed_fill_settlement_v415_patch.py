@@ -12,8 +12,9 @@ v415 is deliberately narrow and fail-closed:
   grace before broker-sync orphan cleanup may remove them;
 * even after the grace expires, a confirmed execution position must be absent
   from more than one consecutive authoritative snapshot before deletion;
-* the heartbeat BUY submit path checks the kill switch immediately before
-  submission and refuses new exposure while it is active;
+* the heartbeat BUY submit path checks every canonical stop surface immediately
+  before submission: the KillSwitch object, emergency-stop files, runtime
+  trading-state environment, and the trading-state-machine singleton;
 * the heartbeat BUY submit path also requires an authoritative position read and
   blocks when the same symbol is already held;
 * when the broker exposes an open-order API, an existing BUY for the heartbeat
@@ -227,19 +228,66 @@ def _open_heartbeat_buy(broker: Any, symbol: str) -> tuple[bool, bool, str]:
     return True, False, f"open_buy_absent:{target}:{shape}"
 
 
-def _kill_switch_entry_clear() -> tuple[bool, str]:
+def _runtime_state() -> str:
+    env_state = str(os.environ.get("NIJA_RUNTIME_TRADING_STATE", "") or "").strip().upper()
+    if env_state:
+        return env_state
+    try:
+        module = importlib.import_module("bot.trading_state_machine")
+        getter = getattr(module, "get_trading_state_machine", None)
+        machine = getter() if callable(getter) else getattr(module, "trading_state_machine", None)
+        if machine is not None:
+            current = getattr(machine, "get_current_state", lambda: None)()
+            return str(getattr(current, "value", current) or "").strip().upper()
+    except Exception:
+        pass
+    return ""
+
+
+def _emergency_stop_files() -> list[str]:
+    candidates = {
+        "/app/EMERGENCY_STOP",
+        os.path.abspath("EMERGENCY_STOP"),
+    }
+    try:
+        module = importlib.import_module("bot.kill_switch")
+        getter = getattr(module, "get_kill_switch", None)
+        switch = getter() if callable(getter) else None
+        kill_file = getattr(switch, "_kill_file", None)
+        if kill_file:
+            candidates.add(os.path.abspath(str(kill_file)))
+    except Exception:
+        pass
+    return sorted(path for path in candidates if path and os.path.exists(path))
+
+
+def _entry_stop_clear() -> tuple[bool, str]:
+    reasons: list[str] = []
+    state = _runtime_state()
+    if state == "EMERGENCY_STOP":
+        reasons.append("runtime_state_emergency_stop")
+
+    active_files = _emergency_stop_files()
+    if active_files:
+        reasons.append("emergency_stop_file:" + ",".join(active_files))
+
     try:
         module = importlib.import_module("bot.kill_switch")
         getter = getattr(module, "get_kill_switch", None)
         if not callable(getter):
-            return False, "kill_switch_getter_missing"
-        switch = getter()
-        if switch is None:
-            return False, "kill_switch_missing"
-        active = bool(switch.is_active())
-        return (not active), ("clear" if not active else "active")
+            reasons.append("kill_switch_getter_missing")
+        else:
+            switch = getter()
+            if switch is None:
+                reasons.append("kill_switch_missing")
+            elif bool(switch.is_active()):
+                reasons.append("kill_switch_active")
     except Exception as exc:
-        return False, f"kill_switch_probe_failed:{type(exc).__name__}:{exc}"
+        reasons.append(f"kill_switch_probe_failed:{type(exc).__name__}:{exc}")
+
+    if reasons:
+        return False, "|".join(reasons)
+    return True, "all_stop_surfaces_clear"
 
 
 def _heartbeat_block_result(reason: str) -> dict[str, Any]:
@@ -378,13 +426,13 @@ def _patch_heartbeat_submit() -> bool:
         if strategy_text != "HEARTBEAT_TRADE" or side_text != "buy":
             return original(*args, **kwargs)
 
-        clear, kill_detail = _kill_switch_entry_clear()
+        clear, stop_detail = _entry_stop_clear()
         if not clear:
             LOGGER.critical(
-                "HEARTBEAT_V415_ENTRY_BLOCKED marker=%s reason=kill_switch_not_clear detail=%s symbol=%s order_submitted=false fail_closed=true safety_gates_bypassed=false",
-                MARKER, kill_detail, _canonical_symbol(symbol),
+                "HEARTBEAT_V415_ENTRY_BLOCKED marker=%s reason=stop_surface_not_clear detail=%s symbol=%s order_submitted=false fail_closed=true safety_gates_bypassed=false",
+                MARKER, stop_detail, _canonical_symbol(symbol),
             )
-            return _heartbeat_block_result("kill_switch_not_clear")
+            return _heartbeat_block_result("stop_surface_not_clear")
 
         positions_ok, has_exposure, position_detail = _authoritative_position_exposure(broker, str(symbol or ""))
         if not positions_ok:
@@ -430,7 +478,7 @@ def install() -> bool:
             ready = bool(tracker_ready and heartbeat_ready)
             os.environ[_READY_FLAG] = "1" if ready else "0"
             LOGGER.critical(
-                "RUNTIME_CONFIRMED_FILL_SETTLEMENT_V415_%s marker=%s tracker_guard=%s heartbeat_guard=%s settlement_grace_s=%.3f orphan_misses_required=%d ordinary_strategy_dispatch_unchanged=true thresholds_unchanged=true sizing_unchanged=true orders_submitted=false orders_cancelled=false forced_activation=false safety_gates_bypassed=false",
+                "RUNTIME_CONFIRMED_FILL_SETTLEMENT_V415_%s marker=%s tracker_guard=%s heartbeat_guard=%s settlement_grace_s=%.3f orphan_misses_required=%d all_stop_surfaces_required=true ordinary_strategy_dispatch_unchanged=true thresholds_unchanged=true sizing_unchanged=true orders_submitted=false orders_cancelled=false forced_activation=false safety_gates_bypassed=false",
                 "READY" if ready else "PENDING",
                 MARKER,
                 str(tracker_ready).lower(),
@@ -458,6 +506,7 @@ __all__ = [
     "_open_heartbeat_buy",
     "_confirmed_execution_position",
     "_position_age_seconds",
+    "_entry_stop_clear",
     "_patch_position_tracker",
     "_patch_heartbeat_submit",
 ]
