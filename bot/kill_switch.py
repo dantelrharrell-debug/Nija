@@ -79,6 +79,12 @@ class KillSwitch:
         
         # Check for file-based activation
         self._check_file_activation()
+
+        # Render and other immutable deployments cannot rely on a file created
+        # by a previous instance surviving the next rollout.  Honour the
+        # documented environment stop as an authoritative, fail-closed input
+        # and materialize the normal kill file/state in the new instance.
+        self._check_env_activation()
         
         logger.info(f"🔴 Kill Switch initialized (Active: {self._is_active})")
         
@@ -131,6 +137,18 @@ class KillSwitch:
             logger.warning(f"🚨 Kill switch file detected: {self._kill_file}")
             if not self._is_active:
                 self._activate_internal("Kill switch file detected", "FILE_SYSTEM")
+
+    def _check_env_activation(self):
+        """Activate when the durable deployment-level stop is asserted."""
+        raw = os.environ.get("NIJA_KILL_SWITCH", "").strip().upper()
+        if raw in ("1", "TRUE", "YES", "ON"):
+            logger.warning("Environment kill switch detected: NIJA_KILL_SWITCH=%s", raw)
+            if not self._is_active:
+                reason = os.environ.get(
+                    "NIJA_KILL_SWITCH_REASON",
+                    "Deployment-level NIJA_KILL_SWITCH asserted",
+                ).strip() or "Deployment-level NIJA_KILL_SWITCH asserted"
+                self._activate_internal(reason, "ENV")
                 
     def _create_kill_file(self, reason: str):
         """Create kill switch file on disk"""
