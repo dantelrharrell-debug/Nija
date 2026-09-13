@@ -116,10 +116,13 @@ def test_heartbeat_buy_blocked_when_existing_authoritative_position(monkeypatch)
 
     fake_strategy.submit_market_order_via_pipeline = original_submit
     monkeypatch.setitem(sys.modules, "bot.trading_strategy", fake_strategy)
+    monkeypatch.setenv("NIJA_RUNTIME_TRADING_STATE", "LIVE_ACTIVE")
 
     fake_kill = types.ModuleType("bot.kill_switch")
 
     class ClearSwitch:
+        _kill_file = ""
+
         def is_active(self):
             return False
 
@@ -157,10 +160,13 @@ def test_heartbeat_buy_blocked_when_kill_switch_active(monkeypatch):
 
     fake_strategy.submit_market_order_via_pipeline = original_submit
     monkeypatch.setitem(sys.modules, "bot.trading_strategy", fake_strategy)
+    monkeypatch.setenv("NIJA_RUNTIME_TRADING_STATE", "LIVE_ACTIVE")
 
     fake_kill = types.ModuleType("bot.kill_switch")
 
     class ActiveSwitch:
+        _kill_file = ""
+
         def is_active(self):
             return True
 
@@ -169,7 +175,7 @@ def test_heartbeat_buy_blocked_when_kill_switch_active(monkeypatch):
 
     class Broker:
         def get_positions(self):
-            raise AssertionError("position read should not run while kill switch is active")
+            raise AssertionError("position read should not run while a stop surface is active")
 
     assert v415._patch_heartbeat_submit() is True
     result = fake_strategy.submit_market_order_via_pipeline(
@@ -181,7 +187,48 @@ def test_heartbeat_buy_blocked_when_kill_switch_active(monkeypatch):
         strategy="HEARTBEAT_TRADE",
     )
     assert result["status"] == "error"
-    assert "kill_switch_not_clear" in result["error"]
+    assert "stop_surface_not_clear" in result["error"]
+    assert calls == []
+
+
+def test_heartbeat_buy_blocked_by_runtime_emergency_state_even_if_kill_switch_object_is_clear(monkeypatch):
+    fake_strategy = types.ModuleType("bot.trading_strategy")
+    calls = []
+
+    def original_submit(*args, **kwargs):
+        calls.append((args, kwargs))
+        return {"status": "filled"}
+
+    fake_strategy.submit_market_order_via_pipeline = original_submit
+    monkeypatch.setitem(sys.modules, "bot.trading_strategy", fake_strategy)
+    monkeypatch.setenv("NIJA_RUNTIME_TRADING_STATE", "EMERGENCY_STOP")
+
+    fake_kill = types.ModuleType("bot.kill_switch")
+
+    class ClearSwitch:
+        _kill_file = ""
+
+        def is_active(self):
+            return False
+
+    fake_kill.get_kill_switch = lambda: ClearSwitch()
+    monkeypatch.setitem(sys.modules, "bot.kill_switch", fake_kill)
+
+    class Broker:
+        def get_positions(self):
+            raise AssertionError("position read should not run while runtime state is EMERGENCY_STOP")
+
+    assert v415._patch_heartbeat_submit() is True
+    result = fake_strategy.submit_market_order_via_pipeline(
+        broker=Broker(),
+        symbol="BTC-USD",
+        side="buy",
+        quantity=12.5,
+        size_type="quote",
+        strategy="HEARTBEAT_TRADE",
+    )
+    assert result["status"] == "error"
+    assert "stop_surface_not_clear" in result["error"]
     assert calls == []
 
 
