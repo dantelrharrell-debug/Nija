@@ -5,8 +5,9 @@ only after current canonical verification, strict writer/nonce authority, and
 a clear kill switch are all proven. It also installs the authenticated v406
 proof revalidation path, the existing v404 live-safety convergence path, v414's
 hardened original-baseline drawdown recovery (which installs v409's portfolio-
-equity correction), v410's user-sharding/capacity layer, v412's confirmed-fill
-realized-P&L reconciliation layer, and v413's authenticated Kraken fee bridge.
+equity correction), v415's confirmed-fill settlement/heartbeat duplicate guard,
+v410's user-sharding/capacity layer, v412's confirmed-fill realized-P&L
+reconciliation layer, and v413's authenticated Kraken fee bridge.
 
 No freshness is extended, no threshold is changed, no readiness is fabricated,
 no proof marker is fabricated, and no order is submitted/cancelled by this patch.
@@ -142,6 +143,10 @@ def _install_drawdown_portfolio_equity() -> bool:
     return _install_module("bot.runtime_drawdown_stop_provenance_v414_patch", "V414")
 
 
+def _install_confirmed_fill_settlement() -> bool:
+    return _install_module("bot.runtime_confirmed_fill_settlement_v415_patch", "V415")
+
+
 def _install_user_sharding_capacity() -> bool:
     return _install_module("bot.runtime_user_sharding_capacity_v410_patch", "V410")
 
@@ -173,6 +178,14 @@ def install() -> bool:
                 return False
             live_safety_ready = _install_live_safety_convergence()
             drawdown_equity_ready = _install_drawdown_portfolio_equity()
+            confirmed_fill_settlement_ready = _install_confirmed_fill_settlement()
+            if not confirmed_fill_settlement_ready:
+                os.environ[_READY_FLAG] = "0"
+                LOGGER.error(
+                    "EXECUTION_BREAKER_RECOVERY_V405_NOT_READY marker=%s reason=v415_confirmed_fill_settlement_install_failed trading_fail_closed=true",
+                    MARKER,
+                )
+                return False
             user_sharding_ready = _install_user_sharding_capacity()
             realized_pnl_ready = _install_realized_pnl_reconciliation()
             kraken_fee_pnl_ready = _install_kraken_fee_pnl_bridge()
@@ -181,9 +194,10 @@ def install() -> bool:
                 _THREAD.start()
             os.environ[_READY_FLAG] = "1"
             LOGGER.critical(
-                "EXECUTION_BREAKER_RECOVERY_V405_READY marker=%s heartbeat_only=true fresh_verification_required=true strict_writer_nonce_required=true kill_switch_clear_required=true authenticated_probe_revalidation_v406=true live_safety_v404=%s drawdown_stop_provenance_v414=%s user_sharding_capacity_v410=%s realized_pnl_v412=%s kraken_fee_pnl_v413=%s freshness_extended=false threshold_changed=false authority_granted=false state_changed=false orders_submitted=false orders_cancelled=false forced_activation=false safety_gates_bypassed=false",
+                "EXECUTION_BREAKER_RECOVERY_V405_READY marker=%s heartbeat_only=true fresh_verification_required=true strict_writer_nonce_required=true kill_switch_clear_required=true authenticated_probe_revalidation_v406=true live_safety_v404=%s drawdown_stop_provenance_v414=%s confirmed_fill_settlement_v415=%s user_sharding_capacity_v410=%s realized_pnl_v412=%s kraken_fee_pnl_v413=%s freshness_extended=false threshold_changed=false authority_granted=false state_changed=false orders_submitted=false orders_cancelled=false forced_activation=false safety_gates_bypassed=false",
                 MARKER, str(live_safety_ready).lower(), str(drawdown_equity_ready).lower(),
-                str(user_sharding_ready).lower(), str(realized_pnl_ready).lower(), str(kraken_fee_pnl_ready).lower(),
+                str(confirmed_fill_settlement_ready).lower(), str(user_sharding_ready).lower(),
+                str(realized_pnl_ready).lower(), str(kraken_fee_pnl_ready).lower(),
             )
             return True
         except Exception as exc:
@@ -197,6 +211,6 @@ install_import_hook = install
 __all__ = [
     "MARKER", "install", "install_import_hook", "_clear_recovered_heartbeat_latch_once",
     "_install_live_safety_convergence", "_install_drawdown_portfolio_equity",
-    "_install_user_sharding_capacity", "_install_realized_pnl_reconciliation",
-    "_install_kraken_fee_pnl_bridge",
+    "_install_confirmed_fill_settlement", "_install_user_sharding_capacity",
+    "_install_realized_pnl_reconciliation", "_install_kraken_fee_pnl_bridge",
 ]
