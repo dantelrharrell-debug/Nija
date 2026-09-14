@@ -1,20 +1,28 @@
-"""Converge all-account coverage onto the current canonical broker object v374.
+"""Converge all-account coverage onto the current canonical broker object v374/v416.
 
 v90 may rebuild a Kraken user broker after startup. During that handoff the
 canonical manager can briefly contain both the retired broker object and the
 new authenticated broker in different compatibility registries. v281 builds
 its denominator from all of those registries, and a later stale registry entry
 can overwrite the current connected object for the same account key. The
-result is a false ``disconnected`` coverage blocker even while v86/v90 have
-already authenticated the replacement broker.
+result is a false ``disconnected`` or stale-snapshot coverage blocker even while
+v86/v90 have already authenticated and reconciled the replacement broker.
 
-v374 changes only broker-object selection for duplicate account keys. It keeps
-v281's complete enabled-account denominator, performs no broker I/O, does not
-mutate manager registries, and never fabricates connectivity, position proof,
-protection, capital, nonce, writer authority, fills, or execution readiness.
-For duplicate user-account objects it prefers the object with the strongest
-already-existing local truth: connected, startup fetch proof, startup adoption,
-and a current v285 snapshot timestamp. Platform identities are unchanged.
+v374 changes only broker-object selection for duplicate account keys. v416
+closes a remaining tie-break defect in that selection: the original score
+classified every historical v285 timestamp as equally "current", so two
+connected/adopted broker objects could tie and leave a retired stale object
+selected indefinitely. v416 prefers a genuinely current, successful v285
+snapshot under the existing unchanged v285 TTL, then the newest authoritative
+snapshot timestamp/generation. Completed v285 fetch failure is never considered
+current. If no current snapshot exists, existing startup fetch/adoption truth
+continues to break the tie fail-closed.
+
+This module keeps v281's complete enabled-account denominator, performs no
+broker I/O, does not mutate manager registries, does not extend snapshot TTLs,
+and never fabricates connectivity, position proof, protection, capital, nonce,
+writer authority, fills, or execution readiness. Platform identities are
+unchanged.
 
 The convergence chain deliberately reasserts v289 first so every canonical
 platform/user broker owns account-scoped position state and stale tracker rows
@@ -37,12 +45,14 @@ from __future__ import annotations
 import importlib
 import logging
 import os
+import time
 from collections.abc import Mapping
 from functools import wraps
 from typing import Any
 
 LOGGER = logging.getLogger("nija.runtime_all_account_broker_identity_convergence_v374")
 MARKER = "20260905-all-account-broker-identity-convergence-v374"
+V416_MARKER = "20260914-user-broker-fresh-snapshot-selection-v416"
 _READY_FLAG = "NIJA_RUNTIME_ALL_ACCOUNT_BROKER_IDENTITY_CONVERGENCE_V374_READY"
 _PATCH_ATTR = "_nija_all_account_broker_identity_convergence_v374"
 
@@ -57,19 +67,62 @@ def _connected(broker: Any) -> bool:
         return False
 
 
-def _score(broker: Any) -> tuple[int, int, int, int]:
+def _snapshot_ttl_s() -> float:
+    """Read the same bounded v285 TTL without changing it."""
+    try:
+        value = float(os.environ.get("NIJA_AUTHORITATIVE_POSITION_SNAPSHOT_MAX_AGE_S", "90") or 90.0)
+    except (TypeError, ValueError):
+        value = 90.0
+    return max(15.0, min(600.0, value))
+
+
+def _score(broker: Any) -> tuple[int, int, float, int, int, int]:
+    """Rank duplicate user brokers by already-existing authoritative truth.
+
+    Fresh v285 truth deliberately outranks transient startup fetch/adoption
+    flags. This matters during an exact authenticated refresh, when legacy
+    reconciliation can briefly clear those flags while the prior v285 snapshot
+    is still current. A completed v285 failure is never promoted because
+    ``_nija_authoritative_position_snapshot_fetch_ok_v285`` must remain true.
+    """
     if broker is None:
-        return (0, 0, 0, 0)
+        return (0, 0, 0.0, 0, 0, 0)
+
     connected = 1 if _connected(broker) else 0
     fetch = 1 if getattr(broker, "_startup_position_sync_fetch_ok", None) is True else 0
     adopted = 1 if getattr(broker, "_startup_position_sync_adopted", None) is True else 0
-    current_snapshot = 0
+
+    snapshot_current = 0
+    snapshot_at = 0.0
+    generation = 0
     try:
-        at = float(getattr(broker, "_nija_authoritative_position_snapshot_at_monotonic_v285", 0.0) or 0.0)
-        current_snapshot = 1 if at > 0 else 0
+        snapshot_at = float(
+            getattr(broker, "_nija_authoritative_position_snapshot_at_monotonic_v285", 0.0) or 0.0
+        )
+        generation = int(
+            getattr(broker, "_nija_authoritative_position_snapshot_generation_v285", 0) or 0
+        )
+        snapshot_fetch_ok = (
+            getattr(broker, "_nija_authoritative_position_snapshot_fetch_ok_v285", None) is True
+        )
+        rows_present = hasattr(broker, "_nija_authoritative_position_snapshot_rows_v285")
+        age_s = max(0.0, time.monotonic() - snapshot_at) if snapshot_at > 0.0 else float("inf")
+        snapshot_current = int(
+            connected
+            and snapshot_fetch_ok
+            and rows_present
+            and snapshot_at > 0.0
+            and age_s <= _snapshot_ttl_s()
+        )
     except Exception:
-        current_snapshot = 0
-    return (connected, fetch, adopted, current_snapshot)
+        snapshot_current = 0
+        snapshot_at = 0.0
+        generation = 0
+
+    # Ordering is intentional: connected + genuinely current authoritative
+    # snapshot wins first; newest observation breaks ties. Startup flags and
+    # generation are secondary truth signals only.
+    return (connected, snapshot_current, snapshot_at, fetch, adopted, generation)
 
 
 def _label(value: Any) -> str:
@@ -131,7 +184,7 @@ def _patch_v281() -> bool:
         if manager is None or not expected:
             return expected
         candidates = _candidate_user_brokers(manager)
-        replacements: list[tuple[str, tuple[int, int, int, int], tuple[int, int, int, int]]] = []
+        replacements: list[tuple[str, tuple[Any, ...], tuple[Any, ...]]] = []
         for account, broker in tuple(expected.items()):
             if not str(account).startswith("user:"):
                 continue
@@ -146,16 +199,20 @@ def _patch_v281() -> bool:
                 expected[account] = best
         if replacements:
             LOGGER.critical(
-                "ALL_ACCOUNT_BROKER_IDENTITY_V374_RECONCILED marker=%s replacements=%s "
-                "broker_io=false registry_mutation=false connectivity_fabricated=false "
-                "position_proof_fabricated=false protection_fabricated=false",
+                "ALL_ACCOUNT_BROKER_IDENTITY_V416_FRESH_RECONCILED marker=%s base_marker=%s replacements=%s "
+                "current_v285_snapshot_preferred=true newest_snapshot_tiebreak=true snapshot_ttl_unchanged=true "
+                "completed_fetch_failure_not_current=true broker_io=false registry_mutation=false "
+                "connectivity_fabricated=false position_proof_fabricated=false protection_fabricated=false "
+                "safety_gates_bypassed=false",
+                V416_MARKER,
                 MARKER,
                 replacements,
             )
         return expected
 
     setattr(expected_accounts_v374, _PATCH_ATTR, True)
-    setattr(expected_accounts_v374, "__wrapped__", current)
+    setattr(tsm := expected_accounts_v374, "_nija_user_broker_fresh_snapshot_selection_v416", True)
+    setattr(tsm, "__wrapped__", current)
     v281._expected_accounts = expected_accounts_v374
     return True
 
@@ -263,16 +320,18 @@ def install_import_hook() -> bool:
         except Exception:
             pass
     LOGGER.critical(
-        "RUNTIME_ALL_ACCOUNT_BROKER_IDENTITY_CONVERGENCE_V374_%s marker=%s ready=%s "
+        "RUNTIME_ALL_ACCOUNT_BROKER_IDENTITY_CONVERGENCE_V374_%s marker=%s v416_marker=%s ready=%s "
         "account_scoped_position_v289=%s identity_ready=%s position_materialization_v377=%s "
         "kraken_pair_resolution_v381=%s kraken_native_margin_backup_v380=%s "
         "registered_user_proof_v379=%s universal_four_way_policy_v375=%s "
         "adaptive_exit_policy_v390=%s universal_scope_v376=%s "
-        "connected_object_preferred=true startup_fetch_proof_preferred=true "
-        "startup_adoption_preferred=true authoritative_stale_cleanup_reasserted=true "
-        "broker_io_identity_patch=false manager_registry_mutation=false safety_gates_bypassed=false",
+        "connected_object_preferred=true current_authoritative_snapshot_preferred=true "
+        "newest_snapshot_tiebreak=true snapshot_ttl_unchanged=true "
+        "authoritative_stale_cleanup_reasserted=true broker_io_identity_patch=false "
+        "manager_registry_mutation=false safety_gates_bypassed=false",
         "READY" if ready else "NOT_READY",
         MARKER,
+        V416_MARKER,
         str(ready).lower(),
         str(account_scope_ready).lower(),
         str(identity_ready).lower(),
@@ -293,6 +352,7 @@ def install() -> bool:
 
 __all__ = [
     "MARKER",
+    "V416_MARKER",
     "install",
     "install_import_hook",
     "_score",
