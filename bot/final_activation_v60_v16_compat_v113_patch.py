@@ -8,12 +8,15 @@ before v60.install() runs. It preserves proof collection, readiness publication,
 and fail-closed activation semantics while dispatching the actual activation
 commit through v60's existing single-flight worker.
 
-The September 14 production restart also exposed a second compatibility cycle:
-v60's pre-dispatch probe asked the execution-authority FSM to converge using its
-default gate evaluation before bootstrap_ready/execution_ready could be committed.
-The shim evaluates every existing hard pre-dispatch gate first, then asks the FSM
-to converge with gates_ok=True. This does not grant dispatch authority; the
-normal order path still requires can_dispatch_trades() and coordinator authority.
+The September 14 production restart exposed a circular pre-dispatch dependency.
+The execution-authority FSM defines convergence as including can_dispatch_trades,
+so requiring that FSM to be converged inside v60's pre-dispatch check asks the
+system to prove dispatch is already enabled before startup can finish enabling
+canonical dispatch. v113 therefore proves the original hard gates first and then
+uses the canonical StartupCoordinator dispatch commit as the final authority
+proof. The coordinator proof is the same proof v92 uses: LIVE_ACTIVE snapshot,
+a committed snapshot version, and execution_permitted=True. No readiness flag,
+order authority, risk threshold, nonce policy, or kill switch is fabricated.
 
 Some later canonical startup repairs rebind/reload v60 after this compatibility
 layer is first installed. A no-I/O guard therefore reasserts only the v60
@@ -36,6 +39,50 @@ _GUARD_STARTED = False
 _GUARD_LOCK = threading.RLock()
 
 
+def _canonical_dispatch_commit_ready(sm: Any) -> tuple[bool, str]:
+    """Read the canonical coordinator dispatch proof without mutating it."""
+    try:
+        state_fn = getattr(sm, "get_current_state", None)
+        state = state_fn() if callable(state_fn) else getattr(sm, "_current_state", "UNKNOWN")
+        state_value = str(getattr(state, "value", state) or "UNKNOWN").strip().upper()
+        if state_value != "LIVE_ACTIVE":
+            return False, f"canonical_state_not_live:{state_value}"
+
+        module = importlib.import_module("bot.startup_coordinator")
+        getter = getattr(module, "get_startup_coordinator", None)
+        coordinator = getter() if callable(getter) else None
+        if coordinator is None:
+            return False, "startup_coordinator_unavailable"
+
+        snapshot = coordinator.build_snapshot(
+            trading_state="LIVE_ACTIVE",
+            activation_intent=True,
+        )
+        commit_version = int(
+            getattr(snapshot, "last_committed_snapshot_version", 0) or 0
+        )
+        permitted = bool(getattr(snapshot, "execution_permitted", False))
+        runtime_authority = str(
+            getattr(snapshot, "runtime_authority_state", "") or ""
+        ).strip().upper()
+        if commit_version <= 0:
+            return False, "canonical_dispatch_commit_missing"
+        if not permitted:
+            return False, f"canonical_execution_not_permitted:{runtime_authority or 'unknown'}"
+
+        LOGGER.critical(
+            "FINAL_ACTIVATION_V113_CANONICAL_DISPATCH_PROOF marker=%s "
+            "commit_version=%s execution_permitted=true runtime_authority=%s "
+            "read_only=true dispatch_granted_by_patch=false",
+            MARKER,
+            commit_version,
+            runtime_authority or "unknown",
+        )
+        return True, "ok"
+    except Exception as exc:
+        return False, f"canonical_dispatch_probe_exception:{type(exc).__name__}:{exc}"
+
+
 def _patch_v60_pre_dispatch_probe(v60: Any) -> bool:
     current = getattr(v60, "_pre_dispatch_safety_ready", None)
     if not callable(current):
@@ -44,13 +91,7 @@ def _patch_v60_pre_dispatch_probe(v60: Any) -> bool:
         return True
 
     def pre_dispatch_safety_ready(tsm: Any, sm: Any) -> tuple[bool, str]:
-        """Prove hard gates before advancing the pre-dispatch authority FSM.
-
-        gates_ok=True is supplied only after the same hard checks v60 already
-        required have passed. It breaks the startup self-dependency without
-        bypassing any broker-order, writer, nonce, heartbeat, circuit-breaker,
-        kill-switch, strategy, risk, or coordinator dispatch gate.
-        """
+        """Prove hard safety gates, then require canonical dispatch commitment."""
         try:
             breaker_probe = getattr(tsm, "_execution_circuit_breaker_status", None)
             breaker_ok, breaker_detail = (
@@ -91,22 +132,14 @@ def _patch_v60_pre_dispatch_probe(v60: Any) -> bool:
                 )
                 return False, f"live_gates:{','.join(failed) or 'not_ready'}"
 
-            snapshot_fn = getattr(sm, "get_execution_authority_snapshot", None)
-            if not callable(snapshot_fn):
-                return False, "authority_snapshot_probe_missing"
-            try:
-                authority = dict(snapshot_fn(gates_ok=True))
-            except TypeError:
-                authority = dict(snapshot_fn())
-            if (
-                str(authority.get("safety_state", "")).strip().upper() != "AUTHORIZED"
-                or not bool(authority.get("converged", False))
-            ):
-                return False, "authority_fsm_not_converged"
+            canonical_ok, canonical_detail = _canonical_dispatch_commit_ready(sm)
+            if not canonical_ok:
+                return False, f"canonical_dispatch:{canonical_detail}"
 
             LOGGER.critical(
                 "FINAL_ACTIVATION_V113_PRE_DISPATCH_AUTHORITY_CONVERGED marker=%s "
-                "hard_gates_proven=true gates_ok_override=validated_only dispatch_granted=false",
+                "hard_gates_proven=true canonical_dispatch_committed=true "
+                "secondary_fsm_cycle_removed=true dispatch_granted_by_patch=false",
                 MARKER,
             )
             return True, "ok"
@@ -118,7 +151,8 @@ def _patch_v60_pre_dispatch_probe(v60: Any) -> bool:
     v60._pre_dispatch_safety_ready = pre_dispatch_safety_ready
     LOGGER.critical(
         "FINAL_ACTIVATION_V113_PRE_DISPATCH_PATCHED marker=%s "
-        "hard_gates_first=true coordinator_dispatch_unchanged=true safety_gates_unchanged=true",
+        "hard_gates_first=true canonical_dispatch_proof=true "
+        "secondary_fsm_cycle_removed=true safety_gates_unchanged=true",
         MARKER,
     )
     return True
