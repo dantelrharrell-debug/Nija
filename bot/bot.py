@@ -80,9 +80,17 @@ _FAST_PATH_INSTALLERS = (
     ("bot.readiness_killswitch_causality_v131_patch", "READINESS_KILLSWITCH_CAUSALITY_V131"),
 )
 
+# These guards depend on live broker/writer prerequisites that are intentionally
+# absent during the canonical import-only smoke test.  A false installer result
+# means "not ready to trade yet", not "the Python entrypoint is broken".  They
+# remain fail-closed at their own execution/readiness gates and become eligible
+# once the canonical runtime has real broker/writer proof.
 _FAST_PATH_COMPAT_OPTIONAL_GUARDS = frozenset({
     "WRITER_REELECTION_LOSS_REASON_V46",
     "ACTIVATION_CONVERGENCE_V17_IMPORTLIB_BRIDGE",
+    "POSITION_SYNC_TIMEOUT_V98",
+    "KRAKEN_PRECORE_LIVENESS_V318",
+    "KRAKEN_RECENT_BALANCE_PREWAIT_V319",
 })
 
 _LEGACY_INSTALLERS = (
@@ -130,7 +138,7 @@ def _install_guards(specs: Iterable[tuple[str, str]], *, mode: str, optional_lab
             logger.warning("%s_INSTALL_REQUESTED source=bot_entrypoint mode=%s", label, mode)
         except Exception as exc:
             if label in optional_labels:
-                logger.warning("%s_INSTALL_SKIPPED_OPTIONAL source=bot_entrypoint mode=%s err=%s", label, mode, exc)
+                logger.warning("%s_INSTALL_SKIPPED_OPTIONAL source=bot_entrypoint mode=%s err=%s trading_fail_closed=true", label, mode, exc)
                 continue
             ready = False
             logger.critical("%s_INSTALL_FAILED source=bot_entrypoint mode=%s err=%s", label, mode, exc, exc_info=True)

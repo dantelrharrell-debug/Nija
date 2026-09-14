@@ -1,307 +1,170 @@
+"""Broker-cell strategy selector.
+
+Each broker gets its own strategy configuration. Selection state is stored in
+ContextVar objects instead of process-wide mutable attributes so concurrent
+broker loops cannot overwrite one another's active strategy.
 """
-Broker Strategy Selector
+from __future__ import annotations
 
-Automatically selects the appropriate trading strategy configuration
-based on the broker being used. Each broker has unique characteristics:
-
-- Coinbase: High fees (1.4%), buy-focused, crypto only
-- Kraken: Low fees (0.36%), bidirectional, crypto + futures/options
-- Binance: Very low fees (0.28%), bidirectional, high-frequency scalp
-- Alpaca: Stock trading, different dynamics
-- Others: Conservative defaults
-
-This module provides the routing logic to apply broker-specific strategies.
-It integrates with BROKER_PROFILES from broker_strategy_router to ensure
-every selection is consistent with the fee-aware trade-filtering layer.
-"""
-
+from contextvars import ContextVar
 import logging
-from typing import Optional, Dict, Any
+from typing import Any, Dict
 
 logger = logging.getLogger("nija.strategy_selector")
 
 try:
-    from .coinbase_config import COINBASE_CONFIG, CoinbaseConfig
-    from .kraken_config import KRAKEN_CONFIG, KrakenConfig
-    from .binance_config import BINANCE_CONFIG, BinanceConfig
-    from .default_config import DEFAULT_CONFIG, DefaultConfig
+    from .coinbase_config import COINBASE_CONFIG
+    from .kraken_config import KRAKEN_CONFIG
+    from .binance_config import BINANCE_CONFIG
+    from .okx_config import OKX_CONFIG
+    from .alpaca_config import ALPACA_CONFIG
+    from .default_config import DEFAULT_CONFIG
 except ImportError:
-    # Fallback if not yet available
-    COINBASE_CONFIG = None
-    KRAKEN_CONFIG = None
-    BINANCE_CONFIG = None
-    DEFAULT_CONFIG = None
-    CoinbaseConfig = None
-    KrakenConfig = None
-    BinanceConfig = None
-    DefaultConfig = None
+    COINBASE_CONFIG = KRAKEN_CONFIG = BINANCE_CONFIG = None
+    OKX_CONFIG = ALPACA_CONFIG = DEFAULT_CONFIG = None
 
-# Pull BROKER_PROFILES so callers can inspect per-broker characteristics
-# without importing broker_strategy_router directly.
 try:
     from bot.broker_strategy_router import BROKER_PROFILES
 except ImportError:
     try:
-        from broker_strategy_router import BROKER_PROFILES
+        from broker_strategy_router import BROKER_PROFILES  # type: ignore[import]
     except ImportError:
-        BROKER_PROFILES = {}
+        BROKER_PROFILES: Dict[str, Dict[str, Any]] = {}
+
+_CURRENT_BROKER: ContextVar[str | None] = ContextVar("nija_broker_cell_name", default=None)
+_CURRENT_CONFIG: ContextVar[Any | None] = ContextVar("nija_broker_cell_strategy", default=None)
 
 
 class BrokerStrategySelector:
-    """
-    Select and manage broker-specific trading strategies.
+    """Broker router with context-local compatibility state."""
 
-    This class acts as a router that:
-    1. Identifies the broker being used
-    2. Loads the appropriate configuration (driven by BROKER_PROFILES)
-    3. Provides broker-specific trading logic
-    """
-
-    def __init__(self):
-        """Initialize strategy selector"""
-        self.configs = {
-            'coinbase': COINBASE_CONFIG,
-            'kraken': KRAKEN_CONFIG,
-            'binance': BINANCE_CONFIG,
-            'default': DEFAULT_CONFIG,
+    def __init__(self) -> None:
+        self.configs: Dict[str, Any] = {
+            "coinbase": COINBASE_CONFIG,
+            "kraken": KRAKEN_CONFIG,
+            "binance": BINANCE_CONFIG,
+            "okx": OKX_CONFIG,
+            "alpaca": ALPACA_CONFIG,
+            "default": DEFAULT_CONFIG,
         }
-        self.current_broker = None
-        self.current_config = None
+
+    @property
+    def current_broker(self) -> str | None:
+        return _CURRENT_BROKER.get()
+
+    @property
+    def current_config(self) -> Any | None:
+        return _CURRENT_CONFIG.get()
+
+    @staticmethod
+    def _name(broker_type: str | None) -> str:
+        return str(broker_type or "default").strip().lower()
+
+    def _config(self, broker_type: str | None) -> Any:
+        return self.configs.get(self._name(broker_type)) or self.configs.get("default")
 
     def select_strategy(self, broker_type: str):
-        """
-        Select trading strategy for specified broker.
-
-        Args:
-            broker_type: Broker type string ('coinbase', 'kraken', 'binance', etc.)
-
-        Returns:
-            Broker configuration object
-        """
-        broker_type_lower = broker_type.lower() if broker_type else 'default'
-
-        # Get config for broker
-        config = self.configs.get(broker_type_lower, self.configs.get('default'))
-
+        """Return the strategy owned by exactly one broker cell."""
+        name = self._name(broker_type)
+        config = self._config(name)
+        _CURRENT_BROKER.set(name)
+        _CURRENT_CONFIG.set(config)
         if config is None:
-            logger.warning(f"No configuration available for {broker_type}, using hardcoded defaults")
-            # Build conservative defaults from BROKER_PROFILES if available
-            profile = BROKER_PROFILES.get(broker_type_lower, BROKER_PROFILES.get('default', {}))
-            round_trip = profile.get('fee', 0.014)
-            min_move = profile.get('min_move', 0.015)
+            profile = BROKER_PROFILES.get(name, BROKER_PROFILES.get("default", {}))
+            min_move = float(profile.get("min_move", 0.015) or 0.015)
+            logger.warning("No concrete strategy config for %s; using isolated fallback", name)
             return {
-                'broker_name': broker_type_lower,
-                'round_trip_cost': round_trip,
-                'profit_targets': [(min_move * 1.5, f"{min_move * 150:.1f}%"),
-                                   (min_move * 2.5, f"{min_move * 250:.1f}%"),
-                                   (min_move * 4.0, f"{min_move * 400:.1f}%")],
-                'stop_loss': -(min_move * 0.8),
-                'max_hold_hours': 12.0,
-                'min_move': min_move,
-                'style': profile.get('style', 'swing'),
-                'speed': profile.get('speed', 'slow'),
+                "broker_name": name,
+                "round_trip_cost": float(profile.get("fee", 0.014) or 0.014),
+                "profit_targets": [(min_move * 1.5, "tp1"), (min_move * 2.5, "tp2"), (min_move * 4.0, "tp3")],
+                "stop_loss": -(min_move * 0.8),
+                "max_hold_hours": 12.0,
+                "min_move": min_move,
+                "style": profile.get("style", "swing"),
+                "speed": profile.get("speed", "slow"),
             }
-
-        self.current_broker = broker_type_lower
-        self.current_config = config
-
-        profile = BROKER_PROFILES.get(broker_type_lower, {})
-        logger.info(f"📊 Selected {config.broker_display_name} strategy")
-        logger.info(f"   Fees: {config.round_trip_cost*100:.2f}% round-trip")
-        logger.info(f"   Strategy: {'BIDIRECTIONAL' if config.bidirectional else 'BUY-FOCUSED'}")
-        logger.info(f"   Profit targets: {', '.join([f'{t[0]*100:.1f}%' for t in config.profit_targets])}")
-        if profile:
-            logger.info(
-                f"   Profile: style={profile.get('style','?')}  "
-                f"min_move={profile.get('min_move', 0)*100:.1f}%  "
-                f"speed={profile.get('speed','?')}"
-            )
-
+        logger.info("BROKER_CELL_STRATEGY_SELECTED broker=%s config=%s context_local=true", name, type(config).__name__)
         return config
 
     def get_current_config(self):
-        """Get currently active configuration"""
-        return self.current_config
+        return _CURRENT_CONFIG.get()
 
-    def should_enter_long(self, broker_type: str, rsi: float, price: float,
-                          ema9: float, ema21: float) -> bool:
-        """
-        Determine if should enter LONG position.
+    def get_config(self, broker_type: str):
+        return self._config(broker_type)
 
-        Args:
-            broker_type: Broker type
-            rsi: RSI value
-            price: Current price
-            ema9: EMA9 value
-            ema21: EMA21 value
-
-        Returns:
-            True if should enter long
-        """
-        config = self.configs.get(broker_type.lower(), self.configs.get('default'))
-
-        if config and hasattr(config, 'should_buy'):
-            return config.should_buy(rsi, price, ema9, ema21)
-
-        # Fallback logic
+    def should_enter_long(self, broker_type: str, rsi: float, price: float, ema9: float, ema21: float) -> bool:
+        config = self._config(broker_type)
+        if config and hasattr(config, "should_buy"):
+            return bool(config.should_buy(rsi, price, ema9, ema21))
         return 30 <= rsi <= 50 and price > ema9 and price > ema21
 
-    def should_enter_short(self, broker_type: str, rsi: float, price: float,
-                           ema9: float, ema21: float) -> bool:
-        """
-        Determine if should enter SHORT position.
-
-        Args:
-            broker_type: Broker type
-            rsi: RSI value
-            price: Current price
-            ema9: EMA9 value
-            ema21: EMA21 value
-
-        Returns:
-            True if should enter short (only on brokers where it's profitable)
-        """
-        config = self.configs.get(broker_type.lower(), self.configs.get('default'))
-
-        # Only allow shorting on bidirectional brokers (Kraken)
-        if config and config.bidirectional and hasattr(config, 'should_short'):
-            return config.should_short(rsi, price, ema9, ema21)
-
-        # Don't short on high-fee exchanges (Coinbase)
+    def should_enter_short(self, broker_type: str, rsi: float, price: float, ema9: float, ema21: float) -> bool:
+        config = self._config(broker_type)
+        if config and bool(getattr(config, "bidirectional", False)) and hasattr(config, "should_short"):
+            return bool(config.should_short(rsi, price, ema9, ema21))
         return False
 
-    def should_exit_position(self, broker_type: str, rsi: float, price: float,
-                            ema9: float, ema21: float) -> bool:
-        """
-        Determine if should exit current position.
-
-        Args:
-            broker_type: Broker type
-            rsi: RSI value
-            price: Current price
-            ema9: EMA9 value
-            ema21: EMA21 value
-
-        Returns:
-            True if should exit
-        """
-        config = self.configs.get(broker_type.lower(), self.configs.get('default'))
-
-        if config and hasattr(config, 'should_sell'):
-            return config.should_sell(rsi, price, ema9, ema21)
-
-        # Fallback logic
+    def should_exit_position(self, broker_type: str, rsi: float, price: float, ema9: float, ema21: float) -> bool:
+        config = self._config(broker_type)
+        if config and hasattr(config, "should_sell"):
+            return bool(config.should_sell(rsi, price, ema9, ema21))
         return rsi > 60 or price < ema9
 
-    def calculate_position_size(self, broker_type: str, account_balance: float,
-                               signal_strength: float = 1.0) -> float:
-        """
-        Calculate position size for broker.
-
-        Args:
-            broker_type: Broker type
-            account_balance: Available balance
-            signal_strength: Signal quality (0.0 to 1.0)
-
-        Returns:
-            Position size in USD
-        """
-        config = self.configs.get(broker_type.lower(), self.configs.get('default'))
-
-        if config and hasattr(config, 'calculate_position_size'):
-            return config.calculate_position_size(account_balance, signal_strength)
-
-        # Fallback
-        base_size = account_balance * 0.20  # 20% default
-        return max(base_size * signal_strength, 10.0)
+    def calculate_position_size(self, broker_type: str, account_balance: float, signal_strength: float = 1.0) -> float:
+        config = self._config(broker_type)
+        if config and hasattr(config, "calculate_position_size"):
+            return float(config.calculate_position_size(account_balance, signal_strength))
+        return max(float(account_balance) * 0.20 * float(signal_strength), 10.0)
 
     def get_profit_targets(self, broker_type: str) -> list:
-        """Get profit targets for broker"""
-        config = self.configs.get(broker_type.lower(), self.configs.get('default'))
-
-        if config and hasattr(config, 'profit_targets'):
-            return config.profit_targets
-
-        # Fallback
-        return [(0.015, "1.5%"), (0.012, "1.2%"), (0.010, "1.0%")]
+        config = self._config(broker_type)
+        return list(config.profit_targets) if config and hasattr(config, "profit_targets") else [(0.015, "1.5%"), (0.012, "1.2%"), (0.010, "1.0%")]
 
     def get_stop_loss(self, broker_type: str) -> float:
-        """Get stop loss percentage for broker"""
-        config = self.configs.get(broker_type.lower(), self.configs.get('default'))
-
-        if config and hasattr(config, 'stop_loss'):
-            return config.stop_loss
-
-        # Fallback
-        return -0.010  # -1.0%
+        config = self._config(broker_type)
+        return float(config.stop_loss) if config and hasattr(config, "stop_loss") else -0.010
 
     def get_max_hold_hours(self, broker_type: str) -> float:
-        """Get maximum hold time for broker"""
-        config = self.configs.get(broker_type.lower(), self.configs.get('default'))
+        config = self._config(broker_type)
+        return float(config.max_hold_hours) if config and hasattr(config, "max_hold_hours") else 12.0
 
-        if config and hasattr(config, 'max_hold_hours'):
-            return config.max_hold_hours
+    def strategy_snapshot(self) -> Dict[str, Dict[str, Any]]:
+        snapshot: Dict[str, Dict[str, Any]] = {}
+        for name, config in self.configs.items():
+            if name == "default" or config is None:
+                continue
+            snapshot[name] = {
+                "config_class": type(config).__name__,
+                "bidirectional": bool(getattr(config, "bidirectional", False)),
+                "round_trip_cost": float(getattr(config, "round_trip_cost", 0.0) or 0.0),
+                "stop_loss": float(getattr(config, "stop_loss", 0.0) or 0.0),
+                "max_hold_hours": float(getattr(config, "max_hold_hours", 0.0) or 0.0),
+                "max_positions": int(getattr(config, "max_positions", 0) or 0),
+                "max_trades_per_day": int(getattr(config, "max_trades_per_day", 0) or 0),
+            }
+        return snapshot
 
-        # Fallback
-        return 12.0
-
-    def print_strategy_comparison(self):
-        """Print comparison of all broker strategies"""
-        print("\n" + "="*80)
+    def print_strategy_comparison(self) -> None:
+        """Backward-compatible human-readable broker strategy summary."""
+        snapshot = self.strategy_snapshot()
+        print("\n" + "=" * 80)
         print("BROKER STRATEGY COMPARISON".center(80))
-        print("="*80)
-
-        coinbase = self.configs.get('coinbase')
-        kraken = self.configs.get('kraken')
-
-        if coinbase:
-            print("\n🔵 COINBASE (High-Fee Exchange)")
+        print("=" * 80)
+        for name in sorted(snapshot):
+            item = snapshot[name]
+            print(f"\n{name.upper()}")
             print("-" * 80)
-            print(coinbase.get_config_summary())
-
-        if kraken:
-            print("\n🟣 KRAKEN (Low-Fee Exchange)")
-            print("-" * 80)
-            print(kraken.get_config_summary())
-
-        # Calculate comparisons from actual config values
-        if coinbase and kraken:
-            fee_ratio = coinbase.round_trip_cost / kraken.round_trip_cost
-            hold_ratio = kraken.max_hold_hours / coinbase.max_hold_hours
-            min_pos_ratio = coinbase.min_position_usd / kraken.min_position_usd
-
-            print("\n" + "="*80)
-            print("KEY DIFFERENCES:".center(80))
-            print("="*80)
-            print(f"""
-Coinbase vs Kraken:
-  Fees:         {coinbase.round_trip_cost*100:.2f}% vs {kraken.round_trip_cost*100:.2f}% (Kraken is {fee_ratio:.1f}x cheaper!)
-  Strategy:     {'Buy-only' if not coinbase.bidirectional else 'Bidirectional'} vs {'Bidirectional' if kraken.bidirectional else 'Buy-only'}
-  Profit Target: {coinbase.profit_targets[0][0]*100:.1f}% vs {kraken.profit_targets[0][0]*100:.1f}%
-  Stop Loss:    {coinbase.stop_loss*100:.1f}% vs {kraken.stop_loss*100:.1f}%
-  Max Hold:     {coinbase.max_hold_hours:.0f}h vs {kraken.max_hold_hours:.0f}h (Kraken {hold_ratio:.1f}x longer)
-  Min Position: ${coinbase.min_position_usd:.0f} vs ${kraken.min_position_usd:.0f} (Kraken {min_pos_ratio:.1f}x smaller)
-  Short Selling: {'Unprofitable' if not coinbase.sell_preferred else 'Profitable'} vs {'PROFITABLE' if kraken.sell_preferred else 'Unprofitable'}
-
-CONCLUSION: Kraken is superior for:
-  ✅ More trading opportunities (bidirectional)
-  ✅ Lower fees = higher profitability
-  ✅ Smaller positions viable
-  ✅ Longer hold times possible
-  ✅ More trades per day allowed
-  ✅ Futures and options support
-""")
+            print(f"Config: {item['config_class']}")
+            print(f"Round-trip cost: {item['round_trip_cost'] * 100:.2f}%")
+            print(f"Bidirectional: {item['bidirectional']}")
+            print(f"Stop loss: {item['stop_loss'] * 100:.2f}%")
+            print(f"Max hold: {item['max_hold_hours']:.1f}h")
+            print(f"Max positions: {item['max_positions']}")
+            print(f"Max trades/day: {item['max_trades_per_day']}")
 
 
-# Create global selector instance
 STRATEGY_SELECTOR = BrokerStrategySelector()
 
-# Convenience functions
+
 def get_strategy_for_broker(broker_type: str):
-    """Get strategy configuration for broker"""
     return STRATEGY_SELECTOR.select_strategy(broker_type)
-
-
-if __name__ == "__main__":
-    # Print comparison when run directly
-    STRATEGY_SELECTOR.print_strategy_comparison()

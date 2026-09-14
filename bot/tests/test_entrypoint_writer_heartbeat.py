@@ -44,9 +44,17 @@ class EntrypointWriterHeartbeatTests(unittest.TestCase):
         ):
             os.environ.pop(key, None)
 
+    def _register_live_core(self):
+        """Use the production registration contract before asserting ACTIVE."""
+        core = MagicMock()
+        core.is_alive.return_value = True
+        core.name = "nija-core-loop-test"
+        core.ident = 1234
+        self.runtime.register_core_thread(core)
+        return core
+
     def test_ttl_refresh_never_disables_execution(self):
-        self.runtime._core_thread = MagicMock()
-        self.runtime._core_thread.is_alive.return_value = True
+        self._register_live_core()
         self.runtime._client.eval.return_value = 1
         self.runtime._set_writer_state(WriterState.ACTIVE, reason="test_setup")
         os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "1"
@@ -64,8 +72,10 @@ class EntrypointWriterHeartbeatTests(unittest.TestCase):
         self.assertEqual(os.environ["NIJA_WRITER_STATE"], "ACTIVE")
 
     def test_lock_refresh_preserves_fencing_token(self):
-        self.runtime._core_thread = MagicMock()
-        self.runtime._core_thread.is_alive.return_value = True
+        self._register_live_core()
+        # Core registration publishes metadata through Redis. Reset the mock so
+        # this assertion covers only the subsequent fencing-token refresh.
+        self.runtime._client.reset_mock()
         self.runtime._client.eval.return_value = 2
         self.runtime._set_writer_state(WriterState.ACTIVE, reason="test_setup")
         os.environ["NIJA_WRITER_FENCING_TOKEN"] = self.runtime._token
@@ -79,8 +89,7 @@ class EntrypointWriterHeartbeatTests(unittest.TestCase):
         self.assertEqual(os.environ["NIJA_WRITER_STATE"], "ACTIVE")
 
     def test_heartbeat_reconciles_only_after_writer_state_becomes_active(self):
-        self.runtime._core_thread = MagicMock()
-        self.runtime._core_thread.is_alive.return_value = True
+        self._register_live_core()
         self.runtime._client.eval.return_value = 1
         self.runtime._set_writer_state(WriterState.ACTIVE, reason="test_setup")
         calls = []
@@ -105,6 +114,7 @@ class EntrypointWriterHeartbeatTests(unittest.TestCase):
         )
 
     def test_brief_redis_interruption_keeps_execution_enabled(self):
+        self._register_live_core()
         self.runtime._set_writer_state(WriterState.ACTIVE, reason="test_setup")
         os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "1"
         os.environ["NIJA_EXECUTION_ACTIVE"] = "true"
@@ -137,6 +147,7 @@ class EntrypointWriterHeartbeatTests(unittest.TestCase):
         self.assertEqual(os.environ["NIJA_WRITER_STATE"], "ACTIVE")
 
     def test_genuine_ownership_loss_demotes_disables_and_may_begin_recovery(self):
+        self._register_live_core()
         self.runtime._set_writer_state(WriterState.ACTIVE, reason="test_setup")
         os.environ["NIJA_WRITER_LEASE_ACQUIRED"] = "1"
         os.environ["NIJA_WRITER_FENCING_TOKEN"] = self.runtime._token
@@ -153,18 +164,13 @@ class EntrypointWriterHeartbeatTests(unittest.TestCase):
         ):
             self.runtime._heartbeat_loop()
 
-        # Ownership loss must always demote the canonical runtime and fail-close
-        # execution. The v55/v39 bounded recovery handoff is allowed to advance
-        # published telemetry from LOST to ACQUIRING immediately afterward; that
-        # transition does not restore execution authority.
         self.assertTrue(self.runtime.lost)
         self.assertEqual(os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"], "0")
         self.assertEqual(os.environ["NIJA_EXECUTION_ACTIVE"], "false")
         self.assertIn(os.environ["NIJA_WRITER_STATE"], {"LOST", "ACQUIRING"})
 
     def test_different_owner_is_rejected_fail_closed(self):
-        self.runtime._core_thread = MagicMock()
-        self.runtime._core_thread.is_alive.return_value = True
+        self._register_live_core()
         self.runtime._client.eval.return_value = 0
 
         ok, reason = self.runtime._heartbeat_tick()
@@ -173,9 +179,6 @@ class EntrypointWriterHeartbeatTests(unittest.TestCase):
         self.assertEqual(reason, "lock_owned_by_different_writer")
 
     def test_missing_core_thread_releases_for_reelection(self):
-        # Simulate the scan-started deadline having been exceeded: the core
-        # loop never entered its running state, so a None core thread must
-        # fail the liveness check and trigger a re-election.
         self.runtime._scan_deadline_exceeded = True
         self.runtime._release_owned_lock_for_reelection = MagicMock()
 

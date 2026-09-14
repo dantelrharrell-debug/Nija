@@ -1,33 +1,24 @@
-"""NIJA independent-broker configuration check.
+"""NIJA broker-cell configuration gate.
 
-Validates shared live-trading safety settings and evaluates Kraken, Coinbase, and
-OKX independently. Startup succeeds when at least one brokerage has a complete
-configuration. Missing or incomplete credentials for another brokerage are
-reported as degraded and that brokerage is excluded; they never stop a healthy
-brokerage from starting.
+Backward-compatible filename retained because production_bootstrap.sh invokes it.
+The old three-venue/global semantics are intentionally removed: Kraken, Coinbase,
+OKX and Alpaca are evaluated independently and an incomplete cell never prevents
+another complete cell from starting. Only genuinely shared safety infrastructure
+(e.g. Redis writer authority) can fail the whole deployment.
 
-Runtime-derived proof such as ``LIVE_CAPITAL_VERIFIED`` is reported here but is
-not a bootstrap configuration prerequisite. A new process must be allowed to
-start before it can re-prove live capital; all downstream trading gates remain
-fail-closed until that proof becomes true.
-
-Run with ``python3 -S`` to avoid triggering NIJA's site-customise trading hooks
-before writer authority has been established.
+Run with ``python3 -S`` so this validation never imports trading runtime hooks.
 """
+from __future__ import annotations
 
 import json
 import os
-import re
 import sys
-import urllib.error
-import urllib.request
-from pathlib import Path
+from typing import Dict, Tuple
 
 TRUE = {"1", "true", "yes", "on", "enabled"}
-FALSE = {"0", "false", "no", "off", "disabled"}
-_AGENT_ID_RE = re.compile(r"^agent_[A-Za-z0-9_-]+$")
+FALSE = {"0", "false", "no", "off", "disabled", ""}
 
-BROKERS = {
+BROKERS: Dict[str, Dict[str, Tuple[str, ...]]] = {
     "kraken": {
         "secrets": ("KRAKEN_PLATFORM_API_KEY", "KRAKEN_PLATFORM_API_SECRET"),
         "true_flags": (),
@@ -35,23 +26,18 @@ BROKERS = {
     },
     "coinbase": {
         "secrets": ("COINBASE_API_KEY", "COINBASE_API_SECRET"),
-        "true_flags": (
-            "ENABLE_COINBASE",
-            "ENABLE_COINBASE_TRADING",
-            "COINBASE_LIVE_TRADING_ENABLED",
-        ),
+        "true_flags": ("ENABLE_COINBASE", "ENABLE_COINBASE_TRADING", "COINBASE_LIVE_TRADING_ENABLED"),
         "false_flags": ("NIJA_DISABLE_COINBASE",),
     },
     "okx": {
         "secrets": ("OKX_API_KEY", "OKX_API_SECRET", "OKX_PASSPHRASE"),
-        "true_flags": (
-            "ENABLE_OKX",
-            "ENABLE_OKX_TRADING",
-            "OKX_LIVE_TRADING_ENABLED",
-            "NIJA_OKX_EXECUTION_ENABLED",
-            "NIJA_OKX_LIVE_TRADING_ENABLED",
-        ),
+        "true_flags": ("ENABLE_OKX", "ENABLE_OKX_TRADING", "OKX_LIVE_TRADING_ENABLED", "NIJA_OKX_EXECUTION_ENABLED", "NIJA_OKX_LIVE_TRADING_ENABLED"),
         "false_flags": ("NIJA_DISABLE_OKX",),
+    },
+    "alpaca": {
+        "secrets": ("ALPACA_API_KEY", "ALPACA_API_SECRET"),
+        "true_flags": (),
+        "false_flags": ("NIJA_DISABLE_ALPACA",),
     },
 }
 
@@ -65,6 +51,7 @@ SHARED_TRUE_FLAGS = (
 )
 SHARED_FALSE_FLAGS = ("DRY_RUN_MODE", "PAPER_MODE")
 RUNTIME_DERIVED_FLAGS = ("LIVE_CAPITAL_VERIFIED",)
+REDIS_NAMES = ("NIJA_REDIS_URL", "REDIS_URL", "REDIS_PRIVATE_URL", "REDIS_PUBLIC_URL", "REDIS_TLS_URL")
 
 
 def _is_true(name: str) -> bool:
@@ -75,212 +62,91 @@ def _is_false(name: str, default: str = "false") -> bool:
     return os.getenv(name, default).strip().lower() in FALSE
 
 
-def _broker_status(name: str, contract: dict[str, tuple[str, ...]]) -> dict[str, object]:
+def _broker_status(name: str, contract: Dict[str, Tuple[str, ...]]) -> Dict[str, object]:
     secrets = contract["secrets"]
     true_flags = contract["true_flags"]
     false_flags = contract["false_flags"]
-    present_secrets = [secret for secret in secrets if os.getenv(secret, "").strip()]
-    missing_secrets = [secret for secret in secrets if secret not in present_secrets]
+    present = [secret for secret in secrets if os.getenv(secret, "").strip()]
+    missing = [secret for secret in secrets if secret not in present]
     bad_true = [flag for flag in true_flags if not _is_true(flag)]
     bad_false = [flag for flag in false_flags if not _is_false(flag)]
+    any_config = bool(present) or any(flag in os.environ for flag in (*true_flags, *false_flags))
+    ready = not missing and not bad_true and not bad_false
 
-    any_config = bool(present_secrets) or any(flag in os.environ for flag in (*true_flags, *false_flags))
-    ready = not missing_secrets and not bad_true and not bad_false
     if ready:
-        state = "ready"
-        reason = "configuration_complete"
+        state, reason = "ready", "configuration_complete"
     elif not any_config:
-        state = "not_configured"
-        reason = "no_credentials_or_flags"
+        state, reason = "not_configured", "no_credentials_or_flags"
     else:
         state = "degraded"
-        parts = []
-        if missing_secrets:
-            parts.append("missing_secrets=" + ",".join(missing_secrets))
+        reasons = []
+        if missing:
+            reasons.append("missing_secrets=" + ",".join(missing))
         if bad_true:
-            parts.append("flags_not_true=" + ",".join(bad_true))
+            reasons.append("flags_not_true=" + ",".join(bad_true))
         if bad_false:
-            parts.append("flags_not_false=" + ",".join(bad_false))
-        reason = ";".join(parts) or "configuration_incomplete"
+            reasons.append("flags_not_false=" + ",".join(bad_false))
+        reason = ";".join(reasons) or "configuration_incomplete"
 
     return {
         "broker": name,
+        "cell": name,
         "ready": ready,
         "state": state,
         "reason": reason,
-        "configured_secret_count": len(present_secrets),
+        "configured_secret_count": len(present),
         "required_secret_count": len(secrets),
-        "missing_secrets": missing_secrets,
+        "missing_secrets": missing,
         "bad_true_flags": bad_true,
         "bad_false_flags": bad_false,
     }
 
 
-def _collect_voice_agent_ids(value: object) -> set[str]:
-    """Collect only JustCall-style AI agent identifiers from an API payload."""
-    found: set[str] = set()
-    if isinstance(value, dict):
-        for item in value.values():
-            found.update(_collect_voice_agent_ids(item))
-    elif isinstance(value, list):
-        for item in value:
-            found.update(_collect_voice_agent_ids(item))
-    elif isinstance(value, str) and _AGENT_ID_RE.fullmatch(value):
-        found.add(value)
-    return found
+def main() -> int:
+    bad_shared_true = [name for name in SHARED_TRUE_FLAGS if not _is_true(name)]
+    bad_shared_false = [name for name in SHARED_FALSE_FLAGS if not _is_false(name)]
+    statuses = {name: _broker_status(name, contract) for name, contract in BROKERS.items()}
+    ready = [name for name, status in statuses.items() if status["ready"]]
+    degraded = [name for name, status in statuses.items() if status["state"] == "degraded"]
+    redis_present = any(os.getenv(name, "").strip() for name in REDIS_NAMES)
+
+    print("=== NIJA BROKER-CELL CONFIGURATION ===")
+    print(json.dumps(statuses, indent=2, sort_keys=True))
+    print("READY CELLS:", ", ".join(ready) or "none")
+    print("DEGRADED CELLS:", ", ".join(degraded) or "none")
+    print("CROSS_BROKER_FAILURE_PROPAGATION: disabled")
+    print("USER_CAPITAL_AGGREGATION: isolated")
+    print(f"REDIS CONNECTION: {'SET' if redis_present else 'MISSING'}")
+
+    for name in SHARED_TRUE_FLAGS + SHARED_FALSE_FLAGS + RUNTIME_DERIVED_FLAGS:
+        print(f"{name}: {os.getenv(name, 'UNSET')}")
+
+    if not _is_true("LIVE_CAPITAL_VERIFIED"):
+        print("RUNTIME PROOF PENDING: LIVE_CAPITAL_VERIFIED (re-proven after bootstrap; entries remain fail-closed)")
+    if bad_shared_true:
+        print("SHARED FLAGS THAT MUST BE TRUE:", ", ".join(bad_shared_true))
+    if bad_shared_false:
+        print("SHARED FLAGS THAT MUST BE FALSE:", ", ".join(bad_shared_false))
+    if not ready:
+        print("NO BROKER CELL HAS A COMPLETE INDEPENDENT CONFIGURATION")
+    if not redis_present:
+        print("REDIS URL IS NOT CONFIGURED")
+
+    safe_off = not _is_true("LIVE_TRADING") and not _is_true("LIVE_CAPITAL_VERIFIED")
+    shared_fatal = bool(bad_shared_true or bad_shared_false or not redis_present)
+    no_live_cell = not ready
+
+    if safe_off:
+        print("RESULT: SAFE-OFF MAINTENANCE MODE")
+        return 0
+    if shared_fatal or no_live_cell:
+        print("RESULT: BROKER-CELL CONFIGURATION INCOMPLETE")
+        return 2
+
+    print("RESULT: BROKER-CELL CONFIGURATION READY")
+    print("Each cell activates, degrades, halts and recovers independently.")
+    return 0
 
 
-def _check_justcall_outreach() -> None:
-    """Emit a redacted JustCall authentication/agent check without affecting startup."""
-    print("\n=== JUSTCALL OUTREACH ===")
-    api_key = os.getenv("JUSTCALL_API_KEY", "").strip()
-    api_secret = os.getenv("JUSTCALL_API_SECRET", "").strip()
-    outbound_number = os.getenv("JUSTCALL_OUTBOUND_NUMBER", "").strip()
-    ai_agent_id = os.getenv("JUSTCALL_AI_AGENT_ID", "").strip()
-    service_token = os.getenv("NIJA_OUTREACH_SERVICE_TOKEN", "").strip()
-
-    configured = bool(api_key and api_secret)
-    print(f"JUSTCALL_CREDENTIALS_CONFIGURED: {str(configured).lower()}")
-    print(f"JUSTCALL_OUTBOUND_NUMBER_CONFIGURED: {str(bool(outbound_number)).lower()}")
-    print(f"JUSTCALL_AI_AGENT_CONFIGURED: {str(bool(ai_agent_id)).lower()}")
-    print(f"NIJA_OUTREACH_SERVICE_TOKEN_CONFIGURED: {str(bool(service_token)).lower()}")
-
-    if not configured:
-        print(
-            "JUSTCALL_OUTREACH_STATUS configured=false authenticated=false "
-            "state=credentials_missing"
-        )
-        return
-
-    request = urllib.request.Request(
-        "https://api.justcall.io/v2.1/voice-agents/list?page=0&per_page=100&order=desc",
-        headers={
-            "Authorization": f"{api_key}:{api_secret}",
-            "Accept": "application/json",
-            "User-Agent": "NIJA-Outreach-StartupCheck/1.0",
-        },
-        method="GET",
-    )
-
-    try:
-        with urllib.request.urlopen(request, timeout=10) as response:
-            body = response.read()
-            authenticated = 200 <= response.status < 300
-            print(
-                "JUSTCALL_OUTREACH_STATUS "
-                f"configured=true authenticated={str(authenticated).lower()} "
-                f"http_status={response.status} state="
-                f"{'connected' if authenticated else 'authentication_or_api_failed'} "
-                f"voice_agents_response_received={str(bool(body)).lower()}"
-            )
-            if authenticated and body:
-                try:
-                    payload = json.loads(body.decode("utf-8"))
-                except (UnicodeDecodeError, json.JSONDecodeError):
-                    print("JUSTCALL_VOICE_AGENT_DISCOVERY state=response_unparseable")
-                else:
-                    agent_ids = sorted(_collect_voice_agent_ids(payload))
-                    if agent_ids:
-                        print(
-                            "JUSTCALL_VOICE_AGENT_DISCOVERY "
-                            f"state=found count={len(agent_ids)} ids={','.join(agent_ids)}"
-                        )
-                    else:
-                        print("JUSTCALL_VOICE_AGENT_DISCOVERY state=none_found count=0")
-    except urllib.error.HTTPError as exc:
-        print(
-            "JUSTCALL_OUTREACH_STATUS configured=true authenticated=false "
-            f"http_status={exc.code} state=authentication_or_api_failed"
-        )
-    except Exception as exc:
-        print(
-            "JUSTCALL_OUTREACH_STATUS configured=true authenticated=false "
-            f"state=provider_unreachable error_type={type(exc).__name__}"
-        )
-
-
-bad_shared_true = [name for name in SHARED_TRUE_FLAGS if not _is_true(name)]
-bad_shared_false = [name for name in SHARED_FALSE_FLAGS if not _is_false(name)]
-broker_statuses = {name: _broker_status(name, contract) for name, contract in BROKERS.items()}
-ready_brokers = [name for name, status in broker_statuses.items() if status["ready"]]
-degraded_brokers = [name for name, status in broker_statuses.items() if status["state"] == "degraded"]
-
-print("=== NIJA INDEPENDENT-BROKER CONFIGURATION ===")
-print(json.dumps(broker_statuses, indent=2, sort_keys=True))
-print("READY BROKERS:", ", ".join(ready_brokers) or "none")
-print("DEGRADED BROKERS:", ", ".join(degraded_brokers) or "none")
-print("LEGACY CROSS-VENUE GATE:", os.getenv("NIJA_REQUIRE_SECONDARY_VENUES_READY", "false"))
-
-for name in SHARED_TRUE_FLAGS + SHARED_FALSE_FLAGS + RUNTIME_DERIVED_FLAGS:
-    print(f"{name}: {os.getenv(name, 'UNSET')}")
-
-if not _is_true("LIVE_CAPITAL_VERIFIED"):
-    print("RUNTIME PROOF PENDING: LIVE_CAPITAL_VERIFIED (re-proven after bootstrap; trading remains fail-closed)")
-
-redis_present = any(
-    os.getenv(name, "").strip()
-    for name in (
-        "NIJA_REDIS_URL",
-        "REDIS_URL",
-        "REDIS_PRIVATE_URL",
-        "REDIS_PUBLIC_URL",
-        "REDIS_TLS_URL",
-    )
-)
-print(f"REDIS CONNECTION: {'SET' if redis_present else 'MISSING'}")
-
-if bad_shared_true:
-    print("SHARED FLAGS THAT MUST BE TRUE:", ", ".join(bad_shared_true))
-if bad_shared_false:
-    print("SHARED FLAGS THAT MUST BE FALSE:", ", ".join(bad_shared_false))
-if not ready_brokers:
-    print("NO BROKER HAS A COMPLETE INDEPENDENT CONFIGURATION")
-if not redis_present:
-    print("REDIS URL IS NOT CONFIGURED")
-
-_check_justcall_outreach()
-
-print("\n=== LOCAL ENDPOINTS ===")
-port = os.getenv("PORT", "5000")
-for path in ("/healthz", "/readyz"):
-    url = f"http://127.0.0.1:{port}{path}"
-    try:
-        with urllib.request.urlopen(url, timeout=5) as response:
-            body = response.read().decode("utf-8", errors="replace")
-            print(f"{path}: HTTP {response.status}")
-            print(body)
-    except urllib.error.HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="replace")
-        print(f"{path}: HTTP {exc.code}")
-        print(body)
-    except Exception as exc:
-        print(f"{path}: ERROR {type(exc).__name__}: {exc}")
-
-print("\n=== SHARED READINESS STATE ===")
-state_path = Path(
-    os.getenv("NIJA_RENDER_READINESS_STATE_FILE", "/tmp/nija_render_readiness.json")
-)
-if state_path.exists():
-    try:
-        payload = json.loads(state_path.read_text(encoding="utf-8"))
-        print(json.dumps(payload, indent=2, sort_keys=True))
-    except Exception as exc:
-        print(f"Could not parse {state_path}: {exc}")
-else:
-    print(f"Readiness state file not found: {state_path}")
-
-# An explicit operator-requested safe-off state is healthy maintenance mode, not a
-# deployment failure. This lets Render replace a live instance while all order
-# entry remains disabled. Broker credentials and Redis are still reported above.
-safe_off = not _is_true("LIVE_TRADING") and not _is_true("LIVE_CAPITAL_VERIFIED")
-fatal = bool(bad_shared_true or bad_shared_false or not redis_present or not ready_brokers)
-if fatal and not safe_off:
-    print("\nRESULT: INDEPENDENT-BROKER CONFIGURATION INCOMPLETE")
-    sys.exit(2)
-if safe_off:
-    print("\nRESULT: SAFE-OFF MAINTENANCE MODE")
-    print("Live trading and capital verification are disabled; startup may remain healthy without order authority.")
-    sys.exit(0)
-
-print("\nRESULT: AT LEAST ONE BROKER IS CONFIGURED")
-print("Each remaining broker will activate or remain isolated according to its own connection state.")
+if __name__ == "__main__":
+    raise SystemExit(main())
