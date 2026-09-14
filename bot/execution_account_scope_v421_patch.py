@@ -1,9 +1,9 @@
 """Canonical broker/account scope for every ExecutionPipeline request.
 
-Pre-trade exposure and risk bookkeeping must never share the generic
-``default``/``unknown`` account key across venues. This wrapper rewrites the
-request identity to ``<broker>:<account>`` and publishes the same identity in a
-ContextVar for downstream risk plugins.
+Pre-trade exposure and risk bookkeeping must never share generic account keys or
+borrow global CapitalAuthority equity. Requests are normalized to
+``<broker>:<account>`` and pre-trade cap base is computed from that account's
+cash plus that account's tracked exposure only.
 """
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ logger = logging.getLogger("nija.execution_account_scope_v421")
 MARKER = "20260914-execution-account-scope-v421"
 _LOCK = threading.RLock()
 _PATCH_ATTR = "_nija_execution_account_scope_v421"
+_CAP_PATCH_ATTR = "_nija_account_local_cap_base_v421"
 
 
 def _clean(value: Any) -> str:
@@ -94,6 +95,50 @@ def _with_account_id(request: Any, account_id: str) -> Any:
         return cloned
     except Exception:
         return request
+
+
+def _patch_pre_trade_capital_base() -> bool:
+    """Remove global-equity borrowing from the account exposure gate."""
+    try:
+        from bot.pre_trade_risk_engine import PreTradeRiskEngine
+    except Exception:
+        return False
+    current = getattr(PreTradeRiskEngine, "_cap_base_usd", None)
+    if not callable(current):
+        return False
+    if getattr(current, _CAP_PATCH_ATTR, False):
+        return True
+
+    def account_local_cap_base(
+        self: Any,
+        *,
+        available_balance_usd: float | None,
+        current_total_exposure: float,
+    ) -> float:
+        try:
+            available = max(0.0, float(available_balance_usd or 0.0))
+        except (TypeError, ValueError, OverflowError):
+            available = 0.0
+        try:
+            exposure = max(0.0, float(current_total_exposure or 0.0))
+        except (TypeError, ValueError, OverflowError):
+            exposure = 0.0
+        # available cash + positions already attributed to the same account is
+        # the only permissible equity base. No process/global capital source.
+        cap_base = available + exposure
+        logger.debug(
+            "ACCOUNT_LOCAL_CAP_BASE marker=%s available_usd=%.2f exposure_usd=%.2f cap_base_usd=%.2f global_equity_used=false",
+            MARKER,
+            available,
+            exposure,
+            cap_base,
+        )
+        return cap_base
+
+    setattr(account_local_cap_base, _CAP_PATCH_ATTR, True)
+    setattr(account_local_cap_base, "__wrapped__", current)
+    PreTradeRiskEngine._cap_base_usd = account_local_cap_base
+    return True
 
 
 def _patch_execution_pipeline() -> bool:
@@ -180,12 +225,14 @@ def _patch_execution_engine() -> bool:
 
 def install() -> bool:
     with _LOCK:
+        cap_base = _patch_pre_trade_capital_base()
         pipeline = _patch_execution_pipeline()
         engine = _patch_execution_engine()
-        ready = pipeline or engine
+        ready = cap_base and (pipeline or engine)
         logger.critical(
-            "EXECUTION_ACCOUNT_SCOPE_V421 marker=%s pipeline=%s engine=%s ready=%s",
+            "EXECUTION_ACCOUNT_SCOPE_V421 marker=%s cap_base=%s pipeline=%s engine=%s ready=%s",
             MARKER,
+            cap_base,
             pipeline,
             engine,
             ready,
