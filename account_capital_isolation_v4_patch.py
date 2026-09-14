@@ -1,8 +1,8 @@
 """Thread-safe independent-account capital isolation for NIJA trading cycles.
 
-This patch replaces process-wide balance overrides with an account-local CapitalAuthority
-proxy.  User cycles always retain their broker balance, positions and mode even while
-platform and other user threads run concurrently.
+This patch replaces process-wide balance overrides with an account-local
+CapitalAuthority proxy. User and platform cycles retain their own broker
+balance, positions and requested execution mode while other account threads run.
 """
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from types import ModuleType
 from typing import Any
 
 logger = logging.getLogger("nija.account_capital_isolation_v4")
-_MARKER = "20260720-account-capital-isolation-v4"
+_MARKER = "20260914-account-capital-isolation-v421"
 _PATCH_ATTR = "_nija_account_capital_isolation_v4"
 _LOCK = threading.RLock()
 _STARTED = False
@@ -72,11 +72,18 @@ def _broker_balance(broker: Any) -> float:
             if value > 0:
                 return value
         except Exception as exc:
-            logger.warning("ACCOUNT_LOCAL_BALANCE_REFRESH_FAILED marker=%s account=%s error=%s", _MARKER, _account_name(broker), exc)
+            logger.warning(
+                "ACCOUNT_LOCAL_BALANCE_REFRESH_FAILED marker=%s account=%s error=%s",
+                _MARKER,
+                _account_name(broker),
+                exc,
+            )
     return 0.0
 
 
 class _ScopedCapitalAuthority:
+    """Read proxy that exposes exactly one account's capital to one cycle."""
+
     def __init__(self, delegate: Any, balance: float, broker: Any) -> None:
         object.__setattr__(self, "_delegate", delegate)
         object.__setattr__(self, "_balance", float(balance))
@@ -143,17 +150,24 @@ def _patch_class(cls: type) -> bool:
 
         balance = _broker_balance(selected)
         account = _account_name(selected)
-        user_account = _is_user_account(selected)
-        effective_user_mode = bool(user_mode or user_account)
         if balance <= 0:
-            logger.critical("ACCOUNT_CAPITAL_ISOLATION_FAIL_CLOSED marker=%s account=%s reason=no_broker_balance", _MARKER, account)
+            logger.critical(
+                "ACCOUNT_CAPITAL_ISOLATION_FAIL_CLOSED marker=%s account=%s reason=no_broker_balance",
+                _MARKER,
+                account,
+            )
             return max(5, int(_f(os.getenv("NIJA_ACCOUNT_SCOPE_RETRY_S", "10"), 10.0)))
 
+        # Preserve the caller's requested mode. An independently configured user
+        # account may run full signal generation with user_mode=False; copy-trade
+        # accounts explicitly pass user_mode=True from IndependentBrokerTrader.
+        effective_user_mode = bool(user_mode)
+
         core = getattr(self, "nija_core_loop", None)
+        apex = getattr(self, "apex", None)
         targets = [self]
         if core is not None:
             targets.append(core)
-        apex = getattr(self, "apex", None)
         if apex is not None:
             targets.append(apex)
 
@@ -187,17 +201,18 @@ def _patch_class(cls: type) -> bool:
         setattr(selected, "_nija_cycle_balance_usd", balance)
         setattr(selected, "_nija_effective_user_mode", effective_user_mode)
 
-        # Never use the process-wide force-balance bridge for concurrent account cycles.
-        old_force = os.environ.pop("NIJA_FORCE_TRADE_BALANCE", None)
         logger.critical(
-            "ACCOUNT_CAPITAL_ISOLATION_ACTIVE marker=%s account=%s balance=$%.2f user_mode_requested=%s user_mode_effective=%s process_env_override=false",
-            _MARKER, account, balance, bool(user_mode), effective_user_mode,
+            "ACCOUNT_CAPITAL_ISOLATION_ACTIVE marker=%s account=%s balance=$%.2f "
+            "user_mode_requested=%s user_mode_effective=%s process_env_override=false",
+            _MARKER,
+            account,
+            balance,
+            bool(user_mode),
+            effective_user_mode,
         )
         try:
             return current(self, broker=selected, user_mode=effective_user_mode, *args, **kwargs)
         finally:
-            if old_force is not None and not user_account:
-                os.environ["NIJA_FORCE_TRADE_BALANCE"] = old_force
             for target, attr, existed, old in reversed(saved):
                 try:
                     if existed:
@@ -224,7 +239,12 @@ def _patch_class(cls: type) -> bool:
     setattr(run_cycle, _PATCH_ATTR, True)
     setattr(run_cycle, "__wrapped__", current)
     cls.run_cycle = run_cycle
-    logger.critical("ACCOUNT_CAPITAL_ISOLATION_SURFACE_PATCHED marker=%s module=%s class=%s", _MARKER, cls.__module__, cls.__name__)
+    logger.critical(
+        "ACCOUNT_CAPITAL_ISOLATION_SURFACE_PATCHED marker=%s module=%s class=%s",
+        _MARKER,
+        cls.__module__,
+        cls.__name__,
+    )
     return True
 
 
