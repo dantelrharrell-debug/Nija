@@ -161,17 +161,31 @@ def _patch_v390_user_refresh() -> bool:
             connected_users: int,
             safe_interval_value: float,
             ttl: float,
+            flight_token: int | None = None,
         ) -> None:
-            original_run(
-                manager,
-                account,
-                broker,
-                prior_reason,
-                prior_snapshot_reason,
-                connected_users,
-                safe_interval_value,
-                ttl,
-            )
+            if flight_token is None:
+                original_run(
+                    manager,
+                    account,
+                    broker,
+                    prior_reason,
+                    prior_snapshot_reason,
+                    connected_users,
+                    safe_interval_value,
+                    ttl,
+                )
+            else:
+                original_run(
+                    manager,
+                    account,
+                    broker,
+                    prior_reason,
+                    prior_snapshot_reason,
+                    connected_users,
+                    safe_interval_value,
+                    ttl,
+                    flight_token,
+                )
             try:
                 ok, reason, _rows, age_s, _generation = snapshot_status(broker)
             except Exception as exc:
