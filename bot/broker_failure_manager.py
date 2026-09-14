@@ -1,79 +1,10 @@
 # bot/broker_failure_manager.py
+"""NIJA broker failure manager.
+
+Tracks broker-local health and reconnect backoff. A failed venue is halted in its
+own broker cell; its capital share is left idle and is never redistributed to
+another brokerage account.
 """
-NIJA Broker Failure Manager
-=============================
-
-Tracks per-broker error counts and automatically marks a broker as **dead**
-once it exceeds a configurable failure threshold.  When a broker dies its
-capital allocation is instantly redistributed to the remaining active brokers.
-Dead brokers are retried with intelligent exponential backoff so that a
-recovered exchange is brought back into the active pool without manual
-intervention.
-
-Features
---------
-* **Auto-remove failed brokers** — broker is marked dead after
-  ``FAILURE_THRESHOLD`` consecutive errors (default 5, override via
-  ``NIJA_BROKER_FAILURE_THRESHOLD`` env var).
-* **Instant capital rebalancing** — :meth:`get_active_allocation_weights`
-  returns normalised weights that exclude dead brokers so callers can
-  immediately redirect capital to healthy exchanges.
-* **Intelligent retry** — :meth:`get_retry_delay` returns an increasing
-  backoff delay (15 s → 30 s → 60 s) so reconnect attempts don't hammer a
-  temporarily unavailable exchange.
-
-Usage
------
-::
-
-    from bot.broker_failure_manager import get_broker_failure_manager
-
-    bfm = get_broker_failure_manager()
-
-    # Register all brokers at startup (equal weights by default):
-    bfm.register_broker("coinbase",  initial_allocation=0.50)
-    bfm.register_broker("kraken",    initial_allocation=0.30)
-    bfm.register_broker("binance",   initial_allocation=0.20)
-
-    # In the trading loop:
-    try:
-        run_trading_cycle(broker)
-        bfm.record_success("coinbase")
-    except Exception as e:
-        bfm.record_error("coinbase", reason=str(e))
-
-    # Before placing a trade, check liveness:
-    if bfm.is_dead("coinbase"):
-        delay = bfm.get_retry_delay("coinbase")
-        time.sleep(delay)   # wait, then attempt reconnect
-
-    # Get redistributed weights when allocating capital:
-    weights = bfm.get_active_allocation_weights()
-    # {"kraken": 0.60, "binance": 0.40}  ← coinbase excluded (dead)
-
-    # After a successful reconnect:
-    bfm.revive_broker("coinbase")
-    mgr = get_broker_failure_manager()
-
-    # Call on each cycle error:
-    mgr.record_error("kraken", "API timeout")
-    delay = mgr.get_retry_delay("kraken")      # 15, 30, or 60 seconds
-    is_dead = mgr.is_dead("kraken")
-
-    # Call on each cycle success:
-    mgr.record_success("kraken")
-
-    # Allocation weights for live capital sizing:
-    weights = mgr.get_active_allocation_weights()
-
-    # For the status banner:
-    mgr.log_active_dead_banner()
-
-Author: NIJA Trading Systems
-Version: 1.0
-Date: March 2026
-"""
-
 from __future__ import annotations
 
 import logging
@@ -81,474 +12,258 @@ import os
 import threading
 import time
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 logger = logging.getLogger("nija.supervisor")
 
-# ---------------------------------------------------------------------------
-# Configuration constants
-# ---------------------------------------------------------------------------
-
-#: Default consecutive-failure threshold before a broker is marked dead.
-#: Override with the ``NIJA_BROKER_FAILURE_THRESHOLD`` environment variable.
 FAILURE_THRESHOLD: int = int(os.environ.get("NIJA_BROKER_FAILURE_THRESHOLD", "5"))
-
-#: Backoff schedule indexed by *retry attempt number* (0-based).
-#: Attempts beyond the last entry reuse the final value.
 _BACKOFF_SCHEDULE: List[float] = [15.0, 30.0, 60.0]
 
 
-# ---------------------------------------------------------------------------
-# Internal state per broker
-# ---------------------------------------------------------------------------
-
 @dataclass
 class _BrokerState:
-    """Mutable runtime state tracked for a single broker."""
     name: str
     initial_allocation: float = 1.0
-
-    # Error tracking
     consecutive_errors: int = 0
     total_errors: int = 0
     total_successes: int = 0
-
-    # Dead / retry state
     is_dead: bool = False
-    dead_since: Optional[float] = None       # monotonic timestamp
-    retry_attempts: int = 0                  # how many times we've tried to revive
-    last_retry_time: Optional[float] = None  # monotonic timestamp of last retry
-
-    # Descriptive reason for the most recent error
+    dead_since: Optional[float] = None
+    retry_attempts: int = 0
+    last_retry_time: Optional[float] = None
     last_error_reason: str = ""
 
 
-# ---------------------------------------------------------------------------
-# Manager class
-# ---------------------------------------------------------------------------
+def _halt_broker_cell(broker_name: str, reason: str) -> None:
+    """Best-effort synchronization to the canonical broker-cell boundary."""
+    try:
+        from bot.broker_isolation_registry import get_broker_isolation_registry
+        get_broker_isolation_registry().halt_cell(
+            broker_name,
+            f"broker_failure_manager:{reason or 'failure_threshold'}",
+        )
+    except Exception as exc:
+        logger.warning(
+            "BROKER_FAILURE_CELL_HALT_SYNC_FAILED broker=%s error=%s:%s",
+            broker_name,
+            type(exc).__name__,
+            exc,
+        )
+
+
+def _resume_broker_cell(broker_name: str) -> None:
+    """Best-effort synchronization after a proven broker recovery."""
+    try:
+        from bot.broker_isolation_registry import get_broker_isolation_registry
+        get_broker_isolation_registry().resume_cell(broker_name)
+    except Exception as exc:
+        logger.warning(
+            "BROKER_FAILURE_CELL_RESUME_SYNC_FAILED broker=%s error=%s:%s",
+            broker_name,
+            type(exc).__name__,
+            exc,
+        )
+
 
 class BrokerFailureManager:
-    """
-    Singleton that tracks health state for every registered broker and
-    provides instant capital rebalancing when a broker fails.
-
-    Thread-safe: all public methods acquire a shared ``threading.Lock``.
-    """
+    """Thread-safe, venue-local broker health/circuit manager."""
 
     def __init__(self, failure_threshold: int = FAILURE_THRESHOLD) -> None:
-        self._failure_threshold = failure_threshold
+        self._failure_threshold = max(1, int(failure_threshold))
         self._states: Dict[str, _BrokerState] = {}
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
 
-    # ------------------------------------------------------------------
-    # Registration
-    # ------------------------------------------------------------------
-
-    def register_broker(
-        self,
-        broker_name: str,
-        initial_allocation: float = 1.0,
-    ) -> None:
-        """
-        Register a broker so the manager can track its health.
-
-        Can be called multiple times with the same *broker_name*; subsequent
-        calls are silently ignored (the existing state is preserved).
-
-        Args:
-            broker_name: Unique broker identifier (e.g. ``"coinbase"``).
-            initial_allocation: Starting allocation weight.  The manager
-                normalises weights across active brokers so the absolute
-                value only matters relative to other brokers.
-        """
+    def register_broker(self, broker_name: str, initial_allocation: float = 1.0) -> None:
+        name = str(broker_name).lower()
         with self._lock:
-            if broker_name not in self._states:
-                self._states[broker_name] = _BrokerState(
-                    name=broker_name,
-                    initial_allocation=max(0.0, initial_allocation),
+            if name not in self._states:
+                self._states[name] = _BrokerState(
+                    name=name,
+                    initial_allocation=max(0.0, float(initial_allocation)),
                 )
                 logger.info(
-                    f"📋 BrokerFailureManager: registered '{broker_name}' "
-                    f"(allocation={initial_allocation:.2f}, "
-                    f"threshold={self._failure_threshold})"
+                    "BrokerFailureManager registered broker=%s local_capital_share=%.4f threshold=%d",
+                    name,
+                    initial_allocation,
+                    self._failure_threshold,
                 )
 
-    # ------------------------------------------------------------------
-    # Error / success recording
-    # ------------------------------------------------------------------
-
     def record_error(self, broker_name: str, reason: str = "") -> bool:
-        """
-        Record a single error for *broker_name*.
-
-        Increments the consecutive-error counter.  If the counter reaches
-        the failure threshold the broker is **automatically marked dead** and
-        its capital allocation is immediately excluded from future
-        :meth:`get_active_allocation_weights` calls.
-
-        Args:
-            broker_name: Broker identifier.
-            reason: Human-readable description of the error (logged).
-
-        Returns:
-            ``True`` if this error caused the broker to be marked dead.
-        """
+        name = str(broker_name).lower()
+        newly_dead = False
+        last_reason = str(reason or "")[:200]
         with self._lock:
-            state = self._get_or_create(broker_name)
+            state = self._get_or_create(name)
             state.consecutive_errors += 1
             state.total_errors += 1
-            if reason:
-                state.last_error_reason = reason[:200]
-
-            newly_dead = False
+            if last_reason:
+                state.last_error_reason = last_reason
             if not state.is_dead and state.consecutive_errors >= self._failure_threshold:
                 state.is_dead = True
                 state.dead_since = time.monotonic()
                 state.retry_attempts = 0
                 newly_dead = True
                 logger.error(
-                    f"🔴 BrokerFailureManager: '{broker_name}' is now DEAD "
-                    f"after {state.consecutive_errors} consecutive errors. "
-                    f"Reason: {state.last_error_reason or 'unspecified'}. "
-                    f"Capital instantly redistributed to active brokers."
+                    "BROKER_LOCAL_CIRCUIT_OPEN broker=%s errors=%d reason=%s capital_redistributed=false",
+                    name,
+                    state.consecutive_errors,
+                    state.last_error_reason or "unspecified",
                 )
-                self._log_redistribution_locked()
             else:
                 logger.warning(
-                    f"⚠️  BrokerFailureManager: '{broker_name}' error "
-                    f"#{state.consecutive_errors}/{self._failure_threshold}. "
-                    f"Reason: {reason or 'unspecified'}"
+                    "BROKER_LOCAL_FAILURE broker=%s error_count=%d/%d reason=%s",
+                    name,
+                    state.consecutive_errors,
+                    self._failure_threshold,
+                    last_reason or "unspecified",
                 )
-
-            return newly_dead
+        if newly_dead:
+            _halt_broker_cell(name, last_reason)
+        return newly_dead
 
     def record_success(self, broker_name: str) -> bool:
-        """
-        Record a successful operation for *broker_name*.
-
-        Resets the consecutive-error counter.  If the broker was previously
-        dead it is **automatically revived**.
-
-        Args:
-            broker_name: Broker identifier.
-
-        Returns:
-            ``True`` if the broker was revived from a dead state.
-        """
+        name = str(broker_name).lower()
+        revived = False
         with self._lock:
-            state = self._get_or_create(broker_name)
+            state = self._get_or_create(name)
             state.total_successes += 1
-            previously_dead = state.is_dead
-
+            revived = state.is_dead
             state.consecutive_errors = 0
             state.last_error_reason = ""
-
-            if previously_dead:
+            if revived:
                 state.is_dead = False
                 state.dead_since = None
                 state.retry_attempts = 0
                 logger.info(
-                    f"✅ BrokerFailureManager: '{broker_name}' REVIVED "
-                    f"(success recorded — capital weights recalculated)"
+                    "BROKER_LOCAL_CIRCUIT_RECOVERED broker=%s capital_redistributed=false",
+                    name,
                 )
-                self._log_redistribution_locked()
-            else:
-                logger.debug(
-                    f"✅ BrokerFailureManager: '{broker_name}' success "
-                    f"(consecutive_errors reset to 0)"
-                )
-
-            return previously_dead
-
-    # ------------------------------------------------------------------
-    # State queries
-    # ------------------------------------------------------------------
+        if revived:
+            _resume_broker_cell(name)
+        return revived
 
     def is_dead(self, broker_name: str) -> bool:
-        """Return ``True`` if *broker_name* has been marked dead."""
         with self._lock:
-            state = self._states.get(broker_name)
-            return state.is_dead if state else False
+            state = self._states.get(str(broker_name).lower())
+            return bool(state.is_dead) if state else False
 
     def get_retry_delay(self, broker_name: str) -> float:
-        """
-        Return the number of seconds to wait before the next reconnect
-        attempt for *broker_name*.
-
-        Uses the backoff schedule ``[15, 30, 60]`` seconds, staying at the
-        maximum value once all steps are exhausted.  Each call increments
-        the internal retry-attempt counter.
-
-        Args:
-            broker_name: Broker identifier.
-
-        Returns:
-            Delay in seconds (float).
-        """
+        name = str(broker_name).lower()
         with self._lock:
-            state = self._get_or_create(broker_name)
+            state = self._get_or_create(name)
             idx = min(state.retry_attempts, len(_BACKOFF_SCHEDULE) - 1)
             delay = _BACKOFF_SCHEDULE[idx]
             state.retry_attempts += 1
             state.last_retry_time = time.monotonic()
-            logger.info(
-                f"⏱️  BrokerFailureManager: '{broker_name}' retry delay = "
-                f"{delay:.0f}s (attempt #{state.retry_attempts})"
-            )
             return delay
 
-    # ------------------------------------------------------------------
-    # Revive
-    # ------------------------------------------------------------------
-
     def revive_broker(self, broker_name: str) -> None:
-        """
-        Manually revive *broker_name* after a successful reconnect.
-
-        Clears the dead flag, resets all counters, and immediately
-        reintegrates the broker's allocation into the active pool.
-
-        Args:
-            broker_name: Broker identifier.
-        """
+        name = str(broker_name).lower()
+        was_dead = False
         with self._lock:
-            state = self._get_or_create(broker_name)
+            state = self._get_or_create(name)
             was_dead = state.is_dead
-
             state.is_dead = False
             state.consecutive_errors = 0
             state.dead_since = None
             state.retry_attempts = 0
             state.last_error_reason = ""
+        if was_dead:
+            logger.info("BROKER_LOCAL_MANUAL_REVIVE broker=%s", name)
+            _resume_broker_cell(name)
 
-            if was_dead:
-                logger.info(
-                    f"♻️  BrokerFailureManager: '{broker_name}' manually REVIVED — "
-                    f"capital weights recalculated"
-                )
-                self._log_redistribution_locked()
-            else:
-                logger.debug(
-                    f"♻️  BrokerFailureManager: '{broker_name}' revive called "
-                    f"(was already active)"
-                )
-
-    # ------------------------------------------------------------------
-    # Capital allocation
-    # ------------------------------------------------------------------
+    def _baseline_allocation_weights_locked(self) -> Dict[str, float]:
+        """Preserve original shares; dead-broker shares become idle, never reassigned."""
+        baseline_total = sum(max(0.0, s.initial_allocation) for s in self._states.values())
+        if baseline_total <= 0.0:
+            return {name: 0.0 for name in self._states}
+        return {
+            name: (0.0 if state.is_dead else max(0.0, state.initial_allocation) / baseline_total)
+            for name, state in self._states.items()
+        }
 
     def get_active_allocation_weights(self) -> Dict[str, float]:
-        """
-        Return a dict of ``{broker_name: weight}`` for all **active** (non-dead)
-        brokers, normalised so the values sum to 1.0.
+        """Return non-dead brokers' preserved baseline shares.
 
-        Dead brokers are excluded immediately when they are marked dead, so
-        this method always reflects the current rebalanced state.
-
-        Returns:
-            Dict mapping broker names to fractional allocation weights.
-            Empty dict if no active brokers are registered.
+        Values intentionally may sum to less than 1.0. The missing fraction is
+        capital belonging to failed venues and remains idle rather than moving
+        to another broker.
         """
         with self._lock:
-            active = {
-                name: s.initial_allocation
-                for name, s in self._states.items()
-                if not s.is_dead
-            }
-            if not active:
-                return {}
+            weights = self._baseline_allocation_weights_locked()
+            return {name: weight for name, weight in weights.items() if weight > 0.0}
 
-            total = sum(active.values())
-            if total <= 0.0:
-                equal = 1.0 / len(active)
-                return {name: equal for name in active}
-
-            return {name: alloc / total for name, alloc in active.items()}
-
-    # ------------------------------------------------------------------
-    # Multi-broker list helpers
-    # ------------------------------------------------------------------
-
-    def get_active_dead_lists(self):
-        """
-        Stub for multi-broker logging.
-        Returns empty lists if no broker tracking is implemented.
-        """
-        active, dead = [], []
-        logger.debug(
-            f"[BrokerFailureManager] Returning stub active/dead lists: {active}/{dead}"
-        )
-        return active, dead
+    def get_active_dead_lists(self) -> Tuple[List[str], List[str]]:
+        with self._lock:
+            active = sorted(name for name, state in self._states.items() if not state.is_dead)
+            dead = sorted(name for name, state in self._states.items() if state.is_dead)
+            return active, dead
 
     def get_consecutive_errors(self, broker_name: str) -> int:
-        """
-        Returns the number of consecutive errors recorded for a broker.
-
-        Args:
-            broker_name (str): The broker identifier.
-
-        Returns:
-            int: Number of consecutive errors (0 if none or unknown broker).
-        """
         with self._lock:
-            state = self._states.get(broker_name)
-            count = state.consecutive_errors if state else 0
-        return count
-
-    # ------------------------------------------------------------------
-    # Status / logging
-    # ------------------------------------------------------------------
+            state = self._states.get(str(broker_name).lower())
+            return state.consecutive_errors if state else 0
 
     def log_active_dead_banner(self) -> None:
-        """
-        Log a formatted status banner listing active and dead brokers with
-        their current allocation weights.
-        """
         with self._lock:
-            active_weights = {
-                name: s.initial_allocation
-                for name, s in self._states.items()
-                if not s.is_dead
-            }
-            dead_states = {
-                name: s
-                for name, s in self._states.items()
-                if s.is_dead
-            }
-            total_weight = sum(active_weights.values()) or 1.0
-            normalised = {n: w / total_weight for n, w in active_weights.items()}
+            weights = self._baseline_allocation_weights_locked()
+            active = [(name, weights.get(name, 0.0)) for name, state in self._states.items() if not state.is_dead]
+            dead = [(name, state) for name, state in self._states.items() if state.is_dead]
 
-        line = "─" * 60
+        line = "-" * 60
         logger.info(line)
-        logger.info("📊 BROKER FAILURE MANAGER — STATUS BANNER")
-        logger.info(line)
-
-        if normalised:
-            logger.info(f"  ✅ ACTIVE BROKERS ({len(normalised)}):")
-            for name, weight in sorted(normalised.items(), key=lambda x: -x[1]):
-                logger.info(f"      • {name:<15}  capital share = {weight * 100:.1f}%")
-        else:
-            logger.warning("  ⚠️  NO ACTIVE BROKERS — all capital is idle")
-
-        if dead_states:
-            logger.info(f"  🔴 DEAD BROKERS ({len(dead_states)}):")
-            for name, s in sorted(dead_states.items()):
-                dead_for = ""
-                if s.dead_since is not None:
-                    elapsed = time.monotonic() - s.dead_since
-                    dead_for = f", dead {elapsed:.0f}s ago"
-                logger.info(
-                    f"      • {name:<15}  errors={s.consecutive_errors}"
-                    f"{dead_for}"
-                    f"  last_reason={s.last_error_reason[:60] or 'n/a'}"
-                )
+        logger.info("BROKER FAILURE MANAGER - VENUE-LOCAL STATUS")
+        logger.info("Capital redistribution across brokers: DISABLED")
+        for name, weight in sorted(active):
+            logger.info("ACTIVE broker=%s preserved_capital_share=%.1f%%", name, weight * 100.0)
+        for name, state in sorted(dead):
+            logger.info(
+                "DEAD broker=%s errors=%d preserved_capital_share=IDLE reason=%s",
+                name,
+                state.consecutive_errors,
+                state.last_error_reason or "n/a",
+            )
         logger.info(line)
 
     def get_status(self) -> Dict:
-        """
-        Return a serialisable snapshot of all broker states for dashboards
-        or health endpoints.
-        """
         with self._lock:
-            active = {
-                name: s.initial_allocation
-                for name, s in self._states.items()
-                if not s.is_dead
-            }
-            total = sum(active.values()) or 1.0
-            weights = {name: alloc / total for name, alloc in active.items()}
+            weights = self._baseline_allocation_weights_locked()
             return {
                 name: {
-                    "is_dead": s.is_dead,
-                    "consecutive_errors": s.consecutive_errors,
-                    "total_errors": s.total_errors,
-                    "total_successes": s.total_successes,
-                    "last_error_reason": s.last_error_reason,
-                    "retry_attempts": s.retry_attempts,
+                    "is_dead": state.is_dead,
+                    "consecutive_errors": state.consecutive_errors,
+                    "total_errors": state.total_errors,
+                    "total_successes": state.total_successes,
+                    "last_error_reason": state.last_error_reason,
+                    "retry_attempts": state.retry_attempts,
                     "allocation_weight": weights.get(name, 0.0),
+                    "capital_redistributed": False,
                 }
-                for name, s in self._states.items()
+                for name, state in self._states.items()
             }
 
-    # ------------------------------------------------------------------
-    # Private helpers
-    # ------------------------------------------------------------------
-
     def _get_or_create(self, broker_name: str) -> _BrokerState:
-        """Return existing state or create a default one (must hold lock)."""
-        if broker_name not in self._states:
-            self._states[broker_name] = _BrokerState(name=broker_name)
-            logger.debug(
-                f"BrokerFailureManager: auto-registered '{broker_name}' "
-                f"(was not pre-registered)"
-            )
-        return self._states[broker_name]
+        name = str(broker_name).lower()
+        if name not in self._states:
+            self._states[name] = _BrokerState(name=name)
+        return self._states[name]
 
-    def _log_redistribution_locked(self) -> None:
-        """
-        Log the new active-broker weight distribution (must hold lock).
-        """
-        active = {
-            name: s.initial_allocation
-            for name, s in self._states.items()
-            if not s.is_dead
-        }
-        if not active:
-            logger.warning(
-                "💸 BrokerFailureManager: NO active brokers — "
-                "all capital allocation is suspended"
-            )
-            return
-
-        total = sum(active.values()) or 1.0
-        parts = ", ".join(
-            f"{n}={v / total * 100:.1f}%"
-            for n, v in sorted(active.items(), key=lambda x: -x[1])
-        )
-        logger.info(f"💸 BrokerFailureManager: active capital weights → {parts}")
-
-
-# ---------------------------------------------------------------------------
-# Singleton factory
-# ---------------------------------------------------------------------------
 
 _instance: Optional[BrokerFailureManager] = None
 _instance_lock = threading.Lock()
 
 
-def get_broker_failure_manager(
-    failure_threshold: Optional[int] = None,
-) -> BrokerFailureManager:
-    """
-    Return (or create) the process-wide :class:`BrokerFailureManager` singleton.
-
-    Args:
-        failure_threshold: Override the failure threshold only on the **first**
-            call that creates the instance.  Subsequent calls ignore this
-            parameter so the threshold remains stable at runtime.
-
-    Returns:
-        :class:`BrokerFailureManager` instance.
-    """
+def get_broker_failure_manager(failure_threshold: Optional[int] = None) -> BrokerFailureManager:
     global _instance
     with _instance_lock:
         if _instance is None:
             threshold = failure_threshold if failure_threshold is not None else FAILURE_THRESHOLD
             _instance = BrokerFailureManager(failure_threshold=threshold)
-            logger.info(
-                f"🛡️  BrokerFailureManager singleton created "
-                f"(failure_threshold={threshold})"
-            )
+            logger.info("BrokerFailureManager singleton created threshold=%d", threshold)
         return _instance
 
 
 def reset_broker_failure_manager() -> None:
-    """
-    Destroy the singleton (primarily for testing).
-
-    After calling this function the next :func:`get_broker_failure_manager`
-    call will create a fresh instance.
-    """
     global _instance
     with _instance_lock:
         _instance = None
