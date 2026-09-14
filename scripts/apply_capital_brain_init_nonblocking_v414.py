@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Apply NIJA startup liveness repairs v414/v415/v417/v418.
+"""Apply NIJA startup liveness repairs v414/v415/v417/v418/v419.
 
 v414 reuses an already-hydrated CapitalAuthority snapshot during
 CapitalAllocationBrain construction so strategy startup cannot be blocked by a
@@ -25,6 +25,13 @@ creates refresh headroom for two serialized user accounts rather than waiting
 until snapshots are already near expiry. It uses the same authenticated v282
 maintenance path and does not grant readiness on its own.
 
+v419 closes the post-deploy empty-user-registry handoff. Once the canonical
+MultiAccountBrokerManager exists, bot_main invokes v267's existing
+registration-only rehydration immediately before installing v86 Kraken user
+supervision. This creates only configured broker records; authenticated connect
+is still delegated to v86/v90 and all eligibility/readiness gates remain
+fail-closed until genuine exchange proof arrives.
+
 None of these repairs grants readiness synthetically, extends freshness TTLs,
 forces activation, starts a trade, or relaxes writer/nonce/risk/kill-switch/
 position/protection/order/fill gates.
@@ -39,10 +46,12 @@ TARGET = ROOT / "bot" / "capital_allocation_brain.py"
 V88 = ROOT / "bot" / "production_runtime_convergence_v88_patch.py"
 V281 = ROOT / "bot" / "runtime_all_account_position_exit_coverage_v281_patch.py"
 V282 = ROOT / "bot" / "runtime_kraken_user_position_eligibility_v282_patch.py"
+BOT_MAIN = ROOT / "bot" / "bot_main.py"
 MARKER = "20260914-capital-brain-init-nonblocking-v414"
 V415_MARKER = "20260914-kraken-platform-balance-capital-feed-v415"
 V417_MARKER = "20260914-v281-canonical-user-object-selection-v417"
 V418_MARKER = "20260914-kraken-user-position-refresh-cadence-v418"
+V419_MARKER = "20260914-user-registry-startup-rehydrate-v419"
 
 OLD = '''            else:\n                self.refresh_authority()\n        \n        logger.info(\n'''
 
@@ -63,6 +72,10 @@ V281_NEW_ALL_USERS = '''            key = _user_key(raw_key[0], raw_key[1])\n   
 V282_OLD_CADENCE = '''def _maintenance_reaudit_s() -> float:\n    try:\n        value = float(os.environ.get("NIJA_KRAKEN_USER_ELIGIBILITY_REAUDIT_S", "60") or 60.0)\n    except (TypeError, ValueError):\n        value = 60.0\n    return max(30.0, min(600.0, value))\n'''
 
 V282_NEW_CADENCE = '''def _maintenance_reaudit_s() -> float:\n    try:\n        value = float(os.environ.get("NIJA_KRAKEN_USER_ELIGIBILITY_REAUDIT_S", "30") or 30.0)\n    except (TypeError, ValueError):\n        value = 30.0\n    # v418: keep the existing authenticated maintenance audit comfortably\n    # inside the unchanged 90s v285 snapshot TTL for two serialized users.\n    return max(20.0, min(600.0, value))\n'''
+
+BOT_MAIN_V419_ANCHOR = '''            from bot.kraken_all_account_supervision_v86 import (\n                install as install_kraken_all_account_supervision,\n                reconcile_once as reconcile_kraken_users_once,\n            )\n\n            if not install_kraken_all_account_supervision():\n'''
+
+BOT_MAIN_V419_REPLACEMENT = '''            # v419: the canonical manager can be created after an earlier\n            # prepared manager, leaving registration-only user maps empty.\n            # Rehydrate configured users before v86 supervision starts. This\n            # performs no authenticated broker connect and grants no eligibility.\n            from bot.runtime_capital_position_liveness_v267_patch import (\n                _rehydrate_user_registry as _rehydrate_user_registry_v419,\n            )\n            _rehydrate_user_registry_v419()\n            logger.critical(\n                "USER_REGISTRY_STARTUP_REHYDRATE_V419 "\n                "marker=20260914-user-registry-startup-rehydrate-v419 "\n                "registration_only=true authenticated_connect_deferred_to_v86_v90=true "\n                "connectivity_fabricated=false eligibility_fabricated=false "\n                "safety_gates_bypassed=false"\n            )\n\n            from bot.kraken_all_account_supervision_v86 import (\n                install as install_kraken_all_account_supervision,\n                reconcile_once as reconcile_kraken_users_once,\n            )\n\n            if not install_kraken_all_account_supervision():\n'''
 
 
 def _patch_v414() -> bool:
@@ -177,11 +190,35 @@ def _patch_v418() -> bool:
     return True
 
 
+def _patch_v419() -> bool:
+    text = BOT_MAIN.read_text(encoding="utf-8")
+    if V419_MARKER in text:
+        print(
+            f"USER_REGISTRY_STARTUP_REHYDRATE_V419_ALREADY_APPLIED marker={V419_MARKER} "
+            "registration_only=true broker_connect_called=false "
+            "eligibility_fabricated=false safety_gates_bypassed=false"
+        )
+        return False
+    if text.count(BOT_MAIN_V419_ANCHOR) != 1:
+        raise SystemExit("v419 expected exactly one bot_main v86 startup anchor")
+    text = text.replace(BOT_MAIN_V419_ANCHOR, BOT_MAIN_V419_REPLACEMENT, 1)
+    BOT_MAIN.write_text(text, encoding="utf-8")
+    py_compile.compile(str(BOT_MAIN), doraise=True)
+    print(
+        f"USER_REGISTRY_STARTUP_REHYDRATE_V419_PATCH_APPLIED marker={V419_MARKER} "
+        "before_v86_install=true registration_only=true broker_connect_called=false "
+        "authenticated_connect_deferred_to_v86_v90=true eligibility_fabricated=false "
+        "forced_trade=false safety_gates_bypassed=false"
+    )
+    return True
+
+
 def main() -> int:
     _patch_v414()
     _patch_v415_chain()
     _patch_v417()
     _patch_v418()
+    _patch_v419()
     return 0
 
 
