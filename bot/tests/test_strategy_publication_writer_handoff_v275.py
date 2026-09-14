@@ -1,4 +1,5 @@
-from types import SimpleNamespace
+import sys
+from types import ModuleType, SimpleNamespace
 
 import bot.runtime_heartbeat_marker_convergence_v238_patch as v238
 
@@ -31,6 +32,7 @@ def test_install_time_rearm_does_not_arm_publication(monkeypatch):
 
 
 def test_writer_rearm_arms_existing_publication_monitor(monkeypatch):
+    monkeypatch.delenv("NIJA_PRECORE_STRATEGY_PUBLICATION_OWNER_V190_READY", raising=False)
     calls = {"start": 0}
 
     def start_monitor():
@@ -51,6 +53,66 @@ def test_writer_rearm_arms_existing_publication_monitor(monkeypatch):
         raise AssertionError(name)
 
     monkeypatch.setattr(v238.importlib, "import_module", fake_import)
+
+    ready, detail = v238._rearm_genuine_heartbeat(allow_publication_arm=True)
+
+    assert ready is False
+    assert detail == "strategy_not_published:publication_monitor_armed"
+    assert calls["start"] == 1
+
+
+def test_writer_rearm_defers_to_canonical_step_2_5_before_startup(monkeypatch):
+    calls = {"start": 0}
+    publication = SimpleNamespace(
+        start_monitor=lambda: calls.__setitem__("start", calls["start"] + 1) or True
+    )
+    v203 = SimpleNamespace(
+        _already_published_strategy=lambda _publication: None,
+        _ensure_heartbeat_scheduler=lambda _strategy: True,
+    )
+    bot_main = ModuleType("bot.bot_main")
+    bot_main._startup_complete = False
+
+    def fake_import(name):
+        if name == "bot.runtime_existing_strategy_heartbeat_rearm_v203_patch":
+            return v203
+        if name == "bot.strategy_publication_patch":
+            return publication
+        raise AssertionError(name)
+
+    monkeypatch.setattr(v238.importlib, "import_module", fake_import)
+    monkeypatch.setitem(sys.modules, "bot.bot_main", bot_main)
+    monkeypatch.setenv("NIJA_PRECORE_STRATEGY_PUBLICATION_OWNER_V190_READY", "1")
+
+    ready, detail = v238._rearm_genuine_heartbeat(allow_publication_arm=True)
+
+    assert ready is False
+    assert detail == "strategy_not_published:deferred_to_bot_main_step2_5"
+    assert calls["start"] == 0
+
+
+def test_writer_rearm_can_arm_after_canonical_startup(monkeypatch):
+    calls = {"start": 0}
+    publication = SimpleNamespace(
+        start_monitor=lambda: calls.__setitem__("start", calls["start"] + 1) or True
+    )
+    v203 = SimpleNamespace(
+        _already_published_strategy=lambda _publication: None,
+        _ensure_heartbeat_scheduler=lambda _strategy: True,
+    )
+    bot_main = ModuleType("bot.bot_main")
+    bot_main._startup_complete = True
+
+    def fake_import(name):
+        if name == "bot.runtime_existing_strategy_heartbeat_rearm_v203_patch":
+            return v203
+        if name == "bot.strategy_publication_patch":
+            return publication
+        raise AssertionError(name)
+
+    monkeypatch.setattr(v238.importlib, "import_module", fake_import)
+    monkeypatch.setitem(sys.modules, "bot.bot_main", bot_main)
+    monkeypatch.setenv("NIJA_PRECORE_STRATEGY_PUBLICATION_OWNER_V190_READY", "1")
 
     ready, detail = v238._rearm_genuine_heartbeat(allow_publication_arm=True)
 

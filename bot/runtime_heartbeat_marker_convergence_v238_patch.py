@@ -28,6 +28,7 @@ from __future__ import annotations
 import importlib
 import logging
 import os
+import sys
 import threading
 from functools import wraps
 from typing import Any
@@ -43,6 +44,19 @@ _POSTWORK_LOCK_ATTR = "_nija_writer_renewal_postwork_lock_v301"
 _POSTWORK_GENERATION_ATTR = "_nija_writer_renewal_postwork_generation_v301"
 _POSTWORK_TOKEN_ATTR = "_nija_writer_renewal_postwork_token_v301"
 _POSTWORK_INIT_LOCK = threading.RLock()
+
+
+def _canonical_step_2_5_owns_precore_publication() -> bool:
+    """Return whether bot_main is still the sole pre-core strategy publisher.
+
+    v190 installs this ownership contract on the canonical fast path.  Writer
+    renewal happens before bot_main reaches Step 2.5, so v275 must honor the
+    same contract instead of arming a competing background constructor.
+    """
+    if os.environ.get("NIJA_PRECORE_STRATEGY_PUBLICATION_OWNER_V190_READY") != "1":
+        return False
+    bot_main = sys.modules.get("bot.bot_main") or sys.modules.get("bot_main")
+    return not bool(bot_main is not None and getattr(bot_main, "_startup_complete", False))
 
 
 def _arm_strategy_publication_monitor(publication: Any) -> tuple[bool, str]:
@@ -78,6 +92,15 @@ def _rearm_genuine_heartbeat(*, allow_publication_arm: bool = False) -> tuple[bo
         if strategy is None:
             if not allow_publication_arm:
                 return False, "strategy_not_published"
+            if _canonical_step_2_5_owns_precore_publication():
+                LOGGER.info(
+                    "STRATEGY_PUBLICATION_WRITER_HANDOFF_V275_DEFERRED marker=%s "
+                    "owner=bot_main_step2_5 background_monitor_started=false "
+                    "strategy_published=false readiness_fabricated=false "
+                    "execution_authority_granted=false safety_gates_bypassed=false",
+                    V275_MARKER,
+                )
+                return False, "strategy_not_published:deferred_to_bot_main_step2_5"
             _armed, detail = _arm_strategy_publication_monitor(publication)
             return False, f"strategy_not_published:{detail}"
         ready = bool(ensure(strategy))
