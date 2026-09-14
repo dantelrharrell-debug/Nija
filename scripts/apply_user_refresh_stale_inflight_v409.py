@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""Patch v390 user-position refresh with bounded stale-flight recovery (v409).
+"""Patch user refresh liveness v409 and v88 supervision convergence v412.
 
-A v390 account refresh may block inside an authenticated Kraken read. Because
-v390 records only a set membership, that account can remain inflight forever and
-its authoritative snapshot can age indefinitely. v409 adds a started-at clock,
-one hard-saturation escape per authoritative snapshot generation, and a flight
-token so a late retired worker cannot clear ownership of a newer worker.
+v409 bounds a stuck per-user refresh and fences retired workers. v412 repairs a
+separate production liveness defect: the v88 convergence monitor used to exit as
+soon as the trading-state patch loaded, even when the Kraken supervision chain
+(v86..v374..v303) was still incomplete. That could leave rebuilt user brokers
+without canonical identity convergence and strand user readiness after a restart.
 
-This is liveness only. Snapshot TTL, authenticated-read/rate/nonce ordering,
-position/cost-basis/protection truth, writer authority, capital/risk/kill-switch,
-order/fill gates and user-entry fail-closed behavior are unchanged.
+Both changes are liveness-only. Snapshot TTL, authenticated read/rate/nonce
+ordering, writer authority, capital/risk/kill-switch, protective exits,
+execution/order/fill gates, and user-entry fail-closed behavior are unchanged.
 """
 from __future__ import annotations
 
@@ -17,14 +17,16 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 TARGET = ROOT / "bot" / "runtime_authoritative_position_coverage_v285_patch.py"
+V88 = ROOT / "bot" / "production_runtime_convergence_v88_patch.py"
 MARKER = "20260909-user-refresh-stale-inflight-v409"
+V412_MARKER = "20260914-v88-kraken-supervision-monitor-v412"
 
 
-def main() -> None:
+def _patch_v409() -> bool:
     text = TARGET.read_text(encoding="utf-8")
     if "AUTHORITATIVE_USER_POSITION_V409_STALE_FLIGHT_RETIRED" in text:
         print(f"USER_REFRESH_STALE_INFLIGHT_V409_ALREADY_APPLIED marker={MARKER}")
-        return
+        return False
 
     anchor = '_USER_COST_BASIS_WAKE_EPOCH_V390: dict[str, int] = {}\n'
     if anchor not in text:
@@ -104,6 +106,51 @@ def main() -> None:
         "per_account_started_at=true token_fence=true one_escape_per_snapshot_generation=true "
         "snapshot_ttl_unchanged=true readiness_fabricated=false safety_gates_bypassed=false"
     )
+    return True
+
+
+def _patch_v412() -> bool:
+    text = V88.read_text(encoding="utf-8")
+    if V412_MARKER in text:
+        print(f"V88_KRAKEN_SUPERVISION_MONITOR_V412_ALREADY_APPLIED marker={V412_MARKER}")
+        return False
+
+    old_monitor = '''def _monitor() -> None:\n    deadline = time.monotonic() + 600.0\n    while time.monotonic() < deadline:\n        _install_kraken_user_supervision()\n        if _try_patch_loaded():\n            return\n        time.sleep(0.25)\n    LOGGER.warning("PRODUCTION_RUNTIME_CONVERGENCE_V88_MONITOR_EXPIRED marker=%s", MARKER)\n'''
+    new_monitor = '''def _monitor() -> None:\n    deadline = time.monotonic() + 600.0\n    last_state = None\n    kraken_ready = False\n    tsm_ready = False\n    while time.monotonic() < deadline:\n        kraken_ready = bool(_install_kraken_user_supervision())\n        tsm_ready = bool(_try_patch_loaded())\n        state = (kraken_ready, tsm_ready)\n        if state != last_state:\n            LOGGER.info(\n                "PRODUCTION_RUNTIME_CONVERGENCE_V412_WAIT marker=20260914-v88-kraken-supervision-monitor-v412 "\n                "kraken_supervision_ready=%s trading_state_patch_ready=%s monitor_requires_both=true "\n                "safety_gates_bypassed=false",\n                str(kraken_ready).lower(), str(tsm_ready).lower(),\n            )\n            last_state = state\n        if kraken_ready and tsm_ready:\n            LOGGER.critical(\n                "PRODUCTION_RUNTIME_CONVERGENCE_V412_READY marker=20260914-v88-kraken-supervision-monitor-v412 "\n                "kraken_supervision_ready=true trading_state_patch_ready=true monitor_requires_both=true "\n                "safety_gates_bypassed=false"\n            )\n            return\n        time.sleep(0.25)\n    LOGGER.warning(\n        "PRODUCTION_RUNTIME_CONVERGENCE_V88_MONITOR_EXPIRED marker=%s "\n        "kraken_supervision_ready=%s trading_state_patch_ready=%s monitor_requires_both=true "\n        "safety_gates_bypassed=false",\n        MARKER, str(kraken_ready).lower(), str(tsm_ready).lower(),\n    )\n'''
+    if old_monitor not in text:
+        raise RuntimeError("v412 expected v88 monitor anchor missing")
+    text = text.replace(old_monitor, new_monitor, 1)
+
+    old_install = '''    _install_stale_startup_log_filter()\n    _install_kraken_user_supervision()\n    _try_patch_loaded()\n'''
+    new_install = '''    _install_stale_startup_log_filter()\n    kraken_ready = bool(_install_kraken_user_supervision())\n    tsm_ready = bool(_try_patch_loaded())\n'''
+    if old_install not in text:
+        raise RuntimeError("v412 expected v88 install anchor missing")
+    text = text.replace(old_install, new_install, 1)
+
+    old_log = '''        "PRODUCTION_RUNTIME_CONVERGENCE_V88_INSTALLED marker=%s circuit_classification=true "\n        "kraken_user_supervision=true kraken_user_rebuild_v90=true all_account_connectivity_v266=true "\n'''
+    new_log = '''        "PRODUCTION_RUNTIME_CONVERGENCE_V88_INSTALLED marker=%s circuit_classification_ready=%s "\n        "kraken_user_supervision_ready=%s v412_monitor_requires_both=true "\n        "kraken_user_rebuild_v90=true all_account_connectivity_v266=true "\n'''
+    if old_log not in text:
+        raise RuntimeError("v412 expected v88 install log anchor missing")
+    text = text.replace(old_log, new_log, 1)
+
+    old_tail = '''        MARKER,\n    )\n    return True\n'''
+    new_tail = '''        MARKER, str(tsm_ready).lower(), str(kraken_ready).lower(),\n    )\n    return True\n'''
+    if old_tail not in text:
+        raise RuntimeError("v412 expected v88 log args anchor missing")
+    text = text.replace(old_tail, new_tail, 1)
+
+    V88.write_text(text, encoding="utf-8")
+    print(
+        f"V88_KRAKEN_SUPERVISION_MONITOR_V412_PATCH_APPLIED marker={V412_MARKER} "
+        "monitor_requires_kraken_and_tsm=true startup_truthful_telemetry=true "
+        "snapshot_ttl_unchanged=true readiness_fabricated=false safety_gates_bypassed=false"
+    )
+    return True
+
+
+def main() -> None:
+    _patch_v409()
+    _patch_v412()
 
 
 if __name__ == "__main__":
