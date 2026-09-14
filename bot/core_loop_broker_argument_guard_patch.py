@@ -3,15 +3,14 @@ from __future__ import annotations
 import builtins
 import importlib
 import logging
-import os
 import sys
 from functools import wraps
 from types import ModuleType
 from typing import Any, Optional
 
 logger = logging.getLogger("nija.core_loop_broker_argument_guard")
-_MARKER = "CORE_LOOP_BROKER_ARGUMENT_GUARD_PATCHED marker=20260705d"
-_PATCHED_ATTR = "_nija_core_loop_broker_argument_guard_20260705d"
+_MARKER = "CORE_LOOP_BROKER_ARGUMENT_GUARD_PATCHED marker=20260914-v422"
+_PATCHED_ATTR = "_nija_core_loop_broker_argument_guard_20260914_v422"
 
 _MARKET_METHODS = (
     "get_candles",
@@ -94,21 +93,46 @@ def _candidate_brokers_from_owner(owner: Any) -> list[Any]:
     return out
 
 
+def _local_selected_name(core_loop: Any) -> str:
+    """Resolve venue selection from this runtime only, never process env."""
+    apex = getattr(core_loop, "apex", None)
+    for owner in (apex, getattr(apex, "strategy", None), getattr(apex, "trading_strategy", None)):
+        if owner is None:
+            continue
+        for attr in ("_nija_selected_execution_broker", "_nija_execution_route_broker", "broker_cell"):
+            selected = _name(getattr(owner, attr, None))
+            if selected:
+                return selected
+    try:
+        from bot.broker_account_scope import current_broker_name
+        selected = _name(current_broker_name(""))
+        if selected:
+            return selected
+    except Exception:
+        pass
+    return ""
+
+
 def _resolve_broker(core_loop: Any, incoming: Any) -> Optional[Any]:
     if _is_broker_adapter(incoming):
         return incoming
+
     apex = getattr(core_loop, "apex", None)
-    selected = _name(
-        os.environ.get("NIJA_SELECTED_EXECUTION_BROKER")
-        or os.environ.get("NIJA_PRIMARY_EXECUTION_BROKER")
-    )
+    selected = _local_selected_name(core_loop)
     candidates: list[Any] = []
+
+    # Per-account APEX broker objects are authoritative and intentionally first.
     for owner in (apex, getattr(apex, "strategy", None), getattr(apex, "trading_strategy", None)):
         candidates.extend([b for b in _candidate_brokers_from_owner(owner) if b not in candidates])
+
     if selected:
         for broker in candidates:
             if _broker_name(broker) == selected:
                 return broker
+
+    # A broker-cell runtime should normally have one direct broker_client. If no
+    # local selector is available, preserve deterministic local-object ordering;
+    # never consult a process-global environment variable.
     return candidates[0] if candidates else None
 
 
@@ -127,15 +151,15 @@ def _patch_core_loop(module: ModuleType) -> bool:
                 resolved = _resolve_broker(self, broker)
                 if resolved is None:
                     logger.error(
-                        "CORE_LOOP_BROKER_ARGUMENT_GUARD_BLOCKED marker=20260705d "
-                        "reason=no_real_broker incoming_type=%s",
+                        "CORE_LOOP_BROKER_ARGUMENT_GUARD_BLOCKED marker=20260914-v422 "
+                        "reason=no_local_broker incoming_type=%s",
                         type(broker).__name__,
                     )
                     return original_run(self, *args, **kwargs)
                 if resolved is not broker:
                     logger.warning(
-                        "CORE_LOOP_BROKER_ARGUMENT_GUARD_REPLACED marker=20260705d "
-                        "incoming_type=%s resolved=%s resolved_type=%s",
+                        "CORE_LOOP_BROKER_ARGUMENT_GUARD_REPLACED marker=20260914-v422 "
+                        "incoming_type=%s resolved=%s resolved_type=%s source=account_local",
                         type(broker).__name__,
                         _broker_name(resolved),
                         type(resolved).__name__,
@@ -148,8 +172,8 @@ def _patch_core_loop(module: ModuleType) -> bool:
             resolved = _resolve_broker(self, broker)
             if resolved is not None and resolved is not broker:
                 logger.warning(
-                    "CORE_LOOP_BROKER_ARGUMENT_GUARD_REPLACED marker=20260705d "
-                    "incoming_type=%s resolved=%s resolved_type=%s",
+                    "CORE_LOOP_BROKER_ARGUMENT_GUARD_REPLACED marker=20260914-v422 "
+                    "incoming_type=%s resolved=%s resolved_type=%s source=account_local",
                     type(broker).__name__,
                     _broker_name(resolved),
                     type(resolved).__name__,
@@ -171,15 +195,15 @@ def _patch_core_loop(module: ModuleType) -> bool:
             resolved = _resolve_broker(self, broker)
             if resolved is None:
                 logger.error(
-                    "CORE_LOOP_FETCH_BROKER_GUARD_BLOCKED marker=20260705d symbol=%s incoming_type=%s",
+                    "CORE_LOOP_FETCH_BROKER_GUARD_BLOCKED marker=20260914-v422 symbol=%s incoming_type=%s",
                     symbol,
                     type(broker).__name__,
                 )
                 return original_fetch(self, broker, symbol, *args, **kwargs)
             if resolved is not broker:
                 logger.warning(
-                    "CORE_LOOP_FETCH_BROKER_GUARD_REPLACED marker=20260705d symbol=%s "
-                    "incoming_type=%s resolved=%s resolved_type=%s",
+                    "CORE_LOOP_FETCH_BROKER_GUARD_REPLACED marker=20260914-v422 symbol=%s "
+                    "incoming_type=%s resolved=%s resolved_type=%s source=account_local",
                     symbol,
                     type(broker).__name__,
                     _broker_name(resolved),
@@ -192,8 +216,8 @@ def _patch_core_loop(module: ModuleType) -> bool:
         patched = True
 
     if patched:
-        logger.warning("%s module=%s", _MARKER, getattr(module, "__name__", "unknown"))
-        print("[NIJA-PRINT] CORE_LOOP_BROKER_ARGUMENT_GUARD_PATCHED marker=20260705d", flush=True)
+        logger.warning("%s module=%s process_env_selection=false", _MARKER, getattr(module, "__name__", "unknown"))
+        print("[NIJA-PRINT] CORE_LOOP_BROKER_ARGUMENT_GUARD_PATCHED marker=20260914-v422", flush=True)
     return patched
 
 
@@ -227,12 +251,12 @@ def _install_live_terminal_guards() -> None:
             if callable(installer):
                 installer()
                 logger.warning(
-                    "CORE_LOOP_BROKER_ARGUMENT_GUARD_CHAINED_INSTALL marker=20260705d downstream=%s",
+                    "CORE_LOOP_BROKER_ARGUMENT_GUARD_CHAINED_INSTALL marker=20260914-v422 downstream=%s",
                     module_name,
                 )
         except Exception as exc:
             logger.warning(
-                "CORE_LOOP_BROKER_ARGUMENT_GUARD_CHAINED_INSTALL_FAILED marker=20260705d downstream=%s err=%s",
+                "CORE_LOOP_BROKER_ARGUMENT_GUARD_CHAINED_INSTALL_FAILED marker=20260914-v422 downstream=%s err=%s",
                 module_name,
                 exc,
             )
@@ -256,7 +280,7 @@ def install_import_hook() -> None:
 
     builtins.__import__ = guarded_import
     setattr(builtins, "_NIJA_CORE_LOOP_BROKER_ARGUMENT_GUARD_HOOK_INSTALLED", True)
-    logger.warning("CORE_LOOP_BROKER_ARGUMENT_GUARD_IMPORT_HOOK_INSTALLED marker=20260705d")
+    logger.warning("CORE_LOOP_BROKER_ARGUMENT_GUARD_IMPORT_HOOK_INSTALLED marker=20260914-v422")
 
 
 def install() -> None:
