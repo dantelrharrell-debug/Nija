@@ -1,7 +1,7 @@
 """Final account isolation and exit-integrity guard for every NIJA broker/account.
 
-This guard is deliberately installed before bot startup. It closes three defects:
-1. shared CapitalAuthority totals leaking into independent user cycles;
+Closes three defects without process-global balance mutation:
+1. shared CapitalAuthority totals leaking into independent account cycles;
 2. broker snapshots being treated as additive fills;
 3. exits being raised to an entry minimum instead of closing the held position.
 """
@@ -14,7 +14,7 @@ import threading
 from typing import Any
 
 logger = logging.getLogger("nija.account_scope_exit_integrity_final")
-_MARKER = "20260716-account-scope-exit-integrity-v3"
+_MARKER = "20260914-account-scope-exit-integrity-v421"
 _LOCK = threading.RLock()
 _PATCHED = False
 
@@ -86,16 +86,11 @@ def _patch_trading_strategy() -> bool:
         if selected is not None and scoped <= 0:
             logger.critical(
                 "ACCOUNT_SCOPE_CAPITAL_UNAVAILABLE marker=%s account=%s action=fail_closed",
-                _MARKER, _account_label(selected),
+                _MARKER,
+                _account_label(selected),
             )
             return int(_f(os.getenv("NIJA_ACCOUNT_SCOPE_RETRY_S", "10"), 10.0))
 
-        # CapitalAuthority exposes computed read-only properties. Never overwrite
-        # those properties for an account-local cycle; doing so raises
-        # AttributeError and aborts position management and exits. Account scope
-        # is carried only on the strategy/core/broker objects and the existing
-        # per-cycle environment bridge.
-        old_force = os.environ.get("NIJA_FORCE_TRADE_BALANCE")
         old_strategy_balance = getattr(self, "_nija_account_scoped_balance", None)
         old_strategy_active = getattr(self, "_nija_account_scope_active", None)
         core = getattr(self, "nija_core_loop", None)
@@ -105,7 +100,6 @@ def _patch_trading_strategy() -> bool:
         old_broker_cycle_balance = getattr(selected, "_nija_cycle_balance_usd", None) if selected is not None else None
 
         if scoped > 0:
-            os.environ["NIJA_FORCE_TRADE_BALANCE"] = f"{scoped:.12f}"
             setattr(self, "_nija_account_scoped_balance", scoped)
             setattr(self, "_nija_account_scope_active", True)
             if selected is not None:
@@ -116,17 +110,15 @@ def _patch_trading_strategy() -> bool:
                 setattr(core, "balance", scoped)
 
         logger.critical(
-            "ACCOUNT_SCOPE_CAPITAL_LOCKED marker=%s account=%s balance=$%.2f shared_ca_overridden=false",
-            _MARKER, _account_label(selected), scoped,
+            "ACCOUNT_SCOPE_CAPITAL_LOCKED marker=%s account=%s balance=$%.2f "
+            "shared_ca_overridden=false process_env_bridge=false",
+            _MARKER,
+            _account_label(selected),
+            scoped,
         )
         try:
             return original(self, *args, broker=selected, user_mode=user_mode, **kwargs)
         finally:
-            if old_force is None:
-                os.environ.pop("NIJA_FORCE_TRADE_BALANCE", None)
-            else:
-                os.environ["NIJA_FORCE_TRADE_BALANCE"] = old_force
-
             if old_strategy_balance is None:
                 try:
                     delattr(self, "_nija_account_scoped_balance")
@@ -172,7 +164,7 @@ def _patch_trading_strategy() -> bool:
     run_cycle._nija_account_scope_final = True  # type: ignore[attr-defined]
     run_cycle._nija_original = original  # type: ignore[attr-defined]
     TradingStrategy.run_cycle = run_cycle
-    logger.critical("ACCOUNT_SCOPE_CAPITAL_GUARD_PATCHED marker=%s", _MARKER)
+    logger.critical("ACCOUNT_SCOPE_CAPITAL_GUARD_PATCHED marker=%s process_env_bridge=false", _MARKER)
     return True
 
 
@@ -245,7 +237,12 @@ def _patch_execution_pipeline() -> bool:
                         pass
                 logger.critical(
                     "EXIT_SIZE_CLAMPED_TO_HELD_POSITION marker=%s symbol=%s qty=%.12f requested=$%.2f held_value=$%.2f final=$%.2f",
-                    _MARKER, symbol, qty, requested, held_value, replacement,
+                    _MARKER,
+                    symbol,
+                    qty,
+                    requested,
+                    held_value,
+                    replacement,
                 )
             kwargs.setdefault("force_trade", False)
             kwargs.setdefault("position_effect", "close")
@@ -281,8 +278,11 @@ def install() -> bool:
                 f"account_scope_exit_integrity_incomplete:adoption={adoption}:strategy={strategy}:pipeline={pipeline}"
             )
         logger.critical(
-            "ACCOUNT_SCOPE_EXIT_INTEGRITY_READY marker=%s adoption=%s strategy=%s pipeline=%s",
-            _MARKER, adoption, strategy, pipeline,
+            "ACCOUNT_SCOPE_EXIT_INTEGRITY_READY marker=%s adoption=%s strategy=%s pipeline=%s process_env_bridge=false",
+            _MARKER,
+            adoption,
+            strategy,
+            pipeline,
         )
         return True
 
