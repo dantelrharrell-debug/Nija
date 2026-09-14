@@ -144,6 +144,24 @@ class BrokerStrategySelector:
             }
         return snapshot
 
+    def print_strategy_comparison(self) -> None:
+        """Backward-compatible human-readable broker strategy summary."""
+        snapshot = self.strategy_snapshot()
+        print("\n" + "=" * 80)
+        print("BROKER STRATEGY COMPARISON".center(80))
+        print("=" * 80)
+        for name in sorted(snapshot):
+            item = snapshot[name]
+            print(f"\n{name.upper()}")
+            print("-" * 80)
+            print(f"Config: {item['config_class']}")
+            print(f"Round-trip cost: {item['round_trip_cost'] * 100:.2f}%")
+            print(f"Bidirectional: {item['bidirectional']}")
+            print(f"Stop loss: {item['stop_loss'] * 100:.2f}%")
+            print(f"Max hold: {item['max_hold_hours']:.1f}h")
+            print(f"Max positions: {item['max_positions']}")
+            print(f"Max trades/day: {item['max_trades_per_day']}")
+
 
 STRATEGY_SELECTOR = BrokerStrategySelector()
 
