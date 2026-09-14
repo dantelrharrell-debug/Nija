@@ -16,6 +16,7 @@ from typing import Any
 
 LOGGER = logging.getLogger("nija.production_runtime_convergence_v88")
 MARKER = "20260813-production-runtime-convergence-v88"
+EARLY_IDENTITY_MARKER = "20260914-v88-user-broker-identity-v418"
 _LOCK = threading.RLock()
 _MONITOR_STARTED = False
 _PATCHED_TSM_IDS: set[int] = set()
@@ -147,11 +148,57 @@ def _patch_trading_state_machine(tsm: ModuleType) -> bool:
     return True
 
 
+def _install_early_user_broker_identity() -> bool:
+    """Install only v374/v416's no-I/O duplicate broker selector.
+
+    This is intentionally independent of the long v88 supervision chain.  The
+    v285 coverage monitor may already be running while later convergence modules
+    are still installing.  During a Kraken user reconnect, compatibility
+    registries can temporarily contain both a retired disconnected broker and a
+    newly authenticated replacement.  v281 must choose the strongest existing
+    broker object immediately; otherwise the live authenticated replacement is
+    never scheduled for position reconciliation.
+
+    The selector performs no exchange call, does not mutate broker registries,
+    does not extend snapshot TTLs, and cannot grant readiness or execution.
+    """
+    try:
+        from bot import runtime_all_account_broker_identity_convergence_v374_patch as v374
+
+        patch = getattr(v374, "_patch_v281", None)
+        ready = bool(callable(patch) and patch())
+        if ready:
+            LOGGER.critical(
+                "V88_EARLY_USER_BROKER_IDENTITY_V418_READY marker=%s "
+                "v374_v416_selector=true broker_io=false registry_mutation=false "
+                "snapshot_ttl_unchanged=true readiness_granted=false "
+                "execution_authority_unchanged=true safety_gates_bypassed=false",
+                EARLY_IDENTITY_MARKER,
+            )
+        else:
+            LOGGER.warning(
+                "V88_EARLY_USER_BROKER_IDENTITY_V418_PENDING marker=%s "
+                "fail_closed=true readiness_granted=false safety_gates_bypassed=false",
+                EARLY_IDENTITY_MARKER,
+            )
+        return ready
+    except Exception as exc:
+        LOGGER.warning(
+            "V88_EARLY_USER_BROKER_IDENTITY_V418_PENDING marker=%s error=%s:%s "
+            "fail_closed=true readiness_granted=false safety_gates_bypassed=false",
+            EARLY_IDENTITY_MARKER,
+            type(exc).__name__,
+            exc,
+        )
+        return False
+
+
 def _install_kraken_user_supervision() -> bool:
     global _KRAKEN_SUPERVISION_INSTALLED
     with _LOCK:
         if _KRAKEN_SUPERVISION_INSTALLED:
             return True
+    installed = False
     try:
         from bot import kraken_all_account_supervision_v86 as v86
         installed = bool(v86.install())
@@ -167,6 +214,14 @@ def _install_kraken_user_supervision() -> bool:
         if installed:
             from bot import runtime_authoritative_position_coverage_v285_patch as v285
             installed = bool(v285.install_import_hook())
+
+        # Do not make duplicate-broker identity convergence depend on v285's
+        # whole installer returning true on this exact pass.  v285 can be
+        # partially installed and already monitoring while a later dependency
+        # is still converging.  Patch only v281's existing-object selector now;
+        # the complete v374 chain remains gated below exactly as before.
+        _install_early_user_broker_identity()
+
         if installed:
             from bot import runtime_all_account_broker_identity_convergence_v374_patch as v374
             installed = bool(v374.install_import_hook())
@@ -323,12 +378,12 @@ def install_import_hook() -> bool:
         "PRODUCTION_RUNTIME_CONVERGENCE_V88_INSTALLED marker=%s circuit_classification=true "
         "kraken_user_supervision=true kraken_user_rebuild_v90=true all_account_connectivity_v266=true "
         "kraken_user_position_eligibility_v282=true authoritative_position_coverage_v285=true "
-        "all_account_broker_identity_convergence_v374=true "
+        "all_account_broker_identity_convergence_v374=true early_identity_selector_v418=true "
         "kraken_position_refresh_liveness_v286=true kraken_position_flight_recovery_v287=true "
         "kraken_cost_basis_bulk_v288=true account_scoped_position_state_v289=true "
         "kraken_read_contention_recovery_v290=true kraken_transport_timeout_v292=true "
         "kraken_credential_lock_scope_v293=true position_sync_isolation_v294=true "
-        "okx_cost_basis_recovery_v295=true dust_position_policy_convergence_v296=true "
+        "okx_fill_history_cost_basis_recovery_v295=true dust_position_policy_convergence_v296=true "
         "kraken_monitoring_fairness_v297=true kraken_inflight_snapshot_truth_v298=true "
         "kraken_credential_read_convergence_v299=true kraken_balance_epoch_handoff_v312=true "
         "registered_platform_position_completeness_v302=true heartbeat_position_cap_result_bridge_v303=true "
@@ -343,9 +398,7 @@ def install() -> bool:
 
 
 __all__ = [
-    "MARKER",
     "install",
     "install_import_hook",
-    "_only_generic_execution_false_counts",
-    "_patch_trading_state_machine",
+    "_install_early_user_broker_identity",
 ]
