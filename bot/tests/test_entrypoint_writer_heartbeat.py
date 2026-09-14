@@ -73,6 +73,9 @@ class EntrypointWriterHeartbeatTests(unittest.TestCase):
 
     def test_lock_refresh_preserves_fencing_token(self):
         self._register_live_core()
+        # Core registration publishes metadata through Redis. Reset the mock so
+        # this assertion covers only the subsequent fencing-token refresh.
+        self.runtime._client.reset_mock()
         self.runtime._client.eval.return_value = 2
         self.runtime._set_writer_state(WriterState.ACTIVE, reason="test_setup")
         os.environ["NIJA_WRITER_FENCING_TOKEN"] = self.runtime._token
