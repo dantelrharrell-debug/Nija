@@ -10,6 +10,9 @@ This source patch is intentionally narrow:
    connected registered user accounts. Existing retry intervals, snapshot TTL,
    authenticated adopter, broker rate limits, and fail-closed semantics are
    unchanged.
+3. v410 classification-only diagnostics are wired directly into v366's
+   authenticated OpenPositions exception boundary so the diagnostic survives
+   SAFE/LIVE_PENDING startup paths without depending on native-protection v381.
 
 No order submission, execution authority, activation, balance, position,
 protection, fill, or freshness proof is fabricated.
@@ -22,6 +25,7 @@ ROOT = Path(__file__).resolve().parents[1]
 V366 = ROOT / "bot" / "runtime_kraken_margin_canonical_coverage_v366_patch.py"
 V285 = ROOT / "bot" / "runtime_authoritative_position_coverage_v285_patch.py"
 MARKER = "20260907-kraken-coverage-truth-fairness-v385"
+V410_MARKER = "20260914-kraken-openpositions-diagnostics-v410"
 
 
 def patch_v366() -> bool:
@@ -36,6 +40,32 @@ def patch_v366() -> bool:
     if old_visible not in text or old_coverage not in text:
         raise RuntimeError("v366 expected telemetry anchors not found")
     text = text.replace(old_visible, new_visible, 1).replace(old_coverage, new_coverage, 1)
+    V366.write_text(text, encoding="utf-8")
+    return True
+
+
+def patch_v366_openpositions_diagnostics_v410() -> bool:
+    """Add redacted failure classification at the v366 private-read boundary.
+
+    The canonical v366 return value/reason remains unchanged.  The exception
+    message is inspected only in-process to select a bounded category and is
+    never emitted to logs.  This is telemetry only; no retry, readiness,
+    authority, nonce, risk, or kill-switch behavior changes.
+    """
+    text = V366.read_text(encoding="utf-8")
+    if "KRAKEN_OPENPOSITIONS_DIAGNOSTIC_V410" in text:
+        return False
+
+    fetch_anchor = '''\ndef fetch_margin_positions(broker: Any, *, account: Any = "", force: bool = False) -> Tuple[bool, Dict[str, Dict[str, Any]], str]:\n'''
+    helper = '''\n\ndef _classify_openpositions_exception_v410(exc: BaseException) -> str:\n    """Return a bounded diagnostic category without exposing exception text."""\n    text = str(exc or "").lower()\n    if "circuit breaker" in text:\n        return "circuit_breaker_open"\n    if "nonce readiness" in text or "nonce issuance" in text or "nonce manager" in text:\n        return "nonce_authority_unready"\n    if "writer authority" in text or "writer lease" in text or "lease unavailable" in text:\n        return "writer_authority_unready"\n    if "permission" in text or "eapi:permission" in text:\n        return "api_permission_denied"\n    if "invalid key" in text or "api key" in text or "authentication" in text or "eapi:invalid key" in text:\n        return "api_authentication_rejected"\n    if "invalid nonce" in text or "eapi:invalid nonce" in text:\n        return "kraken_invalid_nonce"\n    if "rate limit" in text or "too many requests" in text or "eapi:rate limit" in text:\n        return "kraken_rate_limited"\n    if "timeout" in text or "timed out" in text:\n        return "transport_timeout"\n    if any(token in text for token in ("connection", "network", "ssl", "broken pipe", "eof", "503", "504")):\n        return "transport_failure"\n    if "service unavailable" in text or "temporarily unavailable" in text:\n        return "kraken_service_unavailable"\n    return "unclassified_exception"\n'''
+    old_except = '''    except Exception as exc:\n        reason = f"openpositions_exception:{type(exc).__name__}"\n        _log_fetch_failed(key, reason)\n        return False, {}, reason\n'''
+    new_except = '''    except Exception as exc:\n        category = _classify_openpositions_exception_v410(exc)\n        LOGGER.error(\n            "KRAKEN_OPENPOSITIONS_DIAGNOSTIC_V410 marker=20260914-kraken-openpositions-diagnostics-v410 "\n            "account=%s exception_type=%s category=%s message_redacted=true credentials_redacted=true "\n            "params_redacted=true return_value_unchanged=true position_truth_unchanged=true "\n            "readiness_unchanged=true execution_authority_unchanged=true writer_nonce_risk_killswitch_unchanged=true "\n            "safety_gates_bypassed=false",\n            key, type(exc).__name__, category,\n        )\n        reason = f"openpositions_exception:{type(exc).__name__}"\n        _log_fetch_failed(key, reason)\n        return False, {}, reason\n'''
+    if fetch_anchor not in text:
+        raise RuntimeError("v366 OpenPositions fetch insertion anchor not found")
+    if old_except not in text:
+        raise RuntimeError("v366 OpenPositions exception anchor not found")
+    text = text.replace(fetch_anchor, helper + fetch_anchor, 1)
+    text = text.replace(old_except, new_except, 1)
     V366.write_text(text, encoding="utf-8")
     return True
 
@@ -57,14 +87,17 @@ def patch_v285() -> bool:
 
 def main() -> None:
     changed_v366 = patch_v366()
+    changed_v410 = patch_v366_openpositions_diagnostics_v410()
     changed_v285 = patch_v285()
     print(
         "KRAKEN_COVERAGE_TRUTH_FAIRNESS_V385_PATCH_APPLIED "
-        f"marker={MARKER} v366_changed={changed_v366} v285_changed={changed_v285} "
+        f"marker={MARKER} v366_changed={changed_v366} v410_diagnostics_changed={changed_v410} "
+        f"v410_marker={V410_MARKER} v285_changed={changed_v285} "
         "pre_v371_false_telemetry_removed=true user_refresh_round_robin=true "
-        "snapshot_ttl_unchanged=true retry_interval_unchanged=true rate_limits_unchanged=true "
-        "orders_submitted=false protection_fabricated=false readiness_fabricated=false "
-        "safety_gates_bypassed=false"
+        "openpositions_failure_classification=true openpositions_message_redacted=true "
+        "openpositions_return_value_unchanged=true snapshot_ttl_unchanged=true "
+        "retry_interval_unchanged=true rate_limits_unchanged=true orders_submitted=false "
+        "protection_fabricated=false readiness_fabricated=false safety_gates_bypassed=false"
     )
 
 
