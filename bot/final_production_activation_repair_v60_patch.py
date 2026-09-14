@@ -318,6 +318,70 @@ def _patch_v15_nonblocking() -> bool:
     return True
 
 
+def _pre_dispatch_safety_ready(tsm: Any, sm: Any) -> tuple[bool, str]:
+    """Validate hard execution gates without the coordinator's dispatch state.
+
+    sm.has_execution_authority() includes the coordinator's trading_authority
+    result. During canonical startup that value cannot become true until
+    bot_main finishes this convergence function, which made startup wait on
+    its own completion and eventually fail closed.
+
+    This probe preserves every pre-dispatch safety check performed by
+    can_execute(require_executing=False) while intentionally excluding only
+    that post-startup coordinator result. The normal dispatch path still calls
+    can_dispatch_trades() and therefore still requires coordinator
+    execution_permitted before any order can be submitted.
+    """
+    try:
+        snapshot_fn = getattr(sm, "get_execution_authority_snapshot", None)
+        if not callable(snapshot_fn):
+            return False, "authority_snapshot_probe_missing"
+        authority = dict(snapshot_fn())
+        if (
+            str(authority.get("safety_state", "")).strip().upper() != "AUTHORIZED"
+            or not bool(authority.get("converged", False))
+        ):
+            return False, "authority_fsm_not_converged"
+
+        breaker_probe = getattr(tsm, "_execution_circuit_breaker_status", None)
+        breaker_ok, breaker_detail = breaker_probe() if callable(breaker_probe) else (False, "probe_missing")
+        if not breaker_ok:
+            return False, f"execution_circuit_breaker:{breaker_detail or 'tripped'}"
+
+        runtime_probe = getattr(tsm, "_runtime_writer_nonce_ready", None)
+        runtime_ok, runtime_detail = runtime_probe() if callable(runtime_probe) else (False, "probe_missing")
+        if not runtime_ok:
+            return False, f"writer_nonce:{runtime_detail or 'not_ready'}"
+
+        heartbeat_required_probe = getattr(tsm, "_heartbeat_verification_required", None)
+        heartbeat_status_probe = getattr(tsm, "_heartbeat_verification_status", None)
+        heartbeat_required = bool(
+            heartbeat_required_probe() if callable(heartbeat_required_probe) else True
+        )
+        heartbeat_ok, heartbeat_detail, _heartbeat_meta = (
+            heartbeat_status_probe()
+            if callable(heartbeat_status_probe)
+            else (False, "probe_missing", None)
+        )
+        if heartbeat_required and not heartbeat_ok:
+            return False, f"heartbeat_verification:{heartbeat_detail or 'not_ready'}"
+
+        live_gate_probe = getattr(tsm, "_collect_live_gate_status", None)
+        if not callable(live_gate_probe):
+            return False, "live_gate_probe_missing"
+        live_gate = dict(live_gate_probe())
+        if not bool(live_gate.get("execution_allowed", False)):
+            failed = sorted(
+                key
+                for key, value in live_gate.items()
+                if key.endswith("_ok") and not bool(value)
+            )
+            return False, f"live_gates:{','.join(failed) or 'not_ready'}"
+        return True, "ok"
+    except Exception as exc:
+        return False, f"exception:{type(exc).__name__}:{exc}"
+
+
 def _strict_runtime_ready(runtime: Any, core: Any) -> tuple[bool, list[str]]:
     blockers: list[str] = []
     if runtime is None or not bool(getattr(runtime, "acquired", False)) or bool(getattr(runtime, "lost", False)):
@@ -351,11 +415,9 @@ def _strict_runtime_ready(runtime: Any, core: Any) -> tuple[bool, list[str]]:
                 blockers.append("live_active")
             if not bool(getattr(sm, "get_activation_committed")()):
                 blockers.append("activation_committed")
-            authority_probe = getattr(sm, "has_execution_authority", None)
-            if not callable(authority_probe):
-                blockers.append("dispatch_authority_probe_missing")
-            elif not bool(authority_probe()):
-                blockers.append("dispatch_authority")
+            authority_ok, authority_detail = _pre_dispatch_safety_ready(tsm, sm)
+            if not authority_ok:
+                blockers.append(f"dispatch_authority:{authority_detail}")
     except Exception:
         blockers.append("state_machine_probe")
     return not blockers, blockers
