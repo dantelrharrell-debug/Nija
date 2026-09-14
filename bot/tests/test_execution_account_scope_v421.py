@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from bot.execution_account_scope_v421_patch import canonical_account_id, install
+from bot.execution_account_scope_v421_patch import (
+    _patch_pre_trade_capital_base,
+    canonical_account_id,
+)
 
 
 def _request(*, broker: str, account_id: str = "default", broker_client=None, account_type="platform"):
@@ -39,7 +42,7 @@ def test_platform_accounts_are_venue_scoped():
 
 
 def test_pretrade_cap_base_uses_only_account_cash_plus_account_exposure():
-    assert install() is True
+    assert _patch_pre_trade_capital_base() is True
     from bot.pre_trade_risk_engine import PreTradeRiskEngine
 
     engine = PreTradeRiskEngine()
