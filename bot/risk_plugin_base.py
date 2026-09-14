@@ -22,7 +22,7 @@ class RiskContext:
     size_usd: float = 0.0
     broker_name: str = ""
     balance: float = 0.0
-    account_scope: str = "platform"
+    account_scope: str = ""
 
 
 @dataclass
@@ -44,11 +44,16 @@ class ActiveRiskPlugin(RiskPlugin):
     def evaluate(self, context: RiskContext) -> RiskResult:
         try:
             from bot.broker_account_risk_registry import get_broker_account_risk_engine
+            from bot.broker_account_scope import current_account_scope, current_broker_name
 
             if context.balance <= 0 or context.size_usd <= 0:
                 raise RuntimeError("positive balance and order size are required")
-            broker_name = str(context.broker_name or "unknown").strip().lower()
-            account_scope = str(context.account_scope or "platform").strip().lower()
+            broker_name = str(
+                context.broker_name or current_broker_name("unknown") or "unknown"
+            ).strip().lower()
+            account_scope = str(
+                context.account_scope or current_account_scope("platform") or "platform"
+            ).strip().lower()
             engine = get_broker_account_risk_engine(
                 broker_name=broker_name,
                 account_scope=account_scope,
@@ -97,7 +102,7 @@ class ActiveRiskPlugin(RiskPlugin):
         return RiskResult(
             passed=True,
             score=context.score,
-            reason=f"ACTIVE_PASS:{context.broker_name}:{context.account_scope or 'platform'}",
+            reason=f"ACTIVE_PASS:{broker_name}:{account_scope}",
         )
 
 
