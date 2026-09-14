@@ -113,6 +113,68 @@ def test_strict_runtime_ready_requires_every_readiness_proof(monkeypatch):
     assert "readiness.risk_ready" in blockers
 
 
+def test_pre_dispatch_safety_excludes_only_coordinator_cycle():
+    class SM:
+        def get_execution_authority_snapshot(self):
+            return {
+                "safety_state": "AUTHORIZED",
+                "converged": True,
+                "trading_authority": False,
+                "execution_permitted": False,
+            }
+
+        def has_execution_authority(self):
+            raise AssertionError("coordinator-dependent probe must not run during startup")
+
+    tsm = types.SimpleNamespace(
+        _execution_circuit_breaker_status=lambda: (True, ""),
+        _runtime_writer_nonce_ready=lambda: (True, ""),
+        _heartbeat_verification_required=lambda: True,
+        _heartbeat_verification_status=lambda: (True, "", {}),
+        _collect_live_gate_status=lambda: {
+            "safe_ok": True,
+            "recon_ok": True,
+            "nonce_ok": True,
+            "lease_ok": True,
+            "heartbeat_ok": True,
+            "strategy_ok": True,
+            "breaker_ok": True,
+            "execution_allowed": True,
+        },
+    )
+
+    assert repair._pre_dispatch_safety_ready(tsm, SM()) == (True, "ok")
+
+
+def test_pre_dispatch_safety_keeps_live_gates_fail_closed():
+    sm = types.SimpleNamespace(
+        get_execution_authority_snapshot=lambda: {
+            "safety_state": "AUTHORIZED",
+            "converged": True,
+        }
+    )
+    tsm = types.SimpleNamespace(
+        _execution_circuit_breaker_status=lambda: (True, ""),
+        _runtime_writer_nonce_ready=lambda: (True, ""),
+        _heartbeat_verification_required=lambda: True,
+        _heartbeat_verification_status=lambda: (True, "", {}),
+        _collect_live_gate_status=lambda: {
+            "safe_ok": True,
+            "recon_ok": False,
+            "nonce_ok": True,
+            "lease_ok": True,
+            "heartbeat_ok": True,
+            "strategy_ok": True,
+            "breaker_ok": True,
+            "execution_allowed": False,
+        },
+    )
+
+    allowed, detail = repair._pre_dispatch_safety_ready(tsm, sm)
+    assert allowed is False
+    assert detail == "live_gates:recon_ok"
+
+
 def test_v60_source_has_no_force_activation_or_threshold_mutation():
     source = inspect.getsource(repair)
     forbidden = (
