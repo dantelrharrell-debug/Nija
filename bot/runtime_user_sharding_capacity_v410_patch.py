@@ -1,18 +1,8 @@
 """Deterministic user-account sharding and per-worker capacity guard.
 
-This patch does not change trading strategy, risk thresholds, writer authority,
-position protection, or order routing.  It only filters *new user broker
-connections* before authenticated broker I/O so a worker owns a deterministic
-subset of enabled users.
-
-Safety properties:
-- stable SHA-256 user -> shard assignment (no Python hash randomization)
-- fail closed on invalid shard configuration
-- hard per-worker admission ceiling
-- overflow users are not connected for new entries on that worker
-- already-connected brokers/positions are never deleted or disconnected
-- no order is submitted/cancelled and no execution authority is granted
-- v411 continuously publishes SCALE_REQUIRED when enabled-user capacity is exceeded
+This patch filters new user broker connections before authenticated broker I/O,
+then publishes the resulting user->broker membership into the broker-cell
+registry. Existing positions are never deleted or disconnected.
 """
 from __future__ import annotations
 
@@ -24,7 +14,7 @@ import threading
 from typing import Any, Iterable, List
 
 LOGGER = logging.getLogger("nija.runtime_user_sharding_capacity_v410")
-MARKER = "20260909-runtime-user-sharding-capacity-v410"
+MARKER = "20260914-runtime-user-sharding-broker-cells-v420"
 _READY_FLAG = "NIJA_USER_SHARDING_CAPACITY_V410_READY"
 _PATCH_ATTR = "_nija_user_sharding_capacity_v410"
 _LOCK = threading.RLock()
@@ -76,7 +66,7 @@ def _select_users(users: Iterable[Any]) -> tuple[List[Any], List[Any], dict[str,
 
     admitted = assigned[:max_users]
     overflow = assigned[max_users:]
-    meta = {
+    return admitted, overflow, {
         "shard_count": shard_count,
         "shard_index": shard_index,
         "max_users": max_users,
@@ -84,7 +74,6 @@ def _select_users(users: Iterable[Any]) -> tuple[List[Any], List[Any], dict[str,
         "admitted": len(admitted),
         "overflow": len(overflow),
     }
-    return admitted, overflow, meta
 
 
 def _loader() -> Any:
@@ -109,6 +98,55 @@ def _install_capacity_signal() -> bool:
             MARKER,
         )
         return False
+
+
+def _broker_name(broker_type: Any, broker: Any) -> str:
+    value = getattr(broker_type, "value", None)
+    if value:
+        return str(value).strip().lower()
+    bt = getattr(broker, "broker_type", None)
+    value = getattr(bt, "value", None)
+    if value:
+        return str(value).strip().lower()
+    return str(getattr(broker, "broker_name", "") or "").strip().lower()
+
+
+def _sync_broker_cell_membership(manager: Any) -> None:
+    """Publish canonical connected-user membership without moving capital/state."""
+    try:
+        from bot.broker_isolation_registry import get_broker_isolation_registry
+        registry = get_broker_isolation_registry()
+    except Exception as exc:
+        LOGGER.warning("BROKER_CELL_USER_SYNC_DEFERRED error=%s:%s", type(exc).__name__, exc)
+        return
+
+    user_brokers = getattr(manager, "user_brokers", {}) or {}
+    if not isinstance(user_brokers, dict):
+        return
+
+    memberships = 0
+    for user_id, brokers in user_brokers.items():
+        if not isinstance(brokers, dict):
+            continue
+        for broker_type, broker in brokers.items():
+            name = _broker_name(broker_type, broker)
+            if not name:
+                continue
+            if registry.register_user(name, str(user_id)):
+                memberships += 1
+            # Runtime scope metadata only; never overwrite native broker account_id.
+            try:
+                setattr(broker, "nija_user_id", str(user_id))
+                setattr(broker, "nija_account_scope", f"user:{user_id}")
+                setattr(broker, "nija_broker_cell", name)
+            except Exception:
+                pass
+
+    LOGGER.critical(
+        "BROKER_CELL_USER_MEMBERSHIP_SYNC memberships=%d users=%d cross_broker_membership=false",
+        memberships,
+        len(user_brokers),
+    )
 
 
 def _patch_manager_class(cls: type) -> bool:
@@ -142,12 +180,8 @@ def _patch_manager_class(cls: type) -> bool:
                     "USER_SHARD_V410_CAPACITY_BLOCK marker=%s shard=%s/%s assigned=%s admitted=%s overflow=%s "
                     "overflow_users=%s new_user_connections_fail_closed=true existing_positions_untouched=true",
                     MARKER,
-                    meta["shard_index"],
-                    meta["shard_count"],
-                    meta["assigned"],
-                    meta["admitted"],
-                    meta["overflow"],
-                    overflow_ids[:20],
+                    meta["shard_index"], meta["shard_count"], meta["assigned"],
+                    meta["admitted"], meta["overflow"], overflow_ids[:20],
                 )
 
             def local_enabled_users() -> List[Any]:
@@ -159,14 +193,14 @@ def _patch_manager_class(cls: type) -> bool:
             finally:
                 setattr(loader, "get_all_enabled_users", loader_get)
 
+            _sync_broker_cell_membership(self)
+
             try:
                 setattr(self, "_nija_user_shard_meta_v410", dict(meta))
                 setattr(self, "_nija_user_shard_overflow_v410", tuple(overflow_ids))
             except Exception:
                 pass
 
-            # Re-publish the global capacity state after every canonical user
-            # connection pass so onboarding changes become visible immediately.
             try:
                 signal = importlib.import_module("bot.runtime_capacity_autoscale_signal_v411_patch")
                 publish = getattr(signal, "publish_capacity_state", None)
@@ -181,15 +215,12 @@ def _patch_manager_class(cls: type) -> bool:
             os.environ[_READY_FLAG] = "1"
             LOGGER.critical(
                 "USER_SHARD_V410_STATE marker=%s shard=%s/%s assigned=%s admitted=%s overflow=%s "
-                "stable_hash=sha256 per_worker_capacity=%s existing_positions_untouched=true "
-                "orders_submitted=false orders_cancelled=false authority_granted=false safety_gates_bypassed=false",
+                "stable_hash=sha256 per_worker_capacity=%s broker_cell_membership=true "
+                "existing_positions_untouched=true orders_submitted=false orders_cancelled=false "
+                "authority_granted=false safety_gates_bypassed=false",
                 MARKER,
-                meta["shard_index"],
-                meta["shard_count"],
-                meta["assigned"],
-                meta["admitted"],
-                meta["overflow"],
-                meta["max_users"],
+                meta["shard_index"], meta["shard_count"], meta["assigned"],
+                meta["admitted"], meta["overflow"], meta["max_users"],
             )
             return result
 
@@ -216,26 +247,27 @@ def install() -> bool:
             os.environ[_READY_FLAG] = "1"
             LOGGER.critical(
                 "USER_SHARD_V410_READY marker=%s shard=%s/%s max_users_per_shard=%s stable_hash=sha256 "
-                "capacity_signal_v411=%s platform_writer_unchanged=true risk_gates_unchanged=true exits_unchanged=true "
-                "orders_submitted=false forced_activation=false safety_gates_bypassed=false",
-                MARKER,
-                shard_index,
-                shard_count,
-                max_users,
-                str(capacity_signal_ready).lower(),
+                "capacity_signal_v411=%s broker_cell_membership=true platform_writer_unchanged=true "
+                "risk_gates_unchanged=true exits_unchanged=true orders_submitted=false forced_activation=false "
+                "safety_gates_bypassed=false",
+                MARKER, shard_index, shard_count, max_users, str(capacity_signal_ready).lower(),
             )
             return True
         except Exception as exc:
             os.environ[_READY_FLAG] = "0"
             LOGGER.exception(
                 "USER_SHARD_V410_INSTALL_ERROR marker=%s error=%s:%s trading_fail_closed=true",
-                MARKER,
-                type(exc).__name__,
-                exc,
+                MARKER, type(exc).__name__, exc,
             )
             return False
 
 
 install_import_hook = install
 
-__all__ = ["MARKER", "install", "install_import_hook", "shard_for_user"]
+__all__ = [
+    "MARKER",
+    "install",
+    "install_import_hook",
+    "shard_for_user",
+    "_sync_broker_cell_membership",
+]
