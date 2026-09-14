@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Apply NIJA startup liveness repairs v414/v415/v417.
+"""Apply NIJA startup liveness repairs v414/v415/v417/v418.
 
 v414 reuses an already-hydrated CapitalAuthority snapshot during
 CapitalAllocationBrain construction so strategy startup cannot be blocked by a
@@ -19,6 +19,12 @@ current successful v285 snapshot under the unchanged v285 TTL, then newest
 snapshot/fetch/adoption generation. It performs no broker I/O and does not
 mutate either registry.
 
+v418 moves the existing Kraken-user maintenance re-audit cadence from 60 seconds
+to 30 seconds. The authoritative v285 snapshot TTL remains 90 seconds; the change
+creates refresh headroom for two serialized user accounts rather than waiting
+until snapshots are already near expiry. It uses the same authenticated v282
+maintenance path and does not grant readiness on its own.
+
 None of these repairs grants readiness synthetically, extends freshness TTLs,
 forces activation, starts a trade, or relaxes writer/nonce/risk/kill-switch/
 position/protection/order/fill gates.
@@ -32,9 +38,11 @@ ROOT = Path(__file__).resolve().parents[1]
 TARGET = ROOT / "bot" / "capital_allocation_brain.py"
 V88 = ROOT / "bot" / "production_runtime_convergence_v88_patch.py"
 V281 = ROOT / "bot" / "runtime_all_account_position_exit_coverage_v281_patch.py"
+V282 = ROOT / "bot" / "runtime_kraken_user_position_eligibility_v282_patch.py"
 MARKER = "20260914-capital-brain-init-nonblocking-v414"
 V415_MARKER = "20260914-kraken-platform-balance-capital-feed-v415"
 V417_MARKER = "20260914-v281-canonical-user-object-selection-v417"
+V418_MARKER = "20260914-kraken-user-position-refresh-cadence-v418"
 
 OLD = '''            else:\n                self.refresh_authority()\n        \n        logger.info(\n'''
 
@@ -51,6 +59,10 @@ V281_HELPER = V281_HELPER_ANCHOR + '''def _user_broker_truth_score_v417(broker: 
 V281_OLD_ALL_USERS = '''            key = _user_key(raw_key[0], raw_key[1])\n            if key and key not in disabled:\n                expected[key] = broker\n\n    for user_id, broker_map in _iter_items(getattr(manager, "user_brokers", {})):\n        for broker_type, broker in _iter_items(broker_map):\n            key = _user_key(user_id, broker_type)\n            if key and key not in disabled:\n                expected[key] = broker\n'''
 
 V281_NEW_ALL_USERS = '''            key = _user_key(raw_key[0], raw_key[1])\n            if key and key not in disabled:\n                _select_user_broker_v417(expected, key, broker)\n\n    for user_id, broker_map in _iter_items(getattr(manager, "user_brokers", {})):\n        for broker_type, broker in _iter_items(broker_map):\n            key = _user_key(user_id, broker_type)\n            if key and key not in disabled:\n                _select_user_broker_v417(expected, key, broker)\n'''
+
+V282_OLD_CADENCE = '''def _maintenance_reaudit_s() -> float:\n    try:\n        value = float(os.environ.get("NIJA_KRAKEN_USER_ELIGIBILITY_REAUDIT_S", "60") or 60.0)\n    except (TypeError, ValueError):\n        value = 60.0\n    return max(30.0, min(600.0, value))\n'''
+
+V282_NEW_CADENCE = '''def _maintenance_reaudit_s() -> float:\n    try:\n        value = float(os.environ.get("NIJA_KRAKEN_USER_ELIGIBILITY_REAUDIT_S", "30") or 30.0)\n    except (TypeError, ValueError):\n        value = 30.0\n    # v418: keep the existing authenticated maintenance audit comfortably\n    # inside the unchanged 90s v285 snapshot TTL for two serialized users.\n    return max(20.0, min(600.0, value))\n'''
 
 
 def _patch_v414() -> bool:
@@ -116,7 +128,6 @@ def _patch_v417() -> bool:
     if text.count(V281_OLD_ALL_USERS) != 1:
         raise SystemExit("v417 expected one v281 user registry overwrite block")
     text = text.replace(V281_OLD_ALL_USERS, V281_NEW_ALL_USERS, 1)
-    # Embed a stable release marker in executable source for idempotence and audit.
     text = text.replace(
         'MARKER = "20260829-all-account-position-exit-coverage-v281"\n',
         'MARKER = "20260829-all-account-position-exit-coverage-v281"\n'
@@ -135,10 +146,42 @@ def _patch_v417() -> bool:
     return True
 
 
+def _patch_v418() -> bool:
+    text = V282.read_text(encoding="utf-8")
+    if V418_MARKER in text:
+        print(
+            f"KRAKEN_USER_POSITION_REFRESH_CADENCE_V418_ALREADY_APPLIED marker={V418_MARKER} "
+            "snapshot_ttl_unchanged=true authenticated_path_unchanged=true "
+            "readiness_fabricated=false safety_gates_bypassed=false"
+        )
+        return False
+    if text.count(V282_OLD_CADENCE) != 1:
+        raise SystemExit("v418 expected exactly one v282 maintenance cadence anchor")
+    text = text.replace(V282_OLD_CADENCE, V282_NEW_CADENCE, 1)
+    marker_anchor = 'MARKER = "20260829-kraken-user-position-eligibility-v282"\n'
+    if text.count(marker_anchor) != 1:
+        raise SystemExit("v418 expected exactly one v282 marker anchor")
+    text = text.replace(
+        marker_anchor,
+        marker_anchor + 'V418_MARKER = "20260914-kraken-user-position-refresh-cadence-v418"\n',
+        1,
+    )
+    V282.write_text(text, encoding="utf-8")
+    py_compile.compile(str(V282), doraise=True)
+    print(
+        f"KRAKEN_USER_POSITION_REFRESH_CADENCE_V418_PATCH_APPLIED marker={V418_MARKER} "
+        "maintenance_reaudit_s=30 snapshot_ttl_s=90 ttl_unchanged=true "
+        "authenticated_path_unchanged=true user_entries_fail_closed=true "
+        "readiness_fabricated=false safety_gates_bypassed=false"
+    )
+    return True
+
+
 def main() -> int:
     _patch_v414()
     _patch_v415_chain()
     _patch_v417()
+    _patch_v418()
     return 0
 
 
