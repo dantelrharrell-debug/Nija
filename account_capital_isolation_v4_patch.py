@@ -3,6 +3,8 @@
 This patch replaces process-wide balance overrides with an account-local
 CapitalAuthority proxy. User and platform cycles retain their own broker
 balance, positions and requested execution mode while other account threads run.
+It also installs the canonical broker/account execution-scope guard so all
+pre-trade exposure accounting is keyed by venue plus account.
 """
 from __future__ import annotations
 
@@ -158,9 +160,6 @@ def _patch_class(cls: type) -> bool:
             )
             return max(5, int(_f(os.getenv("NIJA_ACCOUNT_SCOPE_RETRY_S", "10"), 10.0)))
 
-        # Preserve the caller's requested mode. An independently configured user
-        # account may run full signal generation with user_mode=False; copy-trade
-        # accounts explicitly pass user_mode=True from IndependentBrokerTrader.
         effective_user_mode = bool(user_mode)
 
         core = getattr(self, "nija_core_loop", None)
@@ -258,11 +257,26 @@ def _patch_loaded() -> bool:
     return changed
 
 
+def _install_execution_scope() -> bool:
+    try:
+        from bot.execution_account_scope_v421_patch import install as install_scope
+        return bool(install_scope())
+    except Exception as exc:
+        logger.warning(
+            "EXECUTION_ACCOUNT_SCOPE_INSTALL_DEFERRED marker=%s error=%s:%s",
+            _MARKER,
+            type(exc).__name__,
+            exc,
+        )
+        return False
+
+
 def _watchdog() -> None:
     deadline = time.monotonic() + 600.0
     while time.monotonic() < deadline:
         try:
             _patch_loaded()
+            _install_execution_scope()
         except Exception as exc:
             logger.debug("ACCOUNT_CAPITAL_ISOLATION_RETRY marker=%s error=%s", _MARKER, exc)
         time.sleep(0.5)
@@ -271,12 +285,19 @@ def _watchdog() -> None:
 def install() -> bool:
     global _STARTED
     with _LOCK:
-        _patch_loaded()
+        strategy_ready = _patch_loaded()
+        execution_scope_ready = _install_execution_scope()
         if not _STARTED:
             _STARTED = True
             threading.Thread(target=_watchdog, name="AccountCapitalIsolationV4", daemon=True).start()
         os.environ["NIJA_ACCOUNT_CAPITAL_ISOLATION_V4_INSTALLED"] = "1"
-        logger.critical("ACCOUNT_CAPITAL_ISOLATION_V4_INSTALLED marker=%s", _MARKER)
+        os.environ["NIJA_EXECUTION_ACCOUNT_SCOPE_V421_READY"] = "1" if execution_scope_ready else "0"
+        logger.critical(
+            "ACCOUNT_CAPITAL_ISOLATION_V4_INSTALLED marker=%s strategy_ready=%s execution_scope_ready=%s",
+            _MARKER,
+            strategy_ready,
+            execution_scope_ready,
+        )
         return True
 
 
