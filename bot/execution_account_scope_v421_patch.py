@@ -3,7 +3,8 @@
 Pre-trade exposure and risk bookkeeping must never share generic account keys or
 borrow global CapitalAuthority equity. Requests are normalized to
 ``<broker>:<account>`` and pre-trade cap base is computed from that account's
-cash plus that account's tracked exposure only.
+cash plus that account's tracked exposure only. Transient broker selection is
+also kept out of process-global environment variables.
 """
 from __future__ import annotations
 
@@ -123,8 +124,6 @@ def _patch_pre_trade_capital_base() -> bool:
             exposure = max(0.0, float(current_total_exposure or 0.0))
         except (TypeError, ValueError, OverflowError):
             exposure = 0.0
-        # available cash + positions already attributed to the same account is
-        # the only permissible equity base. No process/global capital source.
         cap_base = available + exposure
         logger.debug(
             "ACCOUNT_LOCAL_CAP_BASE marker=%s available_usd=%.2f exposure_usd=%.2f cap_base_usd=%.2f global_equity_used=false",
@@ -223,18 +222,34 @@ def _patch_execution_engine() -> bool:
     return True
 
 
+def _install_context_locality() -> bool:
+    try:
+        from bot.broker_context_locality_v422_patch import install as install_locality
+        return bool(install_locality())
+    except Exception as exc:
+        logger.warning(
+            "BROKER_CONTEXT_LOCALITY_INSTALL_DEFERRED marker=%s error=%s:%s",
+            MARKER,
+            type(exc).__name__,
+            exc,
+        )
+        return False
+
+
 def install() -> bool:
     with _LOCK:
         cap_base = _patch_pre_trade_capital_base()
         pipeline = _patch_execution_pipeline()
         engine = _patch_execution_engine()
-        ready = cap_base and (pipeline or engine)
+        context_locality = _install_context_locality()
+        ready = cap_base and (pipeline or engine) and context_locality
         logger.critical(
-            "EXECUTION_ACCOUNT_SCOPE_V421 marker=%s cap_base=%s pipeline=%s engine=%s ready=%s",
+            "EXECUTION_ACCOUNT_SCOPE_V421 marker=%s cap_base=%s pipeline=%s engine=%s context_locality=%s ready=%s",
             MARKER,
             cap_base,
             pipeline,
             engine,
+            context_locality,
             ready,
         )
         return ready
@@ -242,4 +257,10 @@ def install() -> bool:
 
 install_import_hook = install
 
-__all__ = ["MARKER", "canonical_account_id", "install", "install_import_hook"]
+__all__ = [
+    "MARKER",
+    "canonical_account_id",
+    "install",
+    "install_import_hook",
+    "_patch_pre_trade_capital_base",
+]
