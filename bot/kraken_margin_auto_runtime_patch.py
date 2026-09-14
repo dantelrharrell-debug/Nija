@@ -5,6 +5,12 @@ injects margin fields only at the private AddOrder payload boundary.  This keeps
 all existing nonce, writer-authority, validation, maker/market fallback, txid,
 and fill checks on the canonical broker path while ensuring leverage actually
 reaches Kraken.
+
+September 14, 2026 safety repair:
+New leveraged USD-pegged pairs (for example USDC/USD) are blocked at the final
+Kraken margin dispatch boundary.  Existing reduce-only exits remain allowed so
+live protected positions can close normally without widening risk or bypassing
+any execution gate.
 """
 
 from __future__ import annotations
@@ -22,6 +28,7 @@ from typing import Any, Callable, Dict, Iterator, Optional
 
 logger = logging.getLogger("nija.kraken_margin_auto_runtime")
 _MARKER = "20260824-kraken-margin-callshape-v223"
+_STABLECOIN_GUARD_MARKER = "20260914-kraken-stablecoin-margin-entry-guard-v1"
 _ORIGINAL_IMPORT: Optional[Callable[..., Any]] = None
 _LOCK = threading.RLock()
 _PATCHED_MODULES: set[tuple[str, int]] = set()
@@ -29,6 +36,24 @@ _MARGIN_ORDER_PARAMS: ContextVar[Optional[Dict[str, Any]]] = ContextVar(
     "nija_kraken_margin_order_params_v223",
     default=None,
 )
+
+# Assets designed to track the U.S. dollar.  USD is included only as a quote/base
+# counterpart so stablecoin-vs-fiat and stablecoin-vs-stablecoin margin exposure
+# can be rejected.  Spot orders (leverage <= 1) are unaffected by this guard.
+_USD_PEGGED_ASSETS = frozenset(
+    {
+        "USD",
+        "USDC",
+        "USDT",
+        "DAI",
+        "BUSD",
+        "FDUSD",
+        "TUSD",
+        "USDP",
+        "PYUSD",
+    }
+)
+_CRYPTO_STABLECOINS = _USD_PEGGED_ASSETS - {"USD"}
 
 
 def _is_kraken(broker: Any) -> bool:
@@ -55,12 +80,47 @@ def _account_id(broker: Any, metadata: Dict[str, Any]) -> str:
     return "platform"
 
 
+def _is_usd_pegged_pair(symbol: Any) -> bool:
+    """Return True for USD-pegged pairs such as USDCUSD, USDT/USD, or USD-USDC.
+
+    Synthetic Kraken suffixes (for example ``:BTNL``) and common separators are
+    ignored.  At least one side must be a crypto stablecoin; plain USD is never
+    enough by itself to classify a pair.
+    """
+    raw = str(symbol or "").strip().upper().split(":", 1)[0]
+    compact = "".join(ch for ch in raw if ch.isalnum())
+    if not compact:
+        return False
+
+    for base in _USD_PEGGED_ASSETS:
+        for quote in _USD_PEGGED_ASSETS:
+            if base == quote:
+                continue
+            if base not in _CRYPTO_STABLECOINS and quote not in _CRYPTO_STABLECOINS:
+                continue
+            if compact == f"{base}{quote}":
+                return True
+    return False
+
+
+def _stablecoin_margin_entries_allowed() -> bool:
+    return str(os.environ.get("NIJA_KRAKEN_ALLOW_STABLECOIN_MARGIN_ENTRIES", "false")).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 def _install_defaults() -> None:
     os.environ.setdefault("NIJA_KRAKEN_MARGIN_ENABLED", "true")
     os.environ.setdefault("NIJA_KRAKEN_AUTO_MARGIN_ENABLED", "true")
     os.environ.setdefault("NIJA_KRAKEN_MARGIN_DEFAULT_LEVERAGE", "2")
     os.environ.setdefault("NIJA_KRAKEN_AUTO_MARGIN_LONG_ONLY", "true")
     os.environ.setdefault("NIJA_KRAKEN_MARGIN_HARD_MAX_LEVERAGE", "3")
+    # Safe default: do not spend margin fees on instruments engineered to stay
+    # near $1.  This affects only new leveraged entries; reduce-only exits pass.
+    os.environ.setdefault("NIJA_KRAKEN_ALLOW_STABLECOIN_MARGIN_ENTRIES", "false")
 
 
 def _patch_capability_matrix(module: ModuleType) -> bool:
@@ -244,6 +304,28 @@ def _patch_router(module: ModuleType) -> bool:
         reduce_only = meta.get("reduce_only") is True
         account = _account_id(broker, meta)
         try:
+            # Fail closed on new leveraged USD-pegged exposure.  Existing margin
+            # exits are explicitly preserved through reduce_only=True.
+            if (
+                not reduce_only
+                and _is_usd_pegged_pair(symbol)
+                and not _stablecoin_margin_entries_allowed()
+            ):
+                logger.error(
+                    "KRAKEN_STABLECOIN_MARGIN_ENTRY_BLOCKED marker=%s account=%s symbol=%s side=%s "
+                    "notional=$%.2f leverage=%sx reduce_only=false reason=usd_pegged_margin_fee_edge_negative "
+                    "existing_exits_preserved=true safety_gates_bypassed=false",
+                    _STABLECOIN_GUARD_MARKER,
+                    account,
+                    symbol,
+                    side,
+                    float(size_usd),
+                    leverage,
+                )
+                raise RuntimeError(
+                    f"stablecoin_margin_entry_blocked:{symbol}:leveraged USD-pegged pairs are exit-only"
+                )
+
             from bot.kraken_margin_engine import get_margin_engine, margin_account_scope
 
             engine = get_margin_engine(account_id=account, adapter=broker)
@@ -378,12 +460,15 @@ def install_import_hook() -> None:
     logger.critical(
         "KRAKEN_MARGIN_AUTO_RUNTIME_INSTALLED marker=%s enabled=%s auto=%s "
         "default_leverage=%s hard_max=3x long_only=%s native_public_callshape=true "
-        "addorder_payload_injection=true spot_fallback=false",
+        "addorder_payload_injection=true spot_fallback=false stablecoin_margin_entries_allowed=%s "
+        "stablecoin_guard_marker=%s",
         _MARKER,
         os.environ.get("NIJA_KRAKEN_MARGIN_ENABLED"),
         os.environ.get("NIJA_KRAKEN_AUTO_MARGIN_ENABLED"),
         os.environ.get("NIJA_KRAKEN_MARGIN_DEFAULT_LEVERAGE"),
         os.environ.get("NIJA_KRAKEN_AUTO_MARGIN_LONG_ONLY"),
+        _stablecoin_margin_entries_allowed(),
+        _STABLECOIN_GUARD_MARKER,
     )
 
 
@@ -394,4 +479,5 @@ __all__ = [
     "_patch_kraken_adapter",
     "_patch_kraken_class",
     "_margin_order_scope",
+    "_is_usd_pegged_pair",
 ]
