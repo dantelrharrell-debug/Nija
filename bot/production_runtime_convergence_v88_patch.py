@@ -198,6 +198,13 @@ def _install_kraken_user_supervision() -> bool:
     with _LOCK:
         if _KRAKEN_SUPERVISION_INSTALLED:
             return True
+
+    # Install the no-I/O account selector before reconnect supervision can
+    # publish or consume any stale duplicate broker object.  This call is
+    # idempotent and fail-closed; the later calls below reassert it as the
+    # canonical modules finish loading.
+    _install_early_user_broker_identity()
+
     installed = False
     try:
         from bot import kraken_all_account_supervision_v86 as v86
@@ -353,6 +360,7 @@ def _try_patch_loaded() -> bool:
 def _monitor() -> None:
     deadline = time.monotonic() + 600.0
     while time.monotonic() < deadline:
+        _install_early_user_broker_identity()
         _install_kraken_user_supervision()
         if _try_patch_loaded():
             return
@@ -363,6 +371,9 @@ def _monitor() -> None:
 def install_import_hook() -> bool:
     global _MONITOR_STARTED
     _install_stale_startup_log_filter()
+    # Run identity convergence before reconnect supervision can publish a stale
+    # compatibility-registry broker into position-readiness state.
+    _install_early_user_broker_identity()
     _install_kraken_user_supervision()
     _try_patch_loaded()
     with _LOCK:
