@@ -6,6 +6,7 @@ import types
 from concurrent.futures import ThreadPoolExecutor
 
 from bot.broker_configs.strategy_selector import BrokerStrategySelector
+from bot.broker_failure_manager import BrokerFailureManager
 from bot.broker_isolation_registry import (
     BrokerCellRuntimeManager,
     BrokerIsolationRegistry,
@@ -51,6 +52,74 @@ def test_unknown_broker_fails_closed():
     assert registry.check_execution("mystery_exchange", "buy") is not None
 
 
+def test_disabled_cell_cannot_be_halted_or_degraded():
+    registry = BrokerIsolationRegistry()
+    registry.register(
+        IsolationEntry(
+            "disabled_test",
+            IsolationPolicy.DISABLED,
+            state=types.SimpleNamespace(
+                health=CellHealth.DISABLED,
+                halted_reason="",
+                consecutive_failures=0,
+                last_failure="",
+                last_failure_ts=0.0,
+                last_success_ts=0.0,
+                users=set(),
+            ),
+        )
+    )
+    # Replace the SimpleNamespace with canonical state through a detached round trip.
+    entry = registry.get("disabled_test")
+    entry.state.health = CellHealth.DISABLED
+    registry.register(entry)
+
+    assert registry.halt_cell("disabled_test", "should_not_change") is False
+    assert registry.record_failure("disabled_test", "should_not_change") is False
+    assert registry.get("disabled_test").state.health is CellHealth.DISABLED
+
+
+def test_registry_get_returns_detached_snapshot():
+    registry = BrokerIsolationRegistry()
+    registry.register(IsolationEntry("kraken", IsolationPolicy.ACTIVE))
+
+    outside = registry.get("kraken")
+    outside.state.health = CellHealth.HALTED
+    outside.state.users.add("intruder")
+
+    inside = registry.get("kraken")
+    assert inside.state.health is CellHealth.READY
+    assert inside.state.users == set()
+
+
+def test_halt_and_resume_reapply_only_cell_owned_passive_mode():
+    registry = BrokerIsolationRegistry()
+    registry.register(IsolationEntry("okx", IsolationPolicy.ACTIVE))
+
+    class BrokerType:
+        value = "okx"
+
+    class Broker:
+        broker_type = BrokerType()
+
+        def __init__(self):
+            self.mode = "ACTIVE"
+            self.exit_only_mode = False
+
+    broker = Broker()
+    registry.apply_to_broker(broker)
+    assert broker.mode == "ACTIVE"
+    assert broker.exit_only_mode is False
+
+    assert registry.halt_cell("okx", "test") is True
+    assert broker.mode == "PASSIVE"
+    assert broker.exit_only_mode is True
+
+    assert registry.resume_cell("okx") is True
+    assert broker.mode == "ACTIVE"
+    assert broker.exit_only_mode is False
+
+
 def test_users_are_members_of_only_their_broker_cells():
     registry = BrokerIsolationRegistry()
     registry.register(IsolationEntry("kraken", IsolationPolicy.ACTIVE))
@@ -81,6 +150,23 @@ def test_failure_counter_is_cell_local():
     assert registry.get("coinbase").state.consecutive_failures == 0
 
 
+def test_failure_manager_leaves_failed_broker_capital_idle(monkeypatch):
+    import bot.broker_failure_manager as bfm_module
+
+    monkeypatch.setattr(bfm_module, "_halt_broker_cell", lambda *_args, **_kwargs: None)
+    manager = BrokerFailureManager(failure_threshold=1)
+    manager.register_broker("coinbase", 0.50)
+    manager.register_broker("kraken", 0.30)
+    manager.register_broker("okx", 0.20)
+
+    assert manager.record_error("coinbase", "provider_down") is True
+    weights = manager.get_active_allocation_weights()
+
+    assert weights == {"kraken": 0.30, "okx": 0.20}
+    assert sum(weights.values()) == 0.50
+    assert manager.get_status()["coinbase"]["capital_redistributed"] is False
+
+
 def test_strategy_selection_is_thread_local():
     selector = BrokerStrategySelector()
     barrier = threading.Barrier(2)
@@ -102,6 +188,12 @@ def test_strategy_selection_is_thread_local():
     assert coinbase_config is selector.get_config("coinbase")
     assert selector.get_config("okx") is not None
     assert selector.get_config("alpaca") is not None
+
+
+def test_strategy_selector_compatibility_printer_still_exists(capsys):
+    selector = BrokerStrategySelector()
+    selector.print_strategy_comparison()
+    assert "BROKER STRATEGY COMPARISON" in capsys.readouterr().out
 
 
 def test_same_broker_different_accounts_get_distinct_runtime_state(monkeypatch):
@@ -140,8 +232,17 @@ def test_same_broker_different_accounts_get_distinct_runtime_state(monkeypatch):
     owner = types.SimpleNamespace(
         broker=None,
         independent_trader=object(),
-        _symbols_by_broker={},
+        symbols=["BTC-USD"],
+        _symbols_by_broker={"kraken": ["BTC-USD"]},
+        _symbol_scan_cursor={"kraken": 0},
+        failed_brokers={},
         _wiring_recovery_lock=threading.Lock(),
+        _heartbeat_trade_lock=threading.Lock(),
+        _symbol_universe_lock=threading.Lock(),
+        _heartbeat_trade_enabled=True,
+        _heartbeat_trade_thread=object(),
+        _heartbeat_trade_completed=True,
+        _heartbeat_trade_success=True,
     )
 
     manager = BrokerCellRuntimeManager()
@@ -153,6 +254,13 @@ def test_same_broker_different_accounts_get_distinct_runtime_state(monkeypatch):
     assert account_a.strategy is not account_b.strategy
     assert account_a.apex is not account_b.apex
     assert account_a.core_loop is not account_b.core_loop
+    assert account_a.strategy._symbols_by_broker is not account_b.strategy._symbols_by_broker
+    assert account_a.strategy._symbol_scan_cursor is not account_b.strategy._symbol_scan_cursor
+    assert account_a.strategy.failed_brokers is not account_b.strategy.failed_brokers
+    assert account_a.strategy._heartbeat_trade_enabled is False
+    assert account_b.strategy._heartbeat_trade_enabled is False
 
     account_a.core_loop._zero_signal_streak = 9
+    account_a.strategy._symbol_scan_cursor["kraken"] = 7
     assert account_b.core_loop._zero_signal_streak == 0
+    assert account_b.strategy._symbol_scan_cursor["kraken"] == 0
