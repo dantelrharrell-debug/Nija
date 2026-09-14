@@ -14,6 +14,9 @@ only their read-only price lookup to use the standard pair. v397 prevents
 stop-loss/take-profit orphan cleanup while authenticated exposure remains and
 requires repeated authoritative zero-exposure proof before cleanup.
 
+v410 adds classification-only, redacted diagnostics around v366 OpenPositions
+exceptions. It is telemetry-only and is deliberately not a readiness dependency.
+
 No global health state is promoted and no execution gate is bypassed.
 """
 from __future__ import annotations
@@ -69,6 +72,22 @@ def _patch_pair_resolver() -> bool:
     setattr(resolve_pair_v381, "__wrapped__", current)
     module._resolve_pair = resolve_pair_v381
     return True
+
+
+def _install_openpositions_diagnostics_v410() -> bool:
+    """Install redacted diagnostics without making telemetry a readiness gate."""
+    try:
+        module = importlib.import_module("bot.runtime_kraken_openpositions_diagnostics_v410_patch")
+        installer = getattr(module, "install_import_hook", None) or getattr(module, "install", None)
+        return bool(callable(installer) and installer())
+    except Exception as exc:
+        LOGGER.error(
+            "KRAKEN_MARGIN_PAIR_V381_V410_INSTALL_FAILED marker=%s exception_type=%s "
+            "message_redacted=true telemetry_only=true readiness_unchanged=true safety_gates_bypassed=false",
+            MARKER,
+            type(exc).__name__,
+        )
+        return False
 
 
 def _install_liveness_v384() -> bool:
@@ -166,6 +185,7 @@ def _reassert_v380() -> bool:
 
 
 def install_import_hook() -> bool:
+    diagnostics_ready = _install_openpositions_diagnostics_v410()
     liveness_ready = _install_liveness_v384()
     pair_ready = _patch_pair_resolver() if liveness_ready else False
     btnl_routing_ready = _install_btnl_routing_v394() if pair_ready else False
@@ -180,13 +200,15 @@ def install_import_hook() -> bool:
     os.environ[_READY_FLAG] = "1" if ready else "0"
     LOGGER.critical(
         "RUNTIME_KRAKEN_MARGIN_PAIR_RESOLUTION_V381_%s marker=%s ready=%s "
-        "v384_health_user_refresh=%s synthetic_suffix_public_lookup_only=true position_identity_unchanged=true "
+        "v410_openpositions_diagnostics=%s v384_health_user_refresh=%s "
+        "synthetic_suffix_public_lookup_only=true position_identity_unchanged=true "
         "v394_btnl_private_order_routing=%s v396_btnl_index_trigger=%s v395_btnl_software_exit_identity=%s "
         "v397_protective_order_persistence=%s v380_reasserted=%s reduce_only_unchanged=true "
         "openorders_proof_venue_exact=true writer_nonce_risk_killswitch_unchanged=true safety_gates_bypassed=false",
         "READY" if ready else "NOT_READY",
         MARKER,
         str(ready).lower(),
+        str(diagnostics_ready).lower(),
         str(liveness_ready).lower(),
         str(btnl_routing_ready).lower(),
         str(btnl_trigger_ready).lower(),
@@ -203,7 +225,8 @@ def install() -> bool:
 
 __all__ = [
     "MARKER", "install", "install_import_hook", "_lookup_symbol",
-    "_patch_pair_resolver", "_install_liveness_v384", "_install_btnl_routing_v394",
+    "_patch_pair_resolver", "_install_openpositions_diagnostics_v410",
+    "_install_liveness_v384", "_install_btnl_routing_v394",
     "_install_btnl_index_trigger_v396", "_install_btnl_exit_identity_v395",
     "_install_protective_persistence_v397",
 ]
