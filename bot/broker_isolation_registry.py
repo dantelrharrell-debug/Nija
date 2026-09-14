@@ -1,17 +1,19 @@
 """NIJA broker-cell isolation registry.
 
-A broker cell is the hard fault/risk/account boundary for one venue.  Cells
+A broker cell is the hard fault/risk/account boundary for one venue. Cells
 share read-only observability but do not share execution state, circuit-breaker
 state, user membership, strategy selection or broker shutdown state.
 """
 from __future__ import annotations
 
+import copy
 import logging
+import sys
 import threading
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional, Set
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 logger = logging.getLogger("nija.broker_isolation_registry")
 
@@ -82,7 +84,7 @@ class BrokerCellState:
 
 @dataclass
 class IsolationEntry:
-    """Complete immutable policy + mutable state for exactly one broker cell."""
+    """Complete policy + state for exactly one broker cell."""
     broker_name: str
     policy: IsolationPolicy
     capital: CapitalProfile = field(default_factory=CapitalProfile)
@@ -160,7 +162,7 @@ class BrokerIsolationRegistry:
                     symbol_filter = None
 
             health = CellHealth.DISABLED if policy == IsolationPolicy.DISABLED else CellHealth.READY
-            entry = IsolationEntry(
+            self._entries[name] = IsolationEntry(
                 broker_name=name,
                 policy=policy,
                 capital=CapitalProfile(
@@ -187,7 +189,6 @@ class BrokerIsolationRegistry:
                 description=f"Broker cell {name} ({policy.value})",
                 state=BrokerCellState(health=health),
             )
-            self._entries[name] = entry
 
         logger.info(
             "BROKER_CELL_REGISTRY_READY count=%d cells=%s shared_execution_state=false",
@@ -205,7 +206,6 @@ class BrokerIsolationRegistry:
             return self._entries.get(str(broker_name).lower())
 
     def get_or_default(self, broker_name: str) -> IsolationEntry:
-        """Unknown brokers fail closed rather than inheriting live authority."""
         found = self.get(broker_name)
         if found is not None:
             return found
@@ -233,7 +233,6 @@ class BrokerIsolationRegistry:
             return True
 
     def halt_cell(self, broker_name: str, reason: str) -> bool:
-        """Halt one broker only. Protective exits remain policy-eligible."""
         with self._lock:
             entry = self._entries.get(str(broker_name).lower())
             if entry is None:
@@ -254,7 +253,6 @@ class BrokerIsolationRegistry:
             return True
 
     def record_failure(self, broker_name: str, reason: str, halt_after: int = 5) -> bool:
-        """Record a failure only inside the named cell; returns whether it halted."""
         with self._lock:
             entry = self._entries.get(str(broker_name).lower())
             if entry is None:
@@ -317,7 +315,6 @@ class BrokerIsolationRegistry:
         entry = self.get_or_default(broker_name)
         side_lower = str(side).lower()
         if entry.skip_execution():
-            # A halted cell still permits SELL/protective exits when its policy does.
             if side_lower in {"sell", "close", "exit"} and entry.is_exit_allowed():
                 return None
             logger.warning("BROKER_CELL_EXECUTION_BLOCK broker=%s side=%s health=%s", broker_name, side_lower, entry.state.health.value)
@@ -327,7 +324,6 @@ class BrokerIsolationRegistry:
         return None
 
     def snapshot(self) -> Dict[str, Dict[str, Any]]:
-        """Independent per-cell telemetry for dashboards/accounting."""
         with self._lock:
             return {
                 name: {
@@ -368,8 +364,212 @@ def _broker_name(broker) -> str:
     return type(broker).__name__.replace("Broker", "").lower()
 
 
+def _broker_account_key(broker: Any) -> Tuple[str, str]:
+    """Return a stable cell key that separates users on the same brokerage."""
+    name = _broker_name(broker)
+    for attr in ("account_id", "user_id", "portfolio_id", "subaccount_id", "account_uuid", "profile_id"):
+        value = getattr(broker, attr, None)
+        if value not in (None, ""):
+            return name, str(value)
+    return name, f"object:{id(broker)}"
+
+
+@dataclass
+class BrokerAccountRuntime:
+    key: Tuple[str, str]
+    broker_name: str
+    strategy: Any
+    apex: Any
+    core_loop: Any
+    lock: threading.RLock = field(default_factory=threading.RLock)
+    created_at: float = field(default_factory=time.time)
+
+
+class BrokerCellRuntimeManager:
+    """Own one APEX/CoreLoop runtime per broker account, never process-global."""
+
+    def __init__(self) -> None:
+        self._runtimes: Dict[Tuple[str, str], BrokerAccountRuntime] = {}
+        self._lock = threading.RLock()
+
+    @staticmethod
+    def _strategy_config(name: str, entry: IsolationEntry) -> Dict[str, Any]:
+        """Translate broker policy into the subset APEX consumes directly."""
+        cfg: Dict[str, Any] = {
+            "broker_cell": name,
+            "max_position_pct": min(max(float(entry.risk.max_position_pct), 0.001), 0.30),
+            "enable_take_profit": True,
+            "broker_max_positions": int(entry.risk.max_positions),
+            "broker_stop_loss_pct": float(entry.risk.stop_loss_pct),
+            "broker_max_hold_hours": float(entry.strategy.max_hold_hours),
+            "broker_bidirectional": bool(entry.strategy.bidirectional),
+        }
+        try:
+            from bot.broker_configs.strategy_selector import STRATEGY_SELECTOR
+            broker_cfg = STRATEGY_SELECTOR.get_config(name)
+        except Exception:
+            broker_cfg = None
+        if broker_cfg is not None:
+            for attr, target in (
+                ("min_position_pct", "min_position_pct"),
+                ("max_position_pct", "max_position_pct"),
+                ("min_adx", "min_adx"),
+                ("volume_threshold", "volume_threshold"),
+                ("volume_min_threshold", "volume_min_threshold"),
+            ):
+                value = getattr(broker_cfg, attr, None)
+                if value is not None:
+                    cfg[target] = value
+        return cfg
+
+    @staticmethod
+    def _detach_clone_state(clone: Any, broker: Any) -> None:
+        """Detach mutable TradingStrategy fields that must not bleed between cells."""
+        clone.broker = broker
+        clone.independent_trader = None
+        for attr in ("_symbols_by_broker", "_last_known_balances", "_broker_balance_cache"):
+            value = getattr(clone, attr, None)
+            if isinstance(value, dict):
+                setattr(clone, attr, {k: (list(v) if isinstance(v, list) else copy.copy(v)) for k, v in value.items()})
+        for attr in ("_wiring_recovery_lock", "_heartbeat_trade_lock", "_symbol_refresh_lock"):
+            if hasattr(clone, attr):
+                setattr(clone, attr, threading.RLock())
+
+    def get_or_create(self, owner_strategy: Any, broker: Any) -> BrokerAccountRuntime:
+        key = _broker_account_key(broker)
+        with self._lock:
+            existing = self._runtimes.get(key)
+            if existing is not None and existing.strategy is not None:
+                # Broker objects can reconnect in place; keep references current.
+                existing.strategy.broker = broker
+                try:
+                    existing.apex.broker_client = broker
+                    if hasattr(existing.apex, "execution_engine"):
+                        existing.apex.execution_engine.broker_client = broker
+                except Exception:
+                    pass
+                return existing
+
+            registry = get_broker_isolation_registry()
+            entry = registry.get_or_default(key[0])
+            if entry.policy == IsolationPolicy.DISABLED:
+                raise RuntimeError(f"unregistered/disabled broker cell: {key[0]}")
+
+            try:
+                from bot.nija_apex_strategy_v71 import NIJAApexStrategyV71
+                from bot.nija_core_loop import NijaCoreLoop
+            except ImportError:
+                from nija_apex_strategy_v71 import NIJAApexStrategyV71  # type: ignore[import]
+                from nija_core_loop import NijaCoreLoop  # type: ignore[import]
+
+            clone = copy.copy(owner_strategy)
+            self._detach_clone_state(clone, broker)
+            apex_cfg = self._strategy_config(key[0], entry)
+            apex = NIJAApexStrategyV71(broker_client=broker, config=apex_cfg)
+            broker_cfg = None
+            try:
+                from bot.broker_configs.strategy_selector import STRATEGY_SELECTOR
+                broker_cfg = STRATEGY_SELECTOR.get_config(key[0])
+            except Exception:
+                pass
+            setattr(apex, "broker_config", broker_cfg)
+            setattr(apex, "broker_cell", key[0])
+            setattr(apex, "broker_account_key", key[1])
+            core_loop = NijaCoreLoop(apex_strategy=apex, max_positions=max(1, int(entry.risk.max_positions)))
+
+            clone.apex = apex
+            clone.execution_engine = getattr(apex, "execution_engine", None)
+            clone.nija_core_loop = core_loop
+            clone._nija_broker_cell_runtime = True
+            clone._nija_broker_cell_key = key
+
+            runtime = BrokerAccountRuntime(
+                key=key,
+                broker_name=key[0],
+                strategy=clone,
+                apex=apex,
+                core_loop=core_loop,
+            )
+            self._runtimes[key] = runtime
+            logger.critical(
+                "BROKER_ACCOUNT_RUNTIME_CREATED broker=%s account=%s strategy_id=%s apex_id=%s core_loop_id=%s shared_state=false",
+                key[0], key[1], id(clone), id(apex), id(core_loop),
+            )
+            return runtime
+
+    def snapshot(self) -> Dict[str, Dict[str, Any]]:
+        with self._lock:
+            return {
+                f"{broker}:{account}": {
+                    "broker": broker,
+                    "account": account,
+                    "strategy_id": id(runtime.strategy),
+                    "apex_id": id(runtime.apex),
+                    "core_loop_id": id(runtime.core_loop),
+                    "created_at": runtime.created_at,
+                }
+                for (broker, account), runtime in self._runtimes.items()
+            }
+
+    def drop(self, broker: Any) -> None:
+        with self._lock:
+            self._runtimes.pop(_broker_account_key(broker), None)
+
+
 _instance: Optional[BrokerIsolationRegistry] = None
 _instance_lock = threading.Lock()
+_runtime_manager: Optional[BrokerCellRuntimeManager] = None
+_runtime_manager_lock = threading.Lock()
+_strategy_router_lock = threading.Lock()
+
+
+def get_broker_cell_runtime_manager() -> BrokerCellRuntimeManager:
+    global _runtime_manager
+    if _runtime_manager is None:
+        with _runtime_manager_lock:
+            if _runtime_manager is None:
+                _runtime_manager = BrokerCellRuntimeManager()
+    return _runtime_manager
+
+
+def _install_strategy_cell_router() -> bool:
+    """Route TradingStrategy.run_cycle through per-account runtimes when loaded."""
+    with _strategy_router_lock:
+        module = sys.modules.get("bot.trading_strategy") or sys.modules.get("trading_strategy")
+        cls = getattr(module, "TradingStrategy", None) if module is not None else None
+        if not isinstance(cls, type):
+            return False
+        current = getattr(cls, "run_cycle", None)
+        if not callable(current):
+            return False
+        if getattr(current, "_nija_broker_cell_router_v420", False):
+            return True
+
+        original = current
+
+        def _cell_routed_run_cycle(self, broker: Any = None, user_mode: bool = False) -> int:
+            if broker is None or bool(getattr(self, "_nija_broker_cell_runtime", False)):
+                return int(original(self, broker=broker, user_mode=user_mode) or 150)
+            name = _broker_name(broker)
+            registry = get_broker_isolation_registry()
+            entry = registry.get_or_default(name)
+            # Disabled/passive cells still allow the existing path to manage
+            # protective exits, but execution-layer entry checks remain closed.
+            runtime = get_broker_cell_runtime_manager().get_or_create(self, broker)
+            with runtime.lock:
+                try:
+                    result = int(original(runtime.strategy, broker=broker, user_mode=user_mode) or 150)
+                    registry.record_success(name)
+                    return result
+                except Exception as exc:
+                    registry.record_failure(name, f"{type(exc).__name__}:{exc}")
+                    raise
+
+        setattr(_cell_routed_run_cycle, "_nija_broker_cell_router_v420", True)
+        setattr(_cell_routed_run_cycle, "__wrapped__", original)
+        cls.run_cycle = _cell_routed_run_cycle
+        logger.critical("BROKER_CELL_STRATEGY_ROUTER_INSTALLED per_account_strategy=true per_account_core_loop=true")
+        return True
 
 
 def get_broker_isolation_registry() -> BrokerIsolationRegistry:
@@ -378,4 +578,9 @@ def get_broker_isolation_registry() -> BrokerIsolationRegistry:
         with _instance_lock:
             if _instance is None:
                 _instance = BrokerIsolationRegistry()
+    # Re-attempt on every access until TradingStrategy has been imported.
+    try:
+        _install_strategy_cell_router()
+    except Exception as exc:
+        logger.debug("BROKER_CELL_STRATEGY_ROUTER_DEFERRED error=%s", exc)
     return _instance
