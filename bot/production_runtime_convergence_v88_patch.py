@@ -472,8 +472,12 @@ def _monitor() -> None:
 def install_import_hook() -> bool:
     global _MONITOR_STARTED, _CRITICAL_LIVENESS_MONITOR_STARTED
     _install_stale_startup_log_filter()
-    _install_kraken_user_supervision()
-    _try_patch_loaded()
+
+    # Start the proof-producing liveness monitor before the synchronous Kraken
+    # supervision chain.  The supervision installer can legitimately block on
+    # bounded authenticated reads while startup is converging; V420 exists to
+    # keep capital and authoritative-position producers making progress during
+    # exactly that window.  This thread cannot grant execution by itself.
     with _LOCK:
         if not _CRITICAL_LIVENESS_MONITOR_STARTED:
             _CRITICAL_LIVENESS_MONITOR_STARTED = True
@@ -482,6 +486,10 @@ def install_import_hook() -> bool:
                 name="CriticalKrakenLivenessV420",
                 daemon=True,
             ).start()
+
+    _install_kraken_user_supervision()
+    _try_patch_loaded()
+    with _LOCK:
         if not _MONITOR_STARTED:
             _MONITOR_STARTED = True
             threading.Thread(
