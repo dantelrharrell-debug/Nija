@@ -16,6 +16,15 @@ cannot refresh capital.  User-account balances are never fed into platform
 capital.  Existing CapitalAuthority registration, monotonic timestamp,
 freshness, completeness, writer, nonce, risk, kill-switch, position, protection,
 order and fill gates remain authoritative.
+
+September 15, 2026 binding-liveness repair:
+Later startup patches can legitimately rebind KrakenBroker.get_account_balance
+after v415 is installed.  A tiny no-I/O daemon guard now verifies that both v415
+wrappers remain in the callable chains and re-applies only the wrappers when a
+later rebind removes them.  The guard performs no broker calls, does not refresh
+capital by itself, and cannot grant readiness or execution authority.  A fresh
+CapitalAuthority timestamp still requires a genuine authenticated PLATFORM
+Balance read completed inside the same get_account_balance invocation.
 """
 from __future__ import annotations
 
@@ -32,10 +41,13 @@ from typing import Any
 
 LOGGER = logging.getLogger("nija.runtime_kraken_platform_balance_capital_feed_v415")
 MARKER = "20260914-kraken-platform-balance-capital-feed-v415"
+_BINDING_MARKER = "20260915-kraken-platform-balance-capital-feed-binding-v416"
 _READY_FLAG = "NIJA_RUNTIME_KRAKEN_PLATFORM_BALANCE_CAPITAL_FEED_V415_READY"
 _PRIVATE_ATTR = "_nija_kraken_platform_balance_capital_feed_v415_private"
 _BALANCE_ATTR = "_nija_kraken_platform_balance_capital_feed_v415_balance"
 _LOCK = threading.RLock()
+_GUARD_LOCK = threading.Lock()
+_GUARD_STARTED = False
 
 
 def _chain_has(callable_obj: Any, attr: str) -> bool:
@@ -218,6 +230,13 @@ def _patch_kraken_class() -> bool:
         setattr(get_account_balance_v415, _BALANCE_ATTR, True)
         setattr(get_account_balance_v415, "__wrapped__", original_balance)
         cls.get_account_balance = get_account_balance_v415
+        LOGGER.critical(
+            "KRAKEN_PLATFORM_BALANCE_V415_BINDING_REASSERTED marker=%s binding_marker=%s "
+            "surface=get_account_balance broker_io=false readiness_granted=false "
+            "execution_authority_granted=false safety_gates_bypassed=false",
+            MARKER,
+            _BINDING_MARKER,
+        )
 
     return bool(
         _chain_has(getattr(cls, "_kraken_private_call", None), _PRIVATE_ATTR)
@@ -225,16 +244,60 @@ def _patch_kraken_class() -> bool:
     )
 
 
+def _binding_guard_loop() -> None:
+    last_ready: bool | None = None
+    while True:
+        try:
+            ready = bool(_patch_kraken_class())
+            os.environ[_READY_FLAG] = "1" if ready else "0"
+            if ready != last_ready:
+                LOGGER.critical(
+                    "KRAKEN_PLATFORM_BALANCE_V415_BINDING_GUARD marker=%s binding_marker=%s ready=%s "
+                    "broker_io=false capital_refresh_triggered=false readiness_granted=false "
+                    "execution_authority_granted=false safety_gates_bypassed=false",
+                    MARKER,
+                    _BINDING_MARKER,
+                    str(ready).lower(),
+                )
+                last_ready = ready
+        except Exception:
+            LOGGER.debug("v415 binding guard iteration deferred", exc_info=True)
+        time.sleep(0.5)
+
+
+def _start_binding_guard() -> None:
+    global _GUARD_STARTED
+    with _GUARD_LOCK:
+        if _GUARD_STARTED:
+            return
+        thread = threading.Thread(
+            target=_binding_guard_loop,
+            name="KrakenPlatformCapitalFeedV415BindingGuard",
+            daemon=True,
+        )
+        thread.start()
+        _GUARD_STARTED = True
+        LOGGER.critical(
+            "KRAKEN_PLATFORM_BALANCE_V415_BINDING_GUARD_STARTED marker=%s binding_marker=%s "
+            "daemon=true broker_io=false capital_refresh_triggered=false readiness_granted=false "
+            "execution_authority_granted=false safety_gates_bypassed=false",
+            MARKER,
+            _BINDING_MARKER,
+        )
+
+
 def install_import_hook() -> bool:
     with _LOCK:
         ready = bool(_patch_kraken_class())
         os.environ[_READY_FLAG] = "1" if ready else "0"
         if ready:
+            _start_binding_guard()
             LOGGER.critical(
                 "RUNTIME_KRAKEN_PLATFORM_BALANCE_CAPITAL_FEED_V415_READY marker=%s ready=true "
                 "platform_only=true authenticated_private_balance_required=true normalized_outer_result_required=true "
                 "cached_call_cannot_refresh=true observation_timestamp_preserved=true new_broker_io=false "
-                "capital_ttl_unchanged=true writer_nonce_risk_killswitch_position_protection_order_fill_gates_unchanged=true "
+                "binding_guard=true capital_ttl_unchanged=true "
+                "writer_nonce_risk_killswitch_position_protection_order_fill_gates_unchanged=true "
                 "forced_activation=false safety_gates_bypassed=false",
                 MARKER,
             )
@@ -257,4 +320,6 @@ __all__ = [
     "install_import_hook",
     "_normalized_capital",
     "_is_platform_account",
+    "_patch_kraken_class",
+    "_start_binding_guard",
 ]
