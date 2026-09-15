@@ -121,11 +121,16 @@ def _patch_v412() -> bool:
         raise RuntimeError("v412 expected v88 monitor anchor missing")
     text = text.replace(old_monitor, new_monitor, 1)
 
-    old_install = '''    _install_stale_startup_log_filter()\n    _install_kraken_user_supervision()\n    _try_patch_loaded()\n'''
-    new_install = '''    _install_stale_startup_log_filter()\n    kraken_ready = bool(_install_kraken_user_supervision())\n    tsm_ready = bool(_try_patch_loaded())\n'''
-    if old_install not in text:
-        raise RuntimeError("v412 expected v88 install anchor missing")
-    text = text.replace(old_install, new_install, 1)
+    # v421 starts the critical Kraken liveness thread between the stale-log
+    # filter and these two synchronous convergence calls. Match only the unique
+    # call pair so v412 can add truthful readiness telemetry without moving or
+    # delaying the V420 monitor. This also remains compatible with the older
+    # pre-v421 layout where the same pair immediately followed the log filter.
+    old_install_calls = '''    _install_kraken_user_supervision()\n    _try_patch_loaded()\n'''
+    new_install_calls = '''    kraken_ready = bool(_install_kraken_user_supervision())\n    tsm_ready = bool(_try_patch_loaded())\n'''
+    if text.count(old_install_calls) != 1:
+        raise RuntimeError("v412 expected one v88 install call-pair anchor")
+    text = text.replace(old_install_calls, new_install_calls, 1)
 
     old_log = '''        "PRODUCTION_RUNTIME_CONVERGENCE_V88_INSTALLED marker=%s circuit_classification=true "\n        "kraken_user_supervision=true kraken_user_rebuild_v90=true all_account_connectivity_v266=true "\n'''
     new_log = '''        "PRODUCTION_RUNTIME_CONVERGENCE_V88_INSTALLED marker=%s circuit_classification_ready=%s "\n        "kraken_user_supervision_ready=%s v412_monitor_requires_both=true "\n        "kraken_user_rebuild_v90=true all_account_connectivity_v266=true "\n'''
@@ -143,6 +148,7 @@ def _patch_v412() -> bool:
     print(
         f"V88_KRAKEN_SUPERVISION_MONITOR_V412_PATCH_APPLIED marker={V412_MARKER} "
         "monitor_requires_kraken_and_tsm=true startup_truthful_telemetry=true "
+        "v421_critical_monitor_order_preserved=true "
         "snapshot_ttl_unchanged=true readiness_fabricated=false safety_gates_bypassed=false"
     )
     return True
