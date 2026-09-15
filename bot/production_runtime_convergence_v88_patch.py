@@ -17,6 +17,7 @@ from typing import Any
 LOGGER = logging.getLogger("nija.production_runtime_convergence_v88")
 MARKER = "20260813-production-runtime-convergence-v88"
 EARLY_IDENTITY_MARKER = "20260914-v88-user-broker-identity-v418"
+CRITICAL_LIVENESS_MARKER = "20260915-v88-critical-kraken-liveness-v420"
 _LOCK = threading.RLock()
 _MONITOR_STARTED = False
 _PATCHED_TSM_IDS: set[int] = set()
@@ -193,6 +194,57 @@ def _install_early_user_broker_identity() -> bool:
         return False
 
 
+def _install_critical_kraken_liveness() -> bool:
+    """Retry proof-producing Kraken modules independently of the long chain.
+
+    The full supervision chain intentionally remains fail-closed, but optional
+    modules can legitimately need more than one import-hook pass to converge.
+    Capital hydration and authoritative user snapshots must not be starved just
+    because an unrelated later/earlier hook returned ``False`` on that pass.
+
+    These installers perform authenticated reads and publish proof through the
+    existing canonical paths.  They cannot grant execution without their own
+    freshness, synchronization, capital, writer, nonce, risk and kill-switch
+    checks succeeding.
+    """
+    modules = (
+        ("v285", "bot.runtime_authoritative_position_coverage_v285_patch"),
+        ("v286", "bot.runtime_kraken_position_refresh_liveness_v286_patch"),
+        ("v415", "bot.runtime_kraken_platform_balance_capital_feed_v415_patch"),
+    )
+    results: dict[str, bool] = {}
+    for label, module_name in modules:
+        try:
+            module = __import__(module_name, fromlist=("install_import_hook",))
+            installer = getattr(module, "install_import_hook", None)
+            results[label] = bool(callable(installer) and installer())
+        except Exception as exc:
+            results[label] = False
+            LOGGER.warning(
+                "V88_CRITICAL_KRAKEN_LIVENESS_V420_MODULE_PENDING marker=%s "
+                "module=%s error=%s:%s fail_closed=true readiness_granted=false "
+                "execution_authority_unchanged=true safety_gates_bypassed=false",
+                CRITICAL_LIVENESS_MARKER,
+                label,
+                type(exc).__name__,
+                exc,
+            )
+    ready = all(results.values())
+    log = LOGGER.critical if ready else LOGGER.warning
+    log(
+        "V88_CRITICAL_KRAKEN_LIVENESS_V420_%s marker=%s results=%s "
+        "independent_retry=true authenticated_proof_required=true "
+        "snapshot_ttl_unchanged=true capital_ttl_unchanged=true "
+        "readiness_granted=false forced_activation=false forced_trade=false "
+        "writer_nonce_risk_capital_killswitch_order_fill_gates_unchanged=true "
+        "safety_gates_bypassed=false",
+        "READY" if ready else "PENDING",
+        CRITICAL_LIVENESS_MARKER,
+        results,
+    )
+    return ready
+
+
 def _install_kraken_user_supervision() -> bool:
     global _KRAKEN_SUPERVISION_INSTALLED
     with _LOCK:
@@ -203,6 +255,7 @@ def _install_kraken_user_supervision() -> bool:
     # v412 monitor/install anchors stay unchanged. Every call to supervision
     # therefore converges duplicate broker identity before reconnect logic.
     _install_early_user_broker_identity()
+    _install_critical_kraken_liveness()
 
     installed = False
     try:
@@ -407,4 +460,5 @@ __all__ = [
     "install",
     "install_import_hook",
     "_install_early_user_broker_identity",
+    "_install_critical_kraken_liveness",
 ]
