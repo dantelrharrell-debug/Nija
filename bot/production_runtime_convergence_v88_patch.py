@@ -17,8 +17,10 @@ from typing import Any
 LOGGER = logging.getLogger("nija.production_runtime_convergence_v88")
 MARKER = "20260813-production-runtime-convergence-v88"
 EARLY_IDENTITY_MARKER = "20260914-v88-user-broker-identity-v418"
+CRITICAL_LIVENESS_MARKER = "20260915-v88-critical-kraken-liveness-v420"
 _LOCK = threading.RLock()
 _MONITOR_STARTED = False
+_CRITICAL_LIVENESS_MONITOR_STARTED = False
 _PATCHED_TSM_IDS: set[int] = set()
 _KRAKEN_SUPERVISION_INSTALLED = False
 _LOG_FILTER_INSTALLED = False
@@ -193,6 +195,108 @@ def _install_early_user_broker_identity() -> bool:
         return False
 
 
+def _install_critical_kraken_liveness() -> bool:
+    """Retry proof-producing Kraken modules independently of the long chain.
+
+    The full supervision chain intentionally remains fail-closed, but optional
+    modules can legitimately need more than one import-hook pass to converge.
+    Capital hydration and authoritative user snapshots must not be starved just
+    because an unrelated later/earlier hook returned ``False`` on that pass.
+
+    These installers perform authenticated reads and publish proof through the
+    existing canonical paths.  They cannot grant execution without their own
+    freshness, synchronization, capital, writer, nonce, risk and kill-switch
+    checks succeeding.
+    """
+    # The repository's full-suite runner deliberately defers runtime import
+    # hooks so one test cannot leak daemon monitors or mutable module state into
+    # another.  Honor that harness contract; Render production does not set the
+    # defer guard and therefore continues through the real installer path.
+    if _truthy("NIJA_DEFER_RUNTIME_SITE_HOOKS"):
+        LOGGER.info(
+            "V88_CRITICAL_KRAKEN_LIVENESS_V420_DEFERRED marker=%s "
+            "test_isolation=true production_behavior_unchanged=true "
+            "readiness_granted=false safety_gates_bypassed=false",
+            CRITICAL_LIVENESS_MARKER,
+        )
+        return False
+
+    # v318 patches the transport timeout, credential serialization, monitoring
+    # fairness, coalescing and phase-handoff stack without starting broker I/O.
+    # Do not start v285/v286 reconciliation until that ordering contract is
+    # proven for the current writer generation.
+    try:
+        prereq = __import__(
+            "bot.runtime_kraken_precore_liveness_v318_patch",
+            fromlist=("install_import_hook",),
+        )
+        prereq_installer = getattr(prereq, "install_import_hook", None)
+        prereq_ready = bool(callable(prereq_installer) and prereq_installer())
+    except Exception as exc:
+        prereq_ready = False
+        LOGGER.warning(
+            "V88_CRITICAL_KRAKEN_LIVENESS_V420_PREREQUISITE_PENDING marker=%s "
+            "module=v318 error=%s:%s broker_io_started=false fail_closed=true "
+            "readiness_granted=false safety_gates_bypassed=false",
+            CRITICAL_LIVENESS_MARKER,
+            type(exc).__name__,
+            exc,
+        )
+    if not prereq_ready:
+        return False
+
+    modules = (
+        ("v285", "bot.runtime_authoritative_position_coverage_v285_patch"),
+        ("v286", "bot.runtime_kraken_position_refresh_liveness_v286_patch"),
+        ("v415", "bot.runtime_kraken_platform_balance_capital_feed_v415_patch"),
+    )
+    results: dict[str, bool] = {}
+    for label, module_name in modules:
+        try:
+            module = __import__(module_name, fromlist=("install_import_hook",))
+            installer = getattr(module, "install_import_hook", None)
+            results[label] = bool(callable(installer) and installer())
+        except Exception as exc:
+            results[label] = False
+            LOGGER.warning(
+                "V88_CRITICAL_KRAKEN_LIVENESS_V420_MODULE_PENDING marker=%s "
+                "module=%s error=%s:%s fail_closed=true readiness_granted=false "
+                "execution_authority_unchanged=true safety_gates_bypassed=false",
+                CRITICAL_LIVENESS_MARKER,
+                label,
+                type(exc).__name__,
+                exc,
+            )
+    ready = all(results.values())
+    log = LOGGER.critical if ready else LOGGER.warning
+    log(
+        "V88_CRITICAL_KRAKEN_LIVENESS_V420_%s marker=%s results=%s "
+        "independent_retry=true authenticated_proof_required=true "
+        "snapshot_ttl_unchanged=true capital_ttl_unchanged=true "
+        "readiness_granted=false forced_activation=false forced_trade=false "
+        "writer_nonce_risk_capital_killswitch_order_fill_gates_unchanged=true "
+        "safety_gates_bypassed=false",
+        "READY" if ready else "PENDING",
+        CRITICAL_LIVENESS_MARKER,
+        results,
+    )
+    return ready
+
+
+def _critical_liveness_monitor() -> None:
+    """Retry installation at a bounded cadence until all proof producers exist."""
+    deadline = time.monotonic() + 600.0
+    while time.monotonic() < deadline:
+        if _install_critical_kraken_liveness():
+            return
+        time.sleep(5.0)
+    LOGGER.warning(
+        "V88_CRITICAL_KRAKEN_LIVENESS_V420_MONITOR_EXPIRED marker=%s "
+        "trading_fail_closed=true safety_gates_bypassed=false",
+        CRITICAL_LIVENESS_MARKER,
+    )
+
+
 def _install_kraken_user_supervision() -> bool:
     global _KRAKEN_SUPERVISION_INSTALLED
     with _LOCK:
@@ -203,7 +307,6 @@ def _install_kraken_user_supervision() -> bool:
     # v412 monitor/install anchors stay unchanged. Every call to supervision
     # therefore converges duplicate broker identity before reconnect logic.
     _install_early_user_broker_identity()
-
     installed = False
     try:
         from bot import kraken_all_account_supervision_v86 as v86
@@ -367,11 +470,18 @@ def _monitor() -> None:
 
 
 def install_import_hook() -> bool:
-    global _MONITOR_STARTED
+    global _MONITOR_STARTED, _CRITICAL_LIVENESS_MONITOR_STARTED
     _install_stale_startup_log_filter()
     _install_kraken_user_supervision()
     _try_patch_loaded()
     with _LOCK:
+        if not _CRITICAL_LIVENESS_MONITOR_STARTED:
+            _CRITICAL_LIVENESS_MONITOR_STARTED = True
+            threading.Thread(
+                target=_critical_liveness_monitor,
+                name="CriticalKrakenLivenessV420",
+                daemon=True,
+            ).start()
         if not _MONITOR_STARTED:
             _MONITOR_STARTED = True
             threading.Thread(
@@ -407,4 +517,5 @@ __all__ = [
     "install",
     "install_import_hook",
     "_install_early_user_broker_identity",
+    "_install_critical_kraken_liveness",
 ]
