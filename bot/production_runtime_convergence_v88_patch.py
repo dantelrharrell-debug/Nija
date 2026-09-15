@@ -207,6 +207,19 @@ def _install_critical_kraken_liveness() -> bool:
     freshness, synchronization, capital, writer, nonce, risk and kill-switch
     checks succeeding.
     """
+    # The repository's full-suite runner deliberately defers runtime import
+    # hooks so one test cannot leak daemon monitors or mutable module state into
+    # another.  Honor that harness contract; Render production does not set the
+    # defer guard and therefore continues through the real installer path.
+    if _truthy("NIJA_DEFER_RUNTIME_SITE_HOOKS"):
+        LOGGER.info(
+            "V88_CRITICAL_KRAKEN_LIVENESS_V420_DEFERRED marker=%s "
+            "test_isolation=true production_behavior_unchanged=true "
+            "readiness_granted=false safety_gates_bypassed=false",
+            CRITICAL_LIVENESS_MARKER,
+        )
+        return False
+
     modules = (
         ("v285", "bot.runtime_authoritative_position_coverage_v285_patch"),
         ("v286", "bot.runtime_kraken_position_refresh_liveness_v286_patch"),
