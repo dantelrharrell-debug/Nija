@@ -34,7 +34,10 @@ after the first heartbeat and authoritative PLATFORM Balance reconciliation had
 already started. That allowed an otherwise-correct pre-convergence Balance
 flight to monopolize the same credential long enough for startup reconciliation
 to remain pending. v311 installs only those already-existing, idempotent Kraken
-read-liveness repairs from v121's earlier installation point. A v311 failure is
+read-liveness repairs from v121's earlier installation point. The platform
+balance-to-CapitalAuthority bridge v415 is also installed here so a genuinely
+new authenticated PLATFORM Balance observation can republish canonical capital
+without extending freshness or using a user-account balance. A v311 failure is
 non-authoritative and leaves the previous fail-closed behavior intact; the later
 v88 convergence chain remains the canonical full installer.
 
@@ -67,6 +70,7 @@ _LOCK_SCOPE_READY_FLAG = "NIJA_KRAKEN_READ_LOCK_SCOPE_V310_READY"
 _EARLY_READ_READY_FLAG = "NIJA_KRAKEN_EARLY_READ_CONVERGENCE_V311_READY"
 _EARLY_READ_MODULES = (
     "bot.runtime_kraken_position_refresh_liveness_v286_patch",
+    "bot.runtime_kraken_platform_balance_capital_feed_v415_patch",
     "bot.runtime_kraken_transport_timeout_v292_patch",
     "bot.runtime_kraken_credential_lock_scope_v293_patch",
     "bot.runtime_kraken_monitoring_fairness_v297_patch",
@@ -107,8 +111,6 @@ def _public_read_timeout_s() -> float:
 
 
 def _private_read_lock_wait_s() -> float:
-    # Keep lock admission + the default 8 s HTTP read bound inside the
-    # heartbeat v210 12 s outer budget under normal configuration.
     return _env_timeout("NIJA_KRAKEN_PRIVATE_READ_LOCK_WAIT_S", 3.0, maximum=10.0)
 
 
@@ -164,7 +166,6 @@ def _method_from_call(args: tuple[Any, ...], kwargs: dict[str, Any]) -> str:
 
 
 def _chain_has_patch(callable_obj: Any) -> bool:
-    """Return true when any wrapper in the current chain is already v121."""
     seen: set[int] = set()
     current = callable_obj
     for _ in range(128):
@@ -178,13 +179,6 @@ def _chain_has_patch(callable_obj: Any) -> bool:
 
 
 def _credential_scope_runner() -> Callable[[Any, Callable[[], Any]], Any] | None:
-    """Return v293's scope runner only when that repair is already loaded.
-
-    v121 is installed earlier in startup than v293. Importing v293 from here
-    would change startup ordering, so this helper deliberately consults only
-    already-loaded modules. Later v117 reassertions then become order-safe
-    without creating a new import cycle.
-    """
     module = (
         sys.modules.get("bot.runtime_kraken_credential_lock_scope_v293_patch")
         or sys.modules.get("runtime_kraken_credential_lock_scope_v293_patch")
@@ -196,17 +190,6 @@ def _credential_scope_runner() -> Callable[[Any, Callable[[], Any]], Any] | None
 
 
 def _acquire_global_read_lock(module: ModuleType, method: str) -> tuple[Any | None, bool]:
-    """Bound read-only admission to the canonical Kraken lock dispatcher.
-
-    With v293 loaded, ``module.get_kraken_api_lock`` may resolve to a credential-
-    scoped lock when its credential context is active. Without v293 (or without
-    proven credential identity), it resolves to the original process-wide lock.
-
-    Returning ``(None, False)`` means the canonical getter is unavailable and
-    the existing broker method should run unchanged. A busy selected lock raises
-    ``KrakenReadLockBusy`` so the caller fails closed without leaving a daemon
-    parked indefinitely behind another Kraken request.
-    """
     if method in _MUTATING:
         return None, False
 
@@ -217,8 +200,6 @@ def _acquire_global_read_lock(module: ModuleType, method: str) -> tuple[Any | No
     try:
         selected_lock = getter()
     except Exception:
-        # Preserve the broker's existing error behavior if its canonical lock
-        # getter itself is unavailable/broken.
         return None, False
 
     acquire = getattr(selected_lock, "acquire", None)
@@ -254,15 +235,6 @@ def _invoke_bounded_read(
     method: str,
     call: Callable[[], Any],
 ) -> Any:
-    """Acquire the bounded read lock inside v293 scope when available.
-
-    This is the v310 wrapper-order repair. If v121 is reasserted outside v293,
-    the v293 runner establishes the credential-local dispatch context *before*
-    v121 asks ``get_kraken_api_lock`` for the selected lock. The inner original
-    call may pass through v293 again; nested scope on the same RLock is safe and
-    preserves the existing serialization contract.
-    """
-
     def _admit_then_call() -> Any:
         selected_lock, acquired = _acquire_global_read_lock(module, method)
         if not acquired or selected_lock is None:
@@ -295,12 +267,8 @@ def _patch_broker_manager(module: ModuleType | None = None) -> bool:
         def kraken_private_call_v121(self: Any, *args: Any, **kwargs: Any):
             _wrap_api(getattr(self, "api", None))
             method = _method_from_call(args, kwargs)
-
-            # Mutations deliberately keep the original lock wait and request
-            # timeout semantics. Only read-only calls get bounded admission.
             if method in _MUTATING:
                 return current(self, *args, **kwargs)
-
             return _invoke_bounded_read(
                 module,
                 self,
@@ -380,11 +348,6 @@ def _install_early_read_module(module_name: str) -> tuple[bool, str]:
 
 
 def _install_early_read_convergence_v311() -> bool:
-    """Install the narrow Kraken read-liveness subset before first reconciliation.
-
-    This does not grant readiness. The full production v88 chain remains the
-    canonical later installer and safely reasserts these idempotent modules.
-    """
     if os.environ.get(_EARLY_READ_READY_FLAG) == "1":
         return True
 
@@ -403,7 +366,7 @@ def _install_early_read_convergence_v311() -> bool:
             "KRAKEN_EARLY_READ_CONVERGENCE_V311_READY marker=%s ready=true modules=%s "
             "before_first_reconciliation=true v88_full_chain_preserved=true "
             "credential_scoped_serialization=true monitoring_prewait=true balance_single_flight=true "
-            "same_credential_coalescing=true transport_timeout_bound=true "
+            "same_credential_coalescing=true transport_timeout_bound=true platform_capital_feed_v415=true "
             "readiness_granted=false reconciliation_fabricated=false position_success_fabricated=false "
             "lock_force_release=false lock_bypass=false nonce_rate_order_fill_risk_capital_killswitch_execution_gates_unchanged=true "
             "execution_proof_fabricated=false forced_trade=false forced_activation=false safety_gates_bypassed=false",
@@ -452,10 +415,6 @@ def install() -> bool:
             os.environ.pop("NIJA_KRAKEN_READ_TIMEOUT_V121_INSTALLED", None)
             os.environ.pop(_LOCK_SCOPE_READY_FLAG, None)
             return False
-        # v311 is deliberately best-effort from the v121 contract perspective.
-        # If an early dependency is not yet importable, v121 remains installed
-        # and fail-closed; subsequent v121 reassertions may retry, while the full
-        # v88 convergence chain remains the canonical later installer.
         _install_early_read_convergence_v311()
         _INSTALLED = True
         LOGGER.critical(
