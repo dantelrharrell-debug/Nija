@@ -152,6 +152,59 @@ def _resolve_available_balance(
     return None
 
 
+def _risk_bounded_heartbeat_size(
+    broker: Any,
+    requested_usd: float,
+    available_balance_usd: Optional[float],
+) -> float:
+    """Downsize only the Kraken startup BUY probe without weakening risk gates.
+
+    The downstream GlobalRiskGovernor remains authoritative.  This helper merely
+    avoids constructing a heartbeat notional that is known in advance to exceed
+    the governor's 25% ceiling.  The probe keeps a buffer below that ceiling and
+    never goes below Kraken's already-published minimum trade size.  If both
+    constraints cannot be satisfied, the original amount is preserved so the
+    unchanged downstream risk/minimum gates fail closed.
+    """
+    requested = max(0.0, _float(requested_usd))
+    balance = max(0.0, _float(available_balance_usd))
+    if requested <= 0.0 or balance <= 0.0:
+        return requested
+
+    try:
+        fraction = float(os.environ.get("NIJA_HEARTBEAT_RISK_FRACTION", "0.23") or 0.23)
+    except (TypeError, ValueError):
+        fraction = 0.23
+    fraction = max(0.01, min(0.24, fraction))
+    risk_cap = balance * fraction
+
+    broker_min = max(0.0, _float(getattr(broker, "min_trade_size", 0.0)))
+    # Preserve the same $10 absolute heartbeat floor used by TradingStrategy,
+    # while adding only a 1% rounding cushion to the actual broker minimum.
+    safe_floor = max(10.0, broker_min * 1.01)
+    if safe_floor > risk_cap + 1e-9:
+        logger.warning(
+            "KRAKEN_HEARTBEAT_RISK_SIZE_DEFERRED requested=%.2f balance=%.2f "
+            "risk_fraction=%.4f risk_cap=%.2f broker_min=%.2f safe_floor=%.2f "
+            "reason=no_notional_satisfies_both_constraints downstream_gates_unchanged=true "
+            "trading_fail_closed=true safety_gates_bypassed=false",
+            requested, balance, fraction, risk_cap, broker_min, safe_floor,
+        )
+        return requested
+
+    bounded = max(safe_floor, min(requested, risk_cap))
+    if bounded + 1e-9 < requested:
+        logger.critical(
+            "KRAKEN_HEARTBEAT_RISK_SIZE_BOUNDED requested=%.2f resolved=%.2f balance=%.2f "
+            "risk_fraction=%.4f risk_cap=%.2f broker_min=%.2f safe_floor=%.2f "
+            "heartbeat_only=true downstream_risk_governor_required=true minimum_notional_required=true "
+            "ordinary_orders_unchanged=true execution_proof_fabricated=false forced_activation=false "
+            "safety_gates_bypassed=false",
+            requested, bounded, balance, fraction, risk_cap, broker_min, safe_floor,
+        )
+    return bounded
+
+
 def _resolve_margin_exit(preferred_broker: str, account_id: str, symbol: str) -> Dict[str, Any]:
     if preferred_broker != "kraken":
         return {}
@@ -297,6 +350,8 @@ def submit_market_order_via_pipeline(
     margin_fields: Dict[str, Any] = {}
     if preferred_broker == "kraken":
         if heartbeat_probe:
+            if side_norm == "buy" and not is_exit and str(size_type or "quote").lower() != "base":
+                size_usd = _risk_bounded_heartbeat_size(broker, size_usd, available_balance)
             logger.critical(
                 "KRAKEN_HEARTBEAT_SPOT_PROBE strategy=%s account=%s symbol=%s "
                 "auto_margin_bypassed=true leverage=1x ordinary_kraken_margin_unchanged=true "
