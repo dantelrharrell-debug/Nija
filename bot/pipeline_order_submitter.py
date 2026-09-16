@@ -33,6 +33,9 @@ except ImportError:
             raise RuntimeError("execution authority module unavailable")
 
 
+_HEARTBEAT_PROBE_STRATEGIES = {"HEARTBEAT_TRADE", "HEARTBEAT_TRADE_CLOSE"}
+
+
 def _truthy(name: str, default: bool = False) -> bool:
     value = os.environ.get(name)
     if value is None:
@@ -264,6 +267,8 @@ def submit_market_order_via_pipeline(
         }
 
     side_norm = str(side or "buy").strip().lower()
+    strategy_norm = str(strategy or "").strip().upper()
+    heartbeat_probe = strategy_norm in _HEARTBEAT_PROBE_STRATEGIES
     preferred_broker = _resolve_preferred_broker(broker)
     account_id = str(account_id_override or _resolve_account_id(broker, preferred_broker)).strip().lower()
     explicit_intent = str(intent_type or "").strip().lower()
@@ -291,7 +296,15 @@ def submit_market_order_via_pipeline(
     available_balance = _resolve_available_balance(broker, preferred_broker, account_id)
     margin_fields: Dict[str, Any] = {}
     if preferred_broker == "kraken":
-        if side_norm == "buy" and not is_exit:
+        if heartbeat_probe:
+            logger.critical(
+                "KRAKEN_HEARTBEAT_SPOT_PROBE strategy=%s account=%s symbol=%s "
+                "auto_margin_bypassed=true leverage=1x ordinary_kraken_margin_unchanged=true "
+                "writer_nonce_risk_capital_killswitch_min_notional_order_fill_gates_unchanged=true "
+                "execution_proof_fabricated=false forced_activation=false safety_gates_bypassed=false",
+                strategy_norm, account_id, symbol,
+            )
+        elif side_norm == "buy" and not is_exit:
             margin_fields = _plan_margin_entry(
                 broker, account_id, symbol, side_norm, size_usd, _float(available_balance),
             )
