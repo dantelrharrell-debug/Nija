@@ -187,8 +187,8 @@ class OpeningRangeBreakoutDetector(BaseDetector):
     @staticmethod
     def _current_session(df: pd.DataFrame) -> pd.DataFrame:
         if isinstance(df.index, pd.DatetimeIndex) and len(df.index) > 0:
-            current_day = df.index[-1].date()
-            return df[df.index.date == current_day]
+            current_day = df.index[-1].normalize()
+            return df[df.index.normalize() == current_day]
         if "timestamp" in df.columns:
             ts = pd.to_datetime(df["timestamp"], errors="coerce", utc=True)
             if not ts.isna().all():

@@ -190,7 +190,9 @@ class SignalPipeline:
         if df is None or df.empty:
             return None
         regime = "unknown"
-        regime = self._regime_engine.detect(symbol, df).regime.value
+        regime_result = self._regime_engine.detect(symbol, df).regime
+        regime = getattr(regime_result, "value", regime_result)
+        regime = str(regime)
 
         candidates = self._detector_registry.detect(
             df=df,
