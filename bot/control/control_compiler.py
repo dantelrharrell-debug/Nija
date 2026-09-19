@@ -104,10 +104,17 @@ class RawSignal:
     confidence: float = 0.0
     regime: str = "unknown"
     strategy: str = ""                    # "scalp" / "swing" / "apex" / ...
+    user_id: str = ""
     account_id: str = "default"
+    broker: str = ""
+    portfolio_id: str = ""
+    strategy_signal_id: str = ""
+    trade_id: str = ""
     approved: bool = True
     stop_loss_pct: Optional[float] = None
     take_profit_pct: Optional[float] = None
+    execution_mode: Optional[str] = None
+    asset_class: Optional[str] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
     trading_context: Optional[TradingContext] = None
 
@@ -128,10 +135,17 @@ class CompiledSignal:
     confidence: float
     regime: str
     strategy: str
+    user_id: str
     account_id: str
+    broker: str
+    portfolio_id: str
+    strategy_signal_id: str
+    trade_id: str
     approved: bool
     stop_loss_pct: Optional[float]
     take_profit_pct: Optional[float]
+    execution_mode: Optional[str]
+    asset_class: Optional[str]
     metadata: Dict[str, Any]
     trading_context: TradingContext
     compiled_at: str = field(
@@ -150,7 +164,12 @@ class CompiledSignal:
             "side":            self.side,
             "size_usd":        self.size_usd,
             "strategy":        self.strategy,
+            "user_id":         self.user_id,
             "account_id":      self.account_id,
+            "broker":          self.broker,
+            "portfolio_id":    self.portfolio_id,
+            "strategy_signal_id": self.strategy_signal_id,
+            "trade_id":        self.trade_id,
             "trading_context": self.trading_context.to_log_fields(),
             "stop_loss_pct":   self.stop_loss_pct,
             "take_profit_pct": self.take_profit_pct,
@@ -342,10 +361,17 @@ class ControlCompiler:
             confidence=float(signal_dict.get("confidence") or 0.0),
             regime=str(signal_dict.get("regime") or "unknown"),
             strategy=str(signal_dict.get("strategy") or ""),
+            user_id=str(signal_dict.get("user_id") or ""),
             account_id=str(signal_dict.get("account_id") or "default"),
+            broker=str(signal_dict.get("broker") or ""),
+            portfolio_id=str(signal_dict.get("portfolio_id") or ""),
+            strategy_signal_id=str(signal_dict.get("strategy_signal_id") or ""),
+            trade_id=str(signal_dict.get("trade_id") or ""),
             approved=bool(signal_dict.get("approved", True)),
             stop_loss_pct=signal_dict.get("stop_loss_pct"),
             take_profit_pct=signal_dict.get("take_profit_pct"),
+            execution_mode=signal_dict.get("execution_mode"),
+            asset_class=signal_dict.get("asset_class"),
             metadata={k: v for k, v in signal_dict.items()},
             trading_context=trading_context,
         )
@@ -483,10 +509,17 @@ class ControlCompiler:
             confidence=float(raw.confidence),
             regime=(raw.regime or "unknown").lower().strip(),
             strategy=raw.strategy or "",
+            user_id=raw.user_id or "",
             account_id=raw.account_id or "default",
+            broker=(raw.broker or "").strip().lower(),
+            portfolio_id=raw.portfolio_id or "",
+            strategy_signal_id=raw.strategy_signal_id or "",
+            trade_id=raw.trade_id or "",
             approved=raw.approved,
             stop_loss_pct=raw.stop_loss_pct,
             take_profit_pct=raw.take_profit_pct,
+            execution_mode=raw.execution_mode,
+            asset_class=raw.asset_class,
             metadata=dict(raw.metadata or {}),
             trading_context=raw.trading_context,
             compile_notes=list(notes),
@@ -547,6 +580,12 @@ class ControlCompiler:
                 "confidence":  raw.confidence,
                 "regime":      raw.regime,
                 "strategy":    raw.strategy,
+                "user_id":     raw.user_id,
+                "account_id":  raw.account_id,
+                "broker":      raw.broker,
+                "portfolio_id": raw.portfolio_id,
+                "strategy_signal_id": raw.strategy_signal_id,
+                "trade_id": raw.trade_id,
                 "accepted":    compiled is not None,
                 "notes":       notes,
                 "compiled_at": datetime.now(timezone.utc).isoformat(),

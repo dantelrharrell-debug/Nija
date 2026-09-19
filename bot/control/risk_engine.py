@@ -157,6 +157,9 @@ class RiskEngine:
         size_usd: float,
         portfolio_value_usd: float,
         current_positions: List[Dict[str, Any]],
+        user_id: str = "",
+        account_id: str = "default",
+        broker: str = "",
         authoritative_position_proven: bool = True,
         daily_pnl: float = 0.0,
         peak_portfolio_value: Optional[float] = None,
@@ -257,14 +260,20 @@ class RiskEngine:
                 notes.append(note)
                 return False, notes
 
-        # 6. Time between trades (per symbol)
-        ok, note = self._check_trade_frequency(symbol, rules, trading_context=trading_context)
+        # 6. Time between trades (per broker/account/symbol)
+        ok, note = self._check_trade_frequency(
+            symbol,
+            account_id=account_id,
+            broker=broker,
+            rules=rules,
+            trading_context=trading_context,
+        )
         if not ok:
             notes.append(note)
             return False, notes
 
         # All checks passed
-        self._record_trade(symbol, trading_context=trading_context)
+        self._record_trade(symbol, account_id, broker)
         notes.append("all_risk_checks_passed")
         return True, notes
 
@@ -435,11 +444,20 @@ class RiskEngine:
     def _check_trade_frequency(
         self,
         symbol: str,
+        account_id: str,
+        broker: str,
         rules: RiskRules,
         *,
         trading_context: TradingContext,
     ) -> Tuple[bool, str]:
         now_ms = time.time() * 1000
+        frequency_key = self._trade_frequency_key(symbol, account_id, broker)
+        with self._lock:
+            last_ms = self._last_trade_ts.get(frequency_key, 0.0)
+        elapsed_ms = now_ms - last_ms
+        if elapsed_ms < rules.min_time_between_trades_ms:
+            return False, (
+                f"trade_frequency_limit:{frequency_key}:"
         key = self._trade_frequency_key(symbol, trading_context=trading_context)
         with self._lock:
             last_ms = self._last_trade_ts.get(key, 0.0)
@@ -451,6 +469,16 @@ class RiskEngine:
             )
         return True, ""
 
+    @staticmethod
+    def _trade_frequency_key(symbol: str, account_id: str, broker: str) -> str:
+        broker_key = str(broker or "unknown").strip().lower() or "unknown"
+        account_key = str(account_id or "default").strip().lower() or "default"
+        return f"{broker_key}:{account_key}:{symbol.upper()}"
+
+    def _record_trade(self, symbol: str, account_id: str, broker: str) -> None:
+        frequency_key = self._trade_frequency_key(symbol, account_id, broker)
+        with self._lock:
+            self._last_trade_ts[frequency_key] = time.time() * 1000
     def _record_trade(self, symbol: str, *, trading_context: TradingContext) -> None:
         key = self._trade_frequency_key(symbol, trading_context=trading_context)
         with self._lock:

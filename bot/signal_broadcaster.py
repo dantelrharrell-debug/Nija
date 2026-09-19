@@ -61,6 +61,13 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+from bot.control.decision_context import (
+    PROTECTION_CONFIRMED,
+    PROTECTION_UNVERIFIED,
+    UserDecisionContext,
+    UserPortfolioSnapshot,
+)
+
 logger = logging.getLogger("nija.signal_broadcaster")
 
 DEFAULT_RISK_FRACTION = 0.02
@@ -180,6 +187,18 @@ class BroadcastResult:
     )
 
 
+@dataclass
+class AccountDecision:
+    """Account-specific decision input derived from a shared market signal."""
+    account_id: str
+    user_id: str
+    broker: str
+    decision_context: UserDecisionContext
+    portfolio_snapshot: UserPortfolioSnapshot
+    proposed_size_usd: float
+    signal: Dict[str, Any]
+
+
 # ---------------------------------------------------------------------------
 # SignalBroadcaster
 # ---------------------------------------------------------------------------
@@ -208,10 +227,7 @@ class SignalBroadcaster:
         self._account_seed_cache: Dict[str, int] = {}
 
     def _resolve_live_balance(self, broker: Any, candidate_balance: float) -> float:
-        """Return a non-negative balance, preferring live broker balance when needed."""
-        if candidate_balance > 0.0:
-            return candidate_balance
-
+        """Return a non-negative balance, preferring a live broker balance when available."""
         live_balance = 0.0
         try:
             if broker is not None and hasattr(broker, "get_account_balance"):
@@ -234,7 +250,30 @@ class SignalBroadcaster:
             except Exception:
                 live_balance = 0.0
 
+        if live_balance <= 0.0:
+            return max(0.0, float(candidate_balance or 0.0))
         return max(0.0, live_balance)
+
+    def _resolve_buying_power(self, broker: Any, fallback_balance: float) -> float:
+        """Return broker buying power when exposed, else fall back to live balance."""
+        buying_power = 0.0
+        try:
+            if broker is not None and hasattr(broker, "get_account_balance"):
+                raw = broker.get_account_balance()
+                if isinstance(raw, dict):
+                    buying_power = float(
+                        raw.get("buying_power")
+                        or raw.get("available_buying_power")
+                        or raw.get("available_balance")
+                        or raw.get("trading_balance")
+                        or raw.get("free_margin")
+                        or 0.0
+                    )
+        except Exception as exc:
+            logger.debug("[Broadcaster] buying power fetch failed: %s", exc)
+        if buying_power <= 0.0:
+            return max(0.0, float(fallback_balance or 0.0))
+        return max(0.0, buying_power)
 
     # ── Account registry ─────────────────────────────────────────────────────
 
@@ -339,6 +378,81 @@ class SignalBroadcaster:
             side.upper(), symbol, filled, len(results),
         )
         return results
+
+    def build_account_decisions(
+        self,
+        signal: Dict[str, Any],
+    ) -> List[AccountDecision]:
+        """Build isolated account-scoped decision inputs from one shared market signal."""
+        symbol = str(signal.get("symbol") or "")
+        strategy_signal_id = str(signal.get("strategy_signal_id") or signal.get("signal_id") or "")
+        trade_id_prefix = str(signal.get("trade_id") or strategy_signal_id or symbol or "signal")
+        strategy = str(signal.get("strategy") or "SignalBroadcaster")
+
+        with self._lock:
+            accounts_snapshot = list(self._accounts.values())
+
+        decisions: List[AccountDecision] = []
+        capital_manager = (
+            get_global_capital_manager()
+            if _GCM_AVAILABLE and get_global_capital_manager
+            else None
+        )
+        for account in accounts_snapshot:
+            broker_name = self._broker_name(account.broker)
+            user_id = self._user_for_account(account)
+            portfolio_id = f"{broker_name}:{account.account_id}"
+            live_balance = self._resolve_live_balance(account.broker, account.balance)
+            buying_power = self._resolve_buying_power(account.broker, live_balance)
+            allocation = 1.0
+            if capital_manager is not None:
+                try:
+                    allocation = float(capital_manager.get_allocation(account.account_id))
+                except Exception:
+                    allocation = 1.0
+            proposed_size_usd = round(live_balance * self._risk_fraction * allocation, 2)
+            positions, positions_proven = self._positions_for_broker(account.broker)
+            pending_orders, orders_proven = self._pending_orders_for_broker(account.broker)
+            broker_healthy = self._broker_is_healthy(account.broker)
+            decision_context = UserDecisionContext(
+                user_id=user_id,
+                account_id=account.account_id,
+                broker=broker_name,
+                portfolio_id=portfolio_id,
+                strategy_signal_id=strategy_signal_id or f"{strategy}:{symbol}",
+                trade_id=f"{trade_id_prefix}:{account.account_id}",
+                asset_class=signal.get("asset_class"),
+                execution_mode=signal.get("execution_mode"),
+            )
+            portfolio_snapshot = UserPortfolioSnapshot(
+                user_id=user_id,
+                account_id=account.account_id,
+                broker=broker_name,
+                balance=live_balance,
+                equity=live_balance,
+                available_buying_power=buying_power,
+                open_positions=tuple(positions),
+                pending_orders=tuple(pending_orders),
+                portfolio_exposure=sum(float(p.get("usd_value") or p.get("size_usd") or 0.0) for p in positions),
+                protection_state=self._protection_state_for_broker(account.broker),
+                authoritative_positions_proven=positions_proven and broker_healthy,
+                broker_healthy=broker_healthy,
+                positions_fresh=positions_proven,
+                orders_fresh=orders_proven,
+                metadata={"strategy": strategy},
+            )
+            decisions.append(
+                AccountDecision(
+                    account_id=account.account_id,
+                    user_id=user_id,
+                    broker=broker_name,
+                    decision_context=decision_context,
+                    portfolio_snapshot=portfolio_snapshot,
+                    proposed_size_usd=proposed_size_usd,
+                    signal=dict(signal),
+                )
+            )
+        return decisions
 
     def _execute_with_retry(
         self,
@@ -510,6 +624,65 @@ class SignalBroadcaster:
         """Return a deterministic seed from a composite payload."""
         digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
         return int(digest[:SEED_HEX_LENGTH], 16)
+
+    @staticmethod
+    def _broker_name(broker: Any) -> str:
+        broker_type = getattr(broker, "broker_type", None)
+        value = getattr(broker_type, "value", broker_type)
+        if value:
+            return str(value).strip().lower()
+        return str(getattr(broker, "broker_name", "") or getattr(broker, "NAME", "") or "unknown").strip().lower()
+
+    @staticmethod
+    def _user_for_account(account: AccountRecord) -> str:
+        user_id = getattr(account.broker, "user_id", None) or getattr(account.broker, "nija_user_id", None)
+        return str(user_id or account.account_id or "PLATFORM")
+
+    @staticmethod
+    def _positions_for_broker(broker: Any) -> tuple[List[Dict[str, Any]], bool]:
+        try:
+            positions = broker.get_positions()
+            if isinstance(positions, list):
+                return [dict(p) for p in positions], True
+        except Exception:
+            return [], False
+        return [], False
+
+    @staticmethod
+    def _pending_orders_for_broker(broker: Any) -> tuple[List[Dict[str, Any]], bool]:
+        getter = getattr(broker, "get_open_orders", None)
+        if not callable(getter):
+            return [], False
+        try:
+            orders = getter()
+            if isinstance(orders, list):
+                return [dict(o) for o in orders], True
+        except Exception:
+            return [], False
+        return [], False
+
+    @staticmethod
+    def _broker_is_healthy(broker: Any) -> bool:
+        for attribute in ("connected", "is_connected", "healthy", "is_healthy"):
+            value = getattr(broker, attribute, None)
+            if callable(value):
+                try:
+                    return bool(value())
+                except Exception:
+                    return False
+            if value is not None:
+                return bool(value)
+        return True
+
+    @staticmethod
+    def _protection_state_for_broker(broker: Any) -> str:
+        value = getattr(broker, "protection_state", None)
+        if isinstance(value, str) and value.strip():
+            return value.strip().upper()
+        verified = getattr(broker, "protection_verified", None)
+        if verified is False:
+            return PROTECTION_UNVERIFIED
+        return PROTECTION_CONFIRMED
 
     def _apply_account_timing_controls(self, account_id: str, symbol: str) -> None:
         """Apply per-account cooldown and jitter to diversify execution timing.

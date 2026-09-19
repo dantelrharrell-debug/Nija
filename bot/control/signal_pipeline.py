@@ -51,6 +51,7 @@ import logging
 import os
 import threading
 import uuid
+from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -73,6 +74,13 @@ from bot.control.risk_engine import (
     get_risk_engine,
 )
 from bot.control.confirmation_engine import ConfirmationEngine
+from bot.control.decision_context import (
+    PROTECTION_FAILED,
+    PROTECTION_UNVERIFIED,
+    UserDecisionContext,
+    UserPortfolioSnapshot,
+    UserScopedIdempotencyRegistry,
+)
 from bot.control.signal_scoring import SignalScoringEngine
 from bot.control.strategy_registry import StrategyDetectorRegistry
 from bot.control.strategy_signal import StrategySignal
@@ -131,6 +139,7 @@ class SignalPipeline:
         self._confirmation_engine = ConfirmationEngine()
         self._redis         = redis_client
         self._lock          = threading.Lock()
+        self._idempotency_registry = UserScopedIdempotencyRegistry()
 
         # Session counters
         self._total:    int = 0
@@ -151,6 +160,8 @@ class SignalPipeline:
         symbol: str,
         broker: str,
         df: pd.DataFrame,
+        decision_context: Optional[UserDecisionContext] = None,
+        portfolio_snapshot: Optional[UserPortfolioSnapshot] = None,
         current_positions: Optional[List[Dict[str, Any]]] = None,
         portfolio_value_usd: float = 10_000.0,
         peak_portfolio_value: Optional[float] = None,
@@ -228,6 +239,7 @@ class SignalPipeline:
         if not ranked:
             return None
         best_signal, best_score = max(ranked, key=lambda row: row[1])
+        strategy_signal_id = best_signal.strategy_signal_id
         try:
             requested_size = float(requested_size_usd or 0.0)
         except (TypeError, ValueError):
@@ -247,14 +259,24 @@ class SignalPipeline:
             confidence=best_score,
             regime=best_signal.market_regime,
             strategy=best_signal.strategy,
+            user_id=decision_context.user_id if decision_context is not None else "",
+            account_id=decision_context.account_id if decision_context is not None else "default",
+            broker=decision_context.broker if decision_context is not None else broker,
+            portfolio_id=decision_context.portfolio_id if decision_context is not None else "",
+            strategy_signal_id=strategy_signal_id,
+            trade_id=decision_context.trade_id if decision_context is not None else "",
             metadata={
                 **best_signal.to_dict(),
                 "signal_score": best_score,
             },
+            execution_mode=decision_context.execution_mode if decision_context is not None else None,
+            asset_class=decision_context.asset_class if decision_context is not None else None,
         )
         return self.process_signal(
             raw_signal=raw,
             df=df,
+            decision_context=decision_context,
+            portfolio_snapshot=portfolio_snapshot,
             current_positions=current_positions,
             portfolio_value_usd=portfolio_value_usd,
             peak_portfolio_value=peak_portfolio_value,
@@ -271,6 +293,8 @@ class SignalPipeline:
         self,
         raw_signal: RawSignal,
         df: Optional[pd.DataFrame] = None,
+        decision_context: Optional[UserDecisionContext] = None,
+        portfolio_snapshot: Optional[UserPortfolioSnapshot] = None,
         current_positions: Optional[List[Dict[str, Any]]] = None,
         portfolio_value_usd: float = 10_000.0,
         peak_portfolio_value: Optional[float] = None,
@@ -301,6 +325,16 @@ class SignalPipeline:
         import time as _time
 
         positions = current_positions or []
+        snapshot = portfolio_snapshot
+        if snapshot is not None:
+            positions = list(snapshot.open_positions)
+            if snapshot.equity is not None:
+                portfolio_value_usd = snapshot.equity
+            if snapshot.peak_equity is not None:
+                peak_portfolio_value = snapshot.peak_equity
+            daily_pnl = snapshot.daily_realized_pnl + snapshot.daily_unrealized_pnl
+            if snapshot.available_buying_power is not None:
+                available_balance_usd = snapshot.available_buying_power
         pipeline_id = str(uuid.uuid4())
         audit: Dict[str, Any] = {
             "pipeline_id":  pipeline_id,
@@ -310,6 +344,66 @@ class SignalPipeline:
             "started_at":   datetime.now(timezone.utc).isoformat(),
             "stages":       {},
         }
+        if decision_context is not None:
+            audit["decision_context"] = {
+                "user_id": decision_context.user_id,
+                "account_id": decision_context.account_id,
+                "broker": decision_context.broker,
+                "portfolio_id": decision_context.portfolio_id,
+                "strategy_signal_id": decision_context.strategy_signal_id,
+                "trade_id": decision_context.trade_id,
+            }
+
+        context = self._resolve_decision_context(raw_signal, decision_context)
+        duplicate_key: Optional[str] = None
+        if context is not None:
+            context_notes = context.validate_for_entry()
+            if snapshot is not None:
+                context_notes.extend(snapshot.validate_for_context(context))
+                context_notes.extend(snapshot.readiness_notes(symbol=raw_signal.symbol, direction=raw_signal.side))
+            if context_notes:
+                audit["stages"]["context"] = {"approved": False, "notes": context_notes}
+                audit["final_decision"] = "rejected"
+                audit["rejection_stage"] = "context"
+                self._record(accepted=False)
+                self._store_pipeline_audit(pipeline_id, audit)
+                logger.warning(
+                    "PIPELINE_REJECT stage=context symbol=%s action=%s notes=%s",
+                    raw_signal.symbol,
+                    raw_signal.action,
+                    context_notes,
+                )
+                return None
+            audit["stages"]["context"] = {"approved": True, "notes": ["context_verified"]}
+            duplicate_allowed, duplicate_key = self._idempotency_registry.reserve(
+                context,
+                symbol=raw_signal.symbol,
+                direction=self._duplicate_direction(raw_signal),
+            )
+            audit["stages"]["duplicate"] = {
+                "approved": duplicate_allowed,
+                "key": duplicate_key,
+            }
+            if not duplicate_allowed:
+                audit["final_decision"] = "rejected"
+                audit["rejection_stage"] = "duplicate"
+                self._record(accepted=False)
+                self._store_pipeline_audit(pipeline_id, audit)
+                logger.warning(
+                    "PIPELINE_REJECT stage=duplicate symbol=%s account=%s key=%s",
+                    raw_signal.symbol,
+                    context.account_id,
+                    duplicate_key,
+                )
+                return None
+        elif snapshot is not None:
+            context_notes = ["USER_CONTEXT_UNPROVEN:missing_context"]
+            audit["stages"]["context"] = {"approved": False, "notes": context_notes}
+            audit["final_decision"] = "rejected"
+            audit["rejection_stage"] = "context"
+            self._record(accepted=False)
+            self._store_pipeline_audit(pipeline_id, audit)
+            return None
 
         # ── Pre-flight: Live market feed heartbeat ───────────────────────
         self._check_feed_heartbeat(raw_signal.symbol)
@@ -339,10 +433,17 @@ class SignalPipeline:
                         confidence=raw_signal.confidence,
                         regime=regime_result.regime.value,
                         strategy=raw_signal.strategy,
+                        user_id=raw_signal.user_id,
                         account_id=raw_signal.account_id,
+                        broker=raw_signal.broker,
+                        portfolio_id=raw_signal.portfolio_id,
+                        strategy_signal_id=raw_signal.strategy_signal_id,
+                        trade_id=raw_signal.trade_id,
                         approved=raw_signal.approved,
                         stop_loss_pct=raw_signal.stop_loss_pct,
                         take_profit_pct=raw_signal.take_profit_pct,
+                        execution_mode=raw_signal.execution_mode,
+                        asset_class=raw_signal.asset_class,
                         metadata=raw_signal.metadata,
                         trading_context=raw_signal.trading_context,
                     )
@@ -376,40 +477,91 @@ class SignalPipeline:
 
         audit["context"] = compiled.trading_context.to_log_fields()
 
-        # ── Stage 3: Risk Validation ─────────────────────────────────────
-        risk_approved, risk_notes = self._risk_engine.validate_trade(
-            symbol=compiled.symbol,
-            side=compiled.side,
-            size_usd=compiled.size_usd,
-            portfolio_value_usd=portfolio_value_usd,
-            current_positions=positions,
-            authoritative_position_proven=authoritative_position_proven,
-            daily_pnl=daily_pnl,
-            peak_portfolio_value=peak_portfolio_value,
-            trading_context=compiled.trading_context,
-            enforce_isolation=True,
-        )
-        audit["stages"]["risk"] = {
-            "approved": risk_approved,
-            "notes":    risk_notes,
-        }
+        try:
+            # ── Stage 3: Risk Validation ─────────────────────────────────────
+            risk_approved, risk_notes = self._risk_engine.validate_trade(
+                symbol=compiled.symbol,
+                side=compiled.side,
+                size_usd=compiled.size_usd,
+                portfolio_value_usd=portfolio_value_usd,
+                current_positions=positions,
+                authoritative_position_proven=authoritative_position_proven,
+                daily_pnl=daily_pnl,
+                peak_portfolio_value=peak_portfolio_value,
+                trading_context=compiled.trading_context,
+                enforce_isolation=True,
+            )
+            audit["stages"]["risk"] = {
+                "approved": risk_approved,
+                "notes":    risk_notes,
+            }
 
-        if not risk_approved:
-            audit["final_decision"] = "rejected"
-            audit["rejection_stage"] = "risk"
-            self._record(accepted=False)
+            if not risk_approved:
+                if context is not None:
+                    self._idempotency_registry.release(duplicate_key)
+                audit["final_decision"] = "rejected"
+                audit["rejection_stage"] = "risk"
+                self._record(accepted=False)
+                self._store_pipeline_audit(pipeline_id, audit)
+                logger.warning(
+                    "PIPELINE_REJECT stage=risk symbol=%s side=%s size_usd=%.2f user_id=%s account_id=%s notes=%s",
+                    compiled.symbol,
+                    compiled.side,
+                    compiled.size_usd,
+                    compiled.trading_context.user_id,
+                    compiled.trading_context.trading_account_id,
+                    risk_notes,
+                )
+                return None
+
+            # ── Approved ─────────────────────────────────────────────────────
+            audit["final_decision"] = "approved"
+            audit["signal_id"] = compiled.signal_id
+            if context is not None:
+                compiled.metadata["duplicate_key"] = duplicate_key
+                self._idempotency_registry.release(duplicate_key)
+            self._record(accepted=True)
+            with self._lock:
+                self._last_approved_ts = _time.time()
             self._store_pipeline_audit(pipeline_id, audit)
-            logger.warning(
-                "PIPELINE_REJECT stage=risk symbol=%s side=%s size_usd=%.2f user_id=%s account_id=%s notes=%s",
+            logger.info(
+                "PIPELINE_APPROVED symbol=%s side=%s size_usd=%.2f regime=%s confidence=%.3f user_id=%s "
+                "account_id=%s",
                 compiled.symbol,
                 compiled.side,
                 compiled.size_usd,
+                compiled.regime,
+                compiled.confidence,
                 compiled.trading_context.user_id,
                 compiled.trading_context.trading_account_id,
-                risk_notes,
             )
-            return None
+            return compiled
+        except Exception:
+            if context is not None:
+                self._idempotency_registry.release(duplicate_key)
+            raise
 
+    @staticmethod
+    def _resolve_decision_context(
+        raw_signal: RawSignal,
+        decision_context: Optional[UserDecisionContext],
+    ) -> Optional[UserDecisionContext]:
+        if decision_context is not None:
+            replacements: Dict[str, Any] = {}
+            if raw_signal.strategy_signal_id and decision_context.strategy_signal_id != raw_signal.strategy_signal_id:
+                replacements["strategy_signal_id"] = raw_signal.strategy_signal_id
+            if raw_signal.trade_id and decision_context.trade_id != raw_signal.trade_id:
+                replacements["trade_id"] = raw_signal.trade_id
+            if replacements:
+                return replace(decision_context, **replacements)
+            return decision_context
+        has_explicit_account_scope = bool(
+            raw_signal.user_id
+            or raw_signal.broker
+            or raw_signal.portfolio_id
+            or raw_signal.strategy_signal_id
+            or raw_signal.trade_id
+            or (raw_signal.account_id and raw_signal.account_id != "default")
         # ── Approved ─────────────────────────────────────────────────────
         audit["final_decision"] = "approved"
         audit["signal_id"]      = compiled.signal_id
@@ -422,7 +574,37 @@ class SignalPipeline:
             compiled.symbol, compiled.side, compiled.size_usd,
             compiled.regime, compiled.confidence, compiled.trading_context.user_id, compiled.trading_context.trading_account_id,
         )
-        return compiled
+        if has_explicit_account_scope:
+            return UserDecisionContext(
+                user_id=raw_signal.user_id or "",
+                account_id=raw_signal.account_id or "default",
+                broker=raw_signal.broker or "",
+                portfolio_id=raw_signal.portfolio_id or "",
+                strategy_signal_id=raw_signal.strategy_signal_id or "",
+                trade_id=raw_signal.trade_id or "",
+                execution_mode=raw_signal.execution_mode,
+                asset_class=raw_signal.asset_class,
+            )
+        return None
+
+    @staticmethod
+    def _duplicate_direction(raw_signal: RawSignal) -> str:
+        side = str(raw_signal.side or "").lower()
+        action = str(raw_signal.action or "").lower()
+        if side in {"buy", "long"} or action == "enter_long":
+            return "long"
+        if side in {"sell", "short"} or action == "enter_short":
+            return "short"
+        return side or action or "unknown"
+
+    def mark_duplicate_execution_complete(self, duplicate_key: str, *, state: str = "released") -> None:
+        """Finalize a duplicate reservation after downstream execution reconciliation."""
+        if not duplicate_key:
+            return
+        if state == "released":
+            self._idempotency_registry.release(duplicate_key)
+            return
+        self._idempotency_registry.mark_state(duplicate_key, state)
 
     # ------------------------------------------------------------------
     # Diagnostic helpers
