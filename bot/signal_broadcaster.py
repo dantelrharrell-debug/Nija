@@ -413,7 +413,7 @@ class SignalBroadcaster:
                 pending_orders=tuple(pending_orders),
                 portfolio_exposure=sum(float(p.get("usd_value") or p.get("size_usd") or 0.0) for p in positions),
                 protection_state=self._protection_state_for_broker(account.broker),
-                authoritative_positions_proven=positions_proven,
+                authoritative_positions_proven=positions_proven and broker_healthy,
                 broker_healthy=broker_healthy,
                 positions_fresh=positions_proven,
                 orders_fresh=orders_proven,

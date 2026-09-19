@@ -540,7 +540,7 @@ class SignalPipeline:
             if replacements:
                 return replace(decision_context, **replacements)
             return decision_context
-        if raw_signal.strategy_signal_id or raw_signal.trade_id or raw_signal.user_id or raw_signal.broker:
+        if raw_signal.strategy_signal_id or raw_signal.trade_id or raw_signal.user_id or raw_signal.account_id or raw_signal.broker:
             return UserDecisionContext(
                 user_id=raw_signal.user_id or "",
                 account_id=raw_signal.account_id or "default",
