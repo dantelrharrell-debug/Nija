@@ -184,9 +184,10 @@ class SignalPipeline:
         """
         checks = checks or {}
         score_context = score_context or {}
+        if df is None or df.empty:
+            return None
         regime = "unknown"
-        if df is not None and not df.empty:
-            regime = self._regime_engine.detect(symbol, df).regime.value
+        regime = self._regime_engine.detect(symbol, df).regime.value
 
         candidates = self._detector_registry.detect(
             df=df,

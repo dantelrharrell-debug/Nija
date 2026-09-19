@@ -126,8 +126,12 @@ class OpeningRangeBreakoutDetector(BaseDetector):
         broke_down = close < first_low if self.require_close else low < first_low
 
         if self.require_retest:
-            broke_up = broke_up and _to_float(latest["low"]) <= first_high <= _to_float(latest["close"])
-            broke_down = broke_down and _to_float(latest["high"]) >= first_low >= _to_float(latest["close"])
+            breakout_up = _to_float(prev["close"]) > first_high if self.require_close else _to_float(prev["high"]) > first_high
+            breakout_down = _to_float(prev["close"]) < first_low if self.require_close else _to_float(prev["low"]) < first_low
+            retest_up = _to_float(latest["low"]) <= first_high <= _to_float(latest["close"])
+            retest_down = _to_float(latest["high"]) >= first_low >= _to_float(latest["close"])
+            broke_up = breakout_up and retest_up
+            broke_down = breakout_down and retest_down
 
         if broke_up and vol_ok:
             rng = max(first_high - first_low, 0.0)
@@ -206,13 +210,14 @@ class MeanReversionDetector(BaseDetector):
         prev_c = _to_float(close.iloc[-2])
         ema_now = _to_float(ema20.iloc[-1])
         vwap_now = _to_float(vwap.iloc[-1])
+        has_vwap = pd.notna(vwap.iloc[-1]) and vwap_now > 0
         rsi_now = _to_float(rsi.iloc[-1])
         atr_now = max(_to_float(atr.iloc[-1]), 1e-9)
         lower = _to_float(bands["lower"].iloc[-1])
         upper = _to_float(bands["upper"].iloc[-1])
 
-        below_mean = c < ema_now and c < vwap_now and (c <= lower or (ema_now - c) > 0.8 * atr_now)
-        above_mean = c > ema_now and c > vwap_now and (c >= upper or (c - ema_now) > 0.8 * atr_now)
+        below_mean = c < ema_now and (not has_vwap or c < vwap_now) and (c <= lower or (ema_now - c) > 0.8 * atr_now)
+        above_mean = c > ema_now and (not has_vwap or c > vwap_now) and (c >= upper or (c - ema_now) > 0.8 * atr_now)
         reversion_started_long = prev_c <= c and rsi_now > 30
         reversion_started_short = prev_c >= c and rsi_now < 70
 
