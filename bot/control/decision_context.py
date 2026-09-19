@@ -265,8 +265,8 @@ def verify_protection_after_fill(
     notes: List[str] = [f"trade_id:{context.trade_id}"]
     if filled_quantity <= 0:
         return ProtectionVerificationResult(PROTECTION_FAILED, tuple(notes + ["fill_missing"]))
-    if not stop_loss_order_id and not take_profit_order_id:
-        return ProtectionVerificationResult(PROTECTION_FAILED, tuple(notes + ["protection_orders_missing"]))
+    if not stop_loss_order_id:
+        return ProtectionVerificationResult(PROTECTION_FAILED, tuple(notes + ["stop_loss_missing"]))
     if not broker_confirmation:
         return ProtectionVerificationResult(PROTECTION_UNVERIFIED, tuple(notes + ["broker_confirmation_missing"]))
     if not broker_confirmation.get("orders_submitted", True):
