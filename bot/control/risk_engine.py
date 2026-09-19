@@ -148,6 +148,7 @@ class RiskEngine:
         size_usd: float,
         portfolio_value_usd: float,
         current_positions: List[Dict[str, Any]],
+        authoritative_position_proven: bool = True,
         daily_pnl: float = 0.0,
         peak_portfolio_value: Optional[float] = None,
         returns_series: Optional[List[float]] = None,
@@ -177,6 +178,10 @@ class RiskEngine:
         # Reload rules from Redis (non-blocking; falls back to cached)
         rules = self._load_rules()
         notes: List[str] = []
+
+        if not authoritative_position_proven:
+            notes.append("AUTHORITATIVE_POSITION_UNPROVEN")
+            return False, notes
 
         # 1. Position count
         ok, note = self._check_position_count(current_positions, rules)

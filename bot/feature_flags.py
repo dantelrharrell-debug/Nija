@@ -15,6 +15,12 @@ class FeatureFlag(Enum):
     DYNAMIC_STOP_EXPANSION = "dynamic_stop_expansion"
     LIVE_DASHBOARD = "live_dashboard"
     PROFIT_CONFIRMATION = "profit_confirmation"
+    FIRST_CANDLE_ENABLED = "first_candle_enabled"
+    MEAN_REVERSION_ENABLED = "mean_reversion_enabled"
+    RANGE_TRADING_ENABLED = "range_trading_enabled"
+    SUPPORT_RESISTANCE_ENABLED = "support_resistance_enabled"
+    VOLATILITY_EXPANSION_ENABLED = "volatility_expansion_enabled"
+    REVERSAL_EXHAUSTION_ENABLED = "reversal_exhaustion_enabled"
     
     # Safety killswitches (always ON)
     PROFITABILITY_ASSERTION = "profitability_assertion"
@@ -46,6 +52,12 @@ class FeatureFlagManager:
             FeatureFlag.DYNAMIC_STOP_EXPANSION: False,
             FeatureFlag.LIVE_DASHBOARD: False,
             FeatureFlag.PROFIT_CONFIRMATION: True,  # Enabled by default for production
+            FeatureFlag.FIRST_CANDLE_ENABLED: False,
+            FeatureFlag.MEAN_REVERSION_ENABLED: False,
+            FeatureFlag.RANGE_TRADING_ENABLED: False,
+            FeatureFlag.SUPPORT_RESISTANCE_ENABLED: False,
+            FeatureFlag.VOLATILITY_EXPANSION_ENABLED: False,
+            FeatureFlag.REVERSAL_EXHAUSTION_ENABLED: False,
             
             # Safety features ALWAYS ON (cannot be disabled)
             FeatureFlag.PROFITABILITY_ASSERTION: True,
@@ -123,3 +135,15 @@ def get_feature_flags() -> FeatureFlagManager:
 def is_feature_enabled(flag: FeatureFlag) -> bool:
     """Convenience function to check feature flag"""
     return get_feature_flags().is_enabled(flag)
+
+
+def get_strategy_execution_mode() -> str:
+    """
+    Return the configured strategy execution mode.
+
+    Allowed values: BACKTEST, SHADOW, PAPER, LIMITED_LIVE, LIVE.
+    Defaults to BACKTEST.
+    """
+    mode = (os.getenv("NIJA_STRATEGY_EXECUTION_MODE", "BACKTEST") or "BACKTEST").strip().upper()
+    allowed = {"BACKTEST", "SHADOW", "PAPER", "LIMITED_LIVE", "LIVE"}
+    return mode if mode in allowed else "BACKTEST"

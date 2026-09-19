@@ -51,6 +51,10 @@ from bot.control.signal_pipeline import (
     SignalPipeline,
     get_signal_pipeline,
 )
+from bot.control.strategy_signal import StrategySignal
+from bot.control.signal_scoring import SignalScoringEngine
+from bot.control.confirmation_engine import ConfirmationEngine
+from bot.control.strategy_registry import StrategyDetectorRegistry
 
 __all__ = [
     # Control Compiler
@@ -70,4 +74,8 @@ __all__ = [
     # Signal Pipeline
     "SignalPipeline",
     "get_signal_pipeline",
+    "StrategySignal",
+    "SignalScoringEngine",
+    "ConfirmationEngine",
+    "StrategyDetectorRegistry",
 ]
