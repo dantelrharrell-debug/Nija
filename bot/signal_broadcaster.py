@@ -650,7 +650,7 @@ class SignalBroadcaster:
                     return False
             if value is not None:
                 return bool(value)
-        return False
+        return True
 
     @staticmethod
     def _protection_state_for_broker(broker: Any) -> str:
