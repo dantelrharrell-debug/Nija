@@ -61,6 +61,7 @@ from bot.control.control_compiler import (
     RawSignal,
     get_control_compiler,
 )
+from bot.control.trading_context import TradingContext
 from bot.control.regime_engine import (
     RegimeEngine,
     RegimeResult,
@@ -216,6 +217,7 @@ class SignalPipeline:
                         stop_loss_pct=raw_signal.stop_loss_pct,
                         take_profit_pct=raw_signal.take_profit_pct,
                         metadata=raw_signal.metadata,
+                        trading_context=raw_signal.trading_context,
                     )
             except Exception as exc:
                 logger.warning("SignalPipeline: regime detection failed: %s", exc)
@@ -229,6 +231,8 @@ class SignalPipeline:
             portfolio_value_usd=portfolio_value_usd,
             max_position_size_pct=max_position_size_pct,
         )
+        if raw_signal.trading_context is not None:
+            audit["context"] = raw_signal.trading_context.to_log_fields()
         audit["stages"]["compile"] = {
             "accepted": compiled is not None,
             "notes":    compile_notes,
@@ -254,6 +258,8 @@ class SignalPipeline:
             current_positions=positions,
             daily_pnl=daily_pnl,
             peak_portfolio_value=peak_portfolio_value,
+            trading_context=compiled.trading_context,
+            enforce_isolation=True,
         )
         audit["stages"]["risk"] = {
             "approved": risk_approved,
@@ -266,8 +272,13 @@ class SignalPipeline:
             self._record(accepted=False)
             self._store_pipeline_audit(pipeline_id, audit)
             logger.warning(
-                "PIPELINE_REJECT stage=risk symbol=%s side=%s size_usd=%.2f notes=%s",
-                compiled.symbol, compiled.side, compiled.size_usd, risk_notes,
+                "PIPELINE_REJECT stage=risk symbol=%s side=%s size_usd=%.2f user_id=%s account_id=%s notes=%s",
+                compiled.symbol,
+                compiled.side,
+                compiled.size_usd,
+                compiled.trading_context.user_id,
+                compiled.trading_context.trading_account_id,
+                risk_notes,
             )
             return None
 
@@ -279,9 +290,9 @@ class SignalPipeline:
             self._last_approved_ts = _time.time()
         self._store_pipeline_audit(pipeline_id, audit)
         logger.info(
-            "PIPELINE_APPROVED symbol=%s side=%s size_usd=%.2f regime=%s confidence=%.3f",
+            "PIPELINE_APPROVED symbol=%s side=%s size_usd=%.2f regime=%s confidence=%.3f user_id=%s account_id=%s",
             compiled.symbol, compiled.side, compiled.size_usd,
-            compiled.regime, compiled.confidence,
+            compiled.regime, compiled.confidence, compiled.trading_context.user_id, compiled.trading_context.trading_account_id,
         )
         return compiled
 
@@ -432,6 +443,7 @@ class SignalPipeline:
             stop_loss_pct=signal_dict.get("stop_loss_pct"),
             take_profit_pct=signal_dict.get("take_profit_pct"),
             metadata=dict(signal_dict),
+            trading_context=self._context_from_signal_dict(signal_dict),
         )
         return self.process_signal(
             raw,
@@ -480,11 +492,31 @@ class SignalPipeline:
         if self._redis is None:
             return
         try:
-            key = f"nija:control:pipeline:{pipeline_id}"
+            context = audit.get("context") or {}
+            scope = ":".join(
+                [
+                    str(context.get("user_id") or "unknown"),
+                    str(context.get("trading_account_id") or "unknown"),
+                    str(context.get("broker_account_id") or "unknown"),
+                ]
+            )
+            key = f"nija:control:pipeline:{scope}:{pipeline_id}"
             audit["stored_at"] = datetime.now(timezone.utc).isoformat()
             self._redis.setex(key, _SIGNAL_REDIS_TTL, json.dumps(audit))
         except Exception as exc:
             logger.debug("SignalPipeline: Redis audit store failed: %s", exc)
+
+    @staticmethod
+    def _context_from_signal_dict(signal_dict: Dict[str, Any]) -> Optional[TradingContext]:
+        context_raw = signal_dict.get("trading_context")
+        if isinstance(context_raw, TradingContext):
+            return context_raw
+        if isinstance(context_raw, dict):
+            try:
+                return TradingContext.from_mapping(context_raw)
+            except Exception:
+                return None
+        return None
 
 
 # ---------------------------------------------------------------------------

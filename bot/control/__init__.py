@@ -51,6 +51,7 @@ from bot.control.signal_pipeline import (
     SignalPipeline,
     get_signal_pipeline,
 )
+from bot.control.trading_context import TradingContext
 
 __all__ = [
     # Control Compiler
@@ -70,4 +71,5 @@ __all__ = [
     # Signal Pipeline
     "SignalPipeline",
     "get_signal_pipeline",
+    "TradingContext",
 ]

@@ -23,6 +23,7 @@ from bot.control.control_compiler import (
     RawSignal,
     get_control_compiler,
 )
+from bot.control.trading_context import TradingContext
 
 
 # ---------------------------------------------------------------------------
@@ -40,6 +41,18 @@ def _valid_raw(**overrides) -> RawSignal:
         regime="trending",
         strategy="swing",
         approved=True,
+        trading_context=TradingContext(
+            user_id="user_a",
+            trading_account_id="acct_a",
+            broker="kraken",
+            broker_account_id="kraken_a",
+            strategy_instance_id="strat_a",
+            portfolio_id="pf_a",
+            request_id="req_a",
+            correlation_id="corr_a",
+            environment="test",
+            mode="paper",
+        ),
     )
     defaults.update(overrides)
     return RawSignal(**defaults)
@@ -48,6 +61,21 @@ def _valid_raw(**overrides) -> RawSignal:
 def _fresh_compiler() -> ControlCompiler:
     """Return a new, isolated ControlCompiler (not the process singleton)."""
     return ControlCompiler()
+
+
+def _context_dict() -> dict:
+    return {
+        "user_id": "user_a",
+        "trading_account_id": "acct_a",
+        "broker": "kraken",
+        "broker_account_id": "kraken_a",
+        "strategy_instance_id": "strat_a",
+        "portfolio_id": "pf_a",
+        "request_id": "req_a",
+        "correlation_id": "corr_a",
+        "environment": "test",
+        "mode": "paper",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -98,6 +126,11 @@ class TestSchemaValidation(unittest.TestCase):
     def test_nan_confidence_rejected(self):
         compiled, notes = self.compiler.compile(_valid_raw(confidence=math.nan))
         self.assertIsNone(compiled)
+
+    def test_missing_context_rejected_fail_closed(self):
+        compiled, notes = self.compiler.compile(_valid_raw(trading_context=None))
+        self.assertIsNone(compiled)
+        self.assertTrue(any("context_invalid" in n for n in notes))
 
 
 # ---------------------------------------------------------------------------
@@ -357,6 +390,7 @@ class TestCompileDict(unittest.TestCase):
             "confidence": 0.70,
             "regime":     "trending",
             "strategy":   "swing",
+            "trading_context": _context_dict(),
         }
         compiled, notes = self.compiler.compile_dict(d)
         self.assertIsNotNone(compiled)
@@ -368,6 +402,7 @@ class TestCompileDict(unittest.TestCase):
             "size_usd":   100.0,
             "confidence": 0.70,
             "regime":     "trending",
+            "trading_context": _context_dict(),
         })
         self.assertIsNone(compiled)
 
@@ -379,6 +414,7 @@ class TestCompileDict(unittest.TestCase):
             "confidence": 0.70,
             "regime":     "trending",
             "strategy":   "swing",
+            "trading_context": _context_dict(),
         }
         compiled, notes = self.compiler.compile_dict(d)
         self.assertIsNotNone(compiled)
@@ -390,6 +426,7 @@ class TestCompileDict(unittest.TestCase):
             "action":     "hold",
             "confidence": 0.0,
             "regime":     "unknown",
+            "trading_context": _context_dict(),
         }
         compiled, notes = self.compiler.compile_dict(d)
         self.assertIsNotNone(compiled)
