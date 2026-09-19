@@ -5,6 +5,7 @@ from typing import Dict, List
 
 import pandas as pd
 
+from bot.feature_flags import FeatureFlag, get_feature_flags
 from bot.control.strategy_detectors import BaseDetector, DetectorContext, build_default_detectors
 from bot.control.strategy_signal import StrategySignal
 
@@ -37,4 +38,8 @@ class StrategyDetectorRegistry:
 
     @staticmethod
     def _flag_enabled(name: str) -> bool:
+        enum_name = name.replace("FEATURE_", "")
+        enum_name = enum_name if enum_name in FeatureFlag.__members__ else name
+        if enum_name in FeatureFlag.__members__:
+            return get_feature_flags().is_enabled(FeatureFlag[enum_name])
         return os.getenv(name, "false").strip().lower() in ("1", "true", "yes", "on")

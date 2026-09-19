@@ -205,14 +205,22 @@ class SignalPipeline:
         if not ranked:
             return None
         best_signal, best_score = max(ranked, key=lambda row: row[1])
+        requested_size = float(score_context.get("requested_size_usd", 0.0) or 0.0)
+        if requested_size <= 0:
+            logger.warning(
+                "SIGNAL_REJECTED_INVALID_SIZE symbol=%s strategy=%s reason=requested_size_usd_missing_or_non_positive",
+                best_signal.symbol,
+                best_signal.strategy,
+            )
+            return None
         raw = RawSignal(
             symbol=best_signal.symbol,
             side="buy" if best_signal.direction == "long" else "sell",
             action="enter_long" if best_signal.direction == "long" else "enter_short",
-            size_usd=float(score_context.get("requested_size_usd", 0.0)) or 0.0,
+            size_usd=requested_size,
             confidence=best_score,
             regime=best_signal.market_regime,
-            strategy=best_signal.strategy.lower(),
+            strategy=best_signal.strategy,
             metadata={
                 **best_signal.to_dict(),
                 "signal_score": best_score,
