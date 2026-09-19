@@ -260,16 +260,20 @@ class RiskEngine:
                 notes.append(note)
                 return False, notes
 
-        # 6. Time between trades (per symbol)
-        ok, note = self._check_trade_frequency(symbol, account_id, broker, rules)
-        ok, note = self._check_trade_frequency(symbol, rules, trading_context=trading_context)
+        # 6. Time between trades (per broker/account/symbol)
+        ok, note = self._check_trade_frequency(
+            symbol,
+            account_id=account_id,
+            broker=broker,
+            rules=rules,
+            trading_context=trading_context,
+        )
         if not ok:
             notes.append(note)
             return False, notes
 
         # All checks passed
         self._record_trade(symbol, account_id, broker)
-        self._record_trade(symbol, trading_context=trading_context)
         notes.append("all_risk_checks_passed")
         return True, notes
 
