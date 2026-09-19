@@ -128,8 +128,12 @@ class OpeningRangeBreakoutDetector(BaseDetector):
         if self.require_retest:
             breakout_up = _to_float(prev["close"]) > first_high if self.require_close else _to_float(prev["high"]) > first_high
             breakout_down = _to_float(prev["close"]) < first_low if self.require_close else _to_float(prev["low"]) < first_low
-            retest_up = _to_float(latest["low"]) <= first_high <= _to_float(latest["close"])
-            retest_down = _to_float(latest["high"]) >= first_low >= _to_float(latest["close"])
+            if self.require_close:
+                retest_up = _to_float(latest["low"]) <= first_high <= _to_float(latest["close"])
+                retest_down = _to_float(latest["high"]) >= first_low >= _to_float(latest["close"])
+            else:
+                retest_up = _to_float(latest["low"]) <= first_high
+                retest_down = _to_float(latest["high"]) >= first_low
             broke_up = breakout_up and retest_up
             broke_down = breakout_down and retest_down
 
@@ -218,8 +222,8 @@ class MeanReversionDetector(BaseDetector):
 
         below_mean = c < ema_now and (not has_vwap or c < vwap_now) and (c <= lower or (ema_now - c) > 0.8 * atr_now)
         above_mean = c > ema_now and (not has_vwap or c > vwap_now) and (c >= upper or (c - ema_now) > 0.8 * atr_now)
-        reversion_started_long = prev_c <= c and rsi_now > 30
-        reversion_started_short = prev_c >= c and rsi_now < 70
+        reversion_started_long = c > prev_c and rsi_now > 30
+        reversion_started_short = c < prev_c and rsi_now < 70
 
         dev = abs(c - ema_now) / atr_now if atr_now else 0.0
         confidence = min(0.85, 0.55 + min(dev / 3.0, 0.25))
