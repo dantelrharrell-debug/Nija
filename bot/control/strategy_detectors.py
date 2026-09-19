@@ -193,8 +193,8 @@ class MeanReversionDetector(BaseDetector):
         lower = _to_float(bands["lower"].iloc[-1])
         upper = _to_float(bands["upper"].iloc[-1])
 
-        below_mean = c < ema_now and c < vwap_now and c <= lower
-        above_mean = c > ema_now and c > vwap_now and c >= upper
+        below_mean = c < ema_now and c < vwap_now and (c <= lower or (ema_now - c) > 0.8 * atr_now)
+        above_mean = c > ema_now and c > vwap_now and (c >= upper or (c - ema_now) > 0.8 * atr_now)
         reversion_started_long = prev_c <= c and rsi_now > 30
         reversion_started_short = prev_c >= c and rsi_now < 70
 
