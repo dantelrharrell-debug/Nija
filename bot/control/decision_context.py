@@ -165,9 +165,8 @@ class UserPortfolioSnapshot:
         has_open_positions = bool(self.open_positions)
         if has_open_positions and self.protection_state in {PROTECTION_UNVERIFIED, PROTECTION_FAILED}:
             notes.append(self.protection_state)
-        if self.margin_enabled and self.broker.lower() == "kraken":
-            if not bool(self.metadata.get("kraken_margin_visibility_proven")):
-                notes.append("AUTHORITATIVE_POSITION_UNPROVEN")
+        if self.broker.lower() == "kraken" and not bool(self.metadata.get("kraken_margin_visibility_proven")):
+            notes.append("AUTHORITATIVE_POSITION_UNPROVEN")
         for order in self.pending_orders:
             if str(order.get("symbol") or "").upper() != symbol.upper():
                 continue

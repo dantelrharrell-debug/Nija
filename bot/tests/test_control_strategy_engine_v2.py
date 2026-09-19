@@ -68,6 +68,9 @@ def _snapshot(
     margin_enabled: bool = False,
     metadata=None,
 ) -> UserPortfolioSnapshot:
+    snapshot_metadata = dict(metadata or {})
+    if context.broker.lower() == "kraken" and "kraken_margin_visibility_proven" not in snapshot_metadata:
+        snapshot_metadata["kraken_margin_visibility_proven"] = True
     return UserPortfolioSnapshot(
         user_id=context.user_id,
         account_id=context.account_id,
@@ -89,7 +92,7 @@ def _snapshot(
         protection_state=protection_state,
         authoritative_positions_proven=authoritative_positions_proven,
         margin_enabled=margin_enabled,
-        metadata=metadata or {},
+        metadata=snapshot_metadata,
     )
 
 
