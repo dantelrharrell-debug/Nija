@@ -51,6 +51,21 @@ from bot.control.signal_pipeline import (
     SignalPipeline,
     get_signal_pipeline,
 )
+from bot.control.decision_context import (
+    PLATFORM_IDENTITY,
+    POSITION_CLOSED,
+    PROTECTION_CONFIRMED,
+    PROTECTION_FAILED,
+    PROTECTION_PENDING,
+    PROTECTION_UNVERIFIED,
+    ExitVerificationResult,
+    ProtectionVerificationResult,
+    UserDecisionContext,
+    UserPortfolioSnapshot,
+    UserScopedIdempotencyRegistry,
+    verify_exit_lifecycle,
+    verify_protection_after_fill,
+)
 from bot.control.strategy_signal import StrategySignal
 from bot.control.signal_scoring import SignalScoringEngine
 from bot.control.confirmation_engine import ConfirmationEngine
@@ -74,8 +89,21 @@ __all__ = [
     # Signal Pipeline
     "SignalPipeline",
     "get_signal_pipeline",
+    "PLATFORM_IDENTITY",
+    "POSITION_CLOSED",
+    "PROTECTION_CONFIRMED",
+    "PROTECTION_FAILED",
+    "PROTECTION_PENDING",
+    "PROTECTION_UNVERIFIED",
     "StrategySignal",
     "SignalScoringEngine",
     "ConfirmationEngine",
     "StrategyDetectorRegistry",
+    "UserDecisionContext",
+    "UserPortfolioSnapshot",
+    "UserScopedIdempotencyRegistry",
+    "ProtectionVerificationResult",
+    "ExitVerificationResult",
+    "verify_protection_after_fill",
+    "verify_exit_lifecycle",
 ]

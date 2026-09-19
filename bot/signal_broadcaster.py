@@ -61,6 +61,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+from bot.control.decision_context import UserDecisionContext, UserPortfolioSnapshot
+
 logger = logging.getLogger("nija.signal_broadcaster")
 
 DEFAULT_RISK_FRACTION = 0.02
@@ -178,6 +180,18 @@ class BroadcastResult:
     timestamp: str = field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat()
     )
+
+
+@dataclass
+class AccountDecision:
+    """Account-specific decision input derived from a shared market signal."""
+    account_id: str
+    user_id: str
+    broker: str
+    decision_context: UserDecisionContext
+    portfolio_snapshot: UserPortfolioSnapshot
+    proposed_size_usd: float
+    signal: Dict[str, Any]
 
 
 # ---------------------------------------------------------------------------
@@ -339,6 +353,77 @@ class SignalBroadcaster:
             side.upper(), symbol, filled, len(results),
         )
         return results
+
+    def build_account_decisions(
+        self,
+        signal: Dict[str, Any],
+    ) -> List[AccountDecision]:
+        """Build isolated account-scoped decision inputs from one shared market signal."""
+        symbol = str(signal.get("symbol") or "")
+        strategy_signal_id = str(signal.get("strategy_signal_id") or signal.get("signal_id") or "")
+        trade_id_prefix = str(signal.get("trade_id") or strategy_signal_id or symbol or "signal")
+        strategy = str(signal.get("strategy") or "SignalBroadcaster")
+
+        with self._lock:
+            accounts_snapshot = list(self._accounts.values())
+
+        decisions: List[AccountDecision] = []
+        capital_manager = (
+            get_global_capital_manager()
+            if _GCM_AVAILABLE and get_global_capital_manager
+            else None
+        )
+        for account in accounts_snapshot:
+            broker_name = self._broker_name(account.broker)
+            user_id = self._user_for_account(account)
+            portfolio_id = f"{broker_name}:{account.account_id}"
+            allocation = 1.0
+            if capital_manager is not None:
+                try:
+                    allocation = float(capital_manager.get_allocation(account.account_id))
+                except Exception:
+                    allocation = 1.0
+            proposed_size_usd = round(account.balance * self._risk_fraction * allocation, 2)
+            positions = self._positions_for_broker(account.broker)
+            decision_context = UserDecisionContext(
+                user_id=user_id,
+                account_id=account.account_id,
+                broker=broker_name,
+                portfolio_id=portfolio_id,
+                strategy_signal_id=strategy_signal_id or f"{strategy}:{symbol}",
+                trade_id=f"{trade_id_prefix}:{account.account_id}",
+                asset_class=signal.get("asset_class"),
+                execution_mode=signal.get("execution_mode"),
+            )
+            portfolio_snapshot = UserPortfolioSnapshot(
+                user_id=user_id,
+                account_id=account.account_id,
+                broker=broker_name,
+                balance=account.balance,
+                equity=account.balance,
+                available_buying_power=account.balance,
+                open_positions=tuple(positions),
+                pending_orders=tuple(self._pending_orders_for_broker(account.broker)),
+                portfolio_exposure=sum(float(p.get("usd_value") or p.get("size_usd") or 0.0) for p in positions),
+                protection_state="PROTECTION_CONFIRMED",
+                authoritative_positions_proven=bool(signal.get("authoritative_position_proven", True)),
+                broker_healthy=bool(signal.get("broker_available", True)),
+                positions_fresh=bool(signal.get("positions_fresh", True)),
+                orders_fresh=bool(signal.get("orders_fresh", True)),
+                metadata={"strategy": strategy},
+            )
+            decisions.append(
+                AccountDecision(
+                    account_id=account.account_id,
+                    user_id=user_id,
+                    broker=broker_name,
+                    decision_context=decision_context,
+                    portfolio_snapshot=portfolio_snapshot,
+                    proposed_size_usd=proposed_size_usd,
+                    signal=dict(signal),
+                )
+            )
+        return decisions
 
     def _execute_with_retry(
         self,
@@ -510,6 +595,42 @@ class SignalBroadcaster:
         """Return a deterministic seed from a composite payload."""
         digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
         return int(digest[:SEED_HEX_LENGTH], 16)
+
+    @staticmethod
+    def _broker_name(broker: Any) -> str:
+        broker_type = getattr(broker, "broker_type", None)
+        value = getattr(broker_type, "value", broker_type)
+        if value:
+            return str(value).strip().lower()
+        return str(getattr(broker, "broker_name", "") or getattr(broker, "NAME", "") or "unknown").strip().lower()
+
+    @staticmethod
+    def _user_for_account(account: AccountRecord) -> str:
+        user_id = getattr(account.broker, "user_id", None) or getattr(account.broker, "nija_user_id", None)
+        return str(user_id or account.account_id or "PLATFORM")
+
+    @staticmethod
+    def _positions_for_broker(broker: Any) -> List[Dict[str, Any]]:
+        try:
+            positions = broker.get_positions()
+            if isinstance(positions, list):
+                return [dict(p) for p in positions]
+        except Exception:
+            return []
+        return []
+
+    @staticmethod
+    def _pending_orders_for_broker(broker: Any) -> List[Dict[str, Any]]:
+        getter = getattr(broker, "get_open_orders", None)
+        if not callable(getter):
+            return []
+        try:
+            orders = getter()
+            if isinstance(orders, list):
+                return [dict(o) for o in orders]
+        except Exception:
+            return []
+        return []
 
     def _apply_account_timing_controls(self, account_id: str, symbol: str) -> None:
         """Apply per-account cooldown and jitter to diversify execution timing.

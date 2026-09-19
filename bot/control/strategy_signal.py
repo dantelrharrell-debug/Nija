@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+import uuid
 from typing import Any, Dict, List, Optional
 
 
@@ -18,6 +19,7 @@ class StrategySignal:
     symbol: str
     broker: str
     direction: str
+    strategy_signal_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     entry_zone: Optional[Dict[str, float]] = None
     invalidation_level: Optional[float] = None
@@ -33,6 +35,7 @@ class StrategySignal:
     def to_dict(self) -> Dict[str, Any]:
         return {
             "strategy": self.strategy,
+            "strategy_signal_id": self.strategy_signal_id,
             "symbol": self.symbol,
             "broker": self.broker,
             "direction": self.direction,
