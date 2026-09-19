@@ -510,7 +510,8 @@ class SignalPipeline:
             audit["final_decision"] = "approved"
             audit["signal_id"]      = compiled.signal_id
             if context is not None:
-                self._idempotency_registry.mark_state(duplicate_key, "risk_passed")
+                compiled.metadata["duplicate_key"] = duplicate_key
+                self._idempotency_registry.release(duplicate_key)
             self._record(accepted=True)
             with self._lock:
                 self._last_approved_ts = _time.time()
@@ -540,7 +541,15 @@ class SignalPipeline:
             if replacements:
                 return replace(decision_context, **replacements)
             return decision_context
-        if raw_signal.strategy_signal_id or raw_signal.trade_id or raw_signal.user_id or raw_signal.account_id or raw_signal.broker:
+        has_explicit_account_scope = bool(
+            raw_signal.user_id
+            or raw_signal.broker
+            or raw_signal.portfolio_id
+            or raw_signal.strategy_signal_id
+            or raw_signal.trade_id
+            or (raw_signal.account_id and raw_signal.account_id != "default")
+        )
+        if has_explicit_account_scope:
             return UserDecisionContext(
                 user_id=raw_signal.user_id or "",
                 account_id=raw_signal.account_id or "default",

@@ -264,7 +264,13 @@ class TestV2MultiUserIsolation(unittest.TestCase):
 
         raw_a = self._raw(context_a, size_usd=100.0)
         first = self.pipeline.process_signal(raw_a, df=None, decision_context=context_a, portfolio_snapshot=snapshot_a)
-        second = self.pipeline.process_signal(raw_a, df=None, decision_context=context_a, portfolio_snapshot=snapshot_a)
+        second_snapshot_a = _snapshot(
+            context=context_a,
+            equity=10_000.0,
+            buying_power=8_000.0,
+            pending_orders=[{"symbol": "BTC-USD", "side": "buy", "status": "open"}],
+        )
+        second = self.pipeline.process_signal(raw_a, df=None, decision_context=context_a, portfolio_snapshot=second_snapshot_a)
         third = self.pipeline.process_signal(self._raw(context_b, size_usd=20.0), df=None, decision_context=context_b, portfolio_snapshot=snapshot_b)
 
         self.assertIsNotNone(first)
