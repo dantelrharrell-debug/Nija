@@ -123,8 +123,8 @@ class OpeningRangeBreakoutDetector(BaseDetector):
         broke_down = close < first_low if self.require_close else low < first_low
 
         if self.require_retest:
-            broke_up = broke_up and _to_float(prev["low"]) <= first_high <= _to_float(latest["low"])
-            broke_down = broke_down and _to_float(prev["high"]) >= first_low >= _to_float(latest["high"])
+            broke_up = broke_up and _to_float(latest["low"]) <= first_high <= _to_float(latest["close"])
+            broke_down = broke_down and _to_float(latest["high"]) >= first_low >= _to_float(latest["close"])
 
         if broke_up and vol_ok:
             rng = max(first_high - first_low, 0.0)

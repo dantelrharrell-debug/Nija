@@ -41,9 +41,8 @@ class SignalScoringEngine:
             + 0.10 * momentum
             + 0.10 * volume
             + 0.10 * volatility
-            + 0.10 * rr
+            + 0.20 * rr
         )
-        score /= 0.90
         score -= 0.05 * spread_penalty
         score -= 0.05 * liquidity_penalty
 
