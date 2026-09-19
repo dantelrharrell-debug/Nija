@@ -72,6 +72,10 @@ from bot.control.risk_engine import (
     RiskEngine,
     get_risk_engine,
 )
+from bot.control.confirmation_engine import ConfirmationEngine
+from bot.control.signal_scoring import SignalScoringEngine
+from bot.control.strategy_registry import StrategyDetectorRegistry
+from bot.control.strategy_signal import StrategySignal
 
 logger = logging.getLogger("nija.control.pipeline")
 
@@ -122,6 +126,9 @@ class SignalPipeline:
         self._compiler      = compiler      or get_control_compiler(redis_client)
         self._regime_engine = regime_engine or get_regime_engine(redis_client)
         self._risk_engine   = risk_engine   or get_risk_engine(redis_client)
+        self._detector_registry = StrategyDetectorRegistry()
+        self._scoring_engine = SignalScoringEngine()
+        self._confirmation_engine = ConfirmationEngine()
         self._redis         = redis_client
         self._lock          = threading.Lock()
 
@@ -138,6 +145,124 @@ class SignalPipeline:
             _DIAGNOSTIC_TRADE_ENABLED, _DIAGNOSTIC_TRADE_IDLE_SECONDS,
         )
 
+    def process_market_snapshot(
+        self,
+        *,
+        symbol: str,
+        broker: str,
+        df: pd.DataFrame,
+        current_positions: Optional[List[Dict[str, Any]]] = None,
+        portfolio_value_usd: float = 10_000.0,
+        peak_portfolio_value: Optional[float] = None,
+        daily_pnl: float = 0.0,
+        checks: Optional[Dict[str, bool]] = None,
+        score_context: Optional[Dict[str, float]] = None,
+        requested_size_usd: Optional[float] = None,
+        available_balance_usd: Optional[float] = None,
+        authoritative_position_proven: bool = True,
+    ) -> Optional[CompiledSignal]:
+        """
+        Run the detector-driven strategy flow for one market snapshot.
+
+        Parameters
+        ----------
+        symbol, broker:
+            Target instrument and venue label for detector context.
+        df:
+            OHLCV frame used by regime detection and strategy detectors.
+        checks:
+            Confirmation booleans (candle_close, volume, trend,
+            market_data_fresh, broker_available, spread_ok, liquidity_ok).
+        score_context:
+            Scoring inputs for the central score layer.
+        requested_size_usd:
+            Required proposed entry notional after upstream sizing logic.
+        available_balance_usd:
+            Optional tradable balance forwarded to balance/min-notional checks.
+        authoritative_position_proven:
+            Hard safety gate; when False, entry is rejected before risk checks.
+
+        Returns
+        -------
+        Optional[CompiledSignal]
+            Execution-ready compiled signal when every stage passes, else None.
+        """
+        checks = checks or {}
+        score_context = score_context or {}
+        if df is None or df.empty:
+            return None
+        regime = "unknown"
+        regime_result = self._regime_engine.detect(symbol, df).regime
+        regime = getattr(regime_result, "value", regime_result)
+        regime = str(regime)
+
+        candidates = self._detector_registry.detect(
+            df=df,
+            symbol=symbol,
+            broker=broker,
+            market_regime=regime,
+        )
+        if not candidates:
+            return None
+
+        ranked: List[tuple[StrategySignal, float]] = []
+        for candidate in candidates:
+            score_result = self._scoring_engine.score(candidate, score_context)
+            if score_result.rejected:
+                continue
+            confirm = self._confirmation_engine.confirm(
+                candidate,
+                score=score_result.score,
+                checks=checks,
+            )
+            if not confirm.approved:
+                logger.info(
+                    "CONFIRMATION_FAIL symbol=%s strategy=%s reasons=%s",
+                    candidate.symbol,
+                    candidate.strategy,
+                    confirm.reasons,
+                )
+                continue
+            ranked.append((candidate, score_result.score))
+
+        if not ranked:
+            return None
+        best_signal, best_score = max(ranked, key=lambda row: row[1])
+        try:
+            requested_size = float(requested_size_usd or 0.0)
+        except (TypeError, ValueError):
+            requested_size = 0.0
+        if requested_size <= 0:
+            logger.warning(
+                "SIGNAL_REJECTED_INVALID_SIZE symbol=%s strategy=%s reason=requested_size_usd_missing_or_non_positive",
+                best_signal.symbol,
+                best_signal.strategy,
+            )
+            return None
+        raw = RawSignal(
+            symbol=best_signal.symbol,
+            side="buy" if best_signal.direction == "long" else "sell",
+            action="enter_long" if best_signal.direction == "long" else "enter_short",
+            size_usd=requested_size,
+            confidence=best_score,
+            regime=best_signal.market_regime,
+            strategy=best_signal.strategy,
+            metadata={
+                **best_signal.to_dict(),
+                "signal_score": best_score,
+            },
+        )
+        return self.process_signal(
+            raw_signal=raw,
+            df=df,
+            current_positions=current_positions,
+            portfolio_value_usd=portfolio_value_usd,
+            peak_portfolio_value=peak_portfolio_value,
+            daily_pnl=daily_pnl,
+            available_balance_usd=available_balance_usd,
+            authoritative_position_proven=authoritative_position_proven,
+        )
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -152,6 +277,7 @@ class SignalPipeline:
         daily_pnl: float = 0.0,
         max_position_size_pct: float = 10.0,
         available_balance_usd: Optional[float] = None,
+        authoritative_position_proven: bool = True,
     ) -> Optional[CompiledSignal]:
         """
         Run the full signal processing pipeline.
@@ -257,6 +383,7 @@ class SignalPipeline:
             size_usd=compiled.size_usd,
             portfolio_value_usd=portfolio_value_usd,
             current_positions=positions,
+            authoritative_position_proven=authoritative_position_proven,
             daily_pnl=daily_pnl,
             peak_portfolio_value=peak_portfolio_value,
             trading_context=compiled.trading_context,
