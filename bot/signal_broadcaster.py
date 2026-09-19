@@ -439,7 +439,17 @@ class SignalBroadcaster:
                 broker_healthy=broker_healthy,
                 positions_fresh=positions_proven,
                 orders_fresh=orders_proven,
-                metadata={"strategy": strategy},
+                metadata={
+                    "strategy": strategy,
+                    # Kraken entry admission must remain fail-closed unless the
+                    # broker adapter explicitly proves authoritative margin
+                    # position visibility. Never infer proof from an empty list.
+                    "kraken_margin_visibility_proven": (
+                        self._kraken_margin_visibility_proven(account.broker)
+                        if broker_name == "kraken"
+                        else True
+                    ),
+                },
             )
             decisions.append(
                 AccountDecision(
@@ -572,8 +582,12 @@ class SignalBroadcaster:
                     strategy="SignalBroadcaster",
                 )
 
-            status = order.get("status", "error") if order else "error"
-            if status in ("filled", "open", "pending"):
+            status = str(order.get("status", "error") if order else "error").lower()
+            # ACK/open/pending is not fill proof. Preserve the broker/execution
+            # pipeline state until authoritative reconciliation proves FILLED.
+            if status in {"open", "pending", "accepted", "acknowledged"}:
+                status = "pending"
+            elif status in {"filled", "closed"}:
                 status = "filled"
 
             return BroadcastResult(
@@ -660,6 +674,29 @@ class SignalBroadcaster:
         except Exception:
             return [], False
         return [], False
+
+    @staticmethod
+    def _kraken_margin_visibility_proven(broker: Any) -> bool:
+        """Return only explicit authoritative Kraken margin-visibility proof.
+
+        Absence, adapter errors, or unknown values are False by design.  This
+        prevents an empty/failed position response from being interpreted as
+        proof that no margin exposure exists.
+        """
+        for attribute in (
+            "kraken_margin_visibility_proven",
+            "margin_visibility_proven",
+            "authoritative_margin_positions_visible",
+        ):
+            value = getattr(broker, attribute, None)
+            if callable(value):
+                try:
+                    value = value()
+                except Exception:
+                    return False
+            if value is not None:
+                return value is True
+        return False
 
     @staticmethod
     def _broker_is_healthy(broker: Any) -> bool:
