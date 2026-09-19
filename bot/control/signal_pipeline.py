@@ -465,6 +465,11 @@ class SignalPipeline:
         }
 
         if compiled is None:
+            # No broker submission occurred. Release the admission reservation so
+            # a corrected retry is not falsely treated as an already-submitted
+            # order. Reservations remain held only after an approved handoff.
+            if context is not None and duplicate_key:
+                self._idempotency_registry.release(duplicate_key)
             audit["final_decision"] = "rejected"
             audit["rejection_stage"] = "compile"
             self._record(accepted=False)
