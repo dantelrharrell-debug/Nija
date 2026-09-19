@@ -227,10 +227,7 @@ class SignalBroadcaster:
         self._account_seed_cache: Dict[str, int] = {}
 
     def _resolve_live_balance(self, broker: Any, candidate_balance: float) -> float:
-        """Return a non-negative balance, preferring live broker balance when needed."""
-        if candidate_balance > 0.0:
-            return candidate_balance
-
+        """Return a non-negative balance, preferring a live broker balance when available."""
         live_balance = 0.0
         try:
             if broker is not None and hasattr(broker, "get_account_balance"):
@@ -253,6 +250,8 @@ class SignalBroadcaster:
             except Exception:
                 live_balance = 0.0
 
+        if live_balance <= 0.0:
+            return max(0.0, float(candidate_balance or 0.0))
         return max(0.0, live_balance)
 
     # ── Account registry ─────────────────────────────────────────────────────
@@ -382,13 +381,14 @@ class SignalBroadcaster:
             broker_name = self._broker_name(account.broker)
             user_id = self._user_for_account(account)
             portfolio_id = f"{broker_name}:{account.account_id}"
+            live_balance = self._resolve_live_balance(account.broker, account.balance)
             allocation = 1.0
             if capital_manager is not None:
                 try:
                     allocation = float(capital_manager.get_allocation(account.account_id))
                 except Exception:
                     allocation = 1.0
-            proposed_size_usd = round(account.balance * self._risk_fraction * allocation, 2)
+            proposed_size_usd = round(live_balance * self._risk_fraction * allocation, 2)
             positions, positions_proven = self._positions_for_broker(account.broker)
             pending_orders, orders_proven = self._pending_orders_for_broker(account.broker)
             broker_healthy = self._broker_is_healthy(account.broker)
@@ -406,9 +406,9 @@ class SignalBroadcaster:
                 user_id=user_id,
                 account_id=account.account_id,
                 broker=broker_name,
-                balance=account.balance,
-                equity=account.balance,
-                available_buying_power=account.balance,
+                balance=live_balance,
+                equity=live_balance,
+                available_buying_power=live_balance,
                 open_positions=tuple(positions),
                 pending_orders=tuple(pending_orders),
                 portfolio_exposure=sum(float(p.get("usd_value") or p.get("size_usd") or 0.0) for p in positions),

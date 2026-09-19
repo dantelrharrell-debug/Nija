@@ -353,6 +353,7 @@ class SignalPipeline:
             }
 
         context = self._resolve_decision_context(raw_signal, decision_context)
+        duplicate_key: Optional[str] = None
         if context is not None:
             context_notes = context.validate_for_entry()
             if snapshot is not None:
@@ -372,6 +373,27 @@ class SignalPipeline:
                 )
                 return None
             audit["stages"]["context"] = {"approved": True, "notes": ["context_verified"]}
+            duplicate_allowed, duplicate_key = self._idempotency_registry.reserve(
+                context,
+                symbol=raw_signal.symbol,
+                direction=self._duplicate_direction(raw_signal),
+            )
+            audit["stages"]["duplicate"] = {
+                "approved": duplicate_allowed,
+                "key": duplicate_key,
+            }
+            if not duplicate_allowed:
+                audit["final_decision"] = "rejected"
+                audit["rejection_stage"] = "duplicate"
+                self._record(accepted=False)
+                self._store_pipeline_audit(pipeline_id, audit)
+                logger.warning(
+                    "PIPELINE_REJECT stage=duplicate symbol=%s account=%s key=%s",
+                    raw_signal.symbol,
+                    context.account_id,
+                    duplicate_key,
+                )
+                return None
         elif snapshot is not None:
             context_notes = ["USER_CONTEXT_UNPROVEN:missing_context"]
             audit["stages"]["context"] = {"approved": False, "notes": context_notes}
@@ -450,29 +472,6 @@ class SignalPipeline:
             )
             return None
 
-        if context is not None:
-            duplicate_allowed, duplicate_key = self._idempotency_registry.reserve(
-                context,
-                symbol=compiled.symbol,
-                direction="long" if compiled.side == "buy" else "short",
-            )
-            audit["stages"]["duplicate"] = {
-                "approved": duplicate_allowed,
-                "key": duplicate_key,
-            }
-            if not duplicate_allowed:
-                audit["final_decision"] = "rejected"
-                audit["rejection_stage"] = "duplicate"
-                self._record(accepted=False)
-                self._store_pipeline_audit(pipeline_id, audit)
-                logger.warning(
-                    "PIPELINE_REJECT stage=duplicate symbol=%s account=%s key=%s",
-                    compiled.symbol,
-                    compiled.account_id,
-                    duplicate_key,
-                )
-                return None
-
         try:
             # ── Stage 3: Risk Validation ─────────────────────────────────────
             risk_approved, risk_notes = self._risk_engine.validate_trade(
@@ -511,7 +510,7 @@ class SignalPipeline:
             audit["signal_id"]      = compiled.signal_id
             if context is not None:
                 compiled.metadata["duplicate_key"] = duplicate_key
-                self._idempotency_registry.release(duplicate_key)
+                self._idempotency_registry.mark_state(duplicate_key, "approved_pending_execution")
             self._record(accepted=True)
             with self._lock:
                 self._last_approved_ts = _time.time()
@@ -561,6 +560,25 @@ class SignalPipeline:
                 asset_class=raw_signal.asset_class,
             )
         return None
+
+    @staticmethod
+    def _duplicate_direction(raw_signal: RawSignal) -> str:
+        side = str(raw_signal.side or "").lower()
+        action = str(raw_signal.action or "").lower()
+        if side in {"buy", "long"} or action == "enter_long":
+            return "long"
+        if side in {"sell", "short"} or action == "enter_short":
+            return "short"
+        return side or action or "unknown"
+
+    def mark_duplicate_execution_complete(self, duplicate_key: str, *, state: str = "released") -> None:
+        """Finalize a duplicate reservation after downstream execution reconciliation."""
+        if not duplicate_key:
+            return
+        if state == "released":
+            self._idempotency_registry.release(duplicate_key)
+            return
+        self._idempotency_registry.mark_state(duplicate_key, state)
 
     # ------------------------------------------------------------------
     # Diagnostic helpers
