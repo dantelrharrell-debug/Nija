@@ -254,6 +254,27 @@ class SignalBroadcaster:
             return max(0.0, float(candidate_balance or 0.0))
         return max(0.0, live_balance)
 
+    def _resolve_buying_power(self, broker: Any, fallback_balance: float) -> float:
+        """Return broker buying power when exposed, else fall back to live balance."""
+        buying_power = 0.0
+        try:
+            if broker is not None and hasattr(broker, "get_account_balance"):
+                raw = broker.get_account_balance()
+                if isinstance(raw, dict):
+                    buying_power = float(
+                        raw.get("buying_power")
+                        or raw.get("available_buying_power")
+                        or raw.get("available_balance")
+                        or raw.get("trading_balance")
+                        or raw.get("free_margin")
+                        or 0.0
+                    )
+        except Exception as exc:
+            logger.debug("[Broadcaster] buying power fetch failed: %s", exc)
+        if buying_power <= 0.0:
+            return max(0.0, float(fallback_balance or 0.0))
+        return max(0.0, buying_power)
+
     # ── Account registry ─────────────────────────────────────────────────────
 
     def register_account(
@@ -382,6 +403,7 @@ class SignalBroadcaster:
             user_id = self._user_for_account(account)
             portfolio_id = f"{broker_name}:{account.account_id}"
             live_balance = self._resolve_live_balance(account.broker, account.balance)
+            buying_power = self._resolve_buying_power(account.broker, live_balance)
             allocation = 1.0
             if capital_manager is not None:
                 try:
@@ -408,7 +430,7 @@ class SignalBroadcaster:
                 broker=broker_name,
                 balance=live_balance,
                 equity=live_balance,
-                available_buying_power=live_balance,
+                available_buying_power=buying_power,
                 open_positions=tuple(positions),
                 pending_orders=tuple(pending_orders),
                 portfolio_exposure=sum(float(p.get("usd_value") or p.get("size_usd") or 0.0) for p in positions),

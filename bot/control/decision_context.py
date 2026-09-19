@@ -162,7 +162,8 @@ class UserPortfolioSnapshot:
             notes.append("POSITION_DATA_STALE")
         if not self.orders_fresh:
             notes.append("ORDER_DATA_STALE")
-        if self.protection_state in {PROTECTION_UNVERIFIED, PROTECTION_FAILED}:
+        has_open_positions = bool(self.open_positions)
+        if has_open_positions and self.protection_state in {PROTECTION_UNVERIFIED, PROTECTION_FAILED}:
             notes.append(self.protection_state)
         if self.margin_enabled and self.broker.lower() == "kraken":
             if not bool(self.metadata.get("kraken_margin_visibility_proven")):
