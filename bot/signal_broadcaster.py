@@ -414,6 +414,11 @@ class SignalBroadcaster:
             positions, positions_proven = self._positions_for_broker(account.broker)
             pending_orders, orders_proven = self._pending_orders_for_broker(account.broker)
             broker_healthy = self._broker_is_healthy(account.broker)
+            snapshot_metadata = {"strategy": strategy}
+            if broker_name == "kraken":
+                snapshot_metadata["kraken_margin_visibility_proven"] = self._kraken_margin_visibility_proven(
+                    account.broker
+                )
             decision_context = UserDecisionContext(
                 user_id=user_id,
                 account_id=account.account_id,
@@ -439,7 +444,7 @@ class SignalBroadcaster:
                 broker_healthy=broker_healthy,
                 positions_fresh=positions_proven,
                 orders_fresh=orders_proven,
-                metadata={"strategy": strategy},
+                metadata=snapshot_metadata,
             )
             decisions.append(
                 AccountDecision(
@@ -673,6 +678,31 @@ class SignalBroadcaster:
             if value is not None:
                 return bool(value)
         return True
+
+    @staticmethod
+    def _kraken_margin_visibility_proven(broker: Any) -> bool:
+        candidate_keys = (
+            "kraken_margin_visibility_proven",
+            "margin_visibility_proven",
+            "openpositions_proven",
+            "authoritative_positions_proven",
+        )
+        for attribute in candidate_keys:
+            value = getattr(broker, attribute, None)
+            if callable(value):
+                try:
+                    return bool(value())
+                except Exception:
+                    return False
+            if value is not None:
+                return bool(value)
+        for attribute in ("broker_state", "state", "metadata"):
+            value = getattr(broker, attribute, None)
+            if isinstance(value, dict):
+                for key in candidate_keys:
+                    if key in value:
+                        return bool(value.get(key))
+        return False
 
     @staticmethod
     def _protection_state_for_broker(broker: Any) -> str:

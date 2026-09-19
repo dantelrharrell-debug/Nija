@@ -193,6 +193,7 @@ class RiskEngine:
         # Reload rules from Redis (non-blocking; falls back to cached)
         rules = self._load_rules()
         notes: List[str] = []
+        caller_provided_context = trading_context is not None
         if trading_context is None and enforce_isolation:
             return False, ["context_missing:missing_trading_context"]
         if trading_context is None:
@@ -263,17 +264,22 @@ class RiskEngine:
         # 6. Time between trades (per broker/account/symbol)
         ok, note = self._check_trade_frequency(
             symbol,
+            rules=rules,
             account_id=account_id,
             broker=broker,
-            rules=rules,
-            trading_context=trading_context,
+            trading_context=trading_context if caller_provided_context else None,
         )
         if not ok:
             notes.append(note)
             return False, notes
 
         # All checks passed
-        self._record_trade(symbol, account_id, broker)
+        self._record_trade(
+            symbol,
+            account_id=account_id,
+            broker=broker,
+            trading_context=trading_context if caller_provided_context else None,
+        )
         notes.append("all_risk_checks_passed")
         return True, notes
 
@@ -444,49 +450,59 @@ class RiskEngine:
     def _check_trade_frequency(
         self,
         symbol: str,
-        account_id: str,
-        broker: str,
         rules: RiskRules,
         *,
-        trading_context: TradingContext,
+        account_id: str = "default",
+        broker: str = "",
+        trading_context: Optional[TradingContext] = None,
     ) -> Tuple[bool, str]:
         now_ms = time.time() * 1000
-        frequency_key = self._trade_frequency_key(symbol, account_id, broker)
+        frequency_key = self._trade_frequency_key(
+            symbol,
+            account_id=account_id,
+            broker=broker,
+            trading_context=trading_context,
+        )
         with self._lock:
             last_ms = self._last_trade_ts.get(frequency_key, 0.0)
         elapsed_ms = now_ms - last_ms
         if elapsed_ms < rules.min_time_between_trades_ms:
             return False, (
                 f"trade_frequency_limit:{frequency_key}:"
-        key = self._trade_frequency_key(symbol, trading_context=trading_context)
-        with self._lock:
-            last_ms = self._last_trade_ts.get(key, 0.0)
-        elapsed_ms = now_ms - last_ms
-        if elapsed_ms < rules.min_time_between_trades_ms:
-            return False, (
-                f"trade_frequency_limit:{key}:"
                 f"elapsed={elapsed_ms:.0f}ms<{rules.min_time_between_trades_ms}ms"
             )
         return True, ""
 
     @staticmethod
-    def _trade_frequency_key(symbol: str, account_id: str, broker: str) -> str:
+    def _trade_frequency_key(
+        symbol: str,
+        account_id: str = "default",
+        broker: str = "",
+        *,
+        trading_context: Optional[TradingContext] = None,
+    ) -> str:
+        if trading_context is not None:
+            return f"{trading_context.scope_key}|{str(symbol or '').upper()}"
         broker_key = str(broker or "unknown").strip().lower() or "unknown"
         account_key = str(account_id or "default").strip().lower() or "default"
         return f"{broker_key}:{account_key}:{symbol.upper()}"
 
-    def _record_trade(self, symbol: str, account_id: str, broker: str) -> None:
-        frequency_key = self._trade_frequency_key(symbol, account_id, broker)
-        with self._lock:
-            self._last_trade_ts[frequency_key] = time.time() * 1000
-    def _record_trade(self, symbol: str, *, trading_context: TradingContext) -> None:
-        key = self._trade_frequency_key(symbol, trading_context=trading_context)
+    def _record_trade(
+        self,
+        symbol: str,
+        account_id: str = "default",
+        broker: str = "",
+        *,
+        trading_context: Optional[TradingContext] = None,
+    ) -> None:
+        key = self._trade_frequency_key(
+            symbol,
+            account_id=account_id,
+            broker=broker,
+            trading_context=trading_context,
+        )
         with self._lock:
             self._last_trade_ts[key] = time.time() * 1000
-
-    @staticmethod
-    def _trade_frequency_key(symbol: str, *, trading_context: TradingContext) -> str:
-        return f"{trading_context.scope_key}|{str(symbol or '').upper()}"
 
     @staticmethod
     def _position_owner_key(position: Dict[str, Any]) -> Optional[Tuple[str, str, str, str]]:

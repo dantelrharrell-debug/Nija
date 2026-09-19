@@ -405,6 +405,10 @@ class SignalPipeline:
             self._store_pipeline_audit(pipeline_id, audit)
             return None
 
+        raw_signal = self._with_trading_context(raw_signal, context)
+        if raw_signal.trading_context is not None:
+            audit["context"] = raw_signal.trading_context.to_log_fields()
+
         # ── Pre-flight: Live market feed heartbeat ───────────────────────
         self._check_feed_heartbeat(raw_signal.symbol)
 
@@ -465,6 +469,8 @@ class SignalPipeline:
         }
 
         if compiled is None:
+            if context is not None and duplicate_key:
+                self._idempotency_registry.release(duplicate_key)
             audit["final_decision"] = "rejected"
             audit["rejection_stage"] = "compile"
             self._record(accepted=False)
@@ -497,7 +503,7 @@ class SignalPipeline:
             }
 
             if not risk_approved:
-                if context is not None:
+                if context is not None and duplicate_key:
                     self._idempotency_registry.release(duplicate_key)
                 audit["final_decision"] = "rejected"
                 audit["rejection_stage"] = "risk"
@@ -517,9 +523,8 @@ class SignalPipeline:
             # ── Approved ─────────────────────────────────────────────────────
             audit["final_decision"] = "approved"
             audit["signal_id"] = compiled.signal_id
-            if context is not None:
+            if context is not None and duplicate_key:
                 compiled.metadata["duplicate_key"] = duplicate_key
-                self._idempotency_registry.release(duplicate_key)
             self._record(accepted=True)
             with self._lock:
                 self._last_approved_ts = _time.time()
@@ -537,7 +542,7 @@ class SignalPipeline:
             )
             return compiled
         except Exception:
-            if context is not None:
+            if context is not None and duplicate_key:
                 self._idempotency_registry.release(duplicate_key)
             raise
 
@@ -555,6 +560,18 @@ class SignalPipeline:
             if replacements:
                 return replace(decision_context, **replacements)
             return decision_context
+        if raw_signal.trading_context is not None:
+            return UserDecisionContext(
+                user_id=raw_signal.trading_context.user_id,
+                account_id=raw_signal.trading_context.trading_account_id,
+                broker=raw_signal.trading_context.broker,
+                portfolio_id=raw_signal.trading_context.portfolio_id,
+                strategy_signal_id=raw_signal.strategy_signal_id or raw_signal.trading_context.decision_id,
+                trade_id=raw_signal.trade_id or raw_signal.trading_context.request_id,
+                execution_mode=raw_signal.execution_mode or raw_signal.trading_context.mode,
+                asset_class=raw_signal.asset_class,
+                correlation_id=raw_signal.trading_context.correlation_id,
+            )
         has_explicit_account_scope = bool(
             raw_signal.user_id
             or raw_signal.broker
@@ -562,17 +579,6 @@ class SignalPipeline:
             or raw_signal.strategy_signal_id
             or raw_signal.trade_id
             or (raw_signal.account_id and raw_signal.account_id != "default")
-        # ── Approved ─────────────────────────────────────────────────────
-        audit["final_decision"] = "approved"
-        audit["signal_id"]      = compiled.signal_id
-        self._record(accepted=True)
-        with self._lock:
-            self._last_approved_ts = _time.time()
-        self._store_pipeline_audit(pipeline_id, audit)
-        logger.info(
-            "PIPELINE_APPROVED symbol=%s side=%s size_usd=%.2f regime=%s confidence=%.3f user_id=%s account_id=%s",
-            compiled.symbol, compiled.side, compiled.size_usd,
-            compiled.regime, compiled.confidence, compiled.trading_context.user_id, compiled.trading_context.trading_account_id,
         )
         if has_explicit_account_scope:
             return UserDecisionContext(
@@ -586,6 +592,76 @@ class SignalPipeline:
                 asset_class=raw_signal.asset_class,
             )
         return None
+
+    @classmethod
+    def _with_trading_context(
+        cls,
+        raw_signal: RawSignal,
+        decision_context: Optional[UserDecisionContext],
+    ) -> RawSignal:
+        if raw_signal.trading_context is not None or decision_context is None:
+            return raw_signal
+        return RawSignal(
+            symbol=raw_signal.symbol,
+            side=raw_signal.side,
+            action=raw_signal.action,
+            size_usd=raw_signal.size_usd,
+            confidence=raw_signal.confidence,
+            regime=raw_signal.regime,
+            strategy=raw_signal.strategy,
+            user_id=raw_signal.user_id,
+            account_id=raw_signal.account_id,
+            broker=raw_signal.broker,
+            portfolio_id=raw_signal.portfolio_id,
+            strategy_signal_id=raw_signal.strategy_signal_id,
+            trade_id=raw_signal.trade_id,
+            approved=raw_signal.approved,
+            stop_loss_pct=raw_signal.stop_loss_pct,
+            take_profit_pct=raw_signal.take_profit_pct,
+            execution_mode=raw_signal.execution_mode,
+            asset_class=raw_signal.asset_class,
+            metadata=dict(raw_signal.metadata or {}),
+            trading_context=cls._build_trading_context(raw_signal, decision_context),
+        )
+
+    @classmethod
+    def _build_trading_context(
+        cls,
+        raw_signal: RawSignal,
+        decision_context: UserDecisionContext,
+    ) -> TradingContext:
+        request_id = str(decision_context.trade_id or raw_signal.trade_id or decision_context.strategy_signal_id).strip()
+        correlation_id = str(
+            decision_context.correlation_id
+            or raw_signal.strategy_signal_id
+            or decision_context.strategy_signal_id
+            or request_id
+        ).strip()
+        strategy_instance_id = str(raw_signal.strategy or decision_context.strategy_signal_id or "signal_pipeline").strip()
+        account_id = str(decision_context.account_id or raw_signal.account_id or "default").strip() or "default"
+        return TradingContext(
+            user_id=str(decision_context.user_id or raw_signal.user_id or "").strip(),
+            trading_account_id=account_id,
+            broker=str(decision_context.broker or raw_signal.broker or "").strip().lower(),
+            broker_account_id=account_id,
+            strategy_instance_id=strategy_instance_id or "signal_pipeline",
+            portfolio_id=str(decision_context.portfolio_id or raw_signal.portfolio_id or "").strip(),
+            request_id=request_id or str(uuid.uuid4()),
+            correlation_id=correlation_id or request_id or str(uuid.uuid4()),
+            environment="signal_pipeline",
+            mode=cls._normalize_context_mode(decision_context.execution_mode or raw_signal.execution_mode),
+        )
+
+    @staticmethod
+    def _normalize_context_mode(mode: Optional[str]) -> str:
+        normalized = str(mode or "").strip().lower()
+        if normalized in {"live", "limited_live"}:
+            return "live"
+        if normalized in {"simulation", "sim"}:
+            return "simulation"
+        if normalized == "backtest":
+            return "backtest"
+        return "paper"
 
     @staticmethod
     def _duplicate_direction(raw_signal: RawSignal) -> str:

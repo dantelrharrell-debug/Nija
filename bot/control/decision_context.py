@@ -174,6 +174,10 @@ class UserPortfolioSnapshot:
             normalized_direction = (
                 "buy" if direction.lower() in {"long", "buy"} else "sell" if direction.lower() in {"short", "sell"} else direction.lower()
             )
+            if pending_side in {"long", "buy"}:
+                pending_side = "buy"
+            elif pending_side in {"short", "sell"}:
+                pending_side = "sell"
             if pending_side == normalized_direction:
                 notes.append("PENDING_ORDER_EXISTS")
                 break
