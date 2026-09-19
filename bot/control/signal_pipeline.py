@@ -473,53 +473,58 @@ class SignalPipeline:
                 )
                 return None
 
-        # ── Stage 3: Risk Validation ─────────────────────────────────────
-        risk_approved, risk_notes = self._risk_engine.validate_trade(
-            symbol=compiled.symbol,
-            side=compiled.side,
-            size_usd=compiled.size_usd,
-            portfolio_value_usd=portfolio_value_usd,
-            current_positions=positions,
-            user_id=compiled.user_id,
-            account_id=compiled.account_id,
-            broker=compiled.broker,
-            authoritative_position_proven=authoritative_position_proven,
-            daily_pnl=daily_pnl,
-            peak_portfolio_value=peak_portfolio_value,
-        )
-        audit["stages"]["risk"] = {
-            "approved": risk_approved,
-            "notes":    risk_notes,
-        }
-
-        if not risk_approved:
-            if context is not None:
-                self._idempotency_registry.mark_state(duplicate_key, "reconciled_rejected")
-            audit["final_decision"] = "rejected"
-            audit["rejection_stage"] = "risk"
-            self._record(accepted=False)
-            self._store_pipeline_audit(pipeline_id, audit)
-            logger.warning(
-                "PIPELINE_REJECT stage=risk symbol=%s side=%s size_usd=%.2f notes=%s",
-                compiled.symbol, compiled.side, compiled.size_usd, risk_notes,
+        try:
+            # ── Stage 3: Risk Validation ─────────────────────────────────────
+            risk_approved, risk_notes = self._risk_engine.validate_trade(
+                symbol=compiled.symbol,
+                side=compiled.side,
+                size_usd=compiled.size_usd,
+                portfolio_value_usd=portfolio_value_usd,
+                current_positions=positions,
+                user_id=compiled.user_id,
+                account_id=compiled.account_id,
+                broker=compiled.broker,
+                authoritative_position_proven=authoritative_position_proven,
+                daily_pnl=daily_pnl,
+                peak_portfolio_value=peak_portfolio_value,
             )
-            return None
+            audit["stages"]["risk"] = {
+                "approved": risk_approved,
+                "notes":    risk_notes,
+            }
 
-        # ── Approved ─────────────────────────────────────────────────────
-        audit["final_decision"] = "approved"
-        audit["signal_id"]      = compiled.signal_id
-        if context is not None:
-            self._idempotency_registry.mark_state(duplicate_key, "risk_passed")
-        self._record(accepted=True)
-        with self._lock:
-            self._last_approved_ts = _time.time()
-        self._store_pipeline_audit(pipeline_id, audit)
-        logger.info(
-            "PIPELINE_APPROVED symbol=%s side=%s size_usd=%.2f regime=%s confidence=%.3f",
-            compiled.symbol, compiled.side, compiled.size_usd,
-            compiled.regime, compiled.confidence,
-        )
-        return compiled
+            if not risk_approved:
+                if context is not None:
+                    self._idempotency_registry.mark_state(duplicate_key, "reconciled_rejected")
+                audit["final_decision"] = "rejected"
+                audit["rejection_stage"] = "risk"
+                self._record(accepted=False)
+                self._store_pipeline_audit(pipeline_id, audit)
+                logger.warning(
+                    "PIPELINE_REJECT stage=risk symbol=%s side=%s size_usd=%.2f notes=%s",
+                    compiled.symbol, compiled.side, compiled.size_usd, risk_notes,
+                )
+                return None
+
+            # ── Approved ─────────────────────────────────────────────────────
+            audit["final_decision"] = "approved"
+            audit["signal_id"]      = compiled.signal_id
+            if context is not None:
+                self._idempotency_registry.mark_state(duplicate_key, "risk_passed")
+            self._record(accepted=True)
+            with self._lock:
+                self._last_approved_ts = _time.time()
+            self._store_pipeline_audit(pipeline_id, audit)
+            logger.info(
+                "PIPELINE_APPROVED symbol=%s side=%s size_usd=%.2f regime=%s confidence=%.3f",
+                compiled.symbol, compiled.side, compiled.size_usd,
+                compiled.regime, compiled.confidence,
+            )
+            return compiled
+        except Exception:
+            if context is not None:
+                self._idempotency_registry.release(duplicate_key)
+            raise
 
     @staticmethod
     def _resolve_decision_context(

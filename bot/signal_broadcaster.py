@@ -61,7 +61,11 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from bot.control.decision_context import UserDecisionContext, UserPortfolioSnapshot
+from bot.control.decision_context import (
+    PROTECTION_UNVERIFIED,
+    UserDecisionContext,
+    UserPortfolioSnapshot,
+)
 
 logger = logging.getLogger("nija.signal_broadcaster")
 
@@ -384,7 +388,9 @@ class SignalBroadcaster:
                 except Exception:
                     allocation = 1.0
             proposed_size_usd = round(account.balance * self._risk_fraction * allocation, 2)
-            positions = self._positions_for_broker(account.broker)
+            positions, positions_proven = self._positions_for_broker(account.broker)
+            pending_orders, orders_proven = self._pending_orders_for_broker(account.broker)
+            broker_healthy = self._broker_is_healthy(account.broker)
             decision_context = UserDecisionContext(
                 user_id=user_id,
                 account_id=account.account_id,
@@ -403,13 +409,13 @@ class SignalBroadcaster:
                 equity=account.balance,
                 available_buying_power=account.balance,
                 open_positions=tuple(positions),
-                pending_orders=tuple(self._pending_orders_for_broker(account.broker)),
+                pending_orders=tuple(pending_orders),
                 portfolio_exposure=sum(float(p.get("usd_value") or p.get("size_usd") or 0.0) for p in positions),
-                protection_state="PROTECTION_CONFIRMED",
-                authoritative_positions_proven=bool(signal.get("authoritative_position_proven", True)),
-                broker_healthy=bool(signal.get("broker_available", True)),
-                positions_fresh=bool(signal.get("positions_fresh", True)),
-                orders_fresh=bool(signal.get("orders_fresh", True)),
+                protection_state=PROTECTION_UNVERIFIED,
+                authoritative_positions_proven=positions_proven,
+                broker_healthy=broker_healthy,
+                positions_fresh=positions_proven,
+                orders_fresh=orders_proven,
                 metadata={"strategy": strategy},
             )
             decisions.append(
@@ -610,27 +616,40 @@ class SignalBroadcaster:
         return str(user_id or account.account_id or "PLATFORM")
 
     @staticmethod
-    def _positions_for_broker(broker: Any) -> List[Dict[str, Any]]:
+    def _positions_for_broker(broker: Any) -> tuple[List[Dict[str, Any]], bool]:
         try:
             positions = broker.get_positions()
             if isinstance(positions, list):
-                return [dict(p) for p in positions]
+                return [dict(p) for p in positions], True
         except Exception:
-            return []
-        return []
+            return [], False
+        return [], False
 
     @staticmethod
-    def _pending_orders_for_broker(broker: Any) -> List[Dict[str, Any]]:
+    def _pending_orders_for_broker(broker: Any) -> tuple[List[Dict[str, Any]], bool]:
         getter = getattr(broker, "get_open_orders", None)
         if not callable(getter):
-            return []
+            return [], False
         try:
             orders = getter()
             if isinstance(orders, list):
-                return [dict(o) for o in orders]
+                return [dict(o) for o in orders], True
         except Exception:
-            return []
-        return []
+            return [], False
+        return [], False
+
+    @staticmethod
+    def _broker_is_healthy(broker: Any) -> bool:
+        for attribute in ("connected", "is_connected", "healthy", "is_healthy"):
+            value = getattr(broker, attribute, None)
+            if callable(value):
+                try:
+                    return bool(value())
+                except Exception:
+                    return False
+            if value is not None:
+                return bool(value)
+        return False
 
     def _apply_account_timing_controls(self, account_id: str, symbol: str) -> None:
         """Apply per-account cooldown and jitter to diversify execution timing.

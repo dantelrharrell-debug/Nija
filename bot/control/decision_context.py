@@ -209,6 +209,9 @@ class UserScopedIdempotencyRegistry:
         with self._lock:
             self._states[key] = state
 
+    def release(self, key: str) -> None:
+        self.mark_state(key, "released")
+
     def get_state(self, key: str) -> Optional[str]:
         with self._lock:
             return self._states.get(key)
