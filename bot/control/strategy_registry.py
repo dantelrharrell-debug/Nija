@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from typing import Dict, List
 
 import pandas as pd
@@ -15,7 +14,7 @@ class StrategyDetectorRegistry:
     Executes configured strategy detectors and returns candidate signals.
     """
 
-    def __init__(self, detectors: Dict[str, BaseDetector] | None = None) -> None:
+    def __init__(self, detectors: Dict[FeatureFlag, BaseDetector] | None = None) -> None:
         self.detectors = detectors or build_default_detectors()
 
     def detect(
@@ -37,9 +36,5 @@ class StrategyDetectorRegistry:
         return out
 
     @staticmethod
-    def _flag_enabled(name: str) -> bool:
-        enum_name = name.replace("FEATURE_", "")
-        enum_name = enum_name if enum_name in FeatureFlag.__members__ else name
-        if enum_name in FeatureFlag.__members__:
-            return get_feature_flags().is_enabled(FeatureFlag[enum_name])
-        return os.getenv(name, "false").strip().lower() in ("1", "true", "yes", "on")
+    def _flag_enabled(name: FeatureFlag) -> bool:
+        return get_feature_flags().is_enabled(name)

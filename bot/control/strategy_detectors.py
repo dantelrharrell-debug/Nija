@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, TYPE_CHECKING
 
 import pandas as pd
 
 from bot.control.strategy_signal import StrategySignal
+
+if TYPE_CHECKING:
+    from bot.feature_flags import FeatureFlag
 
 
 def _to_float(v: float) -> float:
@@ -349,11 +352,11 @@ class VolatilityExpansionDetector(BaseDetector):
         if len(df) < 40:
             return None
         atr_series = _atr(df)
-        recent_atr = _to_float(atr_series.iloc[-1])
-        base_atr = _to_float(atr_series.iloc[-15:-3].mean())
+        prior_recent_atr = _to_float(atr_series.iloc[-2])
+        base_atr = _to_float(atr_series.iloc[-20:-3].mean())
         if base_atr <= 0:
             return None
-        compression = recent_atr < base_atr * 0.9
+        compression = prior_recent_atr < base_atr * 0.9
         bar = df.iloc[-1]
         prev = df.iloc[-2]
         bar_range = _to_float(bar["high"]) - _to_float(bar["low"])
@@ -451,12 +454,14 @@ class ReversalExhaustionDetector(BaseDetector):
         return None
 
 
-def build_default_detectors() -> Dict[str, BaseDetector]:
+def build_default_detectors() -> Dict["FeatureFlag", BaseDetector]:
+    from bot.feature_flags import FeatureFlag
+
     return {
-        "FIRST_CANDLE_ENABLED": OpeningRangeBreakoutDetector(),
-        "MEAN_REVERSION_ENABLED": MeanReversionDetector(),
-        "RANGE_TRADING_ENABLED": RangeTradingDetector(),
-        "SUPPORT_RESISTANCE_ENABLED": SupportResistanceBounceDetector(),
-        "VOLATILITY_EXPANSION_ENABLED": VolatilityExpansionDetector(),
-        "REVERSAL_EXHAUSTION_ENABLED": ReversalExhaustionDetector(),
+        FeatureFlag.FIRST_CANDLE_ENABLED: OpeningRangeBreakoutDetector(),
+        FeatureFlag.MEAN_REVERSION_ENABLED: MeanReversionDetector(),
+        FeatureFlag.RANGE_TRADING_ENABLED: RangeTradingDetector(),
+        FeatureFlag.SUPPORT_RESISTANCE_ENABLED: SupportResistanceBounceDetector(),
+        FeatureFlag.VOLATILITY_EXPANSION_ENABLED: VolatilityExpansionDetector(),
+        FeatureFlag.REVERSAL_EXHAUSTION_ENABLED: ReversalExhaustionDetector(),
     }
