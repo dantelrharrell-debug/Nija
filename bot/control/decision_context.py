@@ -280,7 +280,7 @@ def verify_exit_lifecycle(
     fill_state = broker_fill_state.upper().strip()
     if fill_state in {"FILLED", "PARTIAL_FILL", "PARTIAL_FILLED"}:
         events.append(EXIT_FILLED)
-    if remaining_position_quantity is not None and remaining_position_quantity <= 0:
+    if fill_state in {"FILLED", "PARTIAL_FILL", "PARTIAL_FILLED"} and remaining_position_quantity is not None and remaining_position_quantity <= 0:
         events.append(POSITION_CLOSED)
         return ExitVerificationResult(POSITION_CLOSED, tuple(events), tuple(notes))
     if fill_state in {"FILLED", "PARTIAL_FILL", "PARTIAL_FILLED"}:

@@ -412,7 +412,7 @@ class SignalBroadcaster:
                 open_positions=tuple(positions),
                 pending_orders=tuple(pending_orders),
                 portfolio_exposure=sum(float(p.get("usd_value") or p.get("size_usd") or 0.0) for p in positions),
-                protection_state=PROTECTION_UNVERIFIED if positions else PROTECTION_CONFIRMED,
+                protection_state=self._protection_state_for_broker(account.broker),
                 authoritative_positions_proven=positions_proven,
                 broker_healthy=broker_healthy,
                 positions_fresh=positions_proven,
@@ -651,6 +651,16 @@ class SignalBroadcaster:
             if value is not None:
                 return bool(value)
         return False
+
+    @staticmethod
+    def _protection_state_for_broker(broker: Any) -> str:
+        value = getattr(broker, "protection_state", None)
+        if isinstance(value, str) and value.strip():
+            return value.strip().upper()
+        verified = getattr(broker, "protection_verified", None)
+        if verified is False:
+            return PROTECTION_UNVERIFIED
+        return PROTECTION_CONFIRMED
 
     def _apply_account_timing_controls(self, account_id: str, symbol: str) -> None:
         """Apply per-account cooldown and jitter to diversify execution timing.
