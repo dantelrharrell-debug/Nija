@@ -21,11 +21,6 @@ class FeatureFlag(Enum):
     SUPPORT_RESISTANCE_ENABLED = "support_resistance_enabled"
     VOLATILITY_EXPANSION_ENABLED = "volatility_expansion_enabled"
     REVERSAL_EXHAUSTION_ENABLED = "reversal_exhaustion_enabled"
-    STRATEGY_MODE_BACKTEST = "strategy_mode_backtest"
-    STRATEGY_MODE_SHADOW = "strategy_mode_shadow"
-    STRATEGY_MODE_PAPER = "strategy_mode_paper"
-    STRATEGY_MODE_LIMITED_LIVE = "strategy_mode_limited_live"
-    STRATEGY_MODE_LIVE = "strategy_mode_live"
     
     # Safety killswitches (always ON)
     PROFITABILITY_ASSERTION = "profitability_assertion"
@@ -63,11 +58,6 @@ class FeatureFlagManager:
             FeatureFlag.SUPPORT_RESISTANCE_ENABLED: False,
             FeatureFlag.VOLATILITY_EXPANSION_ENABLED: False,
             FeatureFlag.REVERSAL_EXHAUSTION_ENABLED: False,
-            FeatureFlag.STRATEGY_MODE_BACKTEST: False,
-            FeatureFlag.STRATEGY_MODE_SHADOW: False,
-            FeatureFlag.STRATEGY_MODE_PAPER: False,
-            FeatureFlag.STRATEGY_MODE_LIMITED_LIVE: False,
-            FeatureFlag.STRATEGY_MODE_LIVE: False,
             
             # Safety features ALWAYS ON (cannot be disabled)
             FeatureFlag.PROFITABILITY_ASSERTION: True,
@@ -145,3 +135,15 @@ def get_feature_flags() -> FeatureFlagManager:
 def is_feature_enabled(flag: FeatureFlag) -> bool:
     """Convenience function to check feature flag"""
     return get_feature_flags().is_enabled(flag)
+
+
+def get_strategy_execution_mode() -> str:
+    """
+    Return the configured strategy execution mode.
+
+    Allowed values: BACKTEST, SHADOW, PAPER, LIMITED_LIVE, LIVE.
+    Defaults to BACKTEST.
+    """
+    mode = (os.getenv("NIJA_STRATEGY_EXECUTION_MODE", "BACKTEST") or "BACKTEST").strip().upper()
+    allowed = {"BACKTEST", "SHADOW", "PAPER", "LIMITED_LIVE", "LIVE"}
+    return mode if mode in allowed else "BACKTEST"

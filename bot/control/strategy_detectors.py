@@ -107,9 +107,12 @@ class OpeningRangeBreakoutDetector(BaseDetector):
     def detect(self, df: pd.DataFrame, context: DetectorContext) -> Optional[StrategySignal]:
         if len(df) < max(25, self.lookback + 2):
             return None
-        first = df.iloc[self.lookback - 1]
-        latest = df.iloc[-1]
-        prev = df.iloc[-2]
+        session_df = self._current_session(df)
+        if len(session_df) < self.lookback + 1:
+            return None
+        first = session_df.iloc[self.lookback - 1]
+        latest = session_df.iloc[-1]
+        prev = session_df.iloc[-2]
 
         first_high = _to_float(first["high"])
         first_low = _to_float(first["low"])
@@ -172,6 +175,18 @@ class OpeningRangeBreakoutDetector(BaseDetector):
                 },
             )
         return None
+
+    @staticmethod
+    def _current_session(df: pd.DataFrame) -> pd.DataFrame:
+        if isinstance(df.index, pd.DatetimeIndex) and len(df.index) > 0:
+            current_day = df.index[-1].date()
+            return df[df.index.date == current_day]
+        if "timestamp" in df.columns:
+            ts = pd.to_datetime(df["timestamp"], errors="coerce", utc=True)
+            if not ts.isna().all():
+                current_day = ts.iloc[-1].date()
+                return df[ts.dt.date == current_day]
+        return df
 
 
 class MeanReversionDetector(BaseDetector):

@@ -155,6 +155,7 @@ class SignalPipeline:
         daily_pnl: float = 0.0,
         checks: Optional[Dict[str, bool]] = None,
         score_context: Optional[Dict[str, float]] = None,
+        requested_size_usd: Optional[float] = None,
         authoritative_position_proven: bool = True,
     ) -> Optional[CompiledSignal]:
         """
@@ -170,7 +171,9 @@ class SignalPipeline:
             Confirmation booleans (candle_close, volume, trend,
             market_data_fresh, broker_available, spread_ok, liquidity_ok).
         score_context:
-            Scoring inputs and required `requested_size_usd`.
+            Scoring inputs for the central score layer.
+        requested_size_usd:
+            Required proposed entry notional after upstream sizing logic.
         authoritative_position_proven:
             Hard safety gate; when False, entry is rejected before risk checks.
 
@@ -218,7 +221,7 @@ class SignalPipeline:
             return None
         best_signal, best_score = max(ranked, key=lambda row: row[1])
         try:
-            requested_size = float(score_context.get("requested_size_usd", 0.0) or 0.0)
+            requested_size = float(requested_size_usd or 0.0)
         except (TypeError, ValueError):
             requested_size = 0.0
         if requested_size <= 0:
