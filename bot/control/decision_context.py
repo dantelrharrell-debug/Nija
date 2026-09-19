@@ -3,7 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import threading
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+import time
+from typing import Any, Dict, List, Optional, Tuple
 
 
 PLATFORM_IDENTITY = "PLATFORM"
@@ -179,9 +180,10 @@ class UserPortfolioSnapshot:
 class UserScopedIdempotencyRegistry:
     """In-memory duplicate guard scoped by user/account/broker/signal/direction."""
 
-    def __init__(self) -> None:
+    def __init__(self, ttl_seconds: float = 300.0) -> None:
         self._lock = threading.Lock()
-        self._states: Dict[str, str] = {}
+        self._ttl_seconds = max(1.0, float(ttl_seconds))
+        self._states: Dict[str, Dict[str, Any]] = {}
 
     @staticmethod
     def build_key(context: UserDecisionContext, *, symbol: str, direction: str) -> str:
@@ -199,22 +201,41 @@ class UserScopedIdempotencyRegistry:
     def reserve(self, context: UserDecisionContext, *, symbol: str, direction: str) -> Tuple[bool, str]:
         key = self.build_key(context, symbol=symbol, direction=direction)
         with self._lock:
-            state = self._states.get(key)
+            entry = self._states.get(key)
+            if entry is not None and self._is_expired(entry):
+                self._states.pop(key, None)
+                entry = None
+            state = str((entry or {}).get("state") or "")
             if state and state not in {"reconciled_rejected", "released"}:
                 return False, key
-            self._states[key] = "submitted"
+            self._states[key] = {
+                "state": "submitted",
+                "expires_at": time.monotonic() + self._ttl_seconds,
+            }
         return True, key
 
     def mark_state(self, key: str, state: str) -> None:
         with self._lock:
-            self._states[key] = state
+            self._states[key] = {
+                "state": state,
+                "expires_at": None if state in {"reconciled_rejected", "released"} else time.monotonic() + self._ttl_seconds,
+            }
 
     def release(self, key: str) -> None:
         self.mark_state(key, "released")
 
     def get_state(self, key: str) -> Optional[str]:
         with self._lock:
-            return self._states.get(key)
+            entry = self._states.get(key)
+            if entry is not None and self._is_expired(entry):
+                self._states.pop(key, None)
+                return None
+            return None if entry is None else str(entry.get("state") or "")
+
+    @staticmethod
+    def _is_expired(entry: Dict[str, Any]) -> bool:
+        expires_at = entry.get("expires_at")
+        return expires_at is not None and time.monotonic() >= float(expires_at)
 
 
 @dataclass(frozen=True)
