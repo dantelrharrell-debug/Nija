@@ -583,6 +583,9 @@ class SignalBroadcaster:
                 )
 
             status = str(order.get("status", "error") if order else "error").lower()
+            order_id = (order or {}).get("order_id") or (order or {}).get("id") or (order or {}).get("txid")
+            if status == "error" and order_id:
+                status = "pending"
             # ACK/open/pending is not fill proof. Preserve the broker/execution
             # pipeline state until authoritative reconciliation proves FILLED.
             if status in {"open", "pending", "accepted", "acknowledged"}:
@@ -688,12 +691,12 @@ class SignalBroadcaster:
             "margin_visibility_proven",
             "authoritative_margin_positions_visible",
         ):
-            value = getattr(broker, attribute, None)
-            if callable(value):
-                try:
+            try:
+                value = getattr(broker, attribute, None)
+                if callable(value):
                     value = value()
-                except Exception:
-                    return False
+            except Exception:
+                return False
             if value is not None:
                 return value is True
         return False
