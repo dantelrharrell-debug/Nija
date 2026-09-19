@@ -227,6 +227,7 @@ class MeanReversionDetector(BaseDetector):
 
         dev = abs(c - ema_now) / atr_now if atr_now else 0.0
         confidence = min(0.85, 0.55 + min(dev / 3.0, 0.25))
+        targets = [ema_now] + ([vwap_now] if has_vwap else [])
 
         if below_mean and rsi_now < 40 and reversion_started_long:
             stop = c - 1.5 * atr_now
@@ -238,7 +239,7 @@ class MeanReversionDetector(BaseDetector):
                 raw_score=confidence,
                 invalidation_level=stop,
                 suggested_stop=stop,
-                targets=[ema_now, vwap_now],
+                targets=targets,
                 support=["vwap_deviation", "ema_deviation", "rsi_recovering"],
                 conflict=[],
             )
@@ -252,7 +253,7 @@ class MeanReversionDetector(BaseDetector):
                 raw_score=confidence,
                 invalidation_level=stop,
                 suggested_stop=stop,
-                targets=[ema_now, vwap_now],
+                targets=targets,
                 support=["vwap_deviation", "ema_deviation", "rsi_fading"],
                 conflict=[],
             )

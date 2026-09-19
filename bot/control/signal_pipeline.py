@@ -156,6 +156,7 @@ class SignalPipeline:
         checks: Optional[Dict[str, bool]] = None,
         score_context: Optional[Dict[str, float]] = None,
         requested_size_usd: Optional[float] = None,
+        available_balance_usd: Optional[float] = None,
         authoritative_position_proven: bool = True,
     ) -> Optional[CompiledSignal]:
         """
@@ -174,6 +175,8 @@ class SignalPipeline:
             Scoring inputs for the central score layer.
         requested_size_usd:
             Required proposed entry notional after upstream sizing logic.
+        available_balance_usd:
+            Optional tradable balance forwarded to balance/min-notional checks.
         authoritative_position_proven:
             Hard safety gate; when False, entry is rejected before risk checks.
 
@@ -252,6 +255,7 @@ class SignalPipeline:
             portfolio_value_usd=portfolio_value_usd,
             peak_portfolio_value=peak_portfolio_value,
             daily_pnl=daily_pnl,
+            available_balance_usd=available_balance_usd,
             authoritative_position_proven=authoritative_position_proven,
         )
 
