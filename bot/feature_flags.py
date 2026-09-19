@@ -15,6 +15,17 @@ class FeatureFlag(Enum):
     DYNAMIC_STOP_EXPANSION = "dynamic_stop_expansion"
     LIVE_DASHBOARD = "live_dashboard"
     PROFIT_CONFIRMATION = "profit_confirmation"
+    FIRST_CANDLE_ENABLED = "first_candle_enabled"
+    MEAN_REVERSION_ENABLED = "mean_reversion_enabled"
+    RANGE_TRADING_ENABLED = "range_trading_enabled"
+    SUPPORT_RESISTANCE_ENABLED = "support_resistance_enabled"
+    VOLATILITY_EXPANSION_ENABLED = "volatility_expansion_enabled"
+    REVERSAL_EXHAUSTION_ENABLED = "reversal_exhaustion_enabled"
+    STRATEGY_MODE_BACKTEST = "strategy_mode_backtest"
+    STRATEGY_MODE_SHADOW = "strategy_mode_shadow"
+    STRATEGY_MODE_PAPER = "strategy_mode_paper"
+    STRATEGY_MODE_LIMITED_LIVE = "strategy_mode_limited_live"
+    STRATEGY_MODE_LIVE = "strategy_mode_live"
     
     # Safety killswitches (always ON)
     PROFITABILITY_ASSERTION = "profitability_assertion"
@@ -46,6 +57,17 @@ class FeatureFlagManager:
             FeatureFlag.DYNAMIC_STOP_EXPANSION: False,
             FeatureFlag.LIVE_DASHBOARD: False,
             FeatureFlag.PROFIT_CONFIRMATION: True,  # Enabled by default for production
+            FeatureFlag.FIRST_CANDLE_ENABLED: False,
+            FeatureFlag.MEAN_REVERSION_ENABLED: False,
+            FeatureFlag.RANGE_TRADING_ENABLED: False,
+            FeatureFlag.SUPPORT_RESISTANCE_ENABLED: False,
+            FeatureFlag.VOLATILITY_EXPANSION_ENABLED: False,
+            FeatureFlag.REVERSAL_EXHAUSTION_ENABLED: False,
+            FeatureFlag.STRATEGY_MODE_BACKTEST: False,
+            FeatureFlag.STRATEGY_MODE_SHADOW: False,
+            FeatureFlag.STRATEGY_MODE_PAPER: False,
+            FeatureFlag.STRATEGY_MODE_LIMITED_LIVE: False,
+            FeatureFlag.STRATEGY_MODE_LIVE: False,
             
             # Safety features ALWAYS ON (cannot be disabled)
             FeatureFlag.PROFITABILITY_ASSERTION: True,
