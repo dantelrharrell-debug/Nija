@@ -344,6 +344,8 @@ class SignalPipeline:
             "started_at":   datetime.now(timezone.utc).isoformat(),
             "stages":       {},
         }
+        if raw_signal.trading_context is not None:
+            audit["context"] = raw_signal.trading_context.to_log_fields()
         if decision_context is not None:
             audit["decision_context"] = {
                 "user_id": decision_context.user_id,
@@ -405,16 +407,36 @@ class SignalPipeline:
             self._store_pipeline_audit(pipeline_id, audit)
             return None
 
-        raw_signal = self._with_trading_context(raw_signal, context)
-        if raw_signal.trading_context is not None:
-            audit["context"] = raw_signal.trading_context.to_log_fields()
-
         # ── Pre-flight: Live market feed heartbeat ───────────────────────
         self._check_feed_heartbeat(raw_signal.symbol)
 
         # ── Pre-flight: Tradable balance vs order minimum ────────────────
         if available_balance_usd is not None:
             self._check_tradable_balance(raw_signal.symbol, available_balance_usd)
+        if raw_signal.trading_context is None and context is not None:
+            raw_signal = RawSignal(
+                symbol=raw_signal.symbol,
+                side=raw_signal.side,
+                action=raw_signal.action,
+                size_usd=raw_signal.size_usd,
+                confidence=raw_signal.confidence,
+                regime=raw_signal.regime,
+                strategy=raw_signal.strategy,
+                user_id=raw_signal.user_id,
+                account_id=raw_signal.account_id,
+                broker=raw_signal.broker,
+                portfolio_id=raw_signal.portfolio_id,
+                strategy_signal_id=raw_signal.strategy_signal_id,
+                trade_id=raw_signal.trade_id,
+                approved=raw_signal.approved,
+                stop_loss_pct=raw_signal.stop_loss_pct,
+                take_profit_pct=raw_signal.take_profit_pct,
+                execution_mode=raw_signal.execution_mode,
+                asset_class=raw_signal.asset_class,
+                metadata=raw_signal.metadata,
+                trading_context=self._build_trading_context(context, pipeline_id=pipeline_id),
+            )
+            audit["context"] = raw_signal.trading_context.to_log_fields()
 
         # ── Stage 1: Regime Detection ────────────────────────────────────
         regime_result: Optional[RegimeResult] = None
@@ -469,7 +491,7 @@ class SignalPipeline:
         }
 
         if compiled is None:
-            if context is not None and duplicate_key:
+            if context is not None and duplicate_key is not None:
                 self._idempotency_registry.release(duplicate_key)
             audit["final_decision"] = "rejected"
             audit["rejection_stage"] = "compile"
@@ -481,9 +503,8 @@ class SignalPipeline:
             )
             return None
 
-        audit["context"] = compiled.trading_context.to_log_fields()
-
         try:
+            audit["context"] = compiled.trading_context.to_log_fields()
             # ── Stage 3: Risk Validation ─────────────────────────────────────
             risk_approved, risk_notes = self._risk_engine.validate_trade(
                 symbol=compiled.symbol,
@@ -506,27 +527,22 @@ class SignalPipeline:
             }
 
             if not risk_approved:
-                if context is not None and duplicate_key:
+                if context is not None:
                     self._idempotency_registry.release(duplicate_key)
                 audit["final_decision"] = "rejected"
                 audit["rejection_stage"] = "risk"
                 self._record(accepted=False)
                 self._store_pipeline_audit(pipeline_id, audit)
                 logger.warning(
-                    "PIPELINE_REJECT stage=risk symbol=%s side=%s size_usd=%.2f user_id=%s account_id=%s notes=%s",
-                    compiled.symbol,
-                    compiled.side,
-                    compiled.size_usd,
-                    compiled.trading_context.user_id,
-                    compiled.trading_context.trading_account_id,
-                    risk_notes,
+                    "PIPELINE_REJECT stage=risk symbol=%s side=%s size_usd=%.2f notes=%s",
+                    compiled.symbol, compiled.side, compiled.size_usd, risk_notes,
                 )
                 return None
 
             # ── Approved ─────────────────────────────────────────────────────
             audit["final_decision"] = "approved"
-            audit["signal_id"] = compiled.signal_id
-            if context is not None and duplicate_key:
+            audit["signal_id"]      = compiled.signal_id
+            if context is not None:
                 compiled.metadata["duplicate_key"] = duplicate_key
                 self._idempotency_registry.release(duplicate_key)
             self._record(accepted=True)
@@ -534,19 +550,13 @@ class SignalPipeline:
                 self._last_approved_ts = _time.time()
             self._store_pipeline_audit(pipeline_id, audit)
             logger.info(
-                "PIPELINE_APPROVED symbol=%s side=%s size_usd=%.2f regime=%s confidence=%.3f user_id=%s "
-                "account_id=%s",
-                compiled.symbol,
-                compiled.side,
-                compiled.size_usd,
-                compiled.regime,
-                compiled.confidence,
-                compiled.trading_context.user_id,
-                compiled.trading_context.trading_account_id,
+                "PIPELINE_APPROVED symbol=%s side=%s size_usd=%.2f regime=%s confidence=%.3f",
+                compiled.symbol, compiled.side, compiled.size_usd,
+                compiled.regime, compiled.confidence,
             )
             return compiled
         except Exception:
-            if context is not None and duplicate_key:
+            if context is not None:
                 self._idempotency_registry.release(duplicate_key)
             raise
 
@@ -565,16 +575,18 @@ class SignalPipeline:
                 return replace(decision_context, **replacements)
             return decision_context
         if raw_signal.trading_context is not None:
+            trading_context = raw_signal.trading_context
             return UserDecisionContext(
-                user_id=raw_signal.trading_context.user_id,
-                account_id=raw_signal.trading_context.trading_account_id,
-                broker=raw_signal.trading_context.broker,
-                portfolio_id=raw_signal.trading_context.portfolio_id,
-                strategy_signal_id=raw_signal.strategy_signal_id or raw_signal.trading_context.decision_id,
-                trade_id=raw_signal.trade_id or raw_signal.trading_context.request_id,
-                execution_mode=raw_signal.execution_mode or raw_signal.trading_context.mode,
+                user_id=trading_context.user_id,
+                account_id=trading_context.trading_account_id,
+                broker=trading_context.broker,
+                portfolio_id=raw_signal.portfolio_id or trading_context.portfolio_id,
+                strategy_signal_id=raw_signal.strategy_signal_id or trading_context.decision_id,
+                trade_id=raw_signal.trade_id or trading_context.request_id,
+                execution_mode=raw_signal.execution_mode or trading_context.mode,
                 asset_class=raw_signal.asset_class,
-                correlation_id=raw_signal.trading_context.correlation_id,
+                session_id=trading_context.request_id,
+                correlation_id=trading_context.correlation_id,
             )
         has_explicit_account_scope = bool(
             raw_signal.user_id
@@ -597,76 +609,6 @@ class SignalPipeline:
             )
         return None
 
-    @classmethod
-    def _with_trading_context(
-        cls,
-        raw_signal: RawSignal,
-        decision_context: Optional[UserDecisionContext],
-    ) -> RawSignal:
-        if raw_signal.trading_context is not None or decision_context is None:
-            return raw_signal
-        return RawSignal(
-            symbol=raw_signal.symbol,
-            side=raw_signal.side,
-            action=raw_signal.action,
-            size_usd=raw_signal.size_usd,
-            confidence=raw_signal.confidence,
-            regime=raw_signal.regime,
-            strategy=raw_signal.strategy,
-            user_id=raw_signal.user_id,
-            account_id=raw_signal.account_id,
-            broker=raw_signal.broker,
-            portfolio_id=raw_signal.portfolio_id,
-            strategy_signal_id=raw_signal.strategy_signal_id,
-            trade_id=raw_signal.trade_id,
-            approved=raw_signal.approved,
-            stop_loss_pct=raw_signal.stop_loss_pct,
-            take_profit_pct=raw_signal.take_profit_pct,
-            execution_mode=raw_signal.execution_mode,
-            asset_class=raw_signal.asset_class,
-            metadata=dict(raw_signal.metadata or {}),
-            trading_context=cls._build_trading_context(raw_signal, decision_context),
-        )
-
-    @classmethod
-    def _build_trading_context(
-        cls,
-        raw_signal: RawSignal,
-        decision_context: UserDecisionContext,
-    ) -> TradingContext:
-        request_id = str(decision_context.trade_id or raw_signal.trade_id or decision_context.strategy_signal_id).strip()
-        correlation_id = str(
-            decision_context.correlation_id
-            or raw_signal.strategy_signal_id
-            or decision_context.strategy_signal_id
-            or request_id
-        ).strip()
-        strategy_instance_id = str(raw_signal.strategy or decision_context.strategy_signal_id or "signal_pipeline").strip()
-        account_id = str(decision_context.account_id or raw_signal.account_id or "default").strip() or "default"
-        return TradingContext(
-            user_id=str(decision_context.user_id or raw_signal.user_id or "").strip(),
-            trading_account_id=account_id,
-            broker=str(decision_context.broker or raw_signal.broker or "").strip().lower(),
-            broker_account_id=account_id,
-            strategy_instance_id=strategy_instance_id or "signal_pipeline",
-            portfolio_id=str(decision_context.portfolio_id or raw_signal.portfolio_id or "").strip(),
-            request_id=request_id or str(uuid.uuid4()),
-            correlation_id=correlation_id or request_id or str(uuid.uuid4()),
-            environment="signal_pipeline",
-            mode=cls._normalize_context_mode(decision_context.execution_mode or raw_signal.execution_mode),
-        )
-
-    @staticmethod
-    def _normalize_context_mode(mode: Optional[str]) -> str:
-        normalized = str(mode or "").strip().lower()
-        if normalized in {"live", "limited_live"}:
-            return "live"
-        if normalized in {"simulation", "sim"}:
-            return "simulation"
-        if normalized == "backtest":
-            return "backtest"
-        return "paper"
-
     @staticmethod
     def _duplicate_direction(raw_signal: RawSignal) -> str:
         side = str(raw_signal.side or "").lower()
@@ -685,6 +627,25 @@ class SignalPipeline:
             self._idempotency_registry.release(duplicate_key)
             return
         self._idempotency_registry.mark_state(duplicate_key, state)
+
+    @staticmethod
+    def _build_trading_context(context: UserDecisionContext, *, pipeline_id: str) -> TradingContext:
+        mode = str(context.execution_mode or "paper").strip().lower() or "paper"
+        if mode not in {"live", "paper", "simulation", "backtest"}:
+            mode = "paper"
+        seed = str(context.trade_id or context.strategy_signal_id or pipeline_id)
+        return TradingContext(
+            user_id=context.user_id,
+            trading_account_id=context.account_id,
+            broker=context.broker,
+            broker_account_id=context.account_id,
+            strategy_instance_id=context.strategy_signal_id or "signal_pipeline",
+            portfolio_id=context.portfolio_id or f"{context.broker}:{context.account_id}",
+            request_id=seed,
+            correlation_id=str(context.correlation_id or seed),
+            environment="pipeline",
+            mode=mode,
+        )
 
     # ------------------------------------------------------------------
     # Diagnostic helpers

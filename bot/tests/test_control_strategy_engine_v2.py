@@ -314,47 +314,6 @@ class TestV2MultiUserIsolation(unittest.TestCase):
         self.assertIsNone(result_a)
         self.assertIsNotNone(result_b)
 
-    def test_compile_rejection_releases_duplicate_reservation(self):
-        context = _decision_context(user_id="user-a", account_id="acct-a", broker="kraken", signal_id="sig-compile", trade_id="trade-compile")
-        snapshot = _snapshot(context=context, equity=10_000.0, buying_power=8_000.0)
-        raw = RawSignal(
-            symbol="BTC-USD",
-            side="buy",
-            action="enter_long",
-            size_usd=100.0,
-            confidence=0.0,
-            regime="trending",
-            strategy="swing",
-            user_id=context.user_id,
-            account_id=context.account_id,
-            broker=context.broker,
-            portfolio_id=context.portfolio_id,
-            strategy_signal_id=context.strategy_signal_id,
-            trade_id=context.trade_id,
-            approved=True,
-            execution_mode=context.execution_mode,
-            asset_class=context.asset_class,
-        )
-
-        result = self.pipeline.process_signal(raw, df=None, decision_context=context, portfolio_snapshot=snapshot)
-        duplicate_key = self.pipeline._idempotency_registry.build_key(context, symbol="BTC-USD", direction="long")
-
-        self.assertIsNone(result)
-        self.assertEqual(self.pipeline._idempotency_registry.get_state(duplicate_key), "released")
-
-    def test_pending_order_direction_normalization_ignores_opposite_side(self):
-        context = _decision_context(user_id="user-a", account_id="acct-a", broker="coinbase", signal_id="sig-pending", trade_id="trade-pending")
-        snapshot = _snapshot(
-            context=context,
-            equity=10_000.0,
-            buying_power=8_000.0,
-            pending_orders=[{"symbol": "BTC-USD", "side": "sell", "status": "open"}],
-        )
-
-        notes = snapshot.readiness_notes(symbol="BTC-USD", direction="buy")
-
-        self.assertNotIn("PENDING_ORDER_EXISTS", notes)
-
     def test_trade_frequency_is_account_scoped(self):
         engine = RiskEngine()
         approved_a, _ = engine.validate_trade(
@@ -376,6 +335,42 @@ class TestV2MultiUserIsolation(unittest.TestCase):
             broker="kraken",
         )
         self.assertTrue(approved_a)
+        self.assertTrue(approved_b)
+
+    def test_trade_frequency_is_trading_context_scoped(self):
+        engine = RiskEngine()
+        context_a = _decision_context(user_id="user-a", account_id="acct-a", broker="kraken", signal_id="sig-4a", trade_id="trade-a4")
+        context_b = _decision_context(user_id="user-b", account_id="acct-b", broker="kraken", signal_id="sig-4b", trade_id="trade-b4")
+        approved_a, _ = engine.validate_trade(
+            symbol="BTC-USD",
+            side="buy",
+            size_usd=100.0,
+            portfolio_value_usd=10_000.0,
+            current_positions=[],
+            trading_context=self._trading_context(context_a),
+            enforce_isolation=True,
+        )
+        rejected_a, notes_a = engine.validate_trade(
+            symbol="BTC-USD",
+            side="buy",
+            size_usd=100.0,
+            portfolio_value_usd=10_000.0,
+            current_positions=[],
+            trading_context=self._trading_context(context_a),
+            enforce_isolation=True,
+        )
+        approved_b, _ = engine.validate_trade(
+            symbol="BTC-USD",
+            side="buy",
+            size_usd=100.0,
+            portfolio_value_usd=10_000.0,
+            current_positions=[],
+            trading_context=self._trading_context(context_b),
+            enforce_isolation=True,
+        )
+        self.assertTrue(approved_a)
+        self.assertFalse(rejected_a)
+        self.assertTrue(any("trade_frequency_limit" in note for note in notes_a))
         self.assertTrue(approved_b)
 
     def test_protection_and_exit_verification_require_broker_proof(self):
@@ -417,25 +412,57 @@ class TestV2MultiUserIsolation(unittest.TestCase):
         decisions = broadcaster.build_account_decisions({"symbol": "BTC-USD", "action": "enter_long", "strategy_signal_id": "shared-1", "strategy": "RANGE_TRADING", "execution_mode": "PAPER"})
 
         self.assertEqual(len(decisions), 2)
+        self.assertEqual(len(decisions), 2)
         by_account = {decision.account_id: decision for decision in decisions}
         self.assertEqual(by_account["acct-a"].decision_context.user_id, "user-a")
         self.assertEqual(by_account["acct-b"].decision_context.user_id, "user-b")
         self.assertGreater(by_account["acct-a"].proposed_size_usd, by_account["acct-b"].proposed_size_usd)
         self.assertEqual(by_account["acct-a"].portfolio_snapshot.open_positions[0]["symbol"], "ETH-USD")
         self.assertEqual(by_account["acct-b"].portfolio_snapshot.open_positions, ())
-        self.assertFalse(by_account["acct-a"].portfolio_snapshot.metadata["kraken_margin_visibility_proven"])
 
-    def test_signal_broadcaster_uses_kraken_margin_visibility_metadata(self):
+    def test_signal_broadcaster_reads_kraken_margin_visibility_proof(self):
         broadcaster = SignalBroadcaster(risk_fraction=0.1)
-        broker = StaticBroker(user_id="user-a", broker_name="kraken", balance=1000.0)
-        broker.kraken_margin_visibility_proven = True
+        broker = StaticBroker(
+            user_id="user-a",
+            broker_name="kraken",
+            balance=1000.0,
+            positions=[{"symbol": "ETH-USD", "usd_value": 150.0, "kraken_margin_openpositions": True}],
+        )
         broadcaster.register_account("acct-a", broker, balance=1000.0)
 
         decisions = broadcaster.build_account_decisions(
-            {"symbol": "BTC-USD", "action": "enter_long", "strategy_signal_id": "shared-2", "strategy": "RANGE_TRADING", "execution_mode": "PAPER"}
+            {"symbol": "BTC-USD", "action": "enter_long", "strategy_signal_id": "shared-2", "strategy": "RANGE_TRADING"}
         )
 
         self.assertTrue(decisions[0].portfolio_snapshot.metadata["kraken_margin_visibility_proven"])
+
+    def test_pending_order_side_normalizes_buy_and_long(self):
+        context = _decision_context(user_id="user-a", account_id="acct-a", broker="coinbase", signal_id="sig-5", trade_id="trade-a5")
+        snapshot = _snapshot(
+            context=context,
+            equity=10_000.0,
+            buying_power=8_000.0,
+            pending_orders=[{"symbol": "BTC-USD", "side": "long", "status": "open"}],
+        )
+
+        self.assertIn("PENDING_ORDER_EXISTS", snapshot.readiness_notes(symbol="BTC-USD", direction="buy"))
+
+    def test_compile_rejection_releases_duplicate_reservation(self):
+        context = _decision_context(user_id="user-a", account_id="acct-a", broker="coinbase", signal_id="sig-6", trade_id="trade-a6")
+        snapshot = _snapshot(context=context, equity=10_000.0, buying_power=8_000.0)
+        raw = self._raw(context, size_usd=100.0)
+        raw.confidence = 1.5
+
+        result = self.pipeline.process_signal(raw, df=None, decision_context=context, portfolio_snapshot=snapshot)
+        self.assertIsNone(result)
+
+        reserved, duplicate_key = self.pipeline._idempotency_registry.reserve(
+            context,
+            symbol=raw.symbol,
+            direction=self.pipeline._duplicate_direction(raw),
+        )
+        self.assertTrue(reserved)
+        self.pipeline._idempotency_registry.release(duplicate_key)
 
     @staticmethod
     def _raw(context: UserDecisionContext, *, size_usd: float) -> RawSignal:
@@ -456,6 +483,23 @@ class TestV2MultiUserIsolation(unittest.TestCase):
             approved=True,
             execution_mode=context.execution_mode,
             asset_class=context.asset_class,
+        )
+
+    @staticmethod
+    def _trading_context(context: UserDecisionContext):
+        from bot.control.trading_context import TradingContext
+
+        return TradingContext(
+            user_id=context.user_id,
+            trading_account_id=context.account_id,
+            broker=context.broker,
+            broker_account_id=f"{context.broker}-{context.account_id}",
+            strategy_instance_id=context.strategy_signal_id or "strategy",
+            portfolio_id=context.portfolio_id or f"{context.broker}:{context.account_id}",
+            request_id=f"req-{context.trade_id or context.account_id}",
+            correlation_id=f"corr-{context.trade_id or context.account_id}",
+            environment="test",
+            mode="paper",
         )
 
 

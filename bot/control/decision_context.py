@@ -171,13 +171,15 @@ class UserPortfolioSnapshot:
             if str(order.get("symbol") or "").upper() != symbol.upper():
                 continue
             pending_side = str(order.get("side") or order.get("direction") or "").lower()
-            normalized_direction = (
-                "buy" if direction.lower() in {"long", "buy"} else "sell" if direction.lower() in {"short", "sell"} else direction.lower()
-            )
+            normalized_direction = direction.lower()
             if pending_side in {"long", "buy"}:
                 pending_side = "buy"
             elif pending_side in {"short", "sell"}:
                 pending_side = "sell"
+            if normalized_direction in {"long", "buy"}:
+                normalized_direction = "buy"
+            elif normalized_direction in {"short", "sell"}:
+                normalized_direction = "sell"
             if pending_side == normalized_direction:
                 notes.append("PENDING_ORDER_EXISTS")
                 break

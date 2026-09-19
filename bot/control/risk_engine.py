@@ -193,7 +193,7 @@ class RiskEngine:
         # Reload rules from Redis (non-blocking; falls back to cached)
         rules = self._load_rules()
         notes: List[str] = []
-        caller_provided_context = trading_context is not None
+        explicit_trading_context = trading_context is not None
         if trading_context is None and enforce_isolation:
             return False, ["context_missing:missing_trading_context"]
         if trading_context is None:
@@ -210,6 +210,7 @@ class RiskEngine:
                 environment="legacy",
                 mode="paper",
             )
+        trade_frequency_context = trading_context if explicit_trading_context else None
 
         ok, note = self._check_kill_switches(trading_context, enforce_platform_kill_switch=enforce_platform_kill_switch)
         if not ok:
@@ -264,10 +265,10 @@ class RiskEngine:
         # 6. Time between trades (per broker/account/symbol)
         ok, note = self._check_trade_frequency(
             symbol,
-            rules=rules,
             account_id=account_id,
             broker=broker,
-            trading_context=trading_context if caller_provided_context else None,
+            rules=rules,
+            trading_context=trade_frequency_context,
         )
         if not ok:
             notes.append(note)
@@ -278,7 +279,7 @@ class RiskEngine:
             symbol,
             account_id=account_id,
             broker=broker,
-            trading_context=trading_context if caller_provided_context else None,
+            trading_context=trade_frequency_context,
         )
         notes.append("all_risk_checks_passed")
         return True, notes
@@ -450,11 +451,11 @@ class RiskEngine:
     def _check_trade_frequency(
         self,
         symbol: str,
+        account_id: str,
+        broker: str,
         rules: RiskRules,
         *,
-        account_id: str = "default",
-        broker: str = "",
-        trading_context: Optional[TradingContext] = None,
+        trading_context: TradingContext,
     ) -> Tuple[bool, str]:
         now_ms = time.time() * 1000
         frequency_key = self._trade_frequency_key(
@@ -476,13 +477,13 @@ class RiskEngine:
     @staticmethod
     def _trade_frequency_key(
         symbol: str,
-        account_id: str = "default",
-        broker: str = "",
-        *,
+        account_id: str,
+        broker: str,
         trading_context: Optional[TradingContext] = None,
     ) -> str:
         if trading_context is not None:
-            return f"{trading_context.scope_key}|{str(symbol or '').upper()}"
+            broker = trading_context.broker or broker
+            account_id = trading_context.trading_account_id or account_id
         broker_key = str(broker or "unknown").strip().lower() or "unknown"
         account_key = str(account_id or "default").strip().lower() or "default"
         return f"{broker_key}:{account_key}:{symbol.upper()}"
@@ -490,19 +491,18 @@ class RiskEngine:
     def _record_trade(
         self,
         symbol: str,
-        account_id: str = "default",
-        broker: str = "",
-        *,
+        account_id: str,
+        broker: str,
         trading_context: Optional[TradingContext] = None,
     ) -> None:
-        key = self._trade_frequency_key(
+        frequency_key = self._trade_frequency_key(
             symbol,
             account_id=account_id,
             broker=broker,
             trading_context=trading_context,
         )
         with self._lock:
-            self._last_trade_ts[key] = time.time() * 1000
+            self._last_trade_ts[frequency_key] = time.time() * 1000
 
     @staticmethod
     def _position_owner_key(position: Dict[str, Any]) -> Optional[Tuple[str, str, str, str]]:
