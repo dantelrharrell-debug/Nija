@@ -528,6 +528,7 @@ class SignalPipeline:
             audit["signal_id"] = compiled.signal_id
             if context is not None and duplicate_key:
                 compiled.metadata["duplicate_key"] = duplicate_key
+                self._idempotency_registry.release(duplicate_key)
             self._record(accepted=True)
             with self._lock:
                 self._last_approved_ts = _time.time()
