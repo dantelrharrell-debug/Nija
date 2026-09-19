@@ -216,10 +216,12 @@ class UserScopedIdempotencyRegistry:
         return True, key
 
     def mark_state(self, key: str, state: str) -> None:
+        if not key:
+            return
         with self._lock:
             self._states[key] = {
                 "state": state,
-                "expires_at": None if state in {"reconciled_rejected", "released"} else time.monotonic() + self._ttl_seconds,
+                "expires_at": None if state == "released" else time.monotonic() + self._ttl_seconds,
             }
 
     def release(self, key: str) -> None:
