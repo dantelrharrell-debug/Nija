@@ -158,7 +158,26 @@ class SignalPipeline:
         authoritative_position_proven: bool = True,
     ) -> Optional[CompiledSignal]:
         """
-        Detector->score->confirmation->compiler->risk flow.
+        Run the detector-driven strategy flow for one market snapshot.
+
+        Parameters
+        ----------
+        symbol, broker:
+            Target instrument and venue label for detector context.
+        df:
+            OHLCV frame used by regime detection and strategy detectors.
+        checks:
+            Confirmation booleans (candle_close, volume, trend,
+            market_data_fresh, broker_available, spread_ok, liquidity_ok).
+        score_context:
+            Scoring inputs and required `requested_size_usd`.
+        authoritative_position_proven:
+            Hard safety gate; when False, entry is rejected before risk checks.
+
+        Returns
+        -------
+        Optional[CompiledSignal]
+            Execution-ready compiled signal when every stage passes, else None.
         """
         checks = checks or {}
         score_context = score_context or {}
