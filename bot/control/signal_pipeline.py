@@ -475,6 +475,8 @@ class SignalPipeline:
             )
             return None
 
+        audit["context"] = compiled.trading_context.to_log_fields()
+
         try:
             # ── Stage 3: Risk Validation ─────────────────────────────────────
             risk_approved, risk_notes = self._risk_engine.validate_trade(
@@ -483,12 +485,11 @@ class SignalPipeline:
                 size_usd=compiled.size_usd,
                 portfolio_value_usd=portfolio_value_usd,
                 current_positions=positions,
-                user_id=compiled.user_id,
-                account_id=compiled.account_id,
-                broker=compiled.broker,
                 authoritative_position_proven=authoritative_position_proven,
                 daily_pnl=daily_pnl,
                 peak_portfolio_value=peak_portfolio_value,
+                trading_context=compiled.trading_context,
+                enforce_isolation=True,
             )
             audit["stages"]["risk"] = {
                 "approved": risk_approved,
@@ -503,14 +504,19 @@ class SignalPipeline:
                 self._record(accepted=False)
                 self._store_pipeline_audit(pipeline_id, audit)
                 logger.warning(
-                    "PIPELINE_REJECT stage=risk symbol=%s side=%s size_usd=%.2f notes=%s",
-                    compiled.symbol, compiled.side, compiled.size_usd, risk_notes,
+                    "PIPELINE_REJECT stage=risk symbol=%s side=%s size_usd=%.2f user_id=%s account_id=%s notes=%s",
+                    compiled.symbol,
+                    compiled.side,
+                    compiled.size_usd,
+                    compiled.trading_context.user_id,
+                    compiled.trading_context.trading_account_id,
+                    risk_notes,
                 )
                 return None
 
             # ── Approved ─────────────────────────────────────────────────────
             audit["final_decision"] = "approved"
-            audit["signal_id"]      = compiled.signal_id
+            audit["signal_id"] = compiled.signal_id
             if context is not None:
                 compiled.metadata["duplicate_key"] = duplicate_key
                 self._idempotency_registry.release(duplicate_key)
@@ -519,42 +525,15 @@ class SignalPipeline:
                 self._last_approved_ts = _time.time()
             self._store_pipeline_audit(pipeline_id, audit)
             logger.info(
-                "PIPELINE_APPROVED symbol=%s side=%s size_usd=%.2f regime=%s confidence=%.3f",
-                compiled.symbol, compiled.side, compiled.size_usd,
-                compiled.regime, compiled.confidence,
-        audit["context"] = compiled.trading_context.to_log_fields()
-
-        # ── Stage 3: Risk Validation ─────────────────────────────────────
-        risk_approved, risk_notes = self._risk_engine.validate_trade(
-            symbol=compiled.symbol,
-            side=compiled.side,
-            size_usd=compiled.size_usd,
-            portfolio_value_usd=portfolio_value_usd,
-            current_positions=positions,
-            authoritative_position_proven=authoritative_position_proven,
-            daily_pnl=daily_pnl,
-            peak_portfolio_value=peak_portfolio_value,
-            trading_context=compiled.trading_context,
-            enforce_isolation=True,
-        )
-        audit["stages"]["risk"] = {
-            "approved": risk_approved,
-            "notes":    risk_notes,
-        }
-
-        if not risk_approved:
-            audit["final_decision"] = "rejected"
-            audit["rejection_stage"] = "risk"
-            self._record(accepted=False)
-            self._store_pipeline_audit(pipeline_id, audit)
-            logger.warning(
-                "PIPELINE_REJECT stage=risk symbol=%s side=%s size_usd=%.2f user_id=%s account_id=%s notes=%s",
+                "PIPELINE_APPROVED symbol=%s side=%s size_usd=%.2f regime=%s confidence=%.3f user_id=%s "
+                "account_id=%s",
                 compiled.symbol,
                 compiled.side,
                 compiled.size_usd,
+                compiled.regime,
+                compiled.confidence,
                 compiled.trading_context.user_id,
                 compiled.trading_context.trading_account_id,
-                risk_notes,
             )
             return compiled
         except Exception:
