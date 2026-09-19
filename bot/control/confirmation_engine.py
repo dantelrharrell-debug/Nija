@@ -67,6 +67,8 @@ class ConfirmationEngine:
             created_at = datetime.fromisoformat(iso_timestamp.replace("Z", "+00:00"))
         except ValueError:
             return True, "invalid_signal_timestamp"
+        if created_at.tzinfo is None:
+            return True, "naive_signal_timestamp"
         age = (datetime.now(timezone.utc) - created_at.astimezone(timezone.utc)).total_seconds()
         if age > self.max_signal_age_seconds:
             return True, f"stale_signal:{age:.1f}s"

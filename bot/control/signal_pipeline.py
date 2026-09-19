@@ -217,7 +217,10 @@ class SignalPipeline:
         if not ranked:
             return None
         best_signal, best_score = max(ranked, key=lambda row: row[1])
-        requested_size = float(score_context.get("requested_size_usd", 0.0) or 0.0)
+        try:
+            requested_size = float(score_context.get("requested_size_usd", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            requested_size = 0.0
         if requested_size <= 0:
             logger.warning(
                 "SIGNAL_REJECTED_INVALID_SIZE symbol=%s strategy=%s reason=requested_size_usd_missing_or_non_positive",

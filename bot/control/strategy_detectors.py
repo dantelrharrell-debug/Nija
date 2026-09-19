@@ -99,7 +99,7 @@ class OpeningRangeBreakoutDetector(BaseDetector):
     strategy_name = "FIRST_CANDLE_ORB"
 
     def __init__(self) -> None:
-        self.lookback = int(os.getenv("NIJA_ORB_SESSION_BARS", "1"))
+        self.lookback = max(1, int(os.getenv("NIJA_ORB_SESSION_BARS", "1")))
         self.require_close = os.getenv("NIJA_ORB_REQUIRE_CLOSE", "true").lower() == "true"
         self.require_retest = os.getenv("NIJA_ORB_REQUIRE_RETEST", "false").lower() == "true"
         self.volume_factor = float(os.getenv("NIJA_ORB_VOLUME_FACTOR", "1.10"))
