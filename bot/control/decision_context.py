@@ -240,7 +240,11 @@ class UserScopedIdempotencyRegistry:
             }
 
     def release(self, key: str) -> None:
-        self.mark_state(key, "released")
+        """Remove a reservation when no broker submission remains in flight."""
+        if not key:
+            return
+        with self._lock:
+            self._states.pop(key, None)
 
     def get_state(self, key: str) -> Optional[str]:
         with self._lock:
