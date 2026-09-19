@@ -51,6 +51,7 @@ from bot.control.signal_pipeline import (
     SignalPipeline,
     get_signal_pipeline,
 )
+from bot.control.isolation_guards import ScopedRiskSnapshot
 from bot.control.trading_context import TradingContext
 from bot.control.strategy_signal import StrategySignal
 from bot.control.signal_scoring import SignalScoringEngine
@@ -76,6 +77,7 @@ __all__ = [
     "SignalPipeline",
     "get_signal_pipeline",
     "TradingContext",
+    "ScopedRiskSnapshot",
     "StrategySignal",
     "SignalScoringEngine",
     "ConfirmationEngine",

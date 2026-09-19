@@ -196,24 +196,22 @@ class ControlCompiler:
         """
         notes: List[str] = []
 
+        # Identity is a safety boundary and remains mandatory even when the
+        # optional control layer is disabled.  A feature flag must never turn
+        # into an ownership bypass.
+        ok, reason = self._validate_context(raw)
+        if not ok:
+            notes.append(f"context_invalid:{reason}")
+            self._record(accepted=False)
+            self._store_audit(raw, None, notes)
+            logger.warning(
+                "COMPILER_REJECT symbol=%s action=%s stage=context reason=%s",
+                raw.symbol, raw.action, reason,
+            )
+            return None, notes
+
         # Fast-path: control layer disabled
         if not _CONTROL_ENABLED:
-            if raw.trading_context is None:
-                raw = RawSignal(
-                    symbol=raw.symbol,
-                    side=raw.side,
-                    action=raw.action,
-                    size_usd=raw.size_usd,
-                    confidence=raw.confidence,
-                    regime=raw.regime,
-                    strategy=raw.strategy,
-                    account_id=raw.account_id,
-                    approved=raw.approved,
-                    stop_loss_pct=raw.stop_loss_pct,
-                    take_profit_pct=raw.take_profit_pct,
-                    metadata=raw.metadata,
-                    trading_context=self._legacy_context_from_raw(raw),
-                )
             notes.append("control_layer_disabled:pass_through")
             return self._build_compiled(raw, raw.size_usd, notes), notes
 
@@ -226,18 +224,6 @@ class ControlCompiler:
             logger.warning(
                 "COMPILER_REJECT symbol=%s action=%s strategy=%s stage=schema reason=%s",
                 raw.symbol, raw.action, raw.strategy or "?", reason,
-            )
-            return None, notes
-
-        # 1.5 Trading context validation
-        ok, reason = self._validate_context(raw)
-        if not ok:
-            notes.append(f"context_invalid:{reason}")
-            self._record(accepted=False)
-            self._store_audit(raw, None, notes)
-            logger.warning(
-                "COMPILER_REJECT symbol=%s action=%s stage=context reason=%s",
-                raw.symbol, raw.action, reason,
             )
             return None, notes
 
@@ -503,22 +489,6 @@ class ControlCompiler:
             except Exception as exc:
                 raise ValueError(f"malformed_trading_context:{exc}") from exc
         return None
-
-    @staticmethod
-    def _legacy_context_from_raw(raw: RawSignal) -> TradingContext:
-        account = str(raw.account_id or "").strip() or "legacy_account"
-        return TradingContext(
-            user_id="legacy",
-            trading_account_id=account,
-            broker="legacy",
-            broker_account_id=f"{account}_broker",
-            strategy_instance_id="legacy_strategy",
-            portfolio_id="legacy_portfolio",
-            request_id="legacy_request",
-            correlation_id="legacy",
-            environment="legacy",
-            mode="paper",
-        )
 
     def _record(self, accepted: bool) -> None:
         with self._lock:

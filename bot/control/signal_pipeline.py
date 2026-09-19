@@ -45,14 +45,14 @@ Phase:  1 — Control Layer
 
 from __future__ import annotations
 
-import json
 import hashlib
+import json
 import logging
 import os
 import threading
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import pandas as pd
 
@@ -62,6 +62,7 @@ from bot.control.control_compiler import (
     RawSignal,
     get_control_compiler,
 )
+from bot.control.isolation_guards import ScopedRiskSnapshot, verify_snapshot_ownership
 from bot.control.trading_context import TradingContext
 from bot.control.regime_engine import (
     RegimeEngine,
@@ -122,6 +123,7 @@ class SignalPipeline:
         regime_engine: Optional[RegimeEngine] = None,
         risk_engine: Optional[RiskEngine] = None,
         redis_client=None,
+        context_authorizer: Optional[Callable[[TradingContext], bool]] = None,
     ) -> None:
         self._compiler      = compiler      or get_control_compiler(redis_client)
         self._regime_engine = regime_engine or get_regime_engine(redis_client)
@@ -130,6 +132,7 @@ class SignalPipeline:
         self._scoring_engine = SignalScoringEngine()
         self._confirmation_engine = ConfirmationEngine()
         self._redis         = redis_client
+        self._context_authorizer = context_authorizer
         self._lock          = threading.Lock()
 
         # Session counters
@@ -138,7 +141,7 @@ class SignalPipeline:
         self._rejected: int = 0
 
         # Diagnostic trade tracking
-        self._last_approved_ts: float = 0.0
+        self._last_approved_ts: Dict[str, float] = {}
 
         logger.info(
             "SignalPipeline initialised | diagnostic_trade=%s idle_threshold=%.0fs",
@@ -151,14 +154,11 @@ class SignalPipeline:
         symbol: str,
         broker: str,
         df: pd.DataFrame,
-        current_positions: Optional[List[Dict[str, Any]]] = None,
-        portfolio_value_usd: float = 10_000.0,
-        peak_portfolio_value: Optional[float] = None,
-        daily_pnl: float = 0.0,
+        trading_context: TradingContext,
+        risk_snapshot: ScopedRiskSnapshot,
         checks: Optional[Dict[str, bool]] = None,
         score_context: Optional[Dict[str, float]] = None,
         requested_size_usd: Optional[float] = None,
-        available_balance_usd: Optional[float] = None,
         authoritative_position_proven: bool = True,
     ) -> Optional[CompiledSignal]:
         """
@@ -170,6 +170,11 @@ class SignalPipeline:
             Target instrument and venue label for detector context.
         df:
             OHLCV frame used by regime detection and strategy detectors.
+        trading_context:
+            Immutable owner/account identity for the entire decision.
+        risk_snapshot:
+            Owner-bound balance, P&L, portfolio, and position state. Foreign
+            scoped positions are ignored and unscoped records fail closed.
         checks:
             Confirmation booleans (candle_close, volume, trend,
             market_data_fresh, broker_available, spread_ok, liquidity_ok).
@@ -177,8 +182,6 @@ class SignalPipeline:
             Scoring inputs for the central score layer.
         requested_size_usd:
             Required proposed entry notional after upstream sizing logic.
-        available_balance_usd:
-            Optional tradable balance forwarded to balance/min-notional checks.
         authoritative_position_proven:
             Hard safety gate; when False, entry is rejected before risk checks.
 
@@ -189,6 +192,14 @@ class SignalPipeline:
         """
         checks = checks or {}
         score_context = score_context or {}
+        try:
+            verify_snapshot_ownership(trading_context, risk_snapshot)
+        except ValueError as exc:
+            logger.warning("PIPELINE_REJECT stage=context reason=%s", exc)
+            return None
+        if broker.strip().lower() != trading_context.broker:
+            logger.warning("PIPELINE_REJECT stage=context reason=broker_mismatch_with_trading_context")
+            return None
         if df is None or df.empty:
             return None
         regime = "unknown"
@@ -201,6 +212,7 @@ class SignalPipeline:
             symbol=symbol,
             broker=broker,
             market_regime=regime,
+            trading_context=trading_context,
         )
         if not candidates:
             return None
@@ -228,6 +240,9 @@ class SignalPipeline:
         if not ranked:
             return None
         best_signal, best_score = max(ranked, key=lambda row: row[1])
+        if best_signal.trading_context.scope_key != trading_context.scope_key:
+            logger.warning("PIPELINE_REJECT stage=context reason=detector_context_mismatch")
+            return None
         try:
             requested_size = float(requested_size_usd or 0.0)
         except (TypeError, ValueError):
@@ -247,6 +262,8 @@ class SignalPipeline:
             confidence=best_score,
             regime=best_signal.market_regime,
             strategy=best_signal.strategy,
+            account_id=trading_context.trading_account_id,
+            trading_context=trading_context,
             metadata={
                 **best_signal.to_dict(),
                 "signal_score": best_score,
@@ -255,11 +272,7 @@ class SignalPipeline:
         return self.process_signal(
             raw_signal=raw,
             df=df,
-            current_positions=current_positions,
-            portfolio_value_usd=portfolio_value_usd,
-            peak_portfolio_value=peak_portfolio_value,
-            daily_pnl=daily_pnl,
-            available_balance_usd=available_balance_usd,
+            risk_snapshot=risk_snapshot,
             authoritative_position_proven=authoritative_position_proven,
         )
 
@@ -278,6 +291,7 @@ class SignalPipeline:
         max_position_size_pct: float = 10.0,
         available_balance_usd: Optional[float] = None,
         authoritative_position_proven: bool = True,
+        risk_snapshot: Optional[ScopedRiskSnapshot] = None,
     ) -> Optional[CompiledSignal]:
         """
         Run the full signal processing pipeline.
@@ -300,7 +314,38 @@ class SignalPipeline:
         """
         import time as _time
 
-        positions = current_positions or []
+        context = raw_signal.trading_context
+        if context is None:
+            logger.warning("PIPELINE_REJECT stage=context reason=missing_trading_context")
+            return None
+        if self._context_authorizer is not None:
+            try:
+                context_authorized = bool(self._context_authorizer(context))
+            except Exception as exc:
+                logger.warning("PIPELINE_REJECT stage=context reason=context_authorizer_error:%s", type(exc).__name__)
+                return None
+            if not context_authorized:
+                logger.warning("PIPELINE_REJECT stage=context reason=context_not_authorized")
+                return None
+        elif context.mode == "live":
+            logger.warning("PIPELINE_REJECT stage=context reason=live_context_authorizer_required")
+            return None
+        if risk_snapshot is None and context.mode == "live":
+            logger.warning("PIPELINE_REJECT stage=context reason=live_risk_snapshot_required")
+            return None
+        if risk_snapshot is not None:
+            try:
+                verify_snapshot_ownership(context, risk_snapshot)
+                positions = list(risk_snapshot.positions_for_owner())
+            except ValueError as exc:
+                logger.warning("PIPELINE_REJECT stage=context reason=%s", exc)
+                return None
+            portfolio_value_usd = float(risk_snapshot.portfolio_value_usd)
+            peak_portfolio_value = risk_snapshot.peak_portfolio_value
+            daily_pnl = float(risk_snapshot.daily_pnl)
+            available_balance_usd = risk_snapshot.available_balance_usd
+        else:
+            positions = current_positions or []
         pipeline_id = str(uuid.uuid4())
         audit: Dict[str, Any] = {
             "pipeline_id":  pipeline_id,
@@ -386,6 +431,7 @@ class SignalPipeline:
             authoritative_position_proven=authoritative_position_proven,
             daily_pnl=daily_pnl,
             peak_portfolio_value=peak_portfolio_value,
+            available_balance_usd=available_balance_usd,
             trading_context=compiled.trading_context,
             enforce_isolation=True,
         )
@@ -415,7 +461,7 @@ class SignalPipeline:
         audit["signal_id"]      = compiled.signal_id
         self._record(accepted=True)
         with self._lock:
-            self._last_approved_ts = _time.time()
+            self._last_approved_ts[compiled.trading_context.scope_key] = _time.time()
         self._store_pipeline_audit(pipeline_id, audit)
         logger.info(
             "PIPELINE_APPROVED symbol=%s side=%s size_usd=%.2f regime=%s confidence=%.3f user_id=%s account_id=%s",
@@ -430,8 +476,9 @@ class SignalPipeline:
 
     def inject_diagnostic_trade_if_idle(
         self,
-        portfolio_value_usd: float = 10_000.0,
-        available_balance_usd: Optional[float] = None,
+        *,
+        trading_context: TradingContext,
+        risk_snapshot: ScopedRiskSnapshot,
     ) -> Optional[CompiledSignal]:
         """
         When NIJA_DIAGNOSTIC_TRADE_ENABLED=true and no signal has been approved
@@ -448,7 +495,7 @@ class SignalPipeline:
             return None
 
         with self._lock:
-            last_ts = self._last_approved_ts
+            last_ts = self._last_approved_ts.get(trading_context.scope_key, 0.0)
 
         idle_s = _time.time() - last_ts
         if idle_s < _DIAGNOSTIC_TRADE_IDLE_SECONDS:
@@ -470,13 +517,14 @@ class SignalPipeline:
             confidence=1.0,
             regime="unknown",
             strategy="diagnostic",
+            account_id=trading_context.trading_account_id,
             approved=True,
             metadata={"diagnostic": True},
+            trading_context=trading_context,
         )
         return self.process_signal(
             diag_signal,
-            portfolio_value_usd=portfolio_value_usd,
-            available_balance_usd=available_balance_usd,
+            risk_snapshot=risk_snapshot,
         )
 
     @staticmethod
@@ -655,14 +703,11 @@ class SignalPipeline:
             return
         try:
             context = audit.get("context") or {}
-            scope = ":".join(
-                [
-                    str(context.get("user_id") or "unknown").strip().lower(),
-                    str(context.get("trading_account_id") or "unknown").strip().lower(),
-                    str(context.get("broker_account_id") or "unknown").strip().lower(),
-                ]
-            )
-            scope_token = hashlib.sha256(scope.encode("utf-8")).hexdigest()[:16]
+            try:
+                scope_token = TradingContext.from_mapping(context).scope_key[:16]
+            except (TypeError, ValueError):
+                encoded = json.dumps(context, sort_keys=True, separators=(",", ":")).encode("utf-8")
+                scope_token = hashlib.sha256(encoded).hexdigest()[:16]
             key = f"nija:control:pipeline:{scope_token}:{pipeline_id}"
             audit["stored_at"] = datetime.now(timezone.utc).isoformat()
             self._redis.setex(key, _SIGNAL_REDIS_TTL, json.dumps(audit))
@@ -733,6 +778,7 @@ def get_signal_pipeline(
     regime_engine: Optional[RegimeEngine] = None,
     risk_engine: Optional[RiskEngine] = None,
     redis_client=None,
+    context_authorizer: Optional[Callable[[TradingContext], bool]] = None,
 ) -> SignalPipeline:
     """Return the process-level SignalPipeline singleton."""
     global _singleton
@@ -744,5 +790,6 @@ def get_signal_pipeline(
                     regime_engine=regime_engine,
                     risk_engine=risk_engine,
                     redis_client=redis_client,
+                    context_authorizer=context_authorizer,
                 )
     return _singleton

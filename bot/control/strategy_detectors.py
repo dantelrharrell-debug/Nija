@@ -7,6 +7,7 @@ from typing import Dict, List, Optional, TYPE_CHECKING
 import pandas as pd
 
 from bot.control.strategy_signal import StrategySignal
+from bot.control.trading_context import TradingContext
 
 if TYPE_CHECKING:
     from bot.feature_flags import FeatureFlag
@@ -54,6 +55,7 @@ def _std_bands(close: pd.Series, window: int = 20, n_std: float = 2.0) -> pd.Dat
 class DetectorContext:
     symbol: str
     broker: str
+    trading_context: TradingContext
     market_regime: str = "uncertain"
 
 
@@ -83,6 +85,7 @@ class BaseDetector:
             symbol=context.symbol,
             broker=context.broker,
             direction=direction,
+            trading_context=context.trading_context,
             confidence=max(0.0, min(1.0, confidence)),
             raw_score=max(0.0, min(1.0, raw_score)),
             invalidation_level=invalidation_level,

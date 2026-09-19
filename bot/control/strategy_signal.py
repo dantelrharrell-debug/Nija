@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+from bot.control.trading_context import TradingContext
+
 
 @dataclass
 class StrategySignal:
@@ -18,6 +20,7 @@ class StrategySignal:
     symbol: str
     broker: str
     direction: str
+    trading_context: TradingContext
     timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     entry_zone: Optional[Dict[str, float]] = None
     invalidation_level: Optional[float] = None
@@ -36,6 +39,7 @@ class StrategySignal:
             "symbol": self.symbol,
             "broker": self.broker,
             "direction": self.direction,
+            "trading_context": self.trading_context.to_log_fields(),
             "timestamp": self.timestamp,
             "entry_zone": self.entry_zone,
             "invalidation_level": self.invalidation_level,
