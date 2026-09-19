@@ -47,8 +47,11 @@ class ConfirmationEngine:
             "broker_available",
         )
         for name in required_checks:
-            if not bool(checks.get(name, False)):
-                reasons.append(f"missing_confirmation:{name}")
+            if name not in checks:
+                reasons.append(f"confirmation_not_provided:{name}")
+                return ConfirmationDecision(False, reasons)
+            if not bool(checks.get(name)):
+                reasons.append(f"confirmation_failed:{name}")
                 return ConfirmationDecision(False, reasons)
         if not bool(checks.get("spread_ok", True)):
             reasons.append("spread_rejected")

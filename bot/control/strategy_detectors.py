@@ -362,8 +362,10 @@ class VolatilityExpansionDetector(BaseDetector):
         if spread_bps > self.max_spread_bps:
             return None
 
-        break_up = _to_float(bar["close"]) > _to_float(df["high"].iloc[-15:-1].max()) and _to_float(bar["close"]) > _to_float(prev["close"])
-        break_down = _to_float(bar["close"]) < _to_float(df["low"].iloc[-15:-1].min()) and _to_float(bar["close"]) < _to_float(prev["close"])
+        prior_high = _to_float(df["high"].iloc[-31:-1].max())
+        prior_low = _to_float(df["low"].iloc[-31:-1].min())
+        break_up = _to_float(bar["close"]) > prior_high and _to_float(bar["close"]) > _to_float(prev["close"])
+        break_down = _to_float(bar["close"]) < prior_low and _to_float(bar["close"]) < _to_float(prev["close"])
         if not (compression and vol_spike):
             return None
         if break_up:

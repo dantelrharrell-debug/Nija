@@ -181,13 +181,6 @@ class SignalPipeline:
         """
         checks = checks or {}
         score_context = score_context or {}
-        if not authoritative_position_proven:
-            logger.warning(
-                "AUTHORITATIVE_POSITION_UNPROVEN symbol=%s broker=%s stage=pre_risk",
-                symbol,
-                broker,
-            )
-            return None
         regime = "unknown"
         if df is not None and not df.empty:
             regime = self._regime_engine.detect(symbol, df).regime.value
