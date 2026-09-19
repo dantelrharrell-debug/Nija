@@ -465,6 +465,11 @@ class SignalPipeline:
         }
 
         if compiled is None:
+            # No broker submission occurred. Release the admission reservation so
+            # a corrected retry is not falsely treated as an already-submitted
+            # order. Reservations remain held only after an approved handoff.
+            if context is not None and duplicate_key:
+                self._idempotency_registry.release(duplicate_key)
             audit["final_decision"] = "rejected"
             audit["rejection_stage"] = "compile"
             self._record(accepted=False)
@@ -546,15 +551,21 @@ class SignalPipeline:
         raw_signal: RawSignal,
         decision_context: Optional[UserDecisionContext],
     ) -> Optional[UserDecisionContext]:
+        """Resolve only explicit account identity; never synthesize a user scope."""
         if decision_context is not None:
             replacements: Dict[str, Any] = {}
             if raw_signal.strategy_signal_id and decision_context.strategy_signal_id != raw_signal.strategy_signal_id:
                 replacements["strategy_signal_id"] = raw_signal.strategy_signal_id
             if raw_signal.trade_id and decision_context.trade_id != raw_signal.trade_id:
                 replacements["trade_id"] = raw_signal.trade_id
-            if replacements:
-                return replace(decision_context, **replacements)
-            return decision_context
+            if raw_signal.user_id and raw_signal.user_id != decision_context.user_id:
+                return None
+            if raw_signal.account_id and raw_signal.account_id != "default" and raw_signal.account_id != decision_context.account_id:
+                return None
+            if raw_signal.broker and raw_signal.broker.lower() != decision_context.broker.lower():
+                return None
+            return replace(decision_context, **replacements) if replacements else decision_context
+
         has_explicit_account_scope = bool(
             raw_signal.user_id
             or raw_signal.broker
@@ -562,30 +573,19 @@ class SignalPipeline:
             or raw_signal.strategy_signal_id
             or raw_signal.trade_id
             or (raw_signal.account_id and raw_signal.account_id != "default")
-        # ── Approved ─────────────────────────────────────────────────────
-        audit["final_decision"] = "approved"
-        audit["signal_id"]      = compiled.signal_id
-        self._record(accepted=True)
-        with self._lock:
-            self._last_approved_ts = _time.time()
-        self._store_pipeline_audit(pipeline_id, audit)
-        logger.info(
-            "PIPELINE_APPROVED symbol=%s side=%s size_usd=%.2f regime=%s confidence=%.3f user_id=%s account_id=%s",
-            compiled.symbol, compiled.side, compiled.size_usd,
-            compiled.regime, compiled.confidence, compiled.trading_context.user_id, compiled.trading_context.trading_account_id,
         )
-        if has_explicit_account_scope:
-            return UserDecisionContext(
-                user_id=raw_signal.user_id or "",
-                account_id=raw_signal.account_id or "default",
-                broker=raw_signal.broker or "",
-                portfolio_id=raw_signal.portfolio_id or "",
-                strategy_signal_id=raw_signal.strategy_signal_id or "",
-                trade_id=raw_signal.trade_id or "",
-                execution_mode=raw_signal.execution_mode,
-                asset_class=raw_signal.asset_class,
-            )
-        return None
+        if not has_explicit_account_scope:
+            return None
+        return UserDecisionContext(
+            user_id=raw_signal.user_id or "",
+            account_id=raw_signal.account_id or "default",
+            broker=raw_signal.broker or "",
+            portfolio_id=raw_signal.portfolio_id or "",
+            strategy_signal_id=raw_signal.strategy_signal_id or "",
+            trade_id=raw_signal.trade_id or "",
+            execution_mode=raw_signal.execution_mode,
+            asset_class=raw_signal.asset_class,
+        )
 
     @staticmethod
     def _duplicate_direction(raw_signal: RawSignal) -> str:

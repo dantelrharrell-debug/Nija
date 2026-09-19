@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import hashlib
+import json
 from datetime import datetime, timezone
 import threading
 import time
@@ -190,16 +192,27 @@ class UserScopedIdempotencyRegistry:
 
     @staticmethod
     def build_key(context: UserDecisionContext, *, symbol: str, direction: str) -> str:
-        return "|".join(
-            [
-                context.user_id,
-                context.account_id,
-                context.broker,
-                symbol.upper(),
-                context.strategy_signal_id,
-                direction.lower(),
-            ]
-        )
+        """Return a collision-safe, opaque key for one account-scoped intent.
+
+        Length-prefixed/canonical JSON semantics avoid delimiter collisions in
+        caller-controlled identities.  The digest also prevents raw user/account
+        identifiers from leaking into shared-state keys or logs.
+        """
+        payload = json.dumps(
+            {
+                "user_id": _clean_identity(context.user_id),
+                "account_id": _clean_identity(context.account_id),
+                "broker": _clean_identity(context.broker).lower(),
+                "symbol": _clean_identity(symbol).upper(),
+                "strategy_signal_id": _clean_identity(context.strategy_signal_id),
+                "trade_id": _clean_identity(context.trade_id),
+                "direction": _clean_identity(direction).lower(),
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+        return "v2:" + hashlib.sha256(payload).hexdigest()
 
     def reserve(self, context: UserDecisionContext, *, symbol: str, direction: str) -> Tuple[bool, str]:
         key = self.build_key(context, symbol=symbol, direction=direction)
