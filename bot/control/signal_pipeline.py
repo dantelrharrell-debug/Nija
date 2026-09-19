@@ -46,6 +46,7 @@ Phase:  1 — Control Layer
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 import os
 import threading
@@ -61,6 +62,7 @@ from bot.control.control_compiler import (
     RawSignal,
     get_control_compiler,
 )
+from bot.control.trading_context import TradingContext
 from bot.control.regime_engine import (
     RegimeEngine,
     RegimeResult,
@@ -342,6 +344,7 @@ class SignalPipeline:
                         stop_loss_pct=raw_signal.stop_loss_pct,
                         take_profit_pct=raw_signal.take_profit_pct,
                         metadata=raw_signal.metadata,
+                        trading_context=raw_signal.trading_context,
                     )
             except Exception as exc:
                 logger.warning("SignalPipeline: regime detection failed: %s", exc)
@@ -371,6 +374,8 @@ class SignalPipeline:
             )
             return None
 
+        audit["context"] = compiled.trading_context.to_log_fields()
+
         # ── Stage 3: Risk Validation ─────────────────────────────────────
         risk_approved, risk_notes = self._risk_engine.validate_trade(
             symbol=compiled.symbol,
@@ -381,6 +386,8 @@ class SignalPipeline:
             authoritative_position_proven=authoritative_position_proven,
             daily_pnl=daily_pnl,
             peak_portfolio_value=peak_portfolio_value,
+            trading_context=compiled.trading_context,
+            enforce_isolation=True,
         )
         audit["stages"]["risk"] = {
             "approved": risk_approved,
@@ -393,8 +400,13 @@ class SignalPipeline:
             self._record(accepted=False)
             self._store_pipeline_audit(pipeline_id, audit)
             logger.warning(
-                "PIPELINE_REJECT stage=risk symbol=%s side=%s size_usd=%.2f notes=%s",
-                compiled.symbol, compiled.side, compiled.size_usd, risk_notes,
+                "PIPELINE_REJECT stage=risk symbol=%s side=%s size_usd=%.2f user_id=%s account_id=%s notes=%s",
+                compiled.symbol,
+                compiled.side,
+                compiled.size_usd,
+                compiled.trading_context.user_id,
+                compiled.trading_context.trading_account_id,
+                risk_notes,
             )
             return None
 
@@ -406,9 +418,9 @@ class SignalPipeline:
             self._last_approved_ts = _time.time()
         self._store_pipeline_audit(pipeline_id, audit)
         logger.info(
-            "PIPELINE_APPROVED symbol=%s side=%s size_usd=%.2f regime=%s confidence=%.3f",
+            "PIPELINE_APPROVED symbol=%s side=%s size_usd=%.2f regime=%s confidence=%.3f user_id=%s account_id=%s",
             compiled.symbol, compiled.side, compiled.size_usd,
-            compiled.regime, compiled.confidence,
+            compiled.regime, compiled.confidence, compiled.trading_context.user_id, compiled.trading_context.trading_account_id,
         )
         return compiled
 
@@ -559,7 +571,42 @@ class SignalPipeline:
             stop_loss_pct=signal_dict.get("stop_loss_pct"),
             take_profit_pct=signal_dict.get("take_profit_pct"),
             metadata=dict(signal_dict),
+            trading_context=None,
         )
+        try:
+            raw = RawSignal(
+                symbol=raw.symbol,
+                side=raw.side,
+                action=raw.action,
+                size_usd=raw.size_usd,
+                confidence=raw.confidence,
+                regime=raw.regime,
+                strategy=raw.strategy,
+                account_id=raw.account_id,
+                approved=raw.approved,
+                stop_loss_pct=raw.stop_loss_pct,
+                take_profit_pct=raw.take_profit_pct,
+                metadata=raw.metadata,
+                trading_context=self._context_from_signal_dict(signal_dict),
+            )
+        except ValueError as exc:
+            pipeline_id = str(uuid.uuid4())
+            audit_context = self._context_audit_from_signal_dict(signal_dict)
+            audit = {
+                "pipeline_id": pipeline_id,
+                "symbol": raw.symbol,
+                "action": raw.action,
+                "strategy": raw.strategy,
+                "started_at": datetime.now(timezone.utc).isoformat(),
+                "context": audit_context,
+                "stages": {"context": {"error": str(exc)}},
+                "final_decision": "rejected",
+                "rejection_stage": "context",
+            }
+            self._record(accepted=False)
+            self._store_pipeline_audit(pipeline_id, audit)
+            logger.warning("PIPELINE_REJECT stage=context reason=%s", exc)
+            return None
         return self.process_signal(
             raw,
             df=df,
@@ -607,11 +654,70 @@ class SignalPipeline:
         if self._redis is None:
             return
         try:
-            key = f"nija:control:pipeline:{pipeline_id}"
+            context = audit.get("context") or {}
+            scope = ":".join(
+                [
+                    str(context.get("user_id") or "unknown").strip().lower(),
+                    str(context.get("trading_account_id") or "unknown").strip().lower(),
+                    str(context.get("broker_account_id") or "unknown").strip().lower(),
+                ]
+            )
+            scope_token = hashlib.sha256(scope.encode("utf-8")).hexdigest()[:16]
+            key = f"nija:control:pipeline:{scope_token}:{pipeline_id}"
             audit["stored_at"] = datetime.now(timezone.utc).isoformat()
             self._redis.setex(key, _SIGNAL_REDIS_TTL, json.dumps(audit))
         except Exception as exc:
             logger.debug("SignalPipeline: Redis audit store failed: %s", exc)
+
+    @staticmethod
+    def _context_from_signal_dict(signal_dict: Dict[str, Any]) -> Optional[TradingContext]:
+        context_raw = signal_dict.get("trading_context")
+        if isinstance(context_raw, TradingContext):
+            context = context_raw
+        elif isinstance(context_raw, dict):
+            try:
+                context = TradingContext.from_mapping(context_raw)
+            except Exception as exc:
+                raise ValueError(f"malformed_trading_context:{exc}") from exc
+        else:
+            raise ValueError("missing_trading_context")
+        account_id = str(signal_dict.get("account_id") or "").strip().lower()
+        if account_id and account_id != str(context.trading_account_id).strip().lower():
+            raise ValueError("account_id_mismatch_with_trading_context")
+        return context
+
+    @staticmethod
+    def _context_audit_from_signal_dict(signal_dict: Dict[str, Any]) -> Dict[str, str]:
+        raw = signal_dict.get("trading_context")
+        if isinstance(raw, TradingContext):
+            return raw.to_log_fields()
+        if isinstance(raw, dict):
+            return {
+                "user_id": str(raw.get("user_id") or "unknown"),
+                "trading_account_id": str(raw.get("trading_account_id") or "unknown"),
+                "broker": str(raw.get("broker") or "unknown"),
+                "broker_account_id": str(raw.get("broker_account_id") or "unknown"),
+                "strategy_instance_id": str(raw.get("strategy_instance_id") or "unknown"),
+                "portfolio_id": str(raw.get("portfolio_id") or ""),
+                "request_id": str(raw.get("request_id") or ""),
+                "correlation_id": str(raw.get("correlation_id") or ""),
+                "environment": str(raw.get("environment") or ""),
+                "mode": str(raw.get("mode") or ""),
+                "decision_id": str(raw.get("decision_id") or ""),
+            }
+        return {
+            "user_id": "unknown",
+            "trading_account_id": "unknown",
+            "broker": "unknown",
+            "broker_account_id": "unknown",
+            "strategy_instance_id": "unknown",
+            "portfolio_id": "",
+            "request_id": "",
+            "correlation_id": "",
+            "environment": "",
+            "mode": "",
+            "decision_id": "",
+        }
 
 
 # ---------------------------------------------------------------------------
