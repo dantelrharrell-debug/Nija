@@ -66,6 +66,7 @@ from bot.control.decision_context import (
     verify_exit_lifecycle,
     verify_protection_after_fill,
 )
+from bot.control.trading_context import TradingContext
 from bot.control.strategy_signal import StrategySignal
 from bot.control.signal_scoring import SignalScoringEngine
 from bot.control.confirmation_engine import ConfirmationEngine
@@ -95,6 +96,7 @@ __all__ = [
     "PROTECTION_FAILED",
     "PROTECTION_PENDING",
     "PROTECTION_UNVERIFIED",
+    "TradingContext",
     "StrategySignal",
     "SignalScoringEngine",
     "ConfirmationEngine",

@@ -51,6 +51,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
+from bot.control.trading_context import TradingContext
+
 logger = logging.getLogger("nija.control.risk")
 
 # ---------------------------------------------------------------------------
@@ -126,7 +128,14 @@ class RiskEngine:
         self._redis = redis_client
         self._lock  = threading.Lock()
         self._rules = RiskRules(**_ENV_RULES)
-        self._last_trade_ts: Dict[str, float] = {}   # symbol → last trade timestamp
+        self._last_trade_ts: Dict[str, float] = {}   # context|symbol → last trade timestamp
+        self._platform_kill_switch: bool = False
+        self._platform_kill_switch_reason: str = ""
+        self._user_kill_switches: Dict[str, str] = {}
+        self._account_kill_switches: Dict[Tuple[str, str, str, str], str] = {}
+        self._strategy_kill_switches: Dict[Tuple[str, str, str, str], str] = {}
+        self._broker_connection_kill_switches: Dict[Tuple[str, str, str], str] = {}
+        self._broker_failure_counters: Dict[Tuple[str, str, str], int] = {}
         self._store_rules_to_redis()
         logger.info(
             "RiskEngine initialised | max_pos=%d max_size_pct=%.1f%% "
@@ -155,6 +164,9 @@ class RiskEngine:
         daily_pnl: float = 0.0,
         peak_portfolio_value: Optional[float] = None,
         returns_series: Optional[List[float]] = None,
+        trading_context: Optional[TradingContext] = None,
+        enforce_isolation: bool = False,
+        enforce_platform_kill_switch: bool = True,
     ) -> Tuple[bool, List[str]]:
         """
         Validate a proposed trade against all active risk rules.
@@ -181,13 +193,43 @@ class RiskEngine:
         # Reload rules from Redis (non-blocking; falls back to cached)
         rules = self._load_rules()
         notes: List[str] = []
+        if trading_context is None and enforce_isolation:
+            return False, ["context_missing:missing_trading_context"]
+        if trading_context is None:
+            request_nonce = f"{threading.get_ident()}_{int(time.time() * 1000)}"
+            trading_context = TradingContext(
+                user_id=f"legacy_{request_nonce}",
+                trading_account_id=f"legacy_account_{request_nonce}",
+                broker="legacy",
+                broker_account_id=f"legacy_broker_account_{request_nonce}",
+                strategy_instance_id="legacy_strategy",
+                portfolio_id="legacy_portfolio",
+                request_id=f"legacy_request_{request_nonce}",
+                correlation_id=f"legacy_correlation_{request_nonce}",
+                environment="legacy",
+                mode="paper",
+            )
+
+        ok, note = self._check_kill_switches(trading_context, enforce_platform_kill_switch=enforce_platform_kill_switch)
+        if not ok:
+            return False, [note]
+
+        if enforce_isolation:
+            mismatch = self._first_position_scope_mismatch(current_positions, trading_context)
+            if mismatch:
+                return False, [f"position_scope_mismatch:{mismatch}"]
+        scoped_positions = self._filter_positions_for_context(
+            current_positions,
+            trading_context,
+            include_unscoped=not enforce_isolation,
+        )
 
         if not authoritative_position_proven:
             notes.append("AUTHORITATIVE_POSITION_UNPROVEN")
             return False, notes
 
         # 1. Position count
-        ok, note = self._check_position_count(current_positions, rules)
+        ok, note = self._check_position_count(scoped_positions, rules)
         if not ok:
             notes.append(note)
             return False, notes
@@ -213,21 +255,78 @@ class RiskEngine:
 
         # 5. Correlation
         if returns_series is not None and len(returns_series) > 10:
-            ok, note = self._check_correlation(symbol, returns_series, current_positions, rules)
+            ok, note = self._check_correlation(symbol, returns_series, scoped_positions, rules)
             if not ok:
                 notes.append(note)
                 return False, notes
 
         # 6. Time between trades (per symbol)
         ok, note = self._check_trade_frequency(symbol, account_id, broker, rules)
+        ok, note = self._check_trade_frequency(symbol, rules, trading_context=trading_context)
         if not ok:
             notes.append(note)
             return False, notes
 
         # All checks passed
         self._record_trade(symbol, account_id, broker)
+        self._record_trade(symbol, trading_context=trading_context)
         notes.append("all_risk_checks_passed")
         return True, notes
+
+    def set_platform_kill_switch(self, active: bool, reason: str = "") -> None:
+        with self._lock:
+            self._platform_kill_switch = bool(active)
+            self._platform_kill_switch_reason = str(reason or "").strip()
+
+    def set_user_kill_switch(self, user_id: str, active: bool, reason: str = "") -> None:
+        key = str(user_id or "").strip()
+        if not key:
+            return
+        with self._lock:
+            if active:
+                self._user_kill_switches[key] = str(reason or "user_kill_switch")
+            else:
+                self._user_kill_switches.pop(key, None)
+
+    def set_account_kill_switch(self, context: TradingContext, active: bool, reason: str = "") -> None:
+        key = (context.user_id, context.trading_account_id, context.broker, context.broker_account_id)
+        with self._lock:
+            if active:
+                self._account_kill_switches[key] = str(reason or "account_kill_switch")
+            else:
+                self._account_kill_switches.pop(key, None)
+
+    def set_strategy_kill_switch(self, context: TradingContext, active: bool, reason: str = "") -> None:
+        key = (
+            context.user_id,
+            context.trading_account_id,
+            context.broker,
+            context.broker_account_id,
+            context.strategy_instance_id,
+        )
+        with self._lock:
+            if active:
+                self._strategy_kill_switches[key] = str(reason or "strategy_kill_switch")
+            else:
+                self._strategy_kill_switches.pop(key, None)
+
+    def set_broker_connection_kill_switch(self, context: TradingContext, active: bool, reason: str = "") -> None:
+        key = (context.user_id, context.broker, context.broker_account_id)
+        with self._lock:
+            if active:
+                self._broker_connection_kill_switches[key] = str(reason or "broker_connection_kill_switch")
+            else:
+                self._broker_connection_kill_switches.pop(key, None)
+
+    def record_broker_failure(self, context: TradingContext) -> None:
+        key = (context.user_id, context.broker, context.broker_account_id)
+        with self._lock:
+            self._broker_failure_counters[key] = int(self._broker_failure_counters.get(key, 0)) + 1
+
+    def clear_broker_failures(self, context: TradingContext) -> None:
+        key = (context.user_id, context.broker, context.broker_account_id)
+        with self._lock:
+            self._broker_failure_counters.pop(key, None)
 
     def update_rules(self, overrides: Dict[str, Any]) -> RiskRules:
         """Apply rule overrides and persist to Redis."""
@@ -344,6 +443,8 @@ class RiskEngine:
         account_id: str,
         broker: str,
         rules: RiskRules,
+        *,
+        trading_context: TradingContext,
     ) -> Tuple[bool, str]:
         now_ms = time.time() * 1000
         frequency_key = self._trade_frequency_key(symbol, account_id, broker)
@@ -353,6 +454,13 @@ class RiskEngine:
         if elapsed_ms < rules.min_time_between_trades_ms:
             return False, (
                 f"trade_frequency_limit:{frequency_key}:"
+        key = self._trade_frequency_key(symbol, trading_context=trading_context)
+        with self._lock:
+            last_ms = self._last_trade_ts.get(key, 0.0)
+        elapsed_ms = now_ms - last_ms
+        if elapsed_ms < rules.min_time_between_trades_ms:
+            return False, (
+                f"trade_frequency_limit:{key}:"
                 f"elapsed={elapsed_ms:.0f}ms<{rules.min_time_between_trades_ms}ms"
             )
         return True, ""
@@ -367,6 +475,105 @@ class RiskEngine:
         frequency_key = self._trade_frequency_key(symbol, account_id, broker)
         with self._lock:
             self._last_trade_ts[frequency_key] = time.time() * 1000
+    def _record_trade(self, symbol: str, *, trading_context: TradingContext) -> None:
+        key = self._trade_frequency_key(symbol, trading_context=trading_context)
+        with self._lock:
+            self._last_trade_ts[key] = time.time() * 1000
+
+    @staticmethod
+    def _trade_frequency_key(symbol: str, *, trading_context: TradingContext) -> str:
+        return f"{trading_context.scope_key}|{str(symbol or '').upper()}"
+
+    @staticmethod
+    def _position_owner_key(position: Dict[str, Any]) -> Optional[Tuple[str, str, str, str]]:
+        if not isinstance(position, dict):
+            return None
+        context = position.get("trading_context")
+        if isinstance(context, TradingContext):
+            return (context.user_id, context.trading_account_id, context.broker, context.broker_account_id)
+        if isinstance(context, dict):
+            try:
+                parsed = TradingContext.from_mapping(context)
+                return (parsed.user_id, parsed.trading_account_id, parsed.broker, parsed.broker_account_id)
+            except Exception:
+                return None
+        user_id = str(position.get("user_id") or "").strip()
+        account_id = str(position.get("trading_account_id") or "").strip()
+        broker = str(position.get("broker") or "").strip().lower()
+        broker_account_id = str(position.get("broker_account_id") or "").strip()
+        if user_id and account_id and broker and broker_account_id:
+            return (user_id, account_id, broker, broker_account_id)
+        return None
+
+    def _filter_positions_for_context(
+        self,
+        positions: List[Dict[str, Any]],
+        trading_context: TradingContext,
+        *,
+        include_unscoped: bool = True,
+    ) -> List[Dict[str, Any]]:
+        expected = (
+            trading_context.user_id,
+            trading_context.trading_account_id,
+            trading_context.broker,
+            trading_context.broker_account_id,
+        )
+        scoped: List[Dict[str, Any]] = []
+        for pos in positions or []:
+            owner = self._position_owner_key(pos)
+            if owner == expected:
+                scoped.append(pos)
+                continue
+            if include_unscoped and owner is None:
+                scoped.append(pos)
+        return scoped
+
+    def _first_position_scope_mismatch(
+        self,
+        positions: List[Dict[str, Any]],
+        trading_context: TradingContext,
+    ) -> str:
+        expected = (
+            trading_context.user_id,
+            trading_context.trading_account_id,
+            trading_context.broker,
+            trading_context.broker_account_id,
+        )
+        for idx, pos in enumerate(positions or []):
+            owner = self._position_owner_key(pos)
+            if owner is None:
+                return f"missing_owner_metadata:index={idx}"
+            if owner != expected:
+                return f"owner_mismatch:index={idx}"
+        return ""
+
+    def _check_kill_switches(
+        self,
+        context: TradingContext,
+        *,
+        enforce_platform_kill_switch: bool,
+    ) -> Tuple[bool, str]:
+        account_key = (context.user_id, context.trading_account_id, context.broker, context.broker_account_id)
+        broker_key = (context.user_id, context.broker, context.broker_account_id)
+        with self._lock:
+            if enforce_platform_kill_switch and self._platform_kill_switch:
+                return False, f"platform_kill_switch:{self._platform_kill_switch_reason or 'active'}"
+            if context.user_id in self._user_kill_switches:
+                return False, f"user_kill_switch:{self._user_kill_switches[context.user_id]}"
+            if account_key in self._account_kill_switches:
+                return False, f"account_kill_switch:{self._account_kill_switches[account_key]}"
+            strategy_key = (
+                context.user_id,
+                context.trading_account_id,
+                context.broker,
+                context.broker_account_id,
+                context.strategy_instance_id,
+            )
+            if strategy_key in self._strategy_kill_switches:
+                return False, f"strategy_kill_switch:{self._strategy_kill_switches[strategy_key]}"
+            if broker_key in self._broker_connection_kill_switches:
+                return False, f"broker_connection_kill_switch:{self._broker_connection_kill_switches[broker_key]}"
+        return True, ""
 
     # ------------------------------------------------------------------
     # Redis helpers
@@ -403,10 +610,23 @@ class RiskEngine:
 
     def get_health(self) -> Dict[str, Any]:
         rules = self.get_rules()
+        with self._lock:
+            platform = self._platform_kill_switch
+            user_count = len(self._user_kill_switches)
+            account_count = len(self._account_kill_switches)
+            strategy_count = len(self._strategy_kill_switches)
+            broker_count = len(self._broker_connection_kill_switches)
         return {
             "available":    True,
             "enabled":      _RISK_ENGINE_ENABLED,
             "active_rules": rules.to_dict(),
+            "kill_switches": {
+                "platform": platform,
+                "user_count": user_count,
+                "account_count": account_count,
+                "strategy_count": strategy_count,
+                "broker_connection_count": broker_count,
+            },
         }
 
 

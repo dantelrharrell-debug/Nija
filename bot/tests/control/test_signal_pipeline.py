@@ -25,6 +25,7 @@ from bot.control.control_compiler import ControlCompiler, RawSignal, CompiledSig
 from bot.control.regime_engine import RegimeEngine, MarketRegime, RegimeResult
 from bot.control.risk_engine import RiskEngine
 from bot.control.signal_pipeline import SignalPipeline, get_signal_pipeline
+from bot.control.trading_context import TradingContext
 
 
 # ---------------------------------------------------------------------------
@@ -62,6 +63,19 @@ def _valid_raw(**overrides) -> RawSignal:
         regime="trending",
         strategy="swing",
         approved=True,
+        account_id="acct_a",
+        trading_context=TradingContext(
+            user_id="user_a",
+            trading_account_id="acct_a",
+            broker="kraken",
+            broker_account_id="kraken_a",
+            strategy_instance_id="strat_a",
+            portfolio_id="pf_a",
+            request_id="req_a",
+            correlation_id="corr_a",
+            environment="test",
+            mode="paper",
+        ),
     )
     defaults.update(overrides)
     return RawSignal(**defaults)
@@ -75,6 +89,21 @@ def _fresh_pipeline(**kwargs) -> SignalPipeline:
         risk_engine=RiskEngine(),
         **kwargs,
     )
+
+
+def _context_dict() -> dict:
+    return {
+        "user_id": "user_a",
+        "trading_account_id": "acct_a",
+        "broker": "kraken",
+        "broker_account_id": "kraken_a",
+        "strategy_instance_id": "strat_a",
+        "portfolio_id": "pf_a",
+        "request_id": "req_a",
+        "correlation_id": "corr_a",
+        "environment": "test",
+        "mode": "paper",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -178,6 +207,16 @@ class TestCompileRejection(unittest.TestCase):
         )
         self.assertIsNone(result)
 
+    def test_missing_context_rejected_fail_closed(self):
+        pipeline = _fresh_pipeline()
+        result = pipeline.process_signal(
+            _valid_raw(trading_context=None),
+            df=_make_df(60, "up"),
+            current_positions=[],
+            portfolio_value_usd=10_000.0,
+        )
+        self.assertIsNone(result)
+
 
 # ---------------------------------------------------------------------------
 # 3. Signal rejection at risk stage
@@ -187,7 +226,17 @@ class TestRiskRejection(unittest.TestCase):
 
     def test_too_many_positions_rejected(self):
         pipeline = _fresh_pipeline()
-        positions = [{"symbol": f"COIN{i}-USD", "size_usd": 100.0} for i in range(7)]
+        positions = [
+            {
+                "symbol": f"COIN{i}-USD",
+                "size_usd": 100.0,
+                "user_id": "user_a",
+                "trading_account_id": "acct_a",
+                "broker": "kraken",
+                "broker_account_id": "kraken_a",
+            }
+            for i in range(8)
+        ]
         result = pipeline.process_signal(
             _valid_raw(),
             df=_make_df(60, "up"),
@@ -297,11 +346,13 @@ class TestProcessDict(unittest.TestCase):
             "symbol":     "BTC-USD",
             "side":       "buy",
             "action":     "enter_long",
+            "account_id": "acct_a",
             "size_usd":   100.0,
             "confidence": 0.70,
             "regime":     "trending",
             "strategy":   "swing",
             "approved":   True,
+            "trading_context": _context_dict(),
         }
         result = pipeline.process_dict(
             d,
@@ -313,7 +364,7 @@ class TestProcessDict(unittest.TestCase):
 
     def test_invalid_dict_rejected(self):
         pipeline = _fresh_pipeline()
-        d = {"symbol": "", "action": "enter_long", "confidence": 0.70, "regime": "trending"}
+        d = {"symbol": "", "action": "enter_long", "account_id": "acct_a", "confidence": 0.70, "regime": "trending", "trading_context": _context_dict()}
         result = pipeline.process_dict(
             d,
             df=_make_df(60, "up"),
@@ -322,15 +373,23 @@ class TestProcessDict(unittest.TestCase):
         )
         self.assertIsNone(result)
 
+    def test_malformed_context_dict_rejected(self):
+        pipeline = _fresh_pipeline()
+        d = {"symbol": "BTC-USD", "action": "enter_long", "account_id": "acct_a", "confidence": 0.8, "size_usd": 50.0, "trading_context": {"user_id": "user_a"}}
+        result = pipeline.process_dict(d, df=None, current_positions=[], portfolio_value_usd=10_000.0)
+        self.assertIsNone(result)
+
     def test_buy_action_mapping(self):
         pipeline = _fresh_pipeline()
         d = {
             "symbol":     "ETH-USD",
             "action":     "buy",
+            "account_id": "acct_a",
             "size_usd":   100.0,
             "confidence": 0.70,
             "regime":     "trending",
             "strategy":   "swing",
+            "trading_context": _context_dict(),
         }
         result = pipeline.process_dict(
             d,

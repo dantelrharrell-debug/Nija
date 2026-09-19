@@ -47,6 +47,8 @@ from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
+from bot.control.trading_context import TradingContext
+
 logger = logging.getLogger("nija.control.compiler")
 
 # ---------------------------------------------------------------------------
@@ -114,6 +116,7 @@ class RawSignal:
     execution_mode: Optional[str] = None
     asset_class: Optional[str] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
+    trading_context: Optional[TradingContext] = None
 
 
 @dataclass
@@ -144,6 +147,7 @@ class CompiledSignal:
     execution_mode: Optional[str]
     asset_class: Optional[str]
     metadata: Dict[str, Any]
+    trading_context: TradingContext
     compiled_at: str = field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat()
     )
@@ -166,6 +170,7 @@ class CompiledSignal:
             "portfolio_id":    self.portfolio_id,
             "strategy_signal_id": self.strategy_signal_id,
             "trade_id":        self.trade_id,
+            "trading_context": self.trading_context.to_log_fields(),
             "stop_loss_pct":   self.stop_loss_pct,
             "take_profit_pct": self.take_profit_pct,
         }
@@ -212,6 +217,22 @@ class ControlCompiler:
 
         # Fast-path: control layer disabled
         if not _CONTROL_ENABLED:
+            if raw.trading_context is None:
+                raw = RawSignal(
+                    symbol=raw.symbol,
+                    side=raw.side,
+                    action=raw.action,
+                    size_usd=raw.size_usd,
+                    confidence=raw.confidence,
+                    regime=raw.regime,
+                    strategy=raw.strategy,
+                    account_id=raw.account_id,
+                    approved=raw.approved,
+                    stop_loss_pct=raw.stop_loss_pct,
+                    take_profit_pct=raw.take_profit_pct,
+                    metadata=raw.metadata,
+                    trading_context=self._legacy_context_from_raw(raw),
+                )
             notes.append("control_layer_disabled:pass_through")
             return self._build_compiled(raw, raw.size_usd, notes), notes
 
@@ -224,6 +245,18 @@ class ControlCompiler:
             logger.warning(
                 "COMPILER_REJECT symbol=%s action=%s strategy=%s stage=schema reason=%s",
                 raw.symbol, raw.action, raw.strategy or "?", reason,
+            )
+            return None, notes
+
+        # 1.5 Trading context validation
+        ok, reason = self._validate_context(raw)
+        if not ok:
+            notes.append(f"context_invalid:{reason}")
+            self._record(accepted=False)
+            self._store_audit(raw, None, notes)
+            logger.warning(
+                "COMPILER_REJECT symbol=%s action=%s stage=context reason=%s",
+                raw.symbol, raw.action, reason,
             )
             return None, notes
 
@@ -297,6 +330,29 @@ class ControlCompiler:
         elif side in ("short", "enter_short"):
             side = "sell"
 
+        notes: List[str] = []
+        try:
+            trading_context = self._context_from_dict(signal_dict)
+        except ValueError as exc:
+            notes.append(f"context_invalid:{exc}")
+            raw = RawSignal(
+                symbol=str(signal_dict.get("symbol") or ""),
+                side=side,
+                action=action,
+                size_usd=float(signal_dict.get("size_usd") or signal_dict.get("size") or 0.0),
+                confidence=float(signal_dict.get("confidence") or 0.0),
+                regime=str(signal_dict.get("regime") or "unknown"),
+                strategy=str(signal_dict.get("strategy") or ""),
+                account_id=str(signal_dict.get("account_id") or "default"),
+                approved=bool(signal_dict.get("approved", True)),
+                stop_loss_pct=signal_dict.get("stop_loss_pct"),
+                take_profit_pct=signal_dict.get("take_profit_pct"),
+                metadata={k: v for k, v in signal_dict.items()},
+                trading_context=None,
+            )
+            self._record(accepted=False)
+            self._store_audit(raw, None, notes)
+            return None, notes
         raw = RawSignal(
             symbol=str(signal_dict.get("symbol") or ""),
             side=side,
@@ -317,6 +373,7 @@ class ControlCompiler:
             execution_mode=signal_dict.get("execution_mode"),
             asset_class=signal_dict.get("asset_class"),
             metadata={k: v for k, v in signal_dict.items()},
+            trading_context=trading_context,
         )
         return self.compile(raw, portfolio_value_usd, max_position_size_pct)
 
@@ -345,6 +402,15 @@ class ControlCompiler:
             return False, f"confidence must be numeric, got {type(raw.confidence).__name__}"
         if not math.isfinite(conf):
             return False, f"confidence must be finite, got {conf}"
+        return True, ""
+
+    @staticmethod
+    def _validate_context(raw: RawSignal) -> Tuple[bool, str]:
+        context = raw.trading_context
+        if context is None:
+            return False, "missing_trading_context"
+        if str(raw.account_id or "").strip() != str(context.trading_account_id).strip():
+            return False, "account_id_mismatch"
         return True, ""
 
     @staticmethod
@@ -432,6 +498,8 @@ class ControlCompiler:
         sized_usd: float,
         notes: List[str],
     ) -> CompiledSignal:
+        if raw.trading_context is None:
+            raise ValueError("missing_trading_context")
         return CompiledSignal(
             signal_id=str(uuid.uuid4()),
             symbol=raw.symbol.strip().upper(),
@@ -453,7 +521,36 @@ class ControlCompiler:
             execution_mode=raw.execution_mode,
             asset_class=raw.asset_class,
             metadata=dict(raw.metadata or {}),
+            trading_context=raw.trading_context,
             compile_notes=list(notes),
+        )
+
+    @staticmethod
+    def _context_from_dict(signal_dict: Dict[str, Any]) -> Optional[TradingContext]:
+        context_raw = signal_dict.get("trading_context")
+        if isinstance(context_raw, TradingContext):
+            return context_raw
+        if isinstance(context_raw, dict):
+            try:
+                return TradingContext.from_mapping(context_raw)
+            except Exception as exc:
+                raise ValueError(f"malformed_trading_context:{exc}") from exc
+        return None
+
+    @staticmethod
+    def _legacy_context_from_raw(raw: RawSignal) -> TradingContext:
+        account = str(raw.account_id or "").strip() or "legacy_account"
+        return TradingContext(
+            user_id="legacy",
+            trading_account_id=account,
+            broker="legacy",
+            broker_account_id=f"{account}_broker",
+            strategy_instance_id="legacy_strategy",
+            portfolio_id="legacy_portfolio",
+            request_id="legacy_request",
+            correlation_id="legacy",
+            environment="legacy",
+            mode="paper",
         )
 
     def _record(self, accepted: bool) -> None:
@@ -493,6 +590,9 @@ class ControlCompiler:
                 "notes":       notes,
                 "compiled_at": datetime.now(timezone.utc).isoformat(),
             }
+            context = raw.trading_context
+            if context is not None:
+                payload["context"] = context.to_log_fields()
             if compiled:
                 payload["size_usd"] = compiled.size_usd
                 payload["side"] = compiled.side
