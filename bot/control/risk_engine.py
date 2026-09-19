@@ -273,7 +273,7 @@ class RiskEngine:
             return False, notes
 
         # All checks passed
-        self._record_trade(symbol, account_id, broker)
+        self._record_trade(symbol, trading_context=trading_context)
         notes.append("all_risk_checks_passed")
         return True, notes
 
