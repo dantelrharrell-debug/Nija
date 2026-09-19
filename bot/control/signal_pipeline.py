@@ -355,6 +355,13 @@ class SignalPipeline:
             }
 
         context = self._resolve_decision_context(raw_signal, decision_context)
+        if decision_context is not None and context is None:
+            audit["stages"]["context"] = {"approved": False, "notes": ["USER_CONTEXT_MISMATCH"]}
+            audit["final_decision"] = "rejected"
+            audit["rejection_stage"] = "context"
+            self._record(accepted=False)
+            self._store_pipeline_audit(pipeline_id, audit)
+            return None
         duplicate_key: Optional[str] = None
         if context is not None:
             context_notes = context.validate_for_entry()
@@ -523,8 +530,10 @@ class SignalPipeline:
             audit["final_decision"] = "approved"
             audit["signal_id"] = compiled.signal_id
             if context is not None:
+                # Keep the reservation through the downstream execution handoff.
+                # The execution/reconciliation owner must call
+                # mark_duplicate_execution_complete() once submission state is known.
                 compiled.metadata["duplicate_key"] = duplicate_key
-                self._idempotency_registry.release(duplicate_key)
             self._record(accepted=True)
             with self._lock:
                 self._last_approved_ts = _time.time()
