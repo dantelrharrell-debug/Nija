@@ -62,6 +62,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from bot.control.decision_context import (
+    PROTECTION_CONFIRMED,
     PROTECTION_UNVERIFIED,
     UserDecisionContext,
     UserPortfolioSnapshot,
@@ -411,7 +412,7 @@ class SignalBroadcaster:
                 open_positions=tuple(positions),
                 pending_orders=tuple(pending_orders),
                 portfolio_exposure=sum(float(p.get("usd_value") or p.get("size_usd") or 0.0) for p in positions),
-                protection_state=PROTECTION_UNVERIFIED,
+                protection_state=PROTECTION_UNVERIFIED if positions else PROTECTION_CONFIRMED,
                 authoritative_positions_proven=positions_proven,
                 broker_healthy=broker_healthy,
                 positions_fresh=positions_proven,
