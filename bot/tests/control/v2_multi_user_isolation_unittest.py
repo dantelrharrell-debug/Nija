@@ -69,7 +69,7 @@ class TestV2MultiUserIsolation(unittest.TestCase):
         self.assertEqual(b.size_usd, 100.0)
 
     def test_02_user_a_open_position_does_not_block_user_b(self):
-        positions = [{"symbol": "BTC-USD", "size_usd": 100.0, "user_id": "user_a", "trading_account_id": "acct_a", "broker_account_id": "kraken_a"} for _ in range(8)]
+        positions = [{"symbol": "BTC-USD", "size_usd": 100.0, "user_id": "user_b", "trading_account_id": "acct_b", "broker": "kraken", "broker_account_id": "kraken_b"} for _ in range(2)]
         ok, notes = self.risk.validate_trade(
             symbol="BTC-USD",
             side="buy",
@@ -83,8 +83,8 @@ class TestV2MultiUserIsolation(unittest.TestCase):
 
     def test_03_user_a_position_not_in_user_b_exposure(self):
         positions = [
-            {"symbol": "BTC-USD", "size_usd": 100.0, "user_id": "user_a", "trading_account_id": "acct_a", "broker_account_id": "kraken_a"},
-            {"symbol": "ETH-USD", "size_usd": 100.0, "user_id": "user_b", "trading_account_id": "acct_b", "broker_account_id": "kraken_b"},
+            {"symbol": "BTC-USD", "size_usd": 100.0, "user_id": "user_a", "trading_account_id": "acct_a", "broker": "kraken", "broker_account_id": "kraken_a"},
+            {"symbol": "ETH-USD", "size_usd": 100.0, "user_id": "user_b", "trading_account_id": "acct_b", "broker": "kraken", "broker_account_id": "kraken_b"},
         ]
         filtered = self.risk._filter_positions_for_context(positions, self.ctx_b)
         self.assertEqual(len(filtered), 1)
@@ -176,13 +176,13 @@ class TestV2MultiUserIsolation(unittest.TestCase):
         self.assertNotEqual(a_key, b_key)
 
     def test_15_sl_tp_attach_only_to_owner_position(self):
-        position = {"position_id": "pos_a", "user_id": "user_a", "trading_account_id": "acct_a", "broker_account_id": "kraken_a"}
+        position = {"position_id": "pos_a", "user_id": "user_a", "trading_account_id": "acct_a", "broker": "kraken", "broker_account_id": "kraken_a"}
         verify_position_ownership(context=self.ctx_a, position=position)
         with self.assertRaises(ValueError):
             verify_position_ownership(context=self.ctx_b, position=position)
 
     def test_16_monitoring_job_cannot_modify_other_user_position(self):
-        position = {"position_id": "pos_a", "user_id": "user_a", "trading_account_id": "acct_a", "broker_account_id": "kraken_a"}
+        position = {"position_id": "pos_a", "user_id": "user_a", "trading_account_id": "acct_a", "broker": "kraken", "broker_account_id": "kraken_a"}
         with self.assertRaises(ValueError):
             verify_position_ownership(context=self.ctx_b, position=position)
 
@@ -225,10 +225,19 @@ class TestV2MultiUserIsolation(unittest.TestCase):
         self.assertEqual(recovered.user_id, "user_a")
         self.assertEqual(recovered.trading_account_id, "acct_a")
 
+    def test_22b_queue_event_decision_id_mismatch_rejected(self):
+        altered = TradingContext.from_mapping({**self.ctx_a.to_log_fields(), "decision_id": "other_decision"})
+        with self.assertRaises(ValueError):
+            validate_queue_event_context(
+                {"trading_context": altered.to_log_fields()},
+                expected_context=self.ctx_a,
+                require_same_decision=True,
+            )
+
     def test_23_kraken_margin_visibility_is_account_scoped(self):
         positions = [
-            {"symbol": "BTC-USD", "size_usd": 100.0, "user_id": "user_a", "trading_account_id": "acct_a", "broker_account_id": "kraken_a"},
-            {"symbol": "BTC-USD", "size_usd": 200.0, "user_id": "user_b", "trading_account_id": "acct_b", "broker_account_id": "kraken_b"},
+            {"symbol": "BTC-USD", "size_usd": 100.0, "user_id": "user_a", "trading_account_id": "acct_a", "broker": "kraken", "broker_account_id": "kraken_a"},
+            {"symbol": "BTC-USD", "size_usd": 200.0, "user_id": "user_b", "trading_account_id": "acct_b", "broker": "kraken", "broker_account_id": "kraken_b"},
         ]
         filtered = self.risk._filter_positions_for_context(positions, self.ctx_a)
         self.assertEqual(len(filtered), 1)
@@ -241,14 +250,14 @@ class TestV2MultiUserIsolation(unittest.TestCase):
         self.assertTrue(redis.setex.called)
         key = redis.setex.call_args[0][0]
         payload = json.loads(redis.setex.call_args[0][2])
-        self.assertIn("user_a:acct_a:kraken_a", key)
+        self.assertNotIn("user_a", key)
         self.assertEqual(payload["context"]["user_id"], "user_a")
         self.assertNotIn("api_key", json.dumps(payload))
 
     def test_25_symbol_only_lookup_cannot_cross_user(self):
         positions = [
-            {"symbol": "BTC-USD", "size_usd": 100.0, "user_id": "user_a", "trading_account_id": "acct_a", "broker_account_id": "kraken_a"},
-            {"symbol": "BTC-USD", "size_usd": 100.0, "user_id": "user_b", "trading_account_id": "acct_b", "broker_account_id": "kraken_b"},
+            {"symbol": "BTC-USD", "size_usd": 100.0, "user_id": "user_a", "trading_account_id": "acct_a", "broker": "kraken", "broker_account_id": "kraken_a"},
+            {"symbol": "BTC-USD", "size_usd": 100.0, "user_id": "user_b", "trading_account_id": "acct_b", "broker": "kraken", "broker_account_id": "kraken_b"},
         ]
         filtered = self.risk._filter_positions_for_context(positions, self.ctx_b)
         self.assertEqual(len(filtered), 1)
@@ -283,4 +292,3 @@ class TestV2MultiUserIsolation(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

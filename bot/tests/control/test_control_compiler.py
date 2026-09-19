@@ -41,6 +41,7 @@ def _valid_raw(**overrides) -> RawSignal:
         regime="trending",
         strategy="swing",
         approved=True,
+        account_id="acct_a",
         trading_context=TradingContext(
             user_id="user_a",
             trading_account_id="acct_a",
@@ -386,6 +387,7 @@ class TestCompileDict(unittest.TestCase):
             "symbol":     "BTC-USD",
             "side":       "buy",
             "action":     "enter_long",
+            "account_id": "acct_a",
             "size_usd":   250.0,
             "confidence": 0.70,
             "regime":     "trending",
@@ -399,6 +401,7 @@ class TestCompileDict(unittest.TestCase):
     def test_compile_dict_missing_symbol_rejected(self):
         compiled, notes = self.compiler.compile_dict({
             "action":     "enter_long",
+            "account_id": "acct_a",
             "size_usd":   100.0,
             "confidence": 0.70,
             "regime":     "trending",
@@ -410,6 +413,7 @@ class TestCompileDict(unittest.TestCase):
         d = {
             "symbol":     "ETH-USD",
             "action":     "buy",
+            "account_id": "acct_a",
             "size_usd":   50.0,
             "confidence": 0.70,
             "regime":     "trending",
@@ -424,12 +428,25 @@ class TestCompileDict(unittest.TestCase):
         d = {
             "symbol":     "BTC-USD",
             "action":     "hold",
+            "account_id": "acct_a",
             "confidence": 0.0,
             "regime":     "unknown",
             "trading_context": _context_dict(),
         }
         compiled, notes = self.compiler.compile_dict(d)
         self.assertIsNotNone(compiled)
+
+    def test_compile_dict_malformed_context_rejected(self):
+        compiled, notes = self.compiler.compile_dict({
+            "symbol": "BTC-USD",
+            "action": "enter_long",
+            "account_id": "acct_a",
+            "confidence": 0.8,
+            "size_usd": 100.0,
+            "trading_context": {"user_id": "user_a"},
+        })
+        self.assertIsNone(compiled)
+        self.assertTrue(any("malformed_trading_context" in n for n in notes))
 
 
 # ---------------------------------------------------------------------------

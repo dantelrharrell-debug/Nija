@@ -198,12 +198,22 @@ class ControlCompiler:
 
         # Fast-path: control layer disabled
         if not _CONTROL_ENABLED:
-            ok, reason = self._validate_context(raw)
-            if not ok:
-                notes.append(f"context_invalid:{reason}")
-                self._record(accepted=False)
-                self._store_audit(raw, None, notes)
-                return None, notes
+            if raw.trading_context is None:
+                raw = RawSignal(
+                    symbol=raw.symbol,
+                    side=raw.side,
+                    action=raw.action,
+                    size_usd=raw.size_usd,
+                    confidence=raw.confidence,
+                    regime=raw.regime,
+                    strategy=raw.strategy,
+                    account_id=raw.account_id,
+                    approved=raw.approved,
+                    stop_loss_pct=raw.stop_loss_pct,
+                    take_profit_pct=raw.take_profit_pct,
+                    metadata=raw.metadata,
+                    trading_context=self._legacy_context_from_raw(raw),
+                )
             notes.append("control_layer_disabled:pass_through")
             return self._build_compiled(raw, raw.size_usd, notes), notes
 
@@ -301,6 +311,29 @@ class ControlCompiler:
         elif side in ("short", "enter_short"):
             side = "sell"
 
+        notes: List[str] = []
+        try:
+            trading_context = self._context_from_dict(signal_dict)
+        except ValueError as exc:
+            notes.append(f"context_invalid:{exc}")
+            raw = RawSignal(
+                symbol=str(signal_dict.get("symbol") or ""),
+                side=side,
+                action=action,
+                size_usd=float(signal_dict.get("size_usd") or signal_dict.get("size") or 0.0),
+                confidence=float(signal_dict.get("confidence") or 0.0),
+                regime=str(signal_dict.get("regime") or "unknown"),
+                strategy=str(signal_dict.get("strategy") or ""),
+                account_id=str(signal_dict.get("account_id") or "default"),
+                approved=bool(signal_dict.get("approved", True)),
+                stop_loss_pct=signal_dict.get("stop_loss_pct"),
+                take_profit_pct=signal_dict.get("take_profit_pct"),
+                metadata={k: v for k, v in signal_dict.items()},
+                trading_context=None,
+            )
+            self._record(accepted=False)
+            self._store_audit(raw, None, notes)
+            return None, notes
         raw = RawSignal(
             symbol=str(signal_dict.get("symbol") or ""),
             side=side,
@@ -314,7 +347,7 @@ class ControlCompiler:
             stop_loss_pct=signal_dict.get("stop_loss_pct"),
             take_profit_pct=signal_dict.get("take_profit_pct"),
             metadata={k: v for k, v in signal_dict.items()},
-            trading_context=self._context_from_dict(signal_dict),
+            trading_context=trading_context,
         )
         return self.compile(raw, portfolio_value_usd, max_position_size_pct)
 
@@ -347,14 +380,11 @@ class ControlCompiler:
 
     @staticmethod
     def _validate_context(raw: RawSignal) -> Tuple[bool, str]:
-        if raw.action not in _EXECUTION_ACTIONS:
-            return True, ""
         context = raw.trading_context
         if context is None:
             return False, "missing_trading_context"
-        if raw.account_id and raw.account_id != "default":
-            if str(raw.account_id).strip() != str(context.trading_account_id).strip():
-                return False, "account_id_mismatch"
+        if str(raw.account_id or "").strip() != str(context.trading_account_id).strip():
+            return False, "account_id_mismatch"
         return True, ""
 
     @staticmethod
@@ -470,9 +500,25 @@ class ControlCompiler:
         if isinstance(context_raw, dict):
             try:
                 return TradingContext.from_mapping(context_raw)
-            except Exception:
-                return None
+            except Exception as exc:
+                raise ValueError(f"malformed_trading_context:{exc}") from exc
         return None
+
+    @staticmethod
+    def _legacy_context_from_raw(raw: RawSignal) -> TradingContext:
+        account = str(raw.account_id or "").strip() or "legacy_account"
+        return TradingContext(
+            user_id="legacy",
+            trading_account_id=account,
+            broker="legacy",
+            broker_account_id=f"{account}_broker",
+            strategy_instance_id="legacy_strategy",
+            portfolio_id="legacy_portfolio",
+            request_id="legacy_request",
+            correlation_id="legacy",
+            environment="legacy",
+            mode="paper",
+        )
 
     def _record(self, accepted: bool) -> None:
         with self._lock:

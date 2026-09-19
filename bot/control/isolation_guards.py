@@ -46,7 +46,12 @@ def validate_owner_account_authorization(
     *,
     authorized_accounts: Mapping[str, str],
 ) -> None:
-    owner = str(authorized_accounts.get(context.trading_account_id) or "").strip()
+    owner = str(
+        authorized_accounts.get(f"{context.broker}:{context.broker_account_id}")
+        or authorized_accounts.get(context.broker_account_id)
+        or authorized_accounts.get(context.trading_account_id)
+        or ""
+    ).strip()
     if not owner or owner != context.user_id:
         raise ValueError("ownership_mismatch:user_not_authorized_for_account")
 
@@ -74,13 +79,15 @@ def verify_position_ownership(
         raise ValueError("position_missing")
     owner = str(position.get("user_id") or "").strip()
     account = str(position.get("trading_account_id") or "").strip()
+    broker = str(position.get("broker") or "").strip().lower()
     broker_account = str(position.get("broker_account_id") or "").strip()
     position_id = str(position.get("position_id") or "").strip()
     if not position_id:
         raise ValueError("position_missing_authoritative_id")
-    if (owner, account, broker_account) != (
+    if (owner, account, broker, broker_account) != (
         context.user_id,
         context.trading_account_id,
+        context.broker,
         context.broker_account_id,
     ):
         raise ValueError("position_owner_mismatch")
@@ -90,6 +97,7 @@ def validate_queue_event_context(
     payload: Mapping[str, Any],
     *,
     expected_context: Optional[TradingContext] = None,
+    require_same_decision: bool = False,
 ) -> TradingContext:
     raw_ctx = payload.get("trading_context")
     if isinstance(raw_ctx, TradingContext):
@@ -98,7 +106,9 @@ def validate_queue_event_context(
         ctx = TradingContext.from_mapping(raw_ctx)
     else:
         raise ValueError("queue_event_missing_context")
-    if expected_context and ctx.scope_key != expected_context.scope_key:
-        raise ValueError("queue_event_context_mismatch")
+    if expected_context:
+        if ctx.scope_key != expected_context.scope_key:
+            raise ValueError("queue_event_context_mismatch")
+        if require_same_decision and ctx.decision_id != expected_context.decision_id:
+            raise ValueError("queue_event_context_mismatch")
     return ctx
-

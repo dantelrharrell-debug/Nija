@@ -104,6 +104,7 @@ class TradingContext:
             [
                 self.user_id,
                 self.trading_account_id,
+                self.broker,
                 self.broker_account_id,
                 self.request_id,
                 self.correlation_id,
@@ -135,4 +136,3 @@ def ensure_context(context: Optional[TradingContext], *, fail_code: str = "missi
     if context is None:
         raise ValueError(fail_code)
     return context
-
