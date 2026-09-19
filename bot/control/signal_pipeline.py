@@ -494,7 +494,7 @@ class SignalPipeline:
 
             if not risk_approved:
                 if context is not None:
-                    self._idempotency_registry.mark_state(duplicate_key, "reconciled_rejected")
+                    self._idempotency_registry.release(duplicate_key)
                 audit["final_decision"] = "rejected"
                 audit["rejection_stage"] = "risk"
                 self._record(accepted=False)
