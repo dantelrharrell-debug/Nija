@@ -631,7 +631,10 @@ class TestCompletionBlockers(unittest.TestCase):
                 "BTC-USD",
                 "buy",
                 10.0,
-                metadata_override=handle.to_metadata(),
+                metadata_override={
+                    **handle.to_metadata(),
+                    "duplicate_retry_managed": True,
+                },
             )
             self.assertEqual(first["status"], "error")
             self.assertTrue(first["v2_pre_submit_proven"])
@@ -642,7 +645,10 @@ class TestCompletionBlockers(unittest.TestCase):
                 "BTC-USD",
                 "buy",
                 10.0,
-                metadata_override=handle.to_metadata(),
+                metadata_override={
+                    **handle.to_metadata(),
+                    "duplicate_retry_managed": True,
+                },
             )
 
         self.assertEqual(second["status"], "filled")
