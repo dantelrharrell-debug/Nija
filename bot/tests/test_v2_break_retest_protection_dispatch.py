@@ -74,6 +74,7 @@ class TestBreakRetestProtectionDispatch(unittest.TestCase):
                     "order_id": "atomic-protected-1",
                     "filled_price": 101.0,
                     "filled_size_usd": float(quantity),
+                    "protection_verified": True,
                 }
 
         broker = AtomicProtectedBroker()
