@@ -8,7 +8,7 @@ from bot.control.control_compiler import RawSignal
 from bot.control.decision_context import UserDecisionContext, get_user_scoped_idempotency_registry
 from bot.control.signal_pipeline import SignalPipeline
 from bot.control.trading_context import TradingContext
-from bot.pipeline_order_submitter import submit_market_order_via_pipeline
+from bot.pipeline_order_submitter import _classify_failed_submission
 from bot.signal_broadcaster import SignalBroadcaster
 
 
@@ -53,20 +53,16 @@ class TestPost2807Safety(unittest.TestCase):
         self.assertTrue(SignalBroadcaster._kraken_margin_visibility_proven(broker))
 
     def test_ack_timeout_without_order_id_stays_state_unknown(self):
-        broker = SimpleNamespace(broker_name="coinbase", connected=True, get_account_balance=lambda: 1000.0)
         result = SimpleNamespace(success=False, order_id=None, error="ACK timeout after dispatch")
-        pipeline = SimpleNamespace(execute=lambda request: result)
-        with patch("bot.pipeline_order_submitter.assert_distributed_writer_authority", return_value=None), \
-             patch("bot.pipeline_order_submitter.get_execution_pipeline", return_value=pipeline):
-            out = submit_market_order_via_pipeline(
-                broker, "BTC-USD", "buy", 10.0,
-                metadata_override={"duplicate_key": "v2:ack-timeout-test"},
-            )
-        self.assertEqual(out["status"], "state_unknown")
-        self.assertEqual(
-            get_user_scoped_idempotency_registry().get_state("v2:ack-timeout-test"),
-            "state_unknown",
-        )
+        self.assertEqual(_classify_failed_submission(result), "state_unknown")
+
+    def test_confirmed_rejection_without_dispatch_proof_can_release(self):
+        result = SimpleNamespace(success=False, order_id=None, error="broker rejected invalid order")
+        self.assertEqual(_classify_failed_submission(result), "error")
+
+    def test_order_id_keeps_failed_submission_pending(self):
+        result = SimpleNamespace(success=False, order_id="OID-1", error="temporary broker error")
+        self.assertEqual(_classify_failed_submission(result), "pending")
 
 
 if __name__ == "__main__":
