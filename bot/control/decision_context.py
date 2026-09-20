@@ -3,10 +3,38 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import hashlib
 import json
+import logging
+import os
 from datetime import datetime, timezone
 import threading
 import time
 from typing import Any, Dict, List, Optional, Tuple
+
+
+logger = logging.getLogger("nija.control.decision_context")
+
+
+def _default_redis_client():
+    """Return the canonical Redis client when configured, otherwise None."""
+    try:
+        from bot.redis_env import get_redis_url
+        redis_url = str(get_redis_url() or "").strip()
+        if not redis_url:
+            return None
+        from bot.redis_runtime import connect_redis_with_fallback
+        client, _ = connect_redis_with_fallback(
+            url=redis_url,
+            decode_responses=True,
+            socket_timeout=2,
+            socket_connect_timeout=2,
+            retries=1,
+            delay_s=0.0,
+            log=lambda msg: logger.debug("V2 idempotency redis: %s", msg),
+        )
+        return client
+    except Exception as exc:
+        logger.warning("V2 idempotency Redis unavailable: %s", exc)
+        return None
 
 
 PLATFORM_IDENTITY = "PLATFORM"
@@ -183,21 +211,37 @@ class UserPortfolioSnapshot:
 
 
 class UserScopedIdempotencyRegistry:
-    """In-memory duplicate guard scoped by user/account/broker/signal/direction."""
+    """Distributed duplicate guard scoped by user/account/broker/signal/direction.
 
-    def __init__(self, ttl_seconds: float = 300.0) -> None:
+    Redis is the authoritative backend whenever it is configured.  A local
+    in-process fallback is retained for paper/backtest development only.
+    Production LIVE admission fails closed when shared Redis authority is
+    unavailable; it never silently downgrades to process-local protection.
+    """
+
+    _KEY_PREFIX = "nija:control:v2:idempotency:"
+
+    def __init__(
+        self,
+        ttl_seconds: float = 300.0,
+        *,
+        redis_client=None,
+        uncertain_ttl_seconds: Optional[float] = None,
+    ) -> None:
         self._lock = threading.Lock()
         self._ttl_seconds = max(1.0, float(ttl_seconds))
+        default_uncertain = float(os.getenv("NIJA_V2_UNCERTAIN_IDEMPOTENCY_TTL_S", "86400") or 86400)
+        self._uncertain_ttl_seconds = max(
+            self._ttl_seconds,
+            float(uncertain_ttl_seconds if uncertain_ttl_seconds is not None else default_uncertain),
+        )
+        self._redis = redis_client
+        self._redis_checked = redis_client is not None
         self._states: Dict[str, Dict[str, Any]] = {}
 
     @staticmethod
     def build_key(context: UserDecisionContext, *, symbol: str, direction: str) -> str:
-        """Return a collision-safe, opaque key for one account-scoped intent.
-
-        Length-prefixed/canonical JSON semantics avoid delimiter collisions in
-        caller-controlled identities.  The digest also prevents raw user/account
-        identifiers from leaking into shared-state keys or logs.
-        """
+        """Return a collision-safe, opaque key for one account-scoped intent."""
         payload = json.dumps(
             {
                 "user_id": _clean_identity(context.user_id),
@@ -214,8 +258,55 @@ class UserScopedIdempotencyRegistry:
         ).encode("utf-8")
         return "v2:" + hashlib.sha256(payload).hexdigest()
 
+    @classmethod
+    def _redis_key(cls, key: str) -> str:
+        digest = key[3:] if key.startswith("v2:") else hashlib.sha256(key.encode("utf-8")).hexdigest()
+        return cls._KEY_PREFIX + digest
+
+    @staticmethod
+    def _requires_shared_authority(context: UserDecisionContext) -> bool:
+        return str(context.execution_mode or "").strip().lower() == "live"
+
+    def _get_redis(self):
+        if not self._redis_checked:
+            with self._lock:
+                if not self._redis_checked:
+                    self._redis = _default_redis_client()
+                    self._redis_checked = True
+        return self._redis
+
+    def _redis_set_state(self, key: str, state: str, ttl_seconds: float, *, nx: bool = False) -> Optional[bool]:
+        client = self._get_redis()
+        if client is None:
+            return None
+        try:
+            result = client.set(
+                self._redis_key(key),
+                state,
+                nx=nx,
+                px=max(1, int(ttl_seconds * 1000)),
+            )
+            return bool(result)
+        except Exception as exc:
+            logger.error("V2 idempotency Redis state write failed state=%s error=%s", state, type(exc).__name__)
+            return None
+
     def reserve(self, context: UserDecisionContext, *, symbol: str, direction: str) -> Tuple[bool, str]:
         key = self.build_key(context, symbol=symbol, direction=direction)
+        redis_result = self._redis_set_state(key, "submitted", self._ttl_seconds, nx=True)
+        if redis_result is True:
+            return True, key
+        if redis_result is False:
+            return False, key
+        if self._requires_shared_authority(context):
+            logger.critical(
+                "V2_IDEMPOTENCY_SHARED_AUTHORITY_UNAVAILABLE broker=%s account=%s fail_closed=true",
+                context.broker,
+                hashlib.sha256(_clean_identity(context.account_id).encode("utf-8")).hexdigest()[:12],
+            )
+            return False, key
+
+        # Non-live fallback for local paper/backtest use.
         with self._lock:
             entry = self._states.get(key)
             if entry is not None and self._is_expired(entry):
@@ -233,20 +324,44 @@ class UserScopedIdempotencyRegistry:
     def mark_state(self, key: str, state: str) -> None:
         if not key:
             return
+        normalized = str(state or "").strip()
+        if normalized in {"released", "reconciled_rejected"}:
+            self.release(key)
+            return
+        ttl = self._uncertain_ttl_seconds if normalized in {"state_unknown", "submitted_pending", "pending"} else self._ttl_seconds
+        redis_result = self._redis_set_state(key, normalized, ttl)
+        # Keep a local mirror for observability and non-live fallback.  Redis
+        # remains authoritative for cross-worker admission whenever available.
         with self._lock:
             self._states[key] = {
-                "state": state,
-                "expires_at": None if state == "released" else time.monotonic() + self._ttl_seconds,
+                "state": normalized,
+                "expires_at": time.monotonic() + ttl,
             }
+        if redis_result is None:
+            logger.warning("V2 idempotency state mirrored locally because Redis authority is unavailable state=%s", normalized)
 
     def release(self, key: str) -> None:
-        """Remove a reservation when no broker submission remains in flight."""
+        """Remove a reservation only when no broker submission remains in flight."""
         if not key:
             return
+        client = self._get_redis()
+        if client is not None:
+            try:
+                client.delete(self._redis_key(key))
+            except Exception as exc:
+                logger.error("V2 idempotency Redis release failed error=%s", type(exc).__name__)
         with self._lock:
             self._states.pop(key, None)
 
     def get_state(self, key: str) -> Optional[str]:
+        client = self._get_redis()
+        if client is not None:
+            try:
+                value = client.get(self._redis_key(key))
+                if value is not None:
+                    return str(value.decode("utf-8") if isinstance(value, bytes) else value)
+            except Exception as exc:
+                logger.error("V2 idempotency Redis read failed error=%s", type(exc).__name__)
         with self._lock:
             entry = self._states.get(key)
             if entry is not None and self._is_expired(entry):
@@ -264,12 +379,15 @@ _IDEMPOTENCY_REGISTRY_SINGLETON: Optional["UserScopedIdempotencyRegistry"] = Non
 _IDEMPOTENCY_REGISTRY_LOCK = threading.Lock()
 
 
-def get_user_scoped_idempotency_registry() -> "UserScopedIdempotencyRegistry":
-    """Return the process-wide V2 reservation registry used by admission and execution."""
+def get_user_scoped_idempotency_registry(redis_client=None) -> "UserScopedIdempotencyRegistry":
+    """Return the process-wide V2 registry backed by shared Redis when available."""
     global _IDEMPOTENCY_REGISTRY_SINGLETON
     with _IDEMPOTENCY_REGISTRY_LOCK:
         if _IDEMPOTENCY_REGISTRY_SINGLETON is None:
-            _IDEMPOTENCY_REGISTRY_SINGLETON = UserScopedIdempotencyRegistry()
+            _IDEMPOTENCY_REGISTRY_SINGLETON = UserScopedIdempotencyRegistry(redis_client=redis_client)
+        elif redis_client is not None and _IDEMPOTENCY_REGISTRY_SINGLETON._redis is None:
+            _IDEMPOTENCY_REGISTRY_SINGLETON._redis = redis_client
+            _IDEMPOTENCY_REGISTRY_SINGLETON._redis_checked = True
         return _IDEMPOTENCY_REGISTRY_SINGLETON
 
 
