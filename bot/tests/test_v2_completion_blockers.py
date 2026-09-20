@@ -186,7 +186,15 @@ class TestCompletionBlockers(unittest.TestCase):
         self.assertIsNone(result)
 
     def test_limited_live_pipeline_requires_context_authorizer(self):
-        ctx = _trading_context(mode="limited_live", environment="production")
+        ctx = SimpleNamespace(
+            user_id="user-a",
+            trading_account_id="acct-a",
+            broker="kraken",
+            portfolio_id="portfolio-a",
+            request_id="request-a",
+            mode="limited_live",
+            environment="production",
+        )
         pipeline = SignalPipeline(
             compiler=MagicMock(),
             regime_engine=MagicMock(),
