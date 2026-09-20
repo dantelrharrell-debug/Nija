@@ -24,7 +24,7 @@ def _default_redis_client():
         if not redis_url:
             return None
         from bot.redis_runtime import connect_redis_with_fallback
-        client, _ = connect_redis_with_fallback(
+        connected = connect_redis_with_fallback(
             url=redis_url,
             decode_responses=True,
             socket_timeout=2,
@@ -33,7 +33,9 @@ def _default_redis_client():
             delay_s=0.0,
             log=lambda msg: logger.debug("V2 idempotency redis: %s", msg),
         )
-        return client
+        if isinstance(connected, tuple):
+            return connected[0] if connected else None
+        return connected
     except Exception as exc:
         logger.warning("V2 idempotency Redis unavailable: %s", exc)
         return None
