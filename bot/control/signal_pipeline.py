@@ -697,7 +697,6 @@ class SignalPipeline:
             strategy_instance_id=(
                 str(raw_signal.strategy or "").strip()
                 or str(decision_context.risk_profile_id or "").strip()
-                or str(decision_context.strategy_signal_id or "").strip()
                 or "v2_strategy"
             ),
             portfolio_id=decision_context.portfolio_id,

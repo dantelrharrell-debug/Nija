@@ -104,6 +104,51 @@ class TestPost2807Safety(unittest.TestCase):
         self.assertEqual(out["status"], "error")
         self.assertIsNone(registry.get_state(key))
 
+    def test_kraken_v366_open_positions_success_proves_margin_visibility(self):
+        broker = SimpleNamespace(connected=True)
+        with patch(
+            "bot.runtime_kraken_margin_canonical_coverage_v366_patch.fetch_margin_positions",
+            return_value=(True, {"ETH-USD": {"quantity": 0.1}}, "ok"),
+        ):
+            self.assertTrue(SignalBroadcaster._kraken_margin_visibility_proven(broker))
+
+    def test_kraken_v366_open_positions_error_fails_closed(self):
+        broker = SimpleNamespace(connected=True)
+        with patch(
+            "bot.runtime_kraken_margin_canonical_coverage_v366_patch.fetch_margin_positions",
+            return_value=(False, {}, "openpositions_rejected:EGeneral:Temporary lockout"),
+        ):
+            self.assertFalse(SignalBroadcaster._kraken_margin_visibility_proven(broker))
+
+    def test_connection_reset_without_order_id_stays_state_unknown(self):
+        broker = SimpleNamespace(broker_name="coinbase", connected=True, get_account_balance=lambda: 1000.0)
+        result = SimpleNamespace(success=False, order_id=None, error="connection reset by peer")
+        pipeline = SimpleNamespace(execute=lambda request: result)
+        key = "v2:connection-reset-test"
+        registry = get_user_scoped_idempotency_registry()
+        registry.release(key)
+        request_type = lambda **kwargs: SimpleNamespace(**kwargs)
+        with patch("bot.pipeline_order_submitter.assert_distributed_writer_authority", return_value=None), \
+             patch("bot.pipeline_order_submitter.get_execution_pipeline", return_value=pipeline), \
+             patch("bot.pipeline_order_submitter.PipelineRequest", request_type):
+            out = submit_market_order_via_pipeline(
+                broker, "BTC-USD", "buy", 10.0, metadata_override={"duplicate_key": key},
+            )
+        self.assertEqual(out["status"], "state_unknown")
+        self.assertEqual(registry.get_state(key), "state_unknown")
+
+    def test_missing_strategy_uses_stable_v2_scope_not_signal_uuid(self):
+        raw = RawSignal(
+            symbol="ETH-USD", side="buy", action="enter_long", size_usd=10,
+            confidence=.8, regime="trending", strategy="   ", approved=True,
+        )
+        dc = UserDecisionContext(
+            user_id="user-a", account_id="acct-a", broker="coinbase",
+            portfolio_id="pf-a", strategy_signal_id="random-signal-uuid", trade_id="trade",
+        )
+        tc = SignalPipeline._trading_context_from_decision_context(raw, dc)
+        self.assertEqual(tc.strategy_instance_id, "v2_strategy")
+
 
 if __name__ == "__main__":
     unittest.main()

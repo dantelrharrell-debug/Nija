@@ -508,19 +508,18 @@ def submit_market_order_via_pipeline(
             "dispatch_disabled", "dispatch.enabled=false", "internal_dispatch_failure",
             "writer", "fence", "validation", "risk reject", "rejected before dispatch",
         ))
-        unknown_after_dispatch = (not known_pre_submit) and any(token in error_text for token in (
-            "timeout", "timed out", "ack timeout", "state unknown", "state_unknown",
-            "reconcile timeout", "post-dispatch", "post_dispatch",
-        ))
         if broker_order_id:
             _finalize_v2_duplicate(metadata, "submitted_pending")
             status = "pending"
-        elif unknown_after_dispatch:
-            _finalize_v2_duplicate(metadata, "state_unknown")
-            status = "state_unknown"
-        else:
+        elif known_pre_submit:
+            # Release only when the pipeline proves the broker was never
+            # contacted. Every other no-order-id failure is submission-uncertain
+            # and must remain reserved until reconciliation proves otherwise.
             _finalize_v2_duplicate(metadata, "released")
             status = "error"
+        else:
+            _finalize_v2_duplicate(metadata, "state_unknown")
+            status = "state_unknown"
         return {
             "status": status,
             "error": result.error or "ExecutionPipeline rejected order",
