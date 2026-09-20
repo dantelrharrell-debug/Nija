@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
+from uuid import uuid4
 
 from bot.control.control_compiler import RawSignal
 from bot.control.decision_context import UserDecisionContext, get_user_scoped_idempotency_registry
@@ -22,14 +23,13 @@ class TestPost2807Safety(unittest.TestCase):
             broker="coinbase",
             portfolio_id="coinbase:acct-a",
             strategy_signal_id="post2807-safety",
-            trade_id=trade_id,
+            trade_id=f"{trade_id}-{uuid4().hex}",
             execution_mode="paper",
             environment="test",
         )
         allowed, handle = registry.reserve(context, symbol="BTC-USD", direction="long")
         if not allowed:
-            registry.release(handle)
-            allowed, handle = registry.reserve(context, symbol="BTC-USD", direction="long")
+            raise AssertionError("unique test reservation was unexpectedly denied")
         return registry, handle
 
     def test_mixed_trading_context_identity_rejected(self):
@@ -104,7 +104,7 @@ class TestPost2807Safety(unittest.TestCase):
         )
         self.assertIsNone(SignalPipeline._resolve_decision_context(raw, dc))
 
-    def test_dispatch_disabled_releases_reservation(self):
+    def test_dispatch_disabled_retains_reservation_for_owned_retry(self):
         broker = SimpleNamespace(broker_name="coinbase", connected=True, get_account_balance=lambda: 1000.0)
         result = SimpleNamespace(success=False, order_id=None, error="dispatch_disabled: dispatch.enabled=false")
         pipeline = SimpleNamespace(execute=lambda request: result)
