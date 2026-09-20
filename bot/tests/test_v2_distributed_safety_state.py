@@ -102,25 +102,25 @@ class TestDistributedV2Idempotency(unittest.TestCase):
         b = UserScopedIdempotencyRegistry(redis_client=redis)
         ctx = _decision()
 
-        first, key_a = a.reserve(ctx, symbol="BTC-USD", direction="long")
-        second, key_b = b.reserve(ctx, symbol="BTC-USD", direction="long")
+        first, handle_a = a.reserve(ctx, symbol="BTC-USD", direction="long")
+        second, handle_b = b.reserve(ctx, symbol="BTC-USD", direction="long")
 
         self.assertTrue(first)
         self.assertFalse(second)
-        self.assertEqual(key_a, key_b)
-        self.assertEqual(b.get_state(key_b), "submitted")
+        self.assertEqual(handle_a.key, handle_b.key)
+        self.assertEqual(b.get_state(handle_b), "submitted")
 
     def test_different_users_do_not_collide_across_workers(self):
         redis = _SharedFakeRedis()
         a = UserScopedIdempotencyRegistry(redis_client=redis)
         b = UserScopedIdempotencyRegistry(redis_client=redis)
 
-        ok_a, key_a = a.reserve(_decision(user="user-a", account="acct-a"), symbol="BTC-USD", direction="long")
-        ok_b, key_b = b.reserve(_decision(user="user-b", account="acct-b"), symbol="BTC-USD", direction="long")
+        ok_a, handle_a = a.reserve(_decision(user="user-a", account="acct-a"), symbol="BTC-USD", direction="long")
+        ok_b, handle_b = b.reserve(_decision(user="user-b", account="acct-b"), symbol="BTC-USD", direction="long")
 
         self.assertTrue(ok_a)
         self.assertTrue(ok_b)
-        self.assertNotEqual(key_a, key_b)
+        self.assertNotEqual(handle_a.key, handle_b.key)
 
     def test_state_unknown_remains_visible_to_other_worker(self):
         redis = _SharedFakeRedis()
@@ -128,11 +128,11 @@ class TestDistributedV2Idempotency(unittest.TestCase):
         b = UserScopedIdempotencyRegistry(redis_client=redis)
         ctx = _decision()
 
-        ok, key = a.reserve(ctx, symbol="BTC-USD", direction="long")
+        ok, handle = a.reserve(ctx, symbol="BTC-USD", direction="long")
         self.assertTrue(ok)
-        a.mark_state(key, "state_unknown")
+        a.mark_state(handle, "state_unknown")
 
-        self.assertEqual(b.get_state(key), "state_unknown")
+        self.assertEqual(b.get_state(handle), "state_unknown")
         retry, _ = b.reserve(ctx, symbol="BTC-USD", direction="long")
         self.assertFalse(retry)
 
@@ -142,9 +142,9 @@ class TestDistributedV2Idempotency(unittest.TestCase):
         b = UserScopedIdempotencyRegistry(redis_client=redis)
         ctx = _decision()
 
-        ok, key = a.reserve(ctx, symbol="BTC-USD", direction="long")
+        ok, handle = a.reserve(ctx, symbol="BTC-USD", direction="long")
         self.assertTrue(ok)
-        a.release(key)
+        a.release(handle)
 
         retry, _ = b.reserve(ctx, symbol="BTC-USD", direction="long")
         self.assertTrue(retry)
