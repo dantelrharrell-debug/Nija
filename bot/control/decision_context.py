@@ -521,6 +521,9 @@ class UserScopedIdempotencyRegistry:
         if redis_result is None:
             # Redis is unavailable. Shared-required reservations must never
             # downgrade to local authority.
+            # Local fallback must validate ownership, expiry and mutate state
+            # under one lock acquisition so a stale finalizer cannot race a
+            # newly-reserved token into being overwritten or revived.
             with self._lock:
                 shared_required = bool(
                     handle.shared_required
@@ -555,6 +558,19 @@ class UserScopedIdempotencyRegistry:
                     self._reservation_shared_required.pop(key, None)
                     logger.warning(
                         "V2 idempotency expired local finalizer refused state=%s",
+                if local_entry is None or self._is_expired(local_entry):
+                    if local_token == token:
+                        self._states.pop(key, None)
+                        self._reservation_tokens.pop(key, None)
+                        self._reservation_shared_required.pop(key, None)
+                    logger.warning(
+                        "V2 idempotency local state expired before transition state=%s fail_closed=true",
+                        normalized,
+                    )
+                    return False
+                if local_token != token:
+                    logger.warning(
+                        "V2 idempotency local owner mismatch state=%s fail_closed=true",
                         normalized,
                     )
                     return False
@@ -584,6 +600,22 @@ class UserScopedIdempotencyRegistry:
                 handle.shared_required
                 or self._reservation_shared_required.get(key, False)
             )
+                    "expires_at": time.monotonic() + ttl,
+                }
+                self._reservation_tokens[key] = token
+            logger.warning("V2 idempotency state mirrored locally state=%s", normalized)
+            return True
+        with self._lock:
+            # Redis CAS is authoritative. Mirror locally only when this process
+            # still owns the same token (or has no local mirror).
+            current_token = str(self._reservation_tokens.get(key, ""))
+            if current_token in {"", token}:
+                self._reservation_tokens[key] = token
+                self._states[key] = {
+                    "state": normalized,
+                    "token": token,
+                    "expires_at": time.monotonic() + ttl,
+                }
         return True
 
     def release(self, handle: IdempotencyReservationHandle) -> bool:
@@ -601,6 +633,8 @@ class UserScopedIdempotencyRegistry:
             return False
 
         if redis_result is None:
+            # Validate and remove atomically for local fallback. Expired handles
+            # are not allowed to delete or revive a replacement reservation.
             with self._lock:
                 shared_required = bool(
                     handle.shared_required
@@ -632,12 +666,22 @@ class UserScopedIdempotencyRegistry:
                     logger.warning(
                         "V2 idempotency expired local release refused"
                     )
+                if local_entry is None or self._is_expired(local_entry):
+                    if local_token == token:
+                        self._states.pop(key, None)
+                        self._reservation_tokens.pop(key, None)
+                        self._reservation_shared_required.pop(key, None)
+                    logger.warning("V2 idempotency local release expired fail_closed=true")
+                    return False
+                if local_token != token:
+                    logger.warning("V2 idempotency local release owner mismatch fail_closed=true")
                     return False
                 self._states.pop(key, None)
                 self._reservation_tokens.pop(key, None)
                 self._reservation_shared_required.pop(key, None)
             return True
 
+                return True
         self._forget_local_if_owned(key, token)
         return True
 
@@ -659,7 +703,11 @@ class UserScopedIdempotencyRegistry:
         with self._lock:
             entry = self._states.get(key)
             if entry is not None and self._is_expired(entry):
+                expired_token = str((entry or {}).get("token") or "")
                 self._states.pop(key, None)
+                if not expired_token or self._reservation_tokens.get(key) == expired_token:
+                    self._reservation_tokens.pop(key, None)
+                    self._reservation_shared_required.pop(key, None)
                 return None
             return None if entry is None else str(entry.get("state") or "")
 

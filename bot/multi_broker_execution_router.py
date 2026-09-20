@@ -477,6 +477,11 @@ class BrokerRoutingScore:
 
 
 class MultiBrokerExecutionRouter:
+    # BREAK_RETEST may run in backtest/paper/simulated modes, but real
+    # broker routing is intentionally fail-closed until this router binds and
+    # verifies both requested stop-loss and take-profit protection legs.
+    supports_v2_protected_entry = False
+
     """
     Routes trade orders to the correct broker and market based on asset class.
 
