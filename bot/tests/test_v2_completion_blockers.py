@@ -22,6 +22,7 @@ from bot.control.strategy_signal import StrategySignal
 from bot.control.trading_context import TradingContext
 from bot.feature_flags import FeatureFlag, FeatureFlagManager
 from bot.signal_broadcaster import SignalBroadcaster
+from bot.pipeline_order_submitter import _prepare_v2_duplicate_handoff
 
 
 class _FakeRedis:
@@ -385,6 +386,29 @@ class TestCompletionBlockers(unittest.TestCase):
         registry.mark_state(handle, "state_unknown")
         extended_remaining = redis._expires[redis_key] - time.monotonic()
         self.assertGreater(extended_remaining, 20.0)
+
+
+    def test_pre_dispatch_handoff_durably_extends_live_reservation(self):
+        redis = _FakeRedis()
+        registry = UserScopedIdempotencyRegistry(
+            redis_client=redis,
+            ttl_seconds=1.0,
+            uncertain_ttl_seconds=30.0,
+        )
+        ok, handle = registry.reserve(
+            _decision_context(mode="live", environment="production"),
+            symbol="SOL-USD",
+            direction="long",
+        )
+        self.assertTrue(ok)
+        with patch(
+            "bot.control.decision_context.get_user_scoped_idempotency_registry",
+            return_value=registry,
+        ):
+            self.assertTrue(_prepare_v2_duplicate_handoff(handle.to_metadata()))
+        self.assertEqual(registry.get_state(handle), "submitted_pending")
+        remaining = redis._expires[registry._redis_key(handle.key)] - time.monotonic()
+        self.assertGreater(remaining, 20.0)
 
     def test_stale_finalizer_cannot_overwrite_newer_reservation(self):
         redis = _FakeRedis()
