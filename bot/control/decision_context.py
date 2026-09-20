@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 
 logger = logging.getLogger("nija.control.decision_context")
+_REDIS_CAS_FALLBACK_LOCK = threading.Lock()
 
 
 def _default_redis_client():
@@ -335,7 +336,20 @@ class UserScopedIdempotencyRegistry:
                     px=ttl_ms,
                 ))
             if not hasattr(client, "eval"):
-                return None
+                # Minimal/mock Redis clients used in tests may not implement
+                # EVAL. A process-global lock preserves CAS semantics for
+                # those in-process backends; production Redis uses Lua below.
+                with _REDIS_CAS_FALLBACK_LOCK:
+                    current = client.get(redis_key)
+                    current_token, _current_state = self._decode_redis_state(current)
+                    if current_token != token:
+                        return False
+                    result = client.set(
+                        redis_key,
+                        self._encode_redis_state(token, state),
+                        px=ttl_ms,
+                    )
+                    return result is not False
             script = (
                 "local v=redis.call('GET',KEYS[1]); "
                 "if not v then return 0 end; "
@@ -358,7 +372,12 @@ class UserScopedIdempotencyRegistry:
             if hasattr(client, "compare_delete"):
                 return bool(client.compare_delete(redis_key, token))
             if not hasattr(client, "eval"):
-                return None
+                with _REDIS_CAS_FALLBACK_LOCK:
+                    current = client.get(redis_key)
+                    current_token, _current_state = self._decode_redis_state(current)
+                    if current_token != token:
+                        return False
+                    return bool(client.delete(redis_key))
             script = (
                 "local v=redis.call('GET',KEYS[1]); "
                 "if not v then return 0 end; "
