@@ -573,6 +573,8 @@ class SignalBroadcaster:
                     "error": "ExecutionPipeline submit helper unavailable; direct broker fallback blocked",
                 }
             else:
+                signal_metadata = signal.get("metadata") if isinstance(signal.get("metadata"), dict) else {}
+                duplicate_key = str(signal.get("duplicate_key") or signal_metadata.get("duplicate_key") or "").strip()
                 order = submit_market_order_via_pipeline(
                     broker=broker,
                     symbol=symbol,
@@ -580,6 +582,7 @@ class SignalBroadcaster:
                     quantity=size,
                     size_type="quote",
                     strategy="SignalBroadcaster",
+                    metadata_override={"duplicate_key": duplicate_key} if duplicate_key else None,
                 )
 
             status = str(order.get("status", "error") if order else "error").lower()
