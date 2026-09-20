@@ -67,6 +67,7 @@ class UserDecisionContext:
     trade_id: str
     risk_profile_id: Optional[str] = None
     execution_mode: Optional[str] = None
+    environment: Optional[str] = None
     asset_class: Optional[str] = None
     session_id: Optional[str] = None
     correlation_id: Optional[str] = None
@@ -82,6 +83,7 @@ class UserDecisionContext:
         strategy_signal_id: str,
         trade_id: str,
         execution_mode: Optional[str] = None,
+        environment: Optional[str] = None,
         asset_class: Optional[str] = None,
         session_id: Optional[str] = None,
         correlation_id: Optional[str] = None,
@@ -94,6 +96,7 @@ class UserDecisionContext:
             strategy_signal_id=strategy_signal_id,
             trade_id=trade_id,
             execution_mode=execution_mode,
+            environment=environment,
             asset_class=asset_class,
             session_id=session_id,
             correlation_id=correlation_id,
@@ -265,7 +268,10 @@ class UserScopedIdempotencyRegistry:
 
     @staticmethod
     def _requires_shared_authority(context: UserDecisionContext) -> bool:
-        return str(context.execution_mode or "").strip().lower() == "live"
+        return (
+            str(context.execution_mode or "").strip().lower() == "live"
+            and str(context.environment or "").strip().lower() in {"production", "prod"}
+        )
 
     def _get_redis(self):
         if not self._redis_checked:
