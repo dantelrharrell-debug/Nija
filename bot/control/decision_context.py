@@ -228,6 +228,14 @@ class IdempotencyReservationHandle:
     def to_metadata(self) -> Dict[str, str]:
         return {"duplicate_key": self.key, "duplicate_token": self.token}
 
+    @classmethod
+    def from_metadata(cls, metadata: Dict[str, Any]) -> "IdempotencyReservationHandle":
+        data = metadata or {}
+        return cls(
+            str(data.get("duplicate_key") or "").strip(),
+            str(data.get("duplicate_token") or "").strip(),
+        )
+
 
 class UserScopedIdempotencyRegistry:
     """Distributed duplicate guard scoped by user/account/broker/signal/direction.
@@ -455,7 +463,7 @@ class UserScopedIdempotencyRegistry:
             return
         normalized = str(state or "").strip()
         if normalized in {"released", "reconciled_rejected"}:
-            self.release(key)
+            self.release(handle)
             return
         ttl = self._uncertain_ttl_seconds if normalized in {"state_unknown", "submitted_pending", "pending"} else self._ttl_seconds
         redis_result = self._redis_compare_set(key, token, normalized, ttl)
