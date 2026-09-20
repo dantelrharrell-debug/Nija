@@ -18,6 +18,7 @@ from bot.control.decision_context import (
 )
 from bot.control.risk_engine import RiskEngine
 from bot.control.signal_pipeline import SignalPipeline
+from bot.control.trading_context import TradingContext
 from bot.control.strategy_detectors import (
     DetectorContext,
     MeanReversionDetector,
@@ -316,14 +317,28 @@ class TestV2MultiUserIsolation(unittest.TestCase):
 
     def test_trade_frequency_is_account_scoped(self):
         engine = RiskEngine()
+        tc_a = TradingContext(
+            user_id="user-a", trading_account_id="acct-a", broker="kraken",
+            broker_account_id="acct-a", strategy_instance_id="sig-frequency",
+            portfolio_id="kraken:acct-a", request_id="req-a-frequency",
+            correlation_id="corr-a-frequency", environment="test", mode="paper",
+            decision_id="decision-a-frequency",
+        )
+        tc_b = TradingContext(
+            user_id="user-b", trading_account_id="acct-b", broker="kraken",
+            broker_account_id="acct-b", strategy_instance_id="sig-frequency",
+            portfolio_id="kraken:acct-b", request_id="req-b-frequency",
+            correlation_id="corr-b-frequency", environment="test", mode="paper",
+            decision_id="decision-b-frequency",
+        )
         approved_a, _ = engine.validate_trade(
             symbol="BTC-USD",
             side="buy",
             size_usd=100.0,
             portfolio_value_usd=10_000.0,
             current_positions=[],
-            account_id="acct-a",
-            broker="kraken",
+            trading_context=tc_a,
+            enforce_isolation=True,
         )
         approved_b, _ = engine.validate_trade(
             symbol="BTC-USD",
@@ -331,8 +346,8 @@ class TestV2MultiUserIsolation(unittest.TestCase):
             size_usd=100.0,
             portfolio_value_usd=10_000.0,
             current_positions=[],
-            account_id="acct-b",
-            broker="kraken",
+            trading_context=tc_b,
+            enforce_isolation=True,
         )
         self.assertTrue(approved_a)
         self.assertTrue(approved_b)

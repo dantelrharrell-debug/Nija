@@ -197,13 +197,16 @@ class RiskEngine:
             return False, ["context_missing:missing_trading_context"]
         if trading_context is None:
             request_nonce = f"{threading.get_ident()}_{int(time.time() * 1000)}"
+            legacy_user = str(user_id or "").strip() or f"legacy_{request_nonce}"
+            legacy_account = str(account_id or "").strip() or f"legacy_account_{request_nonce}"
+            legacy_broker = str(broker or "").strip().lower() or "legacy"
             trading_context = TradingContext(
-                user_id=f"legacy_{request_nonce}",
-                trading_account_id=f"legacy_account_{request_nonce}",
-                broker="legacy",
-                broker_account_id=f"legacy_broker_account_{request_nonce}",
+                user_id=legacy_user,
+                trading_account_id=legacy_account,
+                broker=legacy_broker,
+                broker_account_id=legacy_account,
                 strategy_instance_id="legacy_strategy",
-                portfolio_id="legacy_portfolio",
+                portfolio_id=f"{legacy_broker}:{legacy_account}",
                 request_id=f"legacy_request_{request_nonce}",
                 correlation_id=f"legacy_correlation_{request_nonce}",
                 environment="legacy",

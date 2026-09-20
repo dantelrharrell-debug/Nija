@@ -291,6 +291,24 @@ def _plan_margin_entry(
     }
 
 
+def _finalize_v2_duplicate(metadata: Dict[str, Any], state: str) -> None:
+    """Finalize a held V2 reservation from authoritative submission outcome."""
+    duplicate_key = str((metadata or {}).get("duplicate_key") or "").strip()
+    if not duplicate_key:
+        return
+    try:
+        from bot.control.decision_context import get_user_scoped_idempotency_registry
+        registry = get_user_scoped_idempotency_registry()
+        if state == "released":
+            registry.release(duplicate_key)
+        else:
+            registry.mark_state(duplicate_key, state)
+    except Exception as exc:
+        # Fail closed: inability to finalize must not trigger a blind resubmit.
+        logger.error("V2_DUPLICATE_FINALIZE_FAILED key=%s state=%s error=%s", duplicate_key, state, exc)
+
+
+
 def submit_market_order_via_pipeline(
     broker: Any,
     symbol: str,
@@ -306,12 +324,15 @@ def submit_market_order_via_pipeline(
     metadata_override: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Submit a market order while preserving explicit account/exit context."""
+    incoming_metadata = dict(metadata_override or {})
     if get_execution_pipeline is None or PipelineRequest is None:
+        _finalize_v2_duplicate(incoming_metadata, "released")
         return {"status": "error", "error": "ExecutionPipeline unavailable", "symbol": symbol, "side": side}
 
     try:
         assert_distributed_writer_authority()
     except Exception as exc:
+        _finalize_v2_duplicate(incoming_metadata, "released")
         return {
             "status": "error",
             "error": f"DistributedWriterFence reject: {exc}",
@@ -337,6 +358,7 @@ def submit_market_order_via_pipeline(
         except Exception:
             price_hint_usd = 0.0
         if price_hint_usd <= 0:
+            _finalize_v2_duplicate(incoming_metadata, "released")
             return {
                 "status": "error",
                 "error": "Cannot compile base-size order without valid price hint",
@@ -400,7 +422,7 @@ def submit_market_order_via_pipeline(
     if base_quantity is not None and base_quantity > 0:
         metadata["base_quantity"] = base_quantity
         metadata["owned_base_qty"] = base_quantity
-    metadata.update(dict(metadata_override or {}))
+    metadata.update(incoming_metadata)
 
     request = PipelineRequest(
         strategy=strategy,
@@ -437,25 +459,33 @@ def submit_market_order_via_pipeline(
         else:
             result = get_execution_pipeline().execute(request)
     except Exception as exc:
+        _finalize_v2_duplicate(metadata, "state_unknown")
         return {
-            "status": "error", "error": str(exc), "symbol": symbol,
+            "status": "state_unknown", "error": str(exc), "symbol": symbol,
             "side": side_norm, "account_id": account_id, "leverage": leverage,
         }
 
+    broker_order_id = str(getattr(result, "order_id", "") or "").strip()
     if not result.success:
+        if broker_order_id:
+            _finalize_v2_duplicate(metadata, "submitted_pending")
+            status = "pending"
+        else:
+            _finalize_v2_duplicate(metadata, "released")
+            status = "error"
         return {
-            "status": "error",
+            "status": status,
             "error": result.error or "ExecutionPipeline rejected order",
             "symbol": symbol,
             "side": side_norm,
             "account_id": account_id,
+            "order_id": broker_order_id,
             "leverage": leverage,
             "margin": leverage > 1,
             "intent_type": resolved_intent,
         }
     fill_price = _float(getattr(result, "fill_price", 0.0))
     filled_size_usd = _float(getattr(result, "filled_size_usd", 0.0))
-    broker_order_id = str(getattr(result, "order_id", "") or "").strip()
 
     # A successful submission requires genuine acknowledgment evidence.  Never
     # fabricate an order ID or a fill: without a real fill price the caller must
@@ -467,8 +497,9 @@ def submit_market_order_via_pipeline(
             account_id, preferred_broker, symbol, side_norm,
             broker_order_id or "none", fill_price, filled_size_usd,
         )
+        _finalize_v2_duplicate(metadata, "submitted_pending" if broker_order_id else "state_unknown")
         return {
-            "status": "error",
+            "status": "pending" if broker_order_id else "state_unknown",
             "error": "unacknowledged_submission: no confirmed fill price returned by broker",
             "symbol": symbol,
             "side": side_norm,
@@ -492,6 +523,7 @@ def submit_market_order_via_pipeline(
     }
     if broker_order_id:
         payload["order_id"] = broker_order_id
+    _finalize_v2_duplicate(metadata, "reconciled_filled")
     return payload
 
 

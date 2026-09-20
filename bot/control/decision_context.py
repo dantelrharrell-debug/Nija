@@ -260,6 +260,19 @@ class UserScopedIdempotencyRegistry:
         return expires_at is not None and time.monotonic() >= float(expires_at)
 
 
+_IDEMPOTENCY_REGISTRY_SINGLETON: Optional["UserScopedIdempotencyRegistry"] = None
+_IDEMPOTENCY_REGISTRY_LOCK = threading.Lock()
+
+
+def get_user_scoped_idempotency_registry() -> "UserScopedIdempotencyRegistry":
+    """Return the process-wide V2 reservation registry used by admission and execution."""
+    global _IDEMPOTENCY_REGISTRY_SINGLETON
+    with _IDEMPOTENCY_REGISTRY_LOCK:
+        if _IDEMPOTENCY_REGISTRY_SINGLETON is None:
+            _IDEMPOTENCY_REGISTRY_SINGLETON = UserScopedIdempotencyRegistry()
+        return _IDEMPOTENCY_REGISTRY_SINGLETON
+
+
 @dataclass(frozen=True)
 class ProtectionVerificationResult:
     state: str
@@ -349,6 +362,7 @@ __all__ = [
     "UserDecisionContext",
     "UserPortfolioSnapshot",
     "UserScopedIdempotencyRegistry",
+    "get_user_scoped_idempotency_registry",
     "verify_exit_lifecycle",
     "verify_protection_after_fill",
 ]
