@@ -398,6 +398,14 @@ def _finalize_v2_duplicate(metadata: Dict[str, Any], state: str) -> bool:
 
 
 
+def _finalize_pre_submit_v2_duplicate(metadata: Dict[str, Any]) -> bool:
+    """Retain for broadcaster-managed retries; otherwise release proven pre-submit attempts."""
+    if _v2_duplicate_metadata_state(metadata) == "absent":
+        return True
+    retry_managed = bool((metadata or {}).get("duplicate_retry_managed", False))
+    return _finalize_v2_duplicate(metadata, "submitted" if retry_managed else "released")
+
+
 def _prepare_v2_duplicate_handoff(metadata: Dict[str, Any]) -> bool:
     """Durably extend a V2 reservation before any broker-dispatch-capable call."""
     metadata_state = _v2_duplicate_metadata_state(metadata)
@@ -477,13 +485,13 @@ def submit_market_order_via_pipeline(
         }
     request_type, pipeline_getter = _resolve_execution_pipeline_dependencies()
     if pipeline_getter is None or request_type is None:
-        _finalize_v2_duplicate(incoming_metadata, "submitted")
+        _finalize_pre_submit_v2_duplicate(incoming_metadata)
         return {"status": "error", "error": "ExecutionPipeline unavailable", "symbol": symbol, "side": side, "v2_pre_submit_proven": True}
 
     try:
         assert_distributed_writer_authority()
     except Exception as exc:
-        _finalize_v2_duplicate(incoming_metadata, "submitted")
+        _finalize_pre_submit_v2_duplicate(incoming_metadata)
         return {
             "status": "error",
             "error": f"DistributedWriterFence reject: {exc}",
@@ -509,7 +517,7 @@ def submit_market_order_via_pipeline(
         except Exception:
             price_hint_usd = 0.0
         if price_hint_usd <= 0:
-            _finalize_v2_duplicate(incoming_metadata, "submitted")
+            _finalize_pre_submit_v2_duplicate(incoming_metadata)
             return {
                 "status": "error",
                 "error": "Cannot compile base-size order without valid price hint",
@@ -651,7 +659,7 @@ def submit_market_order_via_pipeline(
             # Retain the same ownership token through broadcaster retries.
             # Revert to the short pre-dispatch TTL; release only after retries
             # are exhausted or the caller explicitly abandons the attempt.
-            _finalize_v2_duplicate(metadata, "submitted")
+            _finalize_pre_submit_v2_duplicate(metadata)
             status = "error"
         else:
             _finalize_v2_duplicate(metadata, "state_unknown")
