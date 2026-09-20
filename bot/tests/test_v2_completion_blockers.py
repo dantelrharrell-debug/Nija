@@ -110,6 +110,16 @@ class TestCompletionBlockers(unittest.TestCase):
             )
         self.assertFalse(ok)
 
+    def test_limited_live_missing_environment_also_requires_shared_idempotency(self):
+        with patch("bot.control.decision_context._default_redis_client", return_value=None):
+            registry = UserScopedIdempotencyRegistry(redis_client=None)
+            ok, _ = registry.reserve(
+                _decision_context(mode="limited_live", environment=None),
+                symbol="BTC-USD",
+                direction="long",
+            )
+        self.assertFalse(ok)
+
     def test_stale_registry_cannot_release_newer_reservation(self):
         redis = _FakeRedis()
         old = UserScopedIdempotencyRegistry(redis_client=redis, ttl_seconds=0.05)
@@ -170,6 +180,24 @@ class TestCompletionBlockers(unittest.TestCase):
             requested_size_usd=10.0,
         )
         self.assertIsNone(result)
+
+    def test_limited_live_pipeline_requires_context_authorizer(self):
+        ctx = _trading_context(mode="limited_live", environment="production")
+        pipeline = SignalPipeline(
+            compiler=MagicMock(),
+            regime_engine=MagicMock(),
+            risk_engine=MagicMock(),
+        )
+        raw = MagicMock()
+        raw.trading_context = ctx
+        raw.user_id = ctx.user_id
+        raw.account_id = ctx.trading_account_id
+        raw.broker = ctx.broker
+        raw.portfolio_id = ctx.portfolio_id
+        raw.strategy_signal_id = "sig"
+        raw.trade_id = ctx.request_id
+        # The authorization gate executes before financial-state processing.
+        self.assertIsNone(pipeline.process_signal(raw_signal=raw))
 
     def test_break_retest_is_compiler_compatible_with_trending_and_breakout(self):
         for regime in ("trending", "breakout"):
