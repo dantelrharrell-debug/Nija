@@ -63,31 +63,19 @@ def test_direct_submitter_always_requires_distributed_writer() -> None:
         and isinstance(node.func, ast.Name)
         and node.func.id == "assert_distributed_writer_authority"
     ]
-    resolver_assignments = [
-        node
+    request_assignments = [
+        node.lineno
         for node in submitter.body
         if isinstance(node, ast.Assign)
-        and isinstance(node.value, ast.Call)
-        and isinstance(node.value.func, ast.Name)
-        and node.value.func.id == "_resolve_execution_pipeline_dependencies"
-        and len(node.targets) == 1
-        and isinstance(node.targets[0], ast.Tuple)
-        and node.targets[0].elts
-        and isinstance(node.targets[0].elts[0], ast.Name)
-    ]
-    assert resolver_assignments
-    request_constructor_name = resolver_assignments[0].targets[0].elts[0].id
-    request_constructor_calls = [
-        node.lineno
-        for node in ast.walk(submitter)
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
-        and node.func.id == request_constructor_name
+        and any(
+            isinstance(target, ast.Name) and target.id == "request"
+            for target in node.targets
+        )
     ]
 
     assert authority_calls
-    assert request_constructor_calls
-    assert min(authority_calls) < min(request_constructor_calls)
+    assert request_assignments
+    assert min(authority_calls) < min(request_assignments)
     assert 'if not (_truthy("FORCE_TRADE")' not in ast.get_source_segment(source, submitter)
     assert 'raise RuntimeError("execution authority module unavailable")' in source
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import os
 from dataclasses import dataclass
 from typing import Dict, List, Optional, TYPE_CHECKING
@@ -510,11 +511,12 @@ class BreakRetestDetector(BaseDetector):
         avg_volume = _to_float(df["volume"].iloc[-(self.lookback + 2):-2].mean())
         breakout_volume = _to_float(breakout["volume"])
         volume_ok = (
-            avg_volume > 0
+            math.isfinite(avg_volume)
+            and math.isfinite(breakout_volume)
+            and avg_volume > 0
             and breakout_volume > 0
             and breakout_volume >= avg_volume * self.volume_factor
         )
-        volume_ok = avg_volume > 0 and breakout_volume > 0 and breakout_volume >= avg_volume * self.volume_factor
 
         breakout_close = _to_float(breakout["close"])
         retest_open = _to_float(retest["open"])

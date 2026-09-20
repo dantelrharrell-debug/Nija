@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
+from uuid import uuid4
 
 from bot.control.control_compiler import RawSignal
 from bot.control.decision_context import UserDecisionContext, get_user_scoped_idempotency_registry
@@ -14,23 +15,22 @@ from bot.signal_broadcaster import SignalBroadcaster
 
 class TestPost2807Safety(unittest.TestCase):
     @staticmethod
-    def _reserve(trade_id: str) -> tuple[str, str]:
+    def _reserve_duplicate_handle(trade_id: str):
+        registry = get_user_scoped_idempotency_registry()
         context = UserDecisionContext(
             user_id="user-a",
             account_id="acct-a",
             broker="coinbase",
             portfolio_id="coinbase:acct-a",
             strategy_signal_id="post2807-safety",
-            trade_id=trade_id,
+            trade_id=f"{trade_id}-{uuid4().hex}",
+            execution_mode="paper",
+            environment="test",
         )
-        allowed, key, token = get_user_scoped_idempotency_registry().reserve(
-            context,
-            symbol="BTC-USD",
-            direction="long",
-        )
+        allowed, handle = registry.reserve(context, symbol="BTC-USD", direction="long")
         if not allowed:
-            raise AssertionError("test reservation unexpectedly rejected")
-        return key, token
+            raise AssertionError("unique test reservation was unexpectedly denied")
+        return registry, handle
 
     def test_mixed_trading_context_identity_rejected(self):
         tc = TradingContext(
@@ -73,22 +73,19 @@ class TestPost2807Safety(unittest.TestCase):
 
     def test_ack_timeout_without_order_id_stays_state_unknown(self):
         broker = SimpleNamespace(broker_name="coinbase", connected=True, get_account_balance=lambda: 1000.0)
+        registry, handle = self._reserve_duplicate_handle("ack-timeout")
         result = SimpleNamespace(success=False, order_id=None, error="ACK timeout after dispatch")
         pipeline = SimpleNamespace(execute=lambda request: result)
         request_type = lambda **kwargs: SimpleNamespace(**kwargs)
-        key, token = self._reserve("ack-timeout")
         with patch("bot.pipeline_order_submitter.assert_distributed_writer_authority", return_value=None), \
              patch("bot.pipeline_order_submitter.get_execution_pipeline", return_value=pipeline), \
              patch("bot.pipeline_order_submitter.PipelineRequest", request_type):
             out = submit_market_order_via_pipeline(
                 broker, "BTC-USD", "buy", 10.0,
-                metadata_override={"duplicate_key": key, "duplicate_token": token},
+                metadata_override=handle.to_metadata(),
             )
         self.assertEqual(out["status"], "state_unknown")
-        self.assertEqual(
-            get_user_scoped_idempotency_registry().get_state(key),
-            "state_unknown",
-        )
+        self.assertEqual(registry.get_state(handle), "state_unknown")
 
     def test_scalar_portfolio_mismatch_rejected_with_explicit_decision_context(self):
         tc = TradingContext(
@@ -107,25 +104,21 @@ class TestPost2807Safety(unittest.TestCase):
         )
         self.assertIsNone(SignalPipeline._resolve_decision_context(raw, dc))
 
-    def test_dispatch_disabled_releases_reservation(self):
+    def test_dispatch_disabled_retains_reservation_for_owned_retry(self):
         broker = SimpleNamespace(broker_name="coinbase", connected=True, get_account_balance=lambda: 1000.0)
         result = SimpleNamespace(success=False, order_id=None, error="dispatch_disabled: dispatch.enabled=false")
         pipeline = SimpleNamespace(execute=lambda request: result)
-        key, token = self._reserve("pre-submit-denial")
-        registry = get_user_scoped_idempotency_registry()
+        registry, handle = self._reserve_duplicate_handle("pre-submit-denial")
         request_type = lambda **kwargs: SimpleNamespace(**kwargs)
         with patch("bot.pipeline_order_submitter.assert_distributed_writer_authority", return_value=None), \
              patch("bot.pipeline_order_submitter.get_execution_pipeline", return_value=pipeline), \
              patch("bot.pipeline_order_submitter.PipelineRequest", request_type):
             out = submit_market_order_via_pipeline(
-                broker,
-                "BTC-USD",
-                "buy",
-                10.0,
-                metadata_override={"duplicate_key": key, "duplicate_token": token},
+                broker, "BTC-USD", "buy", 10.0, metadata_override=handle.to_metadata(),
             )
         self.assertEqual(out["status"], "error")
-        self.assertIsNone(registry.get_state(key))
+        self.assertTrue(out["v2_pre_submit_proven"])
+        self.assertEqual(registry.get_state(handle), "submitted")
 
     def test_kraken_v366_open_positions_success_proves_margin_visibility(self):
         broker = SimpleNamespace(connected=True)
@@ -147,21 +140,16 @@ class TestPost2807Safety(unittest.TestCase):
         broker = SimpleNamespace(broker_name="coinbase", connected=True, get_account_balance=lambda: 1000.0)
         result = SimpleNamespace(success=False, order_id=None, error="connection reset by peer")
         pipeline = SimpleNamespace(execute=lambda request: result)
-        key, token = self._reserve("connection-reset")
-        registry = get_user_scoped_idempotency_registry()
+        registry, handle = self._reserve_duplicate_handle("connection-reset")
         request_type = lambda **kwargs: SimpleNamespace(**kwargs)
         with patch("bot.pipeline_order_submitter.assert_distributed_writer_authority", return_value=None), \
              patch("bot.pipeline_order_submitter.get_execution_pipeline", return_value=pipeline), \
              patch("bot.pipeline_order_submitter.PipelineRequest", request_type):
             out = submit_market_order_via_pipeline(
-                broker,
-                "BTC-USD",
-                "buy",
-                10.0,
-                metadata_override={"duplicate_key": key, "duplicate_token": token},
+                broker, "BTC-USD", "buy", 10.0, metadata_override=handle.to_metadata(),
             )
         self.assertEqual(out["status"], "state_unknown")
-        self.assertEqual(registry.get_state(key), "state_unknown")
+        self.assertEqual(registry.get_state(handle), "state_unknown")
 
     def test_missing_strategy_uses_stable_v2_scope_not_signal_uuid(self):
         raw = RawSignal(

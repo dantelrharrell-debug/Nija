@@ -102,15 +102,6 @@ class TestDistributedV2Idempotency(unittest.TestCase):
         b = UserScopedIdempotencyRegistry(redis_client=redis)
         ctx = _decision()
 
-        first, key_a, token_a = a.reserve(ctx, symbol="BTC-USD", direction="long")
-        second, key_b, token_b = b.reserve(ctx, symbol="BTC-USD", direction="long")
-
-        self.assertTrue(first)
-        self.assertFalse(second)
-        self.assertEqual(key_a, key_b)
-        self.assertTrue(token_a)
-        self.assertFalse(token_b)
-        self.assertEqual(b.get_state(key_b), "submitted")
         first, handle_a = a.reserve(ctx, symbol="BTC-USD", direction="long")
         second, handle_b = b.reserve(ctx, symbol="BTC-USD", direction="long")
 
@@ -124,12 +115,6 @@ class TestDistributedV2Idempotency(unittest.TestCase):
         a = UserScopedIdempotencyRegistry(redis_client=redis)
         b = UserScopedIdempotencyRegistry(redis_client=redis)
 
-        ok_a, key_a, _ = a.reserve(
-            _decision(user="user-a", account="acct-a"), symbol="BTC-USD", direction="long"
-        )
-        ok_b, key_b, _ = b.reserve(
-            _decision(user="user-b", account="acct-b"), symbol="BTC-USD", direction="long"
-        )
         ok_a, handle_a = a.reserve(_decision(user="user-a", account="acct-a"), symbol="BTC-USD", direction="long")
         ok_b, handle_b = b.reserve(_decision(user="user-b", account="acct-b"), symbol="BTC-USD", direction="long")
 
@@ -143,12 +128,6 @@ class TestDistributedV2Idempotency(unittest.TestCase):
         b = UserScopedIdempotencyRegistry(redis_client=redis)
         ctx = _decision()
 
-        ok, key, token = a.reserve(ctx, symbol="BTC-USD", direction="long")
-        self.assertTrue(ok)
-        a.mark_state(key, "state_unknown", token=token)
-
-        self.assertEqual(b.get_state(key), "state_unknown")
-        retry, _, _ = b.reserve(ctx, symbol="BTC-USD", direction="long")
         ok, handle = a.reserve(ctx, symbol="BTC-USD", direction="long")
         self.assertTrue(ok)
         a.mark_state(handle, "state_unknown")
@@ -163,20 +142,17 @@ class TestDistributedV2Idempotency(unittest.TestCase):
         b = UserScopedIdempotencyRegistry(redis_client=redis)
         ctx = _decision()
 
-        ok, key, token = a.reserve(ctx, symbol="BTC-USD", direction="long")
-        self.assertTrue(ok)
-        a.release(key, token=token)
         ok, handle = a.reserve(ctx, symbol="BTC-USD", direction="long")
         self.assertTrue(ok)
         a.release(handle)
 
-        retry, _, _ = b.reserve(ctx, symbol="BTC-USD", direction="long")
+        retry, _ = b.reserve(ctx, symbol="BTC-USD", direction="long")
         self.assertTrue(retry)
 
     def test_production_live_fails_closed_without_shared_backend(self):
         with patch("bot.control.decision_context._default_redis_client", return_value=None):
             registry = UserScopedIdempotencyRegistry(redis_client=None)
-            ok, _, _ = registry.reserve(
+            ok, _ = registry.reserve(
                 _decision(mode="live", environment="production"),
                 symbol="BTC-USD",
                 direction="long",

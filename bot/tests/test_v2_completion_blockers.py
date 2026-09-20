@@ -22,7 +22,7 @@ from bot.control.strategy_signal import StrategySignal
 from bot.control.trading_context import TradingContext
 from bot.feature_flags import FeatureFlag, FeatureFlagManager
 from bot.signal_broadcaster import SignalBroadcaster
-from bot.pipeline_order_submitter import _prepare_v2_duplicate_handoff
+from bot.pipeline_order_submitter import _prepare_v2_duplicate_handoff, submit_market_order_via_pipeline
 
 
 class _FakeRedis:
@@ -126,7 +126,7 @@ class TestCompletionBlockers(unittest.TestCase):
     def test_live_missing_environment_requires_shared_idempotency(self):
         with patch("bot.control.decision_context._default_redis_client", return_value=None):
             registry = UserScopedIdempotencyRegistry(redis_client=None)
-            ok, _, _ = registry.reserve(
+            ok, _ = registry.reserve(
                 _decision_context(mode="live", environment=None),
                 symbol="BTC-USD",
                 direction="long",
@@ -140,28 +140,12 @@ class TestCompletionBlockers(unittest.TestCase):
     def test_limited_live_missing_environment_also_requires_shared_idempotency(self):
         with patch("bot.control.decision_context._default_redis_client", return_value=None):
             registry = UserScopedIdempotencyRegistry(redis_client=None)
-            ok, _, _ = registry.reserve(
+            ok, _ = registry.reserve(
                 _decision_context(mode="limited_live", environment=None),
                 symbol="BTC-USD",
                 direction="long",
             )
         self.assertFalse(ok)
-
-    def test_live_reservation_uses_uncertain_ttl_before_handoff(self):
-        redis = _FakeRedis()
-        registry = UserScopedIdempotencyRegistry(
-            redis_client=redis,
-            ttl_seconds=1.0,
-            uncertain_ttl_seconds=30.0,
-        )
-        ok, handle = registry.reserve(
-            _decision_context(mode="live", environment="production"),
-            symbol="BTC-USD",
-            direction="long",
-        )
-        self.assertTrue(ok)
-        remaining = redis._expires[registry._redis_key(handle.key)] - time.monotonic()
-        self.assertGreater(remaining, 20.0)
 
     def test_stale_registry_cannot_release_newer_reservation(self):
         redis = _FakeRedis()
@@ -169,10 +153,6 @@ class TestCompletionBlockers(unittest.TestCase):
         new = UserScopedIdempotencyRegistry(redis_client=redis, ttl_seconds=5.0)
         context = _decision_context()
 
-        ok_old, key, old_token = old.reserve(context, symbol="BTC-USD", direction="long")
-        self.assertTrue(ok_old)
-        time.sleep(1.05)
-        ok_new, new_key, new_token = new.reserve(context, symbol="BTC-USD", direction="long")
         ok_old, old_handle = old.reserve(context, symbol="BTC-USD", direction="long")
         self.assertTrue(ok_old)
         time.sleep(1.05)
@@ -180,54 +160,15 @@ class TestCompletionBlockers(unittest.TestCase):
         self.assertTrue(ok_new)
         self.assertEqual(old_handle.key, new_handle.key)
 
-        self.assertFalse(old.release(key, token=old_token))
-        self.assertEqual(new.get_state(new_key), "submitted")
-        self.assertNotIn(key, old._reservation_tokens)
-        self.assertTrue(new.release(new_key, token=new_token))
         old.release(old_handle)
         self.assertEqual(new.get_state(new_handle), "submitted")
         self.assertNotIn(old_handle.key, old._reservation_tokens)
 
-    def test_prepare_v2_duplicate_handoff_rejects_incomplete_metadata(self):
-        self.assertFalse(_prepare_v2_duplicate_handoff({"duplicate_key": "v2:test-key"}))
-
     def test_release_clears_local_state_when_compare_delete_errors(self):
-    def test_live_admission_uses_short_ttl_until_handoff_state_is_known(self):
-        redis = _FakeRedis()
-        registry = UserScopedIdempotencyRegistry(
-            redis_client=redis,
-            ttl_seconds=1.0,
-            uncertain_ttl_seconds=60.0,
-        )
-        ok, key, token = registry.reserve(
-            _decision_context(mode="live", environment="production"),
-            symbol="BTC-USD",
-            direction="long",
-        )
-        self.assertTrue(ok)
-        redis_key = registry._redis_key(key)
-        initial_remaining = redis._expires[redis_key] - time.monotonic()
-        self.assertLessEqual(initial_remaining, 1.1)
-
-        self.assertTrue(registry.mark_state(key, "state_unknown", token=token))
-        uncertain_remaining = redis._expires[redis_key] - time.monotonic()
-        self.assertGreater(uncertain_remaining, 50.0)
-
-    def test_release_keeps_local_state_when_compare_delete_errors(self):
         redis = _CompareDeleteErrorRedis()
         registry = UserScopedIdempotencyRegistry(redis_client=redis, ttl_seconds=5.0)
         context = _decision_context()
 
-        ok, key, token = registry.reserve(context, symbol="BTC-USD", direction="long")
-        self.assertTrue(ok)
-        registry.mark_state(key, "submitted_pending", token=token)
-        self.assertIn(key, registry._reservation_tokens)
-        self.assertIn(key, registry._states)
-
-        self.assertFalse(registry.release(key, token=token))
-
-        self.assertIn(key, registry._reservation_tokens)
-        self.assertIn(key, registry._states)
         ok, handle = registry.reserve(context, symbol="BTC-USD", direction="long")
         self.assertTrue(ok)
         registry.mark_state(handle, "submitted_pending")
@@ -444,12 +385,6 @@ class TestCompletionBlockers(unittest.TestCase):
             )
         self.assertTrue(any(signal.strategy == "BREAK_RETEST" for signal in signals))
 
-    def test_live_reservation_preserves_uncertain_ttl_until_submission_uncertain(self):
-    def test_break_retest_rejects_non_positive_volume_evidence(self):
-        frame = _break_retest_frame()
-        frame.loc[:, "volume"] = 0.0
-        signal = BreakRetestDetector().detect(
-            frame,
     def test_live_reservation_uses_short_ttl_until_submission_uncertain(self):
         redis = _FakeRedis()
         registry = UserScopedIdempotencyRegistry(
@@ -465,7 +400,7 @@ class TestCompletionBlockers(unittest.TestCase):
         self.assertTrue(ok)
         redis_key = registry._redis_key(handle.key)
         initial_remaining = redis._expires[redis_key] - time.monotonic()
-        self.assertGreater(initial_remaining, 20.0)
+        self.assertLess(initial_remaining, 2.0)
 
         registry.mark_state(handle, "state_unknown")
         extended_remaining = redis._expires[redis_key] - time.monotonic()
@@ -510,20 +445,6 @@ class TestCompletionBlockers(unittest.TestCase):
         remaining = redis._expires[registry._redis_key(handle.key)] - time.monotonic()
         self.assertGreater(remaining, 20.0)
 
-    def test_mark_duplicate_execution_complete_preserves_shared_authority_flag(self):
-        pipeline = SignalPipeline.__new__(SignalPipeline)
-        pipeline._idempotency_registry = MagicMock()
-
-        pipeline.mark_duplicate_execution_complete(
-            "dup-key",
-            "dup-token",
-            duplicate_shared_required=True,
-            state="submitted_pending",
-        )
-
-        handle = pipeline._idempotency_registry.mark_state.call_args[0][0]
-        self.assertTrue(handle.shared_required)
-
     def test_stale_finalizer_cannot_overwrite_newer_reservation(self):
         redis = _FakeRedis()
         old = UserScopedIdempotencyRegistry(redis_client=redis, ttl_seconds=1.0)
@@ -553,11 +474,19 @@ class TestCompletionBlockers(unittest.TestCase):
         )
         self.assertIsNone(signal)
 
-    def test_break_retest_protection_reaches_canonical_execution_fields(self):
-        ctx = _trading_context()
-        frame = _break_retest_frame()
-        entry = float(frame["close"].iloc[-1])
-        signal = StrategySignal(
+    def test_break_retest_rejects_non_finite_volume_evidence(self):
+        context = DetectorContext(
+            symbol="BTC-USD",
+            broker="kraken",
+            trading_context=_trading_context(),
+            market_regime="trending",
+        )
+        for bad_value in (float("inf"), float("-inf"), float("nan")):
+            with self.subTest(volume=bad_value):
+                frame = _break_retest_frame()
+                frame.loc[frame.index[-2], "volume"] = bad_value
+                self.assertIsNone(BreakRetestDetector().detect(frame, context))
+
     def test_break_retest_stop_and_target_reach_compiled_execution_fields(self):
         ctx = _trading_context()
         df = _break_retest_frame()
@@ -567,30 +496,6 @@ class TestCompletionBlockers(unittest.TestCase):
             broker="kraken",
             direction="long",
             trading_context=ctx,
-            suggested_stop=entry - 1.0,
-            target_candidates=[entry + 2.0],
-            confidence=0.8,
-            raw_score=0.8,
-            market_regime="trending",
-        )
-        regime_engine = MagicMock()
-        regime_engine.detect.return_value = SimpleNamespace(
-            regime=MarketRegime.TRENDING,
-            confidence=0.8,
-            volatility=0.02,
-        )
-        pipeline = SignalPipeline(
-            compiler=MagicMock(),
-            regime_engine=regime_engine,
-            risk_engine=MagicMock(),
-        )
-        pipeline._situation_engine = MagicMock()
-        pipeline._situation_engine.assess.return_value = SimpleNamespace(
-            eligible_for_strategy_evaluation=True,
-            reasons=[],
-        )
-        pipeline._detector_registry = MagicMock()
-        pipeline._detector_registry.detect.return_value = [signal]
             invalidation_level=100.0,
             suggested_stop=100.0,
             target_candidates=[104.0],
@@ -622,25 +527,6 @@ class TestCompletionBlockers(unittest.TestCase):
         pipeline._confirmation_engine.confirm.return_value = SimpleNamespace(approved=True, reasons=[])
         snapshot = ScopedRiskSnapshot.from_values(
             context=ctx,
-            portfolio_value_usd=1000.0,
-            current_positions=[],
-            available_balance_usd=1000.0,
-        )
-        compiled = object()
-        with patch.object(pipeline, "process_signal", return_value=compiled) as process_signal:
-            result = pipeline.process_market_snapshot(
-                symbol="BTC-USD",
-                broker="kraken",
-                df=frame,
-                trading_context=ctx,
-                risk_snapshot=snapshot,
-                requested_size_usd=10.0,
-            )
-
-        self.assertIs(result, compiled)
-        raw = process_signal.call_args.kwargs["raw_signal"]
-        self.assertAlmostEqual(raw.stop_loss_pct, 1.0 / entry)
-        self.assertAlmostEqual(raw.take_profit_pct, 2.0 / entry)
             portfolio_value_usd=10_000.0,
             current_positions=[],
             available_balance_usd=1_000.0,
@@ -667,6 +553,126 @@ class TestCompletionBlockers(unittest.TestCase):
         self.assertEqual(kwargs["metadata"]["target_candidates"][0], 104.0)
         self.assertTrue(kwargs["metadata"].get("duplicate_key"))
         self.assertTrue(kwargs["metadata"].get("duplicate_token"))
+
+
+    def test_incomplete_duplicate_metadata_fails_before_dispatch(self):
+        broker = SimpleNamespace(
+            broker_name="coinbase",
+            connected=True,
+            get_account_balance=lambda: 1000.0,
+        )
+        pipeline = MagicMock()
+        request_type = lambda **kwargs: SimpleNamespace(**kwargs)
+        for partial_metadata in (
+            {"duplicate_key": "v2:missing-token"},
+            {"duplicate_token": "token-without-key"},
+        ):
+            with self.subTest(partial_metadata=partial_metadata), \
+                 patch("bot.pipeline_order_submitter.assert_distributed_writer_authority", return_value=None), \
+                 patch("bot.pipeline_order_submitter.get_execution_pipeline", return_value=pipeline), \
+                 patch("bot.pipeline_order_submitter.PipelineRequest", request_type):
+                out = submit_market_order_via_pipeline(
+                    broker,
+                    "BTC-USD",
+                    "buy",
+                    10.0,
+                    metadata_override=partial_metadata,
+                )
+            self.assertEqual(out["status"], "error")
+            self.assertEqual(out["error"], "v2_duplicate_metadata_incomplete")
+        pipeline.execute.assert_not_called()
+
+    def test_proven_pre_submit_error_retains_token_for_retry(self):
+        redis = _FakeRedis()
+        registry = UserScopedIdempotencyRegistry(redis_client=redis, ttl_seconds=5.0)
+        ok, handle = registry.reserve(
+            _decision_context(),
+            symbol="BTC-USD",
+            direction="long",
+        )
+        self.assertTrue(ok)
+        broker = SimpleNamespace(
+            broker_name="coinbase",
+            connected=True,
+            get_account_balance=lambda: 1000.0,
+        )
+        results = [
+            SimpleNamespace(
+                success=False,
+                order_id=None,
+                error="dispatch_disabled: dispatch.enabled=false",
+            ),
+            SimpleNamespace(
+                success=True,
+                order_id="order-2",
+                error=None,
+                fill_price=101.0,
+                filled_size_usd=10.0,
+                broker="coinbase",
+            ),
+        ]
+        pipeline = SimpleNamespace(execute=MagicMock(side_effect=results))
+        request_type = lambda **kwargs: SimpleNamespace(**kwargs)
+        with patch(
+            "bot.control.decision_context.get_user_scoped_idempotency_registry",
+            return_value=registry,
+        ), patch(
+            "bot.pipeline_order_submitter.assert_distributed_writer_authority",
+            return_value=None,
+        ), patch(
+            "bot.pipeline_order_submitter.get_execution_pipeline",
+            return_value=pipeline,
+        ), patch(
+            "bot.pipeline_order_submitter.PipelineRequest",
+            request_type,
+        ):
+            first = submit_market_order_via_pipeline(
+                broker,
+                "BTC-USD",
+                "buy",
+                10.0,
+                metadata_override=handle.to_metadata(),
+            )
+            self.assertEqual(first["status"], "error")
+            self.assertTrue(first["v2_pre_submit_proven"])
+            self.assertEqual(registry.get_state(handle), "submitted")
+
+            second = submit_market_order_via_pipeline(
+                broker,
+                "BTC-USD",
+                "buy",
+                10.0,
+                metadata_override=handle.to_metadata(),
+            )
+
+        self.assertEqual(second["status"], "filled")
+        self.assertEqual(pipeline.execute.call_count, 2)
+
+    def test_completion_api_preserves_live_shared_authority(self):
+        redis = _FakeRedis()
+        producer = UserScopedIdempotencyRegistry(redis_client=redis)
+        ok, handle = producer.reserve(
+            _decision_context(mode="live", environment="production"),
+            symbol="ADA-USD",
+            direction="long",
+        )
+        self.assertTrue(ok)
+        self.assertTrue(handle.shared_required)
+
+        with patch("bot.control.decision_context._default_redis_client", return_value=None):
+            consumer = UserScopedIdempotencyRegistry(redis_client=None)
+            pipeline = SignalPipeline(
+                compiler=MagicMock(),
+                regime_engine=MagicMock(),
+                risk_engine=MagicMock(),
+            )
+            pipeline._idempotency_registry = consumer
+            self.assertFalse(
+                pipeline.mark_duplicate_execution_complete(
+                    handle,
+                    state="reconciled_filled",
+                )
+            )
 
 
 

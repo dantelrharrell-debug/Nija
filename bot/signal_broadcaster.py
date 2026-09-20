@@ -53,6 +53,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import math
 import os
 import random
 import threading
@@ -473,6 +474,27 @@ class SignalBroadcaster:
             )
         return decisions
 
+    @staticmethod
+    def _release_v2_reservation_from_signal(signal: Dict[str, Any]) -> bool:
+        """Release a proven pre-dispatch reservation only with complete ownership metadata."""
+        signal_metadata = signal.get("metadata") if isinstance(signal.get("metadata"), dict) else {}
+        merged = dict(signal_metadata)
+        for key in ("duplicate_key", "duplicate_token", "duplicate_shared_required"):
+            if key in signal:
+                merged[key] = signal.get(key)
+        try:
+            from bot.control.decision_context import (
+                IdempotencyReservationHandle,
+                get_user_scoped_idempotency_registry,
+            )
+            handle = IdempotencyReservationHandle.from_metadata(merged)
+            if not handle:
+                return False
+            return bool(get_user_scoped_idempotency_registry().release(handle))
+        except Exception as exc:
+            logger.error("V2_DUPLICATE_RELEASE_AFTER_RETRY_FAILED error=%s", exc)
+            return False
+
     def _execute_with_retry(
         self,
         account: AccountRecord,
@@ -497,8 +519,15 @@ class SignalBroadcaster:
             capital_manager=capital_manager,
         )
 
-        # Don't retry skipped orders or successful fills
+        # Don't retry skipped orders or successful fills.  If the only attempt
+        # ended in a proven pre-dispatch error, explicitly abandon the held
+        # reservation so a future fresh decision can reserve it again.
         if result.status != "error" or cfg.max_retries <= 0:
+            if (
+                result.status == "error"
+                and bool((result.order_result or {}).get("v2_pre_submit_proven"))
+            ):
+                self._release_v2_reservation_from_signal(signal)
             return result
 
         delay = cfg.base_delay_s
@@ -530,7 +559,10 @@ class SignalBroadcaster:
 
             delay *= cfg.backoff_factor
 
-        # All retries exhausted
+        # All retries exhausted. Release only if the final attempt is proven
+        # pre-dispatch; uncertain/pending broker outcomes remain reserved.
+        if bool((result.order_result or {}).get("v2_pre_submit_proven")):
+            self._release_v2_reservation_from_signal(signal)
         result.retry_exhausted = True
         logger.error(
             "[Broadcaster] all %d retries exhausted for account=%s %s %s — final error: %s",
@@ -561,24 +593,15 @@ class SignalBroadcaster:
             size = round(size, 2)
 
             signal_metadata = signal.get("metadata") if isinstance(signal.get("metadata"), dict) else {}
-            duplicate_key = str(signal.get("duplicate_key") or signal_metadata.get("duplicate_key") or "").strip()
-            duplicate_token = str(
-                signal.get("duplicate_token") or signal_metadata.get("duplicate_token") or ""
-            ).strip()
-            if bool(duplicate_key) != bool(duplicate_token):
-                return BroadcastResult(
-                    account_id=account.account_id,
-                    symbol=symbol,
-                    side=side,
-                    size_usd=size,
-                    status="error",
-                    error="incomplete_v2_reservation_handle",
+            duplicate_metadata_present = any(
+                field_name in signal or field_name in signal_metadata
+                for field_name in (
+                    "duplicate_key",
+                    "duplicate_token",
+                    "duplicate_shared_required",
                 )
-
-            if size <= 0:
-                if duplicate_key and duplicate_token:
-                    from bot.control.decision_context import get_user_scoped_idempotency_registry
-                    get_user_scoped_idempotency_registry().release(duplicate_key, token=duplicate_token)
+            )
+            duplicate_key = str(signal.get("duplicate_key") or signal_metadata.get("duplicate_key") or "").strip()
             duplicate_token = str(signal.get("duplicate_token") or signal_metadata.get("duplicate_token") or "").strip()
             raw_shared_required = signal.get(
                 "duplicate_shared_required",
@@ -589,6 +612,41 @@ class SignalBroadcaster:
                 if isinstance(raw_shared_required, bool)
                 else str(raw_shared_required or "").strip().lower() in {"1", "true", "yes", "on"}
             )
+            strategy = str(signal.get("strategy") or signal_metadata.get("strategy") or "SignalBroadcaster")
+            protection: Dict[str, float] = {}
+            for field_name in ("stop_loss_pct", "take_profit_pct"):
+                raw_value = signal.get(field_name)
+                if raw_value is None:
+                    raw_value = signal_metadata.get(field_name)
+                if raw_value is None:
+                    continue
+                try:
+                    parsed = float(raw_value)
+                except (TypeError, ValueError):
+                    parsed = float("nan")
+                if not math.isfinite(parsed) or parsed <= 0.0:
+                    return BroadcastResult(
+                        account_id=account.account_id,
+                        symbol=symbol,
+                        side=side,
+                        size_usd=size,
+                        status="error",
+                        error=f"invalid_v2_protection:{field_name}",
+                        order_result={"v2_pre_submit_proven": True},
+                    )
+                protection[field_name] = parsed
+            if strategy.strip().upper() == "BREAK_RETEST" and set(protection) != {
+                "stop_loss_pct", "take_profit_pct"
+            }:
+                return BroadcastResult(
+                    account_id=account.account_id,
+                    symbol=symbol,
+                    side=side,
+                    size_usd=size,
+                    status="error",
+                    error="break_retest_protection_required",
+                    order_result={"v2_pre_submit_proven": True},
+                )
 
             if size <= 0:
                 if duplicate_key and duplicate_token:
@@ -616,8 +674,6 @@ class SignalBroadcaster:
 
             if submit_market_order_via_pipeline is None:
                 if duplicate_key and duplicate_token:
-                    from bot.control.decision_context import get_user_scoped_idempotency_registry
-                    get_user_scoped_idempotency_registry().release(duplicate_key, token=duplicate_token)
                     from bot.control.decision_context import (
                         IdempotencyReservationHandle,
                         get_user_scoped_idempotency_registry,
@@ -636,19 +692,16 @@ class SignalBroadcaster:
                     side=side,
                     quantity=size,
                     size_type="quote",
-                    strategy="SignalBroadcaster",
-                    metadata_override={
-                        "duplicate_key": duplicate_key,
-                        "duplicate_token": duplicate_token,
-                    } if duplicate_key and duplicate_token else None,
+                    strategy=strategy,
                     metadata_override=(
                         {
                             "duplicate_key": duplicate_key,
                             "duplicate_token": duplicate_token,
                             "duplicate_shared_required": bool(duplicate_shared_required),
+                            **protection,
                         }
-                        if duplicate_key and duplicate_token
-                        else None
+                        if duplicate_metadata_present
+                        else (protection or None)
                     ),
                 )
 
