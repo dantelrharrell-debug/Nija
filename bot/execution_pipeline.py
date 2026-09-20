@@ -1098,6 +1098,39 @@ class ExecutionPipeline:
             latency_ms=(time.monotonic() - t_start) * 1000,
         )
 
+    @staticmethod
+    def _requires_verified_entry_protection(request: PipelineRequest) -> bool:
+        """Return True when an entry must not dispatch without bound SL/TP support."""
+        strategy = str(getattr(request, "strategy", "") or "").strip().upper()
+        intent = str(getattr(request, "intent_type", "") or "").strip().lower()
+        reduce_only = bool(getattr(request, "reduce_only", False))
+        if strategy != "BREAK_RETEST" or intent != "entry" or reduce_only:
+            return False
+        try:
+            stop = float(getattr(request, "stop_loss_pct", 0.0) or 0.0)
+            target = float(getattr(request, "take_profit_pct", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            return True
+        return stop > 0.0 and target > 0.0
+
+    @staticmethod
+    def _router_supports_verified_entry_protection(router: Any, request: PipelineRequest) -> bool:
+        """Require an explicit router capability before a protected entry may dispatch."""
+        if router is None:
+            return False
+        capability = getattr(router, "supports_v2_protected_entry", False)
+        if callable(capability):
+            try:
+                return bool(capability(request))
+            except TypeError:
+                try:
+                    return bool(capability())
+                except Exception:
+                    return False
+            except Exception:
+                return False
+        return bool(capability)
+
     def execute(self, request: PipelineRequest) -> PipelineResult:
         """Route an order through the TradeThrottler gate then to execution.
 
@@ -2257,8 +2290,19 @@ class ExecutionPipeline:
             finally:
                 pool.shutdown(wait=False, cancel_futures=True)
 
+        protected_entry_required = self._requires_verified_entry_protection(request)
+        multi_router = self._multi_router
+        if protected_entry_required and multi_router is not None:
+            if not self._router_supports_verified_entry_protection(multi_router, request):
+                logger.error(
+                    "ENTRY_PROTECTION_ROUTE_BLOCKED strategy=%s router=multi symbol=%s fail_closed=true",
+                    request.strategy,
+                    request.symbol,
+                )
+                multi_router = None
+
         # --- MultiBrokerExecutionRouter (preferred for multi-venue) ---
-        if self._multi_router is not None:
+        if multi_router is not None:
             try:
                 from bot.multi_broker_execution_router import RouteRequest  # type: ignore
             except ImportError:
@@ -2322,7 +2366,7 @@ class ExecutionPipeline:
                     )
 
                     def _do_multi_route():
-                        res = self._multi_router.route(route_req)
+                        res = multi_router.route(route_req)
                         return PipelineResult(
                             success=res.success,
                             symbol=request.symbol,
@@ -2342,8 +2386,18 @@ class ExecutionPipeline:
                         "ExecutionPipeline: multi_router failed (%s), trying fallback", exc
                     )
 
+        single_router = self._router
+        if protected_entry_required and single_router is not None:
+            if not self._router_supports_verified_entry_protection(single_router, request):
+                logger.error(
+                    "ENTRY_PROTECTION_ROUTE_BLOCKED strategy=%s router=single symbol=%s fail_closed=true",
+                    request.strategy,
+                    request.symbol,
+                )
+                single_router = None
+
         # --- ExecutionRouter (single-venue fallback) ---
-        if self._router is not None:
+        if single_router is not None:
             try:
                 from bot.execution_router import OrderRequest  # type: ignore
             except ImportError:
@@ -2393,7 +2447,7 @@ class ExecutionPipeline:
                     )
 
                     def _do_single_route():
-                        res = self._router.execute(order_req)
+                        res = single_router.execute(order_req)
                         return PipelineResult(
                             success=res.success,
                             symbol=request.symbol,
@@ -2417,6 +2471,21 @@ class ExecutionPipeline:
                         error=str(exc),
                         latency_ms=(time.monotonic() - t_start) * 1000,
                     )
+
+        if protected_entry_required:
+            error = (
+                "entry_protection_unavailable: BREAK_RETEST entry requires a router "
+                "that proves stop-loss/take-profit protection support"
+            )
+            logger.error(error)
+            return PipelineResult(
+                success=False,
+                symbol=request.symbol,
+                side=request.side,
+                size_usd=request.size_usd,
+                error=error,
+                latency_ms=(time.monotonic() - t_start) * 1000,
+            )
 
         # No router available
         error = "ExecutionPipeline: no execution router available"

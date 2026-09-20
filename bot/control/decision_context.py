@@ -521,6 +521,19 @@ class UserScopedIdempotencyRegistry:
                 normalized,
             )
             return False
+        if redis_result is None:
+            with self._lock:
+                local_entry = self._states.get(key)
+                local_token = str(
+                    (local_entry or {}).get("token")
+                    or self._reservation_tokens.get(key, "")
+                )
+            if local_token != token:
+                logger.warning(
+                    "V2 idempotency local owner mismatch state=%s fail_closed=true",
+                    normalized,
+                )
+                return False
         with self._lock:
             self._states[key] = {
                 "state": normalized,
@@ -549,6 +562,16 @@ class UserScopedIdempotencyRegistry:
         if redis_result is None and shared_required:
             logger.critical("V2 idempotency release not durable; shared authority unchanged")
             return False
+        if redis_result is None:
+            with self._lock:
+                local_entry = self._states.get(key)
+                local_token = str(
+                    (local_entry or {}).get("token")
+                    or self._reservation_tokens.get(key, "")
+                )
+            if local_token != token:
+                logger.warning("V2 idempotency local release owner mismatch fail_closed=true")
+                return False
         self._forget_local_if_owned(key, token)
         return True
 
