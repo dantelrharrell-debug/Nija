@@ -630,7 +630,7 @@ class MultiBrokerExecutionRouter:
         broker = metadata.get("broker_client")
         if broker is None:
             return False
-        declared = bool(getattr(broker, "supports_atomic_protected_entry", False))
+        declared = getattr(broker, "supports_atomic_protected_entry", False) is True
         submit = getattr(broker, "place_market_order_with_protection", None)
         if not declared or not callable(submit):
             return False
@@ -1630,7 +1630,7 @@ class MultiBrokerExecutionRouter:
         ).strip().lower() in {"exit", "reduce"}
 
         if protection_required and not closing_position:
-            declared = bool(getattr(broker, "supports_atomic_protected_entry", False))
+            declared = getattr(broker, "supports_atomic_protected_entry", False) is True
             submit = getattr(broker, "place_market_order_with_protection", None)
             if not declared or not callable(submit):
                 raise _InternalDispatchFailure(
@@ -1729,6 +1729,15 @@ class MultiBrokerExecutionRouter:
             return float(result[0] or 0.0), float(result[1] or size_usd)
         if not isinstance(result, dict):
             raise RuntimeError(f"Unsupported broker order response: {result!r}")
+
+        if (
+            protection_required
+            and not closing_position
+            and result.get("protection_verified") is not True
+        ):
+            raise RuntimeError(
+                "protected_entry_unverified: broker did not prove atomic SL/TP protection"
+            )
 
         status = str(result.get("status") or result.get("state") or "").strip().lower()
         if status in {
