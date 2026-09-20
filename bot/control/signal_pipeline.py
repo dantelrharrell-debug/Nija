@@ -143,7 +143,7 @@ class SignalPipeline:
         self._redis         = redis_client
         self._context_authorizer = context_authorizer
         self._lock          = threading.Lock()
-        self._idempotency_registry = get_user_scoped_idempotency_registry()
+        self._idempotency_registry = get_user_scoped_idempotency_registry(redis_client)
 
         # Session counters
         self._total:    int = 0
