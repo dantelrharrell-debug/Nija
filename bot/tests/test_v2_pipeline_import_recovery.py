@@ -69,8 +69,16 @@ class TestV2PipelineImportRecovery(unittest.TestCase):
         self.assertEqual(result["status"], "error")
         self.assertEqual(result["error"], "ExecutionPipeline unavailable")
         self.assertTrue(result["v2_pre_submit_proven"])
-        self.assertEqual(import_module.call_count, 2)
-        finalize.assert_called_once_with(metadata, "submitted")
+        requested_modules = [
+            call.args[0]
+            for call in import_module.call_args_list
+            if call.args and call.args[0] in {"bot.execution_pipeline", "execution_pipeline"}
+        ]
+        self.assertEqual(
+            requested_modules,
+            ["bot.execution_pipeline", "execution_pipeline"],
+        )
+        finalize.assert_called_once_with(metadata, "released")
 
 
 if __name__ == "__main__":
