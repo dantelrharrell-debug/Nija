@@ -222,6 +222,13 @@ class TestPost2823FinalSafety(unittest.TestCase):
             self.assertNotIn(handle.key, registry._reservation_tokens)
 
 
+    def test_router_capability_flags_preserve_class_docstrings(self):
+        self.assertIsInstance(ExecutionRouter.__doc__, str)
+        self.assertIn("Smart Order Router", ExecutionRouter.__doc__)
+        self.assertIsInstance(MultiBrokerExecutionRouter.__doc__, str)
+        self.assertIn("Routes trade orders", MultiBrokerExecutionRouter.__doc__)
+
+
 
 if __name__ == "__main__":
     unittest.main()
