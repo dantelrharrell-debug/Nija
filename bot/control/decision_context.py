@@ -241,6 +241,7 @@ class UserScopedIdempotencyRegistry:
         self._redis = redis_client
         self._redis_checked = redis_client is not None
         self._states: Dict[str, Dict[str, Any]] = {}
+        self._reservation_tokens: Dict[str, str] = {}
 
     @staticmethod
     def build_key(context: UserDecisionContext, *, symbol: str, direction: str) -> str:
@@ -268,10 +269,11 @@ class UserScopedIdempotencyRegistry:
 
     @staticmethod
     def _requires_shared_authority(context: UserDecisionContext) -> bool:
-        return (
-            str(context.execution_mode or "").strip().lower() == "live"
-            and str(context.environment or "").strip().lower() in {"production", "prod"}
-        )
+        mode = str(context.execution_mode or "").strip().lower()
+        environment = str(context.environment or "").strip().lower()
+        # LIVE with an omitted environment is treated as production. A caller
+        # must explicitly name a non-production environment to use local state.
+        return mode == "live" and environment in {"", "production", "prod"}
 
     def _get_redis(self):
         if not self._redis_checked:
@@ -281,26 +283,100 @@ class UserScopedIdempotencyRegistry:
                     self._redis_checked = True
         return self._redis
 
-    def _redis_set_state(self, key: str, state: str, ttl_seconds: float, *, nx: bool = False) -> Optional[bool]:
+    @staticmethod
+    def _encode_redis_state(token: str, state: str) -> str:
+        return f"{token}|{state}"
+
+    @staticmethod
+    def _decode_redis_state(value: Any) -> Tuple[str, str]:
+        if isinstance(value, bytes):
+            value = value.decode("utf-8", errors="replace")
+        raw = str(value or "")
+        token, sep, state = raw.partition("|")
+        if not sep:
+            return "", raw
+        return token, state
+
+    def _redis_reserve(self, key: str, token: str, ttl_seconds: float) -> Optional[bool]:
         client = self._get_redis()
         if client is None:
             return None
         try:
             result = client.set(
                 self._redis_key(key),
-                state,
-                nx=nx,
+                self._encode_redis_state(token, "submitted"),
+                nx=True,
                 px=max(1, int(ttl_seconds * 1000)),
             )
             return bool(result)
         except Exception as exc:
-            logger.error("V2 idempotency Redis state write failed state=%s error=%s", state, type(exc).__name__)
+            logger.error("V2 idempotency Redis reserve failed error=%s", type(exc).__name__)
+            return None
+
+    def _redis_compare_set(
+        self,
+        key: str,
+        token: str,
+        state: str,
+        ttl_seconds: float,
+    ) -> Optional[bool]:
+        client = self._get_redis()
+        if client is None:
+            return None
+        redis_key = self._redis_key(key)
+        ttl_ms = max(1, int(ttl_seconds * 1000))
+        try:
+            if hasattr(client, "compare_set"):
+                return bool(client.compare_set(
+                    redis_key,
+                    token,
+                    self._encode_redis_state(token, state),
+                    px=ttl_ms,
+                ))
+            if not hasattr(client, "eval"):
+                return None
+            script = (
+                "local v=redis.call('GET',KEYS[1]); "
+                "if not v then return 0 end; "
+                "local p=ARGV[1]..'|'; "
+                "if string.sub(v,1,string.len(p)) ~= p then return 0 end; "
+                "redis.call('PSETEX',KEYS[1],ARGV[3],ARGV[1]..'|'..ARGV[2]); "
+                "return 1"
+            )
+            return bool(client.eval(script, 1, redis_key, token, state, ttl_ms))
+        except Exception as exc:
+            logger.error("V2 idempotency Redis compare-set failed state=%s error=%s", state, type(exc).__name__)
+            return None
+
+    def _redis_compare_delete(self, key: str, token: str) -> Optional[bool]:
+        client = self._get_redis()
+        if client is None:
+            return None
+        redis_key = self._redis_key(key)
+        try:
+            if hasattr(client, "compare_delete"):
+                return bool(client.compare_delete(redis_key, token))
+            if not hasattr(client, "eval"):
+                return None
+            script = (
+                "local v=redis.call('GET',KEYS[1]); "
+                "if not v then return 0 end; "
+                "local p=ARGV[1]..'|'; "
+                "if string.sub(v,1,string.len(p)) ~= p then return 0 end; "
+                "return redis.call('DEL',KEYS[1])"
+            )
+            return bool(client.eval(script, 1, redis_key, token))
+        except Exception as exc:
+            logger.error("V2 idempotency Redis compare-delete failed error=%s", type(exc).__name__)
             return None
 
     def reserve(self, context: UserDecisionContext, *, symbol: str, direction: str) -> Tuple[bool, str]:
         key = self.build_key(context, symbol=symbol, direction=direction)
-        redis_result = self._redis_set_state(key, "submitted", self._ttl_seconds, nx=True)
+        token = uuid.uuid4().hex
+        redis_result = self._redis_reserve(key, token, self._ttl_seconds)
         if redis_result is True:
+            with self._lock:
+                self._reservation_tokens[key] = token
             return True, key
         if redis_result is False:
             return False, key
@@ -317,12 +393,15 @@ class UserScopedIdempotencyRegistry:
             entry = self._states.get(key)
             if entry is not None and self._is_expired(entry):
                 self._states.pop(key, None)
+                self._reservation_tokens.pop(key, None)
                 entry = None
             state = str((entry or {}).get("state") or "")
             if state and state not in {"reconciled_rejected", "released"}:
                 return False, key
+            self._reservation_tokens[key] = token
             self._states[key] = {
                 "state": "submitted",
+                "token": token,
                 "expires_at": time.monotonic() + self._ttl_seconds,
             }
         return True, key
@@ -335,29 +414,43 @@ class UserScopedIdempotencyRegistry:
             self.release(key)
             return
         ttl = self._uncertain_ttl_seconds if normalized in {"state_unknown", "submitted_pending", "pending"} else self._ttl_seconds
-        redis_result = self._redis_set_state(key, normalized, ttl)
-        # Keep a local mirror for observability and non-live fallback.  Redis
-        # remains authoritative for cross-worker admission whenever available.
+        with self._lock:
+            token = self._reservation_tokens.get(key, "")
+        if not token:
+            logger.error("V2 idempotency state transition refused: reservation token unavailable state=%s", normalized)
+            return
+        redis_result = self._redis_compare_set(key, token, normalized, ttl)
+        if redis_result is False:
+            logger.warning("V2 idempotency stale finalizer refused state=%s", normalized)
+            return
         with self._lock:
             self._states[key] = {
                 "state": normalized,
+                "token": token,
                 "expires_at": time.monotonic() + ttl,
             }
         if redis_result is None:
-            logger.warning("V2 idempotency state mirrored locally because Redis authority is unavailable state=%s", normalized)
+            logger.error("V2 idempotency shared state transition unavailable state=%s", normalized)
 
     def release(self, key: str) -> None:
-        """Remove a reservation only when no broker submission remains in flight."""
+        """Remove only the reservation owned by this registry instance."""
         if not key:
             return
-        client = self._get_redis()
-        if client is not None:
-            try:
-                client.delete(self._redis_key(key))
-            except Exception as exc:
-                logger.error("V2 idempotency Redis release failed error=%s", type(exc).__name__)
+        with self._lock:
+            token = self._reservation_tokens.get(key, "")
+        if not token:
+            logger.warning("V2 idempotency release refused: reservation token unavailable")
+            return
+        redis_result = self._redis_compare_delete(key, token)
+        if redis_result is False:
+            logger.warning("V2 idempotency stale release refused")
+            return
+        if redis_result is None and self._get_redis() is not None:
+            logger.error("V2 idempotency release not durable; shared authority unchanged")
+            return
         with self._lock:
             self._states.pop(key, None)
+            self._reservation_tokens.pop(key, None)
 
     def get_state(self, key: str) -> Optional[str]:
         client = self._get_redis()
@@ -365,7 +458,8 @@ class UserScopedIdempotencyRegistry:
             try:
                 value = client.get(self._redis_key(key))
                 if value is not None:
-                    return str(value.decode("utf-8") if isinstance(value, bytes) else value)
+                    _token, state = self._decode_redis_state(value)
+                    return state
             except Exception as exc:
                 logger.error("V2 idempotency Redis read failed error=%s", type(exc).__name__)
         with self._lock:
