@@ -461,6 +461,9 @@ class UserScopedIdempotencyRegistry:
             logger.warning("V2 idempotency local owner mismatch state=%s", normalized)
             return False
         with self._lock:
+            if self._reservation_tokens.get(key, "") != token:
+                logger.warning("V2 idempotency stale local finalizer refused state=%s", normalized)
+                return False
             self._states[key] = {
                 "state": normalized,
                 "token": token,
