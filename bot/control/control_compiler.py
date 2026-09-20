@@ -74,9 +74,9 @@ _SIGNAL_REDIS_TTL: int = int(os.getenv("NIJA_SIGNAL_REDIS_TTL_SECONDS", "3600"))
 
 # Regime → compatible strategy types
 _REGIME_STRATEGY_MAP: Dict[str, List[str]] = {
-    "trending":       ["scalp", "swing", "trend", "apex"],
+    "trending":       ["scalp", "swing", "trend", "apex", "break_retest"],
     "ranging":        ["scalp", "mean_reversion", "range"],
-    "breakout":       ["swing", "breakout", "trend"],
+    "breakout":       ["swing", "breakout", "trend", "break_retest"],
     "mean_reversion": ["mean_reversion", "range", "scalp"],
     "unknown":        ["scalp", "swing", "trend", "apex", "mean_reversion", "range", "breakout"],
 }
