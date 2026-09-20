@@ -711,7 +711,10 @@ class SignalPipeline:
         mode = str(decision_context.execution_mode or "paper").strip().lower()
         if mode == "test":
             mode = "paper"
-        environment = str(decision_context.environment or ("production" if mode == "live" else "test")).strip()
+        environment = str(
+            decision_context.environment
+            or ("production" if mode in {"live", "limited_live"} else "test")
+        ).strip()
         return TradingContext(
             user_id=decision_context.user_id,
             trading_account_id=decision_context.account_id,
