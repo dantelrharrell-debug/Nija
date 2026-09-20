@@ -18,6 +18,7 @@ from bot.control.signal_pipeline import SignalPipeline
 from bot.control.situation_analysis import SituationAnalysisEngine
 from bot.control.strategy_detectors import BreakRetestDetector, DetectorContext
 from bot.control.strategy_registry import StrategyDetectorRegistry
+from bot.control.strategy_signal import StrategySignal
 from bot.control.trading_context import TradingContext
 from bot.feature_flags import FeatureFlag, FeatureFlagManager
 from bot.signal_broadcaster import SignalBroadcaster
@@ -363,6 +364,124 @@ class TestCompletionBlockers(unittest.TestCase):
                 trading_context=detector_context.trading_context,
             )
         self.assertTrue(any(signal.strategy == "BREAK_RETEST" for signal in signals))
+
+    def test_live_reservation_uses_short_ttl_until_submission_uncertain(self):
+        redis = _FakeRedis()
+        registry = UserScopedIdempotencyRegistry(
+            redis_client=redis,
+            ttl_seconds=1.0,
+            uncertain_ttl_seconds=30.0,
+        )
+        ok, handle = registry.reserve(
+            _decision_context(mode="live", environment="production"),
+            symbol="BTC-USD",
+            direction="long",
+        )
+        self.assertTrue(ok)
+        redis_key = registry._redis_key(handle.key)
+        initial_remaining = redis._expires[redis_key] - time.monotonic()
+        self.assertLess(initial_remaining, 2.0)
+
+        registry.mark_state(handle, "state_unknown")
+        extended_remaining = redis._expires[redis_key] - time.monotonic()
+        self.assertGreater(extended_remaining, 20.0)
+
+    def test_stale_finalizer_cannot_overwrite_newer_reservation(self):
+        redis = _FakeRedis()
+        old = UserScopedIdempotencyRegistry(redis_client=redis, ttl_seconds=1.0)
+        new = UserScopedIdempotencyRegistry(redis_client=redis, ttl_seconds=5.0)
+        ctx = _decision_context()
+        ok_old, old_handle = old.reserve(ctx, symbol="ETH-USD", direction="long")
+        self.assertTrue(ok_old)
+        time.sleep(1.05)
+        ok_new, new_handle = new.reserve(ctx, symbol="ETH-USD", direction="long")
+        self.assertTrue(ok_new)
+
+        old.mark_state(old_handle, "state_unknown")
+        self.assertEqual(new.get_state(new_handle), "submitted")
+
+    def test_break_retest_rejects_zero_volume_breakout(self):
+        df = _break_retest_frame()
+        df["volume"] = 0.0
+        detector = BreakRetestDetector()
+        signal = detector.detect(
+            df,
+            DetectorContext(
+                symbol="BTC-USD",
+                broker="kraken",
+                trading_context=_trading_context(),
+                market_regime="trending",
+            ),
+        )
+        self.assertIsNone(signal)
+
+    def test_break_retest_stop_and_target_reach_compiled_execution_fields(self):
+        ctx = _trading_context()
+        df = _break_retest_frame()
+        candidate = StrategySignal(
+            strategy="BREAK_RETEST",
+            symbol="BTC-USD",
+            broker="kraken",
+            direction="long",
+            trading_context=ctx,
+            invalidation_level=100.0,
+            suggested_stop=100.0,
+            target_candidates=[104.0],
+            confidence=0.8,
+            raw_score=0.8,
+            market_regime="trending",
+            supporting_evidence=["structure_break_up", "retest_hold", "volume_confirmed"],
+        )
+        regime = SimpleNamespace(
+            regime=MarketRegime.TRENDING,
+            confidence=0.8,
+            volatility=0.02,
+            adx=30.0,
+            rsi=55.0,
+        )
+        regime_engine = MagicMock()
+        regime_engine.detect.return_value = regime
+        pipeline = SignalPipeline(
+            compiler=ControlCompiler(),
+            regime_engine=regime_engine,
+            risk_engine=RiskEngine(redis_client=_FakeRedis()),
+        )
+        pipeline._idempotency_registry = UserScopedIdempotencyRegistry(redis_client=_FakeRedis())
+        pipeline._detector_registry = MagicMock()
+        pipeline._detector_registry.detect.return_value = [candidate]
+        pipeline._scoring_engine = MagicMock()
+        pipeline._scoring_engine.score.return_value = SimpleNamespace(rejected=False, score=0.8)
+        pipeline._confirmation_engine = MagicMock()
+        pipeline._confirmation_engine.confirm.return_value = SimpleNamespace(approved=True, reasons=[])
+        snapshot = ScopedRiskSnapshot.from_values(
+            context=ctx,
+            portfolio_value_usd=10_000.0,
+            current_positions=[],
+            available_balance_usd=1_000.0,
+        )
+
+        compiled = pipeline.process_market_snapshot(
+            symbol="BTC-USD",
+            broker="kraken",
+            df=df,
+            trading_context=ctx,
+            risk_snapshot=snapshot,
+            requested_size_usd=50.0,
+            authoritative_position_proven=True,
+        )
+        self.assertIsNotNone(compiled)
+        self.assertIsNotNone(compiled.stop_loss_pct)
+        self.assertIsNotNone(compiled.take_profit_pct)
+        self.assertGreater(compiled.stop_loss_pct, 0.0)
+        self.assertGreater(compiled.take_profit_pct, 0.0)
+        kwargs = compiled.to_pipeline_kwargs()
+        self.assertEqual(kwargs["stop_loss_pct"], compiled.stop_loss_pct)
+        self.assertEqual(kwargs["take_profit_pct"], compiled.take_profit_pct)
+        self.assertEqual(kwargs["metadata"]["suggested_stop"], 100.0)
+        self.assertEqual(kwargs["metadata"]["target_candidates"][0], 104.0)
+        self.assertTrue(kwargs["metadata"].get("duplicate_key"))
+        self.assertTrue(kwargs["metadata"].get("duplicate_token"))
+
 
 
 if __name__ == "__main__":
