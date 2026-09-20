@@ -495,6 +495,20 @@ class SignalBroadcaster:
             logger.error("V2_DUPLICATE_RELEASE_AFTER_RETRY_FAILED error=%s", exc)
             return False
 
+    @staticmethod
+    def _release_v2_retry_reservation(signal: Dict[str, Any]) -> None:
+        metadata = signal.get("metadata") if isinstance(signal.get("metadata"), dict) else {}
+        key = str(signal.get("duplicate_key") or metadata.get("duplicate_key") or "").strip()
+        token = str(signal.get("duplicate_token") or metadata.get("duplicate_token") or "").strip()
+        if not key or not token:
+            return
+        raw_shared = signal.get("duplicate_shared_required", metadata.get("duplicate_shared_required", False))
+        shared_required = raw_shared if isinstance(raw_shared, bool) else str(raw_shared or "").strip().lower() in {"1","true","yes","on"}
+        from bot.control.decision_context import IdempotencyReservationHandle, get_user_scoped_idempotency_registry
+        get_user_scoped_idempotency_registry().release(
+            IdempotencyReservationHandle(key, token, bool(shared_required))
+        )
+
     def _execute_with_retry(
         self,
         account: AccountRecord,
@@ -564,6 +578,8 @@ class SignalBroadcaster:
         if bool((result.order_result or {}).get("v2_pre_submit_proven")):
             self._release_v2_reservation_from_signal(signal)
         result.retry_exhausted = True
+        if bool((result.order_result or {}).get("v2_pre_submit_proven")):
+            self._release_v2_retry_reservation(signal)
         logger.error(
             "[Broadcaster] all %d retries exhausted for account=%s %s %s — final error: %s",
             cfg.max_retries, account.account_id, side.upper(), symbol, result.error,
@@ -698,6 +714,7 @@ class SignalBroadcaster:
                             "duplicate_key": duplicate_key,
                             "duplicate_token": duplicate_token,
                             "duplicate_shared_required": bool(duplicate_shared_required),
+                            "duplicate_retry_managed": True,
                             **protection,
                         }
                         if duplicate_metadata_present
