@@ -74,3 +74,32 @@ def test_break_retest_paper_entry_simulates_before_any_router_dispatch(
     assert result.broker == "dry_run_simulated"
     assert simulated and simulated[0][0] == "BREAK_RETEST"
     assert simulated[0][1] == "dry_run"
+
+
+def test_live_controller_downgrades_immediately_when_paper_mode_turns_on(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("APP_STORE_MODE", "false")
+    monkeypatch.setenv("DRY_RUN_MODE", "false")
+    monkeypatch.setenv("PAPER_MODE", "false")
+    monkeypatch.setenv("LIVE_CAPITAL_VERIFIED", "true")
+    monkeypatch.setenv("LIVE_TRADING", "true")
+    monkeypatch.setenv("HEARTBEAT_TRADE", "false")
+    monkeypatch.setattr(
+        safety_controller.SafetyController,
+        "_check_credentials",
+        lambda self: True,
+    )
+
+    controller = safety_controller.SafetyController()
+    assert controller.get_current_mode() is safety_controller.TradingMode.LIVE
+
+    monkeypatch.setenv("PAPER_MODE", "true")
+
+    assert controller.recheck_mode() is True
+    assert controller.get_current_mode() is safety_controller.TradingMode.DRY_RUN
+    allowed, reason = controller.is_trading_allowed()
+    assert allowed is True
+    assert "simulated" in reason.lower()
