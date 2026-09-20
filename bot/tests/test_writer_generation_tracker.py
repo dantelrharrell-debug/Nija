@@ -325,6 +325,8 @@ class TestHeartbeatGenerationIntegration(unittest.TestCase):
             "NIJA_WRITER_FENCING_TOKEN": "test-token",
             "NIJA_WRITER_LEASE_ACQUIRED": "1",
             "NIJA_WRITER_FENCING_TOKEN_FALLBACK": "0",
+            "NIJA_CORE_THREAD_ALIVE": "1",
+            "NIJA_WRITER_HEARTBEAT_ACTIVE": "1",
         }, clear=False), \
              patch("bot.redis_env.get_redis_url", return_value="redis://localhost:6379"), \
              patch("bot.entrypoint_writer_authority.get_entrypoint_writer_authority", return_value=None), \
@@ -342,6 +344,8 @@ class TestHeartbeatGenerationIntegration(unittest.TestCase):
             "NIJA_WRITER_FENCING_TOKEN": "test-token",
             "NIJA_WRITER_LEASE_ACQUIRED": "1",
             "NIJA_WRITER_FENCING_TOKEN_FALLBACK": "0",
+            "NIJA_CORE_THREAD_ALIVE": "1",
+            "NIJA_WRITER_HEARTBEAT_ACTIVE": "1",
         }, clear=False), \
              patch("bot.redis_env.get_redis_url", return_value="redis://localhost:6379"), \
              patch("bot.entrypoint_writer_authority.get_entrypoint_writer_authority", return_value=None), \
@@ -359,6 +363,8 @@ class TestHeartbeatGenerationIntegration(unittest.TestCase):
             "NIJA_WRITER_FENCING_TOKEN": "test-token",
             "NIJA_WRITER_LEASE_ACQUIRED": "1",
             "NIJA_WRITER_FENCING_TOKEN_FALLBACK": "1",
+            "NIJA_CORE_THREAD_ALIVE": "1",
+            "NIJA_WRITER_HEARTBEAT_ACTIVE": "1",
         }, clear=False), \
              patch("bot.redis_env.get_redis_url", return_value="redis://localhost:6379"):
             import redis as _redis_lib
@@ -380,6 +386,8 @@ class TestHeartbeatGenerationIntegration(unittest.TestCase):
             "NIJA_WRITER_FENCING_TOKEN": "test-token",
             "NIJA_WRITER_LEASE_ACQUIRED": "1",
             "NIJA_WRITER_FENCING_TOKEN_FALLBACK": "0",
+            "NIJA_CORE_THREAD_ALIVE": "1",
+            "NIJA_WRITER_HEARTBEAT_ACTIVE": "1",
         }, clear=False), \
              patch("bot.redis_env.get_redis_url", return_value="redis://localhost:6379"), \
              patch("bot.entrypoint_writer_authority.get_entrypoint_writer_authority", return_value=None), \
