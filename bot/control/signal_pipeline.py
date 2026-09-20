@@ -379,7 +379,7 @@ class SignalPipeline:
             if not context_authorized:
                 logger.warning("PIPELINE_REJECT stage=context reason=context_not_authorized")
                 return None
-        elif trading_context.mode == "live":
+        elif str(trading_context.mode or "").strip().lower() in {"live", "limited_live"}:
             logger.warning("PIPELINE_REJECT stage=context reason=live_context_authorizer_required")
             return None
         if risk_snapshot is not None and portfolio_snapshot is not None:
