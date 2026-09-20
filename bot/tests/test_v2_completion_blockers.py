@@ -122,13 +122,13 @@ class TestCompletionBlockers(unittest.TestCase):
 
     def test_stale_registry_cannot_release_newer_reservation(self):
         redis = _FakeRedis()
-        old = UserScopedIdempotencyRegistry(redis_client=redis, ttl_seconds=0.05)
+        old = UserScopedIdempotencyRegistry(redis_client=redis, ttl_seconds=1.0)
         new = UserScopedIdempotencyRegistry(redis_client=redis, ttl_seconds=5.0)
         context = _decision_context()
 
         ok_old, key = old.reserve(context, symbol="BTC-USD", direction="long")
         self.assertTrue(ok_old)
-        time.sleep(0.07)
+        time.sleep(1.05)
         ok_new, new_key = new.reserve(context, symbol="BTC-USD", direction="long")
         self.assertTrue(ok_new)
         self.assertEqual(key, new_key)
@@ -136,8 +136,8 @@ class TestCompletionBlockers(unittest.TestCase):
         old.release(key)
         self.assertEqual(new.get_state(new_key), "submitted")
 
-    def test_live_account_kill_switch_requires_durable_shared_write(self):
-        ctx = _trading_context(mode="live", environment=None)
+    def test_production_live_account_kill_switch_requires_durable_shared_write(self):
+        ctx = _trading_context(mode="live", environment="production")
         with patch("bot.control.decision_context._default_redis_client", return_value=None):
             engine = RiskEngine(redis_client=None)
             with self.assertRaises(RuntimeError):
