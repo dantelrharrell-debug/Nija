@@ -473,6 +473,27 @@ class SignalBroadcaster:
             )
         return decisions
 
+    @staticmethod
+    def _release_v2_reservation_from_signal(signal: Dict[str, Any]) -> bool:
+        """Release a proven pre-dispatch reservation only with complete ownership metadata."""
+        signal_metadata = signal.get("metadata") if isinstance(signal.get("metadata"), dict) else {}
+        merged = dict(signal_metadata)
+        for key in ("duplicate_key", "duplicate_token", "duplicate_shared_required"):
+            if key in signal:
+                merged[key] = signal.get(key)
+        try:
+            from bot.control.decision_context import (
+                IdempotencyReservationHandle,
+                get_user_scoped_idempotency_registry,
+            )
+            handle = IdempotencyReservationHandle.from_metadata(merged)
+            if not handle:
+                return False
+            return bool(get_user_scoped_idempotency_registry().release(handle))
+        except Exception as exc:
+            logger.error("V2_DUPLICATE_RELEASE_AFTER_RETRY_FAILED error=%s", exc)
+            return False
+
     def _execute_with_retry(
         self,
         account: AccountRecord,
@@ -497,8 +518,15 @@ class SignalBroadcaster:
             capital_manager=capital_manager,
         )
 
-        # Don't retry skipped orders or successful fills
+        # Don't retry skipped orders or successful fills.  If the only attempt
+        # ended in a proven pre-dispatch error, explicitly abandon the held
+        # reservation so a future fresh decision can reserve it again.
         if result.status != "error" or cfg.max_retries <= 0:
+            if (
+                result.status == "error"
+                and bool((result.order_result or {}).get("v2_pre_submit_proven"))
+            ):
+                self._release_v2_reservation_from_signal(signal)
             return result
 
         delay = cfg.base_delay_s
@@ -530,7 +558,10 @@ class SignalBroadcaster:
 
             delay *= cfg.backoff_factor
 
-        # All retries exhausted
+        # All retries exhausted. Release only if the final attempt is proven
+        # pre-dispatch; uncertain/pending broker outcomes remain reserved.
+        if bool((result.order_result or {}).get("v2_pre_submit_proven")):
+            self._release_v2_reservation_from_signal(signal)
         result.retry_exhausted = True
         logger.error(
             "[Broadcaster] all %d retries exhausted for account=%s %s %s — final error: %s",
