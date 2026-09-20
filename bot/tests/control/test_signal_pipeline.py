@@ -16,6 +16,7 @@ Coverage:
 
 import json
 import unittest
+import uuid
 from unittest.mock import MagicMock, patch
 
 import numpy as np

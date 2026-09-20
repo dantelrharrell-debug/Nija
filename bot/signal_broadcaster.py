@@ -551,7 +551,13 @@ class SignalBroadcaster:
 
             size = round(size, 2)
 
+            signal_metadata = signal.get("metadata") if isinstance(signal.get("metadata"), dict) else {}
+            duplicate_key = str(signal.get("duplicate_key") or signal_metadata.get("duplicate_key") or "").strip()
+
             if size <= 0:
+                if duplicate_key:
+                    from bot.control.decision_context import get_user_scoped_idempotency_registry
+                    get_user_scoped_idempotency_registry().release(duplicate_key)
                 return BroadcastResult(
                     account_id=account.account_id,
                     symbol=symbol,
@@ -568,13 +574,14 @@ class SignalBroadcaster:
             self._account_last_exec_ts[account.account_id] = time.monotonic()
 
             if submit_market_order_via_pipeline is None:
+                if duplicate_key:
+                    from bot.control.decision_context import get_user_scoped_idempotency_registry
+                    get_user_scoped_idempotency_registry().release(duplicate_key)
                 order = {
                     "status": "error",
                     "error": "ExecutionPipeline submit helper unavailable; direct broker fallback blocked",
                 }
             else:
-                signal_metadata = signal.get("metadata") if isinstance(signal.get("metadata"), dict) else {}
-                duplicate_key = str(signal.get("duplicate_key") or signal_metadata.get("duplicate_key") or "").strip()
                 order = submit_market_order_via_pipeline(
                     broker=broker,
                     symbol=symbol,
@@ -683,17 +690,17 @@ class SignalBroadcaster:
 
     @staticmethod
     def _kraken_margin_visibility_proven(broker: Any) -> bool:
-        """Bridge V2 admission to existing authoritative Kraken position proof.
+        """Require explicit proof that Kraken margin OpenPositions are visible.
 
-        Explicit adapter proof wins when present. Otherwise consult the
-        production v286/v285 authoritative position-sync proof. Any missing,
-        stale, failed, or exceptional state remains False; an empty position
-        list by itself is never proof.
+        Balance/spot-position freshness is insufficient.  V2 stays fail-closed
+        until the adapter exposes an explicit margin/OpenPositions authority
+        signal.
         """
         for attribute in (
             "kraken_margin_visibility_proven",
-            "margin_visibility_proven",
             "authoritative_margin_positions_visible",
+            "open_positions_visibility_proven",
+            "kraken_open_positions_visibility_proven",
         ):
             try:
                 value = getattr(broker, attribute, None)
@@ -703,21 +710,7 @@ class SignalBroadcaster:
                 return False
             if value is not None:
                 return value is True
-
-        try:
-            from bot.runtime_kraken_position_refresh_liveness_v286_patch import _strong_proof
-            ready, _reason = _strong_proof(broker)
-            if ready:
-                return True
-        except Exception:
-            pass
-
-        try:
-            from bot.runtime_authoritative_position_coverage_v285_patch import _strong_broker_proof
-            ready, _reason = _strong_broker_proof(broker)
-            return bool(ready)
-        except Exception:
-            return False
+        return False
 
     @staticmethod
     def _broker_is_healthy(broker: Any) -> bool:
