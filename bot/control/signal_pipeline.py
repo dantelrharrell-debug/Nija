@@ -816,22 +816,31 @@ class SignalPipeline:
 
     def mark_duplicate_execution_complete(
         self,
-        duplicate_key: str,
-        duplicate_token: str,
+        duplicate_key: Any,
+        duplicate_token: str = "",
         *,
+        duplicate_shared_required: Optional[bool] = None,
         state: str = "released",
-    ) -> None:
-        """Finalize a reservation only with the exact ownership token."""
-        handle = IdempotencyReservationHandle(
-            str(duplicate_key or "").strip(),
-            str(duplicate_token or "").strip(),
-        )
+    ) -> bool:
+        """Finalize a reservation only with its ownership-bearing authority context."""
+        if isinstance(duplicate_key, IdempotencyReservationHandle):
+            handle = duplicate_key
+        else:
+            if duplicate_shared_required is None:
+                logger.error(
+                    "V2_DUPLICATE_FINALIZE_REJECT reason=shared_authority_flag_required"
+                )
+                return False
+            handle = IdempotencyReservationHandle(
+                str(duplicate_key or "").strip(),
+                str(duplicate_token or "").strip(),
+                bool(duplicate_shared_required),
+            )
         if not handle:
-            return
+            return False
         if state == "released":
-            self._idempotency_registry.release(handle)
-            return
-        self._idempotency_registry.mark_state(handle, state)
+            return self._idempotency_registry.release(handle)
+        return self._idempotency_registry.mark_state(handle, state)
 
     # ------------------------------------------------------------------
     # Diagnostic helpers
