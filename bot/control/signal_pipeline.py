@@ -84,6 +84,7 @@ from bot.control.decision_context import (
     get_user_scoped_idempotency_registry,
 )
 from bot.control.signal_scoring import SignalScoringEngine
+from bot.control.situation_analysis import SituationAnalysisEngine
 from bot.control.strategy_registry import StrategyDetectorRegistry
 from bot.control.strategy_signal import StrategySignal
 
@@ -140,6 +141,7 @@ class SignalPipeline:
         self._detector_registry = StrategyDetectorRegistry()
         self._scoring_engine = SignalScoringEngine()
         self._confirmation_engine = ConfirmationEngine()
+        self._situation_engine = SituationAnalysisEngine()
         self._redis         = redis_client
         self._context_authorizer = context_authorizer
         self._lock          = threading.Lock()
@@ -212,10 +214,25 @@ class SignalPipeline:
             return None
         if df is None or df.empty:
             return None
-        regime = "unknown"
-        regime_result = self._regime_engine.detect(symbol, df).regime
+        regime_full = self._regime_engine.detect(symbol, df)
+        regime_result = regime_full.regime
         regime = getattr(regime_result, "value", regime_result)
         regime = str(regime)
+
+        situation = self._situation_engine.assess(
+            trading_context=trading_context,
+            regime_result=regime_full,
+            positions=risk_snapshot.positions_for_owner(),
+            checks=checks,
+            authoritative_position_proven=authoritative_position_proven,
+        )
+        if not situation.eligible_for_strategy_evaluation:
+            logger.warning(
+                "PIPELINE_REJECT stage=situation symbol=%s reasons=%s",
+                symbol,
+                situation.reasons,
+            )
+            return None
 
         candidates = self._detector_registry.detect(
             df=df,
