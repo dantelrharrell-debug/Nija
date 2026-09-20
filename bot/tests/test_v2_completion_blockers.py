@@ -147,6 +147,22 @@ class TestCompletionBlockers(unittest.TestCase):
             )
         self.assertFalse(ok)
 
+    def test_live_reservation_uses_uncertain_ttl_before_handoff(self):
+        redis = _FakeRedis()
+        registry = UserScopedIdempotencyRegistry(
+            redis_client=redis,
+            ttl_seconds=1.0,
+            uncertain_ttl_seconds=30.0,
+        )
+        ok, handle = registry.reserve(
+            _decision_context(mode="live", environment="production"),
+            symbol="BTC-USD",
+            direction="long",
+        )
+        self.assertTrue(ok)
+        remaining = redis._expires[registry._redis_key(handle.key)] - time.monotonic()
+        self.assertGreater(remaining, 20.0)
+
     def test_stale_registry_cannot_release_newer_reservation(self):
         redis = _FakeRedis()
         old = UserScopedIdempotencyRegistry(redis_client=redis, ttl_seconds=1.0)
@@ -163,6 +179,9 @@ class TestCompletionBlockers(unittest.TestCase):
         old.release(old_handle)
         self.assertEqual(new.get_state(new_handle), "submitted")
         self.assertNotIn(old_handle.key, old._reservation_tokens)
+
+    def test_prepare_v2_duplicate_handoff_rejects_incomplete_metadata(self):
+        self.assertFalse(_prepare_v2_duplicate_handoff({"duplicate_key": "v2:test-key"}))
 
     def test_release_clears_local_state_when_compare_delete_errors(self):
         redis = _CompareDeleteErrorRedis()
@@ -385,7 +404,7 @@ class TestCompletionBlockers(unittest.TestCase):
             )
         self.assertTrue(any(signal.strategy == "BREAK_RETEST" for signal in signals))
 
-    def test_live_reservation_uses_short_ttl_until_submission_uncertain(self):
+    def test_live_reservation_preserves_uncertain_ttl_until_submission_uncertain(self):
         redis = _FakeRedis()
         registry = UserScopedIdempotencyRegistry(
             redis_client=redis,
@@ -400,7 +419,7 @@ class TestCompletionBlockers(unittest.TestCase):
         self.assertTrue(ok)
         redis_key = registry._redis_key(handle.key)
         initial_remaining = redis._expires[redis_key] - time.monotonic()
-        self.assertLess(initial_remaining, 2.0)
+        self.assertGreater(initial_remaining, 20.0)
 
         registry.mark_state(handle, "state_unknown")
         extended_remaining = redis._expires[redis_key] - time.monotonic()
@@ -444,6 +463,20 @@ class TestCompletionBlockers(unittest.TestCase):
         self.assertEqual(registry.get_state(handle), "submitted_pending")
         remaining = redis._expires[registry._redis_key(handle.key)] - time.monotonic()
         self.assertGreater(remaining, 20.0)
+
+    def test_mark_duplicate_execution_complete_preserves_shared_authority_flag(self):
+        pipeline = SignalPipeline.__new__(SignalPipeline)
+        pipeline._idempotency_registry = MagicMock()
+
+        pipeline.mark_duplicate_execution_complete(
+            "dup-key",
+            "dup-token",
+            duplicate_shared_required=True,
+            state="submitted_pending",
+        )
+
+        handle = pipeline._idempotency_registry.mark_state.call_args[0][0]
+        self.assertTrue(handle.shared_required)
 
     def test_stale_finalizer_cannot_overwrite_newer_reservation(self):
         redis = _FakeRedis()
