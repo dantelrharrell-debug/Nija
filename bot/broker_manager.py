@@ -7282,7 +7282,7 @@ class AlpacaBroker(BaseBroker):
 
         if normalized_size_type in {"quote", "usd", "notional"}:
             share_qty = int(order_size / reference_price)
-            requested_size_usd = order_size
+            requested_size_usd = float(share_qty) * reference_price
         else:
             if not float(order_size).is_integer():
                 return {
