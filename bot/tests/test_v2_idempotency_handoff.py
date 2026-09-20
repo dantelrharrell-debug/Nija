@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from bot.control.decision_context import (
@@ -8,6 +9,7 @@ from bot.control.decision_context import (
     UserDecisionContext,
     get_user_scoped_idempotency_registry,
 )
+import bot.pipeline_order_submitter as submitter
 from bot.pipeline_order_submitter import _finalize_v2_duplicate
 from bot.signal_broadcaster import SignalBroadcaster
 
@@ -81,6 +83,75 @@ class TestV2IdempotencyHandoff(unittest.TestCase):
         self.assertEqual(seen["metadata_override"]["duplicate_key"], "v2:test-key")
         self.assertEqual(seen["metadata_override"]["duplicate_token"], "token-1")
         self.assertTrue(seen["metadata_override"]["duplicate_shared_required"])
+
+    def test_broadcaster_forwards_break_retest_protection_to_submitter(self):
+        broadcaster = SignalBroadcaster(risk_fraction=0.1)
+        broker = _Broker()
+        broadcaster.register_account("acct-a", broker, balance=1000.0)
+        seen = {}
+
+        def fake_submit(**kwargs):
+            seen.update(kwargs)
+            return {"status": "pending", "order_id": "order-1"}
+
+        with patch("bot.signal_broadcaster.submit_market_order_via_pipeline", side_effect=fake_submit):
+            result = broadcaster._execute_single(
+                broadcaster._accounts["acct-a"],
+                {
+                    "symbol": "BTC-USD",
+                    "strategy": "BREAK_RETEST",
+                    "stop_loss_pct": 0.01,
+                    "take_profit_pct": 0.02,
+                    "duplicate_key": "v2:test-key",
+                    "duplicate_token": "token-1",
+                    "duplicate_shared_required": True,
+                },
+                "BTC-USD",
+                "buy",
+                None,
+            )
+
+        self.assertEqual(result.status, "pending")
+        self.assertEqual(seen["strategy"], "BREAK_RETEST")
+        self.assertEqual(seen["metadata_override"]["stop_loss_pct"], 0.01)
+        self.assertEqual(seen["metadata_override"]["take_profit_pct"], 0.02)
+
+    def test_submitter_carries_protection_and_arms_reservation_before_dispatch(self):
+        seen = {}
+
+        def execute(request):
+            seen["request"] = request
+            return SimpleNamespace(
+                success=False,
+                error="dispatch_disabled: dispatch.enabled=false",
+                order_id="",
+            )
+
+        pipeline = SimpleNamespace(execute=execute)
+        with patch.object(submitter, "_resolve_execution_pipeline_dependencies", return_value=(SimpleNamespace, lambda: pipeline)), \
+             patch.object(submitter, "assert_distributed_writer_authority"), \
+             patch.object(submitter, "_prepare_v2_duplicate_handoff", return_value=True) as prepare, \
+             patch.object(submitter, "_finalize_v2_duplicate", return_value=True):
+            result = submitter.submit_market_order_via_pipeline(
+                _Broker(),
+                "BTC-USD",
+                "buy",
+                25.0,
+                strategy="BREAK_RETEST",
+                metadata_override={
+                    "duplicate_key": "v2:test-key",
+                    "duplicate_token": "token-1",
+                    "duplicate_shared_required": True,
+                    "stop_loss_pct": 0.01,
+                    "take_profit_pct": 0.02,
+                },
+            )
+
+        self.assertEqual(result["status"], "error")
+        prepare.assert_called_once()
+        self.assertEqual(seen["request"].stop_loss_pct, 0.01)
+        self.assertEqual(seen["request"].take_profit_pct, 0.02)
+        self.assertTrue(seen["request"].metadata["protection_required"])
 
 
 if __name__ == "__main__":

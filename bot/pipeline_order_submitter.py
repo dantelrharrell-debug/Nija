@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib
 import logging
+import math
 import os
 from typing import Any, Dict, Optional
 
@@ -436,6 +437,30 @@ def submit_market_order_via_pipeline(
             "side": side,
             "v2_pre_submit_proven": True,
         }
+    strategy_norm = str(strategy or "").strip().upper()
+    protection: Dict[str, float] = {}
+    for field_name in ("stop_loss_pct", "take_profit_pct"):
+        raw_value = incoming_metadata.get(field_name)
+        if raw_value is None:
+            continue
+        parsed = _float(raw_value, float("nan"))
+        if not math.isfinite(parsed) or parsed <= 0.0:
+            return {
+                "status": "error",
+                "error": f"invalid_v2_protection:{field_name}",
+                "symbol": symbol,
+                "side": side,
+                "v2_pre_submit_proven": True,
+            }
+        protection[field_name] = parsed
+    if strategy_norm == "BREAK_RETEST" and set(protection) != {"stop_loss_pct", "take_profit_pct"}:
+        return {
+            "status": "error",
+            "error": "break_retest_protection_required",
+            "symbol": symbol,
+            "side": side,
+            "v2_pre_submit_proven": True,
+        }
     request_type, pipeline_getter = _resolve_execution_pipeline_dependencies()
     if pipeline_getter is None or request_type is None:
         _finalize_v2_duplicate(incoming_metadata, "submitted")
@@ -454,7 +479,6 @@ def submit_market_order_via_pipeline(
         }
 
     side_norm = str(side or "buy").strip().lower()
-    strategy_norm = str(strategy or "").strip().upper()
     heartbeat_probe = strategy_norm in _HEARTBEAT_PROBE_STRATEGIES
     preferred_broker = _resolve_preferred_broker(broker)
     account_id = str(account_id_override or _resolve_account_id(broker, preferred_broker)).strip().lower()
@@ -537,6 +561,9 @@ def submit_market_order_via_pipeline(
         metadata["base_quantity"] = base_quantity
         metadata["owned_base_qty"] = base_quantity
     metadata.update(incoming_metadata)
+    metadata.update(protection)
+    if protection:
+        metadata["protection_required"] = True
 
     request = request_type(
         strategy=strategy,
@@ -556,6 +583,8 @@ def submit_market_order_via_pipeline(
         reduce_only=bool(reduce_only),
         units=base_quantity if (base_quantity or 0) > 0 else None,
         unit_type="base" if (base_quantity or 0) > 0 else None,
+        stop_loss_pct=protection.get("stop_loss_pct"),
+        take_profit_pct=protection.get("take_profit_pct"),
         metadata=metadata,
     )
 

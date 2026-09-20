@@ -428,6 +428,8 @@ class PipelineRequest:
     ask_price_usd: Optional[float] = None
     volume_24h_usd: Optional[float] = None
     volatility_pct: Optional[float] = None
+    stop_loss_pct: Optional[float] = None
+    take_profit_pct: Optional[float] = None
     account_id: str = "default"
     account_type: Optional[str] = None
     leverage: Optional[float] = None
@@ -2301,6 +2303,8 @@ class ExecutionPipeline:
                                 else dict(getattr(request, "metadata", {}) or {}).get("price_hint_usd")
                             ),
                             "stop_price": getattr(request, "stop_price", None),
+                            "stop_loss_pct": getattr(request, "stop_loss_pct", None),
+                            "take_profit_pct": getattr(request, "take_profit_pct", None),
                             "instrument_type": request.instrument_type or "",
                             "quantity_mode": request.quantity_mode,
                             "shares": request.shares,
@@ -2367,6 +2371,8 @@ class ExecutionPipeline:
                             "time_in_force": getattr(request, "time_in_force", None),
                             "limit_price": getattr(request, "limit_price", None),
                             "stop_price": getattr(request, "stop_price", None),
+                            "stop_loss_pct": getattr(request, "stop_loss_pct", None),
+                            "take_profit_pct": getattr(request, "take_profit_pct", None),
                             "sizing_mode": getattr(request, "sizing_mode", None),
                             "notional_usd": getattr(request, "notional_usd", None),
                             "units": getattr(request, "units", None),

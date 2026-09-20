@@ -474,6 +474,19 @@ class TestCompletionBlockers(unittest.TestCase):
         )
         self.assertIsNone(signal)
 
+    def test_break_retest_rejects_non_finite_volume_evidence(self):
+        context = DetectorContext(
+            symbol="BTC-USD",
+            broker="kraken",
+            trading_context=_trading_context(),
+            market_regime="trending",
+        )
+        for bad_value in (float("inf"), float("-inf"), float("nan")):
+            with self.subTest(volume=bad_value):
+                frame = _break_retest_frame()
+                frame.loc[frame.index[-2], "volume"] = bad_value
+                self.assertIsNone(BreakRetestDetector().detect(frame, context))
+
     def test_break_retest_stop_and_target_reach_compiled_execution_fields(self):
         ctx = _trading_context()
         df = _break_retest_frame()

@@ -76,6 +76,10 @@ class PipelineRequest:
     volume_24h_usd: Optional[float] = None
     volatility_pct: Optional[float] = None
 
+    # Immutable fractional protection distances (0.01 == 1%).
+    stop_loss_pct: Optional[float] = None
+    take_profit_pct: Optional[float] = None
+
     # Margin / equities controls
     leverage: Optional[int] = None
     margin_mode: Optional[str] = None
@@ -138,6 +142,18 @@ def validate_pipeline_request(req: PipelineRequest) -> Tuple[bool, str]:
         return False, "invalid_side"
     if req.order_type not in _ORDER_TYPES:
         return False, "invalid_order_type"
+    for field_name in ("stop_loss_pct", "take_profit_pct"):
+        value = getattr(req, field_name, None)
+        if value is not None:
+            try:
+                parsed = float(value)
+            except (TypeError, ValueError):
+                return False, f"invalid_{field_name}"
+            if not (parsed > 0.0 and parsed < float("inf")):
+                return False, f"invalid_{field_name}"
+    if str(req.strategy or "").strip().upper() == "BREAK_RETEST" and req.intent_type == "entry":
+        if req.stop_loss_pct is None or req.take_profit_pct is None:
+            return False, "break_retest_protection_required"
     if req.asset_class is not None and req.asset_class not in _ASSET_CLASSES:
         return False, "invalid_asset_class"
     if req.intent_type is not None and req.intent_type not in _INTENT_TYPES:

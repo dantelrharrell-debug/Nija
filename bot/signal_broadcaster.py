@@ -53,6 +53,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import math
 import os
 import random
 import threading
@@ -603,6 +604,41 @@ class SignalBroadcaster:
                 if isinstance(raw_shared_required, bool)
                 else str(raw_shared_required or "").strip().lower() in {"1", "true", "yes", "on"}
             )
+            strategy = str(signal.get("strategy") or signal_metadata.get("strategy") or "SignalBroadcaster")
+            protection: Dict[str, float] = {}
+            for field_name in ("stop_loss_pct", "take_profit_pct"):
+                raw_value = signal.get(field_name)
+                if raw_value is None:
+                    raw_value = signal_metadata.get(field_name)
+                if raw_value is None:
+                    continue
+                try:
+                    parsed = float(raw_value)
+                except (TypeError, ValueError):
+                    parsed = float("nan")
+                if not math.isfinite(parsed) or parsed <= 0.0:
+                    return BroadcastResult(
+                        account_id=account.account_id,
+                        symbol=symbol,
+                        side=side,
+                        size_usd=size,
+                        status="error",
+                        error=f"invalid_v2_protection:{field_name}",
+                        order_result={"v2_pre_submit_proven": True},
+                    )
+                protection[field_name] = parsed
+            if strategy.strip().upper() == "BREAK_RETEST" and set(protection) != {
+                "stop_loss_pct", "take_profit_pct"
+            }:
+                return BroadcastResult(
+                    account_id=account.account_id,
+                    symbol=symbol,
+                    side=side,
+                    size_usd=size,
+                    status="error",
+                    error="break_retest_protection_required",
+                    order_result={"v2_pre_submit_proven": True},
+                )
 
             if size <= 0:
                 if duplicate_key and duplicate_token:
@@ -648,15 +684,16 @@ class SignalBroadcaster:
                     side=side,
                     quantity=size,
                     size_type="quote",
-                    strategy="SignalBroadcaster",
+                    strategy=strategy,
                     metadata_override=(
                         {
                             "duplicate_key": duplicate_key,
                             "duplicate_token": duplicate_token,
                             "duplicate_shared_required": bool(duplicate_shared_required),
+                            **protection,
                         }
                         if duplicate_key and duplicate_token
-                        else None
+                        else (protection or None)
                     ),
                 )
 
