@@ -54,6 +54,7 @@ def _make_df(n: int = 60, trend: str = "up") -> pd.DataFrame:
 
 
 def _valid_raw(**overrides) -> RawSignal:
+    token = uuid.uuid4().hex
     defaults = dict(
         symbol="BTC-USD",
         side="buy",
@@ -71,8 +72,8 @@ def _valid_raw(**overrides) -> RawSignal:
             broker_account_id="kraken_a",
             strategy_instance_id="strat_a",
             portfolio_id="pf_a",
-            request_id="req_a",
-            correlation_id="corr_a",
+            request_id=f"req_{token}",
+            correlation_id=f"corr_{token}",
             environment="test",
             mode="paper",
         ),
@@ -92,6 +93,7 @@ def _fresh_pipeline(**kwargs) -> SignalPipeline:
 
 
 def _context_dict() -> dict:
+    token = uuid.uuid4().hex
     return {
         "user_id": "user_a",
         "trading_account_id": "acct_a",
@@ -99,8 +101,8 @@ def _context_dict() -> dict:
         "broker_account_id": "kraken_a",
         "strategy_instance_id": "strat_a",
         "portfolio_id": "pf_a",
-        "request_id": "req_a",
-        "correlation_id": "corr_a",
+        "request_id": f"req_{token}",
+        "correlation_id": f"corr_{token}",
         "environment": "test",
         "mode": "paper",
     }
