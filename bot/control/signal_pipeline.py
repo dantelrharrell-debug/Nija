@@ -219,10 +219,15 @@ class SignalPipeline:
         regime = getattr(regime_result, "value", regime_result)
         regime = str(regime)
 
+        try:
+            owned_positions = risk_snapshot.positions_for_owner()
+        except ValueError as exc:
+            logger.warning("PIPELINE_REJECT stage=situation reason=%s", exc)
+            return None
         situation = self._situation_engine.assess(
             trading_context=trading_context,
             regime_result=regime_full,
-            positions=risk_snapshot.positions_for_owner(),
+            positions=owned_positions,
             checks=checks,
             authoritative_position_proven=authoritative_position_proven,
         )
