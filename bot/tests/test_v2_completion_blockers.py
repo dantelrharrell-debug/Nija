@@ -185,6 +185,17 @@ class TestCompletionBlockers(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 engine.set_account_kill_switch(ctx, True, "operator_halt")
 
+    def test_blank_environment_live_context_does_not_require_shared_kill_switch_state(self):
+        ctx = SimpleNamespace(mode="live", environment=None)
+        self.assertFalse(RiskEngine._requires_shared_state(ctx))
+
+    def test_production_limited_live_account_kill_switch_requires_durable_shared_write(self):
+        ctx = _trading_context(mode="limited_live", environment="production")
+        with patch("bot.control.decision_context._default_redis_client", return_value=None):
+            engine = RiskEngine(redis_client=None)
+            with self.assertRaises(RuntimeError):
+                engine.set_account_kill_switch(ctx, True, "operator_halt")
+
     def test_situation_analysis_accepts_nested_owned_context(self):
         ctx = _trading_context()
         regime = SimpleNamespace(regime=MarketRegime.TRENDING, confidence=0.8, volatility=0.02)

@@ -154,7 +154,7 @@ class RiskEngine:
     def _requires_shared_state(context: TradingContext) -> bool:
         environment = str(context.environment or "").strip().lower()
         mode = str(context.mode or "").strip().lower()
-        return mode in {"live", "limited_live"} and environment in {"", "production", "prod"}
+        return mode in {"live", "limited_live"} and environment in {"production", "prod"}
 
     def _ensure_redis(self):
         if self._redis is not None:
