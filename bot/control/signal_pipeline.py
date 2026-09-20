@@ -425,7 +425,7 @@ class SignalPipeline:
                 trading_account_id=context.account_id,
                 broker=context.broker,
                 broker_account_id=context.account_id,
-                strategy_instance_id=context.strategy_signal_id,
+                strategy_instance_id=(raw_signal.strategy or context.risk_profile_id or "v2_strategy"),
                 portfolio_id=context.portfolio_id,
                 request_id=context.trade_id,
                 correlation_id=context.correlation_id or context.trade_id,
@@ -585,6 +585,16 @@ class SignalPipeline:
     ) -> Optional[UserDecisionContext]:
         """Resolve only explicit account identity; never synthesize a user scope."""
         if decision_context is not None:
+            tc = raw_signal.trading_context
+            if tc is not None:
+                if tc.user_id != decision_context.user_id:
+                    return None
+                if tc.trading_account_id != decision_context.account_id:
+                    return None
+                if tc.broker.lower() != decision_context.broker.lower():
+                    return None
+                if tc.portfolio_id != decision_context.portfolio_id:
+                    return None
             replacements: Dict[str, Any] = {}
             if raw_signal.strategy_signal_id and decision_context.strategy_signal_id != raw_signal.strategy_signal_id:
                 replacements["strategy_signal_id"] = raw_signal.strategy_signal_id
@@ -605,6 +615,14 @@ class SignalPipeline:
         # V2 admission on one account scope.
         if raw_signal.trading_context is not None:
             tc = raw_signal.trading_context
+            if raw_signal.user_id and raw_signal.user_id != tc.user_id:
+                return None
+            if raw_signal.account_id and raw_signal.account_id != "default" and raw_signal.account_id != tc.trading_account_id:
+                return None
+            if raw_signal.broker and raw_signal.broker.lower() != tc.broker.lower():
+                return None
+            if raw_signal.portfolio_id and raw_signal.portfolio_id != tc.portfolio_id:
+                return None
             return UserDecisionContext(
                 user_id=tc.user_id,
                 account_id=tc.trading_account_id,
