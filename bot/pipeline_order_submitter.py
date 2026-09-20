@@ -361,6 +361,29 @@ def _finalize_v2_duplicate(metadata: Dict[str, Any], state: str) -> None:
 
 
 
+def _prepare_v2_duplicate_handoff(metadata: Dict[str, Any]) -> bool:
+    """Durably extend a V2 reservation before any broker-dispatch-capable call."""
+    try:
+        from bot.control.decision_context import (
+            IdempotencyReservationHandle,
+            get_user_scoped_idempotency_registry,
+        )
+        handle = IdempotencyReservationHandle.from_metadata(metadata or {})
+        if not handle:
+            return True
+        registry = get_user_scoped_idempotency_registry()
+        ok = registry.mark_state(handle, "submitted_pending")
+        if not ok:
+            logger.critical(
+                "V2_DUPLICATE_HANDOFF_UNCONFIRMED key=%s fail_closed=true",
+                handle.key,
+            )
+        return bool(ok)
+    except Exception as exc:
+        logger.error("V2_DUPLICATE_HANDOFF_FAILED error=%s", exc)
+        return False
+
+
 def submit_market_order_via_pipeline(
     broker: Any,
     symbol: str,
@@ -504,6 +527,18 @@ def submit_market_order_via_pipeline(
         account_id, preferred_broker, symbol, side_norm, resolved_intent,
         request.position_effect, leverage, bool(reduce_only), effective_size,
     )
+    # Before entering the broker-dispatch-capable execution pipeline, extend
+    # the exact V2 reservation under its ownership token.  If shared authority
+    # cannot durably confirm this handoff, do not dispatch.
+    if not _prepare_v2_duplicate_handoff(metadata):
+        return {
+            "status": "error",
+            "error": "v2_duplicate_handoff_unconfirmed",
+            "symbol": symbol,
+            "side": side_norm,
+            "account_id": account_id,
+            "intent_type": resolved_intent,
+        }
     try:
         if preferred_broker == "kraken":
             from bot.kraken_margin_engine import margin_account_scope
