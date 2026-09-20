@@ -507,57 +507,30 @@ class UserScopedIdempotencyRegistry:
         normalized = str(state or "").strip()
         if normalized in {"released", "reconciled_rejected"}:
             return self.release(handle)
-        ttl = (
-            self._uncertain_ttl_seconds
-            if normalized in {"state_unknown", "submitted_pending", "pending"}
-            else self._ttl_seconds
-        )
+        ttl = self._uncertain_ttl_seconds if normalized in {"state_unknown", "submitted_pending", "pending"} else self._ttl_seconds
         redis_result = self._redis_compare_set(key, token, normalized, ttl)
         if redis_result is False:
             logger.warning("V2 idempotency stale finalizer refused state=%s", normalized)
             self._forget_local_if_owned(key, token)
             return False
-
+        with self._lock:
+            shared_required = bool(handle.shared_required or self._reservation_shared_required.get(key, False))
+        if redis_result is None and shared_required:
+            logger.critical(
+                "V2 idempotency shared state transition unavailable state=%s fail_closed=true",
+                normalized,
+            )
+            return False
         if redis_result is None:
-            # Redis is unavailable. Shared-required reservations must never
-            # downgrade to local authority.
             # Local fallback must validate ownership, expiry and mutate state
             # under one lock acquisition so a stale finalizer cannot race a
             # newly-reserved token into being overwritten or revived.
             with self._lock:
-                shared_required = bool(
-                    handle.shared_required
-                    or self._reservation_shared_required.get(key, False)
-                )
-            if shared_required:
-                logger.critical(
-                    "V2 idempotency shared state transition unavailable state=%s fail_closed=true",
-                    normalized,
-                )
-                return False
-
-            # Local fallback ownership + expiry + mutation are one atomic
-            # critical section. This prevents an expired/stale finalizer from
-            # racing a replacement reservation and overwriting the new token.
-            now = time.monotonic()
-            with self._lock:
-                entry = self._states.get(key)
-                current_token = str(
-                    (entry or {}).get("token")
+                local_entry = self._states.get(key)
+                local_token = str(
+                    (local_entry or {}).get("token")
                     or self._reservation_tokens.get(key, "")
                 )
-                if entry is None or current_token != token:
-                    logger.warning(
-                        "V2 idempotency local owner mismatch state=%s fail_closed=true",
-                        normalized,
-                    )
-                    return False
-                if self._is_expired(entry):
-                    self._states.pop(key, None)
-                    self._reservation_tokens.pop(key, None)
-                    self._reservation_shared_required.pop(key, None)
-                    logger.warning(
-                        "V2 idempotency expired local finalizer refused state=%s",
                 if local_entry is None or self._is_expired(local_entry):
                     if local_token == token:
                         self._states.pop(key, None)
@@ -577,29 +550,6 @@ class UserScopedIdempotencyRegistry:
                 self._states[key] = {
                     "state": normalized,
                     "token": token,
-                    "expires_at": now + ttl,
-                }
-                self._reservation_tokens[key] = token
-                self._reservation_shared_required[key] = False
-            logger.warning(
-                "V2 idempotency state mirrored locally state=%s",
-                normalized,
-            )
-            return True
-
-        # Shared authority accepted the CAS. Keep a local mirror only for
-        # observability; Redis remains authoritative.
-        with self._lock:
-            self._states[key] = {
-                "state": normalized,
-                "token": token,
-                "expires_at": time.monotonic() + ttl,
-            }
-            self._reservation_tokens[key] = token
-            self._reservation_shared_required[key] = bool(
-                handle.shared_required
-                or self._reservation_shared_required.get(key, False)
-            )
                     "expires_at": time.monotonic() + ttl,
                 }
                 self._reservation_tokens[key] = token
