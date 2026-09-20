@@ -637,6 +637,34 @@ class MultiBrokerExecutionRouter:
         )
         self._pending_decision_trace_id = _decision_trace_id
 
+        # BREAK_RETEST entries require verified stop-loss and take-profit
+        # protection. This router does not yet provide an atomic protected-entry
+        # primitive, so fail closed before any broker dispatch rather than fill
+        # an unprotected position.
+        _strategy = str(getattr(request, "strategy", "") or "").strip().upper()
+        _intent = str(_meta.get("intent_type") or "").strip().lower()
+        _closing = bool(_meta.get("closing_position")) or _intent in {"exit", "reduce"}
+        if _strategy == "BREAK_RETEST" and not _closing:
+            elapsed_ms = (time.monotonic() - t0) * 1000
+            error = "BREAK_RETEST_PROTECTION_DISPATCH_UNAVAILABLE"
+            logger.error(
+                "🚫 %s symbol=%s side=%s trace_id=%s fail_closed=true",
+                error,
+                request.symbol,
+                request.side,
+                _decision_trace_id or "n/a",
+            )
+            return self._make_result(
+                request,
+                _asset_class_for_request(request),
+                str(request.preferred_broker or "NONE"),
+                False,
+                0.0,
+                0.0,
+                elapsed_ms,
+                error,
+            )
+
         # 1. Determine asset class
         ac = _asset_class_for_request(request)
 
