@@ -110,6 +110,10 @@ class TestCompletionBlockers(unittest.TestCase):
             )
         self.assertFalse(ok)
 
+    def test_trading_context_accepts_rollout_modes(self):
+        self.assertEqual(_trading_context(mode="shadow").mode, "shadow")
+        self.assertEqual(_trading_context(mode="limited_live", environment="production").mode, "limited_live")
+
     def test_limited_live_missing_environment_also_requires_shared_idempotency(self):
         with patch("bot.control.decision_context._default_redis_client", return_value=None):
             registry = UserScopedIdempotencyRegistry(redis_client=None)
