@@ -105,6 +105,50 @@ class TestBreakRetestProtectionDispatch(unittest.TestCase):
         self.assertTrue(call["protection_required"])
 
 
+    def test_atomic_broker_without_protection_verification_is_not_accepted(self):
+        router = MultiBrokerExecutionRouter()
+
+        class UnverifiedAtomicBroker:
+            broker_type = "coinbase"
+            NAME = "coinbase"
+            supports_atomic_protected_entry = True
+
+            def place_market_order_with_protection(
+                self,
+                symbol,
+                side,
+                quantity,
+                **kwargs,
+            ):
+                return {
+                    "status": "filled",
+                    "order_id": "unverified-protected-1",
+                    "filled_price": 101.0,
+                    "filled_size_usd": float(quantity),
+                }
+
+        broker = UnverifiedAtomicBroker()
+        request = RouteRequest(
+            strategy="BREAK_RETEST",
+            symbol="BTC-USD",
+            side="buy",
+            size_usd=25.0,
+            preferred_broker="coinbase",
+            metadata={
+                "broker_client": broker,
+                "broker_name": "coinbase",
+                "intent_type": "entry",
+                "protection_required": True,
+                "stop_loss_pct": 0.01,
+                "take_profit_pct": 0.02,
+            },
+        )
+
+        result = router.route(request)
+        self.assertFalse(result.success)
+        self.assertIn("protected_entry_unverified", result.error or "")
+
+
 
 if __name__ == "__main__":
     unittest.main()
