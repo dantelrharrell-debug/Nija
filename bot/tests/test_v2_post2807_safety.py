@@ -104,6 +104,57 @@ class TestPost2807Safety(unittest.TestCase):
         self.assertEqual(out["status"], "error")
         self.assertIsNone(registry.get_state(key))
 
+    def test_transport_failure_without_order_id_stays_state_unknown(self):
+        broker = SimpleNamespace(broker_name="coinbase", connected=True, get_account_balance=lambda: 1000.0)
+        result = SimpleNamespace(success=False, order_id=None, error="connection reset")
+        pipeline = SimpleNamespace(execute=lambda request: result)
+        key = "v2:transport-unknown-test"
+        registry = get_user_scoped_idempotency_registry()
+        registry.mark_state(key, "submitted")
+        request_type = lambda **kwargs: SimpleNamespace(**kwargs)
+        with patch("bot.pipeline_order_submitter.assert_distributed_writer_authority", return_value=None), \
+             patch("bot.pipeline_order_submitter.get_execution_pipeline", return_value=pipeline), \
+             patch("bot.pipeline_order_submitter.PipelineRequest", request_type):
+            out = submit_market_order_via_pipeline(
+                broker, "BTC-USD", "buy", 10.0, metadata_override={"duplicate_key": key},
+            )
+        self.assertEqual(out["status"], "state_unknown")
+        self.assertEqual(registry.get_state(key), "state_unknown")
+
+    def test_strategy_scope_falls_back_to_stable_v2_name_not_signal_uuid(self):
+        raw = RawSignal(
+            symbol="ETH-USD", side="buy", action="enter_long", size_usd=10,
+            confidence=.8, regime="trending", strategy="", approved=True,
+        )
+        dc = UserDecisionContext(
+            user_id="user-a", account_id="acct-a", broker="kraken",
+            portfolio_id="pf-a", strategy_signal_id="fresh-random-signal-uuid",
+            trade_id="trade-a", risk_profile_id=None,
+        )
+        tc = SignalPipeline._trading_context_from_decision_context(raw, dc)
+        self.assertEqual(tc.strategy_instance_id, "v2_strategy")
+
+    def test_kraken_v366_authenticated_openpositions_success_proves_visibility(self):
+        def private_call(endpoint, payload):
+            self.assertEqual(endpoint, "OpenPositions")
+            return {"error": [], "result": {}}
+
+        broker = SimpleNamespace(
+            account_identifier="test-v366-success",
+            _kraken_api_call=private_call,
+        )
+        self.assertTrue(SignalBroadcaster._kraken_margin_visibility_proven(broker))
+
+    def test_kraken_v366_openpositions_error_fails_closed(self):
+        def private_call(endpoint, payload):
+            return {"error": ["EGeneral:Temporary lockout"], "result": {}}
+
+        broker = SimpleNamespace(
+            account_identifier="test-v366-error",
+            _kraken_api_call=private_call,
+        )
+        self.assertFalse(SignalBroadcaster._kraken_margin_visibility_proven(broker))
+
 
 if __name__ == "__main__":
     unittest.main()
