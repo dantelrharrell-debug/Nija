@@ -42,8 +42,12 @@ class TestV2PipelineImportRecovery(unittest.TestCase):
             self.assertIs(request_type, injected_request_type)
             self.assertIs(pipeline_getter, recovered_getter)
 
-    def test_import_time_exceptions_release_reservation_and_fail_closed(self) -> None:
-        metadata = {"duplicate_key": "v2:lazy-import-failure"}
+    def test_import_time_exceptions_retain_owned_reservation_and_fail_closed(self) -> None:
+        metadata = {
+            "duplicate_key": "v2:lazy-import-failure",
+            "duplicate_token": "owned-token",
+            "duplicate_shared_required": False,
+        }
         broker = SimpleNamespace(broker_name="coinbase", connected=True)
 
         with patch.object(submitter, "PipelineRequest", None), \
@@ -64,8 +68,9 @@ class TestV2PipelineImportRecovery(unittest.TestCase):
 
         self.assertEqual(result["status"], "error")
         self.assertEqual(result["error"], "ExecutionPipeline unavailable")
+        self.assertTrue(result["v2_pre_submit_proven"])
         self.assertEqual(import_module.call_count, 2)
-        finalize.assert_called_once_with(metadata, "released")
+        finalize.assert_called_once_with(metadata, "submitted")
 
 
 if __name__ == "__main__":
