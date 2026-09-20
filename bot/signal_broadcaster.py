@@ -563,6 +563,15 @@ class SignalBroadcaster:
             signal_metadata = signal.get("metadata") if isinstance(signal.get("metadata"), dict) else {}
             duplicate_key = str(signal.get("duplicate_key") or signal_metadata.get("duplicate_key") or "").strip()
             duplicate_token = str(signal.get("duplicate_token") or signal_metadata.get("duplicate_token") or "").strip()
+            raw_shared_required = signal.get(
+                "duplicate_shared_required",
+                signal_metadata.get("duplicate_shared_required", False),
+            )
+            duplicate_shared_required = (
+                raw_shared_required
+                if isinstance(raw_shared_required, bool)
+                else str(raw_shared_required or "").strip().lower() in {"1", "true", "yes", "on"}
+            )
 
             if size <= 0:
                 if duplicate_key and duplicate_token:
@@ -571,7 +580,7 @@ class SignalBroadcaster:
                         get_user_scoped_idempotency_registry,
                     )
                     get_user_scoped_idempotency_registry().release(
-                        IdempotencyReservationHandle(duplicate_key, duplicate_token)
+                        IdempotencyReservationHandle(duplicate_key, duplicate_token, bool(duplicate_shared_required))
                     )
                 return BroadcastResult(
                     account_id=account.account_id,
@@ -610,7 +619,11 @@ class SignalBroadcaster:
                     size_type="quote",
                     strategy="SignalBroadcaster",
                     metadata_override=(
-                        {"duplicate_key": duplicate_key, "duplicate_token": duplicate_token}
+                        {
+                            "duplicate_key": duplicate_key,
+                            "duplicate_token": duplicate_token,
+                            "duplicate_shared_required": bool(duplicate_shared_required),
+                        }
                         if duplicate_key and duplicate_token
                         else None
                     ),
