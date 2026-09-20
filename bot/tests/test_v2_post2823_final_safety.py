@@ -127,6 +127,93 @@ class TestPost2823FinalSafety(unittest.TestCase):
             )
         )
 
+    def test_break_retest_supported_multi_router_is_used(self):
+        pipeline = object.__new__(ExecutionPipeline)
+        pipeline._ecel_required = True
+        pipeline._ack_timeout_s = 1.0
+        pipeline._multi_router = MagicMock()
+        pipeline._multi_router.supports_v2_protected_entry.return_value = True
+        pipeline._multi_router.route.return_value = SimpleNamespace(
+            success=True,
+            fill_price=101.0,
+            filled_size_usd=100.0,
+            broker="coinbase",
+            order_id="protected-order-1",
+            error="",
+        )
+        pipeline._router = MagicMock()
+        pipeline._router.supports_v2_protected_entry = False
+
+        request = PipelineRequest(
+            strategy="BREAK_RETEST",
+            symbol="BTC-USD",
+            side="buy",
+            size_usd=100.0,
+            intent_type="entry",
+            stop_loss_pct=0.01,
+            take_profit_pct=0.02,
+            validated=True,
+        )
+
+        with patch(
+            "bot.execution_pipeline.runtime_authority_snapshot",
+            return_value=SimpleNamespace(dispatch_enabled=True),
+        ):
+            result = pipeline._dispatch(request, time.monotonic())
+
+        self.assertTrue(result.success)
+        pipeline._multi_router.route.assert_called_once()
+        pipeline._router.execute.assert_not_called()
+
+    def test_break_retest_supported_single_router_is_fallback_when_multi_is_unsupported(self):
+        pipeline = object.__new__(ExecutionPipeline)
+        pipeline._ecel_required = True
+        pipeline._ack_timeout_s = 1.0
+        pipeline._multi_router = MagicMock()
+        pipeline._multi_router.supports_v2_protected_entry = False
+        pipeline._router = MagicMock()
+        pipeline._router.supports_v2_protected_entry.return_value = True
+        pipeline._router.execute.return_value = SimpleNamespace(
+            success=True,
+            fill_price=101.0,
+            filled_size_usd=100.0,
+            order_id="single-protected-order",
+            error="",
+        )
+
+        request = PipelineRequest(
+            strategy="BREAK_RETEST",
+            symbol="BTC-USD",
+            side="buy",
+            size_usd=100.0,
+            intent_type="entry",
+            stop_loss_pct=0.01,
+            take_profit_pct=0.02,
+            validated=True,
+        )
+
+        with patch(
+            "bot.execution_pipeline.runtime_authority_snapshot",
+            return_value=SimpleNamespace(dispatch_enabled=True),
+        ):
+            result = pipeline._dispatch(request, time.monotonic())
+
+        self.assertTrue(result.success)
+        pipeline._multi_router.route.assert_not_called()
+        pipeline._router.execute.assert_called_once()
+
+    def test_break_retest_missing_percentages_still_requires_protection_capability(self):
+        request = PipelineRequest(
+            strategy="BREAK_RETEST",
+            symbol="BTC-USD",
+            side="buy",
+            size_usd=100.0,
+            intent_type="entry",
+            validated=True,
+        )
+        self.assertTrue(ExecutionPipeline._requires_verified_entry_protection(request))
+
+
 
 if __name__ == "__main__":
     unittest.main()
