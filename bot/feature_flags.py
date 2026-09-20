@@ -21,6 +21,7 @@ class FeatureFlag(Enum):
     SUPPORT_RESISTANCE_ENABLED = "support_resistance_enabled"
     VOLATILITY_EXPANSION_ENABLED = "volatility_expansion_enabled"
     REVERSAL_EXHAUSTION_ENABLED = "reversal_exhaustion_enabled"
+    BREAK_RETEST_ENABLED = "break_retest_enabled"
     
     # Safety killswitches (always ON)
     PROFITABILITY_ASSERTION = "profitability_assertion"
@@ -58,6 +59,7 @@ class FeatureFlagManager:
             FeatureFlag.SUPPORT_RESISTANCE_ENABLED: False,
             FeatureFlag.VOLATILITY_EXPANSION_ENABLED: False,
             FeatureFlag.REVERSAL_EXHAUSTION_ENABLED: False,
+            FeatureFlag.BREAK_RETEST_ENABLED: False,
             
             # Safety features ALWAYS ON (cannot be disabled)
             FeatureFlag.PROFITABILITY_ASSERTION: True,

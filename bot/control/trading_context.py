@@ -11,7 +11,7 @@ from typing import Any, Dict, Mapping, Optional, Tuple
 import uuid
 
 
-_ALLOWED_MODES = {"live", "paper", "simulation", "backtest"}
+_ALLOWED_MODES = {"live", "limited_live", "paper", "shadow", "simulation", "backtest"}
 
 
 def _clean(value: Any) -> str:

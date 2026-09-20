@@ -219,10 +219,15 @@ class SignalPipeline:
         regime = getattr(regime_result, "value", regime_result)
         regime = str(regime)
 
+        try:
+            owned_positions = risk_snapshot.positions_for_owner()
+        except ValueError as exc:
+            logger.warning("PIPELINE_REJECT stage=situation reason=%s", exc)
+            return None
         situation = self._situation_engine.assess(
             trading_context=trading_context,
             regime_result=regime_full,
-            positions=risk_snapshot.positions_for_owner(),
+            positions=owned_positions,
             checks=checks,
             authoritative_position_proven=authoritative_position_proven,
         )
@@ -374,7 +379,7 @@ class SignalPipeline:
             if not context_authorized:
                 logger.warning("PIPELINE_REJECT stage=context reason=context_not_authorized")
                 return None
-        elif trading_context.mode == "live":
+        elif str(trading_context.mode or "").strip().lower() in {"live", "limited_live"}:
             logger.warning("PIPELINE_REJECT stage=context reason=live_context_authorizer_required")
             return None
         if risk_snapshot is not None and portfolio_snapshot is not None:
@@ -706,7 +711,10 @@ class SignalPipeline:
         mode = str(decision_context.execution_mode or "paper").strip().lower()
         if mode == "test":
             mode = "paper"
-        environment = str(decision_context.environment or ("production" if mode == "live" else "test")).strip()
+        environment = str(
+            decision_context.environment
+            or ("production" if mode in {"live", "limited_live"} else "test")
+        ).strip()
         return TradingContext(
             user_id=decision_context.user_id,
             trading_account_id=decision_context.account_id,

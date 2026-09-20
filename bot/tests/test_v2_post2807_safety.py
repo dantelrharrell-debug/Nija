@@ -8,7 +8,7 @@ from bot.control.control_compiler import RawSignal
 from bot.control.decision_context import UserDecisionContext, get_user_scoped_idempotency_registry
 from bot.control.signal_pipeline import SignalPipeline
 from bot.control.trading_context import TradingContext
-from bot.pipeline_order_submitter import _classify_failed_submission
+from bot.pipeline_order_submitter import _classify_failed_submission, submit_market_order_via_pipeline
 from bot.signal_broadcaster import SignalBroadcaster
 
 
