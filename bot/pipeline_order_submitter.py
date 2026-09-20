@@ -341,18 +341,22 @@ def _classify_failed_submission(result: Any) -> str:
 
 def _finalize_v2_duplicate(metadata: Dict[str, Any], state: str) -> None:
     """Finalize a held V2 reservation from authoritative submission outcome."""
-    duplicate_key = str((metadata or {}).get("duplicate_key") or "").strip()
-    if not duplicate_key:
-        return
     try:
-        from bot.control.decision_context import get_user_scoped_idempotency_registry
+        from bot.control.decision_context import (
+            IdempotencyReservationHandle,
+            get_user_scoped_idempotency_registry,
+        )
+        handle = IdempotencyReservationHandle.from_metadata(metadata or {})
+        if not handle:
+            return
         registry = get_user_scoped_idempotency_registry()
         if state == "released":
-            registry.release(duplicate_key)
+            registry.release(handle)
         else:
-            registry.mark_state(duplicate_key, state)
+            registry.mark_state(handle, state)
     except Exception as exc:
         # Fail closed: inability to finalize must not trigger a blind resubmit.
+        duplicate_key = str((metadata or {}).get("duplicate_key") or "").strip()
         logger.error("V2_DUPLICATE_FINALIZE_FAILED key=%s state=%s error=%s", duplicate_key, state, exc)
 
 
