@@ -18,6 +18,7 @@ from bot.control.decision_context import (
 )
 from bot.control.risk_engine import RiskEngine
 from bot.control.signal_pipeline import SignalPipeline
+from bot.control.trading_context import TradingContext
 from bot.control.strategy_detectors import (
     DetectorContext,
     MeanReversionDetector,
