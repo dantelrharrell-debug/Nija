@@ -339,8 +339,30 @@ def _classify_failed_submission(result: Any) -> str:
     return "error"
 
 
-def _finalize_v2_duplicate(metadata: Dict[str, Any], state: str) -> None:
+def _v2_duplicate_metadata_state(metadata: Dict[str, Any]) -> str:
+    """Return absent/complete/partial for V2 duplicate handoff metadata."""
+    data = metadata or {}
+    present = {
+        "duplicate_key": bool(str(data.get("duplicate_key") or "").strip()),
+        "duplicate_token": bool(str(data.get("duplicate_token") or "").strip()),
+    }
+    shared_present = "duplicate_shared_required" in data
+    if not present["duplicate_key"] and not present["duplicate_token"] and not shared_present:
+        return "absent"
+    if present["duplicate_key"] and present["duplicate_token"]:
+        return "complete"
+    return "partial"
+
+
+def _finalize_v2_duplicate(metadata: Dict[str, Any], state: str) -> bool:
+
     """Finalize a held V2 reservation from authoritative submission outcome."""
+    metadata_state = _v2_duplicate_metadata_state(metadata)
+    if metadata_state == "absent":
+        return True
+    if metadata_state == "partial":
+        logger.critical("V2_DUPLICATE_METADATA_INCOMPLETE stage=finalize fail_closed=true")
+        return False
     try:
         from bot.control.decision_context import (
             IdempotencyReservationHandle,
@@ -348,21 +370,27 @@ def _finalize_v2_duplicate(metadata: Dict[str, Any], state: str) -> None:
         )
         handle = IdempotencyReservationHandle.from_metadata(metadata or {})
         if not handle:
-            return
+            return False
         registry = get_user_scoped_idempotency_registry()
         if state == "released":
-            registry.release(handle)
-        else:
-            registry.mark_state(handle, state)
+            return bool(registry.release(handle))
+        return bool(registry.mark_state(handle, state))
     except Exception as exc:
         # Fail closed: inability to finalize must not trigger a blind resubmit.
         duplicate_key = str((metadata or {}).get("duplicate_key") or "").strip()
         logger.error("V2_DUPLICATE_FINALIZE_FAILED key=%s state=%s error=%s", duplicate_key, state, exc)
+        return False
 
 
 
 def _prepare_v2_duplicate_handoff(metadata: Dict[str, Any]) -> bool:
     """Durably extend a V2 reservation before any broker-dispatch-capable call."""
+    metadata_state = _v2_duplicate_metadata_state(metadata)
+    if metadata_state == "absent":
+        return True
+    if metadata_state == "partial":
+        logger.critical("V2_DUPLICATE_METADATA_INCOMPLETE stage=handoff fail_closed=true")
+        return False
     try:
         from bot.control.decision_context import (
             IdempotencyReservationHandle,
@@ -370,7 +398,7 @@ def _prepare_v2_duplicate_handoff(metadata: Dict[str, Any]) -> bool:
         )
         handle = IdempotencyReservationHandle.from_metadata(metadata or {})
         if not handle:
-            return True
+            return False
         registry = get_user_scoped_idempotency_registry()
         ok = registry.mark_state(handle, "submitted_pending")
         if not ok:
@@ -400,20 +428,29 @@ def submit_market_order_via_pipeline(
 ) -> Dict[str, Any]:
     """Submit a market order while preserving explicit account/exit context."""
     incoming_metadata = dict(metadata_override or {})
+    if _v2_duplicate_metadata_state(incoming_metadata) == "partial":
+        return {
+            "status": "error",
+            "error": "v2_duplicate_metadata_incomplete",
+            "symbol": symbol,
+            "side": side,
+            "v2_pre_submit_proven": True,
+        }
     request_type, pipeline_getter = _resolve_execution_pipeline_dependencies()
     if pipeline_getter is None or request_type is None:
-        _finalize_v2_duplicate(incoming_metadata, "released")
-        return {"status": "error", "error": "ExecutionPipeline unavailable", "symbol": symbol, "side": side}
+        _finalize_v2_duplicate(incoming_metadata, "submitted")
+        return {"status": "error", "error": "ExecutionPipeline unavailable", "symbol": symbol, "side": side, "v2_pre_submit_proven": True}
 
     try:
         assert_distributed_writer_authority()
     except Exception as exc:
-        _finalize_v2_duplicate(incoming_metadata, "released")
+        _finalize_v2_duplicate(incoming_metadata, "submitted")
         return {
             "status": "error",
             "error": f"DistributedWriterFence reject: {exc}",
             "symbol": symbol,
             "side": side,
+            "v2_pre_submit_proven": True,
         }
 
     side_norm = str(side or "buy").strip().lower()
@@ -434,13 +471,14 @@ def submit_market_order_via_pipeline(
         except Exception:
             price_hint_usd = 0.0
         if price_hint_usd <= 0:
-            _finalize_v2_duplicate(incoming_metadata, "released")
+            _finalize_v2_duplicate(incoming_metadata, "submitted")
             return {
                 "status": "error",
                 "error": "Cannot compile base-size order without valid price hint",
                 "symbol": symbol,
                 "side": side_norm,
                 "account_id": account_id,
+                "v2_pre_submit_proven": True,
             }
         size_usd = max(0.0, _float(quantity) * price_hint_usd)
 
@@ -567,7 +605,10 @@ def submit_market_order_via_pipeline(
             # Release only when the pipeline proves the broker was never
             # contacted. Every other no-order-id failure is submission-uncertain
             # and must remain reserved until reconciliation proves otherwise.
-            _finalize_v2_duplicate(metadata, "released")
+            # Retain the same ownership token through broadcaster retries.
+            # Revert to the short pre-dispatch TTL; release only after retries
+            # are exhausted or the caller explicitly abandons the attempt.
+            _finalize_v2_duplicate(metadata, "submitted")
             status = "error"
         else:
             _finalize_v2_duplicate(metadata, "state_unknown")
@@ -582,6 +623,7 @@ def submit_market_order_via_pipeline(
             "leverage": leverage,
             "margin": leverage > 1,
             "intent_type": resolved_intent,
+            "v2_pre_submit_proven": bool(known_pre_submit and not broker_order_id),
         }
     fill_price = _float(getattr(result, "fill_price", 0.0))
     filled_size_usd = _float(getattr(result, "filled_size_usd", 0.0))
