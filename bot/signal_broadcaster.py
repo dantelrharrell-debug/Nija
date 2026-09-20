@@ -423,6 +423,7 @@ class SignalBroadcaster:
                 trade_id=f"{trade_id_prefix}:{account.account_id}",
                 asset_class=signal.get("asset_class"),
                 execution_mode=signal.get("execution_mode"),
+                environment=signal.get("environment"),
             )
             portfolio_snapshot = UserPortfolioSnapshot(
                 user_id=user_id,
