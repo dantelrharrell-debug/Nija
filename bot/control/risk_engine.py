@@ -156,6 +156,16 @@ class RiskEngine:
         mode = str(context.mode or "").strip().lower()
         return mode in {"live", "limited_live"} and environment in {"", "production", "prod"}
 
+    @staticmethod
+    def _runtime_requires_shared_state() -> bool:
+        mode = str(os.getenv("NIJA_STRATEGY_EXECUTION_MODE", "BACKTEST") or "BACKTEST").strip().lower()
+        environment = str(
+            os.getenv("NIJA_ENVIRONMENT")
+            or os.getenv("ENVIRONMENT")
+            or ""
+        ).strip().lower()
+        return mode in {"live", "limited_live"} and environment in {"", "production", "prod"}
+
     def _ensure_redis(self):
         if self._redis is not None:
             return self._redis
@@ -360,9 +370,12 @@ class RiskEngine:
             self._platform_kill_switch = bool(active)
             self._platform_kill_switch_reason = normalized_reason
         persisted = self._set_shared_switch(self._platform_state_key(), bool(active), normalized_reason or "platform_kill_switch")
+        shared_required = self._runtime_requires_shared_state()
         if active and not persisted:
             logger.critical("shared_kill_switch_activation_unconfirmed:platform")
-        return persisted or active
+            if shared_required:
+                raise RuntimeError("shared_kill_switch_activation_unconfirmed:platform")
+        return persisted or (active and not shared_required)
 
     def set_user_kill_switch(self, user_id: str, active: bool, reason: str = "") -> bool:
         key = str(user_id or "").strip()
@@ -375,9 +388,12 @@ class RiskEngine:
             else:
                 self._user_kill_switches.pop(key, None)
         persisted = self._set_shared_switch(self._opaque_state_key("kill:user", key), bool(active), normalized_reason)
+        shared_required = self._runtime_requires_shared_state()
         if active and not persisted:
             logger.critical("shared_kill_switch_activation_unconfirmed:user")
-        return persisted or active
+            if shared_required:
+                raise RuntimeError("shared_kill_switch_activation_unconfirmed:user")
+        return persisted or (active and not shared_required)
 
     def set_account_kill_switch(self, context: TradingContext, active: bool, reason: str = "") -> bool:
         key = (context.user_id, context.trading_account_id, context.broker, context.broker_account_id)
