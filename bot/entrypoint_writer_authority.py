@@ -635,6 +635,13 @@ class EntrypointWriterAuthority:
         if published_token:
             return True, "exact_token_owner"
 
+        # Compatibility/direct-test runtimes can exist before any process-global
+        # authority lineage has been published.  There is no newer owner to
+        # protect in that state, so local cleanup may publish the fail-closed
+        # zero/LOST state as before.
+        if not (published_generation or published_instance or published_acquired_at):
+            return True, "no_published_authority_lineage"
+
         # A missing token is itself a fail-closed condition.  Allow the runtime
         # that published the remaining lineage to clean up/restart, but never a
         # stale runtime with incomplete or mismatched lineage.
