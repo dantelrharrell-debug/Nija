@@ -173,6 +173,7 @@ class CompiledSignal:
             "trading_context": self.trading_context.to_log_fields(),
             "stop_loss_pct":   self.stop_loss_pct,
             "take_profit_pct": self.take_profit_pct,
+            "metadata":        dict(self.metadata or {}),
         }
 
 
