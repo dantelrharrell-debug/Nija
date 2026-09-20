@@ -40,6 +40,7 @@ Phase:  1 — Control Layer
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -82,6 +83,7 @@ _ENV_RULES: Dict[str, Any] = {
 
 # Redis key for live rule overrides
 _REDIS_RULES_KEY = "nija:control:risk_rules"
+_REDIS_RISK_STATE_PREFIX = "nija:control:risk_state"
 
 
 # ---------------------------------------------------------------------------
@@ -147,6 +149,59 @@ class RiskEngine:
             self._rules.max_daily_loss_pct,
             self._rules.max_drawdown_pct,
         )
+
+    @staticmethod
+    def _requires_shared_state(context: TradingContext) -> bool:
+        return (
+            str(context.environment or "").strip().lower() in {"production", "prod"}
+            and str(context.mode or "").strip().lower() == "live"
+        )
+
+    def _ensure_redis(self):
+        if self._redis is not None:
+            return self._redis
+        try:
+            from bot.control.decision_context import _default_redis_client
+            self._redis = _default_redis_client()
+        except Exception:
+            self._redis = None
+        return self._redis
+
+    @staticmethod
+    def _opaque_state_key(kind: str, *parts: str) -> str:
+        payload = json.dumps([str(part or "").strip() for part in parts], separators=(",", ":")).encode("utf-8")
+        return f"{_REDIS_RISK_STATE_PREFIX}:{kind}:{hashlib.sha256(payload).hexdigest()}"
+
+    @staticmethod
+    def _platform_state_key() -> str:
+        return f"{_REDIS_RISK_STATE_PREFIX}:kill:platform"
+
+    def _set_shared_switch(self, key: str, active: bool, reason: str) -> None:
+        client = self._ensure_redis()
+        if client is None:
+            return
+        try:
+            if active:
+                client.set(key, str(reason or "active"))
+            else:
+                client.delete(key)
+        except Exception as exc:
+            logger.error("RiskEngine: shared kill-switch write failed key=%s error=%s", key.split(":")[-2], type(exc).__name__)
+
+    def _get_shared_switch(self, key: str) -> Tuple[Optional[bool], str]:
+        client = self._ensure_redis()
+        if client is None:
+            return None, ""
+        try:
+            value = client.get(key)
+            if value is None:
+                return False, ""
+            if isinstance(value, bytes):
+                value = value.decode("utf-8", errors="replace")
+            return True, str(value or "active")
+        except Exception as exc:
+            logger.error("RiskEngine: shared kill-switch read failed error=%s", type(exc).__name__)
+            return None, ""
 
     # ------------------------------------------------------------------
     # Public API
@@ -298,27 +353,37 @@ class RiskEngine:
         return True, notes
 
     def set_platform_kill_switch(self, active: bool, reason: str = "") -> None:
+        normalized_reason = str(reason or "").strip()
         with self._lock:
             self._platform_kill_switch = bool(active)
-            self._platform_kill_switch_reason = str(reason or "").strip()
+            self._platform_kill_switch_reason = normalized_reason
+        self._set_shared_switch(self._platform_state_key(), bool(active), normalized_reason or "platform_kill_switch")
 
     def set_user_kill_switch(self, user_id: str, active: bool, reason: str = "") -> None:
         key = str(user_id or "").strip()
         if not key:
             return
+        normalized_reason = str(reason or "user_kill_switch")
         with self._lock:
             if active:
-                self._user_kill_switches[key] = str(reason or "user_kill_switch")
+                self._user_kill_switches[key] = normalized_reason
             else:
                 self._user_kill_switches.pop(key, None)
+        self._set_shared_switch(self._opaque_state_key("kill:user", key), bool(active), normalized_reason)
 
     def set_account_kill_switch(self, context: TradingContext, active: bool, reason: str = "") -> None:
         key = (context.user_id, context.trading_account_id, context.broker, context.broker_account_id)
+        normalized_reason = str(reason or "account_kill_switch")
         with self._lock:
             if active:
-                self._account_kill_switches[key] = str(reason or "account_kill_switch")
+                self._account_kill_switches[key] = normalized_reason
             else:
                 self._account_kill_switches.pop(key, None)
+        self._set_shared_switch(
+            self._opaque_state_key("kill:account", *key),
+            bool(active),
+            normalized_reason,
+        )
 
     def set_strategy_kill_switch(self, context: TradingContext, active: bool, reason: str = "") -> None:
         key = (
@@ -328,19 +393,31 @@ class RiskEngine:
             context.broker_account_id,
             context.strategy_instance_id,
         )
+        normalized_reason = str(reason or "strategy_kill_switch")
         with self._lock:
             if active:
-                self._strategy_kill_switches[key] = str(reason or "strategy_kill_switch")
+                self._strategy_kill_switches[key] = normalized_reason
             else:
                 self._strategy_kill_switches.pop(key, None)
+        self._set_shared_switch(
+            self._opaque_state_key("kill:strategy", *key),
+            bool(active),
+            normalized_reason,
+        )
 
     def set_broker_connection_kill_switch(self, context: TradingContext, active: bool, reason: str = "") -> None:
         key = (context.user_id, context.broker, context.broker_account_id)
+        normalized_reason = str(reason or "broker_connection_kill_switch")
         with self._lock:
             if active:
-                self._broker_connection_kill_switches[key] = str(reason or "broker_connection_kill_switch")
+                self._broker_connection_kill_switches[key] = normalized_reason
             else:
                 self._broker_connection_kill_switches.pop(key, None)
+        self._set_shared_switch(
+            self._opaque_state_key("kill:broker", *key),
+            bool(active),
+            normalized_reason,
+        )
 
     def record_broker_failure(self, context: TradingContext) -> None:
         key = (context.user_id, context.broker, context.broker_account_id)
@@ -488,15 +565,34 @@ class RiskEngine:
         *,
         trading_context: TradingContext,
     ) -> Tuple[bool, str]:
-        now_ms = time.time() * 1000
+        interval_ms = max(0, int(rules.min_time_between_trades_ms))
+        if interval_ms <= 0:
+            return True, ""
         key = self._trade_frequency_key(symbol, trading_context=trading_context)
+        client = self._ensure_redis()
+        if client is not None:
+            redis_key = f"{_REDIS_RISK_STATE_PREFIX}:frequency:{hashlib.sha256(key.encode('utf-8')).hexdigest()}"
+            try:
+                acquired = bool(client.set(redis_key, "1", nx=True, px=interval_ms))
+                if not acquired:
+                    return False, f"trade_frequency_limit:{trading_context.scope_key[:12]}:{str(symbol or '').upper()}"
+                return True, ""
+            except Exception as exc:
+                logger.error("RiskEngine: distributed frequency gate failed error=%s", type(exc).__name__)
+                if self._requires_shared_state(trading_context):
+                    return False, "shared_risk_state_unavailable:trade_frequency"
+
+        if self._requires_shared_state(trading_context):
+            return False, "shared_risk_state_unavailable:trade_frequency"
+
+        now_ms = time.time() * 1000
         with self._lock:
             last_ms = self._last_trade_ts.get(key, 0.0)
         elapsed_ms = now_ms - last_ms
-        if elapsed_ms < rules.min_time_between_trades_ms:
+        if elapsed_ms < interval_ms:
             return False, (
-                f"trade_frequency_limit:{key}:"
-                f"elapsed={elapsed_ms:.0f}ms<{rules.min_time_between_trades_ms}ms"
+                f"trade_frequency_limit:{trading_context.scope_key[:12]}:"
+                f"elapsed={elapsed_ms:.0f}ms<{interval_ms}ms"
             )
         return True, ""
 
@@ -583,6 +679,31 @@ class RiskEngine:
     ) -> Tuple[bool, str]:
         account_key = (context.user_id, context.trading_account_id, context.broker, context.broker_account_id)
         broker_key = (context.user_id, context.broker, context.broker_account_id)
+        strategy_key = (
+            context.user_id,
+            context.trading_account_id,
+            context.broker,
+            context.broker_account_id,
+            context.strategy_instance_id,
+        )
+
+        shared_keys = [
+            ("platform_kill_switch", self._platform_state_key()) if enforce_platform_kill_switch else None,
+            ("user_kill_switch", self._opaque_state_key("kill:user", context.user_id)),
+            ("account_kill_switch", self._opaque_state_key("kill:account", *account_key)),
+            ("strategy_kill_switch", self._opaque_state_key("kill:strategy", *strategy_key)),
+            ("broker_connection_kill_switch", self._opaque_state_key("kill:broker", *broker_key)),
+        ]
+        for item in shared_keys:
+            if item is None:
+                continue
+            label, redis_key = item
+            active, reason = self._get_shared_switch(redis_key)
+            if active is True:
+                return False, f"{label}:{reason or 'active'}"
+            if active is None and self._requires_shared_state(context):
+                return False, "shared_risk_state_unavailable:kill_switch"
+
         with self._lock:
             if enforce_platform_kill_switch and self._platform_kill_switch:
                 return False, f"platform_kill_switch:{self._platform_kill_switch_reason or 'active'}"
@@ -590,13 +711,6 @@ class RiskEngine:
                 return False, f"user_kill_switch:{self._user_kill_switches[context.user_id]}"
             if account_key in self._account_kill_switches:
                 return False, f"account_kill_switch:{self._account_kill_switches[account_key]}"
-            strategy_key = (
-                context.user_id,
-                context.trading_account_id,
-                context.broker,
-                context.broker_account_id,
-                context.strategy_instance_id,
-            )
             if strategy_key in self._strategy_kill_switches:
                 return False, f"strategy_kill_switch:{self._strategy_kill_switches[strategy_key]}"
             if broker_key in self._broker_connection_kill_switches:
