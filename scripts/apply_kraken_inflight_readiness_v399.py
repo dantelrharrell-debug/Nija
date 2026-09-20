@@ -44,7 +44,68 @@ V407_MARKER = "20260908-kraken-cost-basis-stable-account-cache-v407"
 
 OLD = '''def _strong_broker_proof(broker: Any) -> tuple[bool, str]:\n    if broker is None:\n        return False, "broker_missing"\n    if not _connected(broker):\n        return False, "disconnected"\n    if getattr(broker, "_startup_position_sync_fetch_ok", None) is not True:\n        exact = str(getattr(broker, "_startup_position_sync_error", "") or "").strip()\n        return False, exact or "authoritative_position_fetch_unproven"\n    if getattr(broker, "_startup_position_sync_adopted", None) is not True:\n        exact = str(getattr(broker, "_startup_position_sync_error", "") or "").strip()\n        return False, exact or "position_snapshot_not_adopted"\n    if not hasattr(broker, "_startup_position_sync_symbols"):\n        return False, "authoritative_snapshot_symbols_missing"\n    snapshot_ok, reason, _rows, _age, _generation = _snapshot_status(broker)\n    if not snapshot_ok:\n        return False, reason\n    return True, "authoritative_current_position_snapshot_adopted"\n'''
 
-NEW = '''def _v399_current_snapshot_refresh_inflight(broker: Any) -> bool:\n    # Preserve only already-proven truth while the same authenticated Kraken\n    # refresh is genuinely still running. This is not a grace period: v285's\n    # original snapshot TTL remains authoritative and no timestamp is advanced.\n    if broker is None or not _connected(broker):\n        return False\n    broker_type = _label(getattr(broker, "broker_type", ""))\n    if broker_type != "kraken" and type(broker).__name__.lower() != "krakenbroker":\n        return False\n    snapshot_ok, _reason, _rows, _age, _generation = _snapshot_status(broker)\n    if not snapshot_ok:\n        return False\n    try:\n        v286 = importlib.import_module("bot.runtime_kraken_position_refresh_liveness_v286_patch")\n        last_ready = getattr(v286, "_LAST_PROOF_READY", None)\n        flights = getattr(v286, "_AUTH_FLIGHTS", None)\n        lock = getattr(v286, "_AUTH_LOCK", None)\n        if not isinstance(last_ready, dict) or last_ready.get(id(broker)) is not True:\n            return False\n        if not isinstance(flights, dict) or lock is None:\n            return False\n        with lock:\n            flight = flights.get(id(broker))\n            if not isinstance(flight, dict):\n                return False\n            event = flight.get("event")\n            if event is None or not callable(getattr(event, "is_set", None)):\n                return False\n            if bool(event.is_set()) or flight.get("error") is not None:\n                return False\n            started = _float(flight.get("started_at"), 0.0)\n            return started > 0.0\n    except Exception:\n        return False\n\n\ndef _strong_broker_proof(broker: Any) -> tuple[bool, str]:\n    if broker is None:\n        return False, "broker_missing"\n    if not _connected(broker):\n        return False, "disconnected"\n    if getattr(broker, "_startup_position_sync_fetch_ok", None) is not True:\n        if _v399_current_snapshot_refresh_inflight(broker):\n            return True, "authoritative_current_position_snapshot_refresh_inflight_v399"\n        exact = str(getattr(broker, "_startup_position_sync_error", "") or "").strip()\n        return False, exact or "authoritative_position_fetch_unproven"\n    if getattr(broker, "_startup_position_sync_adopted", None) is not True:\n        if _v399_current_snapshot_refresh_inflight(broker):\n            return True, "authoritative_current_position_snapshot_refresh_inflight_v399"\n        exact = str(getattr(broker, "_startup_position_sync_error", "") or "").strip()\n        return False, exact or "position_snapshot_not_adopted"\n    if not hasattr(broker, "_startup_position_sync_symbols"):\n        return False, "authoritative_snapshot_symbols_missing"\n    snapshot_ok, reason, _rows, _age, _generation = _snapshot_status(broker)\n    if not snapshot_ok:\n        return False, reason\n    return True, "authoritative_current_position_snapshot_adopted"\n'''
+NEW = '''def _v399_current_snapshot_refresh_inflight(broker: Any) -> bool:
+    """Allow only prior-good, still-current Kraken proof during the exact active refresh.
+
+    This is not a grace period.  The existing v285 snapshot TTL remains
+    authoritative, and a completed/errored/missing v286 flight fails closed.
+    """
+    if broker is None or not _connected(broker):
+        return False
+    broker_type = _label(getattr(broker, "broker_type", ""))
+    if broker_type != "kraken" and type(broker).__name__.lower() != "krakenbroker":
+        return False
+    snapshot_ok, _reason, _rows, _age, _generation = _snapshot_status(broker)
+    if not snapshot_ok:
+        return False
+    try:
+        v286 = importlib.import_module(
+            "bot.runtime_kraken_position_refresh_liveness_v286_patch"
+        )
+        last_ready = getattr(v286, "_LAST_PROOF_READY", None)
+        flights = getattr(v286, "_AUTH_FLIGHTS", None)
+        lock = getattr(v286, "_AUTH_LOCK", None)
+        if not isinstance(last_ready, dict) or last_ready.get(id(broker)) is not True:
+            return False
+        if not isinstance(flights, dict) or lock is None:
+            return False
+        with lock:
+            flight = flights.get(id(broker))
+            if not isinstance(flight, dict):
+                return False
+            event = flight.get("event")
+            if event is None or not callable(getattr(event, "is_set", None)):
+                return False
+            if bool(event.is_set()) or flight.get("error") is not None:
+                return False
+            started = _float(flight.get("started_at"), 0.0)
+            return started > 0.0
+    except Exception:
+        return False
+
+
+def _strong_broker_proof(broker: Any) -> tuple[bool, str]:
+    if broker is None:
+        return False, "broker_missing"
+    if not _connected(broker):
+        return False, "disconnected"
+    if getattr(broker, "_startup_position_sync_fetch_ok", None) is not True:
+        if _v399_current_snapshot_refresh_inflight(broker):
+            return True, "authoritative_current_position_snapshot_refresh_inflight_v399"
+        exact = str(getattr(broker, "_startup_position_sync_error", "") or "").strip()
+        return False, exact or "authoritative_position_fetch_unproven"
+    if getattr(broker, "_startup_position_sync_adopted", None) is not True:
+        if _v399_current_snapshot_refresh_inflight(broker):
+            return True, "authoritative_current_position_snapshot_refresh_inflight_v399"
+        exact = str(getattr(broker, "_startup_position_sync_error", "") or "").strip()
+        return False, exact or "position_snapshot_not_adopted"
+    if not hasattr(broker, "_startup_position_sync_symbols"):
+        return False, "authoritative_snapshot_symbols_missing"
+    snapshot_ok, reason, _rows, _age, _generation = _snapshot_status(broker)
+    if not snapshot_ok:
+        return False, reason
+    return True, "authoritative_current_position_snapshot_adopted"
+'''
 
 
 def _patch_v407_stable_cost_basis_cache() -> bool:

@@ -476,6 +476,66 @@ class TestLeaseLossDetection(_Base):
         self.assertNotIn("NIJA_WRITER_FENCING_TOKEN", os.environ)
 
 
+    def test_stale_runtime_mark_lost_preserves_newer_published_authority(self):
+        """A stale runtime must not clear or halt a newer process-global writer."""
+        rt = self._make_runtime()
+        self._acquire(rt)
+
+        # Simulate a newer acquisition in the same process.  The token,
+        # generation and instance intentionally match the mocked test values;
+        # acquisition timestamp is the final exact-lineage discriminator.
+        newer_acquired_at = rt._acquired_at + 1.0
+        os.environ["NIJA_WRITER_FENCING_TOKEN"] = rt._token
+        os.environ["NIJA_WRITER_LEASE_GENERATION"] = str(rt._generation)
+        os.environ["NIJA_WRITER_INSTANCE_ID"] = rt._instance_id
+        os.environ["NIJA_WRITER_LOCK_ACQUIRED_AT"] = str(newer_acquired_at)
+        os.environ["NIJA_WRITER_LEASE_ACQUIRED"] = "1"
+        os.environ["NIJA_WRITER_STATE"] = "ACTIVE"
+        os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "1"
+        os.environ["NIJA_EXECUTION_ACTIVE"] = "true"
+
+        mock_kernel = MagicMock()
+        mock_seak = MagicMock()
+        mock_kernel.get_seak.return_value = mock_seak
+        with (
+            patch.dict(sys.modules, {"bot.single_execution_authority_kernel": mock_kernel}),
+            patch.object(rt, "_notify_runtime_reconciliation") as reconcile,
+            patch.object(rt, "_schedule_unhandled_loss_restart") as restart,
+        ):
+            rt._mark_lost("stale_runtime_test")
+
+        self.assertTrue(rt.lost)
+        self.assertEqual(os.environ.get("NIJA_WRITER_FENCING_TOKEN"), rt._token)
+        self.assertEqual(os.environ.get("NIJA_WRITER_LEASE_ACQUIRED"), "1")
+        self.assertEqual(os.environ.get("NIJA_WRITER_STATE"), "ACTIVE")
+        self.assertEqual(os.environ.get("NIJA_RUNTIME_EXECUTION_AUTHORITY"), "1")
+        self.assertEqual(os.environ.get("NIJA_EXECUTION_ACTIVE"), "true")
+        reconcile.assert_not_called()
+        restart.assert_not_called()
+        mock_seak.emergency_halt.assert_not_called()
+
+    def test_stale_runtime_release_preserves_newer_published_authority(self):
+        """Compare-delete failure from an old runtime must not clear newer globals."""
+        rt = self._make_runtime()
+        _, client = self._acquire(rt)
+        client.eval.return_value = 0
+
+        newer_acquired_at = rt._acquired_at + 1.0
+        os.environ["NIJA_WRITER_FENCING_TOKEN"] = rt._token
+        os.environ["NIJA_WRITER_LEASE_GENERATION"] = str(rt._generation)
+        os.environ["NIJA_WRITER_INSTANCE_ID"] = rt._instance_id
+        os.environ["NIJA_WRITER_LOCK_ACQUIRED_AT"] = str(newer_acquired_at)
+        os.environ["NIJA_WRITER_LEASE_ACQUIRED"] = "1"
+        os.environ["NIJA_WRITER_STATE"] = "ACTIVE"
+
+        released = rt.release()
+
+        self.assertFalse(released)
+        self.assertEqual(os.environ.get("NIJA_WRITER_FENCING_TOKEN"), rt._token)
+        self.assertEqual(os.environ.get("NIJA_WRITER_LEASE_ACQUIRED"), "1")
+        self.assertEqual(os.environ.get("NIJA_WRITER_STATE"), "ACTIVE")
+
+
 # ---------------------------------------------------------------------------
 # 6. Automatic writer re-election
 # ---------------------------------------------------------------------------
