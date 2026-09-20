@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from bot.broker_manager import AccountType, AlpacaBroker, BrokerType
+from bot.multi_broker_execution_router import MultiBrokerExecutionRouter, RouteRequest
 
 
 def _enum(value: str):
@@ -135,6 +136,41 @@ class TestAlpacaAtomicProtectedEntry(unittest.TestCase):
         self.assertEqual(float(order_data.take_profit.limit_price), 102.0)
         self.assertEqual(float(order_data.stop_loss.stop_price), 99.0)
         self.assertGreaterEqual(len(api.read_calls), 1)
+
+    def test_multi_router_dispatches_only_after_concrete_alpaca_leg_verification(self):
+        api = _FakeAlpacaAPI()
+        broker = _broker(api)
+        router = MultiBrokerExecutionRouter()
+        request = RouteRequest(
+            strategy="BREAK_RETEST",
+            symbol="SPY",
+            side="buy",
+            size_usd=250.0,
+            preferred_broker="alpaca",
+            metadata={
+                "broker_client": broker,
+                "broker_name": "alpaca",
+                "intent_type": "entry",
+                "protection_required": True,
+                "stop_loss_pct": 0.01,
+                "take_profit_pct": 0.02,
+                "price_hint_usd": 100.0,
+                "decision_trace_id": "trace-router-1",
+            },
+        )
+        guard1, guard2, guard3 = self._guards()
+        with (
+            patch.dict(os.environ, {"NIJA_ENABLE_ALPACA_PROTECTED_ENTRY": "true"}),
+            guard1,
+            guard2,
+            guard3,
+        ):
+            self.assertTrue(router.supports_v2_protected_entry(request))
+            result = router.route(request)
+
+        self.assertTrue(result.success, result.error)
+        self.assertEqual(len(api.submit_calls), 1)
+        self.assertEqual(float(result.filled_size_usd), 200.0)
 
     def test_missing_stop_leg_never_claims_verified_protection(self):
         api = _FakeAlpacaAPI(include_stop_loss=False)
