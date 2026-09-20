@@ -504,9 +504,20 @@ class UserScopedIdempotencyRegistry:
             return False
         with self._lock:
             shared_required = bool(handle.shared_required or self._reservation_shared_required.get(key, False))
+            local_entry = self._states.get(key)
+            local_token = str(
+                (local_entry or {}).get("token")
+                or self._reservation_tokens.get(key, "")
+            )
         if redis_result is None and shared_required:
             logger.critical(
                 "V2 idempotency shared state transition unavailable state=%s fail_closed=true",
+                normalized,
+            )
+            return False
+        if redis_result is None and local_token and local_token != token:
+            logger.warning(
+                "V2 idempotency stale local finalizer refused state=%s",
                 normalized,
             )
             return False
