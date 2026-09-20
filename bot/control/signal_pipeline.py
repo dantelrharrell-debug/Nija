@@ -80,6 +80,7 @@ from bot.control.decision_context import (
     UserDecisionContext,
     UserPortfolioSnapshot,
     UserScopedIdempotencyRegistry,
+    get_user_scoped_idempotency_registry,
 )
 from bot.control.signal_scoring import SignalScoringEngine
 from bot.control.strategy_registry import StrategyDetectorRegistry
@@ -139,7 +140,7 @@ class SignalPipeline:
         self._confirmation_engine = ConfirmationEngine()
         self._redis         = redis_client
         self._lock          = threading.Lock()
-        self._idempotency_registry = UserScopedIdempotencyRegistry()
+        self._idempotency_registry = get_user_scoped_idempotency_registry()
 
         # Session counters
         self._total:    int = 0
