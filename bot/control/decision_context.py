@@ -266,6 +266,7 @@ class UserScopedIdempotencyRegistry:
         self._redis_checked = redis_client is not None
         self._states: Dict[str, Dict[str, Any]] = {}
         self._reservation_tokens: Dict[str, str] = {}
+        self._reservation_shared_required: Dict[str, bool] = {}
 
     @staticmethod
     def build_key(context: UserDecisionContext, *, symbol: str, direction: str) -> str:
@@ -419,6 +420,7 @@ class UserScopedIdempotencyRegistry:
         if redis_result is True:
             with self._lock:
                 self._reservation_tokens[key] = token
+                self._reservation_shared_required[key] = self._requires_shared_authority(context)
             return True, IdempotencyReservationHandle(key, token)
         if redis_result is False:
             return False, IdempotencyReservationHandle(key, "")
@@ -436,11 +438,13 @@ class UserScopedIdempotencyRegistry:
             if entry is not None and self._is_expired(entry):
                 self._states.pop(key, None)
                 self._reservation_tokens.pop(key, None)
+                self._reservation_shared_required.pop(key, None)
                 entry = None
             state = str((entry or {}).get("state") or "")
             if state and state not in {"reconciled_rejected", "released"}:
                 return False, IdempotencyReservationHandle(key, "")
             self._reservation_tokens[key] = token
+            self._reservation_shared_required[key] = False
             self._states[key] = {
                 "state": "submitted",
                 "token": token,
@@ -454,22 +458,29 @@ class UserScopedIdempotencyRegistry:
             return handle
         return IdempotencyReservationHandle(str(handle or "").strip(), "")
 
-    def mark_state(self, handle: IdempotencyReservationHandle, state: str) -> None:
+    def mark_state(self, handle: IdempotencyReservationHandle, state: str) -> bool:
         handle = self._coerce_handle(handle)
         key = handle.key
         token = handle.token
         if not key or not token:
             logger.error("V2 idempotency state transition refused: ownership handle unavailable state=%s", state)
-            return
+            return False
         normalized = str(state or "").strip()
         if normalized in {"released", "reconciled_rejected"}:
-            self.release(handle)
-            return
+            return self.release(handle)
         ttl = self._uncertain_ttl_seconds if normalized in {"state_unknown", "submitted_pending", "pending"} else self._ttl_seconds
         redis_result = self._redis_compare_set(key, token, normalized, ttl)
         if redis_result is False:
             logger.warning("V2 idempotency stale finalizer refused state=%s", normalized)
-            return
+            return False
+        with self._lock:
+            shared_required = bool(self._reservation_shared_required.get(key, False))
+        if redis_result is None and shared_required:
+            logger.critical(
+                "V2 idempotency shared state transition unavailable state=%s fail_closed=true",
+                normalized,
+            )
+            return False
         with self._lock:
             self._states[key] = {
                 "state": normalized,
@@ -477,27 +488,34 @@ class UserScopedIdempotencyRegistry:
                 "expires_at": time.monotonic() + ttl,
             }
         if redis_result is None:
-            logger.error("V2 idempotency shared state transition unavailable state=%s", normalized)
+            logger.warning("V2 idempotency state mirrored locally state=%s", normalized)
+        return True
 
-    def release(self, handle: IdempotencyReservationHandle) -> None:
+    def release(self, handle: IdempotencyReservationHandle) -> bool:
         """Remove only the reservation owned by the supplied reservation handle."""
         handle = self._coerce_handle(handle)
         key = handle.key
         token = handle.token
         if not key or not token:
             logger.warning("V2 idempotency release refused: ownership handle unavailable")
-            return
+            return False
         redis_result = self._redis_compare_delete(key, token)
         if redis_result is False:
             logger.warning("V2 idempotency stale release refused")
-        elif redis_result is None and self._get_redis() is not None:
-            logger.error("V2 idempotency release not durable; shared authority unchanged")
+            return False
+        with self._lock:
+            shared_required = bool(self._reservation_shared_required.get(key, False))
+        if redis_result is None and shared_required:
+            logger.critical("V2 idempotency release not durable; shared authority unchanged")
+            return False
         with self._lock:
             entry = self._states.get(key)
             entry_token = str((entry or {}).get("token") or self._reservation_tokens.get(key, ""))
             if entry_token == token:
                 self._states.pop(key, None)
                 self._reservation_tokens.pop(key, None)
+                self._reservation_shared_required.pop(key, None)
+        return True
 
     def get_state(self, key: Any) -> Optional[str]:
         if isinstance(key, IdempotencyReservationHandle):
