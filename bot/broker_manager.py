@@ -7134,6 +7134,7 @@ class AlpacaBroker(BaseBroker):
             return False
 
     @staticmethod
+    @staticmethod
     def _alpaca_protected_price(value: float) -> float:
         """Round an Alpaca equity protection price without creating sub-penny noise."""
         price = float(value or 0.0)
@@ -7141,15 +7142,52 @@ class AlpacaBroker(BaseBroker):
             return 0.0
         return round(price, 2 if price >= 1.0 else 4)
 
-    def _alpaca_protected_reference_price(self, symbol: str) -> float:
-        """Return a recent broker-market reference price or fail closed."""
-        candles = self.get_candles(symbol, timeframe="1m", count=1)
-        if not candles:
-            return 0.0
+    def _alpaca_protected_reference_price(self, symbol: str, side: str) -> float:
+        """Return a current executable Alpaca quote for conservative sizing."""
         try:
-            return float((candles[-1] or {}).get("close") or 0.0)
-        except (TypeError, ValueError, AttributeError):
+            from alpaca.data.historical import StockHistoricalDataClient
+            from alpaca.data.requests import StockLatestQuoteRequest
+
+            if not self._api_key or not self._api_secret:
+                return 0.0
+            data_client = StockHistoricalDataClient(self._api_key, self._api_secret)
+            quotes = data_client.get_stock_latest_quote(
+                StockLatestQuoteRequest(symbol_or_symbols=symbol)
+            )
+            quote = quotes.get(symbol) if isinstance(quotes, dict) else None
+            if quote is None:
+                return 0.0
+            normalized_side = str(side or "").strip().lower()
+            raw_price = (
+                getattr(quote, "ask_price", 0.0)
+                if normalized_side == "buy"
+                else getattr(quote, "bid_price", 0.0)
+            )
+            return max(0.0, float(raw_price or 0.0))
+        except Exception as exc:
+            logger.warning(
+                "Alpaca protected-entry quote unavailable symbol=%s side=%s: %s",
+                symbol,
+                side,
+                exc,
+            )
             return 0.0
+
+    @staticmethod
+    def _alpaca_order_status(order: Any) -> str:
+        return str(
+            getattr(getattr(order, "status", None), "value", None)
+            or getattr(order, "status", "")
+            or ""
+        ).strip().lower()
+
+    @staticmethod
+    def _alpaca_order_class(order: Any) -> str:
+        return str(
+            getattr(getattr(order, "order_class", None), "value", None)
+            or getattr(order, "order_class", "")
+            or ""
+        ).strip().lower()
 
     def place_market_order_with_protection(
         self,
@@ -7163,13 +7201,15 @@ class AlpacaBroker(BaseBroker):
         protection_required: bool = True,
         decision_trace_id: Optional[str] = None,
     ) -> Dict:
-        """Submit one Alpaca equity bracket order and verify both protection legs.
+        """Submit one Alpaca bracket and prove a real fill plus both live exit legs.
 
-        No entry is submitted unless both requested protection percentages are
-        valid.  NIJA deliberately uses whole-share quantity for this path because
-        Alpaca bracket/OCO protection is not treated as a fractional/notional
-        contract here.  Quote-sized requests are conservatively converted to the
-        largest whole-share quantity that does not exceed the requested notional.
+        The broker request contains the entry, take-profit and stop-loss together.
+        NIJA does not report success until Alpaca confirms the parent filled and
+        both expected child legs are present in acceptable live states.  If an
+        unfilled parent cannot be verified promptly, NIJA requests cancellation
+        and confirms a zero-fill terminal state.  Any accepted order whose final
+        state cannot be proven is returned as submission-uncertain with its
+        exchange order id so idempotency/reconciliation can block blind retries.
         """
         if not protection_required:
             return {
@@ -7184,22 +7224,35 @@ class AlpacaBroker(BaseBroker):
                 "protection_verified": False,
             }
 
-        # Preserve the same absolute execution blockers as the ordinary order path.
+        # APP_STORE_MODE is an absolute execution block.  If its state cannot
+        # be loaded, fail closed instead of assuming live execution is allowed.
         try:
-            from bot.app_store_mode import get_app_store_mode
+            try:
+                from bot.app_store_mode import get_app_store_mode
+            except ImportError:
+                from app_store_mode import get_app_store_mode  # type: ignore[import]
             app_store_mode = get_app_store_mode()
-            if app_store_mode.is_enabled():
-                blocked = app_store_mode.block_execution_with_log(
-                    operation="place_market_order_with_protection",
-                    symbol=symbol,
-                    side=side,
-                    size=quantity,
-                )
-                if isinstance(blocked, dict):
-                    blocked["protection_verified"] = False
+        except Exception as exc:
+            return {
+                "status": "blocked",
+                "error": f"APP_STORE_GUARD_UNAVAILABLE:{exc}",
+                "protection_verified": False,
+            }
+        if app_store_mode.is_enabled():
+            blocked = app_store_mode.block_execution_with_log(
+                operation="place_market_order_with_protection",
+                symbol=symbol,
+                side=side,
+                size=quantity,
+            )
+            if isinstance(blocked, dict):
+                blocked["protection_verified"] = False
                 return blocked
-        except ImportError:
-            pass
+            return {
+                "status": "blocked",
+                "error": "APP_STORE_MODE",
+                "protection_verified": False,
+            }
 
         _auth_block = _reject_if_unauthorized_order_submit(
             broker_name=self.broker_type.value,
@@ -7272,7 +7325,7 @@ class AlpacaBroker(BaseBroker):
                 "protection_verified": False,
             }
 
-        reference_price = self._alpaca_protected_reference_price(symbol)
+        reference_price = self._alpaca_protected_reference_price(symbol, normalized_side)
         if reference_price <= 0.0:
             return {
                 "status": "error",
@@ -7280,9 +7333,17 @@ class AlpacaBroker(BaseBroker):
                 "protection_verified": False,
             }
 
+        try:
+            price_buffer_pct = float(
+                os.getenv("NIJA_ALPACA_PROTECTED_ENTRY_PRICE_BUFFER_PCT", "0.01")
+            )
+        except (TypeError, ValueError):
+            price_buffer_pct = 0.01
+        price_buffer_pct = min(max(price_buffer_pct, 0.0), 0.05)
+        sizing_price = reference_price * (1.0 + price_buffer_pct)
+
         if normalized_size_type in {"quote", "usd", "notional"}:
-            share_qty = int(order_size / reference_price)
-            requested_size_usd = float(share_qty) * reference_price
+            share_qty = int(order_size / sizing_price)
         else:
             if not float(order_size).is_integer():
                 return {
@@ -7291,7 +7352,6 @@ class AlpacaBroker(BaseBroker):
                     "protection_verified": False,
                 }
             share_qty = int(order_size)
-            requested_size_usd = float(share_qty) * reference_price
 
         if share_qty < 1:
             return {
@@ -7357,50 +7417,13 @@ class AlpacaBroker(BaseBroker):
                     "protection_verified": False,
                 }
 
-            raw_status = str(
-                getattr(getattr(order, "status", None), "value", None)
-                or getattr(order, "status", "")
-                or ""
-            ).strip().lower()
-            if raw_status in {
+            terminal_failure_statuses = {
                 "rejected", "canceled", "cancelled", "expired", "stopped", "suspended"
-            }:
-                return {
-                    "status": "error",
-                    "error": f"PROTECTED_ENTRY_{raw_status.upper()}",
-                    "order_id": str(order_id),
-                    "protection_verified": False,
-                }
-
-            # Read the accepted order back with nested legs and require explicit
-            # broker evidence of both the target and the stop before NIJA marks
-            # protection as verified.
-            verified_order = None
-            for delay_s in (0.0, 0.1, 0.25):
-                if delay_s:
-                    time.sleep(delay_s)
-                try:
-                    verified_order = self.api.get_order_by_id(
-                        order_id,
-                        GetOrderByIdRequest(nested=True),
-                    )
-                except Exception as verify_exc:
-                    logger.warning(
-                        "Alpaca protected-entry readback failed trace_id=%s order_id=%s: %s",
-                        decision_trace_id or "n/a",
-                        order_id,
-                        verify_exc,
-                    )
-                    verified_order = None
-                if getattr(verified_order, "legs", None):
-                    break
-
-            order_class = str(
-                getattr(getattr(verified_order or order, "order_class", None), "value", None)
-                or getattr(verified_order or order, "order_class", "")
-                or ""
-            ).strip().lower()
-            legs = list(getattr(verified_order, "legs", None) or [])
+            }
+            live_leg_statuses = {
+                "new", "accepted", "accepted_for_bidding", "pending_new",
+                "held", "partially_filled",
+            }
 
             def _price_matches(actual: Any, expected: float) -> bool:
                 try:
@@ -7410,84 +7433,177 @@ class AlpacaBroker(BaseBroker):
                 except (TypeError, ValueError):
                     return False
 
-            take_profit_leg = None
-            stop_loss_leg = None
-            for leg in legs:
+            def _inspect(current: Any) -> Dict[str, Any]:
+                current_status = self._alpaca_order_status(current)
+                current_class = self._alpaca_order_class(current)
+                legs = list(getattr(current, "legs", None) or [])
+                take_profit_leg = None
+                stop_loss_leg = None
+                for leg in legs:
+                    leg_status = self._alpaca_order_status(leg)
+                    if (
+                        take_profit_leg is None
+                        and leg_status in live_leg_statuses
+                        and _price_matches(getattr(leg, "limit_price", None), target_price)
+                        and not getattr(leg, "stop_price", None)
+                    ):
+                        take_profit_leg = leg
+                    if (
+                        stop_loss_leg is None
+                        and leg_status in live_leg_statuses
+                        and _price_matches(getattr(leg, "stop_price", None), stop_price)
+                    ):
+                        stop_loss_leg = leg
+                try:
+                    filled_qty = float(getattr(current, "filled_qty", 0.0) or 0.0)
+                except (TypeError, ValueError):
+                    filled_qty = 0.0
+                try:
+                    filled_price = float(
+                        getattr(current, "filled_avg_price", 0.0) or 0.0
+                    )
+                except (TypeError, ValueError):
+                    filled_price = 0.0
+                return {
+                    "status": current_status,
+                    "order_class": current_class,
+                    "take_profit_leg": take_profit_leg,
+                    "stop_loss_leg": stop_loss_leg,
+                    "filled_qty": filled_qty,
+                    "filled_price": filled_price,
+                    "protection_verified": bool(
+                        current_status == "filled"
+                        and current_class == "bracket"
+                        and filled_qty > 0.0
+                        and filled_price > 0.0
+                        and take_profit_leg is not None
+                        and stop_loss_leg is not None
+                    ),
+                }
+
+            last_order = order
+            last_state = _inspect(order)
+            # Continue through partial nested readbacks.  A single visible child
+            # is not enough evidence to fail or succeed the protection contract.
+            for delay_s in (0.0, 0.10, 0.20, 0.40, 0.80, 1.20):
+                if delay_s:
+                    time.sleep(delay_s)
+                try:
+                    last_order = self.api.get_order_by_id(
+                        order_id,
+                        GetOrderByIdRequest(nested=True),
+                    )
+                    last_state = _inspect(last_order)
+                except Exception as verify_exc:
+                    logger.warning(
+                        "Alpaca protected-entry readback failed trace_id=%s order_id=%s: %s",
+                        decision_trace_id or "n/a",
+                        order_id,
+                        verify_exc,
+                    )
+                    continue
+
+                if last_state["protection_verified"]:
+                    tp_leg = last_state["take_profit_leg"]
+                    sl_leg = last_state["stop_loss_leg"]
+                    return {
+                        "status": "filled",
+                        "order_id": str(order_id),
+                        "order": last_order,
+                        "filled_price": last_state["filled_price"],
+                        "filled_size_usd": (
+                            last_state["filled_qty"] * last_state["filled_price"]
+                        ),
+                        "protection_verified": True,
+                        "protection_order_class": last_state["order_class"],
+                        "stop_loss_price": stop_price,
+                        "take_profit_price": target_price,
+                        "stop_loss_order_id": str(getattr(sl_leg, "id", "") or ""),
+                        "take_profit_order_id": str(getattr(tp_leg, "id", "") or ""),
+                        "decision_trace_id": decision_trace_id,
+                    }
                 if (
-                    take_profit_leg is None
-                    and _price_matches(getattr(leg, "limit_price", None), target_price)
-                    and not getattr(leg, "stop_price", None)
+                    last_state["status"] in terminal_failure_statuses
+                    and last_state["filled_qty"] <= 0.0
                 ):
-                    take_profit_leg = leg
-                if (
-                    stop_loss_leg is None
-                    and _price_matches(getattr(leg, "stop_price", None), stop_price)
-                ):
-                    stop_loss_leg = leg
+                    return {
+                        "status": last_state["status"] or "error",
+                        "error": f"PROTECTED_ENTRY_{(last_state['status'] or 'FAILED').upper()}",
+                        "order_id": str(order_id),
+                        "protection_verified": False,
+                        "submission_uncertain": False,
+                    }
 
-            protection_verified = bool(
-                order_class == "bracket"
-                and take_profit_leg is not None
-                and stop_loss_leg is not None
-            )
+            # An accepted but still-unfilled parent can be canceled safely.  Do
+            # not call this "canceled" until a zero-fill terminal readback proves it.
+            if last_state["filled_qty"] <= 0.0 and last_state["status"] != "filled":
+                try:
+                    self.api.cancel_order_by_id(order_id)
+                except Exception as cancel_exc:
+                    logger.warning(
+                        "Alpaca protected-entry cancel request failed order_id=%s: %s",
+                        order_id,
+                        cancel_exc,
+                    )
 
-            final_order = verified_order or order
-            final_status = str(
-                getattr(getattr(final_order, "status", None), "value", None)
-                or getattr(final_order, "status", "")
-                or "open"
-            ).strip().lower()
-            status_map = {
-                "new": "open",
-                "accepted": "open",
-                "accepted_for_bidding": "open",
-                "pending_new": "pending",
-                "partially_filled": "open",
-                "filled": "filled",
-                "done_for_day": "closed",
-                "canceled": "unfilled",
-                "cancelled": "unfilled",
-                "rejected": "error",
-                "expired": "unfilled",
-                "replaced": "open",
-                "stopped": "unfilled",
-                "suspended": "unfilled",
-            }
-            normalized_status = status_map.get(final_status, "open")
-            filled_price_raw = getattr(final_order, "filled_avg_price", None)
-            filled_price = (
-                float(filled_price_raw)
-                if filled_price_raw not in (None, "", 0, "0")
-                else None
-            )
+                for delay_s in (0.0, 0.10, 0.25, 0.50):
+                    if delay_s:
+                        time.sleep(delay_s)
+                    try:
+                        last_order = self.api.get_order_by_id(
+                            order_id,
+                            GetOrderByIdRequest(nested=True),
+                        )
+                        last_state = _inspect(last_order)
+                    except Exception:
+                        continue
 
-            result = {
-                "status": normalized_status,
+                    if last_state["protection_verified"]:
+                        tp_leg = last_state["take_profit_leg"]
+                        sl_leg = last_state["stop_loss_leg"]
+                        return {
+                            "status": "filled",
+                            "order_id": str(order_id),
+                            "order": last_order,
+                            "filled_price": last_state["filled_price"],
+                            "filled_size_usd": (
+                                last_state["filled_qty"] * last_state["filled_price"]
+                            ),
+                            "protection_verified": True,
+                            "protection_order_class": last_state["order_class"],
+                            "stop_loss_price": stop_price,
+                            "take_profit_price": target_price,
+                            "stop_loss_order_id": str(getattr(sl_leg, "id", "") or ""),
+                            "take_profit_order_id": str(getattr(tp_leg, "id", "") or ""),
+                            "decision_trace_id": decision_trace_id,
+                        }
+                    if (
+                        last_state["status"] in terminal_failure_statuses
+                        and last_state["filled_qty"] <= 0.0
+                    ):
+                        return {
+                            "status": "cancelled",
+                            "error": "PROTECTED_ENTRY_CANCEL_CONFIRMED_ZERO_FILL",
+                            "order_id": str(order_id),
+                            "protection_verified": False,
+                            "submission_uncertain": False,
+                        }
+
+            # The exchange accepted the parent and NIJA cannot prove a safe
+            # terminal state.  Preserve the exchange id so the caller keeps the
+            # idempotency reservation in submitted_pending and reconciles rather
+            # than creating a duplicate position.
+            return {
+                "status": "submission_uncertain",
+                "error": "PROTECTED_ENTRY_RECONCILIATION_REQUIRED",
                 "order_id": str(order_id),
-                "order": final_order,
-                "filled_price": filled_price,
-                "filled_size_usd": (
-                    float(share_qty) * filled_price
-                    if filled_price is not None
-                    else requested_size_usd
-                ),
-                "protection_verified": protection_verified,
-                "protection_order_class": order_class,
-                "stop_loss_price": stop_price,
-                "take_profit_price": target_price,
-                "stop_loss_order_id": (
-                    str(getattr(stop_loss_leg, "id", "") or "")
-                    if stop_loss_leg is not None else ""
-                ),
-                "take_profit_order_id": (
-                    str(getattr(take_profit_leg, "id", "") or "")
-                    if take_profit_leg is not None else ""
-                ),
+                "protection_verified": False,
+                "submission_uncertain": True,
+                "parent_status": last_state.get("status", ""),
+                "filled_qty": last_state.get("filled_qty", 0.0),
+                "filled_price": last_state.get("filled_price", 0.0),
                 "decision_trace_id": decision_trace_id,
             }
-            if not protection_verified:
-                result["error"] = "PROTECTED_ENTRY_VERIFICATION_FAILED"
-            return result
         except Exception as exc:
             logger.error(
                 "Alpaca protected bracket error trace_id=%s symbol=%s: %s",

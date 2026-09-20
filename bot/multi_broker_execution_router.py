@@ -68,6 +68,15 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 logger = logging.getLogger("nija.multi_broker_router")
 
+
+class _BrokerSubmissionPending(RuntimeError):
+    """Broker accepted an order whose terminal/fill state still needs reconciliation."""
+
+    def __init__(self, reason: str, order_id: str) -> None:
+        self.order_id = str(order_id or "").strip()
+        super().__init__(reason)
+
+
 try:
     from bot.execution_dispatch_contract import (
         InternalDispatchFailure as _InternalDispatchFailure,
@@ -858,14 +867,14 @@ class MultiBrokerExecutionRouter:
                 logger.debug("ExecutionQualityFilter raised (non-fatal): %s", _eqf_exc)
 
         # 4. Dispatch
-        fill_price, filled_usd, dispatch_error = self._dispatch(request, broker)
+        fill_price, filled_usd, dispatch_error, broker_order_id = self._dispatch(request, broker)
         elapsed_ms = (time.monotonic() - t0) * 1000
-        success = dispatch_error is None and fill_price > 0
+        success = dispatch_error is None and fill_price > 0 and filled_usd > 0
 
         result = self._make_result(
             request, ac, broker.name, success,
             fill_price, filled_usd, elapsed_ms,
-            dispatch_error,
+            dispatch_error, order_id=broker_order_id,
         )
 
         # 5. Feed the performance scorer so future routing improves over time
@@ -1473,14 +1482,16 @@ class MultiBrokerExecutionRouter:
         self,
         request: RouteRequest,
         broker: BrokerProfile,
-    ) -> Tuple[float, float, Optional[str]]:
+    ) -> Tuple[float, float, Optional[str], str]:
         """
         Dispatch the order via the broker's dispatch function.
 
-        Returns (fill_price, filled_usd, error_message_or_None).
+        Returns (fill_price, filled_usd, error_message_or_None, order_id).
+        The order id is preserved for accepted-but-unresolved broker submissions
+        so upstream idempotency can hold the attempt in submitted_pending.
         """
         if broker.dispatch_fn is None:
-            return 0.0, 0.0, f"Broker '{broker.name}' has no dispatch function"
+            return 0.0, 0.0, f"Broker '{broker.name}' has no dispatch function", ""
 
         try:
             fill_price, filled_usd = broker.dispatch_fn(
@@ -1492,9 +1503,11 @@ class MultiBrokerExecutionRouter:
                 broker_name=broker.name,
                 metadata=request.metadata,
             )
-            return fill_price, filled_usd, None
+            return fill_price, filled_usd, None, ""
+        except _BrokerSubmissionPending as exc:
+            return 0.0, 0.0, str(exc), exc.order_id
         except Exception as exc:
-            return 0.0, 0.0, str(exc)
+            return 0.0, 0.0, str(exc), ""
 
     @staticmethod
     def _make_result(
@@ -1506,6 +1519,7 @@ class MultiBrokerExecutionRouter:
         filled_usd: float,
         latency_ms: float,
         error: Optional[str],
+        order_id: str = "",
     ) -> RouteResult:
         return RouteResult(
             success=success,
@@ -1517,6 +1531,7 @@ class MultiBrokerExecutionRouter:
             fill_price=fill_price,
             filled_size_usd=filled_usd,
             order_type=request.order_type or "MARKET",
+            order_id=str(order_id or ""),
             latency_ms=latency_ms,
             error=error,
         )
@@ -1735,16 +1750,43 @@ class MultiBrokerExecutionRouter:
         if not isinstance(result, dict):
             raise RuntimeError(f"Unsupported broker order response: {result!r}")
 
-        if (
-            protection_required
-            and not closing_position
-            and result.get("protection_verified") is not True
-        ):
-            raise RuntimeError(
-                "protected_entry_unverified: broker did not prove atomic SL/TP protection"
-            )
-
         status = str(result.get("status") or result.get("state") or "").strip().lower()
+        order_id = str(
+            result.get("order_id")
+            or result.get("id")
+            or result.get("exchange_order_id")
+            or ""
+        ).strip()
+
+        if protection_required and not closing_position:
+            if result.get("protection_verified") is not True:
+                if bool(result.get("submission_uncertain")) and order_id:
+                    raise _BrokerSubmissionPending(
+                        str(
+                            result.get("error")
+                            or "protected_entry_submission_uncertain: reconciliation required"
+                        ),
+                        order_id,
+                    )
+                raise RuntimeError(
+                    str(
+                        result.get("error")
+                        or "protected_entry_unverified: broker did not prove atomic SL/TP protection"
+                    )
+                )
+            # A protected entry is not a successful fill merely because the
+            # broker acknowledged the bracket.  Require the adapter's verified
+            # terminal fill evidence and never substitute a price hint.
+            if status not in {"filled", "closed", "complete", "done"}:
+                if order_id:
+                    raise _BrokerSubmissionPending(
+                        f"protected_entry_pending: status={status or 'unknown'}",
+                        order_id,
+                    )
+                raise RuntimeError(
+                    f"protected_entry_pending_without_order_id: status={status or 'unknown'}"
+                )
+
         if status in {
             "error",
             "failed",
@@ -1763,13 +1805,10 @@ class MultiBrokerExecutionRouter:
             symbol,
             side,
             status or "unknown",
-            result.get("order_id") or result.get("id") or result.get("exchange_order_id"),
+            order_id,
             result,
         )
 
-        # A genuine acknowledgment is required.  The reference price hint is
-        # only ever used to value a fill that the broker already acknowledged
-        # with a real order id — it must never manufacture a fill on its own.
         fill_price = float(
             result.get("filled_price")
             or result.get("average_filled_price")
@@ -1783,18 +1822,22 @@ class MultiBrokerExecutionRouter:
             or result.get("filled_value")
             or result.get("notional_usd")
             or result.get("size_usd")
-            or size_usd
+            or (0.0 if protection_required and not closing_position else size_usd)
         )
 
-        order_id = result.get("order_id") or result.get("id") or result.get("exchange_order_id")
         if not order_id:
             raise RuntimeError(
                 f"Broker response carries no exchange order id — order not acknowledged: {result!r}"
             )
-        if fill_price <= 0:
+        if fill_price <= 0 and not (protection_required and not closing_position):
             fill_price = float(metadata.get("price_hint_usd") or 0.0)
-        if fill_price <= 0:
-            raise RuntimeError(f"Broker order acknowledged without fill price: {result!r}")
+        if fill_price <= 0 or filled_usd <= 0:
+            if protection_required and not closing_position:
+                raise _BrokerSubmissionPending(
+                    "protected_entry_fill_unconfirmed: reconciliation required",
+                    order_id,
+                )
+            raise RuntimeError(f"Broker order acknowledged without fill evidence: {result!r}")
         return fill_price, filled_usd
 
     @staticmethod
@@ -2156,13 +2199,14 @@ class MultiBrokerExecutionRouter:
             metadata=request.metadata,
         )
 
-        fill_price, filled_usd, dispatch_error = self._dispatch(slice_request, broker)
+        fill_price, filled_usd, dispatch_error, broker_order_id = self._dispatch(slice_request, broker)
         elapsed_ms = (time.monotonic() - t0) * 1000
-        success = dispatch_error is None and fill_price > 0
+        success = dispatch_error is None and fill_price > 0 and filled_usd > 0
 
         result = self._make_result(
             slice_request, ac, broker.name, success,
             fill_price, filled_usd, elapsed_ms, dispatch_error,
+            order_id=broker_order_id,
         )
 
         # Feed performance scorer
