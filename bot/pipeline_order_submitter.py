@@ -326,6 +326,19 @@ def _plan_margin_entry(
     }
 
 
+def _classify_failed_submission(result: Any) -> str:
+    """Classify a failed execution result without permitting blind resubmission."""
+    broker_order_id = str(getattr(result, "order_id", "") or "").strip()
+    if broker_order_id:
+        return "pending"
+    error_text = str(getattr(result, "error", "") or "").lower()
+    if any(token in error_text for token in (
+        "timeout", "timed out", "ack", "unknown", "reconcile", "dispatch",
+    )):
+        return "state_unknown"
+    return "error"
+
+
 def _finalize_v2_duplicate(metadata: Dict[str, Any], state: str) -> None:
     """Finalize a held V2 reservation from authoritative submission outcome."""
     duplicate_key = str((metadata or {}).get("duplicate_key") or "").strip()

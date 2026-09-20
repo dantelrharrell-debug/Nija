@@ -8,7 +8,7 @@ from bot.control.control_compiler import RawSignal
 from bot.control.decision_context import UserDecisionContext, get_user_scoped_idempotency_registry
 from bot.control.signal_pipeline import SignalPipeline
 from bot.control.trading_context import TradingContext
-from bot.pipeline_order_submitter import submit_market_order_via_pipeline
+from bot.pipeline_order_submitter import _classify_failed_submission
 from bot.signal_broadcaster import SignalBroadcaster
 
 
@@ -53,7 +53,6 @@ class TestPost2807Safety(unittest.TestCase):
         self.assertTrue(SignalBroadcaster._kraken_margin_visibility_proven(broker))
 
     def test_ack_timeout_without_order_id_stays_state_unknown(self):
-        broker = SimpleNamespace(broker_name="coinbase", connected=True, get_account_balance=lambda: 1000.0)
         result = SimpleNamespace(success=False, order_id=None, error="ACK timeout after dispatch")
         pipeline = SimpleNamespace(execute=lambda request: result)
         request_type = lambda **kwargs: SimpleNamespace(**kwargs)
