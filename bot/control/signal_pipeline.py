@@ -650,6 +650,8 @@ class SignalPipeline:
                 return None
             if raw_signal.broker and raw_signal.broker.lower() != decision_context.broker.lower():
                 return None
+            if raw_signal.portfolio_id and raw_signal.portfolio_id != decision_context.portfolio_id:
+                return None
             return decision_context
 
         # Deriving the compatibility decision shape from TradingContext is safe:
@@ -692,7 +694,11 @@ class SignalPipeline:
             trading_account_id=decision_context.account_id,
             broker=decision_context.broker,
             broker_account_id=decision_context.account_id,
-            strategy_instance_id=raw_signal.strategy or decision_context.strategy_signal_id,
+            strategy_instance_id=(
+                str(raw_signal.strategy or "").strip()
+                or str(decision_context.risk_profile_id or "").strip()
+                or "v2_strategy"
+            ),
             portfolio_id=decision_context.portfolio_id,
             request_id=decision_context.trade_id,
             correlation_id=decision_context.correlation_id or decision_context.trade_id,

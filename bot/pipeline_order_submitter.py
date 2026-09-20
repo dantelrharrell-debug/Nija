@@ -516,13 +516,23 @@ def submit_market_order_via_pipeline(
 
     broker_order_id = str(getattr(result, "order_id", "") or "").strip()
     if not result.success:
-        status = _classify_failed_submission(result)
-        if status == "pending":
+        error_text = str(getattr(result, "error", "") or "").lower()
+        known_pre_submit = any(token in error_text for token in (
+            "dispatch_disabled", "dispatch.enabled=false", "internal_dispatch_failure",
+            "writer", "fence", "validation", "risk reject", "rejected before dispatch",
+        ))
+        if broker_order_id:
             _finalize_v2_duplicate(metadata, "submitted_pending")
-        elif status == "state_unknown":
-            _finalize_v2_duplicate(metadata, "state_unknown")
-        else:
+            status = "pending"
+        elif known_pre_submit:
+            # Release only when the pipeline proves the broker was never
+            # contacted. Every other no-order-id failure is submission-uncertain
+            # and must remain reserved until reconciliation proves otherwise.
             _finalize_v2_duplicate(metadata, "released")
+            status = "error"
+        else:
+            _finalize_v2_duplicate(metadata, "state_unknown")
+            status = "state_unknown"
         return {
             "status": status,
             "error": result.error or "ExecutionPipeline rejected order",
