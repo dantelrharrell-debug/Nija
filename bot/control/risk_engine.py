@@ -382,6 +382,7 @@ class RiskEngine:
     def set_account_kill_switch(self, context: TradingContext, active: bool, reason: str = "") -> bool:
         key = (context.user_id, context.trading_account_id, context.broker, context.broker_account_id)
         normalized_reason = str(reason or "account_kill_switch")
+        shared_required = self._requires_shared_state(context)
         with self._lock:
             if active:
                 self._account_kill_switches[key] = normalized_reason
@@ -392,9 +393,9 @@ class RiskEngine:
             bool(active),
             normalized_reason,
         )
-        if active and not persisted and self._requires_shared_state(context):
+        if active and not persisted and shared_required:
             raise RuntimeError("shared_kill_switch_activation_unconfirmed:account")
-        return persisted
+        return persisted or (active and not shared_required)
 
     def set_strategy_kill_switch(self, context: TradingContext, active: bool, reason: str = "") -> bool:
         key = (
@@ -405,6 +406,7 @@ class RiskEngine:
             context.strategy_instance_id,
         )
         normalized_reason = str(reason or "strategy_kill_switch")
+        shared_required = self._requires_shared_state(context)
         with self._lock:
             if active:
                 self._strategy_kill_switches[key] = normalized_reason
@@ -415,13 +417,14 @@ class RiskEngine:
             bool(active),
             normalized_reason,
         )
-        if active and not persisted and self._requires_shared_state(context):
+        if active and not persisted and shared_required:
             raise RuntimeError("shared_kill_switch_activation_unconfirmed:strategy")
-        return persisted
+        return persisted or (active and not shared_required)
 
     def set_broker_connection_kill_switch(self, context: TradingContext, active: bool, reason: str = "") -> bool:
         key = (context.user_id, context.broker, context.broker_account_id)
         normalized_reason = str(reason or "broker_connection_kill_switch")
+        shared_required = self._requires_shared_state(context)
         with self._lock:
             if active:
                 self._broker_connection_kill_switches[key] = normalized_reason
@@ -432,9 +435,9 @@ class RiskEngine:
             bool(active),
             normalized_reason,
         )
-        if active and not persisted and self._requires_shared_state(context):
+        if active and not persisted and shared_required:
             raise RuntimeError("shared_kill_switch_activation_unconfirmed:broker")
-        return persisted
+        return persisted or (active and not shared_required)
 
     def record_broker_failure(self, context: TradingContext) -> None:
         key = (context.user_id, context.broker, context.broker_account_id)

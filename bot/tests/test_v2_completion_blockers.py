@@ -189,6 +189,12 @@ class TestCompletionBlockers(unittest.TestCase):
         ctx = SimpleNamespace(mode="live", environment=None)
         self.assertFalse(RiskEngine._requires_shared_state(ctx))
 
+    def test_paper_account_kill_switch_reports_success_without_shared_state(self):
+        ctx = _trading_context()
+        with patch("bot.control.decision_context._default_redis_client", return_value=None):
+            engine = RiskEngine(redis_client=None)
+            self.assertTrue(engine.set_account_kill_switch(ctx, True, "paper_halt"))
+
     def test_production_limited_live_account_kill_switch_requires_durable_shared_write(self):
         ctx = _trading_context(mode="limited_live", environment="production")
         with patch("bot.control.decision_context._default_redis_client", return_value=None):
