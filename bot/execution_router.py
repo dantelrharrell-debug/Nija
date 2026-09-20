@@ -220,11 +220,6 @@ class VenueProfile:
 
 
 class ExecutionRouter:
-    # BREAK_RETEST may run in backtest/paper/simulated modes, but real
-    # broker routing is intentionally fail-closed until this router binds and
-    # verifies both requested stop-loss and take-profit protection legs.
-    supports_v2_protected_entry = False
-
     """
     Smart Order Router — selects venue, order type, and dispatches trades.
 
@@ -243,6 +238,11 @@ class ExecutionRouter:
        discarded; the router records the filled fraction and returns a partial
        success so the caller can decide whether to re-submit the remainder.
     """
+
+    # BREAK_RETEST may run in backtest/paper/simulated modes, but real
+    # broker routing is intentionally fail-closed until this router binds and
+    # verifies both requested stop-loss and take-profit protection legs.
+    supports_v2_protected_entry = False
 
     def __init__(
         self,
