@@ -1,5 +1,7 @@
 """Regression checks for production authority paths that must never fail open."""
 
+import ast
+
 from pathlib import Path
 
 
@@ -47,12 +49,34 @@ def test_execution_engine_fails_closed_when_bootstrap_authority_errors() -> None
 
 def test_direct_submitter_always_requires_distributed_writer() -> None:
     source = _source("bot/pipeline_order_submitter.py")
-    gate = source.index("def submit_market_order_via_pipeline")
-    request = source.index("PipelineRequest(", gate)
-    guarded_region = source[gate:request]
+    tree = ast.parse(source)
+    submitter = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "submit_market_order_via_pipeline"
+    )
+    authority_calls = [
+        node.lineno
+        for node in ast.walk(submitter)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "assert_distributed_writer_authority"
+    ]
+    request_assignments = [
+        node.lineno
+        for node in submitter.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "request"
+            for target in node.targets
+        )
+    ]
 
-    assert "assert_distributed_writer_authority()" in guarded_region
-    assert 'if not (_truthy("FORCE_TRADE")' not in guarded_region
+    assert authority_calls
+    assert request_assignments
+    assert min(authority_calls) < min(request_assignments)
+    assert 'if not (_truthy("FORCE_TRADE")' not in ast.get_source_segment(source, submitter)
     assert 'raise RuntimeError("execution authority module unavailable")' in source
 
 
