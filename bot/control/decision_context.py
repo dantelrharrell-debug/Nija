@@ -221,19 +221,31 @@ class IdempotencyReservationHandle:
 
     key: str
     token: str
+    shared_required: bool = False
 
     def __bool__(self) -> bool:
         return bool(self.key and self.token)
 
-    def to_metadata(self) -> Dict[str, str]:
-        return {"duplicate_key": self.key, "duplicate_token": self.token}
+    def to_metadata(self) -> Dict[str, Any]:
+        return {
+            "duplicate_key": self.key,
+            "duplicate_token": self.token,
+            "duplicate_shared_required": bool(self.shared_required),
+        }
 
     @classmethod
     def from_metadata(cls, metadata: Dict[str, Any]) -> "IdempotencyReservationHandle":
         data = metadata or {}
+        raw_shared = data.get("duplicate_shared_required", False)
+        shared_required = (
+            raw_shared
+            if isinstance(raw_shared, bool)
+            else str(raw_shared or "").strip().lower() in {"1", "true", "yes", "on"}
+        )
         return cls(
             str(data.get("duplicate_key") or "").strip(),
             str(data.get("duplicate_token") or "").strip(),
+            bool(shared_required),
         )
 
 
@@ -421,9 +433,9 @@ class UserScopedIdempotencyRegistry:
             with self._lock:
                 self._reservation_tokens[key] = token
                 self._reservation_shared_required[key] = self._requires_shared_authority(context)
-            return True, IdempotencyReservationHandle(key, token)
+            return True, IdempotencyReservationHandle(key, token, self._requires_shared_authority(context))
         if redis_result is False:
-            return False, IdempotencyReservationHandle(key, "")
+            return False, IdempotencyReservationHandle(key, "", self._requires_shared_authority(context))
         if self._requires_shared_authority(context):
             logger.critical(
                 "V2_IDEMPOTENCY_SHARED_AUTHORITY_UNAVAILABLE broker=%s account=%s fail_closed=true",
@@ -450,13 +462,13 @@ class UserScopedIdempotencyRegistry:
                 "token": token,
                 "expires_at": time.monotonic() + self._ttl_seconds,
             }
-        return True, IdempotencyReservationHandle(key, token)
+        return True, IdempotencyReservationHandle(key, token, False)
 
     @staticmethod
     def _coerce_handle(handle: Any) -> IdempotencyReservationHandle:
         if isinstance(handle, IdempotencyReservationHandle):
             return handle
-        return IdempotencyReservationHandle(str(handle or "").strip(), "")
+        return IdempotencyReservationHandle(str(handle or "").strip(), "", False)
 
     def mark_state(self, handle: IdempotencyReservationHandle, state: str) -> bool:
         handle = self._coerce_handle(handle)
@@ -474,7 +486,7 @@ class UserScopedIdempotencyRegistry:
             logger.warning("V2 idempotency stale finalizer refused state=%s", normalized)
             return False
         with self._lock:
-            shared_required = bool(self._reservation_shared_required.get(key, False))
+            shared_required = bool(handle.shared_required or self._reservation_shared_required.get(key, False))
         if redis_result is None and shared_required:
             logger.critical(
                 "V2 idempotency shared state transition unavailable state=%s fail_closed=true",
@@ -504,7 +516,7 @@ class UserScopedIdempotencyRegistry:
             logger.warning("V2 idempotency stale release refused")
             return False
         with self._lock:
-            shared_required = bool(self._reservation_shared_required.get(key, False))
+            shared_required = bool(handle.shared_required or self._reservation_shared_required.get(key, False))
         if redis_result is None and shared_required:
             logger.critical("V2 idempotency release not durable; shared authority unchanged")
             return False
