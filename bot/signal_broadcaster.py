@@ -683,11 +683,12 @@ class SignalBroadcaster:
 
     @staticmethod
     def _kraken_margin_visibility_proven(broker: Any) -> bool:
-        """Return only explicit authoritative Kraken margin-visibility proof.
+        """Bridge V2 admission to existing authoritative Kraken position proof.
 
-        Absence, adapter errors, or unknown values are False by design.  This
-        prevents an empty/failed position response from being interpreted as
-        proof that no margin exposure exists.
+        Explicit adapter proof wins when present. Otherwise consult the
+        production v286/v285 authoritative position-sync proof. Any missing,
+        stale, failed, or exceptional state remains False; an empty position
+        list by itself is never proof.
         """
         for attribute in (
             "kraken_margin_visibility_proven",
@@ -702,7 +703,21 @@ class SignalBroadcaster:
                 return False
             if value is not None:
                 return value is True
-        return False
+
+        try:
+            from bot.runtime_kraken_position_refresh_liveness_v286_patch import _strong_proof
+            ready, _reason = _strong_proof(broker)
+            if ready:
+                return True
+        except Exception:
+            pass
+
+        try:
+            from bot.runtime_authoritative_position_coverage_v285_patch import _strong_broker_proof
+            ready, _reason = _strong_broker_proof(broker)
+            return bool(ready)
+        except Exception:
+            return False
 
     @staticmethod
     def _broker_is_healthy(broker: Any) -> bool:
