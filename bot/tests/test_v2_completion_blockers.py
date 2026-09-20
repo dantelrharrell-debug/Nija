@@ -22,7 +22,7 @@ from bot.control.strategy_signal import StrategySignal
 from bot.control.trading_context import TradingContext
 from bot.feature_flags import FeatureFlag, FeatureFlagManager
 from bot.signal_broadcaster import SignalBroadcaster
-from bot.pipeline_order_submitter import _prepare_v2_duplicate_handoff
+from bot.pipeline_order_submitter import _prepare_v2_duplicate_handoff, submit_market_order_via_pipeline
 
 
 class _FakeRedis:
@@ -540,6 +540,121 @@ class TestCompletionBlockers(unittest.TestCase):
         self.assertEqual(kwargs["metadata"]["target_candidates"][0], 104.0)
         self.assertTrue(kwargs["metadata"].get("duplicate_key"))
         self.assertTrue(kwargs["metadata"].get("duplicate_token"))
+
+
+    def test_incomplete_duplicate_metadata_fails_before_dispatch(self):
+        broker = SimpleNamespace(
+            broker_name="coinbase",
+            connected=True,
+            get_account_balance=lambda: 1000.0,
+        )
+        pipeline = MagicMock()
+        request_type = lambda **kwargs: SimpleNamespace(**kwargs)
+        with patch("bot.pipeline_order_submitter.assert_distributed_writer_authority", return_value=None), \
+             patch("bot.pipeline_order_submitter.get_execution_pipeline", return_value=pipeline), \
+             patch("bot.pipeline_order_submitter.PipelineRequest", request_type):
+            out = submit_market_order_via_pipeline(
+                broker,
+                "BTC-USD",
+                "buy",
+                10.0,
+                metadata_override={"duplicate_key": "v2:missing-token"},
+            )
+        self.assertEqual(out["status"], "error")
+        self.assertEqual(out["error"], "v2_duplicate_metadata_incomplete")
+        pipeline.execute.assert_not_called()
+
+    def test_proven_pre_submit_error_retains_token_for_retry(self):
+        redis = _FakeRedis()
+        registry = UserScopedIdempotencyRegistry(redis_client=redis, ttl_seconds=5.0)
+        ok, handle = registry.reserve(
+            _decision_context(),
+            symbol="BTC-USD",
+            direction="long",
+        )
+        self.assertTrue(ok)
+        broker = SimpleNamespace(
+            broker_name="coinbase",
+            connected=True,
+            get_account_balance=lambda: 1000.0,
+        )
+        results = [
+            SimpleNamespace(
+                success=False,
+                order_id=None,
+                error="dispatch_disabled: dispatch.enabled=false",
+            ),
+            SimpleNamespace(
+                success=True,
+                order_id="order-2",
+                error=None,
+                fill_price=101.0,
+                filled_size_usd=10.0,
+                broker="coinbase",
+            ),
+        ]
+        pipeline = SimpleNamespace(execute=MagicMock(side_effect=results))
+        request_type = lambda **kwargs: SimpleNamespace(**kwargs)
+        with patch(
+            "bot.control.decision_context.get_user_scoped_idempotency_registry",
+            return_value=registry,
+        ), patch(
+            "bot.pipeline_order_submitter.assert_distributed_writer_authority",
+            return_value=None,
+        ), patch(
+            "bot.pipeline_order_submitter.get_execution_pipeline",
+            return_value=pipeline,
+        ), patch(
+            "bot.pipeline_order_submitter.PipelineRequest",
+            request_type,
+        ):
+            first = submit_market_order_via_pipeline(
+                broker,
+                "BTC-USD",
+                "buy",
+                10.0,
+                metadata_override=handle.to_metadata(),
+            )
+            self.assertEqual(first["status"], "error")
+            self.assertTrue(first["v2_pre_submit_proven"])
+            self.assertEqual(registry.get_state(handle), "submitted")
+
+            second = submit_market_order_via_pipeline(
+                broker,
+                "BTC-USD",
+                "buy",
+                10.0,
+                metadata_override=handle.to_metadata(),
+            )
+
+        self.assertEqual(second["status"], "filled")
+        self.assertEqual(pipeline.execute.call_count, 2)
+
+    def test_completion_api_preserves_live_shared_authority(self):
+        redis = _FakeRedis()
+        producer = UserScopedIdempotencyRegistry(redis_client=redis)
+        ok, handle = producer.reserve(
+            _decision_context(mode="live", environment="production"),
+            symbol="ADA-USD",
+            direction="long",
+        )
+        self.assertTrue(ok)
+        self.assertTrue(handle.shared_required)
+
+        with patch("bot.control.decision_context._default_redis_client", return_value=None):
+            consumer = UserScopedIdempotencyRegistry(redis_client=None)
+            pipeline = SignalPipeline(
+                compiler=MagicMock(),
+                regime_engine=MagicMock(),
+                risk_engine=MagicMock(),
+            )
+            pipeline._idempotency_registry = consumer
+            self.assertFalse(
+                pipeline.mark_duplicate_execution_complete(
+                    handle,
+                    state="reconciled_filled",
+                )
+            )
 
 
 
