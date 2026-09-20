@@ -362,7 +362,7 @@ class RiskEngine:
         persisted = self._set_shared_switch(self._platform_state_key(), bool(active), normalized_reason or "platform_kill_switch")
         if active and not persisted:
             logger.critical("shared_kill_switch_activation_unconfirmed:platform")
-        return persisted
+        return persisted or active
 
     def set_user_kill_switch(self, user_id: str, active: bool, reason: str = "") -> bool:
         key = str(user_id or "").strip()
@@ -377,7 +377,7 @@ class RiskEngine:
         persisted = self._set_shared_switch(self._opaque_state_key("kill:user", key), bool(active), normalized_reason)
         if active and not persisted:
             logger.critical("shared_kill_switch_activation_unconfirmed:user")
-        return persisted
+        return persisted or active
 
     def set_account_kill_switch(self, context: TradingContext, active: bool, reason: str = "") -> bool:
         key = (context.user_id, context.trading_account_id, context.broker, context.broker_account_id)
