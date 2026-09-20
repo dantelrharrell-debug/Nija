@@ -66,7 +66,12 @@ class TestV2IdempotencyHandoff(unittest.TestCase):
         with patch("bot.signal_broadcaster.submit_market_order_via_pipeline", side_effect=fake_submit):
             result = broadcaster._execute_single(
                 broadcaster._accounts["acct-a"],
-                {"symbol": "BTC-USD", "duplicate_key": "v2:test-key", "duplicate_token": "token-1"},
+                {
+                    "symbol": "BTC-USD",
+                    "duplicate_key": "v2:test-key",
+                    "duplicate_token": "token-1",
+                    "duplicate_shared_required": True,
+                },
                 "BTC-USD",
                 "buy",
                 None,
@@ -75,6 +80,7 @@ class TestV2IdempotencyHandoff(unittest.TestCase):
         self.assertEqual(result.status, "pending")
         self.assertEqual(seen["metadata_override"]["duplicate_key"], "v2:test-key")
         self.assertEqual(seen["metadata_override"]["duplicate_token"], "token-1")
+        self.assertTrue(seen["metadata_override"]["duplicate_shared_required"])
 
 
 if __name__ == "__main__":
