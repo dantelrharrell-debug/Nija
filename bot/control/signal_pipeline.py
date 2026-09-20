@@ -598,13 +598,24 @@ class SignalPipeline:
                 return None
             return replace(decision_context, **replacements) if replacements else decision_context
 
-        # Legacy callers that already carry the immutable TradingContext are
-        # compiled on that path and must not be reinterpreted as a partial
-        # UserDecisionContext merely because they also expose account_id.
-        if raw_signal.trading_context is not None and not any(
-            (raw_signal.user_id, raw_signal.broker, raw_signal.portfolio_id, raw_signal.strategy_signal_id, raw_signal.trade_id)
-        ):
-            return None
+        # A RawSignal carrying the immutable TradingContext already has proven
+        # execution identity. Convert that authority into the V2 decision shape
+        # instead of reinterpreting the signal as a partial legacy context.
+        # This preserves fail-closed identity while keeping compiler/risk and
+        # V2 admission on one account scope.
+        if raw_signal.trading_context is not None:
+            tc = raw_signal.trading_context
+            return UserDecisionContext(
+                user_id=tc.user_id,
+                account_id=tc.trading_account_id,
+                broker=tc.broker,
+                portfolio_id=tc.portfolio_id,
+                strategy_signal_id=raw_signal.strategy_signal_id or tc.strategy_instance_id,
+                trade_id=raw_signal.trade_id or tc.decision_id or tc.request_id,
+                execution_mode=raw_signal.execution_mode or tc.mode,
+                asset_class=raw_signal.asset_class,
+                correlation_id=tc.correlation_id,
+            )
 
         has_explicit_account_scope = bool(
             raw_signal.user_id
