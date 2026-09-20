@@ -324,12 +324,15 @@ def submit_market_order_via_pipeline(
     metadata_override: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Submit a market order while preserving explicit account/exit context."""
+    incoming_metadata = dict(metadata_override or {})
     if get_execution_pipeline is None or PipelineRequest is None:
+        _finalize_v2_duplicate(incoming_metadata, "released")
         return {"status": "error", "error": "ExecutionPipeline unavailable", "symbol": symbol, "side": side}
 
     try:
         assert_distributed_writer_authority()
     except Exception as exc:
+        _finalize_v2_duplicate(incoming_metadata, "released")
         return {
             "status": "error",
             "error": f"DistributedWriterFence reject: {exc}",
@@ -355,6 +358,7 @@ def submit_market_order_via_pipeline(
         except Exception:
             price_hint_usd = 0.0
         if price_hint_usd <= 0:
+            _finalize_v2_duplicate(incoming_metadata, "released")
             return {
                 "status": "error",
                 "error": "Cannot compile base-size order without valid price hint",
@@ -418,7 +422,7 @@ def submit_market_order_via_pipeline(
     if base_quantity is not None and base_quantity > 0:
         metadata["base_quantity"] = base_quantity
         metadata["owned_base_qty"] = base_quantity
-    metadata.update(dict(metadata_override or {}))
+    metadata.update(incoming_metadata)
 
     request = PipelineRequest(
         strategy=strategy,
