@@ -275,7 +275,7 @@ class UserScopedIdempotencyRegistry:
         environment = str(context.environment or "").strip().lower()
         # LIVE with an omitted environment is treated as production. A caller
         # must explicitly name a non-production environment to use local state.
-        return mode == "live" and environment in {"", "production", "prod"}
+        return mode in {"live", "limited_live"} and environment in {"", "production", "prod"}
 
     def _get_redis(self):
         if not self._redis_checked:
