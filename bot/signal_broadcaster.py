@@ -710,7 +710,12 @@ class SignalBroadcaster:
                 return False
             if value is not None:
                 return value is True
-        return False
+        try:
+            from bot.runtime_kraken_margin_canonical_coverage_v366_patch import fetch_margin_positions
+            ok, _positions, _reason = fetch_margin_positions(broker, force=False)
+            return ok is True
+        except Exception:
+            return False
 
     @staticmethod
     def _broker_is_healthy(broker: Any) -> bool:
