@@ -33,7 +33,16 @@ from bot.control.risk_engine import (
 
 def _fresh_engine() -> RiskEngine:
     """Return a new, isolated RiskEngine (not the process singleton)."""
-    return RiskEngine()
+    # These legacy rule-unit tests intentionally omit owner context. V2 and
+    # production instances enforce isolation by default.
+    engine = RiskEngine(enforce_isolation_by_default=False)
+    engine.update_rules({
+        "max_concurrent_positions": 7,
+        "max_position_size_pct": 10.0,
+        "max_daily_loss_pct": 5.0,
+        "max_drawdown_pct": 15.0,
+    })
+    return engine
 
 
 def _make_positions(n: int, size_usd: float = 100.0) -> list:

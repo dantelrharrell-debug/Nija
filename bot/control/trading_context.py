@@ -5,6 +5,8 @@ Immutable trading identity context for Strategy Engine V2.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import hashlib
+import json
 from typing import Any, Dict, Mapping, Optional, Tuple
 import uuid
 
@@ -37,6 +39,7 @@ class TradingContext:
             "broker": self.broker,
             "broker_account_id": self.broker_account_id,
             "strategy_instance_id": self.strategy_instance_id,
+            "portfolio_id": self.portfolio_id,
             "request_id": self.request_id,
             "correlation_id": self.correlation_id,
             "environment": self.environment,
@@ -71,18 +74,19 @@ class TradingContext:
 
     @property
     def scope_key(self) -> str:
-        return "|".join(
-            [
-                self.user_id,
-                self.trading_account_id,
-                self.broker,
-                self.broker_account_id,
-                self.strategy_instance_id,
-                self.portfolio_id,
-                self.environment,
-                self.mode,
-            ]
-        )
+        """Return a delimiter-safe, opaque key for mutable state isolation."""
+        payload = {
+            "broker": self.broker,
+            "broker_account_id": self.broker_account_id,
+            "environment": self.environment,
+            "mode": self.mode,
+            "portfolio_id": self.portfolio_id,
+            "strategy_instance_id": self.strategy_instance_id,
+            "trading_account_id": self.trading_account_id,
+            "user_id": self.user_id,
+        }
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
 
     def to_log_fields(self) -> Dict[str, str]:
         return {
@@ -100,20 +104,21 @@ class TradingContext:
         }
 
     def make_idempotency_key(self, *, symbol: str, side: str, action: str) -> str:
-        return "|".join(
-            [
-                self.user_id,
-                self.trading_account_id,
-                self.broker,
-                self.broker_account_id,
-                self.request_id,
-                self.correlation_id,
-                self.decision_id,
-                _clean(symbol).upper(),
-                _clean(side).lower(),
-                _clean(action).lower(),
-            ]
-        )
+        """Return a collision-resistant idempotency key for one decision."""
+        payload = {
+            "action": _clean(action).lower(),
+            "broker": self.broker,
+            "broker_account_id": self.broker_account_id,
+            "correlation_id": self.correlation_id,
+            "decision_id": self.decision_id,
+            "request_id": self.request_id,
+            "side": _clean(side).lower(),
+            "symbol": _clean(symbol).upper(),
+            "trading_account_id": self.trading_account_id,
+            "user_id": self.user_id,
+        }
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return f"v2:{hashlib.sha256(encoded).hexdigest()}"
 
     @classmethod
     def from_mapping(cls, data: Mapping[str, Any]) -> "TradingContext":
