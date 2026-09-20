@@ -8,6 +8,7 @@ as new short entries or sized from platform capital.
 
 from __future__ import annotations
 
+import importlib
 import logging
 import os
 from typing import Any, Dict, Optional
@@ -34,6 +35,36 @@ except ImportError:
 
 
 _HEARTBEAT_PROBE_STRATEGIES = {"HEARTBEAT_TRADE", "HEARTBEAT_TRADE_CLOSE"}
+
+
+def _resolve_execution_pipeline_dependencies() -> tuple[Any, Any]:
+    """Recover dependencies that may be unavailable during circular startup.
+
+    The module-level import remains the fast path.  If package initialization
+    imported this submitter while ``bot.execution_pipeline`` was only partially
+    initialized, retry after startup instead of permanently treating the
+    execution path as unavailable.  Existing injected/mocked dependencies are
+    preserved independently.
+    """
+    global PipelineRequest, get_execution_pipeline
+
+    if PipelineRequest is not None and get_execution_pipeline is not None:
+        return PipelineRequest, get_execution_pipeline
+
+    try:
+        module = importlib.import_module("bot.execution_pipeline")
+    except ImportError:
+        try:
+            module = importlib.import_module("execution_pipeline")
+        except ImportError as exc:
+            logger.error("EXECUTION_PIPELINE_LAZY_IMPORT_FAILED error=%s", exc)
+            return PipelineRequest, get_execution_pipeline
+
+    if PipelineRequest is None:
+        PipelineRequest = getattr(module, "PipelineRequest", None)
+    if get_execution_pipeline is None:
+        get_execution_pipeline = getattr(module, "get_execution_pipeline", None)
+    return PipelineRequest, get_execution_pipeline
 
 
 def _truthy(name: str, default: bool = False) -> bool:
@@ -325,7 +356,8 @@ def submit_market_order_via_pipeline(
 ) -> Dict[str, Any]:
     """Submit a market order while preserving explicit account/exit context."""
     incoming_metadata = dict(metadata_override or {})
-    if get_execution_pipeline is None or PipelineRequest is None:
+    request_type, pipeline_getter = _resolve_execution_pipeline_dependencies()
+    if pipeline_getter is None or request_type is None:
         _finalize_v2_duplicate(incoming_metadata, "released")
         return {"status": "error", "error": "ExecutionPipeline unavailable", "symbol": symbol, "side": side}
 
@@ -424,7 +456,7 @@ def submit_market_order_via_pipeline(
         metadata["owned_base_qty"] = base_quantity
     metadata.update(incoming_metadata)
 
-    request = PipelineRequest(
+    request = request_type(
         strategy=strategy,
         symbol=symbol,
         side=side_norm,
@@ -455,9 +487,9 @@ def submit_market_order_via_pipeline(
         if preferred_broker == "kraken":
             from bot.kraken_margin_engine import margin_account_scope
             with margin_account_scope(account_id, adapter=broker):
-                result = get_execution_pipeline().execute(request)
+                result = pipeline_getter().execute(request)
         else:
-            result = get_execution_pipeline().execute(request)
+            result = pipeline_getter().execute(request)
     except Exception as exc:
         _finalize_v2_duplicate(metadata, "state_unknown")
         return {
