@@ -10,6 +10,7 @@ from typing import Any, Dict, Iterable, Optional
 
 from bot.control.regime_engine import RegimeResult
 from bot.control.trading_context import TradingContext
+from bot.control.isolation_guards import _position_owner_key
 
 
 @dataclass(frozen=True)
@@ -57,21 +58,10 @@ class SituationAnalysisEngine:
             if not isinstance(position, dict):
                 reasons.append("invalid_position_record")
                 continue
-            owner_fields = (
-                str(position.get("user_id", "")),
-                str(position.get("trading_account_id", "")),
-                str(position.get("broker", "")).lower(),
-                str(position.get("broker_account_id", "")),
-            )
-            expected = (
-                trading_context.user_id,
-                trading_context.trading_account_id,
-                trading_context.broker,
-                trading_context.broker_account_id,
-            )
-            if not all(owner_fields):
+            owner = _position_owner_key(position)
+            if owner is None:
                 reasons.append("unscoped_position_record")
-            elif owner_fields == expected:
+            elif owner == trading_context.owner_key:
                 owned_positions.append(position)
 
         if not authoritative_position_proven:
