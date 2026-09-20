@@ -442,7 +442,11 @@ class UserScopedIdempotencyRegistry:
                 context.broker,
                 hashlib.sha256(_clean_identity(context.account_id).encode("utf-8")).hexdigest()[:12],
             )
-            return False, IdempotencyReservationHandle(key, "")
+            return False, IdempotencyReservationHandle(
+                key,
+                "",
+                self._requires_shared_authority(context),
+            )
 
         # Non-live fallback for local paper/backtest use.
         with self._lock:
