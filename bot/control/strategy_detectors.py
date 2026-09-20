@@ -482,6 +482,91 @@ class ReversalExhaustionDetector(BaseDetector):
         return None
 
 
+
+class BreakRetestDetector(BaseDetector):
+    """Detect confirmed structure break followed by a retest of the broken level."""
+
+    strategy_name = "BREAK_RETEST"
+
+    def __init__(self) -> None:
+        self.lookback = max(10, int(os.getenv("NIJA_BREAK_RETEST_LOOKBACK", "20")))
+        self.tolerance_atr = max(0.05, float(os.getenv("NIJA_BREAK_RETEST_TOLERANCE_ATR", "0.30")))
+        self.volume_factor = max(0.0, float(os.getenv("NIJA_BREAK_RETEST_VOLUME_FACTOR", "1.0")))
+
+    def detect(self, df: pd.DataFrame, context: DetectorContext) -> Optional[StrategySignal]:
+        if len(df) < self.lookback + 16:
+            return None
+        atr_now = _to_float(_atr(df).iloc[-1])
+        if atr_now <= 0:
+            return None
+
+        breakout = df.iloc[-2]
+        retest = df.iloc[-1]
+        structure = df.iloc[-(self.lookback + 2):-2]
+        resistance = _to_float(structure["high"].max())
+        support = _to_float(structure["low"].min())
+        tolerance = atr_now * self.tolerance_atr
+
+        avg_volume = _to_float(df["volume"].iloc[-(self.lookback + 2):-2].mean())
+        breakout_volume = _to_float(breakout["volume"])
+        volume_ok = avg_volume <= 0 or breakout_volume >= avg_volume * self.volume_factor
+
+        breakout_close = _to_float(breakout["close"])
+        retest_open = _to_float(retest["open"])
+        retest_close = _to_float(retest["close"])
+        retest_high = _to_float(retest["high"])
+        retest_low = _to_float(retest["low"])
+
+        long_break = breakout_close > resistance and volume_ok
+        long_retest = (
+            retest_low <= resistance + tolerance
+            and retest_low >= resistance - tolerance
+            and retest_close > resistance
+            and retest_close > retest_open
+        )
+        if long_break and long_retest:
+            stop = resistance - max(tolerance, atr_now * 0.5)
+            risk = max(retest_close - stop, atr_now * 0.5)
+            return self._signal(
+                strategy=self.strategy_name,
+                context=context,
+                direction="long",
+                confidence=0.74,
+                raw_score=0.74,
+                invalidation_level=stop,
+                suggested_stop=stop,
+                targets=[retest_close + 1.5 * risk, retest_close + 2.0 * risk],
+                support=["structure_break_up", "retest_hold", "close_confirmation", "volume_confirmed"],
+                conflict=[],
+                metadata={"broken_level": resistance, "retest_tolerance": tolerance},
+            )
+
+        short_break = breakout_close < support and volume_ok
+        short_retest = (
+            retest_high >= support - tolerance
+            and retest_high <= support + tolerance
+            and retest_close < support
+            and retest_close < retest_open
+        )
+        if short_break and short_retest:
+            stop = support + max(tolerance, atr_now * 0.5)
+            risk = max(stop - retest_close, atr_now * 0.5)
+            return self._signal(
+                strategy=self.strategy_name,
+                context=context,
+                direction="short",
+                confidence=0.74,
+                raw_score=0.74,
+                invalidation_level=stop,
+                suggested_stop=stop,
+                targets=[retest_close - 1.5 * risk, retest_close - 2.0 * risk],
+                support=["structure_break_down", "retest_hold", "close_confirmation", "volume_confirmed"],
+                conflict=[],
+                metadata={"broken_level": support, "retest_tolerance": tolerance},
+            )
+        return None
+
+
 def build_default_detectors() -> Dict["FeatureFlag", BaseDetector]:
     from bot.feature_flags import FeatureFlag
 
@@ -492,4 +577,5 @@ def build_default_detectors() -> Dict["FeatureFlag", BaseDetector]:
         FeatureFlag.SUPPORT_RESISTANCE_ENABLED: SupportResistanceBounceDetector(),
         FeatureFlag.VOLATILITY_EXPANSION_ENABLED: VolatilityExpansionDetector(),
         FeatureFlag.REVERSAL_EXHAUSTION_ENABLED: ReversalExhaustionDetector(),
+        FeatureFlag.BREAK_RETEST_ENABLED: BreakRetestDetector(),
     }
