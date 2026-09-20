@@ -92,6 +92,10 @@ class TestV2IdempotencyHandoff(unittest.TestCase):
         for partial_metadata in (
             {"duplicate_key": "v2:missing-token"},
             {"duplicate_token": "token-without-key"},
+            {
+                "duplicate_key": "v2:missing-shared-authority",
+                "duplicate_token": "token-without-shared-authority",
+            },
         ):
             with self.subTest(partial_metadata=partial_metadata):
                 seen = {}

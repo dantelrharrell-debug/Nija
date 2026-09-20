@@ -104,7 +104,7 @@ class TestPost2807Safety(unittest.TestCase):
         )
         self.assertIsNone(SignalPipeline._resolve_decision_context(raw, dc))
 
-    def test_dispatch_disabled_retains_reservation_for_owned_retry(self):
+    def test_dispatch_disabled_direct_submitter_releases_reservation(self):
         broker = SimpleNamespace(broker_name="coinbase", connected=True, get_account_balance=lambda: 1000.0)
         result = SimpleNamespace(success=False, order_id=None, error="dispatch_disabled: dispatch.enabled=false")
         pipeline = SimpleNamespace(execute=lambda request: result)
@@ -118,7 +118,7 @@ class TestPost2807Safety(unittest.TestCase):
             )
         self.assertEqual(out["status"], "error")
         self.assertTrue(out["v2_pre_submit_proven"])
-        self.assertEqual(registry.get_state(handle), "submitted")
+        self.assertIsNone(registry.get_state(handle))
 
     def test_kraken_v366_open_positions_success_proves_margin_visibility(self):
         broker = SimpleNamespace(connected=True)

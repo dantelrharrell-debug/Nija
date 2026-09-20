@@ -627,6 +627,38 @@ class MultiBrokerExecutionRouter:
     # Core routing
     # ------------------------------------------------------------------
 
+    def supports_v2_protected_entry(self, request: Any = None) -> bool:
+        """True only for a broker adapter with an explicit atomic protected-entry contract."""
+        if request is None:
+            return False
+        metadata = dict(getattr(request, "metadata", {}) or {})
+        broker = metadata.get("broker_client")
+        if broker is None:
+            return False
+        declared = getattr(broker, "supports_atomic_protected_entry", False) is True
+        submit = getattr(broker, "place_market_order_with_protection", None)
+        if not declared or not callable(submit):
+            return False
+        try:
+            stop = float(
+                getattr(request, "stop_loss_pct", None)
+                or metadata.get("stop_loss_pct")
+                or 0.0
+            )
+            target = float(
+                getattr(request, "take_profit_pct", None)
+                or metadata.get("take_profit_pct")
+                or 0.0
+            )
+        except (TypeError, ValueError):
+            return False
+        return (
+            stop > 0.0
+            and target > 0.0
+            and stop < float("inf")
+            and target < float("inf")
+        )
+
     def route(self, request: RouteRequest) -> RouteResult:
         """
         Route a trade request to the appropriate broker.
@@ -641,6 +673,37 @@ class MultiBrokerExecutionRouter:
             or ""
         )
         self._pending_decision_trace_id = _decision_trace_id
+
+        # BREAK_RETEST entries may dispatch only through a broker adapter
+        # that explicitly declares an atomic protected-entry primitive. Without
+        # that capability, fail closed before any broker call.
+        _strategy = str(getattr(request, "strategy", "") or "").strip().upper()
+        _intent = str(_meta.get("intent_type") or "").strip().lower()
+        _closing = bool(_meta.get("closing_position")) or _intent in {"exit", "reduce"}
+        if (
+            _strategy == "BREAK_RETEST"
+            and not _closing
+            and not self.supports_v2_protected_entry(request)
+        ):
+            elapsed_ms = (time.monotonic() - t0) * 1000
+            error = "BREAK_RETEST_PROTECTION_DISPATCH_UNAVAILABLE"
+            logger.error(
+                "🚫 %s symbol=%s side=%s trace_id=%s fail_closed=true",
+                error,
+                request.symbol,
+                request.side,
+                _decision_trace_id or "n/a",
+            )
+            return self._make_result(
+                request,
+                _asset_class_for_request(request),
+                str(request.preferred_broker or "NONE"),
+                False,
+                0.0,
+                0.0,
+                elapsed_ms,
+                error,
+            )
 
         # 1. Determine asset class
         ac = _asset_class_for_request(request)
@@ -1566,13 +1629,26 @@ class MultiBrokerExecutionRouter:
         metadata: Dict[str, Any],
     ) -> Tuple[float, float]:
         """Submit directly to the live broker adapter and normalize the ACK/fill."""
-        submit = getattr(broker, "place_market_order", None)
-        if not callable(submit):
-            submit = getattr(broker, "execute_order", None)
-        if not callable(submit):
-            submit = getattr(broker, "place_order", None)
-        if not callable(submit):
-            raise RuntimeError(f"Broker {broker!r} has no market-order submit method")
+        protection_required = bool((metadata or {}).get("protection_required"))
+        closing_position = bool((metadata or {}).get("closing_position")) or str(
+            (metadata or {}).get("intent_type") or ""
+        ).strip().lower() in {"exit", "reduce"}
+
+        if protection_required and not closing_position:
+            declared = getattr(broker, "supports_atomic_protected_entry", False) is True
+            submit = getattr(broker, "place_market_order_with_protection", None)
+            if not declared or not callable(submit):
+                raise _InternalDispatchFailure(
+                    "required_protection_unsupported: atomic protected-entry broker capability missing"
+                )
+        else:
+            submit = getattr(broker, "place_market_order", None)
+            if not callable(submit):
+                submit = getattr(broker, "execute_order", None)
+            if not callable(submit):
+                submit = getattr(broker, "place_order", None)
+            if not callable(submit):
+                raise RuntimeError(f"Broker {broker!r} has no market-order submit method")
 
         try:
             _trace_id = str(metadata.get("decision_trace_id") or metadata.get("trace_id") or "")
@@ -1589,6 +1665,26 @@ class MultiBrokerExecutionRouter:
             # which was previously misreported as an exchange rejection.
             submit_size = float(size_usd or 0.0)
             submit_kwargs: Dict[str, Any] = {"size_type": "quote"}
+            if protection_required and not closing_position:
+                try:
+                    stop_loss_pct = float(metadata.get("stop_loss_pct") or 0.0)
+                    take_profit_pct = float(metadata.get("take_profit_pct") or 0.0)
+                except (TypeError, ValueError) as exc:
+                    raise _InternalDispatchFailure(
+                        f"required_protection_invalid: {exc}"
+                    ) from exc
+                if not (
+                    stop_loss_pct > 0.0
+                    and take_profit_pct > 0.0
+                    and stop_loss_pct < float("inf")
+                    and take_profit_pct < float("inf")
+                ):
+                    raise _InternalDispatchFailure(
+                        "required_protection_invalid: positive finite SL/TP required"
+                    )
+                submit_kwargs["stop_loss_pct"] = stop_loss_pct
+                submit_kwargs["take_profit_pct"] = take_profit_pct
+                submit_kwargs["protection_required"] = True
             if _is_closing_sell(side, metadata):
                 try:
                     submit_size = _resolve_sell_base_quantity(
@@ -1604,7 +1700,7 @@ class MultiBrokerExecutionRouter:
 
             logger.critical(
                 "BROKER_SUBMIT_ATTEMPT trace_id=%s broker=%s symbol=%s side=%s size_usd=%.2f "
-                "submit_size=%.12f size_type=%s submit=place_market_order",
+                "submit_size=%.12f size_type=%s submit=%s",
                 _trace_id or "n/a",
                 _broker_label,
                 symbol,
@@ -1612,6 +1708,11 @@ class MultiBrokerExecutionRouter:
                 float(size_usd or 0.0),
                 submit_size,
                 submit_kwargs["size_type"],
+                (
+                    "place_market_order_with_protection"
+                    if protection_required and not closing_position
+                    else getattr(submit, "__name__", "market_order")
+                ),
             )
             if _trace_id:
                 try:
@@ -1633,6 +1734,15 @@ class MultiBrokerExecutionRouter:
             return float(result[0] or 0.0), float(result[1] or size_usd)
         if not isinstance(result, dict):
             raise RuntimeError(f"Unsupported broker order response: {result!r}")
+
+        if (
+            protection_required
+            and not closing_position
+            and result.get("protection_verified") is not True
+        ):
+            raise RuntimeError(
+                "protected_entry_unverified: broker did not prove atomic SL/TP protection"
+            )
 
         status = str(result.get("status") or result.get("state") or "").strip().lower()
         if status in {

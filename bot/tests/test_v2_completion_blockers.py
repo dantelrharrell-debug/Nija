@@ -631,7 +631,10 @@ class TestCompletionBlockers(unittest.TestCase):
                 "BTC-USD",
                 "buy",
                 10.0,
-                metadata_override=handle.to_metadata(),
+                metadata_override={
+                    **handle.to_metadata(),
+                    "duplicate_retry_managed": True,
+                },
             )
             self.assertEqual(first["status"], "error")
             self.assertTrue(first["v2_pre_submit_proven"])
@@ -642,7 +645,10 @@ class TestCompletionBlockers(unittest.TestCase):
                 "BTC-USD",
                 "buy",
                 10.0,
-                metadata_override=handle.to_metadata(),
+                metadata_override={
+                    **handle.to_metadata(),
+                    "duplicate_retry_managed": True,
+                },
             )
 
         self.assertEqual(second["status"], "filled")
@@ -673,6 +679,33 @@ class TestCompletionBlockers(unittest.TestCase):
                     state="reconciled_filled",
                 )
             )
+
+
+    def test_stale_local_finalizer_cannot_overwrite_replacement_token(self):
+        with patch("bot.control.decision_context._default_redis_client", return_value=None):
+            registry = UserScopedIdempotencyRegistry(
+                redis_client=None,
+                ttl_seconds=1.0,
+                uncertain_ttl_seconds=30.0,
+            )
+            ctx = _decision_context()
+            ok_old, old_handle = registry.reserve(
+                ctx,
+                symbol="LINK-USD",
+                direction="long",
+            )
+            self.assertTrue(ok_old)
+            time.sleep(1.05)
+            ok_new, new_handle = registry.reserve(
+                ctx,
+                symbol="LINK-USD",
+                direction="long",
+            )
+            self.assertTrue(ok_new)
+            self.assertNotEqual(old_handle.token, new_handle.token)
+
+            self.assertFalse(registry.mark_state(old_handle, "state_unknown"))
+            self.assertEqual(registry.get_state(new_handle), "submitted")
 
 
 

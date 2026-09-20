@@ -482,6 +482,13 @@ class SignalBroadcaster:
         for key in ("duplicate_key", "duplicate_token", "duplicate_shared_required"):
             if key in signal:
                 merged[key] = signal.get(key)
+        if (
+            not str(merged.get("duplicate_key") or "").strip()
+            or not str(merged.get("duplicate_token") or "").strip()
+            or "duplicate_shared_required" not in merged
+        ):
+            logger.error("V2_DUPLICATE_RELEASE_REJECT reason=incomplete_ownership_metadata")
+            return False
         try:
             from bot.control.decision_context import (
                 IdempotencyReservationHandle,
@@ -603,9 +610,14 @@ class SignalBroadcaster:
             )
             duplicate_key = str(signal.get("duplicate_key") or signal_metadata.get("duplicate_key") or "").strip()
             duplicate_token = str(signal.get("duplicate_token") or signal_metadata.get("duplicate_token") or "").strip()
-            raw_shared_required = signal.get(
-                "duplicate_shared_required",
-                signal_metadata.get("duplicate_shared_required", False),
+            shared_required_present = (
+                "duplicate_shared_required" in signal
+                or "duplicate_shared_required" in signal_metadata
+            )
+            raw_shared_required = (
+                signal.get("duplicate_shared_required")
+                if "duplicate_shared_required" in signal
+                else signal_metadata.get("duplicate_shared_required")
             )
             duplicate_shared_required = (
                 raw_shared_required
@@ -649,14 +661,8 @@ class SignalBroadcaster:
                 )
 
             if size <= 0:
-                if duplicate_key and duplicate_token:
-                    from bot.control.decision_context import (
-                        IdempotencyReservationHandle,
-                        get_user_scoped_idempotency_registry,
-                    )
-                    get_user_scoped_idempotency_registry().release(
-                        IdempotencyReservationHandle(duplicate_key, duplicate_token, bool(duplicate_shared_required))
-                    )
+                if duplicate_metadata_present:
+                    self._release_v2_reservation_from_signal(signal)
                 return BroadcastResult(
                     account_id=account.account_id,
                     symbol=symbol,
@@ -673,14 +679,8 @@ class SignalBroadcaster:
             self._account_last_exec_ts[account.account_id] = time.monotonic()
 
             if submit_market_order_via_pipeline is None:
-                if duplicate_key and duplicate_token:
-                    from bot.control.decision_context import (
-                        IdempotencyReservationHandle,
-                        get_user_scoped_idempotency_registry,
-                    )
-                    get_user_scoped_idempotency_registry().release(
-                        IdempotencyReservationHandle(duplicate_key, duplicate_token)
-                    )
+                if duplicate_metadata_present:
+                    self._release_v2_reservation_from_signal(signal)
                 order = {
                     "status": "error",
                     "error": "ExecutionPipeline submit helper unavailable; direct broker fallback blocked",
@@ -695,13 +695,23 @@ class SignalBroadcaster:
                     strategy=strategy,
                     metadata_override=(
                         {
-                            "duplicate_key": duplicate_key,
-                            "duplicate_token": duplicate_token,
-                            "duplicate_shared_required": bool(duplicate_shared_required),
+                            **(
+                                {
+                                    **({"duplicate_key": duplicate_key} if duplicate_key else {}),
+                                    **({"duplicate_token": duplicate_token} if duplicate_token else {}),
+                                    **(
+                                        {"duplicate_shared_required": bool(duplicate_shared_required)}
+                                        if shared_required_present
+                                        else {}
+                                    ),
+                                    "duplicate_retry_managed": True,
+                                }
+                                if duplicate_metadata_present
+                                else {}
+                            ),
                             **protection,
                         }
-                        if duplicate_metadata_present
-                        else (protection or None)
+                        or None
                     ),
                 )
 

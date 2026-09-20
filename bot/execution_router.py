@@ -351,6 +351,10 @@ class ExecutionRouter:
     # Core execution
     # ------------------------------------------------------------------
 
+    def supports_v2_protected_entry(self, request: Any = None) -> bool:
+        """Single-venue router has no verified atomic BREAK_RETEST protection path yet."""
+        return False
+
     def execute(self, request: OrderRequest) -> ExecutionResult:
         """
         Route and execute an order.
