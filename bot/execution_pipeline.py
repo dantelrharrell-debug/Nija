@@ -1100,18 +1100,11 @@ class ExecutionPipeline:
 
     @staticmethod
     def _requires_verified_entry_protection(request: PipelineRequest) -> bool:
-        """Return True when an entry must not dispatch without bound SL/TP support."""
+        """Return True for every BREAK_RETEST entry that must bind SL/TP protection."""
         strategy = str(getattr(request, "strategy", "") or "").strip().upper()
         intent = str(getattr(request, "intent_type", "") or "").strip().lower()
         reduce_only = bool(getattr(request, "reduce_only", False))
-        if strategy != "BREAK_RETEST" or intent != "entry" or reduce_only:
-            return False
-        try:
-            stop = float(getattr(request, "stop_loss_pct", 0.0) or 0.0)
-            target = float(getattr(request, "take_profit_pct", 0.0) or 0.0)
-        except (TypeError, ValueError):
-            return True
-        return stop > 0.0 and target > 0.0
+        return strategy == "BREAK_RETEST" and intent == "entry" and not reduce_only
 
     @staticmethod
     def _router_supports_verified_entry_protection(router: Any, request: PipelineRequest) -> bool:
