@@ -36,6 +36,21 @@ from bot.signal_broadcaster import SignalBroadcaster
 NOW = datetime.now(timezone.utc)
 
 
+def _trading_context(*, user_id: str = "detector-user", account_id: str = "detector-account", broker: str = "coinbase") -> TradingContext:
+    return TradingContext(
+        user_id=user_id,
+        trading_account_id=account_id,
+        broker=broker,
+        broker_account_id=account_id,
+        strategy_instance_id="v2-test",
+        portfolio_id=f"{broker}:{account_id}",
+        request_id=f"request:{user_id}:{account_id}",
+        correlation_id=f"correlation:{user_id}:{account_id}",
+        environment="test",
+        mode="paper",
+    )
+
+
 def _decision_context(*, user_id: str, account_id: str, broker: str, signal_id: str, trade_id: str) -> UserDecisionContext:
     return UserDecisionContext(
         user_id=user_id,
@@ -127,7 +142,7 @@ class TestV2DetectorCoverage(unittest.TestCase):
             else:
                 rows.append({"open": 100.0, "high": 100.8, "low": 99.4, "close": 100.1, "volume": 1000.0})
         df = pd.DataFrame(rows, index=index)
-        signal = OpeningRangeBreakoutDetector().detect(df, DetectorContext(symbol="BTC-USD", broker="coinbase", market_regime="trending"))
+        signal = OpeningRangeBreakoutDetector().detect(df, DetectorContext(symbol="BTC-USD", broker="coinbase", market_regime="trending", trading_context=_trading_context()))
         self.assertIsNotNone(signal)
         self.assertEqual(signal.strategy, "FIRST_CANDLE_ORB")
         self.assertEqual(signal.direction, "long")
@@ -135,7 +150,7 @@ class TestV2DetectorCoverage(unittest.TestCase):
     def test_mean_reversion_detects_oversold_recovery(self):
         close = [100.0] * 45 + [95.0, 92.0, 89.0, 88.0, 94.0]
         df = self._ohlcv(close)
-        signal = MeanReversionDetector().detect(df, DetectorContext(symbol="ETH-USD", broker="coinbase", market_regime="mean_reversion"))
+        signal = MeanReversionDetector().detect(df, DetectorContext(symbol="ETH-USD", broker="coinbase", market_regime="mean_reversion", trading_context=_trading_context()))
         self.assertIsNotNone(signal)
         self.assertEqual(signal.strategy, "MEAN_REVERSION")
         self.assertEqual(signal.direction, "long")
@@ -143,7 +158,7 @@ class TestV2DetectorCoverage(unittest.TestCase):
     def test_range_trading_detects_support_bounce_setup(self):
         close = [100.0, 102.0, 104.0, 106.0] * 9 + [100.5, 100.4, 100.3, 100.2]
         df = self._ohlcv(close)
-        signal = RangeTradingDetector().detect(df, DetectorContext(symbol="SOL-USD", broker="coinbase", market_regime="ranging"))
+        signal = RangeTradingDetector().detect(df, DetectorContext(symbol="SOL-USD", broker="coinbase", market_regime="ranging", trading_context=_trading_context()))
         self.assertIsNotNone(signal)
         self.assertEqual(signal.strategy, "RANGE_TRADING")
         self.assertEqual(signal.direction, "long")
@@ -154,7 +169,7 @@ class TestV2DetectorCoverage(unittest.TestCase):
         df.iloc[-1, df.columns.get_loc("open")] = 104.2
         df.iloc[-1, df.columns.get_loc("high")] = 104.4
         df.iloc[-1, df.columns.get_loc("low")] = 102.9
-        signal = SupportResistanceBounceDetector().detect(df, DetectorContext(symbol="ADA-USD", broker="coinbase", market_regime="ranging"))
+        signal = SupportResistanceBounceDetector().detect(df, DetectorContext(symbol="ADA-USD", broker="coinbase", market_regime="ranging", trading_context=_trading_context()))
         self.assertIsNotNone(signal)
         self.assertEqual(signal.strategy, "SUPPORT_RESISTANCE_BOUNCE")
         self.assertEqual(signal.direction, "short")
@@ -166,7 +181,7 @@ class TestV2DetectorCoverage(unittest.TestCase):
         ]
         df = self._ohlcv(close, volume=[500.0] * 39 + [5000.0])
         df["spread_bps"] = 5.0
-        signal = VolatilityExpansionDetector().detect(df, DetectorContext(symbol="XRP-USD", broker="coinbase", market_regime="breakout"))
+        signal = VolatilityExpansionDetector().detect(df, DetectorContext(symbol="XRP-USD", broker="coinbase", market_regime="breakout", trading_context=_trading_context()))
         self.assertIsNotNone(signal)
         self.assertEqual(signal.strategy, "VOLATILITY_EXPANSION")
         self.assertEqual(signal.direction, "long")
@@ -175,7 +190,7 @@ class TestV2DetectorCoverage(unittest.TestCase):
         close = [120.0 - i * 0.2 for i in range(55)] + [108.0, 106.0, 104.0, 103.0, 104.5]
         volume = [2000.0] * 59 + [1200.0]
         df = self._ohlcv(close, volume=volume)
-        signal = ReversalExhaustionDetector().detect(df, DetectorContext(symbol="DOGE-USD", broker="coinbase", market_regime="mean_reversion"))
+        signal = ReversalExhaustionDetector().detect(df, DetectorContext(symbol="DOGE-USD", broker="coinbase", market_regime="mean_reversion", trading_context=_trading_context()))
         self.assertIsNotNone(signal)
         self.assertEqual(signal.strategy, "REVERSAL_EXHAUSTION")
         self.assertEqual(signal.direction, "long")
@@ -191,24 +206,24 @@ class TestV2DetectorCoverage(unittest.TestCase):
             else:
                 rows.append({"open": 100.0, "high": 100.7, "low": 99.5, "close": 100.0, "volume": 1000.0})
         df = pd.DataFrame(rows, index=index)
-        self.assertIsNone(OpeningRangeBreakoutDetector().detect(df, DetectorContext(symbol="BTC-USD", broker="coinbase", market_regime="trending")))
+        self.assertIsNone(OpeningRangeBreakoutDetector().detect(df, DetectorContext(symbol="BTC-USD", broker="coinbase", market_regime="trending", trading_context=_trading_context())))
 
     def test_range_invalidated_by_breakout(self):
         close = [100.0, 101.0, 102.0, 103.0] * 8 + [105.5, 106.0]
         df = self._ohlcv(close)
-        self.assertIsNone(RangeTradingDetector().detect(df, DetectorContext(symbol="SOL-USD", broker="coinbase", market_regime="ranging")))
+        self.assertIsNone(RangeTradingDetector().detect(df, DetectorContext(symbol="SOL-USD", broker="coinbase", market_regime="ranging", trading_context=_trading_context())))
 
     def test_false_volatility_expansion_rejected_without_volume(self):
         close = [100.0 + ((i % 2) * 0.15) for i in range(35)] + [100.1, 100.0, 100.05, 100.1, 104.0]
         df = self._ohlcv(close, volume=[800.0] * 40)
         df["spread_bps"] = 5.0
-        self.assertIsNone(VolatilityExpansionDetector().detect(df, DetectorContext(symbol="XRP-USD", broker="coinbase", market_regime="breakout")))
+        self.assertIsNone(VolatilityExpansionDetector().detect(df, DetectorContext(symbol="XRP-USD", broker="coinbase", market_regime="breakout", trading_context=_trading_context())))
 
     def test_reversal_rejected_without_confirmation(self):
         close = [120.0 - i * 0.2 for i in range(55)] + [108.0, 106.0, 104.0, 103.0, 102.5]
         volume = [2000.0] * 59 + [1200.0]
         df = self._ohlcv(close, volume=volume)
-        self.assertIsNone(ReversalExhaustionDetector().detect(df, DetectorContext(symbol="DOGE-USD", broker="coinbase", market_regime="mean_reversion")))
+        self.assertIsNone(ReversalExhaustionDetector().detect(df, DetectorContext(symbol="DOGE-USD", broker="coinbase", market_regime="mean_reversion", trading_context=_trading_context())))
 
     def test_confirmation_rejects_stale_signal(self):
         engine = ConfirmationEngine(max_signal_age_seconds=10)
@@ -219,6 +234,7 @@ class TestV2DetectorCoverage(unittest.TestCase):
             symbol="BTC-USD",
             broker="coinbase",
             direction="long",
+            trading_context=_trading_context(),
             timestamp=(NOW - timedelta(seconds=60)).isoformat(),
         )
         decision = engine.confirm(
@@ -317,28 +333,15 @@ class TestV2MultiUserIsolation(unittest.TestCase):
 
     def test_trade_frequency_is_account_scoped(self):
         engine = RiskEngine()
-        tc_a = TradingContext(
-            user_id="user-a", trading_account_id="acct-a", broker="kraken",
-            broker_account_id="acct-a", strategy_instance_id="sig-frequency",
-            portfolio_id="kraken:acct-a", request_id="req-a-frequency",
-            correlation_id="corr-a-frequency", environment="test", mode="paper",
-            decision_id="decision-a-frequency",
-        )
-        tc_b = TradingContext(
-            user_id="user-b", trading_account_id="acct-b", broker="kraken",
-            broker_account_id="acct-b", strategy_instance_id="sig-frequency",
-            portfolio_id="kraken:acct-b", request_id="req-b-frequency",
-            correlation_id="corr-b-frequency", environment="test", mode="paper",
-            decision_id="decision-b-frequency",
-        )
+        context_a = _trading_context(user_id="user-a", account_id="acct-a", broker="kraken")
+        context_b = _trading_context(user_id="user-b", account_id="acct-b", broker="kraken")
         approved_a, _ = engine.validate_trade(
             symbol="BTC-USD",
             side="buy",
             size_usd=100.0,
             portfolio_value_usd=10_000.0,
             current_positions=[],
-            trading_context=tc_a,
-            enforce_isolation=True,
+            trading_context=context_a,
         )
         approved_b, _ = engine.validate_trade(
             symbol="BTC-USD",
@@ -346,8 +349,7 @@ class TestV2MultiUserIsolation(unittest.TestCase):
             size_usd=100.0,
             portfolio_value_usd=10_000.0,
             current_positions=[],
-            trading_context=tc_b,
-            enforce_isolation=True,
+            trading_context=context_b,
         )
         self.assertTrue(approved_a)
         self.assertTrue(approved_b)

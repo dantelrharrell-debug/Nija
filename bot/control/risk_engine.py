@@ -124,10 +124,12 @@ class RiskEngine:
     Thread-safe.  Use ``get_risk_engine()`` for the process singleton.
     """
 
-    def __init__(self, redis_client=None) -> None:
+    def __init__(self, redis_client=None, *, enforce_isolation_by_default: bool = True) -> None:
         self._redis = redis_client
+        self._enforce_isolation_by_default = bool(enforce_isolation_by_default)
         self._lock  = threading.Lock()
         self._rules = RiskRules(**_ENV_RULES)
+        self._rules_by_scope: Dict[str, RiskRules] = {}
         self._last_trade_ts: Dict[str, float] = {}   # context|symbol → last trade timestamp
         self._platform_kill_switch: bool = False
         self._platform_kill_switch_reason: str = ""
@@ -164,8 +166,9 @@ class RiskEngine:
         daily_pnl: float = 0.0,
         peak_portfolio_value: Optional[float] = None,
         returns_series: Optional[List[float]] = None,
+        available_balance_usd: Optional[float] = None,
         trading_context: Optional[TradingContext] = None,
-        enforce_isolation: bool = False,
+        enforce_isolation: Optional[bool] = None,
         enforce_platform_kill_switch: bool = True,
     ) -> Tuple[bool, List[str]]:
         """
@@ -187,12 +190,9 @@ class RiskEngine:
         -------
         (approved: bool, notes: List[str])
         """
-        if not _RISK_ENGINE_ENABLED:
-            return True, ["risk_engine_disabled:pass_through"]
-
-        # Reload rules from Redis (non-blocking; falls back to cached)
-        rules = self._load_rules()
         notes: List[str] = []
+        if enforce_isolation is None:
+            enforce_isolation = self._enforce_isolation_by_default
         if trading_context is None and enforce_isolation:
             return False, ["context_missing:missing_trading_context"]
         if trading_context is None:
@@ -218,7 +218,7 @@ class RiskEngine:
             return False, [note]
 
         if enforce_isolation:
-            mismatch = self._first_position_scope_mismatch(current_positions, trading_context)
+            mismatch = self._first_unscoped_position(current_positions)
             if mismatch:
                 return False, [f"position_scope_mismatch:{mismatch}"]
         scoped_positions = self._filter_positions_for_context(
@@ -227,9 +227,28 @@ class RiskEngine:
             include_unscoped=not enforce_isolation,
         )
 
+        # A disabled risk engine may skip numeric policy checks, but it may not
+        # bypass identity or kill-switch enforcement.
+        if not _RISK_ENGINE_ENABLED:
+            return True, ["risk_engine_disabled:identity_checks_passed"]
+
+        # Isolated V2 decisions load owner-scoped rules. Legacy callers retain
+        # the existing global rules without influencing scoped users.
+        rules = self._load_rules(trading_context if enforce_isolation else None)
+
         if not authoritative_position_proven:
             notes.append("AUTHORITATIVE_POSITION_UNPROVEN")
             return False, notes
+
+        if available_balance_usd is not None:
+            try:
+                available = float(available_balance_usd)
+            except (TypeError, ValueError):
+                return False, ["available_balance_invalid"]
+            if not np.isfinite(available) or available < 0:
+                return False, ["available_balance_invalid"]
+            if float(size_usd) > available:
+                return False, [f"insufficient_available_balance:{float(size_usd):.2f}>{available:.2f}"]
 
         # 1. Position count
         ok, note = self._check_position_count(scoped_positions, rules)
@@ -266,8 +285,6 @@ class RiskEngine:
         # 6. Time between trades (per broker/account/symbol)
         ok, note = self._check_trade_frequency(
             symbol,
-            account_id=account_id,
-            broker=broker,
             rules=rules,
             trading_context=trading_context,
         )
@@ -335,18 +352,38 @@ class RiskEngine:
         with self._lock:
             self._broker_failure_counters.pop(key, None)
 
-    def update_rules(self, overrides: Dict[str, Any]) -> RiskRules:
-        """Apply rule overrides and persist to Redis."""
+    def update_rules(
+        self,
+        overrides: Dict[str, Any],
+        *,
+        trading_context: Optional[TradingContext] = None,
+    ) -> RiskRules:
+        """Apply global legacy or owner-scoped V2 rule overrides."""
         with self._lock:
-            current = self._rules.to_dict()
+            if trading_context is None:
+                current = self._rules.to_dict()
+            else:
+                current = self._rules_by_scope.get(
+                    trading_context.scope_key,
+                    RiskRules(**_ENV_RULES),
+                ).to_dict()
             current.update(overrides)
-            self._rules = RiskRules.from_dict(current)
-        self._store_rules_to_redis()
-        logger.info("RiskEngine: rules updated: %s", overrides)
-        return self._rules
+            updated = RiskRules.from_dict(current)
+            if trading_context is None:
+                self._rules = updated
+            else:
+                self._rules_by_scope[trading_context.scope_key] = updated
+        self._store_rules_to_redis(trading_context)
+        logger.info(
+            "RiskEngine: rules updated scope=%s fields=%s",
+            trading_context.scope_key[:16] if trading_context else "legacy_global",
+            sorted(overrides),
+        )
+        return updated
 
-    def get_rules(self) -> RiskRules:
-        return self._load_rules()
+    def get_rules(self, *, trading_context: Optional[TradingContext] = None) -> RiskRules:
+        """Return rules for one isolated scope or the legacy global scope."""
+        return self._load_rules(trading_context)
 
     # ------------------------------------------------------------------
     # Individual checks
@@ -447,8 +484,6 @@ class RiskEngine:
     def _check_trade_frequency(
         self,
         symbol: str,
-        account_id: str,
-        broker: str,
         rules: RiskRules,
         *,
         trading_context: TradingContext,
@@ -530,23 +565,14 @@ class RiskEngine:
                 scoped.append(pos)
         return scoped
 
-    def _first_position_scope_mismatch(
+    def _first_unscoped_position(
         self,
         positions: List[Dict[str, Any]],
-        trading_context: TradingContext,
     ) -> str:
-        expected = (
-            trading_context.user_id,
-            trading_context.trading_account_id,
-            trading_context.broker,
-            trading_context.broker_account_id,
-        )
         for idx, pos in enumerate(positions or []):
             owner = self._position_owner_key(pos)
             if owner is None:
                 return f"missing_owner_metadata:index={idx}"
-            if owner != expected:
-                return f"owner_mismatch:index={idx}"
         return ""
 
     def _check_kill_switches(
@@ -581,28 +607,45 @@ class RiskEngine:
     # Redis helpers
     # ------------------------------------------------------------------
 
-    def _load_rules(self) -> RiskRules:
+    @staticmethod
+    def _rules_redis_key(trading_context: Optional[TradingContext]) -> str:
+        if trading_context is None:
+            return _REDIS_RULES_KEY
+        return f"{_REDIS_RULES_KEY}:{trading_context.scope_key}"
+
+    def _load_rules(self, trading_context: Optional[TradingContext] = None) -> RiskRules:
         """Load rules from Redis if available, else return cached."""
+        key = self._rules_redis_key(trading_context)
         if self._redis is None:
             with self._lock:
-                return self._rules
+                if trading_context is None:
+                    return self._rules
+                return self._rules_by_scope.get(trading_context.scope_key, RiskRules(**_ENV_RULES))
         try:
-            data = self._redis.get(_REDIS_RULES_KEY)
+            data = self._redis.get(key)
             if data:
                 d = json.loads(data)
                 return RiskRules.from_dict(d)
         except Exception as exc:
             logger.debug("RiskEngine: Redis rule load failed: %s", exc)
         with self._lock:
-            return self._rules
+            if trading_context is None:
+                return self._rules
+            return self._rules_by_scope.get(trading_context.scope_key, RiskRules(**_ENV_RULES))
 
-    def _store_rules_to_redis(self) -> None:
+    def _store_rules_to_redis(self, trading_context: Optional[TradingContext] = None) -> None:
         if self._redis is None:
             return
         try:
             with self._lock:
-                rules_dict = self._rules.to_dict()
-            self._redis.set(_REDIS_RULES_KEY, json.dumps(rules_dict))
+                if trading_context is None:
+                    rules_dict = self._rules.to_dict()
+                else:
+                    rules_dict = self._rules_by_scope.get(
+                        trading_context.scope_key,
+                        RiskRules(**_ENV_RULES),
+                    ).to_dict()
+            self._redis.set(self._rules_redis_key(trading_context), json.dumps(rules_dict))
         except Exception as exc:
             logger.debug("RiskEngine: Redis rule store failed: %s", exc)
 

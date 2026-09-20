@@ -4,12 +4,16 @@ import concurrent.futures
 import json
 import threading
 import unittest
-from unittest.mock import MagicMock
+from types import SimpleNamespace
+from unittest.mock import ANY, MagicMock, patch
+
+import pandas as pd
 
 from bot.control.control_compiler import ControlCompiler, RawSignal
 from bot.control.isolation_guards import (
     ExecutionOwnershipEnvelope,
     PositionSizingDecision,
+    ScopedRiskSnapshot,
     context_cache_key,
     validate_owner_account_authorization,
     validate_queue_event_context,
@@ -18,6 +22,7 @@ from bot.control.isolation_guards import (
 )
 from bot.control.risk_engine import RiskEngine
 from bot.control.signal_pipeline import SignalPipeline
+from bot.control.strategy_signal import StrategySignal
 from bot.control.trading_context import TradingContext
 
 
@@ -53,6 +58,37 @@ def _raw(context: TradingContext, **overrides) -> RawSignal:
     return RawSignal(**base)
 
 
+def _position(context: TradingContext, symbol: str = "BTC-USD", size_usd: float = 100.0) -> dict:
+    return {
+        "position_id": f"pos_{context.user_id}_{symbol}",
+        "symbol": symbol,
+        "size_usd": size_usd,
+        "user_id": context.user_id,
+        "trading_account_id": context.trading_account_id,
+        "broker": context.broker,
+        "broker_account_id": context.broker_account_id,
+    }
+
+
+def _snapshot(
+    context: TradingContext,
+    *,
+    balance: float = 1_000.0,
+    portfolio: float = 10_000.0,
+    daily_pnl: float = 0.0,
+    peak: float | None = None,
+    positions=(),
+) -> ScopedRiskSnapshot:
+    return ScopedRiskSnapshot.from_values(
+        context=context,
+        portfolio_value_usd=portfolio,
+        current_positions=positions,
+        daily_pnl=daily_pnl,
+        peak_portfolio_value=peak,
+        available_balance_usd=balance,
+    )
+
+
 class TestV2MultiUserIsolation(unittest.TestCase):
     def setUp(self):
         self.ctx_a = _ctx("user_a", "acct_a", "kraken_a", strategy="orb_a")
@@ -60,16 +96,23 @@ class TestV2MultiUserIsolation(unittest.TestCase):
         self.risk = RiskEngine()
         self.pipeline = SignalPipeline(compiler=ControlCompiler(), risk_engine=self.risk)
 
-    def test_01_user_a_low_balance_does_not_resize_user_b(self):
-        a, _ = self.pipeline._compiler.compile(_raw(self.ctx_a), portfolio_value_usd=300.0, max_position_size_pct=10.0)
-        b, _ = self.pipeline._compiler.compile(_raw(self.ctx_b), portfolio_value_usd=10_000.0, max_position_size_pct=10.0)
-        self.assertIsNotNone(a)
-        self.assertIsNotNone(b)
-        self.assertLess(a.size_usd, b.size_usd)
-        self.assertEqual(b.size_usd, 100.0)
+    def test_01_user_a_low_balance_does_not_change_user_b_decision(self):
+        denied_a, notes_a = self.risk.validate_trade(
+            "BTC-USD", "buy", 100.0, 10_000.0, [],
+            available_balance_usd=25.0,
+            trading_context=self.ctx_a,
+        )
+        approved_b, notes_b = self.risk.validate_trade(
+            "BTC-USD", "buy", 100.0, 10_000.0, [],
+            available_balance_usd=1_000.0,
+            trading_context=self.ctx_b,
+        )
+        self.assertFalse(denied_a)
+        self.assertIn("insufficient_available_balance", notes_a[0])
+        self.assertTrue(approved_b, notes_b)
 
     def test_02_user_a_open_position_does_not_block_user_b(self):
-        positions = [{"symbol": "BTC-USD", "size_usd": 100.0, "user_id": "user_b", "trading_account_id": "acct_b", "broker": "kraken", "broker_account_id": "kraken_b"} for _ in range(2)]
+        positions = [_position(self.ctx_a) for _ in range(8)] + [_position(self.ctx_b, "ETH-USD")]
         ok, notes = self.risk.validate_trade(
             symbol="BTC-USD",
             side="buy",
@@ -91,7 +134,16 @@ class TestV2MultiUserIsolation(unittest.TestCase):
         self.assertEqual(filtered[0]["symbol"], "ETH-USD")
 
     def test_04_user_a_realized_loss_does_not_trigger_user_b_limit(self):
-        ok, _ = self.risk.validate_trade(
+        denied_a, _ = self.risk.validate_trade(
+            symbol="BTC-USD",
+            side="buy",
+            size_usd=50.0,
+            portfolio_value_usd=10_000.0,
+            current_positions=[],
+            daily_pnl=-500.0,
+            trading_context=self.ctx_a,
+        )
+        approved_b, _ = self.risk.validate_trade(
             symbol="BTC-USD",
             side="buy",
             size_usd=50.0,
@@ -101,10 +153,20 @@ class TestV2MultiUserIsolation(unittest.TestCase):
             trading_context=self.ctx_b,
             enforce_isolation=True,
         )
-        self.assertTrue(ok)
+        self.assertFalse(denied_a)
+        self.assertTrue(approved_b)
 
     def test_05_user_a_drawdown_does_not_change_user_b_approval(self):
-        ok, _ = self.risk.validate_trade(
+        denied_a, _ = self.risk.validate_trade(
+            symbol="ETH-USD",
+            side="buy",
+            size_usd=50.0,
+            portfolio_value_usd=8_000.0,
+            peak_portfolio_value=10_000.0,
+            current_positions=[],
+            trading_context=self.ctx_a,
+        )
+        approved_b, _ = self.risk.validate_trade(
             symbol="ETH-USD",
             side="buy",
             size_usd=50.0,
@@ -114,7 +176,8 @@ class TestV2MultiUserIsolation(unittest.TestCase):
             trading_context=self.ctx_b,
             enforce_isolation=True,
         )
-        self.assertTrue(ok)
+        self.assertFalse(denied_a)
+        self.assertTrue(approved_b)
 
     def test_06_user_a_loss_streak_does_not_cooldown_user_b(self):
         ok_a, _ = self.risk.validate_trade("BTC-USD", "buy", 50.0, 10_000.0, [], trading_context=self.ctx_a, enforce_isolation=True)
@@ -165,7 +228,7 @@ class TestV2MultiUserIsolation(unittest.TestCase):
         self.assertFalse(rejected_a)
         self.assertTrue(approved_b)
 
-    def test_13_orb_state_scoped_by_strategy_instance(self):
+    def test_13_strategy_state_keys_are_scoped_by_strategy_instance(self):
         key_a = context_cache_key(self.ctx_a, "orb", "BTC-USD")
         key_b = context_cache_key(self.ctx_b, "orb", "BTC-USD")
         self.assertNotEqual(key_a, key_b)
@@ -219,7 +282,7 @@ class TestV2MultiUserIsolation(unittest.TestCase):
             self.assertTrue(b.result(timeout=2))
         self.assertEqual({u for u, _ in results}, {"user_a", "user_b"})
 
-    def test_22_recovery_restores_correct_owner_scope(self):
+    def test_22_queue_serialization_round_trip_restores_owner_scope(self):
         payload = {"trading_context": self.ctx_a.to_log_fields()}
         recovered = validate_queue_event_context(payload)
         self.assertEqual(recovered.user_id, "user_a")
@@ -234,12 +297,12 @@ class TestV2MultiUserIsolation(unittest.TestCase):
                 require_same_decision=True,
             )
 
-    def test_23_kraken_margin_visibility_is_account_scoped(self):
+    def test_23_scoped_snapshot_filters_foreign_kraken_positions(self):
         positions = [
             {"symbol": "BTC-USD", "size_usd": 100.0, "user_id": "user_a", "trading_account_id": "acct_a", "broker": "kraken", "broker_account_id": "kraken_a"},
             {"symbol": "BTC-USD", "size_usd": 200.0, "user_id": "user_b", "trading_account_id": "acct_b", "broker": "kraken", "broker_account_id": "kraken_b"},
         ]
-        filtered = self.risk._filter_positions_for_context(positions, self.ctx_a)
+        filtered = _snapshot(self.ctx_a, positions=positions).positions_for_owner()
         self.assertEqual(len(filtered), 1)
         self.assertEqual(filtered[0]["broker_account_id"], "kraken_a")
 
@@ -288,6 +351,100 @@ class TestV2MultiUserIsolation(unittest.TestCase):
         )
         with self.assertRaises(ValueError):
             verify_execution_ownership(mismatched)
+
+    def test_detector_path_propagates_context_end_to_end(self):
+        candidate = StrategySignal(
+            strategy="swing",
+            symbol="BTC-USD",
+            broker="kraken",
+            direction="long",
+            trading_context=self.ctx_b,
+            confidence=0.9,
+            market_regime="trending",
+        )
+        self.pipeline._regime_engine.detect = MagicMock(
+            return_value=SimpleNamespace(
+                regime=SimpleNamespace(value="trending"),
+                confidence=0.9,
+                adx=30.0,
+                rsi=55.0,
+            ),
+        )
+        self.pipeline._detector_registry.detect = MagicMock(return_value=[candidate])
+        self.pipeline._scoring_engine.score = MagicMock(return_value=SimpleNamespace(rejected=False, score=0.9))
+        self.pipeline._confirmation_engine.confirm = MagicMock(
+            return_value=SimpleNamespace(approved=True, reasons=[]),
+        )
+        result = self.pipeline.process_market_snapshot(
+            symbol="BTC-USD",
+            broker="kraken",
+            df=pd.DataFrame({"close": [1.0]}),
+            trading_context=self.ctx_b,
+            risk_snapshot=_snapshot(self.ctx_b),
+            requested_size_usd=100.0,
+        )
+        self.assertIsNotNone(result)
+        self.assertEqual(result.trading_context.scope_key, self.ctx_b.scope_key)
+        self.pipeline._detector_registry.detect.assert_called_once_with(
+            df=ANY,
+            symbol="BTC-USD",
+            broker="kraken",
+            market_regime="trending",
+            trading_context=self.ctx_b,
+        )
+
+    def test_live_context_requires_server_side_authorizer(self):
+        live = TradingContext.from_mapping({**self.ctx_a.to_log_fields(), "mode": "live"})
+        snapshot = _snapshot(live)
+        denied = self.pipeline.process_signal(_raw(live), risk_snapshot=snapshot)
+        self.assertIsNone(denied)
+
+        authorized_pipeline = SignalPipeline(
+            compiler=ControlCompiler(),
+            risk_engine=RiskEngine(),
+            context_authorizer=lambda context: context.owner_key == live.owner_key,
+        )
+        approved = authorized_pipeline.process_signal(_raw(live), risk_snapshot=snapshot)
+        self.assertIsNotNone(approved)
+
+    def test_control_disabled_still_rejects_missing_context(self):
+        with patch("bot.control.control_compiler._CONTROL_ENABLED", False):
+            compiled, notes = ControlCompiler().compile(
+                RawSignal(symbol="BTC-USD", side="buy", action="enter_long", size_usd=10.0),
+            )
+        self.assertIsNone(compiled)
+        self.assertIn("context_invalid:missing_trading_context", notes)
+
+    def test_risk_disabled_still_rejects_missing_context(self):
+        with patch("bot.control.risk_engine._RISK_ENGINE_ENABLED", False):
+            approved, notes = RiskEngine().validate_trade("BTC-USD", "buy", 10.0, 100.0, [])
+        self.assertFalse(approved)
+        self.assertIn("context_missing:missing_trading_context", notes)
+
+    def test_scoped_risk_rule_update_cannot_change_other_user(self):
+        self.risk.update_rules({"max_position_size_pct": 1.0}, trading_context=self.ctx_a)
+        rules_a = self.risk.get_rules(trading_context=self.ctx_a)
+        rules_b = self.risk.get_rules(trading_context=self.ctx_b)
+        self.assertEqual(rules_a.max_position_size_pct, 1.0)
+        self.assertNotEqual(rules_b.max_position_size_pct, 1.0)
+
+    def test_delimiter_characters_cannot_collide_scope_or_idempotency_keys(self):
+        first = _ctx("a|b", "c", "broker_acct")
+        second = _ctx("a", "b|c", "broker_acct")
+        self.assertNotEqual(first.scope_key, second.scope_key)
+        self.assertNotEqual(
+            first.make_idempotency_key(symbol="BTC-USD", side="buy", action="submit_order"),
+            second.make_idempotency_key(symbol="BTC-USD", side="buy", action="submit_order"),
+        )
+
+    def test_unscoped_position_fails_closed_but_foreign_scoped_position_does_not(self):
+        approved, notes = self.risk.validate_trade(
+            "BTC-USD", "buy", 50.0, 10_000.0,
+            [_position(self.ctx_a), {"symbol": "ETH-USD", "size_usd": 50.0}],
+            trading_context=self.ctx_b,
+        )
+        self.assertFalse(approved)
+        self.assertIn("missing_owner_metadata", notes[0])
 
 
 if __name__ == "__main__":
