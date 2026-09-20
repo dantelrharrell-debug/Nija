@@ -467,9 +467,16 @@ def submit_market_order_via_pipeline(
 
     broker_order_id = str(getattr(result, "order_id", "") or "").strip()
     if not result.success:
+        error_text = str(getattr(result, "error", "") or "").lower()
+        unknown_after_dispatch = any(token in error_text for token in (
+            "timeout", "timed out", "ack", "unknown", "reconcile", "dispatch",
+        ))
         if broker_order_id:
             _finalize_v2_duplicate(metadata, "submitted_pending")
             status = "pending"
+        elif unknown_after_dispatch:
+            _finalize_v2_duplicate(metadata, "state_unknown")
+            status = "state_unknown"
         else:
             _finalize_v2_duplicate(metadata, "released")
             status = "error"
@@ -490,7 +497,7 @@ def submit_market_order_via_pipeline(
     # A successful submission requires genuine acknowledgment evidence.  Never
     # fabricate an order ID or a fill: without a real fill price the caller must
     # reconcile, not assume the position was closed.
-    if fill_price <= 0.0:
+    if fill_price <= 0.0 or filled_size_usd <= 0.0:
         logger.error(
             "PIPELINE_ORDER_UNACKNOWLEDGED account=%s broker=%s symbol=%s side=%s "
             "order_id=%s fill_price=%.10f filled_size_usd=%.8f fill_fabricated=false",
@@ -500,7 +507,7 @@ def submit_market_order_via_pipeline(
         _finalize_v2_duplicate(metadata, "submitted_pending" if broker_order_id else "state_unknown")
         return {
             "status": "pending" if broker_order_id else "state_unknown",
-            "error": "unacknowledged_submission: no confirmed fill price returned by broker",
+            "error": "unacknowledged_submission: confirmed fill price and quantity required",
             "symbol": symbol,
             "side": side_norm,
             "account_id": account_id,
