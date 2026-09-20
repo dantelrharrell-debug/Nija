@@ -18,9 +18,11 @@ from bot.control.signal_pipeline import SignalPipeline
 from bot.control.situation_analysis import SituationAnalysisEngine
 from bot.control.strategy_detectors import BreakRetestDetector, DetectorContext
 from bot.control.strategy_registry import StrategyDetectorRegistry
+from bot.control.strategy_signal import StrategySignal
 from bot.control.trading_context import TradingContext
 from bot.feature_flags import FeatureFlag, FeatureFlagManager
 from bot.signal_broadcaster import SignalBroadcaster
+from bot.pipeline_order_submitter import _prepare_v2_duplicate_handoff
 
 
 class _FakeRedis:
@@ -151,32 +153,32 @@ class TestCompletionBlockers(unittest.TestCase):
         new = UserScopedIdempotencyRegistry(redis_client=redis, ttl_seconds=5.0)
         context = _decision_context()
 
-        ok_old, key = old.reserve(context, symbol="BTC-USD", direction="long")
+        ok_old, old_handle = old.reserve(context, symbol="BTC-USD", direction="long")
         self.assertTrue(ok_old)
         time.sleep(1.05)
-        ok_new, new_key = new.reserve(context, symbol="BTC-USD", direction="long")
+        ok_new, new_handle = new.reserve(context, symbol="BTC-USD", direction="long")
         self.assertTrue(ok_new)
-        self.assertEqual(key, new_key)
+        self.assertEqual(old_handle.key, new_handle.key)
 
-        old.release(key)
-        self.assertEqual(new.get_state(new_key), "submitted")
-        self.assertNotIn(key, old._reservation_tokens)
+        old.release(old_handle)
+        self.assertEqual(new.get_state(new_handle), "submitted")
+        self.assertNotIn(old_handle.key, old._reservation_tokens)
 
     def test_release_clears_local_state_when_compare_delete_errors(self):
         redis = _CompareDeleteErrorRedis()
         registry = UserScopedIdempotencyRegistry(redis_client=redis, ttl_seconds=5.0)
         context = _decision_context()
 
-        ok, key = registry.reserve(context, symbol="BTC-USD", direction="long")
+        ok, handle = registry.reserve(context, symbol="BTC-USD", direction="long")
         self.assertTrue(ok)
-        registry.mark_state(key, "submitted_pending")
-        self.assertIn(key, registry._reservation_tokens)
-        self.assertIn(key, registry._states)
+        registry.mark_state(handle, "submitted_pending")
+        self.assertIn(handle.key, registry._reservation_tokens)
+        self.assertIn(handle.key, registry._states)
 
-        registry.release(key)
+        registry.release(handle)
 
-        self.assertNotIn(key, registry._reservation_tokens)
-        self.assertNotIn(key, registry._states)
+        self.assertNotIn(handle.key, registry._reservation_tokens)
+        self.assertNotIn(handle.key, registry._states)
 
     def test_production_live_account_kill_switch_requires_durable_shared_write(self):
         ctx = _trading_context(mode="live", environment="production")
@@ -185,9 +187,9 @@ class TestCompletionBlockers(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 engine.set_account_kill_switch(ctx, True, "operator_halt")
 
-    def test_blank_environment_live_context_does_not_require_shared_kill_switch_state(self):
+    def test_blank_environment_live_context_requires_shared_kill_switch_state(self):
         ctx = SimpleNamespace(mode="live", environment=None)
-        self.assertFalse(RiskEngine._requires_shared_state(ctx))
+        self.assertTrue(RiskEngine._requires_shared_state(ctx))
 
     def test_paper_account_kill_switch_reports_success_without_shared_state(self):
         ctx = _trading_context()
@@ -204,6 +206,25 @@ class TestCompletionBlockers(unittest.TestCase):
         with patch("bot.control.decision_context._default_redis_client", return_value=None):
             engine = RiskEngine(redis_client=None)
             self.assertTrue(engine.set_user_kill_switch("user-a", True, "user_halt"))
+
+
+    def test_live_runtime_platform_kill_switch_requires_shared_persistence(self):
+        with patch.dict(
+            os.environ,
+            {"NIJA_STRATEGY_EXECUTION_MODE": "LIVE", "NIJA_ENVIRONMENT": "production"},
+        ), patch("bot.control.decision_context._default_redis_client", return_value=None):
+            engine = RiskEngine(redis_client=None)
+            with self.assertRaises(RuntimeError):
+                engine.set_platform_kill_switch(True, "platform_halt")
+
+    def test_live_runtime_user_kill_switch_requires_shared_persistence(self):
+        with patch.dict(
+            os.environ,
+            {"NIJA_STRATEGY_EXECUTION_MODE": "LIMITED_LIVE", "NIJA_ENVIRONMENT": "production"},
+        ), patch("bot.control.decision_context._default_redis_client", return_value=None):
+            engine = RiskEngine(redis_client=None)
+            with self.assertRaises(RuntimeError):
+                engine.set_user_kill_switch("user-a", True, "user_halt")
 
     def test_production_limited_live_account_kill_switch_requires_durable_shared_write(self):
         ctx = _trading_context(mode="limited_live", environment="production")
@@ -363,6 +384,163 @@ class TestCompletionBlockers(unittest.TestCase):
                 trading_context=detector_context.trading_context,
             )
         self.assertTrue(any(signal.strategy == "BREAK_RETEST" for signal in signals))
+
+    def test_live_reservation_uses_short_ttl_until_submission_uncertain(self):
+        redis = _FakeRedis()
+        registry = UserScopedIdempotencyRegistry(
+            redis_client=redis,
+            ttl_seconds=1.0,
+            uncertain_ttl_seconds=30.0,
+        )
+        ok, handle = registry.reserve(
+            _decision_context(mode="live", environment="production"),
+            symbol="BTC-USD",
+            direction="long",
+        )
+        self.assertTrue(ok)
+        redis_key = registry._redis_key(handle.key)
+        initial_remaining = redis._expires[redis_key] - time.monotonic()
+        self.assertLess(initial_remaining, 2.0)
+
+        registry.mark_state(handle, "state_unknown")
+        extended_remaining = redis._expires[redis_key] - time.monotonic()
+        self.assertGreater(extended_remaining, 20.0)
+
+
+
+    def test_cross_worker_live_handle_cannot_fallback_local_without_redis(self):
+        redis = _FakeRedis()
+        producer = UserScopedIdempotencyRegistry(redis_client=redis)
+        ok, handle = producer.reserve(
+            _decision_context(mode="live", environment="production"),
+            symbol="AVAX-USD",
+            direction="long",
+        )
+        self.assertTrue(ok)
+        self.assertTrue(handle.shared_required)
+
+        with patch("bot.control.decision_context._default_redis_client", return_value=None):
+            consumer = UserScopedIdempotencyRegistry(redis_client=None)
+            self.assertFalse(consumer.mark_state(handle, "submitted_pending"))
+
+    def test_pre_dispatch_handoff_durably_extends_live_reservation(self):
+        redis = _FakeRedis()
+        registry = UserScopedIdempotencyRegistry(
+            redis_client=redis,
+            ttl_seconds=1.0,
+            uncertain_ttl_seconds=30.0,
+        )
+        ok, handle = registry.reserve(
+            _decision_context(mode="live", environment="production"),
+            symbol="SOL-USD",
+            direction="long",
+        )
+        self.assertTrue(ok)
+        with patch(
+            "bot.control.decision_context.get_user_scoped_idempotency_registry",
+            return_value=registry,
+        ):
+            self.assertTrue(_prepare_v2_duplicate_handoff(handle.to_metadata()))
+        self.assertEqual(registry.get_state(handle), "submitted_pending")
+        remaining = redis._expires[registry._redis_key(handle.key)] - time.monotonic()
+        self.assertGreater(remaining, 20.0)
+
+    def test_stale_finalizer_cannot_overwrite_newer_reservation(self):
+        redis = _FakeRedis()
+        old = UserScopedIdempotencyRegistry(redis_client=redis, ttl_seconds=1.0)
+        new = UserScopedIdempotencyRegistry(redis_client=redis, ttl_seconds=5.0)
+        ctx = _decision_context()
+        ok_old, old_handle = old.reserve(ctx, symbol="ETH-USD", direction="long")
+        self.assertTrue(ok_old)
+        time.sleep(1.05)
+        ok_new, new_handle = new.reserve(ctx, symbol="ETH-USD", direction="long")
+        self.assertTrue(ok_new)
+
+        old.mark_state(old_handle, "state_unknown")
+        self.assertEqual(new.get_state(new_handle), "submitted")
+
+    def test_break_retest_rejects_zero_volume_breakout(self):
+        df = _break_retest_frame()
+        df["volume"] = 0.0
+        detector = BreakRetestDetector()
+        signal = detector.detect(
+            df,
+            DetectorContext(
+                symbol="BTC-USD",
+                broker="kraken",
+                trading_context=_trading_context(),
+                market_regime="trending",
+            ),
+        )
+        self.assertIsNone(signal)
+
+    def test_break_retest_stop_and_target_reach_compiled_execution_fields(self):
+        ctx = _trading_context()
+        df = _break_retest_frame()
+        candidate = StrategySignal(
+            strategy="BREAK_RETEST",
+            symbol="BTC-USD",
+            broker="kraken",
+            direction="long",
+            trading_context=ctx,
+            invalidation_level=100.0,
+            suggested_stop=100.0,
+            target_candidates=[104.0],
+            confidence=0.8,
+            raw_score=0.8,
+            market_regime="trending",
+            supporting_evidence=["structure_break_up", "retest_hold", "volume_confirmed"],
+        )
+        regime = SimpleNamespace(
+            regime=MarketRegime.TRENDING,
+            confidence=0.8,
+            volatility=0.02,
+            adx=30.0,
+            rsi=55.0,
+        )
+        regime_engine = MagicMock()
+        regime_engine.detect.return_value = regime
+        pipeline = SignalPipeline(
+            compiler=ControlCompiler(),
+            regime_engine=regime_engine,
+            risk_engine=RiskEngine(redis_client=_FakeRedis()),
+        )
+        pipeline._idempotency_registry = UserScopedIdempotencyRegistry(redis_client=_FakeRedis())
+        pipeline._detector_registry = MagicMock()
+        pipeline._detector_registry.detect.return_value = [candidate]
+        pipeline._scoring_engine = MagicMock()
+        pipeline._scoring_engine.score.return_value = SimpleNamespace(rejected=False, score=0.8)
+        pipeline._confirmation_engine = MagicMock()
+        pipeline._confirmation_engine.confirm.return_value = SimpleNamespace(approved=True, reasons=[])
+        snapshot = ScopedRiskSnapshot.from_values(
+            context=ctx,
+            portfolio_value_usd=10_000.0,
+            current_positions=[],
+            available_balance_usd=1_000.0,
+        )
+
+        compiled = pipeline.process_market_snapshot(
+            symbol="BTC-USD",
+            broker="kraken",
+            df=df,
+            trading_context=ctx,
+            risk_snapshot=snapshot,
+            requested_size_usd=50.0,
+            authoritative_position_proven=True,
+        )
+        self.assertIsNotNone(compiled)
+        self.assertIsNotNone(compiled.stop_loss_pct)
+        self.assertIsNotNone(compiled.take_profit_pct)
+        self.assertGreater(compiled.stop_loss_pct, 0.0)
+        self.assertGreater(compiled.take_profit_pct, 0.0)
+        kwargs = compiled.to_pipeline_kwargs()
+        self.assertEqual(kwargs["stop_loss_pct"], compiled.stop_loss_pct)
+        self.assertEqual(kwargs["take_profit_pct"], compiled.take_profit_pct)
+        self.assertEqual(kwargs["metadata"]["suggested_stop"], 100.0)
+        self.assertEqual(kwargs["metadata"]["target_candidates"][0], 104.0)
+        self.assertTrue(kwargs["metadata"].get("duplicate_key"))
+        self.assertTrue(kwargs["metadata"].get("duplicate_token"))
+
 
 
 if __name__ == "__main__":
