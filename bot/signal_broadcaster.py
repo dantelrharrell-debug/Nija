@@ -593,6 +593,14 @@ class SignalBroadcaster:
             size = round(size, 2)
 
             signal_metadata = signal.get("metadata") if isinstance(signal.get("metadata"), dict) else {}
+            duplicate_metadata_present = any(
+                field_name in signal or field_name in signal_metadata
+                for field_name in (
+                    "duplicate_key",
+                    "duplicate_token",
+                    "duplicate_shared_required",
+                )
+            )
             duplicate_key = str(signal.get("duplicate_key") or signal_metadata.get("duplicate_key") or "").strip()
             duplicate_token = str(signal.get("duplicate_token") or signal_metadata.get("duplicate_token") or "").strip()
             raw_shared_required = signal.get(
@@ -692,7 +700,7 @@ class SignalBroadcaster:
                             "duplicate_shared_required": bool(duplicate_shared_required),
                             **protection,
                         }
-                        if duplicate_key and duplicate_token
+                        if duplicate_metadata_present
                         else (protection or None)
                     ),
                 )

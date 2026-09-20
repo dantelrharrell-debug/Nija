@@ -563,18 +563,23 @@ class TestCompletionBlockers(unittest.TestCase):
         )
         pipeline = MagicMock()
         request_type = lambda **kwargs: SimpleNamespace(**kwargs)
-        with patch("bot.pipeline_order_submitter.assert_distributed_writer_authority", return_value=None), \
-             patch("bot.pipeline_order_submitter.get_execution_pipeline", return_value=pipeline), \
-             patch("bot.pipeline_order_submitter.PipelineRequest", request_type):
-            out = submit_market_order_via_pipeline(
-                broker,
-                "BTC-USD",
-                "buy",
-                10.0,
-                metadata_override={"duplicate_key": "v2:missing-token"},
-            )
-        self.assertEqual(out["status"], "error")
-        self.assertEqual(out["error"], "v2_duplicate_metadata_incomplete")
+        for partial_metadata in (
+            {"duplicate_key": "v2:missing-token"},
+            {"duplicate_token": "token-without-key"},
+        ):
+            with self.subTest(partial_metadata=partial_metadata), \
+                 patch("bot.pipeline_order_submitter.assert_distributed_writer_authority", return_value=None), \
+                 patch("bot.pipeline_order_submitter.get_execution_pipeline", return_value=pipeline), \
+                 patch("bot.pipeline_order_submitter.PipelineRequest", request_type):
+                out = submit_market_order_via_pipeline(
+                    broker,
+                    "BTC-USD",
+                    "buy",
+                    10.0,
+                    metadata_override=partial_metadata,
+                )
+            self.assertEqual(out["status"], "error")
+            self.assertEqual(out["error"], "v2_duplicate_metadata_incomplete")
         pipeline.execute.assert_not_called()
 
     def test_proven_pre_submit_error_retains_token_for_retry(self):

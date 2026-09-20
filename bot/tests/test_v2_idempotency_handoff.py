@@ -84,6 +84,39 @@ class TestV2IdempotencyHandoff(unittest.TestCase):
         self.assertEqual(seen["metadata_override"]["duplicate_token"], "token-1")
         self.assertTrue(seen["metadata_override"]["duplicate_shared_required"])
 
+    def test_broadcaster_preserves_partial_duplicate_metadata_for_fail_closed_submitter(self):
+        broadcaster = SignalBroadcaster(risk_fraction=0.1)
+        broker = _Broker()
+        broadcaster.register_account("acct-a", broker, balance=1000.0)
+
+        for partial_metadata in (
+            {"duplicate_key": "v2:missing-token"},
+            {"duplicate_token": "token-without-key"},
+        ):
+            with self.subTest(partial_metadata=partial_metadata):
+                seen = {}
+
+                def fake_submit(**kwargs):
+                    seen.update(kwargs)
+                    return {"status": "error", "error": "v2_duplicate_metadata_incomplete"}
+
+                with patch(
+                    "bot.signal_broadcaster.submit_market_order_via_pipeline",
+                    side_effect=fake_submit,
+                ):
+                    result = broadcaster._execute_single(
+                        broadcaster._accounts["acct-a"],
+                        {"symbol": "BTC-USD", **partial_metadata},
+                        "BTC-USD",
+                        "buy",
+                        None,
+                    )
+
+                self.assertEqual(result.status, "error")
+                self.assertEqual(result.order_result["error"], "v2_duplicate_metadata_incomplete")
+                for field_name, value in partial_metadata.items():
+                    self.assertEqual(seen["metadata_override"][field_name], value)
+
     def test_broadcaster_forwards_break_retest_protection_to_submitter(self):
         broadcaster = SignalBroadcaster(risk_fraction=0.1)
         broker = _Broker()
