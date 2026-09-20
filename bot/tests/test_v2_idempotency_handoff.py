@@ -21,6 +21,7 @@ class _Broker:
 
 
 class TestV2IdempotencyHandoff(unittest.TestCase):
+    def _reserve(self, trade_id: str) -> tuple[str, str]:
     def _reserve(self, trade_id: str) -> IdempotencyReservationHandle:
         registry = get_user_scoped_idempotency_registry()
         context = UserDecisionContext(
@@ -31,6 +32,27 @@ class TestV2IdempotencyHandoff(unittest.TestCase):
             strategy_signal_id="sig-handoff",
             trade_id=trade_id,
         )
+        allowed, key, token = registry.reserve(context, symbol="BTC-USD", direction="long")
+        self.assertTrue(allowed)
+        return key, token
+
+    def test_release_removes_shared_reservation(self):
+        registry = get_user_scoped_idempotency_registry()
+        key, token = self._reserve("trade-release")
+        _finalize_v2_duplicate({"duplicate_key": key, "duplicate_token": token}, "released")
+        self.assertIsNone(registry.get_state(key))
+
+    def test_pending_submission_remains_blocked_for_reconciliation(self):
+        registry = get_user_scoped_idempotency_registry()
+        key, token = self._reserve("trade-pending")
+        _finalize_v2_duplicate({"duplicate_key": key, "duplicate_token": token}, "submitted_pending")
+        self.assertEqual(registry.get_state(key), "submitted_pending")
+
+    def test_filled_submission_records_terminal_state(self):
+        registry = get_user_scoped_idempotency_registry()
+        key, token = self._reserve("trade-filled")
+        _finalize_v2_duplicate({"duplicate_key": key, "duplicate_token": token}, "reconciled_filled")
+        self.assertEqual(registry.get_state(key), "reconciled_filled")
         allowed, handle = registry.reserve(context, symbol="BTC-USD", direction="long")
         self.assertTrue(allowed)
         return handle
@@ -69,6 +91,7 @@ class TestV2IdempotencyHandoff(unittest.TestCase):
                 {
                     "symbol": "BTC-USD",
                     "duplicate_key": "v2:test-key",
+                    "duplicate_token": "owner-token",
                     "duplicate_token": "token-1",
                     "duplicate_shared_required": True,
                 },
@@ -79,6 +102,7 @@ class TestV2IdempotencyHandoff(unittest.TestCase):
 
         self.assertEqual(result.status, "pending")
         self.assertEqual(seen["metadata_override"]["duplicate_key"], "v2:test-key")
+        self.assertEqual(seen["metadata_override"]["duplicate_token"], "owner-token")
         self.assertEqual(seen["metadata_override"]["duplicate_token"], "token-1")
         self.assertTrue(seen["metadata_override"]["duplicate_shared_required"])
 

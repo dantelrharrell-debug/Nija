@@ -264,8 +264,8 @@ class RiskEngine:
             return False, ["context_missing:missing_trading_context"]
         if trading_context is None:
             request_nonce = f"{threading.get_ident()}_{int(time.time() * 1000)}"
-            legacy_user = str(user_id or "").strip() or f"legacy_{request_nonce}"
-            legacy_account = str(account_id or "").strip() or f"legacy_account_{request_nonce}"
+            legacy_user = str(user_id or "").strip() or "legacy_user"
+            legacy_account = str(account_id or "").strip() or "default"
             legacy_broker = str(broker or "").strip().lower() or "legacy"
             trading_context = TradingContext(
                 user_id=legacy_user,

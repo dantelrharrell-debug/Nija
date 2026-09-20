@@ -562,6 +562,23 @@ class SignalBroadcaster:
 
             signal_metadata = signal.get("metadata") if isinstance(signal.get("metadata"), dict) else {}
             duplicate_key = str(signal.get("duplicate_key") or signal_metadata.get("duplicate_key") or "").strip()
+            duplicate_token = str(
+                signal.get("duplicate_token") or signal_metadata.get("duplicate_token") or ""
+            ).strip()
+            if bool(duplicate_key) != bool(duplicate_token):
+                return BroadcastResult(
+                    account_id=account.account_id,
+                    symbol=symbol,
+                    side=side,
+                    size_usd=size,
+                    status="error",
+                    error="incomplete_v2_reservation_handle",
+                )
+
+            if size <= 0:
+                if duplicate_key and duplicate_token:
+                    from bot.control.decision_context import get_user_scoped_idempotency_registry
+                    get_user_scoped_idempotency_registry().release(duplicate_key, token=duplicate_token)
             duplicate_token = str(signal.get("duplicate_token") or signal_metadata.get("duplicate_token") or "").strip()
             raw_shared_required = signal.get(
                 "duplicate_shared_required",
@@ -599,6 +616,8 @@ class SignalBroadcaster:
 
             if submit_market_order_via_pipeline is None:
                 if duplicate_key and duplicate_token:
+                    from bot.control.decision_context import get_user_scoped_idempotency_registry
+                    get_user_scoped_idempotency_registry().release(duplicate_key, token=duplicate_token)
                     from bot.control.decision_context import (
                         IdempotencyReservationHandle,
                         get_user_scoped_idempotency_registry,
@@ -618,6 +637,10 @@ class SignalBroadcaster:
                     quantity=size,
                     size_type="quote",
                     strategy="SignalBroadcaster",
+                    metadata_override={
+                        "duplicate_key": duplicate_key,
+                        "duplicate_token": duplicate_token,
+                    } if duplicate_key and duplicate_token else None,
                     metadata_override=(
                         {
                             "duplicate_key": duplicate_key,
