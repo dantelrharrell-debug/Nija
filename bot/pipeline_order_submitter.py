@@ -364,7 +364,7 @@ def _v2_duplicate_metadata_state(metadata: Dict[str, Any]) -> str:
     shared_present = "duplicate_shared_required" in data
     if not present["duplicate_key"] and not present["duplicate_token"] and not shared_present:
         return "absent"
-    if present["duplicate_key"] and present["duplicate_token"]:
+    if present["duplicate_key"] and present["duplicate_token"] and shared_present:
         return "complete"
     return "partial"
 
