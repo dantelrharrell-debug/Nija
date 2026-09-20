@@ -388,6 +388,22 @@ class TestCompletionBlockers(unittest.TestCase):
         self.assertGreater(extended_remaining, 20.0)
 
 
+
+    def test_cross_worker_live_handle_cannot_fallback_local_without_redis(self):
+        redis = _FakeRedis()
+        producer = UserScopedIdempotencyRegistry(redis_client=redis)
+        ok, handle = producer.reserve(
+            _decision_context(mode="live", environment="production"),
+            symbol="AVAX-USD",
+            direction="long",
+        )
+        self.assertTrue(ok)
+        self.assertTrue(handle.shared_required)
+
+        with patch("bot.control.decision_context._default_redis_client", return_value=None):
+            consumer = UserScopedIdempotencyRegistry(redis_client=None)
+            self.assertFalse(consumer.mark_state(handle, "submitted_pending"))
+
     def test_pre_dispatch_handoff_durably_extends_live_reservation(self):
         redis = _FakeRedis()
         registry = UserScopedIdempotencyRegistry(
