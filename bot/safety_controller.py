@@ -114,6 +114,21 @@ class SafetyController:
             logger.info("=" * 70)
             self._log_state_change("DRY_RUN_MODE enabled - simulated trading only")
             return
+
+        # PAPER_MODE is also simulation-only.  Keep it on the same execution
+        # surface as DRY_RUN so strategy logic (including BREAK_RETEST) may run
+        # without ever reaching a real-money broker router.  This check must
+        # remain ahead of heartbeat/live authorization.
+        if runtime_mode.paper:
+            self._mode = TradingMode.DRY_RUN
+            logger.info("=" * 70)
+            logger.info("📝 PAPER TRADING MODE ACTIVE")
+            logger.info("=" * 70)
+            logger.info("   All trades are simulated - NO REAL ORDERS PLACED")
+            logger.info("   BREAK_RETEST live broker protection gates remain unchanged")
+            logger.info("=" * 70)
+            self._log_state_change("PAPER_MODE enabled - simulated trading only")
+            return
             
         # Check #4: Heartbeat verification mode (single test trade)
         heartbeat_mode = os.getenv('HEARTBEAT_TRADE', 'false').lower() in ('true', '1', 'yes')
@@ -291,9 +306,11 @@ class SafetyController:
         """
         if self._emergency_stop_active:
             return False
-        if self._mode == TradingMode.LIVE:
-            return False  # Already live — nothing to do.
 
+        # Always re-resolve a non-emergency mode.  In particular, an existing
+        # LIVE controller must be able to downgrade immediately when PAPER_MODE,
+        # DRY_RUN_MODE, APP_STORE_MODE, or live authorization changes.  Keeping
+        # a stale LIVE latch here would defeat the simulation boundary.
         old_mode = self._mode
         self._load_safety_configuration()
         changed = self._mode != old_mode
