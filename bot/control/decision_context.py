@@ -474,6 +474,16 @@ class UserScopedIdempotencyRegistry:
             return handle
         return IdempotencyReservationHandle(str(handle or "").strip(), "", False)
 
+    def _forget_local_if_owned(self, key: str, token: str) -> None:
+        """Clear only local bookkeeping owned by the supplied stale/current token."""
+        with self._lock:
+            entry = self._states.get(key)
+            current_token = str((entry or {}).get("token") or self._reservation_tokens.get(key, ""))
+            if current_token == token:
+                self._states.pop(key, None)
+                self._reservation_tokens.pop(key, None)
+                self._reservation_shared_required.pop(key, None)
+
     def mark_state(self, handle: IdempotencyReservationHandle, state: str) -> bool:
         handle = self._coerce_handle(handle)
         key = handle.key
@@ -488,6 +498,7 @@ class UserScopedIdempotencyRegistry:
         redis_result = self._redis_compare_set(key, token, normalized, ttl)
         if redis_result is False:
             logger.warning("V2 idempotency stale finalizer refused state=%s", normalized)
+            self._forget_local_if_owned(key, token)
             return False
         with self._lock:
             shared_required = bool(handle.shared_required or self._reservation_shared_required.get(key, False))
@@ -518,19 +529,14 @@ class UserScopedIdempotencyRegistry:
         redis_result = self._redis_compare_delete(key, token)
         if redis_result is False:
             logger.warning("V2 idempotency stale release refused")
+            self._forget_local_if_owned(key, token)
             return False
         with self._lock:
             shared_required = bool(handle.shared_required or self._reservation_shared_required.get(key, False))
         if redis_result is None and shared_required:
             logger.critical("V2 idempotency release not durable; shared authority unchanged")
             return False
-        with self._lock:
-            entry = self._states.get(key)
-            entry_token = str((entry or {}).get("token") or self._reservation_tokens.get(key, ""))
-            if entry_token == token:
-                self._states.pop(key, None)
-                self._reservation_tokens.pop(key, None)
-                self._reservation_shared_required.pop(key, None)
+        self._forget_local_if_owned(key, token)
         return True
 
     def get_state(self, key: Any) -> Optional[str]:
