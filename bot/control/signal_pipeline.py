@@ -674,6 +674,7 @@ class SignalPipeline:
                 strategy_signal_id=raw_signal.strategy_signal_id or tc.strategy_instance_id,
                 trade_id=raw_signal.trade_id or tc.decision_id or tc.request_id,
                 execution_mode=raw_signal.execution_mode or tc.mode,
+                environment=tc.environment,
                 asset_class=raw_signal.asset_class,
                 correlation_id=tc.correlation_id,
             )
@@ -688,7 +689,7 @@ class SignalPipeline:
         mode = str(decision_context.execution_mode or "paper").strip().lower()
         if mode == "test":
             mode = "paper"
-        environment = "production" if mode == "live" else "test"
+        environment = str(decision_context.environment or ("production" if mode == "live" else "test")).strip()
         return TradingContext(
             user_id=decision_context.user_id,
             trading_account_id=decision_context.account_id,
