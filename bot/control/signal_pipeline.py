@@ -898,6 +898,7 @@ class SignalPipeline:
         duplicate_key: str,
         duplicate_token: str,
         *,
+        duplicate_shared_required: Any = False,
         state: str = "released",
     ) -> None:
         """Finalize a duplicate reservation after downstream execution reconciliation."""
@@ -908,9 +909,15 @@ class SignalPipeline:
             return
         self._idempotency_registry.mark_state(duplicate_key, state, token=duplicate_token)
         """Finalize a reservation only with the exact ownership token."""
+        shared_required = (
+            duplicate_shared_required
+            if isinstance(duplicate_shared_required, bool)
+            else str(duplicate_shared_required or "").strip().lower() in {"1", "true", "yes", "on"}
+        )
         handle = IdempotencyReservationHandle(
             str(duplicate_key or "").strip(),
             str(duplicate_token or "").strip(),
+            bool(shared_required),
         )
         if not handle:
             return

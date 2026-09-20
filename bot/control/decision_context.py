@@ -436,18 +436,22 @@ class UserScopedIdempotencyRegistry:
     def reserve(self, context: UserDecisionContext, *, symbol: str, direction: str) -> Tuple[bool, IdempotencyReservationHandle]:
         key = self.build_key(context, symbol=symbol, direction=direction)
         token = uuid.uuid4().hex
-        redis_result = self._redis_reserve(key, token, self._ttl_seconds)
+        shared_required = self._requires_shared_authority(context)
+        reserve_ttl = self._uncertain_ttl_seconds if shared_required else self._ttl_seconds
+        redis_result = self._redis_reserve(key, token, reserve_ttl)
         if redis_result is True:
             with self._lock:
                 self._reservation_tokens[key] = token
+                self._reservation_shared_required[key] = shared_required
+            return True, IdempotencyReservationHandle(key, token, shared_required)
             return True, key, token
         if redis_result is False:
             return False, key, ""
                 self._reservation_shared_required[key] = self._requires_shared_authority(context)
             return True, IdempotencyReservationHandle(key, token, self._requires_shared_authority(context))
         if redis_result is False:
-            return False, IdempotencyReservationHandle(key, "", self._requires_shared_authority(context))
-        if self._requires_shared_authority(context):
+            return False, IdempotencyReservationHandle(key, "", shared_required)
+        if shared_required:
             logger.critical(
                 "V2_IDEMPOTENCY_SHARED_AUTHORITY_UNAVAILABLE broker=%s account=%s fail_closed=true",
                 context.broker,
@@ -457,7 +461,7 @@ class UserScopedIdempotencyRegistry:
             return False, IdempotencyReservationHandle(
                 key,
                 "",
-                self._requires_shared_authority(context),
+                shared_required,
             )
 
         # Non-live fallback for local paper/backtest use.
@@ -561,6 +565,14 @@ class UserScopedIdempotencyRegistry:
             logger.warning("V2 idempotency stale local release refused")
             return False
         redis_result = self._redis_compare_delete(key, token)
+        with self._lock:
+            shared_required = bool(handle.shared_required or self._reservation_shared_required.get(key, False))
+            entry = self._states.get(key)
+            entry_token = str((entry or {}).get("token") or self._reservation_tokens.get(key, ""))
+            if redis_result is False and entry_token == token:
+                self._states.pop(key, None)
+                self._reservation_tokens.pop(key, None)
+                self._reservation_shared_required.pop(key, None)
         if redis_result is False:
             logger.warning("V2 idempotency stale release refused")
             with self._lock:
@@ -581,8 +593,6 @@ class UserScopedIdempotencyRegistry:
                 self._states.pop(key, None)
                 self._reservation_tokens.pop(key, None)
             return False
-        with self._lock:
-            shared_required = bool(handle.shared_required or self._reservation_shared_required.get(key, False))
         if redis_result is None and shared_required:
             logger.critical("V2 idempotency release not durable; shared authority unchanged")
             return False
