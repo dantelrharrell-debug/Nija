@@ -207,6 +207,25 @@ class TestCompletionBlockers(unittest.TestCase):
             engine = RiskEngine(redis_client=None)
             self.assertTrue(engine.set_user_kill_switch("user-a", True, "user_halt"))
 
+
+    def test_live_runtime_platform_kill_switch_requires_shared_persistence(self):
+        with patch.dict(
+            os.environ,
+            {"NIJA_STRATEGY_EXECUTION_MODE": "LIVE", "NIJA_ENVIRONMENT": "production"},
+        ), patch("bot.control.decision_context._default_redis_client", return_value=None):
+            engine = RiskEngine(redis_client=None)
+            with self.assertRaises(RuntimeError):
+                engine.set_platform_kill_switch(True, "platform_halt")
+
+    def test_live_runtime_user_kill_switch_requires_shared_persistence(self):
+        with patch.dict(
+            os.environ,
+            {"NIJA_STRATEGY_EXECUTION_MODE": "LIMITED_LIVE", "NIJA_ENVIRONMENT": "production"},
+        ), patch("bot.control.decision_context._default_redis_client", return_value=None):
+            engine = RiskEngine(redis_client=None)
+            with self.assertRaises(RuntimeError):
+                engine.set_user_kill_switch("user-a", True, "user_halt")
+
     def test_production_limited_live_account_kill_switch_requires_durable_shared_write(self):
         ctx = _trading_context(mode="limited_live", environment="production")
         with patch("bot.control.decision_context._default_redis_client", return_value=None):
