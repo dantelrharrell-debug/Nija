@@ -263,10 +263,10 @@ class RiskEngine:
         if trading_context is None and enforce_isolation:
             return False, ["context_missing:missing_trading_context"]
         if trading_context is None:
-            request_nonce = f"{threading.get_ident()}_{int(time.time() * 1000)}"
-            legacy_user = str(user_id or "").strip() or f"legacy_{request_nonce}"
-            legacy_account = str(account_id or "").strip() or f"legacy_account_{request_nonce}"
+            legacy_user = str(user_id or "").strip() or "legacy"
+            legacy_account = str(account_id or "").strip() or "default"
             legacy_broker = str(broker or "").strip().lower() or "legacy"
+            request_nonce = f"{threading.get_ident()}:{legacy_user}:{legacy_account}:{legacy_broker}"
             trading_context = TradingContext(
                 user_id=legacy_user,
                 trading_account_id=legacy_account,
@@ -274,8 +274,8 @@ class RiskEngine:
                 broker_account_id=legacy_account,
                 strategy_instance_id="legacy_strategy",
                 portfolio_id=f"{legacy_broker}:{legacy_account}",
-                request_id=f"legacy_request_{request_nonce}",
-                correlation_id=f"legacy_correlation_{request_nonce}",
+                request_id=f"legacy_request:{request_nonce}",
+                correlation_id=f"legacy_correlation:{request_nonce}",
                 environment="legacy",
                 mode="paper",
             )
