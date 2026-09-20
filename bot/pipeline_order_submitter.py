@@ -11,6 +11,7 @@ from __future__ import annotations
 import importlib
 import logging
 import os
+import threading
 from typing import Any, Dict, Optional
 
 logger = logging.getLogger("nija.pipeline_order_submitter")
@@ -35,6 +36,7 @@ except ImportError:
 
 
 _HEARTBEAT_PROBE_STRATEGIES = {"HEARTBEAT_TRADE", "HEARTBEAT_TRADE_CLOSE"}
+_PIPELINE_DEPENDENCY_LOCK = threading.Lock()
 
 
 def _resolve_execution_pipeline_dependencies() -> tuple[Any, Any]:
@@ -48,35 +50,36 @@ def _resolve_execution_pipeline_dependencies() -> tuple[Any, Any]:
     """
     global PipelineRequest, get_execution_pipeline
 
-    if PipelineRequest is not None and get_execution_pipeline is not None:
-        return PipelineRequest, get_execution_pipeline
+    with _PIPELINE_DEPENDENCY_LOCK:
+        if PipelineRequest is not None and get_execution_pipeline is not None:
+            return PipelineRequest, get_execution_pipeline
 
-    failures = []
-    for module_name in ("bot.execution_pipeline", "execution_pipeline"):
-        try:
-            module = importlib.import_module(module_name)
-        except Exception as exc:
-            failures.append(f"{module_name}:{type(exc).__name__}")
-            continue
+        failures = []
+        for module_name in ("bot.execution_pipeline", "execution_pipeline"):
+            try:
+                module = importlib.import_module(module_name)
+            except Exception as exc:
+                failures.append(f"{module_name}:{type(exc).__name__}")
+                continue
 
-        candidate_request = (
-            PipelineRequest if PipelineRequest is not None else getattr(module, "PipelineRequest", None)
-        )
-        candidate_getter = (
-            get_execution_pipeline
-            if get_execution_pipeline is not None
-            else getattr(module, "get_execution_pipeline", None)
-        )
-        if candidate_request is None or candidate_getter is None:
-            failures.append(f"{module_name}:partial_module")
-            continue
+            candidate_request = (
+                PipelineRequest if PipelineRequest is not None else getattr(module, "PipelineRequest", None)
+            )
+            candidate_getter = (
+                get_execution_pipeline
+                if get_execution_pipeline is not None
+                else getattr(module, "get_execution_pipeline", None)
+            )
+            if candidate_request is None or candidate_getter is None:
+                failures.append(f"{module_name}:partial_module")
+                continue
 
-        # Commit the pair atomically. Never cache one symbol from a partially
-        # initialized alias because a later import could combine incompatible
-        # request and pipeline implementations.
-        PipelineRequest = candidate_request
-        get_execution_pipeline = candidate_getter
-        return PipelineRequest, get_execution_pipeline
+            # Commit the pair atomically. Never cache one symbol from a partially
+            # initialized alias because a later import could combine incompatible
+            # request and pipeline implementations.
+            PipelineRequest = candidate_request
+            get_execution_pipeline = candidate_getter
+            return PipelineRequest, get_execution_pipeline
 
     logger.error("EXECUTION_PIPELINE_LAZY_IMPORT_FAILED failures=%s", ",".join(failures))
     return PipelineRequest, get_execution_pipeline
