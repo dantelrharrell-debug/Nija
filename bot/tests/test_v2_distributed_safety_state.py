@@ -111,6 +111,13 @@ class TestDistributedV2Idempotency(unittest.TestCase):
         self.assertTrue(token_a)
         self.assertFalse(token_b)
         self.assertEqual(b.get_state(key_b), "submitted")
+        first, handle_a = a.reserve(ctx, symbol="BTC-USD", direction="long")
+        second, handle_b = b.reserve(ctx, symbol="BTC-USD", direction="long")
+
+        self.assertTrue(first)
+        self.assertFalse(second)
+        self.assertEqual(handle_a.key, handle_b.key)
+        self.assertEqual(b.get_state(handle_b), "submitted")
 
     def test_different_users_do_not_collide_across_workers(self):
         redis = _SharedFakeRedis()
@@ -123,10 +130,12 @@ class TestDistributedV2Idempotency(unittest.TestCase):
         ok_b, key_b, _ = b.reserve(
             _decision(user="user-b", account="acct-b"), symbol="BTC-USD", direction="long"
         )
+        ok_a, handle_a = a.reserve(_decision(user="user-a", account="acct-a"), symbol="BTC-USD", direction="long")
+        ok_b, handle_b = b.reserve(_decision(user="user-b", account="acct-b"), symbol="BTC-USD", direction="long")
 
         self.assertTrue(ok_a)
         self.assertTrue(ok_b)
-        self.assertNotEqual(key_a, key_b)
+        self.assertNotEqual(handle_a.key, handle_b.key)
 
     def test_state_unknown_remains_visible_to_other_worker(self):
         redis = _SharedFakeRedis()
@@ -140,6 +149,12 @@ class TestDistributedV2Idempotency(unittest.TestCase):
 
         self.assertEqual(b.get_state(key), "state_unknown")
         retry, _, _ = b.reserve(ctx, symbol="BTC-USD", direction="long")
+        ok, handle = a.reserve(ctx, symbol="BTC-USD", direction="long")
+        self.assertTrue(ok)
+        a.mark_state(handle, "state_unknown")
+
+        self.assertEqual(b.get_state(handle), "state_unknown")
+        retry, _ = b.reserve(ctx, symbol="BTC-USD", direction="long")
         self.assertFalse(retry)
 
     def test_proven_pre_submit_release_allows_retry_on_other_worker(self):
@@ -151,6 +166,9 @@ class TestDistributedV2Idempotency(unittest.TestCase):
         ok, key, token = a.reserve(ctx, symbol="BTC-USD", direction="long")
         self.assertTrue(ok)
         a.release(key, token=token)
+        ok, handle = a.reserve(ctx, symbol="BTC-USD", direction="long")
+        self.assertTrue(ok)
+        a.release(handle)
 
         retry, _, _ = b.reserve(ctx, symbol="BTC-USD", direction="long")
         self.assertTrue(retry)

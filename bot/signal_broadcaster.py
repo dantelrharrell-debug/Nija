@@ -579,6 +579,26 @@ class SignalBroadcaster:
                 if duplicate_key and duplicate_token:
                     from bot.control.decision_context import get_user_scoped_idempotency_registry
                     get_user_scoped_idempotency_registry().release(duplicate_key, token=duplicate_token)
+            duplicate_token = str(signal.get("duplicate_token") or signal_metadata.get("duplicate_token") or "").strip()
+            raw_shared_required = signal.get(
+                "duplicate_shared_required",
+                signal_metadata.get("duplicate_shared_required", False),
+            )
+            duplicate_shared_required = (
+                raw_shared_required
+                if isinstance(raw_shared_required, bool)
+                else str(raw_shared_required or "").strip().lower() in {"1", "true", "yes", "on"}
+            )
+
+            if size <= 0:
+                if duplicate_key and duplicate_token:
+                    from bot.control.decision_context import (
+                        IdempotencyReservationHandle,
+                        get_user_scoped_idempotency_registry,
+                    )
+                    get_user_scoped_idempotency_registry().release(
+                        IdempotencyReservationHandle(duplicate_key, duplicate_token, bool(duplicate_shared_required))
+                    )
                 return BroadcastResult(
                     account_id=account.account_id,
                     symbol=symbol,
@@ -598,6 +618,13 @@ class SignalBroadcaster:
                 if duplicate_key and duplicate_token:
                     from bot.control.decision_context import get_user_scoped_idempotency_registry
                     get_user_scoped_idempotency_registry().release(duplicate_key, token=duplicate_token)
+                    from bot.control.decision_context import (
+                        IdempotencyReservationHandle,
+                        get_user_scoped_idempotency_registry,
+                    )
+                    get_user_scoped_idempotency_registry().release(
+                        IdempotencyReservationHandle(duplicate_key, duplicate_token)
+                    )
                 order = {
                     "status": "error",
                     "error": "ExecutionPipeline submit helper unavailable; direct broker fallback blocked",
@@ -614,6 +641,15 @@ class SignalBroadcaster:
                         "duplicate_key": duplicate_key,
                         "duplicate_token": duplicate_token,
                     } if duplicate_key and duplicate_token else None,
+                    metadata_override=(
+                        {
+                            "duplicate_key": duplicate_key,
+                            "duplicate_token": duplicate_token,
+                            "duplicate_shared_required": bool(duplicate_shared_required),
+                        }
+                        if duplicate_key and duplicate_token
+                        else None
+                    ),
                 )
 
             status = str(order.get("status", "error") if order else "error").lower()

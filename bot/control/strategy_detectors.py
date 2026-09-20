@@ -514,6 +514,7 @@ class BreakRetestDetector(BaseDetector):
             and breakout_volume > 0
             and breakout_volume >= avg_volume * self.volume_factor
         )
+        volume_ok = avg_volume > 0 and breakout_volume > 0 and breakout_volume >= avg_volume * self.volume_factor
 
         breakout_close = _to_float(breakout["close"])
         retest_open = _to_float(retest["open"])
