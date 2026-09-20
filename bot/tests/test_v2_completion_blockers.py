@@ -151,32 +151,32 @@ class TestCompletionBlockers(unittest.TestCase):
         new = UserScopedIdempotencyRegistry(redis_client=redis, ttl_seconds=5.0)
         context = _decision_context()
 
-        ok_old, key = old.reserve(context, symbol="BTC-USD", direction="long")
+        ok_old, old_handle = old.reserve(context, symbol="BTC-USD", direction="long")
         self.assertTrue(ok_old)
         time.sleep(1.05)
-        ok_new, new_key = new.reserve(context, symbol="BTC-USD", direction="long")
+        ok_new, new_handle = new.reserve(context, symbol="BTC-USD", direction="long")
         self.assertTrue(ok_new)
-        self.assertEqual(key, new_key)
+        self.assertEqual(old_handle.key, new_handle.key)
 
-        old.release(key)
-        self.assertEqual(new.get_state(new_key), "submitted")
-        self.assertNotIn(key, old._reservation_tokens)
+        old.release(old_handle)
+        self.assertEqual(new.get_state(new_handle), "submitted")
+        self.assertNotIn(old_handle.key, old._reservation_tokens)
 
     def test_release_clears_local_state_when_compare_delete_errors(self):
         redis = _CompareDeleteErrorRedis()
         registry = UserScopedIdempotencyRegistry(redis_client=redis, ttl_seconds=5.0)
         context = _decision_context()
 
-        ok, key = registry.reserve(context, symbol="BTC-USD", direction="long")
+        ok, handle = registry.reserve(context, symbol="BTC-USD", direction="long")
         self.assertTrue(ok)
-        registry.mark_state(key, "submitted_pending")
-        self.assertIn(key, registry._reservation_tokens)
-        self.assertIn(key, registry._states)
+        registry.mark_state(handle, "submitted_pending")
+        self.assertIn(handle.key, registry._reservation_tokens)
+        self.assertIn(handle.key, registry._states)
 
-        registry.release(key)
+        registry.release(handle)
 
-        self.assertNotIn(key, registry._reservation_tokens)
-        self.assertNotIn(key, registry._states)
+        self.assertNotIn(handle.key, registry._reservation_tokens)
+        self.assertNotIn(handle.key, registry._states)
 
     def test_production_live_account_kill_switch_requires_durable_shared_write(self):
         ctx = _trading_context(mode="live", environment="production")
@@ -185,9 +185,9 @@ class TestCompletionBlockers(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 engine.set_account_kill_switch(ctx, True, "operator_halt")
 
-    def test_blank_environment_live_context_does_not_require_shared_kill_switch_state(self):
+    def test_blank_environment_live_context_requires_shared_kill_switch_state(self):
         ctx = SimpleNamespace(mode="live", environment=None)
-        self.assertFalse(RiskEngine._requires_shared_state(ctx))
+        self.assertTrue(RiskEngine._requires_shared_state(ctx))
 
     def test_paper_account_kill_switch_reports_success_without_shared_state(self):
         ctx = _trading_context()
