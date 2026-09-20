@@ -306,9 +306,11 @@ class SafetyController:
         """
         if self._emergency_stop_active:
             return False
-        if self._mode == TradingMode.LIVE:
-            return False  # Already live — nothing to do.
 
+        # Always re-resolve a non-emergency mode.  In particular, an existing
+        # LIVE controller must be able to downgrade immediately when PAPER_MODE,
+        # DRY_RUN_MODE, APP_STORE_MODE, or live authorization changes.  Keeping
+        # a stale LIVE latch here would defeat the simulation boundary.
         old_mode = self._mode
         self._load_safety_configuration()
         changed = self._mode != old_mode
