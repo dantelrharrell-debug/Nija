@@ -509,7 +509,11 @@ class BreakRetestDetector(BaseDetector):
 
         avg_volume = _to_float(df["volume"].iloc[-(self.lookback + 2):-2].mean())
         breakout_volume = _to_float(breakout["volume"])
-        volume_ok = avg_volume <= 0 or breakout_volume >= avg_volume * self.volume_factor
+        volume_ok = (
+            avg_volume > 0
+            and breakout_volume > 0
+            and breakout_volume >= avg_volume * self.volume_factor
+        )
 
         breakout_close = _to_float(breakout["close"])
         retest_open = _to_float(retest["open"])

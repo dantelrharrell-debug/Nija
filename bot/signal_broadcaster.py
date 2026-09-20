@@ -562,11 +562,23 @@ class SignalBroadcaster:
 
             signal_metadata = signal.get("metadata") if isinstance(signal.get("metadata"), dict) else {}
             duplicate_key = str(signal.get("duplicate_key") or signal_metadata.get("duplicate_key") or "").strip()
+            duplicate_token = str(
+                signal.get("duplicate_token") or signal_metadata.get("duplicate_token") or ""
+            ).strip()
+            if bool(duplicate_key) != bool(duplicate_token):
+                return BroadcastResult(
+                    account_id=account.account_id,
+                    symbol=symbol,
+                    side=side,
+                    size_usd=size,
+                    status="error",
+                    error="incomplete_v2_reservation_handle",
+                )
 
             if size <= 0:
-                if duplicate_key:
+                if duplicate_key and duplicate_token:
                     from bot.control.decision_context import get_user_scoped_idempotency_registry
-                    get_user_scoped_idempotency_registry().release(duplicate_key)
+                    get_user_scoped_idempotency_registry().release(duplicate_key, token=duplicate_token)
                 return BroadcastResult(
                     account_id=account.account_id,
                     symbol=symbol,
@@ -583,9 +595,9 @@ class SignalBroadcaster:
             self._account_last_exec_ts[account.account_id] = time.monotonic()
 
             if submit_market_order_via_pipeline is None:
-                if duplicate_key:
+                if duplicate_key and duplicate_token:
                     from bot.control.decision_context import get_user_scoped_idempotency_registry
-                    get_user_scoped_idempotency_registry().release(duplicate_key)
+                    get_user_scoped_idempotency_registry().release(duplicate_key, token=duplicate_token)
                 order = {
                     "status": "error",
                     "error": "ExecutionPipeline submit helper unavailable; direct broker fallback blocked",
@@ -598,7 +610,10 @@ class SignalBroadcaster:
                     quantity=size,
                     size_type="quote",
                     strategy="SignalBroadcaster",
-                    metadata_override={"duplicate_key": duplicate_key} if duplicate_key else None,
+                    metadata_override={
+                        "duplicate_key": duplicate_key,
+                        "duplicate_token": duplicate_token,
+                    } if duplicate_key and duplicate_token else None,
                 )
 
             status = str(order.get("status", "error") if order else "error").lower()

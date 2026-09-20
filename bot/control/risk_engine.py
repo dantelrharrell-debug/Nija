@@ -154,7 +154,7 @@ class RiskEngine:
     def _requires_shared_state(context: TradingContext) -> bool:
         environment = str(context.environment or "").strip().lower()
         mode = str(context.mode or "").strip().lower()
-        return mode in {"live", "limited_live"} and environment in {"production", "prod"}
+        return mode in {"live", "limited_live"} and environment in {"", "production", "prod"}
 
     def _ensure_redis(self):
         if self._redis is not None:
@@ -254,8 +254,8 @@ class RiskEngine:
             return False, ["context_missing:missing_trading_context"]
         if trading_context is None:
             request_nonce = f"{threading.get_ident()}_{int(time.time() * 1000)}"
-            legacy_user = str(user_id or "").strip() or f"legacy_{request_nonce}"
-            legacy_account = str(account_id or "").strip() or f"legacy_account_{request_nonce}"
+            legacy_user = str(user_id or "").strip() or "legacy_user"
+            legacy_account = str(account_id or "").strip() or "default"
             legacy_broker = str(broker or "").strip().lower() or "legacy"
             trading_context = TradingContext(
                 user_id=legacy_user,

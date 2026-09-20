@@ -51,23 +51,34 @@ def _resolve_execution_pipeline_dependencies() -> tuple[Any, Any]:
     if PipelineRequest is not None and get_execution_pipeline is not None:
         return PipelineRequest, get_execution_pipeline
 
-    try:
-        module = importlib.import_module("bot.execution_pipeline")
-    except Exception as canonical_exc:
+    failures = []
+    for module_name in ("bot.execution_pipeline", "execution_pipeline"):
         try:
-            module = importlib.import_module("execution_pipeline")
-        except Exception as fallback_exc:
-            logger.error(
-                "EXECUTION_PIPELINE_LAZY_IMPORT_FAILED canonical_error=%s fallback_error=%s",
-                canonical_exc,
-                fallback_exc,
-            )
-            return PipelineRequest, get_execution_pipeline
+            module = importlib.import_module(module_name)
+        except Exception as exc:
+            failures.append(f"{module_name}:{type(exc).__name__}")
+            continue
 
-    if PipelineRequest is None:
-        PipelineRequest = getattr(module, "PipelineRequest", None)
-    if get_execution_pipeline is None:
-        get_execution_pipeline = getattr(module, "get_execution_pipeline", None)
+        candidate_request = (
+            PipelineRequest if PipelineRequest is not None else getattr(module, "PipelineRequest", None)
+        )
+        candidate_getter = (
+            get_execution_pipeline
+            if get_execution_pipeline is not None
+            else getattr(module, "get_execution_pipeline", None)
+        )
+        if candidate_request is None or candidate_getter is None:
+            failures.append(f"{module_name}:partial_module")
+            continue
+
+        # Commit the pair atomically. Never cache one symbol from a partially
+        # initialized alias because a later import could combine incompatible
+        # request and pipeline implementations.
+        PipelineRequest = candidate_request
+        get_execution_pipeline = candidate_getter
+        return PipelineRequest, get_execution_pipeline
+
+    logger.error("EXECUTION_PIPELINE_LAZY_IMPORT_FAILED failures=%s", ",".join(failures))
     return PipelineRequest, get_execution_pipeline
 
 
@@ -342,15 +353,21 @@ def _classify_failed_submission(result: Any) -> str:
 def _finalize_v2_duplicate(metadata: Dict[str, Any], state: str) -> None:
     """Finalize a held V2 reservation from authoritative submission outcome."""
     duplicate_key = str((metadata or {}).get("duplicate_key") or "").strip()
+    duplicate_token = str((metadata or {}).get("duplicate_token") or "").strip()
     if not duplicate_key:
+        return
+    if not duplicate_token:
+        logger.error("V2_DUPLICATE_FINALIZE_REFUSED reason=missing_owner_token state=%s", state)
         return
     try:
         from bot.control.decision_context import get_user_scoped_idempotency_registry
         registry = get_user_scoped_idempotency_registry()
         if state == "released":
-            registry.release(duplicate_key)
+            finalized = registry.release(duplicate_key, token=duplicate_token)
         else:
-            registry.mark_state(duplicate_key, state)
+            finalized = registry.mark_state(duplicate_key, state, token=duplicate_token)
+        if not finalized:
+            logger.critical("V2_DUPLICATE_FINALIZE_UNCONFIRMED state=%s fail_closed=true", state)
     except Exception as exc:
         # Fail closed: inability to finalize must not trigger a blind resubmit.
         logger.error("V2_DUPLICATE_FINALIZE_FAILED key=%s state=%s error=%s", duplicate_key, state, exc)
@@ -373,6 +390,15 @@ def submit_market_order_via_pipeline(
 ) -> Dict[str, Any]:
     """Submit a market order while preserving explicit account/exit context."""
     incoming_metadata = dict(metadata_override or {})
+    duplicate_key = str(incoming_metadata.get("duplicate_key") or "").strip()
+    duplicate_token = str(incoming_metadata.get("duplicate_token") or "").strip()
+    if bool(duplicate_key) != bool(duplicate_token):
+        return {
+            "status": "error",
+            "error": "Incomplete V2 reservation handle",
+            "symbol": symbol,
+            "side": side,
+        }
     request_type, pipeline_getter = _resolve_execution_pipeline_dependencies()
     if pipeline_getter is None or request_type is None:
         _finalize_v2_duplicate(incoming_metadata, "released")

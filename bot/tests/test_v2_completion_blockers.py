@@ -18,6 +18,7 @@ from bot.control.signal_pipeline import SignalPipeline
 from bot.control.situation_analysis import SituationAnalysisEngine
 from bot.control.strategy_detectors import BreakRetestDetector, DetectorContext
 from bot.control.strategy_registry import StrategyDetectorRegistry
+from bot.control.strategy_signal import StrategySignal
 from bot.control.trading_context import TradingContext
 from bot.feature_flags import FeatureFlag, FeatureFlagManager
 from bot.signal_broadcaster import SignalBroadcaster
@@ -124,7 +125,7 @@ class TestCompletionBlockers(unittest.TestCase):
     def test_live_missing_environment_requires_shared_idempotency(self):
         with patch("bot.control.decision_context._default_redis_client", return_value=None):
             registry = UserScopedIdempotencyRegistry(redis_client=None)
-            ok, _ = registry.reserve(
+            ok, _, _ = registry.reserve(
                 _decision_context(mode="live", environment=None),
                 symbol="BTC-USD",
                 direction="long",
@@ -138,7 +139,7 @@ class TestCompletionBlockers(unittest.TestCase):
     def test_limited_live_missing_environment_also_requires_shared_idempotency(self):
         with patch("bot.control.decision_context._default_redis_client", return_value=None):
             registry = UserScopedIdempotencyRegistry(redis_client=None)
-            ok, _ = registry.reserve(
+            ok, _, _ = registry.reserve(
                 _decision_context(mode="limited_live", environment=None),
                 symbol="BTC-USD",
                 direction="long",
@@ -151,32 +152,54 @@ class TestCompletionBlockers(unittest.TestCase):
         new = UserScopedIdempotencyRegistry(redis_client=redis, ttl_seconds=5.0)
         context = _decision_context()
 
-        ok_old, key = old.reserve(context, symbol="BTC-USD", direction="long")
+        ok_old, key, old_token = old.reserve(context, symbol="BTC-USD", direction="long")
         self.assertTrue(ok_old)
         time.sleep(1.05)
-        ok_new, new_key = new.reserve(context, symbol="BTC-USD", direction="long")
+        ok_new, new_key, new_token = new.reserve(context, symbol="BTC-USD", direction="long")
         self.assertTrue(ok_new)
         self.assertEqual(key, new_key)
 
-        old.release(key)
+        self.assertFalse(old.release(key, token=old_token))
         self.assertEqual(new.get_state(new_key), "submitted")
         self.assertNotIn(key, old._reservation_tokens)
+        self.assertTrue(new.release(new_key, token=new_token))
 
-    def test_release_clears_local_state_when_compare_delete_errors(self):
+    def test_live_admission_uses_short_ttl_until_handoff_state_is_known(self):
+        redis = _FakeRedis()
+        registry = UserScopedIdempotencyRegistry(
+            redis_client=redis,
+            ttl_seconds=1.0,
+            uncertain_ttl_seconds=60.0,
+        )
+        ok, key, token = registry.reserve(
+            _decision_context(mode="live", environment="production"),
+            symbol="BTC-USD",
+            direction="long",
+        )
+        self.assertTrue(ok)
+        redis_key = registry._redis_key(key)
+        initial_remaining = redis._expires[redis_key] - time.monotonic()
+        self.assertLessEqual(initial_remaining, 1.1)
+
+        self.assertTrue(registry.mark_state(key, "state_unknown", token=token))
+        uncertain_remaining = redis._expires[redis_key] - time.monotonic()
+        self.assertGreater(uncertain_remaining, 50.0)
+
+    def test_release_keeps_local_state_when_compare_delete_errors(self):
         redis = _CompareDeleteErrorRedis()
         registry = UserScopedIdempotencyRegistry(redis_client=redis, ttl_seconds=5.0)
         context = _decision_context()
 
-        ok, key = registry.reserve(context, symbol="BTC-USD", direction="long")
+        ok, key, token = registry.reserve(context, symbol="BTC-USD", direction="long")
         self.assertTrue(ok)
-        registry.mark_state(key, "submitted_pending")
+        registry.mark_state(key, "submitted_pending", token=token)
         self.assertIn(key, registry._reservation_tokens)
         self.assertIn(key, registry._states)
 
-        registry.release(key)
+        self.assertFalse(registry.release(key, token=token))
 
-        self.assertNotIn(key, registry._reservation_tokens)
-        self.assertNotIn(key, registry._states)
+        self.assertIn(key, registry._reservation_tokens)
+        self.assertIn(key, registry._states)
 
     def test_production_live_account_kill_switch_requires_durable_shared_write(self):
         ctx = _trading_context(mode="live", environment="production")
@@ -185,9 +208,9 @@ class TestCompletionBlockers(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 engine.set_account_kill_switch(ctx, True, "operator_halt")
 
-    def test_blank_environment_live_context_does_not_require_shared_kill_switch_state(self):
+    def test_blank_environment_live_context_requires_shared_kill_switch_state(self):
         ctx = SimpleNamespace(mode="live", environment=None)
-        self.assertFalse(RiskEngine._requires_shared_state(ctx))
+        self.assertTrue(RiskEngine._requires_shared_state(ctx))
 
     def test_paper_account_kill_switch_reports_success_without_shared_state(self):
         ctx = _trading_context()
@@ -363,6 +386,80 @@ class TestCompletionBlockers(unittest.TestCase):
                 trading_context=detector_context.trading_context,
             )
         self.assertTrue(any(signal.strategy == "BREAK_RETEST" for signal in signals))
+
+    def test_break_retest_rejects_non_positive_volume_evidence(self):
+        frame = _break_retest_frame()
+        frame.loc[:, "volume"] = 0.0
+        signal = BreakRetestDetector().detect(
+            frame,
+            DetectorContext(
+                symbol="BTC-USD",
+                broker="kraken",
+                trading_context=_trading_context(),
+                market_regime="trending",
+            ),
+        )
+        self.assertIsNone(signal)
+
+    def test_break_retest_protection_reaches_canonical_execution_fields(self):
+        ctx = _trading_context()
+        frame = _break_retest_frame()
+        entry = float(frame["close"].iloc[-1])
+        signal = StrategySignal(
+            strategy="BREAK_RETEST",
+            symbol="BTC-USD",
+            broker="kraken",
+            direction="long",
+            trading_context=ctx,
+            suggested_stop=entry - 1.0,
+            target_candidates=[entry + 2.0],
+            confidence=0.8,
+            raw_score=0.8,
+            market_regime="trending",
+        )
+        regime_engine = MagicMock()
+        regime_engine.detect.return_value = SimpleNamespace(
+            regime=MarketRegime.TRENDING,
+            confidence=0.8,
+            volatility=0.02,
+        )
+        pipeline = SignalPipeline(
+            compiler=MagicMock(),
+            regime_engine=regime_engine,
+            risk_engine=MagicMock(),
+        )
+        pipeline._situation_engine = MagicMock()
+        pipeline._situation_engine.assess.return_value = SimpleNamespace(
+            eligible_for_strategy_evaluation=True,
+            reasons=[],
+        )
+        pipeline._detector_registry = MagicMock()
+        pipeline._detector_registry.detect.return_value = [signal]
+        pipeline._scoring_engine = MagicMock()
+        pipeline._scoring_engine.score.return_value = SimpleNamespace(rejected=False, score=0.8)
+        pipeline._confirmation_engine = MagicMock()
+        pipeline._confirmation_engine.confirm.return_value = SimpleNamespace(approved=True, reasons=[])
+        snapshot = ScopedRiskSnapshot.from_values(
+            context=ctx,
+            portfolio_value_usd=1000.0,
+            current_positions=[],
+            available_balance_usd=1000.0,
+        )
+        compiled = object()
+        with patch.object(pipeline, "process_signal", return_value=compiled) as process_signal:
+            result = pipeline.process_market_snapshot(
+                symbol="BTC-USD",
+                broker="kraken",
+                df=frame,
+                trading_context=ctx,
+                risk_snapshot=snapshot,
+                requested_size_usd=10.0,
+            )
+
+        self.assertIs(result, compiled)
+        raw = process_signal.call_args.kwargs["raw_signal"]
+        self.assertAlmostEqual(raw.stop_loss_pct, 1.0 / entry)
+        self.assertAlmostEqual(raw.take_profit_pct, 2.0 / entry)
 
 
 if __name__ == "__main__":
