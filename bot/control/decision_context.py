@@ -432,10 +432,16 @@ class UserScopedIdempotencyRegistry:
         token = uuid.uuid4().hex
         redis_result = self._redis_reserve(key, token, self._ttl_seconds)
         if redis_result is True:
+            shared_required = self._requires_shared_authority(context)
             with self._lock:
                 self._reservation_tokens[key] = token
-                self._reservation_shared_required[key] = self._requires_shared_authority(context)
-            return True, IdempotencyReservationHandle(key, token, self._requires_shared_authority(context))
+                self._reservation_shared_required[key] = shared_required
+                self._states[key] = {
+                    "state": "submitted",
+                    "token": token,
+                    "expires_at": time.monotonic() + self._ttl_seconds,
+                }
+            return True, IdempotencyReservationHandle(key, token, shared_required)
         if redis_result is False:
             return False, IdempotencyReservationHandle(key, "", self._requires_shared_authority(context))
         if self._requires_shared_authority(context):
@@ -477,11 +483,16 @@ class UserScopedIdempotencyRegistry:
         return IdempotencyReservationHandle(str(handle or "").strip(), "", False)
 
     def _forget_local_if_owned(self, key: str, token: str) -> None:
-        """Clear only local bookkeeping owned by the supplied stale/current token."""
+        """Clear local bookkeeping only when no newer token is present."""
         with self._lock:
             entry = self._states.get(key)
-            current_token = str((entry or {}).get("token") or self._reservation_tokens.get(key, ""))
-            if current_token == token:
+            entry_token = str((entry or {}).get("token") or "")
+            reservation_token = str(self._reservation_tokens.get(key, "") or "")
+            if reservation_token and reservation_token != token:
+                return
+            if entry_token and entry_token != token:
+                return
+            if entry_token == token or reservation_token == token:
                 self._states.pop(key, None)
                 self._reservation_tokens.pop(key, None)
                 self._reservation_shared_required.pop(key, None)
@@ -569,7 +580,10 @@ class UserScopedIdempotencyRegistry:
                 "expires_at": time.monotonic() + ttl,
             }
             self._reservation_tokens[key] = token
-            self._reservation_shared_required[key] = bool(handle.shared_required)
+            self._reservation_shared_required[key] = bool(
+                handle.shared_required
+                or self._reservation_shared_required.get(key, False)
+            )
         return True
 
     def release(self, handle: IdempotencyReservationHandle) -> bool:
