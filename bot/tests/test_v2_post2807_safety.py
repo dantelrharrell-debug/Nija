@@ -56,8 +56,10 @@ class TestPost2807Safety(unittest.TestCase):
         broker = SimpleNamespace(broker_name="coinbase", connected=True, get_account_balance=lambda: 1000.0)
         result = SimpleNamespace(success=False, order_id=None, error="ACK timeout after dispatch")
         pipeline = SimpleNamespace(execute=lambda request: result)
+        request_type = lambda **kwargs: SimpleNamespace(**kwargs)
         with patch("bot.pipeline_order_submitter.assert_distributed_writer_authority", return_value=None), \
-             patch("bot.pipeline_order_submitter.get_execution_pipeline", return_value=pipeline):
+             patch("bot.pipeline_order_submitter.get_execution_pipeline", return_value=pipeline), \
+             patch("bot.pipeline_order_submitter.PipelineRequest", request_type):
             out = submit_market_order_via_pipeline(
                 broker, "BTC-USD", "buy", 10.0,
                 metadata_override={"duplicate_key": "v2:ack-timeout-test"},
@@ -67,6 +69,40 @@ class TestPost2807Safety(unittest.TestCase):
             get_user_scoped_idempotency_registry().get_state("v2:ack-timeout-test"),
             "state_unknown",
         )
+
+    def test_scalar_portfolio_mismatch_rejected_with_explicit_decision_context(self):
+        tc = TradingContext(
+            user_id="user-a", trading_account_id="acct-a", broker="kraken",
+            broker_account_id="ka", strategy_instance_id="orb", portfolio_id="pf-a",
+            request_id="req", correlation_id="corr", environment="test", mode="paper",
+        )
+        raw = RawSignal(
+            symbol="ETH-USD", side="buy", action="enter_long", size_usd=10,
+            confidence=.8, regime="trending", strategy="orb", approved=True,
+            portfolio_id="pf-b", trading_context=tc,
+        )
+        dc = UserDecisionContext(
+            user_id="user-a", account_id="acct-a", broker="kraken",
+            portfolio_id="pf-a", strategy_signal_id="sig", trade_id="trade",
+        )
+        self.assertIsNone(SignalPipeline._resolve_decision_context(raw, dc))
+
+    def test_dispatch_disabled_releases_reservation(self):
+        broker = SimpleNamespace(broker_name="coinbase", connected=True, get_account_balance=lambda: 1000.0)
+        result = SimpleNamespace(success=False, order_id=None, error="dispatch_disabled: dispatch.enabled=false")
+        pipeline = SimpleNamespace(execute=lambda request: result)
+        key = "v2:pre-submit-denial-test"
+        registry = get_user_scoped_idempotency_registry()
+        registry.mark_state(key, "submitted")
+        request_type = lambda **kwargs: SimpleNamespace(**kwargs)
+        with patch("bot.pipeline_order_submitter.assert_distributed_writer_authority", return_value=None), \
+             patch("bot.pipeline_order_submitter.get_execution_pipeline", return_value=pipeline), \
+             patch("bot.pipeline_order_submitter.PipelineRequest", request_type):
+            out = submit_market_order_via_pipeline(
+                broker, "BTC-USD", "buy", 10.0, metadata_override={"duplicate_key": key},
+            )
+        self.assertEqual(out["status"], "error")
+        self.assertIsNone(registry.get_state(key))
 
 
 if __name__ == "__main__":

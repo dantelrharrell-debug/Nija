@@ -504,8 +504,13 @@ def submit_market_order_via_pipeline(
     broker_order_id = str(getattr(result, "order_id", "") or "").strip()
     if not result.success:
         error_text = str(getattr(result, "error", "") or "").lower()
-        unknown_after_dispatch = any(token in error_text for token in (
-            "timeout", "timed out", "ack", "unknown", "reconcile", "dispatch",
+        known_pre_submit = any(token in error_text for token in (
+            "dispatch_disabled", "dispatch.enabled=false", "internal_dispatch_failure",
+            "writer", "fence", "validation", "risk reject", "rejected before dispatch",
+        ))
+        unknown_after_dispatch = (not known_pre_submit) and any(token in error_text for token in (
+            "timeout", "timed out", "ack timeout", "state unknown", "state_unknown",
+            "reconcile timeout", "post-dispatch", "post_dispatch",
         ))
         if broker_order_id:
             _finalize_v2_duplicate(metadata, "submitted_pending")
