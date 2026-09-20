@@ -68,6 +68,8 @@ from bot.control.decision_context import (
     UserPortfolioSnapshot,
 )
 
+from bot.feature_flags import get_strategy_execution_mode
+
 logger = logging.getLogger("nija.signal_broadcaster")
 
 DEFAULT_RISK_FRACTION = 0.02
@@ -414,6 +416,12 @@ class SignalBroadcaster:
             positions, positions_proven = self._positions_for_broker(account.broker)
             pending_orders, orders_proven = self._pending_orders_for_broker(account.broker)
             broker_healthy = self._broker_is_healthy(account.broker)
+            configured_mode = get_strategy_execution_mode().strip().lower()
+            execution_mode = str(signal.get("execution_mode") or configured_mode).strip().lower()
+            environment = str(
+                signal.get("environment")
+                or ("production" if execution_mode in {"live", "limited_live"} else "test")
+            ).strip()
             decision_context = UserDecisionContext(
                 user_id=user_id,
                 account_id=account.account_id,
@@ -422,8 +430,8 @@ class SignalBroadcaster:
                 strategy_signal_id=strategy_signal_id or f"{strategy}:{symbol}",
                 trade_id=f"{trade_id_prefix}:{account.account_id}",
                 asset_class=signal.get("asset_class"),
-                execution_mode=signal.get("execution_mode"),
-                environment=signal.get("environment"),
+                execution_mode=execution_mode,
+                environment=environment,
             )
             portfolio_snapshot = UserPortfolioSnapshot(
                 user_id=user_id,
