@@ -465,10 +465,8 @@ class UserScopedIdempotencyRegistry:
         redis_result = self._redis_compare_delete(key, token)
         if redis_result is False:
             logger.warning("V2 idempotency stale release refused")
-            return
-        if redis_result is None and self._get_redis() is not None:
+        elif redis_result is None and self._get_redis() is not None:
             logger.error("V2 idempotency release not durable; shared authority unchanged")
-            return
         with self._lock:
             self._states.pop(key, None)
             self._reservation_tokens.pop(key, None)

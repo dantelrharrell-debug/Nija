@@ -62,7 +62,6 @@ class _FakeRedis:
             return int(existed)
 
 
-
 class _Broker:
     broker_name = "coinbase"
     user_id = "user-a"
@@ -76,6 +75,11 @@ class _Broker:
 
     def get_open_orders(self):
         return []
+
+
+class _CompareDeleteErrorRedis(_FakeRedis):
+    def compare_delete(self, key, token):
+        raise RuntimeError("compare_delete_unavailable")
 
 
 def _trading_context(*, mode="paper", environment="test"):
@@ -156,6 +160,23 @@ class TestCompletionBlockers(unittest.TestCase):
 
         old.release(key)
         self.assertEqual(new.get_state(new_key), "submitted")
+        self.assertNotIn(key, old._reservation_tokens)
+
+    def test_release_clears_local_state_when_compare_delete_errors(self):
+        redis = _CompareDeleteErrorRedis()
+        registry = UserScopedIdempotencyRegistry(redis_client=redis, ttl_seconds=5.0)
+        context = _decision_context()
+
+        ok, key = registry.reserve(context, symbol="BTC-USD", direction="long")
+        self.assertTrue(ok)
+        registry.mark_state(key, "submitted_pending")
+        self.assertIn(key, registry._reservation_tokens)
+        self.assertIn(key, registry._states)
+
+        registry.release(key)
+
+        self.assertNotIn(key, registry._reservation_tokens)
+        self.assertNotIn(key, registry._states)
 
     def test_production_live_account_kill_switch_requires_durable_shared_write(self):
         ctx = _trading_context(mode="live", environment="production")
