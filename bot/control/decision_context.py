@@ -393,7 +393,8 @@ class UserScopedIdempotencyRegistry:
     def reserve(self, context: UserDecisionContext, *, symbol: str, direction: str) -> Tuple[bool, str]:
         key = self.build_key(context, symbol=symbol, direction=direction)
         token = uuid.uuid4().hex
-        redis_result = self._redis_reserve(key, token, self._ttl_seconds)
+        reserve_ttl = self._uncertain_ttl_seconds if self._requires_shared_authority(context) else self._ttl_seconds
+        redis_result = self._redis_reserve(key, token, reserve_ttl)
         if redis_result is True:
             with self._lock:
                 self._reservation_tokens[key] = token
