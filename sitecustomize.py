@@ -363,6 +363,15 @@ def _install_direct_broker_metadata_guard() -> None:
     _install_patch_module(filename="direct_broker_metadata_guard_patch.py", module_name="nija_direct_broker_metadata_guard_patch", success_log="DIRECT_BROKER_METADATA_GUARD_INSTALL_REQUESTED", error_prefix="Direct broker metadata guard")
 
 
+def _install_kraken_live_completion_v415() -> None:
+    _install_patch_module(
+        filename="kraken_live_completion_v415_patch.py",
+        module_name="nija_kraken_live_completion_v415_patch",
+        success_log="KRAKEN_LIVE_COMPLETION_V415_INSTALL_REQUESTED",
+        error_prefix="Kraken live completion v415",
+    )
+
+
 def _install_okx_min_notional_prefilter_repair() -> None:
     _install_patch_module(filename="okx_min_notional_prefilter_repair_patch.py", module_name="nija_okx_min_notional_prefilter_repair_patch", success_log="OKX_MIN_NOTIONAL_PREFILTER_REPAIR_INSTALL_REQUESTED", error_prefix="OKX min-notional prefilter repair")
 
@@ -413,6 +422,7 @@ if not _truthy_name("NIJA_DEFER_RUNTIME_SITE_HOOKS"):
     _install_usdt_kraken_ecel_routing_repair()
     _install_coinbase_execution_failover()
     _install_direct_broker_metadata_guard()
+    _install_kraken_live_completion_v415()
     _install_execution_entry_safe_logger()
     _install_risk_gate_execution_bridge()
     _install_activation_snapshot_bridge()
