@@ -453,7 +453,7 @@ class SignalPipeline:
                 available_balance_usd=snapshot.available_buying_power,
             )
 
-        if risk_snapshot is None and trading_context.mode == "live":
+        if risk_snapshot is None and str(trading_context.mode or "").strip().lower() in {"live", "limited_live"}:
             logger.warning("PIPELINE_REJECT stage=context reason=live_risk_snapshot_required")
             return None
         if risk_snapshot is not None:
