@@ -153,6 +153,8 @@ services:
       # eligible for execution while ENABLE_ALPACA=false.
       - key: ENABLE_ALPACA
         value: "false"
+      - key: NIJA_ENABLE_ALPACA_PROTECTED_ENTRY
+        value: "false"
       - key: ALPACA_MIN_BALANCE_USD
         value: "2.00"
 
