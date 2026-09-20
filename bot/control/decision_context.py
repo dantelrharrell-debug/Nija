@@ -215,6 +215,20 @@ class UserPortfolioSnapshot:
         return notes
 
 
+@dataclass(frozen=True)
+class IdempotencyReservationHandle:
+    """Ownership-bearing handle required to mutate one idempotency reservation."""
+
+    key: str
+    token: str
+
+    def __bool__(self) -> bool:
+        return bool(self.key and self.token)
+
+    def to_metadata(self) -> Dict[str, str]:
+        return {"duplicate_key": self.key, "duplicate_token": self.token}
+
+
 class UserScopedIdempotencyRegistry:
     """Distributed duplicate guard scoped by user/account/broker/signal/direction.
 
@@ -390,24 +404,23 @@ class UserScopedIdempotencyRegistry:
             logger.error("V2 idempotency Redis compare-delete failed error=%s", type(exc).__name__)
             return None
 
-    def reserve(self, context: UserDecisionContext, *, symbol: str, direction: str) -> Tuple[bool, str]:
+    def reserve(self, context: UserDecisionContext, *, symbol: str, direction: str) -> Tuple[bool, IdempotencyReservationHandle]:
         key = self.build_key(context, symbol=symbol, direction=direction)
         token = uuid.uuid4().hex
-        reserve_ttl = self._uncertain_ttl_seconds if self._requires_shared_authority(context) else self._ttl_seconds
-        redis_result = self._redis_reserve(key, token, reserve_ttl)
+        redis_result = self._redis_reserve(key, token, self._ttl_seconds)
         if redis_result is True:
             with self._lock:
                 self._reservation_tokens[key] = token
-            return True, key
+            return True, IdempotencyReservationHandle(key, token)
         if redis_result is False:
-            return False, key
+            return False, IdempotencyReservationHandle(key, "")
         if self._requires_shared_authority(context):
             logger.critical(
                 "V2_IDEMPOTENCY_SHARED_AUTHORITY_UNAVAILABLE broker=%s account=%s fail_closed=true",
                 context.broker,
                 hashlib.sha256(_clean_identity(context.account_id).encode("utf-8")).hexdigest()[:12],
             )
-            return False, key
+            return False, IdempotencyReservationHandle(key, "")
 
         # Non-live fallback for local paper/backtest use.
         with self._lock:
@@ -418,28 +431,33 @@ class UserScopedIdempotencyRegistry:
                 entry = None
             state = str((entry or {}).get("state") or "")
             if state and state not in {"reconciled_rejected", "released"}:
-                return False, key
+                return False, IdempotencyReservationHandle(key, "")
             self._reservation_tokens[key] = token
             self._states[key] = {
                 "state": "submitted",
                 "token": token,
                 "expires_at": time.monotonic() + self._ttl_seconds,
             }
-        return True, key
+        return True, IdempotencyReservationHandle(key, token)
 
-    def mark_state(self, key: str, state: str) -> None:
-        if not key:
+    @staticmethod
+    def _coerce_handle(handle: Any) -> IdempotencyReservationHandle:
+        if isinstance(handle, IdempotencyReservationHandle):
+            return handle
+        return IdempotencyReservationHandle(str(handle or "").strip(), "")
+
+    def mark_state(self, handle: IdempotencyReservationHandle, state: str) -> None:
+        handle = self._coerce_handle(handle)
+        key = handle.key
+        token = handle.token
+        if not key or not token:
+            logger.error("V2 idempotency state transition refused: ownership handle unavailable state=%s", state)
             return
         normalized = str(state or "").strip()
         if normalized in {"released", "reconciled_rejected"}:
             self.release(key)
             return
         ttl = self._uncertain_ttl_seconds if normalized in {"state_unknown", "submitted_pending", "pending"} else self._ttl_seconds
-        with self._lock:
-            token = self._reservation_tokens.get(key, "")
-        if not token:
-            logger.error("V2 idempotency state transition refused: reservation token unavailable state=%s", normalized)
-            return
         redis_result = self._redis_compare_set(key, token, normalized, ttl)
         if redis_result is False:
             logger.warning("V2 idempotency stale finalizer refused state=%s", normalized)
@@ -453,14 +471,13 @@ class UserScopedIdempotencyRegistry:
         if redis_result is None:
             logger.error("V2 idempotency shared state transition unavailable state=%s", normalized)
 
-    def release(self, key: str) -> None:
-        """Remove only the reservation owned by this registry instance."""
-        if not key:
-            return
-        with self._lock:
-            token = self._reservation_tokens.get(key, "")
-        if not token:
-            logger.warning("V2 idempotency release refused: reservation token unavailable")
+    def release(self, handle: IdempotencyReservationHandle) -> None:
+        """Remove only the reservation owned by the supplied reservation handle."""
+        handle = self._coerce_handle(handle)
+        key = handle.key
+        token = handle.token
+        if not key or not token:
+            logger.warning("V2 idempotency release refused: ownership handle unavailable")
             return
         redis_result = self._redis_compare_delete(key, token)
         if redis_result is False:
@@ -468,10 +485,18 @@ class UserScopedIdempotencyRegistry:
         elif redis_result is None and self._get_redis() is not None:
             logger.error("V2 idempotency release not durable; shared authority unchanged")
         with self._lock:
-            self._states.pop(key, None)
-            self._reservation_tokens.pop(key, None)
+            entry = self._states.get(key)
+            entry_token = str((entry or {}).get("token") or self._reservation_tokens.get(key, ""))
+            if entry_token == token:
+                self._states.pop(key, None)
+                self._reservation_tokens.pop(key, None)
 
-    def get_state(self, key: str) -> Optional[str]:
+    def get_state(self, key: Any) -> Optional[str]:
+        if isinstance(key, IdempotencyReservationHandle):
+            key = key.key
+        key = str(key or "").strip()
+        if not key:
+            return None
         client = self._get_redis()
         if client is not None:
             try:
@@ -599,6 +624,7 @@ __all__ = [
     "UserDecisionContext",
     "UserPortfolioSnapshot",
     "UserScopedIdempotencyRegistry",
+    "IdempotencyReservationHandle",
     "get_user_scoped_idempotency_registry",
     "verify_exit_lifecycle",
     "verify_protection_after_fill",
