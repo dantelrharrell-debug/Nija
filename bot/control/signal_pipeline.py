@@ -413,6 +413,28 @@ class SignalPipeline:
             self._store_pipeline_audit(pipeline_id, audit)
             return None
 
+        # Bridge the account-level V2 decision context into the immutable
+        # compiler/risk TradingContext.  This is identity plumbing only: no
+        # broker position, balance, fill, or protection truth is synthesized.
+        if context is not None and raw_signal.trading_context is None:
+            mode = str(context.execution_mode or "paper").strip().lower()
+            if mode not in {"live", "paper", "simulation", "backtest"}:
+                mode = "paper"
+            compiler_context = TradingContext(
+                user_id=context.user_id,
+                trading_account_id=context.account_id,
+                broker=context.broker,
+                broker_account_id=context.account_id,
+                strategy_instance_id=context.strategy_signal_id,
+                portfolio_id=context.portfolio_id,
+                request_id=context.trade_id,
+                correlation_id=context.correlation_id or context.trade_id,
+                environment="v2",
+                mode=mode,
+                decision_id=context.trade_id,
+            )
+            raw_signal = replace(raw_signal, trading_context=compiler_context)
+
         # ── Pre-flight: Live market feed heartbeat ───────────────────────
         self._check_feed_heartbeat(raw_signal.symbol)
 
@@ -576,13 +598,21 @@ class SignalPipeline:
                 return None
             return replace(decision_context, **replacements) if replacements else decision_context
 
+        # Legacy callers that already carry the immutable TradingContext are
+        # compiled on that path and must not be reinterpreted as a partial
+        # UserDecisionContext merely because they also expose account_id.
+        if raw_signal.trading_context is not None and not any(
+            (raw_signal.user_id, raw_signal.broker, raw_signal.portfolio_id, raw_signal.strategy_signal_id, raw_signal.trade_id)
+        ):
+            return None
+
         has_explicit_account_scope = bool(
             raw_signal.user_id
             or raw_signal.broker
             or raw_signal.portfolio_id
             or raw_signal.strategy_signal_id
             or raw_signal.trade_id
-            or (raw_signal.account_id and raw_signal.account_id != "default")
+            or (raw_signal.account_id and raw_signal.account_id != "default" and raw_signal.trading_context is None)
         )
         if not has_explicit_account_scope:
             return None
