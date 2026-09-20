@@ -214,6 +214,25 @@ class TestPost2823FinalSafety(unittest.TestCase):
         self.assertTrue(ExecutionPipeline._requires_verified_entry_protection(request))
 
 
+    def test_stale_local_mirror_cannot_delete_newer_reservation_token(self):
+        registry = UserScopedIdempotencyRegistry(redis_client=None)
+        key = "v2:local-mirror-test"
+        with registry._lock:
+            registry._states[key] = {
+                "state": "submitted",
+                "token": "old-token",
+                "expires_at": time.monotonic() + 30.0,
+            }
+            registry._reservation_tokens[key] = "new-token"
+            registry._reservation_shared_required[key] = False
+
+        registry._forget_local_if_owned(key, "old-token")
+
+        with registry._lock:
+            self.assertEqual(registry._reservation_tokens.get(key), "new-token")
+            self.assertIn(key, registry._states)
+
+
 
 if __name__ == "__main__":
     unittest.main()
