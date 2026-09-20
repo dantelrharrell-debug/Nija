@@ -130,8 +130,10 @@ class TestPost2823FinalSafety(unittest.TestCase):
         )
 
     def test_concrete_live_routers_explicitly_fail_closed_for_break_retest(self):
-        self.assertFalse(ExecutionRouter.supports_v2_protected_entry)
-        self.assertFalse(MultiBrokerExecutionRouter.supports_v2_protected_entry)
+        execution_router = ExecutionRouter()
+        multi_router = MultiBrokerExecutionRouter()
+        self.assertFalse(execution_router.supports_v2_protected_entry())
+        self.assertFalse(multi_router.supports_v2_protected_entry())
 
     def test_capability_enabled_multi_router_can_route_protected_entry(self):
         pipeline = object.__new__(ExecutionPipeline)
