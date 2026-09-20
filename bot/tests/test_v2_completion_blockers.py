@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 
 import pandas as pd
 
-from bot.control.control_compiler import ControlCompiler
+from bot.control.control_compiler import ControlCompiler, RawSignal
 from bot.control.decision_context import UserDecisionContext, UserScopedIdempotencyRegistry
 from bot.control.isolation_guards import ScopedRiskSnapshot
 from bot.control.regime_engine import MarketRegime
@@ -188,14 +188,23 @@ class TestCompletionBlockers(unittest.TestCase):
             regime_engine=MagicMock(),
             risk_engine=MagicMock(),
         )
-        raw = MagicMock()
-        raw.trading_context = ctx
-        raw.user_id = ctx.user_id
-        raw.account_id = ctx.trading_account_id
-        raw.broker = ctx.broker
-        raw.portfolio_id = ctx.portfolio_id
-        raw.strategy_signal_id = "sig"
-        raw.trade_id = ctx.request_id
+        raw = RawSignal(
+            symbol="BTC-USD",
+            side="buy",
+            action="enter_long",
+            size_usd=10.0,
+            confidence=0.8,
+            regime="trending",
+            strategy="BREAK_RETEST",
+            user_id=ctx.user_id,
+            account_id=ctx.trading_account_id,
+            broker=ctx.broker,
+            portfolio_id=ctx.portfolio_id,
+            strategy_signal_id="sig",
+            trade_id=ctx.request_id,
+            trading_context=ctx,
+            execution_mode=ctx.mode,
+        )
         # The authorization gate executes before financial-state processing.
         self.assertIsNone(pipeline.process_signal(raw_signal=raw))
 
