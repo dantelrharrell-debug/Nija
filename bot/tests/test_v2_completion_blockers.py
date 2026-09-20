@@ -20,6 +20,7 @@ from bot.control.strategy_detectors import BreakRetestDetector, DetectorContext
 from bot.control.strategy_registry import StrategyDetectorRegistry
 from bot.control.trading_context import TradingContext
 from bot.feature_flags import FeatureFlag, FeatureFlagManager
+from bot.signal_broadcaster import SignalBroadcaster
 
 
 class _FakeRedis:
@@ -59,6 +60,22 @@ class _FakeRedis:
             self._values.pop(key, None)
             self._expires.pop(key, None)
             return int(existed)
+
+
+
+class _Broker:
+    broker_name = "coinbase"
+    user_id = "user-a"
+    connected = True
+
+    def get_account_balance(self):
+        return {"trading_balance": 1000.0, "available_balance": 1000.0}
+
+    def get_positions(self):
+        return []
+
+    def get_open_orders(self):
+        return []
 
 
 def _trading_context(*, mode="paper", environment="test"):
@@ -219,6 +236,41 @@ class TestCompletionBlockers(unittest.TestCase):
         )
         # The authorization gate executes before financial-state processing.
         self.assertIsNone(pipeline.process_signal(raw_signal=raw))
+
+    def test_limited_live_conversion_defaults_to_production_environment(self):
+        decision = _decision_context(mode="limited_live", environment=None)
+        raw = RawSignal(
+            symbol="BTC-USD",
+            side="buy",
+            action="enter_long",
+            size_usd=10.0,
+            confidence=0.8,
+            regime="trending",
+            strategy="BREAK_RETEST",
+            user_id=decision.user_id,
+            account_id=decision.account_id,
+            broker=decision.broker,
+            portfolio_id=decision.portfolio_id,
+            strategy_signal_id=decision.strategy_signal_id,
+            trade_id=decision.trade_id,
+        )
+        ctx = SignalPipeline._trading_context_from_decision_context(raw, decision)
+        self.assertEqual(ctx.mode, "limited_live")
+        self.assertEqual(ctx.environment, "production")
+
+    def test_broadcaster_uses_configured_v2_execution_mode(self):
+        broadcaster = SignalBroadcaster()
+        broadcaster.register_account("acct-a", _Broker(), balance=1000.0)
+        with patch.dict(os.environ, {"NIJA_STRATEGY_EXECUTION_MODE": "PAPER"}):
+            decisions = broadcaster.build_account_decisions({
+                "symbol": "BTC-USD",
+                "strategy_signal_id": "sig-a",
+                "trade_id": "trade-a",
+                "strategy": "BREAK_RETEST",
+            })
+        self.assertEqual(len(decisions), 1)
+        self.assertEqual(decisions[0].decision_context.execution_mode, "paper")
+        self.assertEqual(decisions[0].decision_context.environment, "test")
 
     def test_break_retest_is_compiler_compatible_with_trending_and_breakout(self):
         for regime in ("trending", "breakout"):
