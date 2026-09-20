@@ -78,6 +78,7 @@ from bot.control.confirmation_engine import ConfirmationEngine
 from bot.control.decision_context import (
     PROTECTION_FAILED,
     PROTECTION_UNVERIFIED,
+    IdempotencyReservationHandle,
     UserDecisionContext,
     UserPortfolioSnapshot,
     UserScopedIdempotencyRegistry,
@@ -287,6 +288,34 @@ class SignalPipeline:
                 best_signal.strategy,
             )
             return None
+        try:
+            entry_price = float(df["close"].iloc[-1])
+        except Exception:
+            entry_price = 0.0
+        stop_loss_pct: Optional[float] = None
+        take_profit_pct: Optional[float] = None
+        if entry_price <= 0:
+            logger.warning("PIPELINE_REJECT stage=protection reason=entry_price_unavailable")
+            return None
+        if best_signal.suggested_stop is not None:
+            stop = float(best_signal.suggested_stop)
+            if best_signal.direction == "long" and stop >= entry_price:
+                logger.warning("PIPELINE_REJECT stage=protection reason=invalid_long_stop")
+                return None
+            if best_signal.direction == "short" and stop <= entry_price:
+                logger.warning("PIPELINE_REJECT stage=protection reason=invalid_short_stop")
+                return None
+            stop_loss_pct = abs(entry_price - stop) / entry_price
+        if best_signal.target_candidates:
+            target = float(best_signal.target_candidates[0])
+            if best_signal.direction == "long" and target <= entry_price:
+                logger.warning("PIPELINE_REJECT stage=protection reason=invalid_long_target")
+                return None
+            if best_signal.direction == "short" and target >= entry_price:
+                logger.warning("PIPELINE_REJECT stage=protection reason=invalid_short_target")
+                return None
+            take_profit_pct = abs(target - entry_price) / entry_price
+
         raw = RawSignal(
             symbol=best_signal.symbol,
             side="buy" if best_signal.direction == "long" else "sell",
@@ -301,6 +330,8 @@ class SignalPipeline:
             portfolio_id=trading_context.portfolio_id,
             strategy_signal_id=strategy_signal_id,
             trade_id=trading_context.request_id,
+            stop_loss_pct=stop_loss_pct,
+            take_profit_pct=take_profit_pct,
             trading_context=trading_context,
             metadata={
                 **best_signal.to_dict(),
@@ -464,7 +495,7 @@ class SignalPipeline:
             self._record(accepted=False)
             self._store_pipeline_audit(pipeline_id, audit)
             return None
-        duplicate_key: Optional[str] = None
+        duplicate_handle: Optional[IdempotencyReservationHandle] = None
         if decision_identity is not None:
             if context_notes:
                 audit["stages"]["context"] = {"approved": False, "notes": context_notes}
@@ -480,14 +511,14 @@ class SignalPipeline:
                 )
                 return None
             audit["stages"]["context"] = {"approved": True, "notes": ["context_verified"]}
-            duplicate_allowed, duplicate_key = self._idempotency_registry.reserve(
+            duplicate_allowed, duplicate_handle = self._idempotency_registry.reserve(
                 decision_identity,
                 symbol=raw_signal.symbol,
                 direction=self._duplicate_direction(raw_signal),
             )
             audit["stages"]["duplicate"] = {
                 "approved": duplicate_allowed,
-                "key": duplicate_key,
+                "key": duplicate_handle.key,
             }
             if not duplicate_allowed:
                 audit["final_decision"] = "rejected"
@@ -498,7 +529,7 @@ class SignalPipeline:
                     "PIPELINE_REJECT stage=duplicate symbol=%s account=%s key=%s",
                     raw_signal.symbol,
                     decision_identity.account_id,
-                    duplicate_key,
+                    duplicate_handle.key,
                 )
                 return None
 
@@ -565,8 +596,8 @@ class SignalPipeline:
             # No broker submission occurred. Release the admission reservation so
             # a corrected retry is not falsely treated as an already-submitted
             # order. Reservations remain held only after an approved handoff.
-            if decision_identity is not None and duplicate_key:
-                self._idempotency_registry.release(duplicate_key)
+            if decision_identity is not None and duplicate_handle:
+                self._idempotency_registry.release(duplicate_handle)
             audit["final_decision"] = "rejected"
             audit["rejection_stage"] = "compile"
             self._record(accepted=False)
@@ -600,7 +631,7 @@ class SignalPipeline:
             }
             if not risk_approved:
                 if decision_identity is not None:
-                    self._idempotency_registry.release(duplicate_key)
+                    self._idempotency_registry.release(duplicate_handle)
                 audit["final_decision"] = "rejected"
                 audit["rejection_stage"] = "risk"
                 self._record(accepted=False)
@@ -623,7 +654,7 @@ class SignalPipeline:
                 # Keep the reservation through the downstream execution handoff.
                 # The execution/reconciliation owner must call
                 # mark_duplicate_execution_complete() once submission state is known.
-                compiled.metadata["duplicate_key"] = duplicate_key
+                compiled.metadata.update(duplicate_handle.to_metadata())
             self._record(accepted=True)
             with self._lock:
                 self._last_approved_ts[compiled.trading_context.scope_key] = _time.time()
@@ -642,7 +673,7 @@ class SignalPipeline:
             return compiled
         except Exception:
             if decision_identity is not None:
-                self._idempotency_registry.release(duplicate_key)
+                self._idempotency_registry.release(duplicate_handle)
             raise
 
     @staticmethod
@@ -783,14 +814,24 @@ class SignalPipeline:
             return "short"
         return side or action or "unknown"
 
-    def mark_duplicate_execution_complete(self, duplicate_key: str, *, state: str = "released") -> None:
-        """Finalize a duplicate reservation after downstream execution reconciliation."""
-        if not duplicate_key:
+    def mark_duplicate_execution_complete(
+        self,
+        duplicate_key: str,
+        duplicate_token: str,
+        *,
+        state: str = "released",
+    ) -> None:
+        """Finalize a reservation only with the exact ownership token."""
+        handle = IdempotencyReservationHandle(
+            str(duplicate_key or "").strip(),
+            str(duplicate_token or "").strip(),
+        )
+        if not handle:
             return
         if state == "released":
-            self._idempotency_registry.release(duplicate_key)
+            self._idempotency_registry.release(handle)
             return
-        self._idempotency_registry.mark_state(duplicate_key, state)
+        self._idempotency_registry.mark_state(handle, state)
 
     # ------------------------------------------------------------------
     # Diagnostic helpers
