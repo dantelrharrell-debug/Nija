@@ -204,6 +204,37 @@ class TestPost2823FinalSafety(unittest.TestCase):
         self.assertTrue(result.success)
         pipeline._router.execute.assert_called_once()
 
+    def test_break_retest_missing_percentages_still_requires_protection_capability(self):
+        request = PipelineRequest(
+            strategy="BREAK_RETEST",
+            symbol="BTC-USD",
+            side="buy",
+            size_usd=100.0,
+            intent_type="entry",
+            validated=True,
+        )
+        self.assertTrue(
+            ExecutionPipeline._requires_verified_entry_protection(request)
+        )
+
+    def test_stale_local_mirror_cannot_delete_newer_reservation_token(self):
+        registry = UserScopedIdempotencyRegistry(redis_client=None)
+        key = "v2:local-mirror-test"
+        with registry._lock:
+            registry._states[key] = {
+                "state": "submitted",
+                "token": "old-token",
+                "expires_at": time.monotonic() + 30.0,
+            }
+            registry._reservation_tokens[key] = "new-token"
+            registry._reservation_shared_required[key] = False
+
+        registry._forget_local_if_owned(key, "old-token")
+
+        with registry._lock:
+            self.assertEqual(registry._reservation_tokens.get(key), "new-token")
+            self.assertIn(key, registry._states)
+
     def test_expired_local_handle_cannot_be_revived_by_state_transition(self):
         with patch("bot.control.decision_context._default_redis_client", return_value=None):
             registry = UserScopedIdempotencyRegistry(redis_client=None, ttl_seconds=1.0)
