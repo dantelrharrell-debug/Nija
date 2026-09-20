@@ -411,7 +411,17 @@ def _prepare_v2_duplicate_handoff(metadata: Dict[str, Any]) -> bool:
             IdempotencyReservationHandle,
             get_user_scoped_idempotency_registry,
         )
-        handle = IdempotencyReservationHandle.from_metadata(metadata or {})
+        metadata = metadata or {}
+        duplicate_key = str(metadata.get("duplicate_key") or "").strip()
+        duplicate_token = str(metadata.get("duplicate_token") or "").strip()
+        if bool(duplicate_key) != bool(duplicate_token):
+            logger.critical(
+                "V2_DUPLICATE_HANDOFF_METADATA_INCOMPLETE key=%s token_present=%s fail_closed=true",
+                duplicate_key or "missing",
+                bool(duplicate_token),
+            )
+            return False
+        handle = IdempotencyReservationHandle.from_metadata(metadata)
         if not handle:
             return False
         registry = get_user_scoped_idempotency_registry()
