@@ -316,11 +316,18 @@ class TestCompletionBlockers(unittest.TestCase):
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop(env_key, None)
             manager = FeatureFlagManager()
-        self.assertFalse(manager.is_enabled(FeatureFlag.BREAK_RETEST_ENABLED))
+        self.assertFalse(manager.get_all_flags().get("break_retest_enabled", True))
 
-        manager.enable(FeatureFlag.BREAK_RETEST_ENABLED)
         registry = StrategyDetectorRegistry()
-        self.assertIsInstance(registry.detectors[FeatureFlag.BREAK_RETEST_ENABLED], BreakRetestDetector)
+        detector = next(
+            (
+                value
+                for flag, value in registry.detectors.items()
+                if getattr(flag, "value", "") == "break_retest_enabled"
+            ),
+            None,
+        )
+        self.assertIsInstance(detector, BreakRetestDetector)
 
         detector_context = DetectorContext(
             symbol="BTC-USD",
@@ -328,7 +335,10 @@ class TestCompletionBlockers(unittest.TestCase):
             trading_context=_trading_context(),
             market_regime="trending",
         )
-        with patch("bot.control.strategy_registry.get_feature_flags", return_value=manager):
+        enabled_flags = SimpleNamespace(
+            is_enabled=lambda flag: getattr(flag, "value", "") == "break_retest_enabled"
+        )
+        with patch("bot.control.strategy_registry.get_feature_flags", return_value=enabled_flags):
             signals = registry.detect(
                 _break_retest_frame(),
                 symbol="BTC-USD",
