@@ -56,3 +56,9 @@ jobs:
         run: |
           python scripts/run_unittest_baseline.py \
             --baseline .github/ci_known_test_failures.txt
+
+      - name: Run mandatory fail-closed safety regressions
+        run: |
+          python -m pytest -q \
+            bot/tests/test_live_authority_fail_closed_v94.py \
+            bot/tests/test_v2_pipeline_import_recovery.py

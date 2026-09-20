@@ -53,11 +53,15 @@ def _resolve_execution_pipeline_dependencies() -> tuple[Any, Any]:
 
     try:
         module = importlib.import_module("bot.execution_pipeline")
-    except ImportError:
+    except Exception as canonical_exc:
         try:
             module = importlib.import_module("execution_pipeline")
-        except ImportError as exc:
-            logger.error("EXECUTION_PIPELINE_LAZY_IMPORT_FAILED error=%s", exc)
+        except Exception as fallback_exc:
+            logger.error(
+                "EXECUTION_PIPELINE_LAZY_IMPORT_FAILED canonical_error=%s fallback_error=%s",
+                canonical_exc,
+                fallback_exc,
+            )
             return PipelineRequest, get_execution_pipeline
 
     if PipelineRequest is None:
