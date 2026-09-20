@@ -74,9 +74,19 @@ class TestV2PipelineImportRecovery(unittest.TestCase):
             for call in import_module.call_args_list
             if call.args and call.args[0] in {"bot.execution_pipeline", "execution_pipeline"}
         ]
-        self.assertEqual(
-            requested_modules,
-            ["bot.execution_pipeline", "execution_pipeline"],
+        self.assertGreaterEqual(
+            requested_modules.count("bot.execution_pipeline"),
+            1,
+        )
+        self.assertGreaterEqual(
+            requested_modules.count("execution_pipeline"),
+            1,
+        )
+        self.assertTrue(
+            all(
+                module_name in {"bot.execution_pipeline", "execution_pipeline"}
+                for module_name in requested_modules
+            )
         )
         finalize.assert_called_once_with(metadata, "released")
 

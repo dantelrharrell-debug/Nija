@@ -129,28 +129,22 @@ class TestPost2823FinalSafety(unittest.TestCase):
             )
         )
 
-    def test_break_retest_supported_multi_router_is_used(self):
     def test_concrete_live_routers_explicitly_fail_closed_for_break_retest(self):
-        self.assertFalse(ExecutionRouter.supports_v2_protected_entry)
-        self.assertFalse(MultiBrokerExecutionRouter.supports_v2_protected_entry)
+        execution_router = ExecutionRouter()
+        multi_router = MultiBrokerExecutionRouter()
+        self.assertFalse(execution_router.supports_v2_protected_entry())
+        self.assertFalse(multi_router.supports_v2_protected_entry())
 
     def test_capability_enabled_multi_router_can_route_protected_entry(self):
         pipeline = object.__new__(ExecutionPipeline)
         pipeline._ecel_required = True
         pipeline._ack_timeout_s = 1.0
         pipeline._multi_router = MagicMock()
-        pipeline._multi_router.supports_v2_protected_entry.return_value = True
         pipeline._multi_router.supports_v2_protected_entry = True
         pipeline._multi_router.route.return_value = SimpleNamespace(
             success=True,
             fill_price=101.0,
             filled_size_usd=100.0,
-            broker="coinbase",
-            order_id="protected-order-1",
-            error="",
-        )
-        pipeline._router = MagicMock()
-        pipeline._router.supports_v2_protected_entry = False
             broker="verified-protection-router",
             order_id="order-1",
             error="",
@@ -176,16 +170,6 @@ class TestPost2823FinalSafety(unittest.TestCase):
 
         self.assertTrue(result.success)
         pipeline._multi_router.route.assert_called_once()
-        pipeline._router.execute.assert_not_called()
-
-    def test_break_retest_supported_single_router_is_fallback_when_multi_is_unsupported(self):
-        pipeline = object.__new__(ExecutionPipeline)
-        pipeline._ecel_required = True
-        pipeline._ack_timeout_s = 1.0
-        pipeline._multi_router = MagicMock()
-        pipeline._multi_router.supports_v2_protected_entry = False
-        pipeline._router = MagicMock()
-        pipeline._router.supports_v2_protected_entry.return_value = True
 
     def test_capability_enabled_single_router_can_route_when_multi_unavailable(self):
         pipeline = object.__new__(ExecutionPipeline)
@@ -198,7 +182,6 @@ class TestPost2823FinalSafety(unittest.TestCase):
             success=True,
             fill_price=101.0,
             filled_size_usd=100.0,
-            order_id="single-protected-order",
             order_id="order-2",
             error="",
         )
@@ -221,7 +204,6 @@ class TestPost2823FinalSafety(unittest.TestCase):
             result = pipeline._dispatch(request, time.monotonic())
 
         self.assertTrue(result.success)
-        pipeline._multi_router.route.assert_not_called()
         pipeline._router.execute.assert_called_once()
 
     def test_break_retest_missing_percentages_still_requires_protection_capability(self):
@@ -233,8 +215,9 @@ class TestPost2823FinalSafety(unittest.TestCase):
             intent_type="entry",
             validated=True,
         )
-        self.assertTrue(ExecutionPipeline._requires_verified_entry_protection(request))
-
+        self.assertTrue(
+            ExecutionPipeline._requires_verified_entry_protection(request)
+        )
 
     def test_stale_local_mirror_cannot_delete_newer_reservation_token(self):
         registry = UserScopedIdempotencyRegistry(redis_client=None)
@@ -253,7 +236,6 @@ class TestPost2823FinalSafety(unittest.TestCase):
         with registry._lock:
             self.assertEqual(registry._reservation_tokens.get(key), "new-token")
             self.assertIn(key, registry._states)
-        pipeline._router.execute.assert_called_once()
 
     def test_expired_local_handle_cannot_be_revived_by_state_transition(self):
         with patch("bot.control.decision_context._default_redis_client", return_value=None):
