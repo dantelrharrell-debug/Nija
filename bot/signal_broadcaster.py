@@ -695,7 +695,11 @@ class SignalBroadcaster:
                         get_user_scoped_idempotency_registry,
                     )
                     get_user_scoped_idempotency_registry().release(
-                        IdempotencyReservationHandle(duplicate_key, duplicate_token)
+                        IdempotencyReservationHandle(
+                            duplicate_key,
+                            duplicate_token,
+                            bool(duplicate_shared_required),
+                        )
                     )
                 order = {
                     "status": "error",
