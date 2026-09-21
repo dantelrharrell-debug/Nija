@@ -801,6 +801,137 @@ def _advance_bootstrap_fsm_to_running_supervised() -> bool:
         return False
 
 
+def _hold_recoverable_post_core_pending(
+    runtime: object,
+    trading_thread: threading.Thread,
+) -> bool:
+    """Wait in the same process for genuine post-core execution proof.
+
+    This helper is entered only after the ordinary bounded convergence attempt
+    returns false.  It never grants readiness or execution authority.  It keeps
+    the process fail-closed while the exact writer and registered core thread
+    remain healthy so background proof/reconciliation workers can converge
+    without losing their state to a process restart.
+
+    Writer loss, core death, shutdown, or leaving the supervised bootstrap
+    states remains terminal and returns False to the existing fatal path.
+    """
+    try:
+        from bot import position_fetch_generation_v117_patch as _v117
+    except Exception as exc:
+        logger.critical(
+            "POST_CORE_PENDING_V427_UNAVAILABLE reason=v117_import_failed "
+            "error=%s:%s trading_fail_closed=true",
+            type(exc).__name__,
+            exc,
+        )
+        return False
+
+    required = (
+        "_exact_execution_ready",
+        "_writer_core_healthy",
+        "_shutdown_requested",
+        "_bootstrap_state",
+        "_request_normal_activation",
+        "_clear_start_gate_while_pending",
+    )
+    if not all(callable(getattr(_v117, name, None)) for name in required):
+        logger.critical(
+            "POST_CORE_PENDING_V427_UNAVAILABLE reason=v117_api_incomplete "
+            "trading_fail_closed=true"
+        )
+        return False
+
+    exact_ready, detail = _v117._exact_execution_ready(runtime, trading_thread)
+    if exact_ready:
+        return True
+
+    state = str(_v117._bootstrap_state() or "").strip().upper()
+    healthy = bool(_v117._writer_core_healthy(runtime, trading_thread))
+    shutdown = bool(_v117._shutdown_requested())
+    if (
+        shutdown
+        or not healthy
+        or state not in {"THREADS_STARTING", "RUNNING_SUPERVISED"}
+    ):
+        logger.critical(
+            "POST_CORE_PENDING_V427_FATAL bootstrap=%s detail=%s "
+            "writer_core_healthy=%s shutdown_requested=%s "
+            "trading_fail_closed=true",
+            state or "unknown",
+            detail,
+            str(healthy).lower(),
+            str(shutdown).lower(),
+        )
+        return False
+
+    os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "0"
+    os.environ["NIJA_EXECUTION_ACTIVE"] = "false"
+    _v117._clear_start_gate_while_pending()
+
+    try:
+        audit_s = float(os.environ.get("NIJA_POST_CORE_RECOVERABLE_AUDIT_S", "180") or 180.0)
+    except (TypeError, ValueError):
+        audit_s = 180.0
+    audit_s = max(30.0, min(900.0, audit_s))
+    next_audit = time.monotonic() + audit_s
+    attempt = 0
+    last_detail = detail
+
+    logger.critical(
+        "POST_CORE_PENDING_V427_HOLD bootstrap=%s detail=%s "
+        "exact_writer=true core_alive=true same_process_preserved=true "
+        "restart_suppressed=true execution_fail_closed=true "
+        "trading_gate_opened=false",
+        state,
+        detail,
+    )
+
+    while True:
+        if _v117._shutdown_requested():
+            return False
+        if not _v117._writer_core_healthy(runtime, trading_thread):
+            return False
+        state = str(_v117._bootstrap_state() or "").strip().upper()
+        if state not in {"THREADS_STARTING", "RUNNING_SUPERVISED"}:
+            return False
+
+        _v117._request_normal_activation()
+        exact_ready, last_detail = _v117._exact_execution_ready(
+            runtime, trading_thread
+        )
+        if exact_ready:
+            logger.critical(
+                "POST_CORE_PENDING_V427_EXECUTION_READY attempts=%d detail=%s "
+                "same_process_preserved=true trading_gate_may_open=true",
+                attempt + 1,
+                last_detail,
+            )
+            return True
+
+        attempt += 1
+        if attempt == 1 or attempt % 10 == 0:
+            logger.info(
+                "POST_CORE_PENDING_V427_WAIT attempt=%d bootstrap=%s detail=%s "
+                "execution_fail_closed=true restart_suppressed=true",
+                attempt,
+                state,
+                last_detail,
+            )
+        now = time.monotonic()
+        if now >= next_audit:
+            logger.warning(
+                "POST_CORE_PENDING_V427_STILL_WAITING attempt=%d bootstrap=%s "
+                "detail=%s writer_core_healthy=true same_process_preserved=true "
+                "execution_fail_closed=true",
+                attempt,
+                state,
+                last_detail,
+            )
+            next_audit = now + audit_s
+        time.sleep(1.0)
+
+
 def _perform_post_core_activation_convergence(
     runtime: object,
     trading_thread: threading.Thread,
@@ -1415,6 +1546,11 @@ def main() -> int:
                 runtime,
                 trading_thread,
             )
+            if not _convergence_ok:
+                _convergence_ok = _hold_recoverable_post_core_pending(
+                    runtime,
+                    trading_thread,
+                )
             if not _convergence_ok:
                 raise RuntimeError(
                     "Post-core activation convergence failed before dispatch enablement"
