@@ -2531,24 +2531,45 @@ class ExecutionPipeline:
 
     @staticmethod
     def _response_fill_details(response: Any, fallback_size_usd: float) -> tuple[float, float]:
+        """Extract broker-reported fill facts without promoting requested size.
+
+        fallback_size_usd is retained in the signature for compatibility, but
+        it is deliberately not used as execution evidence. A timeout
+        reconciliation may succeed only from fill-specific broker fields (or an
+        explicit executed quantity multiplied by a fill-specific price).
+        """
         if not isinstance(response, dict):
-            return 0.0, float(fallback_size_usd or 0.0)
+            return 0.0, 0.0
         fill_price = float(
             response.get("filled_price")
             or response.get("average_filled_price")
             or response.get("average_fill_price")
             or response.get("avg_price")
-            or response.get("price")
+            or response.get("executed_price")
+            or response.get("execution_price")
             or 0.0
         )
         filled_usd = float(
             response.get("filled_size_usd")
             or response.get("filled_value")
-            or response.get("notional_usd")
-            or response.get("size_usd")
-            or fallback_size_usd
+            or response.get("filled_notional")
+            or response.get("executed_value")
+            or response.get("executed_notional")
+            or response.get("filled_quote")
+            or response.get("filled_quote_amount")
             or 0.0
         )
+        if filled_usd <= 0.0 and fill_price > 0.0:
+            filled_qty = float(
+                response.get("filled_volume")
+                or response.get("filled_size")
+                or response.get("executed_qty")
+                or response.get("executed_quantity")
+                or response.get("filled_quantity")
+                or 0.0
+            )
+            if filled_qty > 0.0:
+                filled_usd = filled_qty * fill_price
         return fill_price, filled_usd
 
     @staticmethod
@@ -2577,16 +2598,27 @@ class ExecutionPipeline:
                 status = self._response_status(status_resp)
                 fill_price, filled_usd = self._response_fill_details(status_resp, request.size_usd)
                 if status in {"filled", "closed", "complete", "done"}:
-                    return PipelineResult(
-                        success=True,
-                        symbol=request.symbol,
-                        side=request.side,
-                        size_usd=request.size_usd,
-                        fill_price=fill_price,
-                        filled_size_usd=filled_usd,
-                        broker=request.preferred_broker or "",
-                        error="",
-                        latency_ms=(time.monotonic() - t_start) * 1000,
+                    if fill_price > 0.0 and filled_usd > 0.0:
+                        return PipelineResult(
+                            success=True,
+                            symbol=request.symbol,
+                            side=request.side,
+                            size_usd=request.size_usd,
+                            fill_price=fill_price,
+                            filled_size_usd=filled_usd,
+                            broker=request.preferred_broker or "",
+                            error="",
+                            latency_ms=(time.monotonic() - t_start) * 1000,
+                        )
+                    logger.warning(
+                        "ExecutionPipeline: final broker status lacks fill-specific evidence "
+                        "| symbol=%s order_id=%s status=%s fill_price=%s filled_usd=%s "
+                        "requested_notional_promoted=false",
+                        request.symbol,
+                        order_id,
+                        status,
+                        fill_price,
+                        filled_usd,
                     )
                 if status in {"rejected", "canceled", "cancelled", "expired", "failed", "error"}:
                     return PipelineResult(
