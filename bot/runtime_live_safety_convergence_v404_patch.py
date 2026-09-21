@@ -320,7 +320,7 @@ def install() -> bool:
         LOGGER.critical(
             "RUNTIME_LIVE_SAFETY_CONVERGENCE_V404 marker=%s ready=%s "
             "market_data_telemetry_failclosed=%s healthy_writer_false_warning_suppressed=%s "
-            "kraken_user_refresh_tightened=%s snapshot_ttl_unchanged=true "
+            "kraken_user_refresh_tightened=%s user_refresh_liveness_v422=%s snapshot_ttl_unchanged=true "
             "protection_thresholds_unchanged=true execution_authority_unchanged=true "
             "orders_submitted=false orders_cancelled=false safety_gates_bypassed=false",
             MARKER,
