@@ -78,3 +78,16 @@ def test_heartbeat_size_helper_keeps_valid_risk_bounded_notional(monkeypatch) ->
     assert result is not None
     assert result >= 23.23
     assert result <= 46.0
+
+
+def test_internal_dispatch_contract_classifies_local_heartbeat_minimum_rejects() -> None:
+    from bot.execution_dispatch_contract import is_internal_dispatch_failure
+
+    assert is_internal_dispatch_failure(
+        "heartbeat_min_notional_exceeds_risk_cap"
+    )
+    assert is_internal_dispatch_failure(
+        "INTERNAL_DISPATCH_FAILURE: pre-dispatch:VOLUME_TOO_SMALL"
+    )
+    # A bare venue rejection must remain exchange-originated.
+    assert not is_internal_dispatch_failure("VOLUME_TOO_SMALL")
