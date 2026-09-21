@@ -106,6 +106,14 @@ def is_internal_dispatch_failure(error: Any) -> bool:
         or "unexpected keyword argument" in text
         or "takes no arguments" in text
         or "positional arguments but" in text
+        # Broker/ECEL minimum-size validation may happen locally before the
+        # adapter submits an order. These explicit local validation strings
+        # must not poison the exchange-rejection window. Genuine venue rejects
+        # remain exchange rejects unless the caller marks them pre-dispatch.
+        or "heartbeat_min_notional_exceeds_risk_cap" in text
+        or "min_notional_exceeds_risk_cap" in text
+        or ("minimum notional" in text and "pre-dispatch" in text)
+        or ("volume_too_small" in text and "pre-dispatch" in text)
     )
 
 

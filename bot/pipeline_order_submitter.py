@@ -555,6 +555,27 @@ def submit_market_order_via_pipeline(
                         "broker_dispatch": False,
                     }
                 size_usd = bounded_heartbeat_size
+
+                # Revalidate against the broker minimum after risk bounding.
+                broker_min = max(0.0, _float(getattr(broker, "min_trade_size", 0.0)))
+                if broker_min > 0.0 and size_usd + 1e-9 < broker_min:
+                    _finalize_pre_submit_v2_duplicate(incoming_metadata)
+                    logger.warning(
+                        "KRAKEN_HEARTBEAT_LOCAL_DEFER account=%s symbol=%s size_usd=%.2f "
+                        "broker_min=%.2f reason=pre-dispatch:VOLUME_TOO_SMALL "
+                        "broker_dispatch=false exchange_rejection_recorded=false "
+                        "trading_fail_closed=true safety_gates_bypassed=false",
+                        account_id, symbol, size_usd, broker_min,
+                    )
+                    return {
+                        "status": "error",
+                        "error": "INTERNAL_DISPATCH_FAILURE: pre-dispatch:VOLUME_TOO_SMALL",
+                        "symbol": symbol,
+                        "side": side_norm,
+                        "account_id": account_id,
+                        "v2_pre_submit_proven": True,
+                        "broker_dispatch": False,
+                    }
             logger.critical(
                 "KRAKEN_HEARTBEAT_SPOT_PROBE strategy=%s account=%s symbol=%s "
                 "auto_margin_bypassed=true leverage=1x ordinary_kraken_margin_unchanged=true "
