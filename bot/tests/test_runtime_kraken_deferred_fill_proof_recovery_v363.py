@@ -68,6 +68,7 @@ def test_recovery_promotes_authenticated_trade_history_fill(tmp_path, monkeypatc
                             "vol": "0.0115",
                             "price": "2500",
                             "cost": "28.75",
+                            "time": "1789990200.75",
                         }
                     }
                 },
@@ -90,6 +91,8 @@ def test_recovery_promotes_authenticated_trade_history_fill(tmp_path, monkeypatc
 
     assert v363.recover_once() == 1
     assert promoted and promoted[0][0]["kraken_trade_history_reconciled"] is True
+    assert promoted[0][0]["broker_fill_at_epoch"] == 1789990200.75
+    assert promoted[0][0]["recovered_fill_proof"] is True
     assert _pending(tmp_path) == {}
 
 
@@ -160,3 +163,42 @@ def test_seed_env_queues_operator_supplied_order_ids(tmp_path, monkeypatch):
 def test_install_is_idempotent_and_sets_ready_flag(monkeypatch):
     assert v363.install_import_hook() is True
     assert v363.install_import_hook() is True
+
+
+def test_recovery_with_authenticated_fill_but_no_exchange_time_stays_fail_closed(tmp_path, monkeypatch):
+    v363.record_pending_order(order_id="ORDER-NO-TIME", symbol="ETH-USD", side="buy")
+    broker = KrakenBroker(
+        {
+            "QueryOrders": {"error": [], "result": {"ORDER-NO-TIME": {"status": "closed"}}},
+            "TradesHistory": {
+                "error": [],
+                "result": {
+                    "trades": {
+                        "T1": {
+                            "ordertxid": "ORDER-NO-TIME",
+                            "type": "buy",
+                            "vol": "0.0115",
+                            "price": "2500",
+                            "cost": "28.75",
+                        }
+                    }
+                },
+            },
+        }
+    )
+    monkeypatch.setattr(v363, "_kraken_brokers", lambda: [broker])
+
+    called = []
+
+    def fake_normalize(result, *, symbol, side):
+        called.append(True)
+        return 2500.0, 28.75
+
+    class FakeV328:
+        _normalize_dict_fill = staticmethod(fake_normalize)
+
+    monkeypatch.setattr(v363, "_v328", lambda: FakeV328)
+
+    assert v363.recover_once() == 0
+    assert called == []
+    assert "ORDER-NO-TIME" in _pending(tmp_path)
