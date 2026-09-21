@@ -92,3 +92,13 @@ def test_v339_source_transformations_are_idempotent():
     )
     once = patcher.patch_v238_text(v238)
     assert patcher.patch_v238_text(once) == once
+
+def test_v346_restart_recovery_preserves_authenticated_trade_time():
+    patcher = _load_patcher()
+    source = (ROOT / "bot" / "runtime_execution_position_readiness_v346_patch.py").read_text(
+        encoding="utf-8"
+    )
+    patched = patcher.patch_v346_text(source)
+
+    assert '"broker_fill_at_epoch": float(trade_ts)' in patched
+    assert "must never make an older recovered fill fresh" in patched
