@@ -17,6 +17,7 @@ _HOOK_FLAG = "_NIJA_PHASE3_SCAN_STALL_GUARD_HOOK_20260709AN"
 _PHASE3_PATCH_ATTR = "_nija_phase3_scan_stall_guard_20260709an"
 _FETCH_PATCH_ATTR = "_nija_phase3_fetch_deadline_guard_20260709an"
 _PREFETCH_PATCH_ATTR = "_nija_phase3_bounded_prefetch_v171"
+_DEADLINE_SKIP_COUNT_ATTR = "_nija_phase3_deadline_skip_count_20260709an"
 _TRUE = {"1", "true", "yes", "on", "enabled", "y"}
 
 
@@ -237,6 +238,17 @@ def _patch_core_loop_module(module: ModuleType) -> bool:
 
             if deadline_elapsed:
                 if _truthy("NIJA_PHASE3_FETCH_DEADLINE_SKIP_ENABLED", False):
+                    # A scheduler/deadline skip is not evidence that the market
+                    # data source failed.  Tag it separately so downstream
+                    # health accounting can distinguish budget exhaustion from
+                    # a genuine empty/short candle response or API timeout.
+                    try:
+                        current_skip_count = int(
+                            getattr(self, _DEADLINE_SKIP_COUNT_ATTR, 0) or 0
+                        )
+                        setattr(self, _DEADLINE_SKIP_COUNT_ATTR, current_skip_count + 1)
+                    except Exception:
+                        pass
                     logger.warning(
                         "PHASE3_SCAN_STALL_GUARD_DEADLINE_SKIP marker=%s symbol=%s reason=phase3_deadline_elapsed hard_skip=true cache_hit=false",
                         _MARKER,
@@ -303,11 +315,13 @@ def _patch_core_loop_module(module: ModuleType) -> bool:
             previous_deadline_al = getattr(self, "_nija_phase3_deadline_ts_20260709al", 0.0)
             previous_cache_active = getattr(self, "_nija_phase3_market_data_cache_active_20260709an", False)
             previous_cache = getattr(self, "_nija_phase3_market_data_cache_20260709an", None)
+            previous_deadline_skip_count = getattr(self, _DEADLINE_SKIP_COUNT_ATTR, 0)
             deadline_ts = time.monotonic() + timeout_s
             setattr(self, "_nija_phase3_deadline_ts_20260709an", deadline_ts)
             setattr(self, "_nija_phase3_deadline_ts_20260709am", deadline_ts)
             setattr(self, "_nija_phase3_deadline_ts_20260709al", deadline_ts)
             setattr(self, "_nija_phase3_market_data_cache_active_20260709an", True)
+            setattr(self, _DEADLINE_SKIP_COUNT_ATTR, 0)
             cycle_cache: dict[str, Any] = {}
             setattr(self, "_nija_phase3_market_data_cache_20260709an", cycle_cache)
 
@@ -347,20 +361,34 @@ def _patch_core_loop_module(module: ModuleType) -> bool:
                 flush=True,
             )
             started = time.monotonic()
+            deadline_skip_count = 0
             try:
                 result = original_phase3(self, broker, snapshot, selected, available_slots, *args, **kwargs)
+                try:
+                    deadline_skip_count = max(
+                        0, int(getattr(self, _DEADLINE_SKIP_COUNT_ATTR, 0) or 0)
+                    )
+                except (TypeError, ValueError):
+                    deadline_skip_count = 0
             finally:
                 try:
                     setattr(self, "_nija_phase3_deadline_ts_20260709an", previous_deadline_an)
                     setattr(self, "_nija_phase3_deadline_ts_20260709am", previous_deadline_am)
                     setattr(self, "_nija_phase3_deadline_ts_20260709al", previous_deadline_al)
                     setattr(self, "_nija_phase3_market_data_cache_active_20260709an", previous_cache_active)
+                    setattr(self, _DEADLINE_SKIP_COUNT_ATTR, previous_deadline_skip_count)
                     if isinstance(previous_cache, dict):
                         setattr(self, "_nija_phase3_market_data_cache_20260709an", previous_cache)
                     else:
                         setattr(self, "_nija_phase3_market_data_cache_20260709an", {})
                 except Exception:
                     pass
+
+            # Preserve the original phase-3 result semantics and add only
+            # diagnostic metadata.  v157 consumes this count to avoid treating
+            # scheduler budget skips as broker/market-data failures.
+            if isinstance(result, (tuple, list)) and len(result) >= 4 and isinstance(result[3], dict):
+                result[3]["phase3_deadline_skipped"] = deadline_skip_count
             elapsed = time.monotonic() - started
             total_elapsed = max(0.0, time.monotonic() - prefetch_started)
             if total_elapsed >= timeout_s:

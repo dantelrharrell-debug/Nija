@@ -70,6 +70,34 @@ def test_core_quality_gate_accepts_healthy_recent_data(monkeypatch):
     assert detail["core_data_quality_ok"] is True
 
 
+def test_core_quality_excludes_only_phase3_deadline_skips(monkeypatch):
+    monkeypatch.setenv("NIJA_CORE_DATA_FAILURE_MAX_RATE", "0.50")
+    patch._record_core_quality(
+        (
+            0,
+            0,
+            3,
+            {"data_insufficient": 17, "phase3_deadline_skipped": 17},
+        )
+    )
+    ok, detail = patch._core_quality_gate()
+    assert ok is True
+    assert detail["core_data_failure_rate"] == 0.0
+    assert detail["core_phase3_deadline_skipped"] == 17
+    assert detail["core_market_data_failures"] == 0
+
+
+def test_core_quality_does_not_hide_generic_api_timeouts(monkeypatch):
+    monkeypatch.setenv("NIJA_CORE_DATA_FAILURE_MAX_RATE", "0.50")
+    patch._record_core_quality(
+        (0, 0, 3, {"data_insufficient": 17, "timeout_skipped": 17})
+    )
+    ok, detail = patch._core_quality_gate()
+    assert ok is False
+    assert detail["core_data_failure_rate"] == 0.85
+    assert detail["core_market_data_failures"] == 17
+
+
 def test_core_quality_observation_does_not_change_phase3_result():
     result = (0, 0, 11, {"data_insufficient": 2, "confidence_gate_rejected": 4})
     patch._record_core_quality(result)
