@@ -1,0 +1,28 @@
+name: V44 V268 targeted proof
+
+on:
+  push:
+    branches:
+      - fix/v44-v268-prebot-registry-handoff-20260921
+
+jobs:
+  targeted-proof:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Run registry handoff and fail-closed regressions
+        run: |
+          python -m pytest -q \
+            bot/tests/test_kraken_connection_convergence_v44.py \
+            tests/test_runtime_platform_kraken_registry_liveness_v268.py \
+            tests/test_kraken_authenticated_recovery.py \
+            bot/tests/test_live_authority_fail_closed_v94.py \
+            bot/tests/test_runtime_universal_four_way_policy_v375.py
