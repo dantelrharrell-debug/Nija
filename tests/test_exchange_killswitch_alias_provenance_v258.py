@@ -157,3 +157,11 @@ def test_v258_genuine_exchange_reject_still_counts(monkeypatch):
     assert history[-1]["known_non_exchange"] is False
     assert history[-1]["source"] == "execution_pipeline"
     assert "Coinbase order rejected" in history[-1]["reason"]
+
+
+def test_v432_local_heartbeat_minimum_failures_are_non_exchange_but_bare_exchange_reject_is_not():
+    from bot import exchange_kill_switch_alias_provenance_v258_patch as patch
+
+    assert patch._is_non_exchange("heartbeat_min_notional_exceeds_risk_cap") is True
+    assert patch._is_non_exchange("INTERNAL_DISPATCH_FAILURE: pre-dispatch:VOLUME_TOO_SMALL") is True
+    assert patch._is_non_exchange("VOLUME_TOO_SMALL") is False
