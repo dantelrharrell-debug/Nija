@@ -52,6 +52,7 @@ _FAST_PATH_INSTALLERS = (
     ("bot.stalled_writer_release_guard_v22", "STALLED_WRITER_RELEASE_GUARD_V22"),
     ("bot.capital_refresh_live_continuity_v78_patch", "CAPITAL_REFRESH_FRESHNESS_BOUNDED_V78"),
     ("bot.activation_capital_convergence_v62_patch", "ACTIVATION_CAPITAL_CONVERGENCE_V62"),
+    # v425: the canonical fast path must retain the hardened coordinator live-capital\n    # convergence guard. It only records RUNNING after fresh positive canonical capital,\n    # exact writer fencing/generation, LIVE_ACTIVE, and a clear kill switch are proven.\n    ("bot.startup_coordinator_live_capital_state_repair_patch", "STARTUP_COORDINATOR_LIVE_CAPITAL_REPAIR"),
     ("bot.live_capital_freshness_v64_patch", "LIVE_CAPITAL_FRESHNESS_V64"),
     ("bot.production_freshness_scan_convergence_v93_patch", "PRODUCTION_FRESHNESS_SCAN_V93"),
     ("bot.position_sync_core_handoff_v95_patch", "POSITION_SYNC_CORE_HANDOFF_V95"),
