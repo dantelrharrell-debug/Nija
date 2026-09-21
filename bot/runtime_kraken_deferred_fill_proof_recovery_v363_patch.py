@@ -426,6 +426,32 @@ def _patch_v357_enrichment() -> bool:
             if not order_id:
                 return enriched
             if module._has_fill_specific(enriched):
+                recovered_fill = bool(
+                    enriched.get("kraken_query_order_reconciled")
+                    or enriched.get("kraken_trade_history_reconciled")
+                )
+                try:
+                    event_epoch = float(enriched.get("broker_fill_at_epoch") or 0.0)
+                except (TypeError, ValueError, OverflowError):
+                    event_epoch = 0.0
+                if recovered_fill and event_epoch <= 0.0:
+                    # A delayed/read-only fill without authenticated exchange
+                    # event time is still incomplete canonical proof.  Keep the
+                    # exact txid queued so a later authenticated read can supply
+                    # the missing timestamp; never substitute observation time.
+                    record_pending_order(
+                        order_id=order_id,
+                        symbol=symbol,
+                        side=side,
+                        status=str(enriched.get("status") or "").strip().lower(),
+                    )
+                    LOGGER.info(
+                        "KRAKEN_FILL_PROOF_V363_PENDING_EVENT_TIME marker=%s order_id=%s "
+                        "fill_specific=true broker_event_time_missing=true pending_retained=true "
+                        "observation_time_not_proof=true trading_fail_closed=true",
+                        MARKER, order_id,
+                    )
+                    return enriched
                 _discard_pending(order_id, "fill_specific_evidence_present")
                 return enriched
             record_pending_order(
