@@ -318,10 +318,26 @@ def _clean_authoritative_orphans(broker: Any, scope: str) -> tuple[int, str]:
     sync = getattr(tracker, "sync_with_broker", None)
     if not callable(sync):
         return 0, "tracker_sync_with_broker_unavailable"
-    removed = int(sync(list(rows)) or 0)
+
+    # Keep orphan cleanup aligned with v285 coverage truth.  v285 only treats
+    # authoritative rows with quantity > 0 as held positions; zero-quantity
+    # rows are metadata/empty-balance observations, not live exposure.  Passing
+    # those rows to PositionTracker.sync_with_broker() by symbol alone would
+    # preserve stale tracker ghosts forever and make v281 report positions that
+    # the authoritative snapshot says do not exist.
+    active_rows: list[dict[str, Any]] = []
+    for row in rows:
+        try:
+            quantity = float(row.get("quantity") or 0.0)
+        except (TypeError, ValueError):
+            quantity = 0.0
+        if quantity > 0.0:
+            active_rows.append(row)
+
+    removed = int(sync(active_rows) or 0)
     if removed:
         LOGGER.critical(
-            "ACCOUNT_POSITION_STATE_V289_STALE_TRACKER_REMOVED marker=%s scope=%s removed=%d authoritative_snapshot_current=true cross_account_state_not_preserved=true",
+            "ACCOUNT_POSITION_STATE_V289_STALE_TRACKER_REMOVED marker=%s scope=%s removed=%d authoritative_snapshot_current=true positive_quantity_only=true zero_quantity_rows_not_held=true cross_account_state_not_preserved=true",
             MARKER,
             scope,
             removed,
