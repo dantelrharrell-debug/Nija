@@ -51,9 +51,17 @@ def test_retry_worker_waits_for_canonical_execution_readiness(tmp_path, monkeypa
 
     assert 'importlib.import_module("bot.readiness_table")' in patched
     assert 'table.get("execution_ready", False)' in patched
-    assert 'detail=canonical_execution_ready' in patched
+    assert 'detail=canonical_execution_ready persistent_monitor=true' in patched
+    assert 'future_expiry_recovery_enabled=true' in patched
+    assert 'canonical_execution_ready_became_false' in patched
     assert 'canonical_execution_ready=false retry_continues=true' in patched
     assert 'marker_probe = getattr(v367, "_execution_marker_ready", None)' not in patched
+
+    ready_block = patched.split(
+        "EXECUTION_PROOF_RECOVERY_RETRY_V401_ARMED", 1
+    )[1].split("recovered = recover_execution_proof_once()", 1)[0]
+    assert "return" not in ready_block
+    assert "continue" in ready_block
 
     recovered_block = patched.split(
         "EXECUTION_PROOF_RECOVERY_RETRY_V401_EVIDENCE_RECOVERED", 1
