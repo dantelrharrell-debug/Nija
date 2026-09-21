@@ -307,6 +307,28 @@ def _snapshot_generation(broker: Any) -> int:
         return 0
 
 
+def _completed_v98_proxy_fetch(broker: Any) -> bool:
+    """Recognize the exact successful v98 fetch observer passed into this wrapper.
+
+    position_sync_failure_truth_v98 wraps this v97 startup guard and passes a
+    transparent _FetchProofProxy into it.  That proxy sets fetch_attempted only
+    when canonical startup reconciliation actually calls get_positions(), and
+    sets fetch_ok=True only after the broker call returns and the same response
+    is accepted by the v285 snapshot recorder.  Accepting that exact observer
+    closes the nested-wrapper visibility gap without treating a requested,
+    masked, failed, or unobserved refresh as success.
+    """
+    if type(broker).__name__ != "_FetchProofProxy":
+        return False
+    try:
+        real = object.__getattribute__(broker, "_broker")
+        attempted = object.__getattribute__(broker, "fetch_attempted")
+        fetch_ok = object.__getattribute__(broker, "fetch_ok")
+    except Exception:
+        return False
+    return bool(real is not None and attempted is True and fetch_ok is True)
+
+
 def _kraken_authoritative_refresh_inflight(broker: Any) -> bool:
     """Recognize only the exact active v286 single-flight for this broker."""
     broker = _real_broker(broker)
@@ -462,6 +484,7 @@ def _patch_startup_sync_module(module: ModuleType) -> bool:
             observed_refresh = (
                 _fetch_attempt_seq(broker) > attempt_before
                 or _snapshot_generation(broker) > generation_before
+                or _completed_v98_proxy_fetch(broker)
                 or _kraken_authoritative_refresh_inflight(broker)
             )
             if not observed_refresh:
