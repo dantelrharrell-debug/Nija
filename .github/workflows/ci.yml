@@ -79,4 +79,6 @@ jobs:
             bot/tests/test_runtime_universal_four_way_policy_v375.py \
             bot/tests/test_runtime_kraken_delayed_fill_reconciliation_v357.py \
             bot/tests/test_runtime_kraken_deferred_fill_proof_recovery_v363.py \
+            bot/tests/test_heartbeat_min_notional_local_defer_v431.py \
+            bot/tests/test_post_core_pending_same_process_v427.py \
             bot/tests/test_trading_state_persistence_concurrency.py
