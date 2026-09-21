@@ -179,6 +179,48 @@ def _loaded_manager() -> Any:
     return None
 
 
+def _repair_registry_with_v268(manager: Any) -> bool:
+    """Run the existing v268 registry repair as soon as canonical MABM exists.
+
+    v44 is installed preboot, while v268 is normally installed later by the
+    post-import convergence fanout.  Production can therefore reach an
+    authenticated PLATFORM Kraken singleton before the canonical manager's
+    registry points at that object.  Only after the manager module is already
+    loaded do we import v268 and ask its existing unambiguous-connected-candidate
+    repair to reconcile the registry.  v268 remains the sole owner of the
+    mutation rules; this handoff never sets broker.connected itself.
+    """
+    if manager is None:
+        return False
+    mapping = getattr(manager, "_platform_brokers", None)
+    if not isinstance(mapping, dict):
+        return False
+    try:
+        module = importlib.import_module(
+            "bot.runtime_platform_kraken_registry_liveness_v268_patch"
+        )
+        repair = getattr(module, "_repair_manager_registry", None)
+        if not callable(repair):
+            return False
+        repaired = bool(repair(manager))
+        if repaired:
+            LOGGER.info(
+                "KRAKEN_V44_V268_REGISTRY_HANDOFF marker=%s manager_loaded=true "
+                "v268_repair_invoked=true connected_fabricated=false",
+                MARKER,
+            )
+        return repaired
+    except Exception as exc:
+        LOGGER.warning(
+            "KRAKEN_V44_V268_REGISTRY_HANDOFF_ERROR marker=%s error=%s:%s "
+            "trading_fail_closed=true connected_fabricated=false",
+            MARKER,
+            type(exc).__name__,
+            exc,
+        )
+        return False
+
+
 def _canonical_kraken(manager: Any) -> Any:
     _key, broker = _manager_kraken_pair(manager)
     if broker is not None:
@@ -643,6 +685,12 @@ def reconcile_once() -> dict[str, Any]:
     if manager is None:
         result["reason"] = "canonical_manager_unavailable"
         return result
+
+    # v44 is available before the full post-import installer fanout.  Once the
+    # canonical manager itself exists, give v268 its earliest safe opportunity
+    # to bind an already-authenticated, unique PLATFORM Kraken singleton into
+    # that manager before deciding Kraken is disconnected.
+    _repair_registry_with_v268(manager)
     broker = _canonical_kraken(manager)
     if broker is None:
         prepare = getattr(v24, "_prepare_canonical_manager", None)
