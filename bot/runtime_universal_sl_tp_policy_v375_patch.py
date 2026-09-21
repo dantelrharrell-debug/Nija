@@ -371,6 +371,28 @@ def _patch_v281_coverage() -> bool:
 
         for row in output:
             symbol = str(row.get("symbol") or "").strip().upper().replace("/", "-").replace("_", "-")
+
+            # v296's canonical dust policy explicitly marks these positions as
+            # non-actionable and outside automatic-exit protection scope.  Keep
+            # them visible in the audit without inventing protection or adding a
+            # contradictory four-way-protection failure.
+            dust_not_actionable = bool(
+                row.get("dust_excluded") is True
+                and row.get("protective_exit_required") is False
+            )
+            if dust_not_actionable:
+                row["protective_stop_verified"] = False
+                row["protective_take_profit_verified"] = False
+                row["protective_trailing_stop_verified"] = False
+                row["protective_trailing_take_profit_verified"] = False
+                row["universal_sl_tp_policy_complete"] = False
+                row["universal_four_way_policy_complete"] = False
+                row["protective_exit_verified"] = False
+                row["coverage_basis"] = str(
+                    row.get("coverage_basis") or "dust_policy_not_actionable"
+                )
+                continue
+
             policy = _policy_row(by_symbol.get(symbol, {}))
             fixed_complete = bool(
                 isinstance(policy, Mapping)
