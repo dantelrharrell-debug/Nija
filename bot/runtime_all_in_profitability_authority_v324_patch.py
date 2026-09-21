@@ -89,6 +89,7 @@ def install_import_hook() -> bool:
         ("v367", "bot.runtime_kraken_margin_protection_truth_v367_patch", "NIJA_RUNTIME_KRAKEN_MARGIN_PROTECTION_TRUTH_V367_READY"),
         ("v368", "bot.runtime_kraken_margin_protection_authority_v368_patch", "NIJA_RUNTIME_KRAKEN_MARGIN_PROTECTION_AUTHORITY_V368_READY"),
         ("v369", "bot.runtime_kraken_addorder_txid_capture_v369_patch", "NIJA_RUNTIME_KRAKEN_ADDORDER_TXID_CAPTURE_V369_READY"),
+        ("v430", "bot.runtime_kraken_client_order_recovery_v430_patch", "NIJA_RUNTIME_KRAKEN_CLIENT_ORDER_RECOVERY_V430_READY"),
     )
     outcomes = {}
     previous = core_ready
@@ -110,7 +111,7 @@ def install_import_hook() -> bool:
             "CANONICAL_PROFITABILITY_CHAIN_READY marker=%s "
             "v324=true v325=true v326=true v327=true v328=true v329=true v330=true v331=true "
             "v332=true v333=true v334=true v335=true v336=true v337=true v338=true v339=true "
-            "v340=true v341=true v342=true v343=true v344=true v345=true v346=true v347=true v348=true v349=true v350=true v351=true v352=true v353=true v354=true v355=true v356=true v357=true v358=true v359=true v360=true v361=true v362=true v363=true v364=true v365=true v366=true v367=true v368=true v369=true "
+            "v340=true v341=true v342=true v343=true v344=true v345=true v346=true v347=true v348=true v349=true v350=true v351=true v352=true v353=true v354=true v355=true v356=true v357=true v358=true v359=true v360=true v361=true v362=true v363=true v364=true v365=true v366=true v367=true v368=true v369=true v430=true "
             "confirmed_fill_truth=true measured_slippage_learning=true authoritative_entry_fee=true "
             "capital_recycling_exit=true canonical_exit_broker_rebinding=true canonical_exit_market_price=true "
             "canonical_exit_pipeline_submission=true rejected_submission_not_fill=true "
@@ -132,7 +133,7 @@ def install_import_hook() -> bool:
             "bootstrap_execution_authority_requires_canonical_execution_proof=true "
             "execution_contract_snapshot_repair_requires_canonical_execution_proof=true "
             "kraken_queryorders_fill_fields_required=true kraken_trade_history_ordertxid_exact_match=true "
-            "kraken_deferred_fill_proof_recovery=true durable_pending_fill_proof_registry=true kraken_addorder_txid_capture=true "
+            "kraken_deferred_fill_proof_recovery=true durable_pending_fill_proof_registry=true kraken_addorder_txid_capture=true kraken_client_order_id_timeout_recovery=true "
             "heartbeat_local_deferral_not_exchange_rejection=true heartbeat_ack_timeout_not_exchange_rejection=true "
             "heartbeat_stage_helpers_terminal_reasserted=true kraken_btnl_non_ecp_retry=true "
             "kraken_btnl_all_leveraged_non_ecp_retry=true pending_open_not_margin_exit_authority=true "
