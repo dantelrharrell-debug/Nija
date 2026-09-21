@@ -219,6 +219,54 @@ def test_startup_refresh_preserves_prior_proof_until_authoritative_generation_ad
     assert broker._nija_authoritative_position_snapshot_generation_v285 == 8
 
 
+def test_startup_refresh_accepts_exact_completed_v98_proxy_observation() -> None:
+    class Broker:
+        _startup_position_sync_adopted = True
+        _startup_position_sync_fetch_ok = True
+        _startup_position_sync_error = None
+        _nija_authoritative_position_snapshot_generation_v285 = 7
+
+    class _FetchProofProxy:
+        __slots__ = ("_broker", "fetch_attempted", "fetch_ok")
+
+        def __init__(self, broker) -> None:
+            object.__setattr__(self, "_broker", broker)
+            object.__setattr__(self, "fetch_attempted", False)
+            object.__setattr__(self, "fetch_ok", None)
+
+        def __getattr__(self, name):
+            return getattr(object.__getattribute__(self, "_broker"), name)
+
+        def __setattr__(self, name, value):
+            if name in {"_broker", "fetch_attempted", "fetch_ok"}:
+                object.__setattr__(self, name, value)
+                return
+            setattr(object.__getattribute__(self, "_broker"), name, value)
+
+    real = Broker()
+    proxy = _FetchProofProxy(real)
+
+    def canonical_adopt(broker, broker_name, eps):
+        del broker_name, eps
+        # Reproduce the v98 outer wrapper contract: v97 sees no generation or
+        # attempt-sequence edge on the real object, but the exact v98 observer
+        # has proof that get_positions completed successfully.
+        broker.fetch_attempted = True
+        broker.fetch_ok = True
+        broker._startup_position_sync_adopted = True
+        broker._startup_position_sync_fetch_ok = True
+        broker._startup_position_sync_error = None
+        return 0
+
+    module = ModuleType("bot.startup_position_sync")
+    module._adopt_broker_positions = canonical_adopt
+    assert patch._patch_startup_sync_module(module)
+
+    assert module._adopt_broker_positions(proxy, "user:test:kraken", None) == 0
+    assert real._startup_position_sync_fetch_ok is True
+    assert patch._completed_v98_proxy_fetch(proxy) is True
+
+
 def test_startup_refresh_without_observable_replacement_proof_returns_to_unknown() -> None:
     class Broker:
         _startup_position_sync_adopted = True
