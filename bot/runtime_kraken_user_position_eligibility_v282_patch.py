@@ -225,7 +225,7 @@ def _patch_v86_reconcile() -> bool:
             _set_position_block(manager, user_id, broker_type, broker, proof_reason)
             _record_audit(
                 account, broker, audited=False, position_ready=False,
-                reason=proof_reason, next_audit_s=0.0,
+                reason=proof_reason, next_audit_s=_contention_retry_s(),
             )
             return None
 
@@ -283,7 +283,7 @@ def _patch_v86_schedule() -> bool:
             _set_position_block(manager, user_id, broker_type, broker, proof_reason)
             _record_audit(
                 str(account), broker, audited=False, position_ready=False,
-                reason=proof_reason, next_audit_s=0.0,
+                reason=proof_reason, next_audit_s=_contention_retry_s(),
             )
             with v86._LOCK:
                 v86._FAILURES.pop(str(account), None)
