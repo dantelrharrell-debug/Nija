@@ -5707,6 +5707,63 @@ def _wait_for_engine_ready_or_stop(timeout_s: float) -> bool:
     return TRADING_ENGINE_READY.is_set()
 
 
+def _supervised_pending_start_gate_hold_allowed() -> tuple[bool, str]:
+    """Prove it is safe to keep waiting without opening the trading gate.
+
+    This is deliberately weaker than execution authority and is used only for
+    liveness.  It requires the exact distributed process-writer proof, a
+    RUNNING_SUPERVISED bootstrap, LIVE_PENDING_CONFIRMATION state, and no
+    shutdown request.  It never sets TRADING_ENGINE_READY or any execution bit.
+    """
+    if _engine_stop_event.is_set():
+        return False, "engine_stop_requested"
+    if os.environ.get("NIJA_PROCESS_EXIT_REQUESTED", "").strip().lower() in {
+        "1", "true", "yes", "on"
+    }:
+        return False, "process_exit_requested"
+
+    try:
+        try:
+            from bot.bootstrap_state_machine import BootstrapState, get_bootstrap_fsm
+        except ImportError:
+            from bootstrap_state_machine import BootstrapState, get_bootstrap_fsm  # type: ignore[import]
+        fsm = get_bootstrap_fsm()
+        if fsm.state != BootstrapState.RUNNING_SUPERVISED:
+            return False, f"bootstrap_not_supervised:{fsm.state.value}"
+    except Exception as exc:
+        return False, f"bootstrap_probe_failed:{type(exc).__name__}:{exc}"
+
+    try:
+        if not _SM_AVAILABLE or _get_state_machine is None:
+            return False, "state_machine_unavailable"
+        sm = _get_state_machine()
+        state_obj = sm.get_current_state()
+        state = str(getattr(state_obj, "value", state_obj) or "").strip().upper()
+        if state != "LIVE_PENDING_CONFIRMATION":
+            return False, f"state_not_live_pending:{state or 'unknown'}"
+    except Exception as exc:
+        return False, f"state_probe_failed:{type(exc).__name__}:{exc}"
+
+    try:
+        try:
+            from bot.writer_authority_generation_convergence_v57_patch import (
+                _exact_process_writer,
+            )
+        except ImportError:
+            from writer_authority_generation_convergence_v57_patch import (  # type: ignore[import]
+                _exact_process_writer,
+            )
+        proof, reason = _exact_process_writer(
+            "nija_core_loop.supervised_pending_start_gate"
+        )
+        if proof is None:
+            return False, f"exact_writer_unproven:{reason or 'unknown'}"
+    except Exception as exc:
+        return False, f"exact_writer_probe_failed:{type(exc).__name__}:{exc}"
+
+    return True, "exact_writer_supervised_live_pending"
+
+
 # ---------------------------------------------------------------------------
 # Execution test probe
 # ---------------------------------------------------------------------------
@@ -6295,14 +6352,33 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
         except Exception as _wait_gate_err:
             logger.debug("TRADING_ENGINE_READY wait probe failed: %s", _wait_gate_err)
 
-        # A missing bootstrap signal is an authority failure, not permission to
-        # manufacture readiness.  Stop this worker and let the supervisor retry.
+        # A missing start signal never grants authority.  When the canonical
+        # process writer is still exact and bootstrap is RUNNING_SUPERVISED in
+        # LIVE_PENDING_CONFIRMATION, keep this same worker alive in bounded
+        # windows so background proof recovery can converge without a restart
+        # storm.  Any loss of those liveness proofs retains the historical
+        # fail-closed return path below.
         if _elapsed_gate >= _start_gate_max_s:
+            _hold_ok, _hold_reason = _supervised_pending_start_gate_hold_allowed()
+            if _hold_ok:
+                logger.warning(
+                    "TRADING_ENGINE_START_GATE_V427_HOLD elapsed=%.0fs iter=%d "
+                    "reason=%s same_process_preserved=true start_gate_set=false "
+                    "execution_authority_granted=false trading_fail_closed=true",
+                    _elapsed_gate,
+                    _start_gate_iters,
+                    _hold_reason,
+                )
+                _start_gate_t0 = time.monotonic()
+                _start_gate_iters = 0
+                continue
+
             logger.critical(
                 "🚫 [INIT STEP 2/6] TRADING_ENGINE_READY timeout after %.0fs "
-                "(iter=%d) — trading worker remains fail-closed",
+                "(iter=%d) hold_reason=%s — trading worker remains fail-closed",
                 _elapsed_gate,
                 _start_gate_iters,
+                _hold_reason,
             )
             if _loop_guard.acquire(timeout=5):
                 try:
