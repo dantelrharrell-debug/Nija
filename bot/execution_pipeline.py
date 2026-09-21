@@ -2294,17 +2294,22 @@ class ExecutionPipeline:
         def _run_with_ack_timeout(fn, *args, **kwargs) -> PipelineResult:
             """Execute *fn* with a bounded mutation deadline and caller timeout."""
             pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+            absolute_deadline = time.monotonic() + timeout_s
 
             def _timed_call() -> PipelineResult:
-                # ContextVars are set inside the worker so broker terminals on
-                # this execution path can reject a mutation that reaches them
-                # after the caller's bounded dispatch budget has expired.
-                with order_submission_deadline_scope(timeout_s):
+                # Carry the caller-computed absolute deadline into the worker.
+                # A scheduling delay must never extend mutation authority beyond
+                # the caller's bounded dispatch window.
+                with order_submission_deadline_scope(
+                    timeout_s,
+                    deadline_monotonic=absolute_deadline,
+                ):
                     return fn(*args, **kwargs)
 
             future = pool.submit(_timed_call)
             try:
-                return future.result(timeout=timeout_s)
+                remaining = max(0.001, absolute_deadline - time.monotonic())
+                return future.result(timeout=remaining)
             except concurrent.futures.TimeoutError:
                 logger.error(
                     "ExecutionPipeline: ACK timeout after %.0fs | symbol=%s",
