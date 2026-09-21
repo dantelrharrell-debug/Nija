@@ -144,3 +144,49 @@ def test_v281_expected_accounts_keeps_false_metadata_user(monkeypatch):
 
     expected = v281._expected_accounts(manager)
     assert "user:u1:kraken" in expected
+
+
+def test_transient_position_proof_loss_backs_off_before_reaudit(monkeypatch):
+    _reset_state()
+    broker = _Broker(proof=False)
+    manager = _Manager(broker)
+    calls = []
+
+    def legacy_schedule(_manager, _record):
+        return "connected"
+
+    def fake_mark_connected(*args):
+        calls.append(args)
+
+    monkeypatch.setattr(v86, "_schedule", legacy_schedule)
+    monkeypatch.setattr(v86, "_mark_connected", fake_mark_connected)
+    monkeypatch.setattr(v282, "_contention_retry_s", lambda: 15.0)
+
+    assert v282._patch_v86_schedule() is True
+    account = "user:u1:kraken"
+    record = (account, "u1", "kraken", broker)
+
+    assert v86._schedule(manager, record) == "connected"
+    state = dict(v282._AUDIT_STATE[account])
+    assert state["audited"] is False
+    assert state["position_ready"] is False
+    assert state["next_audit_at"] > time.monotonic()
+    assert manager._capital_blocked_users[("u1", "kraken")].startswith("position_sync_v282:")
+    assert calls == []
+
+    # The authoritative proof can recover while the bounded retry window is
+    # still active.  Connectivity remains true, but the expensive post-connect
+    # capital audit must not fire immediately and compete with the refresh.
+    broker._startup_position_sync_fetch_ok = True
+    broker._startup_position_sync_adopted = True
+    broker._startup_position_sync_error = None
+
+    assert v86._schedule(manager, record) == "connected"
+    assert calls == []
+    assert manager._capital_blocked_users[("u1", "kraken")].startswith("position_sync_v282:")
+
+    # Once the retry window expires, the existing authenticated audit path is
+    # allowed to run normally.
+    v282._AUDIT_STATE[account]["next_audit_at"] = time.monotonic() - 1.0
+    assert v86._schedule(manager, record) == "connected"
+    assert len(calls) == 1
