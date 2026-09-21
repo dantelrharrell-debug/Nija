@@ -1,10 +1,11 @@
 # NIJA AI Trading LLC — Trading Platform Architecture & Recovery Guide
 
 **Project:** `Nija_Trading_Bot`  
-**Status date:** September 14, 2026 (UTC)  
-**Current main merge:** `c44d74b42f35999e4113a6b75129d5607ef1b679`  
+**Status date:** September 21, 2026 (UTC)  
+**Current main merge:** `3c54f2445febcc67c5943b546166e1dbc5161047`  
+**Latest merged PR:** `#2855 — Run v268 Kraken registry repair from preboot v44`  
 **Broker-cell implementation head:** `472eeaa2c9d6f518bad029fbd550fa6a84505eb2`  
-**Merged PR:** `#2784 — Broker-cell isolation: independent strategy/risk/user runtimes`
+**Broker-cell architecture merge:** `#2784 — Broker-cell isolation: independent strategy/risk/user runtimes`
 
 NIJA is an automated multi-broker trading platform designed around **broker isolation, fail-closed safety, independent risk control, and authoritative broker state**.
 
@@ -240,12 +241,50 @@ Trading services should not have withdrawal privileges unless a separately revie
 
 ## 9. Current Merge and Validation State
 
-Broker-cell isolation was merged through PR `#2784`.
+The current `main` head is the September 21 merge of PR `#2855`, which runs the v268 Kraken registry repair from preboot v44. Broker-cell isolation remains the underlying architecture merged through PR `#2784`.
 
 ```text
-implementation_head=472eeaa2c9d6f518bad029fbd550fa6a84505eb2
-main_merge=c44d74b42f35999e4113a6b75129d5607ef1b679
+current_main=3c54f2445febcc67c5943b546166e1dbc5161047
+latest_merged_pr=#2855
+broker_cell_implementation_head=472eeaa2c9d6f518bad029fbd550fa6a84505eb2
+broker_cell_architecture_merge=c44d74b42f35999e4113a6b75129d5607ef1b679
 ```
+
+### September 21 protected live-entry activation status
+
+`BREAK_RETEST` is deliberately **fail-closed for real broker entry** unless the selected execution path can prove that the live entry is created with both requested protective legs and that the broker readback verifies those protections.
+
+The canonical activation rule is:
+
+```text
+EXECUTION_ALLOWED: TRUE
+AND
+selected broker router reports protected-entry capability
+AND
+live entry is broker-confirmed
+AND
+stop-loss is broker-confirmed active
+AND
+take-profit is broker-confirmed active
+AND
+protective exit/reconciliation path is verified
+```
+
+An `EXECUTION_ALLOWED: TRUE` signal by itself is **not** sufficient to declare `BREAK_RETEST` protected live trading active.
+
+Current code contracts include:
+
+- the single-venue `ExecutionRouter.supports_v2_protected_entry(...)` returns `False`;
+- the multi-broker router returns protected-entry capability only when the selected broker explicitly declares `supports_atomic_protected_entry = True` and exposes the protected-entry submission method;
+- a protected entry is rejected if required SL/TP protection is missing or cannot be verified after submission;
+- unverified or uncertain protected submissions require reconciliation and must not be reported as successfully protected;
+- paper, backtest, and simulated `BREAK_RETEST` operation may continue independently of the real-money protected-entry gate.
+
+The Alpaca adapter includes a bracket-order implementation and regression tests that require a real parent fill plus two live broker-visible protection legs before `protection_verified=True`. Production configuration remains opt-in and currently keeps both `ENABLE_ALPACA=false` and `NIJA_ENABLE_ALPACA_PROTECTED_ENTRY=false` in `render.yaml`.
+
+Therefore, do not report protected real-money `BREAK_RETEST` activation for Kraken, Coinbase, OKX, or Alpaca solely from process health, strategy readiness, or execution authority. Report it only after the broker-specific protected-entry contract and live protection evidence above are satisfied.
+
+
 
 The merged architecture includes:
 
@@ -405,7 +444,10 @@ Before declaring a broker cell healthy for new entries, verify the applicable br
 - [ ] Circuit breaker is broker-local.
 - [ ] Writer/authority requirements are satisfied.
 - [ ] Execution readiness is true through the normal canonical path.
-- [ ] Protective exits remain available where appropriate.
+- [ ] If `BREAK_RETEST` real-money entry is enabled, the selected broker reports protected-entry capability.
+- [ ] A live protected entry has broker readback confirming both active stop-loss and take-profit legs.
+- [ ] Protected-entry uncertainty/reconciliation paths fail closed rather than claiming success.
+- [ ] Protective exits remain available and have been verified where appropriate.
 - [ ] No cross-broker capital, queue, strategy, or position state is observed.
 - [ ] A failure injected into one broker cell does not halt unrelated cells.
 
@@ -501,6 +543,9 @@ Never weaken these contracts to recover faster or increase trade frequency:
 - kill switches,
 - core-thread readiness,
 - canonical execution-state transitions,
+- explicit protected-entry capability before real `BREAK_RETEST` dispatch,
+- broker-verified stop-loss and take-profit protection for protected entries,
+- fail-closed protected-entry reconciliation when protection cannot be verified,
 - broker-backed fill/order state,
 - user/platform capital separation,
 - broker-cell isolation,
