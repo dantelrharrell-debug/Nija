@@ -77,6 +77,19 @@ def _status(result: Mapping[str, Any]) -> str:
     return _norm(result.get("status") or result.get("state"))
 
 
+def _event_epoch(row: Mapping[str, Any]) -> float:
+    """Return the authenticated broker event time when Kraken exposes one."""
+    for key in ("closetm", "close_time", "closed_at", "lastupdated", "opentm", "time", "timestamp"):
+        value = row.get(key)
+        try:
+            out = float(value)
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if math.isfinite(out) and out > 0.0:
+            return out
+    return 0.0
+
+
 def _monitoring_category() -> Any:
     """Return the canonical Kraken monitoring enum used by private reads.
 
@@ -250,6 +263,9 @@ def _enrich_kraken_final_order(
             filled_size_usd=filled_usd,
             kraken_query_order_reconciled=True,
         )
+        event_epoch = _event_epoch(order_row)
+        if event_epoch > 0.0:
+            enriched["broker_fill_at_epoch"] = event_epoch
         LOGGER.critical(
             "KRAKEN_FILL_V357_QUERY_ORDER_RECONCILED marker=%s order_id=%s symbol=%s side=%s "
             "status=%s filled_qty=%.12f fill_price=%.10f filled_usd=%.8f exact_order_match=true "
