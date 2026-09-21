@@ -443,16 +443,48 @@ def throttle_symbol_list(
         return capped
     if len(symbols) <= cap:
         return list(symbols)
-    capped = list(symbols[:cap])
-    logger.warning(
-        "SCAN_SYMBOL_THROTTLE input=%d cap=%d result=%d dropped=%d",
-        len(symbols),
-        cap,
-        len(capped),
-        len(symbols) - cap,
-    )
+
+    # Large broker universes are frequently returned alphabetically rather than
+    # by liquidity.  Taking the first N in that case over-selects newly listed
+    # or thin symbols that do not yet have the minimum candle history required
+    # by Phase-3.  Prefer known liquid symbols that are actually present in the
+    # broker universe, then preserve the caller's original order for the rest.
+    by_upper: Dict[str, str] = {}
+    for symbol in symbols:
+        key = str(symbol).strip().upper()
+        if key and key not in by_upper:
+            by_upper[key] = symbol
+
+    preferred = [by_upper[safe] for safe in _SAFE_SHORTLIST if safe in by_upper]
+    if preferred:
+        preferred_keys = {str(symbol).strip().upper() for symbol in preferred}
+        ranked = preferred + [
+            symbol
+            for symbol in symbols
+            if str(symbol).strip().upper() not in preferred_keys
+        ]
+        capped = ranked[:cap]
+        logger.warning(
+            "SCAN_SYMBOL_THROTTLE input=%d cap=%d result=%d dropped=%d safe_prioritized=%d",
+            len(symbols),
+            cap,
+            len(capped),
+            len(symbols) - len(capped),
+            min(len(preferred), cap),
+        )
+    else:
+        capped = list(symbols[:cap])
+        logger.warning(
+            "SCAN_SYMBOL_THROTTLE input=%d cap=%d result=%d dropped=%d safe_prioritized=0",
+            len(symbols),
+            cap,
+            len(capped),
+            len(symbols) - cap,
+        )
+
     print(
-        f"[NIJA-PRINT] SCAN_SYMBOL_THROTTLE input={len(symbols)} cap={cap} result={len(capped)}",
+        f"[NIJA-PRINT] SCAN_SYMBOL_THROTTLE input={len(symbols)} cap={cap} result={len(capped)} "
+        f"safe_prioritized={min(len(preferred), cap)}",
         flush=True,
     )
     return capped
