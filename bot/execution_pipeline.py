@@ -2540,7 +2540,14 @@ class ExecutionPipeline:
         """
         if not isinstance(response, dict):
             return 0.0, 0.0
-        fill_price = float(
+
+        def _to_float(value: Any) -> float:
+            try:
+                return float(value)
+            except (TypeError, ValueError, OverflowError):
+                return 0.0
+
+        fill_price = _to_float(
             response.get("filled_price")
             or response.get("average_filled_price")
             or response.get("average_fill_price")
@@ -2549,7 +2556,7 @@ class ExecutionPipeline:
             or response.get("execution_price")
             or 0.0
         )
-        filled_usd = float(
+        filled_usd = _to_float(
             response.get("filled_size_usd")
             or response.get("filled_value")
             or response.get("filled_notional")
@@ -2560,7 +2567,7 @@ class ExecutionPipeline:
             or 0.0
         )
         if filled_usd <= 0.0 and fill_price > 0.0:
-            filled_qty = float(
+            filled_qty = _to_float(
                 response.get("filled_volume")
                 or response.get("filled_size")
                 or response.get("executed_qty")

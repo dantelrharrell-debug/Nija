@@ -429,6 +429,7 @@ def _patch_v357_enrichment() -> bool:
                 recovered_fill = bool(
                     enriched.get("kraken_query_order_reconciled")
                     or enriched.get("kraken_trade_history_reconciled")
+                    or enriched.get("kraken_trade_history_event_time_reconciled")
                 )
                 try:
                     event_epoch = float(enriched.get("broker_fill_at_epoch") or 0.0)

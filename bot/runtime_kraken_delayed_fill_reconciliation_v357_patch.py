@@ -269,7 +269,7 @@ def _enrich_kraken_final_order(
             filled_size_usd=filled_usd,
             kraken_query_order_reconciled=True,
         )
-event_epoch = 0.0
+        event_epoch = 0.0
         event_time_source = "missing"
         for key in ("closetm", "close_time", "closed_at", "lastupdated"):
             candidate = _f(order_row.get(key))

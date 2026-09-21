@@ -77,4 +77,6 @@ jobs:
             bot/tests/test_runtime_execution_breaker_recovery_v405.py \
             bot/tests/test_runtime_terminal_exit_heartbeat_truth_v349.py \
             bot/tests/test_runtime_universal_four_way_policy_v375.py \
+            bot/tests/test_runtime_kraken_delayed_fill_reconciliation_v357.py \
+            bot/tests/test_runtime_kraken_deferred_fill_proof_recovery_v363.py \
             bot/tests/test_trading_state_persistence_concurrency.py
