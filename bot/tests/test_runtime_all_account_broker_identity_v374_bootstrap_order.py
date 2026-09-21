@@ -63,3 +63,50 @@ def test_v390_failure_blocks_scope_promotion_but_preserves_existing_exits(monkey
     assert v374.install_import_hook() is False
     assert events == ["v289", "identity", "v377", "v381", "v379", "v375", "v390"]
     assert "v376" not in events
+
+
+def test_v281_prefers_connected_v86_supervised_user_broker_over_retired_snapshot(monkeypatch):
+    retired = SimpleNamespace(
+        connected=True,
+        _startup_position_sync_fetch_ok=True,
+        _startup_position_sync_adopted=True,
+        _nija_authoritative_position_snapshot_fetch_ok_v285=True,
+        _nija_authoritative_position_snapshot_rows_v285=(),
+        _nija_authoritative_position_snapshot_at_monotonic_v285=v374.time.monotonic(),
+        _nija_authoritative_position_snapshot_generation_v285=9,
+    )
+    current = SimpleNamespace(
+        connected=True,
+        _startup_position_sync_fetch_ok=False,
+        _startup_position_sync_adopted=False,
+    )
+    manager = SimpleNamespace()
+
+    fake_v281 = SimpleNamespace(
+        _expected_accounts=lambda _manager: {"user:u1:kraken": retired},
+    )
+
+    monkeypatch.setattr(
+        v374.importlib,
+        "import_module",
+        lambda name: fake_v281
+        if name == "bot.runtime_all_account_position_exit_coverage_v281_patch"
+        else SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        v374,
+        "_candidate_user_brokers",
+        lambda _manager: {"user:u1:kraken": [retired, current]},
+    )
+    monkeypatch.setattr(
+        v374,
+        "_supervised_user_brokers",
+        lambda _manager: {"user:u1:kraken": current},
+    )
+
+    assert v374._patch_v281() is True
+    expected = fake_v281._expected_accounts(manager)
+    assert expected["user:u1:kraken"] is current
+    # Identity convergence must not copy readiness from the retired object.
+    assert getattr(current, "_startup_position_sync_fetch_ok", None) is False
+    assert not hasattr(current, "_nija_authoritative_position_snapshot_rows_v285")
