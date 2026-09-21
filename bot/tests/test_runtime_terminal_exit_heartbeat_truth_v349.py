@@ -55,6 +55,40 @@ def test_unknown_heartbeat_error_stays_fail_closed_and_counts_as_rejection():
     assert reason == "unclassified_error"
 
 
+def test_internal_dispatch_heartbeat_exception_is_not_an_exchange_rejection():
+    p = _patch()
+    p._TLS.heartbeat_result = {
+        "strategy": "HEARTBEAT_TRADE",
+        "status": "exception",
+        "error": "owned quantity is below the venue minimum",
+        "order_id": "",
+        "exception_type": "NonExecutableExitQuantity",
+        "internal_dispatch_failure": True,
+    }
+    local, reason = p._proven_local_heartbeat_error(
+        "heartbeat_exception:owned quantity is below the venue minimum"
+    )
+    assert local is True
+    assert reason == "internal_dispatch_failure:NonExecutableExitQuantity"
+
+
+def test_unproven_heartbeat_exception_stays_fail_closed():
+    p = _patch()
+    p._TLS.heartbeat_result = {
+        "strategy": "HEARTBEAT_TRADE",
+        "status": "exception",
+        "error": "minimum order rejected",
+        "order_id": "",
+        "exception_type": "RuntimeError",
+        "internal_dispatch_failure": False,
+    }
+    local, reason = p._proven_local_heartbeat_error(
+        "heartbeat_exception:minimum order rejected"
+    )
+    assert local is False
+    assert reason == "exception_not_proven_local"
+
+
 def test_explicit_exchange_rejection_is_never_suppressed():
     p = _patch()
     p._TLS.heartbeat_result = {
