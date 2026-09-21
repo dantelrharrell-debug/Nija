@@ -170,6 +170,30 @@ def _candidate_user_brokers(manager: Any) -> dict[str, list[Any]]:
     return candidates
 
 
+def _supervised_user_brokers(manager: Any) -> dict[str, Any]:
+    """Resolve the exact broker objects currently supervised by v86.
+
+    v86 deliberately lets manager.user_brokers override older compatibility
+    registries for the same account key. Reusing that read-only selection keeps
+    coverage/refresh identity aligned with the authenticated connectivity owner
+    after a v90 rebuild without mutating any registry or granting readiness.
+    """
+    try:
+        v86 = importlib.import_module("bot.kraken_all_account_supervision_v86")
+        records_fn = getattr(v86, "_user_records", None)
+        records = records_fn(manager) if callable(records_fn) else ()
+    except Exception:
+        records = ()
+    supervised: dict[str, Any] = {}
+    for row in tuple(records or ()):
+        try:
+            account, _user_id, _broker_type, broker = row
+        except Exception:
+            continue
+        if str(account).startswith("user:") and broker is not None:
+            supervised[str(account)] = broker
+    return supervised
+
 def _patch_v281() -> bool:
     v281 = importlib.import_module("bot.runtime_all_account_position_exit_coverage_v281_patch")
     current = getattr(v281, "_expected_accounts", None)
@@ -184,6 +208,7 @@ def _patch_v281() -> bool:
         if manager is None or not expected:
             return expected
         candidates = _candidate_user_brokers(manager)
+        supervised = _supervised_user_brokers(manager)
         replacements: list[tuple[str, tuple[Any, ...], tuple[Any, ...]]] = []
         for account, broker in tuple(expected.items()):
             if not str(account).startswith("user:"):
@@ -191,16 +216,27 @@ def _patch_v281() -> bool:
             pool = list(candidates.get(str(account), ()))
             if broker is not None and all(item is not broker for item in pool):
                 pool.append(broker)
+            supervised_broker = supervised.get(str(account))
+            if supervised_broker is not None and all(item is not supervised_broker for item in pool):
+                pool.append(supervised_broker)
             if not pool:
                 continue
-            best = max(pool, key=_score)
-            if best is not broker and _score(best) > _score(broker):
+
+            # v86 owns authenticated connectivity identity after a rebuild.
+            # Select that exact connected object; v285 still requires a fresh
+            # authoritative snapshot before user entries can become eligible.
+            if supervised_broker is not None and _connected(supervised_broker):
+                best = supervised_broker
+            else:
+                best = max(pool, key=_score)
+
+            if best is not broker:
                 replacements.append((str(account), _score(broker), _score(best)))
                 expected[account] = best
         if replacements:
             LOGGER.critical(
                 "ALL_ACCOUNT_BROKER_IDENTITY_V416_FRESH_RECONCILED marker=%s base_marker=%s replacements=%s "
-                "current_v285_snapshot_preferred=true newest_snapshot_tiebreak=true snapshot_ttl_unchanged=true "
+                "v86_supervised_object_preferred=true current_v285_snapshot_preferred=true newest_snapshot_tiebreak=true snapshot_ttl_unchanged=true "
                 "completed_fetch_failure_not_current=true broker_io=false registry_mutation=false "
                 "connectivity_fabricated=false position_proof_fabricated=false protection_fabricated=false "
                 "safety_gates_bypassed=false",
@@ -325,7 +361,7 @@ def install_import_hook() -> bool:
         "kraken_pair_resolution_v381=%s kraken_native_margin_backup_v380=%s "
         "registered_user_proof_v379=%s universal_four_way_policy_v375=%s "
         "adaptive_exit_policy_v390=%s universal_scope_v376=%s "
-        "connected_object_preferred=true current_authoritative_snapshot_preferred=true "
+        "connected_object_preferred=true v86_supervised_object_preferred=true current_authoritative_snapshot_preferred=true "
         "newest_snapshot_tiebreak=true snapshot_ttl_unchanged=true "
         "authoritative_stale_cleanup_reasserted=true broker_io_identity_patch=false "
         "manager_registry_mutation=false safety_gates_bypassed=false",
