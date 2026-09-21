@@ -27,6 +27,9 @@ LOGGER = logging.getLogger("nija.runtime_live_safety_convergence_v404")
 MARKER = "20260908-runtime-live-safety-convergence-v404"
 _LOCK = threading.RLock()
 _INSTALLED = False
+_USER_REFRESH_MONITOR_STARTED = False
+_USER_REFRESH_MONITOR_STOP = threading.Event()
+USER_REFRESH_LIVENESS_MARKER = "20260921-user-position-refresh-liveness-v422"
 
 _TELEMETRY_ATTR = "_nija_live_safety_v404_telemetry"
 _V390_INTERVAL_ATTR = "_nija_live_safety_v404_v390_interval"
@@ -225,6 +228,84 @@ def _patch_v390_user_refresh() -> bool:
     return True
 
 
+def _user_refresh_poll_s_v422() -> float:
+    try:
+        value = float(os.environ.get("NIJA_USER_POSITION_REFRESH_LIVENESS_POLL_S", "5") or 5.0)
+    except (TypeError, ValueError):
+        value = 5.0
+    return max(2.0, min(30.0, value))
+
+
+def _user_refresh_liveness_tick_v422() -> str:
+    """Dispatch only the existing bounded v390 user refresh path."""
+    try:
+        v86 = importlib.import_module("bot.kraken_all_account_supervision_v86")
+        writer_proof = getattr(v86, "_writer_proof", None)
+        if not callable(writer_proof):
+            return "writer_proof_unavailable"
+        writer_ok, writer_reason = writer_proof()
+        if not writer_ok:
+            return f"writer_unready:{writer_reason}"
+
+        v285 = importlib.import_module("bot.runtime_authoritative_position_coverage_v285_patch")
+        manager_getter = getattr(v285, "_canonical_manager", None)
+        refresh = getattr(v285, "_refresh_one_user_v390", None)
+        if not callable(manager_getter) or not callable(refresh):
+            return "v390_refresh_unavailable"
+        manager = manager_getter()
+        if manager is None:
+            return "manager_unavailable"
+        result = str(refresh(manager) or "no_user_refresh_needed")
+        return result
+    except Exception as exc:
+        LOGGER.warning(
+            "AUTHORITATIVE_USER_POSITION_V422_TICK_FAILED marker=%s error=%s:%s "
+            "readiness_granted=false execution_authority_unchanged=true safety_gates_bypassed=false",
+            USER_REFRESH_LIVENESS_MARKER,
+            type(exc).__name__,
+            exc,
+        )
+        return f"tick_error:{type(exc).__name__}"
+
+
+def _user_refresh_liveness_monitor_v422() -> None:
+    interval = _user_refresh_poll_s_v422()
+    last_result = ""
+    while not _USER_REFRESH_MONITOR_STOP.wait(interval):
+        result = _user_refresh_liveness_tick_v422()
+        if result == last_result:
+            continue
+        last_result = result
+        if "refresh_dispatched" in result or result.endswith(":ready"):
+            LOGGER.info(
+                "AUTHORITATIVE_USER_POSITION_V422_LIVENESS marker=%s result=%s "
+                "writer_proof_required=true existing_v390_path_only=true per_account_single_flight_preserved=true "
+                "snapshot_ttl_unchanged=true kraken_rate_limits_unchanged=true nonce_ordering_unchanged=true "
+                "readiness_granted=false eligibility_fabricated=false orders_submitted=false safety_gates_bypassed=false",
+                USER_REFRESH_LIVENESS_MARKER,
+                result,
+            )
+
+
+def _start_user_refresh_liveness_monitor_v422() -> bool:
+    global _USER_REFRESH_MONITOR_STARTED
+    if _USER_REFRESH_MONITOR_STARTED:
+        return True
+    _USER_REFRESH_MONITOR_STARTED = True
+    threading.Thread(
+        target=_user_refresh_liveness_monitor_v422,
+        name="AuthoritativeUserRefreshLivenessV422",
+        daemon=True,
+    ).start()
+    LOGGER.critical(
+        "AUTHORITATIVE_USER_POSITION_V422_MONITOR_READY marker=%s poll_s=%.1f "
+        "writer_proof_required=true existing_v390_path_only=true snapshot_ttl_unchanged=true "
+        "readiness_granted=false orders_submitted=false safety_gates_bypassed=false",
+        USER_REFRESH_LIVENESS_MARKER,
+        _user_refresh_poll_s_v422(),
+    )
+    return True
+
 def install() -> bool:
     global _INSTALLED
     with _LOCK:
@@ -233,22 +314,23 @@ def install() -> bool:
         telemetry_ok = _patch_market_data_telemetry()
         writer_warning_ok = _patch_stalled_writer_warning()
         refresh_ok = _patch_v390_user_refresh()
-        ready = bool(telemetry_ok and writer_warning_ok and refresh_ok)
+        refresh_monitor_ok = _start_user_refresh_liveness_monitor_v422() if refresh_ok else False
+        ready = bool(telemetry_ok and writer_warning_ok and refresh_ok and refresh_monitor_ok)
         os.environ["NIJA_RUNTIME_LIVE_SAFETY_CONVERGENCE_V404_READY"] = "1" if ready else "0"
         LOGGER.critical(
             "RUNTIME_LIVE_SAFETY_CONVERGENCE_V404 marker=%s ready=%s "
             "market_data_telemetry_failclosed=%s healthy_writer_false_warning_suppressed=%s "
-            "kraken_user_refresh_tightened=%s snapshot_ttl_unchanged=true "
+            "kraken_user_refresh_tightened=%s user_refresh_liveness_v422=%s snapshot_ttl_unchanged=true "
             "protection_thresholds_unchanged=true execution_authority_unchanged=true "
             "orders_submitted=false orders_cancelled=false safety_gates_bypassed=false",
             MARKER,
             str(ready).lower(),
             str(telemetry_ok).lower(),
             str(writer_warning_ok).lower(),
-            str(refresh_ok).lower(),
+            str(refresh_ok).lower(), str(refresh_monitor_ok).lower(),
         )
         _INSTALLED = ready
         return ready
 
 
-__all__ = ["install", "MARKER"]
+__all__ = ["install", "MARKER", "USER_REFRESH_LIVENESS_MARKER", "_user_refresh_liveness_tick_v422"]
