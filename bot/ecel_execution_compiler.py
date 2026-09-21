@@ -551,6 +551,39 @@ class ECELExecutionCompiler:
     # Ordered longest-first so that USDC is matched before USD.
     _KNOWN_QUOTE_ASSETS = ("USDC", "USDT", "USD", "BTC", "ETH", "EUR", "GBP", "ZUSD")
 
+    # Kraken's legacy REST pair ids use exchange-specific asset prefixes
+    # (for example XETHZUSD).  These are identity aliases for canonical ECEL
+    # contracts, not separate instruments or contract rules.
+    _KRAKEN_LEGACY_BASE_ALIASES = {
+        "XETH": "ETH",
+        "XXBT": "XBT",
+        "XXRP": "XRP",
+    }
+
+    @staticmethod
+    def _canonicalize_kraken_legacy_symbol(symbol: str, broker: str) -> str:
+        """Translate known Kraken REST pair ids to existing ECEL symbols.
+
+        Only exact, known Kraken legacy asset prefixes are rewritten. Unknown
+        broker-native ids remain unchanged and therefore continue to fail closed
+        if no canonical contract rule exists.
+        """
+        if (broker or "").strip().lower() != "kraken":
+            return symbol
+
+        raw = (symbol or "").strip().upper()
+        if not raw or "-" in raw or "/" in raw:
+            return raw
+
+        for raw_quote, canonical_quote in (("ZUSD", "USD"), ("USD", "USD")):
+            if not raw.endswith(raw_quote) or len(raw) <= len(raw_quote):
+                continue
+            raw_base = raw[: -len(raw_quote)]
+            canonical_base = ECELExecutionCompiler._KRAKEN_LEGACY_BASE_ALIASES.get(raw_base)
+            if canonical_base:
+                return f"{canonical_base}-{canonical_quote}"
+        return raw
+
     @staticmethod
     def _split_no_separator_symbol(symbol: str) -> str:
         """Attempt to insert a dash separator into a symbol that has none.
@@ -570,15 +603,21 @@ class ECELExecutionCompiler:
         return symbol
 
     @staticmethod
-    def _normalize_symbol(raw_symbol: str, broker: str) -> str:  # noqa: ARG004
+    def _normalize_symbol(raw_symbol: str, broker: str) -> str:
         """Normalize a raw symbol string to the canonical SYMBOL-ASSET format.
 
-        Handles three input forms:
-          * ``ADA-USD``  — already canonical, returned as-is.
-          * ``ADA/USD``  — slash-separated; slash is replaced with a dash.
-          * ``ADAUSD``   — no separator; split using known quote-asset suffixes.
+        Handles canonical, slash-separated, generic no-separator, and known
+        Kraken legacy REST pair ids without inventing duplicate contract rules.
         """
         s = (raw_symbol or "").strip().upper()
+
+        # Kraken legacy ids must be translated before generic suffix splitting;
+        # otherwise XETHZUSD becomes XETHZ-USD and misses the existing ETH-USD
+        # contract even though both names identify the same Kraken market.
+        kraken_canonical = ECELExecutionCompiler._canonicalize_kraken_legacy_symbol(s, broker)
+        if kraken_canonical != s:
+            return kraken_canonical
+
         # Normalise slash-separated form first.
         s = s.replace("/", "-")
         # If still no dash, attempt to infer the separator from known quote assets.
