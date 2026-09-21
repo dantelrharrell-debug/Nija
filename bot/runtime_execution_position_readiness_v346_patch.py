@@ -111,6 +111,19 @@ def _write_confirmed_fill_marker(*, result: Mapping[str, Any], symbol: str, side
 
         observed_now = time.time()
         broker_epoch = _fill_event_epoch(result)
+        recovered_fill = bool(
+            result.get("recovered_fill_proof")
+            or result.get("kraken_query_order_reconciled")
+            or result.get("kraken_trade_history_reconciled")
+        )
+        if recovered_fill and not (0.0 < broker_epoch <= observed_now + 60.0):
+            LOGGER.warning(
+                "CANONICAL_FILL_EXECUTION_PROOF_V346_RECOVERY_TIME_REJECTED marker=%s order_id=%s "
+                "broker_fill_at_epoch=%s historical_recovery=true observation_time_not_proof=true "
+                "trading_fail_closed=true",
+                MARKER, order_id, broker_epoch,
+            )
+            return False
         now = broker_epoch if 0.0 < broker_epoch <= observed_now + 60.0 else observed_now
         payload = {
             "verified": True,
