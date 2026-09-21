@@ -100,6 +100,7 @@ def test_fetch_df_deadline_hard_skip_can_be_enabled_without_cache(monkeypatch):
     loop._nija_phase3_deadline_ts_20260709an = time.monotonic() - 1.0
 
     assert loop._fetch_df(object(), "BTC-USD") is None
+    assert getattr(loop, patch._DEADLINE_SKIP_COUNT_ATTR, 0) == 1
 
 
 def test_same_cycle_cache_reuses_strong_df_when_late_fetch_is_weak(monkeypatch):
