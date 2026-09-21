@@ -15,12 +15,16 @@ class Tracker:
 
 
 class Broker:
-    def __init__(self, *, connected=True, symbols=(), rows=None, fetch_ok=True, adopted=True, error=""):
+    def __init__(
+        self, *, connected=True, symbols=(), rows=None, fetch_ok=True,
+        adopted=True, error="", dust_symbols=(),
+    ):
         self.connected = connected
         self._startup_position_sync_fetch_ok = fetch_ok
         self._startup_position_sync_adopted = adopted
         self._startup_position_sync_symbols = tuple(symbols)
         self._startup_position_sync_error = error
+        self._startup_position_sync_dust_symbols_v371 = tuple(dust_symbols)
         self.position_tracker = Tracker(rows)
 
 
@@ -99,6 +103,35 @@ def test_held_position_requires_verified_basis_and_unblocked_exit():
     assert "cost_basis_unverified:BTC-USD" in reasons
     assert "auto_exit_blocked:BTC-USD" in reasons
     assert result["positions"][0]["protective_exit_verified"] is False
+
+
+def test_canonical_dust_is_visible_but_does_not_block_coverage():
+    row = position(qty=1e-8, verified=False, blocked=True)
+    broker = Broker(
+        symbols=("BTC-USD",),
+        rows={"BTC-USD": row},
+        dust_symbols=("BTC-USD",),
+    )
+    mgr = manager(platform={"kraken": broker})
+    result = v281.evaluate(mgr, structural_exit_ready=True)
+
+    assert result["ready"] is True
+    assert result["pending"] == {}
+    assert result["positions"][0]["protective_exit_verified"] is False
+    assert result["positions"][0]["dust_excluded"] is True
+    assert result["positions"][0]["protective_exit_required"] is False
+    assert result["positions"][0]["coverage_basis"] == "dust_policy_not_actionable"
+
+
+def test_unverified_actionable_position_still_fails_closed():
+    row = position(qty=0.01, verified=False, blocked=True)
+    broker = Broker(symbols=("BTC-USD",), rows={"BTC-USD": row})
+    mgr = manager(platform={"kraken": broker})
+    result = v281.evaluate(mgr, structural_exit_ready=True)
+
+    assert result["ready"] is False
+    assert "cost_basis_unverified:BTC-USD" in result["pending"]["platform:kraken"]
+    assert "auto_exit_blocked:BTC-USD" in result["pending"]["platform:kraken"]
 
 
 def test_authoritative_snapshot_and_tracker_must_match_exactly():
