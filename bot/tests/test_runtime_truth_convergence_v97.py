@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import sys
+import threading
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
@@ -127,6 +128,115 @@ def test_position_fetch_failure_revokes_previous_sync_success(monkeypatch) -> No
     assert "TimeoutError" in broker._startup_position_sync_error
     assert patch.os.environ["NIJA_POSITION_SYNC_ACTIVATION_READY"] == "0"
     assert patch.os.environ["NIJA_POSITION_SYNC_DISPATCH_READY"] == "0"
+
+
+def test_position_refresh_keeps_prior_fetch_proof_visible_until_success(monkeypatch) -> None:
+    started = threading.Event()
+    release = threading.Event()
+
+    class CoinbaseBroker:
+        def __init__(self) -> None:
+            self._startup_position_sync_adopted = True
+            self._startup_position_sync_fetch_ok = True
+            self._startup_position_sync_error = None
+
+    def raw_get_positions(self):
+        started.set()
+        assert release.wait(2)
+        return []
+
+    wrapped = patch._wrap_position_fetch(raw_get_positions, "coinbase")
+    broker = CoinbaseBroker()
+    result: list[object] = []
+
+    worker = threading.Thread(target=lambda: result.append(wrapped(broker)))
+    worker.start()
+    assert started.wait(1)
+
+    # v426 invariant: a replacement read does not erase the last current proof
+    # merely because I/O is still running.
+    assert broker._startup_position_sync_fetch_ok is True
+
+    release.set()
+    worker.join(2)
+    assert not worker.is_alive()
+    assert result == [[]]
+    assert broker._startup_position_sync_fetch_ok is True
+    assert patch._fetch_attempt_seq(broker) == 1
+
+
+def test_position_refresh_completed_failure_revokes_prior_fetch_proof(monkeypatch) -> None:
+    class CoinbaseBroker:
+        def __init__(self) -> None:
+            self._startup_position_sync_adopted = True
+            self._startup_position_sync_fetch_ok = True
+            self._startup_position_sync_error = None
+
+    def raw_get_positions(self):
+        raise TimeoutError("completed exchange failure")
+
+    wrapped = patch._wrap_position_fetch(raw_get_positions, "coinbase")
+    broker = CoinbaseBroker()
+    monkeypatch.setenv("NIJA_POSITION_SYNC_ACTIVATION_READY", "1")
+    monkeypatch.setenv("NIJA_POSITION_SYNC_DISPATCH_READY", "1")
+
+    with pytest.raises(TimeoutError, match="completed exchange failure"):
+        wrapped(broker)
+
+    assert broker._startup_position_sync_fetch_ok is False
+    assert broker._startup_position_sync_adopted is False
+    assert "TimeoutError" in broker._startup_position_sync_error
+    assert patch.os.environ["NIJA_POSITION_SYNC_ACTIVATION_READY"] == "0"
+    assert patch.os.environ["NIJA_POSITION_SYNC_DISPATCH_READY"] == "0"
+
+
+def test_startup_refresh_preserves_prior_proof_until_authoritative_generation_advances() -> None:
+    observed: list[object] = []
+
+    class Broker:
+        _startup_position_sync_adopted = True
+        _startup_position_sync_fetch_ok = True
+        _startup_position_sync_error = None
+        _nija_authoritative_position_snapshot_generation_v285 = 7
+
+    def canonical_adopt(broker, broker_name, eps):
+        del broker_name, eps
+        observed.append(broker._startup_position_sync_fetch_ok)
+        broker._nija_authoritative_position_snapshot_generation_v285 += 1
+        broker._startup_position_sync_adopted = True
+        broker._startup_position_sync_fetch_ok = True
+        broker._startup_position_sync_error = None
+        return 0
+
+    module = ModuleType("bot.startup_position_sync")
+    module._adopt_broker_positions = canonical_adopt
+    assert patch._patch_startup_sync_module(module)
+
+    broker = Broker()
+    assert module._adopt_broker_positions(broker, "platform:coinbase", None) == 0
+    assert observed == [True]
+    assert broker._startup_position_sync_fetch_ok is True
+    assert broker._nija_authoritative_position_snapshot_generation_v285 == 8
+
+
+def test_startup_refresh_without_observable_replacement_proof_returns_to_unknown() -> None:
+    class Broker:
+        _startup_position_sync_adopted = True
+        _startup_position_sync_fetch_ok = True
+        _startup_position_sync_error = None
+        _nija_authoritative_position_snapshot_generation_v285 = 7
+
+    def canonical_adopt(broker, broker_name, eps):
+        del broker, broker_name, eps
+        return 0
+
+    module = ModuleType("bot.startup_position_sync")
+    module._adopt_broker_positions = canonical_adopt
+    assert patch._patch_startup_sync_module(module)
+
+    broker = Broker()
+    assert module._adopt_broker_positions(broker, "platform:coinbase", None) == 0
+    assert broker._startup_position_sync_fetch_ok is None
 
 
 def test_nested_position_wrapper_preserves_failure_masked_as_empty(monkeypatch) -> None:
