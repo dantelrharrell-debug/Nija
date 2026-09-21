@@ -77,6 +77,11 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from contextlib import contextmanager
 
+try:
+    from bot.order_submission_deadline import order_submission_deadline_scope
+except ImportError:  # pragma: no cover - flat-import fallback
+    from order_submission_deadline import order_submission_deadline_scope  # type: ignore[no-redef]
+
 logger = logging.getLogger("nija.execution_pipeline")
 
 # Keep both import paths bound to the same module object.  Production logs
@@ -2206,6 +2211,26 @@ class ExecutionPipeline:
     # Internal helpers
     # ------------------------------------------------------------------
 
+    def _dispatch_timeout_s(self, request: PipelineRequest) -> float:
+        """Return a bounded broker-response budget for this request.
+
+        Ordinary strategies keep the existing ACK timeout exactly. Startup
+        heartbeat probes may use a larger bounded window because Kraken's
+        serialized authenticated pre-flight reads can legitimately consume much
+        of the ordinary timeout before AddOrder is reached. This changes only
+        how long the caller waits; it does not make an ACK/fill successful.
+        """
+        base = max(1.0, float(self._ack_timeout_s))
+        strategy = str(getattr(request, "strategy", "") or "").strip().upper()
+        if strategy not in {"HEARTBEAT_TRADE", "HEARTBEAT_TRADE_CLOSE"}:
+            return base
+        try:
+            configured = float(os.getenv("NIJA_HEARTBEAT_ACK_TIMEOUT_S", "120") or 120.0)
+        except (TypeError, ValueError):
+            configured = 120.0
+        heartbeat = min(180.0, max(30.0, configured))
+        return max(base, heartbeat)
+
     def _dispatch(self, request: PipelineRequest, t_start: float) -> PipelineResult:
         """Try MultiBrokerExecutionRouter, then fall back to ExecutionRouter.
 
@@ -2264,14 +2289,27 @@ class ExecutionPipeline:
             self._router is not None,
         )
 
-        timeout_s = max(1.0, self._ack_timeout_s)
+        timeout_s = self._dispatch_timeout_s(request)
 
         def _run_with_ack_timeout(fn, *args, **kwargs) -> PipelineResult:
-            """Execute *fn* in a thread, returning a timeout PipelineResult on expiry."""
+            """Execute *fn* with a bounded mutation deadline and caller timeout."""
             pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-            future = pool.submit(fn, *args, **kwargs)
+            absolute_deadline = time.monotonic() + timeout_s
+
+            def _timed_call() -> PipelineResult:
+                # Carry the caller-computed absolute deadline into the worker.
+                # A scheduling delay must never extend mutation authority beyond
+                # the caller's bounded dispatch window.
+                with order_submission_deadline_scope(
+                    timeout_s,
+                    deadline_monotonic=absolute_deadline,
+                ):
+                    return fn(*args, **kwargs)
+
+            future = pool.submit(_timed_call)
             try:
-                return future.result(timeout=timeout_s)
+                remaining = max(0.001, absolute_deadline - time.monotonic())
+                return future.result(timeout=remaining)
             except concurrent.futures.TimeoutError:
                 logger.error(
                     "ExecutionPipeline: ACK timeout after %.0fs | symbol=%s",

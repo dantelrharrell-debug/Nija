@@ -52,6 +52,11 @@ except ImportError:
         build_canonical_intent_id = None  # type: ignore[assignment]
 
 try:
+    from bot.order_submission_deadline import assert_mutation_deadline
+except ImportError:
+    from order_submission_deadline import assert_mutation_deadline  # type: ignore[no-redef]
+
+try:
     from bot.runtime_correlation import get_runtime_correlation
 except ImportError:
     try:
@@ -9250,6 +9255,11 @@ class KrakenBroker(BaseBroker):
         #
         # Direct mode (existing path below) is used when the env var is absent.
         _gateway_url = self._gateway_url
+        if method in _KRAKEN_NONCE_MUTATING_METHODS:
+            # The execution pipeline may have returned after its bounded
+            # dispatch timeout while this worker was still in pre-order work.
+            # Never permit a late mutation after that caller deadline.
+            assert_mutation_deadline(method)
         if _gateway_url:
             return self._call_via_gateway(_gateway_url, method, params or {})
         if self._gateway_only_mode:
@@ -9353,6 +9363,11 @@ class KrakenBroker(BaseBroker):
             time.sleep(random.uniform(_KRAKEN_PRIVATE_CALL_SPACING_MIN_S, _KRAKEN_PRIVATE_CALL_SPACING_MAX_S))
 
             try:
+                # Re-check immediately before the exchange mutation. The worker
+                # can spend substantial time waiting on Kraken's serialized
+                # private-call lock/rate interval after the earlier check.
+                if method in _KRAKEN_NONCE_MUTATING_METHODS:
+                    assert_mutation_deadline(method)
                 # Suppress pykrakenapi's print() statements that flood the console
                 with suppress_pykrakenapi_prints():
                     result = self.api.query_private(method, params)
