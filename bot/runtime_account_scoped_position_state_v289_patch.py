@@ -313,8 +313,20 @@ def _clean_authoritative_orphans(broker: Any, scope: str) -> tuple[int, str]:
     ready, rows, reason = _current_snapshot_rows(broker)
     if not ready:
         return 0, reason
-    if getattr(broker, "_startup_position_sync_fetch_ok", None) is not True or getattr(broker, "_startup_position_sync_adopted", None) is not True:
-        return 0, "startup_position_proof_unready"
+    try:
+        v285 = importlib.import_module("bot.runtime_authoritative_position_coverage_v285_patch")
+        strong = getattr(v285, "_strong_broker_proof", None)
+        if callable(strong):
+            proof_ok, proof_reason = strong(broker)
+            if not proof_ok:
+                return 0, str(proof_reason or "startup_position_proof_unready")
+        elif (
+            getattr(broker, "_startup_position_sync_fetch_ok", None) is not True
+            or getattr(broker, "_startup_position_sync_adopted", None) is not True
+        ):
+            return 0, "startup_position_proof_unready"
+    except Exception as exc:
+        return 0, f"canonical_position_proof_error:{type(exc).__name__}:{exc}"
     sync = getattr(tracker, "sync_with_broker", None)
     if not callable(sync):
         return 0, "tracker_sync_with_broker_unavailable"
