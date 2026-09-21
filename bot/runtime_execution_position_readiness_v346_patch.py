@@ -36,6 +36,7 @@ from __future__ import annotations
 import importlib
 import json
 import logging
+import math
 import os
 import threading
 import time
@@ -55,6 +56,30 @@ _POSITION_PATCH = "_nija_stale_platform_position_refresh_v346"
 _ALLOWED_EXECUTION_SOURCES = {"heartbeat_trade", "canonical_confirmed_fill"}
 
 
+def _fill_event_epoch(result: Mapping[str, Any]) -> float:
+    """Prefer an authenticated broker fill/close timestamp over observation time."""
+    for key in (
+        "broker_fill_at_epoch", "broker_closed_at_epoch", "closetm", "close_time",
+        "closed_at", "lastupdated", "time", "timestamp",
+    ):
+        value = result.get(key)
+        try:
+            out = float(value)
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if out > 0.0 and math.isfinite(out):
+            return out
+    return 0.0
+
+
+def _existing_marker(path: Any) -> dict[str, Any]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        return dict(payload) if isinstance(payload, Mapping) else {}
+    except Exception:
+        return {}
+
+
 def _write_confirmed_fill_marker(*, result: Mapping[str, Any], symbol: str, side: str, fill_price: float, filled_usd: float) -> bool:
     """Persist execution proof only after v328 has already accepted the fill."""
     try:
@@ -68,10 +93,27 @@ def _write_confirmed_fill_marker(*, result: Mapping[str, Any], symbol: str, side
         order_id = str(order_id_fn(result) or "").strip()
         if not order_id or float(fill_price or 0.0) <= 0.0 or float(filled_usd or 0.0) <= 0.0:
             return False
-        now = time.time()
+        path = path_fn()
+        existing = _existing_marker(path)
+        if (
+            existing.get("verified") is True
+            and str(existing.get("source") or "").strip().lower() == "canonical_confirmed_fill"
+            and str(existing.get("order_id") or "").strip() == order_id
+            and float(existing.get("verified_at_epoch") or 0.0) > 0.0
+        ):
+            LOGGER.info(
+                "CANONICAL_FILL_EXECUTION_PROOF_V346_DUPLICATE_IGNORED marker=%s order_id=%s "
+                "existing_verified_at_epoch=%.6f proof_timestamp_refreshed=false",
+                MARKER, order_id, float(existing.get("verified_at_epoch") or 0.0),
+            )
+            return True
+
+        observed_now = time.time()
+        broker_epoch = _fill_event_epoch(result)
+        now = broker_epoch if 0.0 < broker_epoch <= observed_now + 60.0 else observed_now
         payload = {
             "verified": True,
-            "version": 3,
+            "version": 4,
             "stage": "FILL_VERIFY",
             "verified_at_epoch": now,
             "verified_at_iso": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
@@ -95,13 +137,18 @@ def _write_confirmed_fill_marker(*, result: Mapping[str, Any], symbol: str, side
             ),
             "nonce_epoch": str(os.environ.get("NIJA_NONCE_EPOCH", "") or ""),
         }
-        atomic_write(path_fn(), payload)
+        atomic_write(path, payload)
         LOGGER.critical(
             "CANONICAL_FILL_EXECUTION_PROOF_V346_RECORDED marker=%s order_id=%s symbol=%s side=%s "
             "fill_price=%.10f filled_usd=%.8f source=canonical_confirmed_fill proof_kind=execution_probe "
             "ack_alone_not_proof=true requested_notional_promoted=false market_price_promoted=false "
             "execution_proof_fabricated=false safety_gates_bypassed=false",
             MARKER, order_id, payload["symbol"], payload["side"], float(fill_price), float(filled_usd),
+        )
+        LOGGER.info(
+            "CANONICAL_FILL_EXECUTION_PROOF_V346_TIME marker=%s order_id=%s verified_at_epoch=%.6f "
+            "timestamp_source=%s replay_freshness_refresh=false",
+            MARKER, order_id, now, "broker_fill_event" if broker_epoch > 0.0 else "observation_time",
         )
         return True
     except Exception as exc:
