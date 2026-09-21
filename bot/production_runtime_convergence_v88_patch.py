@@ -249,6 +249,13 @@ def _install_critical_kraken_liveness() -> bool:
         ("v285", "bot.runtime_authoritative_position_coverage_v285_patch"),
         ("v286", "bot.runtime_kraken_position_refresh_liveness_v286_patch"),
         ("v415", "bot.runtime_kraken_platform_balance_capital_feed_v415_patch"),
+        # v379 is observational and depends on v375 enriching v281's exact
+        # account/symbol rows with verified SL/TP/TSL/TTP truth.  The long
+        # supervision chain can legitimately remain pending before it reaches
+        # v374, so reassert these two proof-only modules independently once the
+        # authoritative position/capital producers above are available.
+        ("v375", "bot.runtime_universal_sl_tp_policy_v375_patch"),
+        ("v379", "bot.runtime_registered_user_protection_proof_v379_patch"),
     )
     results: dict[str, bool] = {}
     for label, module_name in modules:
