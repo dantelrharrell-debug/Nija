@@ -74,6 +74,61 @@ class TestKrakenConnectionConvergenceV44:
         assert module._rearm_if_stale_success(v24, broker) is False
         assert v24._KRAKEN_RECOVERY_STARTED is True
 
+    def test_v268_registry_handoff_runs_only_after_manager_exists(self, monkeypatch):
+        module = _load_module("v44_test_v268_handoff")
+        manager = types.SimpleNamespace(_platform_brokers={})
+        calls = []
+        fake_v268 = types.SimpleNamespace(
+            _repair_manager_registry=lambda observed: calls.append(observed) or True
+        )
+        original_import = module.importlib.import_module
+
+        def fake_import(name):
+            if name == "bot.runtime_platform_kraken_registry_liveness_v268_patch":
+                return fake_v268
+            return original_import(name)
+
+        monkeypatch.setattr(module.importlib, "import_module", fake_import)
+
+        assert module._repair_registry_with_v268(None) is False
+        assert calls == []
+        assert module._repair_registry_with_v268(manager) is True
+        assert calls == [manager]
+
+    def test_reconcile_repairs_registry_before_kraken_lookup(self, monkeypatch):
+        module = _load_module("v44_test_registry_before_lookup")
+        v24, calls = _fake_v24(started=False, ready=False)
+        manager = types.SimpleNamespace(_platform_brokers={})
+        broker = _Broker(connected=True)
+        order = []
+
+        def repair(observed):
+            assert observed is manager
+            order.append("repair")
+            manager._platform_brokers["kraken"] = broker
+            return True
+
+        def lookup(observed):
+            assert observed is manager
+            order.append("lookup")
+            return observed._platform_brokers.get("kraken")
+
+        monkeypatch.setattr(module, "_v24", lambda: v24)
+        monkeypatch.setattr(module, "_manager", lambda: manager)
+        monkeypatch.setattr(module, "_repair_registry_with_v268", repair)
+        monkeypatch.setattr(module, "_canonical_kraken", lookup)
+        monkeypatch.setattr(module, "_permanent_failure_latched", lambda: False)
+        monkeypatch.setattr(module, "_sync_connected_kraken", lambda *_args: True)
+        monkeypatch.setattr(module, "_clear_stale_permanent_failure", lambda *_args, **_kwargs: False)
+
+        result = module.reconcile_once()
+
+        assert order[:2] == ["repair", "lookup"]
+        assert result["ok"] is True
+        assert result["reason"] == "already_connected"
+        assert result["connected"] is True
+        assert calls == []
+
     def test_reconcile_starts_existing_authenticated_recovery(self, monkeypatch):
         module = _load_module("v44_test_start")
         v24, calls = _fake_v24(started=False, ready=False)
