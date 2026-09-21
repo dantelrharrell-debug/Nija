@@ -96,6 +96,8 @@ def test_critical_liveness_attempts_every_module_when_one_is_pending(monkeypatch
         "bot.runtime_authoritative_position_coverage_v285_patch": False,
         "bot.runtime_kraken_position_refresh_liveness_v286_patch": True,
         "bot.runtime_kraken_platform_balance_capital_feed_v415_patch": True,
+        "bot.runtime_universal_sl_tp_policy_v375_patch": True,
+        "bot.runtime_registered_user_protection_proof_v379_patch": True,
     }
     for name, outcome in outcomes.items():
         monkeypatch.setitem(sys.modules, name, _liveness_module(name, outcome, calls))
@@ -111,6 +113,8 @@ def test_critical_liveness_isolates_module_exception(monkeypatch) -> None:
         "bot.runtime_authoritative_position_coverage_v285_patch": RuntimeError("not ready"),
         "bot.runtime_kraken_position_refresh_liveness_v286_patch": True,
         "bot.runtime_kraken_platform_balance_capital_feed_v415_patch": True,
+        "bot.runtime_universal_sl_tp_policy_v375_patch": True,
+        "bot.runtime_registered_user_protection_proof_v379_patch": True,
     }
     for name, outcome in outcomes.items():
         monkeypatch.setitem(sys.modules, name, _liveness_module(name, outcome, calls))
@@ -126,6 +130,8 @@ def test_critical_liveness_reports_ready_only_when_all_ready(monkeypatch) -> Non
         "bot.runtime_authoritative_position_coverage_v285_patch",
         "bot.runtime_kraken_position_refresh_liveness_v286_patch",
         "bot.runtime_kraken_platform_balance_capital_feed_v415_patch",
+        "bot.runtime_universal_sl_tp_policy_v375_patch",
+        "bot.runtime_registered_user_protection_proof_v379_patch",
     )
     for name in names:
         monkeypatch.setitem(sys.modules, name, _liveness_module(name, True, calls))
