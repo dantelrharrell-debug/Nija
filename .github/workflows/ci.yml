@@ -54,11 +54,27 @@ jobs:
 
       - name: Run tests
         run: |
+          set +e
           python scripts/run_unittest_baseline.py \
-            --baseline .github/ci_known_test_failures.txt
+            --baseline .github/ci_known_test_failures.txt \
+            > /tmp/nija-unittest-baseline.log 2>&1
+          status=$?
+          set -e
+          if [ "$status" -ne 0 ]; then
+            echo "::group::CI baseline failure tail"
+            tail -n 800 /tmp/nija-unittest-baseline.log
+            echo "::endgroup::"
+            exit "$status"
+          fi
+          tail -n 80 /tmp/nija-unittest-baseline.log
 
       - name: Run mandatory fail-closed safety regressions
         run: |
           python -m pytest -q \
             bot/tests/test_live_authority_fail_closed_v94.py \
-            bot/tests/test_v2_pipeline_import_recovery.py
+            bot/tests/test_v2_pipeline_import_recovery.py \
+            bot/tests/test_canonical_fast_entrypoint_v28.py \
+            bot/tests/test_runtime_execution_breaker_recovery_v405.py \
+            bot/tests/test_runtime_terminal_exit_heartbeat_truth_v349.py \
+            bot/tests/test_runtime_universal_four_way_policy_v375.py \
+            bot/tests/test_trading_state_persistence_concurrency.py

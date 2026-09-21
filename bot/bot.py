@@ -62,6 +62,13 @@ _FAST_PATH_INSTALLERS = (
     ("bot.trading_strategy_apex_wiring_patch", "TRADING_STRATEGY_APEX_WIRING"),
     ("bot.runtime_truth_convergence_v97_patch", "RUNTIME_TRUTH_CONVERGENCE_V97"),
     ("bot.position_sync_failure_truth_v98_patch", "POSITION_SYNC_FAILURE_TRUTH_V98"),
+    # Canonical main.py intentionally skips the legacy preactivation fanout.
+    # Install the strict runtime reconciliation chain here so authoritative
+    # position-sync truth can publish CLEAN/CLEAN_START before live dispatch.
+    ("bot.runtime_quality_hardening_v144_patch", "RUNTIME_QUALITY_HARDENING_V144"),
+    ("bot.runtime_quality_hardening_v144_entry_classifier_patch", "RUNTIME_QUALITY_HARDENING_V144_ENTRY_CLASSIFIER"),
+    ("bot.runtime_startup_convergence_v145_patch", "RUNTIME_STARTUP_CONVERGENCE_V145"),
+    ("bot.runtime_reconciliation_shutdown_v146_patch", "RUNTIME_RECONCILIATION_SHUTDOWN_V146"),
     ("bot.runtime_kraken_precore_liveness_v318_patch", "KRAKEN_PRECORE_LIVENESS_V318"),
     ("bot.runtime_kraken_recent_balance_prewait_v319_patch", "KRAKEN_RECENT_BALANCE_PREWAIT_V319"),
     ("bot.strategy_runtime_integrity_patch", "STRATEGY_RUNTIME_INTEGRITY"),

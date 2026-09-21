@@ -224,8 +224,30 @@ def _patch_heartbeat_submit_provenance() -> bool:
 
         @wraps(original)
         def submit_v349(*args: Any, __original=original, **kwargs: Any) -> Any:
-            result = __original(*args, **kwargs)
             strategy = str(kwargs.get("strategy") or "").strip().upper()
+            try:
+                result = __original(*args, **kwargs)
+            except Exception as exc:
+                if strategy in {"HEARTBEAT_TRADE", "HEARTBEAT_TRADE_CLOSE"}:
+                    internal_dispatch = False
+                    try:
+                        from bot.execution_dispatch_contract import InternalDispatchFailure
+                    except ImportError:
+                        try:
+                            from execution_dispatch_contract import InternalDispatchFailure  # type: ignore
+                        except ImportError:
+                            InternalDispatchFailure = None  # type: ignore
+                    if InternalDispatchFailure is not None:
+                        internal_dispatch = isinstance(exc, InternalDispatchFailure)
+                    _TLS.heartbeat_result = {
+                        "strategy": strategy,
+                        "status": "exception",
+                        "error": str(exc),
+                        "order_id": "",
+                        "exception_type": type(exc).__name__,
+                        "internal_dispatch_failure": internal_dispatch,
+                    }
+                raise
             if strategy in {"HEARTBEAT_TRADE", "HEARTBEAT_TRADE_CLOSE"}:
                 status, error, order_id = _result_fields(result)
                 _TLS.heartbeat_result = {
@@ -233,6 +255,7 @@ def _patch_heartbeat_submit_provenance() -> bool:
                     "status": status,
                     "error": error,
                     "order_id": order_id,
+                    "internal_dispatch_failure": False,
                 }
             return result
 
@@ -245,7 +268,10 @@ def _patch_heartbeat_submit_provenance() -> bool:
 
 def _proven_local_heartbeat_error(detail: str) -> tuple[bool, str]:
     text = str(detail or "").strip().lower()
-    if not (text.startswith("heartbeat_buy_not_accepted status=error") or text.startswith("heartbeat_stage_insufficient")):
+    buy_error = text.startswith("heartbeat_buy_not_accepted status=error")
+    stage_error = text.startswith("heartbeat_stage_insufficient")
+    exception_error = text.startswith("heartbeat_exception:")
+    if not (buy_error or stage_error or exception_error):
         return False, "not_target"
     result = getattr(_TLS, "heartbeat_result", None)
     if not isinstance(result, Mapping):
@@ -257,9 +283,15 @@ def _proven_local_heartbeat_error(detail: str) -> tuple[bool, str]:
     # explicit rejected status. Unknown errors continue to count fail-closed.
     if order_id or status == "rejected":
         return False, "exchange_provenance_present"
+    if exception_error:
+        # Exception-only suppression requires exact typed provenance from the
+        # submit wrapper. String matching alone must never hide a venue failure.
+        if result.get("internal_dispatch_failure") is True:
+            return True, f"internal_dispatch_failure:{str(result.get('exception_type') or 'unknown')}"
+        return False, "exception_not_proven_local"
     if any(marker in error for marker in _LOCAL_HEARTBEAT_ERROR_MARKERS):
         return True, error[:240]
-    if text.startswith("heartbeat_stage_insufficient") and status not in {"rejected", "error", "failed"}:
+    if stage_error and status not in {"rejected", "error", "failed"}:
         return True, f"verification_stage_only status={status or 'unknown'}"
     return False, "unclassified_error"
 

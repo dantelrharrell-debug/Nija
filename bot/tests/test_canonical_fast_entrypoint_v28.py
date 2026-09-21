@@ -100,6 +100,15 @@ def test_bot_entrypoint_fast_path_is_small_and_fail_closed() -> None:
     assert "okx_final_order_submission_bridge_patch" in fast_block
     assert "startup_authority_prereq_repair_patch" in fast_block
     assert "stalled_writer_release_guard_v22" in fast_block
+    # Canonical main.py deliberately skips the legacy startup fanout, so the
+    # strict reconciliation chain must be owned by bot.py's fast path.
+    assert "runtime_quality_hardening_v144_patch" in fast_block
+    assert "runtime_quality_hardening_v144_entry_classifier_patch" in fast_block
+    assert "runtime_startup_convergence_v145_patch" in fast_block
+    assert "runtime_reconciliation_shutdown_v146_patch" in fast_block
+    assert fast_block.index("position_sync_failure_truth_v98_patch") < fast_block.index(
+        "runtime_reconciliation_shutdown_v146_patch"
+    )
 
     # The canonical production core now invokes TradingStrategy directly, so
     # the wrapper/wiring guards belong on the fast path. Preserve the safety

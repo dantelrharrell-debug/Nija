@@ -39,4 +39,5 @@ def test_state_persistence_serializes_atomic_replaces(tmp_path, monkeypatch):
     payload = json.loads((tmp_path / ".nija_trading_state.json").read_text())
     assert payload["current_state"] == "OFF"
     assert max_active == 1
-    assert list(tmp_path.glob("*.tmp")) == []
+    leftovers = [path.name for path in tmp_path.iterdir() if path.name.endswith(".tmp")]
+    assert leftovers == []
