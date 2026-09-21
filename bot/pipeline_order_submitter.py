@@ -206,15 +206,15 @@ def _risk_bounded_heartbeat_size(
     broker: Any,
     requested_usd: float,
     available_balance_usd: Optional[float],
-) -> float:
+) -> Optional[float]:
     """Downsize only the Kraken startup BUY probe without weakening risk gates.
 
     The downstream GlobalRiskGovernor remains authoritative.  This helper merely
     avoids constructing a heartbeat notional that is known in advance to exceed
     the governor's 25% ceiling.  The probe keeps a buffer below that ceiling and
     never goes below Kraken's already-published minimum trade size.  If both
-    constraints cannot be satisfied, the original amount is preserved so the
-    unchanged downstream risk/minimum gates fail closed.
+    constraints cannot be satisfied, return None so the caller can prove a local
+    pre-submit deferral instead of sending an impossible order to Kraken.
     """
     requested = max(0.0, _float(requested_usd))
     balance = max(0.0, _float(available_balance_usd))
@@ -240,7 +240,7 @@ def _risk_bounded_heartbeat_size(
             "trading_fail_closed=true safety_gates_bypassed=false",
             requested, balance, fraction, risk_cap, broker_min, safe_floor,
         )
-        return requested
+        return None
 
     bounded = max(safe_floor, min(requested, risk_cap))
     if bounded + 1e-9 < requested:
@@ -533,7 +533,28 @@ def submit_market_order_via_pipeline(
     if preferred_broker == "kraken":
         if heartbeat_probe:
             if side_norm == "buy" and not is_exit and str(size_type or "quote").lower() != "base":
-                size_usd = _risk_bounded_heartbeat_size(broker, size_usd, available_balance)
+                bounded_heartbeat_size = _risk_bounded_heartbeat_size(
+                    broker, size_usd, available_balance
+                )
+                if bounded_heartbeat_size is None:
+                    _finalize_pre_submit_v2_duplicate(incoming_metadata)
+                    logger.warning(
+                        "KRAKEN_HEARTBEAT_LOCAL_DEFER account=%s symbol=%s "
+                        "reason=min_notional_exceeds_risk_cap broker_dispatch=false "
+                        "exchange_rejection_recorded=false trading_fail_closed=true "
+                        "ordinary_orders_unchanged=true safety_gates_bypassed=false",
+                        account_id, symbol,
+                    )
+                    return {
+                        "status": "error",
+                        "error": "heartbeat_min_notional_exceeds_risk_cap",
+                        "symbol": symbol,
+                        "side": side_norm,
+                        "account_id": account_id,
+                        "v2_pre_submit_proven": True,
+                        "broker_dispatch": False,
+                    }
+                size_usd = bounded_heartbeat_size
             logger.critical(
                 "KRAKEN_HEARTBEAT_SPOT_PROBE strategy=%s account=%s symbol=%s "
                 "auto_margin_bypassed=true leverage=1x ordinary_kraken_margin_unchanged=true "
