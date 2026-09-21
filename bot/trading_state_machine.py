@@ -31,6 +31,7 @@ import logging
 import time
 import threading
 import sys
+import tempfile
 from dataclasses import dataclass
 from enum import Enum
 from datetime import datetime, timezone
@@ -68,6 +69,7 @@ _EXECUTION_CIRCUIT_BREAKER_COUNTS: Dict[str, int] = {}
 _EXECUTION_CIRCUIT_BREAKER_TRIPPED: bool = False
 _EXECUTION_CIRCUIT_BREAKER_REASON: str = ""
 _EXECUTION_CIRCUIT_BREAKER_LAST_RESET_TOKEN: str = ""
+_STATE_PERSIST_LOCK = threading.RLock()
 
 # Keep both import paths bound to the same module object so the process only
 # ever has one TradingStateMachine singleton.
@@ -1447,24 +1449,44 @@ class TradingStateMachine:
             self._current_state = TradingState.OFF
 
     def _persist_state(self):
-        """Persist current state to disk"""
+        """Persist current state to disk without cross-thread temp-file races."""
+        temp_file = ""
         try:
-            data = {
-                'current_state': self._current_state.value,
-                'history': self._state_history,
-                'last_updated': datetime.now(timezone.utc).isoformat()
-            }
+            # Multiple runtime convergence workers can request persistence at
+            # nearly the same time.  Serialize the snapshot+replace sequence so
+            # an older caller cannot clobber a newer state with a shared .tmp.
+            with _STATE_PERSIST_LOCK:
+                data = {
+                    'current_state': self._current_state.value,
+                    'history': list(self._state_history),
+                    'last_updated': datetime.now(timezone.utc).isoformat()
+                }
 
-            # Ensure directory exists
-            os.makedirs(os.path.dirname(self._state_file), exist_ok=True)
+                state_path = os.path.abspath(self._state_file)
+                state_dir = os.path.dirname(state_path) or "."
+                os.makedirs(state_dir, exist_ok=True)
 
-            # Write atomically
-            temp_file = f"{self._state_file}.tmp"
-            with open(temp_file, 'w') as f:
-                json.dump(data, f, indent=2)
-            os.replace(temp_file, self._state_file)
+                fd, temp_file = tempfile.mkstemp(
+                    prefix=f".{os.path.basename(state_path)}.",
+                    suffix=".tmp",
+                    dir=state_dir,
+                    text=True,
+                )
+                try:
+                    with os.fdopen(fd, 'w') as f:
+                        json.dump(data, f, indent=2)
+                        f.flush()
+                        os.fsync(f.fileno())
+                    os.replace(temp_file, state_path)
+                    temp_file = ""
+                finally:
+                    if temp_file:
+                        try:
+                            os.unlink(temp_file)
+                        except FileNotFoundError:
+                            pass
 
-            logger.debug(f"💾 State persisted: {self._current_state.value}")
+                logger.debug(f"💾 State persisted: {self._current_state.value}")
         except Exception as e:
             logger.error(f"❌ Error persisting state: {e}")
 

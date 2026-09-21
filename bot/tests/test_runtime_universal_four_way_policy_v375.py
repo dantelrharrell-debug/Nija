@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from types import SimpleNamespace
 
 from bot import auto_exit_sl_tp_runtime_patch as auto_exit
 from bot import runtime_universal_sl_tp_policy_v375_patch as v375
@@ -90,3 +91,44 @@ def test_disabling_any_trailing_leg_makes_four_way_policy_incomplete(monkeypatch
     assert row["software_trailing_stop_available"] is True
     assert row["software_trailing_take_profit_available"] is False
     assert row["universal_four_way_policy_complete"] is False
+
+
+def test_four_way_coverage_honors_canonical_non_actionable_dust(monkeypatch):
+    original_audit = lambda account, broker, structural: (
+        [],
+        [
+            {
+                "account": account,
+                "symbol": "BTC-USD",
+                "dust_excluded": True,
+                "protective_exit_required": False,
+                "coverage_basis": "dust_policy_not_actionable",
+            }
+        ],
+    )
+    fake_v281 = SimpleNamespace(
+        _account_audit=original_audit,
+        _connected=lambda broker: True,
+    )
+    fake_universal = SimpleNamespace(_tracker_positions=lambda broker: [])
+
+    real_import = v375.importlib.import_module
+
+    def import_module(name):
+        if name == "bot.runtime_all_account_position_exit_coverage_v281_patch":
+            return fake_v281
+        if name == "bot.universal_broker_exit_supervisor_patch":
+            return fake_universal
+        return real_import(name)
+
+    monkeypatch.setattr(v375.importlib, "import_module", import_module)
+    monkeypatch.setenv("NIJA_PROTECTIVE_EXIT_AUTHORITY_V265_READY", "1")
+
+    assert v375._patch_v281_coverage() is True
+    reasons, rows = fake_v281._account_audit("platform:okx", object(), True)
+
+    assert reasons == []
+    assert rows[0]["coverage_basis"] == "dust_policy_not_actionable"
+    assert rows[0]["protective_exit_required"] is False
+    assert rows[0]["protective_exit_verified"] is False
+    assert rows[0]["universal_four_way_policy_complete"] is False

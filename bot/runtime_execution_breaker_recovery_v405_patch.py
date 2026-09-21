@@ -95,13 +95,48 @@ def _clear_recovered_heartbeat_latch_once() -> bool:
         for key in list(counts):
             if str(key or "").strip().lower() == "heartbeat_verification":
                 counts.pop(key, None)
-        if counts:
+
+        # The breaker was tripped specifically by heartbeat verification.  A
+        # recovered heartbeat may clear that latch, but unrelated counters must
+        # retain their exact values.  Sub-threshold counters are not themselves
+        # a tripped condition; threshold-level or unknown counters remain
+        # fail-closed and prevent recovery.
+        threshold_probe = getattr(tsm, "_execution_circuit_breaker_thresholds", None)
+        if not callable(threshold_probe):
             return False
+        try:
+            thresholds = dict(threshold_probe() or {})
+        except Exception:
+            return False
+
+        blocking_counts: dict[str, int] = {}
+        for raw_key, raw_count in counts.items():
+            key = str(raw_key or "").strip()
+            try:
+                count = int(raw_count or 0)
+            except (TypeError, ValueError):
+                blocking_counts[key or "<unknown>"] = 1
+                continue
+            if key not in thresholds:
+                if count > 0:
+                    blocking_counts[key or "<unknown>"] = count
+                continue
+            try:
+                threshold = max(1, int(thresholds[key]))
+            except (TypeError, ValueError):
+                blocking_counts[key] = count
+                continue
+            if count >= threshold:
+                blocking_counts[key] = count
+
+        if blocking_counts:
+            return False
+        remaining_counts = dict(counts)
         setattr(tsm, "_EXECUTION_CIRCUIT_BREAKER_TRIPPED", False)
         setattr(tsm, "_EXECUTION_CIRCUIT_BREAKER_REASON", "")
     LOGGER.critical(
-        "EXECUTION_BREAKER_RECOVERY_V405_CLEARED marker=%s prior_reason=%s prior_counts=%s verification_source=%s verification_age_s=%s writer_nonce=%s kill_switch=%s freshness_extended=false threshold_changed=false readiness_marked=false authority_granted=false trading_state_changed=false proof_written=false order_submitted=false order_cancelled=false forced_activation=false safety_gates_bypassed=false",
-        MARKER, reason, prior_counts,
+        "EXECUTION_BREAKER_RECOVERY_V405_CLEARED marker=%s prior_reason=%s prior_counts=%s remaining_subthreshold_counts=%s verification_source=%s verification_age_s=%s writer_nonce=%s kill_switch=%s freshness_extended=false threshold_changed=false readiness_marked=false authority_granted=false trading_state_changed=false proof_written=false order_submitted=false order_cancelled=false forced_activation=false safety_gates_bypassed=false",
+        MARKER, reason, prior_counts, remaining_counts,
         str(verification_meta.get("verification_source") or verification_meta.get("source") or "primary"),
         str(verification_meta.get("age_s", "unknown")), authority_detail or "ready", kill_detail,
     )
