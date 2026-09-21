@@ -96,6 +96,61 @@ def test_recovery_promotes_authenticated_trade_history_fill(tmp_path, monkeypatc
     assert _pending(tmp_path) == {}
 
 
+def test_recovery_uses_exact_trade_time_when_queryorders_fill_omits_timestamp(tmp_path, monkeypatch):
+    v363.record_pending_order(order_id="ORDER-QO-TIME", symbol="ETH-USD", side="buy")
+    broker = KrakenBroker(
+        {
+            "QueryOrders": {
+                "error": [],
+                "result": {
+                    "ORDER-QO-TIME": {
+                        "status": "closed",
+                        "vol_exec": "0.0115",
+                        "cost": "28.75",
+                    }
+                },
+            },
+            "TradesHistory": {
+                "error": [],
+                "result": {
+                    "trades": {
+                        "T-QO-TIME": {
+                            "ordertxid": "ORDER-QO-TIME",
+                            "type": "buy",
+                            "vol": "0.0115",
+                            "price": "2500",
+                            "cost": "28.75",
+                            "time": "1789990300.25",
+                        }
+                    }
+                },
+            },
+        }
+    )
+    monkeypatch.setattr(v363, "_kraken_brokers", lambda: [broker])
+
+    promoted = []
+
+    def fake_normalize(result, *, symbol, side):
+        promoted.append((dict(result), symbol, side))
+        return float(result["filled_price"]), float(result["filled_size_usd"])
+
+    class FakeV328:
+        _normalize_dict_fill = staticmethod(fake_normalize)
+
+    monkeypatch.setattr(v363, "_v328", lambda: FakeV328)
+    monkeypatch.setattr(v363, "_wake_activation", lambda: None)
+
+    assert v363.recover_once() == 1
+    assert promoted
+    recovered = promoted[0][0]
+    assert recovered["kraken_query_order_reconciled"] is True
+    assert recovered["kraken_trade_history_event_time_reconciled"] is True
+    assert recovered["broker_fill_at_epoch"] == 1789990300.25
+    assert recovered["recovered_fill_proof"] is True
+    assert _pending(tmp_path) == {}
+
+
 def test_recovery_without_fill_evidence_stays_fail_closed(tmp_path, monkeypatch):
     v363.record_pending_order(order_id="ORDER-B", symbol="ETH-USD", side="buy")
     broker = KrakenBroker(
@@ -148,6 +203,51 @@ def test_proven_result_clears_any_pending_entry(tmp_path):
         side="buy",
     )
     assert _pending(tmp_path) == {}
+
+
+def test_recovered_fill_without_event_time_remains_pending_for_retry(tmp_path, monkeypatch):
+    assert v363._patch_v357_enrichment() is True
+    v363.record_pending_order(order_id="ORDER-WAIT-TIME", symbol="ETH-USD", side="buy")
+
+    broker = KrakenBroker(
+        {
+            "QueryOrders": {
+                "error": [],
+                "result": {
+                    "ORDER-WAIT-TIME": {
+                        "status": "closed",
+                        "vol_exec": "0.0115",
+                        "cost": "28.75",
+                    }
+                },
+            },
+            "TradesHistory": {
+                "error": [],
+                "result": {
+                    "trades": {
+                        "T-WAIT": {
+                            "ordertxid": "ORDER-WAIT-TIME",
+                            "type": "buy",
+                            "vol": "0.0115",
+                            "price": "2500",
+                            "cost": "28.75",
+                            # Event time deliberately unavailable on this pass.
+                        }
+                    }
+                },
+            },
+        }
+    )
+
+    result = v357._enrich_kraken_final_order(
+        broker,
+        {"status": "accepted", "order_id": "ORDER-WAIT-TIME"},
+        symbol="ETH-USD",
+        side="buy",
+    )
+    assert result["kraken_query_order_reconciled"] is True
+    assert result.get("broker_fill_at_epoch") is None
+    assert "ORDER-WAIT-TIME" in _pending(tmp_path)
 
 
 def test_seed_env_queues_operator_supplied_order_ids(tmp_path, monkeypatch):

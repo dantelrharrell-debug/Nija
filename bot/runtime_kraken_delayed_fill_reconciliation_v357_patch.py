@@ -269,15 +269,42 @@ def _enrich_kraken_final_order(
             filled_size_usd=filled_usd,
             kraken_query_order_reconciled=True,
         )
-        event_epoch = _event_epoch(order_row)
+        event_epoch = 0.0
+        event_time_source = "missing"
+        for key in ("closetm", "close_time", "closed_at", "lastupdated"):
+            candidate = _f(order_row.get(key))
+            if candidate > 0.0:
+                event_epoch = candidate
+                event_time_source = "queryorders"
+                break
+        # Kraken QueryOrders can prove a final fill (exact txid + closed status +
+        # positive vol_exec/cost) while omitting closetm/lastupdated.  Do not
+        # substitute observation time.  Instead recover ONLY the broker event
+        # timestamp from TradesHistory rows whose ordertxid exactly matches this
+        # same order and whose side/quantity/cost are independently valid.
+        if event_epoch <= 0.0:
+            (
+                _trade_price,
+                _trade_qty,
+                _trade_cost,
+                _trade_matches,
+                trade_event_epoch,
+            ) = _trade_history_fill(broker, order_id=oid, side=side)
+            if _trade_matches > 0 and trade_event_epoch > 0.0:
+                event_epoch = trade_event_epoch
+                event_time_source = "tradeshistory_exact_ordertxid"
+                enriched["kraken_trade_history_event_time_reconciled"] = True
+                enriched["kraken_trade_history_match_count"] = _trade_matches
         if event_epoch > 0.0:
             enriched["broker_fill_at_epoch"] = event_epoch
         LOGGER.critical(
             "KRAKEN_FILL_V357_QUERY_ORDER_RECONCILED marker=%s order_id=%s symbol=%s side=%s "
             "status=%s filled_qty=%.12f fill_price=%.10f filled_usd=%.8f exact_order_match=true "
-            "read_only=true ack_not_fill=true requested_notional_promoted=false market_price_promoted=false "
+            "event_time_source=%s broker_fill_at_epoch=%s read_only=true ack_not_fill=true "
+            "requested_notional_promoted=false market_price_promoted=false observation_time_not_proof=true "
             "position_appearance_not_proof=true execution_proof_fabricated=false safety_gates_bypassed=false",
             MARKER, oid, symbol, side, queried_status, qty, price, filled_usd,
+            event_time_source, f"{event_epoch:.6f}" if event_epoch > 0.0 else "missing",
         )
         return enriched
 

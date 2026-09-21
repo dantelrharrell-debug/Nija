@@ -474,6 +474,89 @@ class TestExecutionPipelineACKTimeout(unittest.TestCase):
         self.assertEqual(result.fill_price, 2100.0)
         self.assertEqual(result.filled_size_usd, 200.0)
 
+    def test_dispatch_timeout_final_status_without_fill_notional_stays_fail_closed(self):
+        from bot.execution_pipeline import ExecutionPipeline, PipelineRequest
+
+        class _SlowRouter:
+            def route(self, _request):
+                time.sleep(2)
+
+        class _ReconBroker:
+            def get_order_status(self, _order_id):
+                return {
+                    "status": "filled",
+                    "filled_price": 2100.0,
+                    # Deliberately no filled quantity/notional. The requested
+                    # $200 must never be promoted to execution evidence.
+                }
+
+        pipeline = ExecutionPipeline.__new__(ExecutionPipeline)
+        pipeline._ecel_required = False
+        pipeline._ack_timeout_s = 0.05
+        pipeline._multi_router = _SlowRouter()
+        pipeline._router = None
+
+        request = PipelineRequest(
+            symbol="ETH-USD",
+            side="buy",
+            size_usd=200.0,
+            preferred_broker="kraken",
+            request_id="ord-timeout-no-fill-size",
+            validated=True,
+            metadata={"broker_client": _ReconBroker()},
+        )
+
+        with patch(
+            "bot.execution_pipeline.runtime_authority_snapshot",
+            return_value=MagicMock(dispatch_enabled=True),
+        ):
+            result = pipeline._dispatch(request, time.monotonic())
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.filled_size_usd, 0.0)
+        self.assertIn("ack_timeout_no_confirmed_fill", result.error.lower())
+
+    def test_dispatch_timeout_can_compute_notional_from_explicit_fill_quantity(self):
+        from bot.execution_pipeline import ExecutionPipeline, PipelineRequest
+
+        class _SlowRouter:
+            def route(self, _request):
+                time.sleep(2)
+
+        class _ReconBroker:
+            def get_order_status(self, _order_id):
+                return {
+                    "status": "closed",
+                    "filled_price": 2000.0,
+                    "filled_volume": 0.1,
+                }
+
+        pipeline = ExecutionPipeline.__new__(ExecutionPipeline)
+        pipeline._ecel_required = False
+        pipeline._ack_timeout_s = 0.05
+        pipeline._multi_router = _SlowRouter()
+        pipeline._router = None
+
+        request = PipelineRequest(
+            symbol="ETH-USD",
+            side="buy",
+            size_usd=250.0,
+            preferred_broker="kraken",
+            request_id="ord-timeout-fill-qty",
+            validated=True,
+            metadata={"broker_client": _ReconBroker()},
+        )
+
+        with patch(
+            "bot.execution_pipeline.runtime_authority_snapshot",
+            return_value=MagicMock(dispatch_enabled=True),
+        ):
+            result = pipeline._dispatch(request, time.monotonic())
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.fill_price, 2000.0)
+        self.assertEqual(result.filled_size_usd, 200.0)
+
     def test_dispatch_timeout_reconciles_to_confirmed_reject(self):
         from bot.execution_pipeline import ExecutionPipeline, PipelineRequest
 

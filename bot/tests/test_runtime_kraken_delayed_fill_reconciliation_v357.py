@@ -77,6 +77,56 @@ def test_queryorders_exact_final_fill_is_admitted():
     assert result["broker_fill_at_epoch"] == 1789990000.25
 
 
+def test_queryorders_fill_can_recover_missing_event_time_from_exact_trade_history():
+    broker = KrakenBroker({
+        "QueryOrders": {
+            "error": [],
+            "result": {
+                "ORDER-3B": {
+                    "status": "closed",
+                    "vol_exec": "0.0115",
+                    "cost": "28.75",
+                    # Kraken can omit closetm/lastupdated on this surface.
+                }
+            },
+        },
+        "TradesHistory": {
+            "error": [],
+            "result": {
+                "trades": {
+                    "T-3B": {
+                        "ordertxid": "ORDER-3B",
+                        "type": "buy",
+                        "vol": "0.0115",
+                        "price": "2500",
+                        "cost": "28.75",
+                        "time": "1789990050.5",
+                    },
+                    "UNRELATED": {
+                        "ordertxid": "OTHER-ORDER",
+                        "type": "buy",
+                        "vol": "1",
+                        "price": "1",
+                        "cost": "1",
+                        "time": "1799999999.0",
+                    },
+                }
+            },
+        },
+    })
+    result = v357._enrich_kraken_final_order(
+        broker,
+        {"status": "filled", "order_id": "ORDER-3B"},
+        symbol="ETH-USD",
+        side="buy",
+    )
+    assert result["kraken_query_order_reconciled"] is True
+    assert result["kraken_trade_history_event_time_reconciled"] is True
+    assert result["kraken_trade_history_match_count"] == 1
+    assert result["filled_size_usd"] == 28.75
+    assert result["broker_fill_at_epoch"] == 1789990050.5
+
+
 def test_exact_ordertxid_trade_history_can_supply_missing_fill_fields():
     broker = KrakenBroker({
         "QueryOrders": {"error": [], "result": {"ORDER-4": {"status": "closed"}}},
@@ -223,6 +273,6 @@ def test_private_reads_use_kraken_monitoring_category_not_plain_string(monkeypat
         side="buy",
     )
 
-    assert seen == [("QueryOrders", "monitoring")]
+    assert seen == [("QueryOrders", "monitoring"), ("TradesHistory", "monitoring")]
     assert result["kraken_query_order_reconciled"] is True
     assert result["filled_size_usd"] == 28.75
