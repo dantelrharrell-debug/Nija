@@ -386,16 +386,28 @@ def _record_core_quality(result: Any) -> None:
     try:
         scored = max(0, int(result[2] or 0))
         data_insufficient = max(0, int(gates.get("data_insufficient", 0) or 0))
+        phase3_deadline_skipped = max(
+            0, int(gates.get("phase3_deadline_skipped", 0) or 0)
+        )
     except (TypeError, ValueError):
         return
-    attempts = scored + data_insufficient
+
+    # Phase-3's hard deadline is an execution-budget safeguard.  A symbol that
+    # was never fetched because that deadline had already elapsed is not proof
+    # of bad broker/market data.  Exclude only those explicitly tagged skips;
+    # genuine API timeouts and empty/short candle responses remain failures.
+    deadline_exclusions = min(data_insufficient, phase3_deadline_skipped)
+    market_data_failures = max(0, data_insufficient - deadline_exclusions)
+    attempts = scored + market_data_failures
     if attempts <= 0:
         return
-    failure_rate = data_insufficient / attempts
+    failure_rate = market_data_failures / attempts
     sample = {
         "observed_monotonic": time.monotonic(),
         "scored": scored,
         "data_insufficient": data_insufficient,
+        "phase3_deadline_skipped": phase3_deadline_skipped,
+        "market_data_failures": market_data_failures,
         "attempts": attempts,
         "failure_rate": failure_rate,
     }
@@ -407,10 +419,14 @@ def _record_core_quality(result: Any) -> None:
     healthy = failure_rate < max_rate
     log = LOGGER.info if healthy else LOGGER.warning
     log(
-        "MARKET_DATA_CORE_QUALITY_V157 marker=%s scored=%d data_insufficient=%d attempts=%d failure_rate=%.4f max_rate=%.4f healthy=%s",
+        "MARKET_DATA_CORE_QUALITY_V157 marker=%s scored=%d data_insufficient=%d "
+        "phase3_deadline_skipped=%d market_data_failures=%d attempts=%d "
+        "failure_rate=%.4f max_rate=%.4f healthy=%s",
         MARKER,
         scored,
         data_insufficient,
+        phase3_deadline_skipped,
+        market_data_failures,
         attempts,
         failure_rate,
         max_rate,
@@ -440,6 +456,10 @@ def _core_quality_gate(now_monotonic: float | None = None) -> tuple[bool, dict[s
         "core_data_quality_ok": ok,
         "core_scored": int(sample.get("scored", 0) or 0),
         "core_data_insufficient": int(sample.get("data_insufficient", 0) or 0),
+        "core_phase3_deadline_skipped": int(
+            sample.get("phase3_deadline_skipped", 0) or 0
+        ),
+        "core_market_data_failures": int(sample.get("market_data_failures", 0) or 0),
     }
     return ok, detail
 
