@@ -236,7 +236,26 @@ def _patch_position_sync_publication(module: ModuleType) -> bool:
         # synchronously notifies StartupCoordinator, which now observes both
         # proofs in the same readiness transition.
         ready, pending, status = _position_sync_truth(module, manager)
-        _publish_reconciliation_truth(ready, pending, status, source=source)
+
+        # Promotion must remain visible before v96 emits its readiness edge, but
+        # a pre-publication downgrade can be a transient refresh race: v96 may
+        # finish the same authenticated refresh and restore authoritative truth
+        # in this very call.  Do not flap the live execution gate on that
+        # intermediate observation.  Defer revocation until the publisher has
+        # completed, then commit the final authoritative result below.
+        prepublished = bool(ready)
+        if prepublished:
+            _publish_reconciliation_truth(ready, pending, status, source=source)
+        else:
+            LOGGER.debug(
+                "STARTUP_RECONCILIATION_V146_PENDING_DEFERRED "
+                "marker=%s source=%s pending=%s status=%s "
+                "final_refresh_result_required=true fail_closed=true",
+                MARKER,
+                source,
+                sorted(str(value) for value in pending),
+                status,
+            )
 
         reported_ready, reported_pending, reported_status = current(
             manager,
@@ -288,7 +307,8 @@ def _patch_position_sync_publication(module: ModuleType) -> bool:
         # snapshot and v96's own snapshot. A regression is immediately revoked;
         # a promotion is followed by an explicit coordinator reconciliation.
         if (
-            final_ready != ready
+            not prepublished
+            or final_ready != ready
             or final_pending != pending
             or final_status != status
         ):

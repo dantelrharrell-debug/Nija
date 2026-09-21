@@ -286,6 +286,132 @@ class RuntimeReconciliationShutdownV146Tests(unittest.TestCase):
             [(('position_sync_ready', False), {"allow_regression": True})],
         )
 
+    def test_transient_prepublication_regression_does_not_flap_clean_gate(self) -> None:
+        os.environ["NIJA_RECONCILIATION_STATUS"] = "CLEAN_START"
+        os.environ["NIJA_RECONCILIATION_COMPLETE"] = "true"
+
+        state = {
+            "result": (
+                False,
+                ["platform:coinbase"],
+                {"platform:coinbase": False},
+            )
+        }
+        coinbase = types.SimpleNamespace(_startup_position_sync_fetch_ok=True)
+
+        class V95:
+            platform_position_sync_status = staticmethod(lambda _manager: None)
+
+            @staticmethod
+            def position_sync_status(_manager):
+                return state["result"]
+
+            @staticmethod
+            def _connected_brokers(_manager):
+                return {"platform:coinbase": coinbase}
+
+        module = types.ModuleType("fake_position_sync_v96_transient")
+        module._v95_module = lambda: V95
+        module.READINESS_KEY = "position_sync_ready"
+        readiness_calls = []
+        module._readiness_module = lambda: types.SimpleNamespace(
+            set_ready=lambda *args, **kwargs: readiness_calls.append((args, kwargs))
+        )
+        observed = []
+
+        def publish_position_sync_readiness(_manager, *, source):
+            observed.append(
+                (
+                    source,
+                    os.environ.get("NIJA_RECONCILIATION_STATUS"),
+                    os.environ.get("NIJA_RECONCILIATION_COMPLETE"),
+                )
+            )
+            state["result"] = (
+                True,
+                [],
+                {"platform:coinbase": True},
+            )
+            return False, ["platform:coinbase"], {"platform:coinbase": False}
+
+        module.publish_position_sync_readiness = publish_position_sync_readiness
+        self.assertTrue(v146._patch_position_sync_publication(module))
+
+        ready, pending, final_status = module.publish_position_sync_readiness(
+            object(),
+            source="platform_isolation_v320_convergence",
+        )
+
+        self.assertTrue(ready)
+        self.assertEqual(pending, [])
+        self.assertEqual(final_status, {"platform:coinbase": True})
+        self.assertEqual(
+            observed,
+            [
+                (
+                    "platform_isolation_v320_convergence",
+                    "CLEAN_START",
+                    "true",
+                )
+            ],
+        )
+        self.assertEqual(os.environ["NIJA_RECONCILIATION_STATUS"], "CLEAN_START")
+        self.assertEqual(os.environ["NIJA_RECONCILIATION_COMPLETE"], "true")
+        self.assertEqual(
+            readiness_calls,
+            [(("position_sync_ready", True), {"allow_regression": True})],
+        )
+
+    def test_persistent_regression_revokes_after_publisher_final_result(self) -> None:
+        os.environ["NIJA_RECONCILIATION_STATUS"] = "CLEAN_START"
+        os.environ["NIJA_RECONCILIATION_COMPLETE"] = "true"
+
+        result = (
+            False,
+            ["platform:coinbase"],
+            {"platform:coinbase": False},
+        )
+        coinbase = types.SimpleNamespace(_startup_position_sync_fetch_ok=True)
+
+        class V95:
+            platform_position_sync_status = staticmethod(lambda _manager: None)
+
+            @staticmethod
+            def position_sync_status(_manager):
+                return result
+
+            @staticmethod
+            def _connected_brokers(_manager):
+                return {"platform:coinbase": coinbase}
+
+        module = types.ModuleType("fake_position_sync_v96_persistent")
+        module._v95_module = lambda: V95
+        observed = []
+
+        def publish_position_sync_readiness(_manager, *, source):
+            observed.append(
+                (
+                    os.environ.get("NIJA_RECONCILIATION_STATUS"),
+                    os.environ.get("NIJA_RECONCILIATION_COMPLETE"),
+                )
+            )
+            return result
+
+        module.publish_position_sync_readiness = publish_position_sync_readiness
+        self.assertTrue(v146._patch_position_sync_publication(module))
+
+        ready, pending, final_status = module.publish_position_sync_readiness(
+            object(),
+            source="platform_isolation_v320_convergence",
+        )
+
+        self.assertFalse(ready)
+        self.assertEqual(pending, ["platform:coinbase"])
+        self.assertEqual(final_status, {"platform:coinbase": False})
+        self.assertEqual(observed, [("CLEAN_START", "true")])
+        self.assertEqual(os.environ["NIJA_RECONCILIATION_STATUS"], "PENDING")
+        self.assertEqual(os.environ["NIJA_RECONCILIATION_COMPLETE"], "false")
+
     def test_bot_main_finalizer_can_wake_loaded_core_without_importing(self) -> None:
         bot_main = _load("bot_main_v146_under_test", BOT / "bot_main.py")
         calls = []
