@@ -24,10 +24,20 @@ _DEADLINE_MONOTONIC: ContextVar[float] = ContextVar(
 
 
 @contextmanager
-def order_submission_deadline_scope(timeout_s: float) -> Iterator[float]:
-    """Set an absolute mutation deadline for the current execution worker."""
+def order_submission_deadline_scope(
+    timeout_s: float,
+    *,
+    deadline_monotonic: float | None = None,
+) -> Iterator[float]:
+    """Set the caller's absolute mutation deadline for the execution worker."""
     timeout = max(0.0, float(timeout_s or 0.0))
-    deadline = time.monotonic() + timeout if timeout > 0.0 else 0.0
+    if deadline_monotonic is None:
+        deadline = time.monotonic() + timeout if timeout > 0.0 else 0.0
+    else:
+        try:
+            deadline = max(0.0, float(deadline_monotonic))
+        except (TypeError, ValueError, OverflowError):
+            deadline = 0.0
     token = _DEADLINE_MONOTONIC.set(deadline)
     try:
         yield deadline
