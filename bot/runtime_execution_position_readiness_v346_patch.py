@@ -97,6 +97,7 @@ def _write_confirmed_fill_marker(*, result: Mapping[str, Any], symbol: str, side
         existing = _existing_marker(path)
         if (
             existing.get("verified") is True
+            and int(existing.get("version") or 0) >= 4
             and str(existing.get("source") or "").strip().lower() == "canonical_confirmed_fill"
             and str(existing.get("order_id") or "").strip() == order_id
             and float(existing.get("verified_at_epoch") or 0.0) > 0.0
