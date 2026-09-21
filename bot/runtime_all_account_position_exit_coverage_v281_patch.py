@@ -33,6 +33,7 @@ execution authority, acknowledgements, fills, capital, or kill-switch state.
 """
 from __future__ import annotations
 
+import importlib
 import logging
 import os
 import sys
@@ -71,6 +72,64 @@ def _connected(broker: Any) -> bool:
         return bool(value() if callable(value) else value)
     except Exception:
         return False
+
+
+def _authoritative_snapshot_symbols(broker: Any) -> tuple[bool, set[str], str]:
+    """Read position truth from v285 so refresh-inflight continuity has one authority.
+
+    A prior-good snapshot is accepted only when v285 says it is still current and
+    the exact authenticated Kraken refresh is actively in flight.  Completed,
+    errored, missing, or stale refresh proof remains fail-closed.  If v285 is not
+    available at all, retain the legacy strict raw-flag checks.
+    """
+    try:
+        v285 = importlib.import_module("bot.runtime_authoritative_position_coverage_v285_patch")
+    except Exception:
+        v285 = None
+
+    if v285 is not None:
+        strong = getattr(v285, "_strong_broker_proof", None)
+        status = getattr(v285, "_snapshot_status", None)
+        if not callable(strong) or not callable(status):
+            return False, set(), "v285_authoritative_position_proof_unavailable"
+        try:
+            proof_ok, proof_reason = strong(broker)
+            if not proof_ok:
+                return False, set(), str(proof_reason or "authoritative_position_proof_unready")
+            snapshot_ok, snapshot_reason, rows, _age, _generation = status(broker)
+            if not snapshot_ok:
+                return False, set(), str(snapshot_reason or "authoritative_snapshot_unready")
+            symbols: set[str] = set()
+            for row in tuple(rows or ()):
+                raw_symbol = row.get("symbol") if isinstance(row, Mapping) else row
+                symbol = _normalise_symbol(raw_symbol)
+                if symbol:
+                    symbols.add(symbol)
+            return True, symbols, str(proof_reason or "authoritative_current_position_snapshot_adopted")
+        except Exception as exc:
+            return False, set(), f"v285_authoritative_position_proof_error:{type(exc).__name__}:{exc}"
+
+    fetch_ok = getattr(broker, "_startup_position_sync_fetch_ok", None)
+    if fetch_ok is not True:
+        exact = str(getattr(broker, "_startup_position_sync_error", "") or "").strip()
+        return False, set(), exact or "authoritative_position_fetch_unproven"
+    if getattr(broker, "_startup_position_sync_adopted", None) is not True:
+        exact = str(getattr(broker, "_startup_position_sync_error", "") or "").strip()
+        return False, set(), exact or "position_snapshot_not_adopted"
+    if not hasattr(broker, "_startup_position_sync_symbols"):
+        return False, set(), "authoritative_snapshot_symbols_missing"
+    try:
+        symbols = {
+            symbol
+            for symbol in (
+                _normalise_symbol(value)
+                for value in tuple(getattr(broker, "_startup_position_sync_symbols", ()) or ())
+            )
+            if symbol
+        }
+    except Exception:
+        return False, set(), "authoritative_snapshot_symbols_invalid"
+    return True, symbols, "legacy_authoritative_position_snapshot_adopted"
 
 
 def _float(value: Any, default: float = 0.0) -> float:
@@ -297,23 +356,9 @@ def _account_audit(account: str, broker: Any, structural_exit_ready: bool) -> tu
     if not _connected(broker):
         return ["disconnected"], positions
 
-    fetch_ok = getattr(broker, "_startup_position_sync_fetch_ok", None)
-    if fetch_ok is not True:
-        exact = str(getattr(broker, "_startup_position_sync_error", "") or "").strip()
-        return [exact or "authoritative_position_fetch_unproven"], positions
-    if getattr(broker, "_startup_position_sync_adopted", None) is not True:
-        exact = str(getattr(broker, "_startup_position_sync_error", "") or "").strip()
-        return [exact or "position_snapshot_not_adopted"], positions
-    if not hasattr(broker, "_startup_position_sync_symbols"):
-        return ["authoritative_snapshot_symbols_missing"], positions
-
-    raw_snapshot = getattr(broker, "_startup_position_sync_symbols", ())
-    try:
-        snapshot_symbols = {
-            symbol for symbol in (_normalise_symbol(value) for value in tuple(raw_snapshot or ())) if symbol
-        }
-    except Exception:
-        return ["authoritative_snapshot_symbols_invalid"], positions
+    snapshot_ready, snapshot_symbols, snapshot_reason = _authoritative_snapshot_symbols(broker)
+    if not snapshot_ready:
+        return [snapshot_reason or "authoritative_position_proof_unready"], positions
 
     held, tracker_errors = _tracker_holdings(broker)
     reasons.extend(tracker_errors)

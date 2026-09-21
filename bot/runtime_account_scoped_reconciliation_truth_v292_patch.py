@@ -57,6 +57,15 @@ def _snapshot(broker: Any) -> tuple[bool, int, str]:
         generation = 0
     if not ready or generation <= 0:
         return False, generation, str(reason or "authoritative_snapshot_unready")
+    strong = getattr(v285, "_strong_broker_proof", None)
+    if callable(strong):
+        try:
+            proof_ok, proof_reason = strong(broker)
+        except Exception as exc:
+            return False, generation, f"canonical_position_proof_error:{type(exc).__name__}:{exc}"
+        if not proof_ok:
+            return False, generation, str(proof_reason or "authoritative_position_proof_unready")
+        return True, generation, str(proof_reason or "current_authoritative_snapshot_adopted")
     if getattr(broker, "_startup_position_sync_fetch_ok", None) is not True:
         return False, generation, str(getattr(broker, "_startup_position_sync_error", "") or "authoritative_position_fetch_unproven")
     if getattr(broker, "_startup_position_sync_adopted", None) is not True:
