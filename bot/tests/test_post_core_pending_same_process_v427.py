@@ -143,3 +143,24 @@ def test_core_timeout_extends_only_on_proven_supervised_pending_state() -> None:
         reset,
     )
     assert hold_call < reset < fail_closed
+
+
+def test_bot_main_checks_shutdown_before_post_core_fatal_restart() -> None:
+    source = (ROOT / "bot" / "bot_main.py").read_text(encoding="utf-8")
+    hold = source.index(
+        "_convergence_ok = _hold_recoverable_post_core_pending("
+    )
+    shutdown_check = source.index(
+        "if _shutdown_event.is_set():",
+        hold,
+    )
+    fatal = source.index(
+        'raise RuntimeError(\n                    "Post-core activation convergence failed before dispatch enablement"',
+        shutdown_check,
+    )
+    graceful = source.index(
+        "POST_CORE_CONVERGENCE_INTERRUPTED_BY_SHUTDOWN",
+        shutdown_check,
+    )
+
+    assert hold < shutdown_check < graceful < fatal
