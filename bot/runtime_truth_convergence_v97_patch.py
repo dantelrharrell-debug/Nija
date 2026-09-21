@@ -39,6 +39,8 @@ _APEX_ATTR = "_nija_runtime_truth_convergence_v97_apex"
 _POSITION_ATTR = "_nija_runtime_truth_convergence_v97_position"
 _POSITION_SYNC_ATTR = "_nija_runtime_truth_convergence_v97_startup_sync"
 _SCAN_ATTR = "_nija_runtime_truth_convergence_v97_scan"
+REFRESH_ATOMIC_MARKER = "20260921-position-refresh-proof-atomic-v426"
+_FETCH_ATTEMPT_SEQ_ATTR = "_nija_position_fetch_attempt_seq_v426"
 _RECOVERY_MODULE = "bot._nija_apex_strategy_v71_recovery_v97"
 _WIRING_BASENAME = "trading_strategy_apex_wiring_patch.py"
 _APEX_BASENAME = "nija_apex_strategy_v71.py"
@@ -265,6 +267,76 @@ def _set_fetch_proof(broker: Any, value: Any, error: str | None = None) -> None:
         pass
 
 
+def _real_broker(broker: Any) -> Any:
+    return getattr(broker, "_broker", broker)
+
+
+def _fetch_attempt_seq(broker: Any) -> int:
+    broker = _real_broker(broker)
+    try:
+        return max(0, int(getattr(broker, _FETCH_ATTEMPT_SEQ_ATTR, 0) or 0))
+    except Exception:
+        return 0
+
+
+def _mark_fetch_attempt(broker: Any) -> int:
+    broker = _real_broker(broker)
+    value = _fetch_attempt_seq(broker) + 1
+    try:
+        setattr(broker, _FETCH_ATTEMPT_SEQ_ATTR, value)
+    except Exception:
+        pass
+    return value
+
+
+def _snapshot_generation(broker: Any) -> int:
+    broker = _real_broker(broker)
+    try:
+        return max(
+            0,
+            int(
+                getattr(
+                    broker,
+                    "_nija_authoritative_position_snapshot_generation_v285",
+                    0,
+                )
+                or 0
+            ),
+        )
+    except Exception:
+        return 0
+
+
+def _kraken_authoritative_refresh_inflight(broker: Any) -> bool:
+    """Recognize only the exact active v286 single-flight for this broker."""
+    broker = _real_broker(broker)
+    try:
+        broker_type = getattr(getattr(broker, "broker_type", None), "value", getattr(broker, "broker_type", ""))
+        is_kraken = str(broker_type or "").strip().lower() == "kraken" or type(broker).__name__.lower() == "krakenbroker"
+        if not is_kraken:
+            return False
+        v286 = importlib.import_module(
+            "bot.runtime_kraken_position_refresh_liveness_v286_patch"
+        )
+        lock = getattr(v286, "_AUTH_LOCK", None)
+        flights = getattr(v286, "_AUTH_FLIGHTS", None)
+        if lock is None or not isinstance(flights, dict):
+            return False
+        with lock:
+            flight = flights.get(id(broker))
+            if not isinstance(flight, dict):
+                return False
+            event = flight.get("event")
+            return bool(
+                event is not None
+                and callable(getattr(event, "is_set", None))
+                and not event.is_set()
+                and flight.get("error") is None
+            )
+    except Exception:
+        return False
+
+
 def _invalidate_position_sync(broker: Any, *, reason: str) -> None:
     try:
         setattr(broker, "_startup_position_sync_adopted", False)
@@ -287,7 +359,16 @@ def _wrap_position_fetch(method: Callable[..., Any], broker_label: str) -> Calla
         except Exception:
             pass
         if depth == 0:
-            _set_fetch_proof(self, None, None)
+            # v426: a previously verified, still-current snapshot remains the
+            # last authoritative truth while its replacement read is in flight.
+            # Do not publish a transient unknown merely because refresh I/O has
+            # started.  The completed result below still wins immediately.
+            previous_fetch_ready = (
+                getattr(self, "_startup_position_sync_fetch_ok", None) is True
+            )
+            _mark_fetch_attempt(self)
+            if not previous_fetch_ready:
+                _set_fetch_proof(self, None, None)
         try:
             result = method(self, *args, **kwargs)
             # A nested v97 wrapper may have observed a real failure that an
@@ -348,9 +429,22 @@ def _patch_startup_sync_module(module: ModuleType) -> bool:
 
     @wraps(current)
     def adopt_broker_positions_v97(broker: Any, broker_name: str, eps: Any) -> int:
-        _set_fetch_proof(broker, None, None)
+        previous_fetch_ready = (
+            getattr(broker, "_startup_position_sync_fetch_ok", None) is True
+        )
+        attempt_before = _fetch_attempt_seq(broker)
+        generation_before = _snapshot_generation(broker)
+
+        # v426: do not expose a false/unknown edge merely because a refresh has
+        # been requested.  Preserve only an already-proven fetch while the
+        # replacement read runs; unproven brokers retain the historical
+        # fail-closed preclear.
+        if not previous_fetch_ready:
+            _set_fetch_proof(broker, None, None)
+
         result = int(current(broker, broker_name, eps) or 0)
-        if getattr(broker, "_startup_position_sync_fetch_ok", None) is False:
+        fetch_state = getattr(broker, "_startup_position_sync_fetch_ok", None)
+        if fetch_state is False:
             reason = str(getattr(broker, "_startup_position_sync_error", "position_fetch_failed") or "position_fetch_failed")
             _invalidate_position_sync(broker, reason=reason)
             LOGGER.critical(
@@ -359,6 +453,27 @@ def _patch_startup_sync_module(module: ModuleType) -> bool:
                 broker_name,
                 reason,
             )
+        elif previous_fetch_ready and fetch_state is True:
+            # Preserve the old guard's no-fetch fail-closed behavior. A prior
+            # True may survive the call only when this call has observable
+            # evidence of a real replacement read: a wrapped fetch attempt, a
+            # newer v285 snapshot generation, or the exact active Kraken v286
+            # single-flight.  Otherwise return to unknown after the call.
+            observed_refresh = (
+                _fetch_attempt_seq(broker) > attempt_before
+                or _snapshot_generation(broker) > generation_before
+                or _kraken_authoritative_refresh_inflight(broker)
+            )
+            if not observed_refresh:
+                _set_fetch_proof(broker, None, None)
+                LOGGER.warning(
+                    "POSITION_SYNC_V426_NO_REFRESH_PROOF marker=%s broker=%s "
+                    "previous_fetch_ready=true completed_fetch_unobserved=true "
+                    "activation_blocked=true readiness_fabricated=false "
+                    "safety_gates_bypassed=false",
+                    REFRESH_ATOMIC_MARKER,
+                    broker_name,
+                )
         return result
 
     setattr(adopt_broker_positions_v97, _POSITION_SYNC_ATTR, True)
