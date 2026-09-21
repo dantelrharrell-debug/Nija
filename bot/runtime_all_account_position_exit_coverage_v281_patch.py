@@ -246,6 +246,20 @@ def _tracker_holdings(broker: Any) -> tuple[dict[str, dict[str, Any]], list[str]
         except Exception:
             return {}, ["tracker_list_invalid"]
 
+    try:
+        dust_symbols = {
+            symbol
+            for symbol in (
+                _normalise_symbol(value)
+                for value in tuple(
+                    getattr(broker, "_startup_position_sync_dust_symbols_v371", ()) or ()
+                )
+            )
+            if symbol
+        }
+    except Exception:
+        dust_symbols = set()
+
     held: dict[str, dict[str, Any]] = {}
     errors: list[str] = []
     for raw_symbol in raw_symbols:
@@ -269,6 +283,8 @@ def _tracker_holdings(broker: Any) -> tuple[dict[str, dict[str, Any]], list[str]
             "entry_price": _entry_price(row),
             "cost_basis_verified": row.get("cost_basis_verified") is True,
             "auto_exit_blocked": _truthy(row.get("auto_exit_blocked", False)),
+            "dust_excluded": symbol in dust_symbols,
+            "protective_exit_required": symbol not in dust_symbols,
         }
     return held, errors
 
@@ -315,12 +331,16 @@ def _account_audit(account: str, broker: Any, structural_exit_ready: bool) -> tu
         verified = bool(row["cost_basis_verified"])
         entry = float(row["entry_price"])
         blocked = bool(row["auto_exit_blocked"])
+        dust_not_actionable = bool(
+            row.get("dust_excluded") is True
+            and row.get("protective_exit_required") is False
+        )
         in_snapshot = symbol in snapshot_symbols
-        if not verified:
+        if not verified and not dust_not_actionable:
             reasons.append(f"cost_basis_unverified:{symbol}")
-        if entry <= 0.0:
+        if entry <= 0.0 and not dust_not_actionable:
             reasons.append(f"entry_price_unverified:{symbol}")
-        if blocked:
+        if blocked and not dust_not_actionable:
             reasons.append(f"auto_exit_blocked:{symbol}")
         protection_verified = bool(
             structural_exit_ready and in_snapshot and verified and entry > 0.0 and not blocked
@@ -335,6 +355,9 @@ def _account_audit(account: str, broker: Any, structural_exit_ready: bool) -> tu
             "auto_exit_blocked": blocked,
             "authoritative_snapshot_adopted": in_snapshot,
             "protective_exit_verified": protection_verified,
+            "dust_excluded": dust_not_actionable,
+            "protective_exit_required": not dust_not_actionable,
+            "coverage_basis": "dust_policy_not_actionable" if dust_not_actionable else "actionable_position",
         })
     return reasons, positions
 
