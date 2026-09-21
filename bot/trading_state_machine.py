@@ -3335,19 +3335,61 @@ def _is_authority_ready() -> bool:
 def _runtime_writer_nonce_ready() -> tuple[bool, str]:
     """Return runtime writer+nonce readiness for dispatch authorization."""
     heartbeat_required = _heartbeat_verification_required()
-    heartbeat_ok, heartbeat_err, _ = _heartbeat_verification_status()
+    heartbeat_ok, heartbeat_err, heartbeat_meta = _heartbeat_verification_status()
     if heartbeat_required and not heartbeat_ok:
-        # ``marker_missing`` is the expected bootstrap state before the genuine
-        # startup heartbeat reaches ORDER_VERIFY.  Counting readiness polling as
-        # repeated execution anomalies trips the circuit breaker before that
-        # probe can create its marker, producing a circular deadlock.  Malformed,
-        # stale, or insufficient markers remain anomalies and fail closed.
-        if heartbeat_err != "marker_missing":
-            _record_execution_anomaly(
-                "heartbeat_verification",
-                heartbeat_err or "missing_or_stale",
-            )
-        return False, f"heartbeat_verification:{heartbeat_err or 'missing_or_stale'}"
+        # v424: production can retain a stale legacy heartbeat marker while the
+        # canonical v169 execution marker is still fresh and independently
+        # provenance-verified.  Before counting that *specific* stale-primary
+        # condition as an execution anomaly, re-check the read-only v402
+        # canonical verifier when it is installed.  This does not refresh any
+        # marker, extend freshness, clear a breaker, or fabricate execution
+        # proof.  If canonical verification is unavailable or fails, the
+        # original fail-closed behavior remains authoritative.
+        if str(heartbeat_err or "").startswith("verification_stale"):
+            canonical_probe = globals().get("_canonical_execution_verification_status_v402")
+            if callable(canonical_probe):
+                try:
+                    canonical_ok, canonical_err, canonical_meta = canonical_probe()
+                except Exception as exc:
+                    canonical_ok = False
+                    canonical_err = f"canonical_recheck_error_v424:{type(exc).__name__}:{exc}"
+                    canonical_meta = {}
+                if canonical_ok:
+                    heartbeat_ok = True
+                    heartbeat_meta = canonical_meta
+                    logger.critical(
+                        "HEARTBEAT_PRIMARY_STALE_CANONICAL_FRESH_V424 "
+                        "marker=20260921-heartbeat-canonical-freshness-v424 "
+                        "primary_detail=%s canonical_source=%s age_s=%.1f max_age_s=%.1f "
+                        "marker_mutated=false freshness_extended=false breaker_cleared=false "
+                        "order_submitted=false execution_proof_fabricated=false "
+                        "safety_gates_bypassed=false",
+                        str(heartbeat_err or "verification_stale"),
+                        str((canonical_meta or {}).get("source") or "unknown"),
+                        float((canonical_meta or {}).get("age_s") or 0.0),
+                        float((canonical_meta or {}).get("max_age_s") or 0.0),
+                    )
+                else:
+                    logger.warning(
+                        "HEARTBEAT_CANONICAL_RECHECK_V424_NOT_READY "
+                        "marker=20260921-heartbeat-canonical-freshness-v424 "
+                        "primary_detail=%s canonical_detail=%s fail_closed=true",
+                        str(heartbeat_err or "verification_stale"),
+                        str(canonical_err or "canonical_not_ready"),
+                    )
+
+        if not heartbeat_ok:
+            # ``marker_missing`` is the expected bootstrap state before the genuine
+            # startup heartbeat reaches ORDER_VERIFY.  Counting readiness polling as
+            # repeated execution anomalies trips the circuit breaker before that
+            # probe can create its marker, producing a circular deadlock.  Malformed,
+            # stale, or insufficient markers remain anomalies and fail closed.
+            if heartbeat_err != "marker_missing":
+                _record_execution_anomaly(
+                    "heartbeat_verification",
+                    heartbeat_err or "missing_or_stale",
+                )
+            return False, f"heartbeat_verification:{heartbeat_err or 'missing_or_stale'}"
 
     writer_ok, writer_err = _distributed_writer_authority_gate()
     if not writer_ok:
