@@ -8675,6 +8675,11 @@ class KrakenBroker(BaseBroker):
         # When balance fetch fails, preserve last known balance instead of returning 0
         self._last_known_balance = None  # Last successful balance fetch
         self._balance_last_updated = None  # Timestamp of last successful balance fetch (Jan 24, 2026)
+        # v430: preserve the authenticated spendable quote-cash component
+        # separately from total account value.  Order preflight may reuse only
+        # this value while it remains inside the existing Kraken balance TTL.
+        self._last_known_available_cash: Optional[float] = None
+        self._available_cash_last_updated: Optional[float] = None
         self._balance_fetch_errors = 0   # Count of consecutive errors
         self._is_available = True        # Broker availability flag
         # Fraction of non-USD Kraken assets successfully priced in the most
@@ -10364,6 +10369,7 @@ class KrakenBroker(BaseBroker):
                         usdt_balance = float(result.get('USDT', 0))
 
                         total = usd_balance + usdt_balance
+                        self._record_authenticated_available_cash(usd_balance, usdt_balance)
 
                         # FIX (Jan 23, 2026): Calculate held funds to get total account equity
                         # This ensures EXIT-ONLY mode is based on total funds (available + held)
@@ -11094,6 +11100,7 @@ class KrakenBroker(BaseBroker):
                 usdt_balance = float(result.get('USDT', 0))
 
                 total = usd_balance + usdt_balance
+                self._record_authenticated_available_cash(usd_balance, usdt_balance)
                 logger.info(
                     "[KrakenBalancePipeline] parsed_cash account=%s usd=%.8f usdt=%.8f",
                     self.account_identifier,
@@ -11406,6 +11413,60 @@ class KrakenBroker(BaseBroker):
             current = cast(Optional[BaseException], current.__cause__ or current.__context__)
         return 0.0
 
+    def _record_authenticated_available_cash(self, usd_balance: float, usdt_balance: float) -> float:
+        """Record genuine Kraken Balance spendable quote cash for bounded order reuse."""
+        try:
+            usd = max(0.0, float(usd_balance or 0.0))
+            usdt = max(0.0, float(usdt_balance or 0.0))
+        except (TypeError, ValueError, OverflowError):
+            return 0.0
+        total = usd + usdt
+        self._last_known_available_cash = total
+        self._available_cash_last_updated = time.time()
+        return total
+
+    def _fresh_authenticated_available_cash(self) -> Optional[Tuple[float, float]]:
+        """Return (cash, age_s) only while the authenticated cash cache is fresh."""
+        value = getattr(self, "_last_known_available_cash", None)
+        observed_at = getattr(self, "_available_cash_last_updated", None)
+        if value is None or observed_at is None:
+            return None
+        try:
+            cash = float(value)
+            age_s = max(0.0, time.time() - float(observed_at))
+            ttl_s = max(1.0, float(getattr(self, "_kraken_balance_cache_ttl", _KRAKEN_BALANCE_CACHE_TTL_SECONDS)))
+        except (TypeError, ValueError, OverflowError):
+            return None
+        if cash < 0.0 or age_s >= ttl_s:
+            return None
+        return cash, age_s
+
+    def _get_order_balance_snapshot(self) -> dict:
+        """Use fresh authenticated available cash for order checks, else query normally.
+
+        This fast path intentionally carries only the field consumed by Kraken
+        BUY tier/preflight checks.  It never invents held funds, crypto holdings,
+        total equity, readiness, or fill state.
+        """
+        cached = self._fresh_authenticated_available_cash()
+        if cached is not None:
+            cash, age_s = cached
+            logger.info(
+                "KRAKEN_ORDER_AVAILABLE_CASH_V430_REUSED account=%s cash=%.8f age_s=%.3f "
+                "authenticated_balance=true existing_ttl_unchanged=true broker_io=false "
+                "held_funds_not_inferred=true total_equity_not_inferred=true",
+                self.account_identifier,
+                cash,
+                age_s,
+            )
+            return {
+                "trading_balance": cash,
+                "error": False,
+                "source": "authenticated_available_cash_cache_v430",
+                "cache_age_s": age_s,
+            }
+        return self.get_account_balance_detailed()
+
     def get_account_balance_detailed(self, verbose: bool = False) -> dict:
         """
         Get detailed account balance information with fail-closed behavior.
@@ -11482,6 +11543,7 @@ class KrakenBroker(BaseBroker):
                         crypto_holdings[clean_currency] = qty
 
                 trading_balance = usd_balance + usdt_balance
+                self._record_authenticated_available_cash(usd_balance, usdt_balance)
 
                 # Get TradeBalance to calculate held funds
                 # Use MONITORING category for balance checks (conservative rate limiting)
@@ -12163,7 +12225,7 @@ class KrakenBroker(BaseBroker):
             if side.lower() == 'buy' and get_tier_from_balance and validate_trade_size:
                 try:
                     # Get current balance
-                    balance_info = self.get_account_balance_detailed()
+                    balance_info = self._get_order_balance_snapshot()
                     if balance_info and not balance_info.get('error', False):
                         current_balance = balance_info.get('trading_balance', 0.0)
 
@@ -12346,7 +12408,7 @@ class KrakenBroker(BaseBroker):
             # This prevents "EOrder:Insufficient funds" rejections from the API
             # Same pattern as Coinbase broker (lines 2550-2580)
             if side.lower() == 'buy' and not (force_liquidate or ignore_balance):
-                balance_data = self.get_account_balance_detailed()
+                balance_data = self._get_order_balance_snapshot()
                 if balance_data and not balance_data.get('error', False):
                     trading_balance = float(balance_data.get('trading_balance', 0.0))
                     try:
