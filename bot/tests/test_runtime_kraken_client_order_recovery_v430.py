@@ -204,3 +204,13 @@ def test_recovery_hands_exact_client_id_txid_to_v363_and_clears_ref(state_path, 
         (("OID-RECOVERED",), {"pair": "XETHZUSD", "side": "buy", "status": "closed"})
     ]
     assert v430._load_refs() == {}
+
+
+def test_v430_is_wired_into_canonical_profitability_chain():
+    from pathlib import Path
+
+    chain = Path("bot/runtime_all_in_profitability_authority_v324_patch.py").read_text(encoding="utf-8")
+    assert '"v430", "bot.runtime_kraken_client_order_recovery_v430_patch"' in chain
+    assert '"NIJA_RUNTIME_KRAKEN_CLIENT_ORDER_RECOVERY_V430_READY"' in chain
+    assert "v369=true v430=true" in chain
+    assert "kraken_client_order_id_timeout_recovery=true" in chain
