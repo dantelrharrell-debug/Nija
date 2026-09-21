@@ -209,6 +209,15 @@ class TestOHLCWorkerPoolSymbolThrottle(unittest.TestCase):
             result = throttle_symbol_list(syms)
         self.assertEqual(result, syms[:50])
 
+    def test_safe_shortlist_prioritized_when_present(self):
+        from bot.ohlc_worker_pool import throttle_symbol_list
+        syms = [f"AAA{i}-USD" for i in range(200)] + [
+            "SOL-USD", "ETH-USD", "BTC-USD"
+        ]
+        with patch.dict("os.environ", {"NIJA_MAX_SCAN_SYMBOLS": "3"}):
+            result = throttle_symbol_list(syms)
+        self.assertEqual(result, ["BTC-USD", "ETH-USD", "SOL-USD"])
+
     def test_short_list_unchanged(self):
         from bot.ohlc_worker_pool import throttle_symbol_list
         syms = ["BTC-USD", "ETH-USD"]
