@@ -1552,6 +1552,12 @@ def main() -> int:
                     trading_thread,
                 )
             if not _convergence_ok:
+                if _shutdown_event.is_set():
+                    logger.info(
+                        "POST_CORE_CONVERGENCE_INTERRUPTED_BY_SHUTDOWN "
+                        "startup_exception=false trading_fail_closed=true"
+                    )
+                    return _process_exit_code or 0
                 raise RuntimeError(
                     "Post-core activation convergence failed before dispatch enablement"
                 )
