@@ -34,6 +34,39 @@ except ImportError:
 
 logger = logging.getLogger("nija.trading_strategy")
 
+_HEARTBEAT_CONFIRMED_FILL_STATUS = "filled"
+_HEARTBEAT_ACKNOWLEDGED_STATUSES = frozenset({"pending", "submitted", "accepted", "open"})
+
+
+def _positive_float(value: Any) -> float:
+    try:
+        return float(value or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _heartbeat_result_is_confirmed_fill(result: Any) -> bool:
+    """Return true only for a pipeline-normalized, quantity-and-price confirmed fill."""
+    if not isinstance(result, dict):
+        return False
+    status = str(result.get("status") or "").strip().lower()
+    return bool(
+        status == _HEARTBEAT_CONFIRMED_FILL_STATUS
+        and _positive_float(result.get("filled_price")) > 0.0
+        and _positive_float(result.get("filled_size_usd")) > 0.0
+    )
+
+
+def _heartbeat_result_has_confirmed_submission(result: Any) -> bool:
+    """Return true only for a confirmed fill or an exchange order id with acknowledged state."""
+    if _heartbeat_result_is_confirmed_fill(result):
+        return True
+    if not isinstance(result, dict):
+        return False
+    status = str(result.get("status") or "").strip().lower()
+    order_id = str(result.get("order_id") or "").strip()
+    return bool(order_id and status in _HEARTBEAT_ACKNOWLEDGED_STATUSES)
+
 # Balance calls must never stall startup/trade eligibility indefinitely.
 BALANCE_FETCH_TIMEOUT = 12
 CACHED_BALANCE_MAX_AGE_SECONDS = 90
@@ -1377,15 +1410,8 @@ class TradingStrategy:
                         )
             buy_status = (buy_result or {}).get("status", "error")
             buy_order_id = (buy_result or {}).get("order_id")
-            buy_submitted = bool(buy_result)
-            buy_submitted = buy_submitted and str(buy_status).lower().strip() not in {
-                "error",
-                "rejected",
-                "failed",
-                "unfilled",
-                "skipped",
-            }
-            buy_filled = str(buy_status).lower().strip() in ("filled", "ok", "success")
+            buy_submitted = _heartbeat_result_has_confirmed_submission(buy_result)
+            buy_filled = _heartbeat_result_is_confirmed_fill(buy_result)
             stage_details.update(
                 {
                     "symbol": symbol,
@@ -1410,12 +1436,21 @@ class TradingStrategy:
                 stage_achieved = "FILL_VERIFY"
 
             if not buy_submitted:
-                if callable(_report_anomaly):
-                    _report_anomaly("rejected_orders", f"heartbeat_buy_not_accepted status={buy_status}")
-                logger.error(
-                    "❌ Heartbeat BUY not accepted: status=%s error=%s",
+                logger.warning(
+                    "HEARTBEAT_BUY_UNCONFIRMED_FAIL_CLOSED status=%s order_id=%s error=%s "
+                    "heartbeat_success=false marker_written=false confirmed_fill_required=true",
                     buy_status,
+                    buy_order_id or "none",
                     (buy_result or {}).get("error", "unknown"),
+                )
+                return False
+
+            if not buy_filled:
+                logger.warning(
+                    "HEARTBEAT_BUY_PENDING_FAIL_CLOSED status=%s order_id=%s "
+                    "heartbeat_success=false marker_written=false confirmed_fill_required=true",
+                    buy_status,
+                    buy_order_id or "none",
                 )
                 return False
 
@@ -1431,17 +1466,6 @@ class TradingStrategy:
                     required_stage,
                 )
                 return False
-
-            self._persist_heartbeat_marker(stage=stage_achieved, details=stage_details)
-
-            if not buy_filled:
-                if callable(_report_anomaly):
-                    _report_anomaly("partial_fills", f"heartbeat_buy_not_filled status={buy_status}")
-                logger.warning(
-                    "⚠️  Heartbeat BUY accepted but not immediately filled; stage=%s",
-                    stage_achieved,
-                )
-                return True
 
             logger.info("✅ Heartbeat BUY confirmed — order filled")
 
@@ -1476,8 +1500,8 @@ class TradingStrategy:
                             strategy="HEARTBEAT_TRADE_CLOSE",
                         )
             sell_status = (sell_result or {}).get("status", "error")
-            sell_submitted = bool(sell_result)
-            sell_filled = sell_status in ("filled", "ok", "success")
+            sell_submitted = _heartbeat_result_has_confirmed_submission(sell_result)
+            sell_filled = _heartbeat_result_is_confirmed_fill(sell_result)
             logger.info(
                 "[HeartbeatTrade] submit=%s fill=%s broker=%s pair=%s size=%s",
                 sell_submitted,
@@ -1489,15 +1513,18 @@ class TradingStrategy:
             logger.info("💓 Heartbeat SELL result: status=%s", sell_status)
 
             if not sell_filled:
-                if callable(_report_anomaly):
-                    _report_anomaly("partial_fills", f"heartbeat_sell_not_filled status={sell_status}")
                 logger.warning(
-                    "⚠️  Heartbeat SELL returned status=%s — position may remain open",
+                    "HEARTBEAT_SELL_UNCONFIRMED_FAIL_CLOSED status=%s order_id=%s "
+                    "heartbeat_success=false marker_written=false position_may_remain_open=true confirmed_fill_required=true",
                     sell_status,
+                    (sell_result or {}).get("order_id") or "none",
                 )
-                return True
+                return False
 
-            logger.info("✅ Heartbeat trade round-trip complete")
+            stage_details["sell_status"] = str(sell_status)
+            stage_details["sell_order_id"] = str((sell_result or {}).get("order_id") or "")
+            self._persist_heartbeat_marker(stage="FILL_VERIFY", details=stage_details)
+            logger.info("✅ Heartbeat trade round-trip complete with confirmed BUY and SELL fills")
             return True
 
         except Exception as _trade_err:

@@ -84,7 +84,7 @@ class TestHeartbeatEmptyMarketFallback(unittest.TestCase):
         self._marker_patch.start()
         # Mock submit_market_order_via_pipeline so the DistributedWriterFence does not
         # interfere with tests that are only verifying market-discovery behaviour.
-        self._pipeline_mock = MagicMock(return_value={"status": "filled", "order_id": "hb-pipeline-ok"})
+        self._pipeline_mock = MagicMock(return_value={"status": "filled", "order_id": "hb-pipeline-ok", "filled_price": 2500.0, "filled_size_usd": 28.75})
         self._pipeline_patch = patch(
             "bot.trading_strategy.submit_market_order_via_pipeline",
             self._pipeline_mock,
@@ -196,11 +196,12 @@ class TestHeartbeatEmptyMarketFallback(unittest.TestCase):
             "Heartbeat buy should be safely sized above micro-order thresholds",
         )
 
-    def test_heartbeat_order_verify_passes_without_immediate_fill_when_configured(self):
+    def test_heartbeat_order_verify_does_not_override_confirmed_fill_truth(self):
         broker = MagicMock()
         broker.connected = True
         broker.get_available_markets = MagicMock(return_value=["BTC-USD"])
-        # Pipeline returns 'accepted' (submitted but not filled) to exercise ORDER_VERIFY path
+        # A broker acknowledgement is not a confirmed execution fill and cannot
+        # create fresh canonical execution proof.
         self._pipeline_mock.return_value = {"status": "accepted", "order_id": "hb-order-only"}
         strategy = self._make_strategy_with_broker(broker)
         with tempfile.TemporaryDirectory() as tmp:
@@ -214,10 +215,8 @@ class TestHeartbeatEmptyMarketFallback(unittest.TestCase):
                 clear=False,
             ):
                 result = strategy._execute_heartbeat_trade()
-            self.assertTrue(result, "ORDER_VERIFY should pass on accepted order without immediate fill")
-            with open(marker_path, "r", encoding="utf-8") as marker_file:
-                marker_payload = json.loads(marker_file.read())
-                self.assertEqual(marker_payload.get("stage"), "ORDER_VERIFY")
+            self.assertFalse(result, "ORDER_VERIFY must not convert an unfilled acknowledgement into heartbeat success")
+            self.assertFalse(Path(marker_path).exists())
 
     def test_heartbeat_uses_canonical_ready_venue_not_cached_degraded_broker(self):
         """A cached Kraken broker cannot override Coinbase-only readiness."""
@@ -369,7 +368,7 @@ class TestHeartbeatExecutesOnDiscoveryFailure(unittest.TestCase):
         self._marker_patch.start()
         # Mock submit_market_order_via_pipeline so the DistributedWriterFence does not
         # interfere with tests that are only verifying market-discovery behaviour.
-        self._pipeline_mock = MagicMock(return_value={"status": "filled", "order_id": "hb-pipeline-ok"})
+        self._pipeline_mock = MagicMock(return_value={"status": "filled", "order_id": "hb-pipeline-ok", "filled_price": 2500.0, "filled_size_usd": 28.75})
         self._pipeline_patch = patch(
             "bot.trading_strategy.submit_market_order_via_pipeline",
             self._pipeline_mock,
