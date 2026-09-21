@@ -73,6 +73,7 @@ jobs:
           python -m pytest -q \
             bot/tests/test_live_authority_fail_closed_v94.py \
             bot/tests/test_v2_pipeline_import_recovery.py \
+            bot/tests/test_canonical_fast_entrypoint_v28.py \
             bot/tests/test_runtime_execution_breaker_recovery_v405.py \
             bot/tests/test_runtime_terminal_exit_heartbeat_truth_v349.py \
             bot/tests/test_runtime_universal_four_way_policy_v375.py \
