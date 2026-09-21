@@ -91,3 +91,39 @@ def test_fresh_platform_snapshot_is_not_needlessly_requeued(monkeypatch):
 
     assert v346._patch_stale_platform_refresh() is True
     assert v285._platform_candidates(manager) == []
+
+
+def test_confirmed_fill_marker_uses_broker_event_time_and_does_not_refresh_same_order(tmp_path, monkeypatch):
+    marker = tmp_path / "heartbeat_verified.flag"
+
+    import bot.runtime_execution_capital_integrity_v169_patch as v169
+    import bot.runtime_confirmed_fill_profitability_v328_patch as v328
+
+    monkeypatch.setattr(v169, "_execution_marker_path", lambda: marker)
+    monkeypatch.setattr(v169, "_atomic_json_write", lambda path, payload: path.write_text(json.dumps(payload), encoding="utf-8"))
+    monkeypatch.setattr(v328, "_order_id", lambda result: result.get("order_id", ""))
+
+    broker_fill_epoch = 1789990000.25
+    assert v346._write_confirmed_fill_marker(
+        result={"order_id": "kraken-fill-1", "broker_fill_at_epoch": broker_fill_epoch},
+        symbol="ETHUSD:BTNL",
+        side="sell",
+        fill_price=2482.0999915373,
+        filled_usd=341.10763,
+    ) is True
+
+    first = json.loads(marker.read_text(encoding="utf-8"))
+    assert first["version"] == 4
+    assert first["verified_at_epoch"] == broker_fill_epoch
+
+    assert v346._write_confirmed_fill_marker(
+        result={"order_id": "kraken-fill-1", "broker_fill_at_epoch": broker_fill_epoch + 999.0},
+        symbol="ETHUSD:BTNL",
+        side="sell",
+        fill_price=2482.0999915373,
+        filled_usd=341.10763,
+    ) is True
+
+    second = json.loads(marker.read_text(encoding="utf-8"))
+    assert second["verified_at_epoch"] == broker_fill_epoch
+    assert second == first
