@@ -95,22 +95,54 @@ def _write_confirmed_fill_marker(*, result: Mapping[str, Any], symbol: str, side
             return False
         path = path_fn()
         existing = _existing_marker(path)
-        if (
+        observed_now = time.time()
+        broker_epoch = _fill_event_epoch(result)
+        recovered_fill = bool(
+            result.get("recovered_fill_proof")
+            or result.get("kraken_query_order_reconciled")
+            or result.get("kraken_trade_history_reconciled")
+        )
+        if recovered_fill and not (0.0 < broker_epoch <= observed_now + 60.0):
+            LOGGER.warning(
+                "CANONICAL_FILL_EXECUTION_PROOF_V346_RECOVERY_TIME_REJECTED marker=%s order_id=%s "
+                "broker_fill_at_epoch=%s historical_recovery=true observation_time_not_proof=true "
+                "trading_fail_closed=true",
+                MARKER, order_id, broker_epoch,
+            )
+            return False
+
+        existing_epoch = 0.0
+        try:
+            existing_epoch = float(existing.get("verified_at_epoch") or 0.0)
+        except (TypeError, ValueError, OverflowError):
+            existing_epoch = 0.0
+        same_v4_order = bool(
             existing.get("verified") is True
             and int(existing.get("version") or 0) >= 4
             and str(existing.get("source") or "").strip().lower() == "canonical_confirmed_fill"
             and str(existing.get("order_id") or "").strip() == order_id
-            and float(existing.get("verified_at_epoch") or 0.0) > 0.0
-        ):
+            and existing_epoch > 0.0
+        )
+        same_authenticated_event = bool(
+            recovered_fill
+            and broker_epoch > 0.0
+            and abs(existing_epoch - broker_epoch) <= 1.0
+        )
+        if same_v4_order and (not recovered_fill or same_authenticated_event):
             LOGGER.info(
                 "CANONICAL_FILL_EXECUTION_PROOF_V346_DUPLICATE_IGNORED marker=%s order_id=%s "
                 "existing_verified_at_epoch=%.6f proof_timestamp_refreshed=false",
-                MARKER, order_id, float(existing.get("verified_at_epoch") or 0.0),
+                MARKER, order_id, existing_epoch,
             )
             return True
+        if same_v4_order and recovered_fill and broker_epoch > 0.0:
+            LOGGER.warning(
+                "CANONICAL_FILL_EXECUTION_PROOF_V346_REPLAY_TIMESTAMP_MIGRATED marker=%s order_id=%s "
+                "old_verified_at_epoch=%.6f broker_fill_at_epoch=%.6f "
+                "observation_time_replaced=true freshness_not_extended=true",
+                MARKER, order_id, existing_epoch, broker_epoch,
+            )
 
-        observed_now = time.time()
-        broker_epoch = _fill_event_epoch(result)
         now = broker_epoch if 0.0 < broker_epoch <= observed_now + 60.0 else observed_now
         payload = {
             "verified": True,

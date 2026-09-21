@@ -269,12 +269,31 @@ def _kraken_brokers() -> list[Any]:
 
 
 def _promote_confirmed_fill(enriched: Mapping[str, Any], *, symbol: str, side: str) -> bool:
-    """Hand a reconciled Kraken result to the canonical v328/v346 proof layer."""
+    """Hand a reconciled Kraken result to the canonical v328/v346 proof layer.
+
+    Deferred recovery is historical by definition.  It must carry the
+    authenticated exchange event time; observation time is never acceptable
+    execution-freshness evidence for this path.
+    """
+    recovered = dict(enriched)
+    recovered["recovered_fill_proof"] = True
+    try:
+        event_epoch = float(recovered.get("broker_fill_at_epoch") or 0.0)
+    except (TypeError, ValueError, OverflowError):
+        event_epoch = 0.0
+    if event_epoch <= 0.0:
+        LOGGER.warning(
+            "KRAKEN_FILL_PROOF_V363_EVENT_TIME_MISSING marker=%s order_id=%s symbol=%s side=%s "
+            "historical_recovery_not_promoted=true observation_time_not_proof=true fail_closed=true",
+            MARKER, str(recovered.get("order_id") or "").strip(),
+            symbol or "unknown", side or "unknown",
+        )
+        return False
     try:
         normalize = getattr(_v328(), "_normalize_dict_fill", None)
         if not callable(normalize):
             return False
-        price, filled_usd = normalize(dict(enriched), symbol=symbol, side=side)
+        price, filled_usd = normalize(recovered, symbol=symbol, side=side)
     except Exception as exc:
         LOGGER.info(
             "KRAKEN_FILL_PROOF_V363_NOT_YET_PROVEN marker=%s symbol=%s side=%s reason=%s:%s fail_closed=true",

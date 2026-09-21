@@ -166,8 +166,12 @@ def _trade_history_fill(
     *,
     order_id: str,
     side: str,
-) -> tuple[float, float, float, int]:
-    """Aggregate only authenticated Kraken trades tied to the exact order id."""
+) -> tuple[float, float, float, int, float]:
+    """Aggregate only authenticated Kraken trades tied to the exact order id.
+
+    The returned event epoch is the latest authenticated matched trade time so
+    replayed historical fills cannot be made fresh at observation time.
+    """
     try:
         payload = _private_read(broker, "TradesHistory", {"type": "all", "trades": True})
     except Exception as exc:
@@ -175,18 +179,19 @@ def _trade_history_fill(
             "KRAKEN_FILL_V357_TRADE_HISTORY_DEFERRED marker=%s order_id=%s error=%s:%s fail_closed=true",
             MARKER, order_id, type(exc).__name__, exc,
         )
-        return 0.0, 0.0, 0.0, 0
+        return 0.0, 0.0, 0.0, 0, 0.0
     if payload.get("error"):
-        return 0.0, 0.0, 0.0, 0
+        return 0.0, 0.0, 0.0, 0, 0.0
     result = payload.get("result")
     trades = result.get("trades") if isinstance(result, Mapping) else None
     if not isinstance(trades, Mapping):
-        return 0.0, 0.0, 0.0, 0
+        return 0.0, 0.0, 0.0, 0, 0.0
 
     wanted_side = _norm(side)
     total_qty = 0.0
     total_cost = 0.0
     matches = 0
+    latest_event_epoch = 0.0
     for row in trades.values():
         if not isinstance(row, Mapping):
             continue
@@ -205,10 +210,11 @@ def _trade_history_fill(
         total_qty += qty
         total_cost += cost
         matches += 1
+        latest_event_epoch = max(latest_event_epoch, _event_epoch(row))
 
     if matches <= 0 or total_qty <= 0.0 or total_cost <= 0.0:
-        return 0.0, 0.0, 0.0, 0
-    return total_cost / total_qty, total_qty, total_cost, matches
+        return 0.0, 0.0, 0.0, 0, 0.0
+    return total_cost / total_qty, total_qty, total_cost, matches, latest_event_epoch
 
 
 def _has_fill_specific(result: Mapping[str, Any]) -> bool:
@@ -280,7 +286,7 @@ def _enrich_kraken_final_order(
     # original broker result or the exact QueryOrders row before using them.
     if final_status not in _FINAL:
         return enriched
-    price, qty, filled_usd, matches = _trade_history_fill(
+    price, qty, filled_usd, matches, event_epoch = _trade_history_fill(
         broker, order_id=oid, side=side
     )
     if price <= 0.0 or qty <= 0.0 or filled_usd <= 0.0 or matches <= 0:
@@ -294,6 +300,8 @@ def _enrich_kraken_final_order(
         kraken_trade_history_reconciled=True,
         kraken_trade_history_match_count=matches,
     )
+    if event_epoch > 0.0:
+        enriched["broker_fill_at_epoch"] = event_epoch
     LOGGER.critical(
         "KRAKEN_FILL_V357_TRADE_HISTORY_RECONCILED marker=%s order_id=%s symbol=%s side=%s "
         "status=%s matched_trades=%d filled_qty=%.12f fill_price=%.10f filled_usd=%.8f "

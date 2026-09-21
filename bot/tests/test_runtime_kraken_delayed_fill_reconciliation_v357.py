@@ -59,6 +59,7 @@ def test_queryorders_exact_final_fill_is_admitted():
                     "status": "closed",
                     "vol_exec": "0.0115",
                     "cost": "28.75",
+                    "closetm": "1789990000.25",
                 }
             },
         }
@@ -73,6 +74,7 @@ def test_queryorders_exact_final_fill_is_admitted():
     assert result["filled_size"] == 0.0115
     assert result["filled_size_usd"] == 28.75
     assert result["filled_price"] == 28.75 / 0.0115
+    assert result["broker_fill_at_epoch"] == 1789990000.25
 
 
 def test_exact_ordertxid_trade_history_can_supply_missing_fill_fields():
@@ -88,6 +90,7 @@ def test_exact_ordertxid_trade_history_can_supply_missing_fill_fields():
                         "vol": "0.006",
                         "price": "2500",
                         "cost": "15.0",
+                        "time": "1789990100.0",
                     },
                     "T2": {
                         "ordertxid": "ORDER-4",
@@ -95,6 +98,7 @@ def test_exact_ordertxid_trade_history_can_supply_missing_fill_fields():
                         "vol": "0.0055",
                         "price": "2500",
                         "cost": "13.75",
+                        "time": "1789990101.5",
                     },
                 }
             },
@@ -111,6 +115,7 @@ def test_exact_ordertxid_trade_history_can_supply_missing_fill_fields():
     assert abs(result["filled_size"] - 0.0115) < 1e-12
     assert abs(result["filled_size_usd"] - 28.75) < 1e-12
     assert abs(result["filled_price"] - 2500.0) < 1e-12
+    assert result["broker_fill_at_epoch"] == 1789990101.5
 
 
 def test_unrelated_trade_history_never_proves_fill():
