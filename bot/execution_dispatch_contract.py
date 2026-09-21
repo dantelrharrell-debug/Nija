@@ -106,7 +106,15 @@ def is_internal_dispatch_failure(error: Any) -> bool:
         or "unexpected keyword argument" in text
         or "takes no arguments" in text
         or "positional arguments but" in text
-        # Broker/ECEL minimum-size validation may happen locally before the\n        # adapter submits an order.  These explicit local validation strings\n        # must not poison the exchange-rejection window.  Genuine venue rejects\n        # remain exchange rejects unless the caller marks them pre-dispatch.\n        or "heartbeat_min_notional_exceeds_risk_cap" in text\n        or "min_notional_exceeds_risk_cap" in text\n        or "minimum notional" in text and "pre-dispatch" in text\n        or "volume_too_small" in text and "pre-dispatch" in text\n    )
+        # Broker/ECEL minimum-size validation may happen locally before the
+        # adapter submits an order. These explicit local validation strings
+        # must not poison the exchange-rejection window. Genuine venue rejects
+        # remain exchange rejects unless the caller marks them pre-dispatch.
+        or "heartbeat_min_notional_exceeds_risk_cap" in text
+        or "min_notional_exceeds_risk_cap" in text
+        or ("minimum notional" in text and "pre-dispatch" in text)
+        or ("volume_too_small" in text and "pre-dispatch" in text)
+    )
 
 
 def _f(value: Any, default: float = 0.0) -> float:
