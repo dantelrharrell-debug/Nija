@@ -10354,7 +10354,7 @@ class KrakenBroker(BaseBroker):
                         usdt_balance = float(result.get('USDT', 0))
 
                         total = usd_balance + usdt_balance
-                self._record_authenticated_available_cash(usd_balance, usdt_balance)
+                        self._record_authenticated_available_cash(usd_balance, usdt_balance)
 
                         # FIX (Jan 23, 2026): Calculate held funds to get total account equity
                         # This ensures EXIT-ONLY mode is based on total funds (available + held)
@@ -11085,6 +11085,7 @@ class KrakenBroker(BaseBroker):
                 usdt_balance = float(result.get('USDT', 0))
 
                 total = usd_balance + usdt_balance
+                self._record_authenticated_available_cash(usd_balance, usdt_balance)
                 logger.info(
                     "[KrakenBalancePipeline] parsed_cash account=%s usd=%.8f usdt=%.8f",
                     self.account_identifier,
