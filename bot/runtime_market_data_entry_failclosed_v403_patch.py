@@ -40,6 +40,25 @@ def _health() -> tuple[bool, dict[str, Any]]:
         return False, {"health_probe_error": f"{type(exc).__name__}:{exc}"}
 
 
+def _recovery_scan_allowed(detail: dict[str, Any]) -> bool:
+    """Allow read-only Phase-3 sampling when only core data quality is unhealthy.
+
+    The v157 core-quality verdict is produced by Phase-3 itself.  Blocking the
+    entire scan on that verdict creates a self-latching condition: no new scan
+    can run to prove that data quality recovered.  This helper never authorizes
+    order dispatch; the pre-dispatch guard still requires full health.
+    """
+    if detail.get("core_data_quality_ok") is not False:
+        return False
+    required_transport_checks = (
+        "workers_ok",
+        "threads_ok",
+        "timeout_rate_ok",
+        "data_fresh_ok",
+    )
+    return all(detail.get(name) is True for name in required_transport_checks)
+
+
 def _patch_apex_execute(apex: Any) -> bool:
     """Guard Apex submission only while the calling thread is inside Phase-3.
 
@@ -101,27 +120,36 @@ def _patch_module(module: Any) -> bool:
     def phase3_market_health_gate(self: Any, *args: Any, **kwargs: Any):
         healthy, detail = _health()
         if not healthy:
-            symbols = []
-            if len(args) >= 3 and isinstance(args[2], (list, tuple, set)):
-                symbols = list(args[2])
-            elif isinstance(kwargs.get("symbols"), (list, tuple, set)):
-                symbols = list(kwargs.get("symbols") or [])
-            blocked = max(1, len(symbols))
-            try:
-                record = getattr(self, "_record_reject", None)
-                if callable(record):
-                    record("market_data_unhealthy")
-            except Exception:
-                pass
-            LOGGER.critical(
-                "ENTRY_BLOCKED reason=market_data_unhealthy marker=%s blocked=%d detail=%s "
-                "entry_fail_closed=true exits_unchanged=true orders_submitted=false "
-                "forced_activation=false safety_gates_bypassed=false",
-                MARKER,
-                blocked,
-                detail,
-            )
-            return (0, blocked, 0, {"market_data_unhealthy": blocked})
+            if _recovery_scan_allowed(detail):
+                LOGGER.warning(
+                    "MARKET_DATA_RECOVERY_SCAN_ALLOWED marker=%s detail=%s "
+                    "read_only_scan=true entry_dispatch_still_fail_closed=true "
+                    "thresholds_unchanged=true orders_submitted=false safety_gates_bypassed=false",
+                    MARKER,
+                    detail,
+                )
+            else:
+                symbols = []
+                if len(args) >= 3 and isinstance(args[2], (list, tuple, set)):
+                    symbols = list(args[2])
+                elif isinstance(kwargs.get("symbols"), (list, tuple, set)):
+                    symbols = list(kwargs.get("symbols") or [])
+                blocked = max(1, len(symbols))
+                try:
+                    record = getattr(self, "_record_reject", None)
+                    if callable(record):
+                        record("market_data_unhealthy")
+                except Exception:
+                    pass
+                LOGGER.critical(
+                    "ENTRY_BLOCKED reason=market_data_unhealthy marker=%s blocked=%d detail=%s "
+                    "entry_fail_closed=true exits_unchanged=true orders_submitted=false "
+                    "forced_activation=false safety_gates_bypassed=false",
+                    MARKER,
+                    blocked,
+                    detail,
+                )
+                return (0, blocked, 0, {"market_data_unhealthy": blocked})
 
         apex = getattr(self, "apex", None)
         with _LOCK:
