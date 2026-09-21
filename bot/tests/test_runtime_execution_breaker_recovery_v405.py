@@ -3,7 +3,6 @@ from __future__ import annotations
 import threading
 from types import SimpleNamespace
 
-from bot import runtime_execution_breaker_recovery_v405_patch as v405
 
 
 def _fake_tsm(*, rejected_orders: int):
@@ -36,6 +35,8 @@ def _fake_tsm(*, rejected_orders: int):
 
 
 def test_recovered_heartbeat_clears_latch_but_preserves_subthreshold_counts(monkeypatch):
+    from bot import runtime_execution_breaker_recovery_v405_patch as v405
+
     fake = _fake_tsm(rejected_orders=1)
     monkeypatch.setattr(v405, "_tsm", lambda: fake)
     monkeypatch.setattr(v405, "_kill_switch_clear", lambda: (True, "clear"))
@@ -47,6 +48,8 @@ def test_recovered_heartbeat_clears_latch_but_preserves_subthreshold_counts(monk
 
 
 def test_recovered_heartbeat_does_not_clear_another_threshold_level_anomaly(monkeypatch):
+    from bot import runtime_execution_breaker_recovery_v405_patch as v405
+
     fake = _fake_tsm(rejected_orders=5)
     monkeypatch.setattr(v405, "_tsm", lambda: fake)
     monkeypatch.setattr(v405, "_kill_switch_clear", lambda: (True, "clear"))
