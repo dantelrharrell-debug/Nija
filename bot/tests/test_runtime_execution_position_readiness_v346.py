@@ -127,3 +127,35 @@ def test_confirmed_fill_marker_uses_broker_event_time_and_does_not_refresh_same_
     second = json.loads(marker.read_text(encoding="utf-8"))
     assert second["verified_at_epoch"] == broker_fill_epoch
     assert second == first
+
+
+def test_legacy_v3_same_order_marker_is_migrated_to_broker_event_time(tmp_path, monkeypatch):
+    marker = tmp_path / "heartbeat_verified.flag"
+
+    import bot.runtime_execution_capital_integrity_v169_patch as v169
+    import bot.runtime_confirmed_fill_profitability_v328_patch as v328
+
+    marker.write_text(json.dumps({
+        "verified": True,
+        "version": 3,
+        "source": "canonical_confirmed_fill",
+        "proof_kind": "execution_probe",
+        "order_id": "kraken-old-replayed",
+        "verified_at_epoch": 9999999999.0,
+    }), encoding="utf-8")
+    monkeypatch.setattr(v169, "_execution_marker_path", lambda: marker)
+    monkeypatch.setattr(v169, "_atomic_json_write", lambda path, payload: path.write_text(json.dumps(payload), encoding="utf-8"))
+    monkeypatch.setattr(v328, "_order_id", lambda result: result.get("order_id", ""))
+
+    broker_fill_epoch = 1789980000.5
+    assert v346._write_confirmed_fill_marker(
+        result={"order_id": "kraken-old-replayed", "broker_fill_at_epoch": broker_fill_epoch},
+        symbol="ETHUSD:BTNL",
+        side="sell",
+        fill_price=2482.0999915373,
+        filled_usd=341.10763,
+    ) is True
+
+    migrated = json.loads(marker.read_text(encoding="utf-8"))
+    assert migrated["version"] == 4
+    assert migrated["verified_at_epoch"] == broker_fill_epoch
