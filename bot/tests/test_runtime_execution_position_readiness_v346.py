@@ -159,3 +159,28 @@ def test_legacy_v3_same_order_marker_is_migrated_to_broker_event_time(tmp_path, 
     migrated = json.loads(marker.read_text(encoding="utf-8"))
     assert migrated["version"] == 4
     assert migrated["verified_at_epoch"] == broker_fill_epoch
+
+
+def test_recovered_fill_without_authenticated_event_time_cannot_write_execution_proof(tmp_path, monkeypatch):
+    marker = tmp_path / "heartbeat_verified.flag"
+
+    import bot.runtime_execution_capital_integrity_v169_patch as v169
+    import bot.runtime_confirmed_fill_profitability_v328_patch as v328
+
+    monkeypatch.setattr(v169, "_execution_marker_path", lambda: marker)
+    monkeypatch.setattr(v169, "_atomic_json_write", lambda path, payload: path.write_text(json.dumps(payload), encoding="utf-8"))
+    monkeypatch.setattr(v328, "_order_id", lambda result: result.get("order_id", ""))
+
+    assert v346._write_confirmed_fill_marker(
+        result={
+            "order_id": "kraken-recovered-no-time",
+            "kraken_trade_history_reconciled": True,
+            "recovered_fill_proof": True,
+        },
+        symbol="ETHUSD:BTNL",
+        side="sell",
+        fill_price=2482.0999915373,
+        filled_usd=341.10763,
+    ) is False
+
+    assert not marker.exists()
