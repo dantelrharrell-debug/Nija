@@ -18,6 +18,22 @@ def test_mutation_deadline_fails_closed_after_expiry(monkeypatch):
             deadline.assert_mutation_deadline("AddOrder")
 
 
+def test_caller_absolute_deadline_is_not_extended_by_worker_start(monkeypatch):
+    now = {"value": 300.0}
+    monkeypatch.setattr(deadline.time, "monotonic", lambda: now["value"])
+    caller_deadline = 305.0
+
+    # Simulate the worker not beginning until after the caller's original
+    # dispatch deadline. Passing the absolute value must fail immediately.
+    now["value"] = 306.0
+    with deadline.order_submission_deadline_scope(
+        5.0,
+        deadline_monotonic=caller_deadline,
+    ):
+        with pytest.raises(TimeoutError, match="order_submission_deadline_expired_before_addorder"):
+            deadline.assert_mutation_deadline("AddOrder")
+
+
 def test_no_deadline_preserves_existing_behavior():
     assert deadline.current_deadline_monotonic() == 0.0
     assert deadline.remaining_s() is None
