@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import os
 import unittest
+from unittest.mock import patch
 
 import pandas as pd
 
 from bot.control.strategy_detectors import DetectorContext, LiquidityFvgRetraceDetector
+from bot.control.strategy_registry import StrategyDetectorRegistry
+from bot.feature_flags import FeatureFlagManager
 from bot.control.trading_context import TradingContext
 
 
@@ -190,6 +194,24 @@ def _frame(direction: str, *, include_sweep: bool = True, include_daily_fvg: boo
 
 
 class TestLiquidityFvgRetraceDetector(unittest.TestCase):
+    def test_feature_flag_defaults_off_and_registry_contains_detector(self):
+        env_key = "FEATURE_LIQUIDITY_FVG_RETRACE_ENABLED"
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop(env_key, None)
+            manager = FeatureFlagManager()
+        self.assertFalse(manager.get_all_flags().get("liquidity_fvg_retrace_enabled", True))
+
+        registry = StrategyDetectorRegistry()
+        detector = next(
+            (
+                value
+                for flag, value in registry.detectors.items()
+                if getattr(flag, "value", "") == "liquidity_fvg_retrace_enabled"
+            ),
+            None,
+        )
+        self.assertIsInstance(detector, LiquidityFvgRetraceDetector)
+
     def test_long_sequence_emits_exact_limit_stop_and_daily_target(self):
         signal = LiquidityFvgRetraceDetector().detect(_frame("long"), _context())
 
