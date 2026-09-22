@@ -98,7 +98,7 @@ def _audit_protective_coverage() -> bool:
                 result = fn()
             except TypeError:
                 continue
-            ready = bool(result.get("ready")) if isinstance(result, dict) else False
+            ready = result.get("ready") is True if isinstance(result, dict) else False
             LOGGER.info(
                 "PROTECTIVE_COVERAGE_V347_AUDIT marker=%s source=v281 ready=%s result=%s "
                 "tracker_mutation=false protection_fabricated=false dust_policy_unchanged=true",
