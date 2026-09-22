@@ -490,6 +490,16 @@ def audit_once(manager: Any = None, *, structural_exit_ready: Any = None) -> dic
     return result
 
 
+def coverage_status() -> dict[str, Any]:
+    """Return current authoritative coverage truth without broker I/O or mutation.
+
+    This is the native read-only status surface consumed by v347.  Unlike
+    audit_once(), it does not write readiness environment flags or audit state.
+    """
+    manager = _canonical_manager()
+    return evaluate(manager)
+
+
 def install() -> bool:
     """Install/reassert the audit capability; runtime coverage may remain pending."""
     os.environ[_INSTALLED_FLAG] = "1"
@@ -511,5 +521,5 @@ def install_import_hook() -> bool:
 
 __all__ = [
     "MARKER", "install", "install_import_hook", "audit_once", "evaluate",
-    "_expected_accounts", "_account_audit", "_tracker_holdings", "_canonical_manager",
+    "_expected_accounts", "_account_audit", "_tracker_holdings", "_canonical_manager", "coverage_status",
 ]
