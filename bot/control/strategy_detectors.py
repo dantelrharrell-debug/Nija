@@ -633,7 +633,6 @@ class LiquidityFvgRetraceDetector(BaseDetector):
         if len(prior) < self.liquidity_lookback:
             return None
 
-        sweep_open = _to_float(sweep["open"])
         sweep_high = _to_float(sweep["high"])
         sweep_low = _to_float(sweep["low"])
         sweep_close = _to_float(sweep["close"])
