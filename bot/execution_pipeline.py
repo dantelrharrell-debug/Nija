@@ -1587,15 +1587,22 @@ class ExecutionPipeline:
                         latency_ms=(time.monotonic() - t_start) * 1000,
                     )
 
+                _compiled_is_limit = (
+                    str(working_request.order_type or "").strip().lower() == "limit"
+                )
                 effective_request = replace(
                     working_request,
                     size_usd=compiled.compiled_notional_usd,
                     notional_usd=compiled.compiled_notional_usd,
                     units=compiled.compiled_base_size,
-                    price_hint_usd=compiled.compiled_price_usd,
+                    price_hint_usd=(
+                        compiled.compiled_price_usd
+                        if _compiled_is_limit
+                        else working_request.price_hint_usd
+                    ),
                     limit_price=(
                         compiled.compiled_price_usd
-                        if str(working_request.order_type or "").strip().lower() == "limit"
+                        if _compiled_is_limit
                         else working_request.limit_price
                     ),
                     validated=True,
