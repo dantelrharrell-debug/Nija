@@ -1,9 +1,9 @@
 # NIJA AI Trading LLC — Trading Platform Architecture & Recovery Guide
 
 **Project:** `Nija_Trading_Bot`  
-**Status date:** September 21, 2026 (UTC)  
-**Current main merge:** `3c54f2445febcc67c5943b546166e1dbc5161047`  
-**Latest merged PR:** `#2855 — Run v268 Kraken registry repair from preboot v44`  
+**Status date:** September 22, 2026 (UTC)  
+**Current main merge:** `9dc28dd08381c41405506a854ff091ae2dfb87f0`  
+**Latest merged PR:** `#2873 — Fail closed v347 on authoritative protection readiness`  
 **Broker-cell implementation head:** `472eeaa2c9d6f518bad029fbd550fa6a84505eb2`  
 **Broker-cell architecture merge:** `#2784 — Broker-cell isolation: independent strategy/risk/user runtimes`
 
@@ -241,50 +241,97 @@ Trading services should not have withdrawal privileges unless a separately revie
 
 ## 9. Current Merge and Validation State
 
-The current `main` head is the September 21 merge of PR `#2855`, which runs the v268 Kraken registry repair from preboot v44. Broker-cell isolation remains the underlying architecture merged through PR `#2784`.
+The current `main` head is the September 22 UTC merge of PR `#2873`. That safety repair makes v347 protection readiness depend on the authoritative v281 protection-coverage payload and requires the payload to report the strict boolean `ready=true`. Merely finding or calling a status helper is no longer sufficient.
 
 ```text
-current_main=3c54f2445febcc67c5943b546166e1dbc5161047
-latest_merged_pr=#2855
+current_main=9dc28dd08381c41405506a854ff091ae2dfb87f0
+latest_merged_pr=#2873
+protection_status_surface=#2872
+kraken_heartbeat_safe_floor=#2870
+kraken_market_alias_repair=#2869
 broker_cell_implementation_head=472eeaa2c9d6f518bad029fbd550fa6a84505eb2
 broker_cell_architecture_merge=c44d74b42f35999e4113a6b75129d5607ef1b679
 ```
 
-### September 21 protected live-entry activation status
+### September 22 authoritative protection-readiness status
 
-`BREAK_RETEST` is deliberately **fail-closed for real broker entry** unless the selected execution path can prove that the live entry is created with both requested protective legs and that the broker readback verifies those protections.
+`BREAK_RETEST` remains deliberately **fail-closed for real broker entry** until all applicable execution and protection gates are satisfied.
 
-The canonical activation rule is:
+PR `#2872` added the native read-only v281 `coverage_status()` surface. It returns the current authoritative all-account SL/TP coverage evaluation without submitting orders, performing broker I/O, mutating protection trackers, or fabricating protection/fill evidence.
+
+PR `#2873` then tightened v347 so protection readiness is accepted only when:
+
+```text
+coverage_status() returns a dict
+AND
+coverage_status()["ready"] is exactly True
+```
+
+The following conditions now remain fail-closed:
+
+```text
+status helper missing
+status helper unavailable
+payload malformed
+ready missing
+ready=false
+ready="false"
+ready=1
+coverage evaluation deferred/error
+```
+
+This distinction is important: a merged safety patch proves the **control path**, not that the live brokerage state is currently ready.
+
+For real-money `BREAK_RETEST` activation eligibility, require:
 
 ```text
 EXECUTION_ALLOWED: TRUE
 AND
+authoritative v281 coverage_status()["ready"] is True
+AND
+v347 protection readiness is True
+AND
 selected broker router reports protected-entry capability
 AND
-live entry is broker-confirmed
+risk/capital/writer/nonce/circuit-breaker gates pass
 AND
-stop-loss is broker-confirmed active
-AND
-take-profit is broker-confirmed active
-AND
-protective exit/reconciliation path is verified
+current broker positions and open orders are authoritative
 ```
 
-An `EXECUTION_ALLOWED: TRUE` signal by itself is **not** sufficient to declare `BREAK_RETEST` protected live trading active.
+For end-to-end protected-trading proof, additionally verify a real broker-confirmed entry where the requested protections are actually attached and read back:
 
-Current code contracts include:
+```text
+live entry broker-confirmed
+AND
+stop-loss broker-confirmed active
+AND
+take-profit broker-confirmed active
+AND
+protective exit/reconciliation supervision verified
+```
 
-- the single-venue `ExecutionRouter.supports_v2_protected_entry(...)` returns `False`;
-- the multi-broker router returns protected-entry capability only when the selected broker explicitly declares `supports_atomic_protected_entry = True` and exposes the protected-entry submission method;
-- a protected entry is rejected if required SL/TP protection is missing or cannot be verified after submission;
-- unverified or uncertain protected submissions require reconciliation and must not be reported as successfully protected;
-- paper, backtest, and simulated `BREAK_RETEST` operation may continue independently of the real-money protected-entry gate.
+An `EXECUTION_ALLOWED: TRUE` signal by itself is therefore **not** sufficient to declare protected live trading complete.
 
-The Alpaca adapter includes a bracket-order implementation and regression tests that require a real parent fill plus two live broker-visible protection legs before `protection_verified=True`. Production configuration remains opt-in and currently keeps both `ENABLE_ALPACA=false` and `NIJA_ENABLE_ALPACA_PROTECTED_ENTRY=false` in `render.yaml`.
+Current routing contracts still include:
 
-Therefore, do not report protected real-money `BREAK_RETEST` activation for Kraken, Coinbase, OKX, or Alpaca solely from process health, strategy readiness, or execution authority. Report it only after the broker-specific protected-entry contract and live protection evidence above are satisfied.
+- the single-venue `ExecutionRouter.supports_v2_protected_entry(...)` failing closed where no verified protected-entry contract exists;
+- the multi-broker router requiring an explicit broker protected-entry capability and protected submission method;
+- rejection or reconciliation when SL/TP protection cannot be verified after submission;
+- paper, backtest, and simulated `BREAK_RETEST` operation remaining separate from the real-money protected-entry gate.
 
+### Recent Kraken execution-path repairs
 
+The latest merge chain also includes several Kraken-specific safety and routing repairs:
+
+- PR `#2868` preserves local pre-dispatch volume-rejection provenance so a locally rejected `VOLUME_TOO_SMALL` path is not falsely counted as an exchange rejection;
+- PR `#2869` canonicalizes Kraken market aliases such as `XBT -> BTC` and `XDG -> DOGE` during product discovery, allowing NIJA's canonical heartbeat universe to match Kraken markets correctly;
+- PR `#2870` makes heartbeat sizing honor Kraken's canonical safe quote floor while preserving the configured risk cap. If the risk budget cannot satisfy the safe minimum, the heartbeat defers before broker dispatch instead of weakening the exchange minimum or risk limit;
+- PR `#2872` exposes authoritative read-only all-account protection coverage status;
+- PR `#2873` requires that authoritative status to be strictly ready before v347 can report protection readiness.
+
+These repairs do **not** clear a genuine emergency-stop latch, force a trade, lower broker minimums, increase the heartbeat risk fraction, fabricate execution proof, or bypass writer/nonce/risk/protection gates.
+
+Do not report NIJA as fully protected for real-money entry solely because these changes are merged. Runtime completion still requires current authoritative broker evidence through the canonical gates.
 
 The merged architecture includes:
 
@@ -444,6 +491,11 @@ Before declaring a broker cell healthy for new entries, verify the applicable br
 - [ ] Circuit breaker is broker-local.
 - [ ] Writer/authority requirements are satisfied.
 - [ ] Execution readiness is true through the normal canonical path.
+- [ ] v281 `coverage_status()` returns a dict whose `ready` field is exactly boolean `True`.
+- [ ] v347 remains fail-closed for missing, malformed, unavailable, or non-boolean/unready coverage status.
+- [ ] Kraken heartbeat sizing satisfies both the risk cap and canonical safe quote floor, or defers before dispatch.
+- [ ] Kraken canonical market discovery maps broker aliases such as `XBT` to `BTC`.
+- [ ] Local pre-dispatch minimum failures are not misclassified as exchange rejections.
 - [ ] If `BREAK_RETEST` real-money entry is enabled, the selected broker reports protected-entry capability.
 - [ ] A live protected entry has broker readback confirming both active stop-loss and take-profit legs.
 - [ ] Protected-entry uncertainty/reconciliation paths fail closed rather than claiming success.
@@ -543,6 +595,8 @@ Never weaken these contracts to recover faster or increase trade frequency:
 - kill switches,
 - core-thread readiness,
 - canonical execution-state transitions,
+- authoritative v281 protection coverage with strict boolean readiness,
+- fail-closed v347 handling for unavailable, malformed, or unready protection status,
 - explicit protected-entry capability before real `BREAK_RETEST` dispatch,
 - broker-verified stop-loss and take-profit protection for protected entries,
 - fail-closed protected-entry reconciliation when protection cannot be verified,
