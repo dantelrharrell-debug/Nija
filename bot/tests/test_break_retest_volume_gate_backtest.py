@@ -30,9 +30,11 @@ def _frame(direction: str, *, volume: float) -> pd.DataFrame:
         for _ in range(40)
     ]
     if direction == "long":
+        rows[-4] = {"open": 99.8, "high": 100.2, "low": 99.4, "close": 100.0, "volume": volume}
         rows[-2] = {"open": 100.5, "high": 103.0, "low": 100.4, "close": 102.0, "volume": volume * 1.5}
         rows[-1] = {"open": 101.0, "high": 102.2, "low": 100.8, "close": 101.7, "volume": volume * 1.2}
     else:
+        rows[-4] = {"open": 100.2, "high": 100.6, "low": 99.8, "close": 100.0, "volume": volume}
         rows[-2] = {"open": 99.5, "high": 99.6, "low": 97.0, "close": 98.0, "volume": volume * 1.5}
         rows[-1] = {"open": 99.0, "high": 99.2, "low": 97.8, "close": 98.3, "volume": volume * 1.2}
     return pd.DataFrame(rows)
