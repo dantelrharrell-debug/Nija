@@ -182,16 +182,31 @@ def _install_all_in_profitability_authority_v324() -> None:
     try:
         authority = importlib.import_module("bot.runtime_all_in_profitability_authority_v324_patch")
         installer = getattr(authority, "install_import_hook", None) or getattr(authority, "install", None)
-        if not callable(installer) or not bool(installer()):
-            raise RuntimeError("all-in profitability v324 installer unavailable or returned false")
-        if os.environ.get("NIJA_RUNTIME_ALL_IN_PROFITABILITY_V324_READY") != "1":
-            raise RuntimeError("all-in profitability v324 did not attest ready")
-        print("RUNTIME_ALL_IN_PROFITABILITY_AUTHORITY_V324_INSTALL_REQUESTED", flush=True)
-        logger.critical(
-            "RUNTIME_ALL_IN_PROFITABILITY_AUTHORITY_V324_INSTALL_REQUESTED "
-            "verified=true current_costs=true short_carry=true short_borrow_proof=true "
-            "protective_exits_unchanged=true safety_gates_bypassed=false"
-        )
+        if not callable(installer):
+            raise RuntimeError("all-in profitability v324 installer unavailable")
+        installed_ready = bool(installer())
+        attested_ready = os.environ.get("NIJA_RUNTIME_ALL_IN_PROFITABILITY_V324_READY") == "1"
+        if installed_ready and attested_ready:
+            print("RUNTIME_ALL_IN_PROFITABILITY_AUTHORITY_V324_INSTALL_REQUESTED", flush=True)
+            logger.critical(
+                "RUNTIME_ALL_IN_PROFITABILITY_AUTHORITY_V324_INSTALL_REQUESTED "
+                "verified=true current_costs=true short_carry=true short_borrow_proof=true "
+                "protective_exits_unchanged=true safety_gates_bypassed=false"
+            )
+        else:
+            # A false readiness result is a fail-closed trading state, not an
+            # installer crash.  Keep the process alive so broker/position/
+            # protection authorities can converge; downstream execution gates
+            # remain false until the canonical chain attests ready.
+            os.environ["NIJA_RUNTIME_ALL_IN_PROFITABILITY_V324_READY"] = "0"
+            os.environ["NIJA_CANONICAL_PROFITABILITY_CHAIN_READY"] = "0"
+            logger.critical(
+                "RUNTIME_ALL_IN_PROFITABILITY_AUTHORITY_V324_PENDING "
+                "installed_ready=%s attested_ready=%s execution_fail_closed=true "
+                "forced_activation=false safety_gates_bypassed=false",
+                installed_ready,
+                attested_ready,
+            )
     except Exception as exc:
         logger.critical(
             "RUNTIME_ALL_IN_PROFITABILITY_AUTHORITY_V324_INSTALL_FAILED err=%s",
