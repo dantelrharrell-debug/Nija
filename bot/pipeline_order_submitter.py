@@ -229,16 +229,32 @@ def _risk_bounded_heartbeat_size(
     risk_cap = balance * fraction
 
     broker_min = max(0.0, _float(getattr(broker, "min_trade_size", 0.0)))
+    kraken_safe_quote_floor = 0.0
+    try:
+        from bot.kraken_order_validator import (
+            KRAKEN_MINIMUM_ORDER_USD,
+            get_safe_min_quote,
+        )
+        kraken_safe_quote_floor = max(
+            0.0,
+            _float(get_safe_min_quote(KRAKEN_MINIMUM_ORDER_USD)),
+        )
+    except Exception as exc:
+        logger.debug("Kraken heartbeat safe quote floor lookup deferred: %s", exc)
+
     # Preserve the same $10 absolute heartbeat floor used by TradingStrategy,
-    # while adding only a 1% rounding cushion to the actual broker minimum.
-    safe_floor = max(10.0, broker_min * 1.01)
+    # include the broker's generic minimum with its existing 1% cushion, and
+    # require Kraken's canonical buffered quote floor.  This prevents a
+    # heartbeat from reaching Kraken when the account-level risk cap is below
+    # the validator's own minimum quote requirement.
+    safe_floor = max(10.0, broker_min * 1.01, kraken_safe_quote_floor)
     if safe_floor > risk_cap + 1e-9:
         logger.warning(
             "KRAKEN_HEARTBEAT_RISK_SIZE_DEFERRED requested=%.2f balance=%.2f "
-            "risk_fraction=%.4f risk_cap=%.2f broker_min=%.2f safe_floor=%.2f "
+            "risk_fraction=%.4f risk_cap=%.2f broker_min=%.2f kraken_safe_quote=%.2f safe_floor=%.2f "
             "reason=no_notional_satisfies_both_constraints downstream_gates_unchanged=true "
             "trading_fail_closed=true safety_gates_bypassed=false",
-            requested, balance, fraction, risk_cap, broker_min, safe_floor,
+            requested, balance, fraction, risk_cap, broker_min, kraken_safe_quote_floor, safe_floor,
         )
         return None
 
@@ -246,11 +262,11 @@ def _risk_bounded_heartbeat_size(
     if bounded + 1e-9 < requested:
         logger.critical(
             "KRAKEN_HEARTBEAT_RISK_SIZE_BOUNDED requested=%.2f resolved=%.2f balance=%.2f "
-            "risk_fraction=%.4f risk_cap=%.2f broker_min=%.2f safe_floor=%.2f "
+            "risk_fraction=%.4f risk_cap=%.2f broker_min=%.2f kraken_safe_quote=%.2f safe_floor=%.2f "
             "heartbeat_only=true downstream_risk_governor_required=true minimum_notional_required=true "
             "ordinary_orders_unchanged=true execution_proof_fabricated=false forced_activation=false "
             "safety_gates_bypassed=false",
-            requested, bounded, balance, fraction, risk_cap, broker_min, safe_floor,
+            requested, bounded, balance, fraction, risk_cap, broker_min, kraken_safe_quote_floor, safe_floor,
         )
     return bounded
 
