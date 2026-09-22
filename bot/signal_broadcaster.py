@@ -647,7 +647,10 @@ class SignalBroadcaster:
                         order_result={"v2_pre_submit_proven": True},
                     )
                 protection[field_name] = parsed
-            if strategy.strip().upper() == "BREAK_RETEST" and set(protection) != {
+            protected_strategy = strategy.strip().upper() in {
+                "BREAK_RETEST", "LIQUIDITY_FVG_RETRACE"
+            }
+            if protected_strategy and set(protection) != {
                 "stop_loss_pct", "take_profit_pct"
             }:
                 return BroadcastResult(
@@ -656,7 +659,11 @@ class SignalBroadcaster:
                     side=side,
                     size_usd=size,
                     status="error",
-                    error="break_retest_protection_required",
+                    error=(
+                        "break_retest_protection_required"
+                        if strategy.strip().upper() == "BREAK_RETEST"
+                        else "liquidity_fvg_retrace_protection_required"
+                    ),
                     order_result={"v2_pre_submit_proven": True},
                 )
 
@@ -672,9 +679,26 @@ class SignalBroadcaster:
                     error="size_zero",
                 )
 
+            execution_order_type = str(
+                signal.get("order_type")
+                or signal_metadata.get("order_type")
+                or "market"
+            ).strip().lower()
+            execution_limit_price = (
+                signal.get("limit_price")
+                if signal.get("limit_price") is not None
+                else signal_metadata.get("limit_price")
+            )
+            execution_tif = (
+                signal.get("time_in_force")
+                if signal.get("time_in_force") is not None
+                else signal_metadata.get("time_in_force")
+            )
+
             logger.info(
-                "[Broadcaster] → %s | %s %s $%.2f",
+                "[Broadcaster] → %s | %s %s $%.2f type=%s limit=%s",
                 account.account_id, side.upper(), symbol, size,
+                execution_order_type, execution_limit_price,
             )
             self._account_last_exec_ts[account.account_id] = time.monotonic()
 
@@ -693,6 +717,9 @@ class SignalBroadcaster:
                     quantity=size,
                     size_type="quote",
                     strategy=strategy,
+                    order_type=execution_order_type,
+                    limit_price=execution_limit_price,
+                    time_in_force=execution_tif,
                     metadata_override=(
                         {
                             **(
@@ -710,6 +737,26 @@ class SignalBroadcaster:
                                 else {}
                             ),
                             **protection,
+                            **({
+                                key: value
+                                for key, value in signal_metadata.items()
+                                if key in {
+                                    "entry_price",
+                                    "order_type",
+                                    "limit_price",
+                                    "price_hint_usd",
+                                    "time_in_force",
+                                    "entry_zone",
+                                    "liquidity_type",
+                                    "liquidity_level",
+                                    "daily_fvg_low",
+                                    "daily_fvg_high",
+                                    "one_hour_fvg_low",
+                                    "one_hour_fvg_high",
+                                    "target_basis",
+                                    "stop_basis",
+                                }
+                            }),
                         }
                         or None
                     ),
