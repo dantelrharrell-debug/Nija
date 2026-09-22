@@ -12538,8 +12538,10 @@ class KrakenBroker(BaseBroker):
                         logging.error(LOG_SEPARATOR)
                         return {
                             "status": "error",
-                            "error": "VOLUME_TOO_SMALL",
-                            "message": validation_error
+                            "error": "INTERNAL_DISPATCH_FAILURE: pre-dispatch:VOLUME_TOO_SMALL",
+                            "message": validation_error,
+                            "broker_dispatch": False,
+                            "v2_pre_submit_proven": True,
                         }
 
                     logging.info(f"   ✅ Volume validation passed: {volume_for_order:.8f} meets Kraken minimums")
