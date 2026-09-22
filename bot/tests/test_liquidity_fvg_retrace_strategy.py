@@ -111,7 +111,7 @@ def _frame(direction: str, *, include_sweep: bool = True, include_daily_fvg: boo
             "timestamp": current[-4],
             "open": 102.4,
             "high": 102.7,
-            "low": 101.5 if include_sweep else 102.15,
+            "low": 101.5 if include_sweep else 102.19,
             "close": 102.3,
             "volume": 140.0,
         }
@@ -154,7 +154,7 @@ def _frame(direction: str, *, include_sweep: bool = True, include_daily_fvg: boo
         current_rows[-4] = {
             "timestamp": current[-4],
             "open": 97.6,
-            "high": 98.5 if include_sweep else 97.85,
+            "high": 98.5 if include_sweep else 97.81,
             "low": 97.3,
             "close": 97.7,
             "volume": 140.0,
