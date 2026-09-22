@@ -94,7 +94,7 @@ _NON_EXCHANGE_MARKERS = (
     "confirmed_order_rejected:ack_timeout",
     "ack_timeout_no_confirmed_fill",
     "terminal_reject_status:unfilled",
-)
+    # v432 heartbeat feasibility failures are proven local/pre-dispatch.\n    # Bare VOLUME_TOO_SMALL remains a genuine/unknown exchange rejection.\n    "heartbeat_min_notional_exceeds_risk_cap",\n    "internal_dispatch_failure: pre-dispatch:volume_too_small",\n)
 
 # ``HARDENING_ENFORCEMENT`` is the documented execution-layer return code for a
 # position-cap/minimum-size/average-position/dust block.  That control returns
