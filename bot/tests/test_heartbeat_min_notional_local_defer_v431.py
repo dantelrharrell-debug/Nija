@@ -80,6 +80,40 @@ def test_heartbeat_size_helper_keeps_valid_risk_bounded_notional(monkeypatch) ->
     assert result <= 46.0
 
 
+def test_heartbeat_size_helper_honors_kraken_safe_quote_floor_without_generic_min(monkeypatch) -> None:
+    monkeypatch.delenv("NIJA_HEARTBEAT_RISK_FRACTION", raising=False)
+    broker = _KrakenBroker()
+    broker.min_trade_size = 0.0
+
+    # 23% of $63.20 is about $14.54, below Kraken's canonical buffered
+    # quote floor (~$20.60), so the probe must defer before broker dispatch.
+    result = submitter._risk_bounded_heartbeat_size(
+        broker,
+        requested_usd=28.75,
+        available_balance_usd=63.20,
+    )
+
+    assert result is None
+
+
+def test_heartbeat_size_helper_can_use_safe_quote_floor_when_risk_budget_allows(monkeypatch) -> None:
+    monkeypatch.delenv("NIJA_HEARTBEAT_RISK_FRACTION", raising=False)
+    broker = _KrakenBroker()
+    broker.min_trade_size = 0.0
+
+    # 23% of $100 is $23, enough for the canonical buffered Kraken quote
+    # minimum but still below the requested $28.75 probe size.
+    result = submitter._risk_bounded_heartbeat_size(
+        broker,
+        requested_usd=28.75,
+        available_balance_usd=100.0,
+    )
+
+    assert result is not None
+    assert result >= 20.60
+    assert result <= 23.0
+
+
 def test_internal_dispatch_contract_classifies_local_heartbeat_minimum_rejects() -> None:
     from bot.execution_dispatch_contract import is_internal_dispatch_failure
 
