@@ -637,8 +637,15 @@ class MultiBrokerExecutionRouter:
     # ------------------------------------------------------------------
 
     def supports_v2_protected_entry(self, request: Any = None) -> bool:
-        """True only for a broker adapter with an explicit atomic protected-entry contract."""
+        """True only when the exact requested order type has verified atomic protection."""
         if request is None:
+            return False
+        order_type = str(getattr(request, "order_type", "market") or "market").strip().lower()
+        # The current broker contract proves protected MARKET entry only.  Never
+        # convert a strategy-requested LIMIT entry into a market order just to
+        # obtain SL/TP protection; fail closed until an adapter exposes a
+        # verified atomic protected-limit primitive.
+        if order_type != "market":
             return False
         metadata = dict(getattr(request, "metadata", {}) or {})
         broker = metadata.get("broker_client")
@@ -683,19 +690,20 @@ class MultiBrokerExecutionRouter:
         )
         self._pending_decision_trace_id = _decision_trace_id
 
-        # BREAK_RETEST entries may dispatch only through a broker adapter
-        # that explicitly declares an atomic protected-entry primitive. Without
-        # that capability, fail closed before any broker call.
+        # Protected-entry strategies may dispatch only through a broker adapter
+        # that explicitly proves protection for the exact requested order type.
+        # Without that capability, fail closed before any broker call.
         _strategy = str(getattr(request, "strategy", "") or "").strip().upper()
         _intent = str(_meta.get("intent_type") or "").strip().lower()
         _closing = bool(_meta.get("closing_position")) or _intent in {"exit", "reduce"}
+        _protected_strategies = {"BREAK_RETEST", "LIQUIDITY_FVG_RETRACE"}
         if (
-            _strategy == "BREAK_RETEST"
+            _strategy in _protected_strategies
             and not _closing
             and not self.supports_v2_protected_entry(request)
         ):
             elapsed_ms = (time.monotonic() - t0) * 1000
-            error = "BREAK_RETEST_PROTECTION_DISPATCH_UNAVAILABLE"
+            error = f"{_strategy}_PROTECTION_DISPATCH_UNAVAILABLE"
             logger.error(
                 "🚫 %s symbol=%s side=%s trace_id=%s fail_closed=true",
                 error,
