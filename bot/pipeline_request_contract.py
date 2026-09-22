@@ -158,7 +158,9 @@ def validate_pipeline_request(req: PipelineRequest) -> Tuple[bool, str]:
             if strategy_norm == "BREAK_RETEST":
                 return False, "break_retest_protection_required"
             return False, "liquidity_fvg_retrace_protection_required"
-    if req.order_type == "limit":
+    if strategy_norm == "LIQUIDITY_FVG_RETRACE":
+        if req.order_type != "limit":
+            return False, "liquidity_fvg_retrace_requires_limit_order"
         try:
             limit_price = float(req.limit_price or 0.0)
             price_hint = float(req.price_hint_usd or 0.0)
