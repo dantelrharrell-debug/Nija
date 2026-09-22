@@ -37,6 +37,7 @@ except ImportError:
 
 
 _HEARTBEAT_PROBE_STRATEGIES = {"HEARTBEAT_TRADE", "HEARTBEAT_TRADE_CLOSE"}
+_PROTECTED_ENTRY_STRATEGIES = {"BREAK_RETEST", "LIQUIDITY_FVG_RETRACE"}
 _PIPELINE_DEPENDENCY_LOCK = threading.Lock()
 
 
@@ -459,13 +460,16 @@ def submit_market_order_via_pipeline(
     size_type: str = "quote",
     strategy: str = "PipelineOrderSubmitter",
     *,
+    order_type: str = "market",
+    limit_price: Optional[float] = None,
+    time_in_force: Optional[str] = None,
     intent_type: Optional[str] = None,
     account_id_override: Optional[str] = None,
     reduce_only_override: Optional[bool] = None,
     position_effect: Optional[str] = None,
     metadata_override: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """Submit a market order while preserving explicit account/exit context."""
+    """Submit a canonical order while preserving explicit account/exit context."""
     incoming_metadata = dict(metadata_override or {})
     if _v2_duplicate_metadata_state(incoming_metadata) == "partial":
         return {
@@ -491,10 +495,14 @@ def submit_market_order_via_pipeline(
                 "v2_pre_submit_proven": True,
             }
         protection[field_name] = parsed
-    if strategy_norm == "BREAK_RETEST" and set(protection) != {"stop_loss_pct", "take_profit_pct"}:
+    if strategy_norm in _PROTECTED_ENTRY_STRATEGIES and set(protection) != {"stop_loss_pct", "take_profit_pct"}:
         return {
             "status": "error",
-            "error": "break_retest_protection_required",
+            "error": (
+                "break_retest_protection_required"
+                if strategy_norm == "BREAK_RETEST"
+                else "liquidity_fvg_retrace_protection_required"
+            ),
             "symbol": symbol,
             "side": side,
             "v2_pre_submit_proven": True,
@@ -517,6 +525,28 @@ def submit_market_order_via_pipeline(
         }
 
     side_norm = str(side or "buy").strip().lower()
+    order_type_norm = str(order_type or "market").strip().lower()
+    if order_type_norm not in {"market", "limit"}:
+        _finalize_pre_submit_v2_duplicate(incoming_metadata)
+        return {
+            "status": "error",
+            "error": "unsupported_pipeline_order_type",
+            "symbol": symbol,
+            "side": side_norm,
+            "v2_pre_submit_proven": True,
+        }
+    parsed_limit_price: Optional[float] = None
+    if order_type_norm == "limit":
+        parsed_limit_price = _float(limit_price, float("nan"))
+        if not math.isfinite(parsed_limit_price) or parsed_limit_price <= 0.0:
+            _finalize_pre_submit_v2_duplicate(incoming_metadata)
+            return {
+                "status": "error",
+                "error": "limit_order_requires_positive_price",
+                "symbol": symbol,
+                "side": side_norm,
+                "v2_pre_submit_proven": True,
+            }
     heartbeat_probe = strategy_norm in _HEARTBEAT_PROBE_STRATEGIES
     preferred_broker = _resolve_preferred_broker(broker)
     account_id = str(account_id_override or _resolve_account_id(broker, preferred_broker)).strip().lower()
@@ -524,14 +554,15 @@ def submit_market_order_via_pipeline(
     is_exit = explicit_intent in {"exit", "reduce"} or str(position_effect or "").lower() in {"close", "reduce"}
 
     size_usd = max(0.0, _float(quantity))
-    price_hint_usd: Optional[float] = None
+    price_hint_usd: Optional[float] = parsed_limit_price
     base_quantity: Optional[float] = None
     if str(size_type or "quote").lower() == "base":
         base_quantity = max(0.0, _float(quantity))
-        try:
-            price_hint_usd = _float(getattr(broker, "get_current_price")(symbol))
-        except Exception:
-            price_hint_usd = 0.0
+        if price_hint_usd is None or price_hint_usd <= 0:
+            try:
+                price_hint_usd = _float(getattr(broker, "get_current_price")(symbol))
+            except Exception:
+                price_hint_usd = 0.0
         if price_hint_usd <= 0:
             _finalize_pre_submit_v2_duplicate(incoming_metadata)
             return {
@@ -636,6 +667,9 @@ def submit_market_order_via_pipeline(
         "intent_type": resolved_intent,
         "position_effect": position_effect or ("close" if resolved_intent in {"exit", "reduce"} else None),
         "price_hint_usd": price_hint_usd,
+        "order_type": order_type_norm,
+        "limit_price": parsed_limit_price,
+        "time_in_force": time_in_force,
     }
     if base_quantity is not None and base_quantity > 0:
         metadata["base_quantity"] = base_quantity
@@ -650,7 +684,9 @@ def submit_market_order_via_pipeline(
         symbol=symbol,
         side=side_norm,
         size_usd=effective_size,
-        order_type="market",
+        order_type=order_type_norm,
+        time_in_force=time_in_force,
+        limit_price=parsed_limit_price,
         preferred_broker=preferred_broker,
         price_hint_usd=price_hint_usd,
         available_balance_usd=available_balance,
