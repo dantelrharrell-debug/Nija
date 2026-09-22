@@ -493,6 +493,55 @@ class BreakRetestDetector(BaseDetector):
         self.lookback = max(10, int(os.getenv("NIJA_BREAK_RETEST_LOOKBACK", "20")))
         self.tolerance_atr = max(0.05, float(os.getenv("NIJA_BREAK_RETEST_TOLERANCE_ATR", "0.30")))
         self.volume_factor = max(0.0, float(os.getenv("NIJA_BREAK_RETEST_VOLUME_FACTOR", "1.0")))
+        self.require_fvg = os.getenv("NIJA_BREAK_RETEST_REQUIRE_FVG", "true").lower() in ("true", "1", "yes", "on")
+        self.fvg_lookback = max(3, int(os.getenv("NIJA_BREAK_RETEST_FVG_LOOKBACK", "6")))
+        self.fvg_min_atr = max(0.0, float(os.getenv("NIJA_BREAK_RETEST_FVG_MIN_ATR", "0.05")))
+
+    def _recent_directional_fvg(
+        self,
+        df: pd.DataFrame,
+        *,
+        direction: str,
+        atr_now: float,
+    ) -> Optional[Dict[str, float]]:
+        """Return the newest directional three-candle fair value gap before the retest bar.
+
+        Bullish FVG: candle[i].low > candle[i-2].high.
+        Bearish FVG: candle[i].high < candle[i-2].low.
+
+        The retest bar is deliberately excluded so FVG evidence must already exist
+        before the entry-confirmation candle closes.
+        """
+        end = len(df) - 1
+        start = max(2, end - self.fvg_lookback)
+        min_gap = max(0.0, atr_now * self.fvg_min_atr)
+
+        for i in range(end - 1, start - 1, -1):
+            left = df.iloc[i - 2]
+            right = df.iloc[i]
+
+            if direction == "long":
+                fvg_low = _to_float(left["high"])
+                fvg_high = _to_float(right["low"])
+            else:
+                fvg_low = _to_float(right["high"])
+                fvg_high = _to_float(left["low"])
+
+            gap_size = fvg_high - fvg_low
+            if (
+                math.isfinite(fvg_low)
+                and math.isfinite(fvg_high)
+                and math.isfinite(gap_size)
+                and gap_size > 0
+                and gap_size >= min_gap
+            ):
+                return {
+                    "fvg_low": fvg_low,
+                    "fvg_high": fvg_high,
+                    "fvg_gap_size": gap_size,
+                    "fvg_age_bars": float((len(df) - 1) - i),
+                }
+        return None
 
     def detect(self, df: pd.DataFrame, context: DetectorContext) -> Optional[StrategySignal]:
         if len(df) < self.lookback + 16:
@@ -531,9 +580,23 @@ class BreakRetestDetector(BaseDetector):
             and retest_close > resistance
             and retest_close > retest_open
         )
-        if long_break and long_retest:
+        long_fvg = self._recent_directional_fvg(df, direction="long", atr_now=atr_now)
+        long_fvg_ok = (not self.require_fvg) or (
+            long_fvg is not None and retest_close > long_fvg["fvg_low"]
+        )
+        if long_break and long_retest and long_fvg_ok:
             stop = resistance - max(tolerance, atr_now * 0.5)
             risk = max(retest_close - stop, atr_now * 0.5)
+            support_evidence = ["structure_break_up", "retest_hold", "close_confirmation", "volume_confirmed"]
+            metadata = {
+                "broken_level": resistance,
+                "retest_tolerance": tolerance,
+                "fvg_required": self.require_fvg,
+            }
+            if long_fvg is not None:
+                support_evidence.append("bullish_fvg_confirmed")
+                metadata.update(long_fvg)
+                metadata["fvg_direction"] = "bullish"
             return self._signal(
                 strategy=self.strategy_name,
                 context=context,
@@ -543,9 +606,9 @@ class BreakRetestDetector(BaseDetector):
                 invalidation_level=stop,
                 suggested_stop=stop,
                 targets=[retest_close + 1.5 * risk, retest_close + 2.0 * risk],
-                support=["structure_break_up", "retest_hold", "close_confirmation", "volume_confirmed"],
+                support=support_evidence,
                 conflict=[],
-                metadata={"broken_level": resistance, "retest_tolerance": tolerance},
+                metadata=metadata,
             )
 
         short_break = breakout_close < support and volume_ok
@@ -555,9 +618,23 @@ class BreakRetestDetector(BaseDetector):
             and retest_close < support
             and retest_close < retest_open
         )
-        if short_break and short_retest:
+        short_fvg = self._recent_directional_fvg(df, direction="short", atr_now=atr_now)
+        short_fvg_ok = (not self.require_fvg) or (
+            short_fvg is not None and retest_close < short_fvg["fvg_high"]
+        )
+        if short_break and short_retest and short_fvg_ok:
             stop = support + max(tolerance, atr_now * 0.5)
             risk = max(stop - retest_close, atr_now * 0.5)
+            support_evidence = ["structure_break_down", "retest_hold", "close_confirmation", "volume_confirmed"]
+            metadata = {
+                "broken_level": support,
+                "retest_tolerance": tolerance,
+                "fvg_required": self.require_fvg,
+            }
+            if short_fvg is not None:
+                support_evidence.append("bearish_fvg_confirmed")
+                metadata.update(short_fvg)
+                metadata["fvg_direction"] = "bearish"
             return self._signal(
                 strategy=self.strategy_name,
                 context=context,
@@ -567,9 +644,9 @@ class BreakRetestDetector(BaseDetector):
                 invalidation_level=stop,
                 suggested_stop=stop,
                 targets=[retest_close - 1.5 * risk, retest_close - 2.0 * risk],
-                support=["structure_break_down", "retest_hold", "close_confirmation", "volume_confirmed"],
+                support=support_evidence,
                 conflict=[],
-                metadata={"broken_level": support, "retest_tolerance": tolerance},
+                metadata=metadata,
             )
         return None
 
