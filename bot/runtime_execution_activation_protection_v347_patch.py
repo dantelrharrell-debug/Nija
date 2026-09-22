@@ -98,12 +98,13 @@ def _audit_protective_coverage() -> bool:
                 result = fn()
             except TypeError:
                 continue
+            ready = bool(result.get("ready")) if isinstance(result, dict) else False
             LOGGER.info(
-                "PROTECTIVE_COVERAGE_V347_AUDIT marker=%s source=v281 result=%s "
+                "PROTECTIVE_COVERAGE_V347_AUDIT marker=%s source=v281 ready=%s result=%s "
                 "tracker_mutation=false protection_fabricated=false dust_policy_unchanged=true",
-                MARKER, str(result)[:1200],
+                MARKER, str(ready).lower(), str(result)[:1200],
             )
-            return True
+            return ready
         # v281 already owns protection attachment and logs its authoritative
         # coverage state. Absence of a public read helper is not a reason to
         # mutate trackers here.
@@ -113,7 +114,7 @@ def _audit_protective_coverage() -> bool:
             "dust_policy_unchanged=true",
             MARKER,
         )
-        return True
+        return False
     except Exception as exc:
         LOGGER.warning(
             "PROTECTIVE_COVERAGE_V347_AUDIT_DEFERRED marker=%s error=%s:%s "
