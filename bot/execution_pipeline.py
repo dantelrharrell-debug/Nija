@@ -2387,6 +2387,8 @@ class ExecutionPipeline:
                             "stop_price": getattr(request, "stop_price", None),
                             "stop_loss_pct": getattr(request, "stop_loss_pct", None),
                             "take_profit_pct": getattr(request, "take_profit_pct", None),
+                            "intent_type": getattr(request, "intent_type", None),
+                            "protection_required": self._requires_verified_entry_protection(request),
                             "instrument_type": request.instrument_type or "",
                             "quantity_mode": request.quantity_mode,
                             "shares": request.shares,
