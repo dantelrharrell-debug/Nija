@@ -671,7 +671,6 @@ class LiquidityFvgRetraceDetector(BaseDetector):
             sell_side_sweep = (
                 sweep_low < prior_low - sweep_buffer
                 and sweep_close > prior_low
-                and sweep_close > sweep_open
             )
             bullish_displacement = (
                 disp_close > disp_open
@@ -751,7 +750,6 @@ class LiquidityFvgRetraceDetector(BaseDetector):
             buy_side_sweep = (
                 sweep_high > prior_high + sweep_buffer
                 and sweep_close < prior_high
-                and sweep_close < sweep_open
             )
             bearish_displacement = (
                 disp_close < disp_open
