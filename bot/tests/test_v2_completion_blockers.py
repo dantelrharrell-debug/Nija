@@ -117,6 +117,7 @@ def _break_retest_frame():
     rows = []
     for _ in range(40):
         rows.append({"open": 100.0, "high": 101.0, "low": 99.0, "close": 100.0, "volume": 100.0})
+    rows[-4] = {"open": 99.8, "high": 100.2, "low": 99.4, "close": 100.0, "volume": 100.0}
     rows[-2] = {"open": 100.5, "high": 103.0, "low": 100.4, "close": 102.0, "volume": 150.0}
     rows[-1] = {"open": 101.0, "high": 102.2, "low": 100.8, "close": 101.7, "volume": 120.0}
     return pd.DataFrame(rows)
