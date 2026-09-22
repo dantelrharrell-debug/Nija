@@ -1105,11 +1105,12 @@ class ExecutionPipeline:
 
     @staticmethod
     def _requires_verified_entry_protection(request: PipelineRequest) -> bool:
-        """Return True for every BREAK_RETEST entry that must bind SL/TP protection."""
+        """Return True for strategies that require broker-verified SL/TP protection."""
         strategy = str(getattr(request, "strategy", "") or "").strip().upper()
         intent = str(getattr(request, "intent_type", "") or "").strip().lower()
         reduce_only = bool(getattr(request, "reduce_only", False))
-        return strategy == "BREAK_RETEST" and intent == "entry" and not reduce_only
+        protected_strategies = {"BREAK_RETEST", "LIQUIDITY_FVG_RETRACE"}
+        return strategy in protected_strategies and intent == "entry" and not reduce_only
 
     @staticmethod
     def _router_supports_verified_entry_protection(router: Any, request: PipelineRequest) -> bool:
@@ -1591,6 +1592,12 @@ class ExecutionPipeline:
                     size_usd=compiled.compiled_notional_usd,
                     notional_usd=compiled.compiled_notional_usd,
                     units=compiled.compiled_base_size,
+                    price_hint_usd=compiled.compiled_price_usd,
+                    limit_price=(
+                        compiled.compiled_price_usd
+                        if str(working_request.order_type or "").strip().lower() == "limit"
+                        else working_request.limit_price
+                    ),
                     validated=True,
                 )
                 order_validated = True
@@ -2504,8 +2511,9 @@ class ExecutionPipeline:
                     )
 
         if protected_entry_required:
+            _protected_strategy = str(getattr(request, "strategy", "") or "protected_strategy").strip().upper()
             error = (
-                "entry_protection_unavailable: BREAK_RETEST entry requires a router "
+                f"entry_protection_unavailable: {_protected_strategy} entry requires a router "
                 "that proves stop-loss/take-profit protection support"
             )
             logger.error(error)
