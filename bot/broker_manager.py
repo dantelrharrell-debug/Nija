@@ -3406,6 +3406,26 @@ class CoinbaseBroker(BaseBroker):
 
         return False
 
+    @staticmethod
+    def _canonicalize_kraken_ws_market(wsname: str) -> str:
+        """Normalize Kraken websocket market names into NIJA canonical symbols.
+
+        Kraken exposes legacy asset aliases such as XBT/USD and XDG/USD.
+        NIJA's strategy universe uses BTC-USD and DOGE-USD. Market discovery
+        must normalize these aliases before availability checks or the heartbeat
+        can incorrectly skip an executable BTC market and fall through to a
+        higher-minimum symbol.
+        """
+        symbol = str(wsname or "").strip().upper().replace("/", "-")
+        if not symbol:
+            return ""
+        parts = symbol.split("-", 1)
+        base_aliases = {"XBT": "BTC", "XDG": "DOGE"}
+        if len(parts) == 2:
+            base, quote = parts
+            return f"{base_aliases.get(base, base)}-{quote}"
+        return base_aliases.get(symbol, symbol)
+
     def get_all_products(self) -> list:
         """
         Fetch ALL available products (cryptocurrency pairs) from Coinbase.
@@ -13460,7 +13480,7 @@ class KrakenBroker(BaseBroker):
                 if wsname and ('USD' in wsname or 'USDT' in wsname):
                     # Convert from Kraken format to standard format
                     # e.g., BTC/USD -> BTC-USD
-                    symbol = wsname.replace('/', '-')
+                    symbol = self._canonicalize_kraken_ws_market(wsname)
 
                     # Detect futures pairs (contain 'PERP', 'F0', or quarter codes like 'Z24', 'H25')
                     # Kraken futures typically have symbols like BTC-PERP, ETH-F0, BTC-Z24
