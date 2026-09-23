@@ -80,6 +80,7 @@ class BaseDetector:
         support: List[str],
         conflict: List[str],
         metadata: Optional[Dict] = None,
+        entry_zone: Optional[Dict[str, float]] = None,
     ) -> StrategySignal:
         return StrategySignal(
             strategy=strategy,
@@ -89,6 +90,7 @@ class BaseDetector:
             trading_context=context.trading_context,
             confidence=max(0.0, min(1.0, confidence)),
             raw_score=max(0.0, min(1.0, raw_score)),
+            entry_zone=entry_zone,
             invalidation_level=invalidation_level,
             suggested_stop=suggested_stop,
             target_candidates=targets,
@@ -484,6 +486,340 @@ class ReversalExhaustionDetector(BaseDetector):
 
 
 
+class LiquidityFvgRetraceDetector(BaseDetector):
+    """Daily-bias -> 1H liquidity sweep -> displacement -> FVG retracement model.
+
+    The detector is deliberately fail-closed.  It requires timestamped OHLCV
+    data sufficient to derive both 1-hour and completed Daily candles.
+    """
+
+    strategy_name = "LIQUIDITY_FVG_RETRACE"
+
+    def __init__(self) -> None:
+        self.liquidity_lookback = max(5, int(os.getenv("NIJA_LFR_LIQUIDITY_LOOKBACK", "12")))
+        self.daily_fvg_lookback = max(3, int(os.getenv("NIJA_LFR_DAILY_FVG_LOOKBACK", "12")))
+        self.daily_structure_lookback = max(2, int(os.getenv("NIJA_LFR_DAILY_STRUCTURE_LOOKBACK", "3")))
+        self.displacement_body_atr = max(0.1, float(os.getenv("NIJA_LFR_DISPLACEMENT_BODY_ATR", "0.80")))
+        self.displacement_body_ratio = min(
+            0.95, max(0.40, float(os.getenv("NIJA_LFR_DISPLACEMENT_BODY_RATIO", "0.60")))
+        )
+        self.sweep_buffer_atr = max(0.0, float(os.getenv("NIJA_LFR_SWEEP_BUFFER_ATR", "0.05")))
+        self.fvg_min_atr = max(0.0, float(os.getenv("NIJA_LFR_1H_FVG_MIN_ATR", "0.05")))
+        self.retrace_tolerance_atr = max(
+            0.0, float(os.getenv("NIJA_LFR_RETRACE_TOLERANCE_ATR", "0.10"))
+        )
+        self.stop_buffer_atr = max(0.0, float(os.getenv("NIJA_LFR_STOP_BUFFER_ATR", "0.10")))
+
+    @staticmethod
+    def _timestamped_ohlcv(df: pd.DataFrame) -> Optional[pd.DataFrame]:
+        required = {"open", "high", "low", "close", "volume"}
+        if df is None or df.empty or not required.issubset(df.columns):
+            return None
+        out = df.copy()
+        if not isinstance(out.index, pd.DatetimeIndex):
+            if "timestamp" not in out.columns:
+                return None
+            ts = pd.to_datetime(out["timestamp"], errors="coerce", utc=True)
+            if ts.isna().any():
+                return None
+            out.index = pd.DatetimeIndex(ts)
+        out = out.sort_index()
+        out = out[~out.index.duplicated(keep="last")]
+        return out
+
+    @staticmethod
+    def _resample_ohlcv(df: pd.DataFrame, rule: str) -> pd.DataFrame:
+        return (
+            df.resample(rule)
+            .agg(
+                {
+                    "open": "first",
+                    "high": "max",
+                    "low": "min",
+                    "close": "last",
+                    "volume": "sum",
+                }
+            )
+            .dropna()
+        )
+
+    def _completed_daily(self, hourly: pd.DataFrame) -> pd.DataFrame:
+        daily = self._resample_ohlcv(hourly, "1D")
+        if daily.empty:
+            return daily
+        current_day = hourly.index[-1].normalize()
+        return daily[daily.index < current_day]
+
+    def _daily_fvg(
+        self,
+        daily: pd.DataFrame,
+        *,
+        direction: str,
+    ) -> Optional[Dict[str, object]]:
+        if len(daily) < self.daily_structure_lookback + 3:
+            return None
+        earliest = max(2, len(daily) - self.daily_fvg_lookback)
+
+        for i in range(len(daily) - 1, earliest - 1, -1):
+            left = daily.iloc[i - 2]
+            middle = daily.iloc[i - 1]
+            right = daily.iloc[i]
+            structure_start = max(0, i - 1 - self.daily_structure_lookback)
+            prior = daily.iloc[structure_start : i - 1]
+            if prior.empty:
+                continue
+
+            if direction == "long":
+                gap_low = _to_float(left["high"])
+                gap_high = _to_float(right["low"])
+                structure_level = _to_float(prior["high"].max())
+                structure_break = _to_float(middle["close"]) > structure_level
+                later = daily.iloc[i + 1 :]
+                untouched = later.empty or _to_float(later["low"].min()) > gap_high
+            else:
+                gap_low = _to_float(right["high"])
+                gap_high = _to_float(left["low"])
+                structure_level = _to_float(prior["low"].min())
+                structure_break = _to_float(middle["close"]) < structure_level
+                later = daily.iloc[i + 1 :]
+                untouched = later.empty or _to_float(later["high"].max()) < gap_low
+
+            if (
+                math.isfinite(gap_low)
+                and math.isfinite(gap_high)
+                and gap_high > gap_low
+                and structure_break
+                and untouched
+            ):
+                created_at = daily.index[i]
+                return {
+                    "daily_fvg_low": gap_low,
+                    "daily_fvg_high": gap_high,
+                    "daily_fvg_created_at": created_at.isoformat()
+                    if hasattr(created_at, "isoformat")
+                    else str(created_at),
+                    "daily_structure_level": structure_level,
+                    "daily_structure_break": True,
+                }
+        return None
+
+    @staticmethod
+    def _intersects(low: float, high: float, zone_low: float, zone_high: float) -> bool:
+        return low <= zone_high and high >= zone_low
+
+    def detect(self, df: pd.DataFrame, context: DetectorContext) -> Optional[StrategySignal]:
+        base = self._timestamped_ohlcv(df)
+        if base is None:
+            return None
+
+        hourly = self._resample_ohlcv(base, "1h")
+        minimum_hourly = max(20, self.liquidity_lookback + 4)
+        if len(hourly) < minimum_hourly:
+            return None
+
+        daily = self._completed_daily(hourly)
+        if len(daily) < self.daily_structure_lookback + 3:
+            return None
+
+        atr_now = _to_float(_atr(hourly).iloc[-1])
+        if not math.isfinite(atr_now) or atr_now <= 0:
+            return None
+
+        sweep = hourly.iloc[-4]
+        displacement = hourly.iloc[-3]
+        fvg_confirm = hourly.iloc[-2]
+        retrace = hourly.iloc[-1]
+        prior = hourly.iloc[-(self.liquidity_lookback + 4) : -4]
+        if len(prior) < self.liquidity_lookback:
+            return None
+
+        sweep_high = _to_float(sweep["high"])
+        sweep_low = _to_float(sweep["low"])
+        sweep_close = _to_float(sweep["close"])
+        disp_open = _to_float(displacement["open"])
+        disp_high = _to_float(displacement["high"])
+        disp_low = _to_float(displacement["low"])
+        disp_close = _to_float(displacement["close"])
+        confirm_high = _to_float(fvg_confirm["high"])
+        confirm_low = _to_float(fvg_confirm["low"])
+        retrace_high = _to_float(retrace["high"])
+        retrace_low = _to_float(retrace["low"])
+        retrace_close = _to_float(retrace["close"])
+
+        prior_low = _to_float(prior["low"].min())
+        prior_high = _to_float(prior["high"].max())
+        sweep_buffer = atr_now * self.sweep_buffer_atr
+        min_fvg = atr_now * self.fvg_min_atr
+        retrace_tolerance = atr_now * self.retrace_tolerance_atr
+        stop_buffer = max(atr_now * self.stop_buffer_atr, atr_now * 0.01)
+
+        disp_range = max(disp_high - disp_low, 1e-12)
+        disp_body = abs(disp_close - disp_open)
+        body_ratio = disp_body / disp_range
+
+        previous_daily_high = _to_float(daily.iloc[-1]["high"])
+        previous_daily_low = _to_float(daily.iloc[-1]["low"])
+
+        # Long sequence: Daily bullish FVG + SSL sweep + bullish displacement
+        # + newly formed bullish 1H FVG + rejection from its proximal edge.
+        long_daily = self._daily_fvg(daily, direction="long")
+        if long_daily is not None:
+            daily_low = float(long_daily["daily_fvg_low"])
+            daily_high = float(long_daily["daily_fvg_high"])
+            daily_context = self._intersects(sweep_low, sweep_high, daily_low, daily_high)
+            sell_side_sweep = (
+                sweep_low < prior_low - sweep_buffer
+                and sweep_close > prior_low
+            )
+            bullish_displacement = (
+                disp_close > disp_open
+                and disp_body >= atr_now * self.displacement_body_atr
+                and body_ratio >= self.displacement_body_ratio
+                and disp_close > sweep_high
+            )
+            fvg_low = sweep_high
+            fvg_high = confirm_low
+            bullish_fvg = fvg_high - fvg_low >= min_fvg and fvg_high > fvg_low
+            entry_price = fvg_high
+            retracement = (
+                bullish_fvg
+                and retrace_low <= entry_price + retrace_tolerance
+                and retrace_high >= entry_price - retrace_tolerance
+                and retrace_close >= entry_price
+                and retrace_low > fvg_low - retrace_tolerance
+            )
+            stop = sweep_low - stop_buffer
+            target = previous_daily_high
+            if (
+                daily_context
+                and sell_side_sweep
+                and bullish_displacement
+                and retracement
+                and stop < entry_price < target
+            ):
+                metadata = {
+                    **long_daily,
+                    "liquidity_type": "sell_side",
+                    "liquidity_level": prior_low,
+                    "liquidity_sweep_low": sweep_low,
+                    "displacement_body": disp_body,
+                    "displacement_body_ratio": body_ratio,
+                    "one_hour_fvg_low": fvg_low,
+                    "one_hour_fvg_high": fvg_high,
+                    "entry_price": entry_price,
+                    "order_type": "limit",
+                    "limit_price": entry_price,
+                    "price_hint_usd": entry_price,
+                    "time_in_force": "gtc",
+                    "previous_daily_high": previous_daily_high,
+                    "previous_daily_low": previous_daily_low,
+                    "target_basis": "previous_daily_high",
+                    "stop_basis": "below_liquidity_sweep",
+                }
+                return self._signal(
+                    strategy=self.strategy_name,
+                    context=context,
+                    direction="long",
+                    confidence=0.82,
+                    raw_score=0.82,
+                    invalidation_level=stop,
+                    suggested_stop=stop,
+                    targets=[target],
+                    support=[
+                        "daily_bullish_structure_break",
+                        "unmitigated_daily_bullish_fvg",
+                        "sell_side_liquidity_sweep",
+                        "bullish_displacement",
+                        "new_1h_bullish_fvg",
+                        "1h_fvg_retracement",
+                        "previous_daily_high_target",
+                    ],
+                    conflict=[],
+                    metadata=metadata,
+                    entry_zone={"low": fvg_low, "high": fvg_high, "entry_price": entry_price},
+                )
+
+        # Short sequence: Daily bearish FVG + BSL sweep + bearish displacement
+        # + newly formed bearish 1H FVG + rejection from its proximal edge.
+        short_daily = self._daily_fvg(daily, direction="short")
+        if short_daily is not None:
+            daily_low = float(short_daily["daily_fvg_low"])
+            daily_high = float(short_daily["daily_fvg_high"])
+            daily_context = self._intersects(sweep_low, sweep_high, daily_low, daily_high)
+            buy_side_sweep = (
+                sweep_high > prior_high + sweep_buffer
+                and sweep_close < prior_high
+            )
+            bearish_displacement = (
+                disp_close < disp_open
+                and disp_body >= atr_now * self.displacement_body_atr
+                and body_ratio >= self.displacement_body_ratio
+                and disp_close < sweep_low
+            )
+            fvg_low = confirm_high
+            fvg_high = sweep_low
+            bearish_fvg = fvg_high - fvg_low >= min_fvg and fvg_high > fvg_low
+            entry_price = fvg_low
+            retracement = (
+                bearish_fvg
+                and retrace_high >= entry_price - retrace_tolerance
+                and retrace_low <= entry_price + retrace_tolerance
+                and retrace_close <= entry_price
+                and retrace_high < fvg_high + retrace_tolerance
+            )
+            stop = sweep_high + stop_buffer
+            target = previous_daily_low
+            if (
+                daily_context
+                and buy_side_sweep
+                and bearish_displacement
+                and retracement
+                and target < entry_price < stop
+            ):
+                metadata = {
+                    **short_daily,
+                    "liquidity_type": "buy_side",
+                    "liquidity_level": prior_high,
+                    "liquidity_sweep_high": sweep_high,
+                    "displacement_body": disp_body,
+                    "displacement_body_ratio": body_ratio,
+                    "one_hour_fvg_low": fvg_low,
+                    "one_hour_fvg_high": fvg_high,
+                    "entry_price": entry_price,
+                    "order_type": "limit",
+                    "limit_price": entry_price,
+                    "price_hint_usd": entry_price,
+                    "time_in_force": "gtc",
+                    "previous_daily_high": previous_daily_high,
+                    "previous_daily_low": previous_daily_low,
+                    "target_basis": "previous_daily_low",
+                    "stop_basis": "above_liquidity_sweep",
+                }
+                return self._signal(
+                    strategy=self.strategy_name,
+                    context=context,
+                    direction="short",
+                    confidence=0.82,
+                    raw_score=0.82,
+                    invalidation_level=stop,
+                    suggested_stop=stop,
+                    targets=[target],
+                    support=[
+                        "daily_bearish_structure_break",
+                        "unmitigated_daily_bearish_fvg",
+                        "buy_side_liquidity_sweep",
+                        "bearish_displacement",
+                        "new_1h_bearish_fvg",
+                        "1h_fvg_retracement",
+                        "previous_daily_low_target",
+                    ],
+                    conflict=[],
+                    metadata=metadata,
+                    entry_zone={"low": fvg_low, "high": fvg_high, "entry_price": entry_price},
+                )
+        return None
+
+
 class BreakRetestDetector(BaseDetector):
     """Detect confirmed structure break followed by a retest of the broken level."""
 
@@ -662,4 +998,5 @@ def build_default_detectors() -> Dict["FeatureFlag", BaseDetector]:
         FeatureFlag.VOLATILITY_EXPANSION_ENABLED: VolatilityExpansionDetector(),
         FeatureFlag.REVERSAL_EXHAUSTION_ENABLED: ReversalExhaustionDetector(),
         FeatureFlag.BREAK_RETEST_ENABLED: BreakRetestDetector(),
+        FeatureFlag.LIQUIDITY_FVG_RETRACE_ENABLED: LiquidityFvgRetraceDetector(),
     }

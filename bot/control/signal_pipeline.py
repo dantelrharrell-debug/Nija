@@ -288,8 +288,18 @@ class SignalPipeline:
                 best_signal.strategy,
             )
             return None
+        execution_meta = dict(best_signal.metadata or {})
+        planned_entry = (
+            execution_meta.get("limit_price")
+            or execution_meta.get("entry_price")
+            or (
+                best_signal.entry_zone.get("entry_price")
+                if isinstance(best_signal.entry_zone, dict)
+                else None
+            )
+        )
         try:
-            entry_price = float(df["close"].iloc[-1])
+            entry_price = float(planned_entry) if planned_entry is not None else float(df["close"].iloc[-1])
         except Exception:
             entry_price = 0.0
         stop_loss_pct: Optional[float] = None
@@ -335,6 +345,8 @@ class SignalPipeline:
             trading_context=trading_context,
             metadata={
                 **best_signal.to_dict(),
+                **execution_meta,
+                "entry_price": entry_price,
                 "signal_score": best_score,
             },
             execution_mode=trading_context.mode,

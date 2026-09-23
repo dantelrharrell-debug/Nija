@@ -74,11 +74,11 @@ _SIGNAL_REDIS_TTL: int = int(os.getenv("NIJA_SIGNAL_REDIS_TTL_SECONDS", "3600"))
 
 # Regime → compatible strategy types
 _REGIME_STRATEGY_MAP: Dict[str, List[str]] = {
-    "trending":       ["scalp", "swing", "trend", "apex", "break_retest"],
+    "trending":       ["scalp", "swing", "trend", "apex", "break_retest", "liquidity_fvg_retrace"],
     "ranging":        ["scalp", "mean_reversion", "range"],
-    "breakout":       ["swing", "breakout", "trend", "break_retest"],
+    "breakout":       ["swing", "breakout", "trend", "break_retest", "liquidity_fvg_retrace"],
     "mean_reversion": ["mean_reversion", "range", "scalp"],
-    "unknown":        ["scalp", "swing", "trend", "apex", "mean_reversion", "range", "breakout"],
+    "unknown":        ["scalp", "swing", "trend", "apex", "mean_reversion", "range", "breakout", "liquidity_fvg_retrace"],
 }
 
 # Execution actions that require full validation
@@ -157,7 +157,24 @@ class CompiledSignal:
         return asdict(self)
 
     def to_pipeline_kwargs(self) -> Dict[str, Any]:
-        """Return kwargs suitable for order-router / pipeline construction."""
+        """Return kwargs suitable for canonical PipelineRequest construction.
+
+        Detector execution hints are carried in metadata so older strategies
+        remain schema-compatible while limit-entry strategies can preserve the
+        exact intended price through ECEL and broker routing.
+        """
+        metadata = dict(self.metadata or {})
+        nested = metadata.get("metadata") if isinstance(metadata.get("metadata"), dict) else {}
+
+        def _hint(name: str, default: Any = None) -> Any:
+            value = metadata.get(name)
+            if value is None:
+                value = nested.get(name)
+            return default if value is None else value
+
+        is_entry = self.action in {"enter_long", "enter_short", "buy", "sell"}
+        limit_price = _hint("limit_price")
+        price_hint = _hint("price_hint_usd", _hint("entry_price", limit_price))
         return {
             "signal_id":       self.signal_id,
             "symbol":          self.symbol,
@@ -173,7 +190,13 @@ class CompiledSignal:
             "trading_context": self.trading_context.to_log_fields(),
             "stop_loss_pct":   self.stop_loss_pct,
             "take_profit_pct": self.take_profit_pct,
-            "metadata":        dict(self.metadata or {}),
+            "order_type":      _hint("order_type", "market"),
+            "limit_price":     limit_price,
+            "price_hint_usd":  price_hint,
+            "time_in_force":   _hint("time_in_force"),
+            "intent_type":     "entry" if is_entry else None,
+            "position_effect": "open" if is_entry else None,
+            "metadata":        metadata,
         }
 
 

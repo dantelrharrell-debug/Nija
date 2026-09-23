@@ -14,6 +14,7 @@ _TIFS = {"day", "gtc", "ioc", "fok"}
 _SIZING_MODES = {"notional_usd", "units"}
 _UNIT_TYPES = {"shares", "contracts", "base_asset"}
 _MARGIN_MODES = {"cross", "isolated"}
+_PROTECTED_ENTRY_STRATEGIES = {"BREAK_RETEST", "LIQUIDITY_FVG_RETRACE"}
 
 
 def _norm_enum(value: Optional[str]) -> Optional[str]:
@@ -151,9 +152,22 @@ def validate_pipeline_request(req: PipelineRequest) -> Tuple[bool, str]:
                 return False, f"invalid_{field_name}"
             if not (parsed > 0.0 and parsed < float("inf")):
                 return False, f"invalid_{field_name}"
-    if str(req.strategy or "").strip().upper() == "BREAK_RETEST" and req.intent_type == "entry":
+    strategy_norm = str(req.strategy or "").strip().upper()
+    if strategy_norm in _PROTECTED_ENTRY_STRATEGIES and req.intent_type == "entry":
         if req.stop_loss_pct is None or req.take_profit_pct is None:
-            return False, "break_retest_protection_required"
+            if strategy_norm == "BREAK_RETEST":
+                return False, "break_retest_protection_required"
+            return False, "liquidity_fvg_retrace_protection_required"
+    if strategy_norm == "LIQUIDITY_FVG_RETRACE":
+        if req.order_type != "limit":
+            return False, "liquidity_fvg_retrace_requires_limit_order"
+        try:
+            limit_price = float(req.limit_price or 0.0)
+            price_hint = float(req.price_hint_usd or 0.0)
+        except (TypeError, ValueError):
+            return False, "invalid_limit_price"
+        if not (limit_price > 0.0 and price_hint > 0.0):
+            return False, "limit_order_requires_positive_price"
     if req.asset_class is not None and req.asset_class not in _ASSET_CLASSES:
         return False, "invalid_asset_class"
     if req.intent_type is not None and req.intent_type not in _INTENT_TYPES:
