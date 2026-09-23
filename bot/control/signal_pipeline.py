@@ -88,7 +88,7 @@ from bot.control.signal_scoring import SignalScoringEngine
 from bot.control.situation_analysis import SituationAnalysisEngine
 from bot.control.strategy_registry import StrategyDetectorRegistry
 from bot.control.strategy_signal import StrategySignal
-from bot.adaptive_strategy_allocator import get_adaptive_strategy_allocator
+from bot.regime_performance_calibrator import get_regime_performance_calibrator
 
 logger = logging.getLogger("nija.control.pipeline")
 
@@ -144,7 +144,7 @@ class SignalPipeline:
         self._scoring_engine = SignalScoringEngine()
         self._confirmation_engine = ConfirmationEngine()
         self._situation_engine = SituationAnalysisEngine()
-        self._adaptive_strategy_allocator = get_adaptive_strategy_allocator()
+        self._regime_performance_calibrator = get_regime_performance_calibrator()
         self._redis         = redis_client
         self._context_authorizer = context_authorizer
         self._lock          = threading.Lock()
@@ -275,7 +275,7 @@ class SignalPipeline:
         if not ranked:
             return None
 
-        adaptive_ranked = self._adaptive_strategy_allocator.rank(ranked)
+        adaptive_ranked = self._regime_performance_calibrator.rank_strategy_candidates(ranked)
         best_signal, best_score, adaptive_detail = adaptive_ranked[0]
         strategy_signal_id = best_signal.strategy_signal_id
         if best_signal.trading_context.scope_key != trading_context.scope_key:
@@ -352,7 +352,7 @@ class SignalPipeline:
                 **execution_meta,
                 "entry_price": entry_price,
                 "signal_score": best_score,
-                "adaptive_strategy": adaptive_detail.to_dict(),
+                "adaptive_strategy": adaptive_detail,
             },
             execution_mode=trading_context.mode,
         )
