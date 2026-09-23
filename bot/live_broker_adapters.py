@@ -782,6 +782,111 @@ class TradierOptionsAdapter(BrokerAdapter):
             logger.error("[TradierOptions] get_option_chain error: %s", exc)
             return []
 
+    def analyze_option_contract(
+        self,
+        option: Dict[str, Any],
+        underlying_price: float,
+        risk_free_rate: float = 0.0,
+        dividend_yield: float = 0.0,
+    ) -> Dict[str, Any]:
+        """
+        Add NIJA Black-Scholes-Merton analytics to one Tradier option quote.
+
+        This is read-only analytics. It does not authorize, size, or place an order.
+        Broker-provided implied volatility is preferred when present; otherwise NIJA
+        can solve implied volatility from a valid market price.
+        """
+        try:
+            from bot.options_analytics import analyze_option
+        except ImportError:
+            from options_analytics import analyze_option  # type: ignore[import]
+
+        strike = _safe_float(option.get("strike"))
+        option_type = str(
+            option.get("option_type") or option.get("type") or ""
+        ).lower()
+        expiration = str(
+            option.get("expiration_date") or option.get("expiration") or ""
+        )
+        if strike <= 0.0 or option_type not in {"call", "put"} or not expiration:
+            return {
+                "available": False,
+                "reason": "missing_strike_option_type_or_expiration",
+            }
+
+        try:
+            expiry_dt = datetime.fromisoformat(expiration).replace(tzinfo=timezone.utc)
+        except ValueError:
+            return {"available": False, "reason": "invalid_expiration"}
+
+        seconds = (expiry_dt - datetime.now(timezone.utc)).total_seconds()
+        time_to_expiry_years = max(0.0, seconds / (365.25 * 24.0 * 3600.0))
+        if time_to_expiry_years <= 0.0:
+            return {"available": False, "reason": "expired_option"}
+
+        last = _safe_float(option.get("last"))
+        bid = _safe_float(option.get("bid"))
+        ask = _safe_float(option.get("ask"))
+        market_price = last if last > 0.0 else ((bid + ask) / 2.0 if bid > 0.0 and ask > 0.0 else 0.0)
+
+        greeks = option.get("greeks") or {}
+        if not isinstance(greeks, dict):
+            greeks = {}
+        volatility = _safe_float(
+            greeks.get("mid_iv")
+            or greeks.get("smv_vol")
+            or option.get("implied_volatility")
+        )
+
+        if volatility <= 0.0 and market_price <= 0.0:
+            return {"available": False, "reason": "missing_volatility_and_market_price"}
+
+        try:
+            result = analyze_option(
+                spot=float(underlying_price),
+                strike=strike,
+                time_to_expiry_years=time_to_expiry_years,
+                risk_free_rate=float(risk_free_rate),
+                option_type=option_type,
+                volatility=volatility if volatility > 0.0 else None,
+                market_price=market_price if market_price > 0.0 else None,
+                dividend_yield=float(dividend_yield),
+            )
+        except ValueError as exc:
+            return {"available": False, "reason": str(exc)}
+
+        payload = result.to_dict()
+        payload["available"] = True
+        payload["source"] = "nija_black_scholes_merton"
+        return payload
+
+    def get_option_chain_with_analytics(
+        self,
+        underlying: str,
+        expiration: str,
+        underlying_price: float,
+        risk_free_rate: float = 0.0,
+        dividend_yield: float = 0.0,
+    ) -> List[Dict]:
+        """
+        Return Tradier's option chain enriched with NIJA model analytics.
+
+        The original get_option_chain response is left unchanged. Each returned
+        quote gets a nija_black_scholes field containing read-only model output.
+        """
+        chain = self.get_option_chain(underlying, expiration)
+        enriched: List[Dict] = []
+        for option in chain:
+            row = dict(option)
+            row["nija_black_scholes"] = self.analyze_option_contract(
+                row,
+                underlying_price=underlying_price,
+                risk_free_rate=risk_free_rate,
+                dividend_yield=dividend_yield,
+            )
+            enriched.append(row)
+        return enriched
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
