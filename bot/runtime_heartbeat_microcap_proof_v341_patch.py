@@ -95,6 +95,74 @@ def _buffer_pct() -> float:
         return 0.10
 
 
+def _execution_hardening_floor(broker_key: str, balance: float) -> float | None:
+    """Return the canonical execution-layer minimum average for this balance.
+
+    v341 is allowed to downshift only when the resulting heartbeat remains valid
+    under the same hardening policy enforced at broker submission.  If that
+    policy cannot be resolved, fail closed by returning None so the caller keeps
+    the ordinary (larger) heartbeat notional.
+    """
+    try:
+        monitor_mod = importlib.import_module("bot.execution_average_position_monitor")
+        monitor_cls = getattr(monitor_mod, "ExecutionAveragePositionMonitor", None)
+        if not isinstance(monitor_cls, type):
+            return None
+        monitor = monitor_cls(broker_type=str(broker_key or "default"))
+        threshold = max(0.0, float(getattr(monitor, "min_avg_threshold", 0.0) or 0.0))
+        low_cap_threshold = max(0.0, float(getattr(monitor, "LOW_CAPITAL_THRESHOLD", 0.0) or 0.0))
+        low_cap_min = max(0.0, float(getattr(monitor, "LOW_CAPITAL_MIN_AVG", 0.0) or 0.0))
+        if (
+            bool(getattr(monitor, "enforce_low_capital_mode", True))
+            and balance > 0.0
+            and low_cap_threshold > 0.0
+            and balance < low_cap_threshold
+        ):
+            threshold = max(threshold, low_cap_min)
+        return threshold
+    except Exception as exc:
+        LOGGER.warning(
+            "HEARTBEAT_MICROCAP_V341_HARDENING_FLOOR_UNPROVEN marker=%s venue=%s "
+            "balance=%.2f error=%s:%s trading_fail_closed=true",
+            MARKER, broker_key, balance, type(exc).__name__, exc,
+        )
+        return None
+
+
+def _resolve_microcap_heartbeat_notional(
+    configured: float,
+    micro_floor: float,
+    hardening_floor: float,
+) -> float:
+    """Resolve a heartbeat that satisfies both venue and execution hardening."""
+    return max(
+        0.01,
+        float(configured or 0.0),
+        max(0.0, float(micro_floor or 0.0)) * 1.25,
+        max(0.0, float(hardening_floor or 0.0)),
+    )
+
+
+def _heartbeat_funding_status(
+    strategy: Any,
+    broker: Any,
+) -> tuple[bool, str, float, float, float, str]:
+    """Check cached spendable capital against the actual hardened heartbeat size."""
+    key = _broker_key(strategy, broker)
+    balance, source = _cached_balance(strategy, broker, key)
+    if balance is None or balance <= 0.0:
+        return False, key, 0.0, 0.0, 0.0, str(source or "unproven")
+    resolver = getattr(strategy, "_resolve_heartbeat_trade_amount_usd", None)
+    if not callable(resolver):
+        return False, key, balance, 0.0, 0.0, "heartbeat_notional_unproven"
+    try:
+        required = max(0.0, float(resolver(broker) or 0.0))
+    except Exception as exc:
+        return False, key, balance, 0.0, 0.0, f"heartbeat_notional_error:{type(exc).__name__}"
+    spendable = max(0.0, balance * (1.0 - _buffer_pct()))
+    return bool(required > 0.0 and spendable + 1e-9 >= required), key, balance, spendable, required, str(source or "cached")
+
+
 def _verified_heartbeat_context() -> bool:
     if threading.current_thread().name == "HeartbeatTrade":
         return True
@@ -124,16 +192,20 @@ def _patch_trading_strategy() -> bool:
     if callable(current_resolver) and not getattr(current_resolver, _PATCH_ATTR, False):
         @wraps(current_resolver)
         def _resolve_heartbeat_trade_amount_usd(self: Any, broker: Any) -> float:
+            ordinary = float(current_resolver(self, broker))
             if _broker_key(self, broker) != "coinbase":
-                return float(current_resolver(self, broker))
+                return ordinary
             balance, source = _cached_balance(self, broker, "coinbase")
             if balance is None or balance <= 0.0:
-                return float(current_resolver(self, broker))
+                return ordinary
             floor = _coinbase_floor(balance)
             # v341 may only downshift when NIJA's existing micro-cap policy has
             # actually produced a sub-normal Coinbase floor.
             if floor >= 10.0:
-                return float(current_resolver(self, broker))
+                return ordinary
+            hardening_floor = _execution_hardening_floor("coinbase", balance)
+            if hardening_floor is None or hardening_floor <= 0.0:
+                return ordinary
             configured = max(
                 0.01,
                 float(
@@ -145,14 +217,19 @@ def _patch_trading_strategy() -> bool:
                     or 5.0
                 ),
             )
-            resolved = max(configured, floor * 1.25)
+            resolved = _resolve_microcap_heartbeat_notional(
+                configured,
+                floor,
+                hardening_floor,
+            )
             LOGGER.critical(
                 "HEARTBEAT_MICROCAP_V341_NOTIONAL marker=%s venue=coinbase balance=%.2f "
-                "micro_floor=%.2f configured=%.2f resolved=%.2f source=%s "
-                "cached_balance_only=true minimum_notional_gate_required=true "
+                "micro_floor=%.2f hardening_floor=%.2f configured=%.2f ordinary=%.2f "
+                "resolved=%.2f source=%s cached_balance_only=true "
+                "execution_hardening_required=true minimum_notional_gate_required=true "
                 "execution_proof_fabricated=false forced_trade=false forced_activation=false "
                 "safety_gates_bypassed=false",
-                MARKER, balance, floor, configured, resolved, source,
+                MARKER, balance, floor, hardening_floor, configured, ordinary, resolved, source,
             )
             return resolved
 
@@ -202,99 +279,151 @@ def _patch_trading_strategy() -> bool:
         setattr(_is_broker_eligible_for_entry, "_nija_spendable_quote_gate", True)
         setattr(cls, "_is_broker_eligible_for_entry", _is_broker_eligible_for_entry)
 
-    # v322 receives only the ordinary active-venue publication.  If that set
-    # contains an underfunded Kraken but omits a legitimately executable
-    # Coinbase micro-cap account, v341 may add Coinbase only as a startup
-    # heartbeat candidate.  It does not mutate global venue readiness.
+    # Reconcile the selected startup venue against the actual heartbeat notional
+    # after all runtime wrappers (including v341 hardening) have resolved it.
+    # A canonical-ready venue that cannot fund that notional is selection-ineligible
+    # for the heartbeat only; ordinary venue readiness and order routing are unchanged.
     current_selector = getattr(cls, "_get_heartbeat_broker", None)
     if callable(current_selector) and not getattr(current_selector, _SELECTOR_ATTR, False):
         @wraps(current_selector)
         def _get_heartbeat_broker(self: Any):
             selected = current_selector(self)
-            if selected is not None or threading.current_thread().name != "HeartbeatTrade":
+            if threading.current_thread().name != "HeartbeatTrade":
                 return selected
+
+            if selected is not None:
+                funded, selected_key, balance, spendable, required, source = _heartbeat_funding_status(
+                    self, selected
+                )
+                if funded:
+                    return selected
+                LOGGER.warning(
+                    "HEARTBEAT_MICROCAP_V341_SELECTED_DEFERRED marker=%s venue=%s "
+                    "balance=%.2f spendable=%.2f required=%.2f source=%s "
+                    "reason=selected_venue_cannot_fund_hardened_heartbeat selection_only=true "
+                    "ordinary_entries_unchanged=true readiness_granted=false "
+                    "execution_proof_fabricated=false trading_fail_closed=true "
+                    "safety_gates_bypassed=false",
+                    MARKER, selected_key, balance, spendable, required, source,
+                )
 
             try:
                 v274 = importlib.import_module("bot.runtime_heartbeat_live_venue_selection_v274_patch")
                 fallback_resolver = getattr(v274, "_live_venue_fallback_set", None)
                 candidate_resolver = getattr(v274, "_candidate_brokers", None)
-                if not callable(fallback_resolver) or not callable(candidate_resolver):
+                if not callable(candidate_resolver):
                     return None
-                allowed, live_venues, fallback_reason = fallback_resolver()
-                if not allowed:
-                    return None
+
+                canonical_ready = tuple(
+                    dict.fromkeys(
+                        part.strip().lower()
+                        for part in str(os.environ.get("NIJA_EXECUTION_READY_VENUES", "") or "").split(",")
+                        if part.strip()
+                    )
+                )
+                if canonical_ready:
+                    allowed_venues = canonical_ready
+                    fallback_reason = "canonical_ready_funding_reselection"
+                else:
+                    if not callable(fallback_resolver):
+                        return None
+                    allowed, allowed_venues, fallback_reason = fallback_resolver()
+                    if not allowed:
+                        return None
                 candidates = dict(candidate_resolver(self) or {})
             except Exception:
                 return None
 
-            for broker in candidates.values():
-                if broker is None or _broker_key(self, broker) != "coinbase":
-                    continue
-                if not bool(getattr(broker, "connected", False)) or bool(getattr(broker, "exit_only_mode", False)):
-                    continue
-                if hasattr(broker, "position_tracker") and getattr(broker, "position_tracker") is None:
-                    continue
+            allowed_set = set(allowed_venues)
+            funded_candidates: dict[Any, Any] = {}
+            funding_status: dict[str, str] = {}
+            eligible_fn = getattr(self, "_is_broker_eligible_for_entry", None)
 
-                balance, source = _cached_balance(self, broker, "coinbase")
-                if balance is None or balance <= 0.0:
+            for raw_key, broker in candidates.items():
+                if broker is None:
                     continue
-                floor = _coinbase_floor(balance)
-                if floor >= 10.0:
+                key = _broker_key(self, broker)
+                if allowed_set and key not in allowed_set:
                     continue
-                try:
-                    required = float(self._resolve_heartbeat_trade_amount_usd(broker) or 0.0)
-                except Exception:
-                    continue
-                spendable = max(0.0, balance * (1.0 - _buffer_pct()))
-                if required <= 0.0 or spendable + 1e-9 < required:
-                    LOGGER.warning(
-                        "HEARTBEAT_MICROCAP_V341_SELECTOR_DEFERRED marker=%s venue=coinbase "
-                        "balance=%.2f spendable=%.2f required=%.2f floor=%.2f source=%s "
-                        "selection_only=true broker_io=false trading_fail_closed=true "
-                        "readiness_granted=false execution_proof_fabricated=false "
-                        "safety_gates_bypassed=false",
-                        MARKER, balance, spendable, required, floor, source,
+                funded, _key, balance, spendable, required, source = _heartbeat_funding_status(
+                    self, broker
+                )
+                if not funded:
+                    funding_status[key] = (
+                        f"underfunded:balance={balance:.2f}:spendable={spendable:.2f}:"
+                        f"required={required:.2f}:source={source}"
                     )
                     continue
-
-                eligible_fn = getattr(self, "_is_broker_eligible_for_entry", None)
                 if not callable(eligible_fn):
+                    funding_status[key] = "entry_eligibility_unavailable"
                     continue
                 try:
                     eligible, detail = eligible_fn(broker)
-                except Exception:
+                except Exception as exc:
+                    funding_status[key] = f"entry_eligibility_error:{type(exc).__name__}"
                     continue
                 if not eligible:
+                    funding_status[key] = f"entry_ineligible:{detail}"
                     continue
+                funding_status[key] = (
+                    f"funded:balance={balance:.2f}:spendable={spendable:.2f}:"
+                    f"required={required:.2f}:source={source}"
+                )
+                funded_candidates[raw_key] = broker
 
-                self.broker = broker
-                broker_manager = getattr(self, "broker_manager", None)
-                if broker_manager is not None:
-                    try:
-                        broker_manager.active_broker = broker
-                    except Exception:
-                        pass
-                LOGGER.critical(
-                    "HEARTBEAT_MICROCAP_V341_SELECTOR_BRIDGE marker=%s venue=coinbase "
-                    "balance=%.2f spendable=%.2f required=%.2f floor=%.2f source=%s "
-                    "v274_active=%s fallback_reason=%s eligibility=%s "
-                    "selection_only=true ordinary_active_venue_publication_unchanged=true "
-                    "global_venue_readiness_not_mutated=true downstream_capital_authorization_required=true "
-                    "ecel_risk_writer_nonce_killswitch_min_notional_order_ack_fill_gates_unchanged=true "
+            if not funded_candidates:
+                LOGGER.error(
+                    "HEARTBEAT_MICROCAP_V341_SELECTOR_NONE marker=%s allowed=%s status=%s "
+                    "reason=%s selection_only=true broker_io=false trading_fail_closed=true "
                     "readiness_granted=false execution_proof_fabricated=false forced_trade=false "
                     "forced_activation=false safety_gates_bypassed=false",
-                    MARKER,
-                    balance,
-                    spendable,
-                    required,
-                    floor,
-                    source,
-                    ",".join(live_venues),
-                    fallback_reason,
-                    detail,
+                    MARKER, ",".join(allowed_venues), funding_status, fallback_reason,
                 )
-                return broker
-            return None
+                return None
+
+            selector = getattr(self, "_select_entry_broker", None)
+            if not callable(selector):
+                return None
+            try:
+                fallback, name, status = selector(funded_candidates)
+            except Exception as exc:
+                LOGGER.warning(
+                    "HEARTBEAT_MICROCAP_V341_SELECTOR_ERROR marker=%s error=%s:%s "
+                    "selection_only=true trading_fail_closed=true",
+                    MARKER, type(exc).__name__, exc,
+                )
+                return None
+            if fallback is None:
+                LOGGER.warning(
+                    "HEARTBEAT_MICROCAP_V341_SELECTOR_UNAVAILABLE marker=%s status=%s "
+                    "funding_status=%s selection_only=true trading_fail_closed=true",
+                    MARKER, status or "no_funded_candidate", funding_status,
+                )
+                return None
+
+            self.broker = fallback
+            broker_manager = getattr(self, "broker_manager", None)
+            if broker_manager is not None:
+                try:
+                    broker_manager.active_broker = fallback
+                except Exception:
+                    pass
+            funded, key, balance, spendable, required, source = _heartbeat_funding_status(
+                self, fallback
+            )
+            LOGGER.critical(
+                "HEARTBEAT_MICROCAP_V341_SELECTOR_BRIDGE marker=%s selected=%s "
+                "balance=%.2f spendable=%.2f required=%.2f source=%s allowed=%s "
+                "reason=%s eligibility=%s selection_only=true "
+                "ordinary_active_venue_publication_unchanged=true "
+                "global_venue_readiness_not_mutated=true downstream_capital_authorization_required=true "
+                "ecel_risk_writer_nonce_killswitch_min_notional_order_ack_fill_gates_unchanged=true "
+                "readiness_granted=false execution_proof_fabricated=false forced_trade=false "
+                "forced_activation=false safety_gates_bypassed=false",
+                MARKER, key or name, balance, spendable, required, source,
+                ",".join(allowed_venues), fallback_reason, funding_status.get(key, "funded"),
+            )
+            return fallback
 
         setattr(_get_heartbeat_broker, _SELECTOR_ATTR, True)
         setattr(_get_heartbeat_broker, _PATCH_ATTR, True)
