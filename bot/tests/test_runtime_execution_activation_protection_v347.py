@@ -75,3 +75,35 @@ def test_v347_protection_audit_never_mutates_trackers(monkeypatch):
         lambda name: V281 if name == "bot.runtime_all_account_position_exit_coverage_v281_patch" else real_import(name),
     )
     assert v347._audit_protective_coverage() is True
+
+
+def test_v347_installs_monitor_while_runtime_protection_is_still_converging(monkeypatch):
+    started = []
+
+    class FakeThread:
+        def __init__(self, *, target, name, daemon):
+            self.target = target
+            self.name = name
+            self.daemon = daemon
+            self._alive = False
+
+        def start(self):
+            self._alive = True
+            started.append(self.name)
+
+        def is_alive(self):
+            return self._alive
+
+    monkeypatch.setattr(v347, "_THREAD", None)
+    monkeypatch.setattr(v347, "_patch_v346_marker_writer", lambda: True)
+    monkeypatch.setattr(v347, "_audit_protective_coverage", lambda: False)
+    monkeypatch.setattr(v347, "_register_manifest", lambda: True)
+    monkeypatch.setattr(v347.threading, "Thread", FakeThread)
+    monkeypatch.delenv("NIJA_RUNTIME_EXECUTION_ACTIVATION_PROTECTION_V347_READY", raising=False)
+
+    assert v347.install_import_hook() is True
+    assert started == ["ExecutionActivationProtectionV347"]
+    assert (
+        v347.os.environ["NIJA_RUNTIME_EXECUTION_ACTIVATION_PROTECTION_V347_READY"]
+        == "1"
+    )
