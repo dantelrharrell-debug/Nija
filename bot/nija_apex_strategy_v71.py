@@ -5862,6 +5862,24 @@ class NIJAApexStrategyV71:
                     except Exception:
                         _strategy_label = ''
                 levels['strategy_name'] = _strategy_label or 'APEX_V71'
+
+                # Ensure entry-time regime is preserved for closed-trade
+                # attribution even when a particular action payload omitted it.
+                if not (
+                    levels.get('regime')
+                    or levels.get('market_regime')
+                    or levels.get('regime_family')
+                ):
+                    try:
+                        _runtime_regime = getattr(
+                            self.current_regime,
+                            'value',
+                            self.current_regime,
+                        )
+                        if _runtime_regime:
+                            levels['market_regime'] = str(_runtime_regime)
+                    except Exception:
+                        pass
                 # Pass through EV-relevant signal metadata so the expectancy gate
                 # uses the real signal win rate, not the global 50% default.
                 # Keys searched by ExecutionEngine._resolve_expected_win_rate:
