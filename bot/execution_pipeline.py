@@ -518,6 +518,7 @@ class PipelineRequest:
     size_usd: float
     request_id: Optional[str] = None
     intent_id: Optional[str] = None
+    cycle_id: Optional[str] = None
     notional_usd: Optional[float] = None
     sizing_mode: str = "notional_usd"
     intent_type: str = "entry"       # "entry" / "reduce" / "exit"
@@ -533,7 +534,10 @@ class PipelineRequest:
     units: Optional[float] = None
     unit_type: Optional[str] = None
     preferred_broker: Optional[str] = None
+    allowed_brokers: tuple[str, ...] = field(default_factory=tuple)
     available_balance_usd: Optional[float] = None
+    limit_price: Optional[float] = None
+    stop_price: Optional[float] = None
     price_hint_usd: Optional[float] = None
     bid_price_usd: Optional[float] = None
     ask_price_usd: Optional[float] = None
@@ -544,6 +548,7 @@ class PipelineRequest:
     account_id: str = "default"
     account_type: Optional[str] = None
     leverage: Optional[float] = None
+    short_sell: Optional[bool] = None
     reduce_only: bool = False
     position_effect: Optional[str] = None
     borrow_intent: Optional[str] = None
@@ -556,6 +561,7 @@ class PipelineRequest:
     strategy_metadata: Dict[str, Any] = field(default_factory=dict)
     metadata: Dict[str, Any] = field(default_factory=dict)
     validated: bool = False
+    attempt_n: int = 0
 
     def __post_init__(self) -> None:
         # Keep the legacy local request class compatible with the canonical
