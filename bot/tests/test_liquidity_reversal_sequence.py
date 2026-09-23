@@ -106,7 +106,7 @@ class TestLiquidityReversalSequence(unittest.TestCase):
         self.assertFalse(signal["metadata"]["power_of_three_confirmed"])
         self.assertFalse(signal["metadata"]["po3_accumulation"])
         self.assertFalse(signal["metadata"]["po3_manipulation"])
-        self.assertTrue(signal["metadata"]["po3_distribution"])
+        self.assertFalse(signal["metadata"]["po3_distribution"])
 
     def test_body_close_break_is_not_misclassified_as_liquidity_sweep(self):
         strategy = LiquidityReversalStrategy()
