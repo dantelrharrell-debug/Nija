@@ -39,6 +39,50 @@ except ImportError:
 _HEARTBEAT_PROBE_STRATEGIES = {"HEARTBEAT_TRADE", "HEARTBEAT_TRADE_CLOSE"}
 _PROTECTED_ENTRY_STRATEGIES = {"BREAK_RETEST", "LIQUIDITY_FVG_RETRACE"}
 _PIPELINE_DEPENDENCY_LOCK = threading.Lock()
+_CANONICAL_REQUEST_FIELDS = {
+    "limit_price",
+    "time_in_force",
+    "intent_type",
+    "position_effect",
+    "reduce_only",
+    "units",
+    "unit_type",
+    "stop_loss_pct",
+    "take_profit_pct",
+}
+
+
+def _request_contract_is_stale(request_type: Any) -> bool:
+    """Detect the reduced ExecutionPipeline fallback dataclass from circular startup.
+
+    Test doubles and injected factories are deliberately left alone.  Only a
+    dataclass-like request type (or the v204 wrapper around one) is considered
+    stale when it lacks fields required by the canonical submitter.
+    """
+    original = getattr(request_type, "_nija_original_pipeline_request", request_type)
+    fields = getattr(original, "__dataclass_fields__", None)
+    if not isinstance(fields, dict):
+        return False
+    return not _CANONICAL_REQUEST_FIELDS.issubset(fields)
+
+
+def _load_canonical_pipeline_request() -> Any:
+    failures = []
+    for module_name in ("bot.pipeline_request_contract", "pipeline_request_contract"):
+        try:
+            module = importlib.import_module(module_name)
+            request_type = getattr(module, "PipelineRequest", None)
+            fields = getattr(request_type, "__dataclass_fields__", None)
+            if request_type is not None and isinstance(fields, dict) and _CANONICAL_REQUEST_FIELDS.issubset(fields):
+                return request_type
+            failures.append(f"{module_name}:incomplete_contract")
+        except Exception as exc:
+            failures.append(f"{module_name}:{type(exc).__name__}")
+    logger.error(
+        "CANONICAL_PIPELINE_REQUEST_REBIND_FAILED failures=%s trading_fail_closed=true",
+        ",".join(failures),
+    )
+    return None
 
 
 def _resolve_execution_pipeline_dependencies() -> tuple[Any, Any]:
@@ -53,6 +97,20 @@ def _resolve_execution_pipeline_dependencies() -> tuple[Any, Any]:
     global PipelineRequest, get_execution_pipeline
 
     with _PIPELINE_DEPENDENCY_LOCK:
+        if PipelineRequest is not None and _request_contract_is_stale(PipelineRequest):
+            repaired = _load_canonical_pipeline_request()
+            if repaired is not None:
+                logger.critical(
+                    "CANONICAL_PIPELINE_REQUEST_REBOUND source=stale_execution_pipeline_fallback "
+                    "limit_price=true exit_context=true protection_fields=true safety_gates_bypassed=false"
+                )
+                PipelineRequest = repaired
+            else:
+                # Do not continue with a constructor known to reject canonical
+                # exit/limit/protection fields.  Fail closed until the real
+                # contract is importable.
+                PipelineRequest = None
+
         if PipelineRequest is not None and get_execution_pipeline is not None:
             return PipelineRequest, get_execution_pipeline
 
@@ -67,6 +125,8 @@ def _resolve_execution_pipeline_dependencies() -> tuple[Any, Any]:
             candidate_request = (
                 PipelineRequest if PipelineRequest is not None else getattr(module, "PipelineRequest", None)
             )
+            if candidate_request is not None and _request_contract_is_stale(candidate_request):
+                candidate_request = _load_canonical_pipeline_request()
             candidate_getter = (
                 get_execution_pipeline
                 if get_execution_pipeline is not None
@@ -698,7 +758,7 @@ def submit_market_order_via_pipeline(
         margin_mode=margin_mode,
         reduce_only=bool(reduce_only),
         units=base_quantity if (base_quantity or 0) > 0 else None,
-        unit_type="base" if (base_quantity or 0) > 0 else None,
+        unit_type="base_asset" if (base_quantity or 0) > 0 else None,
         stop_loss_pct=protection.get("stop_loss_pct"),
         take_profit_pct=protection.get("take_profit_pct"),
         metadata=metadata,

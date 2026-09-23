@@ -161,27 +161,133 @@ except ImportError:
     except ImportError:
         @dataclass(frozen=True)
         class PipelineRequest:  # type: ignore[no-redef]
-            symbol: str
-            side: str
-            size_usd: float
+            """Fail-closed startup fallback matching the canonical request shape.
+
+            Circular startup may temporarily make pipeline_request_contract
+            unavailable. The fallback accepts the same execution fields so
+            callers do not crash before validation. Normalization and validation
+            lazily rebind to the canonical contract once it is importable.
+            """
+
+            request_id: str = ""
+            intent_id: Optional[str] = None
             strategy: str = ""
-            order_type: Optional[str] = None
+            cycle_id: Optional[str] = None
+            account_id: str = "default"
+            subaccount_id: Optional[str] = None
+
+            symbol: str = ""
             asset_class: Optional[str] = None
             preferred_broker: Optional[str] = None
-            available_balance_usd: Optional[float] = None
+            allowed_brokers: tuple[str, ...] = field(default_factory=tuple)
+
+            side: str = "buy"
+            intent_type: Optional[str] = None
+            position_effect: Optional[str] = None
+            order_type: Optional[str] = "market"
+            time_in_force: Optional[str] = None
+            reduce_only: Optional[bool] = None
+
+            sizing_mode: Optional[str] = None
+            notional_usd: Optional[float] = None
+            units: Optional[float] = None
+            unit_type: Optional[str] = None
+            size_usd: Optional[float] = None
+
+            limit_price: Optional[float] = None
+            stop_price: Optional[float] = None
             price_hint_usd: Optional[float] = None
             bid_price_usd: Optional[float] = None
             ask_price_usd: Optional[float] = None
             volume_24h_usd: Optional[float] = None
             volatility_pct: Optional[float] = None
-            account_id: str = "default"
+
+            stop_loss_pct: Optional[float] = None
+            take_profit_pct: Optional[float] = None
+
+            leverage: Optional[int] = None
+            margin_mode: Optional[str] = None
+            short_sell: Optional[bool] = None
+            extended_hours: Optional[bool] = None
+            buying_power_usd: Optional[float] = None
+            available_balance_usd: Optional[float] = None
+
             validated: bool = False
+            attempt_n: int = 0
+            metadata: Dict[str, Any] = field(default_factory=dict)
+
+            def __post_init__(self) -> None:
+                side = str(self.side or "buy").strip().lower()
+                if side == "long":
+                    side = "buy"
+                elif side == "short":
+                    side = "sell"
+                object.__setattr__(self, "side", side)
+                object.__setattr__(self, "order_type", str(self.order_type or "market").strip().lower())
+                for name in (
+                    "asset_class", "intent_type", "position_effect", "time_in_force",
+                    "sizing_mode", "unit_type", "margin_mode",
+                ):
+                    value = getattr(self, name, None)
+                    if value is not None:
+                        object.__setattr__(self, name, str(value).strip().lower() or None)
+
+                notional = self.notional_usd
+                if notional is None and self.size_usd is not None:
+                    notional = float(self.size_usd)
+                    object.__setattr__(self, "notional_usd", notional)
+                if self.sizing_mode is None:
+                    if self.units is not None:
+                        object.__setattr__(self, "sizing_mode", "units")
+                    elif notional is not None:
+                        object.__setattr__(self, "sizing_mode", "notional_usd")
+                if self.size_usd is None and notional is not None:
+                    object.__setattr__(self, "size_usd", float(notional))
+
+        def _canonical_request_contract():  # type: ignore[no-redef]
+            last_error = None
+            for module_name in ("bot.pipeline_request_contract", "pipeline_request_contract"):
+                try:
+                    module = __import__(module_name, fromlist=["PipelineRequest"])
+                    request_type = getattr(module, "PipelineRequest", None)
+                    validator = getattr(module, "validate_pipeline_request", None)
+                    if request_type is not None and callable(validator):
+                        return request_type, validator
+                except Exception as exc:
+                    last_error = exc
+            raise RuntimeError(
+                "canonical PipelineRequest contract unavailable"
+                + (f": {last_error}" if last_error is not None else "")
+            )
 
         def normalize_pipeline_request(value):  # type: ignore[no-redef]
-            return value
+            try:
+                request_type, _ = _canonical_request_contract()
+                if isinstance(value, request_type):
+                    return value
+                if isinstance(value, dict):
+                    payload = dict(value)
+                elif isinstance(value, PipelineRequest):
+                    payload = {
+                        name: getattr(value, name)
+                        for name in value.__dataclass_fields__
+                    }
+                else:
+                    raise TypeError("PipelineRequest input must be PipelineRequest or dict")
+                return request_type(**payload)
+            except Exception:
+                return value
 
-        def validate_pipeline_request(_):  # type: ignore[no-redef]
-            return True, "ok"
+        def validate_pipeline_request(value):  # type: ignore[no-redef]
+            try:
+                request_type, validator = _canonical_request_contract()
+                if not isinstance(value, request_type):
+                    value = normalize_pipeline_request(value)
+                if not isinstance(value, request_type):
+                    return False, "canonical_pipeline_request_contract_unavailable"
+                return validator(value)
+            except Exception:
+                return False, "canonical_pipeline_request_contract_unavailable"
 
 try:
     from bot.runtime_correlation import get_runtime_correlation
@@ -412,6 +518,7 @@ class PipelineRequest:
     size_usd: float
     request_id: Optional[str] = None
     intent_id: Optional[str] = None
+    cycle_id: Optional[str] = None
     notional_usd: Optional[float] = None
     sizing_mode: str = "notional_usd"
     intent_type: str = "entry"       # "entry" / "reduce" / "exit"
@@ -427,7 +534,10 @@ class PipelineRequest:
     units: Optional[float] = None
     unit_type: Optional[str] = None
     preferred_broker: Optional[str] = None
+    allowed_brokers: tuple[str, ...] = field(default_factory=tuple)
     available_balance_usd: Optional[float] = None
+    limit_price: Optional[float] = None
+    stop_price: Optional[float] = None
     price_hint_usd: Optional[float] = None
     bid_price_usd: Optional[float] = None
     ask_price_usd: Optional[float] = None
@@ -438,6 +548,7 @@ class PipelineRequest:
     account_id: str = "default"
     account_type: Optional[str] = None
     leverage: Optional[float] = None
+    short_sell: Optional[bool] = None
     reduce_only: bool = False
     position_effect: Optional[str] = None
     borrow_intent: Optional[str] = None
@@ -450,6 +561,7 @@ class PipelineRequest:
     strategy_metadata: Dict[str, Any] = field(default_factory=dict)
     metadata: Dict[str, Any] = field(default_factory=dict)
     validated: bool = False
+    attempt_n: int = 0
 
     def __post_init__(self) -> None:
         # Keep the legacy local request class compatible with the canonical
