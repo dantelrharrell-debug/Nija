@@ -1,9 +1,9 @@
 # NIJA AI Trading LLC — Trading Platform Architecture & Recovery Guide
 
 **Project:** `Nija_Trading_Bot`  
-**Status date:** September 22, 2026 (UTC)  
-**Current main merge:** `9dc28dd08381c41405506a854ff091ae2dfb87f0`  
-**Latest merged PR:** `#2873 — Fail closed v347 on authoritative protection readiness`  
+**Status date:** September 23, 2026 (UTC)  
+**Latest runtime merge:** `facd3b0376cf85665c7b6a1d918f265ce9540ad4`  
+**Latest merged runtime PR:** `#2878 — Repair stale PipelineRequest binding in universal exits`  
 **Broker-cell implementation head:** `472eeaa2c9d6f518bad029fbd550fa6a84505eb2`  
 **Broker-cell architecture merge:** `#2784 — Broker-cell isolation: independent strategy/risk/user runtimes`
 
@@ -241,11 +241,17 @@ Trading services should not have withdrawal privileges unless a separately revie
 
 ## 9. Current Merge and Validation State
 
-The current `main` head is the September 22 UTC merge of PR `#2873`. That safety repair makes v347 protection readiness depend on the authoritative v281 protection-coverage payload and requires the payload to report the strict boolean `ready=true`. Merely finding or calling a status helper is no longer sufficient.
+The latest runtime merge before this documentation-only update is the September 23 UTC merge of PR `#2878`. Since the previous README refresh, NIJA merged startup convergence, FVG-based strategy qualification, a new opt-in Daily/1H liquidity-FVG retracement strategy, stricter liquidity-reversal sequencing, and a universal-exit request-contract repair.
 
 ```text
-current_main=9dc28dd08381c41405506a854ff091ae2dfb87f0
-latest_merged_pr=#2873
+latest_runtime_merge=facd3b0376cf85665c7b6a1d918f265ce9540ad4
+latest_runtime_pr=#2878
+startup_fail_closed_nonfatal=#2874
+break_retest_fvg_gate=#2875
+liquidity_fvg_retrace_strategy=#2876
+liquidity_reversal_sequence=#2877
+universal_exit_contract_repair=#2878
+protection_readiness_strict=#2873
 protection_status_surface=#2872
 kraken_heartbeat_safe_floor=#2870
 kraken_market_alias_repair=#2869
@@ -332,6 +338,45 @@ The latest merge chain also includes several Kraken-specific safety and routing 
 These repairs do **not** clear a genuine emergency-stop latch, force a trade, lower broker minimums, increase the heartbeat risk fraction, fabricate execution proof, or bypass writer/nonce/risk/protection gates.
 
 Do not report NIJA as fully protected for real-money entry solely because these changes are merged. Runtime completion still requires current authoritative broker evidence through the canonical gates.
+
+### September 22–23 strategy, startup, and universal-exit updates
+
+PR `#2874` changed startup behavior so a legitimate not-yet-ready v324 profitability/protection chain remains **fail-closed but nonfatal** while broker registration, authoritative position sync, and protection coverage converge. A missing installer remains fatal. This prevents a restart loop without fabricating readiness or bypassing v347.
+
+PR `#2875` added directional Fair Value Gap confirmation to `BREAK_RETEST` signal qualification. The detector defaults to requiring FVG confirmation through:
+
+```text
+NIJA_BREAK_RETEST_REQUIRE_FVG=true
+```
+
+The retest candle is excluded from FVG discovery, and missing required FVG evidence fails the signal closed. The rollback switch `NIJA_BREAK_RETEST_REQUIRE_FVG=false` exists for controlled testing, but disabling the signal qualifier does not bypass execution, protection, risk, capital, writer, nonce, or circuit-breaker gates.
+
+PR `#2876` added the separate opt-in strategy:
+
+```text
+LIQUIDITY_FVG_RETRACE
+FEATURE_LIQUIDITY_FVG_RETRACE_ENABLED
+```
+
+Its intended sequence combines completed Daily structure/FVG context with a 1H liquidity sweep, displacement, newly formed directional FVG, and retracement/rejection at the FVG edge. Both SL and TP are mandatory. The strategy is treated as a protected-entry strategy throughout the request, broadcaster, pipeline, and multi-broker routing contracts.
+
+For live protected LIMIT entries, `LIQUIDITY_FVG_RETRACE` must remain fail-closed until the selected broker adapter explicitly proves protected-limit capability. The execution path must not silently downgrade the planned LIMIT entry to MARKET.
+
+PR `#2877` hardened liquidity reversal qualification to require the ordered sequence:
+
+```text
+liquidity sweep
+-> close back inside prior range
+-> directional displacement within 1–3 candles
+-> fresh directional three-candle FVG
+-> first retrace into that FVG
+```
+
+Full-body structural breaks are not treated as wick sweeps. RSI, volume, CRT-style candle-range confirmation, macro liquidity, and prior-day liquidity remain secondary confluence rather than substitutes for the primary sequence.
+
+PR `#2878` repaired a production universal-exit failure where circular startup could leave `bot.execution_pipeline` bound to a reduced fallback `PipelineRequest` that did not accept fields such as `limit_price`. The canonical submitter now detects stale dataclass-like request contracts and rebinds to `bot.pipeline_request_contract.PipelineRequest` once available. If the canonical contract is still unavailable, the path fails closed rather than constructing a known-incompatible exit request.
+
+PR `#2878` also normalizes base-sized crypto exit units to canonical `base_asset`. The repair does not weaken writer, nonce, kill-switch, risk, capital, broker-minimum, routing, acknowledgement, or fill-confirmation gates.
 
 The merged architecture includes:
 
@@ -460,6 +505,8 @@ Historical restart-proof behavior has successfully recovered real fill evidence 
 
 Protective exits are safety-critical and must remain reachable when valid broker state exists.
 
+Universal exit requests must use the canonical `bot.pipeline_request_contract.PipelineRequest` contract. A stale fallback dataclass from circular startup must be rebound when the canonical contract becomes available; if it cannot be resolved, the exit submission path must fail closed rather than issue a malformed request. Base-sized crypto exits use the canonical `base_asset` unit type.
+
 Do not create duplicate exit workers that could double-sell.
 
 Kraken native symbols must continue to normalize into NIJA canonical symbols before execution/risk contract evaluation. Historical example:
@@ -491,11 +538,16 @@ Before declaring a broker cell healthy for new entries, verify the applicable br
 - [ ] Circuit breaker is broker-local.
 - [ ] Writer/authority requirements are satisfied.
 - [ ] Execution readiness is true through the normal canonical path.
+- [ ] Startup may remain alive while v324/v347 readiness is false, but execution remains fail-closed until authoritative readiness converges.
 - [ ] v281 `coverage_status()` returns a dict whose `ready` field is exactly boolean `True`.
 - [ ] v347 remains fail-closed for missing, malformed, unavailable, or non-boolean/unready coverage status.
 - [ ] Kraken heartbeat sizing satisfies both the risk cap and canonical safe quote floor, or defers before dispatch.
 - [ ] Kraken canonical market discovery maps broker aliases such as `XBT` to `BTC`.
 - [ ] Local pre-dispatch minimum failures are not misclassified as exchange rejections.
+- [ ] If `BREAK_RETEST` is enabled, required directional FVG confirmation is present unless the explicit controlled-test rollback switch is intentionally used.
+- [ ] `LIQUIDITY_FVG_RETRACE` remains opt-in and preserves its planned LIMIT price plus mandatory SL/TP through the canonical request pipeline.
+- [ ] A live protected LIMIT entry is not downgraded to MARKET and remains blocked until the broker proves protected-limit capability.
+- [ ] Universal exits resolve the canonical `PipelineRequest` contract and use canonical `base_asset` units for base-sized crypto exits.
 - [ ] If `BREAK_RETEST` real-money entry is enabled, the selected broker reports protected-entry capability.
 - [ ] A live protected entry has broker readback confirming both active stop-loss and take-profit legs.
 - [ ] Protected-entry uncertainty/reconciliation paths fail closed rather than claiming success.
@@ -597,6 +649,10 @@ Never weaken these contracts to recover faster or increase trade frequency:
 - canonical execution-state transitions,
 - authoritative v281 protection coverage with strict boolean readiness,
 - fail-closed v347 handling for unavailable, malformed, or unready protection status,
+- fail-closed/nonfatal startup convergence without fabricated readiness,
+- directional FVG qualification for `BREAK_RETEST` when required,
+- protected LIMIT semantics for `LIQUIDITY_FVG_RETRACE` with no silent LIMIT-to-MARKET downgrade,
+- canonical `PipelineRequest` resolution for universal exits,
 - explicit protected-entry capability before real `BREAK_RETEST` dispatch,
 - broker-verified stop-loss and take-profit protection for protected entries,
 - fail-closed protected-entry reconciliation when protection cannot be verified,
