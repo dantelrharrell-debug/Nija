@@ -157,27 +157,28 @@ def _bs_price(
     S: float, K: float, T: float, r: float, sigma: float, put_call: str = "call"
 ) -> float:
     """
-    Compute Black-Scholes option price.
+    Compute Black-Scholes option price through NIJA's canonical options analytics.
 
-    S     : underlying price
-    K     : strike
-    T     : time to expiry in years
-    r     : lower-risk rate (e.g. 0.05)
-    sigma : annual volatility (e.g. 0.25)
+    This wrapper preserves the exotic-instrument handler's legacy intrinsic-value
+    fallback for expired/invalid inputs while centralizing normal valuation in
+    bot.options_analytics.
     """
     if T <= 0 or sigma <= 0 or S <= 0 or K <= 0:
         return max(0.0, (S - K) if put_call == "call" else (K - S))
 
-    d1 = (math.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * math.sqrt(T))
-    d2 = d1 - sigma * math.sqrt(T)
+    try:
+        from bot.options_analytics import black_scholes_price
+    except ImportError:
+        from options_analytics import black_scholes_price  # type: ignore[import]
 
-    def _norm_cdf(x: float) -> float:
-        return 0.5 * (1.0 + math.erf(x / math.sqrt(2)))
-
-    if put_call.lower() == "call":
-        return S * _norm_cdf(d1) - K * math.exp(-r * T) * _norm_cdf(d2)
-    else:  # put
-        return K * math.exp(-r * T) * _norm_cdf(-d2) - S * _norm_cdf(-d1)
+    return black_scholes_price(
+        spot=S,
+        strike=K,
+        time_to_expiry_years=T,
+        risk_free_rate=r,
+        volatility=sigma,
+        option_type=put_call,
+    )
 
 
 def _years_to_expiry(expiry_str: str) -> float:
