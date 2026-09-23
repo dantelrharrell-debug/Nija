@@ -180,6 +180,7 @@ class SelfLearningStrategyAllocator:
         pnl_usd: float,
         is_win: bool,
         position_size_usd: float = 100.0,
+        fees_usd: float = 0.0,
     ) -> None:
         """
         Record a closed trade and update the strategy's performance score.
@@ -189,6 +190,8 @@ class SelfLearningStrategyAllocator:
             pnl_usd:            Net P&L in USD.
             is_win:             True if the trade was profitable.
             position_size_usd:  Size of the trade in USD (for normalising returns).
+            fees_usd:           Informational fee amount from the canonical outcome store.
+                                pnl_usd is already treated as net and is not reduced again.
         """
         with self._lock:
             if strategy not in self._stats:
@@ -219,6 +222,7 @@ class SelfLearningStrategyAllocator:
                 "ts": st.last_trade_ts,
                 "pnl_usd": pnl_usd,
                 "is_win": is_win,
+                "fees_usd": max(0.0, float(fees_usd or 0.0)),
                 "ema_return": round(st.ema_return, 6),
             })
             if len(st.trade_history) > 200:
