@@ -44,6 +44,11 @@ class TestLiquidityReversalSequence(unittest.TestCase):
         self.assertTrue(signal["metadata"]["fvg_fresh"])
         self.assertTrue(signal["metadata"]["fvg_retrace_confirmed"])
         self.assertTrue(signal["metadata"]["crt_confirmed"])
+        self.assertTrue(signal["metadata"]["po3_accumulation"])
+        self.assertTrue(signal["metadata"]["po3_manipulation"])
+        self.assertTrue(signal["metadata"]["po3_distribution"])
+        self.assertTrue(signal["metadata"]["power_of_three_confirmed"])
+        self.assertIn("Power of 3 confluence", signal["reason"])
 
     def test_bearish_sequence_requires_sweep_displacement_fvg_and_retrace(self):
         strategy = LiquidityReversalStrategy()
@@ -55,6 +60,53 @@ class TestLiquidityReversalSequence(unittest.TestCase):
         self.assertGreater(signal["stop_loss"], float(df.iloc[-4]["high"]))
         self.assertTrue(signal["metadata"]["fvg_fresh"])
         self.assertTrue(signal["metadata"]["fvg_retrace_confirmed"])
+        self.assertTrue(signal["metadata"]["power_of_three_confirmed"])
+
+    def test_power_of_three_is_confluence_not_a_required_entry_gate(self):
+        strategy = LiquidityReversalStrategy(
+            {
+                "po3_accumulation_max_atr": 0.25,
+            }
+        )
+        df = _bullish_frame()
+        signal = strategy.generate_signal(df, {"rsi": pd.Series([35.0] * len(df))})
+
+        self.assertEqual(signal["signal"], "BUY")
+        self.assertFalse(signal["metadata"]["po3_accumulation"])
+        self.assertTrue(signal["metadata"]["po3_manipulation"])
+        self.assertTrue(signal["metadata"]["po3_distribution"])
+        self.assertFalse(signal["metadata"]["power_of_three_confirmed"])
+        self.assertNotIn("Power of 3 confluence", signal["reason"])
+
+    def test_power_of_three_cannot_substitute_for_missing_core_sequence(self):
+        strategy = LiquidityReversalStrategy(
+            {
+                "po3_accumulation_max_atr": 999.0,
+                "po3_max_close_drift_fraction": 999.0,
+            }
+        )
+        df = _bullish_frame()
+        df.loc[df.index[-2], ["open", "high", "low", "close"]] = [
+            100.1,
+            100.4,
+            99.8,
+            100.2,
+        ]
+
+        signal = strategy.generate_signal(df, {"rsi": pd.Series([35.0] * len(df))})
+
+        self.assertEqual(signal["signal"], "NONE")
+
+    def test_power_of_three_can_be_disabled_without_disabling_strategy(self):
+        strategy = LiquidityReversalStrategy({"po3_enabled": False})
+        df = _bullish_frame()
+        signal = strategy.generate_signal(df, {"rsi": pd.Series([35.0] * len(df))})
+
+        self.assertEqual(signal["signal"], "BUY")
+        self.assertFalse(signal["metadata"]["power_of_three_confirmed"])
+        self.assertFalse(signal["metadata"]["po3_accumulation"])
+        self.assertFalse(signal["metadata"]["po3_manipulation"])
+        self.assertFalse(signal["metadata"]["po3_distribution"])
 
     def test_body_close_break_is_not_misclassified_as_liquidity_sweep(self):
         strategy = LiquidityReversalStrategy()
