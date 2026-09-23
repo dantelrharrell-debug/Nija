@@ -512,6 +512,17 @@ except ImportError:
         SIGNAL_FUNNEL_AVAILABLE = False
         logger.warning("⚠️ Signal Funnel Diagnostics not available — no funnel tracking")
 
+# ── All-strategy shadow learning lab — no broker submission path ─────────────
+try:
+    from bot.shadow_strategy_lab import get_shadow_strategy_lab, ShadowStrategyLab
+    SHADOW_STRATEGY_LAB_AVAILABLE = True
+    logger.info("✅ Shadow Strategy Lab loaded — all registered strategies observed")
+except ImportError:
+    get_shadow_strategy_lab = None  # type: ignore
+    ShadowStrategyLab = None  # type: ignore
+    SHADOW_STRATEGY_LAB_AVAILABLE = False
+    logger.warning("⚠️ Shadow Strategy Lab unavailable — named-strategy comparison disabled")
+
 # ── Pipeline Funnel Counter — global 5-stage choke-point finder ──────────────
 try:
     from bot.pipeline_funnel import get_pipeline_funnel as _get_pipeline_funnel
@@ -748,6 +759,24 @@ class NIJAApexStrategyV71:
             logger.info("✅ Nija AI Engine enabled — rank-first adaptive scoring active")
         else:
             self.nija_ai_engine = None
+
+        # All-strategy shadow laboratory.  It may observe market data and record
+        # hypothetical forward outcomes, but it has no order-submission path.
+        if SHADOW_STRATEGY_LAB_AVAILABLE and get_shadow_strategy_lab is not None:
+            try:
+                self.shadow_strategy_lab = get_shadow_strategy_lab()
+                logger.info(
+                    "✅ Shadow Strategy Lab enabled — detectors=%s horizon=%s bars",
+                    len(self.shadow_strategy_lab.detector_names),
+                    self.shadow_strategy_lab.horizon_bars,
+                )
+            except Exception as _ssl_err:
+                logger.warning("Shadow Strategy Lab init error: %s", _ssl_err)
+                self.shadow_strategy_lab = None
+        else:
+            self.shadow_strategy_lab = None
+        self._shadow_strategy_last_key = None
+        self._last_shadow_strategy_recommendations = []
 
         # Trade Frequency Controller — minimum trade safeguard + drought detection
         if TRADE_FREQ_CTRL_AVAILABLE and get_trade_frequency_controller is not None:
@@ -2645,6 +2674,51 @@ class NIJAApexStrategyV71:
             except Exception as _rd_err:
                 logger.debug("Regime detection error: %s", _rd_err)
 
+        # ── Named-strategy shadow comparison ───────────────────────────────
+        # Evaluate ALL registered strategy detectors on the same closed bar.
+        # This path is observational only; recommendations cannot place orders
+        # or override the existing Apex/risk/protection decision.
+        if self.shadow_strategy_lab is not None:
+            try:
+                _shadow_symbol = str(getattr(self, "_current_symbol", "UNKNOWN"))
+                _shadow_broker = (
+                    self._get_broker_name()
+                    if hasattr(self, "_get_broker_name")
+                    else "unknown"
+                )
+                _shadow_bar = str(df.index[-1])
+                _shadow_key = (_shadow_symbol, _shadow_broker, _shadow_bar)
+                if self._shadow_strategy_last_key != _shadow_key:
+                    _shadow_cost = 0.0
+                    try:
+                        if (
+                            self.execution_engine is not None
+                            and hasattr(
+                                self.execution_engine,
+                                "_get_broker_round_trip_fee",
+                            )
+                        ):
+                            _shadow_cost = float(
+                                self.execution_engine._get_broker_round_trip_fee()
+                            )
+                    except Exception:
+                        _shadow_cost = 0.0
+                    self._last_shadow_strategy_recommendations = (
+                        self.shadow_strategy_lab.observe(
+                            df,
+                            symbol=_shadow_symbol,
+                            broker=_shadow_broker,
+                            market_regime=regime,
+                            round_trip_cost_return=_shadow_cost,
+                        )
+                    )
+                    self._shadow_strategy_last_key = _shadow_key
+            except Exception as _ssl_obs_err:
+                logger.debug(
+                    "Shadow Strategy Lab observation skipped: %s",
+                    _ssl_obs_err,
+                )
+
         # ── Propagate regime scan-interval hint to AI engine speed controller ──
         # Whenever the current regime is known, update the CycleSpeedController
         # so the between-cycle delay reflects market conditions (e.g. faster in
@@ -2700,6 +2774,11 @@ class NIJAApexStrategyV71:
                         "score_breakdown": ai_signal.metadata.get("score_breakdown", {}),
                         "regime": regime_str,
                         "regime_confidence": regime_metrics.get("confidence", 0.5),
+                        "shadow_strategy_recommendation": (
+                            self._last_shadow_strategy_recommendations[0]
+                            if self._last_shadow_strategy_recommendations
+                            else None
+                        ),
                         "regime_params": regime_params,
                         "should_enter_legacy": legacy_signal,
                         "should_enter_enhanced": should_enter,
@@ -2977,6 +3056,10 @@ class NIJAApexStrategyV71:
         """
         try:
             logger.debug("📊 Evaluating market conditions for %s", symbol)
+            # Keep the current symbol explicit for downstream AI/shadow learning.
+            # Previously NijaAIEngine fell back to "UNKNOWN" because this field
+            # was read but never populated by the live Apex analysis path.
+            self._current_symbol = symbol
             # Record that this pair's signal was evaluated (funnel stage 0)
             if SIGNAL_FUNNEL_AVAILABLE and get_signal_funnel is not None:
                 try:
