@@ -204,10 +204,16 @@ def _reassert_bounded_fetch_contract() -> tuple[bool, str]:
             return False, "classes_missing"
 
         pipeline = getattr(cls, "_pipeline", None)
+        # functools.wraps intentionally preserves the wrapped callable's
+        # display name, so the v35/v36 wrapper still reports "_pipeline".
+        # Wrapper ownership must therefore be proven by the explicit marker
+        # anywhere in the __wrapped__ chain, not by __name__.  Requiring the
+        # implementation function name caused this guard to re-wrap the
+        # pipeline on every refresh, multiplying bounded-broker layers until
+        # capital workers could no longer unwind inside their deadline.
         bounded = _chain_contains(
             pipeline,
             marker="_nija_capital_refresh_stall_guard_v36",
-            expected_name="_pipeline_with_bounded_brokers",
         )
         if not bounded:
             # functools.wraps can copy marker attributes to unrelated outer
@@ -229,15 +235,15 @@ def _reassert_bounded_fetch_contract() -> tuple[bool, str]:
             bounded = _chain_contains(
                 pipeline,
                 marker="_nija_capital_refresh_stall_guard_v36",
-                expected_name="_pipeline_with_bounded_brokers",
             )
 
         init_fn = getattr(batch_cls, "__init__", None)
         v78_marker = str(getattr(v78, "_PATCH_ATTR", "_nija_capital_refresh_live_continuity_v78"))
+        # Same rule for v78: @wraps(original_init) preserves "__init__"
+        # as the display name.  The marker is the stable ownership proof.
         freshness_bounded = _chain_contains(
             init_fn,
             marker=v78_marker,
-            expected_name="init_v78",
         )
         if not freshness_bounded:
             try:
@@ -252,7 +258,6 @@ def _reassert_bounded_fetch_contract() -> tuple[bool, str]:
             freshness_bounded = _chain_contains(
                 init_fn,
                 marker=v78_marker,
-                expected_name="init_v78",
             )
 
         if not (bounded and freshness_bounded):
