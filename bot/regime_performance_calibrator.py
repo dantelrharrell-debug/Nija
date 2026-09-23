@@ -17,7 +17,7 @@ from collections import defaultdict, deque
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Deque, Dict, Iterable, List, Optional
+from typing import Any, Deque, Dict, Iterable, List, Optional, Sequence, Tuple
 
 logger = logging.getLogger("nija.regime_calibration")
 
@@ -112,6 +112,59 @@ class RegimePerformanceCalibrator:
         self.shrinkage_k = max(1.0, float(shrinkage_k))
         self._lock = threading.RLock()
         self._observations: Deque[CalibrationObservation] = deque(maxlen=self.window)
+
+        # Strategy-selection learning is deliberately separate from risk sizing.
+        # It observes by default and can only change candidate ordering when both
+        # explicit operator gates are enabled.
+        self.selection_mode = os.getenv(
+            "NIJA_ADAPTIVE_STRATEGY_MODE", "shadow"
+        ).strip().lower()
+        self.selection_approved = os.getenv(
+            "NIJA_ADAPTIVE_STRATEGY_APPROVED", "false"
+        ).strip().lower() in {"1", "true", "yes", "on"}
+        self.selection_min_samples = max(
+            5, int(os.getenv("NIJA_ADAPTIVE_STRATEGY_MIN_SAMPLES", "20"))
+        )
+        self.selection_max_adjustment = max(
+            0.0,
+            min(
+                0.25,
+                _finite(
+                    os.getenv("NIJA_ADAPTIVE_STRATEGY_MAX_ADJUSTMENT", "0.12"),
+                    0.12,
+                ),
+            ),
+        )
+        self.selection_confluence_step = max(
+            0.0,
+            min(
+                0.05,
+                _finite(
+                    os.getenv("NIJA_ADAPTIVE_STRATEGY_CONFLUENCE_STEP", "0.02"),
+                    0.02,
+                ),
+            ),
+        )
+        self.selection_max_confluence = max(
+            0.0,
+            min(
+                0.15,
+                _finite(
+                    os.getenv("NIJA_ADAPTIVE_STRATEGY_MAX_CONFLUENCE", "0.06"),
+                    0.06,
+                ),
+            ),
+        )
+        self.selection_freeze_penalty = max(
+            0.0,
+            min(
+                0.50,
+                _finite(
+                    os.getenv("NIJA_ADAPTIVE_STRATEGY_FREEZE_PENALTY", "0.20"),
+                    0.20,
+                ),
+            ),
+        )
         self._load()
 
     def record_closed_trade(self, **raw: object) -> Dict[str, object]:
@@ -152,6 +205,156 @@ class RegimePerformanceCalibrator:
             for item in self._observations:
                 buckets[(item.regime, item.strategy)].append(item)
         return [self._calculate(regime, strategy, trades) for (regime, strategy), trades in sorted(buckets.items())]
+
+    @property
+    def adaptive_selection_active(self) -> bool:
+        """Whether learned performance is allowed to change strategy ordering."""
+        return self.selection_mode == "active" and self.selection_approved
+
+    def score_strategy_candidate(
+        self,
+        *,
+        strategy: str,
+        regime: object,
+        direction: str,
+        base_score: float,
+        same_direction_confirmations: int = 1,
+    ) -> Dict[str, object]:
+        """Score one already-confirmed strategy candidate.
+
+        The normal signal score remains authoritative in shadow mode. When
+        active, only a bounded regime+strategy performance adjustment and a
+        bounded same-direction confluence bonus may alter candidate ordering.
+        No execution, protection, or sizing controls are changed here.
+        """
+        strategy_key = str(strategy or "unknown").strip() or "unknown"
+        regime_key = normalize_regime(regime)
+        direction_key = str(direction or "unknown").strip().lower()
+        base = max(0.0, min(1.0, _finite(base_score)))
+
+        report = self.get_recommendation(regime_key, strategy_key)
+        sample_size = int(report.get("sample_size", 0) or 0)
+        reliability = max(0.0, min(1.0, _finite(report.get("reliability"))))
+        eligible = (
+            bool(report.get("eligible_for_review"))
+            and sample_size >= self.selection_min_samples
+        )
+        calibration_score = max(
+            -1.0, min(1.0, _finite(report.get("calibration_score")))
+        )
+
+        performance_adjustment = 0.0
+        if eligible:
+            performance_adjustment = max(
+                -self.selection_max_adjustment,
+                min(
+                    self.selection_max_adjustment,
+                    calibration_score * self.selection_max_adjustment,
+                ),
+            )
+
+        freeze_recommended = bool(report.get("freeze_recommended"))
+        if freeze_recommended:
+            # A deteriorating strategy can never be promoted by the learning
+            # layer. This is ranking-only; the downstream risk engine remains
+            # the final execution authority.
+            performance_adjustment = min(
+                performance_adjustment,
+                -min(
+                    self.selection_freeze_penalty,
+                    self.selection_max_adjustment,
+                ),
+            )
+
+        confirmations = max(1, int(same_direction_confirmations or 1))
+        confluence_bonus = min(
+            self.selection_max_confluence,
+            max(0, confirmations - 1) * self.selection_confluence_step,
+        )
+
+        adaptive_score = max(
+            0.0,
+            min(1.0, base + performance_adjustment + confluence_bonus),
+        )
+        selection_score = adaptive_score if self.adaptive_selection_active else base
+
+        return {
+            "strategy": strategy_key,
+            "regime": regime_key,
+            "direction": direction_key,
+            "base_score": round(base, 6),
+            "adaptive_score": round(adaptive_score, 6),
+            "selection_score": round(selection_score, 6),
+            "performance_adjustment": round(performance_adjustment, 6),
+            "confluence_bonus": round(confluence_bonus, 6),
+            "sample_size": sample_size,
+            "reliability": round(reliability, 6),
+            "expectancy": round(_finite(report.get("expectancy")), 8),
+            "win_rate": round(
+                max(0.0, min(1.0, _finite(report.get("win_rate")))),
+                6,
+            ),
+            "profit_factor": round(
+                max(0.0, _finite(report.get("profit_factor"))),
+                6,
+            ),
+            "freeze_recommended": freeze_recommended,
+            "eligible_for_learning": eligible,
+            "active": self.adaptive_selection_active,
+        }
+
+    def rank_strategy_candidates(
+        self,
+        rows: Sequence[Tuple[Any, float]],
+    ) -> List[Tuple[Any, float, Dict[str, object]]]:
+        """Rank confirmed candidate/base-score pairs.
+
+        In shadow mode the returned selection score is exactly the base score,
+        making this path observational only.
+        """
+        direction_counts: Dict[str, int] = {}
+        for candidate, _ in rows:
+            direction = str(
+                getattr(candidate, "direction", "unknown") or "unknown"
+            ).lower()
+            direction_counts[direction] = direction_counts.get(direction, 0) + 1
+
+        ranked: List[Tuple[Any, float, Dict[str, object]]] = []
+        for candidate, base_score in rows:
+            direction = str(
+                getattr(candidate, "direction", "unknown") or "unknown"
+            ).lower()
+            detail = self.score_strategy_candidate(
+                strategy=str(
+                    getattr(candidate, "strategy", "unknown") or "unknown"
+                ),
+                regime=getattr(candidate, "market_regime", "default"),
+                direction=direction,
+                base_score=base_score,
+                same_direction_confirmations=direction_counts.get(direction, 1),
+            )
+            ranked.append(
+                (candidate, float(detail["selection_score"]), detail)
+            )
+
+        ranked.sort(key=lambda row: row[1], reverse=True)
+        if ranked:
+            leader = ranked[0][2]
+            logger.info(
+                "ADAPTIVE_STRATEGY_RANK mode=%s active=%s strategy=%s "
+                "regime=%s base=%.3f adaptive=%.3f selected=%.3f "
+                "samples=%d confluence=%.3f",
+                self.selection_mode,
+                self.adaptive_selection_active,
+                leader["strategy"],
+                leader["regime"],
+                float(leader["base_score"]),
+                float(leader["adaptive_score"]),
+                float(leader["selection_score"]),
+                int(leader["sample_size"]),
+                float(leader["confluence_bonus"]),
+            )
+        return ranked
 
     def get_control_preview(self, regime: object, strategy: str = "APEX_V71") -> Dict[str, object]:
         """Return downside-only controls suitable for walk-forward evaluation.
