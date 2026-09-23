@@ -20,6 +20,16 @@ class _CoinbaseBroker:
 
 
 class TestLiquidityFvgRetraceExecutionContract(unittest.TestCase):
+    def test_execution_pipeline_request_keeps_canonical_field_parity(self):
+        from bot import pipeline_request_contract as contract
+
+        canonical_fields = set(contract.PipelineRequest.__dataclass_fields__)
+        local_fields = set(PipelineRequest.__dataclass_fields__)
+        self.assertTrue(
+            canonical_fields.issubset(local_fields),
+            canonical_fields - local_fields,
+        )
+
     def test_pipeline_contract_requires_protection_and_limit_price(self):
         missing_protection = PipelineRequest(
             strategy="LIQUIDITY_FVG_RETRACE",
