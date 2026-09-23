@@ -5838,6 +5838,30 @@ class NIJAApexStrategyV71:
                 for key in ('forced_fallback', 'fallback_entry', 'force_next_cycle'):
                     if key in action_data:
                         levels[key] = action_data.get(key)
+
+                # Preserve the strategy identity all the way into the position
+                # record so closed-trade learning is attributable.  Apex may
+                # supply an explicit detector/strategy label; otherwise use the
+                # live regime bridge's active high-level strategy type instead
+                # of collapsing every trade into the generic APEX_V71 bucket.
+                _strategy_label = str(
+                    action_data.get('strategy_name')
+                    or action_data.get('strategy')
+                    or ''
+                ).strip()
+                if not _strategy_label:
+                    try:
+                        if self.regime_bridge is not None and self.current_regime is not None:
+                            _strategy_type = self.regime_bridge.get_strategy_type(
+                                self.current_regime
+                            )
+                            _strategy_label = str(
+                                getattr(_strategy_type, 'value', _strategy_type)
+                                or ''
+                            ).strip()
+                    except Exception:
+                        _strategy_label = ''
+                levels['strategy_name'] = _strategy_label or 'APEX_V71'
                 # Pass through EV-relevant signal metadata so the expectancy gate
                 # uses the real signal win rate, not the global 50% default.
                 # Keys searched by ExecutionEngine._resolve_expected_win_rate:
