@@ -11,8 +11,9 @@ A tradeable setup requires the full sequence:
 4. The current candle is the first retracement into that FVG.
 5. Stop sits beyond the sweep wick and target geometry is at least 2R by default.
 
-RSI, volume, macro liquidity and a CRT-style prior-candle sweep are secondary
-confluence only. They cannot substitute for the required price-action sequence.
+RSI, volume, macro liquidity, a CRT-style prior-candle sweep, and ICT-style
+Power of 3 (Accumulation → Manipulation → Distribution) are secondary confluence
+only. They cannot substitute for the required price-action sequence.
 """
 
 import logging
@@ -41,6 +42,23 @@ class LiquidityReversalStrategy(BaseStrategy):
         self.stop_buffer_atr = float(self.config.get("stop_buffer_atr", 0.05))
         self.min_risk_reward = float(self.config.get("min_risk_reward", 2.0))
         self.macro_lookback = int(self.config.get("macro_lookback", 50))
+
+        # Power of 3 is intentionally a context/confluence layer, never a hard
+        # entry gate. The mandatory sweep→displacement→FVG→retrace sequence
+        # remains authoritative.
+        self.po3_enabled = bool(self.config.get("po3_enabled", True))
+        self.po3_accumulation_lookback = int(
+            self.config.get("po3_accumulation_lookback", 6)
+        )
+        self.po3_accumulation_max_atr = float(
+            self.config.get("po3_accumulation_max_atr", 2.5)
+        )
+        self.po3_max_close_drift_fraction = float(
+            self.config.get("po3_max_close_drift_fraction", 0.60)
+        )
+        self.po3_confidence_bonus = float(
+            self.config.get("po3_confidence_bonus", 0.05)
+        )
 
         self.rsi_reversal_max = float(self.config.get("rsi_reversal_max", 40))
         self.rsi_reversal_min = float(self.config.get("rsi_reversal_min", 60))
@@ -90,6 +108,101 @@ class LiquidityReversalStrategy(BaseStrategy):
         if prior.empty:
             return None, None
         return float(prior["high"].max()), float(prior["low"].min())
+
+    def _power_of_three_context(
+        self,
+        df: pd.DataFrame,
+        *,
+        sweep_idx: int,
+        direction: str,
+        atr: pd.Series,
+    ) -> Dict:
+        """Classify an ICT-style Power of 3 context around an existing sweep.
+
+        This detector is deliberately subordinate to the strategy's mandatory
+        execution sequence. It looks only for:
+        - Accumulation: a contained pre-sweep range relative to ATR.
+        - Manipulation: the already-detected sweep pierces that range and closes
+          back inside it.
+        - Distribution: supplied later by the mandatory displacement/FVG leg.
+
+        It does not infer institutional intent and it cannot create a trade.
+        """
+        result = {
+            "power_of_three_confirmed": False,
+            "po3_accumulation": False,
+            "po3_manipulation": False,
+            "po3_distribution": False,
+            "po3_range_low": None,
+            "po3_range_high": None,
+            "po3_range_atr": None,
+            "po3_close_drift_fraction": None,
+        }
+        if not self.po3_enabled:
+            return result
+
+        lookback = max(3, self.po3_accumulation_lookback)
+        if sweep_idx < lookback:
+            return result
+
+        accumulation = df.iloc[sweep_idx - lookback:sweep_idx]
+        if len(accumulation) < lookback:
+            return result
+
+        range_low = float(pd.to_numeric(accumulation["low"], errors="coerce").min())
+        range_high = float(pd.to_numeric(accumulation["high"], errors="coerce").max())
+        range_width = range_high - range_low
+        if range_width <= 0:
+            return result
+
+        atr_window = pd.to_numeric(
+            atr.iloc[sweep_idx - lookback:sweep_idx + 1],
+            errors="coerce",
+        ).dropna()
+        if atr_window.empty:
+            return result
+        atr_ref = float(atr_window.median())
+        if atr_ref <= 0:
+            return result
+
+        closes = pd.to_numeric(accumulation["close"], errors="coerce").dropna()
+        if len(closes) < 2:
+            return result
+        close_drift_fraction = abs(float(closes.iloc[-1]) - float(closes.iloc[0])) / range_width
+
+        range_atr = range_width / atr_ref
+        accumulation_ok = (
+            range_atr <= self.po3_accumulation_max_atr
+            and close_drift_fraction <= self.po3_max_close_drift_fraction
+        )
+
+        sweep = df.iloc[sweep_idx]
+        sweep_close = float(sweep["close"])
+        sweep_low = float(sweep["low"])
+        sweep_high = float(sweep["high"])
+
+        if direction == "long":
+            manipulation_ok = (
+                sweep_low < range_low
+                and range_low < sweep_close <= range_high
+            )
+        else:
+            manipulation_ok = (
+                sweep_high > range_high
+                and range_low <= sweep_close < range_high
+            )
+
+        result.update(
+            {
+                "po3_accumulation": bool(accumulation_ok),
+                "po3_manipulation": bool(manipulation_ok),
+                "po3_range_low": range_low,
+                "po3_range_high": range_high,
+                "po3_range_atr": range_atr,
+                "po3_close_drift_fraction": close_drift_fraction,
+            }
+        )
+        return result
 
     def _find_sequence(
         self,
@@ -269,6 +382,23 @@ class LiquidityReversalStrategy(BaseStrategy):
                     or (direction == "short" and pdh is not None and sweep_high > pdh)
                 )
 
+                po3 = self._power_of_three_context(
+                    df,
+                    sweep_idx=sweep_idx,
+                    direction=direction,
+                    atr=atr,
+                )
+                # Reaching this point already proves the strategy's mandatory
+                # directional displacement and fresh-FVG leg, so it is valid to
+                # label the distribution phase here. Power of 3 remains bonus
+                # context only.
+                po3["po3_distribution"] = True
+                po3["power_of_three_confirmed"] = bool(
+                    po3["po3_accumulation"]
+                    and po3["po3_manipulation"]
+                    and po3["po3_distribution"]
+                )
+
                 return {
                     "direction": direction,
                     "sweep_index": sweep_idx,
@@ -289,6 +419,7 @@ class LiquidityReversalStrategy(BaseStrategy):
                     "crt_confirmed": crt_confirmed,
                     "macro_sweep": macro_sweep,
                     "prior_day_sweep": bool(prior_day_sweep),
+                    **po3,
                 }
         return None
 
@@ -365,7 +496,12 @@ class LiquidityReversalStrategy(BaseStrategy):
                 if setup["macro_sweep"] or setup["prior_day_sweep"]
                 else 0.0
             )
-            confidence = min(0.94, confidence)
+            confidence += (
+                self.po3_confidence_bonus
+                if setup.get("power_of_three_confirmed")
+                else 0.0
+            )
+            confidence = min(0.95, confidence)
 
             signal = "BUY" if direction == "long" else "SELL"
             return {
@@ -376,6 +512,11 @@ class LiquidityReversalStrategy(BaseStrategy):
                     f"displacement, fresh FVG first retrace, stop beyond sweep "
                     f"wick, target={setup['target_basis']} "
                     f"({setup['risk_reward']:.2f}R)"
+                    + (
+                        ", Power of 3 confluence"
+                        if setup.get("power_of_three_confirmed")
+                        else ""
+                    )
                 ),
                 "position_size_multiplier": self.position_size_multiplier,
                 "take_profit_multiplier": self.take_profit_multiplier,
@@ -414,6 +555,11 @@ class LiquidityReversalStrategy(BaseStrategy):
             "stop_buffer_atr": self.stop_buffer_atr,
             "min_risk_reward": self.min_risk_reward,
             "macro_lookback": self.macro_lookback,
+            "po3_enabled": self.po3_enabled,
+            "po3_accumulation_lookback": self.po3_accumulation_lookback,
+            "po3_accumulation_max_atr": self.po3_accumulation_max_atr,
+            "po3_max_close_drift_fraction": self.po3_max_close_drift_fraction,
+            "po3_confidence_bonus": self.po3_confidence_bonus,
             "rsi_reversal_max": self.rsi_reversal_max,
             "rsi_reversal_min": self.rsi_reversal_min,
             "volume_spike_multiplier": self.volume_spike_multiplier,
