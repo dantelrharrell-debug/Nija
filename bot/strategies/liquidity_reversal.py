@@ -46,7 +46,14 @@ class LiquidityReversalStrategy(BaseStrategy):
         # Power of 3 is intentionally a context/confluence layer, never a hard
         # entry gate. The mandatory sweep→displacement→FVG→retrace sequence
         # remains authoritative.
-        self.po3_enabled = bool(self.config.get("po3_enabled", True))
+        po3_enabled_raw = self.config.get("po3_enabled", True)
+        self.po3_enabled = str(po3_enabled_raw).strip().lower() not in {
+            "0",
+            "false",
+            "no",
+            "off",
+            "disabled",
+        }
         self.po3_accumulation_lookback = int(
             self.config.get("po3_accumulation_lookback", 6)
         )
@@ -392,7 +399,7 @@ class LiquidityReversalStrategy(BaseStrategy):
                 # directional displacement and fresh-FVG leg, so it is valid to
                 # label the distribution phase here. Power of 3 remains bonus
                 # context only.
-                po3["po3_distribution"] = True
+                po3["po3_distribution"] = bool(self.po3_enabled)
                 po3["power_of_three_confirmed"] = bool(
                     po3["po3_accumulation"]
                     and po3["po3_manipulation"]
