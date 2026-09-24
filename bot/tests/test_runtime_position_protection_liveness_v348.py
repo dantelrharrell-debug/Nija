@@ -57,7 +57,7 @@ def test_proactive_candidate_is_selected_before_snapshot_ttl(monkeypatch):
     assert result == [("kraken", broker)]
 
 
-def test_fresh_snapshot_is_not_proactively_refreshed(monkeypatch):
+def test_fresh_non_kraken_snapshot_is_not_proactively_refreshed(monkeypatch):
     patch = _patch()
 
     class Broker:
@@ -68,11 +68,12 @@ def test_fresh_snapshot_is_not_proactively_refreshed(monkeypatch):
     broker._nija_authoritative_position_snapshot_at_monotonic_v285 = time.monotonic() - 20.0
 
     class Manager:
-        platform_brokers = {"kraken": broker}
+        platform_brokers = {"coinbase": broker}
 
     fake_v285 = types.ModuleType("bot.runtime_authoritative_position_coverage_v285_patch")
     fake_v285._platform_candidates = lambda manager: []
     fake_v285._refresh_interval_s = lambda: 49.5
+    fake_v285._snapshot_max_age_s = lambda: 90.0
     monkeypatch.setitem(sys.modules, fake_v285.__name__, fake_v285)
 
     assert patch._candidate_union(Manager(), []) == []
@@ -125,3 +126,43 @@ def test_no_execution_or_position_readiness_is_written_by_v348():
     assert "forced_trade=false" in source
     assert "stale_promoted=false" in source
     assert "snapshot_ttl_unchanged=true" in source
+
+
+def test_kraken_refresh_starts_early_enough_for_rate_wait_budget(monkeypatch):
+    patch = _patch()
+
+    class Broker:
+        connected = True
+
+    broker = Broker()
+    broker._nija_authoritative_position_snapshot_fetch_ok_v285 = True
+    broker._nija_authoritative_position_snapshot_at_monotonic_v285 = time.monotonic() - 20.0
+
+    class Manager:
+        platform_brokers = {"kraken": broker}
+
+    fake_v285 = types.ModuleType("bot.runtime_authoritative_position_coverage_v285_patch")
+    fake_v285._platform_candidates = lambda manager: []
+    fake_v285._refresh_interval_s = lambda: 49.5
+    fake_v285._snapshot_max_age_s = lambda: 90.0
+    monkeypatch.setitem(sys.modules, fake_v285.__name__, fake_v285)
+    monkeypatch.setattr(patch, "_kraken_refresh_reserve_s", lambda _broker: 73.0)
+
+    # 90s TTL - 73s reserved wait/transport budget = 17s latest safe start.
+    assert patch._refresh_after_s(fake_v285, "kraken", broker) == 17.0
+    assert patch._candidate_union(Manager(), []) == [("kraken", broker)]
+
+
+def test_kraken_refresh_does_not_extend_snapshot_ttl(monkeypatch):
+    patch = _patch()
+    broker = object()
+
+    fake_v285 = types.ModuleType("bot.runtime_authoritative_position_coverage_v285_patch")
+    fake_v285._refresh_interval_s = lambda: 49.5
+    fake_v285._snapshot_max_age_s = lambda: 90.0
+    monkeypatch.setattr(patch, "_kraken_refresh_reserve_s", lambda _broker: 120.0)
+
+    # If the configured read budget exceeds available TTL, refresh at the
+    # existing 10s floor and let the authoritative readiness gate fail closed
+    # if the broker still cannot complete in time.
+    assert patch._refresh_after_s(fake_v285, "kraken", broker) == 10.0
