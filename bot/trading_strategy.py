@@ -67,6 +67,81 @@ def _heartbeat_result_has_confirmed_submission(result: Any) -> bool:
     order_id = str(result.get("order_id") or "").strip()
     return bool(order_id and status in _HEARTBEAT_ACKNOWLEDGED_STATUSES)
 
+
+def _kraken_heartbeat_auth_probe(broker: Any) -> Optional[tuple[bool, str]]:
+    """Use a bounded authenticated Kraken Balance proof for heartbeat AUTH_VERIFY.
+
+    KrakenBroker.get_account_balance() is a rich capital pipeline: after its
+    authenticated Balance call it can value assets and issue additional
+    monitoring reads. That work is appropriate for capital accounting, but it
+    is too broad for heartbeat AUTH_VERIFY and can leave the v210 single-flight
+    worker alive after the heartbeat outer timeout.
+
+    Heartbeat authentication needs only a genuine authenticated exchange read.
+    Prefer v312/v319 short-TTL, same-credential authenticated Balance evidence
+    when it already exists; otherwise issue exactly one read-only Balance
+    request through the existing v121-bounded private-call chain.
+    """
+    if type(broker).__name__ != "KrakenBroker":
+        return None
+
+    try:
+        from bot import runtime_kraken_recent_balance_prewait_v319_patch as v319
+
+        recent = getattr(v319, "_recent_observation", None)
+        observation = recent(broker) if callable(recent) else None
+        response = observation.get("response") if isinstance(observation, dict) else None
+        if (
+            isinstance(response, dict)
+            and not response.get("error")
+            and isinstance(response.get("result"), dict)
+        ):
+            logger.info(
+                "HEARTBEAT_KRAKEN_AUTH_REUSED authenticated_balance=true "
+                "same_credential=true short_ttl=true new_broker_io=false "
+                "execution_proof_fabricated=false safety_gates_bypassed=false"
+            )
+            return True, "kraken_recent_authenticated_balance"
+    except Exception:
+        logger.debug("Kraken heartbeat recent-auth reuse unavailable", exc_info=True)
+
+    try:
+        from bot import runtime_heartbeat_auth_probe_bound_v210_patch as v210
+
+        reassert = getattr(v210, "_reassert_kraken_read_bounds", None)
+        if not callable(reassert) or not bool(reassert(broker)):
+            return False, "kraken_bounded_read_protections_unavailable"
+    except Exception as exc:
+        return False, f"kraken_bounded_read_protections:{type(exc).__name__}:{exc}"
+
+    private_call = getattr(broker, "_kraken_private_call", None)
+    if not callable(private_call):
+        return False, "kraken_private_balance_probe_unavailable"
+
+    try:
+        response = private_call("Balance")
+    except Exception as exc:
+        return False, f"kraken_private_balance:{type(exc).__name__}:{exc}"
+
+    if not isinstance(response, dict):
+        return False, "kraken_private_balance:invalid_response"
+    errors = response.get("error")
+    if errors:
+        if isinstance(errors, (list, tuple)):
+            detail = ",".join(str(item) for item in errors)
+        else:
+            detail = str(errors)
+        return False, f"kraken_private_balance:{detail or 'exchange_error'}"
+    if not isinstance(response.get("result"), dict):
+        return False, "kraken_private_balance:result_missing"
+
+    logger.info(
+        "HEARTBEAT_KRAKEN_AUTH_VERIFIED source=private_balance "
+        "authenticated_read=true bounded_read=true capital_pipeline_skipped=true "
+        "execution_proof_fabricated=false safety_gates_bypassed=false"
+    )
+    return True, "kraken_private_balance"
+
 # Balance calls must never stall startup/trade eligibility indefinitely.
 BALANCE_FETCH_TIMEOUT = 12
 CACHED_BALANCE_MAX_AGE_SECONDS = 90
@@ -1189,6 +1264,10 @@ class TradingStrategy:
 
     def _heartbeat_auth_verify(self, broker: Any) -> tuple[bool, str]:
         """Best-effort authenticated request probe for AUTH_VERIFY stage."""
+        kraken_probe = _kraken_heartbeat_auth_probe(broker)
+        if kraken_probe is not None:
+            return kraken_probe
+
         probe_methods = ("get_account_balance", "get_balance", "get_accounts", "get_portfolio")
         for method_name in probe_methods:
             method = getattr(broker, method_name, None)
