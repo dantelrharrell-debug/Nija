@@ -90,7 +90,11 @@ def _kraken_heartbeat_auth_probe(broker: Any) -> Optional[tuple[bool, str]]:
 
         recent = getattr(v319, "_recent_observation", None)
         observation = recent(broker) if callable(recent) else None
-        response = observation.get("response") if isinstance(observation, dict) else None
+        response = (
+            observation.get("response")
+            if isinstance(observation, dict)
+            else None
+        )
         if (
             isinstance(response, dict)
             and not response.get("error")
