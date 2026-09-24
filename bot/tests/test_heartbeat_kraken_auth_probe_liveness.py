@@ -33,37 +33,34 @@ def test_kraken_heartbeat_auth_reuses_recent_authenticated_balance_without_new_i
     broker._kraken_private_call.assert_not_called()
 
 
-def test_kraken_heartbeat_auth_uses_single_bounded_private_balance_read():
+def test_kraken_heartbeat_auth_defers_without_fresh_observation_and_does_no_io():
     broker = KrakenBroker()
-    broker._kraken_private_call.return_value = {
-        "error": [],
-        "result": {"ZUSD": "43.61", "USDT": "0"},
-    }
-    with (
-        patch("bot.runtime_kraken_recent_balance_prewait_v319_patch._recent_observation", return_value=None),
-        patch("bot.runtime_heartbeat_auth_probe_bound_v210_patch._reassert_kraken_read_bounds", return_value=True),
-    ):
-        ok, detail = ts._kraken_heartbeat_auth_probe(broker)
-
-    assert ok is True
-    assert detail == "kraken_private_balance"
-    broker._kraken_private_call.assert_called_once_with("Balance")
-
-
-def test_kraken_heartbeat_auth_fails_closed_on_exchange_error():
-    broker = KrakenBroker()
-    broker._kraken_private_call.return_value = {
-        "error": ["EAPI:Invalid key"],
-        "result": {},
-    }
-    with (
-        patch("bot.runtime_kraken_recent_balance_prewait_v319_patch._recent_observation", return_value=None),
-        patch("bot.runtime_heartbeat_auth_probe_bound_v210_patch._reassert_kraken_read_bounds", return_value=True),
+    with patch(
+        "bot.runtime_kraken_recent_balance_prewait_v319_patch._recent_observation",
+        return_value=None,
     ):
         ok, detail = ts._kraken_heartbeat_auth_probe(broker)
 
     assert ok is False
-    assert "EAPI:Invalid key" in detail
+    assert detail == "kraken_recent_authenticated_balance_unavailable"
+    broker._kraken_private_call.assert_not_called()
+
+
+def test_kraken_heartbeat_auth_rejects_error_observation_without_new_io():
+    broker = KrakenBroker()
+    recent = {
+        "response": {"error": ["EAPI:Invalid key"], "result": {}},
+        "age_s": 2.0,
+    }
+    with patch(
+        "bot.runtime_kraken_recent_balance_prewait_v319_patch._recent_observation",
+        return_value=recent,
+    ):
+        ok, detail = ts._kraken_heartbeat_auth_probe(broker)
+
+    assert ok is False
+    assert detail == "kraken_recent_authenticated_balance_unavailable"
+    broker._kraken_private_call.assert_not_called()
 
 
 def test_non_kraken_broker_keeps_existing_auth_path():
