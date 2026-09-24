@@ -99,7 +99,7 @@ class TestStartupValidationEnvMisconfiguration(unittest.TestCase):
             result.warnings,
         )
 
-    def test_enabled_kraken_users_with_key_secret_pairs_are_counted_viable(self):
+    def test_only_enabled_kraken_config_users_with_key_secret_pairs_are_counted_viable(self):
         with patch.dict(
             os.environ,
             {
@@ -107,6 +107,8 @@ class TestStartupValidationEnvMisconfiguration(unittest.TestCase):
                 "KRAKEN_PLATFORM_API_SECRET": "p" * 40,
                 "KRAKEN_USER_DAIVON_API_KEY": "daivon_key_12345",
                 "KRAKEN_USER_DAIVON_API_SECRET": "d" * 40,
+                # Stale/orphaned credentials must not recreate a user that is
+                # no longer enabled in config/users/retail_kraken.json.
                 "KRAKEN_USER_TANIA_API_KEY": "tania_key_12345",
                 "KRAKEN_USER_TANIA_API_SECRET": "t" * 40,
             },
@@ -116,7 +118,11 @@ class TestStartupValidationEnvMisconfiguration(unittest.TestCase):
 
         self.assertFalse(result.warnings, result.warnings)
         self.assertTrue(
-            any("2 enabled Kraken user account(s) have viable credentials" in info for info in result.info),
+            any("1 enabled Kraken user account(s) have viable credentials" in info for info in result.info),
+            result.info,
+        )
+        self.assertFalse(
+            any("Kraken user tania_gilbert credentials configured and viable" in info for info in result.info),
             result.info,
         )
 
