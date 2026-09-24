@@ -36,11 +36,6 @@ class UserTradingActivator:
             'user_id': 'daivon_frazier',
             'name': 'Daivon Frazier',
             'env_prefix': 'DAIVON'
-        },
-        {
-            'user_id': 'tania_gilbert',
-            'name': 'Tania Gilbert',
-            'env_prefix': 'TANIA'
         }
     ]
     

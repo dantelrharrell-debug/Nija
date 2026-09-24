@@ -1282,9 +1282,6 @@ fi
 # Kraken - User #1 (Daivon)
 nija_print_kraken_user_credential_status "User #1: Daivon" "DAIVON" "DAIVON_FRAZIER"
 
-# Kraken - User #2 (Tania)
-nija_print_kraken_user_credential_status "User #2: Tania" "TANIA" "TANIA_GILBERT"
-
 # OKX
 echo "   📊 OKX (Master):"
 if [ -n "${OKX_API_KEY}" ] && [ -n "${OKX_API_SECRET}" ] && [ -n "${OKX_API_PASSPHRASE:-${OKX_PASSPHRASE:-}}" ]; then
@@ -1305,14 +1302,6 @@ fi
 echo "   📊 ALPACA (Master):"
 if [ -n "${ALPACA_API_KEY}" ] && [ -n "${ALPACA_API_SECRET}" ]; then
     echo "      ✅ Configured (Key: ${#ALPACA_API_KEY} chars, Secret: ${#ALPACA_API_SECRET} chars, Paper: ${ALPACA_PAPER:-true})"
-else
-    echo "      ❌ Not configured"
-fi
-
-# Alpaca - User #2 (Tania)
-echo "   👤 ALPACA (User #2: Tania):"
-if [ -n "${ALPACA_USER_TANIA_API_KEY}" ] && [ -n "${ALPACA_USER_TANIA_API_SECRET}" ]; then
-    echo "      ✅ Configured (Key: ${#ALPACA_USER_TANIA_API_KEY} chars, Secret: ${#ALPACA_USER_TANIA_API_SECRET} chars, Paper: ${ALPACA_USER_TANIA_PAPER:-true})"
 else
     echo "      ❌ Not configured"
 fi

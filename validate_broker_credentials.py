@@ -133,10 +133,8 @@ def _validate_kraken_platform() -> dict:
     def get_kraken_creds() -> Tuple[str, str]:
         return (
             _get("KRAKEN_PLATFORM_API_KEY")
-            or _get("KRAKEN_USER_TANIA_GILBERT_API_KEY")
             or _get("KRAKEN_API_KEY"),
             _get("KRAKEN_PLATFORM_API_SECRET")
-            or _get("KRAKEN_USER_TANIA_GILBERT_API_SECRET")
             or _get("KRAKEN_API_SECRET"),
         )
 

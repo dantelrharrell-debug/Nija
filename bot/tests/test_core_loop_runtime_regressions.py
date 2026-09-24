@@ -32,7 +32,6 @@ def test_kraken_user_configs_are_independent_not_copy_trading() -> None:
     retail_users = json.loads((repo_root / "config/users/retail_kraken.json").read_text())
     individual_users = [
         json.loads((repo_root / "config/users/daivon_frazier.json").read_text()),
-        json.loads((repo_root / "config/users/tania_gilbert.json").read_text()),
     ]
 
     for user in [*retail_users, *individual_users]:

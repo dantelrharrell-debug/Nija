@@ -227,10 +227,6 @@ services:
         sync: false
       - key: KRAKEN_USER_DAIVON_API_SECRET
         sync: false
-      - key: KRAKEN_USER_TANIA_API_KEY
-        sync: false
-      - key: KRAKEN_USER_TANIA_API_SECRET
-        sync: false
 
   # Durable private-only Redis-compatible datastore for writer fencing, nonce
   # state, heartbeats, and distributed runtime coordination.

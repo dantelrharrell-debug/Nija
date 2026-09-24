@@ -12,19 +12,5 @@
       "XRP-USD"
     ],
     "description": "Retail user - Kraken crypto account (independent strategy evaluation)"
-  },
-  {
-    "user_id": "tania_gilbert",
-    "name": "Tania Gilbert",
-    "account_type": "retail",
-    "broker_type": "kraken",
-    "enabled": true,
-    "copy_from_platform": false,
-    "independent_trading": true,
-    "active_trading": true,
-    "disabled_symbols": [
-      "XRP-USD"
-    ],
-    "description": "Retail user - Kraken crypto account (independent strategy evaluation)"
   }
 ]
