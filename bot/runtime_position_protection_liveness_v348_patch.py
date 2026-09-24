@@ -52,14 +52,72 @@ _THREAD: threading.Thread | None = None
 _COST_BASIS_ESCAPE: dict[int, float] = {}
 
 
+def _kraken_refresh_reserve_s(broker: Any) -> float:
+    """Reserve enough TTL for Kraken's configured read wait plus transport."""
+    interval_s = 0.0
+    timeout_s = 8.0
+    try:
+        v286 = importlib.import_module("bot.runtime_kraken_position_refresh_liveness_v286_patch")
+        category_fn = getattr(v286, "_category_from_call", None)
+        category = category_fn(broker, "Balance", ("Balance",), {}) if callable(category_fn) else None
+        broker_module = importlib.import_module("bot.broker_manager")
+        calculator = getattr(broker_module, "calculate_min_interval", None)
+        if callable(calculator) and category is not None:
+            interval_s = max(
+                0.0,
+                float(calculator(category, getattr(broker, "_kraken_rate_mode", None)) or 0.0),
+            )
+    except Exception:
+        interval_s = 0.0
+
+    try:
+        v121 = importlib.import_module("bot.kraken_read_timeout_v121_patch")
+        timeout_fn = getattr(v121, "_private_read_timeout_s", None)
+        if callable(timeout_fn):
+            timeout_s = max(1.0, float(timeout_fn() or timeout_s))
+    except Exception:
+        pass
+
+    if interval_s <= 0.0:
+        try:
+            interval_s = max(0.0, float(getattr(broker, "_min_call_interval", 0.0) or 0.0))
+        except Exception:
+            interval_s = 0.0
+
+    if interval_s <= 0.0:
+        try:
+            reserve = float(
+                os.environ.get("NIJA_KRAKEN_POSITION_REFRESH_RESERVE_S", "73") or 73.0
+            )
+        except (TypeError, ValueError):
+            reserve = 73.0
+        return max(15.0, min(180.0, reserve))
+
+    # Five seconds covers the monitor/dispatch scheduling edge without changing
+    # Kraken's configured rate interval or transport timeout.
+    return max(15.0, min(180.0, interval_s + timeout_s + 5.0))
+
+
+def _refresh_after_s(v285: Any, broker_name: str, broker: Any) -> float:
+    interval_fn = getattr(v285, "_refresh_interval_s", None)
+    base_s = float(interval_fn()) if callable(interval_fn) else 49.5
+    base_s = max(10.0, base_s)
+
+    if str(broker_name or "").strip().lower() != "kraken":
+        return base_s
+
+    ttl_fn = getattr(v285, "_snapshot_max_age_s", None)
+    ttl_s = float(ttl_fn()) if callable(ttl_fn) else 90.0
+    reserve_s = _kraken_refresh_reserve_s(broker)
+    latest_safe_start_s = max(10.0, ttl_s - reserve_s)
+    return max(10.0, min(base_s, latest_safe_start_s))
+
+
 def _proactive_platform_candidates(manager: Any) -> list[tuple[str, Any]]:
     """Return connected platform brokers whose current snapshot is due refresh."""
     found: list[tuple[str, Any]] = []
     try:
         v285 = importlib.import_module("bot.runtime_authoritative_position_coverage_v285_patch")
-        interval_fn = getattr(v285, "_refresh_interval_s", None)
-        refresh_after_s = float(interval_fn()) if callable(interval_fn) else 49.5
-        refresh_after_s = max(10.0, refresh_after_s)
         platform = getattr(manager, "platform_brokers", {}) or {}
         if callable(platform):
             platform = platform()
@@ -82,17 +140,20 @@ def _proactive_platform_candidates(manager: Any) -> list[tuple[str, Any]]:
             if at <= 0.0:
                 continue
             age_s = max(0.0, time.monotonic() - at)
-            if age_s < refresh_after_s:
-                continue
             raw_name = getattr(broker_type, "value", broker_type)
             name = str(raw_name or "unknown").strip().lower()
             if "." in name:
                 name = name.rsplit(".", 1)[-1]
+            refresh_after_s = _refresh_after_s(v285, name, broker)
+            if age_s < refresh_after_s:
+                continue
+            reserve_s = _kraken_refresh_reserve_s(broker) if name == "kraken" else 0.0
             found.append((name or "unknown", broker))
             LOGGER.info(
                 "POSITION_REFRESH_V348_PROACTIVE_DUE marker=%s broker=%s age_s=%.3f refresh_after_s=%.3f "
-                "snapshot_ttl_unchanged=true readiness_granted=false",
-                MARKER, name or "unknown", age_s, refresh_after_s,
+                "kraken_ttl_reserve_s=%.3f snapshot_ttl_unchanged=true configured_rate_interval_unchanged=true "
+                "transport_timeout_unchanged=true readiness_granted=false",
+                MARKER, name or "unknown", age_s, refresh_after_s, reserve_s,
             )
     except Exception:
         return []
