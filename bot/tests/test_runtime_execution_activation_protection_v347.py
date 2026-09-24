@@ -14,6 +14,7 @@ def test_v347_does_not_wake_without_genuine_marker(monkeypatch):
             raise AssertionError("must not wake without genuine marker")
 
     real_import = v347.importlib.import_module
+    monkeypatch.setattr(v347, "_audit_protective_coverage", lambda: True)
     monkeypatch.setattr(
         v347.importlib,
         "import_module",
@@ -36,6 +37,7 @@ def test_v347_wakes_only_after_marker_ready(monkeypatch):
             return True
 
     real_import = v347.importlib.import_module
+    monkeypatch.setattr(v347, "_audit_protective_coverage", lambda: True)
     monkeypatch.setattr(
         v347.importlib,
         "import_module",
@@ -107,3 +109,53 @@ def test_v347_installs_monitor_while_runtime_protection_is_still_converging(monk
         v347.os.environ["NIJA_RUNTIME_EXECUTION_ACTIVATION_PROTECTION_V347_READY"]
         == "1"
     )
+
+
+def test_v347_never_wakes_activation_without_protective_coverage(monkeypatch):
+    class V238:
+        @staticmethod
+        def _genuine_execution_marker_ready():
+            raise AssertionError("marker probe must not run without protection")
+
+        @staticmethod
+        def _wake_activation_after_genuine_marker(source):
+            raise AssertionError("activation must not wake without protection")
+
+    real_import = v347.importlib.import_module
+    monkeypatch.setattr(v347, "_audit_protective_coverage", lambda: False)
+    monkeypatch.setattr(
+        v347.importlib,
+        "import_module",
+        lambda name: V238 if name == "bot.runtime_heartbeat_marker_convergence_v238_patch" else real_import(name),
+    )
+
+    assert v347._wake_activation() is False
+
+
+def test_v347_rechecks_protection_after_marker_probe(monkeypatch):
+    calls = {"coverage": 0, "wake": 0}
+
+    def coverage():
+        calls["coverage"] += 1
+        return calls["coverage"] == 1
+
+    class V238:
+        @staticmethod
+        def _genuine_execution_marker_ready():
+            return True, "verified"
+
+        @staticmethod
+        def _wake_activation_after_genuine_marker(source):
+            calls["wake"] += 1
+            return True
+
+    real_import = v347.importlib.import_module
+    monkeypatch.setattr(v347, "_audit_protective_coverage", coverage)
+    monkeypatch.setattr(
+        v347.importlib,
+        "import_module",
+        lambda name: V238 if name == "bot.runtime_heartbeat_marker_convergence_v238_patch" else real_import(name),
+    )
+
+    assert v347._wake_activation() is False
+    assert calls == {"coverage": 2, "wake": 0}

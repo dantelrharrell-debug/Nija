@@ -37,8 +37,23 @@ _THREAD: threading.Thread | None = None
 
 
 def _wake_activation() -> bool:
-    """Reconcile only after the canonical execution marker already exists."""
+    """Wake activation only with both genuine fill proof and current protection."""
     try:
+        # v347 installation is intentionally decoupled from transient runtime
+        # coverage so later recovery stages can install.  Activation itself is
+        # not decoupled: every wake must re-prove v281 coverage immediately
+        # before touching the activation convergence path.
+        if not _audit_protective_coverage():
+            LOGGER.warning(
+                "EXECUTION_ACTIVATION_V347_WAKE_BLOCKED marker=%s "
+                "reason=protective_coverage_not_ready marker_probe_skipped=true "
+                "activation_woken=false trading_fail_closed=true "
+                "execution_proof_fabricated=false forced_activation=false "
+                "safety_gates_bypassed=false",
+                MARKER,
+            )
+            return False
+
         v238 = importlib.import_module("bot.runtime_heartbeat_marker_convergence_v238_patch")
         probe = getattr(v238, "_genuine_execution_marker_ready", None)
         wake = getattr(v238, "_wake_activation_after_genuine_marker", None)
@@ -47,9 +62,24 @@ def _wake_activation() -> bool:
         ready, detail = probe()
         if not bool(ready):
             return False
+
+        # Re-check immediately before the state-changing wake so a coverage
+        # loss between the marker probe and activation cannot pass through.
+        if not _audit_protective_coverage():
+            LOGGER.warning(
+                "EXECUTION_ACTIVATION_V347_WAKE_BLOCKED marker=%s "
+                "reason=protective_coverage_lost_after_marker_probe "
+                "marker_ready=true detail=%s activation_woken=false "
+                "trading_fail_closed=true execution_proof_fabricated=false "
+                "forced_activation=false safety_gates_bypassed=false",
+                MARKER, detail,
+            )
+            return False
+
         result = bool(wake("canonical_confirmed_fill_v347"))
         LOGGER.critical(
-            "EXECUTION_ACTIVATION_V347_WAKE marker=%s marker_ready=true detail=%s activation_woken=%s "
+            "EXECUTION_ACTIVATION_V347_WAKE marker=%s marker_ready=true "
+            "protective_coverage_ready=true detail=%s activation_woken=%s "
             "execution_proof_fabricated=false forced_activation=false safety_gates_bypassed=false",
             MARKER, detail, str(result).lower(),
         )

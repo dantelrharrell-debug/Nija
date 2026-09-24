@@ -181,6 +181,16 @@ class TestAuthorityInvariant(_Base):
             "0",
             "NIJA_WRITER_LEASE_ACQUIRED must be 0 after invariant release",
         )
+        self.assertEqual(
+            os.environ.get("NIJA_RUNTIME_EXECUTION_AUTHORITY"),
+            "0",
+            "missing fencing token must revoke local execution authority",
+        )
+        self.assertEqual(
+            os.environ.get("NIJA_EXECUTION_ACTIVE"),
+            "false",
+            "missing fencing token must leave local execution fail-closed",
+        )
 
     def test_invariant_fires_when_env_externally_cleared(self):
         """VIOLATION: singleton.acquired=True but env flag was externally reset to 0."""
