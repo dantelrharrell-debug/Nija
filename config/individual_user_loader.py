@@ -7,7 +7,6 @@ Auto-enables users if their API keys exist in environment variables.
 
 File structure:
 - config/users/daivon_frazier.json
-- config/users/tania_gilbert.json
 - etc.
 
 Each file contains a single user configuration with format:
@@ -186,7 +185,6 @@ class IndividualUserConfigLoader:
 
     Expected files:
     - config/users/daivon_frazier.json
-    - config/users/tania_gilbert.json
 
     HARD FAIL MODE:
     - If required users are missing, raises exception
@@ -195,7 +193,7 @@ class IndividualUserConfigLoader:
     """
 
     # Required users that must exist
-    REQUIRED_USERS = ['daivon_frazier', 'tania_gilbert']
+    REQUIRED_USERS = ['daivon_frazier']
 
     def __init__(self, config_dir: Optional[str] = None):
         """
