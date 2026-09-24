@@ -71,6 +71,8 @@ jobs:
       - name: Run mandatory fail-closed safety regressions
         run: |
           python -m pytest -q \
+            bot/tests/test_runtime_execution_activation_protection_v347.py \
+            bot/tests/test_runtime_position_protection_liveness_v348.py \
             bot/tests/test_live_authority_fail_closed_v94.py \
             bot/tests/test_v2_pipeline_import_recovery.py \
             bot/tests/test_canonical_fast_entrypoint_v28.py \
