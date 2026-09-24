@@ -330,7 +330,19 @@ class TestCoreThreadDeathTriggerReelection(_Base):
         dead_thread.join(timeout=2.0)
         rt._core_thread = dead_thread
 
-        with self._mock_seak():
+        # This test exercises the current-owner loss path.  The full unittest
+        # suite intentionally reuses one Python process, so an unrelated test can
+        # leave a newer process-global writer lineage published.  Pin this unit
+        # to exact ownership here; the dedicated stale-runtime tests below cover
+        # the opposite invariant (a stale runtime must preserve a newer token).
+        with (
+            self._mock_seak(),
+            patch.object(
+                rt,
+                "_owns_published_authority_env",
+                return_value=(True, "unit_test_exact_owner"),
+            ),
+        ):
             rt._release_owned_lock_for_reelection("core_thread_dead")
 
         self.assertNotIn("NIJA_WRITER_FENCING_TOKEN", os.environ,
