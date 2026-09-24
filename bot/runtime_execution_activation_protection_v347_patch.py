@@ -153,6 +153,11 @@ def install_import_hook() -> bool:
         marker_ready = protection_ready = manifest_ready = False
         try:
             marker_ready = _patch_v346_marker_writer()
+            # Runtime protection coverage may legitimately be false during
+            # startup while authoritative position snapshots are converging.
+            # That is a trading-readiness condition, not an installation
+            # failure.  Audit it for observability, but keep v281/v285 as the
+            # fail-closed owners of the runtime gate.
             protection_ready = _audit_protective_coverage()
             manifest_ready = _register_manifest()
         except Exception as exc:
@@ -160,24 +165,33 @@ def install_import_hook() -> bool:
                 "RUNTIME_EXECUTION_ACTIVATION_PROTECTION_V347_INSTALL_ERROR marker=%s error=%s:%s fail_closed=true",
                 MARKER, type(exc).__name__, exc,
             )
-        ready = bool(marker_ready and protection_ready and manifest_ready)
-        os.environ[_READY_FLAG] = "1" if ready else "0"
-        if ready and (_THREAD is None or not _THREAD.is_alive()):
+
+        # The canonical v324 chain expects each stage flag to attest that the
+        # liveness/repair mechanism installed successfully.  Requiring current
+        # protection coverage here deadlocked startup: v347 returned false, so
+        # v348+ (including stale platform snapshot recovery) were never
+        # installed and the very proof needed by v281 could not refresh.
+        installed = bool(marker_ready and manifest_ready)
+        os.environ[_READY_FLAG] = "1" if installed else "0"
+        if installed and (_THREAD is None or not _THREAD.is_alive()):
             _THREAD = threading.Thread(target=_worker, name="ExecutionActivationProtectionV347", daemon=True)
             _THREAD.start()
-        log = LOGGER.critical if ready else LOGGER.error
+
+        log = LOGGER.critical if installed else LOGGER.error
         log(
             "RUNTIME_EXECUTION_ACTIVATION_PROTECTION_V347_%s marker=%s ready=%s "
             "confirmed_fill_immediate_activation_wakeup=%s protective_coverage_audit=%s manifest=%s "
+            "installation_attestation_separate_from_runtime_protection=true "
+            "runtime_protection_remains_fail_closed=true "
             "take_profit_authority=v281 stop_loss_authority=v281 trailing_take_profit_authority=v281 "
             "trailing_stop_authority=v281 auto_exit_reconciler_authority=v281 dust_policy_unchanged=true "
             "no_forced_trade=true ack_alone_not_execution_proof=true fill_proof_fabricated=false "
             "tracker_mutation=false writer_nonce_capital_risk_killswitch_ecel_minimum_quantity_position_order_fill_gates_unchanged=true "
             "forced_activation=false safety_gates_bypassed=false",
-            "READY" if ready else "NOT_READY", MARKER, str(ready).lower(), str(marker_ready).lower(),
+            "READY" if installed else "NOT_READY", MARKER, str(installed).lower(), str(marker_ready).lower(),
             str(protection_ready).lower(), str(manifest_ready).lower(),
         )
-        return ready
+        return installed
 
 
 def install() -> bool:
