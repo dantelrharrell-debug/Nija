@@ -248,68 +248,6 @@ def check_kraken_platform() -> bool:
     return ok
 
 
-def check_kraken_user_tania() -> bool:
-    """
-    Check Kraken credentials for user Tania Gilbert.
-
-    Primary env var names use the full user_id in uppercase:
-      KRAKEN_USER_TANIA_GILBERT_API_KEY / _SECRET
-
-    First-name-only variants are also accepted as fallbacks:
-      KRAKEN_USER_TANIA_API_KEY / _SECRET
-    """
-    _section("Kraken USER — Tania Gilbert  (user_id: tania_gilbert)")
-
-    # Primary: full name
-    full_key_ok, full_key_disp = _check_var("KRAKEN_USER_TANIA_GILBERT_API_KEY")
-    full_sec_ok, full_sec_disp = _check_var("KRAKEN_USER_TANIA_GILBERT_API_SECRET")
-
-    # Fallback: first name only
-    short_key_ok, short_key_disp = _check_var("KRAKEN_USER_TANIA_API_KEY")
-    short_sec_ok, short_sec_disp = _check_var("KRAKEN_USER_TANIA_API_SECRET")
-
-    key_ok = full_key_ok or short_key_ok
-    sec_ok = full_sec_ok or short_sec_ok
-
-    # Report key
-    if full_key_ok:
-        _ok(f"KRAKEN_USER_TANIA_GILBERT_API_KEY = {full_key_disp}")
-    elif short_key_ok:
-        _ok(
-            f"KRAKEN_USER_TANIA_API_KEY = {short_key_disp}  "
-            f"(fallback accepted; prefer KRAKEN_USER_TANIA_GILBERT_API_KEY)"
-        )
-    else:
-        _fail("KRAKEN_USER_TANIA_GILBERT_API_KEY — not set or invalid")
-        _info(
-            "Also tried fallback: KRAKEN_USER_TANIA_API_KEY — "
-            + short_key_disp
-        )
-
-    # Report secret
-    if full_sec_ok:
-        _ok(f"KRAKEN_USER_TANIA_GILBERT_API_SECRET = {full_sec_disp}")
-    elif short_sec_ok:
-        _ok(
-            f"KRAKEN_USER_TANIA_API_SECRET = {short_sec_disp}  "
-            f"(fallback accepted; prefer KRAKEN_USER_TANIA_GILBERT_API_SECRET)"
-        )
-    else:
-        _fail("KRAKEN_USER_TANIA_GILBERT_API_SECRET — not set or invalid")
-        _info(
-            "Also tried fallback: KRAKEN_USER_TANIA_API_SECRET — "
-            + short_sec_disp
-        )
-
-    if not key_ok or not sec_ok:
-        print()
-        _info("To fix, run:")
-        _info('  export KRAKEN_USER_TANIA_GILBERT_API_KEY="<your-api-key>"')
-        _info('  export KRAKEN_USER_TANIA_GILBERT_API_SECRET="<your-api-secret>"')
-        _info("Or add those lines to your .env file.")
-
-    return key_ok and sec_ok
-
 
 def check_kraken_user_daivon() -> bool:
     """Check Kraken credentials for user Daivon Frazier."""
@@ -500,7 +438,6 @@ def main() -> int:
 
     # Required checks (failures block the bot)
     platform_ok = check_kraken_platform()
-    tania_ok = check_kraken_user_tania()
     daivon_ok = check_kraken_user_daivon()
 
     # Optional checks (informational only)
@@ -515,7 +452,6 @@ def main() -> int:
     required = [
         ("NTP clock sync", ntp_ok),
         ("Kraken PLATFORM", platform_ok),
-        ("Kraken USER — Tania Gilbert", tania_ok),
         ("Kraken USER — Daivon Frazier", daivon_ok),
     ]
 
