@@ -139,7 +139,6 @@ def load_user_configs() -> dict:
     if not users:
         users = {
             'daivon_frazier': {'kraken': False, 'alpaca': False},
-            'tania_gilbert': {'kraken': False, 'alpaca': False}
         }
 
     return users
