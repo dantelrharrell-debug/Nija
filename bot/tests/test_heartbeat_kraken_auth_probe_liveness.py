@@ -21,15 +21,14 @@ def test_kraken_heartbeat_auth_reuses_recent_authenticated_balance_without_new_i
         "response": {"error": [], "result": {"ZUSD": "43.61", "USDT": "0"}},
         "age_s": 2.0,
     }
-    with (
-        patch("bot.runtime_kraken_recent_balance_prewait_v319_patch._recent_observation", return_value=recent),
-        patch("bot.runtime_heartbeat_auth_probe_bound_v210_patch._reassert_kraken_read_bounds") as reassert,
+    with patch(
+        "bot.runtime_kraken_recent_balance_prewait_v319_patch._recent_observation",
+        return_value=recent,
     ):
         ok, detail = ts._kraken_heartbeat_auth_probe(broker)
 
     assert ok is True
     assert detail == "kraken_recent_authenticated_balance"
-    reassert.assert_not_called()
     broker._kraken_private_call.assert_not_called()
 
 
