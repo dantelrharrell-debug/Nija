@@ -1809,6 +1809,38 @@ class EntrypointWriterAuthority:
                 reason,
             )
             self._release_owned_lock_for_reelection(reason)
+
+            # Local fail-closed postcondition: if no newer writer published a
+            # fencing token while release/reconciliation ran, this process must
+            # never retain lease/execution truth after detecting a missing
+            # token.  A newly published token is the guard against clobbering a
+            # legitimate newer process-local owner.
+            if not os.environ.get("NIJA_WRITER_FENCING_TOKEN", "").strip():
+                os.environ["NIJA_WRITER_LEASE_ACQUIRED"] = "0"
+                os.environ["NIJA_LOCK_ACQUIRED"] = "false"
+                os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"] = "0"
+                os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "0"
+                os.environ["NIJA_EXECUTION_ACTIVE"] = "false"
+                os.environ.pop("NIJA_CORE_THREAD_ALIVE", None)
+                try:
+                    from bot.readiness_table import revoke_many
+
+                    revoke_many(
+                        ("authority_ready", "nonce_ready", "execution_ready"),
+                        reason="writer_authority_invariant_missing_fencing_token",
+                    )
+                except Exception:
+                    logger.debug(
+                        "WRITER_AUTHORITY_INVARIANT_LOCAL_REVOKE_FAILED marker=%s",
+                        _MARKER,
+                        exc_info=True,
+                    )
+                logger.critical(
+                    "WRITER_AUTHORITY_INVARIANT_LOCAL_REVOKED marker=%s "
+                    "reason=fencing_token_missing lease_acquired=false "
+                    "execution_authority=false newer_fencing_token_preserved=true",
+                    _MARKER,
+                )
             return False, reason
 
         # Violation 2: in-memory singleton says acquired but env was externally
