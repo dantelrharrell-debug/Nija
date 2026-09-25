@@ -26,6 +26,15 @@ EXCLUDE_DIRS = {
     ".ruff_cache",
 }
 
+# These files define the compliance rules themselves, so they necessarily
+# contain the prohibited phrases as data/patterns. Scanning them makes the
+# repository fail simply because the guardrails exist. Only rule-definition
+# files are exempt; user-facing and runtime content remains scanned.
+EXCLUDE_FILES = {
+    Path("scripts/compliance_scan.py"),
+    Path("bot/compliance_language_guard.py"),
+}
+
 
 def is_binary(path: Path) -> bool:
     try:
@@ -57,12 +66,15 @@ def main() -> int:
     banned_phrases = [phrase.lower() for phrase in BANNED]
     failures: list[str] = []
 
-    script_path = Path(__file__).resolve()
     for root, dirs, files in os.walk(repo_root):
         dirs[:] = [d for d in dirs if d not in EXCLUDE_DIRS]
         for file_name in files:
             path = Path(root) / file_name
-            if path.resolve() == script_path:
+            try:
+                relative_path = path.resolve().relative_to(repo_root.resolve())
+            except (OSError, ValueError):
+                relative_path = path
+            if relative_path in EXCLUDE_FILES:
                 continue
             failures.extend(scan_file(path, banned_phrases))
 
