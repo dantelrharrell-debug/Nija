@@ -67,6 +67,55 @@ def _heartbeat_result_has_confirmed_submission(result: Any) -> bool:
     order_id = str(result.get("order_id") or "").strip()
     return bool(order_id and status in _HEARTBEAT_ACKNOWLEDGED_STATUSES)
 
+
+def _kraken_heartbeat_auth_probe(broker: Any) -> Optional[tuple[bool, str]]:
+    """Reuse genuine recent Kraken Balance evidence for heartbeat AUTH_VERIFY.
+
+    KrakenBroker.get_account_balance() is a rich capital pipeline that can
+    legitimately spend much longer than the heartbeat timeout on monitoring
+    pacing, asset valuation, and additional authenticated reads. Starting a
+    second private read from the heartbeat would either recreate that liveness
+    risk or violate Kraken single-flight/rate-ordering guarantees.
+
+    The canonical Kraken balance pipeline already records credential-proven,
+    authenticated Balance responses in v312/v319 with a short TTL. Heartbeat
+    AUTH_VERIFY consumes only that evidence. If none is currently fresh it
+    fails closed and retries later; it performs no broker I/O itself.
+    """
+    if type(broker).__name__ != "KrakenBroker":
+        return None
+
+    try:
+        from bot import runtime_kraken_recent_balance_prewait_v319_patch as v319
+
+        recent = getattr(v319, "_recent_observation", None)
+        observation = recent(broker) if callable(recent) else None
+        response = (
+            observation.get("response")
+            if isinstance(observation, dict)
+            else None
+        )
+        if (
+            isinstance(response, dict)
+            and not response.get("error")
+            and isinstance(response.get("result"), dict)
+        ):
+            logger.info(
+                "HEARTBEAT_KRAKEN_AUTH_REUSED authenticated_balance=true "
+                "same_credential=true short_ttl=true new_broker_io=false "
+                "execution_proof_fabricated=false safety_gates_bypassed=false"
+            )
+            return True, "kraken_recent_authenticated_balance"
+    except Exception:
+        logger.debug("Kraken heartbeat recent-auth reuse unavailable", exc_info=True)
+
+    logger.info(
+        "HEARTBEAT_KRAKEN_AUTH_DEFERRED reason=fresh_authenticated_balance_unavailable "
+        "new_broker_io=false duplicate_private_read=false trading_fail_closed=true "
+        "execution_proof_fabricated=false safety_gates_bypassed=false"
+    )
+    return False, "kraken_recent_authenticated_balance_unavailable"
+
 # Balance calls must never stall startup/trade eligibility indefinitely.
 BALANCE_FETCH_TIMEOUT = 12
 CACHED_BALANCE_MAX_AGE_SECONDS = 90
@@ -1189,6 +1238,10 @@ class TradingStrategy:
 
     def _heartbeat_auth_verify(self, broker: Any) -> tuple[bool, str]:
         """Best-effort authenticated request probe for AUTH_VERIFY stage."""
+        kraken_probe = _kraken_heartbeat_auth_probe(broker)
+        if kraken_probe is not None:
+            return kraken_probe
+
         probe_methods = ("get_account_balance", "get_balance", "get_accounts", "get_portfolio")
         for method_name in probe_methods:
             method = getattr(broker, method_name, None)
