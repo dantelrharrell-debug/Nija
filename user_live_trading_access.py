@@ -15,6 +15,7 @@ from auth import get_api_key_manager
 from auth.user_database import get_user_database
 from billing_store import get_billing_store
 from vault import get_vault
+from paid_user_state import get_paid_user_state
 
 logger = logging.getLogger("nija.live_trading_access")
 
@@ -42,6 +43,28 @@ class LiveTradingAccessDecision:
             "education_mode": self.education_mode,
             "brokers": list(self.brokers),
         }
+
+
+def _resolve_stores(
+    user_db: Any = None,
+    billing_store: Any = None,
+    vault: Any = None,
+) -> tuple[Any, Any, Any]:
+    """Resolve authoritative stores.
+
+    Explicitly injected stores remain supported for tests. In production/default
+    execution, Redis-paid-user state is authoritative and failures are surfaced
+    so live access remains fail-closed instead of falling back to ephemeral
+    container SQLite.
+    """
+    if user_db is not None or billing_store is not None or vault is not None:
+        return (
+            user_db or get_user_database(),
+            billing_store or get_billing_store(),
+            vault or get_vault(),
+        )
+    state = get_paid_user_state()
+    return state.users, state.billing, state.vault
 
 
 def _safe_user(user_id: str, user_db: Any = None) -> Optional[dict[str, Any]]:
@@ -92,15 +115,37 @@ def evaluate_live_trading_access(
     if not uid:
         return LiveTradingAccessDecision("", False, "user_id_missing", "", False, True, ())
 
-    user = _safe_user(uid, user_db=user_db)
+    try:
+        users, billing, secure_vault = _resolve_stores(
+            user_db=user_db,
+            billing_store=billing_store,
+            vault=vault,
+        )
+    except Exception as exc:
+        logger.error(
+            "LIVE_ACCESS persistent state unavailable user=%s error=%s",
+            uid,
+            exc,
+        )
+        return LiveTradingAccessDecision(
+            uid,
+            False,
+            "persistent_state_unavailable",
+            "",
+            False,
+            True,
+            (),
+        )
+
+    user = _safe_user(uid, user_db=users)
     if not user:
         return LiveTradingAccessDecision(uid, False, "user_not_found", "", False, True, ())
 
     if not bool(user.get("enabled", False)):
         return LiveTradingAccessDecision(uid, False, "user_disabled", "", False, True, ())
 
-    billing = _safe_billing(uid, billing_store=billing_store)
-    billing_status = str(getattr(billing, "status", "") or "").strip().lower()
+    billing_record = _safe_billing(uid, billing_store=billing)
+    billing_status = str(getattr(billing_record, "status", "") or "").strip().lower()
     if billing_status not in PAID_ACTIVE_STATUSES:
         return LiveTradingAccessDecision(
             uid,
@@ -112,7 +157,7 @@ def evaluate_live_trading_access(
             (),
         )
 
-    current_period_end = getattr(billing, "current_period_end", None)
+    current_period_end = getattr(billing_record, "current_period_end", None)
     if current_period_end is not None:
         try:
             if int(current_period_end) <= int(time.time()):
@@ -149,7 +194,7 @@ def evaluate_live_trading_access(
             uid, False, "education_mode_active", billing_status, True, True, ()
         )
 
-    brokers = _safe_brokers(uid, vault=vault)
+    brokers = _safe_brokers(uid, vault=secure_vault)
     if require_credentials and not brokers:
         return LiveTradingAccessDecision(
             uid, False, "broker_credentials_missing", billing_status, True,
@@ -219,7 +264,16 @@ def hydrate_runtime_credentials(
     if not selected:
         raise PermissionError("live_trading_blocked:broker_credentials_missing")
 
-    secure_vault = vault or get_vault()
+    try:
+        _, _, secure_vault = _resolve_stores(
+            user_db=user_db,
+            billing_store=billing_store,
+            vault=vault,
+        )
+    except Exception as exc:
+        raise PermissionError(
+            "live_trading_blocked:persistent_state_unavailable"
+        ) from exc
     manager = api_key_manager or get_api_key_manager()
 
     pending: list[tuple[str, dict[str, Any]]] = []
@@ -260,14 +314,18 @@ def discover_runtime_paid_users(
     api_key_manager: Any = None,
 ) -> list[dict[str, Any]]:
     """Discover and hydrate paid users eligible for canonical multi-account runtime."""
-    users = user_db or get_user_database()
-    billing = billing_store or get_billing_store()
-    secure_vault = vault or get_vault()
-
     try:
+        users, billing, secure_vault = _resolve_stores(
+            user_db=user_db,
+            billing_store=billing_store,
+            vault=vault,
+        )
         active_records = billing.list_by_status(PAID_ACTIVE_STATUSES)
     except Exception as exc:
-        logger.error("LIVE_ACCESS active billing enumeration failed error=%s", exc)
+        logger.error(
+            "LIVE_ACCESS persistent paid-user discovery unavailable error=%s",
+            exc,
+        )
         return []
 
     discovered: list[dict[str, Any]] = []
