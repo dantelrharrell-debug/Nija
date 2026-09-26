@@ -98,6 +98,8 @@ def create_checkout_session():
         subscription_data["trial_period_days"] = assignment.trial_days
 
     existing_billing = get_billing_store().get(user_id)
+    if existing_billing and existing_billing.status in {"active", "trialing", "past_due"}:
+        return jsonify({"error": "A subscription already exists for this account"}), 409
     customer_identity = (
         {"customer": existing_billing.customer_id}
         if existing_billing and existing_billing.customer_id
