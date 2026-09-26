@@ -39,6 +39,7 @@ from auth.user_database import get_user_database
 from auth.two_factor import get_two_factor_auth
 from auth.email_service import get_email_service
 from billing_store import get_billing_store
+from paid_user_state import get_paid_user_state
 from user_live_trading_access import (
     SUPPORTED_USER_BROKERS,
     evaluate_live_trading_access,
@@ -391,6 +392,26 @@ async def register(user_data: UserRegister, request: Request):
             detail="Failed to create user"
         )
 
+    # Mirror live-access identity state into durable Redis. This store is
+    # authoritative for paid-user trading entitlement across deployments.
+    try:
+        get_paid_user_state().users.upsert_user(
+            user_id,
+            email=email,
+            subscription_tier=initial_tier,
+            enabled=True,
+            email_verified=False,
+            education_mode=True,
+            consented_to_live_trading=False,
+            created_at=datetime.utcnow().isoformat(),
+        )
+    except Exception:
+        logger.exception("Persistent paid-user registration mirror failed user=%s", user_id)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Persistent customer state is unavailable",
+        )
+
     # Register permissions based on tier
     max_position_size = {
         'basic': 100.0,
@@ -508,7 +529,7 @@ async def get_profile(user_id: str = Depends(get_current_user)):
         subscription_tier=user_profile['subscription_tier'],
         created_at=user_profile['created_at'],
         enabled=user_profile['enabled'],
-        brokers=vault.list_user_brokers(user_id),
+        brokers=get_paid_user_state().vault.list_user_brokers(user_id),
         permissions=permissions.to_dict() if permissions else None
     )
 
@@ -535,9 +556,26 @@ async def record_live_trading_consent(
         )
     if not user_db.get_user(user_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-    if not user_db.record_live_trading_consent(user_id):
+    try:
+        paid_users = get_paid_user_state().users
+        if not paid_users.get_user(user_id):
+            profile = user_db.get_user(user_id) or {}
+            paid_users.upsert_user(
+                user_id,
+                email=profile.get("email", ""),
+                subscription_tier=profile.get("subscription_tier", "basic"),
+                enabled=profile.get("enabled", True),
+                education_mode=profile.get("education_mode", True),
+                consented_to_live_trading=False,
+                created_at=profile.get("created_at", datetime.utcnow().isoformat()),
+            )
+        if not paid_users.record_live_trading_consent(user_id):
+            raise RuntimeError("persistent consent write rejected")
+        user_db.record_live_trading_consent(user_id)  # compatibility mirror
+    except Exception:
+        logger.exception("Persistent live-trading consent failed user=%s", user_id)
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Could not persist live-trading consent",
         )
     return {
@@ -554,8 +592,6 @@ async def activate_live_trading(user_id: str = Depends(get_current_user)):
         user_id,
         require_live_mode=False,
         require_credentials=True,
-        user_db=user_db,
-        vault=vault,
     )
     if not decision.allowed:
         raise HTTPException(
@@ -563,9 +599,15 @@ async def activate_live_trading(user_id: str = Depends(get_current_user)):
             detail={"reason": decision.blocker, "access": decision.to_dict()},
         )
 
-    if not user_db.set_education_mode(user_id, False):
+    try:
+        paid_users = get_paid_user_state().users
+        if not paid_users.set_education_mode(user_id, False):
+            raise RuntimeError("persistent user state missing")
+        user_db.set_education_mode(user_id, False)  # compatibility mirror
+    except Exception:
+        logger.exception("Persistent live-mode activation failed user=%s", user_id)
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Could not activate live-trading mode",
         )
 
@@ -573,10 +615,9 @@ async def activate_live_trading(user_id: str = Depends(get_current_user)):
         user_id,
         require_live_mode=True,
         require_credentials=True,
-        user_db=user_db,
-        vault=vault,
     )
     if not decision.allowed:
+        get_paid_user_state().users.set_education_mode(user_id, True)
         user_db.set_education_mode(user_id, True)
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -586,11 +627,10 @@ async def activate_live_trading(user_id: str = Depends(get_current_user)):
     try:
         brokers = hydrate_runtime_credentials(
             user_id,
-            user_db=user_db,
-            vault=vault,
             api_key_manager=api_key_manager,
         )
     except Exception:
+        get_paid_user_state().users.set_education_mode(user_id, True)
         user_db.set_education_mode(user_id, True)
         logger.exception("Live-trading credential hydration failed for user %s", user_id)
         raise HTTPException(
@@ -610,9 +650,14 @@ async def revert_to_education_mode(user_id: str = Depends(get_current_user)):
     """Disable new live-entry eligibility by returning the user to education mode."""
     if not user_db.get_user(user_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-    if not user_db.set_education_mode(user_id, True):
+    try:
+        if not get_paid_user_state().users.set_education_mode(user_id, True):
+            raise RuntimeError("persistent user state missing")
+        user_db.set_education_mode(user_id, True)
+    except Exception:
+        logger.exception("Persistent education-mode revert failed user=%s", user_id)
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Could not switch to education mode",
         )
     return {"success": True, "mode": "education"}
@@ -625,7 +670,7 @@ async def revert_to_education_mode(user_id: str = Depends(get_current_user)):
 @app.get("/api/user/brokers", tags=["brokers"])
 async def list_brokers(user_id: str = Depends(get_current_user)):
     """List all configured brokers for user."""
-    brokers = vault.list_user_brokers(user_id)
+    brokers = get_paid_user_state().vault.list_user_brokers(user_id)
     return {"user_id": user_id, "brokers": brokers, "count": len(brokers)}
 
 
@@ -649,7 +694,7 @@ async def add_broker(
     ip_address = request.client.host if request.client else None
 
     # Store encrypted credentials in secure vault
-    success = vault.store_credentials(
+    success = get_paid_user_state().vault.store_credentials(
         user_id=user_id,
         broker=broker_name.lower(),
         api_key=credentials.api_key,
@@ -679,7 +724,9 @@ async def remove_broker(
     ip_address = request.client.host if request.client else None
 
     # Remove from persistent vault and any process-local runtime copy.
-    success = vault.delete_credentials(user_id, broker_name.lower(), ip_address)
+    success = get_paid_user_state().vault.delete_credentials(
+        user_id, broker_name.lower(), ip_address
+    )
     api_key_manager.delete_user_api_key(user_id, broker_name.lower())
 
     if not success:
@@ -705,11 +752,7 @@ async def start_bot(user_id: str = Depends(get_current_user)):
     This endpoint starts a headless NIJA instance for this user.
     The bot runs autonomously until stopped.
     """
-    decision = evaluate_live_trading_access(
-        user_id,
-        user_db=user_db,
-        vault=vault,
-    )
+    decision = evaluate_live_trading_access(user_id)
     if not decision.allowed:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -719,8 +762,6 @@ async def start_bot(user_id: str = Depends(get_current_user)):
     try:
         hydrate_runtime_credentials(
             user_id,
-            user_db=user_db,
-            vault=vault,
             api_key_manager=api_key_manager,
         )
     except Exception:
@@ -1017,8 +1058,12 @@ async def get_subscription(user_id: str = Depends(get_current_user)):
             detail="User not found"
         )
 
-    tier = user_profile.get("subscription_tier", "basic")
-    billing = get_billing_store().get(user_id)
+    persistent_user = get_paid_user_state().users.get_user(user_id) or {}
+    tier = persistent_user.get(
+        "subscription_tier",
+        user_profile.get("subscription_tier", "basic"),
+    )
+    billing = get_paid_user_state().billing.get(user_id)
     billing_status = str(getattr(billing, "status", "not_started") or "not_started")
     current_period_end = getattr(billing, "current_period_end", None)
     return {
@@ -1143,7 +1188,8 @@ async def stripe_webhook(request: Request):
     audit_log.stripe_webhook(event_type=event_type,
                              customer_id=data_obj.get("customer", ""))
 
-    billing_store = get_billing_store()
+    paid_state = get_paid_user_state()
+    billing_store = paid_state.billing
 
     if event_type == "checkout.session.completed":
         metadata = data_obj.get("metadata", {}) or {}
@@ -1186,6 +1232,23 @@ async def stripe_webhook(request: Request):
                         "subscription_tier", "basic"
                     )
                     user_db.update_subscription_tier(user_id=user_id, tier=new_tier)
+                    if not paid_state.users.get_user(user_id):
+                        local_user = user_db.get_user(user_id) or {}
+                        paid_state.users.upsert_user(
+                            user_id,
+                            email=local_user.get("email", ""),
+                            enabled=local_user.get("enabled", True),
+                            education_mode=local_user.get("education_mode", True),
+                            consented_to_live_trading=local_user.get(
+                                "consented_to_live_trading", False
+                            ),
+                            subscription_tier=new_tier,
+                            created_at=local_user.get(
+                                "created_at", datetime.utcnow().isoformat()
+                            ),
+                        )
+                    else:
+                        paid_state.users.update_subscription_tier(user_id, new_tier)
                     audit_log.subscription_changed(
                         user_id=user_id,
                         old_tier=old_tier,
