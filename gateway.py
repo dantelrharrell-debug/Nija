@@ -33,6 +33,7 @@ import secrets
 from auth import get_api_key_manager, get_user_manager
 from auth.user_database import get_user_database
 from billing_store import get_billing_store
+from paid_user_state import get_paid_user_state
 from vault import get_vault
 from user_live_trading_access import (
     SUPPORTED_USER_BROKERS,
@@ -256,6 +257,20 @@ def register():
     ):
         return jsonify({'error': 'Registration failed'}), 500
 
+    try:
+        get_paid_user_state().users.upsert_user(
+            user_id,
+            email=email,
+            subscription_tier=initial_tier,
+            enabled=True,
+            education_mode=True,
+            consented_to_live_trading=False,
+            created_at=datetime.utcnow().isoformat(),
+        )
+    except Exception:
+        logger.exception("Persistent paid-user registration mirror failed user=%s", user_id)
+        return jsonify({'error': 'Persistent customer state unavailable'}), 503
+
     # Keep the legacy in-memory user manager synchronized for endpoints that
     # have not yet migrated, but never treat it as billing authority.
     try:
@@ -339,7 +354,7 @@ def get_user_profile():
         'subscription_tier': user_profile['subscription_tier'],
         'created_at': user_profile['created_at'],
         'enabled': user_profile['enabled'],
-        'brokers': vault.list_user_brokers(user_id),
+        'brokers': get_paid_user_state().vault.list_user_brokers(user_id),
         'permissions': permissions.to_dict() if permissions else None
     })
 
@@ -354,7 +369,7 @@ def user_settings():
         return jsonify({'error': 'User not found'}), 404
 
     if request.method == 'GET':
-        billing = get_billing_store().get(user_id)
+        billing = get_paid_user_state().billing.get(user_id)
         return jsonify({
             'subscription_tier': user_profile.get('subscription_tier', 'basic'),
             'billing_status': str(
@@ -385,7 +400,7 @@ def user_settings():
 def list_brokers():
     """List all configured brokers for user."""
     user_id = request.user_id
-    brokers = vault.list_user_brokers(user_id)
+    brokers = get_paid_user_state().vault.list_user_brokers(user_id)
 
     return jsonify({
         'user_id': user_id,
@@ -425,7 +440,7 @@ def manage_broker_keys(broker_name: str):
         # Persist credentials in the encrypted vault. Runtime hydration is
         # intentionally deferred until paid entitlement + explicit live consent
         # are both proven.
-        stored = vault.store_credentials(
+        stored = get_paid_user_state().vault.store_credentials(
             user_id=user_id,
             broker=broker_name.lower(),
             api_key=api_key,
@@ -444,7 +459,7 @@ def manage_broker_keys(broker_name: str):
         }), 201
 
     elif request.method == 'DELETE':
-        persistent_deleted = vault.delete_credentials(
+        persistent_deleted = get_paid_user_state().vault.delete_credentials(
             user_id,
             broker_name.lower(),
             request.remote_addr,
@@ -504,8 +519,6 @@ def trading_control():
             hydrate_runtime_credentials(
                 user_id,
                 api_key_manager=api_key_manager,
-                vault=vault,
-                user_db=user_db,
             )
         except Exception as exc:
             logger.warning(
@@ -689,9 +702,10 @@ def get_user_mode():
         from bot.education_mode import get_education_manager, UserMode
 
         user_id = request.user_id
-        user = user_db.get_user(user_id)
-        if not user:
+        local_user = user_db.get_user(user_id)
+        if not local_user:
             return jsonify({'error': 'User not found'}), 404
+        user = get_paid_user_state().users.get_user(user_id) or local_user
 
         education_mode = bool(user.get('education_mode', True))
         mode = UserMode.EDUCATION.value if education_mode else UserMode.LIVE_TRADING.value
@@ -710,8 +724,6 @@ def get_user_mode():
             user_id,
             require_live_mode=not education_mode,
             require_credentials=False,
-            user_db=user_db,
-            vault=vault,
         )
 
         return jsonify({
@@ -781,11 +793,28 @@ def consent_to_live_trading():
         if not data.get('risks_acknowledged'):
             return jsonify({'error': 'Risk acknowledgment required'}), 400
 
-        if not user_db.get_user(user_id):
+        local_user = user_db.get_user(user_id)
+        if not local_user:
             return jsonify({'error': 'User not found'}), 404
 
-        if not user_db.record_live_trading_consent(user_id):
-            return jsonify({'error': 'Failed to persist live trading consent'}), 500
+        try:
+            paid_users = get_paid_user_state().users
+            if not paid_users.get_user(user_id):
+                paid_users.upsert_user(
+                    user_id,
+                    email=local_user.get('email', ''),
+                    subscription_tier=local_user.get('subscription_tier', 'basic'),
+                    enabled=local_user.get('enabled', True),
+                    education_mode=local_user.get('education_mode', True),
+                    consented_to_live_trading=False,
+                    created_at=local_user.get('created_at', datetime.utcnow().isoformat()),
+                )
+            if not paid_users.record_live_trading_consent(user_id):
+                raise RuntimeError('persistent consent write rejected')
+            user_db.record_live_trading_consent(user_id)
+        except Exception:
+            logger.exception("Persistent live-trading consent failed user=%s", user_id)
+            return jsonify({'error': 'Persistent customer state unavailable'}), 503
 
         logger.info(f"User {user_id} consented to live trading")
         
@@ -812,8 +841,6 @@ def activate_live_trading():
         user_id,
         require_live_mode=False,
         require_credentials=True,
-        user_db=user_db,
-        vault=vault,
     )
     if not decision.allowed:
         return jsonify({
@@ -821,18 +848,22 @@ def activate_live_trading():
             'access': decision.to_dict(),
         }), 403
 
-    if not user_db.set_education_mode(user_id, False):
-        return jsonify({'error': 'Failed to activate live trading mode'}), 500
+    try:
+        if not get_paid_user_state().users.set_education_mode(user_id, False):
+            raise RuntimeError('persistent user state missing')
+        user_db.set_education_mode(user_id, False)
+    except Exception:
+        logger.exception("Persistent live-mode activation failed user=%s", user_id)
+        return jsonify({'error': 'Persistent customer state unavailable'}), 503
 
     # Re-evaluate after the state transition and hydrate only when every gate is true.
     decision = evaluate_live_trading_access(
         user_id,
         require_live_mode=True,
         require_credentials=True,
-        user_db=user_db,
-        vault=vault,
     )
     if not decision.allowed:
+        get_paid_user_state().users.set_education_mode(user_id, True)
         user_db.set_education_mode(user_id, True)
         return jsonify({
             'error': f'live_trading_blocked:{decision.blocker}',
@@ -843,10 +874,9 @@ def activate_live_trading():
         brokers = hydrate_runtime_credentials(
             user_id,
             api_key_manager=api_key_manager,
-            user_db=user_db,
-            vault=vault,
         )
     except Exception as exc:
+        get_paid_user_state().users.set_education_mode(user_id, True)
         user_db.set_education_mode(user_id, True)
         logger.warning(
             "Live activation credential hydration failed user=%s error=%s",
@@ -884,8 +914,13 @@ def revert_to_education():
         if not user_db.get_user(user_id):
             return jsonify({'error': 'User not found'}), 404
 
-        if not user_db.set_education_mode(user_id, True):
-            return jsonify({'error': 'Failed to switch to education mode'}), 500
+        try:
+            if not get_paid_user_state().users.set_education_mode(user_id, True):
+                raise RuntimeError('persistent user state missing')
+            user_db.set_education_mode(user_id, True)
+        except Exception:
+            logger.exception("Persistent education-mode revert failed user=%s", user_id)
+            return jsonify({'error': 'Persistent customer state unavailable'}), 503
 
         logger.info(f"User {user_id} reverted to education mode")
         
