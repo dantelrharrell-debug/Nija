@@ -8,7 +8,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import logging
-from typing import Any, Iterable, Optional, Sequence, Tuple
+import time
+from typing import Any, Optional, Sequence, Tuple
 
 from auth import get_api_key_manager
 from auth.user_database import get_user_database
@@ -111,6 +112,30 @@ def evaluate_live_trading_access(
             (),
         )
 
+    current_period_end = getattr(billing, "current_period_end", None)
+    if current_period_end is not None:
+        try:
+            if int(current_period_end) <= int(time.time()):
+                return LiveTradingAccessDecision(
+                    uid,
+                    False,
+                    "paid_entitlement_expired",
+                    billing_status,
+                    bool(user.get("consented_to_live_trading", False)),
+                    bool(user.get("education_mode", True)),
+                    (),
+                )
+        except (TypeError, ValueError, OverflowError):
+            return LiveTradingAccessDecision(
+                uid,
+                False,
+                "paid_entitlement_period_invalid",
+                billing_status,
+                bool(user.get("consented_to_live_trading", False)),
+                bool(user.get("education_mode", True)),
+                (),
+            )
+
     consented = bool(user.get("consented_to_live_trading", False))
     if not consented:
         return LiveTradingAccessDecision(
@@ -134,6 +159,30 @@ def evaluate_live_trading_access(
     return LiveTradingAccessDecision(
         uid, True, "none", billing_status, consented, education_mode, brokers
     )
+
+
+def entitlement_allows_new_entries(
+    user_id: str,
+    user_config: Any = None,
+) -> tuple[bool, str]:
+    """Continuously gate new entries for dynamically entitled customer accounts.
+
+    Static/operator-managed accounts keep their existing behavior. Dynamic paid
+    customer accounts are rechecked every entry cycle so cancellation, expiry,
+    payment failure, consent revocation, or education-mode reversion blocks new
+    positions without disconnecting the broker or interfering with exits.
+    """
+    if user_config is None or not bool(
+        getattr(user_config, "entitlement_required", False)
+    ):
+        return True, "not_required"
+
+    decision = evaluate_live_trading_access(
+        user_id,
+        require_live_mode=True,
+        require_credentials=True,
+    )
+    return decision.allowed, decision.blocker
 
 
 def hydrate_runtime_credentials(
@@ -276,6 +325,7 @@ def discover_runtime_paid_users(
                     "independent_trading": True,
                     "active_trading": True,
                     "source": "paid_entitlement_vault",
+                    "entitlement_required": True,
                 }
             )
 
@@ -287,6 +337,7 @@ __all__ = [
     "PAID_ACTIVE_STATUSES",
     "SUPPORTED_USER_BROKERS",
     "evaluate_live_trading_access",
+    "entitlement_allows_new_entries",
     "hydrate_runtime_credentials",
     "discover_runtime_paid_users",
 ]
