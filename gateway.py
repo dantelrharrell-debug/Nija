@@ -31,6 +31,12 @@ import hashlib
 import secrets
 
 from auth import get_api_key_manager, get_user_manager
+from auth.user_database import get_user_database
+from vault import get_vault
+from user_live_trading_access import (
+    evaluate_live_trading_access,
+    hydrate_runtime_credentials,
+)
 from execution import get_permission_validator, UserPermissions
 from user_control import get_user_control_backend
 
@@ -54,6 +60,8 @@ app.config['JWT_EXPIRATION_HOURS'] = int(os.getenv('JWT_EXPIRATION_HOURS', '24')
 # Get manager instances
 api_key_manager = get_api_key_manager()
 user_manager = get_user_manager()
+user_db = get_user_database()
+vault = get_vault()
 permission_validator = get_permission_validator()
 user_control = get_user_control_backend()
 
@@ -456,16 +464,21 @@ def manage_broker_keys(broker_name: str):
         api_secret = data['api_secret']
         additional_params = data.get('additional_params', {})
 
-        # Store encrypted credentials
-        api_key_manager.store_user_api_key(
+        # Persist credentials in the encrypted vault. Runtime hydration is
+        # intentionally deferred until paid entitlement + explicit live consent
+        # are both proven.
+        stored = vault.store_credentials(
             user_id=user_id,
             broker=broker_name.lower(),
             api_key=api_key,
             api_secret=api_secret,
-            additional_params=additional_params
+            additional_params=additional_params,
+            ip_address=request.remote_addr,
         )
+        if not stored:
+            return jsonify({'error': 'Failed to store broker credentials'}), 500
 
-        logger.info(f"✅ User {user_id} added {broker_name} API credentials")
+        logger.info(f"✅ User {user_id} added {broker_name} API credentials to secure vault")
 
         return jsonify({
             'message': f'{broker_name} API credentials added successfully',
@@ -473,17 +486,21 @@ def manage_broker_keys(broker_name: str):
         }), 201
 
     elif request.method == 'DELETE':
-        success = api_key_manager.delete_user_api_key(user_id, broker_name.lower())
+        persistent_deleted = vault.delete_credentials(
+            user_id,
+            broker_name.lower(),
+            request.remote_addr,
+        )
+        api_key_manager.delete_user_api_key(user_id, broker_name.lower())
 
-        if success:
+        if persistent_deleted:
             logger.info(f"✅ User {user_id} removed {broker_name} API credentials")
             return jsonify({
                 'message': f'{broker_name} API credentials removed successfully'
             })
-        else:
-            return jsonify({
-                'error': f'No {broker_name} credentials found for this user'
-            }), 404
+        return jsonify({
+            'error': f'No {broker_name} credentials found for this user'
+        }), 404
 
     return jsonify({'error': 'Method not allowed'}), 405
 
@@ -519,6 +536,28 @@ def trading_control():
 
     # Send command to User Control Backend (Layer 2)
     if action == 'start':
+        decision = evaluate_live_trading_access(user_id)
+        if not decision.allowed:
+            return jsonify({
+                'error': f'live_trading_blocked:{decision.blocker}',
+                'access': decision.to_dict(),
+            }), 403
+        try:
+            hydrate_runtime_credentials(
+                user_id,
+                api_key_manager=api_key_manager,
+                vault=vault,
+                user_db=user_db,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Trading start credential hydration failed user=%s error=%s",
+                user_id,
+                exc,
+            )
+            return jsonify({
+                'error': 'live_trading_blocked:credential_hydration_failed'
+            }), 403
         result = user_control.start_trading(user_id)
     elif action == 'stop':
         result = user_control.stop_trading(user_id)
@@ -775,9 +814,6 @@ def consent_to_live_trading():
     This implements the explicit opt-in requirement.
     """
     try:
-        from database.db_connection import get_db_session
-        from database.models import User
-        
         user_id = request.user_id
         data = request.get_json() or {}
         
@@ -788,25 +824,20 @@ def consent_to_live_trading():
         # Require acknowledgment of risks
         if not data.get('risks_acknowledged'):
             return jsonify({'error': 'Risk acknowledgment required'}), 400
+
+        if not user_db.get_user(user_id):
+            return jsonify({'error': 'User not found'}), 404
+
+        if not user_db.record_live_trading_consent(user_id):
+            return jsonify({'error': 'Failed to persist live trading consent'}), 500
+
+        logger.info(f"User {user_id} consented to live trading")
         
-        with get_db_session() as session:
-            user = session.query(User).filter_by(user_id=user_id).first()
-            
-            if not user:
-                return jsonify({'error': 'User not found'}), 404
-            
-            # Record consent
-            setattr(user, 'consented_to_live_trading', True)
-            setattr(user, 'updated_at', datetime.utcnow())
-            session.commit()
-            
-            logger.info(f"User {user_id} consented to live trading")
-            
-            return jsonify({
-                'success': True,
-                'message': 'Consent recorded. You can now connect your broker account.',
-                'consented_to_live_trading': True
-            }), 200
+        return jsonify({
+            'success': True,
+            'message': 'Consent recorded. You can now connect your broker account.',
+            'consented_to_live_trading': True
+        }), 200
             
     except Exception as e:
         logger.error(f"Error recording consent: {e}")
@@ -816,58 +847,72 @@ def consent_to_live_trading():
 @app.route('/api/user/mode/live/activate', methods=['POST'])
 @require_auth
 def activate_live_trading():
-    """
-    Activate live trading mode after consent and broker connection.
-    
-    This switches the user from education mode to live trading mode.
-    Requires:
-    - Prior consent to live trading
-    - Connected broker account
-    """
+    """Activate live mode only after paid entitlement, consent, and broker setup."""
+    user_id = request.user_id
+
+    # The user is still in education mode at this transition point, so require
+    # every other live-trading invariant first.
+    decision = evaluate_live_trading_access(
+        user_id,
+        require_live_mode=False,
+        require_credentials=True,
+        user_db=user_db,
+        vault=vault,
+    )
+    if not decision.allowed:
+        return jsonify({
+            'error': f'live_trading_blocked:{decision.blocker}',
+            'access': decision.to_dict(),
+        }), 403
+
+    if not user_db.set_education_mode(user_id, False):
+        return jsonify({'error': 'Failed to activate live trading mode'}), 500
+
+    # Re-evaluate after the state transition and hydrate only when every gate is true.
+    decision = evaluate_live_trading_access(
+        user_id,
+        require_live_mode=True,
+        require_credentials=True,
+        user_db=user_db,
+        vault=vault,
+    )
+    if not decision.allowed:
+        user_db.set_education_mode(user_id, True)
+        return jsonify({
+            'error': f'live_trading_blocked:{decision.blocker}',
+            'access': decision.to_dict(),
+        }), 403
+
     try:
-        from database.db_connection import get_db_session
-        from database.models import User, BrokerCredential
-        
-        user_id = request.user_id
-        
-        with get_db_session() as session:
-            user = session.query(User).filter_by(user_id=user_id).first()
-            
-            if not user:
-                return jsonify({'error': 'User not found'}), 404
-            
-            # Check consent
-            if not bool(getattr(user, 'consented_to_live_trading', False)):
-                return jsonify({
-                    'error': 'Must consent to live trading first',
-                    'action_required': 'consent'
-                }), 400
-            
-            # Check broker connection
-            broker_creds = session.query(BrokerCredential).filter_by(user_id=user_id).first()
-            if not broker_creds:
-                return jsonify({
-                    'error': 'Must connect broker account first',
-                    'action_required': 'connect_broker'
-                }), 400
-            
-            # Activate live trading
-            setattr(user, 'education_mode', False)
-            setattr(user, 'updated_at', datetime.utcnow())
-            session.commit()
-            
-            logger.info(f"User {user_id} activated live trading mode")
-            
-            return jsonify({
-                'success': True,
-                'message': 'Live trading mode activated',
-                'mode': 'live_trading',
-                'education_mode': False
-            }), 200
-            
-    except Exception as e:
-        logger.error(f"Error activating live trading: {e}")
-        return jsonify({'error': str(e)}), 500
+        brokers = hydrate_runtime_credentials(
+            user_id,
+            api_key_manager=api_key_manager,
+            user_db=user_db,
+            vault=vault,
+        )
+    except Exception as exc:
+        user_db.set_education_mode(user_id, True)
+        logger.warning(
+            "Live activation credential hydration failed user=%s error=%s",
+            user_id,
+            exc,
+        )
+        return jsonify({
+            'error': 'live_trading_blocked:credential_hydration_failed'
+        }), 403
+
+    logger.info(
+        "User %s activated live trading mode brokers=%s",
+        user_id,
+        ",".join(brokers),
+    )
+    return jsonify({
+        'success': True,
+        'message': 'Live trading mode activated',
+        'mode': 'live_trading',
+        'education_mode': False,
+        'brokers': list(brokers),
+    }), 200
 
 
 @app.route('/api/user/mode/education/revert', methods=['POST'])
@@ -879,30 +924,21 @@ def revert_to_education():
     Allows users to switch back to safe simulation mode anytime.
     """
     try:
-        from database.db_connection import get_db_session
-        from database.models import User
-        
         user_id = request.user_id
+        if not user_db.get_user(user_id):
+            return jsonify({'error': 'User not found'}), 404
+
+        if not user_db.set_education_mode(user_id, True):
+            return jsonify({'error': 'Failed to switch to education mode'}), 500
+
+        logger.info(f"User {user_id} reverted to education mode")
         
-        with get_db_session() as session:
-            user = session.query(User).filter_by(user_id=user_id).first()
-            
-            if not user:
-                return jsonify({'error': 'User not found'}), 404
-            
-            # Switch back to education mode
-            setattr(user, 'education_mode', True)
-            setattr(user, 'updated_at', datetime.utcnow())
-            session.commit()
-            
-            logger.info(f"User {user_id} reverted to education mode")
-            
-            return jsonify({
-                'success': True,
-                'message': 'Switched back to education mode',
-                'mode': 'education',
-                'education_mode': True
-            }), 200
+        return jsonify({
+            'success': True,
+            'message': 'Switched back to education mode',
+            'mode': 'education',
+            'education_mode': True
+        }), 200
             
     except Exception as e:
         logger.error(f"Error reverting to education mode: {e}")
