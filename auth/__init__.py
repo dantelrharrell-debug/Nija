@@ -66,16 +66,21 @@ class APIKeyManager:
         logger.info("API key manager initialized with encryption")
 
     @staticmethod
-    def _user_env_token(user_id: str) -> str:
-        """
-        Build a safe env-var token for a user id.
+    def _user_env_tokens(user_id: str) -> tuple[str, ...]:
+        """Return broker-compatible short/full environment tokens for a user."""
+        normalized = re.sub(r"[^A-Z0-9]", "_", str(user_id or "").upper()).strip("_")
+        if normalized.startswith("USER_"):
+            normalized = normalized[5:]
+        if not normalized:
+            return ()
+        short = normalized.split("_", 1)[0]
+        return tuple(dict.fromkeys(token for token in (short, normalized) if token))
 
-        Keeps only A-Z and 0-9, converting all other characters to underscores.
-        Environment variable names must avoid special characters.
-        Note: this normalization can map different raw ids to the same token
-        (e.g., "user-1" and "user_1").
-        """
-        return re.sub(r"[^A-Z0-9]", "_", user_id.upper())
+    @classmethod
+    def _user_env_token(cls, user_id: str) -> str:
+        """Backward-compatible full token used by older callers."""
+        tokens = cls._user_env_tokens(user_id)
+        return tokens[-1] if tokens else ""
 
     def _wire_broker_env(
         self,
@@ -92,40 +97,43 @@ class APIKeyManager:
         compatibility path should only be used in trusted runtime environments.
         """
         broker_env = broker.upper()
-        user_token = self._user_env_token(user_id)
-        prefix = f"{broker_env}_USER_{user_token}"
+        user_tokens = self._user_env_tokens(user_id)
+        if not user_tokens:
+            raise ValueError("user_id cannot be normalized for broker runtime")
 
         # Runtime compatibility path: broker connectors read process env vars.
-        # This is process-local only and is not persisted to disk.
-        os.environ[f"{prefix}_API_KEY"] = api_key
-        os.environ[f"{prefix}_API_SECRET"] = api_secret
+        # Wire both short and full normalized prefixes because existing broker
+        # adapters intentionally support both formats.
+        for user_token in user_tokens:
+            prefix = f"{broker_env}_USER_{user_token}"
+            os.environ[f"{prefix}_API_KEY"] = api_key
+            os.environ[f"{prefix}_API_SECRET"] = api_secret
 
-        if additional_params and broker_env == "OKX":
-            if "passphrase" in additional_params:
-                passphrase = additional_params.get("passphrase")
-            else:
-                passphrase = additional_params.get("api_passphrase", "")
-            if passphrase is not None:
-                passphrase_str = str(passphrase).strip()
-                if passphrase_str:
-                    os.environ[f"{prefix}_PASSPHRASE"] = passphrase_str
+            if additional_params and broker_env == "OKX":
+                if "passphrase" in additional_params:
+                    passphrase = additional_params.get("passphrase")
+                else:
+                    passphrase = additional_params.get("api_passphrase", "")
+                if passphrase is not None:
+                    passphrase_str = str(passphrase).strip()
+                    if passphrase_str:
+                        os.environ[f"{prefix}_PASSPHRASE"] = passphrase_str
 
-        if additional_params and broker_env == "ALPACA":
-            paper_value = additional_params.get("paper")
-            if paper_value is not None:
-                normalized_paper = bool(paper_value)
-                os.environ[f"{prefix}_PAPER"] = str(normalized_paper).lower()
+            if additional_params and broker_env == "ALPACA":
+                paper_value = additional_params.get("paper")
+                if paper_value is not None:
+                    normalized_paper = bool(paper_value)
+                    os.environ[f"{prefix}_PAPER"] = str(normalized_paper).lower()
 
     def _unwire_broker_env(self, user_id: str, broker: str) -> None:
         """Remove runtime env vars for a user broker connection."""
         broker_env = broker.upper()
-        user_token = self._user_env_token(user_id)
-        prefix = f"{broker_env}_USER_{user_token}"
-
-        os.environ.pop(f"{prefix}_API_KEY", None)
-        os.environ.pop(f"{prefix}_API_SECRET", None)
-        os.environ.pop(f"{prefix}_PASSPHRASE", None)
-        os.environ.pop(f"{prefix}_PAPER", None)
+        for user_token in self._user_env_tokens(user_id):
+            prefix = f"{broker_env}_USER_{user_token}"
+            os.environ.pop(f"{prefix}_API_KEY", None)
+            os.environ.pop(f"{prefix}_API_SECRET", None)
+            os.environ.pop(f"{prefix}_PASSPHRASE", None)
+            os.environ.pop(f"{prefix}_PAPER", None)
 
     def store_user_api_key(
         self,
