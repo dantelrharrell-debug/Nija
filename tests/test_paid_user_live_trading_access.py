@@ -19,6 +19,7 @@ from user_live_trading_access import (
     hydrate_runtime_credentials,
 )
 from vault import SecureVault
+from account_exit_management_recovery_patch import _normal_user_entries_allowed
 
 
 class _UserDB:
@@ -265,6 +266,44 @@ class PersistenceTests(unittest.TestCase):
                 [(u.user_id, u.broker_type) for u in again],
                 [("user_paid1", "kraken")],
             )
+
+
+class RuntimeRevocationTests(unittest.TestCase):
+    def test_dynamic_entitlement_denial_blocks_normal_entries(self):
+        config = SimpleNamespace(
+            active_trading=True,
+            independent_trading=True,
+            entitlement_required=True,
+        )
+        trader = SimpleNamespace(
+            multi_account_manager=SimpleNamespace(
+                user_configs={"user_paid": config}
+            ),
+            should_start_user_independent_thread=lambda user_id: True,
+        )
+        with patch(
+            "user_live_trading_access.entitlement_allows_new_entries",
+            return_value=(False, "paid_entitlement_inactive"),
+        ):
+            self.assertFalse(
+                _normal_user_entries_allowed(trader, "user_paid")
+            )
+
+    def test_static_operator_account_keeps_existing_entry_policy(self):
+        config = SimpleNamespace(
+            active_trading=True,
+            independent_trading=True,
+            entitlement_required=False,
+        )
+        trader = SimpleNamespace(
+            multi_account_manager=SimpleNamespace(
+                user_configs={"legacy_user": config}
+            ),
+            should_start_user_independent_thread=lambda user_id: True,
+        )
+        self.assertTrue(
+            _normal_user_entries_allowed(trader, "legacy_user")
+        )
 
 
 class CredentialPrefixTests(unittest.TestCase):
