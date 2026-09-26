@@ -93,6 +93,56 @@ def test_v274_empty_canonical_set_is_heartbeat_thread_only():
         "broker_local_selection_only",
     )
 
+def test_v274_uses_canonical_prereqs_when_broker_local_global_flag_is_false(monkeypatch):
+    _reset_env()
+    os.environ["NIJA_EXECUTION_READY_VENUES"] = ""
+    os.environ["NIJA_GLOBAL_TRADING_READY"] = "0"
+    os.environ["NIJA_ACTIVE_LIVE_VENUES"] = "coinbase,kraken"
+    snapshot = {
+        "broker_connected": True,
+        "balance_hydrated": True,
+        "authority_ready": True,
+        "capital_ready": True,
+        "risk_ready": True,
+        "strategy_ready": True,
+        "execution_ready": False,
+        "nonce_ready": True,
+        "bootstrap_ready": True,
+        "position_sync_ready": True,
+    }
+    import bot.readiness_table as readiness_table
+    monkeypatch.setattr(readiness_table, "snapshot", lambda: dict(snapshot))
+    assert _on_heartbeat(v274._live_venue_fallback_set) == (
+        True,
+        ("coinbase", "kraken"),
+        "canonical_prereqs_selection_only",
+    )
+
+
+def test_v274_canonical_fallback_stays_closed_when_position_sync_is_false(monkeypatch):
+    _reset_env()
+    os.environ["NIJA_EXECUTION_READY_VENUES"] = ""
+    os.environ["NIJA_GLOBAL_TRADING_READY"] = "0"
+    os.environ["NIJA_ACTIVE_LIVE_VENUES"] = "coinbase,kraken"
+    snapshot = {
+        "broker_connected": True,
+        "balance_hydrated": True,
+        "authority_ready": True,
+        "capital_ready": True,
+        "risk_ready": True,
+        "strategy_ready": True,
+        "execution_ready": False,
+        "nonce_ready": True,
+        "bootstrap_ready": True,
+        "position_sync_ready": False,
+    }
+    import bot.readiness_table as readiness_table
+    monkeypatch.setattr(readiness_table, "snapshot", lambda: dict(snapshot))
+    allowed, venues, detail = _on_heartbeat(v274._live_venue_fallback_set)
+    assert allowed is False
+    assert venues == ()
+    assert "position_sync_ready" in detail
+
 
 def test_v274_wrapper_preserves_original_selection_success():
     _reset_env()
