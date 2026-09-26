@@ -32,6 +32,7 @@ import secrets
 
 from auth import get_api_key_manager, get_user_manager
 from auth.user_database import get_user_database
+from billing_store import get_billing_store
 from vault import get_vault
 from user_live_trading_access import (
     SUPPORTED_USER_BROKERS,
@@ -231,130 +232,88 @@ def get_info():
 
 @app.route('/api/auth/register', methods=['POST'])
 def register():
-    """
-    Register a new user.
-
-    Request body:
-        {
-            "email": "user@example.com",
-            "password": "secure_password",
-            "subscription_tier": "basic"  // optional: basic, pro, enterprise
-        }
-    """
-    data = request.get_json()
-
-    if not data or 'email' not in data or 'password' not in data:
+    """Register a user without allowing client-side paid-tier elevation."""
+    data = request.get_json() or {}
+    if 'email' not in data or 'password' not in data:
         return jsonify({'error': 'Email and password are required'}), 400
 
-    email = data['email'].lower().strip()
-    password = data['password']
-    subscription_tier = data.get('subscription_tier', 'basic')
-
-    # Validate email format (basic check)
+    email = str(data['email']).lower().strip()
+    password = str(data['password'])
     if '@' not in email or '.' not in email:
         return jsonify({'error': 'Invalid email format'}), 400
-
-    # Check if user already exists
-    if email in user_credentials:
+    if len(password) < 8:
+        return jsonify({'error': 'Password must be at least 8 characters'}), 400
+    if user_db.get_user_by_email(email):
         return jsonify({'error': 'User already exists'}), 409
 
-    # Create user ID
     user_id = f"user_{secrets.token_hex(8)}"
+    initial_tier = 'basic'
+    if not user_db.create_user(
+        user_id=user_id,
+        email=email,
+        password=password,
+        subscription_tier=initial_tier,
+    ):
+        return jsonify({'error': 'Registration failed'}), 500
 
-    # Store credentials
-    user_credentials[email] = {
-        'password_hash': hash_password(password),
-        'user_id': user_id
-    }
-
-    # Create user profile
+    # Keep the legacy in-memory user manager synchronized for endpoints that
+    # have not yet migrated, but never treat it as billing authority.
     try:
-        user_profile = user_manager.create_user(
+        user_manager.create_user(
             user_id=user_id,
             email=email,
-            subscription_tier=subscription_tier
+            subscription_tier=initial_tier,
         )
+    except Exception:
+        logger.exception("Legacy user-manager sync failed for %s", user_id)
 
-        # Register default permissions based on tier
-        max_position_size = {
-            'basic': 100.0,
-            'pro': 1000.0,
-            'enterprise': 10000.0
-        }.get(subscription_tier, 100.0)
+    max_position_size = 100.0
+    permissions = UserPermissions(
+        user_id=user_id,
+        max_position_size_usd=max_position_size,
+        max_daily_loss_usd=max_position_size * 0.5,
+        max_positions=3,
+    )
+    permission_validator.register_user(permissions)
 
-        permissions = UserPermissions(
-            user_id=user_id,
-            max_position_size_usd=max_position_size,
-            max_daily_loss_usd=max_position_size * 0.5,
-            max_positions=3 if subscription_tier == 'basic' else 10
-        )
-        permission_validator.register_user(permissions)
-
-        # Generate token
-        token = generate_jwt_token(user_id)
-
-        logger.info(f"✅ New user registered: {email} (ID: {user_id}, Tier: {subscription_tier})")
-
-        return jsonify({
-            'message': 'User registered successfully',
-            'user_id': user_id,
-            'email': email,
-            'subscription_tier': subscription_tier,
-            'token': token
-        }), 201
-
-    except Exception as e:
-        logger.error(f"❌ Failed to register user: {e}")
-        return jsonify({'error': 'Registration failed'}), 500
+    token = generate_jwt_token(user_id)
+    logger.info("✅ New user registered: %s (ID: %s, Tier: basic)", email, user_id)
+    return jsonify({
+        'message': 'User registered successfully',
+        'user_id': user_id,
+        'email': email,
+        'subscription_tier': initial_tier,
+        'token': token,
+    }), 201
 
 
 @app.route('/api/auth/login', methods=['POST'])
 def login():
-    """
-    Login user and return JWT token.
-
-    Request body:
-        {
-            "email": "user@example.com",
-            "password": "secure_password"
-        }
-    """
-    data = request.get_json()
-
-    if not data or 'email' not in data or 'password' not in data:
+    """Authenticate against the persistent user database."""
+    data = request.get_json() or {}
+    if 'email' not in data or 'password' not in data:
         return jsonify({'error': 'Email and password are required'}), 400
 
-    email = data['email'].lower().strip()
-    password = data['password']
-
-    # Check credentials
-    if email not in user_credentials:
+    email = str(data['email']).lower().strip()
+    password = str(data['password'])
+    user_profile = user_db.get_user_by_email(email)
+    if not user_profile:
         return jsonify({'error': 'Invalid credentials'}), 401
 
-    user_creds = user_credentials[email]
-
-    if not verify_password(password, user_creds['password_hash']):
+    user_id = user_profile['user_id']
+    if not user_db.verify_password(user_id, password, request.remote_addr):
         return jsonify({'error': 'Invalid credentials'}), 401
-
-    user_id = user_creds['user_id']
-
-    # Get user profile
-    user_profile = user_manager.get_user(user_id)
-
-    if not user_profile or not user_profile.get('enabled', True):
+    if not user_profile.get('enabled', True):
         return jsonify({'error': 'Account disabled'}), 403
 
-    # Generate token
     token = generate_jwt_token(user_id)
-
-    logger.info(f"✅ User logged in: {email} (ID: {user_id})")
-
+    logger.info("✅ User logged in: %s (ID: %s)", email, user_id)
     return jsonify({
         'message': 'Login successful',
         'user_id': user_id,
         'email': email,
         'subscription_tier': user_profile.get('subscription_tier', 'basic'),
-        'token': token
+        'token': token,
     })
 
 
@@ -388,34 +347,33 @@ def get_user_profile():
 @app.route('/api/user/settings', methods=['GET', 'PUT'])
 @require_auth
 def user_settings():
-    """Get or update user settings."""
+    """Read user settings; paid tier changes are billing-authoritative only."""
     user_id = request.user_id
+    user_profile = user_db.get_user(user_id)
+    if not user_profile:
+        return jsonify({'error': 'User not found'}), 404
 
     if request.method == 'GET':
-        user_profile = user_manager.get_user(user_id)
-        if not user_profile:
-            return jsonify({'error': 'User not found'}), 404
-
+        billing = get_billing_store().get(user_id)
         return jsonify({
             'subscription_tier': user_profile.get('subscription_tier', 'basic'),
-            'enabled': user_profile.get('enabled', True)
+            'billing_status': str(
+                getattr(billing, 'status', 'not_started') or 'not_started'
+            ),
+            'enabled': user_profile.get('enabled', True),
+            'education_mode': user_profile.get('education_mode', True),
+            'consented_to_live_trading': user_profile.get(
+                'consented_to_live_trading', False
+            ),
         })
 
-    elif request.method == 'PUT':
-        data = request.get_json()
+    data = request.get_json() or {}
+    if 'subscription_tier' in data:
+        return jsonify({
+            'error': 'Subscription tier is controlled by verified billing events'
+        }), 403
 
-        # Only allow updating certain fields
-        allowed_updates = {}
-        if 'subscription_tier' in data:
-            allowed_updates['subscription_tier'] = data['subscription_tier']
-
-        if allowed_updates:
-            user_manager.update_user(user_id, allowed_updates)
-            logger.info(f"User {user_id} updated settings: {allowed_updates}")
-
-        return jsonify({'message': 'Settings updated successfully'})
-
-    return jsonify({'error': 'Method not allowed'}), 405
+    return jsonify({'message': 'No mutable user settings supplied'}), 200
 
 
 # ========================================
