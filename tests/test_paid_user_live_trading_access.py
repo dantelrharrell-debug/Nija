@@ -258,6 +258,13 @@ class PersistenceTests(unittest.TestCase):
             )
             self.assertTrue(enabled[0].entitlement_required)
             self.assertEqual(enabled[0].source, "paid_entitlement_vault")
+            # The singleton loader refresh path must be idempotent: registry
+            # reads may run repeatedly while looking for newly paid customers.
+            again = loader.get_all_enabled_users()
+            self.assertEqual(
+                [(u.user_id, u.broker_type) for u in again],
+                [("user_paid1", "kraken")],
+            )
 
 
 class CredentialPrefixTests(unittest.TestCase):
