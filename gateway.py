@@ -366,12 +366,11 @@ def login():
 def get_user_profile():
     """Get user profile (requires authentication)."""
     user_id = request.user_id
-    user_profile = user_manager.get_user(user_id)
+    user_profile = user_db.get_user(user_id)
 
     if not user_profile:
         return jsonify({'error': 'User not found'}), 404
 
-    # Get user permissions
     permissions = permission_validator.get_user_permissions(user_id)
 
     return jsonify({
@@ -380,7 +379,7 @@ def get_user_profile():
         'subscription_tier': user_profile['subscription_tier'],
         'created_at': user_profile['created_at'],
         'enabled': user_profile['enabled'],
-        'brokers': api_key_manager.list_user_brokers(user_id),
+        'brokers': vault.list_user_brokers(user_id),
         'permissions': permissions.to_dict() if permissions else None
     })
 
@@ -427,7 +426,7 @@ def user_settings():
 def list_brokers():
     """List all configured brokers for user."""
     user_id = request.user_id
-    brokers = api_key_manager.list_user_brokers(user_id)
+    brokers = vault.list_user_brokers(user_id)
 
     return jsonify({
         'user_id': user_id,
@@ -726,50 +725,48 @@ def get_onboarding_status():
 @app.route('/api/user/mode', methods=['GET'])
 @require_auth
 def get_user_mode():
-    """
-    Get current user mode (education or live_trading).
-    
-    Returns the user's current trading mode and whether they can upgrade.
-    """
+    """Get canonical education/live-trading state for the authenticated user."""
     try:
         from bot.education_mode import get_education_manager, UserMode
-        from database.db_connection import get_db_session
-        from database.models import User
-        
+
         user_id = request.user_id
-        education_manager = get_education_manager()
-        
-        # Get user from database
-        with get_db_session() as session:
-            user = session.query(User).filter_by(user_id=user_id).first()
-            
-            if not user:
-                return jsonify({'error': 'User not found'}), 404
-            
-            # Determine mode
-            education_mode = bool(getattr(user, 'education_mode', False))
-            mode = UserMode.LIVE_TRADING.value if not education_mode else UserMode.EDUCATION.value
-            
-            # Get progress if in education mode
-            progress = None
-            ready_for_upgrade = False
-            
-            if education_mode:
-                education_manager.update_from_paper_account(user_id)
-                user_progress = education_manager.get_progress(user_id)
-                if user_progress:
-                    progress = user_progress.to_dict()
-                    ready_for_upgrade = user_progress.is_ready_for_live_trading()
-            
-            return jsonify({
-                'success': True,
-                'mode': mode,
-                'education_mode': education_mode,
-                'consented_to_live_trading': user.consented_to_live_trading,
-                'progress': progress,
-                'ready_for_upgrade': ready_for_upgrade
-            }), 200
-            
+        user = user_db.get_user(user_id)
+        if not user:
+            return jsonify({'error': 'User not found'}), 404
+
+        education_mode = bool(user.get('education_mode', True))
+        mode = UserMode.EDUCATION.value if education_mode else UserMode.LIVE_TRADING.value
+
+        progress = None
+        ready_for_upgrade = False
+        if education_mode:
+            education_manager = get_education_manager()
+            education_manager.update_from_paper_account(user_id)
+            user_progress = education_manager.get_progress(user_id)
+            if user_progress:
+                progress = user_progress.to_dict()
+                ready_for_upgrade = user_progress.is_ready_for_live_trading()
+
+        decision = evaluate_live_trading_access(
+            user_id,
+            require_live_mode=not education_mode,
+            require_credentials=False,
+            user_db=user_db,
+            vault=vault,
+        )
+
+        return jsonify({
+            'success': True,
+            'mode': mode,
+            'education_mode': education_mode,
+            'consented_to_live_trading': bool(
+                user.get('consented_to_live_trading', False)
+            ),
+            'progress': progress,
+            'ready_for_upgrade': ready_for_upgrade,
+            'paid_entitlement_status': decision.billing_status,
+            'live_access_blocker': None if decision.allowed else decision.blocker,
+        }), 200
     except Exception as e:
         logger.error(f"Error getting user mode: {e}")
         return jsonify({'error': str(e)}), 500
