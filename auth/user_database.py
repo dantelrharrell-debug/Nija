@@ -267,7 +267,9 @@ class UserDatabase:
 
             cursor.execute("""
                 SELECT user_id, email, subscription_tier, created_at, last_login,
-                       enabled, email_verified, tos_accepted_at, tos_version
+                       enabled, email_verified, tos_accepted_at, tos_version,
+                       education_mode, consented_to_live_trading,
+                       live_trading_consent_at, risk_acknowledged_at
                 FROM users
                 WHERE email = ?
             """, (email,))
@@ -288,6 +290,10 @@ class UserDatabase:
                 'email_verified': bool(row[6]),
                 'tos_accepted_at': row[7],
                 'tos_version': row[8],
+                'education_mode': bool(row[9]),
+                'consented_to_live_trading': bool(row[10]),
+                'live_trading_consent_at': row[11],
+                'risk_acknowledged_at': row[12],
             }
 
         except Exception as e:
