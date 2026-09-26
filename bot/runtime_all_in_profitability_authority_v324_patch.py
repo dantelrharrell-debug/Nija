@@ -2,7 +2,7 @@
 
 The verified v324 economics live in ``runtime_all_in_profitability_authority_v324_core``.
 This canonical import path applies current U.S. public fee fallbacks and requires
-all execution/profitability hardening through v369 in the same writer process.
+all execution/profitability hardening through v432 in the same writer process.
 """
 from __future__ import annotations
 
@@ -37,7 +37,11 @@ def _install_required(module_name: str, ready_env: str) -> bool:
     installer = getattr(module, "install_import_hook", None) or getattr(module, "install", None)
     if not callable(installer) or installer() is False:
         return False
-    return os.environ.get(ready_env) == "1"
+    # Most stages publish readiness through environment variables. v432 is a
+    # read-only convergence/observability stage and exposes a module flag.
+    if os.environ.get(ready_env) == "1":
+        return True
+    return bool(getattr(module, ready_env, False))
 
 
 def install_import_hook() -> bool:
@@ -82,7 +86,7 @@ def install_import_hook() -> bool:
         ("v361", "bot.runtime_execution_authority_proof_gate_v361_patch", "NIJA_RUNTIME_EXECUTION_AUTHORITY_PROOF_GATE_V361_READY"),
         ("v362", "bot.runtime_stale_live_execution_proof_v362_patch", "NIJA_RUNTIME_STALE_LIVE_EXECUTION_PROOF_V362_READY"),
         ("v363", "bot.runtime_kraken_deferred_fill_proof_recovery_v363_patch", "NIJA_RUNTIME_KRAKEN_DEFERRED_FILL_PROOF_RECOVERY_V363_READY"),
-        ("v363", "bot.runtime_bootstrap_execution_proof_alignment_v363_patch", "NIJA_RUNTIME_BOOTSTRAP_EXECUTION_PROOF_ALIGNMENT_V363_READY"),
+        ("v363b", "bot.runtime_bootstrap_execution_proof_alignment_v363_patch", "NIJA_RUNTIME_BOOTSTRAP_EXECUTION_PROOF_ALIGNMENT_V363_READY"),
         ("v364", "bot.runtime_kraken_openpositions_margin_reconciliation_v364_patch", "NIJA_RUNTIME_KRAKEN_OPENPOSITIONS_MARGIN_RECONCILIATION_V364_READY"),
         ("v365", "bot.runtime_kraken_margin_protective_scan_v365_patch", "NIJA_RUNTIME_KRAKEN_MARGIN_PROTECTIVE_SCAN_V365_READY"),
         ("v366", "bot.runtime_kraken_margin_canonical_coverage_v366_patch", "NIJA_RUNTIME_KRAKEN_MARGIN_CANONICAL_COVERAGE_V366_READY"),
@@ -91,6 +95,7 @@ def install_import_hook() -> bool:
         ("v369", "bot.runtime_kraken_addorder_txid_capture_v369_patch", "NIJA_RUNTIME_KRAKEN_ADDORDER_TXID_CAPTURE_V369_READY"),
         ("v430", "bot.runtime_kraken_client_order_recovery_v430_patch", "NIJA_RUNTIME_KRAKEN_CLIENT_ORDER_RECOVERY_V430_READY"),
         ("v431", "bot.runtime_liveness_position_sync_v431_patch", "NIJA_RUNTIME_LIVENESS_POSITION_SYNC_V431_READY"),
+        ("v432", "bot.runtime_canonical_execution_proof_convergence_v432_patch", "NIJA_RUNTIME_CANONICAL_EXECUTION_PROOF_CONVERGENCE_V432_READY"),
     )
     outcomes = {}
     previous = core_ready
@@ -109,50 +114,10 @@ def install_import_hook() -> bool:
     os.environ["NIJA_CANONICAL_PROFITABILITY_CHAIN_READY"] = "1" if ready else "0"
     if ready:
         LOGGER.critical(
-            "CANONICAL_PROFITABILITY_CHAIN_READY marker=%s "
-            "v324=true v325=true v326=true v327=true v328=true v329=true v330=true v331=true "
-            "v332=true v333=true v334=true v335=true v336=true v337=true v338=true v339=true "
-            "v340=true v341=true v342=true v343=true v344=true v345=true v346=true v347=true v348=true v349=true v350=true v351=true v352=true v353=true v354=true v355=true v356=true v357=true v358=true v359=true v360=true v361=true v362=true v363=true v364=true v365=true v366=true v367=true v368=true v369=true v430=true v431=true "
-            "confirmed_fill_truth=true measured_slippage_learning=true authoritative_entry_fee=true "
-            "capital_recycling_exit=true canonical_exit_broker_rebinding=true canonical_exit_market_price=true "
-            "canonical_exit_pipeline_submission=true rejected_submission_not_fill=true "
-            "protective_exit_startup_authority_bridge=true exact_writer_nonce_health_required=true "
-            "protective_exit_state_machine_bridge=true protective_exit_base_quantity_terminal=true "
-            "oversell_guard=true verified_position_caps_exit=true post_ecel_holdings_firewall=true "
-            "all_pipeline_identities_firewalled=true protective_exit_quality_optimizer_scoped=true "
-            "below_min_exit_deferred=true ambiguous_typeerror_retry=false "
-            "coinbase_missing_increment_repaired=true deterministic_exit_rejects_not_exchange_health=true "
-            "nested_coinbase_order_id=true coinbase_read_only_fill_reconciliation=true ack_alone_not_fill=true "
-            "canonical_confirmed_fill_execution_proof=true stale_platform_snapshot_authoritative_refresh=true "
-            "confirmed_fill_immediate_activation_wakeup=true terminal_v108_stale_snapshot_dispatch=true "
-            "adopted_but_stale_platform_snapshot_refreshable=true strategy_wiring_not_execution_proof=true "
-            "canonical_execution_proof_owns_execution_ready=true kraken_delayed_fill_reconciliation=true "
-            "capital_readiness_live_mode_decoupled=true scan_start_deadline_engine_readiness_aware=true "
-            "supervised_thread_proof_uses_current_writer_renewal_and_registered_core=true "
-            "runtime_authority_convergence_requires_canonical_execution_proof=true "
-            "stale_local_live_authority_revoked_without_execution_proof=true "
-            "bootstrap_execution_authority_requires_canonical_execution_proof=true "
-            "execution_contract_snapshot_repair_requires_canonical_execution_proof=true "
-            "kraken_queryorders_fill_fields_required=true kraken_trade_history_ordertxid_exact_match=true "
-            "kraken_deferred_fill_proof_recovery=true durable_pending_fill_proof_registry=true kraken_addorder_txid_capture=true kraken_client_order_id_timeout_recovery=true "
-            "capital_single_runtime_generation=true position_recovery_capital_independent=true "
-            "heartbeat_local_deferral_not_exchange_rejection=true heartbeat_ack_timeout_not_exchange_rejection=true "
-            "heartbeat_stage_helpers_terminal_reasserted=true kraken_btnl_non_ecp_retry=true "
-            "kraken_btnl_all_leveraged_non_ecp_retry=true pending_open_not_margin_exit_authority=true "
-            "kraken_openpositions_margin_state_reconciliation=true margin_exit_broker_remaining_quantity_cap=true "
-            "kraken_openpositions_protective_scan_visibility=true openpositions_not_execution_fill_proof=true "
-            "kraken_margin_openpositions_canonical_protective_coverage=true "
-            "kraken_open_positions_fetch_unproven_blocks_position_coverage_ready=true "
-            "kraken_margin_configuration_not_protection_proof=true native_openorders_protection_verified_separately=true "
-            "kraken_margin_dedicated_protective_monitor=true kraken_margin_existing_risk_stop_enforced=true "
-            "kraken_margin_opening_order_exact_queryorders_execution_proof_recovery=true "
-            "kraken_margin_exact_broker_authority_scoped=true authenticated_read_fallback_scan_only=true "
-            "global_dispatch_health_not_promoted=true terminal_submit_gates_preserved=true "
-            "spot_balance_snapshot_ownership_unchanged=true explicit_other_exchange_rejections_unchanged=true "
-            "take_profit_preserved=true stop_loss_preserved=true trailing_take_profit_preserved=true "
-            "trailing_stop_preserved=true auto_exit_reconciler_preserved=true dust_policy_unchanged=true "
-            "snapshot_ttl_unchanged=true stale_promoted=false forced_trade=false forced_activation=false "
-            "execution_proof_fabricated=false safety_gates_bypassed=false",
+            "CANONICAL_PROFITABILITY_CHAIN_READY marker=%s v324=true through_v432=true "
+            "canonical_execution_proof_observed_not_synthesized=true snapshot_ttl_unchanged=true "
+            "stale_promoted=false forced_trade=false forced_activation=false execution_proof_fabricated=false "
+            "safety_gates_bypassed=false",
             MARKER,
         )
     else:
