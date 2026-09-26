@@ -29,6 +29,10 @@ import json
 
 from auth import get_api_key_manager
 from execution import get_permission_validator
+from user_live_trading_access import (
+    evaluate_live_trading_access,
+    hydrate_runtime_credentials,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -179,6 +183,43 @@ class UserControlBackend:
         Returns:
             dict: Result of start operation
         """
+        # Authoritative customer live-trading entitlement gate.
+        decision = evaluate_live_trading_access(user_id)
+        if not decision.allowed:
+            logger.warning(
+                "USER_TRADING_START_BLOCKED user=%s reason=%s billing_status=%s",
+                user_id,
+                decision.blocker,
+                decision.billing_status,
+            )
+            return {
+                'success': False,
+                'error': f'live_trading_blocked:{decision.blocker}',
+                'access': decision.to_dict(),
+            }
+
+        try:
+            hydrated_brokers = hydrate_runtime_credentials(
+                user_id,
+                api_key_manager=self.api_key_manager,
+            )
+        except Exception as exc:
+            logger.warning(
+                "USER_TRADING_START_BLOCKED user=%s reason=credential_hydration_failed error=%s",
+                user_id,
+                exc,
+            )
+            return {
+                'success': False,
+                'error': 'live_trading_blocked:credential_hydration_failed',
+            }
+
+        if not hydrated_brokers:
+            return {
+                'success': False,
+                'error': 'live_trading_blocked:broker_credentials_missing',
+            }
+
         # Validate user has permissions
         permissions = self.permission_validator.get_user_permissions(user_id)
         if not permissions or not permissions.enabled:
