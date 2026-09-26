@@ -58,6 +58,38 @@ def _truthy(name: str) -> bool:
     }
 
 
+def _canonical_selection_prereqs_ready() -> tuple[bool, str]:
+    """Prove startup is healthy enough to select a heartbeat venue.
+
+    This deliberately excludes execution_ready because the heartbeat order/fill
+    is the proof that establishes that key. It grants selection only; downstream
+    execution and safety gates remain authoritative.
+    """
+    try:
+        readiness = importlib.import_module("bot.readiness_table")
+        snapshot_fn = getattr(readiness, "snapshot", None)
+        if not callable(snapshot_fn):
+            return False, "readiness_snapshot_unavailable"
+        snapshot = dict(snapshot_fn() or {})
+    except Exception as exc:
+        return False, f"readiness_snapshot_error:{type(exc).__name__}:{exc}"
+
+    required = (
+        "broker_connected",
+        "balance_hydrated",
+        "authority_ready",
+        "capital_ready",
+        "risk_ready",
+        "strategy_ready",
+        "nonce_ready",
+        "bootstrap_ready",
+        "position_sync_ready",
+    )
+    missing = tuple(key for key in required if not bool(snapshot.get(key, False)))
+    if missing:
+        return False, "canonical_prereqs_pending:" + ",".join(missing)
+    return True, "canonical_prereqs_ready_without_execution_proof"
+
 def _live_venue_fallback_set() -> tuple[bool, tuple[str, ...], str]:
     """Return a selection-only fallback set; never infer execution readiness."""
     if threading.current_thread().name != "HeartbeatTrade":
@@ -67,8 +99,10 @@ def _live_venue_fallback_set() -> tuple[bool, tuple[str, ...], str]:
     canonical_raw = str(os.environ.get("NIJA_EXECUTION_READY_VENUES", "") or "").strip()
     if canonical_raw:
         return False, (), "canonical_ready_set_nonempty"
-    if not _truthy("NIJA_GLOBAL_TRADING_READY"):
-        return False, (), "broker_local_global_ready_false"
+    broker_local_ready = _truthy("NIJA_GLOBAL_TRADING_READY")
+    canonical_ready, canonical_detail = _canonical_selection_prereqs_ready()
+    if not broker_local_ready and not canonical_ready:
+        return False, (), "broker_local_global_ready_false;" + canonical_detail
     active_raw = str(os.environ.get("NIJA_ACTIVE_LIVE_VENUES", "") or "")
     active = tuple(
         dict.fromkeys(
@@ -79,7 +113,8 @@ def _live_venue_fallback_set() -> tuple[bool, tuple[str, ...], str]:
     )
     if not active:
         return False, (), "broker_local_active_set_empty"
-    return True, active, "broker_local_selection_only"
+    source = "broker_local_selection_only" if broker_local_ready else "canonical_prereqs_selection_only"
+    return True, active, source
 
 
 def _candidate_brokers(strategy: Any) -> dict[Any, Any]:
