@@ -34,6 +34,7 @@ from auth import get_api_key_manager, get_user_manager
 from auth.user_database import get_user_database
 from vault import get_vault
 from user_live_trading_access import (
+    SUPPORTED_USER_BROKERS,
     evaluate_live_trading_access,
     hydrate_runtime_credentials,
 )
@@ -447,8 +448,8 @@ def manage_broker_keys(broker_name: str):
     user_id = request.user_id
 
     # Validate broker name
-    supported_brokers = ['coinbase', 'kraken', 'binance', 'okx', 'alpaca']
-    if broker_name.lower() not in supported_brokers:
+    supported_brokers = sorted(SUPPORTED_USER_BROKERS)
+    if broker_name.lower() not in SUPPORTED_USER_BROKERS:
         return jsonify({
             'error': f'Unsupported broker. Supported: {", ".join(supported_brokers)}'
         }), 400
