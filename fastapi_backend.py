@@ -488,8 +488,8 @@ async def login(credentials: UserLogin, request: Request):
 
 @app.get("/api/user/profile", response_model=UserProfile, tags=["auth"])
 async def get_profile(user_id: str = Depends(get_current_user)):
-    """Get current user's profile."""
-    user_profile = user_manager.get_user(user_id)
+    """Get current user's profile from the persistent user/vault stores."""
+    user_profile = user_db.get_user(user_id)
 
     if not user_profile:
         raise HTTPException(
@@ -505,7 +505,7 @@ async def get_profile(user_id: str = Depends(get_current_user)):
         subscription_tier=user_profile['subscription_tier'],
         created_at=user_profile['created_at'],
         enabled=user_profile['enabled'],
-        brokers=api_key_manager.list_user_brokers(user_id),
+        brokers=vault.list_user_brokers(user_id),
         permissions=permissions.to_dict() if permissions else None
     )
 
@@ -675,8 +675,9 @@ async def remove_broker(
     """Remove broker API credentials from secure vault."""
     ip_address = request.client.host if request.client else None
 
-    # Remove from vault
+    # Remove from persistent vault and any process-local runtime copy.
     success = vault.delete_credentials(user_id, broker_name.lower(), ip_address)
+    api_key_manager.delete_user_api_key(user_id, broker_name.lower())
 
     if not success:
         raise HTTPException(
@@ -1014,11 +1015,14 @@ async def get_subscription(user_id: str = Depends(get_current_user)):
         )
 
     tier = user_profile.get("subscription_tier", "basic")
+    billing = get_billing_store().get(user_id)
+    billing_status = str(getattr(billing, "status", "not_started") or "not_started")
+    current_period_end = getattr(billing, "current_period_end", None)
     return {
         "user_id": user_id,
         "tier": tier,
-        "status": "active",
-        "next_billing_date": None,
+        "status": billing_status,
+        "next_billing_date": current_period_end,
         "features": _TIER_FEATURES.get(tier, _TIER_FEATURES["basic"]),
     }
 
