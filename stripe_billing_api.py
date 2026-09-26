@@ -97,10 +97,17 @@ def create_checkout_session():
     if assignment.trial_days > 0:
         subscription_data["trial_period_days"] = assignment.trial_days
 
+    existing_billing = get_billing_store().get(user_id)
+    customer_identity = (
+        {"customer": existing_billing.customer_id}
+        if existing_billing and existing_billing.customer_id
+        else {"customer_email": user["email"]}
+    )
+
     try:
         session = stripe.checkout.Session.create(
             mode="subscription",
-            customer_email=user["email"],
+            **customer_identity,
             line_items=[{"price": price_id, "quantity": 1}],
             success_url=success_url,
             cancel_url=cancel_url,
@@ -170,17 +177,47 @@ def stripe_webhook():
     data = _obj_value(event, "data", {})
     obj = _obj_value(data, "object", {})
 
-    if event_type == "checkout.session.completed":
+    if event_type in {
+        "checkout.session.completed",
+        "checkout.session.async_payment_succeeded",
+        "checkout.session.async_payment_failed",
+    }:
         metadata = _obj_value(obj, "metadata", {}) or {}
         user_id = _obj_value(metadata, "nija_user_id")
         offer_code = _obj_value(metadata, "nija_offer_code")
         if user_id:
+            previous = get_billing_store().get(str(user_id))
+            event_subscription = _string_or_none(_obj_value(obj, "subscription"))
+            event_customer = _string_or_none(_obj_value(obj, "customer"))
+            if previous and previous.customer_id and event_customer and previous.customer_id != event_customer:
+                logger.warning("Ignored checkout event with conflicting billing identity for user %s", user_id)
+                return jsonify({"received": True})
+            if (previous and previous.subscription_id and event_subscription
+                    and previous.subscription_id != event_subscription
+                    and previous.status in {"active", "trialing", "past_due"}):
+                logger.warning("Ignored checkout event for an older or concurrent subscription of user %s", user_id)
+                return jsonify({"received": True})
+            payment_status = _obj_value(obj, "payment_status", "unpaid")
+            if event_type == "checkout.session.async_payment_failed":
+                status = "payment_failed"
+            elif payment_status in {"paid", "no_payment_required"}:
+                # A trial can require no payment now; subscription events remain
+                # authoritative for active/trialing entitlement status.
+                status = "checkout_completed"
+            else:
+                status = "checkout_unpaid"
+            if previous and previous.subscription_id and previous.status not in {
+                "checkout_created", "checkout_unpaid", "checkout_completed", "payment_failed"
+            }:
+                # Subscription events can arrive before the checkout event or
+                # its retry. Never downgrade their authoritative state.
+                status = previous.status
             get_billing_store().upsert(
                 user_id=str(user_id),
-                customer_id=_string_or_none(_obj_value(obj, "customer")),
-                subscription_id=_string_or_none(_obj_value(obj, "subscription")),
+                customer_id=event_customer,
+                subscription_id=event_subscription,
                 checkout_session_id=_string_or_none(_obj_value(obj, "id")),
-                status="checkout_completed",
+                status=status,
                 offer_code=_string_or_none(offer_code),
             )
 
