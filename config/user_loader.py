@@ -437,6 +437,11 @@ class UserConfigLoader:
         Returns:
             List of all enabled UserConfig objects after env-var filtering
         """
+        # Refresh dynamic paid-user discovery on every normal registry read.
+        # The loader is a process singleton, so without this refresh a customer
+        # who pays/connects after startup would have to wait for a restart.
+        self._merge_runtime_paid_users()
+
         # ── Global user kill-switch ──────────────────────────────────────────
         _disable_all = os.environ.get("NIJA_DISABLE_USER_ACCOUNTS", "").strip().lower()
         if _disable_all in ("1", "true", "yes", "on"):
