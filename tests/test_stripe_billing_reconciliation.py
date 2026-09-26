@@ -44,6 +44,24 @@ def test_repeat_checkout_reuses_recorded_customer(monkeypatch, tmp_path):
     assert "customer_email" not in captured
 
 
+def test_active_subscription_cannot_be_reset_by_repeat_checkout(monkeypatch, tmp_path):
+    store = BillingStore(str(tmp_path / "users.db"))
+    store.upsert(user_id="nija-user-1", status="active", customer_id="cus_existing", subscription_id="sub_live")
+    client = _client(monkeypatch, store)
+    assignment = SimpleNamespace(offer_code=billing.FOUNDING_BETA_OFFER, trial_days=0, to_dict=lambda: {})
+    monkeypatch.setattr(billing, "get_commercial_offer_store", lambda: SimpleNamespace(get_assignment=lambda _: assignment))
+    monkeypatch.setattr(billing, "get_user_database", lambda: SimpleNamespace(get_user=lambda _: {"email": "user@example.test"}))
+    monkeypatch.setattr(billing, "_price_id_for_offer", lambda _: "price_test")
+    monkeypatch.setattr(billing, "_stripe_module", lambda: SimpleNamespace(
+        checkout=SimpleNamespace(Session=SimpleNamespace(create=lambda **_: (_ for _ in ()).throw(
+            AssertionError("Active subscriber must not create another checkout")
+        )))
+    ))
+    assert client.post("/api/billing/checkout").status_code == 409
+    record = store.get("nija-user-1")
+    assert (record.status, record.subscription_id) == ("active", "sub_live")
+
+
 def test_signed_checkout_events_do_not_mark_unpaid_payment_complete(monkeypatch, tmp_path):
     store = BillingStore(str(tmp_path / "users.db"))
     client = _client(monkeypatch, store)
