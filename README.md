@@ -1,9 +1,9 @@
 # NIJA AI Trading LLC — Trading Platform Architecture & Recovery Guide
 
 **Project:** `Nija_Trading_Bot`  
-**Status date:** September 23, 2026 (UTC)  
-**Latest runtime merge:** `facd3b0376cf85665c7b6a1d918f265ce9540ad4`  
-**Latest merged runtime PR:** `#2878 — Repair stale PipelineRequest binding in universal exits`  
+**Status date:** September 26, 2026 (UTC)  
+**Latest runtime merge:** `e60ce1be56cd4080b47cbf7637e55d816aa66c28`  
+**Latest merged runtime PR:** `#2893 — Fix heartbeat canonical selection deadlock`  
 **Broker-cell implementation head:** `472eeaa2c9d6f518bad029fbd550fa6a84505eb2`  
 **Broker-cell architecture merge:** `#2784 — Broker-cell isolation: independent strategy/risk/user runtimes`
 
@@ -241,11 +241,15 @@ Trading services should not have withdrawal privileges unless a separately revie
 
 ## 9. Current Merge and Validation State
 
-The latest runtime merge before this documentation-only update is the September 23 UTC merge of PR `#2878`. Since the previous README refresh, NIJA merged startup convergence, FVG-based strategy qualification, a new opt-in Daily/1H liquidity-FVG retracement strategy, stricter liquidity-reversal sequencing, and a universal-exit request-contract repair.
+The current `main` head is the September 26 UTC merge of PR `#2893`. Since the previous README refresh, NIJA merged runtime-liveness recovery, paid-user live-trading entitlement/credential gating, durable encrypted Redis-backed paid-user state, and a heartbeat canonical-selection deadlock repair.
 
 ```text
-latest_runtime_merge=facd3b0376cf85665c7b6a1d918f265ce9540ad4
-latest_runtime_pr=#2878
+latest_runtime_merge=e60ce1be56cd4080b47cbf7637e55d816aa66c28
+latest_runtime_pr=#2893
+runtime_liveness_position_sync=#2890
+paid_user_live_trading_bridge=#2891
+paid_user_redis_state=#2892
+heartbeat_canonical_selection=#2893
 startup_fail_closed_nonfatal=#2874
 break_retest_fvg_gate=#2875
 liquidity_fvg_retrace_strategy=#2876
@@ -253,11 +257,74 @@ liquidity_reversal_sequence=#2877
 universal_exit_contract_repair=#2878
 protection_readiness_strict=#2873
 protection_status_surface=#2872
-kraken_heartbeat_safe_floor=#2870
-kraken_market_alias_repair=#2869
 broker_cell_implementation_head=472eeaa2c9d6f518bad029fbd550fa6a84505eb2
 broker_cell_architecture_merge=c44d74b42f35999e4113a6b75129d5607ef1b679
 ```
+
+### September 26 current deployment and blocker status
+
+Treat **merged**, **deployed**, **runtime-ready**, and **protected-live-ready** as separate states.
+
+PR `#2890` repaired capital-worker buildup and added a capital-independent pulse for Kraken authoritative position recovery. It preserves fail-closed behavior: no stale snapshot is promoted, no worker is force-killed, and no execution/protection proof is fabricated.
+
+PR `#2891` wired paid customers into the canonical multi-account runtime only when authoritative billing, consent, risk acknowledgement, mode, supported broker credentials, and encrypted-vault checks pass. Entitlement is rechecked on every customer entry cycle; cancellation, expiry, payment failure, consent revocation, education mode, or access-check failure blocks new entries while preserving exit/protection access for existing positions.
+
+PR `#2892` moved paid-user entitlement and encrypted broker state toward durable Redis-backed authority so paid-user runtime access is not dependent on ephemeral process memory.
+
+PR `#2893` repaired a heartbeat selection deadlock. Before that repair, the PR records production as healthy on the canonical non-execution prerequisites while `execution_ready` remained unresolved because the heartbeat could not select a venue to produce the needed proof. The repair permits only the dedicated heartbeat thread to use the existing selection fallback when broker, balance, writer, capital, risk, strategy, nonce, bootstrap, and platform position-sync readiness are already true. It does **not** mark execution ready or bypass downstream gates.
+
+#### Current blockers / verification still required
+
+- **CI validation is not currently green for the September 26 head.** Push workflows for CI, preflight/lint, imports, image build, CodeQL, security scanning, threat modeling, zero-trust isolation, and artifact scanning all reported failure on `e60ce1be56cd4080b47cbf7637e55d816aa66c28`. The associated jobs exposed no executed step list and no retrievable job logs, so this evidence must be treated as a **validation/infrastructure blocker**, not as proof that application tests passed or as proof of a specific code regression.
+- **Production deployment of the September 26 head still requires direct runtime confirmation.** A merge to `main` is not sufficient evidence that the production service is running that commit.
+- **`execution_ready` requires post-repair runtime proof.** PR `#2893` repairs the selection deadlock but does not itself prove that the production heartbeat subsequently produced authoritative execution readiness.
+- **Protected real-money entry remains fail-closed until broker capability and protection evidence are authoritative.** The selected router must report protected-entry capability, authoritative protection coverage must be ready, and a broker-confirmed live entry must show active SL and TP legs on readback.
+- **Paid-user live activation requires deployment and runtime verification.** Redis-backed entitlement, encrypted broker credentials, subscription state, consent, and continuous revocation behavior are merged control paths; they still need to be observed working in the deployed production runtime.
+- **Broker/account authority remains broker-local.** Any stale positions, stale open orders, missing credentials, disconnected broker, stale capital, writer/nonce failure, risk denial, kill switch, minimum-order failure, or reconciliation failure must continue to block only the affected scope unless evidence shows a platform-wide integrity failure.
+
+Do not describe NIJA as fully production-complete, fully protected for real-money entry, or ready for store submission solely because the September 26 repairs are merged.
+
+### App Store / Google Play submission roadmap — gated
+
+Store submission remains a **roadmap milestone**, not a current release state. Do not move NIJA into public App Store or Google Play submission until all four readiness groups below are demonstrably complete with current evidence.
+
+#### 1. Mobile build gate
+
+- [ ] One mobile architecture is locked for release: complete the planned Expo React Native conversion or formally retain and harden Capacitor.
+- [ ] One permanent bundle/package identifier is selected and used consistently for iOS and Android.
+- [ ] Production authentication and authorization are implemented for every mobile API route.
+- [ ] Secure local session/token storage is implemented and verified on both platforms.
+- [ ] Home, Signals, Trades, Risk, and Profile flows are implemented with explicit offline, degraded, error, Simulation, Live Pending, Live, and Emergency Paused states.
+- [ ] Consent, disclosures, broker connection, account deletion, emergency pause, push notifications, biometrics, deep links, accessibility, icons, splash screens, and approved black-and-gold branding are complete.
+- [ ] Signed iOS and Android release candidates pass physical-device QA, TestFlight, and Google Play internal testing.
+
+#### 2. Security gate
+
+- [ ] Required CI, CodeQL, security scanning, artifact scanning, threat-modeling, zero-trust, build, import, and preflight checks are genuinely green for the release commit.
+- [ ] No broker secrets, Redis/database credentials, signing material, writer-authority values, or administrative tokens are embedded in the mobile client.
+- [ ] Mobile authentication, authorization, rate limiting, durable encrypted device-token storage, token rotation/revocation, audit logging, and abuse controls are verified.
+- [ ] Threat modeling and penetration/security testing are complete with release-blocking findings resolved.
+- [ ] Privacy, retention, account-deletion, disclosures, and store data-use declarations match actual production behavior.
+
+#### 3. Brokerage / trading gate
+
+- [ ] Each supported production broker has authoritative connectivity, capital, position, open-order, risk, writer, nonce, and reconciliation evidence for the intended user flow.
+- [ ] Paid-user entitlement and credential hydration are verified in production, including cancellation/payment-failure/expiry/consent revocation.
+- [ ] Live-entry eligibility remains server-authoritative and cannot be enabled by a mobile-only toggle.
+- [ ] Protected strategies remain fail-closed unless the selected broker explicitly supports the required protected-entry contract.
+- [ ] A broker-confirmed protected live entry proves active stop-loss and take-profit protection on readback where that live feature is enabled.
+- [ ] Existing-position protection and exit-only management remain available when new-entry entitlement is revoked.
+
+#### 4. Operational gate
+
+- [ ] The exact release commit is confirmed deployed in production.
+- [ ] Production health, logs, runtime authority, broker cells, reconciliation, and incident telemetry are reviewed after deployment.
+- [ ] Monitoring, support, incident response, rollback, credential-rotation, and emergency-pause procedures are documented and exercised.
+- [ ] Legal/compliance review is complete for privacy policy, terms, risk disclosures, account deletion, pricing/subscription behavior, and store metadata.
+- [ ] Release ownership, signing keys/certificates, store accounts, reviewer access, support contacts, and rollback ownership are defined.
+- [ ] Final release signoff is based on current production and device evidence, not historical checklists or completion claims.
+
+**Submission rule:** App Store and Google Play submission stays **NO-GO / roadmap-only** until the mobile build, security, brokerage, and operational gates above are all complete and evidenced on the intended release commit.
 
 ### September 22 authoritative protection-readiness status
 
