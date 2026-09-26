@@ -375,12 +375,14 @@ async def register(user_data: UserRegister, request: Request):
     # Create user ID
     user_id = f"user_{secrets.token_hex(8)}"
 
-    # Create user in database with password hashing
+    # Registration can never self-grant a paid tier. Commercial access is
+    # advanced only by authoritative billing events after payment verification.
+    initial_tier = "basic"
     success = user_db.create_user(
         user_id=user_id,
         email=email,
         password=user_data.password,  # Will be hashed by user_db
-        subscription_tier=user_data.subscription_tier
+        subscription_tier=initial_tier
     )
 
     if not success:
@@ -394,20 +396,20 @@ async def register(user_data: UserRegister, request: Request):
         'basic': 100.0,
         'pro': 1000.0,
         'enterprise': 10000.0
-    }.get(user_data.subscription_tier, 100.0)
+    }.get(initial_tier, 100.0)
 
     permissions = UserPermissions(
         user_id=user_id,
         max_position_size_usd=max_position_size,
         max_daily_loss_usd=max_position_size * 0.5,
-        max_positions=3 if user_data.subscription_tier == 'basic' else 10
+        max_positions=3 if initial_tier == 'basic' else 10
     )
     permission_validator.register_user(permissions)
 
     # Generate token
     token = create_access_token(user_id)
 
-    logger.info(f"✅ New user registered: {email} (ID: {user_id}, Tier: {user_data.subscription_tier})")
+    logger.info(f"✅ New user registered: {email} (ID: {user_id}, Tier: {initial_tier})")
 
     # Send verification email (non-blocking – failure logged, not raised)
     ip_address = request.client.host if request.client else None
@@ -422,7 +424,7 @@ async def register(user_data: UserRegister, request: Request):
         access_token=token,
         user_id=user_id,
         email=email,
-        subscription_tier=user_data.subscription_tier
+        subscription_tier=initial_tier
     )
 
 
