@@ -1528,6 +1528,82 @@ class IndependentBrokerTrader:
                             if user_config is None:
                                 logger.warning(f"   ⚠️  {broker_name}: no user_config found for {user_id} — defaulting active_trading=True")
                             is_active_trading = user_config.active_trading if user_config is not None else True
+
+                            # Dynamic customer accounts are entitlement-gated on every
+                            # cycle. Billing loss/cancellation/expiry or consent/mode
+                            # revocation blocks NEW entries immediately while keeping
+                            # the connected broker available for protected exits.
+                            entitlement_allowed = True
+                            entitlement_reason = "not_required"
+                            if user_config is not None and bool(
+                                getattr(user_config, "entitlement_required", False)
+                            ):
+                                try:
+                                    from user_live_trading_access import (
+                                        entitlement_allows_new_entries,
+                                    )
+                                    entitlement_allowed, entitlement_reason = (
+                                        entitlement_allows_new_entries(
+                                            user_id,
+                                            user_config=user_config,
+                                        )
+                                    )
+                                except Exception as entitlement_err:
+                                    entitlement_allowed = False
+                                    entitlement_reason = (
+                                        f"entitlement_check_failed:{type(entitlement_err).__name__}"
+                                    )
+                                    logger.exception(
+                                        "LIVE_ACCESS_RUNTIME_CHECK_FAILED user=%s broker=%s",
+                                        user_id,
+                                        broker_type.value,
+                                    )
+
+                            if not entitlement_allowed:
+                                logger.warning(
+                                    "LIVE_ACCESS_RUNTIME_REVOKED user=%s broker=%s "
+                                    "reason=%s entries_allowed=false exits_preserved=true",
+                                    user_id,
+                                    broker_type.value,
+                                    entitlement_reason,
+                                )
+                                exit_authority_ok, exit_authority_reason = (
+                                    self._require_exact_cycle_authority(
+                                        "independent_broker_trader.user_entitlement_exit_only"
+                                    )
+                                )
+                                if exit_authority_ok:
+                                    # user_mode=True executes position management while
+                                    # the core loop keeps new-entry Phase 3 blocked.
+                                    self.trading_strategy.run_cycle(
+                                        broker=broker,
+                                        user_mode=True,
+                                    )
+                                else:
+                                    logger.critical(
+                                        "USER_ENTITLEMENT_EXIT_AUTHORITY_BLOCKED "
+                                        "user=%s broker=%s reason=%s broker_io=false",
+                                        user_id,
+                                        broker_type.value,
+                                        exit_authority_reason,
+                                    )
+
+                                if user_id not in self.user_broker_health:
+                                    self.user_broker_health[user_id] = {}
+                                self.user_broker_health[user_id][broker_name] = {
+                                    'status': 'entitlement_exit_only',
+                                    'error': entitlement_reason,
+                                    'last_check': datetime.now(),
+                                    'is_trading': False,
+                                    'entries_allowed': False,
+                                    'exits_preserved': True,
+                                    'total_cycles': self.user_broker_health.get(
+                                        user_id, {}
+                                    ).get(broker_name, {}).get('total_cycles', 0) + 1,
+                                }
+                                stop_flag.wait(15)
+                                continue
+
                             # A user runs in "independent" mode when their config has
                             # independent_trading: true.  Note that active_trading is already
                             # confirmed True at this point (the loop continues/skips if False),

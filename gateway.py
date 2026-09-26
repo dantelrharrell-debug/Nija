@@ -31,6 +31,14 @@ import hashlib
 import secrets
 
 from auth import get_api_key_manager, get_user_manager
+from auth.user_database import get_user_database
+from billing_store import get_billing_store
+from vault import get_vault
+from user_live_trading_access import (
+    SUPPORTED_USER_BROKERS,
+    evaluate_live_trading_access,
+    hydrate_runtime_credentials,
+)
 from execution import get_permission_validator, UserPermissions
 from user_control import get_user_control_backend
 
@@ -54,6 +62,8 @@ app.config['JWT_EXPIRATION_HOURS'] = int(os.getenv('JWT_EXPIRATION_HOURS', '24')
 # Get manager instances
 api_key_manager = get_api_key_manager()
 user_manager = get_user_manager()
+user_db = get_user_database()
+vault = get_vault()
 permission_validator = get_permission_validator()
 user_control = get_user_control_backend()
 
@@ -222,130 +232,88 @@ def get_info():
 
 @app.route('/api/auth/register', methods=['POST'])
 def register():
-    """
-    Register a new user.
-
-    Request body:
-        {
-            "email": "user@example.com",
-            "password": "secure_password",
-            "subscription_tier": "basic"  // optional: basic, pro, enterprise
-        }
-    """
-    data = request.get_json()
-
-    if not data or 'email' not in data or 'password' not in data:
+    """Register a user without allowing client-side paid-tier elevation."""
+    data = request.get_json() or {}
+    if 'email' not in data or 'password' not in data:
         return jsonify({'error': 'Email and password are required'}), 400
 
-    email = data['email'].lower().strip()
-    password = data['password']
-    subscription_tier = data.get('subscription_tier', 'basic')
-
-    # Validate email format (basic check)
+    email = str(data['email']).lower().strip()
+    password = str(data['password'])
     if '@' not in email or '.' not in email:
         return jsonify({'error': 'Invalid email format'}), 400
-
-    # Check if user already exists
-    if email in user_credentials:
+    if len(password) < 8:
+        return jsonify({'error': 'Password must be at least 8 characters'}), 400
+    if user_db.get_user_by_email(email):
         return jsonify({'error': 'User already exists'}), 409
 
-    # Create user ID
     user_id = f"user_{secrets.token_hex(8)}"
+    initial_tier = 'basic'
+    if not user_db.create_user(
+        user_id=user_id,
+        email=email,
+        password=password,
+        subscription_tier=initial_tier,
+    ):
+        return jsonify({'error': 'Registration failed'}), 500
 
-    # Store credentials
-    user_credentials[email] = {
-        'password_hash': hash_password(password),
-        'user_id': user_id
-    }
-
-    # Create user profile
+    # Keep the legacy in-memory user manager synchronized for endpoints that
+    # have not yet migrated, but never treat it as billing authority.
     try:
-        user_profile = user_manager.create_user(
+        user_manager.create_user(
             user_id=user_id,
             email=email,
-            subscription_tier=subscription_tier
+            subscription_tier=initial_tier,
         )
+    except Exception:
+        logger.exception("Legacy user-manager sync failed for %s", user_id)
 
-        # Register default permissions based on tier
-        max_position_size = {
-            'basic': 100.0,
-            'pro': 1000.0,
-            'enterprise': 10000.0
-        }.get(subscription_tier, 100.0)
+    max_position_size = 100.0
+    permissions = UserPermissions(
+        user_id=user_id,
+        max_position_size_usd=max_position_size,
+        max_daily_loss_usd=max_position_size * 0.5,
+        max_positions=3,
+    )
+    permission_validator.register_user(permissions)
 
-        permissions = UserPermissions(
-            user_id=user_id,
-            max_position_size_usd=max_position_size,
-            max_daily_loss_usd=max_position_size * 0.5,
-            max_positions=3 if subscription_tier == 'basic' else 10
-        )
-        permission_validator.register_user(permissions)
-
-        # Generate token
-        token = generate_jwt_token(user_id)
-
-        logger.info(f"✅ New user registered: {email} (ID: {user_id}, Tier: {subscription_tier})")
-
-        return jsonify({
-            'message': 'User registered successfully',
-            'user_id': user_id,
-            'email': email,
-            'subscription_tier': subscription_tier,
-            'token': token
-        }), 201
-
-    except Exception as e:
-        logger.error(f"❌ Failed to register user: {e}")
-        return jsonify({'error': 'Registration failed'}), 500
+    token = generate_jwt_token(user_id)
+    logger.info("✅ New user registered: %s (ID: %s, Tier: basic)", email, user_id)
+    return jsonify({
+        'message': 'User registered successfully',
+        'user_id': user_id,
+        'email': email,
+        'subscription_tier': initial_tier,
+        'token': token,
+    }), 201
 
 
 @app.route('/api/auth/login', methods=['POST'])
 def login():
-    """
-    Login user and return JWT token.
-
-    Request body:
-        {
-            "email": "user@example.com",
-            "password": "secure_password"
-        }
-    """
-    data = request.get_json()
-
-    if not data or 'email' not in data or 'password' not in data:
+    """Authenticate against the persistent user database."""
+    data = request.get_json() or {}
+    if 'email' not in data or 'password' not in data:
         return jsonify({'error': 'Email and password are required'}), 400
 
-    email = data['email'].lower().strip()
-    password = data['password']
-
-    # Check credentials
-    if email not in user_credentials:
+    email = str(data['email']).lower().strip()
+    password = str(data['password'])
+    user_profile = user_db.get_user_by_email(email)
+    if not user_profile:
         return jsonify({'error': 'Invalid credentials'}), 401
 
-    user_creds = user_credentials[email]
-
-    if not verify_password(password, user_creds['password_hash']):
+    user_id = user_profile['user_id']
+    if not user_db.verify_password(user_id, password, request.remote_addr):
         return jsonify({'error': 'Invalid credentials'}), 401
-
-    user_id = user_creds['user_id']
-
-    # Get user profile
-    user_profile = user_manager.get_user(user_id)
-
-    if not user_profile or not user_profile.get('enabled', True):
+    if not user_profile.get('enabled', True):
         return jsonify({'error': 'Account disabled'}), 403
 
-    # Generate token
     token = generate_jwt_token(user_id)
-
-    logger.info(f"✅ User logged in: {email} (ID: {user_id})")
-
+    logger.info("✅ User logged in: %s (ID: %s)", email, user_id)
     return jsonify({
         'message': 'Login successful',
         'user_id': user_id,
         'email': email,
         'subscription_tier': user_profile.get('subscription_tier', 'basic'),
-        'token': token
+        'token': token,
     })
 
 
@@ -358,12 +326,11 @@ def login():
 def get_user_profile():
     """Get user profile (requires authentication)."""
     user_id = request.user_id
-    user_profile = user_manager.get_user(user_id)
+    user_profile = user_db.get_user(user_id)
 
     if not user_profile:
         return jsonify({'error': 'User not found'}), 404
 
-    # Get user permissions
     permissions = permission_validator.get_user_permissions(user_id)
 
     return jsonify({
@@ -372,7 +339,7 @@ def get_user_profile():
         'subscription_tier': user_profile['subscription_tier'],
         'created_at': user_profile['created_at'],
         'enabled': user_profile['enabled'],
-        'brokers': api_key_manager.list_user_brokers(user_id),
+        'brokers': vault.list_user_brokers(user_id),
         'permissions': permissions.to_dict() if permissions else None
     })
 
@@ -380,34 +347,33 @@ def get_user_profile():
 @app.route('/api/user/settings', methods=['GET', 'PUT'])
 @require_auth
 def user_settings():
-    """Get or update user settings."""
+    """Read user settings; paid tier changes are billing-authoritative only."""
     user_id = request.user_id
+    user_profile = user_db.get_user(user_id)
+    if not user_profile:
+        return jsonify({'error': 'User not found'}), 404
 
     if request.method == 'GET':
-        user_profile = user_manager.get_user(user_id)
-        if not user_profile:
-            return jsonify({'error': 'User not found'}), 404
-
+        billing = get_billing_store().get(user_id)
         return jsonify({
             'subscription_tier': user_profile.get('subscription_tier', 'basic'),
-            'enabled': user_profile.get('enabled', True)
+            'billing_status': str(
+                getattr(billing, 'status', 'not_started') or 'not_started'
+            ),
+            'enabled': user_profile.get('enabled', True),
+            'education_mode': user_profile.get('education_mode', True),
+            'consented_to_live_trading': user_profile.get(
+                'consented_to_live_trading', False
+            ),
         })
 
-    elif request.method == 'PUT':
-        data = request.get_json()
+    data = request.get_json() or {}
+    if 'subscription_tier' in data:
+        return jsonify({
+            'error': 'Subscription tier is controlled by verified billing events'
+        }), 403
 
-        # Only allow updating certain fields
-        allowed_updates = {}
-        if 'subscription_tier' in data:
-            allowed_updates['subscription_tier'] = data['subscription_tier']
-
-        if allowed_updates:
-            user_manager.update_user(user_id, allowed_updates)
-            logger.info(f"User {user_id} updated settings: {allowed_updates}")
-
-        return jsonify({'message': 'Settings updated successfully'})
-
-    return jsonify({'error': 'Method not allowed'}), 405
+    return jsonify({'message': 'No mutable user settings supplied'}), 200
 
 
 # ========================================
@@ -419,7 +385,7 @@ def user_settings():
 def list_brokers():
     """List all configured brokers for user."""
     user_id = request.user_id
-    brokers = api_key_manager.list_user_brokers(user_id)
+    brokers = vault.list_user_brokers(user_id)
 
     return jsonify({
         'user_id': user_id,
@@ -440,8 +406,8 @@ def manage_broker_keys(broker_name: str):
     user_id = request.user_id
 
     # Validate broker name
-    supported_brokers = ['coinbase', 'kraken', 'binance', 'okx', 'alpaca']
-    if broker_name.lower() not in supported_brokers:
+    supported_brokers = sorted(SUPPORTED_USER_BROKERS)
+    if broker_name.lower() not in SUPPORTED_USER_BROKERS:
         return jsonify({
             'error': f'Unsupported broker. Supported: {", ".join(supported_brokers)}'
         }), 400
@@ -456,16 +422,21 @@ def manage_broker_keys(broker_name: str):
         api_secret = data['api_secret']
         additional_params = data.get('additional_params', {})
 
-        # Store encrypted credentials
-        api_key_manager.store_user_api_key(
+        # Persist credentials in the encrypted vault. Runtime hydration is
+        # intentionally deferred until paid entitlement + explicit live consent
+        # are both proven.
+        stored = vault.store_credentials(
             user_id=user_id,
             broker=broker_name.lower(),
             api_key=api_key,
             api_secret=api_secret,
-            additional_params=additional_params
+            additional_params=additional_params,
+            ip_address=request.remote_addr,
         )
+        if not stored:
+            return jsonify({'error': 'Failed to store broker credentials'}), 500
 
-        logger.info(f"✅ User {user_id} added {broker_name} API credentials")
+        logger.info(f"✅ User {user_id} added {broker_name} API credentials to secure vault")
 
         return jsonify({
             'message': f'{broker_name} API credentials added successfully',
@@ -473,17 +444,21 @@ def manage_broker_keys(broker_name: str):
         }), 201
 
     elif request.method == 'DELETE':
-        success = api_key_manager.delete_user_api_key(user_id, broker_name.lower())
+        persistent_deleted = vault.delete_credentials(
+            user_id,
+            broker_name.lower(),
+            request.remote_addr,
+        )
+        api_key_manager.delete_user_api_key(user_id, broker_name.lower())
 
-        if success:
+        if persistent_deleted:
             logger.info(f"✅ User {user_id} removed {broker_name} API credentials")
             return jsonify({
                 'message': f'{broker_name} API credentials removed successfully'
             })
-        else:
-            return jsonify({
-                'error': f'No {broker_name} credentials found for this user'
-            }), 404
+        return jsonify({
+            'error': f'No {broker_name} credentials found for this user'
+        }), 404
 
     return jsonify({'error': 'Method not allowed'}), 405
 
@@ -519,6 +494,28 @@ def trading_control():
 
     # Send command to User Control Backend (Layer 2)
     if action == 'start':
+        decision = evaluate_live_trading_access(user_id)
+        if not decision.allowed:
+            return jsonify({
+                'error': f'live_trading_blocked:{decision.blocker}',
+                'access': decision.to_dict(),
+            }), 403
+        try:
+            hydrate_runtime_credentials(
+                user_id,
+                api_key_manager=api_key_manager,
+                vault=vault,
+                user_db=user_db,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Trading start credential hydration failed user=%s error=%s",
+                user_id,
+                exc,
+            )
+            return jsonify({
+                'error': 'live_trading_blocked:credential_hydration_failed'
+            }), 403
         result = user_control.start_trading(user_id)
     elif action == 'stop':
         result = user_control.stop_trading(user_id)
@@ -687,50 +684,48 @@ def get_onboarding_status():
 @app.route('/api/user/mode', methods=['GET'])
 @require_auth
 def get_user_mode():
-    """
-    Get current user mode (education or live_trading).
-    
-    Returns the user's current trading mode and whether they can upgrade.
-    """
+    """Get canonical education/live-trading state for the authenticated user."""
     try:
         from bot.education_mode import get_education_manager, UserMode
-        from database.db_connection import get_db_session
-        from database.models import User
-        
+
         user_id = request.user_id
-        education_manager = get_education_manager()
-        
-        # Get user from database
-        with get_db_session() as session:
-            user = session.query(User).filter_by(user_id=user_id).first()
-            
-            if not user:
-                return jsonify({'error': 'User not found'}), 404
-            
-            # Determine mode
-            education_mode = bool(getattr(user, 'education_mode', False))
-            mode = UserMode.LIVE_TRADING.value if not education_mode else UserMode.EDUCATION.value
-            
-            # Get progress if in education mode
-            progress = None
-            ready_for_upgrade = False
-            
-            if education_mode:
-                education_manager.update_from_paper_account(user_id)
-                user_progress = education_manager.get_progress(user_id)
-                if user_progress:
-                    progress = user_progress.to_dict()
-                    ready_for_upgrade = user_progress.is_ready_for_live_trading()
-            
-            return jsonify({
-                'success': True,
-                'mode': mode,
-                'education_mode': education_mode,
-                'consented_to_live_trading': user.consented_to_live_trading,
-                'progress': progress,
-                'ready_for_upgrade': ready_for_upgrade
-            }), 200
-            
+        user = user_db.get_user(user_id)
+        if not user:
+            return jsonify({'error': 'User not found'}), 404
+
+        education_mode = bool(user.get('education_mode', True))
+        mode = UserMode.EDUCATION.value if education_mode else UserMode.LIVE_TRADING.value
+
+        progress = None
+        ready_for_upgrade = False
+        if education_mode:
+            education_manager = get_education_manager()
+            education_manager.update_from_paper_account(user_id)
+            user_progress = education_manager.get_progress(user_id)
+            if user_progress:
+                progress = user_progress.to_dict()
+                ready_for_upgrade = user_progress.is_ready_for_live_trading()
+
+        decision = evaluate_live_trading_access(
+            user_id,
+            require_live_mode=not education_mode,
+            require_credentials=False,
+            user_db=user_db,
+            vault=vault,
+        )
+
+        return jsonify({
+            'success': True,
+            'mode': mode,
+            'education_mode': education_mode,
+            'consented_to_live_trading': bool(
+                user.get('consented_to_live_trading', False)
+            ),
+            'progress': progress,
+            'ready_for_upgrade': ready_for_upgrade,
+            'paid_entitlement_status': decision.billing_status,
+            'live_access_blocker': None if decision.allowed else decision.blocker,
+        }), 200
     except Exception as e:
         logger.error(f"Error getting user mode: {e}")
         return jsonify({'error': str(e)}), 500
@@ -775,9 +770,6 @@ def consent_to_live_trading():
     This implements the explicit opt-in requirement.
     """
     try:
-        from database.db_connection import get_db_session
-        from database.models import User
-        
         user_id = request.user_id
         data = request.get_json() or {}
         
@@ -788,25 +780,20 @@ def consent_to_live_trading():
         # Require acknowledgment of risks
         if not data.get('risks_acknowledged'):
             return jsonify({'error': 'Risk acknowledgment required'}), 400
+
+        if not user_db.get_user(user_id):
+            return jsonify({'error': 'User not found'}), 404
+
+        if not user_db.record_live_trading_consent(user_id):
+            return jsonify({'error': 'Failed to persist live trading consent'}), 500
+
+        logger.info(f"User {user_id} consented to live trading")
         
-        with get_db_session() as session:
-            user = session.query(User).filter_by(user_id=user_id).first()
-            
-            if not user:
-                return jsonify({'error': 'User not found'}), 404
-            
-            # Record consent
-            setattr(user, 'consented_to_live_trading', True)
-            setattr(user, 'updated_at', datetime.utcnow())
-            session.commit()
-            
-            logger.info(f"User {user_id} consented to live trading")
-            
-            return jsonify({
-                'success': True,
-                'message': 'Consent recorded. You can now connect your broker account.',
-                'consented_to_live_trading': True
-            }), 200
+        return jsonify({
+            'success': True,
+            'message': 'Consent recorded. You can now connect your broker account.',
+            'consented_to_live_trading': True
+        }), 200
             
     except Exception as e:
         logger.error(f"Error recording consent: {e}")
@@ -816,58 +803,72 @@ def consent_to_live_trading():
 @app.route('/api/user/mode/live/activate', methods=['POST'])
 @require_auth
 def activate_live_trading():
-    """
-    Activate live trading mode after consent and broker connection.
-    
-    This switches the user from education mode to live trading mode.
-    Requires:
-    - Prior consent to live trading
-    - Connected broker account
-    """
+    """Activate live mode only after paid entitlement, consent, and broker setup."""
+    user_id = request.user_id
+
+    # The user is still in education mode at this transition point, so require
+    # every other live-trading invariant first.
+    decision = evaluate_live_trading_access(
+        user_id,
+        require_live_mode=False,
+        require_credentials=True,
+        user_db=user_db,
+        vault=vault,
+    )
+    if not decision.allowed:
+        return jsonify({
+            'error': f'live_trading_blocked:{decision.blocker}',
+            'access': decision.to_dict(),
+        }), 403
+
+    if not user_db.set_education_mode(user_id, False):
+        return jsonify({'error': 'Failed to activate live trading mode'}), 500
+
+    # Re-evaluate after the state transition and hydrate only when every gate is true.
+    decision = evaluate_live_trading_access(
+        user_id,
+        require_live_mode=True,
+        require_credentials=True,
+        user_db=user_db,
+        vault=vault,
+    )
+    if not decision.allowed:
+        user_db.set_education_mode(user_id, True)
+        return jsonify({
+            'error': f'live_trading_blocked:{decision.blocker}',
+            'access': decision.to_dict(),
+        }), 403
+
     try:
-        from database.db_connection import get_db_session
-        from database.models import User, BrokerCredential
-        
-        user_id = request.user_id
-        
-        with get_db_session() as session:
-            user = session.query(User).filter_by(user_id=user_id).first()
-            
-            if not user:
-                return jsonify({'error': 'User not found'}), 404
-            
-            # Check consent
-            if not bool(getattr(user, 'consented_to_live_trading', False)):
-                return jsonify({
-                    'error': 'Must consent to live trading first',
-                    'action_required': 'consent'
-                }), 400
-            
-            # Check broker connection
-            broker_creds = session.query(BrokerCredential).filter_by(user_id=user_id).first()
-            if not broker_creds:
-                return jsonify({
-                    'error': 'Must connect broker account first',
-                    'action_required': 'connect_broker'
-                }), 400
-            
-            # Activate live trading
-            setattr(user, 'education_mode', False)
-            setattr(user, 'updated_at', datetime.utcnow())
-            session.commit()
-            
-            logger.info(f"User {user_id} activated live trading mode")
-            
-            return jsonify({
-                'success': True,
-                'message': 'Live trading mode activated',
-                'mode': 'live_trading',
-                'education_mode': False
-            }), 200
-            
-    except Exception as e:
-        logger.error(f"Error activating live trading: {e}")
-        return jsonify({'error': str(e)}), 500
+        brokers = hydrate_runtime_credentials(
+            user_id,
+            api_key_manager=api_key_manager,
+            user_db=user_db,
+            vault=vault,
+        )
+    except Exception as exc:
+        user_db.set_education_mode(user_id, True)
+        logger.warning(
+            "Live activation credential hydration failed user=%s error=%s",
+            user_id,
+            exc,
+        )
+        return jsonify({
+            'error': 'live_trading_blocked:credential_hydration_failed'
+        }), 403
+
+    logger.info(
+        "User %s activated live trading mode brokers=%s",
+        user_id,
+        ",".join(brokers),
+    )
+    return jsonify({
+        'success': True,
+        'message': 'Live trading mode activated',
+        'mode': 'live_trading',
+        'education_mode': False,
+        'brokers': list(brokers),
+    }), 200
 
 
 @app.route('/api/user/mode/education/revert', methods=['POST'])
@@ -879,30 +880,21 @@ def revert_to_education():
     Allows users to switch back to safe simulation mode anytime.
     """
     try:
-        from database.db_connection import get_db_session
-        from database.models import User
-        
         user_id = request.user_id
+        if not user_db.get_user(user_id):
+            return jsonify({'error': 'User not found'}), 404
+
+        if not user_db.set_education_mode(user_id, True):
+            return jsonify({'error': 'Failed to switch to education mode'}), 500
+
+        logger.info(f"User {user_id} reverted to education mode")
         
-        with get_db_session() as session:
-            user = session.query(User).filter_by(user_id=user_id).first()
-            
-            if not user:
-                return jsonify({'error': 'User not found'}), 404
-            
-            # Switch back to education mode
-            setattr(user, 'education_mode', True)
-            setattr(user, 'updated_at', datetime.utcnow())
-            session.commit()
-            
-            logger.info(f"User {user_id} reverted to education mode")
-            
-            return jsonify({
-                'success': True,
-                'message': 'Switched back to education mode',
-                'mode': 'education',
-                'education_mode': True
-            }), 200
+        return jsonify({
+            'success': True,
+            'message': 'Switched back to education mode',
+            'mode': 'education',
+            'education_mode': True
+        }), 200
             
     except Exception as e:
         logger.error(f"Error reverting to education mode: {e}")

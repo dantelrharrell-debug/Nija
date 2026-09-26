@@ -38,6 +38,12 @@ from auth import get_api_key_manager, get_user_manager
 from auth.user_database import get_user_database
 from auth.two_factor import get_two_factor_auth
 from auth.email_service import get_email_service
+from billing_store import get_billing_store
+from user_live_trading_access import (
+    SUPPORTED_USER_BROKERS,
+    evaluate_live_trading_access,
+    hydrate_runtime_credentials,
+)
 
 
 def get_auth_audit_log() -> Any:
@@ -173,6 +179,11 @@ class BrokerCredentials(BaseModel):
     api_key: str
     api_secret: str
     additional_params: Optional[Dict] = None
+
+
+class LiveTradingConsent(BaseModel):
+    consent_confirmed: bool
+    risks_acknowledged: bool
 
 
 class TradingControl(BaseModel):
@@ -364,12 +375,14 @@ async def register(user_data: UserRegister, request: Request):
     # Create user ID
     user_id = f"user_{secrets.token_hex(8)}"
 
-    # Create user in database with password hashing
+    # Registration can never self-grant a paid tier. Commercial access is
+    # advanced only by authoritative billing events after payment verification.
+    initial_tier = "basic"
     success = user_db.create_user(
         user_id=user_id,
         email=email,
         password=user_data.password,  # Will be hashed by user_db
-        subscription_tier=user_data.subscription_tier
+        subscription_tier=initial_tier
     )
 
     if not success:
@@ -383,20 +396,20 @@ async def register(user_data: UserRegister, request: Request):
         'basic': 100.0,
         'pro': 1000.0,
         'enterprise': 10000.0
-    }.get(user_data.subscription_tier, 100.0)
+    }.get(initial_tier, 100.0)
 
     permissions = UserPermissions(
         user_id=user_id,
         max_position_size_usd=max_position_size,
         max_daily_loss_usd=max_position_size * 0.5,
-        max_positions=3 if user_data.subscription_tier == 'basic' else 10
+        max_positions=3 if initial_tier == 'basic' else 10
     )
     permission_validator.register_user(permissions)
 
     # Generate token
     token = create_access_token(user_id)
 
-    logger.info(f"✅ New user registered: {email} (ID: {user_id}, Tier: {user_data.subscription_tier})")
+    logger.info(f"✅ New user registered: {email} (ID: {user_id}, Tier: {initial_tier})")
 
     # Send verification email (non-blocking – failure logged, not raised)
     ip_address = request.client.host if request.client else None
@@ -411,7 +424,7 @@ async def register(user_data: UserRegister, request: Request):
         access_token=token,
         user_id=user_id,
         email=email,
-        subscription_tier=user_data.subscription_tier
+        subscription_tier=initial_tier
     )
 
 
@@ -478,8 +491,8 @@ async def login(credentials: UserLogin, request: Request):
 
 @app.get("/api/user/profile", response_model=UserProfile, tags=["auth"])
 async def get_profile(user_id: str = Depends(get_current_user)):
-    """Get current user's profile."""
-    user_profile = user_manager.get_user(user_id)
+    """Get current user's profile from the persistent user/vault stores."""
+    user_profile = user_db.get_user(user_id)
 
     if not user_profile:
         raise HTTPException(
@@ -495,9 +508,114 @@ async def get_profile(user_id: str = Depends(get_current_user)):
         subscription_tier=user_profile['subscription_tier'],
         created_at=user_profile['created_at'],
         enabled=user_profile['enabled'],
-        brokers=api_key_manager.list_user_brokers(user_id),
+        brokers=vault.list_user_brokers(user_id),
         permissions=permissions.to_dict() if permissions else None
     )
+
+
+# ========================================
+# Live Trading Consent & Activation
+# ========================================
+
+@app.post("/api/user/live/consent", tags=["trading"])
+async def record_live_trading_consent(
+    data: LiveTradingConsent,
+    user_id: str = Depends(get_current_user),
+):
+    """Record explicit user consent and risk acknowledgement for real-money trading."""
+    if not data.consent_confirmed:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Explicit live-trading consent is required",
+        )
+    if not data.risks_acknowledged:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Trading-risk acknowledgement is required",
+        )
+    if not user_db.get_user(user_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    if not user_db.record_live_trading_consent(user_id):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Could not persist live-trading consent",
+        )
+    return {
+        "success": True,
+        "consented_to_live_trading": True,
+        "message": "Live-trading consent recorded",
+    }
+
+
+@app.post("/api/user/live/activate", tags=["trading"])
+async def activate_live_trading(user_id: str = Depends(get_current_user)):
+    """Leave education mode only when paid entitlement and broker setup are proven."""
+    decision = evaluate_live_trading_access(
+        user_id,
+        require_live_mode=False,
+        require_credentials=True,
+        user_db=user_db,
+        vault=vault,
+    )
+    if not decision.allowed:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"reason": decision.blocker, "access": decision.to_dict()},
+        )
+
+    if not user_db.set_education_mode(user_id, False):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Could not activate live-trading mode",
+        )
+
+    decision = evaluate_live_trading_access(
+        user_id,
+        require_live_mode=True,
+        require_credentials=True,
+        user_db=user_db,
+        vault=vault,
+    )
+    if not decision.allowed:
+        user_db.set_education_mode(user_id, True)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"reason": decision.blocker, "access": decision.to_dict()},
+        )
+
+    try:
+        brokers = hydrate_runtime_credentials(
+            user_id,
+            user_db=user_db,
+            vault=vault,
+            api_key_manager=api_key_manager,
+        )
+    except Exception:
+        user_db.set_education_mode(user_id, True)
+        logger.exception("Live-trading credential hydration failed for user %s", user_id)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="credential_hydration_failed",
+        )
+
+    return {
+        "success": True,
+        "mode": "live_trading",
+        "brokers": list(brokers),
+    }
+
+
+@app.post("/api/user/live/revert", tags=["trading"])
+async def revert_to_education_mode(user_id: str = Depends(get_current_user)):
+    """Disable new live-entry eligibility by returning the user to education mode."""
+    if not user_db.get_user(user_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    if not user_db.set_education_mode(user_id, True):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Could not switch to education mode",
+        )
+    return {"success": True, "mode": "education"}
 
 
 # ========================================
@@ -519,9 +637,9 @@ async def add_broker(
     user_id: str = Depends(get_current_user)
 ):
     """Add broker API credentials to secure vault."""
-    supported_brokers = ['coinbase', 'kraken', 'binance', 'okx', 'alpaca']
+    supported_brokers = sorted(SUPPORTED_USER_BROKERS)
 
-    if broker_name.lower() not in supported_brokers:
+    if broker_name.lower() not in SUPPORTED_USER_BROKERS:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Unsupported broker. Supported: {', '.join(supported_brokers)}"
@@ -560,8 +678,9 @@ async def remove_broker(
     """Remove broker API credentials from secure vault."""
     ip_address = request.client.host if request.client else None
 
-    # Remove from vault
+    # Remove from persistent vault and any process-local runtime copy.
     success = vault.delete_credentials(user_id, broker_name.lower(), ip_address)
+    api_key_manager.delete_user_api_key(user_id, broker_name.lower())
 
     if not success:
         raise HTTPException(
@@ -586,6 +705,31 @@ async def start_bot(user_id: str = Depends(get_current_user)):
     This endpoint starts a headless NIJA instance for this user.
     The bot runs autonomously until stopped.
     """
+    decision = evaluate_live_trading_access(
+        user_id,
+        user_db=user_db,
+        vault=vault,
+    )
+    if not decision.allowed:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"reason": decision.blocker, "access": decision.to_dict()},
+        )
+
+    try:
+        hydrate_runtime_credentials(
+            user_id,
+            user_db=user_db,
+            vault=vault,
+            api_key_manager=api_key_manager,
+        )
+    except Exception:
+        logger.exception("Trading start credential hydration failed for user %s", user_id)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="credential_hydration_failed",
+        )
+
     result = user_control.start_trading(user_id)
 
     if not result.get('success'):
@@ -874,11 +1018,14 @@ async def get_subscription(user_id: str = Depends(get_current_user)):
         )
 
     tier = user_profile.get("subscription_tier", "basic")
+    billing = get_billing_store().get(user_id)
+    billing_status = str(getattr(billing, "status", "not_started") or "not_started")
+    current_period_end = getattr(billing, "current_period_end", None)
     return {
         "user_id": user_id,
         "tier": tier,
-        "status": "active",
-        "next_billing_date": None,
+        "status": billing_status,
+        "next_billing_date": current_period_end,
         "features": _TIER_FEATURES.get(tier, _TIER_FEATURES["basic"]),
     }
 
@@ -975,20 +1122,19 @@ async def stripe_webhook(request: Request):
     payload = await request.body()
     sig_header = request.headers.get("stripe-signature", "")
 
-    if _stripe_webhook_secret:
-        try:
-            event = stripe.Webhook.construct_event(
-                payload, sig_header, _stripe_webhook_secret
-            )
-        except Exception:
-            logger.warning("Stripe webhook signature verification failed")
-            raise HTTPException(status_code=400, detail="Invalid signature")
-    else:
-        # Accept unsigned events only in dev mode (no webhook secret configured)
-        try:
-            event = json.loads(payload)
-        except Exception:
-            raise HTTPException(status_code=400, detail="Invalid payload")
+    if not _stripe_webhook_secret:
+        logger.error("Stripe webhook received without STRIPE_WEBHOOK_SECRET configured")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Stripe webhook verification is not configured",
+        )
+    try:
+        event = stripe.Webhook.construct_event(
+            payload, sig_header, _stripe_webhook_secret
+        )
+    except Exception:
+        logger.warning("Stripe webhook signature verification failed")
+        raise HTTPException(status_code=400, detail="Invalid signature")
 
     event_type = event.get("type", "")
     data_obj = event.get("data", {}).get("object", {})
@@ -997,26 +1143,118 @@ async def stripe_webhook(request: Request):
     audit_log.stripe_webhook(event_type=event_type,
                              customer_id=data_obj.get("customer", ""))
 
-    if event_type == "checkout.session.completed":
-        user_id = data_obj.get("metadata", {}).get("user_id")
-        new_tier = data_obj.get("metadata", {}).get("tier")
-        if user_id and new_tier:
-            old_tier = (user_db.get_user(user_id) or {}).get("subscription_tier", "basic")
-            user_db.update_subscription_tier(user_id=user_id, tier=new_tier)
-            audit_log.subscription_changed(user_id=user_id, old_tier=old_tier,
-                                           new_tier=new_tier)
-            logger.info(f"Subscription updated via webhook: {user_id} → {new_tier}")
+    billing_store = get_billing_store()
 
-    elif event_type == "customer.subscription.deleted":
-        # Subscription cancelled – downgrade user to free/basic tier
-        customer_id = data_obj.get("customer", "")
-        logger.warning(f"Subscription deleted for Stripe customer {customer_id}")
-        # Note: implement customer_id → user_id lookup once Stripe customer IDs
-        # are persisted per user (e.g. via a stripe_customers table).
+    if event_type == "checkout.session.completed":
+        metadata = data_obj.get("metadata", {}) or {}
+        user_id = metadata.get("user_id") or metadata.get("nija_user_id")
+        new_tier = metadata.get("tier")
+        payment_status = str(data_obj.get("payment_status", "") or "").lower()
+        checkout_status = str(data_obj.get("status", "") or "").lower()
+        subscription_id = data_obj.get("subscription")
+
+        # A redirect/session-complete event is not sufficient payment proof.
+        # Require Stripe's paid state and retrieve the subscription server-side.
+        if user_id and payment_status == "paid" and checkout_status == "complete":
+            subscription_status = ""
+            current_period_end = None
+            if subscription_id:
+                try:
+                    subscription = stripe.Subscription.retrieve(subscription_id)
+                    subscription_status = str(
+                        getattr(subscription, "status", "") or ""
+                    ).lower()
+                    current_period_end = getattr(subscription, "current_period_end", None)
+                except Exception:
+                    logger.exception(
+                        "Could not retrieve Stripe subscription %s for user %s",
+                        subscription_id,
+                        user_id,
+                    )
+
+            if subscription_status == "active":
+                billing_store.upsert(
+                    user_id=str(user_id),
+                    status="active",
+                    customer_id=data_obj.get("customer"),
+                    subscription_id=str(subscription_id) if subscription_id else None,
+                    checkout_session_id=data_obj.get("id"),
+                    current_period_end=int(current_period_end) if current_period_end else None,
+                )
+                if new_tier:
+                    old_tier = (user_db.get_user(user_id) or {}).get(
+                        "subscription_tier", "basic"
+                    )
+                    user_db.update_subscription_tier(user_id=user_id, tier=new_tier)
+                    audit_log.subscription_changed(
+                        user_id=user_id,
+                        old_tier=old_tier,
+                        new_tier=new_tier,
+                    )
+                logger.info(
+                    "Stripe paid entitlement activated user=%s subscription=%s",
+                    user_id,
+                    subscription_id,
+                )
+            else:
+                logger.warning(
+                    "Stripe checkout did not activate entitlement user=%s "
+                    "payment_status=%s checkout_status=%s subscription_status=%s",
+                    user_id,
+                    payment_status,
+                    checkout_status,
+                    subscription_status,
+                )
+
+    elif event_type in {
+        "customer.subscription.created",
+        "customer.subscription.updated",
+        "customer.subscription.deleted",
+    }:
+        subscription_id = str(data_obj.get("id") or "")
+        metadata = data_obj.get("metadata", {}) or {}
+        user_id = metadata.get("user_id") or metadata.get("nija_user_id")
+        if not user_id and subscription_id:
+            user_id = billing_store.find_user_by_subscription(subscription_id)
+
+        if user_id:
+            subscription_status = str(data_obj.get("status", "unknown") or "unknown").lower()
+            billing_store.upsert(
+                user_id=str(user_id),
+                status=subscription_status,
+                customer_id=data_obj.get("customer"),
+                subscription_id=subscription_id or None,
+                current_period_end=(
+                    int(data_obj.get("current_period_end"))
+                    if data_obj.get("current_period_end") is not None
+                    else None
+                ),
+            )
+            logger.info(
+                "Stripe subscription state synced user=%s status=%s",
+                user_id,
+                subscription_status,
+            )
 
     elif event_type == "invoice.payment_failed":
-        customer_id = data_obj.get("customer", "")
-        logger.warning(f"Payment failed for Stripe customer {customer_id}")
+        subscription_id = str(data_obj.get("subscription") or "")
+        user_id = (
+            billing_store.find_user_by_subscription(subscription_id)
+            if subscription_id
+            else None
+        )
+        if user_id:
+            billing_store.upsert(
+                user_id=user_id,
+                status="past_due",
+                customer_id=data_obj.get("customer"),
+                subscription_id=subscription_id,
+            )
+            logger.warning(
+                "Stripe payment failed; new live entries revoked user=%s subscription=%s",
+                user_id,
+                subscription_id,
+            )
 
     return {"status": "ok"}
 

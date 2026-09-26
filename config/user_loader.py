@@ -28,7 +28,7 @@ class UserConfig:
     Represents a single user or investor configuration.
     """
 
-    def __init__(self, user_id: str, name: str, account_type: str, broker_type: str, enabled: bool = True, description: str = "", copy_from_platform: bool = False, disabled_symbols: Optional[List[str]] = None, independent_trading: bool = True, active_trading: bool = True):
+    def __init__(self, user_id: str, name: str, account_type: str, broker_type: str, enabled: bool = True, description: str = "", copy_from_platform: bool = False, disabled_symbols: Optional[List[str]] = None, independent_trading: bool = True, active_trading: bool = True, entitlement_required: bool = False, source: str = "static_config"):
         """
         Initialize user/investor configuration.
 
@@ -44,6 +44,8 @@ class UserConfig:
             independent_trading: Whether user should run independent trading thread (default: True)
             active_trading: Allow new trade entries for this user (default: True). Set False during
                             recovery to stop new entries while existing positions are closed out.
+            entitlement_required: Re-check paid entitlement before each new-entry cycle.
+            source: Configuration provenance for audit/diagnostics.
         """
         self.user_id = user_id
         self.name = name
@@ -55,6 +57,8 @@ class UserConfig:
         self.disabled_symbols = disabled_symbols or []
         self.independent_trading = independent_trading
         self.active_trading = active_trading
+        self.entitlement_required = entitlement_required
+        self.source = source
 
     def __repr__(self):
         status = "enabled" if self.enabled else "disabled"
@@ -73,7 +77,9 @@ class UserConfig:
             copy_from_platform=data.get('copy_from_platform', data.get('copy_from_master', False)),
             disabled_symbols=data.get('disabled_symbols', []),
             independent_trading=data.get('independent_trading', True),
-            active_trading=data.get('active_trading', True)
+            active_trading=data.get('active_trading', True),
+            entitlement_required=data.get('entitlement_required', False),
+            source=data.get('source', 'static_config')
         )
 
     def to_dict(self) -> Dict:
@@ -88,7 +94,9 @@ class UserConfig:
             'copy_from_platform': self.copy_from_platform,
             'disabled_symbols': self.disabled_symbols,
             'independent_trading': self.independent_trading,
-            'active_trading': self.active_trading
+            'active_trading': self.active_trading,
+            'entitlement_required': self.entitlement_required,
+            'source': self.source
         }
 
 
@@ -180,6 +188,11 @@ class UserConfigLoader:
                     self.all_users.extend(users)
                     total_loaded += len(users)
 
+        # Merge dynamically entitled paid users from persistent billing + vault.
+        # Static JSON users remain supported, but customer onboarding no longer
+        # requires an operator to edit config/users/*.json.
+        total_loaded += self._merge_runtime_paid_users()
+
         logger.info("=" * 70)
         logger.info(f"✅ Loaded {total_loaded} account(s) - each trading independently")
 
@@ -202,6 +215,77 @@ class UserConfigLoader:
         logger.info("=" * 70)
 
         return total_loaded > 0
+
+    def _merge_runtime_paid_users(self) -> int:
+        """Merge paid, consented, broker-connected users into runtime config.
+
+        Discovery is authoritative and fail-closed in user_live_trading_access:
+        only active paid entitlements with explicit live-trading consent,
+        live mode enabled, and decryptable broker credentials are returned.
+        """
+        try:
+            from user_live_trading_access import discover_runtime_paid_users
+        except Exception as exc:
+            logger.warning(
+                "LIVE_ACCESS dynamic user discovery unavailable; static users only: %s",
+                exc,
+            )
+            return 0
+
+        try:
+            discovered = discover_runtime_paid_users()
+        except Exception as exc:
+            logger.error("LIVE_ACCESS dynamic user discovery failed closed: %s", exc)
+            return 0
+
+        existing = {
+            (str(user.user_id), str(user.broker_type).strip().lower())
+            for user in self.all_users
+        }
+        added = 0
+
+        for raw in discovered:
+            try:
+                user = UserConfig.from_dict(raw)
+            except Exception as exc:
+                logger.warning(
+                    "LIVE_ACCESS invalid dynamic user config user=%s broker=%s error=%s",
+                    raw.get("user_id"),
+                    raw.get("broker_type"),
+                    exc,
+                )
+                continue
+
+            key = (str(user.user_id), str(user.broker_type).strip().lower())
+            if key in existing:
+                logger.info(
+                    "LIVE_ACCESS dynamic user already represented by static config "
+                    "user=%s broker=%s; preserving static config",
+                    user.user_id,
+                    user.broker_type,
+                )
+                continue
+
+            account_type = str(user.account_type).strip().lower()
+            brokerage = str(user.broker_type).strip().lower()
+
+            self.users_by_type_and_broker.setdefault(account_type, {}).setdefault(
+                brokerage, []
+            ).append(user)
+            self.users_by_type.setdefault(account_type, []).append(user)
+            self.users_by_broker.setdefault(brokerage, []).append(user)
+            self.all_users.append(user)
+            existing.add(key)
+            added += 1
+
+            logger.info(
+                "LIVE_ACCESS dynamic paid user admitted user=%s broker=%s "
+                "independent_trading=true",
+                user.user_id,
+                brokerage,
+            )
+
+        return added
 
     def _load_user_file(self, filepath: Path, account_type: str, brokerage: str) -> List[UserConfig]:
         """
@@ -353,6 +437,11 @@ class UserConfigLoader:
         Returns:
             List of all enabled UserConfig objects after env-var filtering
         """
+        # Refresh dynamic paid-user discovery on every normal registry read.
+        # The loader is a process singleton, so without this refresh a customer
+        # who pays/connects after startup would have to wait for a restart.
+        self._merge_runtime_paid_users()
+
         # ── Global user kill-switch ──────────────────────────────────────────
         _disable_all = os.environ.get("NIJA_DISABLE_USER_ACCOUNTS", "").strip().lower()
         if _disable_all in ("1", "true", "yes", "on"):

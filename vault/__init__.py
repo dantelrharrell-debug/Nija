@@ -55,19 +55,36 @@ class SecureVault:
         """
         self.db_path = db_path
 
-        # Initialize encryption
+        # Initialize encryption. Production must provide a persistent key;
+        # silently generating one would make persisted credentials undecryptable
+        # after restart and logging it would expose secret material.
         if encryption_key is None:
-            # Try to load from environment
-            env_key = os.getenv('VAULT_ENCRYPTION_KEY')
+            env_key = os.getenv('VAULT_ENCRYPTION_KEY', '').strip()
             if env_key:
                 encryption_key = env_key.encode()
-                logger.info("Loaded encryption key from environment")
+                logger.info("Loaded vault encryption key from environment")
             else:
-                # Generate new key
+                environment = (
+                    os.getenv('NIJA_ENVIRONMENT')
+                    or os.getenv('ENVIRONMENT')
+                    or os.getenv('ENV')
+                    or ''
+                ).strip().lower()
+                is_managed_production = bool(
+                    os.getenv('RENDER')
+                    or os.getenv('RENDER_SERVICE_ID')
+                    or os.getenv('RENDER_SERVICE_NAME')
+                )
+                if environment in {'prod', 'production'} or is_managed_production:
+                    raise RuntimeError(
+                        "VAULT_ENCRYPTION_KEY is required in production; "
+                        "refusing to generate an ephemeral credential key"
+                    )
                 encryption_key = Fernet.generate_key()
-                logger.warning("Generated new encryption key - STORE THIS SECURELY!")
-                logger.warning(f"VAULT_ENCRYPTION_KEY={encryption_key.decode()}")
-                logger.warning("Set this as an environment variable to persist across restarts")
+                logger.warning(
+                    "Generated an ephemeral development vault key; "
+                    "set VAULT_ENCRYPTION_KEY for persistent credentials"
+                )
 
         self.cipher = Fernet(encryption_key)
         self.encryption_key_hash = hashlib.sha256(encryption_key).hexdigest()[:16]

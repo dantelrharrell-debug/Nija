@@ -54,7 +54,11 @@ class UserDatabase:
                 enabled INTEGER DEFAULT 1,
                 email_verified INTEGER DEFAULT 0,
                 tos_accepted_at TEXT,
-                tos_version TEXT
+                tos_version TEXT,
+                education_mode INTEGER DEFAULT 1,
+                consented_to_live_trading INTEGER DEFAULT 0,
+                live_trading_consent_at TEXT,
+                risk_acknowledged_at TEXT
             )
         """)
 
@@ -67,6 +71,17 @@ class UserDatabase:
             cursor.execute("ALTER TABLE users ADD COLUMN tos_version TEXT")
         except Exception:
             pass  # column already exists
+
+        for ddl in (
+            "ALTER TABLE users ADD COLUMN education_mode INTEGER DEFAULT 1",
+            "ALTER TABLE users ADD COLUMN consented_to_live_trading INTEGER DEFAULT 0",
+            "ALTER TABLE users ADD COLUMN live_trading_consent_at TEXT",
+            "ALTER TABLE users ADD COLUMN risk_acknowledged_at TEXT",
+        ):
+            try:
+                cursor.execute(ddl)
+            except Exception:
+                pass  # column already exists
 
         # Sessions table
         cursor.execute("""
@@ -211,7 +226,9 @@ class UserDatabase:
 
             cursor.execute("""
                 SELECT user_id, email, subscription_tier, created_at, last_login,
-                       enabled, email_verified, tos_accepted_at, tos_version
+                       enabled, email_verified, tos_accepted_at, tos_version,
+                       education_mode, consented_to_live_trading,
+                       live_trading_consent_at, risk_acknowledged_at
                 FROM users
                 WHERE user_id = ?
             """, (user_id,))
@@ -232,6 +249,10 @@ class UserDatabase:
                 'email_verified': bool(row[6]),
                 'tos_accepted_at': row[7],
                 'tos_version': row[8],
+                'education_mode': bool(row[9]),
+                'consented_to_live_trading': bool(row[10]),
+                'live_trading_consent_at': row[11],
+                'risk_acknowledged_at': row[12],
             }
 
         except Exception as e:
@@ -246,7 +267,9 @@ class UserDatabase:
 
             cursor.execute("""
                 SELECT user_id, email, subscription_tier, created_at, last_login,
-                       enabled, email_verified, tos_accepted_at, tos_version
+                       enabled, email_verified, tos_accepted_at, tos_version,
+                       education_mode, consented_to_live_trading,
+                       live_trading_consent_at, risk_acknowledged_at
                 FROM users
                 WHERE email = ?
             """, (email,))
@@ -267,6 +290,10 @@ class UserDatabase:
                 'email_verified': bool(row[6]),
                 'tos_accepted_at': row[7],
                 'tos_version': row[8],
+                'education_mode': bool(row[9]),
+                'consented_to_live_trading': bool(row[10]),
+                'live_trading_consent_at': row[11],
+                'risk_acknowledged_at': row[12],
             }
 
         except Exception as e:
@@ -348,7 +375,16 @@ class UserDatabase:
             cursor = conn.cursor()
 
             # Build update query dynamically
-            allowed_fields = ['email', 'subscription_tier', 'enabled', 'email_verified']
+            allowed_fields = [
+                'email',
+                'subscription_tier',
+                'enabled',
+                'email_verified',
+                'education_mode',
+                'consented_to_live_trading',
+                'live_trading_consent_at',
+                'risk_acknowledged_at',
+            ]
             update_fields = []
             update_values = []
 
@@ -380,6 +416,22 @@ class UserDatabase:
         except Exception as e:
             logger.error(f"Failed to update user: {e}")
             return False
+
+    def record_live_trading_consent(self, user_id: str) -> bool:
+        """Persist explicit live-trading consent and risk acknowledgment."""
+        now = datetime.utcnow().isoformat()
+        return self.update_user(
+            user_id,
+            {
+                'consented_to_live_trading': 1,
+                'live_trading_consent_at': now,
+                'risk_acknowledged_at': now,
+            },
+        )
+
+    def set_education_mode(self, user_id: str, enabled: bool) -> bool:
+        """Persist education/live mode in the canonical user database."""
+        return self.update_user(user_id, {'education_mode': 1 if enabled else 0})
 
     def change_password(self, user_id: str, new_password: str) -> bool:
         """Change user password."""

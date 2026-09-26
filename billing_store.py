@@ -131,6 +131,34 @@ class BillingStore:
             ).fetchone()
         return self._row(row) if row else None
 
+    def list_by_status(self, statuses) -> list[BillingRecord]:
+        """Return billing records whose normalized status is in *statuses*.
+
+        The live-trading bridge uses this to enumerate only authoritative,
+        currently-active paid entitlements. Unknown or empty status values are
+        never treated as active.
+        """
+        normalized = sorted({
+            str(status or "").strip().lower()
+            for status in (statuses or [])
+            if str(status or "").strip()
+        })
+        if not normalized:
+            return []
+
+        placeholders = ",".join("?" for _ in normalized)
+        query = f"""
+            SELECT user_id, provider, customer_id, subscription_id,
+                   checkout_session_id, status, offer_code,
+                   current_period_end, updated_at
+            FROM billing_subscriptions
+            WHERE lower(status) IN ({placeholders})
+            ORDER BY user_id ASC
+        """
+        with closing(self._connect()) as conn:
+            rows = conn.execute(query, tuple(normalized)).fetchall()
+        return [self._row(row) for row in rows]
+
     def find_user_by_subscription(self, subscription_id: str) -> Optional[str]:
         with closing(self._connect()) as conn:
             row = conn.execute(

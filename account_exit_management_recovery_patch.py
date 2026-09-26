@@ -247,6 +247,27 @@ def _normal_user_entries_allowed(trader: Any, user_id: str) -> bool:
     config = _user_config(trader, user_id)
     if config is not None and not bool(getattr(config, "active_trading", True)):
         return False
+    if config is not None and bool(getattr(config, "entitlement_required", False)):
+        try:
+            from user_live_trading_access import entitlement_allows_new_entries
+            allowed, reason = entitlement_allows_new_entries(
+                user_id,
+                user_config=config,
+            )
+        except Exception as exc:
+            logger.exception(
+                "LIVE_ACCESS_RECOVERY_ENTRY_CHECK_FAILED user=%s error=%s",
+                user_id,
+                exc,
+            )
+            return False
+        if not allowed:
+            logger.info(
+                "LIVE_ACCESS_RECOVERY_ENTRIES_BLOCKED user=%s reason=%s exits_preserved=true",
+                user_id,
+                reason,
+            )
+            return False
     checker = getattr(trader, "should_start_user_independent_thread", None)
     if callable(checker):
         try:
