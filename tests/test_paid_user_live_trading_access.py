@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+import time
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -77,7 +78,11 @@ class PaidUserAccessTests(unittest.TestCase):
         self.uid = "user_abc123"
         self.users = _UserDB({self.uid: _user()})
         self.billing = _Billing({
-            self.uid: SimpleNamespace(user_id=self.uid, status="active")
+            self.uid: SimpleNamespace(
+                user_id=self.uid,
+                status="active",
+                current_period_end=int(time.time()) + 3600,
+            )
         })
         self.vault = _Vault({
             (self.uid, "kraken"): {
@@ -100,7 +105,11 @@ class PaidUserAccessTests(unittest.TestCase):
 
     def test_unpaid_user_fails_closed(self):
         billing = _Billing({
-            self.uid: SimpleNamespace(user_id=self.uid, status="past_due")
+            self.uid: SimpleNamespace(
+                user_id=self.uid,
+                status="past_due",
+                current_period_end=int(time.time()) + 3600,
+            )
         })
         decision = evaluate_live_trading_access(
             self.uid,
@@ -110,6 +119,23 @@ class PaidUserAccessTests(unittest.TestCase):
         )
         self.assertFalse(decision.allowed)
         self.assertEqual(decision.blocker, "paid_entitlement_inactive")
+
+    def test_expired_active_period_fails_closed(self):
+        billing = _Billing({
+            self.uid: SimpleNamespace(
+                user_id=self.uid,
+                status="active",
+                current_period_end=int(time.time()) - 1,
+            )
+        })
+        decision = evaluate_live_trading_access(
+            self.uid,
+            user_db=self.users,
+            billing_store=billing,
+            vault=self.vault,
+        )
+        self.assertFalse(decision.allowed)
+        self.assertEqual(decision.blocker, "paid_entitlement_expired")
 
     def test_missing_consent_fails_closed(self):
         users = _UserDB({self.uid: _user(consent=False)})
@@ -177,6 +203,8 @@ class PaidUserAccessTests(unittest.TestCase):
         self.assertEqual(cfg["broker_type"], "kraken")
         self.assertTrue(cfg["independent_trading"])
         self.assertTrue(cfg["active_trading"])
+        self.assertTrue(cfg["entitlement_required"])
+        self.assertEqual(cfg["source"], "paid_entitlement_vault")
         self.assertEqual(len(key_manager.calls), 1)
 
 
@@ -213,6 +241,8 @@ class PersistenceTests(unittest.TestCase):
             "disabled_symbols": [],
             "independent_trading": True,
             "active_trading": True,
+            "entitlement_required": True,
+            "source": "paid_entitlement_vault",
         }]
         with tempfile.TemporaryDirectory() as td:
             loader = UserConfigLoader(config_dir=td)
@@ -226,6 +256,8 @@ class PersistenceTests(unittest.TestCase):
                 [(u.user_id, u.broker_type) for u in enabled],
                 [("user_paid1", "kraken")],
             )
+            self.assertTrue(enabled[0].entitlement_required)
+            self.assertEqual(enabled[0].source, "paid_entitlement_vault")
 
 
 class CredentialPrefixTests(unittest.TestCase):
