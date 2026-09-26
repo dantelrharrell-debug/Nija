@@ -40,6 +40,7 @@ from auth.two_factor import get_two_factor_auth
 from auth.email_service import get_email_service
 from billing_store import get_billing_store
 from user_live_trading_access import (
+    SUPPORTED_USER_BROKERS,
     evaluate_live_trading_access,
     hydrate_runtime_credentials,
 )
@@ -634,9 +635,9 @@ async def add_broker(
     user_id: str = Depends(get_current_user)
 ):
     """Add broker API credentials to secure vault."""
-    supported_brokers = ['coinbase', 'kraken', 'binance', 'okx', 'alpaca']
+    supported_brokers = sorted(SUPPORTED_USER_BROKERS)
 
-    if broker_name.lower() not in supported_brokers:
+    if broker_name.lower() not in SUPPORTED_USER_BROKERS:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Unsupported broker. Supported: {', '.join(supported_brokers)}"
