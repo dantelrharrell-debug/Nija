@@ -180,6 +180,11 @@ class UserConfigLoader:
                     self.all_users.extend(users)
                     total_loaded += len(users)
 
+        # Merge dynamically entitled paid users from persistent billing + vault.
+        # Static JSON users remain supported, but customer onboarding no longer
+        # requires an operator to edit config/users/*.json.
+        total_loaded += self._merge_runtime_paid_users()
+
         logger.info("=" * 70)
         logger.info(f"✅ Loaded {total_loaded} account(s) - each trading independently")
 
@@ -202,6 +207,77 @@ class UserConfigLoader:
         logger.info("=" * 70)
 
         return total_loaded > 0
+
+    def _merge_runtime_paid_users(self) -> int:
+        """Merge paid, consented, broker-connected users into runtime config.
+
+        Discovery is authoritative and fail-closed in user_live_trading_access:
+        only active paid entitlements with explicit live-trading consent,
+        live mode enabled, and decryptable broker credentials are returned.
+        """
+        try:
+            from user_live_trading_access import discover_runtime_paid_users
+        except Exception as exc:
+            logger.warning(
+                "LIVE_ACCESS dynamic user discovery unavailable; static users only: %s",
+                exc,
+            )
+            return 0
+
+        try:
+            discovered = discover_runtime_paid_users()
+        except Exception as exc:
+            logger.error("LIVE_ACCESS dynamic user discovery failed closed: %s", exc)
+            return 0
+
+        existing = {
+            (str(user.user_id), str(user.broker_type).strip().lower())
+            for user in self.all_users
+        }
+        added = 0
+
+        for raw in discovered:
+            try:
+                user = UserConfig.from_dict(raw)
+            except Exception as exc:
+                logger.warning(
+                    "LIVE_ACCESS invalid dynamic user config user=%s broker=%s error=%s",
+                    raw.get("user_id"),
+                    raw.get("broker_type"),
+                    exc,
+                )
+                continue
+
+            key = (str(user.user_id), str(user.broker_type).strip().lower())
+            if key in existing:
+                logger.info(
+                    "LIVE_ACCESS dynamic user already represented by static config "
+                    "user=%s broker=%s; preserving static config",
+                    user.user_id,
+                    user.broker_type,
+                )
+                continue
+
+            account_type = str(user.account_type).strip().lower()
+            brokerage = str(user.broker_type).strip().lower()
+
+            self.users_by_type_and_broker.setdefault(account_type, {}).setdefault(
+                brokerage, []
+            ).append(user)
+            self.users_by_type.setdefault(account_type, []).append(user)
+            self.users_by_broker.setdefault(brokerage, []).append(user)
+            self.all_users.append(user)
+            existing.add(key)
+            added += 1
+
+            logger.info(
+                "LIVE_ACCESS dynamic paid user admitted user=%s broker=%s "
+                "independent_trading=true",
+                user.user_id,
+                brokerage,
+            )
+
+        return added
 
     def _load_user_file(self, filepath: Path, account_type: str, brokerage: str) -> List[UserConfig]:
         """
