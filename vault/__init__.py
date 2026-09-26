@@ -70,7 +70,12 @@ class SecureVault:
                     or os.getenv('ENV')
                     or ''
                 ).strip().lower()
-                if environment in {'prod', 'production'}:
+                is_managed_production = bool(
+                    os.getenv('RENDER')
+                    or os.getenv('RENDER_SERVICE_ID')
+                    or os.getenv('RENDER_SERVICE_NAME')
+                )
+                if environment in {'prod', 'production'} or is_managed_production:
                     raise RuntimeError(
                         "VAULT_ENCRYPTION_KEY is required in production; "
                         "refusing to generate an ephemeral credential key"
