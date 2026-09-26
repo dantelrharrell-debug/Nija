@@ -37,10 +37,29 @@ class APIKeyManager:
             encryption_key: 32-byte encryption key (generated if not provided)
         """
         if encryption_key is None:
-            # Generate new encryption key (should be stored securely)
-            encryption_key = Fernet.generate_key()
-            logger.warning("Generated new encryption key - store this securely!")
-            logger.warning(f"Encryption key: {encryption_key.decode()}")
+            env_key = (
+                os.getenv("NIJA_API_KEY_ENCRYPTION_KEY", "").strip()
+                or os.getenv("VAULT_ENCRYPTION_KEY", "").strip()
+            )
+            if env_key:
+                encryption_key = env_key.encode()
+            else:
+                environment = (
+                    os.getenv("NIJA_ENVIRONMENT")
+                    or os.getenv("ENVIRONMENT")
+                    or os.getenv("ENV")
+                    or ""
+                ).strip().lower()
+                if environment in {"prod", "production"}:
+                    raise RuntimeError(
+                        "NIJA_API_KEY_ENCRYPTION_KEY or VAULT_ENCRYPTION_KEY "
+                        "is required in production"
+                    )
+                encryption_key = Fernet.generate_key()
+                logger.warning(
+                    "Generated ephemeral development API-key encryption key; "
+                    "configure a persistent key before production"
+                )
 
         self.cipher = Fernet(encryption_key)
         self.user_keys: Dict[str, Dict[str, Any]] = {}
