@@ -176,6 +176,23 @@ def _balance_from_payload(payload: Any) -> Optional[float]:
     return None
 
 
+def _equity_from_payload(payload: Any) -> Optional[float]:
+    """Extract total account equity without preferring spendable cash."""
+    if isinstance(payload, (int, float)):
+        return float(payload)
+    if isinstance(payload, dict):
+        for key in (
+            "total_equity_usd", "account_equity_usd", "total_equity", "equity",
+            "portfolio_value", "net_liquidation_value", "total_balance",
+            "total_funds", "balance", "usd_balance", "total_usd",
+        ):
+            if key in payload:
+                value = _float(payload.get(key), float("nan"))
+                if math.isfinite(value):
+                    return value
+    return None
+
+
 def _resolve_preferred_broker(broker: Any) -> str:
     broker_type = getattr(broker, "broker_type", None)
     raw = getattr(broker_type, "value", broker_type)
@@ -260,6 +277,65 @@ def _resolve_available_balance(
             return parsed if parsed is not None else _float(payload)
     except Exception:
         pass
+    return None
+
+
+def _resolve_account_equity(
+    broker: Any,
+    incoming_metadata: Dict[str, Any],
+    fallback_available_balance: Optional[float],
+) -> Optional[float]:
+    """Resolve total equity for the broker-local capital floor guard."""
+    for key in (
+        "account_equity_usd",
+        "total_equity_usd",
+        "equity_usd",
+        "total_equity",
+        "equity",
+        "portfolio_value",
+    ):
+        if key in (incoming_metadata or {}):
+            value = _float((incoming_metadata or {}).get(key), float("nan"))
+            if math.isfinite(value) and value >= 0.0:
+                return value
+
+    for attr in (
+        "_nija_last_account_equity_usd",
+        "_nija_last_verified_equity",
+        "_last_known_equity",
+        "account_equity",
+        "equity",
+        "portfolio_value",
+    ):
+        raw = getattr(broker, attr, None)
+        if isinstance(raw, (int, float)):
+            value = _float(raw, float("nan"))
+            if math.isfinite(value) and value >= 0.0:
+                return value
+
+    for method_name in (
+        "get_account_equity",
+        "get_total_equity",
+        "get_portfolio_value",
+        "get_account_balance",
+    ):
+        getter = getattr(broker, method_name, None)
+        if not callable(getter):
+            continue
+        try:
+            payload = getter()
+        except Exception:
+            continue
+        parsed = _equity_from_payload(payload)
+        if parsed is not None and parsed >= 0.0:
+            return parsed
+
+    if fallback_available_balance is not None:
+        fallback = _float(fallback_available_balance, float("nan"))
+        if math.isfinite(fallback) and fallback >= 0.0:
+            # Conservative fallback: free cash is never treated as more equity
+            # than the broker has actually made available to this account.
+            return fallback
     return None
 
 
@@ -636,6 +712,11 @@ def submit_market_order_via_pipeline(
         size_usd = max(0.0, _float(quantity) * price_hint_usd)
 
     available_balance = _resolve_available_balance(broker, preferred_broker, account_id)
+    account_equity = _resolve_account_equity(
+        broker,
+        incoming_metadata,
+        available_balance,
+    )
     margin_fields: Dict[str, Any] = {}
     if preferred_broker == "kraken":
         if heartbeat_probe:
@@ -692,7 +773,7 @@ def submit_market_order_via_pipeline(
             )
         elif side_norm == "buy" and not is_exit:
             margin_fields = _plan_margin_entry(
-                broker, account_id, symbol, side_norm, size_usd, _float(available_balance),
+                broker, account_id, symbol, side_norm, size_usd, _float(account_equity),
             )
         elif side_norm == "sell":
             margin_fields = _resolve_margin_exit(preferred_broker, account_id, symbol)
@@ -708,6 +789,123 @@ def submit_market_order_via_pipeline(
         reduce_only = True
     if reduce_only is None:
         reduce_only = False
+
+    capital_floor_decision = None
+    try:
+        from bot.broker_capital_floor_guard import evaluate_broker_capital_floor
+    except ImportError:
+        try:
+            from broker_capital_floor_guard import evaluate_broker_capital_floor
+        except ImportError:
+            evaluate_broker_capital_floor = None  # type: ignore[assignment]
+
+    if evaluate_broker_capital_floor is None:
+        if resolved_intent not in {"exit", "reduce"} and not bool(reduce_only):
+            _finalize_pre_submit_v2_duplicate(incoming_metadata)
+            logger.critical(
+                "BROKER_CAPITAL_FLOOR_GUARD_UNAVAILABLE broker=%s account=%s symbol=%s "
+                "entry_blocked=true broker_dispatch=false trading_fail_closed=true",
+                preferred_broker, account_id, symbol,
+            )
+            return {
+                "status": "error",
+                "error": "broker_capital_floor_guard_unavailable",
+                "symbol": symbol,
+                "side": side_norm,
+                "account_id": account_id,
+                "broker_dispatch": False,
+                "v2_pre_submit_proven": True,
+            }
+    else:
+        try:
+            capital_floor_decision = evaluate_broker_capital_floor(
+                broker_name=preferred_broker,
+                equity_usd=account_equity,
+                order_size_usd=effective_size,
+                side=side_norm,
+                intent_type=resolved_intent,
+                reduce_only=bool(reduce_only),
+                stop_loss_pct=protection.get("stop_loss_pct") or incoming_metadata.get("stop_loss_pct"),
+                maintenance_margin_usd=(
+                    margin_fields.get("maintenance_margin_usd")
+                    or incoming_metadata.get("maintenance_margin_usd")
+                    or incoming_metadata.get("maintenance_margin")
+                ),
+                margin_ratio=(
+                    margin_fields.get("margin_ratio")
+                    or incoming_metadata.get("margin_ratio")
+                ),
+                existing_risk_usd=incoming_metadata.get("existing_risk_usd", 0.0),
+                explicit_stress_loss_usd=incoming_metadata.get("stress_loss_usd"),
+                account_id=account_id,
+                requires_margin_or_short=(
+                    leverage > 1
+                    or bool(incoming_metadata.get("short_sell"))
+                    or (
+                        preferred_broker == "alpaca"
+                        and side_norm == "sell"
+                        and resolved_intent not in {"exit", "reduce"}
+                    )
+                ),
+            )
+        except Exception as exc:
+            _finalize_pre_submit_v2_duplicate(incoming_metadata)
+            logger.exception(
+                "BROKER_CAPITAL_FLOOR_GUARD_ERROR broker=%s account=%s symbol=%s "
+                "entry_blocked=true broker_dispatch=false error=%s",
+                preferred_broker, account_id, symbol, exc,
+            )
+            return {
+                "status": "error",
+                "error": f"broker_capital_floor_guard_error:{type(exc).__name__}",
+                "symbol": symbol,
+                "side": side_norm,
+                "account_id": account_id,
+                "broker_dispatch": False,
+                "v2_pre_submit_proven": True,
+            }
+
+        if not capital_floor_decision.allowed:
+            _finalize_pre_submit_v2_duplicate(incoming_metadata)
+            logger.critical(
+                "BROKER_CAPITAL_FLOOR_BLOCKED broker=%s account=%s symbol=%s side=%s "
+                "equity=$%.2f hard_floor=$%.2f required_floor=$%.2f projected=$%.2f "
+                "stress_loss=$%.2f state=%s reason=%s broker_dispatch=false",
+                preferred_broker,
+                account_id,
+                symbol,
+                side_norm,
+                capital_floor_decision.equity_usd,
+                capital_floor_decision.hard_floor_usd,
+                capital_floor_decision.required_floor_usd,
+                capital_floor_decision.projected_equity_usd,
+                capital_floor_decision.estimated_stress_loss_usd,
+                capital_floor_decision.state,
+                capital_floor_decision.reason,
+            )
+            return {
+                "status": "error",
+                "error": f"broker_capital_floor_blocked:{capital_floor_decision.reason}",
+                "symbol": symbol,
+                "side": side_norm,
+                "account_id": account_id,
+                "broker_dispatch": False,
+                "v2_pre_submit_proven": True,
+                **capital_floor_decision.to_metadata(),
+            }
+
+        logger.info(
+            "BROKER_CAPITAL_FLOOR_ALLOWED broker=%s account=%s symbol=%s side=%s "
+            "equity=$%.2f required_floor=$%.2f projected=$%.2f state=%s",
+            preferred_broker,
+            account_id,
+            symbol,
+            side_norm,
+            capital_floor_decision.equity_usd,
+            capital_floor_decision.required_floor_usd,
+            capital_floor_decision.projected_equity_usd,
+            capital_floor_decision.state,
+        )
 
     metadata = {
         "broker_client": broker,
@@ -730,7 +928,10 @@ def submit_market_order_via_pipeline(
         "order_type": order_type_norm,
         "limit_price": parsed_limit_price,
         "time_in_force": time_in_force,
+        "account_equity_usd": account_equity,
     }
+    if capital_floor_decision is not None:
+        metadata.update(capital_floor_decision.to_metadata())
     if base_quantity is not None and base_quantity > 0:
         metadata["base_quantity"] = base_quantity
         metadata["owned_base_qty"] = base_quantity
