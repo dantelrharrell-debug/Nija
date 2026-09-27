@@ -462,7 +462,7 @@ def _process_event(stripe: Any, event_type: str, event_obj: Any, event_created: 
         _process_invoice_failure(event_obj, event_created)
         return
 
-    if event_type == "invoice.paid":
+    if event_type in {"invoice.paid", "invoice.payment_succeeded"}:
         _process_invoice_paid(stripe, event_obj, event_created)
 
 
