@@ -397,3 +397,13 @@ def test_subscription_event_cannot_entitle_before_checkout_validation(monkeypatc
     verified = client.get("/api/billing/verify?session_id=cs_nija_1").get_json()
     assert verified["state"] == "verified"
     assert verified["verified"] is True
+def test_second_checkout_is_blocked_while_first_is_pending(monkeypatch, tmp_path):
+    app, _store = _configured_app(monkeypatch, tmp_path)
+    _state, stripe = _stripe_fixture()
+    monkeypatch.setattr(billing, "_stripe_module", lambda: stripe)
+    client = app.test_client()
+
+    assert _create_checkout(client).status_code == 200
+    second = _create_checkout(client)
+    assert second.status_code == 409
+    assert second.get_json()["error"] == "subscription_or_checkout_already_exists"
