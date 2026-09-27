@@ -181,7 +181,7 @@ def _invoice_id_from_ipn(payload: Any) -> Optional[str]:
 
 
 def _btc_satoshis(invoice: dict[str, Any]) -> Optional[int]:
-    for field in ("paymentTotals", "paymentSubtotals"):
+    for field in ("paymentSubtotals", "paymentTotals"):
         values = invoice.get(field)
         if isinstance(values, dict) and values.get("BTC") is not None:
             try:
@@ -209,6 +209,14 @@ def _validate_authoritative_invoice(
     status = str(invoice.get("status") or "").strip().lower()
     if status not in (_VERIFIED_STATES | _PENDING_STATES | _FAILED_STATES):
         raise BitcoinBillingError("bitpay_status_unknown")
+
+    if status in {"paid", "confirmed", "complete"}:
+        buyer_info = invoice.get("buyerProvidedInfo")
+        selected_currency = invoice.get("transactionCurrency")
+        if not selected_currency and isinstance(buyer_info, dict):
+            selected_currency = buyer_info.get("selectedTransactionCurrency")
+        if str(selected_currency or "").upper() != "BTC":
+            raise BitcoinBillingError("bitpay_transaction_currency_mismatch")
     return status
 
 
