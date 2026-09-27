@@ -96,7 +96,7 @@ class BitPayClient:
     ) -> dict[str, Any]:
         payload = {
             "token": self.token,
-            "price": format(amount_usd.quantize(Decimal("0.01")), "f"),
+            "price": float(amount_usd.quantize(Decimal("0.01"))),
             "currency": "USD",
             "orderId": order_id,
             "itemDesc": item_desc,
@@ -290,7 +290,7 @@ def register_bitcoin_routes(
         except Exception as exc:
             logger.exception("BitPay invoice creation failed")
             try:
-                store.set_bitcoin_order_error(order_id, "provider_create_failed", str(exc))
+                store.set_bitcoin_order_error(order_id, "provider_create_failed", "bitpay_invoice_creation_failed")
             except Exception:
                 logger.exception("Could not persist BitPay creation failure")
             return jsonify({"error": "bitcoin_checkout_creation_failed"}), 502
