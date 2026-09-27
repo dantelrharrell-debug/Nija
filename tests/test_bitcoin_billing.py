@@ -100,6 +100,7 @@ def test_ipn_payload_is_never_payment_authority(monkeypatch, tmp_path):
         "price": "99.00",
         "currency": "USD",
         "status": "paid",
+        "transactionCurrency": "BTC",
         "paymentSubtotals": {"BTC": 150000},
     }
     response = client.post(
@@ -136,6 +137,7 @@ def test_authoritative_price_or_order_mismatch_fails_closed(monkeypatch, tmp_pat
         "price": "99.00",
         "currency": "USD",
         "status": "complete",
+        "transactionCurrency": "BTC",
     }
     response = client.post("/api/billing/bitcoin/webhook", json={"id": "bitpay_inv_1"})
     assert response.status_code == 200
