@@ -285,10 +285,13 @@ services:
         value: https://bitpay.com
       - key: BITPAY_POS_TOKEN
         sync: false
-      # Set this to the billing service's actual deployed HTTPS origin, e.g.
-      # https://<actual-billing-host>. It must never point at the old IONOS 404
-      # webhook route.
+      # Authoritative standalone billing origin. Bitcoin notifications and
+      # website verification must target this service, never the legacy IONOS hook.
       - key: NIJA_BILLING_PUBLIC_URL
+        value: https://nija-billing-api.onrender.com
+      # Set only after Stripe registers the production /api/billing/webhook.
+      # Existing Blueprint updates intentionally do not populate sync:false values.
+      - key: STRIPE_WEBHOOK_SECRET
         sync: false
       - key: STRIPE_PRICE_FOUNDING_BETA
         value: price_1U02snI0gfJjTf3ERCCo4usA
