@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import os
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -107,7 +108,14 @@ class TestBrokerSpecificBalanceReconciliation(unittest.TestCase):
                 return _CapitalAuthorityModule()
             return real_import_module(name, package)
 
-        with patch("bot.pipeline_order_submitter.assert_distributed_writer_authority", return_value=None), patch(
+        with patch.dict(
+            os.environ,
+            {"NIJA_KRAKEN_PLATFORM_PROTECTED_FLOOR_USD": "0"},
+            clear=False,
+        ), patch(
+            "bot.pipeline_order_submitter.assert_distributed_writer_authority",
+            return_value=None,
+        ), patch(
             "bot.pipeline_order_submitter.get_execution_pipeline",
             return_value=fake_pipeline,
         ), patch("importlib.import_module", side_effect=_patched_import_module):
