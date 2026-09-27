@@ -70,9 +70,19 @@ billing authority.
 
 ## Stripe webhook order
 
-Do not register the current IONOS
-`https://nijaaitrading.com/.sfs-be/api/webhooks/stripe` endpoint.  It is not the
-standalone billing service and has previously returned HTTP 404.
+The IONOS route
+`https://nijaaitrading.com/.sfs-be/api/webhooks/stripe` now exists and its
+local hook tests may pass, but it is **not** the standalone billing authority.
+A bare HTTP 400 only proves the route is reachable and rejects the request; it
+does not prove a valid Stripe signature, immutable NIJA identity, expected
+Price/Product, durable idempotency, or entitlement lifecycle are working
+end-to-end.
+
+Do not register that IONOS route as NIJA's authoritative Stripe entitlement
+webhook while the standalone service contract below is in force.  If the IONOS
+hook remains registered for legacy telemetry, it must not independently grant
+membership, emit `customer.paid`, activate a Verified Member badge, or unlock
+broker access.
 
 Deployment order:
 
