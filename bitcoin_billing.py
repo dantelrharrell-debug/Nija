@@ -181,15 +181,14 @@ def _invoice_id_from_ipn(payload: Any) -> Optional[str]:
 
 
 def _btc_satoshis(invoice: dict[str, Any]) -> Optional[int]:
-    for field in ("paymentSubtotals", "paymentTotals"):
-        values = invoice.get(field)
-        if isinstance(values, dict) and values.get("BTC") is not None:
-            try:
-                amount = int(values["BTC"])
-                return amount if amount >= 0 else None
-            except (TypeError, ValueError):
-                return None
-    return None
+    """Return BTC amount paid in satoshis from BitPay's authoritative field."""
+    if str(invoice.get("transactionCurrency") or "").upper() != "BTC":
+        return None
+    try:
+        amount = int(invoice.get("amountPaid"))
+    except (TypeError, ValueError):
+        return None
+    return amount if amount >= 0 else None
 
 
 def _validate_authoritative_invoice(
