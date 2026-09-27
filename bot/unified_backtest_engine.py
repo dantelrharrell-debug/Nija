@@ -419,8 +419,12 @@ class UnifiedBacktestEngine:
 
         # Calculate unrealized P&L from open positions
         unrealized_pnl = 0.0
+        allocated_capital = 0.0
         for pos_id, pos in self.positions.items():
             symbol = pos['symbol']
+            # The engine deducts the position's entry value from cash at open.
+            # It remains part of account equity until the position is closed.
+            allocated_capital += pos['entry_price'] * pos['size']
             if symbol in current_prices:
                 current_price = current_prices[symbol]
 
@@ -431,8 +435,9 @@ class UnifiedBacktestEngine:
 
                 unrealized_pnl += position_pnl
 
-        # Total equity = cash + unrealized P&L
-        total_equity = self.current_balance + unrealized_pnl
+        # Mark the held principal as well as P&L.  Omitting it made every open
+        # position look like an immediate drawdown of its full notional value.
+        total_equity = self.current_balance + allocated_capital + unrealized_pnl
 
         self.equity_curve.append({
             'timestamp': timestamp,
