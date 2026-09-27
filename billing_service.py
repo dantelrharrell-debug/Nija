@@ -517,8 +517,8 @@ def create_app(store: Optional[BillingServiceStore] = None) -> Flask:
                 return jsonify({"error": "billing_identity_mismatch"}), 409
             if existing["offer_code"] != identity.offer_code:
                 return jsonify({"error": "billing_offer_mismatch"}), 409
-            if str(existing["status"]).lower() in {"active", "trialing", "past_due"}:
-                return jsonify({"error": "subscription_already_exists"}), 409
+            if str(existing["status"]).lower() in {"active", "trialing", "past_due", "checkout_created"}:
+                return jsonify({"error": "subscription_or_checkout_already_exists"}), 409
 
         customer_identity: dict[str, str]
         if existing and existing.get("stripe_customer_id"):
