@@ -89,7 +89,7 @@ def test_recurring_offer_is_rejected_until_manual_renewal_policy_is_enabled(monk
 def test_ipn_payload_is_never_payment_authority(monkeypatch, tmp_path):
     app, _store, fake = _app(monkeypatch, tmp_path)
     client = app.test_client()
-    create = client.post("/api/billing/bitcoin/checkout")
+    client.post("/api/billing/bitcoin/checkout")
     order_id = fake.created["order_id"]
 
     # The untrusted callback lies and says complete. The authoritative provider
