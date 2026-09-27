@@ -1,17 +1,18 @@
-"""Broker-local capital floor guard for NIJA live execution.
+"""Broker/account-local capital floor guard for NIJA live execution.
 
-This guard protects broker accounts from new-entry orders that could leave the
-account too close to a broker capability threshold or NIJA's own operating
-reserve. Risk-reducing exits are never blocked by this guard.
+The guard blocks *new exposure* before projected stressed equity can cross a
+broker capability floor or a NIJA-owned platform reserve. Risk-reducing exits
+remain available so the guard cannot trap an account in a position.
 
-Important:
-- Alpaca's hard floor defaults to $2,000 because margin/short access requires
-  at least that much account equity.
-- Kraken, Coinbase, and OKX static floors below are NIJA internal operating
-  reserves, not representations of broker-wide account minimums.
-- Futures/derivatives reserve requirements are dynamic. When maintenance margin
-  or margin-ratio data is supplied, the dynamic requirement can only make the
-  guard stricter.
+Static NIJA reserves are platform-account policy, not broker-wide minimums:
+- Alpaca platform: $2,000 hard margin/short capability floor, $2,250 protected.
+- Kraken platform: $800 protected operating reserve.
+- Coinbase platform: $400 protected operating reserve.
+- OKX platform: $400 protected operating reserve.
+
+Customer/user accounts do not inherit NIJA's company reserve amounts. They are
+still subject to dynamic margin requirements and any explicit account-specific
+overrides. Alpaca short/margin entries retain the $2,000 capability floor.
 """
 
 from __future__ import annotations
@@ -60,9 +61,23 @@ def _normalize_broker(value: Any) -> str:
     return aliases.get(compact, text)
 
 
+def _platform_scope(broker: str, account_id: Any, explicit: Optional[bool]) -> bool:
+    if explicit is not None:
+        return bool(explicit)
+    account = str(account_id or "").strip().lower().replace("/", ":")
+    if not account:
+        return True
+    if account in {"platform", "default", "master", broker}:
+        return True
+    if account.startswith("platform:") or account.startswith("platform_"):
+        return True
+    return False
+
+
 @dataclass(frozen=True)
 class BrokerCapitalFloorPolicy:
     broker: str
+    scope: str
     hard_floor_usd: float
     protected_floor_usd: float
     maintenance_margin_multiplier: float
@@ -75,6 +90,7 @@ class BrokerCapitalFloorPolicy:
 class CapitalFloorDecision:
     allowed: bool
     broker: str
+    scope: str
     state: str
     reason: str
     equity_usd: float
@@ -87,6 +103,7 @@ class CapitalFloorDecision:
     def to_metadata(self) -> dict[str, Any]:
         return {
             "capital_floor_guard_allowed": self.allowed,
+            "capital_floor_guard_scope": self.scope,
             "capital_floor_guard_state": self.state,
             "capital_floor_guard_reason": self.reason,
             "capital_floor_equity_usd": self.equity_usd,
@@ -98,7 +115,7 @@ class CapitalFloorDecision:
         }
 
 
-_DEFAULTS = {
+_PLATFORM_DEFAULTS = {
     "alpaca": (2000.0, 2250.0),
     "kraken": (0.0, 800.0),
     "coinbase": (0.0, 400.0),
@@ -106,15 +123,56 @@ _DEFAULTS = {
 }
 
 
-def get_broker_capital_floor_policy(broker_name: str) -> BrokerCapitalFloorPolicy:
+def get_broker_capital_floor_policy(
+    broker_name: str,
+    *,
+    account_id: Any = None,
+    platform_account: Optional[bool] = None,
+    requires_margin_or_short: bool = False,
+) -> BrokerCapitalFloorPolicy:
     broker = _normalize_broker(broker_name)
-    hard_default, protected_default = _DEFAULTS.get(broker, (0.0, 0.0))
+    is_platform = _platform_scope(broker, account_id, platform_account)
+    scope = "platform" if is_platform else "user"
     env_prefix = "NIJA_" + (broker.upper() if broker else "UNKNOWN")
-    hard = max(0.0, _env_float(f"{env_prefix}_HARD_FLOOR_USD", hard_default))
-    protected = max(
-        hard,
-        _env_float(f"{env_prefix}_PROTECTED_FLOOR_USD", protected_default),
-    )
+
+    if is_platform:
+        hard_default, protected_default = _PLATFORM_DEFAULTS.get(
+            broker, (0.0, 0.0)
+        )
+        hard = max(
+            0.0,
+            _env_float(
+                f"{env_prefix}_PLATFORM_HARD_FLOOR_USD",
+                _env_float(f"{env_prefix}_HARD_FLOOR_USD", hard_default),
+            ),
+        )
+        protected = max(
+            hard,
+            _env_float(
+                f"{env_prefix}_PLATFORM_PROTECTED_FLOOR_USD",
+                _env_float(
+                    f"{env_prefix}_PROTECTED_FLOOR_USD",
+                    protected_default,
+                ),
+            ),
+        )
+    else:
+        hard = max(
+            0.0,
+            _env_float(f"{env_prefix}_USER_HARD_FLOOR_USD", 0.0),
+        )
+        protected = max(
+            hard,
+            _env_float(f"{env_prefix}_USER_PROTECTED_FLOOR_USD", hard),
+        )
+
+    # Alpaca's $2,000 equity requirement is relevant when the order actually
+    # needs margin/short capability. Do not impose it on unrelated cash-only
+    # customer entries.
+    if broker == "alpaca" and requires_margin_or_short:
+        hard = max(hard, 2000.0)
+        protected = max(protected, hard)
+
     maintenance_multiplier = max(
         1.0,
         _env_float(
@@ -149,6 +207,7 @@ def get_broker_capital_floor_policy(broker_name: str) -> BrokerCapitalFloorPolic
     )
     return BrokerCapitalFloorPolicy(
         broker=broker,
+        scope=scope,
         hard_floor_usd=hard,
         protected_floor_usd=protected,
         maintenance_margin_multiplier=maintenance_multiplier,
@@ -169,6 +228,33 @@ def _normalize_margin_ratio(value: Any) -> Optional[float]:
     return ratio
 
 
+def _decision(
+    policy: BrokerCapitalFloorPolicy,
+    *,
+    allowed: bool,
+    state: str,
+    reason: str,
+    equity_usd: float,
+    required_floor_usd: float,
+    projected_equity_usd: float,
+    stress_loss_usd: float,
+    margin_ratio: Optional[float],
+) -> CapitalFloorDecision:
+    return CapitalFloorDecision(
+        allowed=allowed,
+        broker=policy.broker,
+        scope=policy.scope,
+        state=state,
+        reason=reason,
+        equity_usd=max(0.0, equity_usd),
+        hard_floor_usd=policy.hard_floor_usd,
+        required_floor_usd=max(0.0, required_floor_usd),
+        projected_equity_usd=max(0.0, projected_equity_usd),
+        estimated_stress_loss_usd=max(0.0, stress_loss_usd),
+        margin_ratio=margin_ratio,
+    )
+
+
 def evaluate_broker_capital_floor(
     *,
     broker_name: str,
@@ -182,57 +268,61 @@ def evaluate_broker_capital_floor(
     margin_ratio: Any = None,
     existing_risk_usd: Any = 0.0,
     explicit_stress_loss_usd: Any = None,
+    account_id: Any = None,
+    platform_account: Optional[bool] = None,
+    requires_margin_or_short: bool = False,
 ) -> CapitalFloorDecision:
-    """Return a fail-closed decision for broker-local capital preservation."""
+    """Return the broker/account-local pre-dispatch capital-floor decision."""
 
-    policy = get_broker_capital_floor_policy(broker_name)
-    broker = policy.broker
+    policy = get_broker_capital_floor_policy(
+        broker_name,
+        account_id=account_id,
+        platform_account=platform_account,
+        requires_margin_or_short=requires_margin_or_short,
+    )
     equity = _safe_float(equity_usd, -1.0)
     size = max(0.0, _safe_float(order_size_usd, 0.0))
     intent = str(intent_type or "entry").strip().lower()
-    side_norm = str(side or "").strip().lower()
     reducing = bool(reduce_only) or intent in {"exit", "reduce", "close"}
+    ratio = _normalize_margin_ratio(margin_ratio)
 
     if not _truthy("NIJA_BROKER_CAPITAL_FLOOR_GUARD_ENABLED", True):
-        return CapitalFloorDecision(
+        return _decision(
+            policy,
             allowed=True,
-            broker=broker,
             state="DISABLED",
             reason="capital_floor_guard_disabled",
             equity_usd=max(0.0, equity),
-            hard_floor_usd=policy.hard_floor_usd,
             required_floor_usd=policy.protected_floor_usd,
             projected_equity_usd=max(0.0, equity),
-            estimated_stress_loss_usd=0.0,
-            margin_ratio=_normalize_margin_ratio(margin_ratio),
+            stress_loss_usd=0.0,
+            margin_ratio=ratio,
         )
 
     if reducing:
-        return CapitalFloorDecision(
+        return _decision(
+            policy,
             allowed=True,
-            broker=broker,
             state="EXIT_ONLY",
             reason="risk_reducing_order_allowed",
             equity_usd=max(0.0, equity),
-            hard_floor_usd=policy.hard_floor_usd,
             required_floor_usd=policy.protected_floor_usd,
             projected_equity_usd=max(0.0, equity),
-            estimated_stress_loss_usd=0.0,
-            margin_ratio=_normalize_margin_ratio(margin_ratio),
+            stress_loss_usd=0.0,
+            margin_ratio=ratio,
         )
 
     if equity < 0.0:
-        return CapitalFloorDecision(
+        return _decision(
+            policy,
             allowed=False,
-            broker=broker,
             state="HALT",
             reason="account_equity_unavailable",
             equity_usd=0.0,
-            hard_floor_usd=policy.hard_floor_usd,
             required_floor_usd=policy.protected_floor_usd,
             projected_equity_usd=0.0,
-            estimated_stress_loss_usd=0.0,
-            margin_ratio=_normalize_margin_ratio(margin_ratio),
+            stress_loss_usd=0.0,
+            margin_ratio=ratio,
         )
 
     maintenance = max(0.0, _safe_float(maintenance_margin_usd, 0.0))
@@ -241,39 +331,36 @@ def evaluate_broker_capital_floor(
         maintenance * policy.maintenance_margin_multiplier,
     )
 
-    ratio = _normalize_margin_ratio(margin_ratio)
     if (
         ratio is not None
         and policy.max_margin_ratio is not None
         and ratio >= policy.max_margin_ratio
     ):
-        return CapitalFloorDecision(
+        return _decision(
+            policy,
             allowed=False,
-            broker=broker,
             state="RED",
             reason=(
                 f"margin_ratio_too_high:{ratio:.4f}>="
                 f"{policy.max_margin_ratio:.4f}"
             ),
             equity_usd=equity,
-            hard_floor_usd=policy.hard_floor_usd,
             required_floor_usd=required_floor,
             projected_equity_usd=equity,
-            estimated_stress_loss_usd=0.0,
+            stress_loss_usd=0.0,
             margin_ratio=ratio,
         )
 
     if equity <= policy.hard_floor_usd and policy.hard_floor_usd > 0.0:
-        return CapitalFloorDecision(
+        return _decision(
+            policy,
             allowed=False,
-            broker=broker,
             state="HALT",
             reason="hard_floor_reached",
             equity_usd=equity,
-            hard_floor_usd=policy.hard_floor_usd,
             required_floor_usd=required_floor,
             projected_equity_usd=equity,
-            estimated_stress_loss_usd=0.0,
+            stress_loss_usd=0.0,
             margin_ratio=ratio,
         )
 
@@ -289,34 +376,32 @@ def evaluate_broker_capital_floor(
     projected_equity = equity - stress_loss
 
     if projected_equity < required_floor:
-        return CapitalFloorDecision(
+        return _decision(
+            policy,
             allowed=False,
-            broker=broker,
             state="RED",
             reason="projected_equity_below_protected_floor",
             equity_usd=equity,
-            hard_floor_usd=policy.hard_floor_usd,
             required_floor_usd=required_floor,
             projected_equity_usd=projected_equity,
-            estimated_stress_loss_usd=stress_loss,
+            stress_loss_usd=stress_loss,
             margin_ratio=ratio,
         )
 
     cushion = projected_equity - required_floor
-    warning_band = max(25.0, required_floor * 0.05)
-    state = "YELLOW" if cushion <= warning_band else "GREEN"
+    warning_band = max(25.0, required_floor * 0.05) if required_floor > 0 else 0.0
+    state = "YELLOW" if warning_band > 0 and cushion <= warning_band else "GREEN"
     reason = "capital_floor_buffer_thin" if state == "YELLOW" else "capital_floor_ok"
 
-    return CapitalFloorDecision(
+    return _decision(
+        policy,
         allowed=True,
-        broker=broker,
         state=state,
         reason=reason,
         equity_usd=equity,
-        hard_floor_usd=policy.hard_floor_usd,
         required_floor_usd=required_floor,
         projected_equity_usd=projected_equity,
-        estimated_stress_loss_usd=stress_loss,
+        stress_loss_usd=stress_loss,
         margin_ratio=ratio,
     )
 
