@@ -1273,7 +1273,8 @@ class AdaptiveRiskManager:
             regime: Current market regime (MarketRegime enum or string, optional)
 
         Returns:
-            Adaptive stop loss price (capped at SL_MAX_CAP from entry)
+            Adaptive stop loss price when the structure-safe geometry fits the
+            configured risk cap. Raises ValueError otherwise.
         """
         # Reject unknown or internally inconsistent stop geometry. A missing or
         # non-finite volatility/structure input must never degrade to a zero-buffer
