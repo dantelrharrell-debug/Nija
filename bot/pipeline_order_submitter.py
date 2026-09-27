@@ -687,7 +687,22 @@ def submit_market_order_via_pipeline(
     preferred_broker = _resolve_preferred_broker(broker)
     account_id = str(account_id_override or _resolve_account_id(broker, preferred_broker)).strip().lower()
     explicit_intent = str(intent_type or "").strip().lower()
-    is_exit = explicit_intent in {"exit", "reduce"} or str(position_effect or "").lower() in {"close", "reduce"}
+    _declared_closing = (
+        explicit_intent in {"exit", "reduce"}
+        or str(position_effect or "").lower() in {"close", "reduce"}
+        or bool(incoming_metadata.get("closing_position"))
+        or reduce_only_override is True
+    )
+    _base_sized_crypto_sell = (
+        side_norm == "sell"
+        and str(size_type or "quote").lower() == "base"
+        and preferred_broker in {"coinbase", "kraken", "okx", "binance"}
+        and not bool(incoming_metadata.get("short_sell"))
+    )
+    # A base-sized spot-crypto sell represents owned-asset reduction unless the
+    # caller explicitly marks it as a short. This keeps cleanup/profit exits
+    # available below the protected floor without misclassifying Alpaca shorts.
+    is_exit = _declared_closing or _base_sized_crypto_sell
 
     size_usd = max(0.0, _float(quantity))
     price_hint_usd: Optional[float] = parsed_limit_price
@@ -781,7 +796,10 @@ def submit_market_order_via_pipeline(
     effective_size = _float(margin_fields.get("size_usd"), size_usd)
     leverage = int(_float(margin_fields.get("leverage"), 1.0))
     margin_mode = margin_fields.get("margin_mode")
-    resolved_intent = explicit_intent or str(margin_fields.get("intent_type") or "entry")
+    resolved_intent = explicit_intent or str(
+        margin_fields.get("intent_type")
+        or ("exit" if is_exit else "entry")
+    )
     reduce_only = margin_fields.get("reduce_only")
     if reduce_only_override is not None:
         reduce_only = bool(reduce_only_override)
