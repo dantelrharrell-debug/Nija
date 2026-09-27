@@ -13,8 +13,12 @@ class _Thread:
         return self._alive
 
 
-def test_v431_blocks_rollover_while_old_runtime_worker_is_alive(monkeypatch):
-    old = SimpleNamespace(_nija_v142_flight_thread=_Thread(True))
+def test_v431_blocks_rollover_while_unfenced_old_runtime_worker_is_alive(monkeypatch):
+    old = SimpleNamespace(
+        _nija_v142_flight_thread=_Thread(True),
+        _nija_v142_flight_timed_out=False,
+        _nija_v142_flight_generation=7,
+    )
     manager = SimpleNamespace(_capital_coordinator=old)
     calls = []
 
@@ -22,12 +26,72 @@ def test_v431_blocks_rollover_while_old_runtime_worker_is_alive(monkeypatch):
         calls.append((manager, expected_old, reason))
         return "replacement"
 
-    fake_v142 = SimpleNamespace(_rollover_coordinator=original)
+    fake_v142 = SimpleNamespace(
+        _rollover_coordinator=original,
+        _generation_state=lambda: (7, False),
+    )
     monkeypatch.setattr(v431.importlib, "import_module", lambda name: fake_v142)
 
     assert v431._patch_capital_single_generation() is True
     result = fake_v142._rollover_coordinator(
         manager, expected_old=old, reason="timeout"
+    )
+
+    assert result is old
+    assert calls == []
+
+
+
+def test_v431_allows_rollover_after_timed_out_generation_is_fenced(monkeypatch):
+    old = SimpleNamespace(
+        _nija_v142_flight_thread=_Thread(True),
+        _nija_v142_flight_timed_out=True,
+        _nija_v142_flight_generation=7,
+    )
+    manager = SimpleNamespace(_capital_coordinator=old)
+    calls = []
+
+    def original(manager, *, expected_old=None, reason):
+        calls.append((manager, expected_old, reason))
+        return "replacement"
+
+    fake_v142 = SimpleNamespace(
+        _rollover_coordinator=original,
+        _generation_state=lambda: (8, True),
+    )
+    monkeypatch.setattr(v431.importlib, "import_module", lambda name: fake_v142)
+
+    assert v431._patch_capital_single_generation() is True
+    result = fake_v142._rollover_coordinator(
+        manager, expected_old=old, reason="runtime_pipeline_deadline_exceeded"
+    )
+
+    assert result == "replacement"
+    assert calls == [(manager, old, "runtime_pipeline_deadline_exceeded")]
+
+
+def test_v431_refuses_alive_timed_out_worker_without_generation_fence(monkeypatch):
+    old = SimpleNamespace(
+        _nija_v142_flight_thread=_Thread(True),
+        _nija_v142_flight_timed_out=True,
+        _nija_v142_flight_generation=7,
+    )
+    manager = SimpleNamespace(_capital_coordinator=old)
+    calls = []
+
+    def original(manager, *, expected_old=None, reason):
+        calls.append((manager, expected_old, reason))
+        return "replacement"
+
+    fake_v142 = SimpleNamespace(
+        _rollover_coordinator=original,
+        _generation_state=lambda: (7, True),
+    )
+    monkeypatch.setattr(v431.importlib, "import_module", lambda name: fake_v142)
+
+    assert v431._patch_capital_single_generation() is True
+    result = fake_v142._rollover_coordinator(
+        manager, expected_old=old, reason="runtime_pipeline_deadline_exceeded"
     )
 
     assert result is old
