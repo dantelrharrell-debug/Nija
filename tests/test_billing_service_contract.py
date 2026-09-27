@@ -356,6 +356,47 @@ def test_duplicate_event_id_is_idempotent(monkeypatch, tmp_path):
     assert second.get_json()["duplicate"] is True
 
 
+def test_subscription_event_cannot_entitle_before_checkout_validation(monkeypatch, tmp_path):
+    app, store = _configured_app(monkeypatch, tmp_path)
+    state, stripe = _stripe_fixture()
+    monkeypatch.setattr(billing, "_stripe_module", lambda: stripe)
+    client = app.test_client()
+    assert _create_checkout(client).status_code == 200
+
+    state["event"] = {
+        "id": "evt_subscription_first",
+        "type": "customer.subscription.updated",
+        "created": 500,
+        "data": {"object": _valid_subscription("active")},
+    }
+    assert client.post(
+        "/api/billing/webhook",
+        data=b"raw",
+        headers={"Stripe-Signature": "valid-signature"},
+    ).status_code == 200
+
+    before_checkout = store.get_customer("application-123")
+    assert before_checkout["status"] == "active"
+    assert before_checkout["entitled"] is False
+
+    state["session"] = _valid_checkout_session()
+    state["event"] = {
+        "id": "evt_checkout_after_subscription",
+        "type": "checkout.session.completed",
+        "created": 501,
+        "data": {"object": {"id": "cs_nija_1"}},
+    }
+    assert client.post(
+        "/api/billing/webhook",
+        data=b"raw",
+        headers={"Stripe-Signature": "valid-signature"},
+    ).status_code == 200
+
+    after_checkout = store.get_customer("application-123")
+    assert after_checkout["entitled"] is True
+    verified = client.get("/api/billing/verify?session_id=cs_nija_1").get_json()
+    assert verified["state"] == "verified"
+    assert verified["verified"] is True
 def test_second_checkout_is_blocked_while_first_is_pending(monkeypatch, tmp_path):
     app, _store = _configured_app(monkeypatch, tmp_path)
     _state, stripe = _stripe_fixture()

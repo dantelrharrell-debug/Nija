@@ -718,6 +718,7 @@ def _process_checkout_event(stripe: Any, event_type: str, event_obj: Any) -> Non
 
     session = stripe.checkout.Session.retrieve(
         session_id,
+        expand=["line_items"],
         expand=["line_items.data.price.product"],
     )
     try:
@@ -780,6 +781,7 @@ def _process_invoice_paid(stripe: Any, event_obj: Any, event_created: int) -> No
         return
     subscription = stripe.Subscription.retrieve(
         subscription_id,
+        expand=["items"],
         expand=["items.data.price.product"],
     )
     _apply_subscription_object(stripe, subscription, event_created)
@@ -862,6 +864,8 @@ def create_app(store: Optional[BillingServiceStore] = None) -> Flask:
                 return jsonify({"error": "billing_identity_mismatch"}), 409
             if existing["offer_code"] != identity.offer_code:
                 return jsonify({"error": "billing_offer_mismatch"}), 409
+            if str(existing["status"]).lower() in {"active", "trialing", "past_due"}:
+                return jsonify({"error": "subscription_already_exists"}), 409
             if str(existing["status"]).lower() in {"active", "trialing", "past_due", "checkout_created"}:
                 return jsonify({"error": "subscription_or_checkout_already_exists"}), 409
 

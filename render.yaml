@@ -199,6 +199,11 @@ services:
       - key: LIVE_CAPITAL_VERIFIED
         sync: false
 
+      # Shared only with the isolated billing API so NIJA can mint/verify
+      # short-lived billing identity assertions without hardcoding a secret.
+      - key: NIJA_BILLING_IDENTITY_SECRET
+        generateValue: true
+
       # Platform broker credentials. Values are entered in Render and never
       # committed to the repository.
       - key: KRAKEN_PLATFORM_API_KEY
@@ -227,6 +232,47 @@ services:
         sync: false
       - key: KRAKEN_USER_DAIVON_API_SECRET
         sync: false
+
+  # Standalone billing service. It is intentionally separated from the trading
+  # runtime and deploys only after repository checks pass.
+  - type: web
+    name: nija-billing-api
+    runtime: python
+    region: oregon
+    plan: free
+    repo: https://github.com/dantelrharrell-debug/Nija
+    branch: main
+    buildCommand: pip install -r requirements-billing.txt
+    startCommand: gunicorn --workers 2 --threads 4 --timeout 60 billing_service:app
+    autoDeployTrigger: checksPass
+    healthCheckPath: /healthz
+    envVars:
+      - key: BILLING_DATABASE_URL
+        fromDatabase:
+          name: nija-billing-db
+          property: connectionString
+      - key: STRIPE_SECRET_KEY
+        fromService:
+          type: web
+          name: nija-trading-bot
+          envVarKey: STRIPE_SECRET_KEY
+      - key: NIJA_BILLING_IDENTITY_SECRET
+        fromService:
+          type: web
+          name: nija-trading-bot
+          envVarKey: NIJA_BILLING_IDENTITY_SECRET
+      - key: NIJA_PUBLIC_SITE_URL
+        value: https://nijaaitrading.com
+      - key: NIJA_BILLING_ALLOWED_ORIGINS
+        value: https://nijaaitrading.com,https://www.nijaaitrading.com
+      - key: STRIPE_PRICE_FOUNDING_BETA
+        value: price_1U02snI0gfJjTf3ERCCo4usA
+      - key: STRIPE_PRODUCT_FOUNDING_BETA
+        value: prod_UzyI6ZRgZrT8G6
+      - key: STRIPE_CHECKOUT_SUCCESS_URL
+        value: https://nijaaitrading.com/beta-success?session_id={CHECKOUT_SESSION_ID}
+      - key: STRIPE_CHECKOUT_CANCEL_URL
+        value: https://nijaaitrading.com/apply
 
   # Durable private-only Redis-compatible datastore for writer fencing, nonce
   # state, heartbeats, and distributed runtime coordination.
