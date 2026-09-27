@@ -78,6 +78,32 @@ class TestBrokerCapitalFloorGuard(unittest.TestCase):
         self.assertFalse(decision.allowed)
         self.assertEqual(decision.reason, "account_equity_unavailable")
 
+    def test_user_account_does_not_inherit_platform_reserve(self):
+        decision = evaluate_broker_capital_floor(
+            broker_name="coinbase",
+            account_id="user:customer-1",
+            equity_usd=100.0,
+            order_size_usd=10.0,
+            side="buy",
+        )
+        self.assertTrue(decision.allowed)
+        self.assertEqual(decision.scope, "user")
+        self.assertEqual(decision.required_floor_usd, 0.0)
+
+    def test_user_alpaca_short_still_requires_margin_capability_floor(self):
+        decision = evaluate_broker_capital_floor(
+            broker_name="alpaca",
+            account_id="user:customer-2",
+            equity_usd=1900.0,
+            order_size_usd=50.0,
+            side="sell",
+            requires_margin_or_short=True,
+        )
+        self.assertFalse(decision.allowed)
+        self.assertEqual(decision.scope, "user")
+        self.assertEqual(decision.hard_floor_usd, 2000.0)
+        self.assertEqual(decision.reason, "hard_floor_reached")
+
     def test_environment_override_is_respected(self):
         with patch.dict(
             os.environ,
