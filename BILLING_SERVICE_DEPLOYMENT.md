@@ -116,6 +116,72 @@ Checkout Session IDs are absent from the NIJA-created session ledger.
 Payment failure, cancellation, expiry, unpaid/past-due state, deleted customer,
 or any identity/price/product mismatch keeps or moves entitlement to revoked.
 
+## Bitcoin / BitPay rail
+
+Bitcoin checkout is implemented as a second payment rail on the standalone
+billing service. It does not route customer funds directly to a broker and it
+does not grant broker execution authority.
+
+The rail is disabled by default. Configure these values on the billing service:
+
+```text
+NIJA_BITCOIN_PAYMENTS_ENABLED=false
+NIJA_BITCOIN_ENABLED_OFFERS=lessons
+NIJA_BITCOIN_ALLOW_RECURRING_ONE_TIME_PAYMENTS=false
+NIJA_BITCOIN_TRANSACTION_SPEED=medium
+BITPAY_API_BASE_URL=https://bitpay.com
+BITPAY_POS_TOKEN=<server-side BitPay POS token>
+NIJA_BILLING_PUBLIC_URL=https://<actual deployed billing-service host>
+```
+
+Activation order:
+
+1. Complete the BitPay business/merchant setup and obtain the POS token.
+2. Set `BITPAY_POS_TOKEN` only on the billing service.
+3. Set `NIJA_BILLING_PUBLIC_URL` to the billing service's actual public HTTPS
+   origin. Do not point this at the old IONOS webhook path.
+4. Keep `NIJA_BITCOIN_ENABLED_OFFERS=lessons` while recurring Bitcoin
+   entitlement/renewal policy remains undefined.
+5. Deploy and confirm `GET /healthz` returns HTTP 200.
+6. Test `POST /api/billing/bitcoin/checkout` with a valid NIJA billing identity.
+7. Confirm the returned provider invoice is forced to BTC and that the
+   notification URL ends in `/api/billing/bitcoin/webhook`.
+8. Confirm a forged IPN claiming `complete` cannot verify a payment when the
+   provider retrieval still reports `new` or `paid`.
+9. Confirm an authoritative `confirmed` or `complete` invoice becomes
+   `payment_verified=true` through
+   `GET /api/billing/bitcoin/verify?invoice_id=<BITPAY_INVOICE_ID>`.
+10. Only after those checks pass, set `NIJA_BITCOIN_PAYMENTS_ENABLED=true`.
+
+BitPay invoice notifications are **not** treated as payment authority. The
+notification only supplies an invoice ID; NIJA retrieves the invoice from
+BitPay using the server-side token and re-validates invoice ID, NIJA order ID,
+USD price, currency, and provider status before advancing state.
+
+A `paid` BitPay invoice remains pending. `confirmed` or `complete` may mark
+the payment verified. Price/order/currency mismatches fail closed.
+
+Bitcoin payment verification currently does **not** grant Stripe subscription
+entitlement. Recurring NIJA offers therefore remain disabled for Bitcoin until
+NIJA adopts an explicit manual-renewal entitlement policy. The one-time
+`lessons` offer is the initial allowlisted offer.
+
+Treasury state is intentionally separate:
+
+```text
+customer BTC
+  -> BitPay invoice
+  -> authoritative reconciliation
+  -> NIJA merchant/treasury settlement
+  -> accounting/reserve review
+  -> separately approved brokerage funding
+```
+
+The billing service never stores brokerage deposit addresses, never sends
+Bitcoin to a broker, and always returns `brokerage_sweep_allowed=false`.
+Automated brokerage funding must be implemented as a separate treasury service
+after settlement-to-NIJA is independently verified.
+
 ## IONOS success-page wiring
 
 After IONOS site-builder source/admin access is available, `/beta-success` must
