@@ -23,6 +23,13 @@ class RiskContext:
     broker_name: str = ""
     balance: float = 0.0
     account_scope: str = ""
+    intent_type: str = "entry"
+    reduce_only: bool = False
+    stop_loss_pct: float | None = None
+    maintenance_margin_usd: float | None = None
+    margin_ratio: float | None = None
+    existing_risk_usd: float = 0.0
+    requires_margin_or_short: bool = False
 
 
 @dataclass
@@ -54,6 +61,34 @@ class ActiveRiskPlugin(RiskPlugin):
             account_scope = str(
                 context.account_scope or current_account_scope("platform") or "platform"
             ).strip().lower()
+            from bot.broker_capital_floor_guard import evaluate_broker_capital_floor
+
+            floor_decision = evaluate_broker_capital_floor(
+                broker_name=broker_name,
+                equity_usd=context.balance,
+                order_size_usd=context.size_usd,
+                side=context.side,
+                intent_type=context.intent_type,
+                reduce_only=context.reduce_only,
+                stop_loss_pct=context.stop_loss_pct,
+                maintenance_margin_usd=context.maintenance_margin_usd,
+                margin_ratio=context.margin_ratio,
+                existing_risk_usd=context.existing_risk_usd,
+                account_id=account_scope,
+                requires_margin_or_short=context.requires_margin_or_short,
+            )
+            if not floor_decision.allowed:
+                return RiskResult(
+                    passed=False,
+                    score=context.score,
+                    reason=(
+                        f"CAPITAL_FLOOR[{broker_name}:{account_scope}]:"
+                        f"{floor_decision.reason}:required="
+                        f"{floor_decision.required_floor_usd:.2f}:projected="
+                        f"{floor_decision.projected_equity_usd:.2f}"
+                    ),
+                )
+
             engine = get_broker_account_risk_engine(
                 broker_name=broker_name,
                 account_scope=account_scope,
