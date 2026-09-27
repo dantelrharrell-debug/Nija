@@ -373,7 +373,7 @@ def _process_checkout_event(stripe: Any, event_type: str, event_obj: Any) -> Non
 
     session = stripe.checkout.Session.retrieve(
         session_id,
-        expand=["line_items.data.price.product"],
+        expand=["line_items"],
     )
     try:
         customer_id, subscription_id, payment_status = _validate_checkout_session(
@@ -435,7 +435,7 @@ def _process_invoice_paid(stripe: Any, event_obj: Any, event_created: int) -> No
         return
     subscription = stripe.Subscription.retrieve(
         subscription_id,
-        expand=["items.data.price.product"],
+        expand=["items"],
     )
     _apply_subscription_object(stripe, subscription, event_created)
 
