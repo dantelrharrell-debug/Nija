@@ -833,6 +833,8 @@ def create_app(store: Optional[BillingServiceStore] = None) -> Flask:
         resources={
             r"/api/billing/verify": {"origins": allowed_origins, "methods": ["GET"]},
             r"/api/billing/checkout": {"origins": allowed_origins, "methods": ["POST"]},
+            r"/api/billing/bitcoin/verify": {"origins": allowed_origins, "methods": ["GET"]},
+            r"/api/billing/bitcoin/checkout": {"origins": allowed_origins, "methods": ["POST"]},
         },
         allow_headers=["Authorization", "Content-Type"],
     )
@@ -1015,6 +1017,19 @@ def create_app(store: Optional[BillingServiceStore] = None) -> Flask:
             return jsonify({"error": "webhook_processing_failed"}), 500
 
         return jsonify({"received": True})
+
+    # Register the Bitcoin rail only on the standalone billing service. The
+    # module intentionally contains no broker/execution imports; verified
+    # customer payments stop at NIJA treasury state.
+    from bitcoin_billing import register_bitcoin_routes
+
+    register_bitcoin_routes(
+        app,
+        store_getter=_store,
+        identity_loader=_identity_from_request,
+        identity_error_types=(BillingContractViolation,),
+        site_url=_site_url,
+    )
 
     return app
 
