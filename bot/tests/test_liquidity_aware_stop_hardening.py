@@ -49,6 +49,24 @@ class TestLiquidityAwareStopHardening(unittest.TestCase):
                 atr=0.25,
             )
 
+    def test_invalid_atr_fails_closed(self):
+        with self.assertRaisesRegex(ValueError, "unsafe_stop_geometry"):
+            self.risk.calculate_stop_loss(
+                entry_price=100.0,
+                side="long",
+                swing_level=99.0,
+                atr=float("nan"),
+            )
+
+    def test_invalid_structure_side_fails_closed(self):
+        with self.assertRaisesRegex(ValueError, "unsafe_stop_geometry"):
+            self.risk.calculate_stop_loss(
+                entry_price=100.0,
+                side="long",
+                swing_level=101.0,
+                atr=0.25,
+            )
+
     def test_volatility_requirement_over_cap_fails_closed_instead_of_tightening(self):
         with self.assertRaisesRegex(ValueError, "unsafe_stop_geometry"):
             self.risk.calculate_stop_loss(
