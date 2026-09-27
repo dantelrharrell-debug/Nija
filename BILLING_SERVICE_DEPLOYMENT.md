@@ -101,6 +101,7 @@ Deployment order:
    - `customer.subscription.updated`
    - `customer.subscription.deleted`
    - `invoice.paid`
+   - `invoice.payment_succeeded`
    - `invoice.payment_failed`
 8. Set the resulting `STRIPE_WEBHOOK_SECRET` on the billing service and redeploy/restart.
 9. Send a Stripe test event and confirm a 2xx response only for a valid signature.
