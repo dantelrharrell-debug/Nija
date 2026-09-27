@@ -59,6 +59,21 @@ def _thread_alive(coordinator: Any) -> bool:
     return bool(alive()) if callable(alive) else False
 
 
+def _worker_generation_retired(v142: Any, coordinator: Any) -> bool:
+    """Return True only when v142 has already fenced this timed-out worker."""
+    if not bool(getattr(coordinator, "_nija_v142_flight_timed_out", False)):
+        return False
+    try:
+        generation = int(getattr(coordinator, "_nija_v142_flight_generation", 0) or 0)
+        state = getattr(v142, "_generation_state", None)
+        if generation <= 0 or not callable(state):
+            return False
+        active, rolled = state()
+        return bool(rolled and int(active or 0) > 0 and int(active) != generation)
+    except Exception:
+        return False
+
+
 def _patch_capital_single_generation() -> bool:
     """Never overlap runtime refresh generations.
 
@@ -88,11 +103,33 @@ def _patch_capital_single_generation() -> bool:
         old = getattr(manager, "_capital_coordinator", None)
         if old is not None and (expected_old is None or old is expected_old):
             if _thread_alive(old):
+                # v142 retires the timed-out generation *before* invoking
+                # rollover. Once that fence is proven, the old daemon may still
+                # unwind but can no longer publish CapitalAuthority state. In
+                # that precise state, allow v142/v164 to install one fresh
+                # canonical coordinator rather than deadlocking forever behind
+                # an already-retired worker. v164 still enforces the global
+                # retired-thread cap.
+                if _worker_generation_retired(v142, old):
+                    LOGGER.critical(
+                        "CAPITAL_V433_RETIRED_ROLLOVER_ALLOWED marker=%s reason=%s "
+                        "old_worker_alive=true old_generation_retired=true "
+                        "late_publication_fenced=true v164_thread_cap_preserved=true "
+                        "single_authorized_generation=true force_thread_kill=false "
+                        "trading_fail_closed_until_fresh_publish=true",
+                        MARKER,
+                        reason,
+                    )
+                    return original(
+                        manager,
+                        expected_old=expected_old,
+                        reason=reason,
+                    )
                 LOGGER.critical(
                     "CAPITAL_V431_ROLLOVER_DEFERRED marker=%s reason=%s "
-                    "old_worker_alive=true new_generation_started=false "
-                    "single_runtime_generation=true generation_fence_preserved=true "
-                    "trading_fail_closed_until_unwind=true",
+                    "old_worker_alive=true old_generation_retired=false "
+                    "new_generation_started=false generation_fence_preserved=true "
+                    "trading_fail_closed_until_safe_rollover=true",
                     MARKER,
                     reason,
                 )
@@ -229,6 +266,7 @@ __all__ = [
     "install",
     "install_import_hook",
     "_thread_alive",
+    "_worker_generation_retired",
     "_patch_capital_single_generation",
     "_position_recovery_interval_s",
     "_position_recovery_pulse",
