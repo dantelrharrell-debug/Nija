@@ -247,6 +247,10 @@ services:
     autoDeployTrigger: checksPass
     healthCheckPath: /healthz
     envVars:
+      # Match repository CI/runtime compatibility; Render otherwise selects
+      # the newest Python release, which is not compatible with SQLAlchemy 2.0.25.
+      - key: PYTHON_VERSION
+        value: "3.11.11"
       - key: BILLING_DATABASE_URL
         fromDatabase:
           name: nija-billing-db
