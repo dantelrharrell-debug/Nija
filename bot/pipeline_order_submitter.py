@@ -837,6 +837,16 @@ def submit_market_order_via_pipeline(
                 ),
                 existing_risk_usd=incoming_metadata.get("existing_risk_usd", 0.0),
                 explicit_stress_loss_usd=incoming_metadata.get("stress_loss_usd"),
+                account_id=account_id,
+                requires_margin_or_short=(
+                    leverage > 1
+                    or bool(incoming_metadata.get("short_sell"))
+                    or (
+                        preferred_broker == "alpaca"
+                        and side_norm == "sell"
+                        and resolved_intent not in {"exit", "reduce"}
+                    )
+                ),
             )
         except Exception as exc:
             _finalize_pre_submit_v2_duplicate(incoming_metadata)
