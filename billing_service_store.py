@@ -177,6 +177,11 @@ class BillingServiceStore:
                     .values(
                         expected_price_id=expected_price_id,
                         expected_product_id=expected_product_id,
+                        stripe_subscription_id=None,
+                        status="checkout_created",
+                        entitled=False,
+                        entitlement_reason="awaiting_authoritative_subscription_state",
+                        current_period_end=None,
                         updated_at=now,
                     )
                 )
