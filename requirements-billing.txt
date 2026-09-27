@@ -5,3 +5,4 @@ PyJWT==2.10.1
 SQLAlchemy==2.0.25
 psycopg2-binary==2.9.9
 stripe==7.11.0
+requests==2.32.5

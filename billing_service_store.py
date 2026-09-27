@@ -80,6 +80,28 @@ class BillingServiceStore:
             UniqueConstraint("checkout_session_id", name="uq_billing_checkout_session_id"),
         )
 
+        self.bitcoin_orders = Table(
+            "billing_bitcoin_orders",
+            self.metadata,
+            Column("order_id", String(128), primary_key=True),
+            Column("bitpay_invoice_id", String(128), nullable=True, unique=True, index=True),
+            Column("nija_user_id", String(128), nullable=False, index=True),
+            Column("email", String(320), nullable=False),
+            Column("offer_code", String(64), nullable=False),
+            Column("amount_usd_cents", BigInteger, nullable=False),
+            Column("recurring", Boolean, nullable=False, default=False),
+            Column("invoice_url", Text, nullable=True),
+            Column("provider_status", String(64), nullable=False, default="creating"),
+            Column("verification_status", String(64), nullable=False, default="pending"),
+            Column("verification_reason", Text, nullable=True),
+            Column("verified", Boolean, nullable=False, default=False),
+            Column("treasury_status", String(64), nullable=False, default="hold"),
+            Column("btc_paid_satoshis", BigInteger, nullable=True),
+            Column("created_at", DateTime(timezone=True), nullable=False),
+            Column("updated_at", DateTime(timezone=True), nullable=False),
+            UniqueConstraint("bitpay_invoice_id", name="uq_billing_bitpay_invoice_id"),
+        )
+
         self.events = Table(
             "billing_events",
             self.metadata,
@@ -392,6 +414,159 @@ class BillingServiceStore:
                 )
             )
         return True
+
+    def create_bitcoin_order(
+        self,
+        *,
+        order_id: str,
+        user_id: str,
+        email: str,
+        offer_code: str,
+        amount_usd_cents: int,
+        recurring: bool,
+    ) -> None:
+        """Persist NIJA authority before creating the provider invoice."""
+        now = self._now()
+        with self.engine.begin() as conn:
+            try:
+                conn.execute(
+                    insert(self.bitcoin_orders).values(
+                        order_id=order_id,
+                        nija_user_id=user_id,
+                        email=self._normalize_email(email),
+                        offer_code=offer_code,
+                        amount_usd_cents=int(amount_usd_cents),
+                        recurring=bool(recurring),
+                        provider_status="creating",
+                        verification_status="pending",
+                        verification_reason="awaiting_provider_invoice",
+                        verified=False,
+                        treasury_status="hold",
+                        created_at=now,
+                        updated_at=now,
+                    )
+                )
+            except IntegrityError as exc:
+                raise BillingIdentityMismatch("Bitcoin order ID already exists") from exc
+
+    def bind_bitcoin_invoice(
+        self,
+        *,
+        order_id: str,
+        invoice_id: str,
+        invoice_url: str,
+        provider_status: str,
+    ) -> None:
+        now = self._now()
+        with self.engine.begin() as conn:
+            row = conn.execute(
+                select(self.bitcoin_orders).where(self.bitcoin_orders.c.order_id == order_id)
+            ).first()
+            if not row:
+                raise BillingIdentityMismatch("Bitcoin order was not created by NIJA billing")
+            try:
+                conn.execute(
+                    update(self.bitcoin_orders)
+                    .where(self.bitcoin_orders.c.order_id == order_id)
+                    .values(
+                        bitpay_invoice_id=invoice_id,
+                        invoice_url=invoice_url,
+                        provider_status=provider_status or "new",
+                        verification_status="pending",
+                        verification_reason="awaiting_bitpay_confirmation",
+                        updated_at=now,
+                    )
+                )
+            except IntegrityError as exc:
+                raise BillingIdentityMismatch("BitPay invoice ID already exists") from exc
+
+    def set_bitcoin_order_error(self, order_id: str, status: str, reason: str) -> None:
+        with self.engine.begin() as conn:
+            conn.execute(
+                update(self.bitcoin_orders)
+                .where(self.bitcoin_orders.c.order_id == order_id)
+                .values(
+                    provider_status=status,
+                    verification_status="failed",
+                    verification_reason=reason,
+                    verified=False,
+                    treasury_status="hold",
+                    updated_at=self._now(),
+                )
+            )
+
+    def get_bitcoin_order_by_invoice(self, invoice_id: str) -> Optional[dict[str, Any]]:
+        if not invoice_id:
+            return None
+        with self.engine.connect() as conn:
+            row = conn.execute(
+                select(self.bitcoin_orders).where(
+                    self.bitcoin_orders.c.bitpay_invoice_id == invoice_id
+                )
+            ).first()
+        return self._row_dict(row)
+
+    def update_bitcoin_order_state(
+        self,
+        *,
+        invoice_id: str,
+        provider_status: str,
+        verification_status: str,
+        verification_reason: Optional[str],
+        verified: bool,
+        treasury_status: str,
+        btc_paid_satoshis: Optional[int],
+    ) -> None:
+        now = self._now()
+        with self.engine.begin() as conn:
+            row = conn.execute(
+                select(self.bitcoin_orders.c.order_id).where(
+                    self.bitcoin_orders.c.bitpay_invoice_id == invoice_id
+                )
+            ).first()
+            if not row:
+                return
+            conn.execute(
+                update(self.bitcoin_orders)
+                .where(self.bitcoin_orders.c.bitpay_invoice_id == invoice_id)
+                .values(
+                    provider_status=provider_status,
+                    verification_status=verification_status,
+                    verification_reason=verification_reason,
+                    verified=bool(verified),
+                    treasury_status=treasury_status,
+                    btc_paid_satoshis=btc_paid_satoshis,
+                    updated_at=now,
+                )
+            )
+
+    def bitcoin_verification_record(self, invoice_id: str) -> Optional[dict[str, Any]]:
+        record = self.get_bitcoin_order_by_invoice(invoice_id)
+        if record is None:
+            return None
+
+        verified = bool(record.get("verified", False))
+        verification_status = str(record.get("verification_status") or "pending")
+        if verified:
+            state = "verified"
+        elif verification_status in {"failed", "mismatch"}:
+            state = "failed"
+        else:
+            state = "pending"
+
+        return {
+            "invoice_id": invoice_id,
+            "state": state,
+            "payment_verified": verified,
+            "provider_status": str(record.get("provider_status") or "pending"),
+            "verification_status": verification_status,
+            "offer_code": record["offer_code"],
+            "recurring_manual_renewal": bool(record.get("recurring", False)),
+            "entitlement_granted": False,
+            "treasury_status": str(record.get("treasury_status") or "hold"),
+            "brokerage_sweep_allowed": False,
+            "btc_paid_satoshis": record.get("btc_paid_satoshis"),
+        }
 
     def claim_event(self, event_id: str, event_type: str, stale_after_seconds: int = 600) -> bool:
         """Claim a Stripe event, allowing recovery of abandoned claims."""
