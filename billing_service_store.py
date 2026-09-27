@@ -257,7 +257,17 @@ class BillingServiceStore:
                 )
             )
 
-    def mark_checkout_mismatch(self, session_id: str, reason: str) -> None:
+    def set_checkout_status(
+        self,
+        session_id: str,
+        *,
+        verification_status: str,
+        reason: Optional[str],
+        payment_status: Optional[str] = None,
+        verified: bool = False,
+        revoke_customer: bool = False,
+    ) -> None:
+        """Persist Checkout verification state without granting entitlement."""
         now = self._now()
         with self.engine.begin() as conn:
             row = conn.execute(
@@ -265,28 +275,42 @@ class BillingServiceStore:
                     self.checkout_sessions.c.checkout_session_id == session_id
                 )
             ).first()
-            if row:
-                user_id = str(row[0])
-                conn.execute(
-                    update(self.checkout_sessions)
-                    .where(self.checkout_sessions.c.checkout_session_id == session_id)
-                    .values(
-                        verification_status="mismatch",
-                        verification_reason=reason,
-                        verified=False,
-                        updated_at=now,
-                    )
-                )
+            if not row:
+                return
+            user_id = str(row[0])
+            values: dict[str, Any] = {
+                "verification_status": verification_status,
+                "verification_reason": reason,
+                "verified": bool(verified),
+                "updated_at": now,
+            }
+            if payment_status is not None:
+                values["payment_status"] = payment_status
+            conn.execute(
+                update(self.checkout_sessions)
+                .where(self.checkout_sessions.c.checkout_session_id == session_id)
+                .values(**values)
+            )
+            if revoke_customer:
                 conn.execute(
                     update(self.customers)
                     .where(self.customers.c.nija_user_id == user_id)
                     .values(
-                        status="mismatch",
+                        status=verification_status,
                         entitled=False,
                         entitlement_reason=reason,
                         updated_at=now,
                     )
                 )
+
+    def mark_checkout_mismatch(self, session_id: str, reason: str) -> None:
+        self.set_checkout_status(
+            session_id,
+            verification_status="mismatch",
+            reason=reason,
+            verified=False,
+            revoke_customer=True,
+        )
 
     def apply_subscription_state(
         self,
