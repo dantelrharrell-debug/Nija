@@ -262,6 +262,14 @@ class BrokerComplianceEngine:
             size_usd=ctx.usd_size,
             broker_name=ctx.broker_name,
             balance=ctx.balance,
+            account_scope=str(ctx.user_id or ctx.extra.get("account_scope") or "platform"),
+            intent_type=str(ctx.extra.get("intent_type") or ("exit" if ctx.force_liquidate else "entry")),
+            reduce_only=bool(ctx.force_liquidate or ctx.extra.get("reduce_only", False)),
+            stop_loss_pct=ctx.extra.get("stop_loss_pct"),
+            maintenance_margin_usd=ctx.extra.get("maintenance_margin_usd"),
+            margin_ratio=ctx.extra.get("margin_ratio"),
+            existing_risk_usd=float(ctx.extra.get("existing_risk_usd", 0.0) or 0.0),
+            requires_margin_or_short=bool(ctx.extra.get("requires_margin_or_short", False)),
         )
         adapter = RiskSizingAdapterFactory.for_broker(ctx.broker_name)
         risk_result = adapter.evaluate_risk(risk_ctx)
