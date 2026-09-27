@@ -4419,9 +4419,25 @@ class NIJAApexStrategyV71:
                         # plus a 0.5 ATR buffer, reject instead of widening risk.
                         _hf_atr = scalar(indicators['atr'].iloc[-1])
                         _hf_swing_low = self.risk_manager.find_swing_low(df, lookback=10)
-                        _hf_buffer = max(_hf_atr * 0.5, current_price * 0.0005)
-                        _hf_required_stop = _hf_swing_low - _hf_buffer
-                        if _hf_atr <= 0 or stop_loss > _hf_required_stop:
+                        _hf_inputs_valid = (
+                            math.isfinite(current_price)
+                            and current_price > 0
+                            and math.isfinite(_hf_atr)
+                            and _hf_atr > 0
+                            and math.isfinite(_hf_swing_low)
+                            and 0 < _hf_swing_low < current_price
+                        )
+                        _hf_buffer = (
+                            max(_hf_atr * 0.5, current_price * 0.0005)
+                            if _hf_inputs_valid
+                            else float("nan")
+                        )
+                        _hf_required_stop = (
+                            _hf_swing_low - _hf_buffer
+                            if _hf_inputs_valid
+                            else float("nan")
+                        )
+                        if (not _hf_inputs_valid) or stop_loss > _hf_required_stop:
                             _hf_reason = (
                                 f"HF scalp stop geometry unsafe LONG {symbol}: "
                                 f"fixed_stop={stop_loss:.6f} required_below={_hf_required_stop:.6f}"
@@ -5562,9 +5578,25 @@ class NIJAApexStrategyV71:
                         # Symmetric buy-side liquidity guard for HF shorts.
                         _hf_atr = scalar(indicators['atr'].iloc[-1])
                         _hf_swing_high = self.risk_manager.find_swing_high(df, lookback=10)
-                        _hf_buffer = max(_hf_atr * 0.5, current_price * 0.0005)
-                        _hf_required_stop = _hf_swing_high + _hf_buffer
-                        if _hf_atr <= 0 or stop_loss < _hf_required_stop:
+                        _hf_inputs_valid = (
+                            math.isfinite(current_price)
+                            and current_price > 0
+                            and math.isfinite(_hf_atr)
+                            and _hf_atr > 0
+                            and math.isfinite(_hf_swing_high)
+                            and _hf_swing_high > current_price
+                        )
+                        _hf_buffer = (
+                            max(_hf_atr * 0.5, current_price * 0.0005)
+                            if _hf_inputs_valid
+                            else float("nan")
+                        )
+                        _hf_required_stop = (
+                            _hf_swing_high + _hf_buffer
+                            if _hf_inputs_valid
+                            else float("nan")
+                        )
+                        if (not _hf_inputs_valid) or stop_loss < _hf_required_stop:
                             _hf_reason = (
                                 f"HF scalp stop geometry unsafe SHORT {symbol}: "
                                 f"fixed_stop={stop_loss:.6f} required_above={_hf_required_stop:.6f}"
