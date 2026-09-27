@@ -27,6 +27,7 @@ import json
 sys.path.insert(0, str(Path(__file__).parent))
 
 from bot.unified_backtest_engine import UnifiedBacktestEngine, BacktestResults
+from bot.paper_break_retest_replay import json_safe, replay_break_retest
 from bot.live_execution_tracker import LiveExecutionTracker
 
 # Setup logging
@@ -51,7 +52,8 @@ class NIJAExecutionCLI:
             epilog="""
 Examples:
   # Run backtest on BTC-USD
-  python nija_execution_cli.py backtest --symbol BTC-USD --data data/BTC-USD_1h.csv --days 90
+  python nija_execution_cli.py backtest --strategy sma_demo --symbol BTC-USD --data data/BTC-USD_1h.csv --days 90
+  python nija_execution_cli.py backtest --strategy break_retest_replay --symbol BTC-USD --data data/BTC-USD_1h.csv
 
   # Monitor live execution
   python nija_execution_cli.py live --balance 10000
@@ -67,7 +69,9 @@ Examples:
         subparsers = parser.add_subparsers(dest='command', help='Commands')
 
         # Backtest command
-        backtest_parser = subparsers.add_parser('backtest', help='Run strategy backtest')
+        backtest_parser = subparsers.add_parser(
+            'backtest', help='Run the SMA illustration (not a NIJA strategy backtest)'
+        )
         backtest_parser.add_argument('--symbol', required=True, help='Trading symbol (e.g., BTC-USD)')
         backtest_parser.add_argument('--data', required=True, help='Path to historical data CSV')
         backtest_parser.add_argument('--initial-balance', type=float, default=10000.0, help='Initial balance (default: 10000)')
@@ -75,7 +79,10 @@ Examples:
         backtest_parser.add_argument('--slippage', type=float, default=0.0005, help='Slippage rate (default: 0.0005 = 0.05%%)')
         backtest_parser.add_argument('--days', type=int, help='Number of days to backtest (from end of data)')
         backtest_parser.add_argument('--output', help='Output file path for results (JSON)')
-        backtest_parser.add_argument('--strategy', default='apex_v71', choices=['apex_v71', 'apex_v72', 'enhanced'], help='Strategy to backtest')
+        backtest_parser.add_argument(
+            '--strategy', required=True, choices=['sma_demo', 'break_retest_replay'],
+            help='Explicit research mode; APEX strategies are not backtested by this CLI'
+        )
 
         # Live tracking command
         live_parser = subparsers.add_parser('live', help='Monitor live execution')
@@ -141,6 +148,24 @@ Examples:
             logger.error(f"Failed to load data: {e}")
             return 1
 
+        if args.strategy == 'break_retest_replay':
+            try:
+                result = replay_break_retest(
+                    df, symbol=args.symbol, initial_balance=args.initial_balance,
+                    commission_pct=args.commission, slippage_pct=args.slippage,
+                )
+            except ValueError as exc:
+                logger.error("Invalid detector replay data: %s", exc)
+                return 1
+            summary = result['summary']
+            print("DETECTOR REPLAY ONLY: not the complete NIJA strategy or live execution pipeline")
+            print(f"Signals: {result['analysis']['signals']} | Closed trades: {summary['total_trades']}")
+            print(f"Recorded replay P&L: ${summary['total_pnl']:+.2f}")
+            if args.output:
+                with open(args.output, 'w') as handle:
+                    json.dump(result, handle, indent=2, default=str, allow_nan=False)
+            return 0
+
         # Create backtest engine
         engine = UnifiedBacktestEngine(
             initial_balance=args.initial_balance,
@@ -148,9 +173,9 @@ Examples:
             slippage_pct=args.slippage
         )
 
-        # Run simple backtest (placeholder - needs strategy integration)
-        logger.info("Running backtest...")
-        logger.warning("Note: This is a placeholder. Full strategy integration needed.")
+        # This example is not NIJA's actual APEX or Break/Retest execution path.
+        logger.warning("DEMONSTRATION ONLY: SMA crossover example, not an APEX or NIJA strategy backtest")
+        logger.warning("Same-bar illustrative fills are not out-of-sample execution evidence")
 
         # For now, run a simple example
         # TODO: Integrate with actual NIJA strategy (apex_v71, etc.)
@@ -164,7 +189,19 @@ Examples:
 
         # Export if requested
         if args.output:
-            engine.export_results(results, args.output)
+            payload = json_safe(results.to_dict())
+            payload['analysis'] = {
+                'kind': 'demonstration_only',
+                'strategy': 'sma_demo',
+                'live_readiness_granted': False,
+                'limitations': [
+                    'This does not run NIJA APEX or Break/Retest logic.',
+                    'Same-bar illustrative fills cannot validate an executable trading edge.',
+                    'Backtest results do not grant live execution readiness.',
+                ],
+            }
+            with open(args.output, 'w') as handle:
+                json.dump(payload, handle, indent=2, default=str, allow_nan=False)
             logger.info(f"Results saved to {args.output}")
 
         return 0
@@ -330,12 +367,21 @@ Examples:
             print("\n" + "-"*80)
             print("BACKTEST RESULTS")
             print("-"*80)
+            if data['backtest'].get('analysis', {}).get('kind') == 'demonstration_only':
+                print("DEMONSTRATION ONLY: SMA example; not NIJA strategy performance")
+            elif data['backtest'].get('analysis', {}).get('kind') == 'detector_replay_only':
+                print("DETECTOR REPLAY ONLY: does not include NIJA's full execution and risk pipeline")
+            elif 'analysis' not in data['backtest']:
+                print("Strategy provenance unverified: legacy report has no analysis metadata")
             summary = data['backtest']['summary']
             print(f"Return: {summary['total_return_pct']:+.2f}%")
             print(f"Trades: {summary['total_trades']}")
-            print(f"Win Rate: {summary['win_rate']*100:.1f}%")
-            print(f"Profit Factor: {summary['profit_factor']:.2f}")
-            print(f"Sharpe Ratio: {summary['sharpe_ratio']:.2f}")
+            print(f"Win Rate: {summary['win_rate']*100:.1f}%" if summary['win_rate'] is not None
+                  else "Win Rate: N/A (no closed trades)")
+            print(f"Profit Factor: {summary['profit_factor']:.2f}" if summary['profit_factor'] is not None
+                  else "Profit Factor: N/A (no losing trades)")
+            print(f"Sharpe Ratio: {summary['sharpe_ratio']:.2f}" if summary['sharpe_ratio'] is not None
+                  else "Sharpe Ratio: N/A (unverified observation frequency)")
             print(f"Max Drawdown: {summary['max_drawdown_pct']:.2f}%")
 
         if 'live' in data:
@@ -372,6 +418,10 @@ Examples:
                 live_data = json.load(f)
         except Exception as e:
             logger.error(f"Failed to load data: {e}")
+            return 1
+
+        if backtest_data.get('analysis', {}).get('kind') in ('demonstration_only', 'detector_replay_only'):
+            logger.error("Cannot compare a demonstration or detector replay with live trading as strategy evidence")
             return 1
 
         # Extract metrics

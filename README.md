@@ -731,6 +731,39 @@ Never weaken these contracts to recover faster or increase trade frequency:
 
 ---
 
+## Paper evidence review (read only)
+
+The legacy `PaperTradingAccount` writes `paper_trading_data.json`. Review its
+recorded closed fills and open-position exposure without contacting a broker:
+
+```bash
+python -m scripts.review_paper_trades --input paper_trading_data.json
+```
+
+The report distinguishes partial close fills from completed trades, shows
+recorded P&L by symbol and a uniform 20% price-drop scenario for open positions,
+and flags missing fees, strategy IDs, and insufficient samples. It does not
+modify paper state, select a strategy, approve a customer, or enable live entry.
+The paper account's recorded P&L does not establish net returns after fees and
+slippage. Correlation and behavior claims require additional data.
+
+`nija_execution_cli.py backtest` requires an explicit research mode:
+
+```bash
+python nija_execution_cli.py backtest --strategy break_retest_replay \
+  --symbol BTC-USD --data path/to/verified_ohlcv.csv --output replay.json
+```
+
+`break_retest_replay` uses the existing detector on closed historical candles,
+enters at the next open, charges configured fees and slippage, and resolves
+ambiguous stop/target bars against the trade. It is marked
+`detector_replay_only`: it does not model the full NIJA pipeline, broker fills,
+or future performance. `sma_demo` remains an explicitly labeled illustration.
+The CLI refuses APEX names rather than silently running the SMA example, and
+neither research mode can be compared with live trading as strategy evidence.
+
+---
+
 ## Official NIJA Links
 
 - **Website:** https://nijaaitrading.com
