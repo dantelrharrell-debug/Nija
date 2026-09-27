@@ -109,6 +109,9 @@ class OpeningRangeBreakoutDetector(BaseDetector):
         self.require_close = os.getenv("NIJA_ORB_REQUIRE_CLOSE", "true").lower() == "true"
         self.require_retest = os.getenv("NIJA_ORB_REQUIRE_RETEST", "false").lower() == "true"
         self.volume_factor = float(os.getenv("NIJA_ORB_VOLUME_FACTOR", "1.10"))
+        # Keep ORB protection outside the opening-range liquidity extreme rather
+        # than parking the stop directly on the first-candle high/low.
+        self.stop_buffer_atr = max(0.0, float(os.getenv("NIJA_ORB_STOP_BUFFER_ATR", "0.50")))
 
     def detect(self, df: pd.DataFrame, context: DetectorContext) -> Optional[StrategySignal]:
         if len(df) < max(25, self.lookback + 2):
@@ -127,6 +130,10 @@ class OpeningRangeBreakoutDetector(BaseDetector):
         low = _to_float(latest["low"])
         avg_volume = _to_float(df["volume"].iloc[-20:].mean())
         vol_ok = _to_float(latest["volume"]) >= avg_volume * self.volume_factor if avg_volume > 0 else True
+        atr_now = _to_float(_atr(df).iloc[-1])
+        if not math.isfinite(atr_now) or atr_now <= 0:
+            return None
+        stop_buffer = max(atr_now * self.stop_buffer_atr, atr_now * 0.01)
 
         broke_up = close > first_high if self.require_close else high > first_high
         broke_down = close < first_low if self.require_close else low < first_low
@@ -145,14 +152,15 @@ class OpeningRangeBreakoutDetector(BaseDetector):
 
         if broke_up and vol_ok:
             rng = max(first_high - first_low, 0.0)
+            stop = first_low - stop_buffer
             return self._signal(
                 strategy=self.strategy_name,
                 context=context,
                 direction="long",
                 confidence=0.70,
                 raw_score=0.72,
-                invalidation_level=first_low,
-                suggested_stop=first_low,
+                invalidation_level=stop,
+                suggested_stop=stop,
                 targets=[close + rng, close + 2 * rng],
                 support=["orb_breakout_up", "volume_confirmed"],
                 conflict=[],
@@ -162,20 +170,24 @@ class OpeningRangeBreakoutDetector(BaseDetector):
                     "first_candle_low": first_low,
                     "first_candle_close": _to_float(first["close"]),
                     "first_candle_range": rng,
+                    "stop_basis": "below_opening_range_liquidity",
+                    "stop_buffer_atr": self.stop_buffer_atr,
+                    "stop_buffer": stop_buffer,
                     "session_date": str(df.index[-1].date()) if hasattr(df.index[-1], "date") else "",
                 },
             )
 
         if broke_down and vol_ok:
             rng = max(first_high - first_low, 0.0)
+            stop = first_high + stop_buffer
             return self._signal(
                 strategy=self.strategy_name,
                 context=context,
                 direction="short",
                 confidence=0.70,
                 raw_score=0.72,
-                invalidation_level=first_high,
-                suggested_stop=first_high,
+                invalidation_level=stop,
+                suggested_stop=stop,
                 targets=[close - rng, close - 2 * rng],
                 support=["orb_breakout_down", "volume_confirmed"],
                 conflict=[],
@@ -185,6 +197,9 @@ class OpeningRangeBreakoutDetector(BaseDetector):
                     "first_candle_low": first_low,
                     "first_candle_close": _to_float(first["close"]),
                     "first_candle_range": rng,
+                    "stop_basis": "above_opening_range_liquidity",
+                    "stop_buffer_atr": self.stop_buffer_atr,
+                    "stop_buffer": stop_buffer,
                     "session_date": str(df.index[-1].date()) if hasattr(df.index[-1], "date") else "",
                 },
             )
