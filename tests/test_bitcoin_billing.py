@@ -101,7 +101,7 @@ def test_ipn_payload_is_never_payment_authority(monkeypatch, tmp_path):
         "currency": "USD",
         "status": "paid",
         "transactionCurrency": "BTC",
-        "paymentSubtotals": {"BTC": 150000},
+        "amountPaid": 150000,
     }
     response = client.post(
         "/api/billing/bitcoin/webhook",
