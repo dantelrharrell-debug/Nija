@@ -247,12 +247,28 @@ class BillingServiceStore:
                     updated_at=now,
                 )
             )
+            customer_row = conn.execute(
+                select(self.customers).where(
+                    self.customers.c.nija_user_id == session["nija_user_id"]
+                )
+            ).first()
+            customer = dict(customer_row._mapping) if customer_row else {}
+            authoritative_active = str(customer.get("status") or "").lower() in {
+                "active",
+                "trialing",
+            }
             conn.execute(
                 update(self.customers)
                 .where(self.customers.c.nija_user_id == session["nija_user_id"])
                 .values(
                     stripe_customer_id=customer_id,
                     stripe_subscription_id=subscription_id,
+                    entitled=authoritative_active,
+                    entitlement_reason=(
+                        "authoritative_subscription_state"
+                        if authoritative_active
+                        else "awaiting_authoritative_subscription_state"
+                    ),
                     updated_at=now,
                 )
             )
@@ -341,6 +357,21 @@ class BillingServiceStore:
                 status = "mismatch"
                 entitled = False
                 reason = "subscription_offer_mismatch"
+
+            if entitled:
+                verified_checkout = conn.execute(
+                    select(self.checkout_sessions.c.checkout_session_id).where(
+                        (self.checkout_sessions.c.nija_user_id == user_id)
+                        & (self.checkout_sessions.c.verified.is_(True))
+                        & (
+                            (self.checkout_sessions.c.stripe_subscription_id == subscription_id)
+                            | (self.checkout_sessions.c.stripe_subscription_id.is_(None))
+                        )
+                    )
+                ).first()
+                if not verified_checkout:
+                    entitled = False
+                    reason = "awaiting_verified_checkout_session"
             conn.execute(
                 update(self.customers)
                 .where(self.customers.c.nija_user_id == user_id)
