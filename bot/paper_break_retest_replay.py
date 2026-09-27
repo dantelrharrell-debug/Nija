@@ -61,6 +61,7 @@ def replay_break_retest(
     initial_balance: float = 10000.0,
     commission_pct: float = 0.001,
     slippage_pct: float = 0.0005,
+    first_entry_index: int = 0,
 ) -> dict[str, Any]:
     """Replay the existing detector with next-open entry and conservative exits.
 
@@ -75,6 +76,8 @@ def replay_break_retest(
     detector = BreakRetestDetector()
     if len(frame) < detector.lookback + 17:
         raise ValueError("insufficient candles for Break/Retest lookback and next-open execution")
+    if not isinstance(first_entry_index, int) or not 0 <= first_entry_index < len(frame) - 1:
+        raise ValueError("first_entry_index must leave at least two evaluation bars")
 
     context = TradingContext(
         user_id="offline-research", trading_account_id="offline-account", broker="paper",
@@ -89,7 +92,9 @@ def replay_break_retest(
     signals = 0
     rejected_gap = 0
 
-    for index in range(len(frame)):
+    # The preceding training candle may form a signal for the first held-out
+    # opening, but its price is never used to value an evaluation-period trade.
+    for index in range(max(0, first_entry_index - 1), len(frame)):
         row = frame.iloc[index]
         timestamp = frame.index[index]
         opening = float(row["open"])
@@ -146,7 +151,8 @@ def replay_break_retest(
                 engine.close_position(active_id, fill, timestamp, reason)
                 active_id = None
 
-        engine.update_equity_curve(timestamp, {symbol: float(row["close"])})
+        if index >= first_entry_index:
+            engine.update_equity_curve(timestamp, {symbol: float(row["close"])})
         # Never use the current bar to enter at its own opening price.
         if active_id is None and index < len(frame) - 1:
             signal = detector.detect(frame.iloc[:index + 1], detector_context)
@@ -172,8 +178,9 @@ def replay_break_retest(
     result["analysis"] = {
         "kind": "detector_replay_only", "strategy": "BREAK_RETEST", "symbol": symbol,
         "signals": signals, "rejected_gap_entries": rejected_gap,
-        "from": frame.index[0].isoformat(), "through": frame.index[-1].isoformat(),
-        "bars": len(frame), "requires_fvg": detector.require_fvg,
+        "from": frame.index[first_entry_index].isoformat(), "through": frame.index[-1].isoformat(),
+        "bars": len(frame) - first_entry_index, "warmup_bars": first_entry_index,
+        "requires_fvg": detector.require_fvg,
         "lookback": detector.lookback,
         "commission_fraction_per_side": commission_pct,
         "slippage_fraction_per_side": slippage_pct,
@@ -189,3 +196,54 @@ def replay_break_retest(
         ],
     }
     return result
+
+
+def replay_break_retest_holdout(
+    bars: pd.DataFrame,
+    *,
+    symbol: str,
+    holdout_fraction: float,
+    initial_balance: float = 10000.0,
+    commission_pct: float = 0.001,
+    slippage_pct: float = 0.0005,
+) -> dict[str, Any]:
+    """Evaluate a frozen detector on an untouched chronological final segment.
+
+    There is no parameter search here. Any tuning/strategy selection must use
+    only the earlier segment, before viewing the holdout results. Historical
+    candles must come from an independently verified source.
+    """
+    frame = _validate_bars(bars)
+    if not math.isfinite(holdout_fraction) or not 0.10 <= holdout_fraction <= 0.50:
+        raise ValueError("holdout_fraction must be between 0.10 and 0.50")
+    split = int(len(frame) * (1 - holdout_fraction))
+    detector = BreakRetestDetector()
+    if split < detector.lookback + 17 or len(frame) - split < 20:
+        raise ValueError("need sufficient training warmup and at least 20 held-out bars")
+    options = {
+        "symbol": symbol, "initial_balance": initial_balance,
+        "commission_pct": commission_pct, "slippage_pct": slippage_pct,
+    }
+    training = replay_break_retest(frame.iloc[:split], **options)
+    holdout = replay_break_retest(frame, first_entry_index=split, **options)
+    count = holdout["summary"]["total_trades"]
+    return {
+        "analysis": {
+            "kind": "chronological_holdout_detector_replay_only",
+            "strategy": "BREAK_RETEST", "symbol": symbol,
+            "split_timestamp": frame.index[split].isoformat(),
+            "training_bars": split, "holdout_bars": len(frame) - split,
+            "holdout_fraction": holdout_fraction,
+            "holdout_closed_trades": count,
+            "evidence_status": "limited_sample" if count < 20 else "requires_independent_review",
+            "live_readiness_granted": False,
+            "limitations": [
+                "This evaluates a detector, not NIJA's full execution and risk pipeline.",
+                "Parameter selection must be frozen before viewing holdout results; this tool cannot verify that.",
+                "Historical source integrity and representativeness must be checked separately.",
+                "Twenty trades is a minimum review flag, not proof of a durable edge.",
+            ],
+        },
+        "training": training,
+        "holdout": holdout,
+    }

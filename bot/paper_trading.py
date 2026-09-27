@@ -3,15 +3,27 @@ NIJA Paper Trading Simulator
 Mirrors live trading logic but tracks simulated positions locally
 """
 import json
+import logging
+import math
 import os
 from datetime import datetime
 from typing import Dict, List, Optional
 
+logger = logging.getLogger(__name__)
+
 class PaperTradingAccount:
     """Simulates a trading account with virtual money"""
 
-    def __init__(self, initial_balance: float = 10000.0):
+    def __init__(self, initial_balance: float = 10000.0,
+                 max_gross_exposure: float = 0.60, max_symbol_exposure: float = 0.25):
+        if not math.isfinite(initial_balance) or initial_balance <= 0:
+            raise ValueError("initial_balance must be positive and finite")
+        if (not math.isfinite(max_gross_exposure) or not math.isfinite(max_symbol_exposure) or
+                not 0 < max_symbol_exposure <= max_gross_exposure <= 1):
+            raise ValueError("paper exposure caps must be finite fractions within (0, 1]")
         self.initial_balance = initial_balance
+        self.max_gross_exposure = max_gross_exposure
+        self.max_symbol_exposure = max_symbol_exposure
         self.balance = initial_balance
         self.positions: Dict[str, Dict] = {}
         self.trades: List[Dict] = []
@@ -42,18 +54,62 @@ class PaperTradingAccount:
                     'positions': self.positions,
                     'trades': self.trades,
                     'total_pnl': self.total_pnl,
+                    'paper_risk_limits': {
+                        'max_gross_exposure': self.max_gross_exposure,
+                        'max_symbol_exposure': self.max_symbol_exposure,
+                    },
                     'last_updated': datetime.utcnow().isoformat()
                 }, f, indent=2)
         except Exception as e:
             print(f"⚠️ Could not save paper trading state: {e}")
 
     def open_position(self, symbol: str, size: float, entry_price: float,
-                     stop_loss: float, side: str = 'long', position_id: str = None) -> str:
-        """Open a simulated position"""
+                     stop_loss: float, side: str = 'long', position_id: str = None) -> Optional[str]:
+        """Open only if paper cash, gross exposure, and symbol caps permit it."""
+        values = (size, entry_price, stop_loss)
+        if (not isinstance(symbol, str) or not symbol.strip() or side not in ('long', 'short') or
+                any(not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0
+                    for value in values) or
+                (side == 'long' and stop_loss >= entry_price) or
+                (side == 'short' and stop_loss <= entry_price)):
+            logger.warning("PAPER_ENTRY_REJECTED reason=invalid_size_price_side_or_stop")
+            return None
         if position_id is None:
-            position_id = f"{symbol}-paper-{len(self.positions) + 1}"
+            suffix = len(self.trades) + 1
+            position_id = f"{symbol}-paper-{suffix}"
+            while position_id in self.positions:
+                suffix += 1
+                position_id = f"{symbol}-paper-{suffix}"
+        if position_id in self.positions:
+            logger.warning("PAPER_ENTRY_REJECTED reason=duplicate_position_id")
+            return None
 
         position_value = size * entry_price
+        if not math.isfinite(position_value):
+            logger.warning("PAPER_ENTRY_REJECTED reason=non_finite_notional")
+            return None
+
+        try:
+            for pos in self.positions.values():
+                if (pos['side'] not in ('long', 'short') or
+                        any(not isinstance(pos[key], (int, float)) or
+                            not math.isfinite(pos[key]) or pos[key] <= 0
+                            for key in ('size', 'entry_price', 'current_price'))):
+                    raise ValueError("invalid existing position")
+            equity = self.get_equity()
+            gross = sum(pos['size'] * pos['current_price'] for pos in self.positions.values())
+            symbol_gross = sum(pos['size'] * pos['current_price'] for pos in self.positions.values()
+                               if pos['symbol'] == symbol)
+        except (KeyError, TypeError, ValueError, OverflowError):
+            logger.warning("PAPER_ENTRY_REJECTED reason=unknown_existing_exposure")
+            return None
+        if not all(math.isfinite(value) and value >= 0 for value in (equity, gross, symbol_gross)):
+            logger.warning("PAPER_ENTRY_REJECTED reason=invalid_equity_or_exposure")
+            return None
+        if (equity <= 0 or gross + position_value > equity * self.max_gross_exposure + 1e-9 or
+                symbol_gross + position_value > equity * self.max_symbol_exposure + 1e-9):
+            logger.warning("PAPER_ENTRY_REJECTED reason=exposure_cap")
+            return None
 
         # Check if enough balance
         if position_value > self.balance:
@@ -97,6 +153,9 @@ class PaperTradingAccount:
         """Update position with current market price"""
         if position_id not in self.positions:
             return
+        if not isinstance(current_price, (int, float)) or not math.isfinite(current_price) or current_price <= 0:
+            logger.warning("PAPER_PRICE_REJECTED reason=invalid_mark")
+            return
 
         pos = self.positions[position_id]
         pos['current_price'] = current_price
@@ -120,6 +179,11 @@ class PaperTradingAccount:
         """Close position (fully or partially)"""
         if position_id not in self.positions:
             return 0.0
+        if (not isinstance(exit_price, (int, float)) or not math.isfinite(exit_price) or exit_price <= 0 or
+                not isinstance(close_pct, (int, float)) or not math.isfinite(close_pct) or
+                not 0 < close_pct <= 100):
+            logger.warning("PAPER_CLOSE_REJECTED reason=invalid_price_or_fraction")
+            return 0.0
 
         pos = self.positions[position_id]
         close_size = pos['size'] * (close_pct / 100.0)
@@ -131,7 +195,9 @@ class PaperTradingAccount:
             pnl = (pos['entry_price'] - exit_price) * close_size
 
         # Update balance
-        position_value = close_size * exit_price
+        # Both long and short positions return reserved entry principal plus
+        # realized P&L; exit notional alone misstates short-sale cash.
+        position_value = close_size * pos['entry_price'] + pnl
         self.balance += position_value
         self.total_pnl += pnl
         self.daily_pnl += pnl
@@ -162,9 +228,12 @@ class PaperTradingAccount:
         return pnl
 
     def get_equity(self) -> float:
-        """Calculate total account equity (balance + unrealized P&L)"""
-        unrealized = sum(pos['unrealized_pnl'] for pos in self.positions.values())
-        return self.balance + unrealized
+        """Include allocated principal and unrealized P&L in paper equity."""
+        held = sum(pos['entry_price'] * pos['size'] +
+                   (1 if pos['side'] == 'long' else -1) *
+                   (pos['current_price'] - pos['entry_price']) * pos['size']
+                   for pos in self.positions.values())
+        return self.balance + held
 
     def get_stats(self) -> Dict:
         """Get account statistics"""

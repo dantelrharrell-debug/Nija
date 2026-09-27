@@ -8,7 +8,7 @@ from datetime import datetime
 
 import pandas as pd
 
-from bot.paper_break_retest_replay import replay_break_retest
+from bot.paper_break_retest_replay import replay_break_retest, replay_break_retest_holdout
 from bot.unified_backtest_engine import UnifiedBacktestEngine
 
 
@@ -67,6 +67,26 @@ class ReplayTests(unittest.TestCase):
         self.assertAlmostEqual(engine.equity_curve[-1]["total_equity"], 1009.9)
         engine.close_position(position_id, 110.0, when)
         self.assertAlmostEqual(engine.current_balance, 1009.79)
+
+    def test_holdout_uses_training_bars_only_as_warmup(self) -> None:
+        signal_bars = _break_retest_bars()
+        prefix = pd.DataFrame([signal_bars.iloc[0].to_dict()] * 60)
+        bars = pd.concat([prefix, signal_bars.reset_index(drop=True)], ignore_index=True)
+        bars.index = pd.date_range("2026-01-01", periods=len(bars), freq="h")
+        result = replay_break_retest_holdout(bars, symbol="BTC-USD", holdout_fraction=0.30)
+        self.assertEqual(result["analysis"]["kind"], "chronological_holdout_detector_replay_only")
+        self.assertFalse(result["analysis"]["live_readiness_granted"])
+        self.assertEqual(result["training"]["summary"]["total_trades"], 0)
+        self.assertEqual(result["holdout"]["summary"]["total_trades"], 1)
+        self.assertGreaterEqual(result["holdout"]["trades"][0]["entry_time"],
+                                result["analysis"]["split_timestamp"])
+        self.assertEqual(result["analysis"]["evidence_status"], "limited_sample")
+        altered = bars.copy()
+        split = result["analysis"]["training_bars"]
+        altered.iloc[split:, altered.columns.get_loc("volume")] *= 10
+        changed = replay_break_retest_holdout(altered, symbol="BTC-USD", holdout_fraction=0.30)
+        self.assertEqual(result["training"], changed["training"])
+        json.dumps(result, allow_nan=False)
 
 
 if __name__ == "__main__":
