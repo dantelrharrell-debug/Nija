@@ -4411,8 +4411,36 @@ class NIJAApexStrategyV71:
                         # Default fallback of 1.0 ensures tp_pct=1.0/100=1.0%,
                         # safely above the execution engine MIN_TP_PCT of 0.800%.
                         _tp_pct = getattr(self, '_hf_tp_pct', 1.0) / 100.0
-                        stop_loss  = current_price * (1.0 - _sl_pct)
-                        tp_levels  = [current_price * (1.0 + _tp_pct)]
+                        stop_loss = current_price * (1.0 - _sl_pct)
+
+                        # HF mode keeps its configured hard-risk distance, but it
+                        # may not park that stop inside nearby sell-side liquidity.
+                        # If the fixed risk budget cannot clear recent structure
+                        # plus a 0.5 ATR buffer, reject instead of widening risk.
+                        _hf_atr = scalar(indicators['atr'].iloc[-1])
+                        _hf_swing_low = self.risk_manager.find_swing_low(df, lookback=10)
+                        _hf_buffer = max(_hf_atr * 0.5, current_price * 0.0005)
+                        _hf_required_stop = _hf_swing_low - _hf_buffer
+                        if _hf_atr <= 0 or stop_loss > _hf_required_stop:
+                            _hf_reason = (
+                                f"HF scalp stop geometry unsafe LONG {symbol}: "
+                                f"fixed_stop={stop_loss:.6f} required_below={_hf_required_stop:.6f}"
+                            )
+                            logger.warning("🛑 %s", _hf_reason)
+                            self._emit_terminal_execution_trace(
+                                symbol=symbol,
+                                side='long',
+                                outcome='blocked_by_risk_gate',
+                                reason=_hf_reason,
+                                extra={"gate": "liquidity_stop_geometry", "broker": broker_name},
+                            )
+                            return {
+                                'action': 'hold',
+                                'reason': _hf_reason,
+                                'filter_stage': 'stop_geometry',
+                            }
+
+                        tp_levels = [current_price * (1.0 + _tp_pct)]
                         logger.info(
                             "   ⚡ [HF-SCALP LONG] %s — SL=%.4f (%.1f%%)  TP=%.4f (%.1f%%)",
                             symbol, stop_loss, _sl_pct * 100, tp_levels[0], _tp_pct * 100,
@@ -4422,25 +4450,53 @@ class NIJAApexStrategyV71:
                         swing_low = self.risk_manager.find_swing_low(df, lookback=10)
                         atr = scalar(indicators['atr'].iloc[-1])
                         _atr_pct_long = atr / current_price if current_price > 0 else 0.0
-                        stop_loss = self.risk_manager.calculate_stop_loss(
-                            current_price, 'long', swing_low, atr,
-                            regime=self.current_regime,
-                        )
+                        try:
+                            stop_loss = self.risk_manager.calculate_stop_loss(
+                                current_price, 'long', swing_low, atr,
+                                regime=self.current_regime,
+                            )
+                        except ValueError as _stop_geom_err:
+                            _stop_reason = f"Unsafe stop geometry LONG {symbol}: {_stop_geom_err}"
+                            logger.warning("🛑 %s", _stop_reason)
+                            self._emit_terminal_execution_trace(
+                                symbol=symbol,
+                                side='long',
+                                outcome='blocked_by_risk_gate',
+                                reason=_stop_reason,
+                                extra={"gate": "stop_geometry", "broker": broker_name},
+                            )
+                            return {
+                                'action': 'hold',
+                                'reason': _stop_reason,
+                                'filter_stage': 'stop_geometry',
+                            }
 
                         # ── Execution Exit Config: hard SL cap (LONG) ────────────
-                        # Apply the regime-aware hard stop-loss % as a FLOOR on stop
-                        # (i.e. stop can't be FURTHER than hard_sl_pct below entry)
+                        # Never tighten a structure-safe stop back inside liquidity
+                        # merely to satisfy a smaller profile cap. If the configured
+                        # cap cannot accommodate the safe geometry, reject the setup.
                         if self._active_exit_params is not None:
                             try:
                                 _hard_sl = self._active_exit_params.stop.hard_sl_pct
                                 _sl_floor = current_price * (1.0 - _hard_sl)
                                 if stop_loss < _sl_floor:
-                                    logger.debug(
-                                        "   ⚙️  SL tightened by exit config: %.4f → %.4f "
-                                        "(%.2f%% hard cap)",
-                                        stop_loss, _sl_floor, _hard_sl * 100,
+                                    _sl_reason = (
+                                        f"Exit-profile stop cap conflicts with safe LONG geometry {symbol}: "
+                                        f"safe_stop={stop_loss:.6f} cap_floor={_sl_floor:.6f}"
                                     )
-                                    stop_loss = _sl_floor
+                                    logger.warning("🛑 %s", _sl_reason)
+                                    self._emit_terminal_execution_trace(
+                                        symbol=symbol,
+                                        side='long',
+                                        outcome='blocked_by_risk_gate',
+                                        reason=_sl_reason,
+                                        extra={"gate": "exit_profile_stop_geometry", "broker": broker_name},
+                                    )
+                                    return {
+                                        'action': 'hold',
+                                        'reason': _sl_reason,
+                                        'filter_stage': 'stop_geometry',
+                                    }
                             except Exception as _sl_cap_err:
                                 logger.debug("Exit config SL cap error (long): %s", _sl_cap_err)
 
@@ -5501,8 +5557,33 @@ class NIJAApexStrategyV71:
                         # Default fallback of 1.0 ensures tp_pct=1.0/100=1.0%,
                         # safely above the execution engine MIN_TP_PCT of 0.800%.
                         _tp_pct = getattr(self, '_hf_tp_pct', 1.0) / 100.0
-                        stop_loss  = current_price * (1.0 + _sl_pct)
-                        tp_levels  = [current_price * (1.0 - _tp_pct)]
+                        stop_loss = current_price * (1.0 + _sl_pct)
+
+                        # Symmetric buy-side liquidity guard for HF shorts.
+                        _hf_atr = scalar(indicators['atr'].iloc[-1])
+                        _hf_swing_high = self.risk_manager.find_swing_high(df, lookback=10)
+                        _hf_buffer = max(_hf_atr * 0.5, current_price * 0.0005)
+                        _hf_required_stop = _hf_swing_high + _hf_buffer
+                        if _hf_atr <= 0 or stop_loss < _hf_required_stop:
+                            _hf_reason = (
+                                f"HF scalp stop geometry unsafe SHORT {symbol}: "
+                                f"fixed_stop={stop_loss:.6f} required_above={_hf_required_stop:.6f}"
+                            )
+                            logger.warning("🛑 %s", _hf_reason)
+                            self._emit_terminal_execution_trace(
+                                symbol=symbol,
+                                side='short',
+                                outcome='blocked_by_risk_gate',
+                                reason=_hf_reason,
+                                extra={"gate": "liquidity_stop_geometry", "broker": broker_name},
+                            )
+                            return {
+                                'action': 'hold',
+                                'reason': _hf_reason,
+                                'filter_stage': 'stop_geometry',
+                            }
+
+                        tp_levels = [current_price * (1.0 - _tp_pct)]
                         logger.info(
                             "   ⚡ [HF-SCALP SHORT] %s — SL=%.4f (%.1f%%)  TP=%.4f (%.1f%%)",
                             symbol, stop_loss, _sl_pct * 100, tp_levels[0], _tp_pct * 100,
@@ -5512,10 +5593,26 @@ class NIJAApexStrategyV71:
                         swing_high = self.risk_manager.find_swing_high(df, lookback=10)
                         atr = scalar(indicators['atr'].iloc[-1])
                         _atr_pct_short = atr / current_price if current_price > 0 else 0.0
-                        stop_loss = self.risk_manager.calculate_stop_loss(
-                            current_price, 'short', swing_high, atr,
-                            regime=self.current_regime,
-                        )
+                        try:
+                            stop_loss = self.risk_manager.calculate_stop_loss(
+                                current_price, 'short', swing_high, atr,
+                                regime=self.current_regime,
+                            )
+                        except ValueError as _stop_geom_err:
+                            _stop_reason = f"Unsafe stop geometry SHORT {symbol}: {_stop_geom_err}"
+                            logger.warning("🛑 %s", _stop_reason)
+                            self._emit_terminal_execution_trace(
+                                symbol=symbol,
+                                side='short',
+                                outcome='blocked_by_risk_gate',
+                                reason=_stop_reason,
+                                extra={"gate": "stop_geometry", "broker": broker_name},
+                            )
+                            return {
+                                'action': 'hold',
+                                'reason': _stop_reason,
+                                'filter_stage': 'stop_geometry',
+                            }
 
                         # ── Execution Exit Config: hard SL cap (SHORT) ───────────
                         if self._active_exit_params is not None:
@@ -5523,12 +5620,23 @@ class NIJAApexStrategyV71:
                                 _hard_sl_s = self._active_exit_params.stop.hard_sl_pct
                                 _sl_ceil_s = current_price * (1.0 + _hard_sl_s)
                                 if stop_loss > _sl_ceil_s:
-                                    logger.debug(
-                                        "   ⚙️  SL tightened by exit config (short): %.4f → %.4f "
-                                        "(%.2f%% hard cap)",
-                                        stop_loss, _sl_ceil_s, _hard_sl_s * 100,
+                                    _sl_reason = (
+                                        f"Exit-profile stop cap conflicts with safe SHORT geometry {symbol}: "
+                                        f"safe_stop={stop_loss:.6f} cap_ceiling={_sl_ceil_s:.6f}"
                                     )
-                                    stop_loss = _sl_ceil_s
+                                    logger.warning("🛑 %s", _sl_reason)
+                                    self._emit_terminal_execution_trace(
+                                        symbol=symbol,
+                                        side='short',
+                                        outcome='blocked_by_risk_gate',
+                                        reason=_sl_reason,
+                                        extra={"gate": "exit_profile_stop_geometry", "broker": broker_name},
+                                    )
+                                    return {
+                                        'action': 'hold',
+                                        'reason': _sl_reason,
+                                        'filter_stage': 'stop_geometry',
+                                    }
                             except Exception as _sl_cap_s_err:
                                 logger.debug("Exit config SL cap error (short): %s", _sl_cap_s_err)
 
