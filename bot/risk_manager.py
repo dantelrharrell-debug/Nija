@@ -19,6 +19,7 @@ from typing import Dict, Optional, Tuple, List
 from datetime import datetime
 import time
 import logging
+import math
 
 logger = logging.getLogger("nija.risk")
 
@@ -1274,6 +1275,37 @@ class AdaptiveRiskManager:
         Returns:
             Adaptive stop loss price (capped at SL_MAX_CAP from entry)
         """
+        # Reject unknown or internally inconsistent stop geometry. A missing or
+        # non-finite volatility/structure input must never degrade to a zero-buffer
+        # stop on a liquidity level.
+        try:
+            entry_price = float(entry_price)
+            swing_level = float(swing_level)
+            atr = float(atr)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("unsafe_stop_geometry: non-numeric stop input") from exc
+
+        side = str(side).lower()
+        if side not in {"long", "short"}:
+            raise ValueError(f"unsafe_stop_geometry: unsupported side {side!r}")
+        if not math.isfinite(entry_price) or entry_price <= 0:
+            raise ValueError("unsafe_stop_geometry: invalid entry price")
+        if not math.isfinite(swing_level) or swing_level <= 0:
+            raise ValueError("unsafe_stop_geometry: invalid swing level")
+        if not math.isfinite(atr) or atr <= 0:
+            raise ValueError("unsafe_stop_geometry: ATR must be finite and positive")
+        if side == "long" and swing_level >= entry_price:
+            raise ValueError("unsafe_stop_geometry: long swing level must be below entry")
+        if side == "short" and swing_level <= entry_price:
+            raise ValueError("unsafe_stop_geometry: short swing level must be above entry")
+        if bb_width is not None:
+            try:
+                bb_width = float(bb_width)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("unsafe_stop_geometry: non-numeric BB width") from exc
+            if not math.isfinite(bb_width) or bb_width < 0:
+                raise ValueError("unsafe_stop_geometry: invalid BB width")
+
         # ── Regime-aware ATR multiplier ────────────────────────────────────────
         regime_str = ""
         if regime is not None:
