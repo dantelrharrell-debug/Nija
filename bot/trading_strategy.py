@@ -1164,8 +1164,82 @@ class TradingStrategy:
             self._heartbeat_trade_thread.start()
         logger.info("💓 Heartbeat trade thread started")
 
+
+    def _heartbeat_nonexecution_prereqs_ready(self) -> tuple[bool, str]:
+        """Return whether heartbeat may consume its one startup attempt.
+
+        execution_ready is intentionally excluded because the heartbeat is the
+        proof that establishes it. All other canonical readiness components
+        must already be true before the one-shot capital-bearing verification
+        is allowed to run.
+        """
+        try:
+            from bot import readiness_table as _readiness_table
+            snapshot = dict(_readiness_table.snapshot() or {})
+        except Exception as exc:
+            return False, f"readiness_snapshot_error:{type(exc).__name__}:{exc}"
+
+        required = (
+            "broker_connected",
+            "balance_hydrated",
+            "authority_ready",
+            "capital_ready",
+            "risk_ready",
+            "strategy_ready",
+            "nonce_ready",
+            "bootstrap_ready",
+            "position_sync_ready",
+        )
+        missing = tuple(key for key in required if not bool(snapshot.get(key, False)))
+        if missing:
+            return False, "pending:" + ",".join(missing)
+        return True, "canonical_nonexecution_prereqs_ready"
+
+    def _wait_for_heartbeat_nonexecution_prereqs(self) -> tuple[bool, str]:
+        """Bounded wait before consuming the one allowed heartbeat attempt."""
+        try:
+            wait_s = max(
+                0.0,
+                min(
+                    float(os.environ.get("NIJA_HEARTBEAT_PREREQ_WAIT_S", "90") or "90"),
+                    180.0,
+                ),
+            )
+        except (TypeError, ValueError):
+            wait_s = 90.0
+
+        ready, detail = self._heartbeat_nonexecution_prereqs_ready()
+        if ready or wait_s <= 0.0:
+            return ready, detail
+
+        deadline = time.monotonic() + wait_s
+        last_detail = detail
+        while time.monotonic() < deadline:
+            remaining = max(0.0, deadline - time.monotonic())
+            time.sleep(min(1.0, remaining))
+            ready, last_detail = self._heartbeat_nonexecution_prereqs_ready()
+            if ready:
+                logger.critical(
+                    "HEARTBEAT_PREREQ_GATE_V435_READY "
+                    "detail=%s waited_before_first_attempt=true "
+                    "attempts_consumed=0 execution_ready_excluded=true "
+                    "order_submitted=false execution_proof_fabricated=false "
+                    "safety_gates_bypassed=false",
+                    last_detail,
+                )
+                return True, last_detail
+
+        logger.warning(
+            "HEARTBEAT_PREREQ_GATE_V435_TIMEOUT detail=%s wait_s=%.1f "
+            "attempts_consumed=0 order_submitted=false trading_fail_closed=true "
+            "execution_proof_fabricated=false safety_gates_bypassed=false",
+            last_detail,
+            wait_s,
+        )
+        return False, last_detail
+
     def _heartbeat_trade_runner(self) -> None:
-        """Background thread: execute heartbeat immediately and retry until verification succeeds."""
+        """Background thread: execute heartbeat only after canonical prerequisites mature."""
         first_delay_s = max(0.0, _HEARTBEAT_TRADE_FIRST_ATTEMPT_DELAY_S)
         retry_interval_s = max(1.0, _HEARTBEAT_TRADE_INTERVAL_S)
         retry_backoff_max_s = max(retry_interval_s, float(_HEARTBEAT_RETRY_BACKOFF_MAX_S))
@@ -1178,6 +1252,18 @@ class TradingStrategy:
                 first_delay_s,
             )
             time.sleep(first_delay_s)
+
+        prereqs_ready, prereq_detail = self._wait_for_heartbeat_nonexecution_prereqs()
+        if not prereqs_ready:
+            with self._heartbeat_trade_lock:
+                self._heartbeat_trade_success = False
+                self._heartbeat_trade_completed = False
+            logger.critical(
+                "⛔ Heartbeat verification not attempted: canonical prerequisites did not mature (%s)",
+                prereq_detail,
+            )
+            return
+
         attempt = 1
         try:
             max_attempts = max(1, int(os.environ.get("NIJA_HEARTBEAT_MAX_ATTEMPTS", "1") or "1"))
