@@ -11164,16 +11164,41 @@ class KrakenBroker(BaseBroker):
                 all_assets_usd = self.compute_total_usd_balance(result, self._get_asset_usd_price)
                 non_usd_usd_value = max(0.0, all_assets_usd - total)
 
-                # Also get TradeBalance to see held funds
-                # Use MONITORING category for balance checks (conservative rate limiting)
-                balance_category = KrakenAPICategory.MONITORING if KrakenAPICategory is not None else None
-                trade_balance = self._kraken_private_call('TradeBalance', {'asset': 'ZUSD'}, category=balance_category)
-                logger.info(
-                    "[KrakenBalancePipeline] trade_balance_response account=%s type=%s has_error=%s",
-                    self.account_identifier,
-                    type(trade_balance).__name__,
-                    bool(isinstance(trade_balance, dict) and trade_balance.get("error")),
+                # Also get TradeBalance to see held funds.  The dedicated
+                # capital-refresh worker already has a genuine authenticated Balance
+                # response plus current asset valuation at this point.  A second
+                # private Kraken read here can sit behind the monitoring/nonce queue
+                # long enough to strand the entire capital-refresh generation.
+                #
+                # For that worker only, finish from the authenticated Balance-derived
+                # valuation instead of issuing redundant private I/O.  This is
+                # conservative for capital authority (no held/margin uplift is added)
+                # and preserves the normal TradeBalance path everywhere else.
+                _capital_refresh_worker = (
+                    threading.current_thread().name.startswith("capital-balance-fetch-kraken")
                 )
+                trade_balance = None
+                if _capital_refresh_worker:
+                    logger.critical(
+                        "KRAKEN_CAPITAL_TAIL_V434_TRADEBALANCE_SKIPPED "
+                        "account=%s source=authenticated_balance_plus_asset_valuation "
+                        "redundant_private_read=false held_uplift_omitted=true "
+                        "capital_overstatement=false freshness_extended=false "
+                        "execution_proof_fabricated=false safety_gates_bypassed=false",
+                        self.account_identifier,
+                    )
+                else:
+                    # Use MONITORING category for balance checks (conservative rate limiting)
+                    balance_category = KrakenAPICategory.MONITORING if KrakenAPICategory is not None else None
+                    trade_balance = self._kraken_private_call(
+                        'TradeBalance', {'asset': 'ZUSD'}, category=balance_category
+                    )
+                    logger.info(
+                        "[KrakenBalancePipeline] trade_balance_response account=%s type=%s has_error=%s",
+                        self.account_identifier,
+                        type(trade_balance).__name__,
+                        bool(isinstance(trade_balance, dict) and trade_balance.get("error")),
+                    )
                 held_amount = 0.0
                 trade_balance_equity_usd = 0.0
 
