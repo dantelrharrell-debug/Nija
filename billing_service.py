@@ -646,8 +646,23 @@ def create_app(store: Optional[BillingServiceStore] = None) -> Flask:
             stripe = _stripe_module()
             raw_payload = request.get_data(cache=False, as_text=False)
             event = stripe.Webhook.construct_event(raw_payload, signature, webhook_secret)
-        except Exception:
-            logger.warning("Rejected Stripe webhook with missing/invalid signature or payload")
+        except stripe.error.SignatureVerificationError as exc:
+            logger.warning(
+                "Rejected Stripe webhook: signature verification failed (%s)",
+                str(exc).splitlines()[0][:240],
+            )
+            return jsonify({"error": "invalid_webhook_signature"}), 400
+        except ValueError as exc:
+            logger.warning(
+                "Rejected Stripe webhook: payload parsing failed (%s)",
+                type(exc).__name__,
+            )
+            return jsonify({"error": "invalid_webhook_payload"}), 400
+        except Exception as exc:
+            logger.warning(
+                "Rejected Stripe webhook: event construction failed (%s)",
+                type(exc).__name__,
+            )
             return jsonify({"error": "invalid_webhook"}), 400
 
         event_id = _string_or_none(_obj_value(event, "id"))
