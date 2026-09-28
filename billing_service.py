@@ -644,6 +644,11 @@ def create_app(store: Optional[BillingServiceStore] = None) -> Flask:
 
         try:
             stripe = _stripe_module()
+        except RuntimeError:
+            logger.error("Stripe webhook called before STRIPE_SECRET_KEY was configured")
+            return jsonify({"error": "stripe_not_configured"}), 503
+
+        try:
             raw_payload = request.get_data(cache=False, as_text=False)
             event = stripe.Webhook.construct_event(raw_payload, signature, webhook_secret)
         except stripe.error.SignatureVerificationError as exc:
