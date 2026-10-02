@@ -9,6 +9,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import pandas as pd
+
 from bot.tests.test_paper_break_retest_replay import _break_retest_bars
 
 
@@ -69,6 +71,35 @@ class BacktestCliProvenanceTests(unittest.TestCase):
             self.assertEqual(data["summary"]["total_trades"], 1)
             compare = subprocess.run(
                 [sys.executable, str(CLI), "compare", "--backtest", str(out), "--live", str(live)],
+                cwd=REPO_ROOT, capture_output=True, text=True,
+            )
+            self.assertNotEqual(compare.returncode, 0)
+            self.assertIn("Cannot compare", compare.stderr)
+
+    def test_heldout_export_is_labeled_and_rejected_by_live_compare(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bars = Path(directory) / "bars.csv"
+            out = Path(directory) / "heldout.json"
+            prefix = _break_retest_bars().iloc[:1].copy()
+            df = pd.concat([prefix] * 60 + [_break_retest_bars()], ignore_index=True)
+            df.index = pd.date_range("2026-01-01", periods=len(df), freq="h")
+            df.rename_axis("timestamp").to_csv(bars)
+            run = subprocess.run(
+                [sys.executable, str(CLI), "backtest", "--strategy", "break_retest_replay",
+                 "--symbol", "BTC-USD", "--data", str(bars), "--holdout-fraction", "0.30",
+                 "--output", str(out)],
+                cwd=REPO_ROOT, capture_output=True, text=True,
+            )
+            self.assertEqual(run.returncode, 0, run.stderr)
+            data = json.loads(out.read_text(encoding="utf-8"), parse_constant=lambda x: self.fail(x))
+            self.assertEqual(data["analysis"]["kind"], "chronological_holdout_detector_replay_only")
+            self.assertEqual(data["holdout"]["summary"]["total_trades"], 1)
+            live = Path(directory) / "live"
+            live.mkdir()
+            (live / "tracker_state.json").write_text('{"trades": []}', encoding="utf-8")
+            compare = subprocess.run(
+                [sys.executable, str(CLI), "compare", "--backtest", str(out),
+                 "--live", str(live)],
                 cwd=REPO_ROOT, capture_output=True, text=True,
             )
             self.assertNotEqual(compare.returncode, 0)
