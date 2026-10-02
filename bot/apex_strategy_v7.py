@@ -15,6 +15,7 @@ import numpy as np
 from typing import Dict, Optional, Tuple
 from datetime import datetime
 import logging
+import math
 
 # Import Apex modules
 from apex_indicators import (
@@ -299,29 +300,57 @@ class ApexStrategyV7:
         Returns:
             float: Stop loss price
         """
-        entry_price = df['close'].iloc[-1]
-        atr = indicators['atr']
+        entry_price = float(df['close'].iloc[-1])
+        atr = float(indicators['atr'])
+        side = str(side).lower()
+        if (
+            not math.isfinite(entry_price)
+            or entry_price <= 0
+            or not math.isfinite(atr)
+            or atr <= 0
+            or side not in {'long', 'short'}
+        ):
+            raise ValueError("unsafe_stop_geometry: invalid legacy Apex stop inputs")
+
         atr_buffer = atr * STOP_LOSS['atr_multiplier']
+        min_distance = float(STOP_LOSS['min_stop_distance'])
+        max_distance = float(STOP_LOSS['max_stop_distance'])
 
         if side == 'long':
-            # Find swing low
-            swing_low = find_swing_low(df, STOP_LOSS['swing_lookback'])
+            # Keep the stop beyond sell-side swing liquidity plus ATR buffer.
+            swing_low = float(find_swing_low(df, STOP_LOSS['swing_lookback']))
+            if not math.isfinite(swing_low) or not (0 < swing_low < entry_price):
+                raise ValueError("unsafe_stop_geometry: invalid long swing low")
             stop_loss = swing_low - atr_buffer
 
-            # Ensure minimum/maximum stop distance
-            min_stop = entry_price * (1 - STOP_LOSS['max_stop_distance'])
-            max_stop = entry_price * (1 - STOP_LOSS['min_stop_distance'])
-            stop_loss = max(min_stop, min(stop_loss, max_stop))
+            # A minimum-distance rule may widen the stop, but a maximum-distance
+            # rule must never tighten it back inside the structural invalidation.
+            min_distance_stop = entry_price * (1 - min_distance)
+            if stop_loss > min_distance_stop:
+                stop_loss = min_distance_stop
+            max_distance_stop = entry_price * (1 - max_distance)
+            if stop_loss < max_distance_stop:
+                raise ValueError(
+                    "unsafe_stop_geometry: long structure-safe stop exceeds "
+                    "legacy Apex max stop distance"
+                )
 
         else:  # short
-            # Find swing high
-            swing_high = find_swing_high(df, STOP_LOSS['swing_lookback'])
+            # Symmetric protection beyond buy-side swing liquidity.
+            swing_high = float(find_swing_high(df, STOP_LOSS['swing_lookback']))
+            if not math.isfinite(swing_high) or swing_high <= entry_price:
+                raise ValueError("unsafe_stop_geometry: invalid short swing high")
             stop_loss = swing_high + atr_buffer
 
-            # Ensure minimum/maximum stop distance
-            min_stop = entry_price * (1 + STOP_LOSS['min_stop_distance'])
-            max_stop = entry_price * (1 + STOP_LOSS['max_stop_distance'])
-            stop_loss = min(max_stop, max(stop_loss, min_stop))
+            min_distance_stop = entry_price * (1 + min_distance)
+            if stop_loss < min_distance_stop:
+                stop_loss = min_distance_stop
+            max_distance_stop = entry_price * (1 + max_distance)
+            if stop_loss > max_distance_stop:
+                raise ValueError(
+                    "unsafe_stop_geometry: short structure-safe stop exceeds "
+                    "legacy Apex max stop distance"
+                )
 
         return stop_loss
 
@@ -407,7 +436,16 @@ class ApexStrategyV7:
 
         # Calculate trade parameters
         entry_price = df['close'].iloc[-1]
-        stop_loss = self.calculate_stop_loss(df, indicators, side)
+        try:
+            stop_loss = self.calculate_stop_loss(df, indicators, side)
+        except ValueError as exc:
+            logger.warning("🛑 Legacy Apex entry rejected: %s %s", symbol, exc)
+            return {
+                'symbol': symbol,
+                'should_enter': False,
+                'reason': str(exc),
+                'filter_stage': 'stop_geometry',
+            }
 
         # Assess trend quality
         trend_quality = self.risk_manager.assess_trend_quality(

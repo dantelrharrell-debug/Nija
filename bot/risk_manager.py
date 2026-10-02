@@ -19,6 +19,7 @@ from typing import Dict, Optional, Tuple, List
 from datetime import datetime
 import time
 import logging
+import math
 
 logger = logging.getLogger("nija.risk")
 
@@ -1260,7 +1261,8 @@ class AdaptiveRiskManager:
         Formula: SL = max(base_SL, ATR × atr_mult, BB_width × k)
         - Expands in trends (high volatility) and volatile regimes
         - Tightens in ranging / choppy regimes for quicker exits
-        - Hard ceiling: stop distance never exceeds SL_MAX_CAP (3%) of entry price
+        - Fail closed when the structure/volatility-safe stop would exceed
+          SL_MAX_CAP (3%) of entry price; never pull a stop back inside structure
 
         Args:
             entry_price: Entry price
@@ -1271,8 +1273,40 @@ class AdaptiveRiskManager:
             regime: Current market regime (MarketRegime enum or string, optional)
 
         Returns:
-            Adaptive stop loss price (capped at SL_MAX_CAP from entry)
+            Adaptive stop loss price when the structure-safe geometry fits the
+            configured risk cap. Raises ValueError otherwise.
         """
+        # Reject unknown or internally inconsistent stop geometry. A missing or
+        # non-finite volatility/structure input must never degrade to a zero-buffer
+        # stop on a liquidity level.
+        try:
+            entry_price = float(entry_price)
+            swing_level = float(swing_level)
+            atr = float(atr)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("unsafe_stop_geometry: non-numeric stop input") from exc
+
+        side = str(side).lower()
+        if side not in {"long", "short"}:
+            raise ValueError(f"unsafe_stop_geometry: unsupported side {side!r}")
+        if not math.isfinite(entry_price) or entry_price <= 0:
+            raise ValueError("unsafe_stop_geometry: invalid entry price")
+        if not math.isfinite(swing_level) or swing_level <= 0:
+            raise ValueError("unsafe_stop_geometry: invalid swing level")
+        if not math.isfinite(atr) or atr <= 0:
+            raise ValueError("unsafe_stop_geometry: ATR must be finite and positive")
+        if side == "long" and swing_level >= entry_price:
+            raise ValueError("unsafe_stop_geometry: long swing level must be below entry")
+        if side == "short" and swing_level <= entry_price:
+            raise ValueError("unsafe_stop_geometry: short swing level must be above entry")
+        if bb_width is not None:
+            try:
+                bb_width = float(bb_width)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("unsafe_stop_geometry: non-numeric BB width") from exc
+            if not math.isfinite(bb_width) or bb_width < 0:
+                raise ValueError("unsafe_stop_geometry: invalid BB width")
+
         # ── Regime-aware ATR multiplier ────────────────────────────────────────
         regime_str = ""
         if regime is not None:
@@ -1316,13 +1350,26 @@ class AdaptiveRiskManager:
         else:
             adaptive_distance = max(base_distance, atr_stop_distance)
 
-        # ── Hard SL ceiling: cap stop distance at SL_MAX_CAP (3%) ─────────────
+        # ── Hard SL ceiling: FAIL CLOSED, never move inside structure ───────────
+        # A stop that belongs beyond a swing/liquidity invalidation point must not
+        # be tightened merely to satisfy a percentage cap. Doing so converts a
+        # structure-aware stop into an obvious liquidity/noise stop. If the safe
+        # geometry needs more room than the account policy permits, reject the
+        # setup and let the caller return HOLD.
         max_distance = entry_price * SL_MAX_CAP
-        atr_sl_applied = adaptive_distance > max_distance
-        if atr_sl_applied:
-            adaptive_distance = max_distance
+        if adaptive_distance > max_distance:
+            required_pct = adaptive_distance / entry_price if entry_price > 0 else float("inf")
+            logger.warning(
+                "🛑 Unsafe stop geometry: side=%s entry=%.6f swing=%.6f "
+                "required=%.3f%% > max=%.3f%% — rejecting setup",
+                side, entry_price, swing_level, required_pct * 100, SL_MAX_CAP * 100,
+            )
+            raise ValueError(
+                "unsafe_stop_geometry: required structure/volatility stop "
+                f"{required_pct:.6f} exceeds SL_MAX_CAP {SL_MAX_CAP:.6f}"
+            )
 
-        # Apply adaptive distance
+        # Apply the full structure/volatility-safe distance.
         if side == 'long':
             stop_loss = entry_price - adaptive_distance
         else:  # short
@@ -1331,9 +1378,9 @@ class AdaptiveRiskManager:
         # ── ATR SL logging ─────────────────────────────────────────────────────
         atr_pct = atr / entry_price if entry_price > 0 else 0.0
         logger.info(
-            "📏 ATR SL: regime=%s mult=%.1f atr_pct=%.4f → SL=%.6f%s",
-            regime_str or "UNKNOWN", atr_mult, atr_pct, stop_loss,
-            " [capped at SL_MAX_CAP=3%%]" if atr_sl_applied else "",
+            "📏 ATR SL: regime=%s mult=%.1f atr_pct=%.4f → SL=%.6f "
+            "[structure-safe; max_cap=%.1f%%]",
+            regime_str or "UNKNOWN", atr_mult, atr_pct, stop_loss, SL_MAX_CAP * 100,
         )
 
         return stop_loss
