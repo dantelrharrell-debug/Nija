@@ -385,11 +385,18 @@ def _fetch_authoritative_rows_sync(broker: Any) -> list[dict[str, Any]]:
 
 
 def _finish_auth_flight(flight: dict[str, Any], broker: Any) -> None:
+    result = None
+    error = None
     try:
-        flight["result"] = _fetch_authoritative_rows_sync(broker)
+        result = _fetch_authoritative_rows_sync(broker)
     except BaseException as exc:
-        flight["error"] = exc
-    finally:
+        error = exc
+    # Completion and in-flight handoff adoption share one publication lock.
+    # Do not hold it during broker I/O: waiters must remain able to adopt
+    # authenticated evidence while the original request is pending.
+    with _AUTH_LOCK:
+        flight["result"] = result
+        flight["error"] = error
         flight["finished_at"] = time.monotonic()
         flight["event"].set()
 
@@ -400,11 +407,14 @@ def _balance_rows_while_waiting(broker: Any, flight: dict[str, Any]) -> list[dic
         return None
     try:
         v312 = importlib.import_module("bot.runtime_kraken_balance_epoch_handoff_v312_patch")
-        observation = v312._fresh_observation(broker, not_before=float(flight["started_at"]))
-        if observation is None or flight["event"].is_set():
-            return None
-        rows = v312._rows_from_observation(broker, observation)
-        v312._log_handoff(broker, observation, rows, "inflight_short_ttl_handoff")
+        with _AUTH_LOCK:
+            if flight["event"].is_set():
+                return None
+            observation = v312._fresh_observation(broker, not_before=float(flight["started_at"]))
+            if observation is None:
+                return None
+            rows = v312._rows_from_observation(broker, observation)
+            v312._log_handoff(broker, observation, rows, "inflight_short_ttl_handoff")
         # The existing worker remains registered and may finish normally. This
         # handoff neither cancels it nor authorizes a replacement private read.
         return rows

@@ -115,6 +115,55 @@ class KrakenInflightBalanceHandoffTests(unittest.TestCase):
         ):
             self.assertIsNone(v286._balance_rows_while_waiting(broker, flight))
 
+    def test_completion_cannot_publish_error_during_handoff_recording(self) -> None:
+        broker = KrakenBroker()
+        flight = {"event": threading.Event(), "started_at": time.monotonic()}
+        v312._record_observation(broker, {"error": [], "result": {}})
+        fetch_finished = threading.Event()
+        rows = [{"symbol": "BTC-USD", "quantity": 0.001}]
+
+        def fail_fetch(_broker):
+            fetch_finished.set()
+            raise RuntimeError("concurrent exchange error")
+
+        worker = threading.Thread(target=v286._finish_auth_flight, args=(flight, broker))
+
+        def record(_broker, _rows):
+            worker.start()
+            self.assertTrue(fetch_finished.wait(1))
+            # The worker has its error, but cannot publish completion while
+            # this handoff owns the publication lock and records its snapshot.
+            self.assertFalse(flight["event"].wait(0.05))
+            self.assertNotIn("error", flight)
+
+        with (
+            patch.dict(os.environ, {"NIJA_RUNTIME_KRAKEN_BALANCE_EPOCH_HANDOFF_V312_READY": "1"}),
+            patch.object(v286, "_fetch_authoritative_rows_sync", side_effect=fail_fetch),
+            patch.object(v286, "_build_authoritative_rows", return_value=rows),
+            patch.object(v286, "_record_snapshot_success", side_effect=record),
+        ):
+            try:
+                self.assertEqual(v286._balance_rows_while_waiting(broker, flight), rows)
+            finally:
+                worker.join(1)
+            self.assertFalse(worker.is_alive())
+            self.assertTrue(flight["event"].is_set())
+            self.assertEqual(str(flight["error"]), "concurrent exchange error")
+
+    def test_worker_completion_first_prevents_snapshot_recording(self) -> None:
+        broker = KrakenBroker()
+        flight = {"event": threading.Event(), "started_at": time.monotonic()}
+        v312._record_observation(broker, {"error": [], "result": {}})
+        with (
+            patch.dict(os.environ, {"NIJA_RUNTIME_KRAKEN_BALANCE_EPOCH_HANDOFF_V312_READY": "1"}),
+            patch.object(v286, "_fetch_authoritative_rows_sync", side_effect=RuntimeError("exchange failed")),
+            patch.object(v286, "_record_snapshot_success") as recorder,
+        ):
+            v286._finish_auth_flight(flight, broker)
+            self.assertIsNone(v286._balance_rows_while_waiting(broker, flight))
+            recorder.assert_not_called()
+            self.assertEqual(str(flight["error"]), "exchange failed")
+
     def test_heartbeat_catches_balance_arriving_between_scheduler_ticks_without_io(self) -> None:
         broker = KrakenBroker()
 
