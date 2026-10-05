@@ -146,6 +146,9 @@ class TestV2DetectorCoverage(unittest.TestCase):
         self.assertIsNotNone(signal)
         self.assertEqual(signal.strategy, "FIRST_CANDLE_ORB")
         self.assertEqual(signal.direction, "long")
+        self.assertLess(signal.suggested_stop, 99.0)
+        self.assertEqual(signal.metadata.get("stop_basis"), "below_opening_range_liquidity")
+        self.assertGreater(signal.metadata.get("stop_buffer", 0.0), 0.0)
 
     def test_mean_reversion_detects_oversold_recovery(self):
         close = [100.0] * 45 + [95.0, 92.0, 89.0, 88.0, 94.0]
