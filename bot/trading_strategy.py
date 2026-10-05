@@ -68,7 +68,7 @@ def _heartbeat_result_has_confirmed_submission(result: Any) -> bool:
     return bool(order_id and status in _HEARTBEAT_ACKNOWLEDGED_STATUSES)
 
 
-def _kraken_heartbeat_auth_probe(broker: Any) -> Optional[tuple[bool, str]]:
+def _kraken_heartbeat_auth_probe(broker: Any, *, wait_seconds: float = 0.0) -> Optional[tuple[bool, str]]:
     """Reuse genuine recent Kraken Balance evidence for heartbeat AUTH_VERIFY.
 
     KrakenBroker.get_account_balance() is a rich capital pipeline that can
@@ -79,8 +79,9 @@ def _kraken_heartbeat_auth_probe(broker: Any) -> Optional[tuple[bool, str]]:
 
     The canonical Kraken balance pipeline already records credential-proven,
     authenticated Balance responses in v312/v319 with a short TTL. Heartbeat
-    AUTH_VERIFY consumes only that evidence. If none is currently fresh it
-    fails closed and retries later; it performs no broker I/O itself.
+    AUTH_VERIFY consumes only that evidence. A bounded observation-only wait
+    avoids missing a short-lived response between scheduler ticks. If none
+    arrives it fails closed; it performs no broker I/O itself.
     """
     if type(broker).__name__ != "KrakenBroker":
         return None
@@ -89,23 +90,31 @@ def _kraken_heartbeat_auth_probe(broker: Any) -> Optional[tuple[bool, str]]:
         from bot import runtime_kraken_recent_balance_prewait_v319_patch as v319
 
         recent = getattr(v319, "_recent_observation", None)
-        observation = recent(broker) if callable(recent) else None
-        response = (
-            observation.get("response")
-            if isinstance(observation, dict)
-            else None
-        )
-        if (
-            isinstance(response, dict)
-            and not response.get("error")
-            and isinstance(response.get("result"), dict)
-        ):
-            logger.info(
-                "HEARTBEAT_KRAKEN_AUTH_REUSED authenticated_balance=true "
-                "same_credential=true short_ttl=true new_broker_io=false "
-                "execution_proof_fabricated=false safety_gates_bypassed=false"
+        if not callable(recent):
+            raise RuntimeError("kraken_recent_observation_unavailable")
+        deadline = time.monotonic() + max(0.0, min(30.0, float(wait_seconds)))
+        while True:
+            observation = recent(broker)
+            response = (
+                observation.get("response")
+                if isinstance(observation, dict)
+                else None
             )
-            return True, "kraken_recent_authenticated_balance"
+            if (
+                isinstance(response, dict)
+                and not response.get("error")
+                and isinstance(response.get("result"), dict)
+            ):
+                logger.info(
+                    "HEARTBEAT_KRAKEN_AUTH_REUSED authenticated_balance=true "
+                    "same_credential=true short_ttl=true new_broker_io=false "
+                    "execution_proof_fabricated=false safety_gates_bypassed=false"
+                )
+                return True, "kraken_recent_authenticated_balance"
+            remaining = deadline - time.monotonic()
+            if remaining <= 0.0:
+                break
+            time.sleep(min(0.25, remaining))
     except Exception:
         logger.debug("Kraken heartbeat recent-auth reuse unavailable", exc_info=True)
 
@@ -1324,7 +1333,11 @@ class TradingStrategy:
 
     def _heartbeat_auth_verify(self, broker: Any) -> tuple[bool, str]:
         """Best-effort authenticated request probe for AUTH_VERIFY stage."""
-        kraken_probe = _kraken_heartbeat_auth_probe(broker)
+        try:
+            kraken_wait_s = float(os.environ.get("NIJA_HEARTBEAT_AUTH_PROBE_TIMEOUT_S", "12") or "12")
+        except (TypeError, ValueError):
+            kraken_wait_s = 12.0
+        kraken_probe = _kraken_heartbeat_auth_probe(broker, wait_seconds=max(1.0, min(30.0, kraken_wait_s)))
         if kraken_probe is not None:
             return kraken_probe
 

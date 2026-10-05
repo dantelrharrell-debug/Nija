@@ -394,6 +394,25 @@ def _finish_auth_flight(flight: dict[str, Any], broker: Any) -> None:
         flight["event"].set()
 
 
+def _balance_rows_while_waiting(broker: Any, flight: dict[str, Any]) -> list[dict[str, Any]] | None:
+    """Consume same-flight authenticated evidence before its short TTL expires."""
+    if os.environ.get("NIJA_RUNTIME_KRAKEN_BALANCE_EPOCH_HANDOFF_V312_READY") != "1":
+        return None
+    try:
+        v312 = importlib.import_module("bot.runtime_kraken_balance_epoch_handoff_v312_patch")
+        observation = v312._fresh_observation(broker, not_before=float(flight["started_at"]))
+        if observation is None or flight["event"].is_set():
+            return None
+        rows = v312._rows_from_observation(broker, observation)
+        v312._log_handoff(broker, observation, rows, "inflight_short_ttl_handoff")
+        # The existing worker remains registered and may finish normally. This
+        # handoff neither cancels it nor authorizes a replacement private read.
+        return rows
+    except Exception:
+        LOGGER.debug("Kraken in-flight authenticated Balance handoff unavailable", exc_info=True)
+        return None
+
+
 def _authoritative_positions(broker: Any) -> list[dict[str, Any]]:
     key = id(broker)
     with _AUTH_LOCK:
@@ -419,11 +438,21 @@ def _authoritative_positions(broker: Any) -> list[dict[str, Any]]:
         else:
             started = False
     wait_s = _auth_wait_s()
-    if not flight["event"].wait(wait_s):
-        age = max(0.0, time.monotonic() - _float(flight.get("started_at")))
-        raise TimeoutError(
-            f"Kraken authoritative position Balance pending after {wait_s:.1f}s age={age:.1f}s single_flight_reused={str(not started).lower()}"
-        )
+    deadline = time.monotonic() + wait_s
+    while not flight["event"].is_set():
+        # A 30-second caller wait can miss an authenticated Balance that is
+        # valid for only 10 seconds. Inspect the existing credential/epoch/TTL
+        # handoff during the wait, without issuing broker I/O or extending it.
+        rows = _balance_rows_while_waiting(broker, flight)
+        if rows is not None:
+            return [dict(row) for row in rows]
+        remaining = deadline - time.monotonic()
+        if remaining <= 0.0:
+            age = max(0.0, time.monotonic() - _float(flight.get("started_at")))
+            raise TimeoutError(
+                f"Kraken authoritative position Balance pending after {wait_s:.1f}s age={age:.1f}s single_flight_reused={str(not started).lower()}"
+            )
+        flight["event"].wait(min(0.25, remaining))
     error = flight.get("error")
     result = flight.get("result")
     with _AUTH_LOCK:

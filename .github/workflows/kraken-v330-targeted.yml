@@ -5,7 +5,10 @@ on:
     paths:
       - 'bot/runtime_kraken_authoritative_snapshot_liveness_v330_patch.py'
       - 'bot/runtime_kraken_recent_balance_prewait_v319_patch.py'
+      - 'bot/runtime_kraken_position_refresh_liveness_v286_patch.py'
+      - 'bot/trading_strategy.py'
       - 'tests/test_runtime_kraken_authoritative_snapshot_liveness_v330.py'
+      - 'tests/test_kraken_inflight_balance_handoff.py'
       - '.github/workflows/kraken-v330-targeted.yml'
 
 jobs:
@@ -14,6 +17,7 @@ jobs:
     timeout-minutes: 10
     env:
       NIJA_DEFER_RUNTIME_SITE_HOOKS: '1'
+      DRY_RUN_MODE: 'true'
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -24,4 +28,7 @@ jobs:
       - name: Install CI sitecustomize defer guard
         run: python -S scripts/install_sitecustomize_defer_guard.py
       - name: Run Kraken v330 regression tests
-        run: python -m unittest -v tests.test_runtime_kraken_authoritative_snapshot_liveness_v330
+        run: >-
+          python -m unittest -v
+          tests.test_runtime_kraken_authoritative_snapshot_liveness_v330
+          tests.test_kraken_inflight_balance_handoff
