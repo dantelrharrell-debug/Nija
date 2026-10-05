@@ -247,6 +247,10 @@ services:
     autoDeployTrigger: checksPass
     healthCheckPath: /healthz
     envVars:
+      # Match repository CI/runtime compatibility; Render otherwise selects
+      # the newest Python release, which is not compatible with SQLAlchemy 2.0.25.
+      - key: PYTHON_VERSION
+        value: "3.11.11"
       - key: BILLING_DATABASE_URL
         fromDatabase:
           name: nija-billing-db
@@ -265,6 +269,30 @@ services:
         value: https://nijaaitrading.com
       - key: NIJA_BILLING_ALLOWED_ORIGINS
         value: https://nijaaitrading.com,https://www.nijaaitrading.com
+
+      # Bitcoin checkout is fail-closed until the merchant account and public
+      # billing-service origin are explicitly configured. BitPay notifications
+      # are reconciled server-side before a payment is marked verified.
+      - key: NIJA_BITCOIN_PAYMENTS_ENABLED
+        value: "false"
+      - key: NIJA_BITCOIN_ENABLED_OFFERS
+        value: "lessons"
+      - key: NIJA_BITCOIN_ALLOW_RECURRING_ONE_TIME_PAYMENTS
+        value: "false"
+      - key: NIJA_BITCOIN_TRANSACTION_SPEED
+        value: "medium"
+      - key: BITPAY_API_BASE_URL
+        value: https://bitpay.com
+      - key: BITPAY_POS_TOKEN
+        sync: false
+      # Authoritative standalone billing origin. Bitcoin notifications and
+      # website verification must target this service, never the legacy IONOS hook.
+      - key: NIJA_BILLING_PUBLIC_URL
+        value: https://nija-billing-api.onrender.com
+      # Set only after Stripe registers the production /api/billing/webhook.
+      # Existing Blueprint updates intentionally do not populate sync:false values.
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
       - key: STRIPE_PRICE_FOUNDING_BETA
         value: price_1U02snI0gfJjTf3ERCCo4usA
       - key: STRIPE_PRODUCT_FOUNDING_BETA

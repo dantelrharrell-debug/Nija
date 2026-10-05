@@ -75,3 +75,17 @@ def test_patch_exposes_no_freshness_or_execution_bypass_api() -> None:
     assert not hasattr(patch, "accept_partial_snapshot")
     assert not hasattr(patch, "force_activation")
     assert not hasattr(patch, "grant_execution_authority")
+
+
+def test_capital_refresh_worker_contract_uses_authenticated_balance_without_tradebalance_tail() -> None:
+    """Regression guard for the v434 capital-worker-only branch in KrakenBroker."""
+    from pathlib import Path
+
+    source = Path("bot/broker_manager.py").read_text(encoding="utf-8")
+    assert 'threading.current_thread().name.startswith("capital-balance-fetch-kraken")' in source
+    assert "KRAKEN_CAPITAL_TAIL_V434_TRADEBALANCE_SKIPPED" in source
+    # The normal TradeBalance call must still exist for non-capital-worker callers.
+    assert "self._kraken_private_call(" in source
+    assert "'TradeBalance', {'asset': 'ZUSD'}" in source
+    assert "held_uplift_omitted=true" in source
+    assert "capital_overstatement=false" in source
