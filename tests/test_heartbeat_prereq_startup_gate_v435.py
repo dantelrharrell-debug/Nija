@@ -62,9 +62,10 @@ def test_bounded_wait_does_not_consume_attempt_when_prereqs_never_ready(monkeypa
     obj = _DummyStrategy()
     monkeypatch.setenv("NIJA_HEARTBEAT_PREREQ_WAIT_S", "0")
     monkeypatch.setattr(
-        TradingStrategy,
+        obj,
         "_heartbeat_nonexecution_prereqs_ready",
-        lambda self: (False, "pending:authority_ready"),
+        lambda: (False, "pending:authority_ready"),
+        raising=False,
     )
     ready, detail = TradingStrategy._wait_for_heartbeat_nonexecution_prereqs(obj)
     assert ready is False

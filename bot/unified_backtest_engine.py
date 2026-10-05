@@ -533,7 +533,9 @@ class UnifiedBacktestEngine:
 
         # Monthly returns
         if not equity_df.empty:
-            monthly_equity = equity_df['total_equity'].resample('ME').last()
+            # MonthEnd works with pinned pandas 2.1.1 and newer versions;
+            # the string alias 'ME' is unavailable in pandas 2.1.1.
+            monthly_equity = equity_df['total_equity'].resample(pd.offsets.MonthEnd()).last()
             monthly_returns = monthly_equity.pct_change() * 100
         else:
             monthly_returns = pd.Series()
