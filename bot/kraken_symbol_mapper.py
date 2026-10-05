@@ -119,7 +119,8 @@ class KrakenSymbolMapper:
 
                     # Only include USD and USDT pairs
                     if wsname and ('USD' in wsname or 'USDT' in wsname):
-                        # Convert to standard format: BTC/USD -> BTC-USD
+                        # Preserve Kraken's API spelling and expose NIJA's
+                        # Bitcoin spelling for the same API-observed pair.
                         standard_symbol = wsname.replace('/', '-')
 
                         # Get Kraken internal format (from index)
@@ -131,6 +132,13 @@ class KrakenSymbolMapper:
 
                         # Update reverse map
                         self._reverse_map[kraken_symbol] = standard_symbol
+
+                        base, separator, quote = standard_symbol.partition('-')
+                        if separator and base == 'XBT':
+                            canonical_symbol = f'BTC-{quote}'
+                            self._dynamic_map[canonical_symbol] = kraken_symbol
+                            self._available_pairs.add(canonical_symbol)
+                            self._reverse_map[kraken_symbol] = canonical_symbol
 
                 logger.info(f"✅ Detected {len(self._dynamic_map)} tradable Kraken pairs")
 

@@ -7,6 +7,8 @@ on:
       - 'bot/runtime_kraken_recent_balance_prewait_v319_patch.py'
       - 'bot/runtime_kraken_position_refresh_liveness_v286_patch.py'
       - 'bot/trading_strategy.py'
+      - 'bot/kraken_symbol_mapper.py'
+      - 'bot/tests/test_kraken_symbol_mapper_aliases.py'
       - 'tests/test_runtime_kraken_authoritative_snapshot_liveness_v330.py'
       - 'tests/test_kraken_inflight_balance_handoff.py'
       - '.github/workflows/kraken-v330-targeted.yml'
@@ -32,3 +34,4 @@ jobs:
           python -m unittest -v
           tests.test_runtime_kraken_authoritative_snapshot_liveness_v330
           tests.test_kraken_inflight_balance_handoff
+          bot.tests.test_kraken_symbol_mapper_aliases
