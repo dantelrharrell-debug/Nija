@@ -20,6 +20,7 @@ class PaperTradeReviewTests(unittest.TestCase):
 
     def test_partial_fills_and_open_shock_are_labeled_without_live_authority(self) -> None:
         state = {
+            "balance": 1000,
             "total_pnl": 9.0,
             "trades": [
                 {"position_id": "BTC-1", "action": "OPEN", "symbol": "BTC-USD", "price": 100},
@@ -29,8 +30,10 @@ class PaperTradeReviewTests(unittest.TestCase):
                  "pnl": -3.0, "reason": "STOP_LOSS", "timestamp": "2026-01-03T00:00:00"},
             ],
             "positions": {
-                "BTC-1": {"side": "long", "size": 10, "current_price": 100},
-                "ETH-2": {"side": "short", "size": 5, "current_price": 100},
+                "BTC-1": {"symbol": "BTC-USD", "side": "long", "size": 10,
+                          "entry_price": 100, "current_price": 100},
+                "ETH-2": {"symbol": "ETH-USD", "side": "short", "size": 5,
+                          "entry_price": 100, "current_price": 100},
             },
         }
         report = review_paper_account(state)
@@ -39,6 +42,8 @@ class PaperTradeReviewTests(unittest.TestCase):
         self.assertEqual(report["profit_factor"], 4.0)
         self.assertEqual(report["win_rate_pct"], 50.0)
         self.assertEqual(report["open_position_shock"]["estimated_pnl_change_usd"], -100.0)
+        self.assertEqual(report["paper_exposure_risk"]["status"], "breach")
+        self.assertEqual(report["paper_exposure_risk"]["equity_usd"], 2500.0)
         self.assertFalse(report["live_readiness_granted"])
         self.assertTrue(any("fees and slippage" in warning for warning in report["warnings"]))
 
@@ -54,6 +59,29 @@ class PaperTradeReviewTests(unittest.TestCase):
         self.assertIsNone(report["profit_factor"])
         self.assertTrue(any("disagrees" in warning for warning in report["warnings"]))
         self.assertNotIn("NaN", json.dumps(report, allow_nan=False))
+
+    def test_repeated_negative_outcomes_are_review_flags_not_behavioral_claims(self) -> None:
+        report = review_paper_account({
+            "balance": 800,
+            "trades": [{"action": "CLOSE_100.0%", "symbol": "BTC-USD", "pnl": -5,
+                        "reason": "STOP_LOSS", "timestamp": f"2026-01-0{i}"} for i in range(1, 4)],
+            "positions": {"x": {"symbol": "BTC-USD", "side": "long", "size": 2,
+                                "entry_price": 100, "current_price": 110}},
+        })
+        self.assertEqual(report["longest_consecutive_negative_fills"], 3)
+        self.assertEqual(report["recurring_review_flags"][0]["distinct_negative_positions"], 3)
+        self.assertEqual(report["paper_exposure_risk"]["status"], "within_caps")
+        self.assertEqual(report["paper_exposure_risk"]["equity_usd"], 1020.0)
+        self.assertTrue(any("cannot establish behavioral errors" in warning for warning in report["warnings"]))
+
+    def test_partial_closes_on_one_position_do_not_count_as_three_repeated_positions(self) -> None:
+        report = review_paper_account({
+            "balance": 1000, "positions": {},
+            "trades": [{"action": "CLOSE_25%", "symbol": "BTC-USD", "position_id": "one",
+                        "pnl": -1, "reason": "STOP_LOSS"} for _ in range(3)],
+        })
+        self.assertEqual(report["closed_fills"], 3)
+        self.assertEqual(report["recurring_review_flags"], [])
 
     def test_cli_reads_without_mutating_paper_state(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

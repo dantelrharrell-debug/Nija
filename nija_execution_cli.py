@@ -27,7 +27,7 @@ import json
 sys.path.insert(0, str(Path(__file__).parent))
 
 from bot.unified_backtest_engine import UnifiedBacktestEngine, BacktestResults
-from bot.paper_break_retest_replay import json_safe, replay_break_retest
+from bot.paper_break_retest_replay import json_safe, replay_break_retest, replay_break_retest_holdout
 from bot.live_execution_tracker import LiveExecutionTracker
 
 # Setup logging
@@ -79,6 +79,8 @@ Examples:
         backtest_parser.add_argument('--slippage', type=float, default=0.0005, help='Slippage rate (default: 0.0005 = 0.05%%)')
         backtest_parser.add_argument('--days', type=int, help='Number of days to backtest (from end of data)')
         backtest_parser.add_argument('--output', help='Output file path for results (JSON)')
+        backtest_parser.add_argument('--holdout-fraction', type=float,
+                                     help='Chronological final fraction held out for detector replay (0.10 to 0.50)')
         backtest_parser.add_argument(
             '--strategy', required=True, choices=['sma_demo', 'break_retest_replay'],
             help='Explicit research mode; APEX strategies are not backtested by this CLI'
@@ -150,21 +152,26 @@ Examples:
 
         if args.strategy == 'break_retest_replay':
             try:
-                result = replay_break_retest(
-                    df, symbol=args.symbol, initial_balance=args.initial_balance,
-                    commission_pct=args.commission, slippage_pct=args.slippage,
-                )
+                options = dict(symbol=args.symbol, initial_balance=args.initial_balance,
+                               commission_pct=args.commission, slippage_pct=args.slippage)
+                result = (replay_break_retest_holdout(df, holdout_fraction=args.holdout_fraction, **options)
+                          if args.holdout_fraction is not None else replay_break_retest(df, **options))
             except ValueError as exc:
                 logger.error("Invalid detector replay data: %s", exc)
                 return 1
-            summary = result['summary']
+            summary = result.get('holdout', result)['summary']
             print("DETECTOR REPLAY ONLY: not the complete NIJA strategy or live execution pipeline")
-            print(f"Signals: {result['analysis']['signals']} | Closed trades: {summary['total_trades']}")
+            print(f"Held-out closed trades: {summary['total_trades']}" if args.holdout_fraction is not None
+                  else f"Signals: {result['analysis']['signals']} | Closed trades: {summary['total_trades']}")
             print(f"Recorded replay P&L: ${summary['total_pnl']:+.2f}")
             if args.output:
                 with open(args.output, 'w') as handle:
                     json.dump(result, handle, indent=2, default=str, allow_nan=False)
             return 0
+
+        if args.holdout_fraction is not None:
+            logger.error("--holdout-fraction is supported only with break_retest_replay")
+            return 1
 
         # Create backtest engine
         engine = UnifiedBacktestEngine(
@@ -371,9 +378,11 @@ Examples:
                 print("DEMONSTRATION ONLY: SMA example; not NIJA strategy performance")
             elif data['backtest'].get('analysis', {}).get('kind') == 'detector_replay_only':
                 print("DETECTOR REPLAY ONLY: does not include NIJA's full execution and risk pipeline")
+            elif data['backtest'].get('analysis', {}).get('kind') == 'chronological_holdout_detector_replay_only':
+                print("HELD-OUT DETECTOR REPLAY ONLY: unverified as a full NIJA strategy")
             elif 'analysis' not in data['backtest']:
                 print("Strategy provenance unverified: legacy report has no analysis metadata")
-            summary = data['backtest']['summary']
+            summary = data['backtest'].get('holdout', data['backtest'])['summary']
             print(f"Return: {summary['total_return_pct']:+.2f}%")
             print(f"Trades: {summary['total_trades']}")
             print(f"Win Rate: {summary['win_rate']*100:.1f}%" if summary['win_rate'] is not None
@@ -420,7 +429,9 @@ Examples:
             logger.error(f"Failed to load data: {e}")
             return 1
 
-        if backtest_data.get('analysis', {}).get('kind') in ('demonstration_only', 'detector_replay_only'):
+        if backtest_data.get('analysis', {}).get('kind') in (
+            'demonstration_only', 'detector_replay_only', 'chronological_holdout_detector_replay_only'
+        ):
             logger.error("Cannot compare a demonstration or detector replay with live trading as strategy evidence")
             return 1
 

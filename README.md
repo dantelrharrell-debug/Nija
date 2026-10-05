@@ -742,8 +742,13 @@ python -m scripts.review_paper_trades --input paper_trading_data.json
 
 The report distinguishes partial close fills from completed trades, shows
 recorded P&L by symbol and a uniform 20% price-drop scenario for open positions,
-and flags missing fees, strategy IDs, and insufficient samples. It does not
-modify paper state, select a strategy, approve a customer, or enable live entry.
+and flags repeated negative outcomes, missing fees, strategy IDs, and insufficient samples.
+For a legacy paper account with valid cash and position marks, it also checks
+gross exposure against a 60% paper cap and each symbol against a 25% paper cap.
+The paper simulator blocks new entries above these caps and includes allocated
+principal in equity. A repeated stop-loss is a review prompt, not proof of a
+behavioral mistake. The review command does not modify paper state, select a
+strategy, approve a customer, or enable live entry.
 The paper account's recorded P&L does not establish net returns after fees and
 slippage. Correlation and behavior claims require additional data.
 
@@ -761,6 +766,23 @@ ambiguous stop/target bars against the trade. It is marked
 or future performance. `sma_demo` remains an explicitly labeled illustration.
 The CLI refuses APEX names rather than silently running the SMA example, and
 neither research mode can be compared with live trading as strategy evidence.
+
+For a chronological train/holdout report, use verified OHLCV that was not used
+to select the detector or its settings, and freeze those decisions before
+examining the holdout:
+
+```bash
+python nija_execution_cli.py backtest --strategy break_retest_replay \
+  --symbol BTC-USD --data path/to/verified_ohlcv.csv \
+  --holdout-fraction 0.30 --commission 0.001 --slippage 0.0005 \
+  --output heldout-replay.json
+```
+
+The first 70% of bars is the training segment. The final 30% is evaluated with
+only prior bars available as detector warmup; fees and slippage apply in both
+segments. A small held-out trade sample remains inconclusive. This tool does
+not tune a strategy, verify the source data, or validate the complete live NIJA
+execution path. No real historical dataset is bundled with this repository.
 
 ---
 
