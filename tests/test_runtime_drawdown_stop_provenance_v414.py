@@ -93,7 +93,7 @@ def test_oct6_incident_accepts_durable_replay_timestamp_on_rollout() -> None:
             {
                 "reason": "Kill switch file detected",
                 "source": "FILE_SYSTEM",
-                "timestamp": "2026-10-06T15:12:17.231000+00:00",
+                "timestamp": "2026-10-06T15:12:17.039356+00:00",
             }
         ]
     }
