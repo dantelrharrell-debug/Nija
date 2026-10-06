@@ -115,3 +115,52 @@ def test_source_contains_no_forced_live_or_safety_clear_bypass():
     ]
     for token in forbidden:
         assert token not in source
+
+
+def test_false_stale_authority_is_reconciled_from_v231_without_touching_execution(monkeypatch):
+    table = _FakeTable()
+    real_import = v133.importlib.import_module
+
+    def fake_import(name):
+        if name == "bot.readiness_table":
+            return table
+        if name == "bot.runtime_authority_nonce_truth_convergence_v231_patch":
+            return types.SimpleNamespace(
+                _current_writer_authority_proof=lambda: (True, "writer_authority_current")
+            )
+        return real_import(name)
+
+    monkeypatch.setattr(v133.importlib, "import_module", fake_import)
+    proofs = {key: True for key in v133._CRITICAL_KEYS}
+    proofs["authority_ready"] = False
+    proofs["execution_ready"] = False
+
+    after, pending = v133._revoke_false_readiness(proofs)
+
+    assert after["authority_ready"] is True
+    assert after["execution_ready"] is False
+    assert "authority_ready" not in pending
+    assert "execution_ready" in pending
+
+
+def test_failed_v231_authority_probe_remains_fail_closed(monkeypatch):
+    table = _FakeTable()
+    real_import = v133.importlib.import_module
+
+    def fake_import(name):
+        if name == "bot.readiness_table":
+            return table
+        if name == "bot.runtime_authority_nonce_truth_convergence_v231_patch":
+            return types.SimpleNamespace(
+                _current_writer_authority_proof=lambda: (False, "writer_heartbeat_stale")
+            )
+        return real_import(name)
+
+    monkeypatch.setattr(v133.importlib, "import_module", fake_import)
+    proofs = {key: True for key in v133._CRITICAL_KEYS}
+    proofs["authority_ready"] = False
+
+    after, pending = v133._revoke_false_readiness(proofs)
+
+    assert after["authority_ready"] is False
+    assert "authority_ready" in pending
