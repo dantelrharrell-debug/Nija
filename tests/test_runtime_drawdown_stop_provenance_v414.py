@@ -64,3 +64,55 @@ def test_unparseable_or_impossible_reference_fails_closed() -> None:
     assert v414._original_drawdown_reference(
         "GlobalDrawdownCircuitBreaker: HALT level reached (drawdown=100.00%, equity=$1.00)"
     )[0] is False
+
+
+def test_oct6_incident_restores_only_exact_lost_drawdown_cause() -> None:
+    status = {
+        "recent_history": [
+            {
+                "reason": "Kill switch file detected",
+                "source": "FILE_SYSTEM",
+                "timestamp": "2026-10-06T07:36:34.812345+00:00",
+            }
+        ]
+    }
+    restored = v414._incident_20261006_causal_activation(
+        status,
+        "v143_provenance_blocked:origin_unavailable",
+        "PROVENANCE_BOUNDARY",
+    )
+    assert restored == (
+        "GlobalDrawdownCircuitBreaker: HALT level reached (drawdown=20.31%, equity=$617.89)",
+        "GlobalDrawdownCircuitBreaker",
+    )
+
+
+def test_oct6_incident_rejects_other_filesystem_stops() -> None:
+    wrong_time = {
+        "recent_history": [
+            {
+                "reason": "Kill switch file detected",
+                "source": "FILE_SYSTEM",
+                "timestamp": "2026-10-07T07:36:34+00:00",
+            }
+        ]
+    }
+    manual = {
+        "recent_history": [
+            {
+                "reason": "Owner emergency stop",
+                "source": "MANUAL",
+                "timestamp": "2026-10-06T07:36:34+00:00",
+            }
+        ]
+    }
+    assert v414._incident_20261006_causal_activation(
+        wrong_time,
+        "v143_provenance_blocked:origin_unavailable",
+        "PROVENANCE_BOUNDARY",
+    ) is None
+    assert v414._incident_20261006_causal_activation(
+        manual,
+        "v143_provenance_blocked:origin_unavailable",
+        "PROVENANCE_BOUNDARY",
+    ) is None
