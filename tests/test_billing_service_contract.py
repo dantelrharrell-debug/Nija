@@ -407,3 +407,43 @@ def test_second_checkout_is_blocked_while_first_is_pending(monkeypatch, tmp_path
     second = _create_checkout(client)
     assert second.status_code == 409
     assert second.get_json()["error"] == "subscription_or_checkout_already_exists"
+
+def test_readyz_verifies_authoritative_billing_dependencies(monkeypatch, tmp_path):
+    app, _store = _configured_app(monkeypatch, tmp_path)
+    monkeypatch.setenv("NIJA_BILLING_PUBLIC_URL", "https://billing.example.test")
+
+    stripe = SimpleNamespace(
+        Price=SimpleNamespace(
+            retrieve=lambda price_id, **_kwargs: {
+                "id": price_id,
+                "active": True,
+                "type": "recurring",
+                "product": {"id": "prod_founder"},
+            }
+        ),
+        WebhookEndpoint=SimpleNamespace(
+            list=lambda **_kwargs: {
+                "data": [{
+                    "url": "https://billing.example.test/api/billing/webhook",
+                    "status": "enabled",
+                    "enabled_events": list(billing._STRIPE_WEBHOOK_EVENTS),
+                }]
+            }
+        ),
+    )
+    monkeypatch.setattr(billing, "_stripe_module", lambda: stripe)
+
+    response = app.test_client().get("/readyz")
+    assert response.status_code == 200
+    assert response.get_json() == {"service": "nija-billing", "status": "ready"}
+
+
+def test_readyz_fails_closed_when_identity_secret_is_missing(monkeypatch, tmp_path):
+    app, _store = _configured_app(monkeypatch, tmp_path)
+    monkeypatch.setenv("NIJA_BILLING_PUBLIC_URL", "https://billing.example.test")
+    monkeypatch.delenv("NIJA_BILLING_IDENTITY_SECRET")
+
+    response = app.test_client().get("/readyz")
+    assert response.status_code == 503
+    assert response.get_json() == {"service": "nija-billing", "status": "not_ready"}
+
