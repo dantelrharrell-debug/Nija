@@ -250,6 +250,74 @@ class TestHeartbeatEmptyMarketFallback(unittest.TestCase):
         self.assertIs(selected, coinbase)
         self.assertIs(strategy.broker, coinbase)
 
+    def test_heartbeat_preserves_canonical_platform_broker_over_legacy_same_key(self):
+        """Legacy/user broker maps cannot overwrite canonical PLATFORM Kraken."""
+        class _BrokerType:
+            value = "kraken"
+
+        shared_key = _BrokerType()
+        platform = SimpleNamespace(
+            NAME="kraken",
+            broker_type=shared_key,
+            account_type="platform",
+            connected=True,
+            exit_only_mode=False,
+            _last_known_balance=250.0,
+        )
+        user = SimpleNamespace(
+            NAME="kraken",
+            broker_type=shared_key,
+            account_type="user",
+            connected=True,
+            exit_only_mode=False,
+            _last_known_balance=500.0,
+        )
+
+        strategy = self._make_strategy_with_broker(user)
+        strategy.multi_account_manager = SimpleNamespace(
+            platform_brokers={shared_key: platform}
+        )
+        strategy.broker_manager = SimpleNamespace(
+            brokers={shared_key: user},
+            get_primary_broker=lambda: user,
+            active_broker=None,
+        )
+
+        with patch.dict(
+            "os.environ",
+            {"NIJA_EXECUTION_READY_VENUES": "kraken"},
+            clear=False,
+        ):
+            selected = strategy._get_heartbeat_broker()
+
+        self.assertIs(selected, platform)
+        self.assertIs(strategy.broker, platform)
+
+    def test_heartbeat_excludes_explicit_non_platform_candidate_for_startup_proof(self):
+        user = SimpleNamespace(
+            NAME="kraken",
+            account_type="user",
+            connected=True,
+            exit_only_mode=False,
+            _last_known_balance=500.0,
+        )
+        strategy = self._make_strategy_with_broker(user)
+        strategy.multi_account_manager = SimpleNamespace(platform_brokers={})
+        strategy.broker_manager = SimpleNamespace(
+            brokers={"kraken": user},
+            get_primary_broker=lambda: user,
+            active_broker=None,
+        )
+
+        with patch.dict(
+            "os.environ",
+            {"NIJA_EXECUTION_READY_VENUES": "kraken"},
+            clear=False,
+        ):
+            selected = strategy._get_heartbeat_broker()
+
+        self.assertIsNone(selected)
+
     def test_heartbeat_fails_closed_when_ready_venue_object_is_missing(self):
         """Published readiness never falls back to a degraded cached venue."""
         kraken = SimpleNamespace(

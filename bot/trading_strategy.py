@@ -1859,7 +1859,15 @@ class TradingStrategy:
                 logger.debug("Heartbeat MABM broker lookup failed: %s", exc)
         if self.broker_manager is not None:
             try:
-                candidates.update(getattr(self.broker_manager, "brokers", {}) or {})
+                # Canonical PLATFORM brokers from MultiAccountBrokerManager own
+                # startup-proof selection. Legacy BrokerManager objects may
+                # share the same BrokerType key (for example a USER Kraken
+                # adapter); they must never overwrite the canonical platform
+                # object already present in candidates.
+                for raw_key, candidate in (
+                    getattr(self.broker_manager, "brokers", {}) or {}
+                ).items():
+                    candidates.setdefault(raw_key, candidate)
                 primary = self.broker_manager.get_primary_broker()
                 if primary is not None:
                     candidates.setdefault(
@@ -1872,12 +1880,33 @@ class TradingStrategy:
                 getattr(self.broker, "broker_type", "cached"), self.broker
             )
 
-        ready_candidates = {
-            raw_key: broker
-            for raw_key, broker in candidates.items()
-            if broker is not None
-            and self._broker_key_from_obj(broker) in ready_venues
-        }
+        ready_candidates = {}
+        for raw_key, candidate in candidates.items():
+            if candidate is None:
+                continue
+            venue = self._broker_key_from_obj(candidate)
+            if venue not in ready_venues:
+                continue
+            account_type = str(
+                getattr(
+                    getattr(candidate, "account_type", None),
+                    "value",
+                    getattr(candidate, "account_type", ""),
+                )
+                or ""
+            ).strip().lower()
+            # If an adapter exposes account_type, startup proof is PLATFORM-only.
+            # Adapters without that attribute are retained for backward-compatible
+            # tests/non-MABM integrations.
+            if account_type and "platform" not in account_type:
+                logger.warning(
+                    "HEARTBEAT_CANONICAL_CANDIDATE_EXCLUDED venue=%s "
+                    "account_type=%s reason=non_platform_startup_proof",
+                    venue,
+                    account_type,
+                )
+                continue
+            ready_candidates[raw_key] = candidate
         selected, name, status = self._select_entry_broker(ready_candidates)
         if selected is None:
             logger.error(
