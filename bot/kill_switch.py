@@ -180,21 +180,59 @@ class KillSwitch:
                 and incoming_reason.lower().startswith("kill switch file detected")
             )
             if is_generic_file_replay:
-                existing_raw = client.get(self.DURABLE_REDIS_KEY)
-                if existing_raw:
-                    existing = json.loads(existing_raw)
-                    if isinstance(existing, dict) and bool(existing.get("is_active")):
-                        logger.critical(
-                            "DURABLE_KILL_SWITCH_REDIS_CAUSE_PRESERVED key=%s "
-                            "existing_source=%s existing_reason=%s replay_source=%s "
-                            "replay_reason=%s active_stop_unchanged=true",
-                            self.DURABLE_REDIS_KEY,
-                            str(existing.get("source") or "unknown"),
-                            str(existing.get("reason") or "unknown"),
-                            payload["source"] or "unknown",
-                            payload["reason"] or "unknown",
-                        )
-                        return True
+                incoming_json = json.dumps(payload, sort_keys=True)
+                # Atomic compare-and-set: a generic filesystem replay may create
+                # the durable stop only while the key is absent/inactive.  If a
+                # real risk activation wins the race first, preserve it.
+                script = """
+local current = redis.call('GET', KEYS[1])
+if current then
+  local ok, decoded = pcall(cjson.decode, current)
+  if ok and type(decoded) == 'table' and decoded['is_active'] == true then
+    return current
+  end
+end
+redis.call('SET', KEYS[1], ARGV[1])
+return ARGV[1]
+"""
+                stored_raw = client.eval(
+                    script,
+                    1,
+                    self.DURABLE_REDIS_KEY,
+                    incoming_json,
+                )
+                if isinstance(stored_raw, bytes):
+                    stored_raw = stored_raw.decode("utf-8")
+                if not stored_raw:
+                    raise RuntimeError("atomic durable replay persistence returned empty result")
+                stored = json.loads(stored_raw)
+                if (
+                    isinstance(stored, dict)
+                    and bool(stored.get("is_active"))
+                    and (
+                        str(stored.get("source") or "").strip().upper() != incoming_source
+                        or str(stored.get("reason") or "").strip() != incoming_reason
+                    )
+                ):
+                    logger.critical(
+                        "DURABLE_KILL_SWITCH_REDIS_CAUSE_PRESERVED key=%s "
+                        "existing_source=%s existing_reason=%s replay_source=%s "
+                        "replay_reason=%s atomic=true active_stop_unchanged=true",
+                        self.DURABLE_REDIS_KEY,
+                        str(stored.get("source") or "unknown"),
+                        str(stored.get("reason") or "unknown"),
+                        payload["source"] or "unknown",
+                        payload["reason"] or "unknown",
+                    )
+                    return True
+                logger.critical(
+                    "DURABLE_KILL_SWITCH_REDIS_PERSISTED key=%s source=%s reason=%s "
+                    "atomic_replay_compare_set=true",
+                    self.DURABLE_REDIS_KEY,
+                    payload["source"] or "unknown",
+                    payload["reason"] or "unknown",
+                )
+                return True
 
             client.set(self.DURABLE_REDIS_KEY, json.dumps(payload, sort_keys=True))
             logger.critical(
