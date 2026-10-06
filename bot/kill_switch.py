@@ -169,6 +169,33 @@ class KillSwitch:
             "schema": 1,
         }
         try:
+            # A FILE_SYSTEM "Kill switch file detected" activation is a replay
+            # of an already-active stop, not a new causal safety event.  Never
+            # let that generic replay erase a richer durable cause (for example
+            # GlobalDrawdownCircuitBreaker) that recovery logic must inspect.
+            incoming_source = str(payload.get("source") or "").strip().upper()
+            incoming_reason = str(payload.get("reason") or "").strip()
+            is_generic_file_replay = (
+                incoming_source == "FILE_SYSTEM"
+                and incoming_reason.lower().startswith("kill switch file detected")
+            )
+            if is_generic_file_replay:
+                existing_raw = client.get(self.DURABLE_REDIS_KEY)
+                if existing_raw:
+                    existing = json.loads(existing_raw)
+                    if isinstance(existing, dict) and bool(existing.get("is_active")):
+                        logger.critical(
+                            "DURABLE_KILL_SWITCH_REDIS_CAUSE_PRESERVED key=%s "
+                            "existing_source=%s existing_reason=%s replay_source=%s "
+                            "replay_reason=%s active_stop_unchanged=true",
+                            self.DURABLE_REDIS_KEY,
+                            str(existing.get("source") or "unknown"),
+                            str(existing.get("reason") or "unknown"),
+                            payload["source"] or "unknown",
+                            payload["reason"] or "unknown",
+                        )
+                        return True
+
             client.set(self.DURABLE_REDIS_KEY, json.dumps(payload, sort_keys=True))
             logger.critical(
                 "DURABLE_KILL_SWITCH_REDIS_PERSISTED key=%s source=%s reason=%s",
