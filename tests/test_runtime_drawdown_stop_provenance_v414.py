@@ -137,3 +137,15 @@ def test_oct6_incident_rejects_other_filesystem_stops() -> None:
         "v143_provenance_blocked:origin_unavailable",
         "PROVENANCE_BOUNDARY",
     ) is None
+
+
+
+def test_recovery_requires_confirmed_durable_deactivation_contract() -> None:
+    from pathlib import Path
+
+    source = Path("bot/runtime_drawdown_stop_provenance_v414_patch.py").read_text(
+        encoding="utf-8"
+    )
+    assert "deactivated = bool(" in source
+    assert "if not deactivated or bool(ks.is_active()):" in source
+    assert "durable_deactivation_not_confirmed" in source
