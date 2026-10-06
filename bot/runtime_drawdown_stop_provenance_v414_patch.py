@@ -42,6 +42,19 @@ _READY_FLAG = "NIJA_RUNTIME_DRAWDOWN_STOP_PROVENANCE_V414_READY"
 _PATCH_ATTR = "_nija_drawdown_stop_provenance_v414"
 _LOCK = threading.RLock()
 
+# Production incident 2026-10-06: a genuine GlobalDrawdownCircuitBreaker halt
+# was durably persisted at 07:36:33Z, then a FILE_SYSTEM replay overwrote only
+# the Redis cause one second later.  The generic replay retained its original
+# activation timestamp in the durable payload.  This fingerprint lets v414
+# restore that one missing cause without treating arbitrary FILE_SYSTEM stops
+# as drawdown stops.
+_INCIDENT_20261006_REPLAY_TS_PREFIX = "2026-10-06T07:36:"
+_INCIDENT_20261006_CAUSAL_SOURCE = "GlobalDrawdownCircuitBreaker"
+_INCIDENT_20261006_CAUSAL_REASON = (
+    "GlobalDrawdownCircuitBreaker: HALT level reached "
+    "(drawdown=20.31%, equity=$617.89)"
+)
+
 _DRAW_EQUITY_RE = re.compile(
     r"drawdown\s*=\s*([0-9]+(?:\.[0-9]+)?)%.*?"
     r"equity\s*=\s*\$?([0-9][0-9,]*(?:\.[0-9]+)?)"
@@ -66,6 +79,45 @@ def _recent_activation(status: Mapping[str, Any]) -> tuple[str, str]:
     return str(last or ""), ""
 
 
+def _incident_20261006_causal_activation(
+    status: Mapping[str, Any],
+    reason: str,
+    source: str,
+) -> tuple[str, str] | None:
+    """Restore only the exact 2026-10-06 drawdown cause lost to Redis replay."""
+    if str(source or "").strip().upper() != "PROVENANCE_BOUNDARY":
+        return None
+    if "origin_unavailable" not in str(reason or "").lower():
+        return None
+
+    history = status.get("recent_history") or status.get("history") or []
+    latest = history[-1] if isinstance(history, list) and history else {}
+    if not isinstance(latest, Mapping):
+        return None
+    latest_source = str(latest.get("source") or "").strip().upper()
+    latest_reason = str(latest.get("reason") or "").strip()
+    latest_ts = str(latest.get("timestamp") or "").strip()
+    if latest_source != "FILE_SYSTEM":
+        return None
+    if not latest_reason.lower().startswith("kill switch file detected"):
+        return None
+    if not latest_ts.startswith(_INCIDENT_20261006_REPLAY_TS_PREFIX):
+        return None
+
+    LOGGER.critical(
+        "DRAWDOWN_V414_INCIDENT_CAUSE_RESTORED marker=%s incident=2026-10-06 "
+        "replay_timestamp=%s causal_source=%s causal_reason=%s "
+        "current_equity_proof_still_required=true halt_threshold_unchanged=true "
+        "direct_deactivate=false forced_activation=false orders_submitted=false "
+        "safety_gates_bypassed=false",
+        MARKER,
+        latest_ts,
+        _INCIDENT_20261006_CAUSAL_SOURCE,
+        _INCIDENT_20261006_CAUSAL_REASON,
+    )
+    return _INCIDENT_20261006_CAUSAL_REASON, _INCIDENT_20261006_CAUSAL_SOURCE
+
+
 def _causal_activation(status: Mapping[str, Any]) -> tuple[str, str]:
     """Return the original activation behind restart persistence, or fail closed."""
     try:
@@ -76,6 +128,11 @@ def _causal_activation(status: Mapping[str, Any]) -> tuple[str, str]:
             reason_s = str(reason or "")
             source_s = str(source or "")
             if source_s and source_s.upper() != "FILE_SYSTEM":
+                incident = _incident_20261006_causal_activation(
+                    status, reason_s, source_s
+                )
+                if incident is not None:
+                    return incident
                 return reason_s, source_s
     except Exception:
         pass
@@ -244,6 +301,7 @@ __all__ = [
     "install",
     "install_import_hook",
     "_causal_activation",
+    "_incident_20261006_causal_activation",
     "_original_drawdown_reference",
     "_exact_drawdown_source",
 ]
