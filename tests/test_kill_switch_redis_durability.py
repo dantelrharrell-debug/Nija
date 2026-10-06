@@ -17,6 +17,31 @@ class FakeRedis:
     def get(self, key):
         return self.data.get(key)
 
+    def eval(self, script, numkeys, key, incoming_json):
+        current = self.data.get(key)
+        if current:
+            try:
+                decoded = json.loads(current)
+            except Exception:
+                decoded = None
+            if isinstance(decoded, dict) and bool(decoded.get("is_active")):
+                return current
+        self.data[key] = incoming_json
+        return incoming_json
+
+
+class RacingFakeRedis(FakeRedis):
+    def __init__(self, risk_payload):
+        super().__init__()
+        self.risk_payload = risk_payload
+        self.injected = False
+
+    def eval(self, script, numkeys, key, incoming_json):
+        if not self.injected:
+            self.data[key] = json.dumps(self.risk_payload, sort_keys=True)
+            self.injected = True
+        return super().eval(script, numkeys, key, incoming_json)
+
 
 def test_durable_stop_reasserts_on_replacement_instance(tmp_path, monkeypatch):
     shared = FakeRedis()
@@ -101,3 +126,32 @@ def test_filesystem_replay_does_not_overwrite_durable_risk_cause(tmp_path, monke
     assert preserved["is_active"] is True
     assert preserved["source"] == "GlobalDrawdownCircuitBreaker"
     assert "drawdown=20.31%" in preserved["reason"]
+
+
+
+def test_atomic_filesystem_replay_cannot_overwrite_concurrent_risk_activation(tmp_path, monkeypatch):
+    path = tmp_path / "node"
+    path.mkdir()
+    risk = {
+        "is_active": True,
+        "reason": "GlobalDrawdownCircuitBreaker: HALT level reached (drawdown=20.31%, equity=$617.89)",
+        "source": "GlobalDrawdownCircuitBreaker",
+        "timestamp": "2026-10-06T07:36:33+00:00",
+        "schema": 1,
+    }
+    shared = RacingFakeRedis(risk)
+    monkeypatch.setattr(KillSwitch, "_redis_client", lambda self: shared)
+
+    ks = KillSwitch(base_path=str(path))
+    ok = ks._persist_durable_stop(
+        {
+            "reason": "Kill switch file detected",
+            "source": "FILE_SYSTEM",
+            "timestamp": "2026-10-06T14:55:23.027303+00:00",
+        }
+    )
+
+    assert ok is True
+    durable = json.loads(shared.get(ks.DURABLE_REDIS_KEY))
+    assert durable == risk
+    assert durable["source"] == "GlobalDrawdownCircuitBreaker"
