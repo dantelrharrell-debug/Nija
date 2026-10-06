@@ -54,6 +54,10 @@ _V169_PATCH = "_nija_canonical_fill_source_v346"
 _V231_PATCH = "_nija_canonical_fill_source_v346"
 _POSITION_PATCH = "_nija_stale_platform_position_refresh_v346"
 _ALLOWED_EXECUTION_SOURCES = {"heartbeat_trade", "canonical_confirmed_fill"}
+_RECOVERY_LOCK = threading.RLock()
+_RECOVERY_LAST_ATTEMPT_MONO = 0.0
+_RECOVERY_LAST_GENERATION = ""
+_RECOVERY_DEFAULT_INTERVAL_S = 15.0
 
 
 def _fill_event_epoch(result: Mapping[str, Any]) -> float:
@@ -78,6 +82,245 @@ def _existing_marker(path: Any) -> dict[str, Any]:
         return dict(payload) if isinstance(payload, Mapping) else {}
     except Exception:
         return {}
+
+
+def _current_execution_marker_ready() -> tuple[bool, str]:
+    """Return only genuine, fresh canonical execution proof."""
+    try:
+        tsm = importlib.import_module("bot.trading_state_machine")
+        status = getattr(tsm, "_heartbeat_verification_status", None)
+        if not callable(status):
+            return False, "canonical_verifier_missing"
+        ready, detail, meta = status()
+        meta = dict(meta or {})
+        source = str(meta.get("source") or "").strip().lower()
+        kind = str(meta.get("proof_kind") or "").strip().lower()
+        if bool(ready) and source in _ALLOWED_EXECUTION_SOURCES and kind == "execution_probe":
+            return True, f"current:{source}"
+        return False, str(detail or f"not_ready:{source or 'missing'}:{kind or 'missing'}")
+    except Exception as exc:
+        return False, f"verify_error:{type(exc).__name__}:{exc}"
+
+
+def _writer_epoch_for_recovery() -> tuple[bool, str]:
+    """Require exact current distributed writer authority before private reads."""
+    try:
+        authority = importlib.import_module("bot.execution_authority_context")
+        assert_authority = getattr(authority, "assert_startup_write_authority", None)
+        if not callable(assert_authority):
+            return False, "startup_write_authority_probe_missing"
+        assert_authority()
+    except Exception as exc:
+        return False, f"writer_authority_unready:{type(exc).__name__}:{exc}"
+
+    generation = str(
+        os.environ.get("NIJA_WRITER_LEASE_GENERATION")
+        or os.environ.get("NIJA_WRITER_GENERATION")
+        or ""
+    ).strip()
+    token = str(os.environ.get("NIJA_WRITER_FENCING_TOKEN") or "").strip()
+    if not generation or generation in {"0", "none", "None"} or not token:
+        return False, "writer_epoch_not_proven"
+    return True, generation
+
+
+def _canonical_kraken_broker() -> Any:
+    """Return only the connected PLATFORM Kraken broker."""
+    try:
+        v164 = importlib.import_module("bot.runtime_capital_publication_liveness_v164_patch")
+        manager_fn = getattr(v164, "_canonical_manager", None)
+        mapping_fn = getattr(v164, "_manager_platform_mapping", None)
+        connected_fn = getattr(v164, "_manager_connected", None)
+        if callable(manager_fn) and callable(mapping_fn):
+            manager = manager_fn()
+            mapping = dict(mapping_fn(manager) or {})
+            for key, broker in mapping.items():
+                if broker is None:
+                    continue
+                broker_type = getattr(broker, "broker_type", None)
+                label = " ".join(
+                    (
+                        str(key or ""),
+                        str(getattr(broker_type, "value", broker_type) or ""),
+                        type(broker).__name__,
+                    )
+                ).lower()
+                if "kraken" not in label:
+                    continue
+                account_type = str(
+                    getattr(getattr(broker, "account_type", None), "value", getattr(broker, "account_type", ""))
+                    or ""
+                ).lower()
+                if account_type and "platform" not in account_type:
+                    continue
+                if callable(connected_fn):
+                    try:
+                        if not bool(connected_fn(manager, key, broker)):
+                            continue
+                    except Exception:
+                        continue
+                elif getattr(broker, "connected", False) is not True:
+                    continue
+                return broker
+    except Exception:
+        LOGGER.debug("v346 canonical Kraken recovery lookup deferred", exc_info=True)
+    return None
+
+
+def _recovery_freshness_s() -> float:
+    """Use the canonical execution-proof freshness window; never extend it."""
+    try:
+        tsm = importlib.import_module("bot.trading_state_machine")
+        fn = getattr(tsm, "_heartbeat_verification_max_age_seconds", None)
+        value = float(fn()) if callable(fn) else float(
+            os.environ.get("HEARTBEAT_VERIFICATION_MAX_AGE_SECONDS", "1800") or "1800"
+        )
+    except Exception:
+        value = 1800.0
+    if value <= 0.0:
+        return 0.0
+    return max(60.0, min(3600.0, value))
+
+
+def _recovery_interval_s() -> float:
+    try:
+        value = float(os.environ.get("NIJA_EXECUTION_PROOF_RECOVERY_INTERVAL_S", _RECOVERY_DEFAULT_INTERVAL_S))
+    except (TypeError, ValueError):
+        value = _RECOVERY_DEFAULT_INTERVAL_S
+    return max(10.0, min(300.0, value))
+
+
+def _recover_recent_kraken_execution_proof() -> tuple[bool, str]:
+    """Recover a still-fresh proof from authenticated Kraken history without trading."""
+    global _RECOVERY_LAST_ATTEMPT_MONO, _RECOVERY_LAST_GENERATION
+
+    marker_ready, marker_detail = _current_execution_marker_ready()
+    if marker_ready:
+        return True, marker_detail
+
+    freshness_s = _recovery_freshness_s()
+    if freshness_s <= 0.0:
+        return False, "canonical_freshness_disabled"
+
+    writer_ready, generation = _writer_epoch_for_recovery()
+    if not writer_ready:
+        return False, generation
+
+    broker = _canonical_kraken_broker()
+    if broker is None:
+        return False, "kraken_platform_broker_not_ready"
+
+    now_mono = time.monotonic()
+    with _RECOVERY_LOCK:
+        if (
+            generation == _RECOVERY_LAST_GENERATION
+            and now_mono - _RECOVERY_LAST_ATTEMPT_MONO < _recovery_interval_s()
+        ):
+            return False, "recovery_rate_limited"
+        _RECOVERY_LAST_ATTEMPT_MONO = now_mono
+        _RECOVERY_LAST_GENERATION = generation
+
+    try:
+        v357 = importlib.import_module("bot.runtime_kraken_delayed_fill_reconciliation_v357_patch")
+        private_read = getattr(v357, "_private_read", None)
+        query_order_row = getattr(v357, "_query_order_row", None)
+        query_order_fill = getattr(v357, "_query_order_fill", None)
+        trade_history_fill = getattr(v357, "_trade_history_fill", None)
+        if not all(callable(fn) for fn in (private_read, query_order_row, query_order_fill, trade_history_fill)):
+            return False, "v357_helpers_not_ready"
+
+        history = private_read(broker, "TradesHistory", {"type": "all", "trades": True})
+        if not isinstance(history, Mapping) or history.get("error"):
+            return False, "kraken_trade_history_unavailable"
+        result = history.get("result")
+        trades = result.get("trades") if isinstance(result, Mapping) else None
+        if not isinstance(trades, Mapping):
+            return False, "kraken_trade_history_missing"
+
+        cutoff = time.time() - freshness_s
+        candidates: list[tuple[float, str, dict[str, Any]]] = []
+        for row in trades.values():
+            if not isinstance(row, Mapping):
+                continue
+            order_id = str(row.get("ordertxid") or "").strip()
+            try:
+                trade_ts = float(row.get("time") or row.get("timestamp") or 0.0)
+            except (TypeError, ValueError, OverflowError):
+                trade_ts = 0.0
+            if order_id and trade_ts >= cutoff:
+                candidates.append((trade_ts, order_id, dict(row)))
+
+        candidates.sort(key=lambda item: item[0], reverse=True)
+        seen: set[str] = set()
+        final_states = {"filled", "closed", "complete", "completed", "executed"}
+        v328 = importlib.import_module("bot.runtime_confirmed_fill_profitability_v328_patch")
+        normalize_fill = getattr(v328, "_normalize_dict_fill", None)
+        if not callable(normalize_fill):
+            return False, "v328_fill_verifier_not_ready"
+
+        for trade_ts, order_id, trade_row in candidates[:12]:
+            if order_id in seen:
+                continue
+            seen.add(order_id)
+            side = str(trade_row.get("type") or trade_row.get("side") or "").strip().lower()
+            symbol = str(trade_row.get("pair") or trade_row.get("symbol") or "KRAKEN-RECOVERED").strip().upper()
+            if side not in {"buy", "sell"}:
+                continue
+
+            order_row = query_order_row(broker, order_id)
+            status, fill_price, filled_qty, filled_usd = query_order_fill(order_row)
+            status = str(status or "").strip().lower()
+            event_epoch = float(trade_ts)
+
+            if fill_price <= 0.0 or filled_qty <= 0.0 or filled_usd <= 0.0:
+                if status not in final_states:
+                    continue
+                fill_price, filled_qty, filled_usd, matches, history_epoch = trade_history_fill(
+                    broker, order_id=order_id, side=side
+                )
+                if matches <= 0 or fill_price <= 0.0 or filled_qty <= 0.0 or filled_usd <= 0.0:
+                    continue
+                if history_epoch > 0.0:
+                    event_epoch = float(history_epoch)
+
+            if event_epoch < cutoff or event_epoch > time.time() + 60.0:
+                continue
+
+            candidate = {
+                "order_id": order_id,
+                "status": status or "closed",
+                "filled_price": float(fill_price),
+                "filled_size": float(filled_qty),
+                "filled_size_usd": float(filled_usd),
+                "broker_fill_at_epoch": event_epoch,
+                "recovered_fill_proof": True,
+                "kraken_query_order_reconciled": True,
+            }
+            verified_price, verified_usd = normalize_fill(candidate, symbol=symbol, side=side)
+            if verified_price <= 0.0 or verified_usd <= 0.0:
+                continue
+
+            ready_after, ready_detail = _current_execution_marker_ready()
+            if ready_after:
+                LOGGER.critical(
+                    "EXECUTION_PROOF_RESTART_V346_RECOVERED marker=%s order_id=%s symbol=%s side=%s "
+                    "writer_generation=%s authenticated_history=true exact_order_id=true final_status=true "
+                    "positive_fill_quantity=true positive_fill_cost=true broker_event_time=true freshness_s=%.0f "
+                    "no_order_submitted=true proof_timestamp_not_refreshed=true execution_proof_fabricated=false "
+                    "safety_gates_bypassed=false",
+                    MARKER, order_id, symbol, side, generation, freshness_s,
+                )
+                _wake_activation_after_proof()
+                return True, ready_detail
+
+        return False, "no_fresh_final_exact_kraken_fill"
+    except Exception as exc:
+        LOGGER.info(
+            "EXECUTION_PROOF_RESTART_V346_DEFERRED marker=%s reason=%s:%s "
+            "read_only=true no_order_submitted=true trading_fail_closed=true",
+            MARKER, type(exc).__name__, exc,
+        )
+        return False, f"recovery_error:{type(exc).__name__}:{exc}"
 
 
 def _write_confirmed_fill_marker(*, result: Mapping[str, Any], symbol: str, side: str, fill_price: float, filled_usd: float) -> bool:
@@ -395,6 +638,9 @@ def _worker() -> None:
             _patch_v231_execution_marker()
             _patch_stale_platform_refresh()
             _wake_position_sync()
+            recovered, recovery_detail = _recover_recent_kraken_execution_proof()
+            if not recovered and recovery_detail not in {"recovery_rate_limited", "current:heartbeat_trade", "current:canonical_confirmed_fill"}:
+                LOGGER.debug("V346 restart proof recovery pending: %s", recovery_detail)
             _wake_activation_after_proof()
         except Exception:
             LOGGER.debug("V346 worker pulse failed", exc_info=True)
@@ -446,4 +692,5 @@ def install() -> bool:
 __all__ = [
     "MARKER", "RELEASE_ID", "install", "install_import_hook",
     "_write_confirmed_fill_marker", "_patch_stale_platform_refresh",
+    "_recover_recent_kraken_execution_proof",
 ]
