@@ -74,6 +74,8 @@ def _hard_exit_authority_proof() -> tuple[bool, str, Any]:
     # from being reduced.  Every write-safety, nonce, health, SEAK, circuit,
     # stability, ECEL, holdings, ACK and fill gate below remains authoritative.
     kill_switch_active = bool(getattr(snap, "kill_switch_active", False))
+    if kill_switch_active and not _trusted_close():
+        return False, "kill_switch_active", snap
     if not bool(getattr(snap, "nonce_ready", False)):
         return False, "nonce_not_ready", snap
     if not bool(getattr(snap, "dispatch_health_ready", False)):
