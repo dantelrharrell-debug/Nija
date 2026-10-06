@@ -13418,6 +13418,24 @@ class KrakenBroker(BaseBroker):
         supported = asset_class.lower() in ["crypto", "cryptocurrency", "futures"]
         return supported
 
+    @staticmethod
+    def _canonicalize_kraken_ws_market(wsname: str) -> str:
+        """Normalize Kraken websocket market names into NIJA canonical symbols.
+
+        Kraken exposes legacy base aliases such as XBT and XDG while NIJA's
+        strategy universe uses BTC and DOGE. Normalize only the exact base
+        alias and preserve the API-observed quote currency.
+        """
+        symbol = str(wsname or "").strip().upper().replace("/", "-")
+        if not symbol:
+            return ""
+        parts = symbol.split("-", 1)
+        base_aliases = {"XBT": "BTC", "XDG": "DOGE"}
+        if len(parts) == 2:
+            base, quote = parts
+            return f"{base_aliases.get(base, base)}-{quote}"
+        return base_aliases.get(symbol, symbol)
+
     def get_all_products(self) -> list:
         """
         Get list of all tradeable cryptocurrency and futures pairs from Kraken.
