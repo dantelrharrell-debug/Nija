@@ -50,6 +50,14 @@ class KillSwitch:
     
     # State file to persist kill switch activations
     KILL_SWITCH_STATE_FILE = ".nija_kill_switch_state.json"
+
+    # Cross-instance durable stop record. Redis is already a required production
+    # dependency for writer authority; unlike /app files, this survives Render
+    # instance replacement.
+    DURABLE_REDIS_KEY = os.environ.get(
+        "NIJA_GLOBAL_KILL_SWITCH_REDIS_KEY",
+        "nija:global:kill_switch:v1",
+    )
     
     def __init__(self, base_path: Optional[str] = None):
         """
@@ -79,6 +87,10 @@ class KillSwitch:
         
         # Check for file-based activation
         self._check_file_activation()
+
+        # Reassert any shared durable stop before considering the deployment
+        # environment. This preserves real risk halts across Render rollouts.
+        self._check_redis_activation()
 
         # Render and other immutable deployments cannot rely on a file created
         # by a previous instance surviving the next rollout.  Honour the
@@ -130,6 +142,122 @@ class KillSwitch:
             
         except Exception as e:
             logger.error(f"❌ Error persisting kill switch state: {e}")
+
+    def _redis_client(self):
+        """Return the production Redis client used for durable stop state."""
+        try:
+            from bot.redis_runtime import create_redis
+            return create_redis(
+                decode_responses=True,
+                socket_timeout=2,
+                socket_connect_timeout=2,
+            )
+        except Exception as exc:
+            logger.warning("Durable kill-switch Redis unavailable: %s", exc)
+            return None
+
+    def _persist_durable_stop(self, activation_record: Dict[str, Any]) -> bool:
+        """Persist an active stop outside the ephemeral service filesystem."""
+        client = self._redis_client()
+        if client is None:
+            return False
+        payload = {
+            "is_active": True,
+            "reason": str(activation_record.get("reason") or ""),
+            "source": str(activation_record.get("source") or ""),
+            "timestamp": str(activation_record.get("timestamp") or ""),
+            "schema": 1,
+        }
+        try:
+            client.set(self.DURABLE_REDIS_KEY, json.dumps(payload, sort_keys=True))
+            logger.critical(
+                "DURABLE_KILL_SWITCH_REDIS_PERSISTED key=%s source=%s reason=%s",
+                self.DURABLE_REDIS_KEY,
+                payload["source"] or "unknown",
+                payload["reason"] or "unknown",
+            )
+            return True
+        except Exception as exc:
+            logger.critical(
+                "DURABLE_KILL_SWITCH_REDIS_PERSIST_FAILED key=%s err=%s trading_fail_closed_local=true",
+                self.DURABLE_REDIS_KEY,
+                exc,
+            )
+            return False
+
+    def _read_durable_stop(self) -> Optional[Dict[str, Any]]:
+        client = self._redis_client()
+        if client is None:
+            return None
+        try:
+            raw = client.get(self.DURABLE_REDIS_KEY)
+            if not raw:
+                return None
+            parsed = json.loads(raw)
+            return parsed if isinstance(parsed, dict) else None
+        except Exception as exc:
+            logger.error(
+                "DURABLE_KILL_SWITCH_REDIS_READ_FAILED key=%s err=%s",
+                self.DURABLE_REDIS_KEY,
+                exc,
+            )
+            return None
+
+    def _check_redis_activation(self) -> None:
+        """Reassert a durable active stop on a replacement process."""
+        record = self._read_durable_stop()
+        if not record or not bool(record.get("is_active")) or self._is_active:
+            return
+        reason = str(record.get("reason") or "Durable global kill switch active")
+        source = str(record.get("source") or "REDIS_PERSISTED")
+        timestamp = str(record.get("timestamp") or datetime.now(timezone.utc).isoformat())
+        activation_record = {
+            "reason": reason,
+            "source": source,
+            "timestamp": timestamp,
+            "durable_reassertion": True,
+        }
+        self._is_active = True
+        self._activation_history.append(activation_record)
+        self._persist_state()
+        self._create_kill_file(reason)
+        logger.critical(
+            "DURABLE_KILL_SWITCH_REDIS_REASSERTED key=%s source=%s reason=%s trading_fail_closed=true",
+            self.DURABLE_REDIS_KEY,
+            source,
+            reason,
+        )
+
+    def _clear_durable_stop(self, reason: str) -> bool:
+        """Clear shared stop state only when Redis confirms the mutation."""
+        client = self._redis_client()
+        if client is None:
+            return False
+        try:
+            payload = {
+                "is_active": False,
+                "reason": str(reason or ""),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "schema": 1,
+            }
+            client.set(self.DURABLE_REDIS_KEY, json.dumps(payload, sort_keys=True))
+            verify = client.get(self.DURABLE_REDIS_KEY)
+            parsed = json.loads(verify) if verify else {}
+            cleared = isinstance(parsed, dict) and not bool(parsed.get("is_active"))
+            if not cleared:
+                logger.critical(
+                    "DURABLE_KILL_SWITCH_REDIS_CLEAR_VERIFY_FAILED key=%s trading_fail_closed=true",
+                    self.DURABLE_REDIS_KEY,
+                )
+            return cleared
+        except Exception as exc:
+            logger.critical(
+                "DURABLE_KILL_SWITCH_REDIS_CLEAR_FAILED key=%s err=%s trading_fail_closed=true",
+                self.DURABLE_REDIS_KEY,
+                exc,
+            )
+            return False
+
             
     def _check_file_activation(self):
         """Check if kill switch file exists"""
@@ -199,6 +327,11 @@ To resume trading:
         
         # Persist state
         self._persist_state()
+
+        # Persist the same authoritative stop in shared Redis so replacement
+        # instances inherit it. Local activation remains immediate even if the
+        # shared write is temporarily unavailable.
+        self._persist_durable_stop(activation_record)
         
         # Create file marker
         self._create_kill_file(reason)
@@ -260,6 +393,16 @@ To resume trading:
             if not self._is_active:
                 logger.info("Kill switch already inactive")
                 return
+
+            # Shared stop state is authoritative across production instances.
+            # Refuse local deactivation unless the durable record is confirmed
+            # inactive, otherwise the next process could disagree about safety.
+            if not self._clear_durable_stop(reason):
+                logger.critical(
+                    "KILL_SWITCH_DEACTIVATION_REFUSED_DURABLE_STATE_UNCLEARED reason=%s trading_fail_closed=true",
+                    reason,
+                )
+                return False
                 
             deactivation_record = {
                 'reason': reason,
