@@ -11200,18 +11200,46 @@ class KrakenBroker(BaseBroker):
                 _capital_refresh_worker = (
                     threading.current_thread().name.startswith("capital-balance-fetch-kraken")
                 )
+                try:
+                    _raw_asset_pricing_coverage = float(
+                        getattr(self, "_last_pricing_coverage_pct", 1.0)
+                    )
+                except (TypeError, ValueError, OverflowError):
+                    _raw_asset_pricing_coverage = 0.0
+                _valuation_complete = (
+                    not non_usd_assets
+                    or _raw_asset_pricing_coverage >= (1.0 - 1e-9)
+                )
+
                 trade_balance = None
-                if _capital_refresh_worker:
+                if _capital_refresh_worker and _valuation_complete:
                     logger.critical(
                         "KRAKEN_CAPITAL_TAIL_V434_TRADEBALANCE_SKIPPED "
                         "account=%s source=authenticated_balance_plus_asset_valuation "
+                        "raw_asset_pricing_coverage=%.6f valuation_complete=true "
                         "redundant_private_read=false held_uplift_omitted=true "
                         "capital_overstatement=false freshness_extended=false "
                         "execution_proof_fabricated=false safety_gates_bypassed=false",
                         self.account_identifier,
+                        _raw_asset_pricing_coverage,
                     )
                 else:
-                    # Use MONITORING category for balance checks (conservative rate limiting)
+                    if _capital_refresh_worker and not _valuation_complete:
+                        logger.critical(
+                            "KRAKEN_CAPITAL_TAIL_V435_INCOMPLETE_VALUATION_FALLBACK "
+                            "account=%s assets=%s raw_asset_pricing_coverage=%.6f "
+                            "cash_only_publication_blocked=true authenticated_tradebalance_required=true "
+                            "asset_price_fabricated=false stale_equity_promoted=false "
+                            "drawdown_sample_incomplete=true safety_gates_bypassed=false",
+                            self.account_identifier,
+                            non_usd_assets,
+                            _raw_asset_pricing_coverage,
+                        )
+                    # Use MONITORING category for balance checks (conservative rate limiting).
+                    # For the capital worker this call is now made only when local
+                    # non-fiat valuation is incomplete, so Kraken's authenticated
+                    # equivalent balance (eb) can prevent a missing asset price from
+                    # masquerading as a portfolio loss.
                     balance_category = KrakenAPICategory.MONITORING if KrakenAPICategory is not None else None
                     trade_balance = self._kraken_private_call(
                         'TradeBalance', {'asset': 'ZUSD'}, category=balance_category
