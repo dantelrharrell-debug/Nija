@@ -32,6 +32,7 @@ def test_rearm_already_published_strategy_uses_existing_object(monkeypatch):
     publication = SimpleNamespace(_PUBLISHED=strategy)
 
     monkeypatch.setenv("HEARTBEAT_TRADE", "true")
+    monkeypatch.setenv("NIJA_ALLOW_LIVE_HEARTBEAT_ORDERS", "true")
     monkeypatch.setenv("DRY_RUN_MODE", "false")
     monkeypatch.setenv("PAPER_MODE", "false")
     monkeypatch.setenv("NIJA_RUNTIME_EXECUTION_AUTHORITY", "0")
@@ -49,6 +50,7 @@ def test_rearm_already_published_strategy_is_noop_when_none_exists(monkeypatch):
     publication = SimpleNamespace(_PUBLISHED=None)
 
     monkeypatch.setenv("HEARTBEAT_TRADE", "true")
+    monkeypatch.setenv("NIJA_ALLOW_LIVE_HEARTBEAT_ORDERS", "true")
 
     assert module._rearm_already_published_strategy(publication) is True
 
@@ -71,6 +73,7 @@ def test_existing_live_scheduler_is_not_duplicated(monkeypatch):
     strategy._schedule_heartbeat_trade = schedule
 
     monkeypatch.setenv("HEARTBEAT_TRADE", "true")
+    monkeypatch.setenv("NIJA_ALLOW_LIVE_HEARTBEAT_ORDERS", "true")
     monkeypatch.setenv("DRY_RUN_MODE", "false")
     monkeypatch.setenv("PAPER_MODE", "false")
 
@@ -120,6 +123,7 @@ def test_detached_v127_cached_publisher_recovers_same_strategy_and_rearms(monkey
     )
     monkeypatch.setitem(sys.modules, "bot.bot_main", fake_bot_main)
     monkeypatch.setenv("HEARTBEAT_TRADE", "true")
+    monkeypatch.setenv("NIJA_ALLOW_LIVE_HEARTBEAT_ORDERS", "true")
     monkeypatch.setenv("DRY_RUN_MODE", "false")
     monkeypatch.setenv("PAPER_MODE", "false")
     monkeypatch.setenv("NIJA_RUNTIME_EXECUTION_AUTHORITY", "0")
@@ -132,3 +136,30 @@ def test_detached_v127_cached_publisher_recovers_same_strategy_and_rearms(monkey
     assert strategy._heartbeat_trade_thread.is_alive() is True
     assert publication._PUBLISHED is None
     assert os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] == "0"
+
+
+def test_rearm_requires_explicit_live_order_opt_in(monkeypatch):
+    module = importlib.import_module("bot.runtime_existing_strategy_heartbeat_rearm_v203_patch")
+
+    calls = {"scheduler": 0}
+    strategy = SimpleNamespace(
+        _heartbeat_trade_enabled=False,
+        _heartbeat_trade_thread=None,
+        _heartbeat_trade_completed=False,
+        _heartbeat_trade_success=False,
+        _heartbeat_trade_lock=threading.Lock(),
+    )
+
+    def schedule() -> None:
+        calls["scheduler"] += 1
+
+    strategy._schedule_heartbeat_trade = schedule
+
+    monkeypatch.setenv("HEARTBEAT_TRADE", "true")
+    monkeypatch.delenv("NIJA_ALLOW_LIVE_HEARTBEAT_ORDERS", raising=False)
+    monkeypatch.setenv("DRY_RUN_MODE", "false")
+    monkeypatch.setenv("PAPER_MODE", "false")
+
+    assert module._ensure_heartbeat_scheduler(strategy) is True
+    assert calls["scheduler"] == 0
+    assert strategy._heartbeat_trade_enabled is False
