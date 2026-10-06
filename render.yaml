@@ -255,11 +255,11 @@ services:
         fromDatabase:
           name: nija-billing-db
           property: connectionString
+      # Dedicated live-mode restricted Stripe key for the isolated billing
+      # service. Configure this directly in Render; never share the trading
+      # runtime's broader Stripe credential with billing.
       - key: STRIPE_SECRET_KEY
-        fromService:
-          type: web
-          name: nija-trading-bot
-          envVarKey: STRIPE_SECRET_KEY
+        sync: false
       - key: NIJA_BILLING_IDENTITY_SECRET
         fromService:
           type: web
