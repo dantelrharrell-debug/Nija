@@ -85,6 +85,17 @@ def _ensure_heartbeat_scheduler(strategy: Any) -> bool:
         )
         return True
 
+    # A heartbeat verification order is a real capital-bearing order. Re-arm
+    # only when the same explicit second opt-in required by TradingStrategy is
+    # present. HEARTBEAT_TRADE alone must never be enough to schedule an order.
+    if not _truthy("NIJA_ALLOW_LIVE_HEARTBEAT_ORDERS"):
+        LOGGER.warning(
+            "EXISTING_STRATEGY_HEARTBEAT_REARM_V203_SKIPPED marker=%s "
+            "reason=live_heartbeat_order_opt_in_missing order_submitted=false",
+            MARKER,
+        )
+        return True
+
     if _truthy("DRY_RUN_MODE") or _truthy("PAPER_MODE"):
         LOGGER.info(
             "EXISTING_STRATEGY_HEARTBEAT_REARM_V203_SKIPPED marker=%s reason=simulation_mode",
