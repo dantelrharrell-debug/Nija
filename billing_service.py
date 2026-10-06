@@ -33,6 +33,19 @@ _REVOKED_SUBSCRIPTION_STATES = {
 }
 _CHECKOUT_PAID_STATES = {"paid", "no_payment_required"}
 
+_STRIPE_WEBHOOK_EVENTS = frozenset({
+    "checkout.session.completed",
+    "checkout.session.async_payment_succeeded",
+    "checkout.session.async_payment_failed",
+    "checkout.session.expired",
+    "customer.subscription.created",
+    "customer.subscription.updated",
+    "customer.subscription.deleted",
+    "invoice.paid",
+    "invoice.payment_succeeded",
+    "invoice.payment_failed",
+})
+
 
 @dataclass(frozen=True)
 class BillingIdentity:
@@ -500,6 +513,56 @@ def create_app(store: Optional[BillingServiceStore] = None) -> Flask:
             logger.exception("Billing database health check failed")
             return jsonify({"service": "nija-billing", "status": "unhealthy"}), 503
         return jsonify({"service": "nija-billing", "status": "ok"})
+
+    @app.get("/readyz")
+    def readyz():
+        """Verify authoritative production billing dependencies without writes."""
+        try:
+            _store().ping()
+
+            webhook_secret = os.getenv("STRIPE_WEBHOOK_SECRET", "").strip()
+            identity_secret = os.getenv("NIJA_BILLING_IDENTITY_SECRET", "").strip()
+            public_url = os.getenv("NIJA_BILLING_PUBLIC_URL", "").strip().rstrip("/")
+            if not webhook_secret:
+                raise RuntimeError("STRIPE_WEBHOOK_SECRET is not configured")
+            if not identity_secret:
+                raise RuntimeError("NIJA_BILLING_IDENTITY_SECRET is not configured")
+            if not public_url.startswith("https://"):
+                raise RuntimeError("NIJA_BILLING_PUBLIC_URL is not a production HTTPS origin")
+
+            stripe = _stripe_module()
+            offer = _offer_config(FOUNDING_BETA_OFFER)
+            price = stripe.Price.retrieve(offer.price_id, expand=["product"])
+            if _id_value(price) != offer.price_id:
+                raise RuntimeError("Stripe founding Price identity mismatch")
+            if not bool(_obj_value(price, "active", False)):
+                raise RuntimeError("Stripe founding Price is inactive")
+            if str(_obj_value(price, "type", "")).lower() != "recurring":
+                raise RuntimeError("Stripe founding Price is not recurring")
+            if _id_value(_obj_value(price, "product")) != offer.product_id:
+                raise RuntimeError("Stripe founding Price/Product mismatch")
+
+            expected_webhook_url = f"{public_url}/api/billing/webhook"
+            endpoints = stripe.WebhookEndpoint.list(limit=100)
+            matching_endpoint = None
+            for endpoint in (_obj_value(endpoints, "data", []) or []):
+                if (
+                    str(_obj_value(endpoint, "url", "")) == expected_webhook_url
+                    and str(_obj_value(endpoint, "status", "")).lower() == "enabled"
+                ):
+                    matching_endpoint = endpoint
+                    break
+            if matching_endpoint is None:
+                raise RuntimeError("Authoritative Stripe webhook endpoint is missing or disabled")
+
+            enabled_events = set(_obj_value(matching_endpoint, "enabled_events", []) or [])
+            if not _STRIPE_WEBHOOK_EVENTS.issubset(enabled_events):
+                raise RuntimeError("Authoritative Stripe webhook event set is incomplete")
+        except Exception:
+            logger.exception("Billing readiness check failed")
+            return jsonify({"service": "nija-billing", "status": "not_ready"}), 503
+
+        return jsonify({"service": "nija-billing", "status": "ready"})
 
     @app.post("/api/billing/checkout")
     def create_checkout():
