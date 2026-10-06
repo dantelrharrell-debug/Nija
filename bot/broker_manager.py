@@ -10420,10 +10420,18 @@ class KrakenBroker(BaseBroker):
                         self._balance_last_updated = time.time()
                         self.balance_cache["kraken"] = total_funds
 
-                        # Fix 1: Source registration hook — register balance with
-                        # CapitalAuthority immediately so the capital pipeline is never
-                        # starved of its first source on the success path.
-                        _feed_capital_authority("kraken", total_funds)
+                        # Platform CapitalAuthority is strictly PLATFORM-scoped.
+                        # USER Kraken accounts are independently capitalized and must
+                        # never overwrite the shared platform "kraken" source.
+                        if self.account_type == AccountType.PLATFORM:
+                            _feed_capital_authority("kraken", total_funds)
+                        else:
+                            logger.info(
+                                "KRAKEN_USER_CAPITAL_FEED_EXCLUDED account=%s balance=%.8f "
+                                "platform_capital_mutated=false reason=independent_account_isolation",
+                                self.account_identifier,
+                                total_funds,
+                            )
 
                         kraken_connect_raw = {
                             "usd": usd_balance,
