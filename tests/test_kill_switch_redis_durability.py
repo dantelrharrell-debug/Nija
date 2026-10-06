@@ -75,3 +75,29 @@ def test_confirmed_durable_clear_allows_local_deactivation(tmp_path, monkeypatch
     payload = json.loads(shared.get(ks.DURABLE_REDIS_KEY))
     assert payload["is_active"] is False
     assert not Path(ks._kill_file).exists()
+
+
+def test_filesystem_replay_does_not_overwrite_durable_risk_cause(tmp_path, monkeypatch):
+    path = tmp_path / "node"
+    path.mkdir()
+    shared = FakeRedis()
+    monkeypatch.setattr(KillSwitch, "_redis_client", lambda self: shared)
+
+    first = KillSwitch(base_path=str(path))
+    first.activate(
+        "GlobalDrawdownCircuitBreaker: HALT level reached (drawdown=20.31%, equity=$617.89)",
+        "GlobalDrawdownCircuitBreaker",
+    )
+    original = json.loads(shared.get(first.DURABLE_REDIS_KEY))
+    assert original["source"] == "GlobalDrawdownCircuitBreaker"
+
+    # A new KillSwitch object on the same filesystem sees EMERGENCY_STOP first.
+    # That restart/file replay must remain fail-closed locally without erasing
+    # the original causal stop stored in durable Redis.
+    replay = KillSwitch(base_path=str(path))
+    assert replay.is_active() is True
+
+    preserved = json.loads(shared.get(first.DURABLE_REDIS_KEY))
+    assert preserved["is_active"] is True
+    assert preserved["source"] == "GlobalDrawdownCircuitBreaker"
+    assert "drawdown=20.31%" in preserved["reason"]
