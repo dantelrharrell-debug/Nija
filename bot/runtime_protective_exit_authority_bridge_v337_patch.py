@@ -68,8 +68,12 @@ def _hard_exit_authority_proof() -> tuple[bool, str, Any]:
     except Exception as exc:
         return False, f"startup_write_authority:{exc}", snap
 
-    if bool(getattr(snap, "kill_switch_active", False)):
-        return False, "kill_switch_active", snap
+    # A global kill switch blocks risk-increasing execution, but this bridge is
+    # reachable only inside v335's context-bound trusted protective close.  Do
+    # not turn an emergency stop into a trap that prevents an existing position
+    # from being reduced.  Every write-safety, nonce, health, SEAK, circuit,
+    # stability, ECEL, holdings, ACK and fill gate below remains authoritative.
+    kill_switch_active = bool(getattr(snap, "kill_switch_active", False))
     if not bool(getattr(snap, "nonce_ready", False)):
         return False, "nonce_not_ready", snap
     if not bool(getattr(snap, "dispatch_health_ready", False)):
@@ -97,7 +101,11 @@ def _hard_exit_authority_proof() -> tuple[bool, str, Any]:
     if not startup_shape and not bool(getattr(snap, "ready", False)):
         return False, f"non_startup_runtime_block:{reason or lifecycle or coordinator}", snap
 
-    return True, "hard_exit_authority_proven", snap
+    return True, (
+        "hard_exit_authority_proven_kill_switch_exit_only"
+        if kill_switch_active
+        else "hard_exit_authority_proven"
+    ), snap
 
 
 def _bridge_initial_authority_decision(decision: Any) -> Any:
@@ -178,7 +186,7 @@ def _bridge_initial_authority_decision(decision: Any) -> Any:
     LOGGER.critical(
         "PROTECTIVE_EXIT_AUTHORITY_V337_INITIAL_DECISION_BRIDGED marker=%s "
         "source_lifecycle=%s exact_writer=true startup_write_authority=true nonce_ready=true "
-        "broker_health_ready=true kill_switch_clear=true seak_clear=true circuit_clear=true "
+        "broker_health_ready=true kill_switch_entry_block_preserved=true seak_clear=true circuit_clear=true "
         "stability_allowed=true risk_reducing_exit_only=true global_lifecycle_mutated=false "
         "downstream_risk_minimum_order_ack_fill_gates_unchanged=true safety_gates_bypassed=false",
         MARKER, getattr(snap, "lifecycle_phase", "unknown"),
@@ -198,7 +206,7 @@ def _make_dispatch_bridge(base_assert):
         LOGGER.critical(
             "PROTECTIVE_EXIT_AUTHORITY_V337_DISPATCH_GRANTED marker=%s lifecycle=%s coordinator=%s "
             "exact_writer=true startup_write_authority=true nonce_ready=true broker_health_ready=true "
-            "kill_switch_clear=true seak_clear=true circuit_clear=true risk_reducing_exit_only=true "
+            "kill_switch_entry_block_preserved=true seak_clear=true circuit_clear=true risk_reducing_exit_only=true "
             "ordinary_execution_unchanged=true global_lifecycle_mutated=false safety_gates_bypassed=false",
             MARKER,
             getattr(snap, "lifecycle_phase", "unknown"),
@@ -270,7 +278,7 @@ def _patch_pipeline() -> bool:
             LOGGER.critical(
                 "PROTECTIVE_EXIT_AUTHORITY_V337_SNAPSHOT_BRIDGED marker=%s lifecycle=%s coordinator=%s "
                 "runtime_reason=%s exact_writer=true startup_write_authority=true nonce_ready=true "
-                "broker_health_ready=true kill_switch_clear=true seak_clear=true circuit_clear=true "
+                "broker_health_ready=true kill_switch_entry_block_preserved=true seak_clear=true circuit_clear=true "
                 "local_dispatch_enabled=true global_dispatch_mutated=false global_lifecycle_mutated=false "
                 "entry_authority_unchanged=true safety_gates_bypassed=false",
                 MARKER,
@@ -332,7 +340,7 @@ def install_import_hook() -> bool:
             "RUNTIME_PROTECTIVE_EXIT_AUTHORITY_BRIDGE_V337_%s marker=%s ready=%s "
             "trusted_protective_close_only=true exact_distributed_writer_required=true "
             "startup_write_authority_required=true nonce_required=true broker_health_required=true "
-            "kill_switch_clear_required=true seak_clear_required=true circuit_clear_required=true "
+            "kill_switch_blocks_entries_not_verified_close=true seak_clear_required=true circuit_clear_required=true "
             "authority_source_binding=true pipeline_alias_binding=true initial_lifecycle_gate_bridge=true "
             "trusted_close_local_dispatch_bridge=true lifecycle_global_epoch_bridge_only=true "
             "global_dispatch_mutated=false global_lifecycle_mutated=false ordinary_entries_unchanged=true "
