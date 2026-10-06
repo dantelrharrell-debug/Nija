@@ -43,12 +43,11 @@ _PATCH_ATTR = "_nija_drawdown_stop_provenance_v414"
 _LOCK = threading.RLock()
 
 # Production incident 2026-10-06: a genuine GlobalDrawdownCircuitBreaker halt
-# was durably persisted at 07:36:33Z, then a FILE_SYSTEM replay overwrote only
-# the Redis cause one second later.  The generic replay retained its original
-# activation timestamp in the durable payload.  This fingerprint lets v414
-# restore that one missing cause without treating arbitrary FILE_SYSTEM stops
-# as drawdown stops.
-_INCIDENT_20261006_REPLAY_TS_PREFIX = "2026-10-06T07:36:"
+# was durably persisted at 07:36:33Z, then FILE_SYSTEM replays overwrote only
+# the Redis cause.  The currently active generic durable record was last
+# persisted at 15:12:17Z.  Bind recovery to that exact incident generation so
+# arbitrary FILE_SYSTEM stops can never inherit this drawdown cause.
+_INCIDENT_20261006_REPLAY_TS_PREFIX = "2026-10-06T15:12:"
 _INCIDENT_20261006_CAUSAL_SOURCE = "GlobalDrawdownCircuitBreaker"
 _INCIDENT_20261006_CAUSAL_REASON = (
     "GlobalDrawdownCircuitBreaker: HALT level reached "
