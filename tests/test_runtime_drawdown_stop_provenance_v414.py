@@ -72,7 +72,7 @@ def test_oct6_incident_restores_only_exact_lost_drawdown_cause() -> None:
             {
                 "reason": "Kill switch file detected",
                 "source": "FILE_SYSTEM",
-                "timestamp": "2026-10-06T07:36:34.812345+00:00",
+                "timestamp": "2026-10-06T15:12:17.231000+00:00",
             }
         ]
     }
@@ -93,7 +93,7 @@ def test_oct6_incident_rejects_other_filesystem_stops() -> None:
             {
                 "reason": "Kill switch file detected",
                 "source": "FILE_SYSTEM",
-                "timestamp": "2026-10-07T07:36:34+00:00",
+                "timestamp": "2026-10-07T15:12:17+00:00",
             }
         ]
     }
@@ -102,7 +102,7 @@ def test_oct6_incident_rejects_other_filesystem_stops() -> None:
             {
                 "reason": "Owner emergency stop",
                 "source": "MANUAL",
-                "timestamp": "2026-10-06T07:36:34+00:00",
+                "timestamp": "2026-10-06T15:12:17+00:00",
             }
         ]
     }
