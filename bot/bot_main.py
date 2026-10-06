@@ -1309,18 +1309,20 @@ def main() -> int:
 
     global _startup_complete, _core_loop_thread, _process_exit_code, _process_exit_reason, _main_active
 
-    # A new canonical main invocation owns a new shutdown lifecycle.  Clear
-    # only stale in-process shutdown signals before authority acquisition;
-    # actual signals received after this point still set both events and
-    # immediately quiesce the writer heartbeat.
+    # A new canonical main invocation owns a fresh in-process lifecycle.
+    # Reset all startup/shutdown state that can legitimately remain set after
+    # a completed prior invocation. No execution authority is granted here.
     _shutdown_event.clear()
+    _startup_complete = False
+    _startup_registration_done.clear()
+    _startup_stage_ts.clear()
+    _core_loop_thread = None
     try:
         from bot.bootstrap_utils import get_shutdown_event
 
         get_shutdown_event().clear()
     except Exception:
         logger.debug("bootstrap shutdown event reset unavailable", exc_info=True)
-    _main_active = True
 
     _process_exit_code = 0
     _process_exit_reason = ""
@@ -1336,12 +1338,21 @@ def main() -> int:
     logger.info("🚀 NIJA TRADING BOT — APEX v7.2.0")
     logger.info("=" * 80)
 
+    # Signal registration can fail during controlled re-entry outside the main
+    # thread. Do it before publishing _main_active so such a setup failure
+    # cannot leave stale active-lifecycle state behind.
     signal.signal(signal.SIGTERM, _signal_handler)
     signal.signal(signal.SIGINT, _signal_handler)
+    _main_active = True
 
     _startup_stage_ts["process_main_start"] = time.time()
     logger.info("\n[STEP 0] Redis Writer Authority")
-    if not _acquire_writer_authority_before_nonce():
+    try:
+        writer_acquired = _acquire_writer_authority_before_nonce()
+    except BaseException:
+        _main_active = False
+        raise
+    if not writer_acquired:
         _main_active = False
         if _shutdown_event.is_set():
             logger.info("Startup stopped while waiting for writer authority")
