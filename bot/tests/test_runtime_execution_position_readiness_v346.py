@@ -184,3 +184,114 @@ def test_recovered_fill_without_authenticated_event_time_cannot_write_execution_
     ) is False
 
     assert not marker.exists()
+
+
+def test_restart_recovery_uses_authenticated_fresh_fill_without_order(monkeypatch):
+    now = 1791247000.0
+    broker = SimpleNamespace(account_type="platform", connected=True, broker_type="kraken")
+
+    monkeypatch.setattr(v346.time, "time", lambda: now)
+    monkeypatch.setattr(v346, "_current_execution_marker_ready", lambda: (False, "marker_missing"))
+    monkeypatch.setattr(v346, "_writer_epoch_for_recovery", lambda: (True, "777"))
+    monkeypatch.setattr(v346, "_canonical_kraken_broker", lambda: broker)
+    monkeypatch.setattr(v346, "_recovery_freshness_s", lambda: 1800.0)
+    monkeypatch.setattr(v346, "_recovery_interval_s", lambda: 10.0)
+    monkeypatch.setattr(v346, "_RECOVERY_LAST_ATTEMPT_MONO", 0.0)
+    monkeypatch.setattr(v346, "_RECOVERY_LAST_GENERATION", "")
+    monkeypatch.setattr(v346.time, "monotonic", lambda: 1000.0)
+
+    v357 = ModuleType("bot.runtime_kraken_delayed_fill_reconciliation_v357_patch")
+    v357._private_read = lambda _broker, method, params: {
+        "error": [],
+        "result": {"trades": {
+            "T1": {
+                "ordertxid": "ORDER-1",
+                "time": now - 30.0,
+                "type": "buy",
+                "pair": "XXBTZUSD",
+            }
+        }},
+    } if method == "TradesHistory" else {}
+    v357._query_order_row = lambda _broker, oid: {
+        "status": "closed", "vol_exec": "0.001", "cost": "85.0"
+    } if oid == "ORDER-1" else {}
+    v357._query_order_fill = lambda row: ("closed", 85000.0, 0.001, 85.0)
+    v357._trade_history_fill = lambda *args, **kwargs: (85000.0, 0.001, 85.0, 1, now - 30.0)
+    monkeypatch.setitem(__import__("sys").modules, "bot.runtime_kraken_delayed_fill_reconciliation_v357_patch", v357)
+
+    v328 = __import__("bot.runtime_confirmed_fill_profitability_v328_patch", fromlist=["x"])
+    monkeypatch.setattr(v328, "_normalize_dict_fill", lambda result, *, symbol, side: (
+        v346._write_confirmed_fill_marker(
+            result=result, symbol=symbol, side=side,
+            fill_price=float(result["filled_price"]),
+            filled_usd=float(result["filled_size_usd"]),
+        ) and (float(result["filled_price"]), float(result["filled_size_usd"]))
+    ) or (0.0, 0.0))
+
+    state = {"ready": False}
+    original_write = v346._write_confirmed_fill_marker
+
+    def write_and_mark(**kwargs):
+        ok = original_write(**kwargs)
+        state["ready"] = bool(ok)
+        return ok
+
+    monkeypatch.setattr(v346, "_write_confirmed_fill_marker", write_and_mark)
+    monkeypatch.setattr(
+        v346,
+        "_current_execution_marker_ready",
+        lambda: (state["ready"], "current:canonical_confirmed_fill" if state["ready"] else "marker_missing"),
+    )
+    monkeypatch.setattr(v346, "_wake_activation_after_proof", lambda: None)
+
+    import bot.runtime_execution_capital_integrity_v169_patch as v169
+    import bot.runtime_confirmed_fill_profitability_v328_patch as real_v328
+    marker = Path("/tmp/test_restart_execution_proof.json")
+    if marker.exists():
+        marker.unlink()
+    monkeypatch.setattr(v169, "_execution_marker_path", lambda: marker)
+    monkeypatch.setattr(v169, "_atomic_json_write", lambda path, payload: path.write_text(json.dumps(payload), encoding="utf-8"))
+    monkeypatch.setattr(real_v328, "_order_id", lambda result: result.get("order_id", ""))
+
+    ok, detail = v346._recover_recent_kraken_execution_proof()
+    assert ok is True
+    assert detail == "current:canonical_confirmed_fill"
+    payload = json.loads(marker.read_text(encoding="utf-8"))
+    assert payload["order_id"] == "ORDER-1"
+    assert payload["verified_at_epoch"] == now - 30.0
+    marker.unlink()
+
+
+def test_restart_recovery_rejects_stale_fill(monkeypatch):
+    now = 1791247000.0
+    broker = SimpleNamespace(account_type="platform", connected=True, broker_type="kraken")
+    monkeypatch.setattr(v346.time, "time", lambda: now)
+    monkeypatch.setattr(v346, "_current_execution_marker_ready", lambda: (False, "marker_missing"))
+    monkeypatch.setattr(v346, "_writer_epoch_for_recovery", lambda: (True, "777"))
+    monkeypatch.setattr(v346, "_canonical_kraken_broker", lambda: broker)
+    monkeypatch.setattr(v346, "_recovery_freshness_s", lambda: 1800.0)
+    monkeypatch.setattr(v346, "_recovery_interval_s", lambda: 10.0)
+    monkeypatch.setattr(v346, "_RECOVERY_LAST_ATTEMPT_MONO", 0.0)
+    monkeypatch.setattr(v346, "_RECOVERY_LAST_GENERATION", "")
+    monkeypatch.setattr(v346.time, "monotonic", lambda: 1000.0)
+
+    v357 = ModuleType("bot.runtime_kraken_delayed_fill_reconciliation_v357_patch")
+    v357._private_read = lambda _broker, method, params: {
+        "error": [],
+        "result": {"trades": {
+            "T1": {
+                "ordertxid": "OLD-ORDER",
+                "time": now - 7200.0,
+                "type": "buy",
+                "pair": "XXBTZUSD",
+            }
+        }},
+    }
+    v357._query_order_row = lambda *_args: {"status": "closed", "vol_exec": "0.001", "cost": "85.0"}
+    v357._query_order_fill = lambda row: ("closed", 85000.0, 0.001, 85.0)
+    v357._trade_history_fill = lambda *args, **kwargs: (85000.0, 0.001, 85.0, 1, now - 7200.0)
+    monkeypatch.setitem(__import__("sys").modules, "bot.runtime_kraken_delayed_fill_reconciliation_v357_patch", v357)
+
+    ok, detail = v346._recover_recent_kraken_execution_proof()
+    assert ok is False
+    assert detail == "no_fresh_final_exact_kraken_fill"
