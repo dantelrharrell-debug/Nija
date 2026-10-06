@@ -93,7 +93,7 @@ def test_oct6_incident_rejects_other_filesystem_stops() -> None:
             {
                 "reason": "Kill switch file detected",
                 "source": "FILE_SYSTEM",
-                "timestamp": "2026-10-07T14:55:23+00:00",
+                "timestamp": "2026-10-06T14:55:23.027304+00:00",
             }
         ]
     }
@@ -102,7 +102,7 @@ def test_oct6_incident_rejects_other_filesystem_stops() -> None:
             {
                 "reason": "Owner emergency stop",
                 "source": "MANUAL",
-                "timestamp": "2026-10-06T14:55:23+00:00",
+                "timestamp": "2026-10-06T14:55:23.027303+00:00",
             }
         ]
     }
