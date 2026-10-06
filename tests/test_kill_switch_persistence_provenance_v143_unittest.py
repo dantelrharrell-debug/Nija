@@ -79,6 +79,33 @@ class KillSwitchPersistenceProvenanceV143Tests(unittest.TestCase):
         history = [{"source": "AUTOMATIC", "reason": HEARTBEAT}]
         self.assertIsNone(mod._derive_persisted_cause(history))
 
+    def test_origin_unavailable_retains_persisted_marker_reason_fail_closed(self) -> None:
+        history = [
+            {
+                "source": "FILE_SYSTEM",
+                "reason": "Kill switch file detected | persisted_reason=AUTHORITY_HEARTBEAT_EXPIRED",
+                "persisted_marker_reason": "AUTHORITY_HEARTBEAT_EXPIRED: core_thread_dead",
+                "persisted_marker_activated": "2026-10-05T00:00:00Z",
+            },
+            dict(FILE),
+        ]
+        meta = mod._derive_persisted_cause(history)
+        self.assertIsNotNone(meta)
+        assert meta is not None
+        self.assertEqual(meta.get("blocked"), "origin_unavailable")
+        self.assertEqual(
+            meta.get("persisted_marker_reason"),
+            "AUTHORITY_HEARTBEAT_EXPIRED: core_thread_dead",
+        )
+        status = {
+            "is_active": True,
+            "recent_history": history,
+            mod._META_KEY: meta,
+        }
+        reason, source = mod._causal_activation_from_status(status)
+        self.assertEqual(reason, "v143_provenance_blocked:origin_unavailable")
+        self.assertEqual(source, "PROVENANCE_BOUNDARY")
+
     def test_get_status_wrapper_keeps_recent_window_but_adds_compact_cause(self) -> None:
         class FakeKillSwitch:
             def __init__(self) -> None:

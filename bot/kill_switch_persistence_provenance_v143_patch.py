@@ -104,8 +104,24 @@ def _derive_persisted_cause(history: object) -> dict[str, Any] | None:
             "persistence_records_skipped": skipped,
         }
 
+    persisted_marker_reason = ""
+    persisted_marker_activated = ""
+    for item in reversed(history):
+        if not _restart_persistence_record(item):
+            continue
+        marker_reason = str(item.get("persisted_marker_reason") or "").strip()
+        marker_activated = str(item.get("persisted_marker_activated") or "").strip()
+        if marker_reason and not persisted_marker_reason:
+            persisted_marker_reason = marker_reason
+        if marker_activated and not persisted_marker_activated:
+            persisted_marker_activated = marker_activated
+        if persisted_marker_reason and persisted_marker_activated:
+            break
+
     return {
         "blocked": "origin_unavailable",
+        "persisted_marker_reason": persisted_marker_reason,
+        "persisted_marker_activated": persisted_marker_activated,
         "persistence_records_skipped": skipped,
     }
 
@@ -115,8 +131,9 @@ def _announce_provenance(meta: dict[str, Any], depth: int) -> None:
     blocked = str(meta.get("blocked") or "")
     source = str(meta.get("source") or "")
     reason = str(meta.get("reason") or "")
+    persisted_marker_reason = str(meta.get("persisted_marker_reason") or "")
     skipped = int(meta.get("persistence_records_skipped") or 0)
-    signature = f"{blocked}|{source}|{reason}|{skipped}|{depth}"
+    signature = f"{blocked}|{source}|{reason}|{persisted_marker_reason}|{skipped}|{depth}"
     with _LOCK:
         if signature == _LAST_PROVENANCE_SIGNATURE:
             return
@@ -125,11 +142,13 @@ def _announce_provenance(meta: dict[str, Any], depth: int) -> None:
     if blocked:
         LOGGER.critical(
             "KILL_SWITCH_PROVENANCE_V143_PRESERVED marker=%s block=%s history_depth=%d "
-            "persistence_records_skipped=%d auto_clear=false trading_fail_closed=true",
+            "persistence_records_skipped=%d persisted_marker_reason=%s "
+            "auto_clear=false trading_fail_closed=true",
             MARKER,
             blocked,
             depth,
             skipped,
+            persisted_marker_reason or "unavailable",
         )
     else:
         LOGGER.critical(

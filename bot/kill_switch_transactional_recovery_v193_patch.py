@@ -128,9 +128,25 @@ def _derive_persisted_cause_v193(history: object) -> dict[str, Any] | None:
             "persistence_records_skipped": skipped,
         }
 
+    persisted_marker_reason = ""
+    persisted_marker_activated = ""
+    for item in reversed(history):
+        if not _restart_persistence_record(item):
+            continue
+        marker_reason = str(item.get("persisted_marker_reason") or "").strip()
+        marker_activated = str(item.get("persisted_marker_activated") or "").strip()
+        if marker_reason and not persisted_marker_reason:
+            persisted_marker_reason = marker_reason
+        if marker_activated and not persisted_marker_activated:
+            persisted_marker_activated = marker_activated
+        if persisted_marker_reason and persisted_marker_activated:
+            break
+
     return {
         "blocked": "origin_unavailable",
         "boundary_reason": boundary_reason,
+        "persisted_marker_reason": persisted_marker_reason,
+        "persisted_marker_activated": persisted_marker_activated,
         "persistence_records_skipped": skipped,
     }
 
