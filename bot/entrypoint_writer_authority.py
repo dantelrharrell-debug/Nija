@@ -79,18 +79,28 @@ def _cfg_float(name: str, default: float, *, minimum: float = 0.0) -> float:
 
 
 def _process_shutdown_requested() -> bool:
-    """Return whether the canonical process is intentionally shutting down.
+    """Return whether the active canonical process is intentionally shutting down.
 
-    Signal handlers publish shutdown intent before stopping ``TradingLoop``.
-    The writer heartbeat must quiesce during that narrow handoff window rather
-    than reclassifying the deliberately stopped core as terminal writer loss.
-    It does not release or grant authority here; ``bot_main`` retains the sole
-    compare-delete release path, and an interrupted release falls back to TTL.
+    bot_main deliberately leaves its shutdown Event set after teardown so worker
+    loops can observe termination. That event is not valid shutdown evidence for
+    a later in-process writer-authority object. Honor it only while the canonical
+    main() lifecycle is active. Synthetic bot_main modules without _main_active
+    retain the legacy behavior for compatibility tests.
     """
 
+    canonical_main_active = False
+    canonical_main_seen = False
     for name in ("bot.bot_main", "bot_main"):
         module = sys.modules.get(name)
-        event = getattr(module, "_shutdown_event", None) if module else None
+        if module is None:
+            continue
+        canonical_main_seen = True
+        active_marker = getattr(module, "_main_active", None)
+        main_active = True if active_marker is None else bool(active_marker)
+        canonical_main_active = canonical_main_active or main_active
+        if not main_active:
+            continue
+        event = getattr(module, "_shutdown_event", None)
         if event is not None and callable(getattr(event, "is_set", None)):
             try:
                 if event.is_set():
@@ -98,20 +108,23 @@ def _process_shutdown_requested() -> bool:
             except Exception:
                 pass
 
-    for name in ("bot.bootstrap_utils", "bootstrap_utils"):
-        module = sys.modules.get(name)
-        getter = getattr(module, "get_shutdown_event", None) if module else None
-        if callable(getter):
-            try:
-                event = getter()
-                if event is not None and event.is_set():
-                    return True
-            except Exception:
-                pass
+    # bootstrap_utils mirrors the same process shutdown handoff. If the real
+    # bot_main has completed, its bootstrap event may also remain set and must
+    # not poison a later writer runtime. Before bot_main import, preserve the
+    # bootstrap-only early-startup behavior.
+    if not canonical_main_seen or canonical_main_active:
+        for name in ("bot.bootstrap_utils", "bootstrap_utils"):
+            module = sys.modules.get(name)
+            getter = getattr(module, "get_shutdown_event", None) if module else None
+            if callable(getter):
+                try:
+                    event = getter()
+                    if event is not None and event.is_set():
+                        return True
+                except Exception:
+                    pass
 
     return False
-
-
 def _cfg_int(name: str, default: int, *, minimum: int = 1) -> int:
     try:
         return max(minimum, int(float(os.environ.get(name, str(default)) or default)))
@@ -438,13 +451,20 @@ class EntrypointWriterAuthority:
         shutdown_requested = False
         try:
             bot_main = importlib.import_module("bot.bot_main")
-            startup_complete = bool(getattr(bot_main, "_startup_complete", False))
-            shutdown = getattr(bot_main, "_shutdown_event", None)
-            shutdown_requested = bool(
-                shutdown is not None
-                and callable(getattr(shutdown, "is_set", None))
-                and shutdown.is_set()
-            )
+            active_marker = getattr(bot_main, "_main_active", None)
+            main_active = True if active_marker is None else bool(active_marker)
+            if main_active:
+                startup_complete = bool(getattr(bot_main, "_startup_complete", False))
+                shutdown = getattr(bot_main, "_shutdown_event", None)
+                shutdown_requested = bool(
+                    shutdown is not None
+                    and callable(getattr(shutdown, "is_set", None))
+                    and shutdown.is_set()
+                )
+            else:
+                # Completed main() state is stale for a fresh writer object.
+                startup_complete = True
+                shutdown_requested = False
         except Exception:
             startup_complete = True
             shutdown_requested = False
