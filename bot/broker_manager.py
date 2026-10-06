@@ -8629,6 +8629,10 @@ def _is_local_kraken_read_contention(error: BaseException) -> bool:
     )
 
 
+class KrakenIncompleteValuation(RuntimeError):
+    """Authenticated balance exists, but total equity is not yet provable."""
+
+
 class KrakenBroker(BaseBroker):
     """
     Kraken Pro Exchange integration for cryptocurrency spot trading.
@@ -11150,19 +11154,11 @@ class KrakenBroker(BaseBroker):
                     usd_balance,
                     usdt_balance,
                 )
-                # Hard guarantee: feed available cash into CapitalAuthority before
-                # any async handoff (e.g. TradeBalance RPC).  This ensures the
-                # authority is never left at $0 if the subsequent call is slow or
-                # fails, and that the feed timestamp reflects the true observation
-                # time rather than the end of the full parse pipeline.
-                if total > 0:
-                    _now = datetime.now(timezone.utc)
-                    _feed_capital_authority(
-                        "kraken",
-                        total,
-                        timestamp=_now,
-                        source="capital_authority_refresh",
-                    )
+                # Do not publish quote cash to CapitalAuthority yet.  Kraken
+                # get_account_balance() is total-equity authority; if non-USD
+                # holdings exist, publishing cash before those holdings are priced
+                # can masquerade as a portfolio drawdown.  Only the completed
+                # total_funds observation below may refresh CapitalAuthority.
 
                 non_usd_assets = []
                 for asset, amount in result.items():
@@ -11262,6 +11258,23 @@ class KrakenBroker(BaseBroker):
                     tb = float(tb_result.get('tb', 0))
                     trade_balance_equity_usd = max(0.0, eb)
                     held_amount = eb - tb if eb > tb else 0.0
+
+                if not _valuation_complete and trade_balance_equity_usd <= 0.0:
+                    logger.critical(
+                        "KRAKEN_CAPITAL_TAIL_V435_INCOMPLETE_VALUATION_REJECTED "
+                        "account=%s assets=%s raw_asset_pricing_coverage=%.6f "
+                        "authenticated_tradebalance_equity=false "
+                        "cash_only_capital_publication=false "
+                        "previous_observation_freshness_preserved=true "
+                        "drawdown_sample_rejected=true safety_gates_bypassed=false",
+                        self.account_identifier,
+                        non_usd_assets,
+                        _raw_asset_pricing_coverage,
+                    )
+                    raise KrakenIncompleteValuation(
+                        "Kraken total equity unproven: non-USD asset valuation incomplete "
+                        "and authenticated TradeBalance equivalent balance unavailable"
+                    )
 
                 # Enhanced balance logging with clear breakdown (Jan 19, 2026)
                 # Only log detailed breakdown if verbose is True
@@ -11366,6 +11379,20 @@ class KrakenBroker(BaseBroker):
             return 0.0
 
         except Exception as e:
+            # An incomplete valuation is not an exchange outage and must not be
+            # converted into a newly-fresh cached balance.  Re-raise it so the
+            # capital refresh stall guard can use only its prior observation with
+            # the original timestamp, or exclude Kraken if that observation is stale.
+            if isinstance(e, KrakenIncompleteValuation):
+                logger.warning(
+                    "KRAKEN_INCOMPLETE_VALUATION_FAIL_CLOSED account=%s "
+                    "broker_health_unchanged=true exit_only_unchanged=true "
+                    "cached_balance_not_promoted_to_fresh=true error=%s",
+                    self.account_identifier,
+                    str(e)[:180],
+                )
+                raise
+
             # Process-local read-lock contention is not Kraken/API/auth/nonce
             # unavailability.  Classify it before any broker-health mutation so
             # the transient call fails closed without incrementing the balance
