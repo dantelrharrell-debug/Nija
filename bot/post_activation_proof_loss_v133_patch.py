@@ -50,7 +50,44 @@ def _state_value(sm: Any | None = None) -> str:
         return "UNAVAILABLE"
 
 
+def _reconcile_current_authority_proof(proofs: dict[str, bool]) -> dict[str, bool]:
+    """Repair only stale authority snapshots from the canonical v231 proof.
+
+    v231 deliberately separates current writer authority from nonce/execution
+    proof.  A caller can therefore arrive here with authority_ready=False from
+    an older combined snapshot even while the canonical current writer proof is
+    healthy.  Re-probe only that one key; all other proofs remain untouched.
+    """
+    current = dict(proofs or {})
+    if bool(current.get("authority_ready", False)):
+        return current
+    try:
+        v231 = importlib.import_module("bot.runtime_authority_nonce_truth_convergence_v231_patch")
+        probe = getattr(v231, "_current_writer_authority_proof", None)
+        if not callable(probe):
+            return current
+        ready, detail = probe()
+        if bool(ready):
+            current["authority_ready"] = True
+            LOGGER.info(
+                "AUTHORITY_V133_V231_RECONCILED marker=%s detail=%s "
+                "authority_ready=true execution_ready_unchanged=%s "
+                "nonce_ready_unchanged=%s proof_fabricated=false",
+                MARKER,
+                str(detail or "current_writer_authority"),
+                str(bool(current.get("execution_ready", False))).lower(),
+                str(bool(current.get("nonce_ready", False))).lower(),
+            )
+    except Exception as exc:
+        LOGGER.debug(
+            "AUTHORITY_V133_V231_RECONCILE_DEFERRED marker=%s err=%s:%s",
+            MARKER, type(exc).__name__, exc,
+        )
+    return current
+
+
 def _revoke_false_readiness(proofs: dict[str, bool]) -> tuple[dict[str, bool], list[str]]:
+    proofs = _reconcile_current_authority_proof(proofs)
     table = importlib.import_module("bot.readiness_table")
     for key in _CRITICAL_KEYS:
         if bool(proofs.get(key, False)):
@@ -223,6 +260,7 @@ __all__ = [
     "install",
     "install_import_hook",
     "_truth_sync_v133",
+    "_reconcile_current_authority_proof",
     "_revoke_false_readiness",
     "_fail_closed_live_state",
     "_anchor_owner",
