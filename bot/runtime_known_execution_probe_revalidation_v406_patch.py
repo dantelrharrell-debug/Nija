@@ -29,7 +29,7 @@ from typing import Any
 LOGGER = logging.getLogger("nija.runtime_known_execution_probe_revalidation_v406")
 MARKER = "20260910-runtime-known-execution-probe-revalidation-v406c"
 _READY_FLAG = "NIJA_RUNTIME_KNOWN_EXECUTION_PROBE_REVALIDATION_V406_READY"
-_ORDER_ID = "OSW7F3-YD2NX-SR3BZB"
+_FALLBACK_ORDER_ID = "OSW7F3-YD2NX-SR3BZB"
 _LOCK = threading.RLock()
 _THREAD: threading.Thread | None = None
 
@@ -54,6 +54,27 @@ def _marker_ready() -> bool:
     except Exception:
         pass
     return False
+
+
+def _candidate_order_id() -> str:
+    """Prefer the newest real pending Kraken order over the historical fallback."""
+    try:
+        v363 = importlib.import_module("bot.runtime_kraken_deferred_fill_proof_recovery_v363_patch")
+        loader = getattr(v363, "_load_pending", None)
+        pending = dict(loader() or {}) if callable(loader) else {}
+        if pending:
+            ordered = sorted(
+                pending.items(),
+                key=lambda item: float(dict(item[1] or {}).get("last_seen_epoch") or dict(item[1] or {}).get("first_seen_epoch") or 0.0),
+                reverse=True,
+            )
+            for order_id, _entry in ordered:
+                oid = str(order_id or "").strip()
+                if oid:
+                    return oid
+    except Exception:
+        LOGGER.debug("v406 dynamic pending-order discovery deferred", exc_info=True)
+    return _FALLBACK_ORDER_ID
 
 
 def _candidate_brokers() -> list[Any]:
@@ -82,7 +103,7 @@ def _candidate_brokers() -> list[Any]:
     return found
 
 
-def _final_authenticated_row() -> tuple[Any | None, Mapping[str, Any] | None]:
+def _final_authenticated_row(order_id: str) -> tuple[Any | None, Mapping[str, Any] | None]:
     """Return broker + exact authenticated final QueryOrders row, or no proof."""
     try:
         v357 = importlib.import_module("bot.runtime_kraken_delayed_fill_reconciliation_v357_patch")
@@ -92,7 +113,7 @@ def _final_authenticated_row() -> tuple[Any | None, Mapping[str, Any] | None]:
             return None, None
         for broker in brokers:
             try:
-                row = query(broker, _ORDER_ID)
+                row = query(broker, order_id)
             except Exception:
                 continue
             if not isinstance(row, Mapping) or not row:
@@ -108,21 +129,15 @@ def _final_authenticated_row() -> tuple[Any | None, Mapping[str, Any] | None]:
     return None, None
 
 
-def _promote_same_authenticated_row(row: Mapping[str, Any]) -> tuple[bool, int]:
+def _promote_same_authenticated_row(order_id: str, broker: Any, row: Mapping[str, Any]) -> tuple[bool, int]:
+    """Reuse v357's exact authenticated reconciliation so event time remains authoritative."""
     v357 = importlib.import_module("bot.runtime_kraken_delayed_fill_reconciliation_v357_patch")
     v363 = importlib.import_module("bot.runtime_kraken_deferred_fill_proof_recovery_v363_patch")
-    parse = getattr(v357, "_query_order_fill", None)
+    enrich = getattr(v357, "_enrich_kraken_final_order", None)
     promote = getattr(v363, "_promote_confirmed_fill", None)
-    record = getattr(v363, "record_pending_order", None)
     discard = getattr(v363, "_discard_pending", None)
     wake = getattr(v363, "_wake_activation", None)
-    if not callable(parse) or not callable(promote) or not callable(record):
-        return False, 0
-
-    status, fill_price, filled_qty, filled_usd = parse(dict(row))
-    if status not in {"closed", "filled", "complete", "completed", "executed"}:
-        return False, 0
-    if fill_price <= 0.0 or filled_qty <= 0.0 or filled_usd <= 0.0:
+    if not callable(enrich) or not callable(promote):
         return False, 0
 
     descr = row.get("descr") if isinstance(row.get("descr"), Mapping) else {}
@@ -131,54 +146,48 @@ def _promote_same_authenticated_row(row: Mapping[str, Any]) -> tuple[bool, int]:
     if side not in {"buy", "sell"} or not symbol:
         return False, 0
 
-    if not bool(record(order_id=_ORDER_ID, symbol=symbol, side=side, status=status)):
+    probe = {"order_id": order_id, "status": str(row.get("status") or "").strip().lower()}
+    enriched = enrich(broker, probe, symbol=symbol, side=side)
+    if not isinstance(enriched, Mapping):
         return False, 0
 
-    enriched = {
-        "order_id": _ORDER_ID,
-        "status": status,
-        "filled_price": fill_price,
-        "filled_size": filled_qty,
-        "filled_size_usd": filled_usd,
-        "kraken_query_order_reconciled": True,
-        "kraken_query_order_authenticated": True,
-    }
     promoted = bool(promote(enriched, symbol=symbol, side=side))
     if not promoted:
         return False, 0
 
     if callable(discard):
         try:
-            discard(_ORDER_ID, "canonical_execution_proof_written_from_same_authenticated_row")
+            discard(order_id, "canonical_execution_proof_written_from_dynamic_authenticated_row")
         except Exception:
-            LOGGER.debug("v406c pending cleanup deferred", exc_info=True)
+            LOGGER.debug("v406 dynamic pending cleanup deferred", exc_info=True)
     if callable(wake):
         try:
             wake()
         except Exception:
-            LOGGER.debug("v406c activation wake deferred", exc_info=True)
+            LOGGER.debug("v406 dynamic activation wake deferred", exc_info=True)
     return True, 1
 
 
 def recover_once() -> bool:
     if _marker_ready():
         return True
-    _broker, row = _final_authenticated_row()
-    if row is None:
+    order_id = _candidate_order_id()
+    broker, row = _final_authenticated_row(order_id)
+    if row is None or broker is None:
         LOGGER.info(
-            "KNOWN_EXECUTION_PROBE_V406_DEFERRED marker=%s order_id=%s reason=exact_authenticated_final_queryorders_row_unavailable authoritative_v367_registry_enabled=true trading_fail_closed=true execution_proof_fabricated=false orders_submitted=false safety_gates_bypassed=false",
-            MARKER, _ORDER_ID,
+            "KNOWN_EXECUTION_PROBE_V406_DEFERRED marker=%s order_id=%s reason=exact_authenticated_final_queryorders_row_unavailable dynamic_pending_order=true authoritative_v367_registry_enabled=true trading_fail_closed=true execution_proof_fabricated=false orders_submitted=false safety_gates_bypassed=false",
+            MARKER, order_id,
         )
         return False
     try:
-        promoted, promoted_count = _promote_same_authenticated_row(row)
+        promoted, promoted_count = _promote_same_authenticated_row(order_id, broker, row)
     except Exception:
-        LOGGER.exception("KNOWN_EXECUTION_PROBE_V406_RECOVERY_ERROR marker=%s order_id=%s fail_closed=true", MARKER, _ORDER_ID)
+        LOGGER.exception("KNOWN_EXECUTION_PROBE_V406_RECOVERY_ERROR marker=%s order_id=%s fail_closed=true", MARKER, order_id)
         return False
     ready = _marker_ready()
     LOGGER.critical(
-        "KNOWN_EXECUTION_PROBE_V406_RESULT marker=%s order_id=%s authenticated_queryorders_final=true positive_vol_exec=true positive_cost=true same_authenticated_row_reused=true authoritative_v367_registry_enabled=true canonical_recovery_promoted=%s marker_ready=%s remembered_fill_values=false orders_submitted=false orders_cancelled=false forced_activation=false execution_proof_fabricated=false safety_gates_bypassed=false",
-        MARKER, _ORDER_ID, promoted_count if promoted else 0, str(ready).lower(),
+        "KNOWN_EXECUTION_PROBE_V406_RESULT marker=%s order_id=%s authenticated_queryorders_final=true positive_vol_exec=true positive_cost=true dynamic_pending_order=true same_authenticated_row_reused=true authoritative_v367_registry_enabled=true canonical_recovery_promoted=%s marker_ready=%s remembered_fill_values=false orders_submitted=false orders_cancelled=false forced_activation=false execution_proof_fabricated=false safety_gates_bypassed=false",
+        MARKER, order_id, promoted_count if promoted else 0, str(ready).lower(),
     )
     return bool(ready)
 
@@ -201,7 +210,7 @@ def install() -> bool:
             _THREAD = threading.Thread(target=_worker, name="KnownExecutionProbeRevalidationV406", daemon=True)
             _THREAD.start()
         LOGGER.critical(
-            "KNOWN_EXECUTION_PROBE_V406_READY marker=%s candidate_only=true authoritative_v367_registry_enabled=true v363_registry_preserved=true broker_dedup=true exact_authenticated_queryorders_required=true final_status_required=true positive_vol_exec_required=true positive_cost_required=true same_authenticated_row_reused=true canonical_v357_v328_v346_authority_preserved=true remembered_fill_values=false orders_submitted=false orders_cancelled=false forced_activation=false safety_gates_bypassed=false",
+            "KNOWN_EXECUTION_PROBE_V406_READY marker=%s candidate_only=true dynamic_pending_order=true authoritative_v367_registry_enabled=true v363_registry_preserved=true broker_dedup=true exact_authenticated_queryorders_required=true final_status_required=true positive_vol_exec_required=true positive_cost_required=true same_authenticated_row_reused=true canonical_v357_v328_v346_authority_preserved=true remembered_fill_values=false orders_submitted=false orders_cancelled=false forced_activation=false safety_gates_bypassed=false",
             MARKER,
         )
         return True
