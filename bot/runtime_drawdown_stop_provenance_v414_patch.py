@@ -43,10 +43,14 @@ _PATCH_ATTR = "_nija_drawdown_stop_provenance_v414"
 _LOCK = threading.RLock()
 
 # Production incident 2026-10-06: a genuine GlobalDrawdownCircuitBreaker halt
-# was later represented locally by one exact FILE_SYSTEM replay activation.
-# KillSwitch.get_status() exposes this full timestamp to v414. Bind recovery to
-# the exact observed record so unrelated FILE_SYSTEM stops cannot inherit it.
-_INCIDENT_20261006_REPLAY_TIMESTAMP = "2026-10-06T14:55:23.027303+00:00"
+# was later represented by two exact generic FILE_SYSTEM replay records:
+# the current container's local marker and the durable Redis record a replacement
+# container will inherit. Bind recovery only to those observed timestamps so
+# unrelated FILE_SYSTEM stops cannot inherit this cause.
+_INCIDENT_20261006_REPLAY_TIMESTAMPS = {
+    "2026-10-06T14:55:23.027303+00:00",
+    "2026-10-06T15:12:17.231000+00:00",
+}
 _INCIDENT_20261006_CAUSAL_SOURCE = "GlobalDrawdownCircuitBreaker"
 _INCIDENT_20261006_CAUSAL_REASON = (
     "GlobalDrawdownCircuitBreaker: HALT level reached "
@@ -99,7 +103,7 @@ def _incident_20261006_causal_activation(
         return None
     if not latest_reason.lower().startswith("kill switch file detected"):
         return None
-    if latest_ts != _INCIDENT_20261006_REPLAY_TIMESTAMP:
+    if latest_ts not in _INCIDENT_20261006_REPLAY_TIMESTAMPS:
         return None
 
     LOGGER.critical(
