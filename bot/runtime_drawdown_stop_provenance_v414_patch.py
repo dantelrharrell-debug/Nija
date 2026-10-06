@@ -248,9 +248,19 @@ def _install_v409_guarded_recovery() -> bool:
             # Local breaker level may be corrected using v409's existing logic, but
             # kill-switch recovery proof is anchored exclusively to the original stop.
             v409._reclassify_false_halt_if_proven(cb, corrected)
-            ks.deactivate(
-                "v414 original-stop baseline plus current authoritative portfolio equity proved prior GlobalDrawdownCircuitBreaker HALT false"
+            deactivated = bool(
+                ks.deactivate(
+                    "v414 original-stop baseline plus current authoritative portfolio equity proved prior GlobalDrawdownCircuitBreaker HALT false"
+                )
             )
+            if not deactivated or bool(ks.is_active()):
+                LOGGER.critical(
+                    "DRAWDOWN_V414_RECOVERY_BLOCKED marker=%s reason=durable_deactivation_not_confirmed "
+                    "redis_clear_required=true local_stop_must_be_inactive=true fail_closed=true "
+                    "orders_submitted=false safety_gates_bypassed=false",
+                    MARKER,
+                )
+                return False
             LOGGER.critical(
                 "DRAWDOWN_V414_FALSE_KILL_SWITCH_CLEARED marker=%s source=%s original_peak=%.8f stopped_equity=%.8f "
                 "current_corrected_equity=%.8f original_reference_drawdown_pct=%.6f halt_pct=%.6f baseline_detail=%s "
