@@ -98,19 +98,23 @@ def test_hard_exit_authority_proof_denies_nonce_not_ready(monkeypatch):
     assert reason == "nonce_not_ready"
 
 
-def test_hard_exit_authority_proof_denies_kill_switch(monkeypatch):
+def test_hard_exit_authority_proof_allows_verified_close_during_kill_switch(monkeypatch):
     from bot import execution_authority_context as eac
     from bot import runtime_protective_exit_authority_bridge_v337_patch as v337
 
     monkeypatch.setattr(eac, "runtime_authority_snapshot", lambda: _snapshot(kill_switch_active=True))
+    monkeypatch.setattr(v337, "_trusted_close", lambda: True)
     monkeypatch.setattr(eac, "assert_distributed_writer_authority", lambda: None)
     monkeypatch.setattr(eac, "require_startup_execution_authority", lambda **kwargs: {"ready": True})
+    monkeypatch.setattr(eac, "is_seak_halted", lambda: False)
+    monkeypatch.setattr(v337, "_circuit_permits_exit", lambda: (True, "CLOSED"))
     monkeypatch.setenv("NIJA_WRITER_FENCING_TOKEN", "writer-token")
 
-    ok, reason, _ = v337._hard_exit_authority_proof()
+    ok, reason, snap = v337._hard_exit_authority_proof()
 
-    assert ok is False
-    assert reason == "kill_switch_active"
+    assert ok is True
+    assert reason == "hard_exit_authority_proven_kill_switch_exit_only"
+    assert snap.kill_switch_active is True
 
 
 def test_hard_exit_authority_proof_denies_writer_failure(monkeypatch):
@@ -191,3 +195,19 @@ def test_initial_authority_bridge_preserves_stability_halt(monkeypatch):
     monkeypatch.setattr(eac, "_evaluate_stability_authority", lambda **kwargs: _stability(False))
 
     assert v337._bridge_initial_authority_decision(original) is original
+
+
+
+def test_hard_exit_authority_proof_keeps_kill_switch_closed_for_untrusted_call(monkeypatch):
+    from bot import execution_authority_context as eac
+    from bot import runtime_protective_exit_authority_bridge_v337_patch as v337
+
+    monkeypatch.setattr(eac, "runtime_authority_snapshot", lambda: _snapshot(kill_switch_active=True))
+    monkeypatch.setattr(v337, "_trusted_close", lambda: False)
+    monkeypatch.setattr(eac, "assert_distributed_writer_authority", lambda: None)
+    monkeypatch.setattr(eac, "require_startup_execution_authority", lambda **kwargs: {"ready": True})
+
+    ok, reason, _ = v337._hard_exit_authority_proof()
+
+    assert ok is False
+    assert reason == "kill_switch_active"

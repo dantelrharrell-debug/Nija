@@ -4,6 +4,14 @@ on:
   pull_request:
     paths:
       - "Dockerfile"
+      - "bot/kill_switch.py"
+      - "bot/broker_manager.py"
+      - "bot/runtime_protective_exit_authority_bridge_v337_patch.py"
+      - "tests/test_runtime_protective_exit_authority_bridge_v337.py"
+      - "tests/test_runtime_kraken_capital_tail_liveness_v173.py"
+      - "tests/test_kill_switch_redis_durability.py"
+      - "bot/runtime_drawdown_stop_provenance_v414_patch.py"
+      - "tests/test_runtime_drawdown_stop_provenance_v414.py"
       - "critical_runtime_repairs_v10.py"
       - "secondary_venue_runtime_diagnostics.py"
       - "bot/tests/test_critical_runtime_repairs_v10.py"
@@ -58,6 +66,14 @@ on:
     branches: [main]
     paths:
       - "Dockerfile"
+      - "bot/kill_switch.py"
+      - "bot/broker_manager.py"
+      - "bot/runtime_protective_exit_authority_bridge_v337_patch.py"
+      - "tests/test_runtime_protective_exit_authority_bridge_v337.py"
+      - "tests/test_runtime_kraken_capital_tail_liveness_v173.py"
+      - "tests/test_kill_switch_redis_durability.py"
+      - "bot/runtime_drawdown_stop_provenance_v414_patch.py"
+      - "tests/test_runtime_drawdown_stop_provenance_v414.py"
       - "critical_runtime_repairs_v10.py"
       - "secondary_venue_runtime_diagnostics.py"
       - "bot/tests/test_critical_runtime_repairs_v10.py"
@@ -139,6 +155,10 @@ jobs:
           python -m py_compile \
             critical_runtime_repairs_v10.py \
             secondary_venue_runtime_diagnostics.py \
+            bot/kill_switch.py \
+            bot/broker_manager.py \
+            bot/runtime_protective_exit_authority_bridge_v337_patch.py \
+            bot/runtime_drawdown_stop_provenance_v414_patch.py \
             bot/strategy_runtime_integrity_patch.py \
             bot/disconnected_coinbase_balance_guard_patch.py \
             bot/okx_patch_churn_guard_patch.py \
@@ -175,6 +195,10 @@ jobs:
           TEST_LOG="${RUNNER_TEMP}/nija-focused-runtime-tests.log"
           set +e
           python -m pytest -q \
+            tests/test_kill_switch_redis_durability.py \
+            tests/test_runtime_drawdown_stop_provenance_v414.py \
+            tests/test_runtime_protective_exit_authority_bridge_v337.py \
+            tests/test_runtime_kraken_capital_tail_liveness_v173.py \
             bot/tests/test_funded_okx_capital_convergence_v31.py \
             bot/tests/test_capital_refresh_storm_guard_v29.py \
             bot/tests/test_runtime_authority_convergence_repair_patch.py \

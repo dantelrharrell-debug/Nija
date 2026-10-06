@@ -42,6 +42,21 @@ _READY_FLAG = "NIJA_RUNTIME_DRAWDOWN_STOP_PROVENANCE_V414_READY"
 _PATCH_ATTR = "_nija_drawdown_stop_provenance_v414"
 _LOCK = threading.RLock()
 
+# Production incident 2026-10-06: a genuine GlobalDrawdownCircuitBreaker halt
+# was later represented by two exact generic FILE_SYSTEM replay records:
+# the current container's local marker and the durable Redis record a replacement
+# container will inherit. Bind recovery only to those observed timestamps so
+# unrelated FILE_SYSTEM stops cannot inherit this cause.
+_INCIDENT_20261006_REPLAY_TIMESTAMPS = {
+    "2026-10-06T14:55:23.027303+00:00",
+    "2026-10-06T15:12:17.039356+00:00",
+}
+_INCIDENT_20261006_CAUSAL_SOURCE = "GlobalDrawdownCircuitBreaker"
+_INCIDENT_20261006_CAUSAL_REASON = (
+    "GlobalDrawdownCircuitBreaker: HALT level reached "
+    "(drawdown=20.31%, equity=$617.89)"
+)
+
 _DRAW_EQUITY_RE = re.compile(
     r"drawdown\s*=\s*([0-9]+(?:\.[0-9]+)?)%.*?"
     r"equity\s*=\s*\$?([0-9][0-9,]*(?:\.[0-9]+)?)"
@@ -66,6 +81,45 @@ def _recent_activation(status: Mapping[str, Any]) -> tuple[str, str]:
     return str(last or ""), ""
 
 
+def _incident_20261006_causal_activation(
+    status: Mapping[str, Any],
+    reason: str,
+    source: str,
+) -> tuple[str, str] | None:
+    """Restore only the exact 2026-10-06 drawdown cause lost to Redis replay."""
+    if str(source or "").strip().upper() != "PROVENANCE_BOUNDARY":
+        return None
+    if "origin_unavailable" not in str(reason or "").lower():
+        return None
+
+    history = status.get("recent_history") or status.get("history") or []
+    latest = history[-1] if isinstance(history, list) and history else {}
+    if not isinstance(latest, Mapping):
+        return None
+    latest_source = str(latest.get("source") or "").strip().upper()
+    latest_reason = str(latest.get("reason") or "").strip()
+    latest_ts = str(latest.get("timestamp") or "").strip()
+    if latest_source != "FILE_SYSTEM":
+        return None
+    if not latest_reason.lower().startswith("kill switch file detected"):
+        return None
+    if latest_ts not in _INCIDENT_20261006_REPLAY_TIMESTAMPS:
+        return None
+
+    LOGGER.critical(
+        "DRAWDOWN_V414_INCIDENT_CAUSE_RESTORED marker=%s incident=2026-10-06 "
+        "replay_timestamp=%s causal_source=%s causal_reason=%s "
+        "current_equity_proof_still_required=true halt_threshold_unchanged=true "
+        "direct_deactivate=false forced_activation=false orders_submitted=false "
+        "safety_gates_bypassed=false",
+        MARKER,
+        latest_ts,
+        _INCIDENT_20261006_CAUSAL_SOURCE,
+        _INCIDENT_20261006_CAUSAL_REASON,
+    )
+    return _INCIDENT_20261006_CAUSAL_REASON, _INCIDENT_20261006_CAUSAL_SOURCE
+
+
 def _causal_activation(status: Mapping[str, Any]) -> tuple[str, str]:
     """Return the original activation behind restart persistence, or fail closed."""
     try:
@@ -76,6 +130,11 @@ def _causal_activation(status: Mapping[str, Any]) -> tuple[str, str]:
             reason_s = str(reason or "")
             source_s = str(source or "")
             if source_s and source_s.upper() != "FILE_SYSTEM":
+                incident = _incident_20261006_causal_activation(
+                    status, reason_s, source_s
+                )
+                if incident is not None:
+                    return incident
                 return reason_s, source_s
     except Exception:
         pass
@@ -189,9 +248,19 @@ def _install_v409_guarded_recovery() -> bool:
             # Local breaker level may be corrected using v409's existing logic, but
             # kill-switch recovery proof is anchored exclusively to the original stop.
             v409._reclassify_false_halt_if_proven(cb, corrected)
-            ks.deactivate(
-                "v414 original-stop baseline plus current authoritative portfolio equity proved prior GlobalDrawdownCircuitBreaker HALT false"
+            deactivated = bool(
+                ks.deactivate(
+                    "v414 original-stop baseline plus current authoritative portfolio equity proved prior GlobalDrawdownCircuitBreaker HALT false"
+                )
             )
+            if not deactivated or bool(ks.is_active()):
+                LOGGER.critical(
+                    "DRAWDOWN_V414_RECOVERY_BLOCKED marker=%s reason=durable_deactivation_not_confirmed "
+                    "redis_clear_required=true local_stop_must_be_inactive=true fail_closed=true "
+                    "orders_submitted=false safety_gates_bypassed=false",
+                    MARKER,
+                )
+                return False
             LOGGER.critical(
                 "DRAWDOWN_V414_FALSE_KILL_SWITCH_CLEARED marker=%s source=%s original_peak=%.8f stopped_equity=%.8f "
                 "current_corrected_equity=%.8f original_reference_drawdown_pct=%.6f halt_pct=%.6f baseline_detail=%s "
@@ -244,6 +313,7 @@ __all__ = [
     "install",
     "install_import_hook",
     "_causal_activation",
+    "_incident_20261006_causal_activation",
     "_original_drawdown_reference",
     "_exact_drawdown_source",
 ]

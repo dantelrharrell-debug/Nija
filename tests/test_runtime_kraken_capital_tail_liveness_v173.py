@@ -84,8 +84,34 @@ def test_capital_refresh_worker_contract_uses_authenticated_balance_without_trad
     source = Path("bot/broker_manager.py").read_text(encoding="utf-8")
     assert 'threading.current_thread().name.startswith("capital-balance-fetch-kraken")' in source
     assert "KRAKEN_CAPITAL_TAIL_V434_TRADEBALANCE_SKIPPED" in source
-    # The normal TradeBalance call must still exist for non-capital-worker callers.
+    assert "KRAKEN_CAPITAL_TAIL_V435_INCOMPLETE_VALUATION_FALLBACK" in source
+    assert "_raw_asset_pricing_coverage" in source
+    assert "_valuation_complete" in source
+    assert "if _capital_refresh_worker and _valuation_complete:" in source
+    assert "cash_only_publication_blocked=true" in source
+    assert "authenticated_tradebalance_required=true" in source
+    # TradeBalance remains the authenticated fallback when local asset valuation
+    # is incomplete, and the normal path remains unchanged for other callers.
     assert "self._kraken_private_call(" in source
     assert "'TradeBalance', {'asset': 'ZUSD'}" in source
     assert "held_uplift_omitted=true" in source
     assert "capital_overstatement=false" in source
+
+
+
+def test_incomplete_kraken_valuation_cannot_publish_cash_as_total_equity() -> None:
+    from pathlib import Path
+
+    source = Path("bot/broker_manager.py").read_text(encoding="utf-8")
+    parsed_cash_tail = source.split(
+        "[KrakenBalancePipeline] parsed_cash account=%s usd=%.8f usdt=%.8f",
+        1,
+    )[1].split("non_usd_assets = []", 1)[0]
+
+    # The authenticated cash component is not total equity while crypto is held.
+    assert "_feed_capital_authority(" not in parsed_cash_tail
+    assert "class KrakenIncompleteValuation(RuntimeError)" in source
+    assert "KRAKEN_CAPITAL_TAIL_V435_INCOMPLETE_VALUATION_REJECTED" in source
+    assert "raise KrakenIncompleteValuation(" in source
+    assert "cached_balance_not_promoted_to_fresh=true" in source
+    assert "drawdown_sample_rejected=true" in source
