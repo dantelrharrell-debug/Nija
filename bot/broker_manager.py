@@ -1239,6 +1239,29 @@ def _feed_capital_authority(
         )
 
 
+def _feed_kraken_platform_capital_authority(
+    broker: object,
+    balance: float,
+    timestamp=None,
+) -> bool:
+    """Feed Kraken capital only for the canonical PLATFORM account.
+
+    User Kraken accounts are independently capitalized. Their balances must
+    never overwrite the shared platform kraken CapitalAuthority source.
+    """
+    account_type = getattr(broker, "account_type", None)
+    if account_type != AccountType.PLATFORM:
+        logger.info(
+            "KRAKEN_USER_CAPITAL_FEED_EXCLUDED account=%s balance=%.8f "
+            "platform_capital_mutated=false reason=independent_account_isolation",
+            getattr(broker, "account_identifier", "USER:unknown"),
+            float(balance or 0.0),
+        )
+        return False
+    _feed_capital_authority("kraken", balance, timestamp=timestamp)
+    return True
+
+
 def _get_authoritative_broker_balance_usd(broker_key: str) -> float:
     """Return broker balance from CapitalAuthority as the sole balance truth source."""
     key = str(broker_key or "").strip().lower()
@@ -10423,15 +10446,7 @@ class KrakenBroker(BaseBroker):
                         # Platform CapitalAuthority is strictly PLATFORM-scoped.
                         # USER Kraken accounts are independently capitalized and must
                         # never overwrite the shared platform "kraken" source.
-                        if self.account_type == AccountType.PLATFORM:
-                            _feed_capital_authority("kraken", total_funds)
-                        else:
-                            logger.info(
-                                "KRAKEN_USER_CAPITAL_FEED_EXCLUDED account=%s balance=%.8f "
-                                "platform_capital_mutated=false reason=independent_account_isolation",
-                                self.account_identifier,
-                                total_funds,
-                            )
+                        _feed_kraken_platform_capital_authority(self, total_funds)
 
                         kraken_connect_raw = {
                             "usd": usd_balance,
