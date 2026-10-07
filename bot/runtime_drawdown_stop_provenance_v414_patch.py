@@ -287,15 +287,16 @@ def _capital_proof_snapshot() -> tuple[bool, float, dict[str, str]]:
         ca = importlib.import_module("bot.capital_authority").get_capital_authority()
         is_current = ca.is_fresh() is True
         current_real = _float(ca.get_real_capital()) if is_current else 0.0
-        is_accepted = bool(
-            is_current and math.isfinite(current_real) and current_real > 0.0
-        )
+        # Preserve the pre-existing optional-provider fallback contract: current
+        # standalone freshness can satisfy _capital_proof_current(). Recovery
+        # remains stricter because it separately requires canonical_capital > 0
+        # before evaluating any durable stop.
         details.update(
             proof_provider="capital_authority_fallback",
             proof_provider_identity="canonical_provider_absent",
-            proof_rejection="none" if is_accepted else "standalone_not_fresh_or_real",
+            proof_rejection="none" if is_current else "standalone_not_fresh",
         )
-        return is_accepted, current_real if is_accepted else 0.0, details
+        return is_current, current_real if math.isfinite(current_real) else 0.0, details
     except Exception as exc:
         details.update(
             proof_provider="capital_authority_fallback",
