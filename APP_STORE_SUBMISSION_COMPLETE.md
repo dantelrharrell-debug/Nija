@@ -142,7 +142,7 @@ GETTING STARTED
 CUSTOMER SUPPORT
 • In-app chat support
 • Email: support@nija.app
-• Phone: +1 425-756-0283
+• Phone: +1 425-765-0283
 • Discord community: discord.gg/nija
 • Documentation: docs.nija.app
 
@@ -180,7 +180,7 @@ Download NIJA today and start trading smarter! 🚀
 **Contact Information:**
 - First Name: [Your First Name]
 - Last Name: [Your Last Name]
-- Phone: +1 425-756-0283
+- Phone: +1 425-765-0283
 - Email: support@nija.app
 
 **Demo Account Credentials:**
@@ -547,6 +547,6 @@ Create subscription products in Play Console:
 
 **NIJA Support:**
 - Email: support@nija.app
-- Phone: +1 425-756-0283
+- Phone: +1 425-765-0283
 - Discord: discord.gg/nija
 - Docs: docs.nija.app
