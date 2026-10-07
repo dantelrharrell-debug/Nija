@@ -512,7 +512,8 @@ To resume trading:
             except Exception as e:
                 logger.error(f"⚠️  Could not transition state machine: {e}")
                 logger.error("   Please use safe_restore_trading.py to restore trading state")
-            
+            return True
+
     def is_active(self) -> bool:
         """
         Check if kill switch is active.
