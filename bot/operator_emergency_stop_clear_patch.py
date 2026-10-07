@@ -246,6 +246,76 @@ def _clear_runtime_env() -> None:
     os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "0"
 
 
+def _kill_switch_instance():
+    try:
+        from bot.kill_switch import get_kill_switch
+    except ImportError:
+        from kill_switch import get_kill_switch  # type: ignore[import]
+    return get_kill_switch()
+
+
+def _durable_stop_safe_to_clear(record: object) -> tuple[bool, str]:
+    if not isinstance(record, dict) or not bool(record.get("is_active")):
+        return True, "durable_stop_absent_or_inactive"
+
+    source = str(
+        record.get("origin_source")
+        or record.get("source")
+        or ""
+    ).strip().upper()
+    reason = str(
+        record.get("origin_reason")
+        or record.get("reason")
+        or ""
+    ).strip()
+    combined = f"{source} {reason}".lower()
+
+    if any(token in combined for token in _TERMINAL_RISK_TOKENS):
+        return False, "durable_terminal_risk_reason_present"
+
+    # Only human/operator/file-system stops may be cleared by this path.
+    # Automatic/risk/unknown sources remain fail-closed even when the local
+    # EMERGENCY_STOP file itself contains only a generic replay message.
+    if source not in {"MANUAL", "UI", "CLI", "FILE_SYSTEM"}:
+        return False, f"durable_source_not_operator_clearable:{source or 'missing'}"
+
+    if combined and not any(token in combined for token in _MANUAL_CLEAR_ALLOWED_TOKENS):
+        return False, "durable_unknown_emergency_stop_reason"
+
+    return True, "durable_operator_stop_clearable"
+
+
+def _clear_durable_stop_if_safe(operator_reason: str) -> tuple[bool, str]:
+    """Clear the authoritative Redis stop before removing local markers.
+
+    The durable stop is the cross-instance source of truth.  A local-only clear
+    is incomplete because a replacement Render instance will simply reassert
+    the Redis stop and recreate EMERGENCY_STOP.
+    """
+    try:
+        kill_switch = _kill_switch_instance()
+        reader = getattr(kill_switch, "_read_durable_stop", None)
+        clearer = getattr(kill_switch, "_clear_durable_stop", None)
+        if not callable(reader) or not callable(clearer):
+            return False, "durable_stop_api_unavailable"
+
+        record = reader()
+        safe, detail = _durable_stop_safe_to_clear(record)
+        if not safe:
+            return False, detail
+
+        if isinstance(record, dict) and bool(record.get("is_active")):
+            if not bool(clearer(operator_reason)):
+                return False, "durable_stop_clear_unconfirmed"
+            verify = reader()
+            if isinstance(verify, dict) and bool(verify.get("is_active")):
+                return False, "durable_stop_clear_verify_failed"
+
+        return True, "durable_stop_clear_confirmed"
+    except Exception as exc:
+        return False, f"durable_stop_clear_error:{type(exc).__name__}:{exc}"
+
+
 def run_once() -> int:
     kill_files = _kill_files()
     state_files = _state_files()
@@ -283,6 +353,22 @@ def run_once() -> int:
         return 0
 
     operator_reason = _clean(os.environ.get("NIJA_OPERATOR_CLEAR_EMERGENCY_STOP_REASON"))
+    durable_ok, durable_reason = _clear_durable_stop_if_safe(operator_reason)
+    if not durable_ok:
+        logger.critical(
+            "OPERATOR_EMERGENCY_STOP_CLEAR_SKIPPED marker=%s reason=%s durable_stop_preserved=true "
+            "local_markers_preserved=true trading_fail_closed=true",
+            _MARKER,
+            durable_reason,
+        )
+        return 0
+    logger.critical(
+        "OPERATOR_EMERGENCY_STOP_DURABLE_CLEAR_CONFIRMED marker=%s detail=%s "
+        "force_activation=false risk_bypass=false",
+        _MARKER,
+        durable_reason,
+    )
+
     cleared: list[str] = []
     for path in all_paths:
         try:

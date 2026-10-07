@@ -131,3 +131,69 @@ def test_install_hook_is_process_idempotent(monkeypatch):
     patch.install_import_hook()
 
     assert calls == ["run"]
+
+
+def test_operator_clear_clears_durable_filesystem_stop_before_local_markers(monkeypatch, tmp_path):
+    kill_file = tmp_path / "EMERGENCY_STOP"
+    state_file = tmp_path / ".nija_kill_switch_state.json"
+    kill_file.write_text("Kill switch file detected\n", encoding="utf-8")
+    state_file.write_text(json.dumps({"reason": "Kill switch file detected", "source": "FILE_SYSTEM"}), encoding="utf-8")
+    _operator_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("NIJA_EMERGENCY_STOP_FILES", str(kill_file))
+    monkeypatch.setenv("NIJA_EMERGENCY_STOP_STATE_FILES", str(state_file))
+
+    durable = {
+        "is_active": True,
+        "source": "FILE_SYSTEM",
+        "reason": "Kill switch file detected",
+        "origin_source": "FILE_SYSTEM",
+        "origin_reason": "Kill switch file detected",
+    }
+    calls = []
+
+    class FakeKillSwitch:
+        def _read_durable_stop(self):
+            return dict(durable)
+
+        def _clear_durable_stop(self, reason):
+            calls.append(reason)
+            durable["is_active"] = False
+            return True
+
+    monkeypatch.setattr(patch, "_kill_switch_instance", lambda: FakeKillSwitch())
+
+    cleared = patch.run_once()
+
+    assert cleared == 2
+    assert calls == ["Operator reviewed current logs and approves clearing manual emergency stop."]
+    assert durable["is_active"] is False
+    assert not kill_file.exists()
+    assert not state_file.exists()
+
+
+def test_operator_clear_refuses_automatic_durable_risk_stop(monkeypatch, tmp_path):
+    kill_file = tmp_path / "EMERGENCY_STOP"
+    kill_file.write_text("Kill switch file detected\n", encoding="utf-8")
+    _operator_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("NIJA_EMERGENCY_STOP_FILES", str(kill_file))
+    monkeypatch.setenv("NIJA_EMERGENCY_STOP_STATE_FILES", "")
+
+    class FakeKillSwitch:
+        def _read_durable_stop(self):
+            return {
+                "is_active": True,
+                "source": "AUTO",
+                "reason": "daily loss limit reached",
+                "origin_source": "AUTO",
+                "origin_reason": "daily loss limit reached",
+            }
+
+        def _clear_durable_stop(self, reason):
+            raise AssertionError("risk-origin durable stop must not be cleared")
+
+    monkeypatch.setattr(patch, "_kill_switch_instance", lambda: FakeKillSwitch())
+
+    cleared = patch.run_once()
+
+    assert cleared == 0
+    assert kill_file.exists()
