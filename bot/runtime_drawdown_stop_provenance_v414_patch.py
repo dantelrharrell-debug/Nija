@@ -737,7 +737,7 @@ def _install_v409_guarded_recovery() -> bool:
             # same bounded snapshot before a newly initialized breaker may rely on
             # canonical capital.  This closes the startup deadlock without
             # accepting a stale or contradictory process-local equity value.
-            canonical_tolerance = max(1.0, canonical_capital * 0.02)
+            canonical_tolerance = max(1.0, ca_total * 0.02)
             if abs(ca_total - canonical_capital) > canonical_tolerance:
                 _recovery_diagnostic(
                     "predicate_rejection",
@@ -754,7 +754,9 @@ def _install_v409_guarded_recovery() -> bool:
                 )
                 return False
 
-            if raw == 0.0:
+            breaker_initialised = getattr(cb, "_initialised", None)
+            startup_zero = raw == 0.0 and breaker_initialised is False
+            if startup_zero:
                 _recovery_diagnostic(
                     "breaker_equity_reference",
                     status="canonical_current_proof",
@@ -764,14 +766,20 @@ def _install_v409_guarded_recovery() -> bool:
             elif not matches and abs(raw - corrected) > max(1.0, ca_total * 0.02):
                 _recovery_diagnostic(
                     "predicate_rejection",
-                    rejection="capital_series_mismatch",
+                    rejection=(
+                        "initialized_zero_equity_mismatch"
+                        if raw == 0.0 and breaker_initialised is True
+                        else "capital_series_mismatch"
+                    ),
                 )
                 return False
             else:
                 _recovery_diagnostic(
                     "breaker_equity_reference",
                     status="breaker_series_consistent",
-                    breaker_initialized="true",
+                    breaker_initialized=(
+                        "true" if breaker_initialised is True else "unknown"
+                    ),
                     canonical_snapshot_match="true",
                 )
 
