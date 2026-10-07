@@ -6,6 +6,7 @@ import os
 import sys
 import tempfile
 import threading
+import time
 import types
 import unittest
 from pathlib import Path
@@ -133,6 +134,10 @@ class DrawdownRecoveryRetryV414Tests(unittest.TestCase):
         if worker is not None:
             worker.join(timeout=1.0)
             self.assertFalse(worker.is_alive())
+        monitor = self.v414._RECOVERY_MONITOR_THREAD
+        if monitor is not None:
+            monitor.join(timeout=1.0)
+            self.assertFalse(monitor.is_alive())
 
     def _redis_set(self, key: str, value: str) -> bool:
         if self.redis_clear_ok:
@@ -239,6 +244,61 @@ class DrawdownRecoveryRetryV414Tests(unittest.TestCase):
                     self.assertFalse(self.v414._capital_proof_current())
         self.ca.is_fresh.assert_not_called()
 
+    def test_capital_diagnostic_reports_provider_and_duplicate_v16_identities(self) -> None:
+        root_v16 = types.ModuleType("preactivation_readiness_convergence_v16_patch")
+        package_v16 = types.ModuleType("bot.preactivation_readiness_convergence_v16_patch")
+        collector = lambda: ({}, {})
+        collector._nija_v358_capital_mode_decoupled = True
+        root_v16._collect_proofs = collector
+        v358 = types.ModuleType("bot.runtime_capital_readiness_mode_decoupling_v358_patch")
+
+        def current_proof() -> dict[str, object]:
+            sys.modules[root_v16.__name__] = root_v16
+            sys.modules[package_v16.__name__] = package_v16
+            return {
+                "hydrated": True, "stale": False, "real": 5.0, "registered": 1,
+            }
+
+        provider = types.SimpleNamespace(
+            _current_capital_proof=current_proof,
+            _current_capital_accepted=lambda proof: True,
+        )
+
+        with patch.dict(sys.modules, {
+            "bot.readiness_proof_convergence_v134_patch": provider,
+            "bot.runtime_capital_readiness_mode_decoupling_v358_patch": v358,
+        }):
+            accepted, diagnostic = self.v414._capital_proof_diagnostic()
+
+        self.assertTrue(accepted)
+        self.assertTrue(diagnostic["proof_provider_identity"].startswith("SimpleNamespace:"))
+        self.assertEqual(diagnostic["v16_alias_identity"], "distinct_modules")
+        self.assertEqual(
+            diagnostic["v16_reader_module"], "preactivation_readiness_convergence_v16_patch"
+        )
+        self.assertEqual(
+            diagnostic["v358_reader_module"], "preactivation_readiness_convergence_v16_patch"
+        )
+        self.assertEqual(diagnostic["v358_collector"], "installed")
+        self.assertNotIn("5.0", " ".join(diagnostic.values()))
+        self.assertNotIn("real=5", " ".join(diagnostic.values()))
+
+    def test_capital_diagnostic_classifies_broken_reader_without_error_payload(self) -> None:
+        provider = types.SimpleNamespace(
+            _current_capital_proof=Mock(side_effect=RuntimeError("private payload")),
+            _current_capital_accepted=lambda proof: True,
+        )
+        with patch.dict(
+            sys.modules,
+            {"bot.readiness_proof_convergence_v134_patch": provider},
+        ):
+            accepted, diagnostic = self.v414._capital_proof_diagnostic()
+
+        self.assertFalse(accepted)
+        self.assertEqual(diagnostic["proof_rejection"], "reader_error")
+        self.assertEqual(diagnostic["proof_exception"], "RuntimeError")
+        self.assertNotIn("private payload", " ".join(diagnostic.values()))
+
     def _assert_stopped(self) -> None:
         self.assertTrue(self.ks.is_active())
         self.assertTrue(Path(self.ks._kill_file).exists())
@@ -284,11 +344,17 @@ class DrawdownRecoveryRetryV414Tests(unittest.TestCase):
         self.snapshot_fresh = False
         self.assertTrue(self.v414._install_v409_guarded_recovery())
 
-        self.assertFalse(self.v409._recover_exact_false_drawdown_stop())
+        with self.assertLogs(self.v414.LOGGER, level="CRITICAL") as logs:
+            self.assertFalse(self.v409._recover_exact_false_drawdown_stop())
         self.assertEqual(json.loads(self.redis_value)["schema"], 1)
         self.redis.eval.assert_not_called()
         self.ks.deactivate.assert_not_called()
         self._assert_stopped()
+        self.assertTrue(any(
+            "authoritative_position_proof" in line
+            and "freshness_status=stale_snapshot" in line
+            for line in logs.output
+        ))
 
     def test_operator_history_blocks_legacy_annotation(self) -> None:
         self._hydrate()
@@ -443,18 +509,84 @@ class DrawdownRecoveryRetryV414Tests(unittest.TestCase):
 
     def test_worker_serializes_recovery_with_v409_installation_lock(self) -> None:
         self._hydrate()
-        recovery = Mock(return_value=True)
-        self.v409._recover_exact_false_drawdown_stop = recovery
-        lock = Mock()
-        lock.__enter__ = Mock()
-        lock.__exit__ = Mock()
+        lock = threading.Lock()
+
+        def recovery() -> bool:
+            self.assertFalse(lock.acquire(blocking=False))
+            return True
+
+        self.v409._recover_exact_false_drawdown_stop = Mock(side_effect=recovery)
         self.v409._LOCK = lock
         with patch.object(self.v414._RECOVERY_COMPLETE, "wait", return_value=False):
             self.v414._retry_recovery()
-        lock.__enter__.assert_called_once()
-        lock.__exit__.assert_called_once()
-        recovery.assert_called_once()
+        self.v409._recover_exact_false_drawdown_stop.assert_called_once()
+        self.assertTrue(lock.acquire(blocking=False))
+        lock.release()
         self.assertTrue(self.v414._RECOVERY_COMPLETE.is_set())
+
+    def test_worker_reports_bounded_lock_contention_without_running_predicate(self) -> None:
+        self._hydrate()
+        lock = threading.Lock()
+        lock.acquire()
+        self.v409._LOCK = lock
+        recovery = Mock(return_value=True)
+        self.v409._recover_exact_false_drawdown_stop = recovery
+        waits = Mock(side_effect=[False, True])
+        with patch.object(self.v414._RECOVERY_COMPLETE, "wait", waits):
+            with self.assertLogs(self.v414.LOGGER, level="CRITICAL") as logs:
+                self.v414._retry_recovery()
+
+        lock.release()
+        recovery.assert_not_called()
+        self.assertTrue(any(
+            "phase=installation_lock_wait" in line and "status=busy" in line
+            for line in logs.output
+        ))
+
+    def test_worker_deduplicates_repeated_capital_wait_diagnostics(self) -> None:
+        waits = Mock(side_effect=[False, False, False, True])
+        with patch.object(self.v414._RECOVERY_COMPLETE, "wait", waits):
+            with self.assertLogs(self.v414.LOGGER, level="CRITICAL") as logs:
+                worker = threading.Thread(
+                    target=self.v414._retry_recovery,
+                    name="DrawdownRecoveryV414",
+                )
+                worker.start()
+                worker.join(timeout=1.0)
+
+        self.assertFalse(worker.is_alive())
+        waiting_transitions = [
+            line for line in logs.output
+            if "phase=awaiting_capital_proof" in line
+        ]
+        self.assertEqual(len(waiting_transitions), 1)
+        self.assertIn("proof_rejection=hydrated", waiting_transitions[0])
+        self.assertNotIn("real=", waiting_transitions[0])
+        self.assertEqual(sum("DRAWDOWN_V414_RETRY_WAITING" in line for line in logs.output), 1)
+
+    def test_diagnostic_monitor_reports_stuck_live_predicate_phase(self) -> None:
+        class AliveWorker:
+            def is_alive(self) -> bool:
+                return True
+
+        prior_worker = self.v414._RETRY_THREAD
+        self.v414._RETRY_THREAD = AliveWorker()
+        self.v414._RECOVERY_PHASE = "predicate_evaluation"
+        self.v414._RECOVERY_PHASE_STARTED_AT = time.monotonic() - 11.0
+        waits = Mock(side_effect=[False, True])
+        try:
+            with patch.object(self.v414._RECOVERY_COMPLETE, "wait", waits):
+                with self.assertLogs(self.v414.LOGGER, level="CRITICAL") as logs:
+                    self.v414._recovery_diagnostic_monitor()
+        finally:
+            self.v414._RETRY_THREAD = prior_worker
+
+        self.assertTrue(any(
+            "worker_alive=true" in line
+            and "phase=predicate_evaluation" in line
+            and "status=stalled" in line
+            for line in logs.output
+        ))
 
     def test_missing_positions_stale_capital_or_contradictory_equity_fail_closed(self) -> None:
         self._hydrate()

@@ -43,7 +43,9 @@ import logging
 import math
 import os
 import re
+import sys
 import threading
+import time
 from collections.abc import Mapping
 from typing import Any
 
@@ -57,6 +59,12 @@ _RECOVERY_COMPLETE = threading.Event()
 _RETRY_INTERVAL_S = 5.0
 _RECOVERY_OPERATOR_GATE = "NIJA_ALLOW_PROVEN_LEGACY_STOP_RECOVERY"
 _LEGACY_MIGRATION_MARKER = "20261007-legacy-oct6-stop-v1-migration"
+_RECOVERY_DIAGNOSTIC_LOCK = threading.RLock()
+_RECOVERY_PHASE = "not_started"
+_RECOVERY_PHASE_STARTED_AT = 0.0
+_RECOVERY_PHASE_DETAILS: dict[str, str] = {}
+_RECOVERY_PHASE_SIGNATURES: dict[str, tuple[Any, ...]] = {}
+_RECOVERY_MONITOR_THREAD: threading.Thread | None = None
 
 # Production incident 2026-10-06: a genuine GlobalDrawdownCircuitBreaker halt
 # was later represented by two exact generic FILE_SYSTEM replay records:
@@ -150,43 +158,215 @@ def _exact_drawdown_source(reason: str, source: str) -> bool:
     )
 
 
-def _capital_proof_current() -> bool:
-    """Use NIJA's canonical v134 current-capital proof when available.
+def _module_alias_identity(names: tuple[str, ...]) -> str:
+    modules = [
+        sys.modules[name]
+        for name in names
+        if isinstance(sys.modules.get(name), type(sys))
+    ]
+    if not modules:
+        return "not_loaded"
+    if len(modules) == 1:
+        return "single_module"
+    return "same_module" if len({id(module) for module in modules}) == 1 else "distinct_modules"
 
-    v134 owns the activation/readiness capital truth. If it is installed but
-    cannot produce an accepted proof, fail closed rather than falling back to a
-    conflicting standalone freshness opinion.
-    """
+
+def _capital_provider_chain_diagnostics(details: dict[str, str]) -> None:
+    root_name = "preactivation_readiness_convergence_v16_patch"
+    package_name = "bot.preactivation_readiness_convergence_v16_patch"
+    details["v16_alias_identity"] = _module_alias_identity((root_name, package_name))
+    v16_name = root_name if isinstance(sys.modules.get(root_name), type(sys)) else package_name
+    v16 = sys.modules.get(v16_name)
+    if not isinstance(v16, type(sys)):
+        details["v16_reader_module"] = "not_loaded"
+        details["v358_reader_module"] = "not_loaded"
+        details["v358_collector"] = "not_loaded"
+        return
+    details["v16_reader_module"] = v16_name
+    details["v358_reader_module"] = v16_name
+    v358 = sys.modules.get("bot.runtime_capital_readiness_mode_decoupling_v358_patch")
+    collector = getattr(v16, "_collect_proofs", None)
+    details["v358_collector"] = (
+        "installed" if bool(getattr(collector, "_nija_v358_capital_mode_decoupled", False))
+        else "unavailable" if v358 is not None
+        else "not_loaded"
+    )
+
+
+def _proof_rejection_category(proof: Mapping[str, Any]) -> str:
     try:
-        v134 = importlib.import_module("bot.readiness_proof_convergence_v134_patch")
+        hydrated = bool(proof.get("hydrated", False))
+        stale = bool(proof.get("stale", True))
+        real = float(proof.get("real", 0.0) or 0.0)
+        registered = int(float(proof.get("registered", 0) or 0))
+    except (TypeError, ValueError, OverflowError):
+        return "proof_fields_invalid"
+    if not hydrated:
+        return "hydrated"
+    if stale:
+        return "stale"
+    if real <= 0.0:
+        return "real"
+    if registered <= 0:
+        return "registered"
+    return "provider_acceptance"
+
+
+def _reason_category(reason: Any) -> str:
+    text = str(reason or "").strip()
+    category = text.split(":", 1)[0].split(" ", 1)[0]
+    return re.sub(r"[^A-Za-z0-9_.-]", "_", category)[:64] or "unknown"
+
+
+def _capital_proof_diagnostic() -> tuple[bool, dict[str, str]]:
+    """Return canonical capital acceptance and safe provider-identity diagnostics."""
+    provider_name = "bot.readiness_proof_convergence_v134_patch"
+    details: dict[str, str] = {
+        "proof_provider": provider_name,
+        "proof_provider_identity": "unavailable",
+        "v16_alias_identity": "not_loaded",
+        "v16_reader_module": "not_loaded",
+        "v358_reader_module": "not_loaded",
+        "v358_collector": "not_loaded",
+        "proof_rejection": "provider_unavailable",
+        "proof_exception": "none",
+    }
+
+    try:
+        v134 = importlib.import_module(provider_name)
     except ModuleNotFoundError as exc:
-        if exc.name != "bot.readiness_proof_convergence_v134_patch":
-            return False
+        if exc.name != provider_name:
+            details.update(proof_rejection="provider_import", proof_exception=type(exc).__name__)
+            return False, details
         try:
             if importlib.util.find_spec(exc.name) is not None:
-                return False
-        except Exception:
-            return False
+                details.update(proof_rejection="provider_import", proof_exception=type(exc).__name__)
+                return False, details
+        except Exception as spec_exc:
+            details.update(proof_rejection="provider_import", proof_exception=type(spec_exc).__name__)
+            return False, details
         v134 = None
-    except Exception:
-        return False
+    except Exception as exc:
+        details.update(proof_rejection="provider_import", proof_exception=type(exc).__name__)
+        return False, details
 
     if v134 is not None:
+        provider_module_name = str(getattr(v134, "__name__", type(v134).__name__))
+        details["proof_provider_identity"] = f"{provider_module_name}:{id(v134):x}"
         reader = getattr(v134, "_current_capital_proof", None)
         accepted = getattr(v134, "_current_capital_accepted", None)
         if not callable(reader) or not callable(accepted):
-            return False
+            details.update(proof_rejection="reader_unavailable", proof_exception="none")
+            return False, details
         try:
             proof = reader()
-            return bool(isinstance(proof, Mapping) and accepted(dict(proof)))
-        except Exception:
-            return False
+        except Exception as exc:
+            _capital_provider_chain_diagnostics(details)
+            details.update(proof_rejection="reader_error", proof_exception=type(exc).__name__)
+            return False, details
+        _capital_provider_chain_diagnostics(details)
+        try:
+            if not isinstance(proof, Mapping):
+                details["proof_rejection"] = "proof_shape"
+                return False, details
+            proof_dict = dict(proof)
+            is_accepted = bool(accepted(proof_dict))
+            details["proof_rejection"] = "none" if is_accepted else _proof_rejection_category(proof_dict)
+            return is_accepted, details
+        except Exception as exc:
+            details.update(proof_rejection="reader_error", proof_exception=type(exc).__name__)
+            return False, details
 
     try:
         ca = importlib.import_module("bot.capital_authority").get_capital_authority()
-        return ca.is_fresh() is True
-    except Exception:
-        return False
+        is_current = ca.is_fresh() is True
+        details.update(
+            proof_provider="capital_authority_fallback",
+            proof_provider_identity="canonical_provider_absent",
+            proof_rejection="none" if is_current else "standalone_not_fresh",
+        )
+        return is_current, details
+    except Exception as exc:
+        details.update(
+            proof_provider="capital_authority_fallback",
+            proof_provider_identity="canonical_provider_absent",
+            proof_rejection="standalone_reader_error",
+            proof_exception=type(exc).__name__,
+        )
+        return False, details
+
+
+def _capital_proof_current() -> bool:
+    """Use NIJA's canonical v134 current-capital proof when available."""
+    return _capital_proof_diagnostic()[0]
+
+
+def _recovery_diagnostic(
+    phase: str, *, log_transition: bool = True, **details: Any
+) -> bool:
+    """Log only recovery-state transitions, with no account payload or values."""
+    global _RECOVERY_PHASE, _RECOVERY_PHASE_STARTED_AT
+    global _RECOVERY_PHASE_DETAILS
+    safe_details = {key: str(value) for key, value in sorted(details.items())}
+    signature = (str(phase), tuple(safe_details.items()))
+    with _RECOVERY_DIAGNOSTIC_LOCK:
+        phase_signature = (str(phase), tuple(safe_details.items()))
+        if (
+            phase != _RECOVERY_PHASE
+            or safe_details != _RECOVERY_PHASE_DETAILS
+        ):
+            _RECOVERY_PHASE = str(phase)
+            _RECOVERY_PHASE_STARTED_AT = time.monotonic()
+            _RECOVERY_PHASE_DETAILS = safe_details
+        if not log_transition:
+            return False
+        if _RECOVERY_PHASE_SIGNATURES.get(str(phase)) == signature:
+            return False
+        _RECOVERY_PHASE_SIGNATURES[str(phase)] = phase_signature
+    retry_thread = _RETRY_THREAD
+    worker_alive = bool(
+        retry_thread is not None and retry_thread.is_alive()
+    ) or threading.current_thread().name == "DrawdownRecoveryV414"
+    detail_text = " ".join(f"{key}={value}" for key, value in safe_details.items())
+    LOGGER.critical(
+        "DRAWDOWN_V414_RECOVERY_DIAGNOSTIC marker=%s worker_alive=%s phase=%s "
+        "transition=true phase_age_s=0.0 %s",
+        MARKER,
+        str(worker_alive).lower(),
+        phase,
+        detail_text,
+    )
+    return True
+
+
+def _recovery_diagnostic_monitor() -> None:
+    """Report a stuck retry phase without polling the recovery predicates."""
+    last_signature: tuple[Any, ...] | None = None
+    stalled_after_s = max(10.0, _RETRY_INTERVAL_S * 2.0)
+    while not _RECOVERY_COMPLETE.wait(1.0):
+        retry_thread = _RETRY_THREAD
+        worker_alive = bool(retry_thread is not None and retry_thread.is_alive())
+        with _RECOVERY_DIAGNOSTIC_LOCK:
+            phase = _RECOVERY_PHASE
+            phase_started_at = _RECOVERY_PHASE_STARTED_AT
+        phase_age = max(0.0, time.monotonic() - phase_started_at) if phase_started_at else 0.0
+        waiting_phase = phase in {"worker_wait", "awaiting_capital_proof"}
+        status = "stalled" if worker_alive and not waiting_phase and phase_age >= stalled_after_s else (
+            "running" if worker_alive else "stopped"
+        )
+        signature = (worker_alive, status)
+        if signature == last_signature:
+            continue
+        last_signature = signature
+        LOGGER.critical(
+            "DRAWDOWN_V414_RECOVERY_DIAGNOSTIC marker=%s worker_alive=%s "
+            "phase=%s status=%s phase_age_s=%.1f",
+            MARKER,
+            str(worker_alive).lower(),
+            phase,
+            status,
+            phase_age,
+        )
 
 
 def _fresh_authoritative_position_proof(v409: Any) -> tuple[bool, str, float, int]:
@@ -367,30 +547,86 @@ def _is_migrated_oct6_stop(payload: Mapping[str, Any]) -> bool:
 
 def _retry_recovery() -> None:
     capital_wait_logged = False
+    _recovery_diagnostic("worker_wait", status="retry_interval")
     while not _RECOVERY_COMPLETE.wait(_RETRY_INTERVAL_S):
-        if not _capital_proof_current():
+        _recovery_diagnostic(
+            "capital_proof_check", log_transition=False, status="checking"
+        )
+        capital_current, proof_details = _capital_proof_diagnostic()
+        if not capital_current:
             if not capital_wait_logged:
                 LOGGER.critical(
-                    "DRAWDOWN_V414_RETRY_WAITING marker=%s reason=canonical_capital_proof_not_current "
-                    "fail_closed=true readiness_unchanged=true orders_submitted=false",
+                    "DRAWDOWN_V414_RETRY_WAITING marker=%s "
+                    "reason=canonical_capital_proof_not_current fail_closed=true "
+                    "readiness_unchanged=true orders_submitted=false",
                     MARKER,
                 )
                 capital_wait_logged = True
+            _recovery_diagnostic(
+                "awaiting_capital_proof",
+                status="rejected",
+                **proof_details,
+            )
             continue
         capital_wait_logged = False
+        _recovery_diagnostic(
+            "capital_proof_accepted",
+            status="accepted",
+            **proof_details,
+        )
         try:
+            _recovery_diagnostic(
+                "v409_import", log_transition=False, status="loading"
+            )
             v409 = importlib.import_module("bot.runtime_drawdown_portfolio_equity_v409_patch")
-            with v409._LOCK:
+            lock = getattr(v409, "_LOCK", None)
+            acquire = getattr(lock, "acquire", None)
+            release = getattr(lock, "release", None)
+            if not callable(acquire) or not callable(release):
+                _recovery_diagnostic(
+                    "installation_lock_unavailable",
+                    status="rejected",
+                    error_type="lock_api_unavailable",
+                )
+                continue
+            if not acquire(blocking=False):
+                _recovery_diagnostic(
+                    "installation_lock_wait",
+                    status="busy",
+                    worker_liveness="alive",
+                )
+                continue
+            try:
                 if _RECOVERY_COMPLETE.is_set():
                     return
-                if v409._recover_exact_false_drawdown_stop():
+                _recovery_diagnostic(
+                    "predicate_evaluation",
+                    log_transition=False,
+                    status="running",
+                    proof_provider=proof_details.get("proof_provider", "unknown"),
+                )
+                recovered = v409._recover_exact_false_drawdown_stop()
+                if recovered:
                     _RECOVERY_COMPLETE.set()
+                    _recovery_diagnostic("durable_clear", status="confirmed")
+                    _recovery_diagnostic("recovery_complete", status="confirmed")
                     return
-        except Exception:
-            LOGGER.exception(
-                "DRAWDOWN_V414_RETRY_ERROR marker=%s fail_closed=true execution_authority_unchanged=true",
-                MARKER,
+                _recovery_diagnostic("predicate_result", status="rejected")
+            finally:
+                release()
+        except Exception as exc:
+            transition_logged = _recovery_diagnostic(
+                "recovery_error",
+                status="failed_closed",
+                error_type=type(exc).__name__,
             )
+            if transition_logged:
+                LOGGER.critical(
+                    "DRAWDOWN_V414_RETRY_ERROR marker=%s error_type=%s "
+                    "fail_closed=true execution_authority_unchanged=true",
+                    MARKER,
+                    type(exc).__name__,
+                )
 
 
 def _install_v409_guarded_recovery() -> bool:
@@ -403,12 +639,30 @@ def _install_v409_guarded_recovery() -> bool:
 
     def recover_v414() -> bool:
         try:
-            if _RECOVERY_COMPLETE.is_set() or not _capital_proof_current():
+            _recovery_diagnostic(
+                "predicate_evaluation", log_transition=False, status="running"
+            )
+            if _RECOVERY_COMPLETE.is_set():
+                _recovery_diagnostic(
+                    "predicate_rejection", rejection="recovery_already_complete"
+                )
+                return False
+            capital_current, capital_details = _capital_proof_diagnostic()
+            _recovery_diagnostic(
+                "canonical_capital_proof",
+                status="accepted" if capital_current else "rejected",
+                **capital_details,
+            )
+            if not capital_current:
                 return False
             drawdown = importlib.import_module("bot.global_drawdown_circuit_breaker")
             getter = getattr(drawdown, "get_global_drawdown_cb", None)
             cb = getter() if callable(getter) else None
             if cb is None:
+                _recovery_diagnostic(
+                    "predicate_rejection",
+                    rejection="drawdown_breaker_unavailable",
+                )
                 return False
 
             raw = _float(getattr(cb, "_current_equity", 0.0))
@@ -417,12 +671,19 @@ def _install_v409_guarded_recovery() -> bool:
             snapshot_fresh, snapshot_detail, snapshot_age, snapshot_generation = (
                 _fresh_authoritative_position_proof(v409)
             )
+            position_transition_logged = _recovery_diagnostic(
+                "authoritative_position_proof",
+                status="accepted" if proof_ready and snapshot_fresh else "rejected",
+                position_status=_reason_category(proof_reason),
+                freshness_status=_reason_category(snapshot_detail),
+            )
             if not proof_ready or not snapshot_fresh:
-                LOGGER.critical(
-                    "DRAWDOWN_V414_RECOVERY_BLOCKED marker=%s reason=current_portfolio_proof_missing "
-                    "detail=%s snapshot_detail=%s symbols=%s fail_closed=true",
-                    MARKER, proof_reason, snapshot_detail, ",".join(symbols) or "none",
-                )
+                if position_transition_logged:
+                    LOGGER.critical(
+                        "DRAWDOWN_V414_RECOVERY_BLOCKED marker=%s reason=current_portfolio_proof_missing "
+                        "detail=%s snapshot_detail=%s symbols=%s fail_closed=true",
+                        MARKER, proof_reason, snapshot_detail, ",".join(symbols) or "none",
+                    )
                 return False
             holding_value = _float(holding_value)
             if not all(math.isfinite(value) for value in (raw, ca_total, holding_value)):
@@ -433,64 +694,128 @@ def _install_v409_guarded_recovery() -> bool:
             # Value them exactly once, using the current CapitalAuthority series.
             corrected = ca_total + holding_value
             if not math.isfinite(corrected):
+                _recovery_diagnostic(
+                    "predicate_rejection", rejection="corrected_equity_invalid"
+                )
                 return False
             if not matches and abs(raw - corrected) > max(1.0, ca_total * 0.02):
+                _recovery_diagnostic(
+                    "predicate_rejection",
+                    rejection="capital_series_mismatch",
+                )
                 return False
 
             kill_module = importlib.import_module("bot.kill_switch")
             ks_getter = getattr(kill_module, "get_kill_switch", None)
             ks = ks_getter() if callable(ks_getter) else None
             if ks is None or not bool(ks.is_active()):
+                _recovery_diagnostic(
+                    "predicate_rejection", rejection="kill_switch_inactive_or_missing"
+                )
                 return False
             status = dict(ks.get_status() or {})
             durable = _redis_record(ks)
             if durable is None:
+                provenance_transition_logged = _recovery_diagnostic(
+                    "durable_incident",
+                    status="unavailable",
+                    incident_identity="not_proven",
+                )
                 return False
             _redis, _raw_record, durable_payload = durable
             if durable_payload.get("is_active") is not True:
+                _recovery_diagnostic(
+                    "durable_incident",
+                    status="inactive",
+                    incident_identity="not_proven",
+                )
                 return False
 
             needs_legacy_migration = _is_legacy_oct6_replay(durable_payload)
+            migrated_incident_match = _is_migrated_oct6_stop(durable_payload)
             if needs_legacy_migration:
                 causal_reason = _INCIDENT_20261006_CAUSAL_REASON
                 causal_source = _INCIDENT_20261006_CAUSAL_SOURCE
-            elif _is_migrated_oct6_stop(durable_payload):
+            elif migrated_incident_match:
                 causal_reason = str(durable_payload.get("origin_reason") or "")
                 causal_source = str(durable_payload.get("origin_source") or "")
             else:
                 causal_reason, causal_source = _causal_activation(status)
-            if not _exact_drawdown_source(causal_reason, causal_source):
-                LOGGER.critical(
-                    "DRAWDOWN_V414_RECOVERY_BLOCKED marker=%s reason=causal_source_not_exact source=%s causal_reason=%s fail_closed=true",
-                    MARKER, causal_source or "missing", causal_reason or "missing",
-                )
+            provenance_match = _exact_drawdown_source(causal_reason, causal_source)
+            _recovery_diagnostic(
+                "durable_incident",
+                status="provenance_matched" if provenance_match else "provenance_rejected",
+                incident_identity=(
+                    "exact_legacy_candidate"
+                    if needs_legacy_migration
+                    else "exact_migrated"
+                    if migrated_incident_match
+                    else "unmatched"
+                ),
+                incident_id_match=(
+                    "exact" if migrated_incident_match else "not_established"
+                ),
+                provenance_match=str(provenance_match).lower(),
+            )
+            if not provenance_match:
+                if provenance_transition_logged:
+                    LOGGER.critical(
+                        "DRAWDOWN_V414_RECOVERY_BLOCKED marker=%s "
+                        "reason=causal_source_not_exact source_category=%s "
+                        "causal_reason_category=%s fail_closed=true",
+                        MARKER,
+                        _reason_category(causal_source),
+                        _reason_category(causal_reason),
+                    )
                 return False
 
             ref_ok, stopped_dd, stopped_equity, original_peak, ref_detail = _original_drawdown_reference(causal_reason)
             if not ref_ok:
-                LOGGER.critical(
-                    "DRAWDOWN_V414_RECOVERY_BLOCKED marker=%s reason=original_baseline_unproven detail=%s causal_reason=%s fail_closed=true",
-                    MARKER, ref_detail, causal_reason,
+                transition_logged = _recovery_diagnostic(
+                    "original_stop_reference",
+                    status="rejected",
+                    rejection=_reason_category(ref_detail),
                 )
+                if transition_logged:
+                    LOGGER.critical(
+                        "DRAWDOWN_V414_RECOVERY_BLOCKED marker=%s "
+                        "reason=original_baseline_unproven detail_category=%s "
+                        "causal_reason_category=%s fail_closed=true",
+                        MARKER, _reason_category(ref_detail), _reason_category(causal_reason),
+                    )
                 return False
 
             config = getattr(cb, "_config", None)
             halt_pct = _float(getattr(config, "halt_pct", 0.0))
             if not math.isfinite(halt_pct) or halt_pct <= 0.0 or stopped_dd < halt_pct:
-                LOGGER.critical(
-                    "DRAWDOWN_V414_RECOVERY_BLOCKED marker=%s reason=original_stop_not_halt stopped_drawdown_pct=%.6f halt_pct=%.6f fail_closed=true",
-                    MARKER, stopped_dd, halt_pct,
+                transition_logged = _recovery_diagnostic(
+                    "original_stop_reference",
+                    status="rejected",
+                    rejection="original_stop_not_halt",
                 )
+                if transition_logged:
+                    LOGGER.critical(
+                        "DRAWDOWN_V414_RECOVERY_BLOCKED marker=%s "
+                        "reason=original_stop_not_halt fail_closed=true",
+                        MARKER,
+                    )
                 return False
 
             original_reference_dd = max(0.0, (original_peak - corrected) / original_peak * 100.0)
             if original_reference_dd >= halt_pct:
-                LOGGER.critical(
-                    "DRAWDOWN_V414_RECOVERY_BLOCKED marker=%s reason=current_equity_still_below_original_halt_boundary "
-                    "original_peak=%.8f stopped_equity=%.8f current_corrected_equity=%.8f original_reference_drawdown_pct=%.6f halt_pct=%.6f "
-                    "current_process_peak_ignored=true fail_closed=true orders_submitted=false safety_gates_bypassed=false",
-                    MARKER, original_peak, stopped_equity, corrected, original_reference_dd, halt_pct,
+                transition_logged = _recovery_diagnostic(
+                    "original_stop_reference",
+                    status="rejected",
+                    rejection="current_equity_below_original_boundary",
                 )
+                if transition_logged:
+                    LOGGER.critical(
+                        "DRAWDOWN_V414_RECOVERY_BLOCKED marker=%s "
+                        "reason=current_equity_still_below_original_halt_boundary "
+                        "current_process_peak_ignored=true fail_closed=true "
+                        "orders_submitted=false safety_gates_bypassed=false",
+                        MARKER,
+                    )
                 return False
 
             if needs_legacy_migration:
@@ -506,21 +831,35 @@ def _install_v409_guarded_recovery() -> bool:
                     snapshot_generation=snapshot_generation,
                 ) or {}
                 if not durable_payload:
-                    LOGGER.critical(
-                        "DRAWDOWN_V414_RECOVERY_BLOCKED marker=%s reason=legacy_incident_migration_failed "
-                        "redis_cas_required=true fail_closed=true",
-                        MARKER,
+                    transition_logged = _recovery_diagnostic(
+                        "legacy_migration",
+                        status="compare_and_set_rejected",
+                        incident_identity="exact_legacy_candidate",
                     )
+                    if transition_logged:
+                        LOGGER.critical(
+                            "DRAWDOWN_V414_RECOVERY_BLOCKED marker=%s reason=legacy_incident_migration_failed "
+                            "redis_cas_required=true fail_closed=true",
+                            MARKER,
+                        )
                     return False
 
-            if os.environ.get(_RECOVERY_OPERATOR_GATE, "").strip() != "1":
-                LOGGER.critical(
-                    "DRAWDOWN_V414_RECOVERY_BLOCKED marker=%s reason=operator_gate_required "
-                    "operator_gate=%s required_value=1 stop_remains_active=true readiness_unchanged=true "
-                    "orders_submitted=false safety_gates_bypassed=false",
-                    MARKER,
-                    _RECOVERY_OPERATOR_GATE,
-                )
+            operator_authorized = (
+                os.environ.get(_RECOVERY_OPERATOR_GATE, "").strip() == "1"
+            )
+            operator_transition_logged = _recovery_diagnostic(
+                "operator_gate",
+                status="authorized" if operator_authorized else "required",
+            )
+            if not operator_authorized:
+                if operator_transition_logged:
+                    LOGGER.critical(
+                        "DRAWDOWN_V414_RECOVERY_BLOCKED marker=%s reason=operator_gate_required "
+                        "operator_gate=%s required_value=1 stop_remains_active=true readiness_unchanged=true "
+                        "orders_submitted=false safety_gates_bypassed=false",
+                        MARKER,
+                        _RECOVERY_OPERATOR_GATE,
+                    )
                 return False
 
             # Local breaker level may be corrected using v409's existing logic, but
@@ -535,16 +874,30 @@ def _install_v409_guarded_recovery() -> bool:
                 and durable_after[2].get("is_active") is False
                 and durable_after[2].get("incident_id") == durable_payload.get("incident_id")
             )
+            durable_transition_logged = _recovery_diagnostic(
+                "durable_clear",
+                status="confirmed" if durable_inactive and deactivated is True else "not_confirmed",
+                incident_id_match=(
+                    "same"
+                    if durable_after is not None
+                    and durable_after[2].get("incident_id") == durable_payload.get("incident_id")
+                    else "different_or_missing"
+                ),
+                local_deactivation=str(deactivated is True).lower(),
+            )
             if deactivated is not True or bool(ks.is_active()) or not durable_inactive:
-                LOGGER.critical(
-                    "DRAWDOWN_V414_RECOVERY_BLOCKED marker=%s reason=durable_deactivation_not_confirmed "
-                    "redis_clear_required=true local_stop_must_be_inactive=true redis_inactive_confirmed=%s fail_closed=true "
-                    "orders_submitted=false safety_gates_bypassed=false",
-                    MARKER,
-                    str(durable_inactive).lower(),
-                )
+                if durable_transition_logged:
+                    LOGGER.critical(
+                        "DRAWDOWN_V414_RECOVERY_BLOCKED marker=%s reason=durable_deactivation_not_confirmed "
+                        "redis_clear_required=true local_stop_must_be_inactive=true "
+                        "redis_inactive_confirmed=%s fail_closed=true "
+                        "orders_submitted=false safety_gates_bypassed=false",
+                        MARKER,
+                        str(durable_inactive).lower(),
+                    )
                 return False
             _RECOVERY_COMPLETE.set()
+            _recovery_diagnostic("recovery_complete", status="durable_clear_confirmed")
             LOGGER.critical(
                 "DRAWDOWN_V414_FALSE_KILL_SWITCH_CLEARED marker=%s source=%s original_peak=%.8f stopped_equity=%.8f "
                 "current_corrected_equity=%.8f original_reference_drawdown_pct=%.6f halt_pct=%.6f baseline_detail=%s "
@@ -554,11 +907,19 @@ def _install_v409_guarded_recovery() -> bool:
                 original_reference_dd, halt_pct, ref_detail,
             )
             return True
-        except Exception:
-            LOGGER.exception(
-                "DRAWDOWN_V414_RECOVERY_ERROR marker=%s fail_closed=true force_activation=false safety_gates_bypassed=false",
-                MARKER,
+        except Exception as exc:
+            transition_logged = _recovery_diagnostic(
+                "predicate_error",
+                status="failed_closed",
+                error_type=type(exc).__name__,
             )
+            if transition_logged:
+                LOGGER.critical(
+                    "DRAWDOWN_V414_RECOVERY_ERROR marker=%s error_type=%s "
+                    "fail_closed=true force_activation=false safety_gates_bypassed=false",
+                    MARKER,
+                    type(exc).__name__,
+                )
             return False
 
     setattr(recover_v414, _PATCH_ATTR, True)
@@ -568,7 +929,7 @@ def _install_v409_guarded_recovery() -> bool:
 
 
 def install() -> bool:
-    global _RETRY_THREAD
+    global _RETRY_THREAD, _RECOVERY_MONITOR_THREAD
     with _LOCK:
         try:
             v409 = importlib.import_module("bot.runtime_drawdown_portfolio_equity_v409_patch")
@@ -583,6 +944,16 @@ def install() -> bool:
                         target=_retry_recovery, name="DrawdownRecoveryV414", daemon=True,
                     )
                     _RETRY_THREAD.start()
+                if (
+                    _RECOVERY_MONITOR_THREAD is None
+                    or not _RECOVERY_MONITOR_THREAD.is_alive()
+                ):
+                    _RECOVERY_MONITOR_THREAD = threading.Thread(
+                        target=_recovery_diagnostic_monitor,
+                        name="DrawdownRecoveryV414Diagnostics",
+                        daemon=True,
+                    )
+                    _RECOVERY_MONITOR_THREAD.start()
             os.environ[_READY_FLAG] = "1" if ready else "0"
             LOGGER.critical(
                 "RUNTIME_DRAWDOWN_STOP_PROVENANCE_V414_%s marker=%s v409_installed=%s v143_causal_provenance_required=true "
