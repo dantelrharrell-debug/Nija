@@ -218,8 +218,8 @@ def _reason_category(reason: Any) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]", "_", category)[:64] or "unknown"
 
 
-def _capital_proof_diagnostic() -> tuple[bool, dict[str, str]]:
-    """Return canonical capital acceptance and safe provider-identity diagnostics."""
+def _capital_proof_snapshot() -> tuple[bool, float, dict[str, str]]:
+    """Return acceptance, current canonical capital, and non-sensitive diagnostics."""
     provider_name = "bot.readiness_proof_convergence_v134_patch"
     details: dict[str, str] = {
         "proof_provider": provider_name,
@@ -237,18 +237,18 @@ def _capital_proof_diagnostic() -> tuple[bool, dict[str, str]]:
     except ModuleNotFoundError as exc:
         if exc.name != provider_name:
             details.update(proof_rejection="provider_import", proof_exception=type(exc).__name__)
-            return False, details
+            return False, 0.0, details
         try:
             if importlib.util.find_spec(exc.name) is not None:
                 details.update(proof_rejection="provider_import", proof_exception=type(exc).__name__)
-                return False, details
+                return False, 0.0, details
         except Exception as spec_exc:
             details.update(proof_rejection="provider_import", proof_exception=type(spec_exc).__name__)
-            return False, details
+            return False, 0.0, details
         v134 = None
     except Exception as exc:
         details.update(proof_rejection="provider_import", proof_exception=type(exc).__name__)
-        return False, details
+        return False, 0.0, details
 
     if v134 is not None:
         provider_module_name = str(getattr(v134, "__name__", type(v134).__name__))
@@ -257,35 +257,46 @@ def _capital_proof_diagnostic() -> tuple[bool, dict[str, str]]:
         accepted = getattr(v134, "_current_capital_accepted", None)
         if not callable(reader) or not callable(accepted):
             details.update(proof_rejection="reader_unavailable", proof_exception="none")
-            return False, details
+            return False, 0.0, details
         try:
             proof = reader()
         except Exception as exc:
             _capital_provider_chain_diagnostics(details)
             details.update(proof_rejection="reader_error", proof_exception=type(exc).__name__)
-            return False, details
+            return False, 0.0, details
         _capital_provider_chain_diagnostics(details)
         try:
             if not isinstance(proof, Mapping):
                 details["proof_rejection"] = "proof_shape"
-                return False, details
+                return False, 0.0, details
             proof_dict = dict(proof)
             is_accepted = bool(accepted(proof_dict))
-            details["proof_rejection"] = "none" if is_accepted else _proof_rejection_category(proof_dict)
-            return is_accepted, details
+            proof_real = _float(proof_dict.get("real", 0.0))
+            if not math.isfinite(proof_real) or proof_real <= 0.0:
+                details["proof_rejection"] = "real"
+                return False, 0.0, details
+            details["proof_rejection"] = (
+                "none" if is_accepted else _proof_rejection_category(proof_dict)
+            )
+            return is_accepted, proof_real if is_accepted else 0.0, details
         except Exception as exc:
             details.update(proof_rejection="reader_error", proof_exception=type(exc).__name__)
-            return False, details
+            return False, 0.0, details
 
     try:
         ca = importlib.import_module("bot.capital_authority").get_capital_authority()
         is_current = ca.is_fresh() is True
+        current_real = _float(ca.get_real_capital()) if is_current else 0.0
+        # Preserve the pre-existing optional-provider fallback contract: current
+        # standalone freshness can satisfy _capital_proof_current(). Recovery
+        # remains stricter because it separately requires canonical_capital > 0
+        # before evaluating any durable stop.
         details.update(
             proof_provider="capital_authority_fallback",
             proof_provider_identity="canonical_provider_absent",
             proof_rejection="none" if is_current else "standalone_not_fresh",
         )
-        return is_current, details
+        return is_current, current_real if math.isfinite(current_real) else 0.0, details
     except Exception as exc:
         details.update(
             proof_provider="capital_authority_fallback",
@@ -293,13 +304,18 @@ def _capital_proof_diagnostic() -> tuple[bool, dict[str, str]]:
             proof_rejection="standalone_reader_error",
             proof_exception=type(exc).__name__,
         )
-        return False, details
+        return False, 0.0, details
+
+
+def _capital_proof_diagnostic() -> tuple[bool, dict[str, str]]:
+    """Return canonical capital acceptance and safe provider-identity diagnostics."""
+    accepted, _current_real, details = _capital_proof_snapshot()
+    return accepted, details
 
 
 def _capital_proof_current() -> bool:
     """Use NIJA's canonical v134 current-capital proof when available."""
-    return _capital_proof_diagnostic()[0]
-
+    return _capital_proof_snapshot()[0]
 
 def _recovery_diagnostic(
     phase: str, *, log_transition: bool = True, **details: Any
@@ -647,7 +663,7 @@ def _install_v409_guarded_recovery() -> bool:
                     "predicate_rejection", rejection="recovery_already_complete"
                 )
                 return False
-            capital_current, capital_details = _capital_proof_diagnostic()
+            capital_current, canonical_capital, capital_details = _capital_proof_snapshot()
             _recovery_diagnostic(
                 "canonical_capital_proof",
                 status="accepted" if capital_current else "rejected",
@@ -665,7 +681,22 @@ def _install_v409_guarded_recovery() -> bool:
                 )
                 return False
 
-            raw = _float(getattr(cb, "_current_equity", 0.0))
+            raw_value = getattr(cb, "_current_equity", None)
+            try:
+                raw = float(raw_value)
+            except (TypeError, ValueError, OverflowError):
+                _recovery_diagnostic(
+                    "predicate_rejection",
+                    rejection="breaker_current_equity_invalid",
+                )
+                return False
+            if not math.isfinite(raw) or raw < 0.0:
+                _recovery_diagnostic(
+                    "predicate_rejection",
+                    rejection="breaker_current_equity_invalid",
+                )
+                return False
+
             matches, ca_total = v409._capital_authority_matches(raw)
             proof_ready, holding_value, symbols, proof_reason = v409._authoritative_coinbase_holding_value()
             snapshot_fresh, snapshot_detail, snapshot_age, snapshot_generation = (
@@ -686,24 +717,71 @@ def _install_v409_guarded_recovery() -> bool:
                     )
                 return False
             holding_value = _float(holding_value)
-            if not all(math.isfinite(value) for value in (raw, ca_total, holding_value)):
+            if not all(
+                math.isfinite(value)
+                for value in (canonical_capital, ca_total, holding_value)
+            ):
+                _recovery_diagnostic(
+                    "predicate_rejection",
+                    rejection="current_portfolio_value_invalid",
+                )
                 return False
-            if raw <= 0.0 or ca_total <= 0.0 or holding_value < 0.0:
+            if canonical_capital <= 0.0 or ca_total <= 0.0 or holding_value < 0.0:
+                _recovery_diagnostic(
+                    "predicate_rejection",
+                    rejection="current_portfolio_value_invalid",
+                )
                 return False
+
+            # v134's accepted current proof and CapitalAuthority must describe the
+            # same bounded snapshot before a newly initialized breaker may rely on
+            # canonical capital.  This closes the startup deadlock without
+            # accepting a stale or contradictory process-local equity value.
+            canonical_tolerance = max(1.0, ca_total * 0.02)
+            if abs(ca_total - canonical_capital) > canonical_tolerance:
+                _recovery_diagnostic(
+                    "predicate_rejection",
+                    rejection="capital_authority_snapshot_mismatch",
+                )
+                return False
+
             # v409.update_equity may already have included holdings in the breaker.
             # Value them exactly once, using the current CapitalAuthority series.
             corrected = ca_total + holding_value
-            if not math.isfinite(corrected):
+            if not math.isfinite(corrected) or corrected <= 0.0:
                 _recovery_diagnostic(
                     "predicate_rejection", rejection="corrected_equity_invalid"
                 )
                 return False
-            if not matches and abs(raw - corrected) > max(1.0, ca_total * 0.02):
+
+            breaker_initialised = getattr(cb, "_initialised", None)
+            startup_zero = raw == 0.0 and breaker_initialised is False
+            if startup_zero:
+                _recovery_diagnostic(
+                    "breaker_equity_reference",
+                    status="canonical_current_proof",
+                    breaker_initialized="false",
+                    canonical_snapshot_match="true",
+                )
+            elif not matches and abs(raw - corrected) > max(1.0, ca_total * 0.02):
                 _recovery_diagnostic(
                     "predicate_rejection",
-                    rejection="capital_series_mismatch",
+                    rejection=(
+                        "initialized_zero_equity_mismatch"
+                        if raw == 0.0 and breaker_initialised is True
+                        else "capital_series_mismatch"
+                    ),
                 )
                 return False
+            else:
+                _recovery_diagnostic(
+                    "breaker_equity_reference",
+                    status="breaker_series_consistent",
+                    breaker_initialized=(
+                        "true" if breaker_initialised is True else "unknown"
+                    ),
+                    canonical_snapshot_match="true",
+                )
 
             kill_module = importlib.import_module("bot.kill_switch")
             ks_getter = getattr(kill_module, "get_kill_switch", None)
@@ -742,7 +820,7 @@ def _install_v409_guarded_recovery() -> bool:
             else:
                 causal_reason, causal_source = _causal_activation(status)
             provenance_match = _exact_drawdown_source(causal_reason, causal_source)
-            _recovery_diagnostic(
+            provenance_transition_logged = _recovery_diagnostic(
                 "durable_incident",
                 status="provenance_matched" if provenance_match else "provenance_rejected",
                 incident_identity=(
