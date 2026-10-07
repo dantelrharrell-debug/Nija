@@ -389,7 +389,7 @@ BY PROCEEDING TO USE LIVE TRADING, YOU ACKNOWLEDGE:
 
 For questions about this Risk Disclosure:
 - Email: legal@nija.trading
-- Phone: 425-756-0283
+- Phone: 425-765-0283
 - Support: support@nija.trading
 - Website: nija.trading/risk-disclosure
 
