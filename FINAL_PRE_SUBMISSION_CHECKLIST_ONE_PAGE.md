@@ -90,6 +90,7 @@ TESTING INSTRUCTIONS:
 5. Risk disclaimers shown during onboarding (cannot skip)
 
 Contact: support@nija.app
+Phone: +1 425-756-0283
 Response time: <24 hours
 ```
 
