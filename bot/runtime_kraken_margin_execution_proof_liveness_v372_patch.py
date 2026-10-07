@@ -363,6 +363,11 @@ def recover_execution_proof_once() -> int:
                         MARKER, account_s or "unknown", order_id or "unknown", reason,
                     )
                 continue
+            # Preserve the authenticated account identity with the fill proof.
+            # Accounting consumers may use this to scope cost basis without
+            # guessing which platform/user account produced the order.
+            proof["account"] = account_s
+            proof["account_id"] = account_s
             try:
                 normalize(proof, symbol=proof["symbol"], side=proof["side"])
             except Exception as exc:
