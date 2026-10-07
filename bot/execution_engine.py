@@ -458,15 +458,22 @@ except ImportError:
             DEFAULT_ROUND_TRIP_FEE * 100,
         )
 
-# Import trade ledger database
+# Import trade ledger database.
+# Prefer the package-qualified module so production startup does not depend on
+# whether the bot/ directory happened to be inserted into sys.path first.
 try:
-    from trade_ledger_db import get_trade_ledger_db
+    from bot.trade_ledger_db import get_trade_ledger_db
     TRADE_LEDGER_ENABLED = True
     logger.info("✅ Trade ledger database enabled")
 except ImportError:
-    TRADE_LEDGER_ENABLED = False
-    logger.warning("⚠️ Trade ledger database not available")
-    get_trade_ledger_db = None  # type: ignore
+    try:
+        from trade_ledger_db import get_trade_ledger_db  # type: ignore[no-redef]
+        TRADE_LEDGER_ENABLED = True
+        logger.info("✅ Trade ledger database enabled (legacy import path)")
+    except ImportError:
+        TRADE_LEDGER_ENABLED = False
+        logger.warning("⚠️ Trade ledger database not available")
+        get_trade_ledger_db = None  # type: ignore
 
 # Import Recovery Controller for capital-first safety (NEW - Feb 2026)
 try:

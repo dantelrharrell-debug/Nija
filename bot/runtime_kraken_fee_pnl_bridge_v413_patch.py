@@ -70,6 +70,166 @@ def _is_opening_proof(result: Mapping[str, Any]) -> bool:
     )
 
 
+def _ledger_user_id(result: Mapping[str, Any]) -> str:
+    raw = str(
+        result.get("account")
+        or result.get("account_id")
+        or result.get("user_id")
+        or "platform"
+    ).strip()
+    if not raw:
+        return "platform"
+    lowered = raw.lower()
+    if lowered in {"platform", "master"} or lowered.startswith("platform:"):
+        return "platform"
+    if lowered.startswith("user:"):
+        parts = raw.split(":")
+        if len(parts) >= 2 and parts[1].strip():
+            return parts[1].strip()
+    return raw
+
+
+def _ensure_opening_cost_basis(
+    result: Mapping[str, Any], *, symbol: str, side: str, fill_price: float, filled_usd: float
+) -> None:
+    """Persist authenticated Kraken entry cost basis for later realized P&L.
+
+    This is accounting-only. It never creates broker positions or submits orders.
+    The source must already be an authenticated exact QueryOrders opening proof.
+    """
+    position_id = str(result.get("opening_position_id") or "").strip()
+    order_id = _order_id(result)
+    if not position_id or not order_id or fill_price <= 0.0 or filled_usd <= 0.0:
+        LOGGER.warning(
+            "REALIZED_PNL_V413_ENTRY_LEDGER_PENDING marker=%s order_id=%s symbol=%s "
+            "reason=missing_position_or_fill_truth cost_basis_fabricated=false",
+            MARKER, order_id or "unknown", symbol,
+        )
+        return
+
+    fee_known = _has_explicit_fee(result)
+    if not fee_known:
+        LOGGER.warning(
+            "REALIZED_PNL_V413_ENTRY_LEDGER_PENDING marker=%s order_id=%s symbol=%s "
+            "reason=entry_fee_unproven cost_basis_fabricated=false",
+            MARKER, order_id, symbol,
+        )
+        return
+
+    fee = 0.0
+    for key in ("fee", "fees", "fill_fee", "filled_fee", "commission", "commission_usd"):
+        if key not in result:
+            continue
+        value = result.get(key)
+        if isinstance(value, Mapping):
+            for nested in ("usd", "amount", "cost", "value"):
+                if nested in value and _f(value.get(nested)) >= 0.0:
+                    fee = max(0.0, _f(value.get(nested), 0.0))
+                    break
+        elif _f(value) >= 0.0:
+            fee = max(0.0, _f(value, 0.0))
+        break
+
+    try:
+        try:
+            ledger_module = importlib.import_module("bot.trade_ledger_db")
+        except Exception:
+            ledger_module = importlib.import_module("trade_ledger_db")
+        getter = getattr(ledger_module, "get_trade_ledger_db", None)
+        if not callable(getter):
+            raise RuntimeError("trade_ledger_singleton_missing")
+        ledger = getter()
+
+        # Idempotency across replay/recovery cycles.
+        with ledger._get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT 1 FROM open_positions WHERE position_id = ? LIMIT 1",
+                (position_id,),
+            )
+            if cur.fetchone() is not None:
+                LOGGER.info(
+                    "REALIZED_PNL_V413_ENTRY_LEDGER_DUPLICATE marker=%s order_id=%s position_id=%s "
+                    "symbol=%s source=authenticated_kraken_queryorders",
+                    MARKER, order_id, position_id, symbol,
+                )
+                return
+            cur.execute(
+                "SELECT 1 FROM completed_trades WHERE position_id = ? LIMIT 1",
+                (position_id,),
+            )
+            if cur.fetchone() is not None:
+                LOGGER.info(
+                    "REALIZED_PNL_V413_ENTRY_LEDGER_ALREADY_COMPLETED marker=%s order_id=%s position_id=%s "
+                    "symbol=%s",
+                    MARKER, order_id, position_id, symbol,
+                )
+                return
+
+        quantity = float(filled_usd) / float(fill_price)
+        if quantity <= 0.0:
+            raise RuntimeError("entry_quantity_nonpositive")
+        user_id = _ledger_user_id(result)
+        side_norm = str(side or "").strip().lower()
+        position_side = "LONG" if side_norm == "buy" else "SHORT"
+        notes = (
+            "authenticated_kraken_queryorders_entry; "
+            f"order_id={order_id}; account={str(result.get('account') or result.get('account_id') or 'platform')}"
+        )
+
+        if side_norm == "buy":
+            ledger.record_buy(
+                symbol=symbol,
+                price=float(fill_price),
+                quantity=quantity,
+                size_usd=float(filled_usd),
+                fee=fee,
+                order_id=order_id,
+                position_id=position_id,
+                user_id=user_id,
+                notes=notes,
+            )
+        else:
+            ledger.record_sell(
+                symbol=symbol,
+                price=float(fill_price),
+                quantity=quantity,
+                size_usd=float(filled_usd),
+                fee=fee,
+                order_id=order_id,
+                position_id=position_id,
+                user_id=user_id,
+                notes=notes,
+            )
+
+        opened = ledger.open_position(
+            position_id=position_id,
+            symbol=symbol,
+            side=position_side,
+            entry_price=float(fill_price),
+            quantity=quantity,
+            size_usd=float(filled_usd),
+            entry_fee=fee,
+            user_id=user_id,
+            notes=notes,
+            position_source="nija_strategy",
+        )
+        if opened:
+            LOGGER.critical(
+                "REALIZED_PNL_V413_ENTRY_LEDGER_BOOKED marker=%s order_id=%s position_id=%s user_id=%s "
+                "symbol=%s side=%s entry_price=%.10f quantity=%.12f size_usd=%.8f entry_fee=%.8f "
+                "source=authenticated_kraken_queryorders cost_basis_fabricated=false orders_submitted=false",
+                MARKER, order_id, position_id, user_id, symbol, position_side,
+                float(fill_price), quantity, float(filled_usd), fee,
+            )
+    except Exception as exc:
+        LOGGER.exception(
+            "REALIZED_PNL_V413_ENTRY_LEDGER_ERROR marker=%s order_id=%s position_id=%s symbol=%s "
+            "error=%s:%s cost_basis_fabricated=false trading_gates_unchanged=true",
+            MARKER, order_id or "unknown", position_id or "unknown", symbol, type(exc).__name__, exc,
+        )
+
+
 def _canonical_symbol(value: Any) -> str:
     try:
         v366 = importlib.import_module("bot.runtime_kraken_margin_canonical_coverage_v366_patch")
@@ -196,8 +356,16 @@ def _patch_v412_reconcile() -> bool:
         def reconcile_v413(result: Mapping[str, Any], *, symbol: str, side: str, fill_price: float, filled_usd: float) -> None:
             oid = _order_id(result)
             if _is_opening_proof(result):
+                _ensure_opening_cost_basis(
+                    result,
+                    symbol=symbol,
+                    side=side,
+                    fill_price=float(fill_price),
+                    filled_usd=float(filled_usd),
+                )
                 LOGGER.info(
-                    "REALIZED_PNL_V413_NONCLOSE_IGNORED marker=%s order_id=%s symbol=%s role=entry opening_order_replay=true realized_pnl_unchanged=true",
+                    "REALIZED_PNL_V413_NONCLOSE_IGNORED marker=%s order_id=%s symbol=%s role=entry "
+                    "opening_order_replay=true realized_pnl_unchanged=true cost_basis_checked=true",
                     MARKER, oid or "unknown", symbol,
                 )
                 return
