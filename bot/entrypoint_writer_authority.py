@@ -2439,22 +2439,22 @@ class EntrypointWriterAuthority:
                 os.environ.pop("NIJA_SCAN_START_DEADLINE_SOURCE", None)
                 self._notify_runtime_reconciliation("writer_released")
         logger.info(
-                "ENTRYPOINT_WRITER_AUTHORITY_RELEASED marker=%s released=%s "
-                "local_fallback=%s heartbeat_quiesced=true",
-                _MARKER,
-                released,
-                self._local_fallback,
-            )
-            logger.critical(
-                "WRITER_LOCK_RELEASED marker=%s released=%s local_fallback=%s "
-                "instance_id=%s pid=%d reason=release_called",
-                _MARKER,
-                released,
-                self._local_fallback,
-                self._instance_id,
-                os.getpid(),
-            )
-            return released or self._local_fallback
+            "ENTRYPOINT_WRITER_AUTHORITY_RELEASED marker=%s released=%s "
+            "local_fallback=%s heartbeat_quiesced=true",
+            _MARKER,
+            released,
+            self._local_fallback,
+        )
+        logger.critical(
+            "WRITER_LOCK_RELEASED marker=%s released=%s local_fallback=%s "
+            "instance_id=%s pid=%d reason=release_called",
+            _MARKER,
+            released,
+            self._local_fallback,
+            self._instance_id,
+            os.getpid(),
+        )
+        return released or self._local_fallback
 
 
 _SINGLETON: Optional[EntrypointWriterAuthority] = None
