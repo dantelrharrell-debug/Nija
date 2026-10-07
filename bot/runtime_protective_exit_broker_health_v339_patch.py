@@ -18,7 +18,8 @@ The substitution is permitted only when:
 * that broker, or the concrete broker behind a known NIJA proxy, exposes a
   positive local connection/health state;
 * v337's remaining hard proofs are re-verified: distributed writer, startup
-  writer prerequisites, nonce, kill switch, SEAK, circuit and fencing token;
+  writer prerequisites, nonce, explicitly clear kill switch, SEAK, circuit and
+  fencing token; active or unknown stops block all orders, including closes;
 * the runtime block is startup/activation convergence rather than an unrelated
   degraded/corrupt state.
 
@@ -230,8 +231,11 @@ def _reprove_without_global_health() -> tuple[bool, str, Any]:
         eac.require_startup_execution_authority(context="protective_exit_v339", force_refresh=True)
     except Exception as exc:
         return False, f"writer_authority:{exc}", snap
-    if bool(getattr(snap, "kill_switch_active", False)):
+    kill_switch_active = getattr(snap, "kill_switch_active", None)
+    if kill_switch_active is True:
         return False, "kill_switch_active", snap
+    if kill_switch_active is not False:
+        return False, "kill_switch_state_unproven", snap
     if not bool(getattr(snap, "nonce_ready", False)):
         return False, "nonce_not_ready", snap
     if eac.is_seak_halted():
@@ -315,6 +319,7 @@ def install_import_hook() -> bool:
             "RUNTIME_PROTECTIVE_EXIT_BROKER_HEALTH_V339_%s marker=%s ready=%s "
             "trusted_close_only=true exact_broker_object_required=true exact_broker_connected_required=true "
             "global_dispatch_health_not_promoted=true distributed_writer_nonce_killswitch_seak_circuit_required=true "
+            "kill_switch_blocks_all_orders=true "
             "terminal_broker_health_gate_preserved=true ordinary_orders_unchanged=true "
             "forced_exit=false safety_gates_bypassed=false",
             "READY" if ready else "NOT_READY", MARKER, str(ready).lower(),

@@ -26,6 +26,11 @@ switch, SEAK, circuit breaker, risk or fill state.
 Ordinary entries, ordinary spot sells/shorts, untrusted exits, other state-machine
 states, safety-controller blocks and dry-run/app-store modes are byte-for-byte
 unchanged.
+
+Emergency-stop denials are never bridged. Metadata, a ContextVar and a proof
+reason cannot independently establish stop provenance, live-mode authorization,
+account/position ownership or the remaining reduction budget. Active or unknown
+kill-switch state also prevents the pending-confirmation bridge.
 """
 from __future__ import annotations
 
@@ -91,12 +96,31 @@ def _patch_execution_gate() -> bool:
         error = str(getattr(result, "error", "") or "")
         if error != _ALLOWED_ERROR:
             return result
+        if (
+            str(getattr(request, "intent_type", "") or "").lower() not in {"exit", "reduce"}
+            or str(getattr(request, "position_effect", "") or "").lower() not in {"close", "reduce"}
+            or str(getattr(request, "side", "") or "").lower() != "sell"
+        ):
+            return result
 
         proof_ok, proof_reason, snap = _hard_exit_proof()
         if not proof_ok:
             LOGGER.warning(
                 "PROTECTIVE_EXIT_STATE_MACHINE_V340_DENIED marker=%s symbol=%s side=%s "
                 "state=LIVE_PENDING_CONFIRMATION proof=%s original_gate_preserved=true "
+                "order_submitted=false safety_gates_bypassed=false",
+                MARKER,
+                str(getattr(request, "symbol", "") or ""),
+                str(getattr(request, "side", "") or ""),
+                proof_reason,
+            )
+            return result
+
+        # Defense in depth against later re-wrapping of the v337/v339 proof.
+        if getattr(snap, "kill_switch_active", None) is not False:
+            LOGGER.warning(
+                "PROTECTIVE_EXIT_STATE_MACHINE_V340_DENIED marker=%s symbol=%s side=%s "
+                "proof=%s reason=kill_switch_not_proven_clear original_gate_preserved=true "
                 "order_submitted=false safety_gates_bypassed=false",
                 MARKER,
                 str(getattr(request, "symbol", "") or ""),
@@ -164,6 +188,7 @@ def install_import_hook() -> bool:
         log(
             "RUNTIME_PROTECTIVE_EXIT_STATE_MACHINE_BRIDGE_V340_%s marker=%s ready=%s "
             "trusted_close_only=true live_pending_confirmation_only=true v337_hard_proof_required=true "
+            "emergency_stop_gate_preserved=true kill_switch_clear_required=true "
             "v339_exact_broker_health_preserved=true state_machine_unchanged=true activation_commit_unchanged=true "
             "ordinary_entries_unchanged=true ordinary_shorts_unchanged=true "
             "broker_ecel_minimum_order_ack_fill_gates_unchanged=true forced_exit=false safety_gates_bypassed=false",

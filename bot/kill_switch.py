@@ -28,6 +28,7 @@ Date: February 2026
 
 import os
 import json
+import hashlib
 import logging
 import threading
 from datetime import datetime, timezone

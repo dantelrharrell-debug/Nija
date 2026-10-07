@@ -50,6 +50,7 @@ class DrawdownRecoveryRetryV414Tests(unittest.TestCase):
         self.orders = Mock()
         self.ca = Mock()
         self.ca.is_fresh.return_value = False
+        self.canonical_capital_ready = False
         self.ca_total = 600.0
         self.holding_value = 176.0
         self.position_proof = True
@@ -75,6 +76,20 @@ class DrawdownRecoveryRetryV414Tests(unittest.TestCase):
         modules = {
             "bot.runtime_drawdown_portfolio_equity_v409_patch": self.v409,
             "bot.capital_authority": types.SimpleNamespace(get_capital_authority=lambda: self.ca),
+            "bot.readiness_proof_convergence_v134_patch": types.SimpleNamespace(
+                _current_capital_proof=lambda: {
+                    "hydrated": self.canonical_capital_ready,
+                    "stale": not self.canonical_capital_ready,
+                    "real": self.ca_total if self.canonical_capital_ready else 0.0,
+                    "registered": 3 if self.canonical_capital_ready else 0,
+                },
+                _current_capital_accepted=lambda proof: bool(
+                    proof.get("hydrated")
+                    and not proof.get("stale")
+                    and float(proof.get("real", 0.0) or 0.0) > 0.0
+                    and int(proof.get("registered", 0) or 0) > 0
+                ),
+            ),
             "bot.global_drawdown_circuit_breaker": types.SimpleNamespace(get_global_drawdown_cb=lambda: self.cb),
             "bot.kill_switch": types.SimpleNamespace(get_kill_switch=lambda: self.ks),
             "bot.kill_switch_persistence_provenance_v143_patch": types.SimpleNamespace(
@@ -150,7 +165,79 @@ class DrawdownRecoveryRetryV414Tests(unittest.TestCase):
 
     def _hydrate(self, corrected_breaker: bool = False) -> None:
         self.ca.is_fresh.return_value = True
+        self.canonical_capital_ready = True
         self.cb._current_equity = self.ca_total + (self.holding_value if corrected_breaker else 0.0)
+
+    def test_canonical_v134_capital_proof_is_authoritative(self) -> None:
+        self.ca.is_fresh.return_value = True
+        self.canonical_capital_ready = False
+        self.assertFalse(self.v414._capital_proof_current())
+
+        self.ca.is_fresh.return_value = False
+        self.canonical_capital_ready = True
+        self.assertTrue(self.v414._capital_proof_current())
+
+    def test_canonical_import_failures_never_select_standalone_freshness(self) -> None:
+        self.ca.is_fresh.return_value = True
+        canonical = "bot.readiness_proof_convergence_v134_patch"
+        original_import = self.v414.importlib.import_module
+        for failure in (
+            RuntimeError("provider initialization failed"),
+            ImportError("provider broken"),
+            ModuleNotFoundError("dependency missing", name="missing_dependency"),
+            ModuleNotFoundError("parent missing", name="bot"),
+        ):
+            with self.subTest(failure=type(failure).__name__, name=getattr(failure, "name", None)):
+                def importer(name: str):
+                    if name == canonical:
+                        raise failure
+                    return original_import(name)
+
+                with patch.object(self.v414.importlib, "import_module", side_effect=importer):
+                    self.assertFalse(self.v414._capital_proof_current())
+        self.ca.is_fresh.assert_not_called()
+
+    def test_standalone_fallback_requires_genuinely_absent_optional_provider(self) -> None:
+        self.ca.is_fresh.return_value = True
+        canonical = "bot.readiness_proof_convergence_v134_patch"
+        original_import = self.v414.importlib.import_module
+
+        def importer(name: str):
+            if name == canonical:
+                raise ModuleNotFoundError("optional provider absent", name=canonical)
+            return original_import(name)
+
+        with patch.object(self.v414.importlib, "import_module", side_effect=importer):
+            with patch.object(self.v414.importlib.util, "find_spec", return_value=None):
+                self.assertTrue(self.v414._capital_proof_current())
+            self.ca.is_fresh.reset_mock()
+            with patch.object(self.v414.importlib.util, "find_spec", return_value=object()):
+                self.assertFalse(self.v414._capital_proof_current())
+            with patch.object(
+                self.v414.importlib.util, "find_spec",
+                side_effect=ModuleNotFoundError("parent missing", name="bot"),
+            ):
+                self.assertFalse(self.v414._capital_proof_current())
+            self.ca.is_fresh.assert_not_called()
+
+    def test_invalid_or_broken_canonical_providers_fail_closed(self) -> None:
+        self.ca.is_fresh.return_value = True
+        for provider in (
+            types.SimpleNamespace(),
+            types.SimpleNamespace(_current_capital_proof=lambda: None, _current_capital_accepted=lambda p: True),
+            types.SimpleNamespace(
+                _current_capital_proof=Mock(side_effect=RuntimeError("reader broken")),
+                _current_capital_accepted=lambda p: True,
+            ),
+            types.SimpleNamespace(
+                _current_capital_proof=lambda: {},
+                _current_capital_accepted=Mock(side_effect=RuntimeError("acceptor broken")),
+            ),
+        ):
+            with self.subTest(provider=provider):
+                with patch.dict(sys.modules, {"bot.readiness_proof_convergence_v134_patch": provider}):
+                    self.assertFalse(self.v414._capital_proof_current())
+        self.ca.is_fresh.assert_not_called()
 
     def _assert_stopped(self) -> None:
         self.assertTrue(self.ks.is_active())
@@ -383,6 +470,7 @@ class DrawdownRecoveryRetryV414Tests(unittest.TestCase):
         ):
             with self.subTest(fresh=fresh, positions=positions, equity=equity, holding=holding):
                 self.ca.is_fresh.return_value = fresh
+                self.canonical_capital_ready = fresh
                 self.position_proof = positions
                 self.cb._current_equity = equity
                 self.holding_value = holding
