@@ -213,6 +213,35 @@ def test_unsafe_emergency_reason_blocks_recovery(monkeypatch):
     assert token in {"manual", "operator"}
 
 
+
+def test_incidental_manual_word_does_not_count_as_manual_stop(monkeypatch, tmp_path):
+    """Incidental documentation/status text must not impersonate an operator stop."""
+    _live_env(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "EMERGENCY_STOP").write_text(
+        "Kill switch file detected; manual_stops_preserved=true; generic_auto_clear=false",
+        encoding="utf-8",
+    )
+
+    unsafe, token = patch._unsafe_emergency_reason_present()
+
+    assert unsafe is False
+    assert token == ""
+
+
+def test_explicit_manual_source_still_blocks_recovery(monkeypatch):
+    """Real operator/manual provenance must remain fail-closed."""
+    _live_env(monkeypatch)
+    monkeypatch.setenv(
+        "NIJA_OPERATOR_EMERGENCY_STOP_REASON",
+        "source=MANUAL reason=owner requested emergency stop",
+    )
+
+    unsafe, token = patch._unsafe_emergency_reason_present()
+
+    assert unsafe is True
+    assert token in {"manual", "operator"}
+
 def test_safe_to_recover_when_kill_switch_clear_capital_ready_and_writer_ok(monkeypatch):
     _live_env(monkeypatch)
     import bot.capital_authority as ca_mod
