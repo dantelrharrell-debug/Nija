@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 
 def _snapshot(**overrides):
     base = {
@@ -98,7 +100,7 @@ def test_hard_exit_authority_proof_denies_nonce_not_ready(monkeypatch):
     assert reason == "nonce_not_ready"
 
 
-def test_hard_exit_authority_proof_allows_verified_close_during_kill_switch(monkeypatch):
+def test_hard_exit_authority_proof_denies_metadata_only_close_during_kill_switch(monkeypatch):
     from bot import execution_authority_context as eac
     from bot import runtime_protective_exit_authority_bridge_v337_patch as v337
 
@@ -112,8 +114,66 @@ def test_hard_exit_authority_proof_allows_verified_close_during_kill_switch(monk
 
     ok, reason, snap = v337._hard_exit_authority_proof()
 
-    assert ok is True
-    assert reason == "hard_exit_authority_proven_kill_switch_exit_only"
+    assert ok is False
+    assert reason == "kill_switch_active"
+
+
+@pytest.mark.parametrize("state", [None, "false", 0])
+def test_hard_exit_authority_proof_denies_unproven_stop_state(monkeypatch, state):
+    from bot import execution_authority_context as eac
+    from bot import runtime_protective_exit_authority_bridge_v337_patch as v337
+
+    snap = _snapshot(kill_switch_active=state)
+    if state is None:
+        del snap.kill_switch_active
+    monkeypatch.setattr(eac, "runtime_authority_snapshot", lambda: snap)
+    monkeypatch.setattr(eac, "assert_distributed_writer_authority", lambda: None)
+    monkeypatch.setattr(eac, "require_startup_execution_authority", lambda **kwargs: {"ready": True})
+    monkeypatch.setattr(v337, "_trusted_close", lambda: True)
+    ok, reason, returned = v337._hard_exit_authority_proof()
+    assert ok is False
+    assert reason == "kill_switch_state_unproven"
+    assert returned is snap
+
+
+@pytest.mark.parametrize("global_health", [True, False])
+def test_wrapped_proof_chain_preserves_active_stop_for_metadata_only_close(monkeypatch, global_health):
+    from bot import execution_authority_context as eac
+    from bot import runtime_protective_exit_authority_bridge_v337_patch as v337
+    from bot import runtime_protective_exit_broker_health_v339_patch as v339
+    from bot import runtime_protective_exit_state_machine_bridge_v340_patch as v340
+    from bot import runtime_exit_capability_semantics_v335_patch as v335
+    from bot import execution_pipeline
+
+    snap = _snapshot(kill_switch_active=True, dispatch_health_ready=global_health)
+    monkeypatch.setattr(eac, "runtime_authority_snapshot", lambda: snap)
+    monkeypatch.setattr(eac, "assert_distributed_writer_authority", lambda: None)
+    monkeypatch.setattr(eac, "require_startup_execution_authority", lambda **kwargs: {"ready": True})
+    monkeypatch.setattr(eac, "is_seak_halted", lambda: False)
+    monkeypatch.setenv("NIJA_WRITER_FENCING_TOKEN", "writer-token")
+    monkeypatch.setenv("NIJA_EXECUTION_CIRCUIT_STATE", "CLOSED")
+    # Ensure pytest restores the wrapped proof after exercising actual wrappers.
+    monkeypatch.setattr(v337, "_hard_exit_authority_proof", v337._hard_exit_authority_proof)
+    blocked = SimpleNamespace(error="Execution gate pending (state_machine=LIVE_PENDING_CONFIRMATION)")
+    monkeypatch.setattr(
+        execution_pipeline.ExecutionPipeline, "_enforce_execution_gate",
+        lambda self, request, t_start: blocked,
+    )
+    assert v339._patch_v337_proof()
+    assert v340._patch_execution_gate()
+    token = v335._TRUSTED_CLOSE.set(True)
+    broker_token = v339._BROKER.set(SimpleNamespace(connected=True))
+    try:
+        ok, reason, returned = v337._hard_exit_authority_proof()
+        assert ok is False
+        assert reason == "kill_switch_active"
+        assert returned is snap
+        request = SimpleNamespace(symbol="BTC-USD", side="sell", intent_type="exit", position_effect="close")
+        pipeline = object.__new__(execution_pipeline.ExecutionPipeline)
+        assert pipeline._enforce_execution_gate(request, 0.0) is blocked
+    finally:
+        v339._BROKER.reset(broker_token)
+        v335._TRUSTED_CLOSE.reset(token)
     assert snap.kill_switch_active is True
 
 

@@ -36,6 +36,7 @@ forces LIVE_ACTIVE, grants execution authority, or submits/cancels orders.
 from __future__ import annotations
 
 import importlib
+import importlib.util
 import hashlib
 import json
 import logging
@@ -150,6 +151,37 @@ def _exact_drawdown_source(reason: str, source: str) -> bool:
 
 
 def _capital_proof_current() -> bool:
+    """Use NIJA's canonical v134 current-capital proof when available.
+
+    v134 owns the activation/readiness capital truth. If it is installed but
+    cannot produce an accepted proof, fail closed rather than falling back to a
+    conflicting standalone freshness opinion.
+    """
+    try:
+        v134 = importlib.import_module("bot.readiness_proof_convergence_v134_patch")
+    except ModuleNotFoundError as exc:
+        if exc.name != "bot.readiness_proof_convergence_v134_patch":
+            return False
+        try:
+            if importlib.util.find_spec(exc.name) is not None:
+                return False
+        except Exception:
+            return False
+        v134 = None
+    except Exception:
+        return False
+
+    if v134 is not None:
+        reader = getattr(v134, "_current_capital_proof", None)
+        accepted = getattr(v134, "_current_capital_accepted", None)
+        if not callable(reader) or not callable(accepted):
+            return False
+        try:
+            proof = reader()
+            return bool(isinstance(proof, Mapping) and accepted(dict(proof)))
+        except Exception:
+            return False
+
     try:
         ca = importlib.import_module("bot.capital_authority").get_capital_authority()
         return ca.is_fresh() is True
@@ -334,9 +366,18 @@ def _is_migrated_oct6_stop(payload: Mapping[str, Any]) -> bool:
 
 
 def _retry_recovery() -> None:
+    capital_wait_logged = False
     while not _RECOVERY_COMPLETE.wait(_RETRY_INTERVAL_S):
         if not _capital_proof_current():
+            if not capital_wait_logged:
+                LOGGER.critical(
+                    "DRAWDOWN_V414_RETRY_WAITING marker=%s reason=canonical_capital_proof_not_current "
+                    "fail_closed=true readiness_unchanged=true orders_submitted=false",
+                    MARKER,
+                )
+                capital_wait_logged = True
             continue
+        capital_wait_logged = False
         try:
             v409 = importlib.import_module("bot.runtime_drawdown_portfolio_equity_v409_patch")
             with v409._LOCK:

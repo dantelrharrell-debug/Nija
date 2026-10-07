@@ -68,14 +68,14 @@ def _hard_exit_authority_proof() -> tuple[bool, str, Any]:
     except Exception as exc:
         return False, f"startup_write_authority:{exc}", snap
 
-    # A global kill switch blocks risk-increasing execution, but this bridge is
-    # reachable only inside v335's context-bound trusted protective close.  Do
-    # not turn an emergency stop into a trap that prevents an existing position
-    # from being reduced.  Every write-safety, nonce, health, SEAK, circuit,
-    # stability, ECEL, holdings, ACK and fill gate below remains authoritative.
-    kill_switch_active = bool(getattr(snap, "kill_switch_active", False))
-    if kill_switch_active and not _trusted_close():
+    # Caller metadata and the trusted-close ContextVar do not prove stop
+    # provenance or an independently bound position/pending-reduction budget.
+    # Never reinterpret an operator or unknown stop as an entry-only stop.
+    kill_switch_active = getattr(snap, "kill_switch_active", None)
+    if kill_switch_active is True:
         return False, "kill_switch_active", snap
+    if kill_switch_active is not False:
+        return False, "kill_switch_state_unproven", snap
     if not bool(getattr(snap, "nonce_ready", False)):
         return False, "nonce_not_ready", snap
     if not bool(getattr(snap, "dispatch_health_ready", False)):
@@ -103,11 +103,7 @@ def _hard_exit_authority_proof() -> tuple[bool, str, Any]:
     if not startup_shape and not bool(getattr(snap, "ready", False)):
         return False, f"non_startup_runtime_block:{reason or lifecycle or coordinator}", snap
 
-    return True, (
-        "hard_exit_authority_proven_kill_switch_exit_only"
-        if kill_switch_active
-        else "hard_exit_authority_proven"
-    ), snap
+    return True, "hard_exit_authority_proven", snap
 
 
 def _bridge_initial_authority_decision(decision: Any) -> Any:
@@ -342,7 +338,7 @@ def install_import_hook() -> bool:
             "RUNTIME_PROTECTIVE_EXIT_AUTHORITY_BRIDGE_V337_%s marker=%s ready=%s "
             "trusted_protective_close_only=true exact_distributed_writer_required=true "
             "startup_write_authority_required=true nonce_required=true broker_health_required=true "
-            "kill_switch_blocks_entries_not_verified_close=true seak_clear_required=true circuit_clear_required=true "
+            "kill_switch_blocks_all_orders=true seak_clear_required=true circuit_clear_required=true "
             "authority_source_binding=true pipeline_alias_binding=true initial_lifecycle_gate_bridge=true "
             "trusted_close_local_dispatch_bridge=true lifecycle_global_epoch_bridge_only=true "
             "global_dispatch_mutated=false global_lifecycle_mutated=false ordinary_entries_unchanged=true "
