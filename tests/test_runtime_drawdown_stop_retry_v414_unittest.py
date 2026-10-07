@@ -299,6 +299,92 @@ class DrawdownRecoveryRetryV414Tests(unittest.TestCase):
         self.assertEqual(diagnostic["proof_exception"], "RuntimeError")
         self.assertNotIn("private payload", " ".join(diagnostic.values()))
 
+    def test_capital_diagnostic_reports_detached_v358_binding_independently(self) -> None:
+        root_v16 = types.ModuleType("preactivation_readiness_convergence_v16_patch")
+        package_v16 = types.ModuleType("bot.preactivation_readiness_convergence_v16_patch")
+        root_v16._collect_proofs = lambda: ({}, {})
+        package_collector = lambda: ({}, {})
+        package_collector._nija_v358_capital_mode_decoupled = True
+        package_v16._collect_proofs = package_collector
+        v358 = types.ModuleType("bot.runtime_capital_readiness_mode_decoupling_v358_patch")
+        provider = types.SimpleNamespace(
+            _current_capital_proof=lambda: {
+                "hydrated": True, "stale": False, "real": 5.0, "registered": 1,
+            },
+            _current_capital_accepted=lambda proof: True,
+        )
+
+        with patch.dict(sys.modules, {
+            root_v16.__name__: root_v16,
+            package_v16.__name__: package_v16,
+            "bot.readiness_proof_convergence_v134_patch": provider,
+            "bot.runtime_capital_readiness_mode_decoupling_v358_patch": v358,
+        }):
+            accepted, diagnostic = self.v414._capital_proof_diagnostic()
+
+        self.assertTrue(accepted)
+        self.assertEqual(
+            diagnostic["v16_reader_module"],
+            "preactivation_readiness_convergence_v16_patch",
+        )
+        self.assertEqual(
+            diagnostic["v358_reader_module"],
+            "bot.preactivation_readiness_convergence_v16_patch",
+        )
+        self.assertEqual(diagnostic["v358_collector"], "installed")
+        self.assertNotEqual(diagnostic["v358_collector_identity"], "unknown")
+
+    def test_capital_diagnostic_exposes_encoded_v16_exception_type_only(self) -> None:
+        provider = types.SimpleNamespace(
+            _current_capital_proof=lambda: {
+                "hydrated": True,
+                "stale": False,
+                "real": 5.0,
+                "registered": 1,
+                "authority_error": "TimeoutError:private broker detail",
+            },
+            _current_capital_accepted=lambda proof: True,
+        )
+        with patch.dict(
+            sys.modules,
+            {"bot.readiness_proof_convergence_v134_patch": provider},
+        ):
+            accepted, diagnostic = self.v414._capital_proof_diagnostic()
+
+        self.assertTrue(accepted)
+        self.assertEqual(diagnostic["proof_exception"], "TimeoutError")
+        self.assertNotIn("private broker detail", " ".join(diagnostic.values()))
+
+    def test_provenance_rejection_returns_normally_without_predicate_error(self) -> None:
+        self._hydrate()
+        self.redis_value = json.dumps({
+            "is_active": True,
+            "schema": 2,
+            "source": "MANUAL",
+            "reason": "Owner emergency stop",
+            "timestamp": "2026-10-06T19:00:00+00:00",
+            "origin_source": "MANUAL",
+            "origin_reason": "Owner emergency stop",
+            "origin_timestamp": "2026-10-06T19:00:00+00:00",
+            "incident_id": "manual-stop",
+        })
+        self.ks._activation_history = [{
+            "source": "MANUAL",
+            "reason": "Owner emergency stop",
+            "timestamp": "2026-10-06T19:00:00+00:00",
+        }]
+        self.assertTrue(self.v414._install_v409_guarded_recovery())
+
+        with self.assertLogs(self.v414.LOGGER, level="CRITICAL") as logs:
+            self.assertFalse(self.v409._recover_exact_false_drawdown_stop())
+
+        joined = "\n".join(logs.output)
+        self.assertIn("status=provenance_rejected", joined)
+        self.assertIn("reason=causal_source_not_exact", joined)
+        self.assertNotIn("predicate_error", joined)
+        self.ks.deactivate.assert_not_called()
+        self._assert_stopped()
+
     def _assert_stopped(self) -> None:
         self.assertTrue(self.ks.is_active())
         self.assertTrue(Path(self.ks._kill_file).exists())
