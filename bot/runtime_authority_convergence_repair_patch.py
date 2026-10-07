@@ -126,6 +126,7 @@ def _state_text(state: Any) -> str:
 
 
 def _emergency_reason_text() -> str:
+    """Return diagnostic text only; safety classification uses structured evidence."""
     chunks: list[str] = []
     for env_name in (
         "NIJA_EMERGENCY_STOP_REASON",
@@ -147,13 +148,96 @@ def _emergency_reason_text() -> str:
     return "\n".join(chunks)
 
 
+def _current_emergency_evidence() -> list[tuple[str, str]]:
+    """Return current stop provenance without scanning historical/help text.
+
+    The generated EMERGENCY_STOP file contains phrases such as "Manually restart
+    the bot".  Raw substring scanning therefore misclassified a generic
+    FILE_SYSTEM replay as a manual operator stop.  Only current structured
+    source/reason evidence is authoritative here.
+    """
+    evidence: list[tuple[str, str]] = []
+
+    operator_value = str(os.environ.get("NIJA_OPERATOR_EMERGENCY_STOP_REASON", "") or "").strip()
+    if operator_value:
+        evidence.append(("OPERATOR", operator_value))
+
+    for env_name in (
+        "NIJA_EMERGENCY_STOP_REASON",
+        "NIJA_KILL_SWITCH_REASON",
+        "NIJA_PRE_HALT_REASON",
+        "NIJA_RUNTIME_STOP_REASON",
+    ):
+        value = str(os.environ.get(env_name, "") or "").strip()
+        if value:
+            evidence.append(("ENV", value))
+
+    state_path = ".nija_kill_switch_state.json"
+    try:
+        if os.path.exists(state_path):
+            with open(state_path, "r", encoding="utf-8", errors="ignore") as handle:
+                parsed = __import__("json").load(handle)
+            if isinstance(parsed, dict) and bool(parsed.get("is_active")):
+                history = parsed.get("history") or []
+                latest = history[-1] if isinstance(history, list) and history else {}
+                if isinstance(latest, dict):
+                    evidence.append((
+                        str(latest.get("source") or "STATE_FILE"),
+                        str(latest.get("reason") or ""),
+                    ))
+    except Exception:
+        pass
+
+    for path in ("EMERGENCY_STOP", "data/EMERGENCY_STOP"):
+        try:
+            if not os.path.exists(path):
+                continue
+            with open(path, "r", encoding="utf-8", errors="ignore") as handle:
+                content = handle.read(4096)
+            reason = ""
+            for line in content.splitlines():
+                if line.strip().lower().startswith("reason:"):
+                    reason = line.split(":", 1)[1].strip()
+                    break
+            evidence.append(("FILE_SYSTEM", reason or "Kill switch file detected"))
+        except Exception:
+            pass
+    return evidence
+
+
 def _unsafe_emergency_reason_present() -> tuple[bool, str]:
-    text = _emergency_reason_text().lower()
-    if not text.strip():
-        return False, ""
-    for token in _UNSAFE_REASON_TOKENS:
-        if token in text:
-            return True, token
+    """Block only explicit current operator/risk provenance, never incidental text."""
+    unsafe_sources = {"MANUAL", "OPERATOR", "UI", "CLI"}
+    reason_tokens = (
+        "daily loss",
+        "weekly loss",
+        "drawdown",
+        "loss limit",
+        "consecutive losses",
+        "liquidation",
+        "panic",
+        "api instability",
+        "unexpected balance",
+        "balance delta",
+    )
+    for source, reason in _current_emergency_evidence():
+        source_u = str(source or "").strip().upper()
+        reason_l = str(reason or "").strip().lower()
+        if source_u in unsafe_sources:
+            return True, source_u.lower()
+        # Explicit source markers embedded in an otherwise neutral env value.
+        compact = reason_l.replace('"', "").replace("'", "")
+        for marker in ("source=manual", "source: manual", "source=operator", "source: operator",
+                       "source=ui", "source: ui", "source=cli", "source: cli"):
+            if marker in compact:
+                return True, marker.split("=")[-1].split(":")[-1].strip()
+        if "manual activation" in reason_l or "manual operator stop" in reason_l:
+            return True, "manual"
+        if "owner requested emergency stop" in reason_l or "operator requested emergency stop" in reason_l:
+            return True, "operator"
+        for token in reason_tokens:
+            if token in reason_l:
+                return True, token
     return False, ""
 
 
