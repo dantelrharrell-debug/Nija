@@ -75,6 +75,10 @@ def test_oct6_legacy_replay_requires_exact_active_schema_v1_identity() -> None:
         "schema": 1,
     }
     assert v414._is_legacy_oct6_replay(legacy) is True
+    assert v414._is_legacy_oct6_replay({
+        **legacy,
+        "timestamp": "2026-10-07T00:39:22.506451+00:00",
+    }) is True
     assert v414._is_legacy_oct6_replay({**legacy, "schema": 2}) is False
     assert v414._is_legacy_oct6_replay({**legacy, "is_active": False}) is False
     assert v414._is_legacy_oct6_replay(
