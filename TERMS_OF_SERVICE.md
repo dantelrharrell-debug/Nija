@@ -278,6 +278,7 @@ You may not assign these Terms. NIJA may assign them to any successor entity.
 ### 14.5 Contact
 For questions about these Terms, contact us at:
 - Email: legal@nija.trading
+- Phone: 425-756-0283
 - Mailing Address: NIJA AI Trading LLC, 1209 Orange Street, Wilmington, Delaware 19801, United States (c/o Registered Agent).
 
 ## 15. Acknowledgment
@@ -854,6 +855,7 @@ For questions about these Terms, please contact:
 
 **NIJA Support**  
 Email: support@nija-trading.com  
+Business Phone: 425-756-0283  
 Legal Inquiries: legal@nija-trading.com  
 Technical Support: technical@nija-trading.com  
 Billing Questions: billing@nija-trading.com
