@@ -93,6 +93,39 @@ def test_patched_heartbeat_refuses_tick_during_release(monkeypatch) -> None:
     assert runtime.tick_calls == 0
 
 
+def test_stale_release_does_not_publish_process_release_marker(monkeypatch) -> None:
+    module = _module()
+    fake_module = ModuleType("bot.entrypoint_writer_authority_stale_release_test")
+
+    class Authority:
+        def __init__(self) -> None:
+            self._stop = threading.Event()
+            self._heartbeat_thread = None
+            self.release_calls = 0
+
+        def _owns_published_authority_env(self):
+            return False, "acquired_at_mismatch"
+
+        def _heartbeat_tick(self):
+            return True, ""
+
+        def release(self) -> bool:
+            self.release_calls += 1
+            return False
+
+    fake_module.EntrypointWriterAuthority = Authority
+    monkeypatch.delenv("NIJA_WRITER_RELEASE_IN_PROGRESS", raising=False)
+    monkeypatch.delenv("NIJA_WRITER_RELEASE_OWNER", raising=False)
+
+    assert module._patch_entrypoint_authority_module(fake_module) is True
+    runtime = Authority()
+
+    assert runtime.release() is False
+    assert runtime._stop.is_set()
+    assert runtime.release_calls == 1
+    assert "NIJA_WRITER_RELEASE_IN_PROGRESS" not in os.environ
+
+
 def test_release_guard_source_requires_heartbeat_quiescence() -> None:
     module = _module()
     source = open(module.__file__, encoding="utf-8").read()

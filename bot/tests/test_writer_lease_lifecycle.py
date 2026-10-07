@@ -22,6 +22,7 @@ import os
 import sys
 import threading
 import time
+import importlib.util
 import unittest
 from unittest.mock import MagicMock, patch, call
 
@@ -538,14 +539,159 @@ class TestLeaseLossDetection(_Base):
         os.environ["NIJA_WRITER_INSTANCE_ID"] = rt._instance_id
         os.environ["NIJA_WRITER_LOCK_ACQUIRED_AT"] = str(newer_acquired_at)
         os.environ["NIJA_WRITER_LEASE_ACQUIRED"] = "1"
+        os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"] = "1"
+        os.environ["NIJA_WRITER_HEARTBEAT_ALIVE_TS"] = "newer-heartbeat"
         os.environ["NIJA_WRITER_STATE"] = "ACTIVE"
+        os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "1"
+        os.environ["NIJA_EXECUTION_ACTIVE"] = "true"
 
-        released = rt.release()
+        with (
+            patch.object(rt, "_notify_runtime_reconciliation") as reconcile,
+            patch.object(rt, "_schedule_unhandled_loss_restart") as restart,
+        ):
+            released = rt.release()
 
         self.assertFalse(released)
         self.assertEqual(os.environ.get("NIJA_WRITER_FENCING_TOKEN"), rt._token)
         self.assertEqual(os.environ.get("NIJA_WRITER_LEASE_ACQUIRED"), "1")
+        self.assertEqual(os.environ.get("NIJA_WRITER_HEARTBEAT_ACTIVE"), "1")
+        self.assertEqual(os.environ.get("NIJA_WRITER_HEARTBEAT_ALIVE_TS"), "newer-heartbeat")
         self.assertEqual(os.environ.get("NIJA_WRITER_STATE"), "ACTIVE")
+        self.assertEqual(os.environ.get("NIJA_RUNTIME_EXECUTION_AUTHORITY"), "1")
+        self.assertEqual(os.environ.get("NIJA_EXECUTION_ACTIVE"), "true")
+        reconcile.assert_not_called()
+        restart.assert_not_called()
+
+    def _wrapped_runtime(self, *, delete_result=0, delete_side_effect=None):
+        source = os.path.join(_BOT_DIR, "entrypoint_writer_authority.py")
+        spec = importlib.util.spec_from_file_location(
+            "test_v53_v55_release_entrypoint_writer_authority", source
+        )
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        self.addCleanup(sys.modules.pop, spec.name, None)
+        spec.loader.exec_module(module)
+
+        from bot import writer_release_state_consistency_v53_patch as v53
+        from bot import writer_recovery_callback_guard_v55_patch as v55
+
+        self.assertTrue(v53._patch_entrypoint_writer_authority(module))
+        self.assertTrue(v55._patch_entrypoint_module(module))
+        release = module.EntrypointWriterAuthority.release
+        self.assertTrue(getattr(release, v55._RELEASE_PATCH, False))
+        self.assertTrue(getattr(release.__wrapped__, v53._PATCH_ATTR, False))
+
+        runtime = module.EntrypointWriterAuthority()
+        runtime._token = "17"
+        runtime._generation = 23
+        runtime._instance_id = "test-inst-A"
+        runtime._acquired_at = 100.0
+        runtime._lock_key = "test-lock"
+        runtime._meta_key = "test-meta"
+        runtime._fencing_key = "test-fence"
+        runtime._lock_value = "17:owner"
+        runtime._result = module.EntrypointWriterAuthorityResult(
+            acquired=True,
+            token="17",
+            generation=23,
+            instance_id="test-inst-A",
+            lock_key="test-lock",
+        )
+        runtime._client = MagicMock()
+        runtime._client.eval.return_value = delete_result
+        if delete_side_effect is not None:
+            runtime._client.eval.side_effect = delete_side_effect
+        runtime._notify_runtime_reconciliation = MagicMock()
+        runtime._schedule_unhandled_loss_restart = MagicMock()
+        module._get_heartbeat_state = lambda: MagicMock()
+        os.environ["NIJA_WRITER_FENCING_TOKEN"] = runtime._token
+        os.environ["NIJA_WRITER_LEASE_GENERATION"] = str(runtime._generation)
+        os.environ["NIJA_WRITER_INSTANCE_ID"] = runtime._instance_id
+        os.environ["NIJA_WRITER_LOCK_ACQUIRED_AT"] = str(runtime._acquired_at)
+        os.environ["NIJA_WRITER_LEASE_ACQUIRED"] = "1"
+        os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"] = "1"
+        os.environ["NIJA_WRITER_HEARTBEAT_ALIVE_TS"] = "owner-heartbeat"
+        os.environ["NIJA_WRITER_STATE"] = "ACTIVE"
+        os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "1"
+        os.environ["NIJA_EXECUTION_ACTIVE"] = "true"
+        return module, runtime
+
+    def test_v53_v55_wrapped_stale_release_has_no_global_side_effects(self):
+        module, runtime = self._wrapped_runtime()
+        os.environ["NIJA_WRITER_LOCK_ACQUIRED_AT"] = str(runtime._acquired_at + 1.0)
+        seak = MagicMock()
+        kernel = MagicMock()
+        kernel.get_seak.return_value = seak
+        with patch.dict(sys.modules, {"bot.single_execution_authority_kernel": kernel}):
+            released = runtime.release()
+
+        self.assertFalse(released)
+        self.assertTrue(runtime.lost)
+        self.assertTrue(runtime._stop.is_set())
+        self.assertEqual(os.environ["NIJA_WRITER_STATE"], "ACTIVE")
+        self.assertEqual(os.environ["NIJA_WRITER_LEASE_ACQUIRED"], "1")
+        self.assertEqual(os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"], "1")
+        self.assertEqual(os.environ["NIJA_WRITER_HEARTBEAT_ALIVE_TS"], "owner-heartbeat")
+        self.assertEqual(os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"], "1")
+        self.assertEqual(os.environ["NIJA_EXECUTION_ACTIVE"], "true")
+        runtime._notify_runtime_reconciliation.assert_not_called()
+        runtime._schedule_unhandled_loss_restart.assert_not_called()
+        seak.emergency_halt.assert_not_called()
+
+    def test_v53_v55_release_preserves_owner_appearing_during_compare_delete(self):
+        readiness = {"ready": True}
+
+        def publish_new_owner(*_args):
+            os.environ["NIJA_WRITER_FENCING_TOKEN"] = "new-token"
+            os.environ["NIJA_WRITER_LEASE_GENERATION"] = "24"
+            os.environ["NIJA_WRITER_INSTANCE_ID"] = "new-instance"
+            os.environ["NIJA_WRITER_LOCK_ACQUIRED_AT"] = "101.0"
+            os.environ["NIJA_WRITER_LEASE_ACQUIRED"] = "1"
+            os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"] = "1"
+            os.environ["NIJA_WRITER_HEARTBEAT_ALIVE_TS"] = "new-heartbeat"
+            os.environ["NIJA_WRITER_STATE"] = "ACTIVE"
+            os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "1"
+            os.environ["NIJA_EXECUTION_ACTIVE"] = "true"
+            readiness["ready"] = True
+            return 0
+
+        _module, runtime = self._wrapped_runtime(delete_side_effect=publish_new_owner)
+        readiness["ready"] = False
+        self.assertFalse(runtime.release())
+
+        self.assertEqual(os.environ["NIJA_WRITER_FENCING_TOKEN"], "new-token")
+        self.assertEqual(os.environ["NIJA_WRITER_LEASE_GENERATION"], "24")
+        self.assertEqual(os.environ["NIJA_WRITER_LOCK_ACQUIRED_AT"], "101.0")
+        self.assertEqual(os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"], "1")
+        self.assertEqual(os.environ["NIJA_WRITER_HEARTBEAT_ALIVE_TS"], "new-heartbeat")
+        self.assertEqual(os.environ["NIJA_WRITER_STATE"], "ACTIVE")
+        self.assertEqual(os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"], "1")
+        self.assertEqual(os.environ["NIJA_EXECUTION_ACTIVE"], "true")
+        self.assertTrue(readiness["ready"])
+        runtime._notify_runtime_reconciliation.assert_not_called()
+        runtime._schedule_unhandled_loss_restart.assert_not_called()
+
+    def test_v53_v55_current_owner_release_reconciles(self):
+        _module, runtime = self._wrapped_runtime(delete_result=1)
+
+        self.assertTrue(runtime.release())
+
+        self.assertEqual(os.environ["NIJA_WRITER_LEASE_ACQUIRED"], "0")
+        self.assertEqual(os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"], "0")
+        self.assertEqual(os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"], "0")
+        self.assertEqual(os.environ["NIJA_EXECUTION_ACTIVE"], "false")
+        runtime._notify_runtime_reconciliation.assert_called_once_with("writer_released")
+
+    def test_v53_v55_current_owner_compare_delete_failure_fails_closed(self):
+        _module, runtime = self._wrapped_runtime(delete_result=0)
+
+        self.assertFalse(runtime.release())
+
+        self.assertEqual(os.environ["NIJA_WRITER_LEASE_ACQUIRED"], "0")
+        self.assertEqual(os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"], "0")
+        self.assertEqual(os.environ["NIJA_EXECUTION_ACTIVE"], "false")
+        runtime._notify_runtime_reconciliation.assert_called_once_with("writer_released")
 
 
 # ---------------------------------------------------------------------------

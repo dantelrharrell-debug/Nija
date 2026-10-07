@@ -46,6 +46,17 @@ def _fail_closed() -> None:
     os.environ["NIJA_EXECUTION_ACTIVE"] = "false"
 
 
+def _owns_published_authority(runtime: Any) -> bool:
+    checker = getattr(runtime, "_owns_published_authority_env", None)
+    if not callable(checker):
+        return True
+    try:
+        owns, _detail = checker()
+        return bool(owns)
+    except Exception:
+        return False
+
+
 def _bot_main() -> ModuleType | None:
     module = sys.modules.get("bot.bot_main")
     if isinstance(module, ModuleType):
@@ -283,11 +294,16 @@ def _patch_entrypoint_module(module: ModuleType) -> bool:
             setter = getattr(stop, "set", None)
             if callable(setter):
                 setter()
-            _fail_closed()
+            owns_published = _owns_published_authority(self)
+            if owns_published:
+                _fail_closed()
             LOGGER.info(
                 "WRITER_RECOVERY_V55_RELEASE_QUIESCED marker=%s "
-                "stop_before_lost=true execution_fail_closed=true",
+                "stop_before_lost=true execution_fail_closed=%s "
+                "stale_globals_preserved=%s",
                 MARKER,
+                str(owns_published).lower(),
+                str(not owns_published).lower(),
             )
             return original_release(self, *args, **kwargs)
 

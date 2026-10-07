@@ -41,14 +41,29 @@ _IMPORTLIB_FLAG = "_NIJA_WRITER_RELEASE_STATE_V53_IMPORTLIB_HOOK"
 _TARGETS = {"bot.entrypoint_writer_authority", "entrypoint_writer_authority"}
 
 
-def _invalidate_local_release_state(runtime: Any) -> None:
+def _invalidate_local_release_state(
+    runtime: Any, *, clear_process_state: bool = True
+) -> None:
     lost = getattr(runtime, "_lost", None)
     setter = getattr(lost, "set", None)
     if callable(setter):
         setter()
+    if not clear_process_state:
+        return
     os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "0"
     os.environ["NIJA_EXECUTION_ACTIVE"] = "false"
     os.environ["NIJA_WRITER_RELEASE_STATE_V53_INVALIDATED"] = "1"
+
+
+def _owns_published_authority(runtime: Any) -> bool:
+    checker = getattr(runtime, "_owns_published_authority_env", None)
+    if not callable(checker):
+        return True
+    try:
+        owns, _detail = checker()
+        return bool(owns)
+    except Exception:
+        return False
 
 
 def _patch_entrypoint_writer_authority(module: ModuleType) -> bool:
@@ -65,21 +80,25 @@ def _patch_entrypoint_writer_authority(module: ModuleType) -> bool:
 
     @wraps(original)
     def release(self: Any, *args: Any, **kwargs: Any):
-        # Invalidate local authority before heartbeat shutdown / Redis deletion,
-        # so no concurrent reader can observe an intentionally released writer
-        # as still acquired. Do not call _mark_lost(): intentional release must
-        # not invoke loss callbacks or SEAK emergency-halt semantics.
-        _invalidate_local_release_state(self)
-        result = original(self, *args, **kwargs)
-        # Preserve fail-closed state even if a legacy release wrapper mutates
-        # environment variables after the canonical release returns.
-        _invalidate_local_release_state(self)
+        # Always invalidate this runtime locally before release, but only publish
+        # process-wide execution state after the canonical ownership checks run.
+        _invalidate_local_release_state(self, clear_process_state=False)
+        try:
+            result = original(self, *args, **kwargs)
+        finally:
+            owns_published = _owns_published_authority(self)
+            if owns_published:
+                _invalidate_local_release_state(self)
         LOGGER.critical(
             "WRITER_RELEASE_STATE_V53_INVALIDATED marker=%s acquired=%s lost=%s "
-            "execution_authority=0 execution_active=false reacquire_requires_redis=true",
+            "publish_global=%s execution_authority=%s execution_active=%s "
+            "reacquire_requires_redis=true",
             MARKER,
             str(bool(getattr(self, "acquired", False))).lower(),
             str(bool(getattr(self, "lost", False))).lower(),
+            str(owns_published).lower(),
+            "0" if owns_published else "preserved",
+            "false" if owns_published else "preserved",
         )
         return result
 
