@@ -161,12 +161,21 @@ class KillSwitch:
         client = self._redis_client()
         if client is None:
             return False
+        reason = str(activation_record.get("reason") or "")
+        source = str(activation_record.get("source") or "")
+        timestamp = str(activation_record.get("timestamp") or "")
+        fingerprint_material = f"{source.strip().upper()}|{reason.strip()}|{timestamp.strip()}"
+        incident_id = hashlib.sha256(fingerprint_material.encode("utf-8")).hexdigest()[:24]
         payload = {
             "is_active": True,
-            "reason": str(activation_record.get("reason") or ""),
-            "source": str(activation_record.get("source") or ""),
-            "timestamp": str(activation_record.get("timestamp") or ""),
-            "schema": 1,
+            "reason": reason,
+            "source": source,
+            "timestamp": timestamp,
+            "origin_source": source,
+            "origin_reason": reason,
+            "origin_timestamp": timestamp,
+            "incident_id": incident_id,
+            "schema": 2,
         }
         try:
             # A FILE_SYSTEM "Kill switch file detected" activation is a replay
@@ -299,11 +308,16 @@ return ARGV[1]
         if client is None:
             return False
         try:
+            existing = self._read_durable_stop() or {}
             payload = {
                 "is_active": False,
                 "reason": str(reason or ""),
                 "timestamp": datetime.now(timezone.utc).isoformat(),
-                "schema": 1,
+                "origin_source": str(existing.get("origin_source") or existing.get("source") or ""),
+                "origin_reason": str(existing.get("origin_reason") or existing.get("reason") or ""),
+                "origin_timestamp": str(existing.get("origin_timestamp") or existing.get("timestamp") or ""),
+                "incident_id": str(existing.get("incident_id") or ""),
+                "schema": max(2, int(existing.get("schema") or 0)),
             }
             client.set(self.DURABLE_REDIS_KEY, json.dumps(payload, sort_keys=True))
             verify = client.get(self.DURABLE_REDIS_KEY)
