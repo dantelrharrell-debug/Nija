@@ -196,11 +196,12 @@ def _retry_recovery() -> None:
             continue
         try:
             v409 = importlib.import_module("bot.runtime_drawdown_portfolio_equity_v409_patch")
-            if _RECOVERY_COMPLETE.is_set():
-                return
-            if v409._recover_exact_false_drawdown_stop():
-                _RECOVERY_COMPLETE.set()
-                return
+            with v409._LOCK:
+                if _RECOVERY_COMPLETE.is_set():
+                    return
+                if v409._recover_exact_false_drawdown_stop():
+                    _RECOVERY_COMPLETE.set()
+                    return
         except Exception:
             LOGGER.exception(
                 "DRAWDOWN_V414_RETRY_ERROR marker=%s fail_closed=true execution_authority_unchanged=true",

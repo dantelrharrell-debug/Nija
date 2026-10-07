@@ -54,6 +54,7 @@ class DrawdownRecoveryRetryV414Tests(unittest.TestCase):
             _config=types.SimpleNamespace(halt_pct=20.0),
         )
         self.v409 = types.ModuleType("bot.runtime_drawdown_portfolio_equity_v409_patch")
+        self.v409._LOCK = threading.RLock()
         self.v409._capital_authority_matches = lambda raw: (
             abs(raw - self.ca_total) <= max(1.0, self.ca_total * 0.02), self.ca_total,
         )
@@ -101,7 +102,8 @@ class DrawdownRecoveryRetryV414Tests(unittest.TestCase):
         return self.redis_clear_ok
 
     def _install_v409(self) -> bool:
-        self.v409._recover_exact_false_drawdown_stop()
+        with self.v409._LOCK:
+            self.v409._recover_exact_false_drawdown_stop()
         return True
 
     def _causal_activation(self, status: dict) -> tuple[str, str]:
@@ -243,6 +245,21 @@ class DrawdownRecoveryRetryV414Tests(unittest.TestCase):
         self.ks.deactivate.assert_called_once()
         self.assertTrue(self.v414.install())
         self.ks.deactivate.assert_called_once()
+
+    def test_worker_serializes_recovery_with_v409_installation_lock(self) -> None:
+        self._hydrate()
+        recovery = Mock(return_value=True)
+        self.v409._recover_exact_false_drawdown_stop = recovery
+        lock = Mock()
+        lock.__enter__ = Mock()
+        lock.__exit__ = Mock()
+        self.v409._LOCK = lock
+        with patch.object(self.v414._RECOVERY_COMPLETE, "wait", return_value=False):
+            self.v414._retry_recovery()
+        lock.__enter__.assert_called_once()
+        lock.__exit__.assert_called_once()
+        recovery.assert_called_once()
+        self.assertTrue(self.v414._RECOVERY_COMPLETE.is_set())
 
     def test_missing_positions_stale_capital_or_contradictory_equity_fail_closed(self) -> None:
         self._hydrate()
