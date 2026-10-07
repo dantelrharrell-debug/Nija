@@ -247,6 +247,7 @@ We are not liable for failures due to circumstances beyond our control.
 For questions about these Terms:
 
 **General Support:** support@nija-trading.com  
+**Business Phone:** 425-756-0283  
 **Legal Inquiries:** legal@nija-trading.com  
 **Technical Support:** technical@nija-trading.com  
 **Billing Questions:** billing@nija-trading.com
