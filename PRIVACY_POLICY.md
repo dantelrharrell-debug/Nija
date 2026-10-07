@@ -202,7 +202,7 @@ If you have questions about this Privacy Policy, please contact us:
 **Privacy Questions:** privacy@nija-trading.com  
 **General Support:** support@nija-trading.com  
 **Data Requests:** data@nija-trading.com  
-**Business Phone:** 425-756-0283
+**Business Phone:** 425-765-0283
 
 For comprehensive support options, see our [Customer Support](SUPPORT.md) page.
 
