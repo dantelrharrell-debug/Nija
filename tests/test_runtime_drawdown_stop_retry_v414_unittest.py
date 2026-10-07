@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import sys
 import tempfile
 import threading
@@ -30,12 +31,15 @@ class DrawdownRecoveryRetryV414Tests(unittest.TestCase):
             "source": "FILE_SYSTEM",
             "reason": "Kill switch file detected",
             "timestamp": "2026-10-06T18:32:01.539636+00:00",
+            "schema": 1,
         }
         self.redis_value = json.dumps(self.stop_record)
         self.redis_clear_ok = True
         redis = Mock()
+        redis.eval.side_effect = self._redis_compare_and_set
         redis.get.side_effect = lambda key: self.redis_value
         redis.set.side_effect = self._redis_set
+        self.redis = redis
         redis_patch = patch.object(KillSwitch, "_redis_client", return_value=redis)
         redis_patch.start()
         self.addCleanup(redis_patch.stop)
@@ -49,6 +53,7 @@ class DrawdownRecoveryRetryV414Tests(unittest.TestCase):
         self.ca_total = 600.0
         self.holding_value = 176.0
         self.position_proof = True
+        self.snapshot_fresh = True
         self.cb = types.SimpleNamespace(
             _current_equity=0.0, _peak_equity=600.0,
             _config=types.SimpleNamespace(halt_pct=20.0),
@@ -61,6 +66,9 @@ class DrawdownRecoveryRetryV414Tests(unittest.TestCase):
         self.v409._authoritative_coinbase_holding_value = Mock(
             side_effect=lambda: (self.position_proof, self.holding_value, ("ETH-USD",), "test_position_proof"),
         )
+        broker = object()
+        self.v409._canonical_manager = lambda: object()
+        self.v409._platform_coinbase = lambda manager: broker
         self.v409._reclassify_false_halt_if_proven = Mock(return_value=False)
         self.v409._recover_exact_false_drawdown_stop = lambda: False
         self.v409.install = self._install_v409
@@ -72,6 +80,15 @@ class DrawdownRecoveryRetryV414Tests(unittest.TestCase):
             "bot.kill_switch_persistence_provenance_v143_patch": types.SimpleNamespace(
                 _causal_activation_from_status=self._causal_activation,
             ),
+            "bot.runtime_authoritative_position_coverage_v285_patch": types.SimpleNamespace(
+                _snapshot_status=lambda current_broker: (
+                    self.snapshot_fresh,
+                    "fresh_snapshot" if self.snapshot_fresh else "stale_snapshot",
+                    (),
+                    1.0,
+                    2,
+                ),
+            ),
             "bot.trading_state_machine": types.SimpleNamespace(
                 get_state_machine=lambda: self.state,
                 TradingState=types.SimpleNamespace(EMERGENCY_STOP="EMERGENCY_STOP", OFF="OFF"),
@@ -82,7 +99,13 @@ class DrawdownRecoveryRetryV414Tests(unittest.TestCase):
         module_patch = patch.dict(sys.modules, modules)
         module_patch.start()
         self.addCleanup(module_patch.stop)
-        env_patch = patch.dict("os.environ", {"NIJA_KILL_SWITCH": "false"})
+        env_patch = patch.dict(
+            "os.environ",
+            {
+                "NIJA_KILL_SWITCH": "false",
+                "NIJA_ALLOW_PROVEN_LEGACY_STOP_RECOVERY": "0",
+            },
+        )
         env_patch.start()
         self.addCleanup(env_patch.stop)
         self.ks = KillSwitch(base_path=temp.name)
@@ -100,6 +123,19 @@ class DrawdownRecoveryRetryV414Tests(unittest.TestCase):
         if self.redis_clear_ok:
             self.redis_value = value
         return self.redis_clear_ok
+
+    def _redis_compare_and_set(
+        self,
+        script: str,
+        key_count: int,
+        key: str,
+        expected: str,
+        replacement: str,
+    ) -> int:
+        if self.redis_value != expected:
+            return 0
+        self.redis_value = replacement
+        return 1
 
     def _install_v409(self) -> bool:
         with self.v409._LOCK:
@@ -133,7 +169,70 @@ class DrawdownRecoveryRetryV414Tests(unittest.TestCase):
         self.v409._authoritative_coinbase_holding_value.assert_not_called()
         self._assert_stopped()
 
+    def test_operator_gate_is_required_after_one_time_redis_annotation(self) -> None:
+        self._hydrate()
+        self.assertTrue(self.v414._install_v409_guarded_recovery())
+
+        self.assertFalse(self.v409._recover_exact_false_drawdown_stop())
+        annotated = json.loads(self.redis_value)
+        self.assertTrue(annotated["is_active"])
+        self.assertEqual(annotated["schema"], 2)
+        self.assertEqual(annotated["origin_source"], "GlobalDrawdownCircuitBreaker")
+        self.assertEqual(
+            annotated["origin_reason"],
+            "GlobalDrawdownCircuitBreaker: HALT level reached (drawdown=20.31%, equity=$617.89)",
+        )
+        self.assertTrue(annotated["incident_id"])
+        self.assertEqual(annotated["timestamp"], self.stop_record["timestamp"])
+        self.redis.eval.assert_called_once()
+        self.ks.deactivate.assert_not_called()
+        self._assert_stopped()
+
+        self.assertFalse(self.v409._recover_exact_false_drawdown_stop())
+        self.assertEqual(self.redis.eval.call_count, 1)
+        self.ks.deactivate.assert_not_called()
+
+    def test_stale_authoritative_snapshot_blocks_migration_and_deactivation(self) -> None:
+        self._hydrate()
+        self.snapshot_fresh = False
+        self.assertTrue(self.v414._install_v409_guarded_recovery())
+
+        self.assertFalse(self.v409._recover_exact_false_drawdown_stop())
+        self.assertEqual(json.loads(self.redis_value)["schema"], 1)
+        self.redis.eval.assert_not_called()
+        self.ks.deactivate.assert_not_called()
+        self._assert_stopped()
+
+    def test_operator_history_blocks_legacy_annotation(self) -> None:
+        self._hydrate()
+        self.ks._activation_history.append(
+            {
+                "source": "UI",
+                "reason": "operator stop after incident",
+                "timestamp": "2026-10-06T19:00:00+00:00",
+            }
+        )
+        self.assertTrue(self.v414._install_v409_guarded_recovery())
+
+        self.assertFalse(self.v409._recover_exact_false_drawdown_stop())
+        self.assertEqual(json.loads(self.redis_value)["schema"], 1)
+        self.redis.eval.assert_not_called()
+        self.ks.deactivate.assert_not_called()
+        self._assert_stopped()
+
+    def test_redis_compare_and_set_race_blocks_legacy_annotation(self) -> None:
+        self._hydrate()
+        self.redis.eval.side_effect = None
+        self.redis.eval.return_value = 0
+        self.assertTrue(self.v414._install_v409_guarded_recovery())
+
+        self.assertFalse(self.v409._recover_exact_false_drawdown_stop())
+        self.assertEqual(json.loads(self.redis_value)["schema"], 1)
+        self.ks.deactivate.assert_not_called()
+        self._assert_stopped()
+
     def test_worker_waits_for_hydration_then_recovers_and_terminates(self) -> None:
+        os.environ["NIJA_ALLOW_PROVEN_LEGACY_STOP_RECOVERY"] = "1"
         self.assertTrue(self.v414._install_v409_guarded_recovery())
         guarded_recovery = Mock(wraps=self.v409._recover_exact_false_drawdown_stop)
         self.v409._recover_exact_false_drawdown_stop = guarded_recovery
@@ -163,6 +262,7 @@ class DrawdownRecoveryRetryV414Tests(unittest.TestCase):
         self.assertFalse(Path(self.ks._kill_file).exists())
         self.assertFalse(json.loads(self.redis_value)["is_active"])
         self.assertTrue(any("DRAWDOWN_V414_FALSE_KILL_SWITCH_CLEARED" in line for line in logs.output))
+        self.assertTrue(any("LEGACY_KILL_SWITCH_V1_MIGRATION_APPLIED" in line for line in logs.output))
         self.assertEqual(self.cb._config.halt_pct, 20.0)
         self.assertEqual(self.cb._peak_equity, 600.0)
         self.assertEqual(self.readiness, {"execution_ready": False, "capital_ready": False})
@@ -173,10 +273,14 @@ class DrawdownRecoveryRetryV414Tests(unittest.TestCase):
         self.ks.deactivate.assert_called_once()
 
     def test_recovery_accepts_raw_breaker_series(self) -> None:
+        os.environ["NIJA_ALLOW_PROVEN_LEGACY_STOP_RECOVERY"] = "1"
         self._hydrate()
         self.assertTrue(self.v414._install_v409_guarded_recovery())
         self.assertTrue(self.v409._recover_exact_false_drawdown_stop())
         self.assertFalse(self.ks.is_active())
+        self.ks.deactivate.assert_called_once()
+        self.assertFalse(self.v409._recover_exact_false_drawdown_stop())
+        self.ks.deactivate.assert_called_once()
 
     def test_manual_and_unrelated_filesystem_stops_never_clear(self) -> None:
         self._hydrate()
@@ -194,6 +298,7 @@ class DrawdownRecoveryRetryV414Tests(unittest.TestCase):
                 self._assert_stopped()
 
     def test_durable_clear_failure_stays_active_and_can_retry(self) -> None:
+        os.environ["NIJA_ALLOW_PROVEN_LEGACY_STOP_RECOVERY"] = "1"
         self._hydrate()
         self.redis_clear_ok = False
         self.v409._reclassify_false_halt_if_proven.side_effect = (
@@ -208,6 +313,7 @@ class DrawdownRecoveryRetryV414Tests(unittest.TestCase):
         self.assertEqual(self.ks.deactivate.call_count, 2)
 
     def test_deactivate_success_without_inactive_local_stop_is_not_recovery(self) -> None:
+        os.environ["NIJA_ALLOW_PROVEN_LEGACY_STOP_RECOVERY"] = "1"
         self._hydrate()
         self.ks.deactivate = Mock(return_value=True)
         self.assertTrue(self.v414._install_v409_guarded_recovery())
@@ -215,6 +321,7 @@ class DrawdownRecoveryRetryV414Tests(unittest.TestCase):
         self._assert_stopped()
 
     def test_worker_retries_redis_failure_and_exits_on_confirmed_success(self) -> None:
+        os.environ["NIJA_ALLOW_PROVEN_LEGACY_STOP_RECOVERY"] = "1"
         self._hydrate()
         self.redis_clear_ok = False
         self.assertTrue(self.v414._install_v409_guarded_recovery())
@@ -239,6 +346,7 @@ class DrawdownRecoveryRetryV414Tests(unittest.TestCase):
         self.assertFalse(self.ks.is_active())
 
     def test_startup_success_does_not_start_retry_worker(self) -> None:
+        os.environ["NIJA_ALLOW_PROVEN_LEGACY_STOP_RECOVERY"] = "1"
         self._hydrate()
         self.assertTrue(self.v414.install())
         self.assertIsNone(self.v414._RETRY_THREAD)

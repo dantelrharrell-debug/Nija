@@ -66,98 +66,38 @@ def test_unparseable_or_impossible_reference_fails_closed() -> None:
     )[0] is False
 
 
-def test_oct6_incident_restores_only_exact_lost_drawdown_cause() -> None:
-    status = {
-        "recent_history": [
-            {
-                "reason": "Kill switch file detected",
-                "source": "FILE_SYSTEM",
-                "timestamp": "2026-10-06T14:55:23.027303+00:00",
-            }
-        ]
+def test_oct6_legacy_replay_requires_exact_active_schema_v1_identity() -> None:
+    legacy = {
+        "is_active": True,
+        "source": "FILE_SYSTEM",
+        "reason": "Kill switch file detected",
+        "timestamp": "2026-10-06T14:55:23.027303+00:00",
+        "schema": 1,
     }
-    restored = v414._incident_20261006_causal_activation(
-        status,
-        "v143_provenance_blocked:origin_unavailable",
-        "PROVENANCE_BOUNDARY",
-    )
-    assert restored == (
-        "GlobalDrawdownCircuitBreaker: HALT level reached (drawdown=20.31%, equity=$617.89)",
-        "GlobalDrawdownCircuitBreaker",
-    )
+    assert v414._is_legacy_oct6_replay(legacy) is True
+    assert v414._is_legacy_oct6_replay({**legacy, "schema": 2}) is False
+    assert v414._is_legacy_oct6_replay({**legacy, "is_active": False}) is False
+    assert v414._is_legacy_oct6_replay(
+        {**legacy, "timestamp": "2026-10-06T14:55:23.027304+00:00"}
+    ) is False
 
 
-def test_oct6_incident_accepts_durable_replay_timestamp_on_rollout() -> None:
-    status = {
-        "recent_history": [
-            {
-                "reason": "Kill switch file detected",
-                "source": "FILE_SYSTEM",
-                "timestamp": "2026-10-06T15:12:17.039356+00:00",
-            }
-        ]
+def test_oct6_migrated_identity_is_exact_and_immutable() -> None:
+    migrated = {
+        "is_active": True,
+        "source": "FILE_SYSTEM",
+        "reason": "Kill switch file detected",
+        "timestamp": "2026-10-06T14:55:23.027303+00:00",
+        "schema": 2,
+        "origin_source": "GlobalDrawdownCircuitBreaker",
+        "origin_reason": "GlobalDrawdownCircuitBreaker: HALT level reached (drawdown=20.31%, equity=$617.89)",
+        "origin_timestamp": "2026-10-06T14:55:23.027303+00:00",
+        "incident_id": v414._INCIDENT_20261006_ID,
     }
-    restored = v414._incident_20261006_causal_activation(
-        status,
-        "v143_provenance_blocked:origin_unavailable",
-        "PROVENANCE_BOUNDARY",
-    )
-    assert restored == (
-        "GlobalDrawdownCircuitBreaker: HALT level reached (drawdown=20.31%, equity=$617.89)",
-        "GlobalDrawdownCircuitBreaker",
-    )
-
-
-def test_oct6_incident_accepts_live_replacement_instance_replay() -> None:
-    status = {
-        "recent_history": [
-            {
-                "reason": "Kill switch file detected",
-                "source": "FILE_SYSTEM",
-                "timestamp": "2026-10-06T18:32:01.539636+00:00",
-            }
-        ]
-    }
-    restored = v414._incident_20261006_causal_activation(
-        status,
-        "v143_provenance_blocked:origin_unavailable",
-        "PROVENANCE_BOUNDARY",
-    )
-    assert restored == (
-        "GlobalDrawdownCircuitBreaker: HALT level reached (drawdown=20.31%, equity=$617.89)",
-        "GlobalDrawdownCircuitBreaker",
-    )
-
-
-def test_oct6_incident_rejects_other_filesystem_stops() -> None:
-    wrong_time = {
-        "recent_history": [
-            {
-                "reason": "Kill switch file detected",
-                "source": "FILE_SYSTEM",
-                "timestamp": "2026-10-06T14:55:23.027304+00:00",
-            }
-        ]
-    }
-    manual = {
-        "recent_history": [
-            {
-                "reason": "Owner emergency stop",
-                "source": "MANUAL",
-                "timestamp": "2026-10-06T14:55:23.027303+00:00",
-            }
-        ]
-    }
-    assert v414._incident_20261006_causal_activation(
-        wrong_time,
-        "v143_provenance_blocked:origin_unavailable",
-        "PROVENANCE_BOUNDARY",
-    ) is None
-    assert v414._incident_20261006_causal_activation(
-        manual,
-        "v143_provenance_blocked:origin_unavailable",
-        "PROVENANCE_BOUNDARY",
-    ) is None
+    assert v414._is_migrated_oct6_stop(migrated) is True
+    assert v414._is_migrated_oct6_stop(
+        {**migrated, "incident_id": "different-incident"}
+    ) is False
 
 
 
@@ -167,6 +107,6 @@ def test_recovery_requires_confirmed_durable_deactivation_contract() -> None:
     source = Path("bot/runtime_drawdown_stop_provenance_v414_patch.py").read_text(
         encoding="utf-8"
     )
-    assert "deactivated = bool(" in source
-    assert "if not deactivated or bool(ks.is_active()):" in source
+    assert "deactivated = ks.deactivate(" in source
+    assert "if deactivated is not True or bool(ks.is_active()) or not durable_inactive:" in source
     assert "durable_deactivation_not_confirmed" in source
