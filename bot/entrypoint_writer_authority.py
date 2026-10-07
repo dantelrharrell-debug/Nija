@@ -66,9 +66,23 @@ except ImportError:
 _TRUE = {"1", "true", "yes", "on", "enabled", "y"}
 _GENERATION_KEY_DEFAULT = "nija:lease:generation"
 # Serializes process-global writer lineage publication with release-side
-# ownership checks and mutations. RLock allows nested canonical helpers to
-# re-check ownership while the transaction is held.
-_PUBLISHED_AUTHORITY_LOCK = threading.RLock()
+# ownership checks and mutations. The writer module can transiently exist under
+# both its package and compatibility import names before alias convergence, so
+# keep this lock on builtins to ensure both module objects share one lock.
+_PUBLISHED_AUTHORITY_LOCK_ATTR = "_NIJA_ENTRYPOINT_WRITER_PUBLICATION_LOCK"
+_PUBLISHED_AUTHORITY_LOCK = getattr(
+    builtins, _PUBLISHED_AUTHORITY_LOCK_ATTR, None
+)
+if not (
+    callable(getattr(_PUBLISHED_AUTHORITY_LOCK, "acquire", None))
+    and callable(getattr(_PUBLISHED_AUTHORITY_LOCK, "release", None))
+):
+    _PUBLISHED_AUTHORITY_LOCK = threading.RLock()
+    setattr(
+        builtins,
+        _PUBLISHED_AUTHORITY_LOCK_ATTR,
+        _PUBLISHED_AUTHORITY_LOCK,
+    )
 
 
 def _truthy(name: str, default: str = "false") -> bool:
