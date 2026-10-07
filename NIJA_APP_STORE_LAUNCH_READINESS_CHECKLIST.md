@@ -328,7 +328,7 @@ This comprehensive checklist ensures NIJA is fully prepared for submission to bo
   - [ ] Note: No actual trading will occur in review
 
 - [ ] **Contact Information**
-  - [ ] Phone number for App Review team
+  - [x] Phone number for App Review team: +1 425-756-0283
   - [ ] Email for App Review team
   - [ ] Response time commitment
 
@@ -875,7 +875,7 @@ These items MUST be completed before submission:
 
 ### Support
 
-- **Emergency Contact**: [Phone/Email]
+- **Emergency Contact**: +1 425-756-0283
 - **Legal Counsel**: [Contact]
 - **Apple Support**: https://developer.apple.com/support/
 - **Google Support**: https://support.google.com/googleplay/android-developer/
