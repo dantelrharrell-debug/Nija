@@ -174,23 +174,55 @@ def _module_alias_identity(names: tuple[str, ...]) -> str:
 def _capital_provider_chain_diagnostics(details: dict[str, str]) -> None:
     root_name = "preactivation_readiness_convergence_v16_patch"
     package_name = "bot.preactivation_readiness_convergence_v16_patch"
-    details["v16_alias_identity"] = _module_alias_identity((root_name, package_name))
-    v16_name = root_name if isinstance(sys.modules.get(root_name), type(sys)) else package_name
-    v16 = sys.modules.get(v16_name)
-    if not isinstance(v16, type(sys)):
-        details["v16_reader_module"] = "not_loaded"
-        details["v358_reader_module"] = "not_loaded"
-        details["v358_collector"] = "not_loaded"
-        return
-    details["v16_reader_module"] = v16_name
-    details["v358_reader_module"] = v16_name
-    v358 = sys.modules.get("bot.runtime_capital_readiness_mode_decoupling_v358_patch")
-    collector = getattr(v16, "_collect_proofs", None)
-    details["v358_collector"] = (
-        "installed" if bool(getattr(collector, "_nija_v358_capital_mode_decoupled", False))
-        else "unavailable" if v358 is not None
-        else "not_loaded"
+    names = (root_name, package_name)
+    details["v16_alias_identity"] = _module_alias_identity(names)
+
+    loaded = [
+        name for name in names
+        if isinstance(sys.modules.get(name), type(sys))
+    ]
+    # v134 imports the root alias first on every read, then falls back to the
+    # package alias. Report that current binding independently from v358.
+    details["v16_reader_module"] = loaded[0] if loaded else "not_loaded"
+
+    v358_loaded = (
+        sys.modules.get("bot.runtime_capital_readiness_mode_decoupling_v358_patch")
+        is not None
     )
+    installed_on: list[str] = []
+    collector_ids: list[str] = []
+    for name in names:
+        module = sys.modules.get(name)
+        if not isinstance(module, type(sys)):
+            continue
+        collector = getattr(module, "_collect_proofs", None)
+        if callable(collector) and bool(
+            getattr(collector, "_nija_v358_capital_mode_decoupled", False)
+        ):
+            installed_on.append(name)
+            collector_ids.append(f"{id(collector):x}")
+
+    if installed_on:
+        details["v358_reader_module"] = ",".join(installed_on)
+        details["v358_collector"] = "installed"
+        details["v358_collector_identity"] = ",".join(collector_ids)
+    else:
+        details["v358_reader_module"] = "unknown" if v358_loaded else "not_loaded"
+        details["v358_collector"] = "unproven" if v358_loaded else "not_loaded"
+        details["v358_collector_identity"] = "unknown"
+
+
+def _encoded_proof_exception_type(proof: Mapping[str, Any]) -> str:
+    """Return only an encoded v16 exception type, never its message."""
+    for field in ("error", "authority_error"):
+        raw = str(proof.get(field, "") or "").strip()
+        if not raw:
+            continue
+        exc_type = raw.split(":", 1)[0].strip()
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.]*", exc_type):
+            return exc_type[:96]
+        return "encoded_error"
+    return "none"
 
 
 def _proof_rejection_category(proof: Mapping[str, Any]) -> str:
@@ -228,6 +260,7 @@ def _capital_proof_diagnostic() -> tuple[bool, dict[str, str]]:
         "v16_reader_module": "not_loaded",
         "v358_reader_module": "not_loaded",
         "v358_collector": "not_loaded",
+        "v358_collector_identity": "not_loaded",
         "proof_rejection": "provider_unavailable",
         "proof_exception": "none",
     }
@@ -270,6 +303,9 @@ def _capital_proof_diagnostic() -> tuple[bool, dict[str, str]]:
                 details["proof_rejection"] = "proof_shape"
                 return False, details
             proof_dict = dict(proof)
+            encoded_exception = _encoded_proof_exception_type(proof_dict)
+            if encoded_exception != "none":
+                details["proof_exception"] = encoded_exception
             is_accepted = bool(accepted(proof_dict))
             details["proof_rejection"] = "none" if is_accepted else _proof_rejection_category(proof_dict)
             return is_accepted, details
@@ -742,7 +778,7 @@ def _install_v409_guarded_recovery() -> bool:
             else:
                 causal_reason, causal_source = _causal_activation(status)
             provenance_match = _exact_drawdown_source(causal_reason, causal_source)
-            _recovery_diagnostic(
+            provenance_transition_logged = _recovery_diagnostic(
                 "durable_incident",
                 status="provenance_matched" if provenance_match else "provenance_rejected",
                 incident_identity=(
