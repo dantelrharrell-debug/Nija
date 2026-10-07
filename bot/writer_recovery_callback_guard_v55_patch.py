@@ -294,9 +294,11 @@ def _patch_entrypoint_module(module: ModuleType) -> bool:
             setter = getattr(stop, "set", None)
             if callable(setter):
                 setter()
-            owns_published = _owns_published_authority(self)
-            if owns_published:
-                _fail_closed()
+            publication_lock = getattr(self, "_published_authority_lock", _LOCK)
+            with publication_lock:
+                owns_published = _owns_published_authority(self)
+                if owns_published:
+                    _fail_closed()
             LOGGER.info(
                 "WRITER_RECOVERY_V55_RELEASE_QUIESCED marker=%s "
                 "stop_before_lost=true execution_fail_closed=%s "
