@@ -515,3 +515,35 @@ def test_converge_sets_env_auth_to_1_after_successful_commit(monkeypatch):
     assert sm._activation_committed is True
     assert sm._execution_authority is True
     assert sm._can_dispatch_trades is True
+
+
+def test_generated_emergency_stop_help_text_is_not_manual_operator_stop(monkeypatch, tmp_path):
+    """The kill-file's own 'Manually restart' instructions are not provenance."""
+    _live_env(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "EMERGENCY_STOP").write_text(
+        """ALL TRADING OPERATIONS HAVE BEEN HALTED
+Reason: Kill switch file detected
+To resume trading:
+1. Delete this file
+2. Investigate and resolve the issue
+3. Manually restart the bot
+4. Carefully monitor initial trades
+""",
+        encoding="utf-8",
+    )
+    unsafe, token = patch._unsafe_emergency_reason_present()
+    assert unsafe is False
+    assert token == ""
+
+
+def test_explicit_operator_source_in_state_file_remains_fail_closed(monkeypatch, tmp_path):
+    _live_env(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".nija_kill_switch_state.json").write_text(
+        '{"is_active": true, "history": [{"source": "OPERATOR", "reason": "owner requested emergency stop"}]}',
+        encoding="utf-8",
+    )
+    unsafe, token = patch._unsafe_emergency_reason_present()
+    assert unsafe is True
+    assert token == "operator"
