@@ -161,12 +161,21 @@ class KillSwitch:
         client = self._redis_client()
         if client is None:
             return False
+        reason = str(activation_record.get("reason") or "")
+        source = str(activation_record.get("source") or "")
+        timestamp = str(activation_record.get("timestamp") or "")
+        fingerprint_material = f"{source.strip().upper()}|{reason.strip()}|{timestamp.strip()}"
+        incident_id = hashlib.sha256(fingerprint_material.encode("utf-8")).hexdigest()[:24]
         payload = {
             "is_active": True,
-            "reason": str(activation_record.get("reason") or ""),
-            "source": str(activation_record.get("source") or ""),
-            "timestamp": str(activation_record.get("timestamp") or ""),
-            "schema": 1,
+            "reason": reason,
+            "source": source,
+            "timestamp": timestamp,
+            "origin_source": source,
+            "origin_reason": reason,
+            "origin_timestamp": timestamp,
+            "incident_id": incident_id,
+            "schema": 2,
         }
         try:
             # A FILE_SYSTEM "Kill switch file detected" activation is a replay
@@ -234,9 +243,34 @@ return ARGV[1]
                 )
                 return True
 
-            client.set(self.DURABLE_REDIS_KEY, json.dumps(payload, sort_keys=True))
+            incoming_json = json.dumps(payload, sort_keys=True)
+            script = """
+local current = redis.call('GET', KEYS[1])
+if current then
+  local ok, decoded = pcall(cjson.decode, current)
+  if ok and type(decoded) == 'table' and decoded['is_active'] == true then
+    local incoming_ok, incoming = pcall(cjson.decode, ARGV[1])
+    if incoming_ok and type(incoming) == 'table' then
+      incoming['origin_source'] = decoded['origin_source'] or decoded['source'] or incoming['origin_source']
+      incoming['origin_reason'] = decoded['origin_reason'] or decoded['reason'] or incoming['origin_reason']
+      incoming['origin_timestamp'] = decoded['origin_timestamp'] or decoded['timestamp'] or incoming['origin_timestamp']
+      incoming['incident_id'] = decoded['incident_id'] or incoming['incident_id']
+      ARGV[1] = cjson.encode(incoming)
+    end
+  end
+end
+redis.call('SET', KEYS[1], ARGV[1])
+return ARGV[1]
+"""
+            client.eval(
+                script,
+                1,
+                self.DURABLE_REDIS_KEY,
+                incoming_json,
+            )
             logger.critical(
-                "DURABLE_KILL_SWITCH_REDIS_PERSISTED key=%s source=%s reason=%s",
+                "DURABLE_KILL_SWITCH_REDIS_PERSISTED key=%s source=%s reason=%s "
+                "atomic_origin_preservation=true",
                 self.DURABLE_REDIS_KEY,
                 payload["source"] or "unknown",
                 payload["reason"] or "unknown",
@@ -299,11 +333,16 @@ return ARGV[1]
         if client is None:
             return False
         try:
+            existing = self._read_durable_stop() or {}
             payload = {
                 "is_active": False,
                 "reason": str(reason or ""),
                 "timestamp": datetime.now(timezone.utc).isoformat(),
-                "schema": 1,
+                "origin_source": str(existing.get("origin_source") or existing.get("source") or ""),
+                "origin_reason": str(existing.get("origin_reason") or existing.get("reason") or ""),
+                "origin_timestamp": str(existing.get("origin_timestamp") or existing.get("timestamp") or ""),
+                "incident_id": str(existing.get("incident_id") or ""),
+                "schema": max(2, int(existing.get("schema") or 0)),
             }
             client.set(self.DURABLE_REDIS_KEY, json.dumps(payload, sort_keys=True))
             verify = client.get(self.DURABLE_REDIS_KEY)

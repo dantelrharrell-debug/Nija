@@ -19,15 +19,34 @@ class FakeRedis:
 
     def eval(self, script, numkeys, key, incoming_json):
         current = self.data.get(key)
+        incoming = json.loads(incoming_json)
         if current:
             try:
                 decoded = json.loads(current)
             except Exception:
                 decoded = None
             if isinstance(decoded, dict) and bool(decoded.get("is_active")):
-                return current
-        self.data[key] = incoming_json
-        return incoming_json
+                if (
+                    str(incoming.get("source") or "").strip().upper() == "FILE_SYSTEM"
+                    and str(incoming.get("reason") or "")
+                    .strip()
+                    .lower()
+                    .startswith("kill switch file detected")
+                ):
+                    return current
+                incoming["origin_source"] = (
+                    decoded.get("origin_source") or decoded.get("source") or incoming.get("origin_source")
+                )
+                incoming["origin_reason"] = (
+                    decoded.get("origin_reason") or decoded.get("reason") or incoming.get("origin_reason")
+                )
+                incoming["origin_timestamp"] = (
+                    decoded.get("origin_timestamp") or decoded.get("timestamp") or incoming.get("origin_timestamp")
+                )
+                incoming["incident_id"] = decoded.get("incident_id") or incoming.get("incident_id")
+        stored_json = json.dumps(incoming, sort_keys=True)
+        self.data[key] = stored_json
+        return stored_json
 
 
 class RacingFakeRedis(FakeRedis):
@@ -209,6 +228,41 @@ def test_filesystem_replay_changes_local_timestamp_not_incident_identity(tmp_pat
     assert after["origin_timestamp"] == origin_timestamp
     assert after["origin_source"] == "GlobalDrawdownCircuitBreaker"
     assert after["origin_reason"] == before["origin_reason"]
+
+
+def test_new_activation_preserves_active_incident_origin_identity(tmp_path, monkeypatch):
+    shared = FakeRedis()
+    monkeypatch.setattr(KillSwitch, "_redis_client", lambda self: shared)
+
+    second = KillSwitch(base_path=str(tmp_path / "second"))
+    original = {
+        "is_active": True,
+        "reason": "initial risk halt",
+        "source": "GlobalDrawdownCircuitBreaker",
+        "timestamp": "2026-10-07T02:00:00+00:00",
+        "origin_source": "GlobalDrawdownCircuitBreaker",
+        "origin_reason": "initial risk halt",
+        "origin_timestamp": "2026-10-07T02:00:00+00:00",
+        "incident_id": "original-incident",
+        "schema": 2,
+    }
+    shared.set(second.DURABLE_REDIS_KEY, json.dumps(original, sort_keys=True))
+
+    assert second._persist_durable_stop(
+        {
+            "reason": "later manual activation",
+            "source": "MANUAL",
+            "timestamp": "2026-10-07T03:00:00+00:00",
+        }
+    )
+
+    updated = json.loads(shared.get(second.DURABLE_REDIS_KEY))
+    assert updated["source"] == "MANUAL"
+    assert updated["reason"] == "later manual activation"
+    assert updated["origin_source"] == original["origin_source"]
+    assert updated["origin_reason"] == original["origin_reason"]
+    assert updated["origin_timestamp"] == original["origin_timestamp"]
+    assert updated["incident_id"] == original["incident_id"]
 
 
 def test_durable_clear_preserves_incident_audit_identity(tmp_path, monkeypatch):
