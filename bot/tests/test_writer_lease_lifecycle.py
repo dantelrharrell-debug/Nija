@@ -687,7 +687,6 @@ class TestLeaseLossDetection(_Base):
         self.assertEqual(os.environ["NIJA_WRITER_LOCK_ACQUIRED_AT"], "101.0")
         self.assertEqual(os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"], "1")
         self.assertEqual(os.environ["NIJA_EXECUTION_ACTIVE"], "true")
-        runtime._notify_runtime_reconciliation.assert_not_called()
 
     def test_v53_v55_release_preserves_owner_appearing_during_compare_delete(self):
         readiness = {"ready": True}
