@@ -233,7 +233,7 @@ def test_explicit_manual_source_still_blocks_recovery(monkeypatch):
     """Real operator/manual provenance must remain fail-closed."""
     _live_env(monkeypatch)
     monkeypatch.setenv(
-        "NIJA_OPERATOR_EMERGENCY_STOP_REASON",
+        "NIJA_EMERGENCY_STOP_REASON",
         "source=MANUAL reason=owner requested emergency stop",
     )
 
