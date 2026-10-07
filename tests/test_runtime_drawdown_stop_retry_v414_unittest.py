@@ -425,6 +425,55 @@ class DrawdownRecoveryRetryV414Tests(unittest.TestCase):
         self.assertIsNone(self.v414._RETRY_THREAD)
         self.ks.deactivate.assert_called_once()
 
+    def test_zero_initialized_breaker_uses_fresh_canonical_capital_without_clearing_gate(self) -> None:
+        self.canonical_capital_ready = True
+        self.ca.is_fresh.return_value = True
+        self.cb._current_equity = 0.0
+        self.assertTrue(self.v414._install_v409_guarded_recovery())
+
+        with self.assertLogs(self.v414.LOGGER, level="CRITICAL") as logs:
+            self.assertFalse(self.v409._recover_exact_false_drawdown_stop())
+
+        annotated = json.loads(self.redis_value)
+        self.assertEqual(annotated["schema"], 2)
+        self.assertEqual(annotated["origin_source"], "GlobalDrawdownCircuitBreaker")
+        self.assertTrue(any(
+            "phase=breaker_equity_reference" in line
+            and "status=canonical_current_proof" in line
+            for line in logs.output
+        ))
+        self.ks.deactivate.assert_not_called()
+        self._assert_stopped()
+
+    def test_zero_initialized_breaker_can_recover_only_with_operator_gate(self) -> None:
+        os.environ["NIJA_ALLOW_PROVEN_LEGACY_STOP_RECOVERY"] = "1"
+        self.canonical_capital_ready = True
+        self.ca.is_fresh.return_value = True
+        self.cb._current_equity = 0.0
+        self.assertTrue(self.v414._install_v409_guarded_recovery())
+
+        self.assertTrue(self.v409._recover_exact_false_drawdown_stop())
+        self.ks.deactivate.assert_called_once()
+        self.assertFalse(self.ks.is_active())
+        self.assertFalse(json.loads(self.redis_value)["is_active"])
+
+    def test_nonzero_contradictory_breaker_still_fails_closed(self) -> None:
+        os.environ["NIJA_ALLOW_PROVEN_LEGACY_STOP_RECOVERY"] = "1"
+        self.canonical_capital_ready = True
+        self.ca.is_fresh.return_value = True
+        self.cb._current_equity = 400.0
+        self.assertTrue(self.v414._install_v409_guarded_recovery())
+
+        with self.assertLogs(self.v414.LOGGER, level="CRITICAL") as logs:
+            self.assertFalse(self.v409._recover_exact_false_drawdown_stop())
+
+        self.assertTrue(any(
+            "rejection=capital_series_mismatch" in line for line in logs.output
+        ))
+        self.ks.deactivate.assert_not_called()
+        self.assertEqual(json.loads(self.redis_value)["schema"], 1)
+        self._assert_stopped()
+
     def test_recovery_accepts_raw_breaker_series(self) -> None:
         os.environ["NIJA_ALLOW_PROVEN_LEGACY_STOP_RECOVERY"] = "1"
         self._hydrate()
