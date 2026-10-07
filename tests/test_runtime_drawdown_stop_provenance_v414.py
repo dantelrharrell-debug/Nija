@@ -108,6 +108,27 @@ def test_oct6_incident_accepts_durable_replay_timestamp_on_rollout() -> None:
     )
 
 
+def test_oct6_incident_accepts_live_replacement_instance_replay() -> None:
+    status = {
+        "recent_history": [
+            {
+                "reason": "Kill switch file detected",
+                "source": "FILE_SYSTEM",
+                "timestamp": "2026-10-06T18:32:01.539636+00:00",
+            }
+        ]
+    }
+    restored = v414._incident_20261006_causal_activation(
+        status,
+        "v143_provenance_blocked:origin_unavailable",
+        "PROVENANCE_BOUNDARY",
+    )
+    assert restored == (
+        "GlobalDrawdownCircuitBreaker: HALT level reached (drawdown=20.31%, equity=$617.89)",
+        "GlobalDrawdownCircuitBreaker",
+    )
+
+
 def test_oct6_incident_rejects_other_filesystem_stops() -> None:
     wrong_time = {
         "recent_history": [
