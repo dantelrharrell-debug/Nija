@@ -155,3 +155,75 @@ def test_atomic_filesystem_replay_cannot_overwrite_concurrent_risk_activation(tm
     durable = json.loads(shared.get(ks.DURABLE_REDIS_KEY))
     assert durable == risk
     assert durable["source"] == "GlobalDrawdownCircuitBreaker"
+
+
+def test_durable_stop_carries_immutable_origin_identity(tmp_path, monkeypatch):
+    """Issue #2934 contract: durable risk cause survives replacement containers."""
+    path = tmp_path / "node"
+    path.mkdir()
+    shared = FakeRedis()
+    monkeypatch.setattr(KillSwitch, "_redis_client", lambda self: shared)
+
+    ks = KillSwitch(base_path=str(path))
+    ks.activate(
+        "GlobalDrawdownCircuitBreaker: HALT level reached (drawdown=20.31%, equity=$617.89)",
+        "GlobalDrawdownCircuitBreaker",
+    )
+
+    payload = json.loads(shared.get(ks.DURABLE_REDIS_KEY))
+    assert payload["is_active"] is True
+    assert payload["origin_source"] == "GlobalDrawdownCircuitBreaker"
+    assert "drawdown=20.31%" in payload["origin_reason"]
+    assert payload["origin_timestamp"]
+    assert payload["incident_id"]
+    assert int(payload["schema"]) >= 2
+
+
+def test_filesystem_replay_changes_local_timestamp_not_incident_identity(tmp_path, monkeypatch):
+    """A rollout may create a new local marker but must not create a new incident."""
+    first_dir = tmp_path / "first"
+    first_dir.mkdir()
+    shared = FakeRedis()
+    monkeypatch.setattr(KillSwitch, "_redis_client", lambda self: shared)
+
+    first = KillSwitch(base_path=str(first_dir))
+    first.activate(
+        "GlobalDrawdownCircuitBreaker: HALT level reached (drawdown=20.31%, equity=$617.89)",
+        "GlobalDrawdownCircuitBreaker",
+    )
+    before = json.loads(shared.get(first.DURABLE_REDIS_KEY))
+    incident_id = before["incident_id"]
+    origin_timestamp = before["origin_timestamp"]
+
+    second_dir = tmp_path / "second"
+    second_dir.mkdir()
+    second = KillSwitch(base_path=str(second_dir))
+    assert second.is_active() is True
+
+    after = json.loads(shared.get(second.DURABLE_REDIS_KEY))
+    assert after["incident_id"] == incident_id
+    assert after["origin_timestamp"] == origin_timestamp
+    assert after["origin_source"] == "GlobalDrawdownCircuitBreaker"
+    assert after["origin_reason"] == before["origin_reason"]
+
+
+def test_durable_clear_preserves_incident_audit_identity(tmp_path, monkeypatch):
+    """Normal deactivation may clear active state without erasing incident identity."""
+    path = tmp_path / "node"
+    path.mkdir()
+    shared = FakeRedis()
+    monkeypatch.setattr(KillSwitch, "_redis_client", lambda self: shared)
+
+    ks = KillSwitch(base_path=str(path))
+    ks.activate(
+        "GlobalDrawdownCircuitBreaker: HALT level reached (drawdown=20.31%, equity=$617.89)",
+        "GlobalDrawdownCircuitBreaker",
+    )
+    active = json.loads(shared.get(ks.DURABLE_REDIS_KEY))
+    incident_id = active["incident_id"]
+
+    assert ks.deactivate("verified proof-gated recovery") is True
+    cleared = json.loads(shared.get(ks.DURABLE_REDIS_KEY))
+    assert cleared["is_active"] is False
+    assert cleared["incident_id"] == incident_id
+    assert cleared["origin_source"] == "GlobalDrawdownCircuitBreaker"
