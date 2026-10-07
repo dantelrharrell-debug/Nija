@@ -2387,38 +2387,38 @@ class EntrypointWriterAuthority:
                         self._notify_runtime_reconciliation("writer_release_heartbeat_not_quiesced")
                 return False
 
-        with self._state_lock:
-            released = False
-            if self._client is not None and self._lock_key and self._lock_value:
-                script = """
-                local current = redis.call('GET', KEYS[1])
-                if not current or current ~= ARGV[1] then return 0 end
-                redis.call('DEL', KEYS[1])
-                if KEYS[2] and KEYS[2] ~= '' then redis.call('DEL', KEYS[2]) end
-                return 1
-                """
-                try:
-                    released = bool(
-                        int(
-                            self._client.eval(
-                                script,
-                                2,
-                                self._lock_key,
-                                self._meta_key,
-                                self._lock_value,
+        with self._published_authority_lock:
+            with self._state_lock:
+                released = False
+                if self._client is not None and self._lock_key and self._lock_value:
+                    script = """
+                    local current = redis.call('GET', KEYS[1])
+                    if not current or current ~= ARGV[1] then return 0 end
+                    redis.call('DEL', KEYS[1])
+                    if KEYS[2] and KEYS[2] ~= '' then redis.call('DEL', KEYS[2]) end
+                    return 1
+                    """
+                    try:
+                        released = bool(
+                            int(
+                                self._client.eval(
+                                    script,
+                                    2,
+                                    self._lock_key,
+                                    self._meta_key,
+                                    self._lock_value,
+                                )
+                                or 0
                             )
-                            or 0
                         )
-                    )
-                except Exception as exc:
-                    logger.warning(
-                        "ENTRYPOINT_WRITER_AUTHORITY_RELEASE_FAILED marker=%s err=%s",
-                        _MARKER,
-                        exc,
-                    )
+                    except Exception as exc:
+                        logger.warning(
+                            "ENTRYPOINT_WRITER_AUTHORITY_RELEASE_FAILED marker=%s err=%s",
+                            _MARKER,
+                            exc,
+                        )
 
-            self._heartbeat_thread = None
-            with self._published_authority_lock:
+                self._heartbeat_thread = None
                 current_owner, _ = self._owns_published_authority_env_locked()
                 if current_owner:
                     try:
