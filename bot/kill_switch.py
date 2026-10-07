@@ -243,9 +243,34 @@ return ARGV[1]
                 )
                 return True
 
-            client.set(self.DURABLE_REDIS_KEY, json.dumps(payload, sort_keys=True))
+            incoming_json = json.dumps(payload, sort_keys=True)
+            script = """
+local current = redis.call('GET', KEYS[1])
+if current then
+  local ok, decoded = pcall(cjson.decode, current)
+  if ok and type(decoded) == 'table' and decoded['is_active'] == true then
+    local incoming_ok, incoming = pcall(cjson.decode, ARGV[1])
+    if incoming_ok and type(incoming) == 'table' then
+      incoming['origin_source'] = decoded['origin_source'] or decoded['source'] or incoming['origin_source']
+      incoming['origin_reason'] = decoded['origin_reason'] or decoded['reason'] or incoming['origin_reason']
+      incoming['origin_timestamp'] = decoded['origin_timestamp'] or decoded['timestamp'] or incoming['origin_timestamp']
+      incoming['incident_id'] = decoded['incident_id'] or incoming['incident_id']
+      ARGV[1] = cjson.encode(incoming)
+    end
+  end
+end
+redis.call('SET', KEYS[1], ARGV[1])
+return ARGV[1]
+"""
+            client.eval(
+                script,
+                1,
+                self.DURABLE_REDIS_KEY,
+                incoming_json,
+            )
             logger.critical(
-                "DURABLE_KILL_SWITCH_REDIS_PERSISTED key=%s source=%s reason=%s",
+                "DURABLE_KILL_SWITCH_REDIS_PERSISTED key=%s source=%s reason=%s "
+                "atomic_origin_preservation=true",
                 self.DURABLE_REDIS_KEY,
                 payload["source"] or "unknown",
                 payload["reason"] or "unknown",
