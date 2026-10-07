@@ -23,6 +23,10 @@ recovery function with one that:
 * refuses recovery when provenance, original baseline, current position proof,
   or current corrected equity is insufficient.
 
+After installation, one daemon retries recovery once capital proof is fresh.
+It stops permanently after confirmed durable deactivation; readiness and execution
+proof must still converge through their normal owners.
+
 It never changes drawdown thresholds, fabricates balances/positions/prices,
 forces LIVE_ACTIVE, grants execution authority, or submits/cancels orders.
 """
@@ -30,6 +34,7 @@ from __future__ import annotations
 
 import importlib
 import logging
+import math
 import os
 import re
 import threading
@@ -41,6 +46,9 @@ MARKER = "20260913-runtime-drawdown-stop-provenance-v414"
 _READY_FLAG = "NIJA_RUNTIME_DRAWDOWN_STOP_PROVENANCE_V414_READY"
 _PATCH_ATTR = "_nija_drawdown_stop_provenance_v414"
 _LOCK = threading.RLock()
+_RETRY_THREAD: threading.Thread | None = None
+_RECOVERY_COMPLETE = threading.Event()
+_RETRY_INTERVAL_S = 5.0
 
 # Production incident 2026-10-06: a genuine GlobalDrawdownCircuitBreaker halt
 # was later represented by two exact generic FILE_SYSTEM replay records:
@@ -174,6 +182,32 @@ def _exact_drawdown_source(reason: str, source: str) -> bool:
     )
 
 
+def _capital_proof_current() -> bool:
+    try:
+        ca = importlib.import_module("bot.capital_authority").get_capital_authority()
+        return ca.is_fresh() is True
+    except Exception:
+        return False
+
+
+def _retry_recovery() -> None:
+    while not _RECOVERY_COMPLETE.wait(_RETRY_INTERVAL_S):
+        if not _capital_proof_current():
+            continue
+        try:
+            v409 = importlib.import_module("bot.runtime_drawdown_portfolio_equity_v409_patch")
+            if _RECOVERY_COMPLETE.is_set():
+                return
+            if v409._recover_exact_false_drawdown_stop():
+                _RECOVERY_COMPLETE.set()
+                return
+        except Exception:
+            LOGGER.exception(
+                "DRAWDOWN_V414_RETRY_ERROR marker=%s fail_closed=true execution_authority_unchanged=true",
+                MARKER,
+            )
+
+
 def _install_v409_guarded_recovery() -> bool:
     v409 = importlib.import_module("bot.runtime_drawdown_portfolio_equity_v409_patch")
     current = getattr(v409, "_recover_exact_false_drawdown_stop", None)
@@ -184,6 +218,8 @@ def _install_v409_guarded_recovery() -> bool:
 
     def recover_v414() -> bool:
         try:
+            if _RECOVERY_COMPLETE.is_set() or not _capital_proof_current():
+                return False
             drawdown = importlib.import_module("bot.global_drawdown_circuit_breaker")
             getter = getattr(drawdown, "get_global_drawdown_cb", None)
             cb = getter() if callable(getter) else None
@@ -191,9 +227,7 @@ def _install_v409_guarded_recovery() -> bool:
                 return False
 
             raw = _float(getattr(cb, "_current_equity", 0.0))
-            matches, _ca_total = v409._capital_authority_matches(raw)
-            if not matches:
-                return False
+            matches, ca_total = v409._capital_authority_matches(raw)
             proof_ready, holding_value, symbols, proof_reason = v409._authoritative_coinbase_holding_value()
             if not proof_ready:
                 LOGGER.critical(
@@ -201,8 +235,17 @@ def _install_v409_guarded_recovery() -> bool:
                     MARKER, proof_reason, ",".join(symbols) or "none",
                 )
                 return False
-            corrected = raw + max(0.0, _float(holding_value))
-            if corrected <= 0.0:
+            holding_value = _float(holding_value)
+            if not all(math.isfinite(value) for value in (raw, ca_total, holding_value)):
+                return False
+            if raw <= 0.0 or ca_total <= 0.0 or holding_value < 0.0:
+                return False
+            # v409.update_equity may already have included holdings in the breaker.
+            # Value them exactly once, using the current CapitalAuthority series.
+            corrected = ca_total + holding_value
+            if not math.isfinite(corrected):
+                return False
+            if not matches and abs(raw - corrected) > max(1.0, ca_total * 0.02):
                 return False
 
             kill_module = importlib.import_module("bot.kill_switch")
@@ -229,7 +272,7 @@ def _install_v409_guarded_recovery() -> bool:
 
             config = getattr(cb, "_config", None)
             halt_pct = _float(getattr(config, "halt_pct", 0.0))
-            if halt_pct <= 0.0 or stopped_dd < halt_pct:
+            if not math.isfinite(halt_pct) or halt_pct <= 0.0 or stopped_dd < halt_pct:
                 LOGGER.critical(
                     "DRAWDOWN_V414_RECOVERY_BLOCKED marker=%s reason=original_stop_not_halt stopped_drawdown_pct=%.6f halt_pct=%.6f fail_closed=true",
                     MARKER, stopped_dd, halt_pct,
@@ -262,6 +305,7 @@ def _install_v409_guarded_recovery() -> bool:
                     MARKER,
                 )
                 return False
+            _RECOVERY_COMPLETE.set()
             LOGGER.critical(
                 "DRAWDOWN_V414_FALSE_KILL_SWITCH_CLEARED marker=%s source=%s original_peak=%.8f stopped_equity=%.8f "
                 "current_corrected_equity=%.8f original_reference_drawdown_pct=%.6f halt_pct=%.6f baseline_detail=%s "
@@ -285,6 +329,7 @@ def _install_v409_guarded_recovery() -> bool:
 
 
 def install() -> bool:
+    global _RETRY_THREAD
     with _LOCK:
         try:
             v409 = importlib.import_module("bot.runtime_drawdown_portfolio_equity_v409_patch")
@@ -293,6 +338,12 @@ def install() -> bool:
                 return False
             installer = getattr(v409, "install", None)
             ready = bool(installer()) if callable(installer) else False
+            if ready and not _RECOVERY_COMPLETE.is_set():
+                if _RETRY_THREAD is None or not _RETRY_THREAD.is_alive():
+                    _RETRY_THREAD = threading.Thread(
+                        target=_retry_recovery, name="DrawdownRecoveryV414", daemon=True,
+                    )
+                    _RETRY_THREAD.start()
             os.environ[_READY_FLAG] = "1" if ready else "0"
             LOGGER.critical(
                 "RUNTIME_DRAWDOWN_STOP_PROVENANCE_V414_%s marker=%s v409_installed=%s v143_causal_provenance_required=true "
