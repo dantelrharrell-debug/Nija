@@ -133,6 +133,30 @@ class DrawdownRecoveryRetryV414Tests(unittest.TestCase):
         self.v409._authoritative_coinbase_holding_value.assert_not_called()
         self._assert_stopped()
 
+    def test_startup_without_matching_active_drawdown_stop_does_not_start_worker(self) -> None:
+        self.ks._activation_history = [
+            {"source": "MANUAL", "reason": "Owner emergency stop", "timestamp": self.stop_record["timestamp"]}
+        ]
+        self.assertTrue(self.v414.install())
+        self.assertIsNone(self.v414._RETRY_THREAD)
+        self._assert_stopped()
+
+    def test_startup_with_inactive_stop_does_not_start_worker(self) -> None:
+        self.ks._remove_kill_file()
+        self.ks._is_active = False
+        self.assertTrue(self.v414.install())
+        self.assertIsNone(self.v414._RETRY_THREAD)
+
+    def test_worker_exits_when_active_stop_becomes_unrelated(self) -> None:
+        self.assertTrue(self.v414._install_v409_guarded_recovery())
+        self.ks._activation_history = [
+            {"source": "MANUAL", "reason": "Owner emergency stop", "timestamp": self.stop_record["timestamp"]}
+        ]
+        with patch.object(self.v414._RECOVERY_COMPLETE, "wait", return_value=False):
+            self.v414._retry_recovery()
+        self.v409._authoritative_coinbase_holding_value.assert_not_called()
+        self._assert_stopped()
+
     def test_worker_waits_for_hydration_then_recovers_and_terminates(self) -> None:
         self.assertTrue(self.v414._install_v409_guarded_recovery())
         guarded_recovery = Mock(wraps=self.v409._recover_exact_false_drawdown_stop)

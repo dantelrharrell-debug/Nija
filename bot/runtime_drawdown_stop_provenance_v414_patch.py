@@ -190,8 +190,27 @@ def _capital_proof_current() -> bool:
         return False
 
 
+def _matching_active_drawdown_stop() -> bool | None:
+    try:
+        kill_module = importlib.import_module("bot.kill_switch")
+        ks_getter = getattr(kill_module, "get_kill_switch", None)
+        ks = ks_getter() if callable(ks_getter) else None
+        if ks is None or not bool(ks.is_active()):
+            return False
+        status = dict(ks.get_status() or {})
+        causal_reason, causal_source = _causal_activation(status)
+        return _exact_drawdown_source(causal_reason, causal_source)
+    except Exception:
+        return None
+
+
 def _retry_recovery() -> None:
     while not _RECOVERY_COMPLETE.wait(_RETRY_INTERVAL_S):
+        matching_stop = _matching_active_drawdown_stop()
+        if matching_stop is False:
+            return
+        if matching_stop is None:
+            continue
         if not _capital_proof_current():
             continue
         try:
@@ -340,7 +359,10 @@ def install() -> bool:
             installer = getattr(v409, "install", None)
             ready = bool(installer()) if callable(installer) else False
             if ready and not _RECOVERY_COMPLETE.is_set():
-                if _RETRY_THREAD is None or not _RETRY_THREAD.is_alive():
+                if (
+                    _matching_active_drawdown_stop() is True
+                    and (_RETRY_THREAD is None or not _RETRY_THREAD.is_alive())
+                ):
                     _RETRY_THREAD = threading.Thread(
                         target=_retry_recovery, name="DrawdownRecoveryV414", daemon=True,
                     )
