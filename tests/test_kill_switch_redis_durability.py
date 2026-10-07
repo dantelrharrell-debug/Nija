@@ -224,10 +224,12 @@ def test_durable_clear_preserves_incident_audit_identity(tmp_path, monkeypatch):
         "GlobalDrawdownCircuitBreaker",
     )
     active = json.loads(shared.get(ks.DURABLE_REDIS_KEY))
-    incident_id = active["incident_id"]
+    origin_identity = {
+        key: active[key]
+        for key in ("incident_id", "origin_source", "origin_reason", "origin_timestamp")
+    }
 
     assert ks.deactivate("verified proof-gated recovery") is True
     cleared = json.loads(shared.get(ks.DURABLE_REDIS_KEY))
     assert cleared["is_active"] is False
-    assert cleared["incident_id"] == incident_id
-    assert cleared["origin_source"] == "GlobalDrawdownCircuitBreaker"
+    assert {key: cleared[key] for key in origin_identity} == origin_identity
