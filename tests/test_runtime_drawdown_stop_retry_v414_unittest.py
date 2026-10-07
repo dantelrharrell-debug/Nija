@@ -171,6 +171,7 @@ class DrawdownRecoveryRetryV414Tests(unittest.TestCase):
 
     def test_operator_gate_is_required_after_one_time_redis_annotation(self) -> None:
         self._hydrate()
+        self.ks._activation_history[-1]["timestamp"] = "2026-10-07T03:00:00+00:00"
         self.assertTrue(self.v414._install_v409_guarded_recovery())
 
         self.assertFalse(self.v409._recover_exact_false_drawdown_stop())

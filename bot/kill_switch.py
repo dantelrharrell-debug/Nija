@@ -27,6 +27,7 @@ Date: February 2026
 """
 
 import os
+import hashlib
 import json
 import logging
 import threading

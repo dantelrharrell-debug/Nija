@@ -255,7 +255,7 @@ def _annotate_legacy_oct6_stop(
     if (
         str(latest.get("source") or "").strip().upper() != "FILE_SYSTEM"
         or str(latest.get("reason") or "").strip().lower() != "kill switch file detected"
-        or latest_timestamp not in _INCIDENT_20261006_REPLAY_TIMESTAMPS
+        or not latest_timestamp
     ):
         return None
 
