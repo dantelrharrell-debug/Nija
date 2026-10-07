@@ -8,6 +8,7 @@ on:
       - "bot/broker_manager.py"
       - "bot/runtime_protective_exit_authority_bridge_v337_patch.py"
       - "tests/test_runtime_protective_exit_authority_bridge_v337.py"
+      - "tests/test_runtime_protective_exit_state_machine_bridge_v340.py"
       - "tests/test_runtime_kraken_capital_tail_liveness_v173.py"
       - "tests/test_kill_switch_redis_durability.py"
       - "bot/runtime_drawdown_stop_provenance_v414_patch.py"
@@ -70,6 +71,7 @@ on:
       - "bot/broker_manager.py"
       - "bot/runtime_protective_exit_authority_bridge_v337_patch.py"
       - "tests/test_runtime_protective_exit_authority_bridge_v337.py"
+      - "tests/test_runtime_protective_exit_state_machine_bridge_v340.py"
       - "tests/test_runtime_kraken_capital_tail_liveness_v173.py"
       - "tests/test_kill_switch_redis_durability.py"
       - "bot/runtime_drawdown_stop_provenance_v414_patch.py"
@@ -198,6 +200,7 @@ jobs:
             tests/test_kill_switch_redis_durability.py \
             tests/test_runtime_drawdown_stop_provenance_v414.py \
             tests/test_runtime_protective_exit_authority_bridge_v337.py \
+            tests/test_runtime_protective_exit_state_machine_bridge_v340.py \
             tests/test_runtime_kraken_capital_tail_liveness_v173.py \
             bot/tests/test_funded_okx_capital_convergence_v31.py \
             bot/tests/test_capital_refresh_storm_guard_v29.py \
