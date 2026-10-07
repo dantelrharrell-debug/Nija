@@ -197,8 +197,12 @@ def test_filesystem_replay_changes_local_timestamp_not_incident_identity(tmp_pat
 
     second_dir = tmp_path / "second"
     second_dir.mkdir()
+    (second_dir / KillSwitch.KILL_SWITCH_FILE).write_text("replacement marker", encoding="utf-8")
     second = KillSwitch(base_path=str(second_dir))
     assert second.is_active() is True
+    replay = second.get_status()["recent_history"][-1]
+    assert replay["source"] == "FILE_SYSTEM"
+    assert replay["timestamp"] != origin_timestamp
 
     after = json.loads(shared.get(second.DURABLE_REDIS_KEY))
     assert after["incident_id"] == incident_id
