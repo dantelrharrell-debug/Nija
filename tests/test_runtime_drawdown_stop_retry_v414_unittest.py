@@ -57,7 +57,7 @@ class DrawdownRecoveryRetryV414Tests(unittest.TestCase):
         self.position_proof = True
         self.snapshot_fresh = True
         self.cb = types.SimpleNamespace(
-            _current_equity=0.0, _peak_equity=600.0,
+            _current_equity=0.0, _peak_equity=600.0, _initialised=False,
             _config=types.SimpleNamespace(halt_pct=20.0),
         )
         self.v409 = types.ModuleType("bot.runtime_drawdown_portfolio_equity_v409_patch")
@@ -456,6 +456,25 @@ class DrawdownRecoveryRetryV414Tests(unittest.TestCase):
         self.ks.deactivate.assert_called_once()
         self.assertFalse(self.ks.is_active())
         self.assertFalse(json.loads(self.redis_value)["is_active"])
+
+    def test_initialized_zero_breaker_still_fails_closed(self) -> None:
+        os.environ["NIJA_ALLOW_PROVEN_LEGACY_STOP_RECOVERY"] = "1"
+        self.canonical_capital_ready = True
+        self.ca.is_fresh.return_value = True
+        self.cb._current_equity = 0.0
+        self.cb._initialised = True
+        self.assertTrue(self.v414._install_v409_guarded_recovery())
+
+        with self.assertLogs(self.v414.LOGGER, level="CRITICAL") as logs:
+            self.assertFalse(self.v409._recover_exact_false_drawdown_stop())
+
+        self.assertTrue(any(
+            "rejection=initialized_zero_equity_mismatch" in line
+            for line in logs.output
+        ))
+        self.ks.deactivate.assert_not_called()
+        self.assertEqual(json.loads(self.redis_value)["schema"], 1)
+        self._assert_stopped()
 
     def test_nonzero_contradictory_breaker_still_fails_closed(self) -> None:
         os.environ["NIJA_ALLOW_PROVEN_LEGACY_STOP_RECOVERY"] = "1"
