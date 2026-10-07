@@ -156,7 +156,9 @@ NIJA may update this Privacy Policy as the service, legal requirements, or data 
 
 ## 13. Contact
 
-The final published version will identify NIJA's verified legal entity name, mailing address if legally required, and a monitored privacy contact. Until those details are verified, users should use the official contact/support channel published on `https://nijaaitrading.com`.
+NIJA's verified legal entity is **NIJA AI Trading LLC**.  
+**Business phone:** 425-756-0283  
+For privacy or support requests, use the official contact/support channel published on `https://nijaaitrading.com`. Any legally required mailing address and jurisdiction-specific contact details remain subject to counsel review before publication.
 
 ## Pre-Publication Sign-Off
 
