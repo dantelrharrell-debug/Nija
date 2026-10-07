@@ -47,6 +47,17 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Remove SSH agent identities before tests
+        if: ${{ env.SSH_PRIVATE_KEY != '' }}
+        run: |
+          ssh-add -D
+          if ssh-add -l >/dev/null 2>&1; then
+            echo "::error::SSH identities remain loaded after dependency installation"
+            exit 1
+          fi
+          echo "SSH_AUTH_SOCK=" >> "$GITHUB_ENV"
+          echo "SSH_AGENT_PID=" >> "$GITHUB_ENV"
+
       - name: Run tests
         env:
           GH_TOKEN: ""

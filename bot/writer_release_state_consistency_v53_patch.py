@@ -86,9 +86,11 @@ def _patch_entrypoint_writer_authority(module: ModuleType) -> bool:
         try:
             result = original(self, *args, **kwargs)
         finally:
-            owns_published = _owns_published_authority(self)
-            if owns_published:
-                _invalidate_local_release_state(self)
+            publication_lock = getattr(self, "_published_authority_lock", _LOCK)
+            with publication_lock:
+                owns_published = _owns_published_authority(self)
+                if owns_published:
+                    _invalidate_local_release_state(self)
         LOGGER.critical(
             "WRITER_RELEASE_STATE_V53_INVALIDATED marker=%s acquired=%s lost=%s "
             "publish_global=%s execution_authority=%s execution_active=%s "
