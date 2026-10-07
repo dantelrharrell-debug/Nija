@@ -13,11 +13,6 @@ jobs:
       # Keep ordinary CI Python processes from importing production startup
       # hooks that can start writer, broker, activation, or execution monitors.
       NIJA_DEFER_RUNTIME_SITE_HOOKS: "1"
-      # Repository secrets used by tests when present.
-      GH_TOKEN: ${{ secrets.GH_TOKEN }}
-      COINBASE_API_KEY: ${{ secrets.COINBASE_API_KEY }}
-      COINBASE_API_SECRET: ${{ secrets.COINBASE_API_SECRET }}
-      COINBASE_PEM_CONTENT: ${{ secrets.COINBASE_PEM_CONTENT }}
       # Secrets cannot be referenced directly in a step-level `if:` expression.
       # Copy the optional SSH key into job env and gate on env instead.
       SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
@@ -53,6 +48,12 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run tests
+        env:
+          GH_TOKEN: ""
+          SSH_PRIVATE_KEY: ""
+          COINBASE_API_KEY: ""
+          COINBASE_API_SECRET: ""
+          COINBASE_PEM_CONTENT: ""
         run: |
           set +e
           python scripts/run_unittest_baseline.py \
@@ -69,6 +70,12 @@ jobs:
           tail -n 80 /tmp/nija-unittest-baseline.log
 
       - name: Run mandatory fail-closed safety regressions
+        env:
+          GH_TOKEN: ""
+          SSH_PRIVATE_KEY: ""
+          COINBASE_API_KEY: ""
+          COINBASE_API_SECRET: ""
+          COINBASE_PEM_CONTENT: ""
         run: |
           python -m pytest -q \
             bot/tests/test_runtime_execution_activation_protection_v347.py \

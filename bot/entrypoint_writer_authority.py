@@ -2439,7 +2439,8 @@ class EntrypointWriterAuthority:
                 self._instance_id,
                 os.getpid(),
             )
-            self._notify_runtime_reconciliation("writer_released")
+            if current_owner:
+                self._notify_runtime_reconciliation("writer_released")
             return released or self._local_fallback
 
 

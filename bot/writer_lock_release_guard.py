@@ -138,6 +138,37 @@ def _as_text(value: Any) -> str:
     return str(value or "")
 
 
+def _runtime_lineage_fingerprint(runtime: Any) -> str:
+    values = (
+        str(getattr(runtime, "_token", "") or "").strip(),
+        str(getattr(runtime, "_generation", "") or "").strip(),
+        str(getattr(runtime, "_instance_id", "") or "").strip(),
+        str(getattr(runtime, "_acquired_at", "") or "").strip(),
+    )
+    if not all(values):
+        return ""
+    return hashlib.sha256("|".join(values).encode("utf-8")).hexdigest()
+
+
+def _owns_published_authority(runtime: Any) -> bool:
+    checker = getattr(runtime, "_owns_published_authority_env", None)
+    if not callable(checker):
+        return True
+    try:
+        owns, _detail = checker()
+        return bool(owns)
+    except Exception:
+        return False
+
+
+def _release_in_progress_for_runtime(runtime: Any) -> bool:
+    if not _truthy("NIJA_WRITER_RELEASE_IN_PROGRESS"):
+        return False
+    release_owner = _clean(os.getenv("NIJA_WRITER_RELEASE_OWNER"))
+    current_owner = _runtime_lineage_fingerprint(runtime)
+    return not release_owner or not current_owner or release_owner == current_owner
+
+
 def _entrypoint_modules() -> list[ModuleType]:
     modules: list[ModuleType] = []
     seen: set[int] = set()
@@ -205,13 +236,27 @@ def _patch_entrypoint_authority_module(module: ModuleType) -> bool:
 
     def guarded_tick(self: Any):
         stop = getattr(self, "_stop", None)
-        if _truthy("NIJA_WRITER_RELEASE_IN_PROGRESS") or bool(
+        if _release_in_progress_for_runtime(self) or bool(
             stop is not None and callable(getattr(stop, "is_set", None)) and stop.is_set()
         ):
             return False, "release_in_progress"
         return original_tick(self)
 
     def guarded_release(self: Any) -> bool:
+        owns_published = _owns_published_authority(self)
+        if not owns_published:
+            quiesced, reason = _quiesce_runtime(self, timeout_s=2.0)
+            if not quiesced:
+                logger.error(
+                    "ENTRYPOINT_WRITER_RELEASE_DEFERRED marker=%s reason=%s "
+                    "lock_delete_skipped=true stale_runtime=true",
+                    _MARKER,
+                    reason,
+                )
+                return False
+            return bool(original_release(self))
+
+        os.environ["NIJA_WRITER_RELEASE_OWNER"] = _runtime_lineage_fingerprint(self)
         os.environ["NIJA_WRITER_RELEASE_IN_PROGRESS"] = "1"
         ok, reason = _quiesce_runtime(self, timeout_s=2.0)
         if not ok:
