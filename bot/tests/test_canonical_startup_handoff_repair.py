@@ -213,6 +213,20 @@ class DuplicateImportDefenseTests(unittest.TestCase):
         compat_singleton = getattr(compat_mod, "_SINGLETON", None)
         self.assertIs(pkg_singleton, compat_singleton)
 
+    def test_publication_lock_is_process_global(self) -> None:
+        import builtins
+        import importlib
+
+        pkg_mod = importlib.import_module("bot.entrypoint_writer_authority")
+        lock = getattr(pkg_mod, "_PUBLISHED_AUTHORITY_LOCK")
+        lock_attr = getattr(pkg_mod, "_PUBLISHED_AUTHORITY_LOCK_ATTR")
+
+        self.assertIs(getattr(builtins, lock_attr), lock)
+        runtime_a = pkg_mod.EntrypointWriterAuthority()
+        runtime_b = pkg_mod.EntrypointWriterAuthority()
+        self.assertIs(runtime_a._published_authority_lock, lock)
+        self.assertIs(runtime_b._published_authority_lock, lock)
+
     def test_get_entrypoint_writer_authority_is_idempotent(self) -> None:
         """Two successive calls to get_entrypoint_writer_authority() must return the
         same object."""
