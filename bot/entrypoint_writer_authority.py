@@ -65,6 +65,10 @@ except ImportError:
     )
 _TRUE = {"1", "true", "yes", "on", "enabled", "y"}
 _GENERATION_KEY_DEFAULT = "nija:lease:generation"
+# Serializes process-global writer lineage publication with release-side
+# ownership checks and mutations. RLock allows nested canonical helpers to
+# re-check ownership while the transaction is held.
+_PUBLISHED_AUTHORITY_LOCK = threading.RLock()
 
 
 def _truthy(name: str, default: str = "false") -> bool:
@@ -228,6 +232,7 @@ class EntrypointWriterAuthority:
 
     def __init__(self) -> None:
         self._state_lock = threading.RLock()
+        self._published_authority_lock = _PUBLISHED_AUTHORITY_LOCK
         self._stop = threading.Event()
         self._lost = threading.Event()
         self._heartbeat_thread: Optional[threading.Thread] = None
@@ -604,6 +609,10 @@ class EntrypointWriterAuthority:
         return False, str(detail or "recovery_failed")
 
     def _owns_published_authority_env(self) -> tuple[bool, str]:
+        with _PUBLISHED_AUTHORITY_LOCK:
+            return self._owns_published_authority_env_locked()
+
+    def _owns_published_authority_env_locked(self) -> tuple[bool, str]:
         """Return whether process-global writer authority still belongs to this runtime.
 
         A stale authority object must never clear or downgrade globals published
@@ -675,22 +684,23 @@ class EntrypointWriterAuthority:
             state,
             reason=reason,
         )
-        publish_env = True
-        if self._result is not None and self._result.acquired:
-            publish_env, _ = self._owns_published_authority_env()
-        with self._state_lock:
-            if self._writer_state == state:
+        with _PUBLISHED_AUTHORITY_LOCK:
+            publish_env = True
+            if self._result is not None and self._result.acquired:
+                publish_env, _ = self._owns_published_authority_env_locked()
+            with self._state_lock:
+                if self._writer_state == state:
+                    if publish_env:
+                        os.environ["NIJA_WRITER_STATE"] = state.value
+                        os.environ.setdefault(
+                            "NIJA_WRITER_STATE_SINCE_TS", str(self._writer_state_since)
+                        )
+                    return
+                self._writer_state = state
+                self._writer_state_since = time.time()
                 if publish_env:
                     os.environ["NIJA_WRITER_STATE"] = state.value
-                    os.environ.setdefault(
-                        "NIJA_WRITER_STATE_SINCE_TS", str(self._writer_state_since)
-                    )
-                return
-            self._writer_state = state
-            self._writer_state_since = time.time()
-            if publish_env:
-                os.environ["NIJA_WRITER_STATE"] = state.value
-                os.environ["NIJA_WRITER_STATE_SINCE_TS"] = str(self._writer_state_since)
+                    os.environ["NIJA_WRITER_STATE_SINCE_TS"] = str(self._writer_state_since)
         logger.info(
             "WRITER_STATE_TRANSITION marker=%s state=%s reason=%s publish_env=%s",
             _MARKER,
@@ -1310,39 +1320,40 @@ class EntrypointWriterAuthority:
         return True, "renewal_healthy", age_s, max_age_s
 
     def _publish_env(self, *, scope: str, generation_key: str, fallback: bool) -> None:
-        now = str(time.time())
-        os.environ["NIJA_WRITER_FENCING_TOKEN"] = self._token
-        os.environ["NIJA_WRITER_OWNER_ID"] = self._owner
-        os.environ["NIJA_WRITER_INSTANCE_ID"] = self._instance_id
-        os.environ["NIJA_WRITER_LEASE_GENERATION"] = str(self._generation)
-        os.environ["NIJA_WRITER_GENERATION"] = str(self._generation)
-        os.environ["NIJA_LEASE_GENERATION_KEY"] = str(generation_key)
-        os.environ["NIJA_WRITER_LEASE_ACQUIRED"] = "1"
-        os.environ["NIJA_LOCK_ACQUIRED"] = "true"
-        os.environ["NIJA_WRITER_LOCK_KEY"] = self._lock_key
-        os.environ["NIJA_WRITER_LOCK_META_KEY"] = self._meta_key
-        os.environ["NIJA_WRITER_LOCK_SCOPE"] = scope
-        os.environ["NIJA_WRITER_LOCK_TTL_S"] = str(self._ttl_s)
-        os.environ["NIJA_WRITER_LOCK_ACQUIRED_AT"] = str(self._acquired_at)
-        os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"] = "1"
-        os.environ["NIJA_WRITER_HEARTBEAT_LAST_TS"] = now
-        os.environ["NIJA_WRITER_HEARTBEAT_ALIVE_TS"] = now
-        self._record_successful_lease_renewal()
-        if fallback:
-            os.environ["NIJA_WRITER_FENCING_TOKEN_FALLBACK"] = "1"
-            os.environ["NIJA_LOCK_BYPASS_MODE"] = (
-                "NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK"
-            )
-        else:
-            os.environ.pop("NIJA_WRITER_FENCING_TOKEN_FALLBACK", None)
-            os.environ.pop("NIJA_LOCK_BYPASS_MODE", None)
-        # Record initial heartbeat and advance lifecycle to LEASE_ACQUIRED.
-        try:
-            _hs = _get_heartbeat_state()
-            _hs.record_heartbeat(generation=self._generation)
-            _hs.advance_phase(_Phase.LEASE_ACQUIRED)
-        except Exception:
-            pass
+        with _PUBLISHED_AUTHORITY_LOCK:
+            now = str(time.time())
+            os.environ["NIJA_WRITER_FENCING_TOKEN"] = self._token
+            os.environ["NIJA_WRITER_OWNER_ID"] = self._owner
+            os.environ["NIJA_WRITER_INSTANCE_ID"] = self._instance_id
+            os.environ["NIJA_WRITER_LEASE_GENERATION"] = str(self._generation)
+            os.environ["NIJA_WRITER_GENERATION"] = str(self._generation)
+            os.environ["NIJA_LEASE_GENERATION_KEY"] = str(generation_key)
+            os.environ["NIJA_WRITER_LEASE_ACQUIRED"] = "1"
+            os.environ["NIJA_LOCK_ACQUIRED"] = "true"
+            os.environ["NIJA_WRITER_LOCK_KEY"] = self._lock_key
+            os.environ["NIJA_WRITER_LOCK_META_KEY"] = self._meta_key
+            os.environ["NIJA_WRITER_LOCK_SCOPE"] = scope
+            os.environ["NIJA_WRITER_LOCK_TTL_S"] = str(self._ttl_s)
+            os.environ["NIJA_WRITER_LOCK_ACQUIRED_AT"] = str(self._acquired_at)
+            os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"] = "1"
+            os.environ["NIJA_WRITER_HEARTBEAT_LAST_TS"] = now
+            os.environ["NIJA_WRITER_HEARTBEAT_ALIVE_TS"] = now
+            self._record_successful_lease_renewal()
+            if fallback:
+                os.environ["NIJA_WRITER_FENCING_TOKEN_FALLBACK"] = "1"
+                os.environ["NIJA_LOCK_BYPASS_MODE"] = (
+                    "NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK"
+                )
+            else:
+                os.environ.pop("NIJA_WRITER_FENCING_TOKEN_FALLBACK", None)
+                os.environ.pop("NIJA_LOCK_BYPASS_MODE", None)
+            # Record initial heartbeat and advance lifecycle to LEASE_ACQUIRED.
+            try:
+                _hs = _get_heartbeat_state()
+                _hs.record_heartbeat(generation=self._generation)
+                _hs.advance_phase(_Phase.LEASE_ACQUIRED)
+            except Exception:
+                pass
 
     def _run_runtime_reconciliation(self, trigger: str) -> None:
         try:
@@ -2314,32 +2325,33 @@ class EntrypointWriterAuthority:
 
         self._stop.set()
         self._set_writer_state(WriterState.LOST, reason="release_called")
-        owns_published, ownership_detail = self._owns_published_authority_env()
-        if owns_published:
-            try:
-                from bot.readiness_table import revoke_many
+        with self._published_authority_lock:
+            owns_published, ownership_detail = self._owns_published_authority_env_locked()
+            if owns_published:
+                try:
+                    from bot.readiness_table import revoke_many
 
-                revoke_many(
-                    ("authority_ready", "nonce_ready", "execution_ready"),
-                    reason="writer_authority_release_called",
-                )
-            except Exception:
-                logger.debug(
-                    "ENTRYPOINT_WRITER_AUTHORITY_READINESS_REVOKE_FAILED marker=%s",
+                    revoke_many(
+                        ("authority_ready", "nonce_ready", "execution_ready"),
+                        reason="writer_authority_release_called",
+                    )
+                except Exception:
+                    logger.debug(
+                        "ENTRYPOINT_WRITER_AUTHORITY_READINESS_REVOKE_FAILED marker=%s",
+                        _MARKER,
+                        exc_info=True,
+                    )
+            else:
+                logger.warning(
+                    "ENTRYPOINT_WRITER_STALE_RELEASE_LOCAL_ONLY marker=%s "
+                    "ownership_detail=%s token_prefix=%s generation=%s instance_id=%s "
+                    "readiness_preserved=true",
                     _MARKER,
-                    exc_info=True,
+                    ownership_detail,
+                    self._token[:8],
+                    self._generation,
+                    self._instance_id or "unknown",
                 )
-        else:
-            logger.warning(
-                "ENTRYPOINT_WRITER_STALE_RELEASE_LOCAL_ONLY marker=%s "
-                "ownership_detail=%s token_prefix=%s generation=%s instance_id=%s "
-                "readiness_preserved=true",
-                _MARKER,
-                ownership_detail,
-                self._token[:8],
-                self._generation,
-                self._instance_id or "unknown",
-            )
         heartbeat = self._heartbeat_thread
         if heartbeat is not None and heartbeat is not threading.current_thread():
             if heartbeat.is_alive():
@@ -2360,18 +2372,19 @@ class EntrypointWriterAuthority:
                 # Never delete a lease while its renewal thread may still be in
                 # flight.  Revoke local authority immediately and leave the
                 # Redis key to its TTL (or a later release after quiescence).
-                current_owner, _ = self._owns_published_authority_env()
-                if current_owner:
-                    with self._state_lock:
-                        os.environ["NIJA_WRITER_LEASE_ACQUIRED"] = "0"
-                        os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"] = "0"
-                        os.environ["NIJA_WRITER_HEARTBEAT_ALIVE_TS"] = "0"
-                        os.environ.pop("NIJA_CORE_THREAD_ALIVE", None)
-                        os.environ.pop("NIJA_WRITER_FENCING_TOKEN", None)
-                        os.environ.pop("NIJA_WRITER_GENERATION", None)
-                        os.environ.pop("NIJA_WRITER_FENCING_TOKEN_FALLBACK", None)
-                        os.environ.pop("NIJA_WRITER_LEASE_GENERATION", None)
-                    self._notify_runtime_reconciliation("writer_release_heartbeat_not_quiesced")
+                with self._published_authority_lock:
+                    current_owner, _ = self._owns_published_authority_env_locked()
+                    if current_owner:
+                        with self._state_lock:
+                            os.environ["NIJA_WRITER_LEASE_ACQUIRED"] = "0"
+                            os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"] = "0"
+                            os.environ["NIJA_WRITER_HEARTBEAT_ALIVE_TS"] = "0"
+                            os.environ.pop("NIJA_CORE_THREAD_ALIVE", None)
+                            os.environ.pop("NIJA_WRITER_FENCING_TOKEN", None)
+                            os.environ.pop("NIJA_WRITER_GENERATION", None)
+                            os.environ.pop("NIJA_WRITER_FENCING_TOKEN_FALLBACK", None)
+                            os.environ.pop("NIJA_WRITER_LEASE_GENERATION", None)
+                        self._notify_runtime_reconciliation("writer_release_heartbeat_not_quiesced")
                 return False
 
         with self._state_lock:
@@ -2405,24 +2418,26 @@ class EntrypointWriterAuthority:
                     )
 
             self._heartbeat_thread = None
-            current_owner, _ = self._owns_published_authority_env()
-            if current_owner:
-                try:
-                    _get_heartbeat_state().reset()
-                except Exception:
-                    pass
-                os.environ["NIJA_WRITER_LEASE_ACQUIRED"] = "0"
-                os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"] = "0"
-                os.environ["NIJA_WRITER_HEARTBEAT_ALIVE_TS"] = "0"
-                # Pop rather than set-to-0: NIJA_WRITER_LEASE_ACQUIRED=0 is the
-                # authoritative signal once the lease is explicitly released.
-                os.environ.pop("NIJA_CORE_THREAD_ALIVE", None)
-                os.environ.pop("NIJA_WRITER_FENCING_TOKEN", None)
-                os.environ.pop("NIJA_WRITER_GENERATION", None)
-                os.environ.pop("NIJA_WRITER_FENCING_TOKEN_FALLBACK", None)
-                os.environ.pop("NIJA_WRITER_LEASE_GENERATION", None)
-                os.environ.pop("NIJA_SCAN_START_DEADLINE_ARMED_AT", None)
-                os.environ.pop("NIJA_SCAN_START_DEADLINE_SOURCE", None)
+            with self._published_authority_lock:
+                current_owner, _ = self._owns_published_authority_env_locked()
+                if current_owner:
+                    try:
+                        _get_heartbeat_state().reset()
+                    except Exception:
+                        pass
+                    os.environ["NIJA_WRITER_LEASE_ACQUIRED"] = "0"
+                    os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"] = "0"
+                    os.environ["NIJA_WRITER_HEARTBEAT_ALIVE_TS"] = "0"
+                    # Pop rather than set-to-0: NIJA_WRITER_LEASE_ACQUIRED=0 is the
+                    # authoritative signal once the lease is explicitly released.
+                    os.environ.pop("NIJA_CORE_THREAD_ALIVE", None)
+                    os.environ.pop("NIJA_WRITER_FENCING_TOKEN", None)
+                    os.environ.pop("NIJA_WRITER_GENERATION", None)
+                    os.environ.pop("NIJA_WRITER_FENCING_TOKEN_FALLBACK", None)
+                    os.environ.pop("NIJA_WRITER_LEASE_GENERATION", None)
+                    os.environ.pop("NIJA_SCAN_START_DEADLINE_ARMED_AT", None)
+                    os.environ.pop("NIJA_SCAN_START_DEADLINE_SOURCE", None)
+                    self._notify_runtime_reconciliation("writer_released")
             logger.info(
                 "ENTRYPOINT_WRITER_AUTHORITY_RELEASED marker=%s released=%s "
                 "local_fallback=%s heartbeat_quiesced=true",
@@ -2439,8 +2454,6 @@ class EntrypointWriterAuthority:
                 self._instance_id,
                 os.getpid(),
             )
-            if current_owner:
-                self._notify_runtime_reconciliation("writer_released")
             return released or self._local_fallback
 
 
