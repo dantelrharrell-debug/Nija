@@ -274,6 +274,17 @@ def _install_v409_guarded_recovery() -> bool:
             if ks is None or not bool(ks.is_active()):
                 return False
             status = dict(ks.get_status() or {})
+            history = status.get("recent_history") or status.get("history") or []
+            expected_activation = next(
+                (
+                    record
+                    for record in reversed(history)
+                    if isinstance(record, Mapping) and record.get("source")
+                ),
+                None,
+            )
+            if expected_activation is None:
+                return False
             causal_reason, causal_source = _causal_activation(status)
             if not _exact_drawdown_source(causal_reason, causal_source):
                 LOGGER.critical(
@@ -313,7 +324,8 @@ def _install_v409_guarded_recovery() -> bool:
             # kill-switch recovery proof is anchored exclusively to the original stop.
             v409._reclassify_false_halt_if_proven(cb, corrected)
             deactivated = bool(
-                ks.deactivate(
+                ks.deactivate_if_activation_matches(
+                    expected_activation,
                     "v414 original-stop baseline plus current authoritative portfolio equity proved prior GlobalDrawdownCircuitBreaker HALT false"
                 )
             )

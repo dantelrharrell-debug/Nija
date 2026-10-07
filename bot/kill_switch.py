@@ -66,7 +66,7 @@ class KillSwitch:
         Args:
             base_path: Base directory for kill switch files (default: project root)
         """
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         
         # Determine base path
         if base_path is None:
@@ -513,6 +513,35 @@ To resume trading:
                 logger.error(f"⚠️  Could not transition state machine: {e}")
                 logger.error("   Please use safe_restore_trading.py to restore trading state")
             return True
+
+    def deactivate_if_activation_matches(
+        self,
+        expected_activation: Dict[str, Any],
+        reason: str = "Conditional deactivation",
+    ) -> bool:
+        """Deactivate only if the active stop is still the expected activation."""
+        with self._lock:
+            self._check_file_activation()
+            if not self._is_active:
+                return False
+
+            current_activation = next(
+                (
+                    record
+                    for record in reversed(self._activation_history)
+                    if isinstance(record, dict) and record.get("source")
+                ),
+                None,
+            )
+            identity_fields = ("timestamp", "source", "reason")
+            if current_activation is None or any(
+                not expected_activation.get(field)
+                or current_activation.get(field) != expected_activation.get(field)
+                for field in identity_fields
+            ):
+                return False
+
+            return bool(self.deactivate(reason))
 
     def is_active(self) -> bool:
         """

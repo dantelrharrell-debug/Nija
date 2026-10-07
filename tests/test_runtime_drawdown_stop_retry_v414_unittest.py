@@ -217,6 +217,25 @@ class DrawdownRecoveryRetryV414Tests(unittest.TestCase):
                 self.ks.deactivate.assert_not_called()
                 self._assert_stopped()
 
+    def test_new_manual_activation_racing_recovery_is_not_cleared(self) -> None:
+        self._hydrate()
+        self.assertTrue(self.v414._install_v409_guarded_recovery())
+        conditional_deactivate = self.ks.deactivate_if_activation_matches
+
+        def operator_replaces_stop(expected_activation: dict, reason: str) -> bool:
+            self.ks.deactivate("Operator cleared prior incident stop")
+            self.ks.activate("New manual stop", "MANUAL")
+            return conditional_deactivate(expected_activation, reason)
+
+        self.ks.deactivate_if_activation_matches = operator_replaces_stop
+
+        self.assertFalse(self.v409._recover_exact_false_drawdown_stop())
+        self.assertTrue(self.ks.is_active())
+        self.assertEqual(self.ks.get_status()["recent_history"][-1]["reason"], "New manual stop")
+        self.assertEqual(self.ks.get_status()["recent_history"][-1]["source"], "MANUAL")
+        self.assertTrue(json.loads(self.redis_value)["is_active"])
+        self.assertFalse(self.v414._RECOVERY_COMPLETE.is_set())
+
     def test_durable_clear_failure_stays_active_and_can_retry(self) -> None:
         self._hydrate()
         self.redis_clear_ok = False
