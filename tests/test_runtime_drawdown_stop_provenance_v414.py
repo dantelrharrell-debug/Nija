@@ -66,8 +66,10 @@ def test_unparseable_or_impossible_reference_fails_closed() -> None:
     )[0] is False
 
 
-def test_oct6_incident_restores_only_exact_lost_drawdown_cause() -> None:
+def test_oct6_incident_restores_only_exact_lost_drawdown_cause(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(v414._LEGACY_ATTESTATION_ENV, v414._INCIDENT_20261006_ID)
     status = {
+        "durable_stop": {"is_active": True, "schema": 1, "source": "FILE_SYSTEM", "reason": "Kill switch file detected"},
         "recent_history": [
             {
                 "reason": "Kill switch file detected",
@@ -87,8 +89,10 @@ def test_oct6_incident_restores_only_exact_lost_drawdown_cause() -> None:
     )
 
 
-def test_oct6_incident_accepts_durable_replay_timestamp_on_rollout() -> None:
+def test_oct6_incident_accepts_durable_replay_timestamp_on_rollout(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(v414._LEGACY_ATTESTATION_ENV, v414._INCIDENT_20261006_ID)
     status = {
+        "durable_stop": {"is_active": True, "schema": 1, "source": "FILE_SYSTEM", "reason": "Kill switch file detected"},
         "recent_history": [
             {
                 "reason": "Kill switch file detected",
@@ -108,13 +112,15 @@ def test_oct6_incident_accepts_durable_replay_timestamp_on_rollout() -> None:
     )
 
 
-def test_oct6_incident_accepts_live_replacement_instance_replay() -> None:
+def test_oct6_incident_accepts_live_replacement_instance_replay(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(v414._LEGACY_ATTESTATION_ENV, v414._INCIDENT_20261006_ID)
     status = {
+        "durable_stop": {"is_active": True, "schema": 1, "source": "FILE_SYSTEM", "reason": "Kill switch file detected"},
         "recent_history": [
             {
                 "reason": "Kill switch file detected",
                 "source": "FILE_SYSTEM",
-                "timestamp": "2026-10-06T18:32:01.539636+00:00",
+                "timestamp": "2026-10-07T00:39:22.506451+00:00",
             }
         ]
     }

@@ -14,7 +14,9 @@ facts make that unsafe/incomplete across restarts:
 v414 changes only recovery proof.  It installs v409 after replacing v409's
 recovery function with one that:
 
-* asks v143 for the causal activation behind restart-persistence records;
+* reads immutable Redis origin metadata instead of container replay timestamps;
+* migrates a generic legacy record only with incident-bound operator attestation
+  and all current-equity/original-baseline proofs, using atomic Redis verification;
 * accepts only an exact GlobalDrawdownCircuitBreaker HALT cause;
 * reconstructs the original peak from the stop's recorded drawdown/equity when
   the reason does not contain an explicit peak;
@@ -33,6 +35,8 @@ forces LIVE_ACTIVE, grants execution authority, or submits/cancels orders.
 from __future__ import annotations
 
 import importlib
+import hashlib
+import json
 import logging
 import math
 import os
@@ -50,21 +54,15 @@ _RETRY_THREAD: threading.Thread | None = None
 _RECOVERY_COMPLETE = threading.Event()
 _RETRY_INTERVAL_S = 5.0
 
-# Production incident 2026-10-06: a genuine GlobalDrawdownCircuitBreaker halt
-# was later represented by two exact generic FILE_SYSTEM replay records:
-# the current container's local marker and the durable Redis record a replacement
-# container will inherit. Bind recovery only to those observed timestamps so
-# unrelated FILE_SYSTEM stops cannot inherit this cause.
-_INCIDENT_20261006_REPLAY_TIMESTAMPS = {
-    "2026-10-06T14:55:23.027303+00:00",
-    "2026-10-06T15:12:17.039356+00:00",
-    "2026-10-06T18:32:01.539636+00:00",
-}
 _INCIDENT_20261006_CAUSAL_SOURCE = "GlobalDrawdownCircuitBreaker"
 _INCIDENT_20261006_CAUSAL_REASON = (
     "GlobalDrawdownCircuitBreaker: HALT level reached "
     "(drawdown=20.31%, equity=$617.89)"
 )
+_INCIDENT_20261006_ID = hashlib.sha256(
+    ("2026-10-06|" + _INCIDENT_20261006_CAUSAL_SOURCE + "|" + _INCIDENT_20261006_CAUSAL_REASON).encode("utf-8")
+).hexdigest()
+_LEGACY_ATTESTATION_ENV = "NIJA_DRAWDOWN_V414_LEGACY_INCIDENT_ID"
 
 _DRAW_EQUITY_RE = re.compile(
     r"drawdown\s*=\s*([0-9]+(?:\.[0-9]+)?)%.*?"
@@ -95,7 +93,7 @@ def _incident_20261006_causal_activation(
     reason: str,
     source: str,
 ) -> tuple[str, str] | None:
-    """Restore only the exact 2026-10-06 drawdown cause lost to Redis replay."""
+    """Identify an attested legacy incident; never treat generic replay as proof."""
     if str(source or "").strip().upper() != "PROVENANCE_BOUNDARY":
         return None
     if "origin_unavailable" not in str(reason or "").lower():
@@ -107,26 +105,59 @@ def _incident_20261006_causal_activation(
         return None
     latest_source = str(latest.get("source") or "").strip().upper()
     latest_reason = str(latest.get("reason") or "").strip()
-    latest_ts = str(latest.get("timestamp") or "").strip()
     if latest_source != "FILE_SYSTEM":
         return None
-    if not latest_reason.lower().startswith("kill switch file detected"):
+    if latest_reason != "Kill switch file detected":
         return None
-    if latest_ts not in _INCIDENT_20261006_REPLAY_TIMESTAMPS:
+    durable = status.get("durable_stop")
+    if not isinstance(durable, Mapping) or durable.get("is_active") is not True:
+        return None
+    if (
+        durable.get("schema") != 1
+        or durable.get("legacy_v414_migration_consumed")
+        or durable.get("superseding_stop")
+        or durable.get("source") != "FILE_SYSTEM"
+        or durable.get("reason") != "Kill switch file detected"
+        or any(key.startswith("origin_") or key == "incident_id" for key in durable)
+        or os.environ.get(_LEGACY_ATTESTATION_ENV, "") != _INCIDENT_20261006_ID
+    ):
         return None
 
-    LOGGER.critical(
-        "DRAWDOWN_V414_INCIDENT_CAUSE_RESTORED marker=%s incident=2026-10-06 "
-        "replay_timestamp=%s causal_source=%s causal_reason=%s "
-        "current_equity_proof_still_required=true halt_threshold_unchanged=true "
-        "direct_deactivate=false forced_activation=false orders_submitted=false "
-        "safety_gates_bypassed=false",
-        MARKER,
-        latest_ts,
-        _INCIDENT_20261006_CAUSAL_SOURCE,
-        _INCIDENT_20261006_CAUSAL_REASON,
-    )
     return _INCIDENT_20261006_CAUSAL_REASON, _INCIDENT_20261006_CAUSAL_SOURCE
+
+
+def _durable_cause(record: Mapping[str, Any]) -> tuple[str, str] | None:
+    if (
+        record.get("is_active") is not True or record.get("schema") != 2
+        or record.get("superseding_stop")
+        or not record.get("incident_id")
+        or "origin_timestamp" not in record
+    ):
+        return None
+    reason = str(record.get("origin_reason") or "")
+    source = str(record.get("origin_source") or "")
+    if record.get("source") != source or record.get("reason") != reason:
+        # A newer event must not inherit the previous incident's recovery proof.
+        return None
+    if record.get("origin_timestamp"):
+        expected_id = hashlib.sha256(json.dumps(
+            [source, reason, record["origin_timestamp"]], separators=(",", ":"),
+        ).encode("utf-8")).hexdigest()
+    else:
+        if record.get("origin_date") != "2026-10-06":
+            return None
+        if record.get("legacy_v414_migration_consumed") is not True:
+            return None
+        if (reason, source) != (_INCIDENT_20261006_CAUSAL_REASON, _INCIDENT_20261006_CAUSAL_SOURCE):
+            return None
+        expected_id = _INCIDENT_20261006_ID
+    return (reason, source) if record.get("incident_id") == expected_id else None
+
+
+def _local_stop_compatible(ks: Any, reason: str, source: str) -> bool:
+    """Refuse independent local/operator/risk evidence, including truncated history."""
+    with ks._lock:
+        return ks._recovery_local_stop_matches(reason, source) is True
 
 
 def _causal_activation(status: Mapping[str, Any]) -> tuple[str, str]:
@@ -139,11 +170,6 @@ def _causal_activation(status: Mapping[str, Any]) -> tuple[str, str]:
             reason_s = str(reason or "")
             source_s = str(source or "")
             if source_s and source_s.upper() != "FILE_SYSTEM":
-                incident = _incident_20261006_causal_activation(
-                    status, reason_s, source_s
-                )
-                if incident is not None:
-                    return incident
                 return reason_s, source_s
     except Exception:
         pass
@@ -164,7 +190,10 @@ def _original_drawdown_reference(reason: str) -> tuple[bool, float, float, float
     original_peak = explicit_peak
     if original_peak <= 0.0:
         original_peak = stopped_equity / (1.0 - (drawdown_pct / 100.0))
-    if original_peak <= stopped_equity:
+    if (
+        not all(math.isfinite(value) for value in (stopped_equity, original_peak))
+        or original_peak <= stopped_equity
+    ):
         return False, drawdown_pct, stopped_equity, original_peak, "original_peak_invalid"
     return True, drawdown_pct, stopped_equity, original_peak, (
         "explicit_peak" if explicit_peak > 0.0 else "derived_peak_from_stop"
@@ -175,10 +204,12 @@ def _exact_drawdown_source(reason: str, source: str) -> bool:
     reason_l = str(reason or "").lower()
     source_l = str(source or "").lower().replace("_", "").replace("-", "").replace(" ", "")
     return (
-        "globaldrawdowncircuitbreaker" in reason_l
-        and "halt" in reason_l
+        reason_l.startswith("globaldrawdowncircuitbreaker: halt")
         and "drawdown=" in reason_l.replace(" ", "")
-        and "globaldrawdowncircuitbreaker" in source_l
+        and source_l == "globaldrawdowncircuitbreaker"
+        and not any(token in reason_l for token in (
+            "manual", "operator", "panic", "liquidation", "daily", "weekly", "api", "unknown",
+        ))
     )
 
 
@@ -255,7 +286,34 @@ def _install_v409_guarded_recovery() -> bool:
             if ks is None or not bool(ks.is_active()):
                 return False
             status = dict(ks.get_status() or {})
-            causal_reason, causal_source = _causal_activation(status)
+            durable = status.get("durable_stop")
+            if not isinstance(durable, dict) or durable.get("is_active") is not True:
+                return False
+            cause = _durable_cause(durable)
+            migration = cause is None
+            legacy_generic = False
+            if migration:
+                reason, source = _causal_activation(status)
+                cause = _incident_20261006_causal_activation(status, reason, source)
+                legacy_generic = cause is not None
+                if (
+                    cause is None and durable.get("schema") == 1
+                    and not durable.get("superseding_stop")
+                    and not any(key.startswith("origin_") or key == "incident_id" for key in durable)
+                    and durable.get("timestamp")
+                    and _exact_drawdown_source(str(durable.get("reason") or ""), str(durable.get("source") or ""))
+                ):
+                    cause = str(durable["reason"]), str(durable["source"])
+            if cause is None:
+                LOGGER.critical(
+                    "DRAWDOWN_V414_RECOVERY_BLOCKED marker=%s reason=durable_incident_unproven "
+                    "legacy_attestation_env=%s incident_id=%s fail_closed=true",
+                    MARKER, _LEGACY_ATTESTATION_ENV, _INCIDENT_20261006_ID,
+                )
+                return False
+            causal_reason, causal_source = cause
+            if not _local_stop_compatible(ks, causal_reason, causal_source):
+                return False
             if not _exact_drawdown_source(causal_reason, causal_source):
                 LOGGER.critical(
                     "DRAWDOWN_V414_RECOVERY_BLOCKED marker=%s reason=causal_source_not_exact source=%s causal_reason=%s fail_closed=true",
@@ -290,12 +348,43 @@ def _install_v409_guarded_recovery() -> bool:
                 )
                 return False
 
+            if migration:
+                migrated = dict(durable)
+                origin_timestamp = None if legacy_generic else durable["timestamp"]
+                incident_id = _INCIDENT_20261006_ID if legacy_generic else hashlib.sha256(json.dumps(
+                    [causal_source, causal_reason, origin_timestamp], separators=(",", ":"),
+                ).encode("utf-8")).hexdigest()
+                migrated.update({
+                    "schema": 2,
+                    "source": causal_source,
+                    "reason": causal_reason,
+                    "origin_source": causal_source,
+                    "origin_reason": causal_reason,
+                    # Only the original incident date is known. Never invent a
+                    # precise activation time from a replacement-container clock.
+                    "origin_timestamp": origin_timestamp,
+                    "incident_id": incident_id,
+                })
+                if legacy_generic:
+                    migrated["origin_date"] = "2026-10-06"
+                    migrated["legacy_v414_migration_consumed"] = True
+                if not ks._compare_set_durable_stop(durable, migrated):
+                    return False
+                durable = migrated
+                LOGGER.critical(
+                    "DRAWDOWN_V414_DURABLE_CAUSE_MIGRATED incident_id=%s "
+                    "current_portfolio_proof=true original_baseline_proof=true orders_submitted=false",
+                    incident_id,
+                )
+            if not _capital_proof_current() or not _local_stop_compatible(ks, causal_reason, causal_source):
+                return False
             # Local breaker level may be corrected using v409's existing logic, but
             # kill-switch recovery proof is anchored exclusively to the original stop.
             v409._reclassify_false_halt_if_proven(cb, corrected)
             deactivated = bool(
                 ks.deactivate(
-                    "v414 original-stop baseline plus current authoritative portfolio equity proved prior GlobalDrawdownCircuitBreaker HALT false"
+                    "v414 original-stop baseline plus current authoritative portfolio equity proved prior GlobalDrawdownCircuitBreaker HALT false",
+                    expected_durable_stop=durable,
                 )
             )
             if not deactivated or bool(ks.is_active()):

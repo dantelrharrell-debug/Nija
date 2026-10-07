@@ -28,6 +28,7 @@ Date: February 2026
 
 import os
 import json
+import hashlib
 import logging
 import threading
 from datetime import datetime, timezone
@@ -168,6 +169,17 @@ class KillSwitch:
             "timestamp": str(activation_record.get("timestamp") or ""),
             "schema": 1,
         }
+        if payload["source"] != "FILE_SYSTEM":
+            payload.update({
+                "schema": 2,
+                "origin_source": payload["source"],
+                "origin_reason": payload["reason"],
+                "origin_timestamp": payload["timestamp"],
+                "incident_id": hashlib.sha256(json.dumps(
+                    [payload["source"], payload["reason"], payload["timestamp"]],
+                    separators=(",", ":"),
+                ).encode("utf-8")).hexdigest(),
+            })
         try:
             # A FILE_SYSTEM "Kill switch file detected" activation is a replay
             # of an already-active stop, not a new causal safety event.  Never
@@ -179,62 +191,55 @@ class KillSwitch:
                 incoming_source == "FILE_SYSTEM"
                 and incoming_reason.lower().startswith("kill switch file detected")
             )
-            if is_generic_file_replay:
-                incoming_json = json.dumps(payload, sort_keys=True)
-                # Atomic compare-and-set: a generic filesystem replay may create
-                # the durable stop only while the key is absent/inactive.  If a
-                # real risk activation wins the race first, preserve it.
-                script = """
+            # Preserve replay causes and the one-time migration latch atomically.
+            script = """
 local current = redis.call('GET', KEYS[1])
+local incoming = cjson.decode(ARGV[1])
 if current then
   local ok, decoded = pcall(cjson.decode, current)
-  if ok and type(decoded) == 'table' and decoded['is_active'] == true then
-    return current
+  if not ok or type(decoded) ~= 'table' then
+    return false
+  end
+  if ARGV[2] == 'replay' and decoded['is_active'] == true then
+      return current
+  end
+  if decoded['is_active'] == true then
+    incoming['superseding_stop'] = true
+    if decoded['schema'] == 2 then
+      for _, field in ipairs({'origin_source', 'origin_reason', 'origin_timestamp', 'origin_date', 'incident_id'}) do
+        incoming[field] = decoded[field]
+      end
+    end
+  end
+  if decoded['legacy_v414_migration_consumed'] == true then
+    incoming['legacy_v414_migration_consumed'] = true
   end
 end
-redis.call('SET', KEYS[1], ARGV[1])
-return ARGV[1]
+local encoded = cjson.encode(incoming)
+redis.call('SET', KEYS[1], encoded)
+return encoded
 """
-                stored_raw = client.eval(
-                    script,
-                    1,
-                    self.DURABLE_REDIS_KEY,
-                    incoming_json,
-                )
-                if isinstance(stored_raw, bytes):
-                    stored_raw = stored_raw.decode("utf-8")
-                if not stored_raw:
-                    raise RuntimeError("atomic durable replay persistence returned empty result")
-                stored = json.loads(stored_raw)
-                if (
-                    isinstance(stored, dict)
-                    and bool(stored.get("is_active"))
-                    and (
-                        str(stored.get("source") or "").strip().upper() != incoming_source
-                        or str(stored.get("reason") or "").strip() != incoming_reason
-                    )
-                ):
-                    logger.critical(
-                        "DURABLE_KILL_SWITCH_REDIS_CAUSE_PRESERVED key=%s "
-                        "existing_source=%s existing_reason=%s replay_source=%s "
-                        "replay_reason=%s atomic=true active_stop_unchanged=true",
-                        self.DURABLE_REDIS_KEY,
-                        str(stored.get("source") or "unknown"),
-                        str(stored.get("reason") or "unknown"),
-                        payload["source"] or "unknown",
-                        payload["reason"] or "unknown",
-                    )
-                    return True
+            stored_raw = client.eval(
+                script, 1, self.DURABLE_REDIS_KEY,
+                json.dumps(payload, sort_keys=True),
+                "replay" if is_generic_file_replay else "activation",
+            )
+            if isinstance(stored_raw, bytes):
+                stored_raw = stored_raw.decode("utf-8")
+            if not stored_raw:
+                raise RuntimeError("atomic durable persistence returned empty result")
+            stored = json.loads(stored_raw)
+            if not isinstance(stored, dict) or stored.get("is_active") is not True:
+                return False
+            if is_generic_file_replay and stored != payload:
                 logger.critical(
-                    "DURABLE_KILL_SWITCH_REDIS_PERSISTED key=%s source=%s reason=%s "
-                    "atomic_replay_compare_set=true",
+                    "DURABLE_KILL_SWITCH_REDIS_CAUSE_PRESERVED key=%s "
+                    "existing_source=%s existing_reason=%s atomic=true active_stop_unchanged=true",
                     self.DURABLE_REDIS_KEY,
-                    payload["source"] or "unknown",
-                    payload["reason"] or "unknown",
+                    str(stored.get("source") or "unknown"),
+                    str(stored.get("reason") or "unknown"),
                 )
                 return True
-
-            client.set(self.DURABLE_REDIS_KEY, json.dumps(payload, sort_keys=True))
             logger.critical(
                 "DURABLE_KILL_SWITCH_REDIS_PERSISTED key=%s source=%s reason=%s",
                 self.DURABLE_REDIS_KEY,
@@ -268,6 +273,36 @@ return ARGV[1]
             )
             return None
 
+    def _compare_set_durable_stop(
+        self, expected: Dict[str, Any], replacement: Dict[str, Any]
+    ) -> bool:
+        """Mutate only the proven stop, then require an exact Redis readback."""
+        client = self._redis_client()
+        if client is None:
+            return False
+        try:
+            raw = client.get(self.DURABLE_REDIS_KEY)
+            if not raw or json.loads(raw) != expected:
+                return False
+            script = """
+if redis.call('GET', KEYS[1]) ~= ARGV[1] then
+  return 0
+end
+redis.call('SET', KEYS[1], ARGV[2])
+return 1
+"""
+            written = client.eval(
+                script, 1, self.DURABLE_REDIS_KEY, raw,
+                json.dumps(replacement, sort_keys=True),
+            )
+            if written != 1:
+                return False
+            verify = client.get(self.DURABLE_REDIS_KEY)
+            return bool(verify) and json.loads(verify) == replacement
+        except Exception:
+            logger.exception("DURABLE_KILL_SWITCH_CAS_FAILED trading_fail_closed=true")
+            return False
+
     def _check_redis_activation(self) -> None:
         """Reassert a durable active stop on a replacement process."""
         record = self._read_durable_stop()
@@ -293,22 +328,24 @@ return ARGV[1]
             reason,
         )
 
-    def _clear_durable_stop(self, reason: str) -> bool:
+    def _clear_durable_stop(
+        self, reason: str, expected_stop: Optional[Dict[str, Any]] = None
+    ) -> bool:
         """Clear shared stop state only when Redis confirms the mutation."""
         client = self._redis_client()
         if client is None:
             return False
         try:
-            payload = {
+            current = self._read_durable_stop()
+            if current is None or (expected_stop is not None and current != expected_stop):
+                return False
+            payload = dict(current)
+            payload.update({
                 "is_active": False,
                 "reason": str(reason or ""),
                 "timestamp": datetime.now(timezone.utc).isoformat(),
-                "schema": 1,
-            }
-            client.set(self.DURABLE_REDIS_KEY, json.dumps(payload, sort_keys=True))
-            verify = client.get(self.DURABLE_REDIS_KEY)
-            parsed = json.loads(verify) if verify else {}
-            cleared = isinstance(parsed, dict) and not bool(parsed.get("is_active"))
+            })
+            cleared = self._compare_set_durable_stop(current, payload)
             if not cleared:
                 logger.critical(
                     "DURABLE_KILL_SWITCH_REDIS_CLEAR_VERIFY_FAILED key=%s trading_fail_closed=true",
@@ -423,6 +460,9 @@ To resume trading:
         with self._lock:
             if self._is_active:
                 logger.warning(f"⚠️  Kill switch already active, reason: {reason}")
+                # A new safety event must supersede recovery eligibility even
+                # while the existing hard stop is already asserted.
+                self._activate_internal(reason, source)
                 return
                 
             self._activate_internal(reason, source)
@@ -442,7 +482,41 @@ To resume trading:
                 logger.error(f"❌ Error transitioning state machine: {e}")
                 # Continue anyway - kill switch is still active
                 
-    def deactivate(self, reason: str = "Manual deactivation"):
+    def _recovery_local_stop_matches(self, reason: str, source: str) -> bool:
+        """Check local evidence under the caller-held lock before causal recovery."""
+        if os.environ.get("NIJA_KILL_SWITCH", "").strip().upper() in {"1", "TRUE", "YES", "ON"}:
+            return False
+        allowed = {
+            ("Kill switch file detected", "FILE_SYSTEM"),
+            (f"Kill switch file detected | persisted_reason={reason}", "FILE_SYSTEM"),
+            (reason, source),
+        }
+        for item in reversed(self._activation_history):
+            if not isinstance(item, dict):
+                return False
+            if not item.get("source"):
+                break
+            if (item.get("reason"), item.get("source")) not in allowed:
+                return False
+            if item.get("persisted_marker_read_error"):
+                return False
+            marker_reason = item.get("persisted_marker_reason")
+            if marker_reason and marker_reason not in {"Kill switch file detected", reason}:
+                return False
+        try:
+            with open(self._kill_file, encoding="utf-8") as marker:
+                reasons = [
+                    line.strip()[8:] for line in marker.read(32_768).splitlines()
+                    if line.strip().startswith("Reason: ")
+                ]
+            return len(reasons) == 1 and reasons[0] in {"Kill switch file detected", reason}
+        except Exception:
+            return False
+
+    def deactivate(
+        self, reason: str = "Manual deactivation",
+        *, expected_durable_stop: Optional[Dict[str, Any]] = None,
+    ):
         """
         Deactivate the kill switch.
         
@@ -459,10 +533,22 @@ To resume trading:
                 logger.info("Kill switch already inactive")
                 return
 
+            if expected_durable_stop is not None:
+                if not self._recovery_local_stop_matches(
+                    str(expected_durable_stop.get("origin_reason") or ""),
+                    str(expected_durable_stop.get("origin_source") or ""),
+                ):
+                    return False
+
             # Shared stop state is authoritative across production instances.
             # Refuse local deactivation unless the durable record is confirmed
             # inactive, otherwise the next process could disagree about safety.
-            if not self._clear_durable_stop(reason):
+            cleared = (
+                self._clear_durable_stop(reason)
+                if expected_durable_stop is None
+                else self._clear_durable_stop(reason, expected_durable_stop)
+            )
+            if not cleared:
                 logger.critical(
                     "KILL_SWITCH_DEACTIVATION_REFUSED_DURABLE_STATE_UNCLEARED reason=%s trading_fail_closed=true",
                     reason,
@@ -547,7 +633,8 @@ To resume trading:
                 'is_active': self._is_active,
                 'kill_file_exists': os.path.exists(self._kill_file),
                 'kill_file_path': self._kill_file,
-                'recent_history': self._activation_history[-5:] if self._activation_history else []
+                'recent_history': self._activation_history[-5:] if self._activation_history else [],
+                'durable_stop': self._read_durable_stop(),
             }
             
     def get_activation_count(self) -> int:

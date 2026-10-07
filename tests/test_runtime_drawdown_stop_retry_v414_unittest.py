@@ -29,13 +29,18 @@ class DrawdownRecoveryRetryV414Tests(unittest.TestCase):
             "is_active": True,
             "source": "FILE_SYSTEM",
             "reason": "Kill switch file detected",
-            "timestamp": "2026-10-06T18:32:01.539636+00:00",
+            "timestamp": "2026-10-07T00:39:22.506451+00:00",
+            "schema": 1,
         }
         self.redis_value = json.dumps(self.stop_record)
         self.redis_clear_ok = True
+        self.redis_migrate_ok = True
+        self.redis_verify_ok = True
         redis = Mock()
         redis.get.side_effect = lambda key: self.redis_value
         redis.set.side_effect = self._redis_set
+        redis.eval.side_effect = self._redis_eval
+        self.redis = redis
         redis_patch = patch.object(KillSwitch, "_redis_client", return_value=redis)
         redis_patch.start()
         self.addCleanup(redis_patch.stop)
@@ -82,7 +87,10 @@ class DrawdownRecoveryRetryV414Tests(unittest.TestCase):
         module_patch = patch.dict(sys.modules, modules)
         module_patch.start()
         self.addCleanup(module_patch.stop)
-        env_patch = patch.dict("os.environ", {"NIJA_KILL_SWITCH": "false"})
+        env_patch = patch.dict("os.environ", {
+            "NIJA_KILL_SWITCH": "false",
+            self.v414._LEGACY_ATTESTATION_ENV: self.v414._INCIDENT_20261006_ID,
+        })
         env_patch.start()
         self.addCleanup(env_patch.stop)
         self.ks = KillSwitch(base_path=temp.name)
@@ -100,6 +108,34 @@ class DrawdownRecoveryRetryV414Tests(unittest.TestCase):
         if self.redis_clear_ok:
             self.redis_value = value
         return self.redis_clear_ok
+
+    def _redis_eval(self, script: str, numkeys: int, key: str, expected: str, value: str | None = None) -> int | str:
+        if value in (None, "replay", "activation"):
+            current = json.loads(self.redis_value)
+            if value != "activation" and current["is_active"]:
+                return self.redis_value
+            incoming = json.loads(expected)
+            if current.get("is_active"):
+                incoming["superseding_stop"] = True
+                if current.get("schema") == 2:
+                    for field in ("origin_source", "origin_reason", "origin_timestamp", "origin_date", "incident_id"):
+                        if field in current:
+                            incoming[field] = current[field]
+                        else:
+                            incoming.pop(field, None)
+            if current.get("legacy_v414_migration_consumed"):
+                incoming["legacy_v414_migration_consumed"] = True
+            self.redis_value = json.dumps(incoming)
+            return self.redis_value
+        if expected != self.redis_value:
+            return 0
+        replacement = json.loads(value)
+        ok = self.redis_clear_ok if replacement["is_active"] is False else self.redis_migrate_ok
+        if not ok:
+            return 0
+        if self.redis_verify_ok:
+            self.redis_value = value
+        return 1
 
     def _install_v409(self) -> bool:
         with self.v409._LOCK:
@@ -184,7 +220,13 @@ class DrawdownRecoveryRetryV414Tests(unittest.TestCase):
         for source, reason, timestamp in (
             ("MANUAL", "Owner emergency stop", self.stop_record["timestamp"]),
             ("ENV", "Deployment kill switch", self.stop_record["timestamp"]),
-            ("FILE_SYSTEM", "Kill switch file detected", "2026-10-06T18:32:01.539637+00:00"),
+            ("UI", "Owner emergency stop", self.stop_record["timestamp"]),
+            ("CLI", "Operator stop", self.stop_record["timestamp"]),
+            ("AUTO_TRIGGER", "Daily loss limit exceeded", self.stop_record["timestamp"]),
+            ("AUTO_TRIGGER", "Weekly loss limit exceeded", self.stop_record["timestamp"]),
+            ("AUTO_TRIGGER", "API instability", self.stop_record["timestamp"]),
+            ("AUTO_TRIGGER", "Liquidation panic", self.stop_record["timestamp"]),
+            ("UNKNOWN", "Unknown stop", self.stop_record["timestamp"]),
             ("FILE_SYSTEM", "Owner emergency stop", self.stop_record["timestamp"]),
         ):
             with self.subTest(source=source, reason=reason):
@@ -192,6 +234,180 @@ class DrawdownRecoveryRetryV414Tests(unittest.TestCase):
                 self.assertFalse(self.v409._recover_exact_false_drawdown_stop())
                 self.ks.deactivate.assert_not_called()
                 self._assert_stopped()
+
+    def test_generic_stop_without_incident_attestation_is_unknown_and_never_migrates(self) -> None:
+        self._hydrate()
+        self.assertTrue(self.v414._install_v409_guarded_recovery())
+        with patch.dict("os.environ", {self.v414._LEGACY_ATTESTATION_ENV: ""}):
+            self.assertFalse(self.v409._recover_exact_false_drawdown_stop())
+        self.redis.eval.assert_not_called()
+        self.ks.deactivate.assert_not_called()
+        self._assert_stopped()
+
+    def test_migration_write_or_verification_failure_never_deactivates(self) -> None:
+        self._hydrate()
+        self.assertTrue(self.v414._install_v409_guarded_recovery())
+        for write_ok, verify_ok in ((False, True), (True, False)):
+            with self.subTest(write_ok=write_ok, verify_ok=verify_ok):
+                self.redis_migrate_ok = write_ok
+                self.redis_verify_ok = verify_ok
+                self.assertFalse(self.v409._recover_exact_false_drawdown_stop())
+                self.ks.deactivate.assert_not_called()
+                self._assert_stopped()
+
+    def test_durable_migration_survives_restart_without_attestation_or_replay_identity(self) -> None:
+        self._hydrate()
+        self.redis_clear_ok = False
+        self.assertTrue(self.v414._install_v409_guarded_recovery())
+        self.assertFalse(self.v409._recover_exact_false_drawdown_stop())
+        migrated = json.loads(self.redis_value)
+        self.assertEqual(migrated["incident_id"], self.v414._INCIDENT_20261006_ID)
+        self.assertEqual(migrated["origin_reason"], self.v414._INCIDENT_20261006_CAUSAL_REASON)
+        self.assertIsNone(migrated["origin_timestamp"])
+        self.assertEqual(migrated["origin_date"], "2026-10-06")
+        self.ks = KillSwitch(base_path=self.ks._base_path)
+        self.ks.deactivate = Mock(wraps=self.ks.deactivate)
+        self.assertNotEqual(self.ks._activation_history[-1]["timestamp"], self.stop_record["timestamp"])
+        self.assertEqual(json.loads(self.redis_value), migrated)
+        self.redis_clear_ok = True
+        with patch.dict("os.environ", {self.v414._LEGACY_ATTESTATION_ENV: ""}):
+            self.assertTrue(self.v409._recover_exact_false_drawdown_stop())
+        self.ks.deactivate.assert_called_once()
+        self.assertTrue(self.v414._RECOVERY_COMPLETE.is_set())
+        inactive = json.loads(self.redis_value)
+        for field in ("origin_source", "origin_reason", "origin_timestamp", "incident_id"):
+            self.assertEqual(inactive[field], migrated[field])
+        restarted = KillSwitch(base_path=self.ks._base_path)
+        self.assertFalse(restarted.is_active())
+        self.assertFalse(Path(restarted._kill_file).exists())
+
+    def test_new_durable_risk_stop_during_migration_cannot_be_overwritten(self) -> None:
+        self._hydrate()
+        self.assertTrue(self.v414._install_v409_guarded_recovery())
+        risk = dict(self.stop_record, source="MANUAL", reason="Operator emergency stop")
+
+        def race(*args: object) -> int:
+            self.redis_value = json.dumps(risk)
+            return 0
+
+        self.redis.eval.side_effect = race
+        self.assertFalse(self.v409._recover_exact_false_drawdown_stop())
+        self.ks.deactivate.assert_not_called()
+        self.assertEqual(json.loads(self.redis_value), risk)
+        self._assert_stopped()
+
+    def test_new_local_stop_after_proof_blocks_normal_deactivation_even_if_redis_write_fails(self) -> None:
+        self._hydrate()
+        self.assertTrue(self.v414._install_v409_guarded_recovery())
+
+        def new_stop(cb: object, equity: float) -> None:
+            self.ks._activation_history.append({"source": "MANUAL", "reason": "Operator stop"})
+
+        self.v409._reclassify_false_halt_if_proven.side_effect = new_stop
+        self.assertFalse(self.v409._recover_exact_false_drawdown_stop())
+        self._assert_stopped()
+
+    def test_one_time_migration_cannot_be_reused_for_a_future_generic_stop(self) -> None:
+        self._hydrate()
+        self.assertTrue(self.v414._install_v409_guarded_recovery())
+        self.assertTrue(self.v409._recover_exact_false_drawdown_stop())
+        self.ks._activate_internal("Kill switch file detected", "FILE_SYSTEM")
+        record = json.loads(self.redis_value)
+        self.assertTrue(record["legacy_v414_migration_consumed"])
+        self.v414._RECOVERY_COMPLETE.clear()
+        self.assertFalse(self.v409._recover_exact_false_drawdown_stop())
+        self.ks.deactivate.assert_called_once()
+        self._assert_stopped()
+
+    def test_conflicting_history_outside_recent_window_blocks_migration(self) -> None:
+        self._hydrate()
+        self.ks._activation_history = [
+            {"reason": "Operator stop", "source": "MANUAL"},
+            *[dict(self.stop_record) for _ in range(6)],
+        ]
+        self.assertEqual(len(self.ks.get_status()["recent_history"]), 5)
+        self.assertTrue(self.v414._install_v409_guarded_recovery())
+        self.assertFalse(self.v409._recover_exact_false_drawdown_stop())
+        self.redis.eval.assert_not_called()
+        self._assert_stopped()
+
+    def test_operator_marker_or_env_stop_blocks_migration(self) -> None:
+        self._hydrate()
+        self.assertTrue(self.v414._install_v409_guarded_recovery())
+        for text in ("Owner stop", "Reason: Operator emergency stop\n"):
+            Path(self.ks._kill_file).write_text(text)
+            self.assertFalse(self.v409._recover_exact_false_drawdown_stop())
+            self.redis.eval.assert_not_called()
+            self._assert_stopped()
+        self.ks._create_kill_file("Kill switch file detected")
+        with patch.dict("os.environ", {"NIJA_KILL_SWITCH": "true"}):
+            self.assertFalse(self.v409._recover_exact_false_drawdown_stop())
+        self.redis.eval.assert_not_called()
+
+    def test_new_redis_risk_after_migration_blocks_deactivation(self) -> None:
+        self._hydrate()
+        self.assertTrue(self.v414._install_v409_guarded_recovery())
+
+        def new_risk(cb: object, equity: float) -> None:
+            self.redis_value = json.dumps(dict(self.stop_record, source="AUTO_TRIGGER", reason="Daily loss limit"))
+
+        self.v409._reclassify_false_halt_if_proven.side_effect = new_risk
+        self.assertFalse(self.v409._recover_exact_false_drawdown_stop())
+        self._assert_stopped()
+        self.assertEqual(json.loads(self.redis_value)["reason"], "Daily loss limit")
+
+    def test_original_reference_and_halt_proofs_required_before_any_migration_write(self) -> None:
+        self._hydrate()
+        self.assertTrue(self.v414._install_v409_guarded_recovery())
+        with patch.object(self.v414, "_original_drawdown_reference", return_value=(False, 0, 0, 0, "invalid")):
+            self.assertFalse(self.v409._recover_exact_false_drawdown_stop())
+        self.cb._config.halt_pct = 21.0
+        self.assertFalse(self.v409._recover_exact_false_drawdown_stop())
+        self.redis.eval.assert_not_called()
+        self.ks.deactivate.assert_not_called()
+        self._assert_stopped()
+
+    def test_redis_read_failure_blocks_migration(self) -> None:
+        self._hydrate()
+        self.assertTrue(self.v414._install_v409_guarded_recovery())
+        self.redis.get.side_effect = RuntimeError("Redis unavailable")
+        self.assertFalse(self.v409._recover_exact_false_drawdown_stop())
+        self.redis.eval.assert_not_called()
+        self.ks.deactivate.assert_not_called()
+        self._assert_stopped()
+
+    def test_existing_real_cause_upgrades_without_generic_incident_attestation(self) -> None:
+        self._hydrate()
+        real = dict(
+            self.stop_record,
+            source=self.v414._INCIDENT_20261006_CAUSAL_SOURCE,
+            reason=self.v414._INCIDENT_20261006_CAUSAL_REASON,
+        )
+        self.redis_value = json.dumps(real)
+        self.ks._activation_history = [real]
+        self.ks._create_kill_file(real["reason"])
+        self.assertTrue(self.v414._install_v409_guarded_recovery())
+        with patch.dict("os.environ", {self.v414._LEGACY_ATTESTATION_ENV: ""}):
+            self.assertTrue(self.v409._recover_exact_false_drawdown_stop())
+        self.assertFalse(self.ks.is_active())
+        inactive = json.loads(self.redis_value)
+        self.assertEqual(inactive["origin_timestamp"], real["timestamp"])
+
+    def test_v213_preserved_marker_replay_retains_durable_recovery(self) -> None:
+        self._hydrate()
+        self.redis_clear_ok = False
+        self.assertTrue(self.v414._install_v409_guarded_recovery())
+        self.assertFalse(self.v409._recover_exact_false_drawdown_stop())
+        reason = self.v414._INCIDENT_20261006_CAUSAL_REASON
+        self.ks._activation_history.append({
+            "source": "FILE_SYSTEM",
+            "reason": f"Kill switch file detected | persisted_reason={reason}",
+            "persisted_marker_reason": reason,
+        })
+        self.ks._create_kill_file(reason)
+        self.redis_clear_ok = True
+        self.assertTrue(self.v409._recover_exact_false_drawdown_stop())
+        self.assertFalse(self.ks.is_active())
 
     def test_durable_clear_failure_stays_active_and_can_retry(self) -> None:
         self._hydrate()
@@ -281,6 +497,7 @@ class DrawdownRecoveryRetryV414Tests(unittest.TestCase):
                 self.assertFalse(self.v409._recover_exact_false_drawdown_stop())
                 self.ks.deactivate.assert_not_called()
                 self._assert_stopped()
+                self.redis.eval.assert_not_called()
 
 
 if __name__ == "__main__":
