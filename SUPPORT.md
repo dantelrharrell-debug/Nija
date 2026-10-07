@@ -126,7 +126,7 @@ Currently, we provide support in English. For non-English speakers:
 
 **NIJA Trading Platform**  
 Email: support@nija-trading.com  
-Business Phone: 425-756-0283  
+Business Phone: 425-765-0283  
 Website: https://nija-trading.com *(placeholder for production)*  
 Discord: https://discord.gg/nija-trading *(placeholder for production)*
 
