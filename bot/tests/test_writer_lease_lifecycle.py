@@ -639,6 +639,56 @@ class TestLeaseLossDetection(_Base):
         runtime._schedule_unhandled_loss_restart.assert_not_called()
         seak.emergency_halt.assert_not_called()
 
+    def test_v53_v55_replacement_cannot_publish_between_check_and_fail_closed(self):
+        _module, runtime = self._wrapped_runtime(delete_result=0)
+        original_checker = runtime._owns_published_authority_env
+        attempting = threading.Event()
+        published = threading.Event()
+        observed = {"published_during_check": None}
+        publisher_thread = None
+
+        def publish_replacement() -> None:
+            attempting.set()
+            with runtime._published_authority_lock:
+                os.environ["NIJA_WRITER_FENCING_TOKEN"] = "replacement-token"
+                os.environ["NIJA_WRITER_LEASE_GENERATION"] = "24"
+                os.environ["NIJA_WRITER_INSTANCE_ID"] = "replacement-instance"
+                os.environ["NIJA_WRITER_LOCK_ACQUIRED_AT"] = "101.0"
+                os.environ["NIJA_WRITER_LEASE_ACQUIRED"] = "1"
+                os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"] = "1"
+                os.environ["NIJA_WRITER_HEARTBEAT_ALIVE_TS"] = "replacement-heartbeat"
+                os.environ["NIJA_WRITER_STATE"] = "ACTIVE"
+                os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "1"
+                os.environ["NIJA_EXECUTION_ACTIVE"] = "true"
+                published.set()
+
+        def checker():
+            nonlocal publisher_thread
+            result = original_checker()
+            if result[0] and publisher_thread is None:
+                publisher_thread = threading.Thread(target=publish_replacement)
+                publisher_thread.start()
+                self.assertTrue(attempting.wait(timeout=1.0))
+                # A correctly serialized check/mutation keeps publication blocked
+                # until the release-side fail-closed mutation is complete.
+                published.wait(timeout=0.05)
+                observed["published_during_check"] = published.is_set()
+            return result
+
+        runtime._owns_published_authority_env = checker
+        self.assertFalse(runtime.release())
+        assert publisher_thread is not None
+        publisher_thread.join(timeout=1.0)
+
+        self.assertFalse(observed["published_during_check"])
+        self.assertTrue(published.is_set())
+        self.assertEqual(os.environ["NIJA_WRITER_FENCING_TOKEN"], "replacement-token")
+        self.assertEqual(os.environ["NIJA_WRITER_LEASE_GENERATION"], "24")
+        self.assertEqual(os.environ["NIJA_WRITER_LOCK_ACQUIRED_AT"], "101.0")
+        self.assertEqual(os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"], "1")
+        self.assertEqual(os.environ["NIJA_EXECUTION_ACTIVE"], "true")
+        runtime._notify_runtime_reconciliation.assert_not_called()
+
     def test_v53_v55_release_preserves_owner_appearing_during_compare_delete(self):
         readiness = {"ready": True}
 
