@@ -305,7 +305,37 @@ class SafetyController:
             False if the mode stayed the same.
         """
         if self._emergency_stop_active:
-            return False
+            # The kill switch can be cleared by the canonical, operator-gated
+            # recovery worker after this controller was initialized.  Never
+            # retain a stale in-memory stop forever, but never infer clearance
+            # from a missing local file alone: the shared durable stop and
+            # canonical kill switch must both independently confirm inactive.
+            if os.path.exists('EMERGENCY_STOP'):
+                return False
+            try:
+                try:
+                    from bot.kill_switch import get_kill_switch
+                except ImportError:
+                    from kill_switch import get_kill_switch
+                canonical = get_kill_switch()
+                canonical_file = getattr(canonical, "_kill_file", "")
+                if not canonical_file or os.path.exists(canonical_file):
+                    return False
+                if canonical.is_active():
+                    return False
+                reader = getattr(canonical, "_read_durable_stop", None)
+                durable = reader() if callable(reader) else None
+                if not isinstance(durable, dict) or durable.get("is_active") is not False:
+                    return False
+            except Exception as exc:
+                logger.warning("SafetyController: emergency-stop clearance proof unavailable: %s", type(exc).__name__)
+                return False
+            self._emergency_stop_active = False
+            logger.warning(
+                "SAFETY_CONTROLLER_EMERGENCY_LATCH_RECONCILED "
+                "local_file_absent=true canonical_stop_inactive=true "
+                "durable_stop_inactive=true trading_authority_not_granted=true"
+            )
 
         # Always re-resolve a non-emergency mode.  In particular, an existing
         # LIVE controller must be able to downgrade immediately when PAPER_MODE,
