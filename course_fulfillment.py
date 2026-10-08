@@ -9,7 +9,6 @@ from sqlalchemy import Boolean, Column, DateTime, MetaData, String, Table, selec
 COURSE_PRICE = "price_1U02soI0gfJjTf3EFtISyrYf"
 COURSE_PRODUCT = "prod_V01AbvtwLMQPkn"
 COURSE_LINK = "plink_1UEtWDI0gfJjTf3E5L0wb3K9"
-course_routes = Blueprint("course_fulfillment", __name__)
 
 
 class CourseLedger:
@@ -126,6 +125,7 @@ def handle_course_event(stripe, ledger, event_type, obj):
 
 
 def register_course_routes(app, store):
+    course_routes = Blueprint("course_fulfillment", __name__)
     # Disabled until the IONOS customer-auth integration is deployed and tested.
     ledger = CourseLedger(store.engine)
     app.config["COURSE_LEDGER"] = ledger
