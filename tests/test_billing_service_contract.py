@@ -16,7 +16,8 @@ def _configured_app(monkeypatch, tmp_path):
     monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "whsec_test")
     monkeypatch.setenv("STRIPE_PRICE_FOUNDING_BETA", "price_founder")
     monkeypatch.setenv("STRIPE_PRODUCT_FOUNDING_BETA", "prod_founder")
-    monkeypatch.setenv("STRIPE_PRICE_STANDARD_BETA_LEGACY_75", "price_standard_legacy")\n    monkeypatch.setenv("STRIPE_PRICE_STANDARD_BETA_V2_99", "price_standard_v2")
+    monkeypatch.setenv("STRIPE_PRICE_STANDARD_BETA_LEGACY_75", "price_standard_legacy")
+    monkeypatch.setenv("STRIPE_PRICE_STANDARD_BETA_V2_99", "price_standard_v2")
     monkeypatch.setenv("STRIPE_PRODUCT_STANDARD_BETA", "prod_standard")
     store = BillingServiceStore(f"sqlite:///{tmp_path / 'billing.db'}")
     return billing.create_app(store), store
