@@ -506,6 +506,60 @@ def register_course_portal(app, billing_store):
             count += 1
         return jsonify({"attempted": count})
 
+    @portal.get("/admin/preview")
+    def admin_preview():
+        if not _admin_allowed():
+            return jsonify({"error": "unauthorized"}), 403
+        # A reconciliation preview never changes entitlements or sends email.
+        try:
+            sessions = _stripe().checkout.Session.list(payment_link=COURSE_LINK, limit=100)
+            data = sessions.get("data", [])
+        except Exception:
+            return jsonify({"error": "stripe_history_unavailable"}), 503
+        history = {"paid": 0, "pending_or_unpaid": 0, "already_reconciled": 0,
+                   "paid_without_entitlement": 0}
+        ledger = current_app.config["COURSE_LEDGER"]
+        for session in data:
+            sid = session.get("id")
+            paid = session.get("payment_status") == "paid" and session.get("status") == "complete"
+            if paid:
+                history["paid"] += 1
+                recorded = ledger.get(sid)
+                if recorded and recorded["granted"]:
+                    history["already_reconciled"] += 1
+                else:
+                    history["paid_without_entitlement"] += 1
+            else:
+                history["pending_or_unpaid"] += 1
+        return jsonify({"counts": history, "has_more": bool(sessions.get("has_more")),
+                        "dry_run": True})
+
+    @portal.post("/admin/reconcile")
+    def admin_reconcile():
+        if not _admin_allowed():
+            return jsonify({"error": "unauthorized"}), 403
+        sid = (request.get_json(silent=True) or {}).get("session_id", "")
+        if not isinstance(sid, str) or not sid.startswith("cs_") or len(sid) > 128:
+            return jsonify({"error": "valid_session_id_required"}), 400
+        try:
+            result = reconcile_session(_stripe(), current_app.config["COURSE_LEDGER"], sid)
+        except Exception:
+            log.exception("Course order reconciliation failed")
+            return jsonify({"error": "provider_reconciliation_failed"}), 503
+        if not result or not result["paid"]:
+            return jsonify({"verified": False, "access_granted": False}), 409
+        on_course_payment(current_app, sid)
+        return jsonify({"verified": True, "access_granted": True,
+                        "email_delivery_queued": True})
+
+    @portal.after_request
+    def secure_headers(resp):
+        resp.headers.setdefault("Cache-Control", "private, no-store")
+        resp.headers["Referrer-Policy"] = "no-referrer"
+        resp.headers["X-Content-Type-Options"] = "nosniff"
+        resp.headers["X-Frame-Options"] = "DENY"
+        return resp
+
     @portal.get("/readyz")
     def readyz():
         return jsonify({"service": "nija-course", "ready": bool(_enabled(current_app)),
