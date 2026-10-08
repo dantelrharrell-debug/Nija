@@ -45,7 +45,8 @@ NIJA_BILLING_ALLOWED_ORIGINS=https://nijaaitrading.com,https://www.nijaaitrading
 
 STRIPE_PRICE_FOUNDING_BETA=<expected recurring Price ID>
 STRIPE_PRODUCT_FOUNDING_BETA=<expected Product ID>
-STRIPE_PRICE_STANDARD_BETA=<expected recurring Price ID>
+STRIPE_PRICE_STANDARD_BETA_LEGACY_75=<legacy $75 recurring Price ID; required only while a locked legacy assignment exists>
+STRIPE_PRICE_STANDARD_BETA_V2_99=<current $99 recurring Price ID>
 STRIPE_PRODUCT_STANDARD_BETA=<expected Product ID>
 
 STRIPE_CHECKOUT_SUCCESS_URL=https://nijaaitrading.com/beta-success?session_id={CHECKOUT_SESSION_ID}
@@ -67,6 +68,8 @@ exp=<short expiration>
 
 Browser-controlled user IDs, emails, prices, products, and offer codes are not
 billing authority.
+
+Do not point both standard-beta environment variables at the same Stripe Price. The legacy `standard_beta` code and current `standard_beta_v2` code are intentionally distinct so an old locked $75 assignment cannot be silently charged $99.
 
 ## Stripe webhook order
 
