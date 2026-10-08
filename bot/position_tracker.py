@@ -154,6 +154,17 @@ class PositionTracker:
                     old_price = self._safe_float(existing.get("entry_price"))
                     old_size = self._safe_float(existing.get("size_usd"))
                     old_verified = self._existing_verified(existing)
+                    # Remember the pre-corruption quantity when a legacy
+                    # duplicate zero-price snapshot is incorrectly added as a
+                    # fill. This is the ONLY quantity allowed for reconstructing
+                    # its unchanged, already-authenticated cost basis.
+                    legacy_origin_qty = self._safe_float(
+                        existing.get("legacy_zero_snapshot_origin_qty")
+                    )
+                    if legacy_zero_snapshot and old_verified and legacy_origin_qty <= 0:
+                        legacy_origin_qty = old_qty
+                    elif not legacy_zero_snapshot:
+                        legacy_origin_qty = 0.0
                     total_qty = old_qty + quantity
                     total_cost = (old_qty * old_price) + (quantity * entry_price)
                     avg_price = total_cost / total_qty if total_qty > 0 else entry_price
@@ -174,6 +185,7 @@ class PositionTracker:
                         "previous_profit_pct": self._safe_float(existing.get("previous_profit_pct")),
                         "position_source": existing.get("position_source", position_source),
                         "entry_price_source": entry_source,
+                        "legacy_zero_snapshot_origin_qty": legacy_origin_qty,
                         "cost_basis_verified": verified,
                         "auto_exit_blocked": not verified,
                         "auto_exit_block_reason": "" if verified else "unverified_cost_basis",
@@ -246,17 +258,44 @@ class PositionTracker:
                 old_cost = self._safe_float((existing or {}).get("size_usd"))
                 old_verified = self._existing_verified(existing)
                 repaired_from_cost = False
+                # A broker quantity change is not proof of an associated new
+                # purchase price. Dividing OLD cost by NEW, larger quantity
+                # fabricated entry prices ($41k or even $2 for BTC in 2026)
+                # and incorrectly triggered profit/stop logic.
+                qty_same = (
+                    old_qty > 0
+                    and abs(old_qty - quantity) <= max(1e-10, quantity * 1e-6)
+                )
+                legacy_origin_qty = self._safe_float(
+                    (existing or {}).get("legacy_zero_snapshot_origin_qty")
+                )
+                legacy_repair = (
+                    old_verified and old_cost > 0 and legacy_origin_qty > 0
+                    and abs(legacy_origin_qty - quantity) <= max(1e-10, quantity * 1e-6)
+                )
 
                 if supplied_entry > 0:
                     effective_entry = supplied_entry
                     effective_source = str(entry_price_source or "override")
                     verified = self._source_verified(effective_source, effective_entry)
-                elif existing and old_cost > 0 and quantity > 0 and old_verified:
+                elif legacy_repair:
+                    # Only a known duplicate zero-price snapshot may reuse the
+                    # previously verified original cost at its original qty.
                     effective_entry = old_cost / quantity
                     effective_source = "reconstructed_verified_cost_basis"
                     verified = True
                     repaired_from_cost = True
-                elif old_entry > 0 and old_verified:
+                elif existing and old_cost > 0 and quantity > 0 and old_verified and qty_same:
+                    effective_entry = old_entry if old_entry > 0 else old_cost / quantity
+                    effective_source = str((existing or {}).get("entry_price_source") or "execution")
+                    verified = True
+                elif (
+                    existing and old_entry > 0 and old_verified
+                    and old_qty > quantity and not legacy_origin_qty
+                ):
+                    # Under average-cost accounting, a partial reduction keeps
+                    # the verified per-unit entry, NOT total historic cost
+                    # divided by the remaining quantity.
                     effective_entry = old_entry
                     effective_source = str((existing or {}).get("entry_price_source") or "execution")
                     verified = True
@@ -300,6 +339,7 @@ class PositionTracker:
                     "previous_profit_pct": self._safe_float((existing or {}).get("previous_profit_pct")),
                     "position_source": source,
                     "entry_price_source": effective_source,
+                    "legacy_zero_snapshot_origin_qty": 0.0,
                     "cost_basis_verified": verified,
                     "auto_exit_blocked": not verified,
                     "auto_exit_block_reason": "" if verified else "unverified_cost_basis:reconciliation_required",
