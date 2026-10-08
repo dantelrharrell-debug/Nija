@@ -2694,6 +2694,12 @@ class NijaCoreLoop:
             flush=True,
         )
         funnel_traces: Dict[str, Dict[str, Tuple[str, str]]] = {}
+        try:
+            from bot.market_scan_coverage import get_market_scan_coverage
+
+            _scan_coverage = get_market_scan_coverage(broker)
+        except Exception:
+            _scan_coverage = None
         for _symbol_idx, symbol in enumerate(symbols):
             _funnel = funnel_traces.setdefault(symbol, {})
             # ── Per-symbol progress heartbeat (every 10 symbols) ─────────
@@ -2734,6 +2740,8 @@ class NijaCoreLoop:
                 break
 
             try:
+                if _scan_coverage is not None:
+                    _scan_coverage.record_evaluation(symbol)
                 _data_attempts += 1
                 # Check session quarantine before fetching — symbols that have
                 # repeatedly failed data fetches are skipped for the rest of the
@@ -2751,6 +2759,8 @@ class NijaCoreLoop:
                     continue
                 df = self._fetch_df(broker, symbol)
                 _df_len = len(df) if df is not None else 0
+                if _scan_coverage is not None:
+                    _scan_coverage.record_data_result(symbol, available=df is not None and _df_len >= 50)
                 # Minimum candle requirement: lowered from 100 → 50 so symbols
                 # with shorter history still get scored.  Indicators need at
                 # least 50 candles (EMA-50 is the longest-period indicator).
@@ -3302,6 +3312,16 @@ class NijaCoreLoop:
             f"liquidity_qualified={_liquidity_qualified} liquidity_rejected={_liquidity_rejected}",
             flush=True,
         )
+        if _scan_coverage is not None:
+            _coverage = _scan_coverage.snapshot()
+            logger.info(
+                "MARKET_SCAN_COVERAGE advertised=%d evaluated=%d not_evaluated=%d "
+                "data_available=%d coverage_pct=%.2f source=adapter_advertised "
+                "candle_freshness_verified=false global_coverage_verified=false",
+                _coverage["advertised"], _coverage["evaluated"], _coverage["not_evaluated"],
+                _coverage["data_available"], _coverage["coverage_pct"],
+            )
+
         # Diagnose timeout-skipped symbols — visible even when some symbols scored OK
         if _data_skipped_timeout > 0:
             logger.critical(

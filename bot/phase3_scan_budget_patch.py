@@ -41,8 +41,7 @@ logger = logging.getLogger("nija.phase3_scan_budget")
 _ORIGINAL_IMPORT_MODULE: Optional[Callable[..., Any]] = None
 _PATCHED = False
 _AI_PATCHED = False
-_COUNTER = 0
-_COUNTER_LOCK = threading.Lock()
+_ROTATION_LOCK = threading.Lock()
 _INSTALL_LOCK = threading.Lock()
 
 _DEPLOY_MARKER = "PHASE3_TERMINAL_BLOCKER_TRACE_PATCHED marker=20260703i"
@@ -239,24 +238,43 @@ def _prioritize_symbols(symbols: list[str]) -> tuple[list[str], int]:
     return ordered, len(priority)
 
 
-def _rotate_symbols(symbols: list[str], budget: int) -> tuple[list[str], int, int]:
-    global _COUNTER
-    count = len(symbols)
-    if count <= budget:
-        return symbols, 0, 0
+def _rotate_symbols(
+    symbols: list[str], budget: int, state: Optional[dict[str, Any]] = None,
+) -> tuple[list[str], int, int]:
+    """Reserve liquid-major slots while fairly admitting every advertised symbol.
+
+    Selection history belongs to a single core-loop/broker instance. It records
+    admission, not scoring or fresh-data proof. Least-recent admission also avoids
+    starvation when an upstream wrapper supplies a changing scan window.
+    """
+    if budget <= 0:
+        return [], 0, 0
     ordered, priority_count = _prioritize_symbols(symbols)
-    priority_slice = ordered[: min(priority_count, max(1, min(budget, 6)))]
-    remainder = ordered[priority_count:] if priority_count else ordered
-    remaining_budget = max(0, budget - len(priority_slice))
-    if remaining_budget <= 0 or not remainder:
-        return priority_slice[:budget], 0, priority_count
-    with _COUNTER_LOCK:
-        offset = (_COUNTER * remaining_budget) % len(remainder)
-        _COUNTER += 1
-    window = remainder[offset:offset + remaining_budget]
-    if len(window) < remaining_budget:
-        window.extend(remainder[:remaining_budget - len(window)])
-    return (priority_slice + window)[:budget], offset, priority_count
+    if not ordered:
+        return [], 0, 0
+    state = state if state is not None else {}
+    with _ROTATION_LOCK:
+        # Keep at least half of the budget available for exploration. Crucially,
+        # priority symbols not reserved below remain in the exploration pool.
+        sequence = int(state.get("sequence", 0)) + 1
+        last_selected = state.setdefault("last_selected", {})
+        priority = sorted(ordered[:priority_count], key=lambda s: last_selected.get(s, 0))
+        reserved = priority[:min(priority_count, 6, budget // 2)]
+        reserved_set = set(reserved)
+        remainder = sorted(
+            (s for s in ordered if s not in reserved_set),
+            key=lambda s: last_selected.get(s, 0),
+        )
+        selected = (reserved + remainder[:max(0, budget - len(reserved))])[:budget]
+        for symbol in selected:
+            last_selected[symbol] = sequence
+        state["sequence"] = sequence
+        # Bounds state to a generous finite history without claiming full coverage
+        # of instruments no longer advertised. Eviction favors the oldest entries.
+        if len(last_selected) > 50_000:
+            keep = sorted(last_selected, key=last_selected.get, reverse=True)[:25_000]
+            state["last_selected"] = {s: last_selected[s] for s in keep}
+    return selected, sequence - 1, priority_count
 
 
 def _count(value: Any) -> int:
@@ -553,7 +571,11 @@ def _install_on_module(module: ModuleType) -> bool:
         offset = 0
         priority_count = 0
         if filtered_count > budget:
-            symbols, offset, priority_count = _rotate_symbols(list(symbols), budget)
+            # Do not let activity in another broker/account consume this cursor.
+            states = self.__dict__.setdefault("_nija_phase3_admission_history", {})
+            scope = (id(broker), _broker_name(broker))
+            state = states.setdefault(scope, {})
+            symbols, offset, priority_count = _rotate_symbols(list(symbols), budget, state)
             logger.critical(
                 "PHASE3_SCAN_BUDGET_APPLIED marker=20260703i original_symbols=%d filtered_symbols=%d budget=%d slots=%d offset=%d priority_matches=%d symbols=%s cycle_id=%s",
                 original_count,

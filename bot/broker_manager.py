@@ -18,6 +18,7 @@ import logging
 import os
 import random
 import re
+import math
 import sys
 import time
 import traceback
@@ -3607,10 +3608,26 @@ class CoinbaseBroker(BaseBroker):
                             logging.debug(f"   Filtered out {product_id}: trading_disabled=True")
                         continue
 
+                    # A visible catalog listing is not market-order eligibility.
+                    # Preserve the adapter's spot scope and reject known entry
+                    # restrictions before spending candle/scoring capacity.
+                    def _product_field(name: str, default: Any = None) -> Any:
+                        return product.get(name, default) if isinstance(product, dict) else getattr(product, name, default)
+
+                    restricted = any(_product_field(flag, False) for flag in (
+                        'view_only', 'is_disabled', 'cancel_only', 'limit_only', 'post_only', 'auction_mode',
+                    ))
+                    product_type = str(getattr(_product_field('product_type', ''), 'value',
+                                               _product_field('product_type', '')) or '').upper()
+                    if restricted or product_type not in {'', 'SPOT'}:
+                        filtered_products_count += 1
+                        continue
+
                     # 5. Validate symbol format (basic sanity check)
-                    # Valid format: 2-8 chars, dash, USD/USDC
+                    # Use the authenticated catalog id; legitimate long/new base
+                    # tickers must not disappear behind an arbitrary length cap.
                     parts = product_id.split('-')
-                    if len(parts) != 2 or len(parts[0]) < 2 or len(parts[0]) > 8:
+                    if len(parts) != 2 or not re.fullmatch(r'[A-Z0-9]+', parts[0]):
                         filtered_products_count += 1
                         if filtered_products_count <= DEBUG_LOG_LIMIT:
                             logging.debug(f"   Filtered out {product_id}: invalid format (length)")
@@ -7180,6 +7197,49 @@ class AlpacaBroker(BaseBroker):
                 exc,
             )
             return False
+
+    def get_asset(self, symbol: str) -> Dict[str, Any]:
+        """Read current asset/borrow metadata with authenticated account eligibility.
+
+        Returning shortable=True requires current account equity, explicit short
+        permission and an active, unblocked account. This read-only interface
+        makes metadata available to the existing profitability capability gate.
+        It does not request a locate, enable margin or submit an order.
+        """
+        if self.api is None:
+            return {}
+        try:
+            asset = self.api.get_asset(symbol)
+            account = self.api.get_account()
+
+            def value(obj: Any, name: str, default: Any = None) -> Any:
+                raw = obj.get(name, default) if isinstance(obj, dict) else getattr(obj, name, default)
+                return getattr(raw, "value", raw)
+
+            equity = float(value(account, "equity", 0.0) or 0.0)
+            eligible = bool(
+                math.isfinite(equity) and equity >= 2000.0
+                and value(account, "shorting_enabled") is True
+                and str(value(account, "status", "")).lower() == "active"
+                and value(account, "trading_blocked") is False
+                and value(account, "account_blocked") is False
+                and value(account, "trade_suspended_by_user") is False
+            )
+            return {
+                "symbol": value(asset, "symbol", symbol),
+                "asset_class": value(asset, "asset_class", value(asset, "class", "")),
+                "status": value(asset, "status", ""),
+                "tradable": value(asset, "tradable", False),
+                "borrow_status": value(asset, "borrow_status", ""),
+                "easy_to_borrow": value(asset, "easy_to_borrow"),
+                "shortable": bool(eligible and value(asset, "shortable") is True
+                                  and value(asset, "tradable") is True
+                                  and str(value(asset, "status", "")).lower() == "active"),
+                "account_shorting_eligible": eligible,
+            }
+        except Exception as exc:
+            logger.warning("Alpaca asset/short eligibility unavailable symbol=%s error=%s", symbol, type(exc).__name__)
+            return {}
 
     @staticmethod
     @staticmethod
@@ -13598,7 +13658,9 @@ class KrakenBroker(BaseBroker):
                 # Convert to our standard format BTC-USD
                 # Access DataFrame column value - pair_info is a pandas Series
                 wsname = pair_info.get('wsname', '')
-                if wsname and ('USD' in wsname or 'USDT' in wsname):
+                pair_status = str(pair_info.get('status', '') or '').strip().lower()
+                quote = str(wsname).rsplit('/', 1)[-1].upper() if wsname else ''
+                if wsname and quote in {'USD', 'USDT', 'USDC'} and pair_status in {'', 'online'}:
                     # Convert from Kraken format to standard format
                     # e.g., BTC/USD -> BTC-USD
                     symbol = self._canonicalize_kraken_ws_market(wsname)

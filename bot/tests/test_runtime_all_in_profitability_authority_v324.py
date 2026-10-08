@@ -122,8 +122,8 @@ def test_alpaca_hard_to_borrow_requires_locate_proof():
         "AAPL",
         {"metadata": {"locate_available": True}},
     )
-    assert ok
-    assert reason == "alpaca:hard_to_borrow_locate_proven"
+    assert not ok
+    assert reason == "alpaca:hard_to_borrow_authenticated_locate_required"
 
 
 def test_fee_capability_patch_changes_economics_not_short_permissions():

@@ -954,6 +954,17 @@ class TradingStrategy:
                 universe[(start + offset) % len(universe)]
                 for offset in range(window_size)
             ]
+            # Nested Phase 3 budgets may visit only a fraction of this window.
+            # Prioritize actual loop visits rather than claiming that admission
+            # to a 100-symbol window means all 100 instruments were evaluated.
+            try:
+                from bot.market_scan_coverage import get_market_scan_coverage
+
+                window = get_market_scan_coverage(broker).select(
+                    universe, start=start, limit=window_size,
+                )
+            except Exception as coverage_exc:
+                logger.debug("Scan coverage unavailable: %s", type(coverage_exc).__name__)
             self._symbol_scan_cursor[broker_name] = (
                 start + window_size
             ) % len(universe)

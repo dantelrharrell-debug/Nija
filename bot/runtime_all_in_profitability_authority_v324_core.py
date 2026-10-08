@@ -289,10 +289,14 @@ def _short_capability(strategy: Any, symbol: str, result: Mapping[str, Any]) -> 
     easy = asset.get("easy_to_borrow")
     if borrow_status in {"unavailable", "not_available", "no_borrow", "none"}:
         return False, f"alpaca:borrow_status={borrow_status}"
-    if borrow_status in {"easy_to_borrow", "easy", "etb"} or easy is True:
+    if borrow_status in {"easy_to_borrow", "easy", "etb"}:
         return True, "alpaca:easy_to_borrow"
 
-    hard = borrow_status in {"hard_to_borrow", "hard", "htb"} or easy is False
+    # The current borrow_status field is authoritative. A deprecated cached
+    # easy_to_borrow=True must never override HTB, unavailable, or unknown status.
+    if not borrow_status and easy is True:
+        return True, "alpaca:easy_to_borrow"
+    hard = borrow_status in {"hard_to_borrow", "hard", "htb"} or (not borrow_status and easy is False)
     if hard:
         metadata = result.get("metadata") if isinstance(result.get("metadata"), Mapping) else {}
         locate_ok = bool(
@@ -301,7 +305,10 @@ def _short_capability(strategy: Any, symbol: str, result: Mapping[str, Any]) -> 
         )
         if not locate_ok:
             return False, "alpaca:hard_to_borrow_locate_not_proven"
-        return True, "alpaca:hard_to_borrow_locate_proven"
+        # Signal metadata is not an authenticated, active, unexpired locate with
+        # sufficient remaining shares. NIJA has no such readback/consumption
+        # adapter yet. Keep HTB research-only until that full flow is implemented.
+        return False, "alpaca:hard_to_borrow_authenticated_locate_required"
 
     return False, "alpaca:borrow_status_not_proven"
 

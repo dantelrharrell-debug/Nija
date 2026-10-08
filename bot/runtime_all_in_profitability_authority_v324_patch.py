@@ -16,6 +16,8 @@ from bot import runtime_all_in_profitability_authority_v324_core as _core
 LOGGER = logging.getLogger("nija.runtime_all_in_profitability_authority_v324_chain")
 MARKER = _core.MARKER
 _ORIGINAL_BASE_FEES = _core._current_base_fees
+# Preserve the canonical compatibility API used by fee/capability diagnostics.
+_patch_exchange_capabilities = _core._patch_exchange_capabilities
 
 
 def _current_base_fees(broker_name: str, symbol: str):
