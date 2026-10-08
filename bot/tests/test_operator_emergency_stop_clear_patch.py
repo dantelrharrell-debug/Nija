@@ -152,6 +152,9 @@ def test_operator_clear_clears_durable_filesystem_stop_before_local_markers(monk
     calls = []
 
     class FakeKillSwitch:
+        def __init__(self):
+            self.active = True
+
         def _read_durable_stop(self):
             return dict(durable)
 
@@ -159,6 +162,14 @@ def test_operator_clear_clears_durable_filesystem_stop_before_local_markers(monk
             calls.append(reason)
             durable["is_active"] = False
             return True
+
+        def deactivate(self, reason):
+            assert durable["is_active"] is False
+            self.active = False
+            return True
+
+        def is_active(self):
+            return self.active
 
     monkeypatch.setattr(patch, "_kill_switch_instance", lambda: FakeKillSwitch())
 
@@ -197,3 +208,50 @@ def test_operator_clear_refuses_automatic_durable_risk_stop(monkeypatch, tmp_pat
 
     assert cleared == 0
     assert kill_file.exists()
+
+
+def test_operator_clear_resets_preinitialized_local_singleton_when_durable_already_clear(monkeypatch, tmp_path):
+    kill_file = tmp_path / "EMERGENCY_STOP"
+    state_file = tmp_path / ".nija_kill_switch_state.json"
+    kill_file.write_text("manual emergency stop active\n", encoding="utf-8")
+    state_file.write_text(json.dumps({"reason": "manual operator stop", "source": "operator"}), encoding="utf-8")
+    _operator_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("NIJA_EMERGENCY_STOP_FILES", str(kill_file))
+    monkeypatch.setenv("NIJA_EMERGENCY_STOP_STATE_FILES", str(state_file))
+
+    durable = {
+        "is_active": False,
+        "source": "FILE_SYSTEM",
+        "reason": "Kill switch file detected",
+        "origin_source": "FILE_SYSTEM",
+        "origin_reason": "Kill switch file detected",
+    }
+
+    class FakeKillSwitch:
+        def __init__(self):
+            self.active = True
+            self.deactivate_calls = 0
+
+        def _read_durable_stop(self):
+            return dict(durable)
+
+        def _clear_durable_stop(self, reason):
+            raise AssertionError("already-inactive durable stop must not need a direct clear")
+
+        def deactivate(self, reason):
+            self.deactivate_calls += 1
+            self.active = False
+            return True
+
+        def is_active(self):
+            return self.active
+
+    fake = FakeKillSwitch()
+    monkeypatch.setattr(patch, "_kill_switch_instance", lambda: fake)
+
+    cleared = patch.run_once()
+
+    assert cleared == 2
+    assert fake.deactivate_calls == 1
+    assert fake.is_active() is False
+    assert durable["is_active"] is False
