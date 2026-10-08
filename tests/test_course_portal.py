@@ -110,18 +110,18 @@ def test_authenticated_library_serves_only_purchased_content(tmp_path, monkeypat
     store = BillingServiceStore(f"sqlite:///{tmp_path / 'authed.db'}")
     app = billing.create_app(store)
     client = app.test_client()
-    assert client.get("/course-portal/file/NIJA_Trading_Foundations_eBook.pdf").status_code == 403
+    assert client.get("/course-portal/file/NIJA_Trading_Foundations_eBook.pdf", base_url="https://localhost").status_code == 403
     signer = URLSafeTimedSerializer("test-session-secret-" * 4, salt="nija-foundations-portal-v1")
     cookie = signer.dumps({"sid": "cs_good", "email": "buyer@example.com"})
     client.set_cookie("nija_foundations_session", cookie, path="/course-portal", secure=True)
 
-    assert client.get("/course-portal/library").status_code == 200
-    pdf = client.get("/course-portal/file/NIJA_Trading_Foundations_eBook.pdf")
+    assert client.get("/course-portal/library", base_url="https://localhost").status_code == 200
+    pdf = client.get("/course-portal/file/NIJA_Trading_Foundations_eBook.pdf", base_url="https://localhost")
     assert pdf.status_code == 200
     assert pdf.content_type.startswith("application/pdf")
-    audio = client.get("/course-portal/file/NIJA_AI_Trading_Foundations_Final_Audiobook_Under_50MB.mp3")
+    audio = client.get("/course-portal/file/NIJA_AI_Trading_Foundations_Final_Audiobook_Under_50MB.mp3", base_url="https://localhost")
     assert audio.status_code == 200
     assert audio.content_type.startswith("audio/mpeg")
 
     monkeypatch.setattr(portal, "_valid_paid", lambda sid: None)
-    assert client.get("/course-portal/file/NIJA_Trading_Foundations_eBook.pdf").status_code == 403
+    assert client.get("/course-portal/file/NIJA_Trading_Foundations_eBook.pdf", base_url="https://localhost").status_code == 403
