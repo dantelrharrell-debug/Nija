@@ -142,8 +142,15 @@ def _resolve_asset_pair(instance: Any, asset: str) -> Optional[Tuple[str, str]]:
     key = (id(instance), base)
     now = time.monotonic()
     cached = _PAIR_CACHE.get(key)
-    if cached and now - cached[0] < 1800.0:
-        return cached[1]
+    if cached:
+        # Positive AssetPairs mapping is relatively stable; a negative lookup
+        # can instead reflect a temporary Kraken public-API/transport failure.
+        # Do not freeze an unpriced holding for 30 minutes after one failure:
+        # a missing quote prevents authenticated dust classification and keeps
+        # startup position reconciliation fail closed.
+        ttl_s = 1800.0 if cached[1] is not None else 30.0
+        if 0.0 <= now - cached[0] < ttl_s:
+            return cached[1]
     candidates = [f"{base}{quote}" for quote in ("USD", "USDT", "USDC", "EUR")]
     for candidate in candidates:
         try:
