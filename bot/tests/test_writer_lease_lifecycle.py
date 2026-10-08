@@ -494,7 +494,17 @@ class TestLeaseLossDetection(_Base):
 
         self.assertIn("NIJA_WRITER_FENCING_TOKEN", os.environ)
 
-        with self._mock_seak():
+        # Exercise the current owner's loss path, not a stale object from
+        # another test's process-global writer lineage.  The separate stale
+        # runtime tests assert that newer authority must remain untouched.
+        with (
+            self._mock_seak(),
+            patch.object(
+                rt,
+                "_owns_published_authority_env",
+                return_value=(True, "unit_test_exact_owner"),
+            ),
+        ):
             rt._mark_lost("test")
 
         self.assertNotIn("NIJA_WRITER_FENCING_TOKEN", os.environ)
@@ -591,7 +601,27 @@ class TestLeaseLossDetection(_Base):
         self.assertTrue(v55._patch_entrypoint_module(module))
         release = module.EntrypointWriterAuthority.release
         self.assertTrue(getattr(release, v55._RELEASE_PATCH, False))
-        self.assertTrue(getattr(release.__wrapped__, v53._PATCH_ATTR, False))
+        # Import hooks may have already wrapped release before these explicit
+        # installers run.  Inspect the complete functools wrapper chain,
+        # rather than assuming the v53 wrapper is exactly one level beneath
+        # v55.  Require the actual v53 function (not a copied @wraps marker).
+        wrappers = []
+        current = release
+        seen = set()
+        while callable(current) and id(current) not in seen:
+            seen.add(id(current))
+            wrappers.append(current)
+            current = getattr(current, "__wrapped__", None)
+        self.assertTrue(
+            any(
+                getattr(getattr(fn, "__code__", None), "co_filename", "").endswith(
+                    "writer_release_state_consistency_v53_patch.py"
+                )
+                and getattr(fn, v53._PATCH_ATTR, False)
+                for fn in wrappers
+            ),
+            "v53 release wrapper must exist in the active release chain",
+        )
 
         runtime = module.EntrypointWriterAuthority()
         runtime._token = "17"
