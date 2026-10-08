@@ -39,7 +39,7 @@ def test_user_101_gets_standard_beta_without_repricing_first_100(tmp_path):
     user_101 = store.assign_beta_offer("user_101")
     first_after = store.get_assignment("user_1")
 
-    assert user_101.offer_code == "standard_beta"
+    assert user_101.offer_code == "standard_beta_v2"
     assert user_101.price_usd == Decimal("99.00")
     assert user_101.trial_days == 0
     assert user_101.cohort_position is None
@@ -47,3 +47,21 @@ def test_user_101_gets_standard_beta_without_repricing_first_100(tmp_path):
     assert first_after == first
     assert first_after.price_usd == Decimal("50.00")
     assert first_after.trial_days == 14
+
+
+def test_legacy_standard_beta_assignment_remains_price_locked(tmp_path):
+    store = CommercialOfferStore(str(tmp_path / "users.db"))
+    with store._connect() as conn:
+        conn.execute(
+            "INSERT INTO commercial_offer_assignments "
+            "(user_id, offer_code, price_usd_cents, trial_days, cohort_position, assigned_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            ("legacy_user", "standard_beta", 7500, 0, None, "2026-08-01T00:00:00+00:00"),
+        )
+        conn.commit()
+
+    legacy = store.get_assignment("legacy_user")
+    assert legacy is not None
+    assert legacy.offer_code == "standard_beta"
+    assert legacy.price_usd == Decimal("75.00")
+    assert store.assign_beta_offer("legacy_user") == legacy

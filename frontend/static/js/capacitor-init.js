@@ -359,7 +359,7 @@ function renderBetaOfferCard(beta) {
 
     const current = beta && beta.current_offer ? beta.current_offer : null;
     const amount = current ? Number(current.amount_usd) : NaN;
-    if (!current || !['founding_beta', 'standard_beta'].includes(current.code) || !Number.isFinite(amount)) {
+    if (!current || !['founding_beta', 'standard_beta_v2'].includes(current.code) || !Number.isFinite(amount)) {
         return false;
     }
 

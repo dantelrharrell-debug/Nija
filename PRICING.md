@@ -67,8 +67,14 @@ Every customer-facing implementation should use the same policy values:
 - `BETA_TRIAL_DAYS = 14`
 - `FOUNDING_BETA_LIMIT = 100`
 - `FOUNDING_BETA_MONTHLY_USD = 50`
+- `LEGACY_STANDARD_BETA_OFFER = standard_beta` (preserved only for previously locked $75 assignments)
+- `STANDARD_BETA_OFFER = standard_beta_v2`
 - `STANDARD_BETA_MONTHLY_USD = 99`
 - `FULL_RELEASE_MONTHLY_USD = 99`
 - `LESSONS_ONE_TIME_USD = 99`
 
 Website, CRM, billing, analytics, and call-center systems must preserve the user's offer/cohort at signup so future public-price changes do not silently reprice existing users.
+
+### Versioned Stripe pricing rule
+
+The legacy offer code `standard_beta` is reserved for any pre-existing assignment that was locked at $75/month. It must never be remapped to the new $99 Stripe Price. New post-Founding-100 assignments use `standard_beta_v2` at $99/month. Stripe must use separate immutable Price IDs for those two offer codes.

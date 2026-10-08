@@ -6,7 +6,7 @@ from pricing_policy import (
     FOUNDING_BETA_MONTHLY_USD,
     FULL_RELEASE_MONTHLY_USD,
     LESSONS_ONE_TIME_USD,
-    STANDARD_BETA_MONTHLY_USD,
+    LEGACY_STANDARD_BETA_OFFER,\n    STANDARD_BETA_MONTHLY_USD,\n    STANDARD_BETA_OFFER,
     beta_offer_for_claimed_count,
 )
 
