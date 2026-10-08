@@ -100,11 +100,11 @@ def _candidate_user(result: Mapping[str, Any]) -> str:
             return "platform"
         if lowered.startswith("user:"):
             parts = raw.split(":")
-            return parts[1].strip() if len(parts) >= 2 else ""
+            return parts[1].strip() if len(parts) >= 2 and parts[1].strip() else "__unresolved_account_identity__"
         if key in {"user_id", "owner_id"}:
             return raw
         # An opaque account identifier must not be treated as a user_id.
-        return ""
+        return "__unresolved_account_identity__"
     return ""
 
 
