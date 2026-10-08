@@ -16,7 +16,7 @@ def _configured_app(monkeypatch, tmp_path):
     monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "whsec_test")
     monkeypatch.setenv("STRIPE_PRICE_FOUNDING_BETA", "price_founder")
     monkeypatch.setenv("STRIPE_PRODUCT_FOUNDING_BETA", "prod_founder")
-    monkeypatch.setenv("STRIPE_PRICE_STANDARD_BETA", "price_standard")
+    monkeypatch.setenv("STRIPE_PRICE_STANDARD_BETA_LEGACY_75", "price_standard_legacy")\n    monkeypatch.setenv("STRIPE_PRICE_STANDARD_BETA_V2_99", "price_standard_v2")
     monkeypatch.setenv("STRIPE_PRODUCT_STANDARD_BETA", "prod_standard")
     store = BillingServiceStore(f"sqlite:///{tmp_path / 'billing.db'}")
     return billing.create_app(store), store
@@ -447,3 +447,15 @@ def test_readyz_fails_closed_when_identity_secret_is_missing(monkeypatch, tmp_pa
     assert response.status_code == 503
     assert response.get_json() == {"service": "nija-billing", "status": "not_ready"}
 
+
+
+def test_versioned_standard_beta_price_mappings_are_distinct(monkeypatch, tmp_path):
+    _configured_app(monkeypatch, tmp_path)
+    legacy = billing._offer_config(billing.LEGACY_STANDARD_BETA_OFFER)
+    current = billing._offer_config(billing.STANDARD_BETA_OFFER)
+
+    assert legacy.offer_code == "standard_beta"
+    assert legacy.price_id == "price_standard_legacy"
+    assert current.offer_code == "standard_beta_v2"
+    assert current.price_id == "price_standard_v2"
+    assert legacy.price_id != current.price_id
