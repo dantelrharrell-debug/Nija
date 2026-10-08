@@ -118,7 +118,7 @@ def test_platform_account_identity_matches_platform_ledger_user(tmp_path, monkey
     assert realized._candidate_user({"account": "platform:kraken"}) == "platform"
     assert realized._candidate_user({"account": "platform"}) == "platform"
     assert realized._candidate_user({"account": "user:daivon_frazier:kraken"}) == "daivon_frazier"
-    assert realized._candidate_user({"account_id": "opaque-kraken-account"}) == ""
+    assert realized._candidate_user({"account_id": "opaque-kraken-account"}) == "__unresolved_account_identity__"
 
     assert db.open_position(
         position_id="PLATFORM-1", symbol="XXBTZUSD", side="LONG",
