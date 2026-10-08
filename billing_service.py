@@ -18,6 +18,7 @@ from flask_cors import CORS
 
 from billing_service_store import BillingIdentityMismatch, BillingServiceStore
 from course_fulfillment import handle_course_event, register_course_routes
+from course_portal import on_course_payment, register_course_portal
 from pricing_policy import (
     BETA_TRIAL_DAYS,
     FOUNDING_BETA_OFFER,
@@ -758,6 +759,9 @@ def create_app(store: Optional[BillingServiceStore] = None) -> Flask:
         try:
             _process_event(stripe, event_type, event_obj, event_created)
             handle_course_event(stripe, current_app.config["COURSE_LEDGER"], event_type, event_obj)
+            if event_type in {"checkout.session.completed", "checkout.session.async_payment_succeeded"}:
+                # Only the verified course ledger can queue this customer-facing delivery.
+                on_course_payment(current_app, _id_value(event_obj))
             _store().finish_event(event_id)
         except Exception:
             _store().release_event(event_id)
@@ -769,6 +773,7 @@ def create_app(store: Optional[BillingServiceStore] = None) -> Flask:
     # Course-specific ledger; no course content is delivered without authenticated access.
     # Use the app-owned store during startup; current_app has no context yet.
     register_course_routes(app, app.config["BILLING_STORE"])
+    register_course_portal(app, app.config["BILLING_STORE"])
 
     # Register the Bitcoin rail only on the standalone billing service. The
     # module intentionally contains no broker/execution imports; verified
