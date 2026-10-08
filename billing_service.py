@@ -17,7 +17,7 @@ from flask import Flask, current_app, jsonify, request
 from flask_cors import CORS
 
 from billing_service_store import BillingIdentityMismatch, BillingServiceStore
-from pricing_policy import BETA_TRIAL_DAYS, FOUNDING_BETA_OFFER, STANDARD_BETA_OFFER
+from pricing_policy import (\n    BETA_TRIAL_DAYS,\n    FOUNDING_BETA_OFFER,\n    LEGACY_STANDARD_BETA_OFFER,\n    STANDARD_BETA_OFFER,\n)
 
 logger = logging.getLogger("nija.billing.service")
 
