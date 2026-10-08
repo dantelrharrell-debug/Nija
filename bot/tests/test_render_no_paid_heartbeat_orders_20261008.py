@@ -10,7 +10,7 @@ _ENTRYPOINT = Path(__file__).resolve().parents[2] / "scripts" / "render_entrypoi
 
 def _exported(name: str) -> str:
     data = _ENTRYPOINT.read_text(encoding="utf-8")
-    matches = re.findall(r"^\\s*export\\s+" + re.escape(name) + r"=([^\\n#]+)", data, re.MULTILINE)
+    matches = re.findall(r"^\s*export\s+" + re.escape(name) + r"=([^\n#]+)", data, re.MULTILINE)
     assert matches, f"{name} must have an explicit production value"
     assert len(matches) == 1, f"{name} must not be ambiguously reassigned"
     return matches[0].strip().strip('"').strip("'").lower()
