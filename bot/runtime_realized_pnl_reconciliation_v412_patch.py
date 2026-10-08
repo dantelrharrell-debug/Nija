@@ -84,14 +84,27 @@ def _explicit_fee(result: Mapping[str, Any]) -> tuple[bool, float]:
 
 
 def _candidate_user(result: Mapping[str, Any]) -> str:
-    for key in ("user_id", "account_id", "account", "account_key", "owner_id"):
-        value = str(result.get(key) or "").strip()
-        if value and value.lower() not in {"platform", "master"}:
-            if value.startswith("user:"):
-                parts = value.split(":")
-                if len(parts) >= 2:
-                    return parts[1]
-            return value
+    """Map authenticated account routing identity to the ledger's user_id.
+
+    The ledger stores the platform owner as "platform", not "platform:kraken".
+    An opaque broker account id is not evidence of a ledger user.  Prefer an
+    explicit account-scoped identity to an unscoped user hint, and fail closed
+    (no matching ledger position) when a supplied identity is unrecognized.
+    """
+    for key in ("account", "account_id", "account_key", "user_id", "owner_id"):
+        raw = str(result.get(key) or "").strip()
+        if not raw:
+            continue
+        lowered = raw.lower()
+        if lowered in {"platform", "master"} or lowered.startswith("platform:"):
+            return "platform"
+        if lowered.startswith("user:"):
+            parts = raw.split(":")
+            return parts[1].strip() if len(parts) >= 2 else ""
+        if key in {"user_id", "owner_id"}:
+            return raw
+        # An opaque account identifier must not be treated as a user_id.
+        return ""
     return ""
 
 
