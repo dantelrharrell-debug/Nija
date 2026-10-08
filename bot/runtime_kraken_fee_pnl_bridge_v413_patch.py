@@ -71,22 +71,25 @@ def _is_opening_proof(result: Mapping[str, Any]) -> bool:
 
 
 def _ledger_user_id(result: Mapping[str, Any]) -> str:
-    raw = str(
-        result.get("account")
-        or result.get("account_id")
-        or result.get("user_id")
-        or "platform"
-    ).strip()
-    if not raw:
-        return "platform"
+    """Return a ledger user only for a proven, scoped Kraken account.
+
+    Do not silently attribute account-less or opaque authenticated fills to
+    the platform; an additional user Kraken account can hold the same symbol.
+    """
+    raw = str(result.get("account") or result.get("account_id") or "").strip()
     lowered = raw.lower()
-    if lowered in {"platform", "master"} or lowered.startswith("platform:"):
+    if lowered in {"platform", "master", "platform:kraken"}:
         return "platform"
-    if lowered.startswith("user:"):
+    if lowered.startswith("user:") and lowered.endswith(":kraken"):
         parts = raw.split(":")
-        if len(parts) >= 2 and parts[1].strip():
+        if len(parts) == 3 and parts[1].strip():
             return parts[1].strip()
-    return raw
+    return ""
+
+
+def _account_owner(result: Mapping[str, Any]) -> str:
+    """Canonical owner for comparing independent proof and fill provenance."""
+    return _ledger_user_id(result)
 
 
 def _ensure_opening_cost_basis(
@@ -170,6 +173,14 @@ def _ensure_opening_cost_basis(
         if quantity <= 0.0:
             raise RuntimeError("entry_quantity_nonpositive")
         user_id = _ledger_user_id(result)
+        if not user_id:
+            LOGGER.warning(
+                "REALIZED_PNL_V413_ENTRY_LEDGER_PENDING marker=%s order_id=%s position_id=%s "
+                "reason=authenticated_account_scope_unproven cost_basis_fabricated=false "
+                "ledger_user_guessed=false",
+                MARKER, order_id, position_id,
+            )
+            return
         side_norm = str(side or "").strip().lower()
         position_side = "LONG" if side_norm == "buy" else "SHORT"
         notes = (
@@ -244,9 +255,13 @@ def _canonical_symbol(value: Any) -> str:
 def _query_exact_fee(order_id: str, symbol: str, side: str) -> tuple[dict[str, Any] | None, str]:
     if order_id in _FEE_CACHE:
         fee, account = _FEE_CACHE[order_id]
-        out: dict[str, Any] = {"fee": fee, "broker": "kraken", "fee_source": "authenticated_kraken_queryorders"}
-        if account.startswith("user:"):
-            out["account"] = account
+        if not _account_owner({"account": account}):
+            return None, "cached_account_scope_unproven"
+        out: dict[str, Any] = {
+            "fee": fee, "broker": "kraken",
+            "fee_source": "authenticated_kraken_queryorders",
+            "account": account,
+        }
         return out, "cache"
     try:
         v367 = importlib.import_module("bot.runtime_kraken_margin_protection_truth_v367_patch")
@@ -290,10 +305,14 @@ def _query_exact_fee(order_id: str, symbol: str, side: str) -> tuple[dict[str, A
             if wanted_side and row_side and wanted_side != row_side:
                 continue
             account_s = str(account or "")
+            if not _account_owner({"account": account_s}):
+                continue
             _FEE_CACHE[order_id] = (float(fee), account_s)
-            out = {"fee": float(fee), "broker": "kraken", "fee_source": "authenticated_kraken_queryorders"}
-            if account_s.startswith("user:"):
-                out["account"] = account_s
+            out = {
+                "fee": float(fee), "broker": "kraken",
+                "fee_source": "authenticated_kraken_queryorders",
+                "account": account_s,
+            }
             return out, "authenticated_exact_match"
     except Exception as exc:
         return None, f"queryorders_exception:{type(exc).__name__}:{exc}"
@@ -373,6 +392,16 @@ def _patch_v412_reconcile() -> bool:
             if not _has_explicit_fee(enriched) and oid:
                 fee_meta, reason = _query_exact_fee(oid, symbol, side)
                 if fee_meta:
+                    explicit_owner = _account_owner(enriched)
+                    authenticated_owner = _account_owner(fee_meta)
+                    if explicit_owner and explicit_owner != authenticated_owner:
+                        LOGGER.error(
+                            "REALIZED_PNL_V413_ACCOUNT_MISMATCH marker=%s order_id=%s symbol=%s "
+                            "authenticated_fee_owner_conflicts_with_fill=true "
+                            "realized_pnl_not_booked=true account_isolation_preserved=true",
+                            MARKER, oid, symbol,
+                        )
+                        return
                     enriched.update(fee_meta)
                     LOGGER.critical(
                         "REALIZED_PNL_V413_FEE_RESOLVED marker=%s order_id=%s symbol=%s fee=%.8f source=authenticated_kraken_queryorders exact_order_match=true fee_estimated=false",

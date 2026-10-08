@@ -154,3 +154,57 @@ def test_unrecognized_account_does_not_book_other_users_pnl(tmp_path, monkeypatc
     )
     assert len(db.get_open_positions(user_id="customer-a")) == 1
     assert db.get_trade_history(user_id="customer-a") == []
+
+
+def test_accountless_exit_cannot_close_any_accounts_ledger(tmp_path, monkeypatch):
+    db = _fresh_ledger(tmp_path, monkeypatch)
+    realized = importlib.import_module("bot.runtime_realized_pnl_reconciliation_v412_patch")
+    assert realized._candidate_user({"broker": "kraken"}) == "__unresolved_account_identity__"
+    assert db.open_position(
+        position_id="REAL-1", symbol="XXBTZUSD", side="LONG",
+        entry_price=100000.0, quantity=0.001, size_usd=100.0,
+        entry_fee=0.25, user_id="platform",
+    )
+    realized._reconcile_confirmed_fill(
+        {"order_id": "ACCOUNTLESS-EXIT-1", "broker": "kraken", "fee": 0.30},
+        symbol="XXBTZUSD", side="sell", fill_price=101000.0, filled_usd=101.0,
+    )
+    assert len(db.get_open_positions(user_id="platform")) == 1
+    assert db.get_trade_history(user_id="platform") == []
+
+
+def test_authenticated_kraken_fee_cache_retains_platform_owner(monkeypatch):
+    bridge = importlib.import_module("bot.runtime_kraken_fee_pnl_bridge_v413_patch")
+    monkeypatch.setitem(bridge._FEE_CACHE, "REAL-FEE-1", (0.21, "platform:kraken"))
+    fee, reason = bridge._query_exact_fee("REAL-FEE-1", "XXBTZUSD", "sell")
+    assert reason == "cache"
+    assert fee == {
+        "fee": 0.21, "broker": "kraken",
+        "fee_source": "authenticated_kraken_queryorders",
+        "account": "platform:kraken",
+    }
+
+
+def test_authenticated_opening_without_scoped_account_cannot_be_misattributed(tmp_path, monkeypatch):
+    db = _fresh_ledger(tmp_path, monkeypatch)
+    bridge = importlib.import_module("bot.runtime_kraken_fee_pnl_bridge_v413_patch")
+    proof = {
+        "order_id": "ACCOUNTLESS-ENTRY-1",
+        "execution_role": "entry", "authenticated_kraken_opening_order": True,
+        "authenticated_kraken_queryorders": True,
+        "opening_position_id": "ACCOUNTLESS-POS-1", "fee": 0.30,
+    }
+    bridge._ensure_opening_cost_basis(
+        proof, symbol="XXBTZUSD", side="buy",
+        fill_price=100000.0, filled_usd=100.0,
+    )
+    assert db.get_open_positions(user_id="platform") == []
+    assert db.get_ledger_transactions(user_id="platform") == []
+
+
+def test_queryorders_fee_provenance_rejects_conflicting_user_attribution(monkeypatch):
+    bridge = importlib.import_module("bot.runtime_kraken_fee_pnl_bridge_v413_patch")
+    assert bridge._account_owner({"account": "platform:kraken"}) == "platform"
+    assert bridge._account_owner({"account": "user:customer-1:kraken"}) == "customer-1"
+    assert bridge._account_owner({"account": "opaque-account"}) == ""
+    assert bridge._ledger_user_id({"account": "user:customer-1:kraken"}) == "customer-1"

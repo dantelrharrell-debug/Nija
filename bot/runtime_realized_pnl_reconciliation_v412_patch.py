@@ -105,7 +105,7 @@ def _candidate_user(result: Mapping[str, Any]) -> str:
             return raw
         # An opaque account identifier must not be treated as a user_id.
         return "__unresolved_account_identity__"
-    return ""
+    return "__unresolved_account_identity__"
 
 
 def _ledger() -> Any:
@@ -185,6 +185,14 @@ def _reconcile_confirmed_fill(
             return
 
         user_hint = _candidate_user(result)
+        if user_hint == "__unresolved_account_identity__":
+            LOGGER.warning(
+                "REALIZED_PNL_V412_PENDING marker=%s order_id=%s symbol=%s "
+                "reason=authenticated_account_scope_unproven "
+                "realized_net_pnl_not_booked=true cross_account_booking_forbidden=true",
+                MARKER, oid, symbol,
+            )
+            return
         candidates = _matching_positions(ledger, symbol, side, user_hint)
         if len(candidates) != 1:
             LOGGER.warning(
