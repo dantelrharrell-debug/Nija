@@ -471,7 +471,18 @@ class TestLeaseLossDetection(_Base):
 
         self.assertEqual(os.environ.get("NIJA_WRITER_LEASE_ACQUIRED"), "1")
 
-        with self._mock_seak():
+        # This test exercises the current-owner loss path. The full suite reuses
+        # one process and may leave a newer process-global writer lineage from an
+        # unrelated test; pin exact ownership here. Dedicated stale-runtime tests
+        # below verify that an older runtime must preserve newer published state.
+        with (
+            self._mock_seak(),
+            patch.object(
+                rt,
+                "_owns_published_authority_env",
+                return_value=(True, "unit_test_exact_owner"),
+            ),
+        ):
             rt._mark_lost("test")
 
         self.assertEqual(os.environ.get("NIJA_WRITER_LEASE_ACQUIRED"), "0",

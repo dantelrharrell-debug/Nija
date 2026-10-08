@@ -286,18 +286,21 @@ def _durable_stop_safe_to_clear(record: object) -> tuple[bool, str]:
 
 
 def _clear_durable_stop_if_safe(operator_reason: str) -> tuple[bool, str]:
-    """Clear the authoritative Redis stop before removing local markers.
+    """Clear durable and already-instantiated process-local stop state.
 
-    The durable stop is the cross-instance source of truth.  A local-only clear
-    is incomplete because a replacement Render instance will simply reassert
-    the Redis stop and recreate EMERGENCY_STOP.
+    The durable stop is cleared first. Only after Redis confirms the stop is
+    inactive may this path ask the existing KillSwitch singleton to deactivate.
+    Final success requires both the local singleton and durable record to verify
+    inactive. Missing APIs or ambiguous results fail closed.
     """
     try:
         kill_switch = _kill_switch_instance()
         reader = getattr(kill_switch, "_read_durable_stop", None)
         clearer = getattr(kill_switch, "_clear_durable_stop", None)
-        if not callable(reader) or not callable(clearer):
-            return False, "durable_stop_api_unavailable"
+        deactivator = getattr(kill_switch, "deactivate", None)
+        active_probe = getattr(kill_switch, "is_active", None)
+        if not all(callable(item) for item in (reader, clearer, deactivator, active_probe)):
+            return False, "kill_switch_clear_api_unavailable"
 
         record = reader()
         safe, detail = _durable_stop_safe_to_clear(record)
@@ -311,7 +314,18 @@ def _clear_durable_stop_if_safe(operator_reason: str) -> tuple[bool, str]:
             if isinstance(verify, dict) and bool(verify.get("is_active")):
                 return False, "durable_stop_clear_verify_failed"
 
-        return True, "durable_stop_clear_confirmed"
+        if bool(active_probe()):
+            if deactivator(operator_reason) is not True:
+                return False, "local_kill_switch_deactivate_unconfirmed"
+
+        if bool(active_probe()):
+            return False, "local_kill_switch_still_active"
+
+        final_durable = reader()
+        if isinstance(final_durable, dict) and bool(final_durable.get("is_active")):
+            return False, "durable_stop_reasserted_after_local_clear"
+
+        return True, "durable_and_local_stop_clear_confirmed"
     except Exception as exc:
         return False, f"durable_stop_clear_error:{type(exc).__name__}:{exc}"
 
@@ -371,6 +385,8 @@ def run_once() -> int:
 
     cleared: list[str] = []
     for path in all_paths:
+        if not path.exists():
+            continue
         try:
             target = _quarantine(path)
             cleared.append(f"{path}->{target}")
