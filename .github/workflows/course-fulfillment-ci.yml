@@ -1,0 +1,41 @@
+name: Foundations course delivery tests
+
+on:
+  pull_request:
+    paths:
+      - 'billing_service.py'
+      - 'billing_service_store.py'
+      - 'course_fulfillment.py'
+      - 'course_portal.py'
+      - 'tests/test_course_fulfillment.py'
+      - 'tests/test_course_portal.py'
+      - '.github/workflows/course-fulfillment-ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'billing_service.py'
+      - 'course_fulfillment.py'
+      - 'course_portal.py'
+      - 'tests/test_course_fulfillment.py'
+      - 'tests/test_course_portal.py'
+
+permissions:
+  contents: read
+
+jobs:
+  verify-course-fulfillment:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install billing dependencies
+        run: |
+          python -m pip install -r requirements-billing.txt pytest
+      - name: Verify payment, private access and delivery contracts
+        env:
+          NIJA_COURSE_DELIVERY_ENABLED: 'false'
+        run: |
+          python -m pytest -q tests/test_course_fulfillment.py tests/test_course_portal.py tests/test_billing_service_contract.py
