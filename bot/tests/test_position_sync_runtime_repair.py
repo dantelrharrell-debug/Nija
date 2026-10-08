@@ -67,6 +67,50 @@ class PositionSnapshotSyncTests(unittest.TestCase):
             places=8,
         )
 
+    def test_new_broker_quantity_cannot_divide_stale_cost_basis_to_fake_profit(self) -> None:
+        tracker = position_tracker_module.PositionTracker(self.storage)
+        initial_qty = 0.00035037
+        initial_entry = 82312.87
+        self.assertTrue(tracker.track_entry("BTC-USD", initial_entry, initial_qty,
+                                           initial_qty * initial_entry))
+        self.assertTrue(tracker.sync_position_snapshot(
+            symbol="BTC-USD", quantity=0.00070087,
+            entry_price=0.0, current_price=81630.30,
+            size_usd=0.00070087 * 81630.30,
+        ))
+        row = tracker.get_position("BTC-USD")
+        self.assertEqual(row["entry_price"], 0.0)
+        self.assertFalse(row["cost_basis_verified"])
+        self.assertTrue(row["auto_exit_blocked"])
+        self.assertEqual(row["entry_price_source"], "reconciliation_required")
+
+    def test_partial_reduction_preserves_authenticated_per_unit_average(self) -> None:
+        tracker = position_tracker_module.PositionTracker(self.storage)
+        before = 0.00070087
+        after = 0.00035037
+        entry = 82312.87
+        self.assertTrue(tracker.track_entry("BTC-USD", entry, before, before * entry))
+        self.assertTrue(tracker.sync_position_snapshot(
+            symbol="BTC-USD", quantity=after, entry_price=0.0,
+            current_price=81630.30, size_usd=after * 81630.30,
+        ))
+        row = tracker.get_position("BTC-USD")
+        self.assertAlmostEqual(row["entry_price"], entry, places=5)
+        self.assertAlmostEqual(row["size_usd"], after * entry, places=5)
+        self.assertTrue(row["cost_basis_verified"])
+
+    def test_dust_to_tradeable_quantity_requires_new_basis_truth(self) -> None:
+        tracker = position_tracker_module.PositionTracker(self.storage)
+        self.assertTrue(tracker.track_entry("BTC-USD", 82312.87, 0.00000001, 0.0008231287))
+        self.assertTrue(tracker.sync_position_snapshot(
+            symbol="BTC-USD", quantity=0.00035037, entry_price=0.0,
+            current_price=81612.0, size_usd=28.59,
+        ))
+        row = tracker.get_position("BTC-USD")
+        self.assertEqual(row["entry_price"], 0.0)
+        self.assertFalse(row["cost_basis_verified"])
+        self.assertTrue(row["auto_exit_blocked"])
+
     def test_startup_sync_ignores_stale_override_quantity(self) -> None:
         tracker = position_tracker_module.PositionTracker(self.storage)
         quantity = 5.13699973
