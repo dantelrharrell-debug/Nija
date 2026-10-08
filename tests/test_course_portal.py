@@ -91,3 +91,37 @@ def test_bundle_integrity_and_reject_modified_asset(monkeypatch):
 
     with pytest.raises(ValueError):
         validate_bundle(b"not a zip")
+
+
+def test_authenticated_library_serves_only_purchased_content(tmp_path, monkeypatch):
+    import billing_service as billing
+    import course_portal as portal
+    from billing_service_store import BillingServiceStore
+    from itsdangerous import URLSafeTimedSerializer
+
+    monkeypatch.setenv("BILLING_DATABASE_URL", f"sqlite:///{tmp_path / 'authed.db'}")
+    monkeypatch.setenv("NIJA_COURSE_DELIVERY_ENABLED", "true")
+    monkeypatch.setenv("NIJA_COURSE_SESSION_SECRET", "test-session-secret-" * 4)
+    monkeypatch.setattr(portal.PortalStore, "has_bundle", lambda self: True)
+    monkeypatch.setattr(portal.PortalStore, "asset_bytes",
+                        lambda self, filename: b"%PDF-1.4\\nVerified" if filename.endswith(".pdf") else b"ID3test")
+    monkeypatch.setattr(portal, "_valid_paid",
+                        lambda sid: {"customer_email": "buyer@example.com"} if sid == "cs_good" else None)
+    store = BillingServiceStore(f"sqlite:///{tmp_path / 'authed.db'}")
+    app = billing.create_app(store)
+    client = app.test_client()
+    assert client.get("/course-portal/file/NIJA_Trading_Foundations_eBook.pdf").status_code == 403
+    signer = URLSafeTimedSerializer("test-session-secret-" * 4, salt="nija-foundations-portal-v1")
+    cookie = signer.dumps({"sid": "cs_good", "email": "buyer@example.com"})
+    client.set_cookie("nija_foundations_session", cookie, path="/course-portal", secure=True)
+
+    assert client.get("/course-portal/library").status_code == 200
+    pdf = client.get("/course-portal/file/NIJA_Trading_Foundations_eBook.pdf")
+    assert pdf.status_code == 200
+    assert pdf.content_type.startswith("application/pdf")
+    audio = client.get("/course-portal/file/NIJA_AI_Trading_Foundations_Final_Audiobook_Under_50MB.mp3")
+    assert audio.status_code == 200
+    assert audio.content_type.startswith("audio/mpeg")
+
+    monkeypatch.setattr(portal, "_valid_paid", lambda sid: None)
+    assert client.get("/course-portal/file/NIJA_Trading_Foundations_eBook.pdf").status_code == 403
