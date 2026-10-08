@@ -20,6 +20,12 @@ export FORCE_TRADE=false
 # inside the existing phase-3 deadline. This reduces data-insufficient cycles
 # without weakening any risk, execution, position-sync, or protective-exit gate.
 export NIJA_MAX_SCAN_SYMBOLS=20
+# Independent public-only observer: 20 symbols per venue per 150-second
+# cycle, rotating through catalog listings even while trading is blocked.
+# Uses ONLY exchange public HTTPS GET and never creates trade authority.
+export NIJA_PUBLIC_MARKET_OBSERVER_ENABLED=true
+export NIJA_PUBLIC_MARKET_SCAN_WINDOW=20
+export NIJA_PUBLIC_MARKET_SCAN_INTERVAL_S=150
 export NIJA_MARKET_DATA_STABILITY_PATCH=true
 export NIJA_PHASE3_FETCH_DEADLINE_SKIP_ENABLED=true
 

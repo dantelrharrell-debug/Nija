@@ -9,6 +9,7 @@ instead of relying on stale inherited environment variables.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import signal
@@ -21,6 +22,8 @@ from typing import Any, Optional
 
 _STARTED_AT = time.time()
 _TRUE = {"1", "true", "yes", "on", "enabled", "y"}
+# Isolated public quote observer. Never shares the trading worker's objects.
+_PUBLIC_MARKET_OBSERVER: Any = None
 
 
 def _read_text(path: Path) -> Optional[str]:
@@ -420,6 +423,32 @@ class _Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
     def do_GET(self) -> None:  # noqa: N802 - stdlib handler contract
+        if self.path == "/market-observerz":
+            # This endpoint reports PUBLIC quote coverage only. It cannot set
+            # /readyz, writer authority, execution readiness, or trade state.
+            observer = _PUBLIC_MARKET_OBSERVER
+            payload_obj = (
+                observer.snapshot()
+                if observer is not None
+                else {
+                    "status": "disabled",
+                    "mode": "public_quote_quality_only_not_strategy",
+                    "orders_submitted": False,
+                    "broker_credentials_used": False,
+                    "trading_authority_unchanged": True,
+                }
+            )
+            payload = json.dumps(payload_obj, separators=(",", ":")).encode("utf-8")
+            try:
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(payload)))
+                self.send_header("Connection", "close")
+                self.end_headers()
+                self.wfile.write(payload)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            return
         if self.path not in {"/", "/health", "/healthz", "/status", "/readyz"}:
             self.send_response(404)
             self.send_header("Content-Length", "0")
@@ -476,9 +505,41 @@ def main() -> int:
         f"state_file={_state_path()}",
         flush=True,
     )
+    # The early liveness server is launched with python -S and has no trading
+    # module imports or writer lease. Run the public-only observer here so
+    # market coverage continues when the trading engine correctly fails closed.
+    global _PUBLIC_MARKET_OBSERVER
+    if str(os.environ.get("NIJA_PUBLIC_MARKET_OBSERVER_ENABLED", "false")).lower() in {
+        "1", "true", "yes", "on"
+    }:
+        try:
+            # Path import uses stdlib only; the liveness module must never
+            # transitively import the bot package or load Python site hooks.
+            observer_path = Path(__file__).resolve().parent / "scripts" / "public_market_observer_v428.py"
+            spec = importlib.util.spec_from_file_location("nija_public_market_observer_v428", observer_path)
+            if spec is None or spec.loader is None:
+                raise RuntimeError("public_observer_module_missing")
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            _PUBLIC_MARKET_OBSERVER = module.start_from_liveness()
+            print(
+                "RENDER_PUBLIC_MARKET_OBSERVER_V428_STARTED "
+                "read_only=true execution_independent=true orders_submitted=false",
+                flush=True,
+            )
+        except Exception as exc:
+            # Market observer failure is independently visible and must never
+            # take down Render's /healthz or distort trading /readyz.
+            print(
+                "RENDER_PUBLIC_MARKET_OBSERVER_V428_UNAVAILABLE "
+                f"reason={type(exc).__name__} orders_submitted=false",
+                flush=True,
+            )
     try:
         server.serve_forever(poll_interval=0.5)
     finally:
+        if _PUBLIC_MARKET_OBSERVER is not None:
+            _PUBLIC_MARKET_OBSERVER.stop()
         server.server_close()
     return 0
 
