@@ -26,7 +26,6 @@ from sqlalchemy.exc import IntegrityError
 from course_fulfillment import COURSE_LINK, CourseLedger, reconcile_session
 
 log = logging.getLogger("nija.billing.course_portal")
-portal = Blueprint("nija_course_portal", __name__, url_prefix="/course-portal")
 COOKIE = "nija_foundations_session"
 BUNDLE = "foundations-customer-v1"
 ALLOWED = {
@@ -365,6 +364,7 @@ def on_course_payment(app, session_id):
 
 
 def register_course_portal(app, billing_store):
+    portal = Blueprint("nija_course_portal", __name__, url_prefix="/course-portal")
     store = PortalStore(billing_store.engine)
     app.config["COURSE_PORTAL_STORE"] = store
 
