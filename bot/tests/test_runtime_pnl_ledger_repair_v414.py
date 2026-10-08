@@ -108,3 +108,49 @@ def test_confirmed_exit_books_realized_pnl_from_authenticated_cost_basis(tmp_pat
     assert trade["gross_profit"] == pytest.approx(2.0)
     assert trade["total_fees"] == pytest.approx(1.10)
     assert trade["net_profit"] == pytest.approx(0.90)
+
+
+def test_platform_account_identity_matches_platform_ledger_user(tmp_path, monkeypatch):
+    db = _fresh_ledger(tmp_path, monkeypatch)
+    importlib.import_module("bot.position_close_pnl_runtime_patch").install_import_hook()
+    realized = importlib.import_module("bot.runtime_realized_pnl_reconciliation_v412_patch")
+
+    assert realized._candidate_user({"account": "platform:kraken"}) == "platform"
+    assert realized._candidate_user({"account": "platform"}) == "platform"
+    assert realized._candidate_user({"account": "user:daivon_frazier:kraken"}) == "daivon_frazier"
+    assert realized._candidate_user({"account_id": "opaque-kraken-account"}) == ""
+
+    assert db.open_position(
+        position_id="PLATFORM-1", symbol="XXBTZUSD", side="LONG",
+        entry_price=100000.0, quantity=0.001, size_usd=100.0,
+        entry_fee=0.25, user_id="platform",
+    )
+    realized._reconcile_confirmed_fill(
+        {"order_id": "PLATFORM-EXIT-1", "account": "platform:kraken",
+         "broker": "kraken", "fee": 0.30},
+        symbol="XXBTZUSD", side="sell", fill_price=101000.0,
+        filled_usd=101.0,
+    )
+    assert db.get_open_positions(user_id="platform") == []
+    trades = db.get_trade_history(user_id="platform")
+    assert len(trades) == 1
+    assert trades[0]["net_profit"] == pytest.approx(0.45)
+
+
+def test_unrecognized_account_does_not_book_other_users_pnl(tmp_path, monkeypatch):
+    db = _fresh_ledger(tmp_path, monkeypatch)
+    importlib.import_module("bot.position_close_pnl_runtime_patch").install_import_hook()
+    realized = importlib.import_module("bot.runtime_realized_pnl_reconciliation_v412_patch")
+    assert db.open_position(
+        position_id="USER-1", symbol="XXBTZUSD", side="LONG",
+        entry_price=100000.0, quantity=0.001, size_usd=100.0,
+        entry_fee=0.25, user_id="customer-a",
+    )
+    realized._reconcile_confirmed_fill(
+        {"order_id": "OPAQUE-EXIT-1", "account": "opaque-kraken-account",
+         "broker": "kraken", "fee": 0.30},
+        symbol="XXBTZUSD", side="sell", fill_price=101000.0,
+        filled_usd=101.0,
+    )
+    assert len(db.get_open_positions(user_id="customer-a")) == 1
+    assert db.get_trade_history(user_id="customer-a") == []
