@@ -62,6 +62,17 @@ def reconcile_session(stripe, ledger, session_id):
             or product_id != COURSE_PRODUCT or price.get("unit_amount") != 9900
             or price.get("currency") != "usd"):
         return None
+    # Unit course price is $99; Stripe Tax may increase the actual charged total.
+    # The full paid total must reconcile exactly to the PaymentIntent and charge.
+    subtotal = session.get("amount_subtotal")
+    total = session.get("amount_total")
+    breakdown = session.get("total_details") or {}
+    tax = breakdown.get("amount_tax")
+    discount = breakdown.get("amount_discount", 0)
+    if (subtotal != 9900 or not isinstance(total, int) or total < 9900
+            or discount not in (None, 0)
+            or (tax is not None and total != subtotal + tax)):
+        return None
     email = ((session.get("customer_details") or {}).get("email") or "").strip().lower()
     if not email or "@" not in email:
         return None
@@ -70,18 +81,26 @@ def reconcile_session(stripe, ledger, session_id):
     intent_id = intent if isinstance(intent, str) else (intent or {}).get("id")
     if intent_id:
         intent_obj = stripe.PaymentIntent.retrieve(intent_id)
-        charge_paid = (intent_obj.get("status") == "succeeded"
-                       and intent_obj.get("amount_received") == 9900
-                       and intent_obj.get("currency") == "usd"
-                       and intent_obj.get("amount_refunded", 0) == 0)
-        # Stripe PaymentIntent objects do not always expose amount_refunded.
-        # A charge must be checked separately before releasing course access.
+        charge_paid = (
+            intent_obj.get("status") == "succeeded"
+            and intent_obj.get("amount_received") == total
+            and intent_obj.get("currency") == "usd"
+        )
         charge_id = intent_obj.get("latest_charge")
         if isinstance(charge_id, dict):
             charge_id = charge_id.get("id")
-        if charge_id:
+        if charge_id and charge_paid:
             charge = stripe.Charge.retrieve(charge_id)
-            charge_paid = charge_paid and not charge.get("refunded") and charge.get("amount_refunded", 0) == 0 and not charge.get("disputed")
+            charge_paid = (
+                charge.get("paid") is True
+                and charge.get("status") == "succeeded"
+                and charge.get("currency") == "usd"
+                and charge.get("amount") == total
+                and not charge.get("refunded")
+                and charge.get("amount_refunded", 0) == 0
+                and not charge.get("disputed")
+                and charge.get("payment_intent") == intent_id
+            )
         else:
             charge_paid = False
         paid = paid and charge_paid
