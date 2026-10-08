@@ -1,11 +1,10 @@
 """Fail-closed course payment verification, independent of subscription/broker entitlements."""
 from __future__ import annotations
 
-import os
 from datetime import datetime, timezone
 
 from flask import Blueprint, jsonify, request
-from sqlalchemy import Boolean, Column, DateTime, MetaData, String, Table, create_engine, select, update, insert
+from sqlalchemy import Boolean, Column, DateTime, MetaData, String, Table, select, update, insert
 
 COURSE_PRICE = "price_1U02soI0gfJjTf3EFtISyrYf"
 COURSE_PRODUCT = "prod_V01AbvtwLMQPkn"
@@ -69,11 +68,23 @@ def reconcile_session(stripe, ledger, session_id):
     paid = session.get("status") == "complete" and session.get("payment_status") == "paid"
     intent = session.get("payment_intent")
     intent_id = intent if isinstance(intent, str) else (intent or {}).get("id")
-    if paid and intent_id:
+    if intent_id:
         intent_obj = stripe.PaymentIntent.retrieve(intent_id)
-        paid = (intent_obj.get("status") == "succeeded"
-                and intent_obj.get("amount_received") == 9900
-                and intent_obj.get("currency") == "usd")
+        charge_paid = (intent_obj.get("status") == "succeeded"
+                       and intent_obj.get("amount_received") == 9900
+                       and intent_obj.get("currency") == "usd"
+                       and intent_obj.get("amount_refunded", 0) == 0)
+        # Stripe PaymentIntent objects do not always expose amount_refunded.
+        # A charge must be checked separately before releasing course access.
+        charge_id = intent_obj.get("latest_charge")
+        if isinstance(charge_id, dict):
+            charge_id = charge_id.get("id")
+        if charge_id:
+            charge = stripe.Charge.retrieve(charge_id)
+            charge_paid = charge_paid and not charge.get("refunded") and charge.get("amount_refunded", 0) == 0 and not charge.get("disputed")
+        else:
+            charge_paid = False
+        paid = paid and charge_paid
     else:
         paid = False
     ledger.upsert(session_id, email, session.get("customer"), intent_id,
@@ -88,6 +99,9 @@ def handle_course_event(stripe, ledger, event_type, obj):
         return
     session_id = obj.get("id")
     if not session_id or not session_id.startswith("cs_"):
+        return
+    # Ignore every other Stripe product without changing its subscription state.
+    if obj.get("payment_link") != COURSE_LINK:
         return
     reconcile_session(stripe, ledger, session_id)
 
