@@ -19,8 +19,9 @@ def test_valid_paid_course(tmp_path):
         "has_more": False,
     }
     stripe.PaymentIntent.retrieve.return_value = {
-        "status": "succeeded", "amount_received": 9900, "currency": "usd",
+        "status": "succeeded", "amount_received": 9900, "currency": "usd", "latest_charge": "ch_test",
     }
+    stripe.Charge.retrieve.return_value = {"refunded": False, "amount_refunded": 0, "disputed": False}
     result = reconcile_session(stripe, ledger, "cs_test_paid")
     assert result["paid"] is True
     assert ledger.get("cs_test_paid")["granted"] is True
@@ -56,3 +57,25 @@ def test_wrong_product_never_grants(tmp_path):
     }
     assert reconcile_session(stripe, ledger, "cs_wrong") is None
     assert ledger.get("cs_wrong") is None
+
+
+def test_refunded_charge_cannot_grant(tmp_path):
+    ledger = CourseLedger(create_engine("sqlite:///" + str(tmp_path / "refunded.db")))
+    stripe = Mock()
+    stripe.checkout.Session.retrieve.return_value = {
+        "payment_link": COURSE_LINK, "mode": "payment", "status": "complete",
+        "payment_status": "paid", "customer_details": {"email": "buyer@example.com"},
+        "payment_intent": "pi_refunded",
+    }
+    stripe.checkout.Session.list_line_items.return_value = {
+        "data": [{"quantity": 1, "price": {"id": COURSE_PRICE, "product": COURSE_PRODUCT,
+                                           "unit_amount": 9900, "currency": "usd"}}],
+        "has_more": False,
+    }
+    stripe.PaymentIntent.retrieve.return_value = {
+        "status": "succeeded", "amount_received": 9900, "currency": "usd",
+        "latest_charge": "ch_refunded",
+    }
+    stripe.Charge.retrieve.return_value = {"refunded": True, "amount_refunded": 9900, "disputed": False}
+    assert reconcile_session(stripe, ledger, "cs_refunded")["paid"] is False
+    assert ledger.get("cs_refunded")["granted"] is False
