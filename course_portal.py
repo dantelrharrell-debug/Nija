@@ -471,6 +471,41 @@ def register_course_portal(app, billing_store):
         got = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
         return len(secret) >= 32 and hmac.compare_digest(secret, got)
 
+    @portal.get("/admin/")
+    def admin_home():
+        # Credential is entered only in this browser and never stored in cookies or URLs.
+        return _layout("Private Course Package Upload", '''
+        <div class="card"><p>Operator only. Select the original validated NIJA
+        Foundations customer ZIP, then enter the private upload token
+        configured on Render. Neither token nor archive is made public.</p>
+        <p><input id="archive" type="file" accept=".zip"></p>
+        <p><input id="operator-token" type="password" autocomplete="off"
+        placeholder="Private upload token"></p>
+        <button type="button" id="import-button">Upload Protected Package</button>
+        <pre id="import-result" role="status"></pre></div>
+        <script>
+        document.getElementById("import-button").addEventListener("click",async()=>{
+          const f=document.getElementById("archive").files[0];
+          const input=document.getElementById("operator-token");
+          const output=document.getElementById("import-result");
+          if(!f||!input.value){output.textContent="Select a ZIP and enter your token.";return;}
+          const form=new FormData();form.append("package",f);
+          const button=document.getElementById("import-button");button.disabled=true;
+          output.textContent="Uploading and verifying private files…";
+          try {
+            const res=await fetch("/course-portal/admin/import",{method:"POST",
+              headers:{"Authorization":"Bearer "+input.value},
+              credentials:"same-origin",body:form});
+            const result=await res.json();
+            output.textContent=res.ok
+              ? "Verified: "+result.files+" files. SHA-256: "+result.bundle_sha256
+              : "Upload rejected: "+(result.error||res.status);
+          } catch(e) {output.textContent="Upload failed. Retry safely.";}
+          input.value="";button.disabled=false;
+        });
+        </script>
+        ''')
+
     @portal.post("/admin/import")
     def admin_import():
         if not _admin_allowed():
