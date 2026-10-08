@@ -479,6 +479,33 @@ def _run_main_single_identity(bot_entry: ModuleType, bot_main: ModuleType) -> No
             _release_early_writer(bot_main, reason="main_wrapper_failed_before_handoff")
 
 
+def _run_operator_emergency_stop_clear_pre_runtime() -> int:
+    """Consume an explicit operator emergency-stop approval before runtime starts.
+
+    The canonical launcher deliberately keeps sitecustomize deferred, so the
+    historical sitecustomize installer cannot own this control in production.
+    This one-shot call invokes the existing fail-closed operator-clear policy
+    after exact writer bootstrap and before any runtime trading work starts.
+    It does not grant execution authority, submit orders, weaken risk gates, or
+    force LIVE activation.
+    """
+    module = _canonical_import("bot.operator_emergency_stop_clear_patch")
+    runner = getattr(module, "run_once", None)
+    if not callable(runner):
+        raise RuntimeError("operator emergency-stop clear runner unavailable")
+
+    cleared = int(runner() or 0)
+    LOGGER.critical(
+        "CANONICAL_OPERATOR_EMERGENCY_STOP_CLEAR_CHECK "
+        "marker=20261007-canonical-operator-emergency-stop-clear-v416 "
+        "cleared=%d explicit_operator_policy=true durable_stop_policy_preserved=true "
+        "execution_authority_granted=false forced_activation=false "
+        "orders_submitted=false safety_gates_bypassed=false",
+        cleared,
+    )
+    return cleared
+
+
 def main() -> int:
     os.environ["NIJA_DEFER_RUNTIME_SITE_HOOKS"] = "1"
     os.environ["NIJA_CANONICAL_ENTRYPOINT_FAST_PATH"] = "1"
@@ -487,6 +514,14 @@ def main() -> int:
     _start_render_memory_pressure_guard()
     install_canonical_startup_guard()
     bot_entry, bot_main = _bootstrap_writer_first()
+    try:
+        _run_operator_emergency_stop_clear_pre_runtime()
+    except Exception:
+        _release_early_writer(
+            bot_main,
+            reason="operator_emergency_stop_clear_pre_runtime_failed",
+        )
+        raise
     try:
         _install_exchange_rejection_provenance_before_runtime()
     except Exception:
