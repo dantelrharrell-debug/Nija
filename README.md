@@ -1,11 +1,52 @@
 # NIJA AI Trading LLC — Trading Platform Architecture & Recovery Guide
 
 **Project:** `Nija_Trading_Bot`  
-**Status date:** September 26, 2026 (UTC)  
-**Latest runtime merge:** `e60ce1be56cd4080b47cbf7637e55d816aa66c28`  
-**Latest merged runtime PR:** `#2893 — Fix heartbeat canonical selection deadlock`  
+**Production snapshot:** October 8, 2026, 04:09 UTC (October 7, 9:09 PM Pacific)  
+**Latest verified live Render deployment:** `dep-db3h61mk1f9s73a316u0`  
+**Deployed commit:** `5d787aa44a46a53fcce659be3fbb10aa635a0f27` (PR #2959 — preserve writer singleton across import aliases)  
+**Observation status:** 24-hour observation **started, not completed**; subject to uninterrupted safety/readiness checks  
 **Broker-cell implementation head:** `472eeaa2c9d6f518bad029fbd550fa6a84505eb2`  
 **Broker-cell architecture merge:** `#2784 — Broker-cell isolation: independent strategy/risk/user runtimes`
+
+## Production readiness and 24-hour observation — October 7–8, 2026
+
+This is a **point-in-time production observation**, not a permanent guarantee of execution readiness or protected-entry capability. The September 26 notes below remain historical; do not treat their dated CI/deployment blockers as current production results.
+
+| Gate / evidence | Verified state at October 8, 04:09 UTC |
+| --- | --- |
+| Render deployment | `dep-db3h61mk1f9s73a316u0` — **live** |
+| Trading state | `LIVE_ACTIVE` (reconciled with `kill_switch=False`) |
+| Emergency kill switch | **Clear** |
+| Broker connectivity | Kraken, Coinbase, OKX connected (3 registered) |
+| Canonical capital | Hydrated, fresh, approximately **$767.86** (snapshot, not realized P&L) |
+| Writer/nonce, risk, strategy, bootstrap | **Ready** in preactivation convergence proof |
+| Execution readiness | `execution_ready=True` in readiness proof at **04:07:32 UTC** |
+| Execution authority | `EXECUTION_ALLOWED: TRUE` logged at **04:00:09 UTC**; subsequently `LIVE_ACTIVE` confirmed through **04:09 UTC** |
+| Confirmed fill evidence | Canonical Kraken BTC/USD execution fills recorded at **04:07:24** and **04:07:53 UTC**; fill acknowledgement alone is not a protection proof |
+| 24-hour observation | **In progress** — not certified complete |
+
+**Observation clock:** Start **2026-10-07 21:07:32 Pacific** (**2026-10-08 04:07:32 UTC**), the post-recovery `LIVE_ACTIVE` readiness confirmation. Earliest nominal end **2026-10-08 21:07:32 Pacific** (**2026-10-09 04:07:32 UTC**). Completion requires review of the **entire interval**, not merely matching start/end snapshots.
+
+### Recovery and activation sequence
+
+1. The audited legacy drawdown-stop recovery cleared the prior stop without lowering the 5% halt threshold or fabricating authority. The operator-approved recovery gate was `NIJA_ALLOW_PROVEN_LEGACY_STOP_RECOVERY=1`; it is **not** a general permission to clear future risk stops.
+2. Subsequent deployments briefly returned the runtime to `LIVE_PENDING_CONFIRMATION` with stale heartbeat execution proof. Those temporary `EXECUTION_ALLOWED: TRUE` sightings **did not** start a stable observation.
+3. PR #2959 deployed at **03:51:37 UTC**. The runtime later recorded canonical confirmed fills and `EXECUTION_BREAKER_RECOVERY_V405_CLEARED` at **04:07:26 UTC**, followed by transition to `LIVE_ACTIVE` at **04:07:28 UTC**.
+4. At **04:07:32 UTC**, readiness reported `active=true`, no blockers, all nine prerequisite proofs true, and `execution_marker_current:stage=FILL_VERIFY:source=canonical_confirmed_fill`. Reconciliation logs continued to show `LIVE_ACTIVE` and `kill_switch=False` through approximately **04:09 UTC**.
+
+### Observation acceptance and stop conditions
+
+- Avoid unnecessary **merges to `main`**, production deployments, restarts, environment changes, risk-setting changes, and manual orders during the observation. Even a documentation-only `main` commit may trigger a Render deployment and invalidate the uninterrupted window.
+- Record hourly state and investigate any `LIVE_PENDING_CONFIRMATION`, `EXECUTION_ALLOWED: FALSE`, stale execution proof, kill-switch activation, lost writer/nonce authority, broker disconnect, capital staleness, position/open-order mismatch, rejected-order circuit breaker, or other risk/protection fault.
+- Require broker-authenticated orders/fills, actual balances/positions, and risk telemetry for validation; never treat an application heartbeat, `EXECUTION_ALLOWED`, or order acknowledgment as proof of active stop-loss/take-profit protection.
+- At the end of 24 hours, reconcile fills, fees, realized/unrealized P&L, position and open-order state, capital movement, and safety events. Only then mark observation **PASS** or **FAIL** with the supporting timestamps and evidence.
+- A material interruption **pauses or resets certification** depending on the incident. Do not backdate a fresh observation window or bypass a failed safety gate.
+
+**Scope limitation:** The `LIVE_ACTIVE` proof establishes runtime activation at the recorded times. It does **not** certify 24-hour stability, broker-local protected-entry SL/TP readback, profitability, user-account segregation, or mobile/store release readiness.
+
+**Documentation rollout:** Keep this README update on a documentation branch/PR until the 24-hour observation is finished, to avoid triggering a new production deployment during the test.
+
+---
 
 NIJA is an automated multi-broker trading platform designed around **broker isolation, fail-closed safety, independent risk control, and authoritative broker state**.
 
@@ -239,9 +280,9 @@ Trading services should not have withdrawal privileges unless a separately revie
 
 ---
 
-## 9. Current Merge and Validation State
+## 9. Historical Merge and Validation State — September 26, 2026
 
-The current `main` head is the September 26 UTC merge of PR `#2893`. Since the previous README refresh, NIJA merged runtime-liveness recovery, paid-user live-trading entitlement/credential gating, durable encrypted Redis-backed paid-user state, and a heartbeat canonical-selection deadlock repair.
+**Archived snapshot:** This section describes the repository state as of September 26, not the current October 8 production head. On September 26, the `main` head was the merge of PR `#2893`. Since the previous README refresh, NIJA merged runtime-liveness recovery, paid-user live-trading entitlement/credential gating, durable encrypted Redis-backed paid-user state, and a heartbeat canonical-selection deadlock repair.
 
 ```text
 latest_runtime_merge=e60ce1be56cd4080b47cbf7637e55d816aa66c28
