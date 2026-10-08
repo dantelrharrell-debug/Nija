@@ -17,7 +17,12 @@ from flask import Flask, current_app, jsonify, request
 from flask_cors import CORS
 
 from billing_service_store import BillingIdentityMismatch, BillingServiceStore
-from pricing_policy import (\n    BETA_TRIAL_DAYS,\n    FOUNDING_BETA_OFFER,\n    LEGACY_STANDARD_BETA_OFFER,\n    STANDARD_BETA_OFFER,\n)
+from pricing_policy import (
+    BETA_TRIAL_DAYS,
+    FOUNDING_BETA_OFFER,
+    LEGACY_STANDARD_BETA_OFFER,
+    STANDARD_BETA_OFFER,
+)
 
 logger = logging.getLogger("nija.billing.service")
 
@@ -119,8 +124,13 @@ def _offer_config(offer_code: str) -> OfferConfig:
             "STRIPE_PRODUCT_FOUNDING_BETA",
             BETA_TRIAL_DAYS,
         ),
+        LEGACY_STANDARD_BETA_OFFER: (
+            "STRIPE_PRICE_STANDARD_BETA_LEGACY_75",
+            "STRIPE_PRODUCT_STANDARD_BETA",
+            0,
+        ),
         STANDARD_BETA_OFFER: (
-            "STRIPE_PRICE_STANDARD_BETA",
+            "STRIPE_PRICE_STANDARD_BETA_V2_99",
             "STRIPE_PRODUCT_STANDARD_BETA",
             0,
         ),
