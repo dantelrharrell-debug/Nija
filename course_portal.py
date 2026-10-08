@@ -315,7 +315,8 @@ def _email_access(email, sid, token, *, delivery=False):
         "html": "<h2>NIJA Trading Foundations</h2><p>Your payment has been verified."
                 " Use this one-time secure link to open your purchased materials:</p>"
                 '<p><a href="' + html.escape(link, quote=True) + '">Open My Course</a></p>'
-                "<p>The link expires in 48 hours. You can restore access later from the course portal.</p>"
+                "<p>This secure link expires in " + ("7 days" if delivery else "48 hours") +
+                ". You can restore access later from the course portal.</p>"
                 "<p>Includes your eBook, audiobook, workbook, fillable practice journal, "
                 "scripts, certificate template, Start Here guide and bonus Starter Kit.</p>"
                 "<p>This is educational material, not financial advice or a profit guarantee.</p>"
