@@ -319,3 +319,47 @@ def test_recovery_does_not_import_or_initialize_brokers_before_writer_lineage(mo
     assert reason == "fencing_token_missing"
     assert os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] == "0"
     assert os.environ["NIJA_RUNTIME_TRADING_STATE"] == "OFF"
+
+
+def test_writer_alias_with_active_singleton_preserves_lease_but_denies_authority(monkeypatch):
+    _clear_runtime_env(monkeypatch)
+    monkeypatch.setenv("NIJA_WRITER_LEASE_ACQUIRED", "1")
+    monkeypatch.setenv("NIJA_RUNTIME_EXECUTION_AUTHORITY", "1")
+    monkeypatch.setenv("NIJA_RUNTIME_TRADING_STATE", "LIVE_ACTIVE")
+    # A stale top-level alias must not obscure the canonical active singleton.
+    monkeypatch.setitem(
+        sys.modules, "entrypoint_writer_authority",
+        SimpleNamespace(get_entrypoint_writer_authority=lambda: None),
+    )
+    monkeypatch.setitem(
+        sys.modules, "bot.entrypoint_writer_authority",
+        SimpleNamespace(
+            get_entrypoint_writer_authority=lambda: SimpleNamespace(acquired=True)
+        ),
+    )
+    module = _load_module()
+    changes = module.normalize_derived_runtime_state()
+
+    assert os.environ["NIJA_WRITER_LEASE_ACQUIRED"] == "1"
+    assert "NIJA_WRITER_LEASE_ACQUIRED" not in changes
+    assert os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] == "0"
+    assert os.environ["NIJA_RUNTIME_TRADING_STATE"] == "OFF"
+
+
+def test_writer_aliases_without_active_singleton_fail_closed(monkeypatch):
+    _clear_runtime_env(monkeypatch)
+    monkeypatch.setenv("NIJA_WRITER_LEASE_ACQUIRED", "1")
+    monkeypatch.setenv("NIJA_RUNTIME_EXECUTION_AUTHORITY", "1")
+    for name in ("bot.entrypoint_writer_authority", "entrypoint_writer_authority"):
+        monkeypatch.setitem(
+            sys.modules, name,
+            SimpleNamespace(
+                get_entrypoint_writer_authority=lambda: SimpleNamespace(acquired=False)
+            ),
+        )
+    module = _load_module()
+    changes = module.normalize_derived_runtime_state()
+
+    assert os.environ["NIJA_WRITER_LEASE_ACQUIRED"] == "0"
+    assert "NIJA_WRITER_LEASE_ACQUIRED" in changes
+    assert os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] == "0"

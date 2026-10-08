@@ -115,21 +115,32 @@ def normalize_derived_runtime_state() -> dict[str, str]:
         # causes an unnecessary re-election.  Only reset the flag when the
         # singleton itself does not hold authority.
         _singleton_acquired = False
-        try:
-            _ewa_mod = (
-                sys.modules.get("bot.entrypoint_writer_authority")
-                or sys.modules.get("entrypoint_writer_authority")
-            )
-            if _ewa_mod is not None:
-                _get_singleton = getattr(_ewa_mod, "get_entrypoint_writer_authority", None)
-                if callable(_get_singleton):
-                    _singleton = _get_singleton()
-                    _singleton_acquired = bool(
-                        _singleton is not None
-                        and getattr(_singleton, "acquired", False)
-                    )
-        except Exception:
-            pass
+        # The runtime can import this module under either its package or
+        # legacy top-level name. A stale alias must not hide the active writer
+        # singleton in the other module; check both without importing or
+        # constructing another writer instance.
+        for _module_name in (
+            "bot.entrypoint_writer_authority",
+            "entrypoint_writer_authority",
+        ):
+            _ewa_mod = sys.modules.get(_module_name)
+            if _ewa_mod is None:
+                continue
+            try:
+                _get_singleton = getattr(
+                    _ewa_mod, "get_entrypoint_writer_authority", None
+                )
+                if not callable(_get_singleton):
+                    continue
+                _singleton = _get_singleton()
+                if _singleton is not None and bool(
+                    getattr(_singleton, "acquired", False)
+                ):
+                    _singleton_acquired = True
+                    break
+            except Exception:
+                # A failed probe is not evidence of writer ownership.
+                continue
 
         if not _singleton_acquired:
             if str(os.environ.get("NIJA_WRITER_LEASE_ACQUIRED", "")).strip() != "0":
