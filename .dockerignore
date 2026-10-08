@@ -131,6 +131,7 @@ scripts/*
 !scripts/apply_render_outreach_frontdoor.py
 !scripts/canonical_runtime_launcher_v26.py
 !scripts/render_memory_pressure_guard.py
+!scripts/public_market_observer_v428.py
 !scripts/apply_direct_broker_prebootstrap_v27.py
 !scripts/install_sitecustomize_defer_guard.py
 !scripts/runtime_entrypoint_attestation.py
