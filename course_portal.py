@@ -144,21 +144,43 @@ class PortalStore:
             pass
 
     def pending(self, limit=10):
+        stale = utcnow() - timedelta(minutes=15)
         with self.engine.connect() as conn:
             rows = conn.execute(select(self.outbox).where(
-                self.outbox.c.status.in_(("queued", "error")) &
+                ((self.outbox.c.status.in_(("queued", "error"))) |
+                 ((self.outbox.c.status == "sending") &
+                  (self.outbox.c.updated_at < stale))) &
                 (self.outbox.c.attempts < 5)
             ).order_by(self.outbox.c.updated_at).limit(limit)).all()
             return [dict(r._mapping) for r in rows]
 
     def mark_sending(self, sid):
+        stale = utcnow() - timedelta(minutes=15)
         with self.engine.begin() as conn:
             result = conn.execute(update(self.outbox).where(
                 (self.outbox.c.session_id == sid) &
-                self.outbox.c.status.in_(("queued", "error")) &
+                ((self.outbox.c.status.in_(("queued", "error"))) |
+                 ((self.outbox.c.status == "sending") &
+                  (self.outbox.c.updated_at < stale))) &
                 (self.outbox.c.attempts < 5)
             ).values(status="sending", attempts=self.outbox.c.attempts + 1, updated_at=utcnow()))
             return result.rowcount == 1
+
+    def mint_initial(self, sid):
+        # Stable across retries; Resend receives the same idempotency key + link.
+        secret = os.environ["NIJA_COURSE_SESSION_SECRET"]
+        digest = hmac.new(secret.encode(), ("delivery-v1:" + sid).encode(), hashlib.sha256).digest()
+        import base64
+        token = base64.urlsafe_b64encode(digest).decode().rstrip("=")
+        token_hash = hashlib.sha256(token.encode()).hexdigest()
+        try:
+            with self.engine.begin() as conn:
+                conn.execute(insert(self.tokens).values(
+                    token_hash=token_hash, session_id=sid,
+                    expires_at=utcnow() + timedelta(days=7)))
+        except IntegrityError:
+            pass
+        return token
 
     def mark_mail(self, sid, status, provider_id=None, error=None):
         with self.engine.begin() as conn:
@@ -209,9 +231,13 @@ class PortalStore:
 
 
 def _enabled(app):
+    # Content access remains available if the email provider is temporarily down.
     return os.getenv("NIJA_COURSE_DELIVERY_ENABLED", "false").lower() == "true" and \
-        bool(os.getenv("RESEND_API_KEY")) and bool(os.getenv("NIJA_COURSE_SESSION_SECRET")) and \
-        app.config["COURSE_PORTAL_STORE"].has_bundle()
+        _signer() is not None and app.config["COURSE_PORTAL_STORE"].has_bundle()
+
+
+def _email_ready(app):
+    return _enabled(app) and bool(os.getenv("RESEND_API_KEY"))
 
 
 def _stripe():
@@ -277,7 +303,7 @@ def _layout(title, body):
         '<small>Educational material only. No trading profits are guaranteed.</small></body></html>')
 
 
-def _email_access(email, sid, token):
+def _email_access(email, sid, token, *, delivery=False):
     key = os.getenv("RESEND_API_KEY", "")
     link = os.getenv("NIJA_COURSE_PUBLIC_URL", "https://nija-billing-api.onrender.com").rstrip("/") + \
         "/course-portal/claim?token=" + quote(token)
@@ -298,8 +324,9 @@ def _email_access(email, sid, token):
     response = requests.post("https://api.resend.com/emails", json=message, headers={
         "Authorization": "Bearer " + key,
         "Content-Type": "application/json",
-        "Idempotency-Key": "nija-foundations-" + sid + "-" + hashlib.sha256(token.encode()).hexdigest()[:12],
-    }, timeout=12)
+        "Idempotency-Key": ("nija-foundations-delivery-v1-" + sid if delivery else
+                            "nija-foundations-recovery-v1-" + hashlib.sha256(token.encode()).hexdigest()),
+    }, timeout=5)
     if response.status_code not in (200, 201):
         raise RuntimeError("provider_rejected_" + str(response.status_code))
     return response.json().get("id")
@@ -307,14 +334,14 @@ def _email_access(email, sid, token):
 
 def _dispatch_one(sid, email):
     store = current_app.config["COURSE_PORTAL_STORE"]
-    if not _enabled(current_app) or not store.mark_sending(sid):
+    if not _email_ready(current_app) or not store.mark_sending(sid):
         return
     if not _valid_paid(sid):
         store.mark_mail(sid, "error", error="payment_not_verified")
         return
     try:
-        token = store.mint(sid)
-        provider_id = _email_access(email, sid, token)
+        token = store.mint_initial(sid)
+        provider_id = _email_access(email, sid, token, delivery=True)
         if not provider_id:
             raise RuntimeError("provider_message_id_missing")
         store.mark_mail(sid, "sent", provider_id=provider_id)
@@ -352,7 +379,7 @@ def register_course_portal(app, billing_store):
     def recover():
         email = (request.form.get("email") or "").strip().lower()[:320]
         ip = request.remote_addr or "unknown"
-        if "@" in email and store.allow_recovery(email, ip) and _enabled(current_app):
+        if "@" in email and store.allow_recovery(email, ip) and _email_ready(current_app):
             ledger = current_app.config["COURSE_LEDGER"]
             with store.engine.connect() as conn:
                 found = conn.execute(select(ledger.table.c.session_id).where(
@@ -459,7 +486,15 @@ def register_course_portal(app, billing_store):
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 422
         store.import_bundle(payload, digest)
-        return jsonify({"uploaded": True, "files": len(ALLOWED), "bundle_sha256": digest})
+        # Flush pre-existing paid orders after the private package is available.
+        # Failed emails remain durable for subsequent admin retry or buyer recovery.
+        attempted = 0
+        if _email_ready(current_app):
+            for item in store.pending(10):
+                _dispatch_one(item["session_id"], item["email"])
+                attempted += 1
+        return jsonify({"uploaded": True, "files": len(ALLOWED),
+                        "bundle_sha256": digest, "queued_attempted": attempted})
 
     @portal.post("/admin/retry")
     def admin_retry():
