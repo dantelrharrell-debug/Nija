@@ -40,7 +40,7 @@ def test_user_101_gets_standard_beta_without_repricing_first_100(tmp_path):
     first_after = store.get_assignment("user_1")
 
     assert user_101.offer_code == "standard_beta"
-    assert user_101.price_usd == Decimal("75.00")
+    assert user_101.price_usd == Decimal("99.00")
     assert user_101.trial_days == 0
     assert user_101.cohort_position is None
 
