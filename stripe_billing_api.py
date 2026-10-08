@@ -15,7 +15,7 @@ from flask import Blueprint, jsonify, request
 from auth.user_database import get_user_database
 from billing_store import get_billing_store
 from commercial_offer_store import get_commercial_offer_store
-from pricing_policy import FOUNDING_BETA_OFFER, STANDARD_BETA_OFFER
+from pricing_policy import FOUNDING_BETA_OFFER, LEGACY_STANDARD_BETA_OFFER, STANDARD_BETA_OFFER
 
 logger = logging.getLogger("nija.billing.stripe")
 
@@ -23,7 +23,7 @@ stripe_billing_api = Blueprint("stripe_billing_api", __name__)
 
 _PRICE_ENV = {
     FOUNDING_BETA_OFFER: "STRIPE_PRICE_FOUNDING_BETA",
-    STANDARD_BETA_OFFER: "STRIPE_PRICE_STANDARD_BETA",
+    LEGACY_STANDARD_BETA_OFFER: "STRIPE_PRICE_STANDARD_BETA_LEGACY_75",\n    STANDARD_BETA_OFFER: "STRIPE_PRICE_STANDARD_BETA_V2_99",
 }
 
 
