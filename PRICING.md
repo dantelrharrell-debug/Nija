@@ -27,11 +27,11 @@ This document is the authoritative public pricing policy for NIJA. Older Basic/P
 
 ## 3. NIJA Beta - After the First 100 Users
 
-**$75/month**
+**$99/month**
 
-- Once 100 eligible founding beta spots have been claimed, the public beta offer for new users becomes $75/month.
+- Once 100 eligible founding beta spots have been claimed, the public beta offer for new users becomes $99/month.
 - Existing founding beta users remain associated with their $50/month offer.
-- The $75 price applies to new beta subscriptions after the founding cohort is filled.
+- The $99 price applies to new beta subscriptions after the founding cohort is filled.
 
 ## 4. Full Apple App Store / Google Play Paid Release
 
@@ -51,7 +51,7 @@ Commercial pricing must be derived from the NIJA offer/cohort policy:
 |---|---:|---|
 | NIJA Lessons | $99 | One-time |
 | Founding Beta - first 100 | $50/month after 14-day trial | Recurring |
-| Standard Beta - after first 100 | $75/month | Recurring |
+| Standard Beta - after first 100 | $99/month | Recurring |
 | Full mobile paid release | $99/month | Recurring |
 
 ## 6. Sales and Marketing Rules
@@ -67,7 +67,7 @@ Every customer-facing implementation should use the same policy values:
 - `BETA_TRIAL_DAYS = 14`
 - `FOUNDING_BETA_LIMIT = 100`
 - `FOUNDING_BETA_MONTHLY_USD = 50`
-- `STANDARD_BETA_MONTHLY_USD = 75`
+- `STANDARD_BETA_MONTHLY_USD = 99`
 - `FULL_RELEASE_MONTHLY_USD = 99`
 - `LESSONS_ONE_TIME_USD = 99`
 

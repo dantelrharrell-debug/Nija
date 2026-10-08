@@ -27,7 +27,7 @@ def test_ninety_ninth_claimed_still_has_one_founding_slot():
 def test_after_first_100_new_beta_users_get_standard_beta_price():
     offer = beta_offer_for_claimed_count(FOUNDING_BETA_LIMIT)
     assert offer.amount_usd == STANDARD_BETA_MONTHLY_USD
-    assert offer.amount_usd == Decimal("75.00")
+    assert offer.amount_usd == Decimal("99.00")
     assert offer.trial_days == 0
 
 
