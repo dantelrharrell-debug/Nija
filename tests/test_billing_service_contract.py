@@ -86,6 +86,7 @@ def _stripe_fixture():
         Customer=SimpleNamespace(retrieve=retrieve_customer),
         Subscription=SimpleNamespace(retrieve=retrieve_subscription),
         Webhook=SimpleNamespace(construct_event=construct_event),
+        error=SimpleNamespace(SignatureVerificationError=ValueError),
     )
     return state, stripe
 
