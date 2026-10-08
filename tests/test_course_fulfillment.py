@@ -79,3 +79,24 @@ def test_refunded_charge_cannot_grant(tmp_path):
     stripe.Charge.retrieve.return_value = {"refunded": True, "amount_refunded": 9900, "disputed": False}
     assert reconcile_session(stripe, ledger, "cs_refunded")["paid"] is False
     assert ledger.get("cs_refunded")["granted"] is False
+
+
+def test_billing_app_registers_course_route_without_flask_context(monkeypatch, tmp_path):
+    """Regression: route initialization cannot access current_app before app startup."""
+    import billing_service as billing
+    from billing_service_store import BillingServiceStore
+
+    monkeypatch.setenv("BILLING_DATABASE_URL", f"sqlite:///{tmp_path / 'billing.db'}")
+    store = BillingServiceStore(f"sqlite:///{tmp_path / 'billing.db'}")
+    app = billing.create_app(store)
+    client = app.test_client()
+
+    response = client.get("/api/billing/course/status")
+    assert response.status_code == 403
+    assert response.get_json() == {
+        "entitled": False,
+        "delivery_enabled": False,
+        "status": "requires_authenticated_delivery",
+    }
+    assert "COURSE_LEDGER" in app.config
+    assert app.config["COURSE_LEDGER"].engine is store.engine
