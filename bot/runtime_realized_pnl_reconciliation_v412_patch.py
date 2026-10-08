@@ -244,6 +244,14 @@ def _reconcile_confirmed_fill(
                 MARKER, oid, symbol, str(pnl.get("error") or "unknown"),
             )
             return
+        # Read the canonical ledger directly; never feed speculative ACKs or a
+        # shared cross-account singleton into adaptive position sizing.
+        try:
+            from bot.confirmed_performance_report import log_confirmed_performance
+
+            log_confirmed_performance(ledger, broker=broker, user_id=user_hint)
+        except Exception as report_exc:
+            LOGGER.warning("CONFIRMED_PERFORMANCE_HOOK_UNAVAILABLE error=%s", type(report_exc).__name__)
         LOGGER.critical(
             "REALIZED_PNL_V412_BOOKED marker=%s order_id=%s position_id=%s user_id=%s symbol=%s "
             "entry_price=%.10f exit_price=%.10f quantity=%.12f entry_fee=%.8f exit_fee=%.8f "

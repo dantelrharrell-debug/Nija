@@ -196,6 +196,7 @@ jobs:
         include:
           - test_group: unit
             test_paths: >-
+              bot/tests/test_market_coverage_upgrade.py
               bot/tests/test_okx_order_wrapper_stability_v2.py
               bot/tests/test_scan_wrapper_depth_convergence_patch.py
               bot/tests/test_zero_signal_streak_state_repair_patch.py
