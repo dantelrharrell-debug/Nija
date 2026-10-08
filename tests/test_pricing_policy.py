@@ -6,7 +6,9 @@ from pricing_policy import (
     FOUNDING_BETA_MONTHLY_USD,
     FULL_RELEASE_MONTHLY_USD,
     LESSONS_ONE_TIME_USD,
-    LEGACY_STANDARD_BETA_OFFER,\n    STANDARD_BETA_MONTHLY_USD,\n    STANDARD_BETA_OFFER,
+    LEGACY_STANDARD_BETA_OFFER,
+    STANDARD_BETA_MONTHLY_USD,
+    STANDARD_BETA_OFFER,
     beta_offer_for_claimed_count,
 )
 
@@ -28,6 +30,8 @@ def test_after_first_100_new_beta_users_get_standard_beta_price():
     offer = beta_offer_for_claimed_count(FOUNDING_BETA_LIMIT)
     assert offer.amount_usd == STANDARD_BETA_MONTHLY_USD
     assert offer.amount_usd == Decimal("99.00")
+    assert offer.code == STANDARD_BETA_OFFER
+    assert offer.code != LEGACY_STANDARD_BETA_OFFER
     assert offer.trial_days == 0
 
 
