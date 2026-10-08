@@ -17,6 +17,7 @@ from flask import Flask, current_app, jsonify, request
 from flask_cors import CORS
 
 from billing_service_store import BillingIdentityMismatch, BillingServiceStore
+from course_fulfillment import handle_course_event, register_course_routes
 from pricing_policy import (
     BETA_TRIAL_DAYS,
     FOUNDING_BETA_OFFER,
@@ -756,6 +757,7 @@ def create_app(store: Optional[BillingServiceStore] = None) -> Flask:
         event_obj = _obj_value(data, "object", {}) or {}
         try:
             _process_event(stripe, event_type, event_obj, event_created)
+            handle_course_event(stripe, current_app.config["COURSE_LEDGER"], event_type, event_obj)
             _store().finish_event(event_id)
         except Exception:
             _store().release_event(event_id)
@@ -763,6 +765,9 @@ def create_app(store: Optional[BillingServiceStore] = None) -> Flask:
             return jsonify({"error": "webhook_processing_failed"}), 500
 
         return jsonify({"received": True})
+
+    # Course-specific ledger; no course content is delivered without authenticated access.
+    register_course_routes(app, _store())
 
     # Register the Bitcoin rail only on the standalone billing service. The
     # module intentionally contains no broker/execution imports; verified
