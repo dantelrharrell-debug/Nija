@@ -5,7 +5,6 @@ No order submission, risk-threshold change or forced LIVE activation.
 from __future__ import annotations
 
 import importlib
-from pathlib import Path
 from types import SimpleNamespace
 
 
@@ -34,10 +33,13 @@ def _controller(monkeypatch, tmp_path, *, local_file=False, canonical_active=Fal
 
 
 def test_durable_cleared_stop_reconciles_latch_without_forcing_live(monkeypatch, tmp_path):
+    monkeypatch.setenv("LIVE_TRADING", "false")
+    monkeypatch.setenv("LIVE_CAPITAL_VERIFIED", "false")
     ctl = _controller(monkeypatch, tmp_path)
     ctl.recheck_mode()
     assert ctl._emergency_stop_active is False
-    assert ctl.get_current_mode().value != "live" or ctl.is_trading_allowed()[0] is True
+    assert ctl.get_current_mode().value != "live"
+    assert ctl.is_trading_allowed()[0] is False
 
 
 def test_local_file_still_blocks(monkeypatch, tmp_path):
