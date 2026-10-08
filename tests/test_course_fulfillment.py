@@ -11,7 +11,10 @@ def test_valid_paid_course(tmp_path):
     stripe.checkout.Session.retrieve.return_value = {
         "payment_link": COURSE_LINK, "mode": "payment", "status": "complete",
         "payment_status": "paid", "customer_details": {"email": "buyer@example.com"},
+        "amount_subtotal": 9900, "amount_total": 9900,
         "customer": "cus_test", "payment_intent": "pi_test",
+        "amount_subtotal": 9900, "amount_total": 9900,
+        "total_details": {"amount_tax": 0, "amount_discount": 0},
     }
     stripe.checkout.Session.list_line_items.return_value = {
         "data": [{"quantity": 1, "price": {"id": COURSE_PRICE, "product": COURSE_PRODUCT,
@@ -21,7 +24,9 @@ def test_valid_paid_course(tmp_path):
     stripe.PaymentIntent.retrieve.return_value = {
         "status": "succeeded", "amount_received": 9900, "currency": "usd", "latest_charge": "ch_test",
     }
-    stripe.Charge.retrieve.return_value = {"refunded": False, "amount_refunded": 0, "disputed": False}
+    stripe.Charge.retrieve.return_value = {"paid": True, "status": "succeeded", "amount": 9900,
+                                           "currency": "usd", "payment_intent": "pi_test",
+                                           "refunded": False, "amount_refunded": 0, "disputed": False}
     result = reconcile_session(stripe, ledger, "cs_test_paid")
     assert result["paid"] is True
     assert ledger.get("cs_test_paid")["granted"] is True
@@ -33,6 +38,7 @@ def test_unpaid_course_cannot_grant(tmp_path):
     stripe.checkout.Session.retrieve.return_value = {
         "payment_link": COURSE_LINK, "mode": "payment", "status": "open",
         "payment_status": "unpaid", "customer_details": {"email": "buyer@example.com"},
+        "amount_subtotal": 9900, "amount_total": 9900,
     }
     stripe.checkout.Session.list_line_items.return_value = {
         "data": [{"quantity": 1, "price": {"id": COURSE_PRICE, "product": COURSE_PRODUCT,
@@ -49,6 +55,7 @@ def test_wrong_product_never_grants(tmp_path):
     stripe.checkout.Session.retrieve.return_value = {
         "payment_link": COURSE_LINK, "mode": "payment", "status": "complete",
         "payment_status": "paid", "customer_details": {"email": "buyer@example.com"},
+        "amount_subtotal": 9900, "amount_total": 9900,
     }
     stripe.checkout.Session.list_line_items.return_value = {
         "data": [{"quantity": 1, "price": {"id": COURSE_PRICE, "product": "prod_wrong",
@@ -65,6 +72,7 @@ def test_refunded_charge_cannot_grant(tmp_path):
     stripe.checkout.Session.retrieve.return_value = {
         "payment_link": COURSE_LINK, "mode": "payment", "status": "complete",
         "payment_status": "paid", "customer_details": {"email": "buyer@example.com"},
+        "amount_subtotal": 9900, "amount_total": 9900,
         "payment_intent": "pi_refunded",
     }
     stripe.checkout.Session.list_line_items.return_value = {
@@ -76,7 +84,9 @@ def test_refunded_charge_cannot_grant(tmp_path):
         "status": "succeeded", "amount_received": 9900, "currency": "usd",
         "latest_charge": "ch_refunded",
     }
-    stripe.Charge.retrieve.return_value = {"refunded": True, "amount_refunded": 9900, "disputed": False}
+    stripe.Charge.retrieve.return_value = {"paid": True, "status": "succeeded", "amount": 9900,
+                                           "currency": "usd", "payment_intent": "pi_refunded",
+                                           "refunded": True, "amount_refunded": 9900, "disputed": False}
     assert reconcile_session(stripe, ledger, "cs_refunded")["paid"] is False
     assert ledger.get("cs_refunded")["granted"] is False
 
@@ -100,3 +110,48 @@ def test_billing_app_registers_course_route_without_flask_context(monkeypatch, t
     }
     assert "COURSE_LEDGER" in app.config
     assert app.config["COURSE_LEDGER"].engine is store.engine
+
+
+def test_tax_inclusive_course_payment_succeeds(tmp_path):
+    ledger = CourseLedger(create_engine("sqlite:///" + str(tmp_path / "tax.db")))
+    stripe = Mock()
+    stripe.checkout.Session.retrieve.return_value = {
+        "payment_link": COURSE_LINK, "mode": "payment", "status": "complete",
+        "payment_status": "paid", "customer_details": {"email": "buyer@example.com"},
+        "customer": "cus_tax", "payment_intent": "pi_tax",
+        "amount_subtotal": 9900, "amount_total": 10800,
+        "total_details": {"amount_tax": 900, "amount_discount": 0},
+    }
+    stripe.checkout.Session.list_line_items.return_value = {
+        "data": [{"quantity": 1, "price": {"id": COURSE_PRICE, "product": COURSE_PRODUCT,
+                                           "unit_amount": 9900, "currency": "usd"}}],
+        "has_more": False,
+    }
+    stripe.PaymentIntent.retrieve.return_value = {
+        "status": "succeeded", "amount_received": 10800, "currency": "usd",
+        "latest_charge": "ch_tax",
+    }
+    stripe.Charge.retrieve.return_value = {
+        "paid": True, "status": "succeeded", "currency": "usd", "amount": 10800,
+        "payment_intent": "pi_tax", "refunded": False, "amount_refunded": 0, "disputed": False,
+    }
+    assert reconcile_session(stripe, ledger, "cs_tax")["paid"] is True
+    assert ledger.get("cs_tax")["granted"] is True
+
+
+def test_tax_amount_mismatch_denied(tmp_path):
+    ledger = CourseLedger(create_engine("sqlite:///" + str(tmp_path / "mismatch.db")))
+    stripe = Mock()
+    stripe.checkout.Session.retrieve.return_value = {
+        "payment_link": COURSE_LINK, "mode": "payment", "status": "complete",
+        "payment_status": "paid", "customer_details": {"email": "buyer@example.com"},
+        "payment_intent": "pi_wrong_total", "amount_subtotal": 9900,
+        "amount_total": 11800, "total_details": {"amount_tax": 900, "amount_discount": 0},
+    }
+    stripe.checkout.Session.list_line_items.return_value = {
+        "data": [{"quantity": 1, "price": {"id": COURSE_PRICE, "product": COURSE_PRODUCT,
+                                           "unit_amount": 9900, "currency": "usd"}}],
+        "has_more": False,
+    }
+    assert reconcile_session(stripe, ledger, "cs_mismatch") is None
+    assert ledger.get("cs_mismatch") is None
