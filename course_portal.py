@@ -597,7 +597,8 @@ def register_course_portal(app, billing_store):
 
     @portal.get("/readyz")
     def readyz():
-        return jsonify({"service": "nija-course", "ready": bool(_enabled(current_app)),
+        return jsonify({"service": "nija-course", "ready": bool(_email_ready(current_app)),
+            "access_ready": bool(_enabled(current_app)),
             "assets_present": store.has_bundle(), "email_configured": bool(os.getenv("RESEND_API_KEY")),
             "access_key_configured": bool(_signer()), "checkout_access_enabled": False}), 200
 
