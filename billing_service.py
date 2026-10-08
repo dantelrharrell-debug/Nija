@@ -767,7 +767,8 @@ def create_app(store: Optional[BillingServiceStore] = None) -> Flask:
         return jsonify({"received": True})
 
     # Course-specific ledger; no course content is delivered without authenticated access.
-    register_course_routes(app, _store())
+    # Use the app-owned store during startup; current_app has no context yet.
+    register_course_routes(app, app.config["BILLING_STORE"])
 
     # Register the Bitcoin rail only on the standalone billing service. The
     # module intentionally contains no broker/execution imports; verified
