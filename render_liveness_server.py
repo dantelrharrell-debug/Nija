@@ -9,6 +9,7 @@ instead of relying on stale inherited environment variables.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import signal
@@ -512,8 +513,15 @@ def main() -> int:
         "1", "true", "yes", "on"
     }:
         try:
-            from scripts.public_market_observer_v428 import start_from_liveness
-            _PUBLIC_MARKET_OBSERVER = start_from_liveness()
+            # Path import uses stdlib only; the liveness module must never
+            # transitively import the bot package or load Python site hooks.
+            observer_path = Path(__file__).resolve().parent / "scripts" / "public_market_observer_v428.py"
+            spec = importlib.util.spec_from_file_location("nija_public_market_observer_v428", observer_path)
+            if spec is None or spec.loader is None:
+                raise RuntimeError("public_observer_module_missing")
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            _PUBLIC_MARKET_OBSERVER = module.start_from_liveness()
             print(
                 "RENDER_PUBLIC_MARKET_OBSERVER_V428_STARTED "
                 "read_only=true execution_independent=true orders_submitted=false",
