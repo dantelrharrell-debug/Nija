@@ -9,6 +9,7 @@ suppression is clear, and a JustCall AI Voice Agent resolves.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import os
 import pathlib
@@ -268,6 +269,7 @@ def enqueue_candidate(body: dict[str, Any]) -> dict[str, Any]:
         "clearance_id": str(raw_weekend.get("clearance_id") or "").strip()[:128],
         "cleared_local_date": str(raw_weekend.get("cleared_local_date") or "").strip()[:10],
         "checked_at": str(raw_weekend.get("checked_at") or "").strip()[:40],
+        "signature": str(raw_weekend.get("signature") or "").strip()[:64],
     }
     weekend_evidence_json = json.dumps(weekend_evidence, separators=(",", ":"))
 
@@ -531,39 +533,78 @@ def _calling_window(timezone_name: str, now_utc: datetime) -> tuple[bool, dateti
     return True, now_utc, "ok"
 
 
-def _weekend_call_eligibility(
-    evidence_json: object, timezone_name: str, now_utc: datetime
-) -> tuple[bool, str]:
-    """Allow Saturday/Sunday only with dated, recipient-specific legal clearance.
+_VALID_US_JURISDICTIONS = {
+    "US-" + state for state in (
+        "AL AK AZ AR CA CO CT DE DC FL GA HI ID IL IN IA KS KY LA ME MD MA "
+        "MI MN MS MO MT NE NV NH NJ NM NY NC ND OH OK OR PA RI SC SD TN TX "
+        "UT VT VA WA WV WI WY"
+    ).split()
+}
 
-    This is an additional gate on top of AI express consent, fresh DNC screening,
-    local suppression and permitted local calling hours. It never infers
-    permission from the area code, contact profile, or a generic country flag.
+
+def _weekend_clearance_valid(
+    evidence: dict[str, Any], number: str, campaign: str, consent_record_id: str
+) -> bool:
+    """Verify a second-party clearance signature bound to THIS recipient/day.
+
+    Only an external compliance reviewer with access to the separately managed
+    signing key may authorize weekend outreach. API callers cannot self-approve
+    by setting `approved` or selecting a convenient state.
+    """
+    secret = os.getenv("NIJA_JUSTCALL_WEEKEND_CLEARANCE_SECRET", "").strip()
+    signature = str(evidence.get("signature") or "").strip().lower()
+    if len(secret) < 32 or not re.fullmatch(r"[0-9a-f]{64}", signature):
+        return False
+    signed_fields = (
+        phone_key(number),
+        campaign,
+        consent_record_id,
+        str(evidence.get("recipient_jurisdiction") or "").strip().upper(),
+        str(evidence.get("clearance_id") or "").strip(),
+        str(evidence.get("cleared_local_date") or "").strip(),
+        str(evidence.get("checked_at") or "").strip(),
+    )
+    message = "\n".join(signed_fields).encode("utf-8")
+    expected = hmac.new(secret.encode("utf-8"), message, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, signature)
+
+
+def _weekend_call_eligibility(
+    evidence_json: object, timezone_name: str, now_utc: datetime,
+    *, number: str, campaign: str, consent_record_id: str
+) -> tuple[bool, str]:
+    """Every day: require recipient jurisdiction; weekends: signed clearance.
+
+    A signed clearance is necessary but not sufficient: fresh verified AI consent,
+    DNC and suppression rules, human handoff and local hours still apply.
     """
     try:
         local = now_utc.astimezone(ZoneInfo(timezone_name))
     except (ZoneInfoNotFoundError, ValueError, TypeError):
         return False, "contact_timezone_required"
-    if local.weekday() < 5:
-        return True, "ok"
-
     try:
         evidence = json.loads(str(evidence_json or "{}"))
     except (TypeError, ValueError, json.JSONDecodeError):
-        return False, "weekend_clearance_invalid"
+        return False, "jurisdiction_evidence_invalid"
     if not isinstance(evidence, dict):
-        return False, "weekend_clearance_invalid"
+        return False, "jurisdiction_evidence_invalid"
 
     jurisdiction = str(evidence.get("recipient_jurisdiction") or "").strip().upper()
-    if not re.fullmatch(r"US-[A-Z]{2}", jurisdiction):
-        return False, "weekend_jurisdiction_required"
-    # Conservative hard stops, independent of consent flags or operator overrides.
-    # Restrictive state/municipal rules can change; clearance must check all
-    # applicable rules, holidays and call classification before approval.
+    if jurisdiction not in _VALID_US_JURISDICTIONS:
+        return False, "recipient_jurisdiction_required"
+
+    # Pennsylvania Act 47 of July 20, 2026 takes effect on October 18, 2026.
+    if jurisdiction == "US-PA" and local.date().isoformat() >= "2026-10-18":
+        if local.hour < 9 or local.hour >= 19:
+            return False, "jurisdiction_hours_prohibited"
+        if local.weekday() == 6:
+            return False, "jurisdiction_sunday_prohibited"
+
+    # Conservative hard stops for known Sunday bans, regardless of consent.
     if local.weekday() == 6 and jurisdiction in {"US-AL", "US-MS", "US-PA"}:
         return False, "jurisdiction_sunday_prohibited"
-    if jurisdiction == "US-PA" and local.date().isoformat() >= "2026-10-18" and local.hour >= 19:
-        return False, "jurisdiction_evening_prohibited"
+    if local.weekday() < 5:
+        return True, "ok"
 
     if evidence.get("approved") is not True:
         return False, "weekend_clearance_required"
@@ -577,6 +618,8 @@ def _weekend_call_eligibility(
     age = (now_utc - checked).total_seconds()
     if not -60 <= age <= 86400:
         return False, "weekend_clearance_expired"
+    if not _weekend_clearance_valid(evidence, number, campaign, consent_record_id):
+        return False, "weekend_clearance_signature_invalid"
     return True, "ok"
 
 
@@ -645,7 +688,10 @@ def _eligibility(row: sqlite3.Row, now_utc: datetime) -> tuple[list[str], dateti
         blockers.append(window_reason)
         retry_at = max(retry_at, window_retry)
     weekend_allowed, weekend_reason = _weekend_call_eligibility(
-        row["weekend_evidence_json"], str(row["contact_timezone"] or ""), now_utc
+        row["weekend_evidence_json"], str(row["contact_timezone"] or ""), now_utc,
+        number=str(row["contact_number"] or ""),
+        campaign=str(row["campaign"] or ""),
+        consent_record_id=str(row["consent_record_id"] or ""),
     )
     if not weekend_allowed:
         blockers.append(weekend_reason)
