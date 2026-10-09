@@ -80,13 +80,24 @@ def _iter_function_graph(root: Any) -> Iterable[FunctionType]:
 
 
 def _find_phase3_source_function(method: Any) -> FunctionType | None:
-    needle = "if df is None or len(df) < 100:"
+    """Resolve a verified Phase 3 source with either legacy or aligned minimum.
+
+    The canonical core-loop source already uses 50 candles. Repeatedly searching
+    only for the obsolete 100-candle signature raises a misleading warning at
+    every runtime import, even when no threshold repair is necessary.
+    """
+    signatures = (
+        "if df is None or len(df) < 100:",
+        "if df is None or len(df) < 50:",
+    )
     for function in _iter_function_graph(method):
+        if function.__name__ != "_phase3_scan_and_enter":
+            continue
         try:
             source = inspect.getsource(function)
         except (OSError, IOError, TypeError):
             continue
-        if needle in source and function.__name__ == "_phase3_scan_and_enter":
+        if any(needle in source for needle in signatures):
             return function
     return None
 
@@ -152,6 +163,25 @@ def _repair_phase3_threshold(cls: type) -> bool:
         )
         return False
     if getattr(target, _PHASE3_PATCH_ATTR, False):
+        return True
+
+    # The canonical source now already checks 50 candles. Do not recompile or
+    # mutate a live trading function when its execution threshold is aligned.
+    # This is telemetry-only; the source and all risk gates remain unchanged.
+    try:
+        current_source = inspect.getsource(target)
+    except (OSError, IOError, TypeError):
+        return False
+    legacy = "if df is None or len(df) < 100:"
+    aligned = "if df is None or len(df) < 50:"
+    if legacy not in current_source and aligned in current_source:
+        setattr(target, _PHASE3_PATCH_ATTR, True)
+        logger.info(
+            "PHASE3_EXECUTION_THRESHOLD_ALREADY_ALIGNED marker=%s class=%s "
+            "scoring_min=%d execution_min=%d source_mutated=false "
+            "trading_gates_unchanged=true",
+            _MARKER, getattr(cls, "__name__", "unknown"), _MIN_CANDLES, _MIN_CANDLES,
+        )
         return True
 
     replacement = _compile_repaired_phase3(target)
