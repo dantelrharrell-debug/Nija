@@ -407,3 +407,41 @@ def test_kraken_close_requires_queryorders_open_entry_and_exact_owner(tmp_path, 
     )
     assert len(db.get_trade_history(user_id="platform")) == 1
     assert db.get_open_positions(user_id="platform") == []
+
+
+
+def test_existing_open_position_with_conflicting_authenticated_fill_is_not_silent(tmp_path, monkeypatch):
+    db = _fresh_ledger(tmp_path, monkeypatch)
+    entry = dict(
+        position_id="REPLAY-POS-1", order_id="REPLAY-ENTRY-1", user_id="platform",
+        symbol="XXBTZUSD", side="LONG", entry_price=100000.0,
+        quantity=0.001, size_usd=100.0, entry_fee=0.25,
+        notes="authenticated_kraken_queryorders_entry; order_id=REPLAY-ENTRY-1; account=platform:kraken",
+    )
+    assert db.record_confirmed_entry_atomic(**entry)
+    assert db.record_confirmed_entry_atomic(**entry) is False
+    with pytest.raises(ValueError, match="existing opening position conflicts"):
+        db.record_confirmed_entry_atomic(**{**entry, "entry_fee": 0.99})
+    assert len(db.get_ledger_transactions(user_id="platform")) == 1
+    assert db.get_open_positions(user_id="platform")[0]["entry_fee"] == 0.25
+
+
+def test_orphan_open_position_without_authenticated_ledger_is_not_considered_idempotent(tmp_path, monkeypatch):
+    db = _fresh_ledger(tmp_path, monkeypatch)
+    entry = dict(
+        position_id="MISSING-OPEN-ROW", order_id="MISSING-OPEN-ORDER", user_id="platform",
+        symbol="XXBTZUSD", side="LONG", entry_price=100000.0,
+        quantity=0.001, size_usd=100.0, entry_fee=0.25,
+        notes="authenticated_kraken_queryorders_entry; order_id=MISSING-OPEN-ORDER; account=platform:kraken",
+    )
+    db.open_position(
+        position_id=entry["position_id"], user_id=entry["user_id"],
+        symbol=entry["symbol"], side=entry["side"],
+        entry_price=entry["entry_price"], quantity=entry["quantity"],
+        size_usd=entry["size_usd"], entry_fee=entry["entry_fee"],
+        notes=entry["notes"],
+    )
+    with pytest.raises(ValueError, match="lacks exact authenticated OPEN ledger"):
+        db.record_confirmed_entry_atomic(**entry)
+    assert db.get_ledger_transactions(user_id="platform") == []
+    assert len(db.get_open_positions(user_id="platform")) == 1
