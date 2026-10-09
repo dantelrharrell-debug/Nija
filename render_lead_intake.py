@@ -144,11 +144,33 @@ def normalize_lead_payload(payload: dict[str, Any]) -> dict[str, str]:
     if not form_name:
         form_name = "Website Lead"
 
+    raw_phone = (
+        nested.get("Phone Number")
+        or nested.get("phone")
+        or nested.get("phone_number")
+        or payload.get("Phone Number")
+        or payload.get("phone")
+        or payload.get("phone_number")
+        or ""
+    )
+    raw_consent = (
+        nested.get("consent")
+        if "consent" in nested
+        else payload.get("consent", "")
+    )
+    phone = _clean_text(raw_phone, max_length=80)
+    consent_text = _clean_text(raw_consent, max_length=32).casefold()
+    communications_consent = consent_text in {
+        "1", "true", "yes", "on", "checked", "agree", "agreed"
+    }
+
     return {
         "form_name": form_name,
         "name": name,
         "email": email,
         "submitted_at": submitted_at,
+        "phone": phone,
+        "communications_consent": "true" if communications_consent else "false",
     }
 
 
