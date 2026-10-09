@@ -170,6 +170,63 @@ def _validate_timezone(name: str) -> str:
     return value
 
 
+def _static_readiness(body: dict[str, Any]) -> tuple[bool, str]:
+    """Evaluate only durable, non-time-window call-readiness evidence."""
+    checks = (
+        (_bool(body.get("has_consent")), "verified_consent_required"),
+        (bool(str(body.get("consent_record_id", "") or "").strip()), "consent_record_id_required"),
+        (bool(str(body.get("legal_basis", "") or "").strip()), "legal_basis_required"),
+        (_bool(body.get("dnc_clear")), "dnc_clear_required"),
+        (bool(str(body.get("dnc_checked_at", "") or "").strip()), "dnc_checked_at_required"),
+        (_bool(body.get("suppression_clear")), "suppression_clear_required"),
+        (_bool(body.get("campaign_enabled")), "campaign_not_enabled"),
+    )
+    blockers = [reason for passed, reason in checks if not passed]
+    return (not blockers, ",".join(blockers))
+
+
+def _quarantine_static_nonready() -> int:
+    """Move stale unqualified rows out of the active worker loop.
+
+    A future qualified refresh through enqueue_candidate reactivates the same
+    queue key automatically; submitted rows are never changed.
+    """
+    now = _iso(_utcnow())
+    with _QUEUE_LOCK, _connect() as connection:
+        _ensure_schema(connection)
+        changed = connection.execute(
+            """
+            UPDATE outreach_autodial_queue
+            SET state='review_required',
+                lease_until=NULL,
+                last_blocker=CASE
+                    WHEN has_consent=0 THEN 'verified_consent_required'
+                    WHEN TRIM(COALESCE(consent_record_id,''))='' THEN 'consent_record_id_required'
+                    WHEN TRIM(COALESCE(legal_basis,''))='' THEN 'legal_basis_required'
+                    WHEN dnc_clear=0 THEN 'dnc_clear_required'
+                    WHEN TRIM(COALESCE(dnc_checked_at,''))='' THEN 'dnc_checked_at_required'
+                    WHEN suppression_clear=0 THEN 'suppression_clear_required'
+                    WHEN campaign_enabled=0 THEN 'campaign_not_enabled'
+                    ELSE 'static_readiness_review_required'
+                END,
+                next_attempt_at=?,
+                updated_at=?
+            WHERE state IN ('queued','processing')
+              AND (
+                    has_consent=0
+                 OR TRIM(COALESCE(consent_record_id,''))=''
+                 OR TRIM(COALESCE(legal_basis,''))=''
+                 OR dnc_clear=0
+                 OR TRIM(COALESCE(dnc_checked_at,''))=''
+                 OR suppression_clear=0
+                 OR campaign_enabled=0
+              )
+            """,
+            (now, now),
+        )
+        connection.commit()
+        return int(changed.rowcount or 0)
+
 def enqueue_candidate(body: dict[str, Any]) -> dict[str, Any]:
     """Create or refresh a candidate without inventing any compliance evidence."""
     record_id = str(body.get("record_id", "") or "").strip()
@@ -189,6 +246,8 @@ def enqueue_candidate(body: dict[str, Any]) -> dict[str, Any]:
     if _bool(body.get("test_mode")):
         raise ValueError("autodial queue accepts production campaign records only")
 
+    static_ready, static_blocker = _static_readiness(body)
+    desired_state = "queued" if static_ready else "review_required"
     key = _queue_key(record_id, number, campaign, call_stage)
     now = _iso(_utcnow())
     values = (
@@ -208,7 +267,9 @@ def enqueue_candidate(body: dict[str, Any]) -> dict[str, Any]:
         1 if _bool(body.get("campaign_enabled")) else 0,
         json.dumps(variables, separators=(",", ":"), ensure_ascii=False),
         str(body.get("ai_agent_id", "") or "").strip(),
+        desired_state,
         now,
+        static_blocker or None,
         now,
         now,
     )
@@ -237,7 +298,7 @@ def enqueue_candidate(body: dict[str, Any]) -> dict[str, Any]:
                 dynamic_variables_json, ai_agent_id, state, attempts, next_attempt_at,
                 lease_until, last_blocker, provider_call_key, submitted_at,
                 created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, NULL, NULL, NULL, NULL, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, NULL, ?, NULL, NULL, ?, ?)
             ON CONFLICT(queue_key) DO UPDATE SET
                 has_consent=excluded.has_consent,
                 consent_record_id=excluded.consent_record_id,
@@ -249,16 +310,56 @@ def enqueue_candidate(body: dict[str, Any]) -> dict[str, Any]:
                 campaign_enabled=excluded.campaign_enabled,
                 dynamic_variables_json=excluded.dynamic_variables_json,
                 ai_agent_id=excluded.ai_agent_id,
-                state=CASE WHEN outreach_autodial_queue.state='review_required' THEN 'review_required' ELSE 'queued' END,
-                next_attempt_at=CASE WHEN outreach_autodial_queue.state='review_required' THEN outreach_autodial_queue.next_attempt_at ELSE excluded.next_attempt_at END,
+                state=CASE
+                    WHEN outreach_autodial_queue.state='review_required'
+                         AND COALESCE(outreach_autodial_queue.last_blocker,'') IN (
+                             'provider_submission_requires_review',
+                             'provider_submission_recording_requires_review'
+                         )
+                    THEN 'review_required'
+                    ELSE excluded.state
+                END,
+                attempts=CASE
+                    WHEN outreach_autodial_queue.state='review_required'
+                         AND COALESCE(outreach_autodial_queue.last_blocker,'') IN (
+                             'provider_submission_requires_review',
+                             'provider_submission_recording_requires_review'
+                         )
+                    THEN outreach_autodial_queue.attempts
+                    WHEN excluded.state='queued' THEN 0
+                    ELSE outreach_autodial_queue.attempts
+                END,
+                next_attempt_at=CASE
+                    WHEN outreach_autodial_queue.state='review_required'
+                         AND COALESCE(outreach_autodial_queue.last_blocker,'') IN (
+                             'provider_submission_requires_review',
+                             'provider_submission_recording_requires_review'
+                         )
+                    THEN outreach_autodial_queue.next_attempt_at
+                    ELSE excluded.next_attempt_at
+                END,
                 lease_until=NULL,
+                last_blocker=CASE
+                    WHEN outreach_autodial_queue.state='review_required'
+                         AND COALESCE(outreach_autodial_queue.last_blocker,'') IN (
+                             'provider_submission_requires_review',
+                             'provider_submission_recording_requires_review'
+                         )
+                    THEN outreach_autodial_queue.last_blocker
+                    ELSE excluded.last_blocker
+                END,
                 updated_at=excluded.updated_at
             """,
             values,
         )
         connection.commit()
-    return {"queued": True, "duplicate_prevented": False, "state": "queued", "queue_key": key}
-
+    return {
+        "queued": static_ready,
+        "duplicate_prevented": False,
+        "state": desired_state,
+        "queue_key": key,
+        "blocker": static_blocker or None,
+    }
 
 def _worker_enabled() -> bool:
     return _bool(os.getenv("NIJA_JUSTCALL_AUTODIAL_ENABLED", "0"))
@@ -643,11 +744,13 @@ def _worker() -> None:
     if not _worker_enabled():
         print("JUSTCALL_AUTODIAL_WORKER state=disabled fail_closed=true", flush=True)
         return
+    quarantined = _quarantine_static_nonready()
     print(
         "JUSTCALL_AUTODIAL_WORKER state=ready fail_closed=true "
         f"poll_s={_poll_seconds():.0f} batch={_batch_size()} daily_cap={_daily_cap()} "
         f"quota_tz={getattr(_quota_zone(), 'key', 'America/Los_Angeles')} "
-        f"local_hours={_calling_hours()[0]}-{_calling_hours()[1]} weekdays_only={str(_weekdays_only()).lower()}",
+        f"local_hours={_calling_hours()[0]}-{_calling_hours()[1]} "
+        f"weekdays_only={str(_weekdays_only()).lower()} quarantined={quarantined}",
         flush=True,
     )
     while True:
@@ -689,7 +792,7 @@ def _queue_status() -> dict[str, Any]:
             """
             SELECT COALESCE(last_blocker,'') AS blocker, COUNT(*) AS count
             FROM outreach_autodial_queue
-            WHERE state='queued' AND COALESCE(last_blocker,'') <> ''
+            WHERE state IN ('queued','review_required') AND COALESCE(last_blocker,'') <> ''
             GROUP BY COALESCE(last_blocker,'')
             ORDER BY count DESC LIMIT 20
             """
