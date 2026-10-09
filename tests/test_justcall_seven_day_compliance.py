@@ -219,5 +219,60 @@ class QueueAndDirectRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 409)
 
 
+class ApolloJurisdictionTests(unittest.TestCase):
+    def test_feeder_requires_explicit_verified_recipient_jurisdiction(self):
+        import render_apollo_feeder as feeder
+
+        fields = {
+            "NIJA_APOLLO_RECIPIENT_JURISDICTION_FIELD_ID": "recipient-state",
+            "NIJA_APOLLO_WEEKEND_APPROVED_FIELD_ID": "weekend-approval",
+            "NIJA_APOLLO_WEEKEND_CLEARANCE_ID_FIELD_ID": "weekend-id",
+            "NIJA_APOLLO_WEEKEND_LOCAL_DATE_FIELD_ID": "weekend-date",
+            "NIJA_APOLLO_WEEKEND_CHECKED_AT_FIELD_ID": "weekend-time",
+            "NIJA_APOLLO_WEEKEND_SIGNATURE_FIELD_ID": "weekend-signature",
+        }
+        contact = {
+            "person_location_state": "Pennsylvania",  # must NOT be inferred
+            "organization_name": "Pennsylvania Example",
+            "typed_custom_fields": {
+                "recipient-state": "US-WA",
+                "weekend-approval": True,
+                "weekend-id": "legal-review-123",
+                "weekend-date": "2026-10-11",
+                "weekend-time": "2026-10-11T15:59:00Z",
+                "weekend-signature": "signed-evidence",
+            },
+        }
+        with mock.patch.dict(os.environ, fields):
+            obj = feeder._jurisdiction_evidence(contact)
+            self.assertEqual(obj["recipient_jurisdiction"], "US-WA")
+            self.assertEqual(obj["signature"], "signed-evidence")
+            self.assertTrue(obj["approved"])
+            contact["typed_custom_fields"].pop("recipient-state")
+            self.assertEqual(
+                feeder._jurisdiction_evidence(contact)["recipient_jurisdiction"], ""
+            )
+
+    def test_feeder_cannot_call_without_jurisdiction_or_consent(self):
+        import render_apollo_feeder as feeder
+
+        ready = {
+            "has_consent": True,
+            "consent_record_id": "consent-123",
+            "legal_basis": "express-written-consent",
+            "dnc_clear": True,
+            "suppression_clear": True,
+            "campaign_enabled": True,
+            "weekend_evidence": {},
+        }
+        self.assertEqual(
+            feeder._qualification_reason(ready), "recipient_jurisdiction_required"
+        )
+        ready["weekend_evidence"] = {"recipient_jurisdiction": "US-WA"}
+        self.assertEqual(feeder._qualification_reason(ready), "call_ready")
+        ready["has_consent"] = False
+        self.assertEqual(feeder._qualification_reason(ready), "consent_required")
+
+
 if __name__ == "__main__":
     unittest.main()
