@@ -15,6 +15,11 @@ import threading
 import time
 import urllib.error
 import urllib.request
+
+try:
+    import redis as redis_lib
+except ImportError:  # pragma: no cover - fallback keeps intake available
+    redis_lib = None
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -23,6 +28,7 @@ _WORKER_LOCK = threading.RLock()
 _DELIVERY_LOCK = threading.RLock()
 _WORKER_STARTED = False
 _WAKE = threading.Event()
+_REDIS_PREFIX = "nija:lead_crm"
 
 
 def _now_iso() -> str:
@@ -76,16 +82,117 @@ def _enabled() -> bool:
     return str(os.getenv("NIJA_LEAD_APOLLO_SYNC_ENABLED", "true")).strip().lower() in {"true", "1", "yes", "on"}
 
 
-def enqueue_lead(canonical: dict[str, str], event_key: str) -> bool:
-    """Queue after the website lead has been persisted; never delay HTTP receipt."""
-    with _WORKER_LOCK, _connect() as conn:
-        _prepare(conn)
-        conn.execute(
-            """INSERT OR IGNORE INTO website_lead_crm_sync
-               (event_key, email, name, updated_at) VALUES (?, ?, ?, ?)""",
-            (event_key, canonical["email"].lower(), canonical.get("name", "")[:200], _now_iso()),
+def _redis_url() -> str:
+    return str(
+        os.getenv("NIJA_REDIS_URL")
+        or os.getenv("REDIS_URL")
+        or os.getenv("NIJA_RENDER_REDIS_FALLBACK_URL")
+        or ""
+    ).strip()
+
+
+def _redis_client():
+    if redis_lib is None:
+        return None
+    url = _redis_url()
+    if not url:
+        return None
+    try:
+        client = redis_lib.Redis.from_url(
+            url,
+            decode_responses=True,
+            socket_connect_timeout=0.75,
+            socket_timeout=0.75,
+            health_check_interval=30,
         )
-        conn.commit()
+        client.ping()
+        return client
+    except Exception:
+        return None
+
+
+def _redis_event_key(event_key: str) -> str:
+    return f"{_REDIS_PREFIX}:event:{event_key}"
+
+
+def _redis_enqueue(client, canonical: dict[str, str], event_key: str) -> bool:
+    key = _redis_event_key(event_key)
+    now = _now_iso()
+    # hsetnx preserves the first canonical identity while zadd makes the work
+    # discoverable after process restarts. No marketing consent is stored here.
+    created = client.hsetnx(key, "email", canonical["email"].lower())
+    if created:
+        client.hset(key, mapping={
+            "name": canonical.get("name", "")[:200],
+            "state": "pending",
+            "attempts": "0",
+            "next_attempt_at": "0",
+            "last_error_code": "",
+            "updated_at": now,
+        })
+    state = client.hget(key, "state")
+    if state != "synced":
+        score_raw = client.hget(key, "next_attempt_at") or "0"
+        try:
+            score = float(score_raw)
+        except (TypeError, ValueError):
+            score = 0.0
+        client.zadd(f"{_REDIS_PREFIX}:pending", {event_key: score})
+    return True
+
+
+def _bootstrap_redis_from_sqlite(client) -> int:
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    try:
+        with _connect() as conn:
+            _prepare(conn)
+            rows = conn.execute(
+                """SELECT event_key, email, name FROM website_leads
+                   WHERE received_at >= ? ORDER BY received_at""",
+                (cutoff,),
+            ).fetchall()
+    except sqlite3.Error:
+        return 0
+    count = 0
+    for row in rows:
+        try:
+            _redis_enqueue(client, {"email": row["email"], "name": row["name"]}, row["event_key"])
+            count += 1
+        except Exception:
+            break
+    return count
+
+
+def enqueue_lead(canonical: dict[str, str], event_key: str) -> bool:
+    """Queue after the website lead has been persisted; never delay HTTP receipt.
+
+    Redis is the durable production outbox because NIJA's Render Key Value
+    service has persistence enabled. SQLite remains a local fallback/mirror.
+    """
+    durable = False
+    client = _redis_client()
+    if client is not None:
+        try:
+            durable = _redis_enqueue(client, canonical, event_key)
+        except Exception:
+            durable = False
+
+    local = False
+    try:
+        with _WORKER_LOCK, _connect() as conn:
+            _prepare(conn)
+            conn.execute(
+                """INSERT OR IGNORE INTO website_lead_crm_sync
+                   (event_key, email, name, updated_at) VALUES (?, ?, ?, ?)""",
+                (event_key, canonical["email"].lower(), canonical.get("name", "")[:200], _now_iso()),
+            )
+            conn.commit()
+            local = True
+    except (sqlite3.Error, OSError):
+        local = False
+
+    if not durable and not local:
+        return False
     start_worker()
     _WAKE.set()
     return True
@@ -139,8 +246,123 @@ def _deliver_batch(rows: list[dict[str, Any]], key: str) -> set[str]:
     return acknowledged & set(unique)
 
 
+def _sync_pending_redis(client, key: str, max_batch: int) -> dict[str, int]:
+    counts = {"attempted": 0, "synced": 0, "retry": 0, "waiting": 0}
+    now = time.time()
+    ids = client.zrangebyscore(
+        f"{_REDIS_PREFIX}:pending", 0, now, start=0,
+        num=min(max(1, int(max_batch)), 100),
+    )
+    rows: list[dict[str, Any]] = []
+    for event_key in ids:
+        record = client.hgetall(_redis_event_key(event_key)) or {}
+        if not record.get("email"):
+            client.zrem(f"{_REDIS_PREFIX}:pending", event_key)
+            continue
+        rows.append({
+            "event_key": event_key,
+            "email": record["email"],
+            "name": record.get("name", ""),
+            "attempts": int(record.get("attempts", "0") or "0"),
+        })
+    if not rows:
+        return counts
+    counts["attempted"] = len(rows)
+    error_code = ""
+    try:
+        confirmed = _deliver_batch(rows, key)
+    except urllib.error.HTTPError as exc:
+        confirmed = set()
+        error_code = f"HTTP_{int(exc.code)}"
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        confirmed = set()
+        error_code = type(exc).__name__
+    except (ValueError, UnicodeError) as exc:
+        confirmed = set()
+        error_code = type(exc).__name__
+
+    for row in rows:
+        event_key = row["event_key"]
+        rkey = _redis_event_key(event_key)
+        if row["email"].lower() in confirmed:
+            client.hset(rkey, mapping={
+                "state": "synced",
+                "last_error_code": "",
+                "updated_at": _now_iso(),
+            })
+            client.zrem(f"{_REDIS_PREFIX}:pending", event_key)
+            client.expire(rkey, 90 * 24 * 3600)
+            counts["synced"] += 1
+        else:
+            attempt = int(row["attempts"]) + 1
+            wait_seconds = min(3600, 30 * (2 ** min(attempt - 1, 7)))
+            next_at = now + wait_seconds
+            client.hset(rkey, mapping={
+                "attempts": str(attempt),
+                "next_attempt_at": str(next_at),
+                "last_error_code": error_code or "not_acknowledged",
+                "updated_at": _now_iso(),
+            })
+            client.zadd(f"{_REDIS_PREFIX}:pending", {event_key: next_at})
+            counts["retry"] += 1
+    return counts
+
+
+def _sync_pending_sqlite(key: str, max_batch: int) -> dict[str, int]:
+    counts = {"attempted": 0, "synced": 0, "retry": 0, "waiting": 0}
+    with _connect() as conn:
+        _prepare(conn)
+        now = time.time()
+        selected = conn.execute(
+            """SELECT event_key, email, name, attempts
+               FROM website_lead_crm_sync
+               WHERE state='pending' AND next_attempt_at <= ?
+               ORDER BY next_attempt_at, updated_at LIMIT ?""",
+            (now, min(max(1, int(max_batch)), 100)),
+        ).fetchall()
+        rows = [dict(row) for row in selected]
+    if not rows:
+        return counts
+    counts["attempted"] = len(rows)
+    error_code = ""
+    try:
+        confirmed = _deliver_batch(rows, key)
+    except urllib.error.HTTPError as exc:
+        confirmed = set()
+        error_code = f"HTTP_{int(exc.code)}"
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        confirmed = set()
+        error_code = type(exc).__name__
+    except (ValueError, UnicodeError) as exc:
+        confirmed = set()
+        error_code = type(exc).__name__
+
+    with _connect() as conn:
+        for row in rows:
+            if row["email"].lower() in confirmed:
+                conn.execute(
+                    """UPDATE website_lead_crm_sync SET state='synced',
+                       last_error_code='', updated_at=? WHERE event_key=?""",
+                    (_now_iso(), row["event_key"]),
+                )
+                counts["synced"] += 1
+            else:
+                attempt = int(row["attempts"]) + 1
+                wait_seconds = min(3600, 30 * (2 ** min(attempt - 1, 7)))
+                conn.execute(
+                    """UPDATE website_lead_crm_sync SET attempts=?,
+                       next_attempt_at=?, last_error_code=?, updated_at=?
+                       WHERE event_key=?""",
+                    (attempt, now + wait_seconds,
+                     error_code or "not_acknowledged", _now_iso(), row["event_key"]),
+                )
+                counts["retry"] += 1
+        conn.commit()
+    return counts
+
+
 def sync_pending(max_batch: int = 20) -> dict[str, int]:
-    """Reconcile pending lead contacts to Apollo, retrying bounded failures.
+    """Reconcile pending lead contacts to Apollo with durable Redis first.
 
     Does not mutate promotional sequences or re-write existing Apollo contacts.
     """
@@ -152,59 +374,15 @@ def sync_pending(max_batch: int = 20) -> dict[str, int]:
         counts["waiting"] = 1
         return counts
 
-    # Hold this lock across I/O to prohibit two workers processing the same rows,
-    # but do not acquire the writer lock used by live HTTP submissions.
     with _DELIVERY_LOCK:
-        with _connect() as conn:
-            _prepare(conn)
-            now = time.time()
-            selected = conn.execute(
-                """SELECT event_key, email, name, attempts
-                   FROM website_lead_crm_sync
-                   WHERE state='pending' AND next_attempt_at <= ?
-                   ORDER BY next_attempt_at, updated_at LIMIT ?""",
-                (now, min(max(1, int(max_batch)), 100)),
-            ).fetchall()
-            rows = [dict(row) for row in selected]
-        if not rows:
-            return counts
-        counts["attempted"] = len(rows)
-        error_code = ""
-        try:
-            confirmed = _deliver_batch(rows, key)
-        except urllib.error.HTTPError as exc:
-            confirmed = set()
-            error_code = f"HTTP_{int(exc.code)}"
-        except (urllib.error.URLError, TimeoutError, OSError) as exc:
-            confirmed = set()
-            error_code = type(exc).__name__
-        except (ValueError, UnicodeError) as exc:
-            confirmed = set()
-            error_code = type(exc).__name__
-
-        with _connect() as conn:
-            for row in rows:
-                if row["email"].lower() in confirmed:
-                    conn.execute(
-                        """UPDATE website_lead_crm_sync SET state='synced',
-                           last_error_code='', updated_at=? WHERE event_key=?""",
-                        (_now_iso(), row["event_key"]),
-                    )
-                    counts["synced"] += 1
-                else:
-                    attempt = int(row["attempts"]) + 1
-                    # Retry indefinitely with a bounded interval; never discard a lead.
-                    wait_seconds = min(3600, 30 * (2 ** min(attempt - 1, 7)))
-                    conn.execute(
-                        """UPDATE website_lead_crm_sync SET attempts=?,
-                           next_attempt_at=?, last_error_code=?, updated_at=?
-                           WHERE event_key=?""",
-                        (attempt, now + wait_seconds,
-                         error_code or "not_acknowledged", _now_iso(), row["event_key"]),
-                    )
-                    counts["retry"] += 1
-            conn.commit()
-    return counts
+        client = _redis_client()
+        if client is not None:
+            try:
+                return _sync_pending_redis(client, key, max_batch)
+            except Exception:
+                # Fail over to the local mirror; never drop the intake path.
+                pass
+        return _sync_pending_sqlite(key, max_batch)
 
 
 def _worker_loop() -> None:
@@ -230,5 +408,18 @@ def start_worker() -> None:
     with _WORKER_LOCK:
         if _WORKER_STARTED:
             return
+        client = _redis_client()
+        if client is not None:
+            try:
+                backfilled = _bootstrap_redis_from_sqlite(client)
+                print(
+                    f"NIJA_LEAD_CRM_DURABLE backend=redis backfilled={backfilled} "
+                    "persistent=true no_marketing_sent=true",
+                    flush=True,
+                )
+            except Exception as exc:
+                print(f"NIJA_LEAD_CRM_DURABLE backend=sqlite reason={type(exc).__name__}", flush=True)
+        else:
+            print("NIJA_LEAD_CRM_DURABLE backend=sqlite persistent=false", flush=True)
         _WORKER_STARTED = True
         threading.Thread(target=_worker_loop, name="nija-lead-apollo-recovery", daemon=True).start()
