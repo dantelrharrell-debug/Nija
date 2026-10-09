@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import ast
 import logging
+import json
 import threading
 from collections.abc import Mapping
 from types import SimpleNamespace
@@ -195,3 +196,35 @@ def test_history_contract_repair_is_idempotent():
     source = (ROOT / "bot/runtime_execution_position_readiness_v346_patch.py").read_text()
     once = patcher.patch_v346_text(source)
     assert patcher.patch_v346_text(once) == once
+
+
+def test_generated_recovery_persists_scope_through_canonical_marker(tmp_path, monkeypatch):
+    import bot.runtime_execution_position_readiness_v346_patch as v346
+    import bot.runtime_execution_capital_integrity_v169_patch as v169
+    import bot.runtime_confirmed_fill_profitability_v328_patch as v328
+
+    marker = tmp_path / "proof.json"
+    monkeypatch.setattr(v169, "_execution_marker_path", lambda: marker)
+    monkeypatch.setattr(v169, "_atomic_json_write", lambda path, payload: path.write_text(json.dumps(payload)))
+    monkeypatch.setattr(v328, "_order_id", lambda result: result.get("order_id", ""))
+    monkeypatch.setattr(v169, "_execution_provenance_valid", lambda payload, stage: (False, "original"))
+    assert v346._patch_v169_provenance()
+    ns, _, _ = _recovery_namespace(fill=(100.0, 1.0, 100.0, 1, 9995.0))
+    original_import = ns["importlib"].import_module
+    ns["importlib"] = SimpleNamespace(import_module=lambda name:
+        v169 if name == "bot.runtime_execution_capital_integrity_v169_patch" else original_import(name))
+    ns["json"] = json
+    ns["_write_confirmed_fill_marker"] = v346._write_confirmed_fill_marker
+
+    def ready():
+        if not marker.exists():
+            return False, "missing"
+        return v169._execution_provenance_valid(json.loads(marker.read_text()), "FILL_VERIFY")
+
+    ns["_current_execution_marker_ready"] = ready
+    assert ns["_recover_recent_kraken_execution_proof"]()[0]
+    saved = json.loads(marker.read_text())
+    assert saved["broker"] == "kraken"
+    assert saved["account"] == saved["account_id"] == "platform:kraken"
+    assert saved["recovered_fill_proof"] is True
+    assert saved["verified_at_epoch"] == saved["exchange_fill_time"] == 9995.0
