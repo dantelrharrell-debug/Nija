@@ -4,6 +4,29 @@ import io
 import json
 import time
 
+
+class FakeRedis:
+    def __init__(self):
+        self.hashes = {}
+        self.zsets = {}
+    def ping(self): return True
+    def hsetnx(self, key, field, value):
+        h = self.hashes.setdefault(key, {})
+        if field in h: return 0
+        h[field] = str(value); return 1
+    def hset(self, key, mapping):
+        h = self.hashes.setdefault(key, {})
+        h.update({k: str(v) for k, v in mapping.items()})
+    def hget(self, key, field): return self.hashes.get(key, {}).get(field)
+    def hgetall(self, key): return dict(self.hashes.get(key, {}))
+    def zadd(self, key, mapping): self.zsets.setdefault(key, {}).update(mapping)
+    def zrem(self, key, member): self.zsets.setdefault(key, {}).pop(member, None)
+    def zrangebyscore(self, key, low, high, start=0, num=None):
+        rows = [k for k,v in sorted(self.zsets.get(key, {}).items(), key=lambda x:x[1]) if float(low) <= float(v) <= float(high)]
+        return rows[start:start+num if num is not None else None]
+    def expire(self, key, seconds): return True
+
+
 import render_lead_crm_sync as sync
 
 
@@ -223,3 +246,52 @@ def test_live_intake_route_enqueues_crm_without_delaying_zapier(monkeypatch, tmp
     with sync._connect() as conn:
         assert conn.execute("SELECT COUNT(*) FROM website_lead_crm_sync").fetchone()[0] == 1
     assert forwarded
+
+
+def test_redis_outbox_survives_local_sqlite_loss(monkeypatch, tmp_path):
+    fake = FakeRedis()
+    monkeypatch.setenv("NIJA_LEAD_DB_PATH", str(tmp_path / "first.sqlite3"))
+    monkeypatch.setenv("NIJA_LEAD_APOLLO_SYNC_ENABLED", "true")
+    monkeypatch.setenv("APOLLO_API_KEY", "private-credential")
+    monkeypatch.setattr(sync, "_redis_client", lambda: fake)
+    monkeypatch.setattr(sync, "start_worker", lambda: None)
+    assert sync.enqueue_lead({"name": "Durable QA", "email": "durable@example.com"}, "evt_durable")
+    assert fake.hget(sync._redis_event_key("evt_durable"), "state") == "pending"
+
+    # Simulate a Render restart with a fresh/empty ephemeral SQLite file.
+    monkeypatch.setenv("NIJA_LEAD_DB_PATH", str(tmp_path / "second.sqlite3"))
+    monkeypatch.setattr(sync, "_deliver_batch", lambda rows, key: {"durable@example.com"})
+    result = sync.sync_pending()
+    assert result["attempted"] == 1
+    assert result["synced"] == 1
+    assert fake.hget(sync._redis_event_key("evt_durable"), "state") == "synced"
+    assert fake.zrangebyscore(f"{sync._REDIS_PREFIX}:pending", 0, time.time() + 1000) == []
+
+
+def test_redis_dedupe_does_not_requeue_synced_event(monkeypatch, tmp_path):
+    fake = FakeRedis()
+    monkeypatch.setenv("NIJA_LEAD_DB_PATH", str(tmp_path / "dedupe.sqlite3"))
+    monkeypatch.setattr(sync, "_redis_client", lambda: fake)
+    monkeypatch.setattr(sync, "start_worker", lambda: None)
+    lead = {"name": "Dedupe QA", "email": "dedupe@example.com"}
+    assert sync.enqueue_lead(lead, "evt_same")
+    fake.hset(sync._redis_event_key("evt_same"), mapping={"state": "synced"})
+    fake.zrem(f"{sync._REDIS_PREFIX}:pending", "evt_same")
+    assert sync.enqueue_lead(lead, "evt_same")
+    assert fake.zrangebyscore(f"{sync._REDIS_PREFIX}:pending", 0, time.time() + 1000) == []
+
+
+def test_redis_retry_remains_pending(monkeypatch, tmp_path):
+    fake = FakeRedis()
+    monkeypatch.setenv("NIJA_LEAD_DB_PATH", str(tmp_path / "retryredis.sqlite3"))
+    monkeypatch.setenv("APOLLO_API_KEY", "private-credential")
+    monkeypatch.setattr(sync, "_redis_client", lambda: fake)
+    monkeypatch.setattr(sync, "start_worker", lambda: None)
+    sync.enqueue_lead({"name": "Retry QA", "email": "retry@example.com"}, "evt_retry_redis")
+    monkeypatch.setattr(sync, "_deliver_batch", lambda rows, key: set())
+    result = sync.sync_pending()
+    assert result["retry"] == 1
+    rec = fake.hgetall(sync._redis_event_key("evt_retry_redis"))
+    assert rec["state"] == "pending"
+    assert int(rec["attempts"]) == 1
+    assert float(rec["next_attempt_at"]) > time.time()
