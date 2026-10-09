@@ -279,3 +279,21 @@ def test_legacy_close_row_prevents_resurrection_of_an_entry(tmp_path, monkeypatc
             notes="authenticated_kraken_queryorders_entry; order_id=PAST-ENTRY-1; account=platform:kraken",
         )
     assert db.get_open_positions(user_id="platform") == []
+
+
+def test_configured_external_ledger_path_survives_new_instance(tmp_path, monkeypatch):
+    from bot.trade_ledger_db import TradeLedgerDB
+    path = tmp_path / "mounted" / "trade_ledger.db"
+    monkeypatch.setenv("NIJA_TRADE_LEDGER_DB_PATH", str(path))
+    first = TradeLedgerDB()
+    assert first.db_path == path
+    notes = "authenticated_kraken_queryorders_entry; order_id=DURABLE-ENTRY-1; account=platform:kraken"
+    assert first.record_confirmed_entry_atomic(
+        position_id="DURABLE-POS-1", order_id="DURABLE-ENTRY-1",
+        user_id="platform", symbol="XXBTZUSD", side="LONG",
+        entry_price=100000.0, quantity=0.001, size_usd=100.0,
+        entry_fee=0.15, notes=notes,
+    ) is True
+    second = TradeLedgerDB()
+    assert len(second.get_open_positions(user_id="platform")) == 1
+    assert len(second.get_ledger_transactions(user_id="platform")) == 1
