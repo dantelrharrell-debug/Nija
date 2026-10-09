@@ -262,6 +262,22 @@ def fetch_margin_positions(broker: Any, *, account: Any = "", force: bool = Fals
     never downgraded into an empty (i.e. "no exposure") result.
     """
     key = _account_key(account, broker)
+
+    # A cached successful private read must not outlive an explicitly
+    # disconnected concrete adapter. Keep the cache account-scoped; an error
+    # on one Kraken user's credentials does not poison other accounts.
+    try:
+        target = _unwrap(broker)
+        connected_flag = getattr(target, "connected", None)
+        if callable(connected_flag):
+            connected_flag = connected_flag()
+    except Exception:
+        _log_fetch_failed(key, "kraken_adapter_connection_state_unproven")
+        return False, {}, "kraken_adapter_connection_state_unproven"
+    if connected_flag is False:
+        _log_fetch_failed(key, "kraken_adapter_disconnected")
+        return False, {}, "kraken_adapter_disconnected"
+
     ttl = _cache_ttl_s()
     now = time.monotonic()
     if not force and ttl > 0:
