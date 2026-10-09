@@ -13,6 +13,7 @@ Date: January 21, 2026
 """
 
 import sqlite3
+import math
 import json
 import logging
 from datetime import datetime
@@ -404,6 +405,99 @@ class TradeLedgerDB:
             tx_id = cursor.lastrowid
             logger.info(f"📝 SELL recorded: {symbol} @ ${price:.2f} (ID: {tx_id})")
             return tx_id
+
+    def record_confirmed_entry_atomic(
+        self, *, position_id: str, order_id: str, user_id: str,
+        symbol: str, side: str, entry_price: float, quantity: float,
+        size_usd: float, entry_fee: float, notes: str,
+    ) -> bool:
+        """Atomically book an authenticated entry transaction and position.
+
+        The caller must establish broker-side final fill, account and cost proof
+        before calling. This method does not contact any broker or execute orders.
+        An incomplete old OPEN transaction may be resumed only after verifying
+        exact ID, account, symbol, side, price, quantity, fees and notes. Never
+        resurrect a position whose CLOSE ledger row or completed trade exists.
+        """
+        if not all(
+            isinstance(value, str) and value.strip()
+            for value in (position_id, order_id, user_id, symbol, notes)
+        ):
+            raise ValueError("confirmed entry identity missing")
+        if side not in {"LONG", "SHORT"}:
+            raise ValueError("confirmed entry direction invalid")
+        amounts = (entry_price, quantity, size_usd, entry_fee)
+        if any(
+            isinstance(value, bool) or not math.isfinite(float(value))
+            for value in amounts
+        ):
+            raise ValueError("confirmed entry amount nonfinite")
+        price, units, notional, fee = (float(v) for v in amounts)
+        if price <= 0 or units <= 0 or notional <= 0 or fee < 0:
+            raise ValueError("confirmed entry cost or quantity invalid")
+        if not math.isclose(price * units, notional, rel_tol=1e-8, abs_tol=1e-7):
+            raise ValueError("confirmed entry price/quantity/cost mismatch")
+        tx_side = "BUY" if side == "LONG" else "SELL"
+        timestamp = datetime.now().isoformat()
+        with self._get_connection() as conn:
+            existing = conn.execute(
+                "SELECT 1 FROM open_positions WHERE position_id = ? LIMIT 1",
+                (position_id,),
+            ).fetchone()
+            if existing:
+                return False
+            if conn.execute(
+                "SELECT 1 FROM completed_trades WHERE position_id = ? LIMIT 1",
+                (position_id,),
+            ).fetchone():
+                return False
+            if conn.execute(
+                "SELECT 1 FROM trade_ledger WHERE position_id = ? AND action = 'CLOSE' LIMIT 1",
+                (position_id,),
+            ).fetchone():
+                raise ValueError("entry replay after known close requires human reconciliation")
+
+            entries = conn.execute(
+                """SELECT * FROM trade_ledger
+                   WHERE (order_id = ? AND user_id = ? AND action = 'OPEN')
+                      OR (position_id = ? AND action = 'OPEN')""",
+                (order_id, user_id, position_id),
+            ).fetchall()
+            if len(entries) > 1:
+                raise ValueError("multiple opening transactions for confirmed entry")
+            if entries:
+                tx = entries[0]
+                if not (
+                    tx["order_id"] == order_id
+                    and tx["position_id"] == position_id
+                    and tx["user_id"] == user_id
+                    and tx["symbol"] == symbol
+                    and tx["side"] == tx_side
+                    and tx["notes"] == notes
+                    and math.isclose(float(tx["price"]), price, rel_tol=1e-10)
+                    and math.isclose(float(tx["quantity"]), units, rel_tol=1e-10)
+                    and math.isclose(float(tx["size_usd"]), notional, rel_tol=1e-10)
+                    and math.isclose(float(tx["fee"]), fee, rel_tol=1e-10)
+                ):
+                    raise ValueError("opening transaction identity or fill discrepancy")
+            else:
+                conn.execute(
+                    """INSERT INTO trade_ledger
+                    (timestamp, user_id, symbol, side, action, price, quantity,
+                     size_usd, fee, order_id, position_id, notes)
+                    VALUES (?, ?, ?, ?, 'OPEN', ?, ?, ?, ?, ?, ?, ?)""",
+                    (timestamp, user_id, symbol, tx_side, price, units,
+                     notional, fee, order_id, position_id, notes),
+                )
+            conn.execute(
+                """INSERT INTO open_positions
+                (position_id, user_id, symbol, side, entry_price, quantity,
+                 size_usd, entry_fee, entry_time, notes, position_source)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'nija_strategy')""",
+                (position_id, user_id, symbol, side, price, units,
+                 notional, fee, timestamp, notes),
+            )
+        return True
 
     def open_position(self, position_id: str, symbol: str, side: str,
                      entry_price: float, quantity: float, size_usd: float,
