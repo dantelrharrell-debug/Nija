@@ -158,7 +158,7 @@ def test_us_equity_short_requires_all_current_permissions(borrow, expected):
         account_scope="platform:alpaca",
         direction="SHORT",
         market_session_open=True, account_shorting_enabled=True,
-        borrow_status=borrow,
+        shortable=True, borrow_status=borrow,
         borrow_verified_epoch_s=1010.0,
     )
     r = evaluate_shadow_candidate(
@@ -168,6 +168,26 @@ def test_us_equity_short_requires_all_current_permissions(borrow, expected):
     )
     assert (r["classification"] == "shadow_research_only") is expected
 
+
+
+@pytest.mark.parametrize("shortable", [None, False, "true", 1, 0])
+def test_equity_short_requires_authenticated_individual_security_shortable(shortable):
+    data = candidate(
+        venue="alpaca", asset_class="us_equity", symbol="AAPL",
+        account_scope="platform:alpaca", direction="SHORT",
+        market_session_open=True, account_shorting_enabled=True,
+        borrow_status="easy_to_borrow", borrow_verified_epoch_s=1010.0,
+    )
+    if shortable is not None:
+        data["shortable"] = shortable
+    result = evaluate_shadow_candidate(
+        data, requested_account_scope="platform:alpaca",
+        registered_strategies={"trend_breakout": "v7"}, now_epoch_s=1020.0,
+    )
+    assert result["classification"] == "blocked_in_research"
+    assert "individual_security_shortable_not_verified" in result["blockers"]
+    assert result["live_execution_authorized"] is False
+    assert result["orders_submitted"] is False
 
 def test_us_equity_short_stale_borrow_or_market_closed_blocks():
     data = candidate(
