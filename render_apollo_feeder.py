@@ -27,6 +27,7 @@ APOLLO_API_BASE = "https://api.apollo.io/api/v1"
 _STATUS_PATH = "/api/apollo/feeder-status"
 _SYNC_PATH = "/api/apollo/sync-now"
 _DEFAULT_WEBSITE_LEAD_LABEL_ID = "6a95ec5c651e97000cd9a898"
+_PIPELINE_VERSION = "20261008-call-readiness-v2"
 _WORKER_LOCK = threading.Lock()
 _WORKER_STARTED = False
 _LAST_SYNC_AT: Optional[str] = None
@@ -108,10 +109,19 @@ def _ensure_schema(connection: sqlite3.Connection) -> None:
             last_contact_updated_at TEXT NOT NULL DEFAULT '',
             last_sync_at TEXT NOT NULL DEFAULT '',
             last_error TEXT NOT NULL DEFAULT '',
-            last_counts_json TEXT NOT NULL DEFAULT '{}'
+            last_counts_json TEXT NOT NULL DEFAULT '{}',
+            pipeline_version TEXT NOT NULL DEFAULT ''
         )
         """
     )
+    columns = {
+        str(row["name"])
+        for row in connection.execute("PRAGMA table_info(outreach_apollo_sync_state)").fetchall()
+    }
+    if "pipeline_version" not in columns:
+        connection.execute(
+            "ALTER TABLE outreach_apollo_sync_state ADD COLUMN pipeline_version TEXT NOT NULL DEFAULT ''"
+        )
     connection.execute(
         "INSERT OR IGNORE INTO outreach_apollo_sync_state(singleton) VALUES (1)"
     )
@@ -122,9 +132,11 @@ def _load_cursor() -> str:
     with _connect() as connection:
         _ensure_schema(connection)
         row = connection.execute(
-            "SELECT last_contact_updated_at FROM outreach_apollo_sync_state WHERE singleton=1"
+            "SELECT last_contact_updated_at, pipeline_version FROM outreach_apollo_sync_state WHERE singleton=1"
         ).fetchone()
-    return str(row["last_contact_updated_at"] or "") if row else ""
+    if row is None or str(row["pipeline_version"] or "") != _PIPELINE_VERSION:
+        return ""
+    return str(row["last_contact_updated_at"] or "")
 
 
 def _save_state(cursor: str, counts: dict[str, int], error: str = "") -> None:
@@ -133,14 +145,21 @@ def _save_state(cursor: str, counts: dict[str, int], error: str = "") -> None:
     with _connect() as connection:
         _ensure_schema(connection)
         connection.execute(
-            "UPDATE outreach_apollo_sync_state SET last_contact_updated_at=?,last_sync_at=?,last_error=?,last_counts_json=? WHERE singleton=1",
-            (cursor, now, error, json.dumps(counts, separators=(",", ":"))),
+            "UPDATE outreach_apollo_sync_state "
+            "SET last_contact_updated_at=?,last_sync_at=?,last_error=?,last_counts_json=?,pipeline_version=? "
+            "WHERE singleton=1",
+            (
+                cursor,
+                now,
+                error,
+                json.dumps(counts, separators=(",", ":")),
+                _PIPELINE_VERSION,
+            ),
         )
         connection.commit()
     _LAST_SYNC_AT = now
     _LAST_ERROR = error or None
     _LAST_COUNTS = dict(counts)
-
 
 def _apollo_request(path: str, payload: dict[str, Any]) -> dict[str, Any]:
     key = _api_key()
@@ -241,6 +260,13 @@ def _phone(contact: dict[str, Any]) -> tuple[str, dict[str, Any]]:
 
 
 def _evidence(contact: dict[str, Any], phone_meta: dict[str, Any]) -> dict[str, Any]:
+    """Return evidence without inferring consent from prospecting data.
+
+    Apollo phone-level DNC results are authoritative for the current sync:
+    not_found is clear, found is blocked, and pending is not clear.
+    Explicit AI-voice consent and its record/legal basis must still come from
+    dedicated contact fields or another authoritative consent system.
+    """
     has_consent = _bool(_custom_field(contact, "NIJA_APOLLO_CONSENT_FIELD_ID"))
     consent_record_id = str(
         _custom_field(contact, "NIJA_APOLLO_CONSENT_RECORD_FIELD_ID") or ""
@@ -251,54 +277,47 @@ def _evidence(contact: dict[str, Any], phone_meta: dict[str, Any]) -> dict[str, 
     dnc_value = str(
         _custom_field(contact, "NIJA_APOLLO_DNC_STATUS_FIELD_ID") or ""
     ).strip().lower()
-    dnc_checked_at = str(
+    custom_dnc_checked_at = str(
         _custom_field(contact, "NIJA_APOLLO_DNC_CHECKED_AT_FIELD_ID") or ""
     ).strip()
-    suppression_clear = _bool(
-        _custom_field(contact, "NIJA_APOLLO_SUPPRESSION_CLEAR_FIELD_ID")
-    )
     explicit_campaign_enabled = _bool(
         _custom_field(contact, "NIJA_APOLLO_CAMPAIGN_ENABLED_FIELD_ID")
     )
 
     provider_dnc = str(phone_meta.get("dnc_status_cd", "") or "").strip().lower()
-    if provider_dnc == "found":
-        return {
-            "has_consent": has_consent,
-            "consent_record_id": consent_record_id,
-            "legal_basis": legal_basis,
-            "dnc_clear": False,
-            "dnc_checked_at": dnc_checked_at,
-            "suppression_clear": False,
-            "campaign_enabled": False,
-            "provider_dnc_found": True,
-        }
+    checked_now = _iso(_utcnow())
 
-    dnc_clear = dnc_value in {
-        "qualified", "clear", "not_found", "not found", "passed", "true", "1"
-    }
-    complete = bool(
-        has_consent
-        and consent_record_id
-        and legal_basis
-        and dnc_clear
-        and dnc_checked_at
-        and suppression_clear
-    )
-    campaign_enabled = explicit_campaign_enabled or (
-        _bool(os.getenv("NIJA_APOLLO_AUTO_ENABLE_QUALIFIED", "1")) and complete
-    )
+    if provider_dnc == "found":
+        dnc_clear = False
+        dnc_checked_at = checked_now
+        provider_dnc_found = True
+    elif provider_dnc == "not_found":
+        dnc_clear = True
+        dnc_checked_at = checked_now
+        provider_dnc_found = False
+    elif provider_dnc == "pending":
+        dnc_clear = False
+        dnc_checked_at = checked_now
+        provider_dnc_found = False
+    else:
+        dnc_clear = dnc_value in {
+            "qualified", "clear", "not_found", "not found", "passed", "true", "1"
+        }
+        dnc_checked_at = custom_dnc_checked_at
+        provider_dnc_found = False
+
     return {
         "has_consent": has_consent,
         "consent_record_id": consent_record_id,
         "legal_basis": legal_basis,
         "dnc_clear": dnc_clear,
         "dnc_checked_at": dnc_checked_at,
-        "suppression_clear": suppression_clear,
-        "campaign_enabled": campaign_enabled,
-        "provider_dnc_found": False,
+        "suppression_clear": False,
+        "campaign_enabled": False,
+        "explicit_campaign_enabled": explicit_campaign_enabled,
+        "provider_dnc_found": provider_dnc_found,
+        "provider_dnc_status": provider_dnc,
     }
-
 
 def _dynamic_variables(contact: dict[str, Any]) -> list[dict[str, str]]:
     pairs = (
@@ -313,6 +332,26 @@ def _dynamic_variables(contact: dict[str, Any]) -> list[dict[str, str]]:
         for key, value in pairs
         if str(value or "").strip()
     ]
+
+
+def _qualification_reason(payload: dict[str, Any]) -> str:
+    if not _bool(payload.get("has_consent")):
+        return "consent_required"
+    if not str(payload.get("consent_record_id", "") or "").strip():
+        return "consent_record_required"
+    if not str(payload.get("legal_basis", "") or "").strip():
+        return "legal_basis_required"
+    if not _bool(payload.get("dnc_clear")):
+        return (
+            "dnc_pending"
+            if str(payload.get("provider_dnc_status", "") or "").lower() == "pending"
+            else "dnc_not_clear"
+        )
+    if not _bool(payload.get("suppression_clear")):
+        return "suppressed"
+    if not _bool(payload.get("campaign_enabled")):
+        return "campaign_not_enabled"
+    return "call_ready"
 
 
 def _contact_payload(contact: dict[str, Any]) -> tuple[Optional[dict[str, Any]], str]:
@@ -337,9 +376,29 @@ def _contact_payload(contact: dict[str, Any]) -> tuple[Optional[dict[str, Any]],
             )
         except (OSError, ValueError):
             pass
-    if is_suppressed(number):
-        evidence["suppression_clear"] = False
-        evidence["campaign_enabled"] = False
+
+    locally_suppressed = is_suppressed(number)
+    evidence["suppression_clear"] = not locally_suppressed
+
+    complete = bool(
+        evidence["has_consent"]
+        and evidence["consent_record_id"]
+        and evidence["legal_basis"]
+        and evidence["dnc_clear"]
+        and evidence["dnc_checked_at"]
+        and evidence["suppression_clear"]
+    )
+    explicit_campaign_enabled = bool(evidence.pop("explicit_campaign_enabled", False))
+    evidence["campaign_enabled"] = bool(
+        not locally_suppressed
+        and (
+            explicit_campaign_enabled
+            or (
+                _bool(os.getenv("NIJA_APOLLO_AUTO_ENABLE_QUALIFIED", "1"))
+                and complete
+            )
+        )
+    )
 
     return {
         "record_id": f"apollo:{contact_id}",
@@ -353,7 +412,6 @@ def _contact_payload(contact: dict[str, Any]) -> tuple[Optional[dict[str, Any]],
         **evidence,
     }, "ok"
 
-
 def run_sync() -> dict[str, int]:
     cursor = _load_cursor()
     newest_seen = cursor
@@ -364,6 +422,14 @@ def run_sync() -> dict[str, int]:
         "website_leads_existing": 0,
         "website_lead_errors": 0,
         "website_lead_missing_email": 0,
+        "call_ready": 0,
+        "consent_required": 0,
+        "consent_record_required": 0,
+        "legal_basis_required": 0,
+        "dnc_pending": 0,
+        "dnc_not_clear": 0,
+        "suppressed": 0,
+        "campaign_not_enabled": 0,
         "queued_or_refreshed": 0,
         "missing_phone": 0,
         "missing_timezone": 0,
@@ -391,10 +457,6 @@ def run_sync() -> dict[str, int]:
             if not isinstance(contact, dict):
                 continue
             updated_at = str(contact.get("updated_at", "") or "")
-            # Apollo returns contacts newest-first. Once a persisted cursor is
-            # reached, every remaining row/page is already known. Stop before
-            # mirroring or queue evaluation so idle polls consume one search call
-            # instead of repeatedly walking historical pages.
             if cursor and updated_at and updated_at <= cursor:
                 reached_cursor = True
                 break
@@ -418,6 +480,13 @@ def run_sync() -> dict[str, int]:
             if payload is None:
                 counts[reason] = counts.get(reason, 0) + 1
                 continue
+
+            qualification = _qualification_reason(payload)
+            if qualification != "call_ready":
+                counts[qualification] = counts.get(qualification, 0) + 1
+                continue
+
+            counts["call_ready"] += 1
             try:
                 result = enqueue_candidate(payload)
             except (OSError, ValueError):
@@ -434,7 +503,6 @@ def run_sync() -> dict[str, int]:
     _save_state(newest_seen, counts)
     return counts
 
-
 def _worker() -> None:
     global _LAST_ERROR
     if not _enabled():
@@ -449,8 +517,9 @@ def _worker() -> None:
         return
     print(
         f"APOLLO_NIJA_FEEDER state=ready poll_s={_poll_seconds():.0f} "
-        f"max_pages={_pages_per_sync()} cold_contacts_call_ready=false "
-        "website_lead_mirror=true fail_closed=true",
+        f"max_pages={_pages_per_sync()} pipeline_version={_PIPELINE_VERSION} "
+        "cold_contacts_call_ready=false dnc_source=apollo_phone_screen "
+        "non_call_ready_not_enqueued=true website_lead_mirror=true fail_closed=true",
         flush=True,
     )
     while True:
@@ -463,7 +532,12 @@ def _worker() -> None:
                 f"seen={counts.get('contacts_seen', 0)} "
                 f"lead_mirrored={counts.get('website_leads_mirrored', 0)} "
                 f"lead_existing={counts.get('website_leads_existing', 0)} "
+                f"call_ready={counts.get('call_ready', 0)} "
                 f"queued={counts.get('queued_or_refreshed', 0)} "
+                f"consent_required={counts.get('consent_required', 0)} "
+                f"dnc_not_clear={counts.get('dnc_not_clear', 0)} "
+                f"dnc_pending={counts.get('dnc_pending', 0)} "
+                f"suppressed={counts.get('suppressed', 0)} "
                 f"missing_phone={counts.get('missing_phone', 0)} "
                 f"errors={counts.get('errors', 0) + counts.get('website_lead_errors', 0)}",
                 flush=True,
@@ -504,7 +578,13 @@ def status() -> dict[str, Any]:
         "last_counts": _LAST_COUNTS,
         "website_lead_mirror": True,
         "website_lead_label_id_configured": bool(_website_lead_label_id()),
+        "pipeline_version": _PIPELINE_VERSION,
         "cold_contacts_call_ready": False,
+        "non_call_ready_not_enqueued": True,
+        "dnc_source": "apollo_phone_screen_then_custom_fallback",
+        "consent_field_id_configured": bool(os.getenv("NIJA_APOLLO_CONSENT_FIELD_ID", "").strip()),
+        "consent_record_field_id_configured": bool(os.getenv("NIJA_APOLLO_CONSENT_RECORD_FIELD_ID", "").strip()),
+        "legal_basis_field_id_configured": bool(os.getenv("NIJA_APOLLO_LEGAL_BASIS_FIELD_ID", "").strip()),
         "requires_authoritative_consent_and_compliance_evidence": True,
         "fail_closed": True,
     }
