@@ -17,6 +17,9 @@ def test_exception_classification_is_bounded_and_does_not_return_message():
         "EAPI:Rate limit exceeded": "kraken_rate_limited",
         "read timed out": "transport_timeout",
         "connection reset": "transport_failure",
+        "Kraken API not connected": "broker_disconnected_or_unconfigured",
+        "Kraken client not connected": "broker_disconnected_or_unconfigured",
+        "credentials not configured": "broker_disconnected_or_unconfigured",
         "opaque failure SECRET-DO-NOT-LOG": "unclassified_exception",
     }
     for message, expected in samples.items():
