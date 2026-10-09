@@ -73,3 +73,25 @@ def test_short_frame_is_not_cached(monkeypatch) -> None:
     assert len(loop._fetch_df(broker, "SOL-USD")) == 49
     assert len(loop._fetch_df(broker, "SOL-USD")) == 49
     assert loop.fetch_calls == 2
+
+
+
+class AlreadyAlignedLoop:
+    def _phase3_scan_and_enter(self, df: Any) -> str:
+        if df is None or len(df) < 50:
+            return "skip_before_execute_action"
+        return "execute_action"
+
+
+def test_already_aligned_phase3_is_not_recompiled(caplog) -> None:
+    """Existing 50-candle source must retain identical live bytecode."""
+    method = AlreadyAlignedLoop._phase3_scan_and_enter
+    original_code = method.__code__
+    assert patch._repair_phase3_threshold(AlreadyAlignedLoop) is True
+    assert AlreadyAlignedLoop._phase3_scan_and_enter.__code__ is original_code
+    assert AlreadyAlignedLoop()._phase3_scan_and_enter(list(range(49))) == "skip_before_execute_action"
+    assert AlreadyAlignedLoop()._phase3_scan_and_enter(list(range(50))) == "execute_action"
+    assert "PHASE3_EXECUTION_THRESHOLD_ALREADY_ALIGNED" in caplog.text
+    assert "PHASE3_EXEC_HANDOFF_SOURCE_NOT_FOUND" not in caplog.text
+    assert patch._repair_phase3_threshold(AlreadyAlignedLoop) is True
+    assert AlreadyAlignedLoop._phase3_scan_and_enter.__code__ is original_code
