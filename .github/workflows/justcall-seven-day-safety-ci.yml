@@ -1,0 +1,47 @@
+name: NIJA JustCall Seven-Day Compliance
+
+on:
+  pull_request:
+    paths:
+      - 'render_outreach_autodial.py'
+      - 'render_outreach_routes.py'
+      - 'render_apollo_feeder.py'
+      - 'justcall_api.py'
+      - 'tests/test_justcall_seven_day_compliance.py'
+      - '.github/workflows/justcall-seven-day-safety-ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'render_outreach_autodial.py'
+      - 'render_outreach_routes.py'
+      - 'render_apollo_feeder.py'
+      - 'justcall_api.py'
+      - 'tests/test_justcall_seven_day_compliance.py'
+      - '.github/workflows/justcall-seven-day-safety-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  fail-closed-outreach-regressions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      NIJA_DEFER_RUNTIME_SITE_HOOKS: "1"
+      NIJA_JUSTCALL_AUTODIAL_ENABLED: "0"
+      NIJA_JUSTCALL_HUMAN_HANDOFF_VERIFIED: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install isolated test dependencies
+        run: python -m pip install --disable-pip-version-check flask pytest requests
+      - name: Syntax validation
+        run: python -m py_compile render_outreach_autodial.py render_outreach_routes.py render_apollo_feeder.py justcall_api.py
+      - name: Check weekend jurisdiction signatures, legacy bypass and Apollo screening
+        run: |
+          python -m pytest -q \
+            tests/test_justcall_seven_day_compliance.py \
+            tests/test_outbound_call_readiness_repair.py \
+            tests/test_render_apollo_feeder_quota_cursor.py

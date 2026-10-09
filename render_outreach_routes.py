@@ -267,71 +267,20 @@ def handle_outreach_get(handler: Any) -> bool:
 
 
 def handle_outreach_post(handler: Any) -> bool:
-    """Handle a protected JustCall POST route; return whether the path matched."""
+    """Fail closed: direct AI calls bypass the persisted outreach compliance queue."""
     if _path(handler) != "/api/justcall/calls":
         return False
-
     authorized, status_code, detail = _service_authorized(handler)
     if not authorized:
         _send_json(handler, status_code, {"error": detail})
         return True
-
-    try:
-        body = _read_json_body(handler)
-    except ValueError as exc:
-        _send_json(handler, 400, {"error": str(exc)})
-        return True
-
-    if body.get("has_consent") is not True:
-        _send_json(
-            handler,
-            422,
-            {
-                "error": "Outbound AI call blocked",
-                "detail": "A verified consent record is required before has_consent can be true",
-            },
-        )
-        return True
-
-    contact_number = str(body.get("contact_number", "") or "").strip()
-    if not _E164_RE.fullmatch(contact_number):
-        _send_json(
-            handler,
-            422,
-            {"error": "Phone number must be in E.164 format, for example +15551234567"},
-        )
-        return True
-
-    variables = body.get("dynamic_variables") or []
-    if not isinstance(variables, list):
-        _send_json(handler, 422, {"error": "dynamic_variables must be an array"})
-        return True
-    if len(variables) > 50:
-        _send_json(handler, 422, {"error": "Too many dynamic variables"})
-        return True
-
-    try:
-        agent_id = _resolve_agent_id(str(body.get("ai_agent_id", "") or ""))
-        provider_payload = _provider_request(
-            "POST",
-            "/voice-agents/calls",
-            payload={
-                "ai_agent_id": agent_id,
-                "contact_number": contact_number,
-                "dynamic_variables": variables,
-                "has_consent": True,
-            },
-        )
-    except ValueError as exc:
-        _send_json(handler, 422, {"error": str(exc)})
-    except OutreachConfigurationError as exc:
-        _send_json(handler, 503, {"error": str(exc)})
-    except OutreachProviderError as exc:
-        _send_json(
-            handler,
-            502,
-            {"error": str(exc), "provider_status": exc.status_code},
-        )
-    else:
-        _send_json(handler, 200, provider_payload)
+    _send_json(
+        handler, 409,
+        {
+            "error": "Direct outbound AI calls disabled",
+            "detail": "Enqueue a vetted recipient via /api/justcall/autodial-queue. "
+                      "Consent, DNC, suppression, local hours, jurisdiction and quota "
+                      "are enforced by the background queue."
+        },
+    )
     return True
