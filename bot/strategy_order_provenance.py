@@ -116,4 +116,117 @@ def record_pipeline_order_intent(request: Any, result: Any, *, ledger: Any = Non
         return False
 
 
-__all__ = ["record_pipeline_order_intent"]
+
+def _canonical_symbol(symbol: Any) -> str:
+    raw = str(symbol or "").strip().upper().split(":", 1)[0]
+    compact = "".join(char for char in raw if char.isalnum())
+    return {
+        "XXBTZUSD": "BTCUSD", "XBTUSD": "BTCUSD",
+        "XETHZUSD": "ETHUSD",
+    }.get(compact, compact)
+
+
+def resolve_confirmed_strategy_attribution(
+    ledger: Any, *, broker: str, user_id: str, confirmed_closes: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Join validated confirmed closes with authenticated entry + pipeline intent.
+
+    All missing, duplicated, inconsistent or historically untraceable strategy
+    identities remain unattributed. The function does not write any accounting
+    state and does not promote a pipeline ACK to fill evidence.
+    """
+    grouped: dict[tuple[str, str], list[float]] = {}
+    unproven = 0
+    counted = 0
+    if broker != "kraken":
+        return {"status": "unavailable", "attributed": 0,
+                "unattributed": len(confirmed_closes), "strategies": []}
+    try:
+        with ledger._get_connection() as conn:
+            for close in confirmed_closes:
+                entry_rows = conn.execute(
+                    """SELECT order_id, symbol, side, notes FROM trade_ledger
+                       WHERE position_id = ? AND user_id = ? AND action = 'OPEN'
+                         AND COALESCE(order_id, '') != ''""",
+                    (str(close["position_id"]), user_id),
+                ).fetchall()
+                if len(entry_rows) != 1:
+                    unproven += 1
+                    continue
+                entry = entry_rows[0]
+                entry_id = str(entry["order_id"] or "")
+                notes = str(entry["notes"] or "")
+                if not notes.startswith("authenticated_kraken_queryorders_entry; "):
+                    unproven += 1
+                    continue
+                direction = str(close["direction"] or "").lower()
+                if (direction == "long" and entry["side"] != "BUY") or (
+                    direction == "short" and entry["side"] != "SELL"
+                ):
+                    unproven += 1
+                    continue
+                if _canonical_symbol(entry["symbol"]) != _canonical_symbol(close["symbol"]):
+                    unproven += 1
+                    continue
+                rows = conn.execute(
+                    """SELECT account_scope, user_id, symbol, side,
+                              strategy_id, strategy_version
+                       FROM strategy_order_intents
+                       WHERE broker = ? AND user_id = ? AND order_id = ?""",
+                    (broker, user_id, entry_id),
+                ).fetchall()
+                if len(rows) != 1:
+                    unproven += 1
+                    continue
+                provenance = rows[0]
+                scope = str(provenance["account_scope"])
+                if (
+                    f"order_id={entry_id}" not in notes.split("; ")
+                    or f"account={scope}" not in notes.split("; ")
+                    or str(provenance["user_id"]) != user_id
+                    or _canonical_symbol(provenance["symbol"]) != _canonical_symbol(close["symbol"])
+                    or str(provenance["side"]).lower() != str(entry["side"]).lower()
+                ):
+                    unproven += 1
+                    continue
+                sid = str(provenance["strategy_id"] or "")
+                version = str(provenance["strategy_version"] or "")
+                if not _STRATEGY.fullmatch(sid):
+                    unproven += 1
+                    continue
+                net = float(close["net_pnl_usd"])
+                if not __import__("math").isfinite(net):
+                    unproven += 1
+                    continue
+                grouped.setdefault((sid, version), []).append(net)
+                counted += 1
+    except Exception as exc:
+        LOGGER.warning("STRATEGY_ATTRIBUTION_REPORT_UNAVAILABLE reason=%s", type(exc).__name__)
+        return {"status": "unavailable", "attributed": 0,
+                "unattributed": len(confirmed_closes), "strategies": []}
+    result = []
+    for (sid, version), values in grouped.items():
+        wins = [v for v in values if v > 0]
+        losses = [v for v in values if v < 0]
+        result.append({
+            "strategy_id": sid,
+            "strategy_version": version or None,
+            "provenance": "pipeline_order_id_joined_to_authenticated_open_and_confirmed_close",
+            "trades": len(values),
+            "wins": len(wins), "losses": len(losses),
+            "net_pnl_usd": sum(values),
+            "win_rate": len(wins) / len(values),
+            "average_pnl_usd": sum(values) / len(values),
+            "profit_factor": sum(wins) / -sum(losses) if losses else None,
+        })
+    result.sort(key=lambda row: (row["net_pnl_usd"], row["trades"]), reverse=True)
+    return {
+        "status": "verified_subset" if counted else "unavailable",
+        "attributed": counted, "unattributed": unproven,
+        "strategies": result,
+        "performance_guaranteed": False,
+        "missing_historical_provenance_imputed": False,
+    }
+
+
+__all__ = ["record_pipeline_order_intent", "resolve_confirmed_strategy_attribution"]
