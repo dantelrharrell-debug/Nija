@@ -39,7 +39,8 @@ def get_confirmed_performance_report(
 
     Broker identity comes from the exact broker field in the close transaction's
     ledger notes. Unscoped, manual, fee-inconsistent and ambiguous closes cannot
-    enter this report. Unavailable strategy attribution remains unavailable.
+    enter this report. Strategy attribution requires a distinct authenticated
+    entry and account-scoped pipeline intent; unmatched history stays unknown.
     """
     broker = str(broker or "").strip().lower()
     user_id = str(user_id or "").strip()
@@ -74,6 +75,7 @@ def get_confirmed_performance_report(
     buckets: dict[tuple[str, str], list[float]] = defaultdict(list)
     values: list[float] = []
     excluded = 0
+    verified_closes = []
     for row in rows:
         try:
             net, gross, fees, entry_fee, exit_fee = map(float, row[3:8])
@@ -94,15 +96,34 @@ def get_confirmed_performance_report(
                 raise ValueError("unproven position direction")
             buckets[(str(row[1]), direction)].append(net)
             values.append(net)
+            verified_closes.append({
+                "position_id": str(row[0]), "symbol": str(row[1]),
+                "direction": direction, "net_pnl_usd": net,
+            })
         except (TypeError, ValueError):
             excluded += 1
+    # Only an exact pipeline order intent + authenticated Kraken OPEN and
+    # confirmed fee-verified CLOSE proves a strategy outcome. All older trades
+    # with missing provenance are reported as unattributed, never guessed.
+    try:
+        from bot.strategy_order_provenance import resolve_confirmed_strategy_attribution
+        attribution = resolve_confirmed_strategy_attribution(
+            ledger, broker=broker, user_id=user_id, confirmed_closes=verified_closes,
+        )
+    except Exception:
+        attribution = {"status": "unavailable", "attributed": 0,
+                       "unattributed": len(verified_closes), "strategies": []}
     symbols = [{"symbol": symbol, "direction": direction, **_metrics(pnl)}
                for (symbol, direction), pnl in buckets.items()]
     return {
         "broker": broker, "user_id": user_id,
         "source": "canonical_confirmed_close_ledger",
         "cost_basis": "net_of_recorded_entry_and_exit_fees",
-        "carry_costs_verified": False, "strategy_attribution": "unavailable",
+        "carry_costs_verified": False,
+        "strategy_attribution": attribution["status"],
+        "strategy_attribution_proven_closes": attribution["attributed"],
+        "strategy_attribution_unproven_closes": attribution["unattributed"],
+        "strategy_metrics": attribution["strategies"],
         "window_limit": limit, "window_may_be_truncated": len(rows) == limit,
         "excluded_invalid_rows": excluded, "overall": _metrics(values),
         "winners": sorted((s for s in symbols if s["net_pnl_usd"] > 0),
