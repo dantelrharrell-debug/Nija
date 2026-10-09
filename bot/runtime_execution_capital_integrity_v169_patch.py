@@ -43,6 +43,7 @@ import logging
 import os
 import sys
 import threading
+import tempfile
 import time
 from functools import wraps
 from pathlib import Path
@@ -84,9 +85,20 @@ def _execution_marker_path() -> Path:
 
 def _atomic_json_write(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
-    tmp.replace(path)
+    # Detached heartbeat modules/threads may publish concurrently. Each write
+    # owns its sibling temporary file so another writer cannot consume it.
+    tmp: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=path.parent,
+            prefix=f".{path.name}.", suffix=".tmp", delete=False,
+        ) as stream:
+            tmp = Path(stream.name)
+            stream.write(json.dumps(payload, sort_keys=True))
+        tmp.replace(path)
+    finally:
+        if tmp is not None:
+            tmp.unlink(missing_ok=True)
 
 
 def _write_authority_liveness_marker(
