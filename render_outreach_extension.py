@@ -278,6 +278,94 @@ def _ensure_justcall_webhooks_once() -> tuple[int, int, int]:
     return added, existing, failed
 
 
+def _agent_inventory_summary(payload: object, configured_id: str) -> dict[str, object]:
+    """Inspect provider agent metadata without logging names, numbers or secrets.
+
+    This is only a read-only configuration hint. It NEVER attests to a
+    successful agent-to-human transfer, nor enables outbound calling.
+    """
+    from render_outreach_routes import _AGENT_ID_RE
+
+    candidates: list[dict[str, Any]] = []
+
+    def _collect(value: object, depth: int = 0) -> None:
+        if depth > 6 or len(candidates) >= 100:
+            return
+        if isinstance(value, dict):
+            agent_id = str(value.get("ai_agent_id") or value.get("agent_id") or "").strip()
+            if not agent_id:
+                candidate_id = str(value.get("id") or "").strip()
+                if _AGENT_ID_RE.fullmatch(candidate_id):
+                    agent_id = candidate_id
+            if _AGENT_ID_RE.fullmatch(agent_id):
+                candidates.append(value)
+                return
+            for key in ("agents", "voice_agents", "data", "results", "items", "list"):
+                if key in value:
+                    _collect(value[key], depth + 1)
+        elif isinstance(value, list):
+            for item in value[:100]:
+                _collect(item, depth + 1)
+
+    _collect(payload)
+    unique = {
+        str(a.get("ai_agent_id") or a.get("agent_id") or a.get("id")): a
+        for a in candidates
+    }
+    if configured_id:
+        agent = unique.get(configured_id)
+    elif len(unique) == 1:
+        agent = next(iter(unique.values()))
+    else:
+        agent = None
+
+    # An action list is vendor metadata, not proof of a working transfer.
+    actions_present = bool(agent and isinstance(agent.get("actions"), list))
+    possible_warm = False
+    if actions_present:
+        for action in agent["actions"][:100]:
+            if not isinstance(action, dict):
+                continue
+            typ = str(action.get("type") or action.get("action_type") or "").casefold()
+            subtype = str(action.get("transfer_type") or action.get("mode") or "").casefold()
+            if "transfer" in typ and "warm" in subtype:
+                possible_warm = True
+    return {
+        "agent_count": len(unique),
+        "configured_agent_id_present": bool(configured_id),
+        "selected_agent_identified": agent is not None,
+        "action_metadata_available": actions_present,
+        "warm_transfer_action_listed": possible_warm,
+        "human_handoff_verified": False,  # requires completed real transfer!
+    }
+
+
+def _audit_justcall_agents_readonly() -> None:
+    """Read metadata through existing JustCall API credentials; never dial."""
+    configured = str(os.getenv("JUSTCALL_AI_AGENT_ID", "") or "").strip()
+    try:
+        metadata = _justcall_webhook_request(
+            "GET", "/voice-agents/list?page=0&per_page=100&order=desc"
+        )
+        info = _agent_inventory_summary(metadata, configured)
+        print(
+            "JUSTCALL_AGENT_AUDIT state=read_only "
+            f"agent_count={info['agent_count']} "
+            f"selected_agent_identified={str(info['selected_agent_identified']).lower()} "
+            f"action_metadata_available={str(info['action_metadata_available']).lower()} "
+            f"warm_transfer_action_listed={str(info['warm_transfer_action_listed']).lower()} "
+            "human_handoff_verified=false",
+            flush=True,
+        )
+    except Exception as exc:
+        # Provider exception bodies may carry phone numbers or tokens.
+        print(
+            "JUSTCALL_AGENT_AUDIT state=unverified "
+            f"error={type(exc).__name__} human_handoff_verified=false",
+            flush=True,
+        )
+
+
 def _autoconfig_worker() -> None:
     if not _autoconfig_enabled():
         print("JUSTCALL_WEBHOOK_AUTOCONFIG state=disabled nonfatal=true", flush=True)
@@ -312,6 +400,7 @@ def _autoconfig_worker() -> None:
                 "signed_receiver=true nonfatal=true",
                 flush=True,
             )
+            _audit_justcall_agents_readonly()
             return
         print(
             "JUSTCALL_WEBHOOK_AUTOCONFIG "
@@ -395,73 +484,20 @@ def handle_outreach_extension_post(handler: Any) -> bool:
         _send_json(handler, 200, result)
         return True
 
+    # The legacy campaign endpoint used caller-supplied compliance booleans and
+    # bypassed recipient-jurisdiction evidence, human handoff, daily quota and
+    # durable submission pacing. All live AI calls must go through the vetted queue.
     authorized, status_code, detail = _service_authorized(handler)
     if not authorized:
         _send_json(handler, status_code, {"error": detail})
         return True
-    try:
-        _, body = _read_raw_json(handler)
-    except ValueError as exc:
-        _send_json(handler, 400, {"error": str(exc)})
-        return True
-
-    contact_number = str(body.get("contact_number", "") or "").strip()
-    if not _E164_RE.fullmatch(contact_number):
-        _send_json(handler, 422, {"error": "Phone number must be valid E.164"})
-        return True
-
-    compliance_errors = _campaign_compliance_errors(body, contact_number)
-    if compliance_errors:
-        _send_json(
-            handler,
-            422,
-            {
-                "error": "Campaign call blocked by compliance gate",
-                "blockers": compliance_errors,
-            },
-        )
-        return True
-
-    variables = body.get("dynamic_variables") or []
-    if not isinstance(variables, list) or len(variables) > 50:
-        _send_json(
-            handler,
-            422,
-            {"error": "dynamic_variables must be an array of at most 50 items"},
-        )
-        return True
-
-    try:
-        agent_id = _resolve_agent_id(str(body.get("ai_agent_id", "") or ""))
-        provider_payload = _provider_request(
-            "POST",
-            "/voice-agents/calls",
-            payload={
-                "ai_agent_id": agent_id,
-                "contact_number": contact_number,
-                "dynamic_variables": variables,
-                "has_consent": True,
-            },
-        )
-        record_outbound_submission(
-            contact_number=contact_number,
-            record_id=str(body.get("record_id", "") or ""),
-            campaign=str(body.get("campaign", "") or ""),
-            provider_payload=provider_payload,
-            request_payload=body,
-        )
-    except ValueError as exc:
-        _send_json(handler, 422, {"error": str(exc)})
-    except OutreachConfigurationError as exc:
-        _send_json(handler, 503, {"error": str(exc)})
-    except OutreachProviderError as exc:
-        _send_json(
-            handler,
-            502,
-            {"error": str(exc), "provider_status": exc.status_code},
-        )
-    except OSError:
-        _send_json(handler, 503, {"error": "Outreach event store unavailable"})
-    else:
-        _send_json(handler, 200, provider_payload)
+    _send_json(
+        handler, 409,
+        {
+            "error": "Direct AI campaign calling is disabled",
+            "detail": "Enqueue through /api/justcall/autodial-queue after verified "
+                      "AI consent, DNC, suppression, jurisdiction, calling-hours "
+                      "and agent-human handoff checks.",
+        },
+    )
     return True

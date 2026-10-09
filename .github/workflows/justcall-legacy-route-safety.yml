@@ -1,0 +1,32 @@
+name: NIJA Legacy Campaign Route Safety
+on:
+  pull_request:
+    paths:
+      - 'render_outreach_extension.py'
+      - 'tests/test_justcall_campaign_route_safety.py'
+      - '.github/workflows/justcall-legacy-route-safety.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'render_outreach_extension.py'
+      - 'tests/test_justcall_campaign_route_safety.py'
+      - '.github/workflows/justcall-legacy-route-safety.yml'
+permissions:
+  contents: read
+jobs:
+  verify-no-direct-dial-bypass:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      NIJA_DEFER_RUNTIME_SITE_HOOKS: "1"
+      NIJA_JUSTCALL_AUTODIAL_ENABLED: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Syntax and safe legacy endpoint tests
+        run: |
+          python -m pip install --disable-pip-version-check pytest
+          python -m py_compile render_outreach_extension.py
+          python -m pytest -q tests/test_justcall_campaign_route_safety.py
