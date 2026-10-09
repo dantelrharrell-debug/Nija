@@ -172,8 +172,9 @@ def _ensure_opening_cost_basis(
         # two commits: a crash between those writes creates an orphaned fill.
         # SHORT entry SELL is an OPEN, not the legacy record_sell() CLOSE action.
         quantity = float(filled_usd) / float(fill_price)
+        account_scope = _exact_kraken_account_scope(result)
         user_id = _ledger_user_id(result)
-        if not user_id:
+        if not account_scope or not user_id:
             LOGGER.warning(
                 "REALIZED_PNL_V413_ENTRY_LEDGER_PENDING marker=%s order_id=%s position_id=%s "
                 "reason=authenticated_account_scope_unproven ledger_user_guessed=false",
@@ -186,7 +187,7 @@ def _ensure_opening_cost_basis(
         position_side = "LONG" if side_norm == "buy" else "SHORT"
         notes = (
             "authenticated_kraken_queryorders_entry; "
-            f"order_id={order_id}; account={str(result.get('account') or result.get('account_id') or '')}"
+            f"order_id={order_id}; account={account_scope}"
         )
         atomic_book = getattr(ledger, "record_confirmed_entry_atomic", None)
         if not callable(atomic_book):
