@@ -62,7 +62,7 @@ def test_snapshot_archive_rejects_member_tampering(tmp_path):
     archive = Path(result["archive"])
     manifest = snapshot.verify_snapshot(archive)
     payload = io.BytesIO()
-    with tarfile.open(payload, "w:gz") as output:
+    with tarfile.open(fileobj=payload, mode="w:gz") as output:
         raw = b"malicious substitution"
         entry = tarfile.TarInfo("trade_ledger.db")
         entry.size = len(raw)
