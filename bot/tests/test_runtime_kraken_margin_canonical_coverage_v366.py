@@ -388,3 +388,12 @@ def test_unknown_adapter_connection_flag_continues_authenticated_proof():
         broker, account="platform:kraken", force=True,
     )
     assert (ok, rows, source) == (True, {}, "ok")
+
+
+def test_null_or_missing_openpositions_result_is_never_treated_as_no_positions():
+    for payload in ({"error": []}, {"error": [], "result": None}):
+        truth = v366.normalise_open_positions(payload)
+        assert truth["ok"] is False
+        assert truth["reason"] == "invalid_openpositions_result"
+        assert truth["positions"] == {}
+    assert v366.normalise_open_positions({"error": [], "result": {}})["ok"] is True
