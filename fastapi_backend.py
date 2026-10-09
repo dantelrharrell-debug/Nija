@@ -812,22 +812,42 @@ async def stop_bot(user_id: str = Depends(get_current_user)):
     }
 
 
-@app.get("/api/status", response_model=TradingStatus, tags=["trading"])
-async def get_status(user_id: str = Depends(get_current_user)):
-    """
-    Get current NIJA bot status for user.
+@app.get("/api/status", tags=["trading"])
+@app.get("/api/trading/status", tags=["trading"])
+def get_status(request: Request, user_id: str = Depends(get_current_user)) -> Dict[str, Any]:
+    """Report entitlement separately from unverified account execution readiness."""
+    supplied = request.query_params.get("user_id")
+    if supplied is not None and supplied != user_id:
+        raise HTTPException(status_code=403, detail="Cannot access another user's trading status")
+    try:
+        from user_trade_reporting import get_user_access_status
+        return get_user_access_status(user_id)
+    except Exception as exc:
+        logger.error("User account readiness unavailable error=%s", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="Account readiness unavailable") from None
 
-    Returns real-time status without exposing strategy internals.
-    """
-    status = user_control.get_user_status(user_id)
 
-    return TradingStatus(
-        user_id=user_id,
-        trading_enabled=status.get('status') == 'running',
-        engine_status=status.get('status', 'unknown'),
-        last_activity=status.get('last_activity'),
-        stats=status.get('stats', {})
-    )
+@app.get("/api/trading/history", tags=["analytics"])
+def get_confirmed_trade_history(
+    request: Request, user_id: str = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """Read only the authenticated customer's confirmed closes in their IANA zone."""
+    supplied = request.query_params.get("user_id")
+    if supplied is not None and supplied != user_id:
+        raise HTTPException(status_code=403, detail="Cannot access another user's trades")
+    try:
+        from user_trade_reporting import get_user_confirmed_history
+        from bot.trade_ledger_db import get_trade_ledger_db
+        return get_user_confirmed_history(
+            get_trade_ledger_db(), user_id=user_id,
+            limit=request.query_params.get("limit", "50"), offset=request.query_params.get("offset", "0"),
+            timezone_name=request.query_params.get("timezone", "UTC"), broker=request.query_params.get("broker"),
+        )
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid trade-history query") from None
+    except Exception as exc:
+        logger.error("Confirmed history unavailable error=%s", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="Confirmed trade history unavailable") from None
 
 
 @app.get("/api/positions", response_model=List[Position], tags=["trading"])

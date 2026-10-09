@@ -102,7 +102,7 @@ def get_user_confirmed_history(
             entry_utc, entry_local = _timestamp(row["entry_time"], zone)
             exit_utc, exit_local = _timestamp(row["exit_time"], zone)
             symbol = str(row["symbol"])
-            quote = symbol.rsplit("-", 1)[-1] if "-" in symbol else "USD" if venue == "alpaca" else None
+            quote = "USD" if venue == "alpaca" else symbol.rsplit("-", 1)[-1] if "-" in symbol else None
             trades.append({
                 "position_id": row["position_id"], "symbol": symbol, "broker": venue,
                 "direction": "long" if side in {"buy", "long"} else "short",
@@ -134,7 +134,7 @@ def get_user_access_status(user_id: str) -> dict[str, Any]:
     """
     from user_live_trading_access import evaluate_live_trading_access
 
-    decision = evaluate_live_trading_access(user_id)
+    decision = evaluate_live_trading_access(user_id, require_live_mode=False, require_credentials=False)
     return {
         "user_id": user_id, "trading_enabled": False, "engine_status": "unverified",
         "entitlement_allowed": decision.allowed,

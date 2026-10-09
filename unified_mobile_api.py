@@ -305,17 +305,11 @@ def stop_trading():
 
 @unified_mobile_api.route('/trading/status', methods=['GET'])
 def get_trading_status():
-    """
-    Get current trading status for the user.
-    
-    Returns:
-        {
-            "enabled": true,
-            "active_positions": 3,
-            "today_trades": 12,
-            "profit_today": 125.50,
-            "brokers": ["coinbase", "kraken"]
-        }
+    """Return entitlement, credential venues and readiness verification flags.
+
+    The response includes trading_enabled=false, engine_status=unverified,
+    entitlement_allowed, blocker, connected_brokers, and country/account
+    readiness verification flags. It does not report execution counts or profit.
     """
     user_id = _get_request_user_id()
     if not user_id:
