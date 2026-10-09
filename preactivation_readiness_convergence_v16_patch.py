@@ -9,6 +9,7 @@ single bounded activation iteration.
 from __future__ import annotations
 
 import importlib
+import math
 import logging
 import os
 import sys
@@ -250,6 +251,46 @@ def _bootstrap_ready() -> tuple[bool, list[str]]:
     return not missing, missing
 
 
+def _genuine_execution_marker_proof() -> tuple[bool, str]:
+    """Require fresh broker-execution provenance BEFORE any live readiness.
+
+    In particular, startup must not mark execution_ready from pipeline,
+    writer, capital or nonce health while the v169/v231 wrappers are still
+    loading.  If the strict verifier has not installed yet, the source/kind
+    fields will be absent and this check fails closed.
+    """
+    try:
+        module = sys.modules.get("bot.trading_state_machine")
+        if module is None:
+            module = importlib.import_module("bot.trading_state_machine")
+        verifier = getattr(module, "_heartbeat_verification_status", None)
+        if not callable(verifier):
+            return False, "execution_verifier_unavailable"
+        ok, reason, meta = verifier()
+        if not bool(ok):
+            return False, f"execution_marker:{reason or 'not_verified'}"
+        meta = dict(meta or {})
+        stage = str(meta.get("stage") or "").strip().upper()
+        source = str(meta.get("source") or "").strip().lower()
+        kind = str(meta.get("proof_kind") or "").strip().lower()
+        if stage not in {"ORDER_VERIFY", "FILL_VERIFY"}:
+            return False, f"execution_stage_insufficient:{stage or 'missing'}"
+        if source != "heartbeat_trade" or kind != "execution_probe":
+            return False, "execution_provenance_unverified"
+        verified = float(meta.get("verified_at_epoch") or 0.0)
+        age = time.time() - verified
+        if not math.isfinite(verified) or not math.isfinite(age):
+            return False, "execution_marker_timestamp_invalid"
+        # A 30-minute upper bound is mandatory even if an optional legacy
+        # policy disables its own age limit.  Never use writer heartbeat age
+        # as execution evidence.
+        if verified <= 0 or age < -5.0 or age > 1800.0:
+            return False, "execution_marker_missing_future_or_stale"
+        return True, "fresh_genuine_order_or_fill_execution_proof"
+    except Exception as exc:
+        return False, f"execution_proof_unavailable:{type(exc).__name__}"
+
+
 def _collect_proofs() -> tuple[dict[str, bool], dict[str, Any]]:
     capital = _capital_snapshot()
     strict_ok, strict_detail = _strict_authority_ready()
@@ -257,6 +298,7 @@ def _collect_proofs() -> tuple[dict[str, bool], dict[str, Any]]:
     bootstrap_ok, bootstrap_missing = _bootstrap_ready()
     strategy = _strategy_published()
     execution = _execution_pipeline_ready()
+    execution_proof_ok, execution_proof_detail = _genuine_execution_marker_proof()
     hydrated = bool(capital.get("hydrated")) and not bool(capital.get("stale"))
     funded = _float(capital.get("real")) > 0.0
     registered = _int(capital.get("registered")) > 0
@@ -269,7 +311,7 @@ def _collect_proofs() -> tuple[dict[str, bool], dict[str, Any]]:
         "capital_ready": bool(_live_mode() and hydrated and funded),
         "risk_ready": risk,
         "strategy_ready": strategy,
-        "execution_ready": bool(execution and risk and authority),
+        "execution_ready": bool(execution and risk and authority and execution_proof_ok),
         "nonce_ready": strict_ok,
         "bootstrap_ready": bootstrap_ok,
     }
@@ -280,6 +322,8 @@ def _collect_proofs() -> tuple[dict[str, bool], dict[str, Any]]:
         "bootstrap_missing": bootstrap_missing,
         "live_mode": _live_mode(),
         "execution_pipeline_wired": execution,
+        "execution_marker_ready": execution_proof_ok,
+        "execution_marker_detail": execution_proof_detail,
     }
 
 
