@@ -97,6 +97,9 @@ jobs:
           COINBASE_PEM_CONTENT: ""
         run: |
           python -m pytest -q \
+            bot/tests/test_canonical_kraken_recovery_deferral.py \
+            bot/tests/test_production_runtime_convergence_v88.py \
+            bot/tests/test_v420_monitor_start_order_v421.py \
             tests/test_authority_marker_atomic_publication.py \
             bot/tests/test_runtime_execution_capital_integrity_v169.py \
             bot/tests/test_runtime_execution_activation_protection_v347.py \
