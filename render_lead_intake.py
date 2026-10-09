@@ -418,6 +418,17 @@ def handle_lead_intake_post(handler: Any) -> bool:
         _send_json(handler, 503, {"error": "Lead store unavailable"})
         return True
 
+    # Keep a retryable Apollo CRM mirror separate from the existing Zapier
+    # delivery path. Successful submission must not depend on Apollo uptime.
+    crm_queued = False
+    crm_error = False
+    try:
+        from render_lead_crm_sync import enqueue_lead
+        crm_queued = enqueue_lead(canonical, event_key)
+    except Exception as exc:
+        crm_error = True
+        print(f"NIJA_LEAD_CRM_QUEUE_FAILED reason={type(exc).__name__}", flush=True)
+
     forwarded = False
     forward_error = False
     try:
@@ -438,6 +449,8 @@ def handle_lead_intake_post(handler: Any) -> bool:
             "email_normalized": True,
             "forwarded": forwarded,
             "forward_error": forward_error,
+            "crm_queued": crm_queued,
+            "crm_queue_error": crm_error,
         },
     )
     return True
