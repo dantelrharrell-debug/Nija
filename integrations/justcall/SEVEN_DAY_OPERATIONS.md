@@ -21,7 +21,11 @@ person-to-person campaigns independently reviewed under applicable laws.
    recipient's actual **calling jurisdiction**. Email opt-in, Apollo verified
    email, place of employment, area code and website-lead presence are not proof
    of AI-call consent or location.
-3. The quota timezone is `America/Los_Angeles`, while the call-hour window
+3. Pacing is persisted in the daily quota ledger and defaults to one submission
+   every 120 seconds (`NIJA_AUTODIAL_MIN_SUBMISSION_INTERVAL_SECONDS=120`).
+   This prevents an unmanageable burst of hundreds of simultaneous AI calls
+   and allows up to about 30 per hour when eligible recipients exist.
+4. The quota timezone is `America/Los_Angeles`, while the call-hour window
    is evaluated in the recipient's verified local timezone. Defaults are
    09:00–20:00 local. More restrictive state/municipal rules always prevail.
 4. For seven-day consideration set `NIJA_AUTODIAL_WEEKDAYS_ONLY=0` **only
@@ -75,10 +79,12 @@ person-to-person campaigns independently reviewed under applicable laws.
 }
 ```
 
-The HMAC signed message is these seven fields joined by the newline character,
-with no trailing newline, using UTF-8: phone **digits only**; exact campaign
-string; exact consent record ID; uppercase `US-XX` jurisdiction; clearance ID;
-recipient's local date `YYYY-MM-DD`; exact checked-at ISO timestamp.
+The HMAC signed message is a canonical JSON **object** encoded with UTF-8,
+`sort_keys=True`, `separators=(",", ":")`, and `ensure_ascii=True`.
+It contains seven keys: `phone_digits` (digits only), `campaign` (exact
+campaign string), `consent_record_id` (exact ID), `jurisdiction` (uppercase
+`US-XX`), `clearance_id`, `local_date` (recipient `YYYY-MM-DD`), and
+`checked_at` (exact timestamp). No API caller may mint its own signature.
 The signature is the lowercase hex HMAC-SHA256 output. Never sign a clearance
 without an actual legal/consent audit record. Signature age must not exceed
 24 hours, and approval is bound to a single recipient-local calendar date.
