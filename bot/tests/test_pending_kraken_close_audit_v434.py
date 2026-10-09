@@ -1,6 +1,8 @@
 """Offline NIJA unmatched Kraken close audits: no broker orders or synthetic P&L."""
 from __future__ import annotations
 
+import pytest
+
 from bot.trade_ledger_db import TradeLedgerDB
 from bot.pending_kraken_close_audit_v434 import (
     mark_reconciled,
@@ -112,3 +114,45 @@ def test_pending_closure_reconciles_only_after_authenticated_entry_and_confirmed
     with ledger._get_connection() as conn:
         row = conn.execute("SELECT state, matched_position_id FROM pending_kraken_closes").fetchone()
     assert row["state"] == "reconciled" and row["matched_position_id"] == "P-434"
+
+
+@pytest.mark.parametrize("mismatch", ["pending_symbol", "completed_symbol", "broker", "order_id"])
+def test_pending_resolution_rejects_mismatched_identity(tmp_path, monkeypatch, mismatch):
+    ledger = _ledger(tmp_path)
+    from bot import trade_ledger_db
+    from bot import runtime_kraken_fee_pnl_bridge_v413_patch as bridge
+    monkeypatch.setattr(trade_ledger_db, "_trade_ledger_db", ledger)
+    assert _record(ledger)
+    bridge._ensure_opening_cost_basis(
+        {"order_id": "ENTRY-434", "opening_position_id": "P-434",
+         "account": "platform:kraken", "broker": "kraken", "fee": 0.12,
+         "authenticated_kraken_queryorders": True,
+         "authenticated_kraken_opening_order": True},
+        symbol="XXBTZUSD", side="buy", fill_price=100000.0, filled_usd=100.0,
+    )
+    realized._reconcile_confirmed_fill(
+        _fill(), symbol="XXBTZUSD", side="sell", fill_price=101000.0, filled_usd=101.0,
+    )
+    # Replay a pending audit against genuine canonical accounting, changing
+    # one identity field while retaining all prices, quantities and fees.
+    with ledger._get_connection() as conn:
+        conn.execute("UPDATE pending_kraken_closes SET state='pending', matched_position_id=NULL")
+        if mismatch == "pending_symbol":
+            conn.execute("UPDATE pending_kraken_closes SET symbol='ETHUSD'")
+        if mismatch == "completed_symbol":
+            conn.execute("UPDATE completed_trades SET symbol='ETHUSD'")
+    result = _fill()
+    if mismatch == "broker":
+        result["broker"] = "coinbase"
+    if mismatch == "order_id":
+        result["order_id"] = "OTHER-ORDER"
+    assert not mark_reconciled(ledger, result=result, order_id="EXIT-434", position_id="P-434")
+    assert pending_summary(ledger, account_scope="platform:kraken")["pending_confirmed_closes"] == 1
+
+
+def test_pending_resolution_accepts_equivalent_kraken_symbol_alias(tmp_path, monkeypatch):
+    test_pending_closure_reconciles_only_after_authenticated_entry_and_confirmed_close(tmp_path, monkeypatch)
+    ledger = _ledger(tmp_path)
+    with ledger._get_connection() as conn:
+        conn.execute("UPDATE pending_kraken_closes SET state='pending', symbol='BTC-USD'")
+    assert mark_reconciled(ledger, result=_fill(), order_id="EXIT-434", position_id="P-434")
