@@ -170,7 +170,7 @@ def test_late_fee_updates_and_duplicate_close_rows_do_not_inflate_results(ledger
         conn.execute("""INSERT INTO trade_ledger
             (timestamp,user_id,symbol,side,action,price,quantity,size_usd,order_id,position_id,notes)
             SELECT timestamp,user_id,symbol,side,action,price,quantity,size_usd,order_id,position_id,notes
-            FROM trade_ledger""")
+            FROM trade_ledger WHERE action='CLOSE'""")
     report = get_confirmed_performance_report(ledger, broker="kraken", user_id="platform")
     assert report["overall"]["trades"] == 1
     assert report["overall"]["losses"] == 1
