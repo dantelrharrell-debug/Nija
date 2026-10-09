@@ -89,6 +89,10 @@ def evaluate_shadow_candidate(
     version = str(idea.get("strategy_version") or "").strip()
     if not requested_account_scope or not scope or scope != requested_account_scope:
         reasons.append("account_scope_mismatch")
+    # A valid user scope is still wrong if it belongs to a different broker.
+    # Never let the same asset price be treated as account-local authority.
+    if not scope.endswith(":" + venue):
+        reasons.append("account_venue_mismatch")
     if venue not in SUPPORTED_RESEARCH_VENUES.get(asset, frozenset()):
         reasons.append("asset_venue_research_not_configured")
     if not _SYMBOL.fullmatch(symbol):
