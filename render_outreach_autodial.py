@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 import pathlib
+import re
 import sqlite3
 import threading
 import time
@@ -105,6 +106,7 @@ def _ensure_schema(connection: sqlite3.Connection) -> None:
             dnc_checked_at TEXT NOT NULL DEFAULT '',
             suppression_clear INTEGER NOT NULL DEFAULT 0,
             contact_timezone TEXT NOT NULL DEFAULT '',
+            weekend_evidence_json TEXT NOT NULL DEFAULT '{}',
             campaign_enabled INTEGER NOT NULL DEFAULT 0,
             dynamic_variables_json TEXT NOT NULL DEFAULT '[]',
             ai_agent_id TEXT NOT NULL DEFAULT '',
@@ -131,6 +133,16 @@ def _ensure_schema(connection: sqlite3.Connection) -> None:
         );
         """
     )
+    # Existing production databases must migrate before the worker reads weekend evidence.
+    columns = {
+        str(field["name"])
+        for field in connection.execute("PRAGMA table_info(outreach_autodial_queue)")
+    }
+    if "weekend_evidence_json" not in columns:
+        connection.execute(
+            "ALTER TABLE outreach_autodial_queue "
+            "ADD COLUMN weekend_evidence_json TEXT NOT NULL DEFAULT '{}'"
+        )
     connection.commit()
 
 
@@ -246,6 +258,19 @@ def enqueue_candidate(body: dict[str, Any]) -> dict[str, Any]:
     if _bool(body.get("test_mode")):
         raise ValueError("autodial queue accepts production campaign records only")
 
+    raw_weekend = body.get("weekend_evidence") or {}
+    if not isinstance(raw_weekend, dict):
+        raise ValueError("weekend_evidence must be an object")
+    # Store only audit identifiers, never treat missing evidence as weekend consent.
+    weekend_evidence = {
+        "approved": raw_weekend.get("approved") is True,
+        "recipient_jurisdiction": str(raw_weekend.get("recipient_jurisdiction") or "").strip().upper()[:16],
+        "clearance_id": str(raw_weekend.get("clearance_id") or "").strip()[:128],
+        "cleared_local_date": str(raw_weekend.get("cleared_local_date") or "").strip()[:10],
+        "checked_at": str(raw_weekend.get("checked_at") or "").strip()[:40],
+    }
+    weekend_evidence_json = json.dumps(weekend_evidence, separators=(",", ":"))
+
     static_ready, static_blocker = _static_readiness(body)
     desired_state = "queued" if static_ready else "review_required"
     key = _queue_key(record_id, number, campaign, call_stage)
@@ -264,6 +289,7 @@ def enqueue_candidate(body: dict[str, Any]) -> dict[str, Any]:
         str(body.get("dnc_checked_at", "") or "").strip(),
         1 if _bool(body.get("suppression_clear")) else 0,
         timezone_name,
+        weekend_evidence_json,
         1 if _bool(body.get("campaign_enabled")) else 0,
         json.dumps(variables, separators=(",", ":"), ensure_ascii=False),
         str(body.get("ai_agent_id", "") or "").strip(),
@@ -294,11 +320,11 @@ def enqueue_candidate(body: dict[str, Any]) -> dict[str, Any]:
             INSERT INTO outreach_autodial_queue (
                 queue_key, record_id, contact_number, phone_key, campaign, call_stage,
                 has_consent, consent_record_id, legal_basis, dnc_clear, dnc_checked_at,
-                suppression_clear, contact_timezone, campaign_enabled,
+                suppression_clear, contact_timezone, weekend_evidence_json, campaign_enabled,
                 dynamic_variables_json, ai_agent_id, state, attempts, next_attempt_at,
                 lease_until, last_blocker, provider_call_key, submitted_at,
                 created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, NULL, ?, NULL, NULL, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, NULL, ?, NULL, NULL, ?, ?)
             ON CONFLICT(queue_key) DO UPDATE SET
                 has_consent=excluded.has_consent,
                 consent_record_id=excluded.consent_record_id,
@@ -307,6 +333,7 @@ def enqueue_candidate(body: dict[str, Any]) -> dict[str, Any]:
                 dnc_checked_at=excluded.dnc_checked_at,
                 suppression_clear=excluded.suppression_clear,
                 contact_timezone=excluded.contact_timezone,
+                weekend_evidence_json=excluded.weekend_evidence_json,
                 campaign_enabled=excluded.campaign_enabled,
                 dynamic_variables_json=excluded.dynamic_variables_json,
                 ai_agent_id=excluded.ai_agent_id,
@@ -504,6 +531,55 @@ def _calling_window(timezone_name: str, now_utc: datetime) -> tuple[bool, dateti
     return True, now_utc, "ok"
 
 
+def _weekend_call_eligibility(
+    evidence_json: object, timezone_name: str, now_utc: datetime
+) -> tuple[bool, str]:
+    """Allow Saturday/Sunday only with dated, recipient-specific legal clearance.
+
+    This is an additional gate on top of AI express consent, fresh DNC screening,
+    local suppression and permitted local calling hours. It never infers
+    permission from the area code, contact profile, or a generic country flag.
+    """
+    try:
+        local = now_utc.astimezone(ZoneInfo(timezone_name))
+    except (ZoneInfoNotFoundError, ValueError, TypeError):
+        return False, "contact_timezone_required"
+    if local.weekday() < 5:
+        return True, "ok"
+
+    try:
+        evidence = json.loads(str(evidence_json or "{}"))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return False, "weekend_clearance_invalid"
+    if not isinstance(evidence, dict):
+        return False, "weekend_clearance_invalid"
+
+    jurisdiction = str(evidence.get("recipient_jurisdiction") or "").strip().upper()
+    if not re.fullmatch(r"US-[A-Z]{2}", jurisdiction):
+        return False, "weekend_jurisdiction_required"
+    # Conservative hard stops, independent of consent flags or operator overrides.
+    # Restrictive state/municipal rules can change; clearance must check all
+    # applicable rules, holidays and call classification before approval.
+    if local.weekday() == 6 and jurisdiction in {"US-AL", "US-MS", "US-PA"}:
+        return False, "jurisdiction_sunday_prohibited"
+    if jurisdiction == "US-PA" and local.date().isoformat() >= "2026-10-18" and local.hour >= 19:
+        return False, "jurisdiction_evening_prohibited"
+
+    if evidence.get("approved") is not True:
+        return False, "weekend_clearance_required"
+    if not str(evidence.get("clearance_id") or "").strip():
+        return False, "weekend_clearance_record_required"
+    if str(evidence.get("cleared_local_date") or "") != local.date().isoformat():
+        return False, "weekend_clearance_date_required"
+    checked = _parse_iso(evidence.get("checked_at"))
+    if checked is None:
+        return False, "weekend_clearance_timestamp_required"
+    age = (now_utc - checked).total_seconds()
+    if not -60 <= age <= 86400:
+        return False, "weekend_clearance_expired"
+    return True, "ok"
+
+
 def _dnc_fresh(value: object, now_utc: datetime, max_age_seconds: int = 900) -> bool:
     checked = _parse_iso(value)
     if checked is None:
@@ -568,6 +644,16 @@ def _eligibility(row: sqlite3.Row, now_utc: datetime) -> tuple[list[str], dateti
     if not allowed:
         blockers.append(window_reason)
         retry_at = max(retry_at, window_retry)
+    weekend_allowed, weekend_reason = _weekend_call_eligibility(
+        row["weekend_evidence_json"], str(row["contact_timezone"] or ""), now_utc
+    )
+    if not weekend_allowed:
+        blockers.append(weekend_reason)
+        retry_at = max(retry_at, now_utc + timedelta(minutes=15))
+    if _bool(os.getenv("NIJA_JUSTCALL_REQUIRE_HUMAN_HANDOFF", "0")) and not _bool(
+        os.getenv("NIJA_JUSTCALL_HUMAN_HANDOFF_VERIFIED", "0")
+    ):
+        blockers.append("human_handoff_not_verified")
     if _active_call_exists(str(row["contact_number"] or ""), now_utc):
         blockers.append("duplicate_active_call")
         retry_at = max(retry_at, now_utc + timedelta(minutes=10))
@@ -750,7 +836,9 @@ def _worker() -> None:
         f"poll_s={_poll_seconds():.0f} batch={_batch_size()} daily_cap={_daily_cap()} "
         f"quota_tz={getattr(_quota_zone(), 'key', 'America/Los_Angeles')} "
         f"local_hours={_calling_hours()[0]}-{_calling_hours()[1]} "
-        f"weekdays_only={str(_weekdays_only()).lower()} quarantined={quarantined}",
+        f"weekdays_only={str(_weekdays_only()).lower()} weekend_per_recipient_gate=true "
+        f"human_handoff_required={str(_bool(os.getenv('NIJA_JUSTCALL_REQUIRE_HUMAN_HANDOFF', '0'))).lower()} "
+        f"quarantined={quarantined}",
         flush=True,
     )
     while True:
@@ -806,6 +894,10 @@ def _queue_status() -> dict[str, Any]:
         "daily_quota": _quota_snapshot(_utcnow()),
         "calling_hours_local": list(_calling_hours()),
         "weekdays_only": _weekdays_only(),
+        "seven_day_mode": not _weekdays_only(),
+        "weekend_recipient_clearance_required": True,
+        "human_handoff_required": _bool(os.getenv("NIJA_JUSTCALL_REQUIRE_HUMAN_HANDOFF", "0")),
+        "human_handoff_verified": _bool(os.getenv("NIJA_JUSTCALL_HUMAN_HANDOFF_VERIFIED", "0")),
         "counts": counts,
         "blockers": {str(row["blocker"]): int(row["count"] or 0) for row in blocker_rows},
         "next_attempt_at": next_row["next_attempt_at"] if next_row else None,
