@@ -564,22 +564,15 @@ def get_trading_status():
     strategy logic from Layer 1 (Core Brain).
     """
     user_id = request.user_id
-
-    # Query User Control Backend for user's trading status
-    status = user_control.get_user_status(user_id)
-
-    # Format response
-    response = {
-        'user_id': user_id,
-        'trading_enabled': status.get('status') == 'running',
-        'engine_status': status.get('status', 'unknown'),
-        'last_activity': status.get('last_activity'),
-        'created_at': status.get('created_at'),
-        'stats': status.get('stats', {}),
-        'layer': 'Layer 2 - Execution Engine'
-    }
-
-    return jsonify(response)
+    supplied = request.args.get('user_id')
+    if supplied is not None and supplied != user_id:
+        return jsonify({'error': "Cannot access another user's trading status"}), 403
+    try:
+        from user_trade_reporting import get_user_access_status
+        return jsonify(get_user_access_status(user_id))
+    except Exception as exc:
+        logger.error("User trading status unavailable error=%s", type(exc).__name__)
+        return jsonify({'error': 'Account readiness unavailable', 'trading_enabled': False}), 503
 
 
 @app.route('/api/trading/positions', methods=['GET'])
@@ -613,21 +606,24 @@ def get_trade_history():
     Does NOT expose strategy signals from Layer 1 (Core Brain).
     """
     user_id = request.user_id
+    supplied = request.args.get('user_id')
+    if supplied is not None and supplied != user_id:
+        return jsonify({'error': "Cannot access another user's trades"}), 403
+    try:
+        from user_trade_reporting import get_user_confirmed_history
+        from bot.trade_ledger_db import get_trade_ledger_db
+        report = get_user_confirmed_history(
+            get_trade_ledger_db(), user_id=user_id,
+            limit=request.args.get('limit', '50'), offset=request.args.get('offset', '0'),
+            timezone_name=request.args.get('timezone', 'UTC'), broker=request.args.get('broker'),
+        )
+        return jsonify(report)
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+    except Exception as exc:
+        logger.error("User trade history unavailable error=%s", type(exc).__name__)
+        return jsonify({'error': 'Confirmed trade history unavailable'}), 503
 
-    # Optional query parameters
-    limit = request.args.get('limit', 50, type=int)
-    offset = request.args.get('offset', 0, type=int)
-
-    # TODO: Query Layer 2 for user's trade history
-    trades = []
-
-    return jsonify({
-        'user_id': user_id,
-        'trades': trades,
-        'count': len(trades),
-        'limit': limit,
-        'offset': offset
-    })
 
 
 # ========================================
