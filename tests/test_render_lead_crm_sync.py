@@ -295,3 +295,37 @@ def test_redis_retry_remains_pending(monkeypatch, tmp_path):
     assert rec["state"] == "pending"
     assert int(rec["attempts"]) == 1
     assert float(rec["next_attempt_at"]) > time.time()
+
+
+def test_redis_diagnostic_does_not_log_secrets(monkeypatch, capsys):
+    monkeypatch.setattr(sync, "redis_lib", None)
+    monkeypatch.setenv("NIJA_REDIS_URL", "redis://private:secret@redis.internal:6379")
+    monkeypatch.setattr(sync, "_REDIS_DIAGNOSTIC_LAST", "")
+    assert sync._redis_client() is None
+    output = capsys.readouterr().out
+    assert "redis_package_unavailable" in output
+    assert "secret" not in output
+    assert "redis.internal" not in output
+
+
+def test_redis_diagnostic_captures_exception_class_only(monkeypatch, capsys):
+    class FakeClient:
+        def ping(self):
+            raise ConnectionError("secret password redis.internal")
+
+    class RedisPackage:
+        class Redis:
+            @staticmethod
+            def from_url(url, **kwargs):
+                assert kwargs["socket_connect_timeout"] == 3.0
+                assert kwargs["socket_timeout"] == 3.0
+                return FakeClient()
+
+    monkeypatch.setattr(sync, "redis_lib", RedisPackage)
+    monkeypatch.setenv("NIJA_REDIS_URL", "redis://private:secret@redis.internal:6379")
+    monkeypatch.setattr(sync, "_REDIS_DIAGNOSTIC_LAST", "")
+    assert sync._redis_client() is None
+    output = capsys.readouterr().out
+    assert "redis_ConnectionError" in output
+    assert "secret" not in output
+    assert "redis.internal" not in output
