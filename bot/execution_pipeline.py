@@ -2033,6 +2033,14 @@ class ExecutionPipeline:
             },
         )
         if result.success:
+            # Strategy intent only; authenticated OPEN and CLOSE proof is required
+            # before strategy P&L attribution. No new orders are sent.
+            try:
+                from bot.strategy_order_provenance import record_pipeline_order_intent
+                record_pipeline_order_intent(effective_request, result)
+            except Exception as provenance_error:
+                logger.warning("STRATEGY_PROVENANCE_INTENT_DEFERRED reason=%s",
+                               type(provenance_error).__name__)
             append_execution_journal_event(
                 event_type="broker_ack",
                 intent_id=_intent_id,
