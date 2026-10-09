@@ -93,3 +93,11 @@ GitHub CodeQL CLI checks were run locally. No new secret findings; two unchanged
 API example/component labels were reviewed as keyword false positives. CodeQL
 SQL/command injection queries found zero alerts in the four changed runtime
 Python files. This focused analysis is not a full repository security audit.
+
+Full CI initially found one unexpected existing writer-lease callback test
+failure (2494 tests, 168 known failures). Its current-owner fixture did not pin
+owner identity when a newer process-global lineage was left by earlier tests.
+The callback test now pins exact ownership, matching adjacent current-owner
+fixtures. Separate stale-runtime tests continue to verify callback suppression
+and preservation of newer authority. No writer production code or failure
+baseline was changed. The 32 writer-lease tests also passed locally.

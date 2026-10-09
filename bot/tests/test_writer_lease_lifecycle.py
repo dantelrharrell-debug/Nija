@@ -443,7 +443,17 @@ class TestLeaseLossDetection(_Base):
 
         rt.set_on_lost_callback(_cb)
 
-        with self._mock_seak():
+        # Exercise loss by the exact current owner. The full-suite process may
+        # retain newer writer lineage from earlier tests; stale-owner callback
+        # suppression is separately covered below and must remain fail-closed.
+        with (
+            self._mock_seak(),
+            patch.object(
+                rt,
+                "_owns_published_authority_env",
+                return_value=(True, "unit_test_exact_owner"),
+            ),
+        ):
             rt._mark_lost("test_lease_lost")
 
         self.assertEqual(len(received), 1, "on_lost callback must be called exactly once")
