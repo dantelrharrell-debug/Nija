@@ -91,24 +91,40 @@ def _redis_url() -> str:
     ).strip()
 
 
+_REDIS_DIAGNOSTIC_LAST = ""
+_REDIS_DIAGNOSTIC_LOCK = threading.Lock()
+
+
 def _redis_client():
-    if redis_lib is None:
-        return None
+    global _REDIS_DIAGNOSTIC_LAST
     url = _redis_url()
-    if not url:
-        return None
-    try:
-        client = redis_lib.Redis.from_url(
-            url,
-            decode_responses=True,
-            socket_connect_timeout=0.75,
-            socket_timeout=0.75,
-            health_check_interval=30,
-        )
-        client.ping()
-        return client
-    except Exception:
-        return None
+    if redis_lib is None:
+        reason = "redis_package_unavailable"
+        client = None
+    elif not url:
+        reason = "redis_url_missing"
+        client = None
+    else:
+        try:
+            client = redis_lib.Redis.from_url(
+                url,
+                decode_responses=True,
+                socket_connect_timeout=3.0,
+                socket_timeout=3.0,
+                health_check_interval=30,
+            )
+            client.ping()
+            reason = "connected"
+        except Exception as exc:
+            # Only a bounded exception CLASS is logged: no URL, host, tokens,
+            # credentials, exception string, or connection parameters.
+            reason = "redis_" + type(exc).__name__
+            client = None
+    with _REDIS_DIAGNOSTIC_LOCK:
+        if reason != _REDIS_DIAGNOSTIC_LAST:
+            print(f"NIJA_LEAD_CRM_REDIS_DIAGNOSTIC status={reason}", flush=True)
+            _REDIS_DIAGNOSTIC_LAST = reason
+    return client
 
 
 def _redis_event_key(event_key: str) -> str:
