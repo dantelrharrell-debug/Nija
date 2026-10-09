@@ -87,6 +87,8 @@ def test_already_aligned_phase3_is_not_recompiled(caplog) -> None:
     """Existing 50-candle source must retain identical live bytecode."""
     method = AlreadyAlignedLoop._phase3_scan_and_enter
     original_code = method.__code__
+    import logging
+    caplog.set_level(logging.INFO, logger="nija.phase3_execution_handoff_repair")
     assert patch._repair_phase3_threshold(AlreadyAlignedLoop) is True
     assert AlreadyAlignedLoop._phase3_scan_and_enter.__code__ is original_code
     assert AlreadyAlignedLoop()._phase3_scan_and_enter(list(range(49))) == "skip_before_execute_action"
