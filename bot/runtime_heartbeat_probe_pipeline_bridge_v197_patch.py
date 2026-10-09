@@ -133,23 +133,35 @@ def _align_required_heartbeat_scheduler_policy() -> bool:
     """
     required_first = _env_truthy("HEARTBEAT_REQUIRED_FIRST_ACTIVATION")
     heartbeat_trade_before = _env_truthy("HEARTBEAT_TRADE")
+    # A heartbeat verification BUY is a real, fee-bearing order.  LIVE mode and
+    # first-activation policy are never themselves permission to submit one.
+    operator_opted_in = _env_truthy("NIJA_ALLOW_LIVE_HEARTBEAT_ORDERS")
     mode_resolved, mode, mode_source = _resolved_runtime_mode()
     live_mode = bool(mode_resolved and mode == "live")
     aligned_v200 = False
     aligned_v201 = False
 
-    # Preserve v200 behavior for explicitly configured first-activation proof.
-    if required_first and not heartbeat_trade_before:
+    if not operator_opted_in:
+        # Some older runtime imports re-arm HEARTBEAT_TRADE after Render's
+        # explicit false startup export. Restore the stricter operator setting.
+        if heartbeat_trade_before:
+            LOGGER.warning(
+                "LIVE_HEARTBEAT_POLICY_V433_DENIED marker=%s "
+                "reason=operator_opt_in_missing heartbeat_trade_reverted=true "
+                "capital_bearing_order_allowed=false read_only_proof_recovery_preserved=true",
+                V201_MARKER,
+            )
+        os.environ["HEARTBEAT_TRADE"] = "false"
+    elif required_first and not heartbeat_trade_before:
         os.environ["HEARTBEAT_TRADE"] = "true"
         aligned_v200 = True
 
     heartbeat_trade = _env_truthy("HEARTBEAT_TRADE")
 
-    # v201: canonical can_execute always requires a genuine stage-sufficient
-    # heartbeat marker in LIVE mode.  Arm the existing verifier so that proof can
-    # actually be produced.  Non-live and unresolved/conflicting modes do not
-    # schedule a live verification order.
-    if live_mode and not heartbeat_trade:
+    # Only the explicit two-flag operator opt-in permits legacy live scheduler
+    # alignment. A stale execution proof remains stale when orders are disabled;
+    # the verifier must never manufacture proof or reactivate a paid test trade.
+    if operator_opted_in and live_mode and not heartbeat_trade:
         os.environ["HEARTBEAT_TRADE"] = "true"
         heartbeat_trade = True
         aligned_v201 = True
