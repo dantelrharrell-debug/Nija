@@ -87,6 +87,11 @@ def _liveness_module(name: str, result: bool | Exception, calls: list[str]) -> t
 
 def _enable_runtime_hooks(monkeypatch) -> None:
     monkeypatch.delenv("NIJA_DEFER_RUNTIME_SITE_HOOKS", raising=False)
+    # These unit tests isolate downstream module outcomes. The real v318
+    # prerequisite needs canonical writer attestations and must not run here.
+    prerequisite = types.ModuleType("bot.runtime_kraken_precore_liveness_v318_patch")
+    prerequisite.install_import_hook = lambda: True
+    monkeypatch.setitem(sys.modules, prerequisite.__name__, prerequisite)
 
 
 def test_critical_liveness_attempts_every_module_when_one_is_pending(monkeypatch) -> None:
