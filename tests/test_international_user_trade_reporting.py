@@ -14,7 +14,7 @@ from unittest.mock import patch
 import jwt
 from flask import Flask, jsonify, request
 
-from user_trade_reporting import get_user_confirmed_history, get_user_access_status
+from user_trade_reporting import get_user_confirmed_history, get_user_access_status, TradeHistoryQueryError
 
 
 class Ledger:
@@ -96,7 +96,7 @@ class InternationalHistoryTests(unittest.TestCase):
         self.assertNotEqual(result['trades'][0]['position_id'], second['trades'][0]['position_id'])
 
     def test_identity_pagination_broker_and_timezone_fail_closed(self):
-        cases = [{'user_id': ''}, {'user_id': 'platform'}, {'limit': 201}, {'offset': -1},
+        cases = [{'user_id': ''}, {'user_id': 'platform'}, {'limit': 201}, {'limit': 'invalid'}, {'offset': -1},
                  {'timezone_name': 'Bad/Zone'}, {'broker': "kraken' OR 1=1"}]
         for kwargs in cases:
             with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
@@ -104,7 +104,7 @@ class InternationalHistoryTests(unittest.TestCase):
 
     def test_entitlement_is_not_international_execution_proof(self):
         module = types.ModuleType('user_live_trading_access')
-        module.evaluate_live_trading_access = lambda uid: types.SimpleNamespace(
+        module.evaluate_live_trading_access = lambda uid, **kwargs: types.SimpleNamespace(
             allowed=True, blocker='none', brokers=('kraken',))
         with patch.dict(sys.modules, {'user_live_trading_access': module}):
             result = get_user_access_status('british-user')
@@ -123,6 +123,7 @@ class InternationalHistoryTests(unittest.TestCase):
                 wanted = {'decode_jwt_token', 'require_auth', 'get_trade_history', 'get_trading_status'}
                 nodes = [n for n in source.body if isinstance(n, ast.FunctionDef) and n.name in wanted]
                 env = dict(app=app, request=request, jsonify=jsonify, wraps=wraps, jwt=jwt,
+                           TradeHistoryQueryError=TradeHistoryQueryError,
                            logger=logging.getLogger('test'), Optional=__import__('typing').Optional,
                            Dict=__import__('typing').Dict, require_tos_accepted=lambda f: f)
                 exec(compile(ast.Module(body=nodes, type_ignores=[]), filename, 'exec'), env)
@@ -143,6 +144,11 @@ class InternationalHistoryTests(unittest.TestCase):
                     self.assertEqual(response.status_code, 200)
                     self.assertEqual(response.json['trades'][0]['position_id'], 'one')
                     self.assertEqual(client.get('/api/trading/history?limit=-1', headers=headers).status_code, 400)
+                    with patch.object(ledger_module, 'get_trade_ledger_db',
+                                      side_effect=ValueError('internal-store-detail')):
+                        invalid = client.get('/api/trading/history', headers=headers)
+                    self.assertEqual(invalid.status_code, 503)
+                    self.assertNotIn('internal-store-detail', invalid.get_data(as_text=True))
                     with patch('user_trade_reporting.get_user_access_status', side_effect=RuntimeError):
                         response = client.get('/api/trading/status', headers=headers)
                     self.assertEqual(response.status_code, 503)
@@ -171,6 +177,85 @@ class InternationalHistoryTests(unittest.TestCase):
                 response, status = env['get_trading_status']()
             self.assertEqual(status, 503)
             self.assertFalse(response.json['trading_enabled'])
+
+    def test_alpaca_hyphenated_stock_prices_use_usd(self):
+        self.add('british-user', 'stock', broker='alpaca')
+        with self.ledger._get_connection() as conn:
+            conn.execute("UPDATE completed_trades SET symbol='BRK-B' WHERE position_id='stock'")
+        report = get_user_confirmed_history(self.ledger, user_id='british-user', broker='alpaca')
+        self.assertEqual(report['trades'][0]['price_currency'], 'USD')
+
+    def test_entitlement_does_not_require_live_mode_or_credentials(self):
+        from unittest.mock import Mock
+        module = types.ModuleType('user_live_trading_access')
+        module.evaluate_live_trading_access = Mock(return_value=types.SimpleNamespace(
+            allowed=True, blocker='none', brokers=()))
+        with patch.dict(sys.modules, {'user_live_trading_access': module}):
+            result = get_user_access_status('british-user')
+        module.evaluate_live_trading_access.assert_called_once_with(
+            'british-user', require_live_mode=False, require_credentials=False)
+        self.assertTrue(result['entitlement_allowed'])
+        self.assertFalse(result['account_execution_readiness_verified'])
+
+    def test_frontend_fastapi_routes_have_real_auth_owner_scope_and_safe_errors(self):
+        import asyncio
+        import time
+        from collections import defaultdict
+        from typing import Any, Dict, Optional
+        import httpx
+        from fastapi import Depends, FastAPI, HTTPException, Request, status
+        from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+        app = FastAPI()
+        path = Path(__file__).resolve().parents[1] / 'fastapi_backend.py'
+        source = ast.parse(path.read_text())
+        wanted = {'decode_access_token', 'check_rate_limit', 'get_current_user',
+                  'get_status', 'get_confirmed_trade_history'}
+        nodes = [n for n in source.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+                 and n.name in wanted]
+        signing = 'test-signing-value-not-for-production-123456'  # pragma: allowlist secret
+        env = dict(app=app, Request=Request, Depends=Depends, HTTPException=HTTPException,
+                   TradeHistoryQueryError=TradeHistoryQueryError,
+                   status=status, security=HTTPBearer(), HTTPAuthorizationCredentials=HTTPAuthorizationCredentials,
+                   jwt=jwt, JWT_SECRET_KEY_STR=signing, JWT_ALGORITHM='HS256', time=time,
+                   rate_limit_storage=defaultdict(list), RATE_LIMIT_WINDOW=60, RATE_LIMIT_REQUESTS=100,
+                   logger=logging.getLogger('test'), Optional=Optional, Dict=Dict, Any=Any)
+        exec(compile(ast.Module(body=nodes, type_ignores=[]), str(path), 'exec'), env)
+        ledger_module = types.ModuleType('bot.trade_ledger_db')
+        ledger_module.get_trade_ledger_db = lambda: self.ledger
+        bot_module = types.ModuleType('bot')
+        bot_module.__path__ = []
+        token = jwt.encode({'user_id': 'british-user',
+                            'exp': datetime.now(timezone.utc) + timedelta(minutes=1)}, signing, algorithm='HS256')
+        headers = {'Authorization': 'Bearer ' + token}
+        async def verify():
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
+                self.assertIn((await client.get('/api/trading/history')).status_code, (401, 403))
+                self.assertEqual((await client.get('/api/trading/history', headers={
+                    'Authorization': 'Bearer invalid'})).status_code, 401)
+                other = await client.get('/api/trading/history?user_id=japanese-user', headers=headers)
+                self.assertEqual(other.status_code, 403)
+                report = await client.get('/api/trading/history?timezone=Asia/Tokyo', headers=headers)
+                invalid = await client.get('/api/trading/history?limit=-1', headers=headers)
+                self.assertEqual(invalid.status_code, 400)
+                self.assertEqual(report.status_code, 200)
+                self.assertEqual(report.json()['trades'][0]['position_id'], 'one')
+                self.assertEqual(report.json()['trades'][0]['exit_time_local'], '2026-07-01T22:00:00+09:00')
+                with patch('user_trade_reporting.get_user_access_status', return_value={
+                        'trading_enabled': False, 'engine_status': 'unverified',
+                        'country_eligibility_verified': False}):
+                    for route in ['/api/status', '/api/trading/status']:
+                        response = await client.get(route, headers=headers)
+                        self.assertEqual(response.status_code, 200)
+                        self.assertFalse(response.json()['trading_enabled'])
+                        other = await client.get(route+'?user_id=japanese-user', headers=headers)
+                        self.assertEqual(other.status_code, 403)
+                with patch.object(ledger_module, 'get_trade_ledger_db',
+                                  side_effect=ValueError('internal-store-detail')):
+                    response = await client.get('/api/trading/history', headers=headers)
+                    self.assertEqual(response.status_code, 503)
+                    self.assertNotIn('internal-store-detail', response.text)
+        with patch.dict(sys.modules, {'bot': bot_module, 'bot.trade_ledger_db': ledger_module}):
+            asyncio.run(verify())
 
 
 if __name__ == '__main__':

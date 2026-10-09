@@ -101,3 +101,30 @@ The callback test now pins exact ownership, matching adjacent current-owner
 fixtures. Separate stale-runtime tests continue to verify callback suppression
 and preservation of newer authority. No writer production code or failure
 baseline was changed. The 32 writer-lease tests also passed locally.
+
+## Frontend integration follow-up
+
+Review identified that fastapi_backend.py serves this same frontend. Its
+/api/trading/history and /api/trading/status routes were absent, so Flask-only
+repairs did not connect that frontend. FastAPI now has authenticated canonical
+history plus readiness status at both /api/status and /api/trading/status.
+Tests exercise actual FastAPI JWT/rate-limit dependencies through an ASGI client,
+including owner separation, Tokyo timestamps, both status aliases and sanitized
+errors. They isolate startup managers, so deployed stores/JWT configuration
+remain unverified.
+
+Alpaca hyphenated stock symbols now report USD before crypto quote parsing.
+Entitlement evaluation excludes live-mode/credential prerequisites while account
+execution remains unverified. Flask/gateway validation failures return generic
+messages; gateway/mobile docstrings describe the actual readiness contract.
+These changes require a new CI run on the updated head, not prior CI results.
+
+Follow-up validation: 12 international Python tests, 32 writer-lease tests,
+and three JavaScript tests passed locally. Focused CodeQL SQL/command-injection
+queries report zero alerts; the exception-exposure query reports existing alerts
+in untouched handlers and none on changed lines. The two reviewed history
+exception exposures are removed. This is not a full application security audit.
+
+Client query errors use a dedicated TradeHistoryQueryError. Only those invalid
+inputs return 400; an internal ledger/store ValueError returns sanitized 503.
+Regression tests cover both classes across Flask, gateway and FastAPI.

@@ -27,6 +27,7 @@ import jwt
 from functools import wraps
 import secrets
 
+from user_trade_reporting import TradeHistoryQueryError
 from auth import get_api_key_manager, get_user_manager
 from auth.user_database import get_user_database
 from execution import get_permission_validator, UserPermissions
@@ -660,8 +661,8 @@ def get_trade_history():
             timezone_name=request.args.get('timezone', 'UTC'), broker=request.args.get('broker'),
         )
         return jsonify(report)
-    except ValueError as exc:
-        return jsonify({'error': str(exc)}), 400
+    except TradeHistoryQueryError:
+        return jsonify({'error': 'Invalid trade-history query'}), 400
     except Exception as exc:
         logger.error("User trade history unavailable error=%s", type(exc).__name__)
         return jsonify({'error': 'Confirmed trade history unavailable'}), 503
