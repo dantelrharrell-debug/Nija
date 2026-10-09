@@ -106,6 +106,28 @@ def patch_v346_text(text: str) -> str:
         '                "status": status or "closed",',
     )
 
+    # Keep recovery metadata in the canonical writer's serialized payload.
+    # The old read-modify-write could overwrite a concurrent order's proof.
+    recovery_start = text.index("def _recover_recent_kraken_execution_proof()")
+    metadata_start = text.find(
+        '            try:\n                v169 = importlib.import_module("bot.runtime_execution_capital_integrity_v169_patch")',
+        recovery_start,
+    )
+    if metadata_start >= 0:
+        metadata_end = text.find("            ready_after, ready_detail = _current_execution_marker_ready()", metadata_start)
+        if metadata_end < 0:
+            raise RuntimeError("v339 recovery metadata end anchor missing")
+        text = text[:metadata_start] + text[metadata_end:]
+    if '                "recovered_from_authenticated_history": True,' not in text[recovery_start:]:
+        text = text.replace(
+            '                "recovered_fill_proof": True,\n',
+            '                "recovered_fill_proof": True,\n'
+            '                "recovered_from_authenticated_history": True,\n'
+            '                "recovery_source": "kraken_queryorders_tradeshistory_exact_order",\n'
+            '                "recovered_writer_generation": generation,\n',
+            1,
+        )
+
     worker_old = '''def _worker() -> None:\n    while True:\n        try:\n            _patch_v328_confirmed_fill_marker()\n            _patch_v169_provenance()\n            _patch_v231_execution_marker()\n            _patch_stale_platform_refresh()\n            _wake_position_sync()\n            _wake_activation_after_proof()\n        except Exception:\n            LOGGER.debug("V346 worker pulse failed", exc_info=True)\n        time.sleep(3.0)\n'''
     worker_new = '''def _worker() -> None:\n    while True:\n        try:\n            v169_ready, _v169_detail = _ensure_v169_ready()\n            _patch_v328_confirmed_fill_marker()\n            _patch_v169_provenance()\n            _patch_v231_execution_marker()\n            _patch_stale_platform_refresh()\n            if v169_ready:\n                recovered, recovery_detail = _recover_recent_kraken_execution_proof()\n                if not recovered:\n                    _log_recovery_wait(recovery_detail)\n            _wake_position_sync()\n            _wake_activation_after_proof()\n        except Exception:\n            LOGGER.debug("V346 worker pulse failed", exc_info=True)\n        time.sleep(3.0)\n'''
     text = _replace_once(text, worker_old, worker_new, "v346 worker recovery")

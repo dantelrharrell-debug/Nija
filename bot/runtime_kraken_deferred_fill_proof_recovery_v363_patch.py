@@ -294,6 +294,18 @@ def _promote_confirmed_fill(enriched: Mapping[str, Any], *, symbol: str, side: s
         if not callable(normalize):
             return False
         price, filled_usd = normalize(recovered, symbol=symbol, side=side)
+        v346 = importlib.import_module("bot.runtime_execution_position_readiness_v346_patch")
+        write_marker = getattr(v346, "_write_confirmed_fill_marker", None)
+        if not callable(write_marker) or not write_marker(
+            result=recovered, symbol=symbol, side=side,
+            fill_price=float(price), filled_usd=float(filled_usd),
+        ):
+            LOGGER.info(
+                "KRAKEN_FILL_PROOF_V363_MARKER_NOT_ADMITTED marker=%s order_id=%s "
+                "pending_retained=true execution_readiness_unchanged=true",
+                MARKER, str(recovered.get("order_id") or "").strip(),
+            )
+            return False
     except Exception as exc:
         LOGGER.info(
             "KRAKEN_FILL_PROOF_V363_NOT_YET_PROVEN marker=%s symbol=%s side=%s reason=%s:%s fail_closed=true",
@@ -453,7 +465,16 @@ def _patch_v357_enrichment() -> bool:
                         MARKER, order_id,
                     )
                     return enriched
-                _discard_pending(order_id, "fill_specific_evidence_present")
+                if recovered_fill:
+                    # v328 fill normalization does not imply durable marker
+                    # admission. Only recover_once may remove recovered orders
+                    # after the canonical writer confirms their proof.
+                    record_pending_order(
+                        order_id=order_id, symbol=symbol, side=side,
+                        status=str(enriched.get("status") or "").strip().lower(),
+                    )
+                else:
+                    _discard_pending(order_id, "fill_specific_evidence_present")
                 return enriched
             record_pending_order(
                 order_id=order_id,

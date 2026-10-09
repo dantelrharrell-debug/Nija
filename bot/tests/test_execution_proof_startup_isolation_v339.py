@@ -198,14 +198,32 @@ def test_history_contract_repair_is_idempotent():
     assert patcher.patch_v346_text(once) == once
 
 
+def test_generated_recovery_has_no_unlocked_marker_metadata_write():
+    patcher = _load_patcher()
+    source = patcher.patch_v346_text(
+        (ROOT / "bot/runtime_execution_position_readiness_v346_patch.py").read_text()
+    )
+    function = next(n for n in ast.parse(source).body
+                    if isinstance(n, ast.FunctionDef) and n.name == "_recover_recent_kraken_execution_proof")
+    recovery = ast.unparse(function)
+    assert "atomic_write" not in recovery
+    assert "read_text" not in recovery
+    assert "recovered_from_authenticated_history" in recovery
+    assert "recovered_writer_generation" in recovery
+
+
 def test_generated_recovery_persists_scope_through_canonical_marker(tmp_path, monkeypatch):
     import bot.runtime_execution_position_readiness_v346_patch as v346
     import bot.runtime_execution_capital_integrity_v169_patch as v169
     import bot.runtime_confirmed_fill_profitability_v328_patch as v328
 
     marker = tmp_path / "proof.json"
+    writes = []
     monkeypatch.setattr(v169, "_execution_marker_path", lambda: marker)
-    monkeypatch.setattr(v169, "_atomic_json_write", lambda path, payload: path.write_text(json.dumps(payload)))
+    def atomic_write(path, payload):
+        writes.append(dict(payload))
+        path.write_text(json.dumps(payload))
+    monkeypatch.setattr(v169, "_atomic_json_write", atomic_write)
     monkeypatch.setattr(v328, "_order_id", lambda result: result.get("order_id", ""))
     monkeypatch.setattr(v169, "_execution_provenance_valid", lambda payload, stage: (False, "original"))
     assert v346._patch_v169_provenance()
@@ -228,3 +246,6 @@ def test_generated_recovery_persists_scope_through_canonical_marker(tmp_path, mo
     assert saved["account"] == saved["account_id"] == "platform:kraken"
     assert saved["recovered_fill_proof"] is True
     assert saved["verified_at_epoch"] == saved["exchange_fill_time"] == 9995.0
+    assert saved["recovery_source"] == "kraken_queryorders_tradeshistory_exact_order"
+    assert saved["recovered_writer_generation"] == "1"
+    assert writes == [saved]

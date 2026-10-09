@@ -48,6 +48,7 @@ MARKER = "20260902-runtime-execution-position-readiness-v346"
 RELEASE_ID = "20260902-runtime-convergence-v346"
 _READY_FLAG = "NIJA_RUNTIME_EXECUTION_POSITION_READINESS_V346_READY"
 _LOCK = threading.RLock()
+_MARKER_WRITE_LOCK = threading.RLock()
 _THREAD: threading.Thread | None = None
 _FILL_PATCH = "_nija_canonical_fill_execution_proof_v346"
 _V169_PATCH = "_nija_canonical_fill_source_v346"
@@ -97,6 +98,14 @@ def _is_recovered_fill(payload: Mapping[str, Any]) -> bool:
 
 
 def _write_confirmed_fill_marker(*, result: Mapping[str, Any], symbol: str, side: str, fill_price: float, filled_usd: float) -> bool:
+    """Serialize canonical marker updates from concurrent fill recovery workers."""
+    with _MARKER_WRITE_LOCK:
+        return _write_confirmed_fill_marker_locked(
+            result=result, symbol=symbol, side=side, fill_price=fill_price, filled_usd=filled_usd,
+        )
+
+
+def _write_confirmed_fill_marker_locked(*, result: Mapping[str, Any], symbol: str, side: str, fill_price: float, filled_usd: float) -> bool:
     """Persist execution proof only after v328 has already accepted the fill."""
     try:
         v169 = importlib.import_module("bot.runtime_execution_capital_integrity_v169_patch")
@@ -144,6 +153,28 @@ def _write_confirmed_fill_marker(*, result: Mapping[str, Any], symbol: str, side
             and broker_epoch > 0.0
             and abs(existing_epoch - broker_epoch) <= 1.0
         )
+        existing_canonical = bool(
+            existing.get("verified") is True
+            and int(existing.get("version") or 0) >= 4
+            and existing.get("source") == "canonical_confirmed_fill"
+            and existing.get("proof_kind") == "execution_probe"
+            and str(existing.get("order_id") or "").strip()
+            and 0.0 < existing_epoch <= observed_now + 60.0
+            and (not _is_recovered_fill(existing) or _platform_recovery_scope_valid(existing))
+        )
+        existing_broker_epoch = _fill_event_epoch(existing)
+        existing_broker_timed = bool(
+            existing_broker_epoch > 0.0 and abs(existing_epoch - existing_broker_epoch) <= 1.0
+        )
+        if (existing_canonical and existing_broker_timed and not same_v4_order and broker_epoch > 0.0
+                and broker_epoch < existing_broker_epoch):
+            LOGGER.info(
+                "CANONICAL_FILL_EXECUTION_PROOF_V346_OLDER_EVENT_IGNORED marker=%s order_id=%s "
+                "broker_fill_at_epoch=%.6f existing_verified_at_epoch=%.6f "
+                "proof_timestamp_refreshed=false pending_admission=false",
+                MARKER, order_id, broker_epoch, existing_epoch,
+            )
+            return False
         if same_v4_order and (not recovered_fill or (
             same_authenticated_event and _platform_recovery_scope_valid(existing)
             and _is_recovered_fill(existing)
@@ -168,6 +199,8 @@ def _write_confirmed_fill_marker(*, result: Mapping[str, Any], symbol: str, side
             "version": 4,
             "stage": "FILL_VERIFY",
             "verified_at_epoch": now,
+            "broker_fill_at_epoch": broker_epoch if now == broker_epoch else 0.0,
+            "timestamp_source": "broker_fill_event" if now == broker_epoch else "observation_time",
             "verified_at_iso": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
             "source": "canonical_confirmed_fill",
             "proof_kind": "execution_probe",
@@ -193,6 +226,15 @@ def _write_confirmed_fill_marker(*, result: Mapping[str, Any], symbol: str, side
             ),
             "nonce_epoch": str(os.environ.get("NIJA_NONCE_EPOCH", "") or ""),
         }
+        if recovered_fill and result.get("recovered_from_authenticated_history"):
+            # Startup recovery metadata is published in the same locked write
+            # as its exact order, scope and broker event time.
+            payload.update(
+                recovered_from_authenticated_history=True,
+                recovery_source=str(result.get("recovery_source") or ""),
+                exchange_fill_time=broker_epoch,
+                recovered_writer_generation=str(result.get("recovered_writer_generation") or ""),
+            )
         atomic_write(path, payload)
         LOGGER.critical(
             "CANONICAL_FILL_EXECUTION_PROOF_V346_RECORDED marker=%s order_id=%s symbol=%s side=%s "

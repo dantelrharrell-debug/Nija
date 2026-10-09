@@ -242,6 +242,29 @@ def _has_fill_specific(result: Mapping[str, Any]) -> bool:
     return False
 
 
+def _recovery_scope(broker: Any) -> dict[str, str]:
+    """Bind recovered proof to the exact registered platform broker instance."""
+    scope = {"broker": "kraken", "account": "", "account_id": ""}
+    try:
+        module = importlib.import_module("bot.multi_account_broker_manager")
+        getter = getattr(module, "get_broker_manager", None)
+        manager = getter() if callable(getter) else None
+        platform = dict(getattr(manager, "platform_brokers", {}) or {})
+        owned = any(instance is broker and _norm(getattr(key, "value", key)) == "kraken"
+                    for key, instance in platform.items())
+        # Shared registration is ambiguous; user evidence cannot become platform proof.
+        users = dict(getattr(manager, "user_brokers", {}) or {})
+        shared = any(instance is broker for mapping in users.values()
+                     for instance in dict(mapping or {}).values())
+        registered_users = dict(getattr(manager, "_all_user_brokers", {}) or {})
+        shared = shared or any(instance is broker for instance in registered_users.values())
+        if owned and not shared:
+            scope.update(account="platform:kraken", account_id="platform:kraken")
+    except Exception:
+        LOGGER.debug("Kraken recovered-fill ownership unavailable", exc_info=True)
+    return scope
+
+
 def _enrich_kraken_final_order(
     broker: Any,
     result: Any,
@@ -252,6 +275,11 @@ def _enrich_kraken_final_order(
     if not _is_kraken(broker) or not isinstance(result, Mapping):
         return result
     enriched = dict(result)
+    if any(enriched.get(key) for key in (
+        "recovered_fill_proof", "kraken_query_order_reconciled",
+        "kraken_trade_history_reconciled", "recovered_from_authenticated_history",
+    )):
+        enriched.update(_recovery_scope(broker))
     oid = _order_id(enriched)
     if not oid or _has_fill_specific(enriched):
         return enriched
@@ -269,6 +297,7 @@ def _enrich_kraken_final_order(
             filled_size_usd=filled_usd,
             kraken_query_order_reconciled=True,
         )
+        enriched.update(_recovery_scope(broker))
         event_epoch = 0.0
         event_time_source = "missing"
         for key in ("closetm", "close_time", "closed_at", "lastupdated"):
@@ -327,6 +356,7 @@ def _enrich_kraken_final_order(
         kraken_trade_history_reconciled=True,
         kraken_trade_history_match_count=matches,
     )
+    enriched.update(_recovery_scope(broker))
     if event_epoch > 0.0:
         enriched["broker_fill_at_epoch"] = event_epoch
     LOGGER.critical(
