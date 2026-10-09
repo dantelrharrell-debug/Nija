@@ -141,7 +141,13 @@ def _execution_marker_proof() -> tuple[bool, str]:
                     f"source={source or 'missing'}:kind={proof_kind or 'missing'}"
                 )
         stage = str(meta.get("stage", "") or "").strip().upper()
-        return True, f"execution_marker_current:stage={stage or 'verified'}"
+        # Do not accept AUTH_VERIFY as entry authorization, even when a
+        # deployment uses a weaker legacy required-stage configuration.
+        if stage not in {"ORDER_VERIFY", "FILL_VERIFY"}:
+            return False, f"execution_stage_insufficient:{stage or 'missing'}"
+        if source != "heartbeat_trade" or proof_kind != "execution_probe":
+            return False, "execution_provenance_invalid:source_or_kind_missing"
+        return True, f"execution_marker_current:stage={stage}"
     except Exception as exc:
         return False, f"heartbeat_verification_probe_failed:{type(exc).__name__}:{exc}"
 
