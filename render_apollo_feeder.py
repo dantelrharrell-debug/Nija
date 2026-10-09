@@ -330,6 +330,9 @@ def _jurisdiction_evidence(contact: dict[str, Any]) -> dict[str, Any]:
     state = raw if raw in _VALID_US_JURISDICTIONS else ""
     return {
         "recipient_jurisdiction": state,
+        "recipient_timezone": str(
+            _custom_field(contact, "NIJA_APOLLO_RECIPIENT_TIMEZONE_FIELD_ID") or ""
+        ).strip(),
         "approved": _bool(_custom_field(contact, "NIJA_APOLLO_WEEKEND_APPROVED_FIELD_ID")),
         "clearance_id": str(
             _custom_field(contact, "NIJA_APOLLO_WEEKEND_CLEARANCE_ID_FIELD_ID") or ""

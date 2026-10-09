@@ -276,6 +276,7 @@ def enqueue_candidate(body: dict[str, Any]) -> dict[str, Any]:
     weekend_evidence = {
         "approved": raw_weekend.get("approved") is True,
         "recipient_jurisdiction": str(raw_weekend.get("recipient_jurisdiction") or "").strip().upper()[:16],
+        "recipient_timezone": str(raw_weekend.get("recipient_timezone") or "").strip()[:128],
         "clearance_id": str(raw_weekend.get("clearance_id") or "").strip()[:128],
         "cleared_local_date": str(raw_weekend.get("cleared_local_date") or "").strip()[:10],
         "checked_at": str(raw_weekend.get("checked_at") or "").strip()[:40],
@@ -586,7 +587,7 @@ _VALID_US_JURISDICTIONS = {
 def _weekend_clearance_valid(
     evidence: dict[str, Any], number: str, campaign: str, consent_record_id: str
 ) -> bool:
-    """Verify a second-party clearance signature bound to THIS recipient/day.
+    """Verify a second-party signature bound to THIS recipient, jurisdiction, timezone and day.
 
     Only an external compliance reviewer with access to the separately managed
     signing key may authorize weekend outreach. API callers cannot self-approve
@@ -601,6 +602,7 @@ def _weekend_clearance_valid(
         "campaign": campaign,
         "consent_record_id": consent_record_id,
         "jurisdiction": str(evidence.get("recipient_jurisdiction") or "").strip().upper(),
+        "timezone": str(evidence.get("recipient_timezone") or "").strip(),
         "clearance_id": str(evidence.get("clearance_id") or "").strip(),
         "local_date": str(evidence.get("cleared_local_date") or "").strip(),
         "checked_at": str(evidence.get("checked_at") or "").strip(),
@@ -612,29 +614,49 @@ def _weekend_clearance_valid(
     return hmac.compare_digest(expected, signature)
 
 
+def _verified_weekend_evidence(
+    evidence_json: object, number: str, campaign: str, consent_record_id: str
+) -> tuple[Optional[dict[str, Any]], str, str]:
+    try:
+        evidence = json.loads(str(evidence_json or "{}"))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None, "", "jurisdiction_evidence_invalid"
+    if not isinstance(evidence, dict):
+        return None, "", "jurisdiction_evidence_invalid"
+
+    jurisdiction = str(evidence.get("recipient_jurisdiction") or "").strip().upper()
+    if jurisdiction not in _VALID_US_JURISDICTIONS:
+        return None, "", "recipient_jurisdiction_required"
+
+    timezone_name = str(evidence.get("recipient_timezone") or "").strip()
+    if not timezone_name:
+        return None, "", "recipient_timezone_required"
+    try:
+        ZoneInfo(timezone_name)
+    except (ZoneInfoNotFoundError, ValueError, TypeError):
+        return None, "", "contact_timezone_invalid"
+    if not _weekend_clearance_valid(evidence, number, campaign, consent_record_id):
+        return None, "", "weekend_clearance_signature_invalid"
+    return evidence, timezone_name, ""
+
+
 def _weekend_call_eligibility(
-    evidence_json: object, timezone_name: str, now_utc: datetime,
+    evidence_json: object, now_utc: datetime,
     *, number: str, campaign: str, consent_record_id: str
 ) -> tuple[bool, str]:
-    """Every day: require recipient jurisdiction; weekends: signed clearance.
+    """Every day: require signed recipient jurisdiction/timezone; weekends: signed clearance.
 
     A signed clearance is necessary but not sufficient: fresh verified AI consent,
     DNC and suppression rules, human handoff and local hours still apply.
     """
-    try:
-        local = now_utc.astimezone(ZoneInfo(timezone_name))
-    except (ZoneInfoNotFoundError, ValueError, TypeError):
-        return False, "contact_timezone_required"
-    try:
-        evidence = json.loads(str(evidence_json or "{}"))
-    except (TypeError, ValueError, json.JSONDecodeError):
-        return False, "jurisdiction_evidence_invalid"
-    if not isinstance(evidence, dict):
-        return False, "jurisdiction_evidence_invalid"
-
+    evidence, verified_timezone, reason = _verified_weekend_evidence(
+        evidence_json, number, campaign, consent_record_id
+    )
+    if reason:
+        return False, reason
+    assert evidence is not None
+    local = now_utc.astimezone(ZoneInfo(verified_timezone))
     jurisdiction = str(evidence.get("recipient_jurisdiction") or "").strip().upper()
-    if jurisdiction not in _VALID_US_JURISDICTIONS:
-        return False, "recipient_jurisdiction_required"
 
     # Pennsylvania Act 47 of July 20, 2026 takes effect on October 18, 2026.
     if jurisdiction == "US-PA" and local.date().isoformat() >= "2026-10-18":
@@ -661,8 +683,6 @@ def _weekend_call_eligibility(
     age = (now_utc - checked).total_seconds()
     if not -60 <= age <= 86400:
         return False, "weekend_clearance_expired"
-    if not _weekend_clearance_valid(evidence, number, campaign, consent_record_id):
-        return False, "weekend_clearance_signature_invalid"
     return True, "ok"
 
 
@@ -731,12 +751,8 @@ def _eligibility(row: sqlite3.Row, now_utc: datetime) -> tuple[list[str], dateti
         if retry_after:
             retry_at = max(retry_at, retry_after)
 
-    allowed, window_retry, window_reason = _calling_window(str(row["contact_timezone"] or ""), now_utc)
-    if not allowed:
-        blockers.append(window_reason)
-        retry_at = max(retry_at, window_retry)
     weekend_allowed, weekend_reason = _weekend_call_eligibility(
-        row["weekend_evidence_json"], str(row["contact_timezone"] or ""), now_utc,
+        row["weekend_evidence_json"], now_utc,
         number=str(row["contact_number"] or ""),
         campaign=str(row["campaign"] or ""),
         consent_record_id=str(row["consent_record_id"] or ""),
@@ -744,6 +760,13 @@ def _eligibility(row: sqlite3.Row, now_utc: datetime) -> tuple[list[str], dateti
     if not weekend_allowed:
         blockers.append(weekend_reason)
         retry_at = max(retry_at, now_utc + timedelta(minutes=15))
+    else:
+        evidence = json.loads(str(row["weekend_evidence_json"] or "{}"))
+        verified_timezone = str(evidence["recipient_timezone"])
+        allowed, window_retry, window_reason = _calling_window(verified_timezone, now_utc)
+        if not allowed:
+            blockers.append(window_reason)
+            retry_at = max(retry_at, window_retry)
     if _bool(os.getenv("NIJA_JUSTCALL_REQUIRE_HUMAN_HANDOFF", "1")) and not _bool(
         os.getenv("NIJA_JUSTCALL_HUMAN_HANDOFF_VERIFIED", "0")
     ):

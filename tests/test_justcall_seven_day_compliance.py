@@ -27,10 +27,12 @@ def utc(s):
 
 def evidence(number="+12065550123", state="US-WA", local_day="2026-10-11",
              campaign="NIJA Apollo Outbound", consent_id="consent-123",
-             checked="2026-10-11T15:59:00Z"):
+             checked="2026-10-11T15:59:00Z", recipient_timezone="America/Los_Angeles",
+             approved=True):
     obj = {
-        "approved": True,
+        "approved": approved,
         "recipient_jurisdiction": state,
+        "recipient_timezone": recipient_timezone,
         "clearance_id": "legal-review-123",
         "cleared_local_date": local_day,
         "checked_at": checked,
@@ -40,6 +42,7 @@ def evidence(number="+12065550123", state="US-WA", local_day="2026-10-11",
         "campaign": campaign,
         "consent_record_id": consent_id,
         "jurisdiction": state,
+        "timezone": recipient_timezone,
         "clearance_id": obj["clearance_id"],
         "local_date": local_day,
         "checked_at": checked,
@@ -67,7 +70,7 @@ class WeekendRulesTests(unittest.TestCase):
     def decide(self, details, now="2026-10-11T16:00:00Z", number="+12065550123",
                campaign="NIJA Apollo Outbound", consent_id="consent-123"):
         return dial._weekend_call_eligibility(
-            json.dumps(details), "America/Los_Angeles", utc(now),
+            json.dumps(details), utc(now),
             number=number, campaign=campaign, consent_record_id=consent_id,
         )
 
@@ -76,7 +79,7 @@ class WeekendRulesTests(unittest.TestCase):
 
     def test_sunday_without_clearance_is_blocked(self):
         self.assertEqual(
-            self.decide({"recipient_jurisdiction": "US-WA"}),
+            self.decide(evidence(approved=False)),
             (False, "weekend_clearance_required"),
         )
 
@@ -109,6 +112,10 @@ class WeekendRulesTests(unittest.TestCase):
         forged["signature"] = "0" * 64
         self.assertEqual(self.decide(forged)[1],
                          "weekend_clearance_signature_invalid")
+        changed_timezone = evidence()
+        changed_timezone["recipient_timezone"] = "America/New_York"
+        self.assertEqual(self.decide(changed_timezone)[1],
+                         "weekend_clearance_signature_invalid")
         old = evidence(checked="2026-10-09T16:00:00Z")
         self.assertEqual(self.decide(old)[1], "weekend_clearance_expired")
 
@@ -121,8 +128,14 @@ class WeekendRulesTests(unittest.TestCase):
         # Monday October 19 2026, 19:30 America/New_York.
         local = utc("2026-10-19T23:30:00Z")
         allowed, reason = dial._weekend_call_eligibility(
-            json.dumps({"recipient_jurisdiction": "US-PA"}),
-            "America/New_York", local,
+            json.dumps(evidence(
+                number="+12155550100",
+                state="US-PA",
+                local_day="2026-10-19",
+                checked="2026-10-19T23:29:00Z",
+                recipient_timezone="America/New_York",
+            )),
+            local,
             number="+12155550100", campaign="NIJA Apollo Outbound",
             consent_record_id="consent-123",
         )
@@ -174,6 +187,26 @@ class QueueAndDirectRouteTests(unittest.TestCase):
             with mock.patch.dict(os.environ, {"NIJA_JUSTCALL_HUMAN_HANDOFF_VERIFIED": "1"}):
                 blockers, _ = dial._eligibility(self.row(), utc("2026-10-11T16:00:00Z"))
                 self.assertEqual(blockers, [])
+
+    def test_signed_recipient_timezone_overrides_contact_timezone(self):
+        row = self.row()
+        row["contact_timezone"] = "America/Los_Angeles"
+        row["weekend_evidence_json"] = json.dumps(evidence(
+            state="US-PA",
+            local_day="2026-10-19",
+            checked="2026-10-19T23:29:00Z",
+            recipient_timezone="America/New_York",
+        ))
+        with (
+            mock.patch.object(dial, "_quota_snapshot", return_value={
+                "weekday_open": True, "remaining": 300,
+            }),
+            mock.patch.object(dial, "_active_call_exists", return_value=False),
+            mock.patch.object(dial, "is_suppressed", return_value=False),
+            mock.patch.dict(os.environ, {"NIJA_JUSTCALL_HUMAN_HANDOFF_VERIFIED": "1"}),
+        ):
+            blockers, _ = dial._eligibility(row, utc("2026-10-19T23:30:00Z"))
+        self.assertIn("jurisdiction_hours_prohibited", blockers)
 
     def test_existing_database_migrates_without_dropping_rows(self):
         with sqlite3.connect(os.environ["NIJA_OUTREACH_DB_PATH"]) as con:
@@ -237,6 +270,7 @@ class QueueAndDirectRouteTests(unittest.TestCase):
         decoded = json.loads(stored["weekend_evidence_json"])
         self.assertEqual(decoded["signature"], valid["signature"])
         self.assertEqual(decoded["recipient_jurisdiction"], "US-WA")
+        self.assertEqual(decoded["recipient_timezone"], "America/Los_Angeles")
 
     def test_legacy_stdlib_route_cannot_dial_provider(self):
         handler = type("Request", (), {"path": "/api/justcall/calls"})()
@@ -278,6 +312,7 @@ class ApolloJurisdictionTests(unittest.TestCase):
             "NIJA_APOLLO_WEEKEND_LOCAL_DATE_FIELD_ID": "weekend-date",
             "NIJA_APOLLO_WEEKEND_CHECKED_AT_FIELD_ID": "weekend-time",
             "NIJA_APOLLO_WEEKEND_SIGNATURE_FIELD_ID": "weekend-signature",
+            "NIJA_APOLLO_RECIPIENT_TIMEZONE_FIELD_ID": "recipient-timezone",
         }
         contact = {
             "person_location_state": "Pennsylvania",  # must NOT be inferred
@@ -289,11 +324,13 @@ class ApolloJurisdictionTests(unittest.TestCase):
                 "weekend-date": "2026-10-11",
                 "weekend-time": "2026-10-11T15:59:00Z",
                 "weekend-signature": "signed-evidence",
+                "recipient-timezone": "America/Los_Angeles",
             },
         }
         with mock.patch.dict(os.environ, fields):
             obj = feeder._jurisdiction_evidence(contact)
             self.assertEqual(obj["recipient_jurisdiction"], "US-WA")
+            self.assertEqual(obj["recipient_timezone"], "America/Los_Angeles")
             self.assertEqual(obj["signature"], "signed-evidence")
             self.assertTrue(obj["approved"])
             contact["typed_custom_fields"].pop("recipient-state")
