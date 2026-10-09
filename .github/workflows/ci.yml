@@ -102,6 +102,7 @@ jobs:
             bot/tests/test_v420_monitor_start_order_v421.py \
             tests/test_authority_marker_atomic_publication.py \
             bot/tests/test_runtime_execution_capital_integrity_v169.py \
+            tests/test_preactivation_execution_proof_v439.py \
             bot/tests/test_runtime_execution_activation_protection_v347.py \
             bot/tests/test_runtime_position_protection_liveness_v348.py \
             bot/tests/test_live_authority_fail_closed_v94.py \
