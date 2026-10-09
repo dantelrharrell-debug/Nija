@@ -191,6 +191,53 @@ class QueueAndDirectRouteTests(unittest.TestCase):
             }
         self.assertIn("weekend_evidence_json", names)
 
+    def test_daily_quota_paces_attempts_instead_of_bursting(self):
+        start = utc("2026-10-11T16:00:00Z")
+        with mock.patch.dict(os.environ, {
+            "NIJA_AUTODIAL_DAILY_CAP": "300",
+            "NIJA_AUTODIAL_MIN_SUBMISSION_INTERVAL_SECONDS": "120",
+        }):
+            accepted, key, reason = dial._reserve_quota(start)
+            self.assertEqual((accepted, reason), (True, "ok"))
+            accepted, _, reason = dial._reserve_quota(start.replace(second=30))
+            self.assertEqual((accepted, reason), (False, "pacing_interval_not_elapsed"))
+            snap = dial._quota_snapshot(start.replace(second=30))
+            self.assertEqual(snap["used"], 1)
+            self.assertEqual(snap["remaining"], 299)
+            self.assertFalse(snap["pacing_ready"])
+            accepted, _, reason = dial._reserve_quota(utc("2026-10-11T16:02:01Z"))
+            self.assertEqual((accepted, reason), (True, "ok"))
+            self.assertEqual(dial._quota_snapshot(utc("2026-10-11T16:02:01Z"))["used"], 2)
+
+    def test_ready_queue_persists_signed_weekend_evidence(self):
+        now = utc("2026-10-11T16:00:00Z")
+        valid = evidence()
+        payload = {
+            "record_id": "apollo:contact-1",
+            "contact_number": "+12065550123",
+            "campaign": "NIJA Apollo Outbound",
+            "call_stage": "initial",
+            "contact_timezone": "America/Los_Angeles",
+            "has_consent": True,
+            "consent_record_id": "consent-123",
+            "legal_basis": "express-written-consent",
+            "dnc_clear": True,
+            "dnc_checked_at": now.isoformat(),
+            "suppression_clear": True,
+            "campaign_enabled": True,
+            "weekend_evidence": valid,
+        }
+        result = dial.enqueue_candidate(payload)
+        self.assertTrue(result["queued"])
+        with dial._connect() as con:
+            stored = con.execute(
+                "SELECT weekend_evidence_json FROM outreach_autodial_queue WHERE queue_key=?",
+                (result["queue_key"],),
+            ).fetchone()
+        decoded = json.loads(stored["weekend_evidence_json"])
+        self.assertEqual(decoded["signature"], valid["signature"])
+        self.assertEqual(decoded["recipient_jurisdiction"], "US-WA")
+
     def test_legacy_stdlib_route_cannot_dial_provider(self):
         handler = type("Request", (), {"path": "/api/justcall/calls"})()
         with (
