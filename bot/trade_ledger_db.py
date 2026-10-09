@@ -53,6 +53,31 @@ class TradeLedgerDB:
         # Initialize database schema
         self._init_database()
 
+        try:
+            from bot.runtime_trade_ledger_storage_v435 import inspect_ledger_storage
+            self.storage_verification = inspect_ledger_storage(self.db_path)
+        except Exception as exc:
+            self.storage_verification = {
+                "state": "mount_evidence_unavailable",
+                "dedicated_mount_detected": False,
+                "restart_persistence_verified": False,
+                "migration_integrity_verified": False,
+                "backup_restore_verified": False,
+                "history_completeness_verified": False,
+                "ready_for_historical_pnl_certification": False,
+            }
+            logger.warning(
+                "TRADE_LEDGER_V435_STORAGE_DIAGNOSTIC_UNAVAILABLE exception_type=%s",
+                type(exc).__name__,
+            )
+        logger.warning(
+            "TRADE_LEDGER_V435_STORAGE_EVIDENCE state=%s "
+            "dedicated_mount_detected=%s restart_persistence_verified=false "
+            "migration_integrity_verified=false backup_restore_verified=false "
+            "historical_pnl_certification=false entries_or_exits_changed=false",
+            self.storage_verification["state"],
+            self.storage_verification["dedicated_mount_detected"],
+        )
         logger.info(f"📊 Trade Ledger DB initialized at {self.db_path}")
 
     @contextmanager
