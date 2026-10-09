@@ -322,7 +322,9 @@ def fetch_margin_positions(broker: Any, *, account: Any = "", force: bool = Fals
             )
             return False, {}, "superseded_by_newer_private_read_failure"
         _CACHE[key] = {"at": time.monotonic(), "positions": {symbol: dict(row) for symbol, row in positions.items()}}
-    _reconcile_closed(key, positions)
+        # RLock is reentrant: keep last-visible updates in the same epoch
+        # transaction so a newer failure cannot interleave between them.
+        _reconcile_closed(key, positions)
     LOGGER.info(
         "KRAKEN_MARGIN_OPENPOSITIONS_FETCH_SUCCESS marker=%s account=%s open_positions=%d symbols=%s "
         "source=%s broker_position_state_only=true fill_fabricated=false spot_tracker_mutated=false "
