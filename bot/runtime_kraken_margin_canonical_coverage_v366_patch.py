@@ -302,6 +302,10 @@ def fetch_margin_positions(broker: Any, *, account: Any = "", force: bool = Fals
 
 
 def _log_fetch_failed(account: str, reason: str) -> None:
+    # A failed authenticated private read invalidates any cached success for
+    # this exact account. Do not let a later cached hit imply fresh coverage.
+    with _LOCK:
+        _CACHE.pop(account, None)
     LOGGER.error(
         "KRAKEN_MARGIN_OPENPOSITIONS_FETCH_FAILED marker=%s account=%s reason=%s "
         "coverage_reason=%s fail_closed=true margin_position_fabricated=false "
