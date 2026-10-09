@@ -113,4 +113,11 @@ jobs:
             bot/tests/test_runtime_kraken_deferred_fill_proof_recovery_v363.py \
             bot/tests/test_heartbeat_min_notional_local_defer_v431.py \
             bot/tests/test_post_core_pending_same_process_v427.py \
-            bot/tests/test_trading_state_persistence_concurrency.py
+            bot/tests/test_trading_state_persistence_concurrency.py \
+            bot/tests/test_runtime_kraken_margin_canonical_coverage_v366.py \
+            bot/tests/test_kraken_all_account_exit_runtime.py \
+            bot/tests/test_runtime_pnl_ledger_repair_v414.py \
+            bot/tests/test_pending_kraken_close_audit_v434.py \
+            bot/tests/test_confirmed_strategy_order_provenance_v433.py \
+            bot/tests/test_runtime_heartbeat_no_rearm_v433.py \
+            bot/tests/test_research_edge_ranking_v432.py
