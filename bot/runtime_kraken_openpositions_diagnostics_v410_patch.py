@@ -28,6 +28,14 @@ _PATCH_ATTR = "_nija_kraken_openpositions_diagnostics_v410"
 
 def _classify_exception(exc: BaseException) -> str:
     text = str(exc or "").lower()
+    # KrakenBroker raises a generic Exception("Kraken API not connected").
+    # It is neither an authenticated empty position result nor a transport
+    # timeout; identify the specific disconnected adapter state safely.
+    if any(token in text for token in (
+        "api not connected", "broker not connected", "kraken not connected",
+        "client not connected", "credentials not configured",
+    )):
+        return "broker_disconnected_or_unconfigured"
     if "circuit breaker" in text:
         return "circuit_breaker_open"
     if "nonce readiness" in text or "nonce issuance" in text or "nonce manager" in text:

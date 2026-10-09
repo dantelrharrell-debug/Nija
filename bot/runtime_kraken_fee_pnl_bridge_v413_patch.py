@@ -143,87 +143,40 @@ def _ensure_opening_cost_basis(
             raise RuntimeError("trade_ledger_singleton_missing")
         ledger = getter()
 
-        # Idempotency across replay/recovery cycles.
-        with ledger._get_connection() as conn:
-            cur = conn.cursor()
-            cur.execute(
-                "SELECT 1 FROM open_positions WHERE position_id = ? LIMIT 1",
-                (position_id,),
-            )
-            if cur.fetchone() is not None:
-                LOGGER.info(
-                    "REALIZED_PNL_V413_ENTRY_LEDGER_DUPLICATE marker=%s order_id=%s position_id=%s "
-                    "symbol=%s source=authenticated_kraken_queryorders",
-                    MARKER, order_id, position_id, symbol,
-                )
-                return
-            cur.execute(
-                "SELECT 1 FROM completed_trades WHERE position_id = ? LIMIT 1",
-                (position_id,),
-            )
-            if cur.fetchone() is not None:
-                LOGGER.info(
-                    "REALIZED_PNL_V413_ENTRY_LEDGER_ALREADY_COMPLETED marker=%s order_id=%s position_id=%s "
-                    "symbol=%s",
-                    MARKER, order_id, position_id, symbol,
-                )
-                return
-
+        # This module must not split OPEN transaction and open_positions into
+        # two commits: a crash between those writes creates an orphaned fill.
+        # SHORT entry SELL is an OPEN, not the legacy record_sell() CLOSE action.
         quantity = float(filled_usd) / float(fill_price)
-        if quantity <= 0.0:
-            raise RuntimeError("entry_quantity_nonpositive")
         user_id = _ledger_user_id(result)
         if not user_id:
             LOGGER.warning(
                 "REALIZED_PNL_V413_ENTRY_LEDGER_PENDING marker=%s order_id=%s position_id=%s "
-                "reason=authenticated_account_scope_unproven cost_basis_fabricated=false "
-                "ledger_user_guessed=false",
+                "reason=authenticated_account_scope_unproven ledger_user_guessed=false",
                 MARKER, order_id, position_id,
             )
             return
         side_norm = str(side or "").strip().lower()
+        if side_norm not in {"buy", "sell"}:
+            raise ValueError("entry_side_not_authenticated")
         position_side = "LONG" if side_norm == "buy" else "SHORT"
         notes = (
             "authenticated_kraken_queryorders_entry; "
-            f"order_id={order_id}; account={str(result.get('account') or result.get('account_id') or 'platform')}"
+            f"order_id={order_id}; account={str(result.get('account') or result.get('account_id') or '')}"
         )
-
-        if side_norm == "buy":
-            ledger.record_buy(
-                symbol=symbol,
-                price=float(fill_price),
-                quantity=quantity,
-                size_usd=float(filled_usd),
-                fee=fee,
-                order_id=order_id,
-                position_id=position_id,
-                user_id=user_id,
-                notes=notes,
-            )
-        else:
-            ledger.record_sell(
-                symbol=symbol,
-                price=float(fill_price),
-                quantity=quantity,
-                size_usd=float(filled_usd),
-                fee=fee,
-                order_id=order_id,
-                position_id=position_id,
-                user_id=user_id,
-                notes=notes,
-            )
-
-        opened = ledger.open_position(
+        atomic_book = getattr(ledger, "record_confirmed_entry_atomic", None)
+        if not callable(atomic_book):
+            raise RuntimeError("atomic_confirmed_entry_writer_missing")
+        opened = atomic_book(
             position_id=position_id,
+            order_id=order_id,
+            user_id=user_id,
             symbol=symbol,
             side=position_side,
             entry_price=float(fill_price),
             quantity=quantity,
             size_usd=float(filled_usd),
             entry_fee=fee,
-            user_id=user_id,
             notes=notes,
-            position_source="nija_strategy",
         )
         if opened:
             LOGGER.critical(
