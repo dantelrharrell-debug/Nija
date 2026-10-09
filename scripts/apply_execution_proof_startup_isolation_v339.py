@@ -84,6 +84,28 @@ def patch_v346_text(text: str) -> str:
             raise RuntimeError("v339 v346 helper anchor missing")
         text = text.replace(helper_anchor, helpers + helper_anchor, 1)
 
+    # v357 returns matched exchange event time as a fifth value. Preserve
+    # both that time and authenticated account scope through the verifier.
+    text = text.replace(
+        "fill_price, filled_qty, filled_usd, matches = trade_history_fill(",
+        "fill_price, filled_qty, filled_usd, matches, matched_event_epoch = trade_history_fill(",
+    ).replace(
+        "                if matches <= 0 or fill_price <= 0.0 or filled_qty <= 0.0 or filled_usd <= 0.0:\n"
+        "                    continue\n",
+        "                if (matches <= 0 or fill_price <= 0.0 or filled_qty <= 0.0\n"
+        "                        or filled_usd <= 0.0 or matched_event_epoch <= 0.0):\n"
+        "                    continue\n"
+        "                trade_ts = matched_event_epoch\n",
+    ).replace(
+        '                "order_id": order_id,\n                "status": status or "closed",',
+        '                "order_id": order_id,\n'
+        '                "broker": "kraken",\n'
+        '                "account": "platform:kraken",\n'
+        '                "account_id": "platform:kraken",\n'
+        '                "recovered_fill_proof": True,\n'
+        '                "status": status or "closed",',
+    )
+
     worker_old = '''def _worker() -> None:\n    while True:\n        try:\n            _patch_v328_confirmed_fill_marker()\n            _patch_v169_provenance()\n            _patch_v231_execution_marker()\n            _patch_stale_platform_refresh()\n            _wake_position_sync()\n            _wake_activation_after_proof()\n        except Exception:\n            LOGGER.debug("V346 worker pulse failed", exc_info=True)\n        time.sleep(3.0)\n'''
     worker_new = '''def _worker() -> None:\n    while True:\n        try:\n            v169_ready, _v169_detail = _ensure_v169_ready()\n            _patch_v328_confirmed_fill_marker()\n            _patch_v169_provenance()\n            _patch_v231_execution_marker()\n            _patch_stale_platform_refresh()\n            if v169_ready:\n                recovered, recovery_detail = _recover_recent_kraken_execution_proof()\n                if not recovered:\n                    _log_recovery_wait(recovery_detail)\n            _wake_position_sync()\n            _wake_activation_after_proof()\n        except Exception:\n            LOGGER.debug("V346 worker pulse failed", exc_info=True)\n        time.sleep(3.0)\n'''
     text = _replace_once(text, worker_old, worker_new, "v346 worker recovery")
