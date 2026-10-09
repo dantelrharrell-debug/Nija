@@ -168,3 +168,58 @@ def test_old_failures_remain_retryable_after_twelve_attempts(monkeypatch, tmp_pa
         conn.commit()
     monkeypatch.setattr(sync, "_deliver_batch", lambda rows, key: {"qa@example.com"})
     assert sync.sync_pending()["synced"] == 1
+
+
+def test_live_intake_route_enqueues_crm_without_delaying_zapier(monkeypatch, tmp_path):
+    import io
+    from render_lead_intake import handle_lead_intake_post
+    import render_lead_intake as intake
+
+    monkeypatch.setenv("NIJA_LEAD_DB_PATH", str(tmp_path / "intake.sqlite3"))
+    monkeypatch.setenv("NIJA_LEAD_WEBHOOK_TOKEN", "qa-internal-token")
+    monkeypatch.setattr(sync, "start_worker", lambda: None)
+    forwarded = []
+    monkeypatch.setattr(intake, "_forward", lambda lead: forwarded.append(lead["email"]) or True)
+
+    payload = json.dumps({
+        "form_name": "free_trader_assessment",
+        "name": "NIJA QA Visitor",
+        "email": "qa@example.com",
+        "submitted_at": sync._now_iso(),
+    }).encode("utf-8")
+
+    class Handler:
+        path = "/api/leads/intake"
+        headers = {"Content-Length": str(len(payload)), "X-NIJA-Lead-Token": "qa-internal-token"}
+
+        def __init__(self):
+            self.rfile = io.BytesIO(payload)
+            self.wfile = io.BytesIO()
+            self.status = None
+
+        def send_response(self, code):
+            self.status = code
+
+        def send_header(self, key, value):
+            pass
+
+        def end_headers(self):
+            pass
+
+    request1 = Handler()
+    assert handle_lead_intake_post(request1) is True
+    result1 = json.loads(request1.wfile.getvalue())
+    assert request1.status == 201
+    assert result1["accepted"] and result1["crm_queued"] and result1["forwarded"]
+    assert result1["crm_queue_error"] is False
+
+    request2 = Handler()
+    assert handle_lead_intake_post(request2) is True
+    result2 = json.loads(request2.wfile.getvalue())
+    assert request2.status == 200
+    assert result2["duplicate"]
+    assert result2["lead_id"] == result1["lead_id"]
+
+    with sync._connect() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM website_lead_crm_sync").fetchone()[0] == 1
+    assert forwarded
