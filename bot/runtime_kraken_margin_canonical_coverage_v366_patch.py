@@ -185,8 +185,8 @@ def normalise_open_positions(payload: Any) -> Dict[str, Any]:
         detail = ",".join(str(item) for item in errors)
         return {"ok": False, "reason": f"openpositions_rejected:{detail}", "positions": {}}
     result = payload.get("result")
-    if result is None:
-        result = {}
+    # A missing/null private API result is not an authenticated empty position
+    # inventory. Only an actual empty object proves zero open margin positions.
     if not isinstance(result, Mapping):
         return {"ok": False, "reason": "invalid_openpositions_result", "positions": {}}
 
