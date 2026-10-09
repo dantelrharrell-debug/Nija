@@ -395,73 +395,20 @@ def handle_outreach_extension_post(handler: Any) -> bool:
         _send_json(handler, 200, result)
         return True
 
+    # The legacy campaign endpoint used caller-supplied compliance booleans and
+    # bypassed recipient-jurisdiction evidence, human handoff, daily quota and
+    # durable submission pacing. All live AI calls must go through the vetted queue.
     authorized, status_code, detail = _service_authorized(handler)
     if not authorized:
         _send_json(handler, status_code, {"error": detail})
         return True
-    try:
-        _, body = _read_raw_json(handler)
-    except ValueError as exc:
-        _send_json(handler, 400, {"error": str(exc)})
-        return True
-
-    contact_number = str(body.get("contact_number", "") or "").strip()
-    if not _E164_RE.fullmatch(contact_number):
-        _send_json(handler, 422, {"error": "Phone number must be valid E.164"})
-        return True
-
-    compliance_errors = _campaign_compliance_errors(body, contact_number)
-    if compliance_errors:
-        _send_json(
-            handler,
-            422,
-            {
-                "error": "Campaign call blocked by compliance gate",
-                "blockers": compliance_errors,
-            },
-        )
-        return True
-
-    variables = body.get("dynamic_variables") or []
-    if not isinstance(variables, list) or len(variables) > 50:
-        _send_json(
-            handler,
-            422,
-            {"error": "dynamic_variables must be an array of at most 50 items"},
-        )
-        return True
-
-    try:
-        agent_id = _resolve_agent_id(str(body.get("ai_agent_id", "") or ""))
-        provider_payload = _provider_request(
-            "POST",
-            "/voice-agents/calls",
-            payload={
-                "ai_agent_id": agent_id,
-                "contact_number": contact_number,
-                "dynamic_variables": variables,
-                "has_consent": True,
-            },
-        )
-        record_outbound_submission(
-            contact_number=contact_number,
-            record_id=str(body.get("record_id", "") or ""),
-            campaign=str(body.get("campaign", "") or ""),
-            provider_payload=provider_payload,
-            request_payload=body,
-        )
-    except ValueError as exc:
-        _send_json(handler, 422, {"error": str(exc)})
-    except OutreachConfigurationError as exc:
-        _send_json(handler, 503, {"error": str(exc)})
-    except OutreachProviderError as exc:
-        _send_json(
-            handler,
-            502,
-            {"error": str(exc), "provider_status": exc.status_code},
-        )
-    except OSError:
-        _send_json(handler, 503, {"error": "Outreach event store unavailable"})
-    else:
-        _send_json(handler, 200, provider_payload)
+    _send_json(
+        handler, 409,
+        {
+            "error": "Direct AI campaign calling is disabled",
+            "detail": "Enqueue through /api/justcall/autodial-queue after verified "
+                      "AI consent, DNC, suppression, jurisdiction, calling-hours "
+                      "and agent-human handoff checks.",
+        },
+    )
     return True
