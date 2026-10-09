@@ -1,0 +1,35 @@
+name: NIJA website leads Apollo CRM recovery tests
+
+on:
+  pull_request:
+    paths:
+      - 'render_lead_intake.py'
+      - 'render_lead_crm_sync.py'
+      - 'render_apollo_feeder.py'
+      - 'tests/test_render_lead_crm_sync.py'
+      - '.github/workflows/lead-crm-recovery-ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'render_lead_intake.py'
+      - 'render_lead_crm_sync.py'
+      - 'render_apollo_feeder.py'
+      - 'tests/test_render_lead_crm_sync.py'
+      - '.github/workflows/lead-crm-recovery-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  lead-crm-recovery:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install tests
+        run: python -m pip install --disable-pip-version-check pytest
+      - name: Verify idempotency, response speed, retry and safety
+        run: python -m pytest -q tests/test_render_lead_crm_sync.py
