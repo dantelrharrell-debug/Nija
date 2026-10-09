@@ -596,16 +596,18 @@ def _weekend_clearance_valid(
     signature = str(evidence.get("signature") or "").strip().lower()
     if len(secret) < 32 or not re.fullmatch(r"[0-9a-f]{64}", signature):
         return False
-    signed_fields = (
-        phone_key(number),
-        campaign,
-        consent_record_id,
-        str(evidence.get("recipient_jurisdiction") or "").strip().upper(),
-        str(evidence.get("clearance_id") or "").strip(),
-        str(evidence.get("cleared_local_date") or "").strip(),
-        str(evidence.get("checked_at") or "").strip(),
-    )
-    message = "\n".join(signed_fields).encode("utf-8")
+    signed_fields = {
+        "phone_digits": phone_key(number),
+        "campaign": campaign,
+        "consent_record_id": consent_record_id,
+        "jurisdiction": str(evidence.get("recipient_jurisdiction") or "").strip().upper(),
+        "clearance_id": str(evidence.get("clearance_id") or "").strip(),
+        "local_date": str(evidence.get("cleared_local_date") or "").strip(),
+        "checked_at": str(evidence.get("checked_at") or "").strip(),
+    }
+    message = json.dumps(
+        signed_fields, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    ).encode("utf-8")
     expected = hmac.new(secret.encode("utf-8"), message, hashlib.sha256).hexdigest()
     return hmac.compare_digest(expected, signature)
 
