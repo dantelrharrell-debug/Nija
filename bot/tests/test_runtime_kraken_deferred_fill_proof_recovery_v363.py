@@ -24,6 +24,13 @@ class KrakenBroker:
 
 @pytest.fixture(autouse=True)
 def _isolated_state(tmp_path, monkeypatch):
+    import bot.runtime_execution_position_readiness_v346_patch as v346
+    # These unit tests isolate the canonical writer; real admission is covered
+    # by test_kraken_recovery_marker_admission.py.
+    monkeypatch.setattr(v346, "_write_confirmed_fill_marker", lambda **kwargs: True)
+    monkeypatch.setattr(v357, "_recovery_scope", lambda broker: {
+        "broker": "kraken", "account": "platform:kraken", "account_id": "platform:kraken",
+    })
     monkeypatch.setenv(
         "NIJA_KRAKEN_PENDING_FILL_PROOF_PATH", str(tmp_path / "pending.json")
     )
