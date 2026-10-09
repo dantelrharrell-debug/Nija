@@ -21,6 +21,10 @@ def load():
 
 def test_missing_verifier_fails_closed(monkeypatch):
     v16 = load()
+    # Other CI tests import bot.trading_state_machine during collection. Clear
+    # that cached module so this test actually exercises the absent-verifier
+    # startup branch rather than a preloaded verifier with a missing marker.
+    monkeypatch.delitem(sys.modules, "bot.trading_state_machine", raising=False)
     monkeypatch.setattr(v16.importlib, "import_module", lambda n: ModuleType(n))
     ok, detail = v16._genuine_execution_marker_proof()
     assert not ok
