@@ -61,6 +61,13 @@ def _finite(value: Any) -> float | None:
     return None
 
 
+def _symbol_key(value: Any) -> str:
+    raw = str(value or "").strip().upper().split(":", 1)[0]
+    compact = "".join(char for char in raw if char.isalnum())
+    return {"XXBTZUSD": "BTCUSD", "XBTUSD": "BTCUSD",
+            "XETHZUSD": "ETHUSD"}.get(compact, compact)
+
+
 def record_unmatched_confirmed_close(
     ledger: Any, *, result: Mapping[str, Any], symbol: str, side: str,
     price: float, filled_usd: float, fee: float, reason: str,
@@ -161,7 +168,9 @@ def mark_reconciled(
     """Mark a previously pending exact fill only after canonical P&L was booked."""
     scope, user_id = _owner(result.get("account") or result.get("account_id"))
     oid, pid = str(order_id or "").strip(), str(position_id or "").strip()
-    if not (scope and oid and pid):
+    broker = str(result.get("broker") or result.get("venue") or "").strip().lower()
+    result_oid = str(result.get("order_id") or result.get("id") or result.get("exchange_order_id") or "").strip()
+    if not (broker == "kraken" and scope and oid and pid and result_oid == oid):
         return False
     try:
         with ledger._get_connection() as conn:
@@ -169,7 +178,7 @@ def mark_reconciled(
             # The canonical CLOSE transaction and completed trade must exist.
             recorded = conn.execute(
                 """SELECT l.symbol, l.side, l.price, l.size_usd, l.fee,
-                          c.exit_price, c.exit_fee
+                          c.symbol AS completed_symbol, c.exit_price, c.exit_fee
                    FROM trade_ledger l
                    INNER JOIN completed_trades c
                      ON c.position_id = l.position_id AND c.user_id = l.user_id
@@ -190,7 +199,9 @@ def mark_reconciled(
             if not pending:
                 return False
             if not (
-                str(recorded["side"]).upper() == (
+                _symbol_key(recorded["symbol"]) == _symbol_key(pending["symbol"])
+                and _symbol_key(recorded["completed_symbol"]) == _symbol_key(pending["symbol"])
+                and str(recorded["side"]).upper() == (
                     "SELL" if pending["side"] == "sell" else "BUY"
                 )
                 and math.isclose(float(recorded["price"]), float(pending["fill_price"]), rel_tol=1e-8)
