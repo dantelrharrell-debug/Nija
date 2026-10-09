@@ -58,6 +58,8 @@ _EPS = 1e-12
 
 _LOCK = threading.RLock()
 _CACHE: Dict[str, Dict[str, Any]] = {}
+# Per-account failures supersede older concurrent in-flight reads.
+_FAILURE_EPOCH: Dict[str, int] = {}
 _LAST_VISIBLE: Dict[str, Dict[str, float]] = {}
 
 _KNOWN_ALIASES = {
@@ -286,6 +288,9 @@ def fetch_margin_positions(broker: Any, *, account: Any = "", force: bool = Fals
             if cached and (now - _float(cached.get("at"))) <= ttl:
                 return True, {symbol: dict(row) for symbol, row in cached["positions"].items()}, "cached"
 
+    with _LOCK:
+        read_epoch = _FAILURE_EPOCH.get(key, 0)
+
     call = _private_call(broker)
     if call is None:
         reason = "kraken_private_api_unavailable"
@@ -306,7 +311,17 @@ def fetch_margin_positions(broker: Any, *, account: Any = "", force: bool = Fals
 
     positions = {symbol: dict(row) for symbol, row in (truth.get("positions") or {}).items()}
     with _LOCK:
-        _CACHE[key] = {"at": now, "positions": {symbol: dict(row) for symbol, row in positions.items()}}
+        if _FAILURE_EPOCH.get(key, 0) != read_epoch:
+            # A newer failed read must win over an older in-flight success.
+            # Never republish stale exposure or call _reconcile_closed from it.
+            LOGGER.warning(
+                "KRAKEN_MARGIN_READ_SUPERSEDED_V434 account=%s "
+                "reason=newer_private_read_failure cache_not_republished=true "
+                "coverage_unproven=true",
+                key,
+            )
+            return False, {}, "superseded_by_newer_private_read_failure"
+        _CACHE[key] = {"at": time.monotonic(), "positions": {symbol: dict(row) for symbol, row in positions.items()}}
     _reconcile_closed(key, positions)
     LOGGER.info(
         "KRAKEN_MARGIN_OPENPOSITIONS_FETCH_SUCCESS marker=%s account=%s open_positions=%d symbols=%s "
@@ -322,6 +337,7 @@ def _log_fetch_failed(account: str, reason: str) -> None:
     # this exact account. Do not let a later cached hit imply fresh coverage.
     with _LOCK:
         _CACHE.pop(account, None)
+        _FAILURE_EPOCH[account] = _FAILURE_EPOCH.get(account, 0) + 1
     LOGGER.error(
         "KRAKEN_MARGIN_OPENPOSITIONS_FETCH_FAILED marker=%s account=%s reason=%s "
         "coverage_reason=%s fail_closed=true margin_position_fabricated=false "
@@ -683,6 +699,7 @@ def install() -> bool:
 def _reset_state_for_tests() -> None:
     with _LOCK:
         _CACHE.clear()
+        _FAILURE_EPOCH.clear()
         _LAST_VISIBLE.clear()
 
 
