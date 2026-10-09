@@ -85,7 +85,12 @@ def _confirmed_kraken_entry_from_ledger(
             ):
                 return False
         return True
-    except (ValueError, TypeError, OSError, IndexError):
+    except Exception as exc:
+        LOGGER.warning(
+            "CONFIRMED_KRAKEN_ENTRY_V435_UNPROVEN position_id=%s exception_type=%s "
+            "historical_pnl_excluded=true",
+            position_id, type(exc).__name__,
+        )
         return False
 
 
