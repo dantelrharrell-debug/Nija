@@ -56,15 +56,17 @@ def test_exact_platform_broker_scope_reaches_durable_marker(context):
     assert wakes == [True]
 
 
-@pytest.mark.parametrize("registration", ["user", "unknown", "shared", "wrong_venue"])
+@pytest.mark.parametrize("registration", ["user", "unknown", "shared", "disconnected_shared", "wrong_venue"])
 def test_unknown_user_or_ambiguous_owner_cannot_satisfy_platform_proof(context, registration):
     broker, manager, marker, wakes = context
-    if registration != "shared":
+    if registration not in {"shared", "disconnected_shared"}:
         manager.platform_brokers = {}
     if registration in {"user", "shared"}:
         manager.user_brokers = {"user-a": {"kraken": broker}}
     if registration == "wrong_venue":
         manager.platform_brokers = {"coinbase": broker}
+    if registration == "disconnected_shared":
+        manager._all_user_brokers = {("user-a", "kraken"): broker}
     enriched = v357._enrich_kraken_final_order(
         broker, {"order_id": "ORDER", "status": "closed", "account": "platform:kraken",
                  "account_id": "platform:kraken"}, symbol="ETH-USD", side="buy",
@@ -116,3 +118,38 @@ def test_concurrent_recoveries_preserve_latest_broker_event(context):
     with ThreadPoolExecutor(max_workers=4) as pool:
         list(pool.map(lambda epoch: _write_event(str(epoch), float(epoch)), [9998, 9000, 9999, 9500]))
     assert json.loads(marker.read_text())["verified_at_epoch"] == 9999.0
+
+
+def test_observation_timed_marker_does_not_reject_newer_broker_timed_fill(context):
+    _, _, marker, _ = context
+    assert v346._write_confirmed_fill_marker(
+        result={"order_id": "OBSERVED"}, symbol="ETH-USD", side="buy",
+        fill_price=2500.0, filled_usd=25.0,
+    )
+    observed = json.loads(marker.read_text())
+    assert observed["timestamp_source"] == "observation_time"
+    assert observed["broker_fill_at_epoch"] == 0.0
+    assert _write_event("BROKER-TIMED", 9999.0)
+    assert json.loads(marker.read_text())["order_id"] == "BROKER-TIMED"
+
+
+def test_recovery_metadata_is_written_atomically_with_its_order(context):
+    _, _, marker, _ = context
+    result = {
+        "order_id": "HISTORY", "broker_fill_at_epoch": 9995.0, "recovered_fill_proof": True,
+        "broker": "kraken", "account": "platform:kraken", "account_id": "platform:kraken",
+        "recovered_from_authenticated_history": True, "recovery_source": "exact_order_history",
+        "recovered_writer_generation": "7", "exchange_fill_time": 10000.0,
+    }
+    assert v346._write_confirmed_fill_marker(
+        result=result, symbol="ETH-USD", side="buy", fill_price=2500.0, filled_usd=25.0,
+    )
+    payload = json.loads(marker.read_text())
+    assert payload["order_id"] == "HISTORY"
+    assert payload["recovery_source"] == "exact_order_history"
+    assert payload["recovered_writer_generation"] == "7"
+    assert payload["exchange_fill_time"] == payload["verified_at_epoch"] == 9995.0
+    assert _write_event("NEW", 9999.0)
+    new = json.loads(marker.read_text())
+    assert new["order_id"] == "NEW"
+    assert "recovery_source" not in new

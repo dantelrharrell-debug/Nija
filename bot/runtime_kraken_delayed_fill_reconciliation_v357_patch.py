@@ -256,6 +256,8 @@ def _recovery_scope(broker: Any) -> dict[str, str]:
         users = dict(getattr(manager, "user_brokers", {}) or {})
         shared = any(instance is broker for mapping in users.values()
                      for instance in dict(mapping or {}).values())
+        registered_users = dict(getattr(manager, "_all_user_brokers", {}) or {})
+        shared = shared or any(instance is broker for instance in registered_users.values())
         if owned and not shared:
             scope.update(account="platform:kraken", account_id="platform:kraken")
     except Exception:
