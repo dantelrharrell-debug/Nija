@@ -135,6 +135,11 @@ def test_out_of_sample_quality_guard_does_not_accept_mere_backtest_claim(problem
     assert "out_of_sample_net_edge_not_proven" in evaluate(data)["blockers"]
 
 
+def test_research_rejects_cross_venue_prices_even_with_matching_requested_owner():
+    data = candidate(venue="coinbase", account_scope="platform:kraken")
+    assert "account_venue_mismatch" in evaluate(data)["blockers"]
+
+
 def test_crypto_spot_cannot_short_by_borrowing_stock_permissions():
     data = candidate(direction="SHORT", account_shorting_enabled=True, borrow_status="easy_to_borrow")
     assert "short_not_supported_on_spot_or_unconfigured_venue" in evaluate(data)["blockers"]
