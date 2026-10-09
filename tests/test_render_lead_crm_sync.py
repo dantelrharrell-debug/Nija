@@ -43,7 +43,9 @@ def test_sync_creates_contact_once_without_sequence(monkeypatch, tmp_path):
     def request(req, timeout):
         calls.append(req)
         payload = json.loads(req.data)
-        assert set(payload) == {"contacts"}
+        assert set(payload) == {"contacts", "run_dedupe", "append_label_names"}
+        assert payload["run_dedupe"] is True
+        assert payload["append_label_names"] == ["NIJA Website Leads"]
         assert set(payload["contacts"][0]) == {"first_name", "last_name", "email"}
         assert b"sequence" not in req.data.lower()
         assert req.get_header("X-api-key") == "private-credential"
