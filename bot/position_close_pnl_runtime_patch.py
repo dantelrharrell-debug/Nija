@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import builtins
 import logging
+import math
 from datetime import datetime
 from typing import Any, Optional
 
@@ -26,6 +27,12 @@ def _sym(value: Any) -> str:
 
 def _side(value: Any) -> str:
     return str(value or "").strip().lower()
+
+
+def _symbol_identity(value: Any) -> str:
+    compact = "".join(c for c in str(value or "").upper().split(":", 1)[0] if c.isalnum())
+    return {"XXBTZUSD": "BTCUSD", "XBTUSD": "BTCUSD",
+            "XETHZUSD": "ETHUSD"}.get(compact, compact)
 
 
 def _result(**kwargs: Any) -> dict[str, Any]:
@@ -133,10 +140,18 @@ def _close_and_record(
     order_id: str = "",
     broker: str = "",
 ) -> dict[str, Any]:
-    if _f(exit_price) <= 0:
-        return _result(success=False, position_id=position_id, symbol=_sym(symbol), user_id=user_id, error="invalid_exit_price")
+    try:
+        raw_price = float(exit_price)
+        raw_fee = float(exit_fee)
+        if not math.isfinite(raw_price) or not math.isfinite(raw_fee) or raw_price <= 0 or raw_fee < 0:
+            raise ValueError("invalid_exit_economics")
+    except (ValueError, TypeError, OverflowError):
+        return _result(success=False, position_id=position_id, symbol=_sym(symbol), user_id=user_id, error="invalid_exit_economics")
     try:
         with ledger._get_connection() as conn:
+            # Reserve the close before selecting an open position. This avoids
+            # two workers simultaneously booking the same canonical CLOSE.
+            conn.execute("BEGIN IMMEDIATE")
             cur = conn.cursor()
             if position_id:
                 cur.execute("SELECT * FROM open_positions WHERE position_id = ? AND status = 'open'", (position_id,))
@@ -161,7 +176,25 @@ def _close_and_record(
             if not row:
                 return _result(success=False, position_id=position_id, symbol=_sym(symbol), user_id=user_id, error="open_position_not_found")
             pos = dict(row)
-            pnl = _calculate(pos, _f(exit_price), _f(exit_fee))
+            if user_id and str(pos.get("user_id") or "") != str(user_id):
+                return _result(success=False, position_id=position_id, user_id=user_id,
+                               error="position_owner_mismatch")
+            if symbol and _symbol_identity(pos.get("symbol")) != _symbol_identity(symbol):
+                return _result(success=False, position_id=position_id, symbol=_sym(symbol),
+                               user_id=user_id, error="position_symbol_mismatch")
+            if order_id:
+                # The canonical ledger is account+broker scoped; no different
+                # position may reuse the same confirmed closing-order identity.
+                duplicate = cur.execute(
+                    """SELECT position_id FROM trade_ledger
+                       WHERE action='CLOSE' AND user_id=? AND order_id=? AND notes LIKE ? LIMIT 1""",
+                    (str(pos.get("user_id") or ""),
+                     str(order_id), f"%; broker={str(broker).strip().lower()}; %"),
+                ).fetchone()
+                if duplicate:
+                    return _result(success=False, position_id=position_id,
+                                   user_id=user_id, error="confirmed_order_already_booked")
+            pnl = _calculate(pos, raw_price, raw_fee)
             pnl.update(exit_reason=exit_reason, order_id=order_id, broker=broker)
             exit_side = "SELL" if _side(pos.get("side")) in {"long", "buy"} else "BUY"
             cur.execute(
@@ -181,7 +214,7 @@ def _close_and_record(
             pnl["ledger_exit_id"] = int(cur.lastrowid or 0)
             cur.execute(
                 """
-                INSERT OR REPLACE INTO completed_trades
+                INSERT INTO completed_trades
                 (position_id, user_id, symbol, side, entry_price, exit_price, quantity, size_usd,
                  entry_fee, exit_fee, total_fees, gross_profit, net_profit, profit_pct,
                  entry_time, exit_time, duration_seconds, exit_reason, notes)
