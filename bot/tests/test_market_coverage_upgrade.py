@@ -233,19 +233,21 @@ def test_coinbase_catalog_keeps_long_tickers_and_excludes_restricted_products(mo
 
 
 def test_kraken_catalog_excludes_offline_and_exact_quote_mismatches(monkeypatch):
-    import pandas as pd
     from bot import broker_manager
     from bot.broker_manager import KrakenBroker
 
     broker = object.__new__(KrakenBroker)
-    broker.kraken_api = SimpleNamespace(get_tradable_asset_pairs=lambda: pd.DataFrame([
+    # Exercise the adapter's row protocol without a heavyweight test dependency.
+    rows = [
         {"wsname": "XBT/USD", "status": "online"},
         {"wsname": "ETH/USDT", "status": "online"},
         {"wsname": "DOGE/USDC", "status": "online"},
         {"wsname": "BAD/USD", "status": "cancel_only"},
         {"wsname": "BAD2/USD1", "status": "online"},
         {"wsname": "BAD3/EUR", "status": "online"},
-    ]))
+    ]
+    catalog = SimpleNamespace(iterrows=lambda: iter(enumerate(rows)))
+    broker.kraken_api = SimpleNamespace(get_tradable_asset_pairs=lambda: catalog)
     broker._initialize_kraken_market_data = lambda: None
     monkeypatch.setattr(broker_manager, "get_kraken_symbol_mapper", None)
     assert set(broker.get_all_products()) == {"BTC-USD", "ETH-USDT", "DOGE-USDC"}

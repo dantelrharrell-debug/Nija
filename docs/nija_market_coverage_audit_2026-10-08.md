@@ -29,6 +29,7 @@ entry signals, fills or profit. Its existing implementation is preserved.
 | New borrow status could conflict with deprecated easy-to-borrow flags | Current status wins; unavailable/unknown status fails closed | HTB plus stale easy flag cannot authorize a short |
 | Alpaca adapter exposed no current asset metadata to the profitability gate | Add read-only asset/account metadata interface with eligibility checks | Require finite equity ≥ $2,000, explicit short permission and an active, unblocked account |
 | HTB locate metadata was accepted as proof | Keep HTB blocked until authenticated locate readback, expiration, quantity and consumption are implemented | A signal's locate flag/id is no longer sufficient |
+| Public quote observer failed with FileNotFoundError in production | Include its script in the Docker context allowlist; compile and require its presence during the image build | Production log at 23:28:10 UTC exposed the missing file; runtime verification requires deployment |
 | Canonical fee diagnostics lost a compatibility export | Restore `_patch_exchange_capabilities` alias to the existing core implementation | Existing fee/capability regression now passes |
 
 Telemetry is per process and broker instance. Restart/reconnection begins a new
@@ -89,7 +90,10 @@ Official broker documentation and primary research checked October 8, 2026:
 
 ## Validation
 
-75 targeted pytest tests pass without credentials or live orders. All changed
+75 targeted pytest tests pass without credentials or live orders. The CI unit
+group also passes locally (91 passed, one expected failure). The initial isolated
+CI run exposed a pandas dependency in the new catalog fixture; the fixture now
+uses the adapter's iterrows/get protocol without pandas. All changed
 Python files pass syntax compilation. Local verification uses Python 3.12; the
 production Python 3.11 matrix remains a CI requirement. Secret scanning finds no
 new findings (three unchanged baseline keyword findings in broker_manager.py).
