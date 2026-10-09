@@ -317,3 +317,50 @@ def test_v366_registered_in_canonical_profitability_chain():
     source = importlib.import_module("inspect").getsource(chain.install_import_hook)
     assert "bot.runtime_kraken_margin_canonical_coverage_v366_patch" in source
     assert "NIJA_RUNTIME_KRAKEN_MARGIN_CANONICAL_COVERAGE_V366_READY" in source
+
+
+def test_failed_force_read_revokes_success_cache_for_same_account(monkeypatch):
+    monkeypatch.setenv("NIJA_KRAKEN_MARGIN_OPENPOSITIONS_TTL_S", "45")
+    state = {"failed": False, "calls": 0}
+
+    def maybe_read(_number):
+        state["calls"] += 1
+        if state["failed"]:
+            raise RuntimeError("EAPI:Rate limit exceeded")
+        return _payload({"TX-1": ETH_ROW})
+
+    broker = Broker(maybe_read)
+    ok, rows, source = v366.fetch_margin_positions(
+        broker, account="user:customer:kraken",
+    )
+    assert ok and rows and source == "ok"
+    assert state["calls"] == 1
+    ok, rows, source = v366.fetch_margin_positions(
+        broker, account="user:customer:kraken",
+    )
+    assert ok and source == "cached"
+    assert state["calls"] == 1
+    state["failed"] = True
+    broker.error = RuntimeError("EAPI:Rate limit exceeded")
+    ok, rows, _ = v366.fetch_margin_positions(
+        broker, account="user:customer:kraken", force=True,
+    )
+    assert ok is False and rows == {}
+    broker.error = None
+    ok, rows, _ = v366.fetch_margin_positions(
+        broker, account="user:customer:kraken",
+    )
+    assert ok is False and rows == {}
+    assert state["calls"] == 2
+
+
+def test_failed_account_cache_invalidation_does_not_affect_other_account(monkeypatch):
+    monkeypatch.setenv("NIJA_KRAKEN_MARGIN_OPENPOSITIONS_TTL_S", "45")
+    platform = Broker(_payload({"TX-1": ETH_ROW}))
+    user = Broker(_payload({"TX-9": ETH_ROW}))
+    assert v366.fetch_margin_positions(platform, account="platform:kraken")[0] is True
+    assert v366.fetch_margin_positions(user, account="user:u1:kraken")[0] is True
+    user.error = RuntimeError("EAPI:Permission denied")
+    assert v366.fetch_margin_positions(user, account="user:u1:kraken", force=True)[0] is False
+    assert v366.fetch_margin_positions(platform, account="platform:kraken")[2] == "cached"
+
