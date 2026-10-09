@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from render_lead_intake import record_lead
-from render_outreach_autodial import enqueue_candidate
+from render_outreach_autodial import _VALID_US_JURISDICTIONS, enqueue_candidate
 from render_outreach_routes import _E164_RE, _send_json, _service_authorized
 from render_outreach_store import is_suppressed, set_suppression
 
@@ -319,6 +319,33 @@ def _evidence(contact: dict[str, Any], phone_meta: dict[str, Any]) -> dict[str, 
         "provider_dnc_status": provider_dnc,
     }
 
+def _jurisdiction_evidence(contact: dict[str, Any]) -> dict[str, Any]:
+    """Only explicit, reviewed Apollo custom fields can authorize a jurisdiction.
+
+    Company headquarters, timezone, and telephone area code are NOT reliable
+    evidence of the recipient's calling jurisdiction or marketing permission.
+    The weekend signature must be issued separately by NIJA compliance.
+    """
+    raw = str(_custom_field(contact, "NIJA_APOLLO_RECIPIENT_JURISDICTION_FIELD_ID") or "").strip().upper()
+    state = raw if raw in _VALID_US_JURISDICTIONS else ""
+    return {
+        "recipient_jurisdiction": state,
+        "approved": _bool(_custom_field(contact, "NIJA_APOLLO_WEEKEND_APPROVED_FIELD_ID")),
+        "clearance_id": str(
+            _custom_field(contact, "NIJA_APOLLO_WEEKEND_CLEARANCE_ID_FIELD_ID") or ""
+        ).strip(),
+        "cleared_local_date": str(
+            _custom_field(contact, "NIJA_APOLLO_WEEKEND_LOCAL_DATE_FIELD_ID") or ""
+        ).strip(),
+        "checked_at": str(
+            _custom_field(contact, "NIJA_APOLLO_WEEKEND_CHECKED_AT_FIELD_ID") or ""
+        ).strip(),
+        "signature": str(
+            _custom_field(contact, "NIJA_APOLLO_WEEKEND_SIGNATURE_FIELD_ID") or ""
+        ).strip(),
+    }
+
+
 def _dynamic_variables(contact: dict[str, Any]) -> list[dict[str, str]]:
     pairs = (
         ("first_name", contact.get("first_name")),
@@ -351,6 +378,9 @@ def _qualification_reason(payload: dict[str, Any]) -> str:
         return "suppressed"
     if not _bool(payload.get("campaign_enabled")):
         return "campaign_not_enabled"
+    weekend = payload.get("weekend_evidence") or {}
+    if str(weekend.get("recipient_jurisdiction") or "") not in _VALID_US_JURISDICTIONS:
+        return "recipient_jurisdiction_required"
     return "call_ready"
 
 
@@ -407,6 +437,7 @@ def _contact_payload(contact: dict[str, Any]) -> tuple[Optional[dict[str, Any]],
         or "NIJA Apollo Outbound",
         "call_stage": "initial",
         "contact_timezone": timezone_name,
+        "weekend_evidence": _jurisdiction_evidence(contact),
         "dynamic_variables": _dynamic_variables(contact),
         "test_mode": False,
         **evidence,
@@ -433,6 +464,7 @@ def run_sync() -> dict[str, int]:
         "queued_or_refreshed": 0,
         "missing_phone": 0,
         "missing_timezone": 0,
+        "recipient_jurisdiction_required": 0,
         "missing_contact_id": 0,
         "already_submitted": 0,
         "errors": 0,
@@ -539,6 +571,7 @@ def _worker() -> None:
                 f"dnc_pending={counts.get('dnc_pending', 0)} "
                 f"suppressed={counts.get('suppressed', 0)} "
                 f"missing_phone={counts.get('missing_phone', 0)} "
+                f"jurisdiction_required={counts.get('recipient_jurisdiction_required', 0)} "
                 f"errors={counts.get('errors', 0) + counts.get('website_lead_errors', 0)}",
                 flush=True,
             )
