@@ -160,6 +160,28 @@ def _matching_positions(ledger: Any, symbol: str, side: str, user_hint: str) -> 
     return out
 
 
+def _audit_deferred_close(
+    ledger: Any, result: Mapping[str, Any], *, symbol: str, side: str,
+    fill_price: float, filled_usd: float, exit_fee: float, reason: str,
+) -> None:
+    """Audit only a canonical verified final fill with no safe ledger match.
+
+    Failure to persist an audit record cannot promote realized P&L or change
+    execution readiness. The queue is account-scoped and never guesses entry.
+    """
+    try:
+        from bot.pending_kraken_close_audit_v434 import record_unmatched_confirmed_close
+        record_unmatched_confirmed_close(
+            ledger, result=result, symbol=symbol, side=side,
+            price=fill_price, filled_usd=filled_usd, fee=exit_fee, reason=reason,
+        )
+    except Exception as exc:
+        LOGGER.warning(
+            "REALIZED_PNL_V434_AUDIT_DEFERRED exception_type=%s pnl_not_booked=true",
+            type(exc).__name__,
+        )
+
+
 def _reconcile_confirmed_fill(
     result: Mapping[str, Any], *, symbol: str, side: str, fill_price: float, filled_usd: float
 ) -> None:
@@ -200,6 +222,11 @@ def _reconcile_confirmed_fill(
                 "user_hint=%s realized_net_pnl_not_booked=true fill_confirmed=true",
                 MARKER, oid, symbol, len(candidates), user_hint or "none",
             )
+            _audit_deferred_close(
+                ledger, result, symbol=symbol, side=side, fill_price=fill_price,
+                filled_usd=filled_usd, exit_fee=exit_fee,
+                reason="missing_position" if not candidates else "ambiguous_position",
+            )
             return
 
         pos = candidates[0]
@@ -221,6 +248,11 @@ def _reconcile_confirmed_fill(
                 "REALIZED_PNL_V412_PENDING marker=%s order_id=%s symbol=%s reason=partial_or_quantity_mismatch "
                 "position_qty=%.12f fill_qty=%.12f tolerance=%.12f realized_net_pnl_not_booked=true",
                 MARKER, oid, symbol, position_qty, fill_qty, tolerance,
+            )
+            _audit_deferred_close(
+                ledger, result, symbol=symbol, side=side, fill_price=fill_price,
+                filled_usd=filled_usd, exit_fee=exit_fee,
+                reason="partial_or_quantity_mismatch",
             )
             return
 
@@ -244,6 +276,19 @@ def _reconcile_confirmed_fill(
                 MARKER, oid, symbol, str(pnl.get("error") or "unknown"),
             )
             return
+        # A previous pending audit record may be resolved only after the
+        # canonical transaction and completed trade are both present.
+        try:
+            from bot.pending_kraken_close_audit_v434 import mark_reconciled
+            mark_reconciled(
+                ledger, result=result, order_id=oid,
+                position_id=str(pnl.get("position_id") or ""),
+            )
+        except Exception as audit_exc:
+            LOGGER.warning(
+                "REALIZED_PNL_V434_PENDING_CLOSE_RESOLVE_DEFERRED exception_type=%s",
+                type(audit_exc).__name__,
+            )
         # Read the canonical ledger directly; never feed speculative ACKs or a
         # shared cross-account singleton into adaptive position sizing.
         try:
