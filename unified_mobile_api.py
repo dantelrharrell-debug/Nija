@@ -321,23 +321,15 @@ def get_trading_status():
     if not user_id:
         return jsonify({'error': 'Authentication required'}), 401
     
+    supplied = request.args.get('user_id')
+    if supplied is not None and supplied != user_id:
+        return jsonify({'error': "Cannot access another user's trading status"}), 403
     try:
-        # TODO: Fetch actual trading status from database
-        
-        return jsonify({
-            'success': True,
-            'user_id': user_id,
-            'trading_enabled': True,
-            'active_positions': 0,
-            'today_trades': 0,
-            'profit_today_usd': 0.0,
-            'connected_brokers': [],
-            'timestamp': datetime.utcnow().isoformat()
-        })
-    
-    except Exception as e:
-        logger.error(f"Error fetching trading status for user {user_id}: {e}")
-        return jsonify({'error': 'Failed to fetch trading status', 'details': str(e)}), 500
+        from user_trade_reporting import get_user_access_status
+        return jsonify({'success': True, **get_user_access_status(user_id)})
+    except Exception as exc:
+        logger.error("Mobile account readiness unavailable error=%s", type(exc).__name__)
+        return jsonify({'error': 'Account readiness unavailable', 'trading_enabled': False}), 503
 
 
 # ========================================
