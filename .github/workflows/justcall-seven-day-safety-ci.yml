@@ -36,7 +36,7 @@ jobs:
         with:
           python-version: '3.11'
       - name: Install isolated test dependencies
-        run: python -m pip install --disable-pip-version-check flask pytest
+        run: python -m pip install --disable-pip-version-check flask pytest requests
       - name: Syntax validation
         run: python -m py_compile render_outreach_autodial.py render_outreach_routes.py render_apollo_feeder.py justcall_api.py
       - name: Check weekend jurisdiction signatures, legacy bypass and Apollo screening
