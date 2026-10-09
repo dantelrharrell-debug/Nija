@@ -127,6 +127,20 @@ def _closed(ledger, position, *, symbol="BTC-USD", broker="kraken", user="platfo
             (user, symbol, "ORDER-" + position, position,
              f"exit_reason={reason}; broker={broker}; net_pnl={gross - fees}"),
         )
+        if broker == "kraken" and reason == "canonical_confirmed_fill":
+            account = "platform:kraken" if user == "platform" else f"user:{user}:kraken"
+            entry_id = "ENTRY-" + position
+            conn.execute(
+                """INSERT INTO trade_ledger
+                (timestamp, user_id, symbol, side, action, price, quantity,
+                 size_usd, fee, order_id, position_id, notes)
+                VALUES ('2026-10-08', ?, ?, ?, 'OPEN', 100, 1, 100, ?, ?, ?, ?)""",
+                (
+                    user, symbol, "BUY" if direction == "LONG" else "SELL",
+                    fees / 2, entry_id, position,
+                    f"authenticated_kraken_queryorders_entry; order_id={entry_id}; account={account}",
+                ),
+            )
 
 
 def test_net_winners_losers_breakeven_and_owner_isolation(ledger):
@@ -152,6 +166,7 @@ def test_late_fee_updates_and_duplicate_close_rows_do_not_inflate_results(ledger
     _closed(ledger, "a", gross=2, fees=.2)
     with ledger._get_connection() as conn:
         conn.execute("UPDATE completed_trades SET total_fees=3, entry_fee=1, exit_fee=2, net_profit=-1")
+        conn.execute("UPDATE trade_ledger SET fee=1 WHERE action='OPEN' AND position_id='a'")
         conn.execute("""INSERT INTO trade_ledger
             (timestamp,user_id,symbol,side,action,price,quantity,size_usd,order_id,position_id,notes)
             SELECT timestamp,user_id,symbol,side,action,price,quantity,size_usd,order_id,position_id,notes
@@ -169,6 +184,21 @@ def test_fee_inconsistent_rows_are_excluded(ledger):
     report = get_confirmed_performance_report(ledger, broker="kraken", user_id="platform")
     assert report["overall"]["trades"] == 0
     assert report["excluded_invalid_rows"] == 1
+
+
+def test_unverified_kraken_close_cannot_inflate_winner_loser_totals(ledger):
+    _closed(ledger, "real", gross=5, fees=0.2)
+    _closed(ledger, "unproven", gross=999, fees=0.2)
+    with ledger._get_connection() as conn:
+        conn.execute(
+            "DELETE FROM trade_ledger WHERE position_id='unproven' AND action='OPEN'"
+        )
+    report = get_confirmed_performance_report(
+        ledger, broker="kraken", user_id="platform",
+    )
+    assert report["overall"]["trades"] == 1
+    assert report["overall"]["net_pnl_usd"] == pytest.approx(4.8)
+    assert report["excluded_kraken_closes_without_authenticated_open"] == 1
 
 
 def test_unscoped_report_rejected(ledger):
