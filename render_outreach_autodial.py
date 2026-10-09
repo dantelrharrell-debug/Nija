@@ -696,7 +696,7 @@ def _eligibility(row: sqlite3.Row, now_utc: datetime) -> tuple[list[str], dateti
     if not weekend_allowed:
         blockers.append(weekend_reason)
         retry_at = max(retry_at, now_utc + timedelta(minutes=15))
-    if _bool(os.getenv("NIJA_JUSTCALL_REQUIRE_HUMAN_HANDOFF", "0")) and not _bool(
+    if _bool(os.getenv("NIJA_JUSTCALL_REQUIRE_HUMAN_HANDOFF", "1")) and not _bool(
         os.getenv("NIJA_JUSTCALL_HUMAN_HANDOFF_VERIFIED", "0")
     ):
         blockers.append("human_handoff_not_verified")
@@ -942,7 +942,7 @@ def _queue_status() -> dict[str, Any]:
         "weekdays_only": _weekdays_only(),
         "seven_day_mode": not _weekdays_only(),
         "weekend_recipient_clearance_required": True,
-        "human_handoff_required": _bool(os.getenv("NIJA_JUSTCALL_REQUIRE_HUMAN_HANDOFF", "0")),
+        "human_handoff_required": _bool(os.getenv("NIJA_JUSTCALL_REQUIRE_HUMAN_HANDOFF", "1")),
         "human_handoff_verified": _bool(os.getenv("NIJA_JUSTCALL_HUMAN_HANDOFF_VERIFIED", "0")),
         "counts": counts,
         "blockers": {str(row["blocker"]): int(row["count"] or 0) for row in blocker_rows},
