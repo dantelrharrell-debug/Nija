@@ -168,7 +168,9 @@ def mark_reconciled(
             conn.execute(_SCHEMA)
             # The canonical CLOSE transaction and completed trade must exist.
             recorded = conn.execute(
-                """SELECT 1 FROM trade_ledger l
+                """SELECT l.symbol, l.side, l.price, l.size_usd, l.fee,
+                          c.exit_price, c.exit_fee
+                   FROM trade_ledger l
                    INNER JOIN completed_trades c
                      ON c.position_id = l.position_id AND c.user_id = l.user_id
                    WHERE l.action = 'CLOSE' AND l.order_id = ?
@@ -177,6 +179,26 @@ def mark_reconciled(
                 (oid, pid, user_id),
             ).fetchone()
             if not recorded:
+                return False
+            pending = conn.execute(
+                """SELECT symbol, side, fill_price, filled_usd, exit_fee
+                   FROM pending_kraken_closes
+                   WHERE broker='kraken' AND account_scope=? AND order_id=?
+                     AND user_id=? AND state='pending'""",
+                (scope, oid, user_id),
+            ).fetchone()
+            if not pending:
+                return False
+            if not (
+                str(recorded["side"]).upper() == (
+                    "SELL" if pending["side"] == "sell" else "BUY"
+                )
+                and math.isclose(float(recorded["price"]), float(pending["fill_price"]), rel_tol=1e-8)
+                and math.isclose(float(recorded["exit_price"]), float(pending["fill_price"]), rel_tol=1e-8)
+                and math.isclose(float(recorded["size_usd"]), float(pending["filled_usd"]), rel_tol=1e-8)
+                and math.isclose(float(recorded["fee"]), float(pending["exit_fee"]), rel_tol=1e-8, abs_tol=1e-8)
+                and math.isclose(float(recorded["exit_fee"]), float(pending["exit_fee"]), rel_tol=1e-8, abs_tol=1e-8)
+            ):
                 return False
             changed = conn.execute(
                 """UPDATE pending_kraken_closes
