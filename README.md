@@ -1,14 +1,31 @@
 # NIJA AI Trading LLC — Trading Platform Architecture & Recovery Guide
 
 **Project:** `Nija_Trading_Bot`  
-**Production snapshot:** October 8, 2026, 04:09 UTC (October 7, 9:09 PM Pacific)  
-**Latest verified live Render deployment:** `dep-db3h61mk1f9s73a316u0`  
-**Deployed commit:** `5d787aa44a46a53fcce659be3fbb10aa635a0f27` (PR #2959 — preserve writer singleton across import aliases)  
-**Observation status:** 24-hour observation **started, not completed**; subject to uninterrupted safety/readiness checks  
+**Latest production recheck:** October 9, 2026, 00:19 UTC (October 8, 5:19 PM Pacific)  
+**Latest verified live Render deployment:** `dep-db431ac9v7es73a861rg`  
+**Deployed commit:** `2da43f35ecf68440197908b2fab18dbb63173b0e` (PR #2975, observer packaging repair)  
+**Trading readiness:** **BLOCKED** — latest explicit EXECUTION_ALLOWED: FALSE; protective coverage reported Kraken disconnected / protective-exit authority not ready.  
+**24-hour observation:** **NOT ACTIVE**; earlier October 7 observation attempt was interrupted by successive deployments and readiness regressions.  
 **Broker-cell implementation head:** `472eeaa2c9d6f518bad029fbd550fa6a84505eb2`  
 **Broker-cell architecture merge:** `#2784 — Broker-cell isolation: independent strategy/risk/user runtimes`
 
-## Production readiness and 24-hour observation — October 7–8, 2026
+## Current production and worldwide research — October 8, 2026
+
+The public-market observer independently discovers and rotates through spot quotes from Kraken, Coinbase and OKX. At October 9, 00:18 UTC its catalogs included **714 Kraken**, **408 Coinbase**, and **702 OKX** spot quote listings (1,824 venue-specific listings total, not distinct assets). Verified quote counts over its first four cycles reached 80 Kraken, 80 Coinbase and 79 OKX; this is quote coverage, **not full strategy evaluation**. See the /market-observerz endpoint.
+
+NIJA's confirmed-close report exists at bot/confirmed_performance_report.py and can show fee-adjusted winners and losers per broker and account, but strategy attribution is not yet authenticated, and unmatched fills are excluded.
+
+**New research branch v432:** bot/research_edge_ranking_v432.py provides a conservative, shadow-only net-edge/volatility ranking across *declared, configured* crypto spot and Alpaca U.S. equity research capabilities. It requires current data, direction/borrow eligibility, costs and holdout evidence, rejects unsupported global markets and never submits orders, sizes positions or authorizes trading. It is **not yet part of the deployed trading loop**. Detailed architecture and rollout criteria: docs/NIJA_GLOBAL_RESEARCH_V432.md.
+
+Alpaca catalog (connected user tool, not proof of Render activation): 14,392 active U.S.-equity records, of which 13,506 were marked tradable and 5,383 marked shortable. Actual market-data entitlements, options permissions, short borrow, account capital and broker-local protection remain to be verified.
+
+The latest Render logs show the live engine held by TRADING_ENGINE_START_GATE_V427_HOLD; execution permission FALSE; and a protective-exit audit reporting the Kraken platform disconnected. Do not clear safety gates to enable scanning. All additional markets, instruments and strategies require broker authorization, licensed feeds, validated risk and out-of-sample results before live deployment. Broader discovery alone cannot guarantee trading profits.
+
+**The following 2026-10-07 readiness/observation snapshot is preserved for historical incident context only; its LIVE_ACTIVE readings and observation clock are no longer current.**
+
+---
+
+## Historical readiness and observation snapshot — October 7–8, 2026
 
 This is a **point-in-time production observation**, not a permanent guarantee of execution readiness or protected-entry capability. The September 26 notes below remain historical; do not treat their dated CI/deployment blockers as current production results.
 
