@@ -194,7 +194,7 @@ def test_us_equity_short_stale_borrow_or_market_closed_blocks():
         venue="alpaca", asset_class="us_equity",
         symbol="NVDA", account_scope="platform:alpaca",
         direction="SHORT", account_shorting_enabled=True,
-        borrow_status="easy_to_borrow",
+        shortable=True, borrow_status="easy_to_borrow",
         borrow_verified_epoch_s=800.0,
         market_session_open=False,
     )
