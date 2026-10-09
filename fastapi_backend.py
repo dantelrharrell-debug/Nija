@@ -34,6 +34,7 @@ import time
 import stripe
 from importlib import import_module
 
+from user_trade_reporting import TradeHistoryQueryError
 from auth import get_api_key_manager, get_user_manager
 from auth.user_database import get_user_database
 from auth.two_factor import get_two_factor_auth
@@ -843,7 +844,7 @@ def get_confirmed_trade_history(
             limit=request.query_params.get("limit", "50"), offset=request.query_params.get("offset", "0"),
             timezone_name=request.query_params.get("timezone", "UTC"), broker=request.query_params.get("broker"),
         )
-    except ValueError:
+    except TradeHistoryQueryError:
         raise HTTPException(status_code=400, detail="Invalid trade-history query") from None
     except Exception as exc:
         logger.error("Confirmed history unavailable error=%s", type(exc).__name__)

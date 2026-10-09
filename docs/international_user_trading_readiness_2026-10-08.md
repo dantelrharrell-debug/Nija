@@ -124,3 +124,7 @@ and three JavaScript tests passed locally. Focused CodeQL SQL/command-injection
 queries report zero alerts; the exception-exposure query reports existing alerts
 in untouched handlers and none on changed lines. The two reviewed history
 exception exposures are removed. This is not a full application security audit.
+
+Client query errors use a dedicated TradeHistoryQueryError. Only those invalid
+inputs return 400; an internal ledger/store ValueError returns sanitized 503.
+Regression tests cover both classes across Flask, gateway and FastAPI.

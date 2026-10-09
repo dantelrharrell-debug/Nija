@@ -15,6 +15,10 @@ BROKERS = ("kraken", "coinbase", "okx", "alpaca")
 _BROKER_FIELD = re.compile(r"(?:^|;\s*)broker=([a-z0-9_]+)(?=;|$)")
 
 
+class TradeHistoryQueryError(ValueError):
+    """A customer supplied an invalid history query, distinct from store errors."""
+
+
 def _timestamp(value: Any, zone: ZoneInfo) -> tuple[str, str]:
     stamp = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
     if stamp.tzinfo is None:
@@ -35,18 +39,21 @@ def get_user_confirmed_history(
     """
     user_id = str(user_id or "").strip()
     if not user_id or user_id == "platform":
-        raise ValueError("customer identity required")
+        raise TradeHistoryQueryError("customer identity required")
     if isinstance(limit, bool) or isinstance(offset, bool):
-        raise ValueError("invalid pagination")
-    limit, offset = int(limit), int(offset)
+        raise TradeHistoryQueryError("invalid pagination")
+    try:
+        limit, offset = int(limit), int(offset)
+    except (ValueError, TypeError, OverflowError):
+        raise TradeHistoryQueryError("invalid pagination") from None
     if not 1 <= limit <= 200 or not 0 <= offset <= 100000:
-        raise ValueError("limit must be 1..200 and offset 0..100000")
+        raise TradeHistoryQueryError("limit must be 1..200 and offset 0..100000")
     if broker is not None and broker not in BROKERS:
-        raise ValueError("unsupported broker")
+        raise TradeHistoryQueryError("unsupported broker")
     try:
         zone = ZoneInfo(timezone_name)
     except (ZoneInfoNotFoundError, ValueError, TypeError) as exc:
-        raise ValueError("invalid IANA timezone") from exc
+        raise TradeHistoryQueryError("invalid IANA timezone") from exc
     with ledger._get_connection() as conn:
         rows = conn.execute(
             """SELECT c.* FROM completed_trades c
