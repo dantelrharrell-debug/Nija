@@ -375,6 +375,19 @@ def _kill_switch_active() -> bool:
 
 
 def _concrete_activation_gates_pass(tsm_module: Any) -> tuple[bool, str]:
+    # The bridge can run before post-import execution wrappers converge. An
+    # accepted capital snapshot must never grant LIVE_ACTIVE without a fresh
+    # genuine order/fill proof, even if the other concrete gates pass.
+    try:
+        preactivation = importlib.import_module("preactivation_readiness_convergence_v16_patch")
+        probe = getattr(preactivation, "_genuine_execution_marker_proof", None)
+        if not callable(probe):
+            return False, "execution_proof_guard_unavailable"
+        proof_ok, proof_detail = probe()
+        if not proof_ok:
+            return False, "execution_proof:" + str(proof_detail)
+    except Exception as exc:
+        return False, f"execution_proof_guard_failed:{type(exc).__name__}"
     if _kill_switch_active():
         return False, "kill_switch_active"
     if _truthy("DRY_RUN_MODE") or _truthy("PAPER_MODE"):
