@@ -161,6 +161,8 @@ function handleLogout() {
     authToken = null;
     userProfile = null;
     localStorage.removeItem('nija_token');
+    historyRequestGeneration += 1;
+    document.getElementById('trades-container').replaceChildren();
 
     // Show auth screen
     showAuthScreen();
@@ -191,6 +193,7 @@ async function loadDashboard() {
 
         // Load trading status
         await loadTradingStatus();
+        await loadTradeHistory();
 
         // Show dashboard
         showDashboardScreen();
@@ -220,25 +223,64 @@ async function loadStats() {
             pnlEl.style.color = '#ef4444';
         }
     } catch (error) {
+        for (const id of ['stat-pnl', 'stat-winrate', 'stat-trades', 'stat-positions']) {
+            document.getElementById(id).textContent = 'Unavailable';
+        }
         console.error('Failed to load stats:', error);
     }
 }
 
-async function loadTradingStatus() {
+let historyRequestGeneration = 0;
+
+async function loadTradeHistory(offset = 0) {
+    const container = document.getElementById('trades-container');
+    const token = authToken;
+    const generation = ++historyRequestGeneration;
+    if (!token || !container) return;
+    const zone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+    const query = new URLSearchParams({limit: '50', offset: String(offset), timezone: zone});
+    const message = text => {
+        const paragraph = document.createElement('p');
+        paragraph.textContent = text;
+        container.appendChild(paragraph);
+    };
     try {
-        const status = await apiRequest('/api/status');
-
-        document.getElementById('status-text').textContent =
-            status.trading_enabled ? 'Trading Active' : 'Trading Paused';
-        document.getElementById('engine-status').textContent = status.engine_status;
-        document.getElementById('last-trade').textContent =
-            status.last_activity ? new Date(status.last_activity).toLocaleString() : 'Never';
-
-        // Update status dot color
-        const dotEl = document.getElementById('status-dot');
-        dotEl.style.background = status.trading_enabled ? '#10b981' : '#f59e0b';
+        const report = await apiRequest(`/api/trading/history?${query}`);
+        if (token !== authToken || generation !== historyRequestGeneration) return;
+        container.replaceChildren();
+        if (!Array.isArray(report.trades)) throw new Error('Invalid history response');
+        message(`Confirmed closed trades • ${report.timezone}. Prices use the quoted currency; net result currency is unverified.`);
+        if (!report.trades.length) message('No verified closed trades on this page.');
+        for (const trade of report.trades) {
+            const row = document.createElement('article');
+            row.className = 'trade-item';
+            const heading = document.createElement('h4');
+            heading.textContent = `${trade.symbol} • ${trade.broker} • ${trade.direction}`;
+            row.appendChild(heading);
+            const details = document.createElement('p');
+            const number = value => new Intl.NumberFormat(undefined, {maximumFractionDigits: 8}).format(value);
+            details.textContent = `Quantity ${number(trade.quantity)} • Entry ${number(trade.entry_price)} → Exit ${number(trade.exit_price)} ${trade.price_currency || '(currency unverified)'} • Recorded net ${number(trade.net_profit)} (unit unverified)`;
+            row.appendChild(details);
+            const time = document.createElement('p');
+            time.textContent = `Closed ${trade.exit_time_local} • UTC ${trade.exit_time_utc}`;
+            row.appendChild(time);
+            const proof = document.createElement('p');
+            proof.textContent = `Close orders: ${trade.close_order_ids.join(', ')}`;
+            row.appendChild(proof);
+            container.appendChild(row);
+        }
+        if (report.excluded_unverified_rows) message(`${report.excluded_unverified_rows} records excluded because their evidence could not be verified.`);
+        if (offset || report.has_more) {
+            const button = document.createElement('button');
+            button.className = 'btn btn-primary';
+            button.textContent = report.has_more ? 'Older trades' : 'Latest trades';
+            button.addEventListener('click', () => loadTradeHistory(report.has_more ? report.next_offset : 0));
+            container.appendChild(button);
+        }
     } catch (error) {
-        console.error('Failed to load trading status:', error);
+        if (token !== authToken || generation !== historyRequestGeneration) return;
+        container.replaceChildren();
+        message('Trade history unavailable. Please retry; this does not mean no trades were made.');
     }
 }
 
@@ -400,6 +442,7 @@ setInterval(() => {
     if (authToken && !document.getElementById('dashboard-screen').classList.contains('hidden')) {
         loadStats();
         loadTradingStatus();
+        loadTradeHistory();
     }
 }, 30000);
 
@@ -440,7 +483,7 @@ async function handleTradingToggle() {
 // Enhanced loadTradingStatus to sync toggle state
 async function loadTradingStatus() {
     try {
-        const status = await apiRequest('/api/status');
+        const status = await apiRequest('/api/trading/status');
 
         // Update toggle
         const toggle = document.getElementById('trading-toggle');
@@ -449,10 +492,10 @@ async function loadTradingStatus() {
         }
 
         document.getElementById('status-text').textContent =
-            status.trading_enabled ? 'Trading ON' : 'Trading OFF';
+            status.trading_enabled ? 'Trading ON' : 'Trading readiness unverified';
         document.getElementById('engine-status').textContent = status.engine_status;
         document.getElementById('last-trade').textContent =
-            status.last_activity ? new Date(status.last_activity).toLocaleString() : 'Never';
+            status.last_activity ? new Date(status.last_activity).toLocaleString() : 'Unverified';
 
         // Update status dot color
         const dotEl = document.getElementById('status-dot');

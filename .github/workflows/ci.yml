@@ -80,6 +80,14 @@ jobs:
           fi
           tail -n 80 /tmp/nija-unittest-baseline.log
 
+      - name: Run private international trade reporting regressions
+        env:
+          NIJA_DEFER_RUNTIME_SITE_HOOKS: "1"
+        run: |
+          python -m unittest discover -s tests -p test_international_user_trade_reporting.py -v
+          node --check frontend/static/js/app.js
+          node --test tests/international_trade_display.test.cjs
+
       - name: Run mandatory fail-closed safety regressions
         env:
           GH_TOKEN: ""
