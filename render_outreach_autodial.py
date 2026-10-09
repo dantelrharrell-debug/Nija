@@ -130,7 +130,8 @@ def _ensure_schema(connection: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS outreach_autodial_daily_quota (
             quota_date TEXT PRIMARY KEY,
             used_count INTEGER NOT NULL DEFAULT 0,
-            updated_at TEXT NOT NULL
+            updated_at TEXT NOT NULL,
+            last_reserved_at TEXT NOT NULL DEFAULT ''
         );
         """
     )
@@ -143,6 +144,15 @@ def _ensure_schema(connection: sqlite3.Connection) -> None:
         connection.execute(
             "ALTER TABLE outreach_autodial_queue "
             "ADD COLUMN weekend_evidence_json TEXT NOT NULL DEFAULT '{}'"
+        )
+    quota_columns = {
+        str(field["name"])
+        for field in connection.execute("PRAGMA table_info(outreach_autodial_daily_quota)")
+    }
+    if "last_reserved_at" not in quota_columns:
+        connection.execute(
+            "ALTER TABLE outreach_autodial_daily_quota "
+            "ADD COLUMN last_reserved_at TEXT NOT NULL DEFAULT ''"
         )
     connection.commit()
 
@@ -408,6 +418,15 @@ def _batch_size() -> int:
         return 10
 
 
+def _min_submission_interval_seconds() -> int:
+    # 2 minutes = at most 30 submitted calls per hour; 300/day needs about
+    # 10 recipient-local calling hours if every recipient is eligible.
+    try:
+        return max(60, min(int(os.getenv("NIJA_AUTODIAL_MIN_SUBMISSION_INTERVAL_SECONDS", "120")), 3600))
+    except ValueError:
+        return 120
+
+
 def _daily_cap() -> int:
     try:
         return max(1, min(int(os.getenv("NIJA_AUTODIAL_DAILY_CAP", "300")), 5000))
@@ -457,9 +476,17 @@ def _quota_snapshot(now_utc: datetime) -> dict[str, Any]:
     with _QUEUE_LOCK, _connect() as connection:
         _ensure_schema(connection)
         row = connection.execute(
-            "SELECT used_count FROM outreach_autodial_daily_quota WHERE quota_date=?", (key,)
+            "SELECT used_count, last_reserved_at FROM outreach_autodial_daily_quota WHERE quota_date=?", (key,)
         ).fetchone()
     used = int(row["used_count"] or 0) if row else 0
+    last_text = str(row["last_reserved_at"] or "").strip() if row else ""
+    last = _parse_iso(last_text) if last_text else None
+    if last_text and last is None:
+        pacing_ready = False
+        next_allowed = None
+    else:
+        next_allowed = last + timedelta(seconds=_min_submission_interval_seconds()) if last else now_utc
+        pacing_ready = now_utc >= next_allowed
     cap = _daily_cap()
     return {
         "date": key,
@@ -467,6 +494,9 @@ def _quota_snapshot(now_utc: datetime) -> dict[str, Any]:
         "cap": cap,
         "remaining": max(0, cap - used),
         "weekday_open": allowed_day,
+        "pacing_ready": pacing_ready,
+        "next_allowed_at": _iso(next_allowed) if next_allowed else None,
+        "min_submission_interval_seconds": _min_submission_interval_seconds(),
     }
 
 
@@ -480,19 +510,29 @@ def _reserve_quota(now_utc: datetime) -> tuple[bool, str, str]:
         _ensure_schema(connection)
         connection.execute("BEGIN IMMEDIATE")
         connection.execute(
-            "INSERT OR IGNORE INTO outreach_autodial_daily_quota(quota_date, used_count, updated_at) VALUES (?,0,?)",
+            "INSERT OR IGNORE INTO outreach_autodial_daily_quota("
+            "quota_date, used_count, updated_at, last_reserved_at) VALUES (?,0,?,'')",
             (key, now),
         )
         row = connection.execute(
-            "SELECT used_count FROM outreach_autodial_daily_quota WHERE quota_date=?", (key,)
+            "SELECT used_count, last_reserved_at FROM outreach_autodial_daily_quota WHERE quota_date=?", (key,)
         ).fetchone()
         used = int(row["used_count"] or 0) if row else 0
         if used >= cap:
             connection.commit()
             return False, key, "daily_cap_reached"
+        last_text = str(row["last_reserved_at"] or "").strip() if row else ""
+        last = _parse_iso(last_text) if last_text else None
+        if last_text and last is None:
+            connection.commit()
+            return False, key, "quota_state_invalid"
+        if last and (now_utc - last).total_seconds() < _min_submission_interval_seconds():
+            connection.commit()
+            return False, key, "pacing_interval_not_elapsed"
         connection.execute(
-            "UPDATE outreach_autodial_daily_quota SET used_count=used_count+1, updated_at=? WHERE quota_date=?",
-            (now, key),
+            "UPDATE outreach_autodial_daily_quota SET used_count=used_count+1, "
+            "last_reserved_at=?, updated_at=? WHERE quota_date=?",
+            (now, now, key),
         )
         connection.commit()
     return True, key, "ok"
@@ -502,7 +542,8 @@ def _release_quota(key: str) -> None:
     with _QUEUE_LOCK, _connect() as connection:
         _ensure_schema(connection)
         connection.execute(
-            "UPDATE outreach_autodial_daily_quota SET used_count=MAX(used_count-1,0), updated_at=? WHERE quota_date=?",
+            "UPDATE outreach_autodial_daily_quota SET used_count=MAX(used_count-1,0), "
+            "updated_at=? WHERE quota_date=?",
             (_iso(_utcnow()), key),
         )
         connection.commit()
@@ -682,6 +723,11 @@ def _eligibility(row: sqlite3.Row, now_utc: datetime) -> tuple[list[str], dateti
     elif quota["remaining"] <= 0:
         blockers.append("daily_cap_reached")
         retry_at = max(retry_at, _next_campaign_day_start(now_utc))
+    if not quota.get("pacing_ready", True):
+        blockers.append("pacing_interval_not_elapsed")
+        retry_after = _parse_iso(quota.get("next_allowed_at"))
+        if retry_after:
+            retry_at = max(retry_at, retry_after)
 
     allowed, window_retry, window_reason = _calling_window(str(row["contact_timezone"] or ""), now_utc)
     if not allowed:
@@ -782,7 +828,12 @@ def _submit_row(row: sqlite3.Row) -> bool:
 
     reserved, quota_key, quota_reason = _reserve_quota(now_utc)
     if not reserved:
-        _reschedule(int(row["id"]), quota_reason, _next_campaign_day_start(now_utc))
+        retry_at = (
+            now_utc + timedelta(seconds=_min_submission_interval_seconds())
+            if quota_reason == "pacing_interval_not_elapsed"
+            else _next_campaign_day_start(now_utc)
+        )
+        _reschedule(int(row["id"]), quota_reason, retry_at)
         return False
 
     request_payload = {
@@ -860,7 +911,8 @@ def _run_cycle() -> tuple[int, int]:
     submitted = 0
     _WORKER_LAST_CYCLE_AT = _iso(_utcnow())
     for _ in range(_batch_size()):
-        if _quota_snapshot(_utcnow())["remaining"] <= 0:
+        quota = _quota_snapshot(_utcnow())
+        if quota["remaining"] <= 0 or not quota["pacing_ready"]:
             break
         row = _claim_one(_utcnow())
         if row is None:
@@ -880,10 +932,11 @@ def _worker() -> None:
     print(
         "JUSTCALL_AUTODIAL_WORKER state=ready fail_closed=true "
         f"poll_s={_poll_seconds():.0f} batch={_batch_size()} daily_cap={_daily_cap()} "
+        f"min_submission_interval_s={_min_submission_interval_seconds()} "
         f"quota_tz={getattr(_quota_zone(), 'key', 'America/Los_Angeles')} "
         f"local_hours={_calling_hours()[0]}-{_calling_hours()[1]} "
         f"weekdays_only={str(_weekdays_only()).lower()} weekend_per_recipient_gate=true "
-        f"human_handoff_required={str(_bool(os.getenv('NIJA_JUSTCALL_REQUIRE_HUMAN_HANDOFF', '0'))).lower()} "
+        f"human_handoff_required={str(_bool(os.getenv('NIJA_JUSTCALL_REQUIRE_HUMAN_HANDOFF', '1'))).lower()} "
         f"quarantined={quarantined}",
         flush=True,
     )
