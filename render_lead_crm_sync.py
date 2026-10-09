@@ -106,7 +106,11 @@ def _deliver_batch(rows: list[dict[str, Any]], key: str) -> set[str]:
         email = str(row["email"]).strip().lower()
         if email and email not in unique:
             unique[email] = _contact(str(row["name"]), email)
-    body = json.dumps({"contacts": list(unique.values())}, separators=(",", ":")).encode("utf-8")
+    body = json.dumps({
+        "contacts": list(unique.values()),
+        "run_dedupe": True,
+        "append_label_names": ["NIJA Website Leads"],
+    }, separators=(",", ":")).encode("utf-8")
     req = urllib.request.Request(
         _APOLLO_URL,
         data=body,
