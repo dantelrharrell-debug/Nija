@@ -310,11 +310,44 @@ def enqueue_candidate(body: dict[str, Any]) -> dict[str, Any]:
                 campaign_enabled=excluded.campaign_enabled,
                 dynamic_variables_json=excluded.dynamic_variables_json,
                 ai_agent_id=excluded.ai_agent_id,
-                state=excluded.state,
-                attempts=CASE WHEN excluded.state='queued' THEN 0 ELSE outreach_autodial_queue.attempts END,
-                next_attempt_at=excluded.next_attempt_at,
+                state=CASE
+                    WHEN outreach_autodial_queue.state='review_required'
+                         AND COALESCE(outreach_autodial_queue.last_blocker,'') IN (
+                             'provider_submission_requires_review',
+                             'provider_submission_recording_requires_review'
+                         )
+                    THEN 'review_required'
+                    ELSE excluded.state
+                END,
+                attempts=CASE
+                    WHEN outreach_autodial_queue.state='review_required'
+                         AND COALESCE(outreach_autodial_queue.last_blocker,'') IN (
+                             'provider_submission_requires_review',
+                             'provider_submission_recording_requires_review'
+                         )
+                    THEN outreach_autodial_queue.attempts
+                    WHEN excluded.state='queued' THEN 0
+                    ELSE outreach_autodial_queue.attempts
+                END,
+                next_attempt_at=CASE
+                    WHEN outreach_autodial_queue.state='review_required'
+                         AND COALESCE(outreach_autodial_queue.last_blocker,'') IN (
+                             'provider_submission_requires_review',
+                             'provider_submission_recording_requires_review'
+                         )
+                    THEN outreach_autodial_queue.next_attempt_at
+                    ELSE excluded.next_attempt_at
+                END,
                 lease_until=NULL,
-                last_blocker=excluded.last_blocker,
+                last_blocker=CASE
+                    WHEN outreach_autodial_queue.state='review_required'
+                         AND COALESCE(outreach_autodial_queue.last_blocker,'') IN (
+                             'provider_submission_requires_review',
+                             'provider_submission_recording_requires_review'
+                         )
+                    THEN outreach_autodial_queue.last_blocker
+                    ELSE excluded.last_blocker
+                END,
                 updated_at=excluded.updated_at
             """,
             values,
