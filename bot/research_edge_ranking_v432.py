@@ -123,6 +123,11 @@ def evaluate_shadow_candidate(
             reasons.append("short_not_supported_on_spot_or_unconfigured_venue")
         elif idea.get("account_shorting_enabled") is not True:
             reasons.append("account_short_permission_not_verified")
+        elif idea.get("shortable") is not True:
+            # Per-security, authenticated broker metadata is distinct from the
+            # account permission or a general easy-to-borrow classification.
+            # Reject absent/false/stale/nonboolean flags; never infer eligibility.
+            reasons.append("individual_security_shortable_not_verified")
         elif str(idea.get("borrow_status") or "").lower() != "easy_to_borrow":
             # HTB requires genuine locate reservation/readback, which the
             # current NIJA live adapter has not proven. Never infer it.
