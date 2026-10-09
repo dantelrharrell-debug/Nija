@@ -548,10 +548,24 @@ def _patch_recovery_module(module: ModuleType) -> bool:
     if callable(original_connect) and not getattr(original_connect, "_nija_private_ready_v1", False):
         @wraps(original_connect)
         def connect(broker: Any, identity: str) -> bool:
-            if _private_ready(broker, identity)[0]:
+            ready, reason = _private_ready(broker, identity)
+            if ready:
                 return True
+            if _connected(broker):
+                # Probe errors alone are not evidence of a disconnected adapter.
+                # Do not let original_connect demote a still-connected broker.
+                # The independent private-proof entry/exit gates remain closed.
+                logger.warning(
+                    "KRAKEN_ACCOUNT_CONNECT_REPROOF_BLOCKED marker=%s account=%s "
+                    "reason_class=%s connected_flag_unchanged=true private_proof_unready=true "
+                    "forced_reconnect=false",
+                    _MARKER, _identity(broker, identity), str(reason).split(":", 1)[0],
+                )
+                return False
             result = original_connect(broker, identity)
-            return bool(result and _private_ready(broker, identity, force=True)[0]) or _force_reconnect(broker, identity)
+            if result and _private_ready(broker, identity, force=True)[0]:
+                return True
+            return _force_reconnect(broker, identity)
         connect._nija_private_ready_v1 = True  # type: ignore[attr-defined]
         module._connect = connect
         changed = True
