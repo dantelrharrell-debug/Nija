@@ -58,6 +58,8 @@ _EPS = 1e-12
 
 _LOCK = threading.RLock()
 _CACHE: Dict[str, Dict[str, Any]] = {}
+# Per-account failures supersede older concurrent in-flight reads.
+_FAILURE_EPOCH: Dict[str, int] = {}
 _LAST_VISIBLE: Dict[str, Dict[str, float]] = {}
 
 _KNOWN_ALIASES = {
@@ -185,8 +187,8 @@ def normalise_open_positions(payload: Any) -> Dict[str, Any]:
         detail = ",".join(str(item) for item in errors)
         return {"ok": False, "reason": f"openpositions_rejected:{detail}", "positions": {}}
     result = payload.get("result")
-    if result is None:
-        result = {}
+    # A missing/null private API result is not an authenticated empty position
+    # inventory. Only an actual empty object proves zero open margin positions.
     if not isinstance(result, Mapping):
         return {"ok": False, "reason": "invalid_openpositions_result", "positions": {}}
 
@@ -262,6 +264,22 @@ def fetch_margin_positions(broker: Any, *, account: Any = "", force: bool = Fals
     never downgraded into an empty (i.e. "no exposure") result.
     """
     key = _account_key(account, broker)
+
+    # A cached successful private read must not outlive an explicitly
+    # disconnected concrete adapter. Keep the cache account-scoped; an error
+    # on one Kraken user's credentials does not poison other accounts.
+    try:
+        target = _unwrap(broker)
+        connected_flag = getattr(target, "connected", None)
+        if callable(connected_flag):
+            connected_flag = connected_flag()
+    except Exception:
+        _log_fetch_failed(key, "kraken_adapter_connection_state_unproven")
+        return False, {}, "kraken_adapter_connection_state_unproven"
+    if connected_flag is False:
+        _log_fetch_failed(key, "kraken_adapter_disconnected")
+        return False, {}, "kraken_adapter_disconnected"
+
     ttl = _cache_ttl_s()
     now = time.monotonic()
     if not force and ttl > 0:
@@ -269,6 +287,9 @@ def fetch_margin_positions(broker: Any, *, account: Any = "", force: bool = Fals
             cached = _CACHE.get(key)
             if cached and (now - _float(cached.get("at"))) <= ttl:
                 return True, {symbol: dict(row) for symbol, row in cached["positions"].items()}, "cached"
+
+    with _LOCK:
+        read_epoch = _FAILURE_EPOCH.get(key, 0)
 
     call = _private_call(broker)
     if call is None:
@@ -290,8 +311,20 @@ def fetch_margin_positions(broker: Any, *, account: Any = "", force: bool = Fals
 
     positions = {symbol: dict(row) for symbol, row in (truth.get("positions") or {}).items()}
     with _LOCK:
-        _CACHE[key] = {"at": now, "positions": {symbol: dict(row) for symbol, row in positions.items()}}
-    _reconcile_closed(key, positions)
+        if _FAILURE_EPOCH.get(key, 0) != read_epoch:
+            # A newer failed read must win over an older in-flight success.
+            # Never republish stale exposure or call _reconcile_closed from it.
+            LOGGER.warning(
+                "KRAKEN_MARGIN_READ_SUPERSEDED_V434 account=%s "
+                "reason=newer_private_read_failure cache_not_republished=true "
+                "coverage_unproven=true",
+                key,
+            )
+            return False, {}, "superseded_by_newer_private_read_failure"
+        _CACHE[key] = {"at": time.monotonic(), "positions": {symbol: dict(row) for symbol, row in positions.items()}}
+        # RLock is reentrant: keep last-visible updates in the same epoch
+        # transaction so a newer failure cannot interleave between them.
+        _reconcile_closed(key, positions)
     LOGGER.info(
         "KRAKEN_MARGIN_OPENPOSITIONS_FETCH_SUCCESS marker=%s account=%s open_positions=%d symbols=%s "
         "source=%s broker_position_state_only=true fill_fabricated=false spot_tracker_mutated=false "
@@ -302,6 +335,11 @@ def fetch_margin_positions(broker: Any, *, account: Any = "", force: bool = Fals
 
 
 def _log_fetch_failed(account: str, reason: str) -> None:
+    # A failed authenticated private read invalidates any cached success for
+    # this exact account. Do not let a later cached hit imply fresh coverage.
+    with _LOCK:
+        _CACHE.pop(account, None)
+        _FAILURE_EPOCH[account] = _FAILURE_EPOCH.get(account, 0) + 1
     LOGGER.error(
         "KRAKEN_MARGIN_OPENPOSITIONS_FETCH_FAILED marker=%s account=%s reason=%s "
         "coverage_reason=%s fail_closed=true margin_position_fabricated=false "
@@ -663,6 +701,7 @@ def install() -> bool:
 def _reset_state_for_tests() -> None:
     with _LOCK:
         _CACHE.clear()
+        _FAILURE_EPOCH.clear()
         _LAST_VISIBLE.clear()
 
 

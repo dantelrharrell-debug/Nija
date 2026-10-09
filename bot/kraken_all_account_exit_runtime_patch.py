@@ -157,34 +157,50 @@ def _private_ready(broker: Any, identity: str = "", *, force: bool = False) -> T
 
 
 def _force_reconnect(broker: Any, identity: str) -> bool:
+    """Reconnect only a *disconnected* adapter, never demote a live adapter.
+
+    A transient private balance/read failure is not evidence that reconnecting
+    (or changing a broker's connected flag) is safe. Preserve the adapter for
+    dedicated exit recovery; the independent private-proof gate stays DENIED
+    until a new authenticated read actually succeeds. No readiness is forged.
+    """
     if broker is None:
         return False
     account = _identity(broker, identity)
-    ready, _ = _private_ready(broker, account)
+    ready, reason = _private_ready(broker, account)
     if ready:
         return True
+    if _connected(broker):
+        logger.warning(
+            "KRAKEN_ACCOUNT_REPROOF_DEFERRED marker=%s account=%s reason_class=%s "
+            "connected_flag_unchanged=true private_proof_unready=true "
+            "new_entries_not_authorized=true protective_exit_gate_preserved=true",
+            _MARKER, account, str(reason).split(":", 1)[0],
+        )
+        return False
+
+    # The underlying adapter is already disconnected. Reconnect through its
+    # own authenticated handshake, without overriding any state attributes.
+    connector = getattr(broker, "connect", None)
+    if not callable(connector):
+        return False
     try:
-        for attr in ("connected", "_connected"):
-            if hasattr(broker, attr):
-                try:
-                    setattr(broker, attr, False)
-                except Exception:
-                    pass
-        connector = getattr(broker, "connect", None)
-        if not callable(connector):
-            return False
         result = connector()
         _PRIVATE_HEALTH.pop(id(broker), None)
+        if not bool(result) or not _connected(broker):
+            return False
         ready, reason = _private_ready(broker, account, force=True)
         logger.warning(
-            "KRAKEN_ACCOUNT_RECONNECT_RESULT marker=%s account=%s connect_result=%s private_ready=%s reason=%s",
-            _MARKER, account, result, ready, reason,
+            "KRAKEN_ACCOUNT_RECONNECT_RESULT marker=%s account=%s connect_result=%s "
+            "private_ready=%s reason_class=%s",
+            _MARKER, account, bool(result), ready, str(reason).split(":", 1)[0],
         )
-        return ready
+        return bool(ready)
     except Exception as exc:
         logger.warning(
-            "KRAKEN_ACCOUNT_RECONNECT_FAILED marker=%s account=%s error=%s",
-            _MARKER, account, exc,
+            "KRAKEN_ACCOUNT_RECONNECT_FAILED marker=%s account=%s exception_type=%s "
+            "broker_connection_not_fabricated=true",
+            _MARKER, account, type(exc).__name__,
         )
         return False
 
@@ -532,10 +548,24 @@ def _patch_recovery_module(module: ModuleType) -> bool:
     if callable(original_connect) and not getattr(original_connect, "_nija_private_ready_v1", False):
         @wraps(original_connect)
         def connect(broker: Any, identity: str) -> bool:
-            if _private_ready(broker, identity)[0]:
+            ready, reason = _private_ready(broker, identity)
+            if ready:
                 return True
+            if _connected(broker):
+                # Probe errors alone are not evidence of a disconnected adapter.
+                # Do not let original_connect demote a still-connected broker.
+                # The independent private-proof entry/exit gates remain closed.
+                logger.warning(
+                    "KRAKEN_ACCOUNT_CONNECT_REPROOF_BLOCKED marker=%s account=%s "
+                    "reason_class=%s connected_flag_unchanged=true private_proof_unready=true "
+                    "forced_reconnect=false",
+                    _MARKER, _identity(broker, identity), str(reason).split(":", 1)[0],
+                )
+                return False
             result = original_connect(broker, identity)
-            return bool(result and _private_ready(broker, identity, force=True)[0]) or _force_reconnect(broker, identity)
+            if result and _private_ready(broker, identity, force=True)[0]:
+                return True
+            return _force_reconnect(broker, identity)
         connect._nija_private_ready_v1 = True  # type: ignore[attr-defined]
         module._connect = connect
         changed = True
