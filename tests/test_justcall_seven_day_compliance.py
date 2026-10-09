@@ -35,17 +35,18 @@ def evidence(number="+12065550123", state="US-WA", local_day="2026-10-11",
         "cleared_local_date": local_day,
         "checked_at": checked,
     }
-    fields = (
-        dial.phone_key(number),
-        campaign,
-        consent_id,
-        state,
-        obj["clearance_id"],
-        local_day,
-        checked,
-    )
+    fields = {
+        "phone_digits": dial.phone_key(number),
+        "campaign": campaign,
+        "consent_record_id": consent_id,
+        "jurisdiction": state,
+        "clearance_id": obj["clearance_id"],
+        "local_date": local_day,
+        "checked_at": checked,
+    }
+    encoded = json.dumps(fields, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
     obj["signature"] = hmac.new(
-        SECRET.encode(), "\n".join(fields).encode(), hashlib.sha256
+        SECRET.encode(), encoded.encode(), hashlib.sha256
     ).hexdigest()
     return obj
 
