@@ -14,6 +14,7 @@ Date: January 21, 2026
 
 import sqlite3
 import math
+import os
 import json
 import logging
 from datetime import datetime
@@ -39,6 +40,13 @@ class TradeLedgerDB:
         Args:
             db_path: Path to SQLite database file
         """
+        # Render containers can be ephemeral: allow the operator to place the
+        # canonical SQLite ledger on an explicitly mounted durable disk.
+        # Never silently swap to a billing DB or silently assume durability.
+        if str(db_path) == "./data/trade_ledger.db":
+            configured = str(os.environ.get("NIJA_TRADE_LEDGER_DB_PATH", "")).strip()
+            if configured:
+                db_path = configured
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(exist_ok=True, parents=True)
 
