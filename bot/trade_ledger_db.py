@@ -161,6 +161,29 @@ class TradeLedgerDB:
                 )
             """)
 
+            # Pipeline order intent provenance is deliberately not a fill/P&L
+            # record. Reports may attribute a trade only by joining this
+            # exact order to authenticated OPEN and confirmed CLOSE evidence.
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS strategy_order_intents (
+                    broker TEXT NOT NULL,
+                    account_scope TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    order_id TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    side TEXT NOT NULL,
+                    strategy_id TEXT NOT NULL,
+                    strategy_version TEXT,
+                    signal_id TEXT,
+                    captured_at TEXT NOT NULL,
+                    PRIMARY KEY (broker, account_scope, order_id)
+                )
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_strategy_intent_scope
+                ON strategy_order_intents(broker, user_id, order_id)
+            """)
+
             # Create indexes for performance
             cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_ledger_symbol
