@@ -555,6 +555,14 @@ def _worker() -> None:
 
 def start_apollo_feeder() -> None:
     global _WORKER_STARTED
+    # Contact CRM recovery is independent of compliance-gated phone outreach.
+    # Start it at boot so previously stored leads are reconciled even when no
+    # new website submission arrives.
+    try:
+        from render_lead_crm_sync import start_worker as start_lead_crm_worker
+        start_lead_crm_worker()
+    except Exception as exc:
+        print(f"NIJA_LEAD_CRM_BOOTSTRAP_FAILED reason={type(exc).__name__}", flush=True)
     with _WORKER_LOCK:
         if _WORKER_STARTED:
             return
