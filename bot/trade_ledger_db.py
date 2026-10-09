@@ -471,11 +471,36 @@ class TradeLedgerDB:
         tx_side = "BUY" if side == "LONG" else "SELL"
         timestamp = datetime.now().isoformat()
         with self._get_connection() as conn:
+            # Reserve the canonical entry before checking for old trade rows.
+            # SQLite serializes concurrent attempts on this process-owned DB.
+            conn.execute("BEGIN IMMEDIATE")
             existing = conn.execute(
-                "SELECT 1 FROM open_positions WHERE position_id = ? LIMIT 1",
+                "SELECT * FROM open_positions WHERE position_id = ? LIMIT 1",
                 (position_id,),
             ).fetchone()
             if existing:
+                if not (
+                    existing["user_id"] == user_id
+                    and existing["symbol"] == symbol
+                    and existing["side"] == side
+                    and existing["notes"] == notes
+                    and math.isclose(float(existing["entry_price"]), price, rel_tol=1e-10)
+                    and math.isclose(float(existing["quantity"]), units, rel_tol=1e-10)
+                    and math.isclose(float(existing["size_usd"]), notional, rel_tol=1e-10)
+                    and math.isclose(float(existing["entry_fee"]), fee, rel_tol=1e-10)
+                ):
+                    raise ValueError("existing opening position conflicts with authenticated fill")
+                # Even matching position replay is not enough by itself:
+                # its corresponding one exact authenticated OPEN ledger row
+                # must still exist, or the account is pending reconciliation.
+                matched = conn.execute(
+                    """SELECT 1 FROM trade_ledger WHERE position_id = ?
+                       AND order_id = ? AND user_id = ? AND symbol = ?
+                       AND action = 'OPEN' AND side = ? AND notes = ? LIMIT 1""",
+                    (position_id, order_id, user_id, symbol, tx_side, notes),
+                ).fetchone()
+                if not matched:
+                    raise ValueError("existing opening position lacks exact authenticated OPEN ledger")
                 return False
             if conn.execute(
                 "SELECT 1 FROM completed_trades WHERE position_id = ? LIMIT 1",
