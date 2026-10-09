@@ -334,3 +334,47 @@ class TestLegacyMonitorIsolation:
         assert module._scan_once(
             SimpleNamespace(broker_client=SimpleNamespace(NAME="Coinbase"))
         ) == 7
+
+
+def test_private_probe_failure_does_not_mutate_connected_broker_or_force_reconnect():
+    exit_runtime._PRIVATE_HEALTH.clear()
+    broker = KrakenBroker("USER:daivon_frazier", private_ok=False)
+    attempts = []
+    broker.connect = lambda: attempts.append("connect") or True
+    assert exit_runtime._force_reconnect(broker, "user:daivon_frazier:kraken") is False
+    assert broker.connected is True
+    assert attempts == []
+    assert exit_runtime._private_ready(broker, "user:daivon_frazier:kraken")[0] is False
+
+
+def test_disconnected_broker_can_reconnect_with_actual_private_proof():
+    exit_runtime._PRIVATE_HEALTH.clear()
+    broker = KrakenBroker("platform:kraken")
+    broker.connected = False
+    called = []
+    def reconnect():
+        called.append("connect")
+        broker.connected = True
+        return True
+    broker.connect = reconnect
+    assert exit_runtime._force_reconnect(broker, "platform:kraken") is True
+    assert called == ["connect"]
+    assert broker.connected is True
+    assert any(m == "TradeBalance" for m, _ in broker.private_calls)
+
+
+def test_legacy_connection_wrapper_does_not_disconnect_connected_unproven_user():
+    exit_runtime._PRIVATE_HEALTH.clear()
+    module = types.ModuleType("test_recovery_reproof")
+    calls = []
+    def original_connect(broker, identity):
+        calls.append(identity)
+        broker.connected = False
+        return False
+    module._connect = original_connect
+    assert exit_runtime._patch_recovery_module(module) is True
+    broker = KrakenBroker("USER:daivon_frazier", private_ok=False)
+    assert module._connect(broker, "user:daivon_frazier:kraken") is False
+    assert calls == []
+    assert broker.connected is True
+
