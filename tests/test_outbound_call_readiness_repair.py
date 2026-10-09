@@ -6,11 +6,14 @@ import unittest
 from datetime import datetime, timezone
 from unittest import mock
 
-import render_apollo_feeder as feeder
-import render_outreach_autodial as autodial
+import importlib
 
 
 class ApolloEvidenceTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.feeder = importlib.import_module("render_apollo_feeder")
+
     def _field_env(self):
         return mock.patch.dict(
             os.environ,
@@ -37,7 +40,7 @@ class ApolloEvidenceTests(unittest.TestCase):
             }
         }
         with self._field_env():
-            evidence = feeder._evidence(contact, {})
+            evidence = self.feeder._evidence(contact, {})
 
         self.assertTrue(evidence["has_consent"])
         self.assertEqual(evidence["consent_record_id"], "consent-123")
@@ -58,7 +61,7 @@ class ApolloEvidenceTests(unittest.TestCase):
             }
         }
         with self._field_env():
-            evidence = feeder._evidence(contact, {"dnc_status_cd": "found"})
+            evidence = self.feeder._evidence(contact, {"dnc_status_cd": "found"})
 
         self.assertFalse(evidence["dnc_clear"])
         self.assertTrue(evidence["provider_dnc_found"])
@@ -73,13 +76,17 @@ class ApolloEvidenceTests(unittest.TestCase):
             }
         }
         with self._field_env():
-            evidence = feeder._evidence(contact, {})
+            evidence = self.feeder._evidence(contact, {})
 
         self.assertFalse(evidence["dnc_clear"])
         self.assertEqual(evidence["dnc_checked_at"], "")
 
 
 class AutodialQueueReadinessTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.autodial = importlib.import_module("render_outreach_autodial")
+
     def setUp(self):
         self.tmpdir = tempfile.TemporaryDirectory()
         self.env = mock.patch.dict(
@@ -117,13 +124,13 @@ class AutodialQueueReadinessTests(unittest.TestCase):
         }
 
     def test_unqualified_contact_is_not_active_queued(self):
-        result = autodial.enqueue_candidate(self._base())
+        result = self.autodial.enqueue_candidate(self._base())
 
         self.assertFalse(result["queued"])
         self.assertEqual(result["state"], "review_required")
         self.assertIn("verified_consent_required", result["blocker"])
 
-        with autodial._connect() as connection:
+        with self.autodial._connect() as connection:
             row = connection.execute(
                 "SELECT state, last_blocker FROM outreach_autodial_queue LIMIT 1"
             ).fetchone()
@@ -131,14 +138,14 @@ class AutodialQueueReadinessTests(unittest.TestCase):
         self.assertIn("verified_consent_required", row["last_blocker"])
 
     def test_qualified_refresh_reactivates_same_queue_key(self):
-        first = autodial.enqueue_candidate(self._base())
-        second = autodial.enqueue_candidate(self._ready())
+        first = self.autodial.enqueue_candidate(self._base())
+        second = self.autodial.enqueue_candidate(self._ready())
 
         self.assertEqual(first["queue_key"], second["queue_key"])
         self.assertTrue(second["queued"])
         self.assertEqual(second["state"], "queued")
 
-        with autodial._connect() as connection:
+        with self.autodial._connect() as connection:
             row = connection.execute(
                 "SELECT state, last_blocker, has_consent, dnc_clear, suppression_clear, campaign_enabled "
                 "FROM outreach_autodial_queue WHERE queue_key=?",
@@ -152,18 +159,18 @@ class AutodialQueueReadinessTests(unittest.TestCase):
         self.assertEqual(row["campaign_enabled"], 1)
 
     def test_startup_quarantine_parks_legacy_nonready_queue_rows(self):
-        result = autodial.enqueue_candidate(self._base())
-        with autodial._connect() as connection:
+        result = self.autodial.enqueue_candidate(self._base())
+        with self.autodial._connect() as connection:
             connection.execute(
                 "UPDATE outreach_autodial_queue SET state='queued', last_blocker=NULL WHERE queue_key=?",
                 (result["queue_key"],),
             )
             connection.commit()
 
-        changed = autodial._quarantine_static_nonready()
+        changed = self.autodial._quarantine_static_nonready()
         self.assertEqual(changed, 1)
 
-        with autodial._connect() as connection:
+        with self.autodial._connect() as connection:
             row = connection.execute(
                 "SELECT state, last_blocker FROM outreach_autodial_queue WHERE queue_key=?",
                 (result["queue_key"],),
