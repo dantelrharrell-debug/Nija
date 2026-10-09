@@ -1,4 +1,6 @@
-FROM python:3.11-slim
+# CI may override this registry without changing the production base image.
+ARG PYTHON_BASE=python:3.11-slim
+FROM ${PYTHON_BASE}
 
 RUN apt-get update && apt-get install -y git redis-tools && rm -rf /var/lib/apt/lists/*
 RUN groupadd -r nija && useradd -r -g nija -u 1000 nija

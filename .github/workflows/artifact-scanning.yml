@@ -43,6 +43,7 @@ jobs:
         GH_TOKEN: ${{ secrets.GH_TOKEN }}
       run: |
         docker build --no-cache \
+          --build-arg PYTHON_BASE=public.ecr.aws/docker/library/python:3.11-slim \
           --build-arg GH_TOKEN="${GH_TOKEN}" \
           -f ${{ matrix.dockerfile }} \
           -t ${{ steps.image-name.outputs.image }} \
@@ -59,7 +60,7 @@ jobs:
 
     - name: Upload Trivy results to GitHub Security
       uses: github/codeql-action/upload-sarif@v3
-      if: always()
+      if: success()
       with:
         sarif_file: 'trivy-results-${{ matrix.dockerfile }}.sarif'
         category: 'trivy-${{ matrix.dockerfile }}'

@@ -1,6 +1,8 @@
 # Dockerfile for NIJA FastAPI Backend
 
-FROM python:3.11-slim
+# CI may override this registry without changing the production base image.
+ARG PYTHON_BASE=python:3.11-slim
+FROM ${PYTHON_BASE}
 
 WORKDIR /app
 

@@ -2,6 +2,15 @@
 
 **No new live trading, disk mount, or deployment until the current live SQLite ledger is backed up off the container.** Render reported `ephemeral_filesystem` and `disk=null`. Code pushed to this branch does not change production.
 
+
+## Critical current-production evidence — October 9, 2026
+
+Render reports the **new dedicated `/data` disk mounted** and `/data/trade_ledger.db` passing SQLite `integrity_check`. However, the October 9 **21:00:08 UTC** boot log reports `initial_restore_replayed=false` and **zero** `trade_ledger`, `open_positions`, `completed_trades`, and `strategy_order_intents` rows, while **13** `pending_kraken_closes` rows are present. The database is structurally valid, but this is **not** evidence of restored historical trading records. Neither an empty-ledger snapshot nor re-creating pending rows proves recovered entry cost basis. Historical trade records may be missing; their fate cannot be determined from these logs alone.
+
+**Do not restart, redeploy, merge this branch, or mutate the ledger.** First inventory possible pre-disk off-server copies and previous-instance evidence through an authorized operator, without overwriting the new database. Collect SHA-256 hashes and row counts for each independently recovered artifact; test restore into an **isolated throwaway location**, never over the running `/data/trade_ledger.db`. Reconcile Kraken entries and fees with authenticated QueryOrders/TradesHistory account by account. If historical acquisition evidence is unavailable, leave those P&L figures and strategy IDs **unverified**; do not backfill inferred costs or create synthetic execution proofs.
+
+This evidence supersedes the document's earlier `disk=null` observation but **does not** satisfy backup/restoration or historical completeness gates. CI-only workflow changes on a draft PR should not be merged while the service is configured for automatic deployment.
+
 ## 1. Preserve the current instance
 Open the [trading service in Render](https://dashboard.render.com/web/srv-d98dsr5aeets73fpbaqg) and open its current running-instance shell. Confirm the current working directory, `NIJA_TRADE_LEDGER_DB_PATH`, the ledger's presence and nonzero size, and whether it has a SQLite WAL. Do not share private credentials or raw ledger data in chat. A read-only snapshot utility is staged at `scripts/nija_trade_ledger_snapshot_v436.py` on this branch. **Do not deploy the branch merely to make the utility available.** Transfer that single script into the existing live container using a secure approved operator mechanism, or execute the equivalent verified SQLite online backup in the shell.
 

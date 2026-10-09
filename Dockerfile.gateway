@@ -1,7 +1,9 @@
 # Dockerfile for NIJA API Gateway (Mobile/Web App Integration)
 # This deploys only the API Gateway layer, not the trading bot
 
-FROM python:3.11-slim
+# CI may override this registry without changing the production base image.
+ARG PYTHON_BASE=python:3.11-slim
+FROM ${PYTHON_BASE}
 
 WORKDIR /app
 
