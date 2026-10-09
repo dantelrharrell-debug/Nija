@@ -124,12 +124,11 @@ def _resolved_runtime_mode() -> tuple[bool, str, str]:
 def _align_required_heartbeat_scheduler_policy() -> bool:
     """Ensure canonical LIVE execution proof has an existing scheduler path.
 
-    ``execution_authority_context.can_execute()`` treats heartbeat freshness and
-    stage sufficiency as mandatory LIVE pre-trade gates.  Therefore a LIVE
-    runtime must have a way to create genuine ORDER/FILL proof even when legacy
-    opt-in scheduler flags are unset.  This function only arms the already
-    existing TradingStrategy heartbeat verifier; it does not execute an order by
-    itself and it never runs the scheduler in dry-run, paper, or monitor mode.
+    ``execution_authority_context.can_execute()`` requires genuine current
+    execution proof; when paid heartbeat orders are explicitly disabled, stale
+    proof remains blocked. This function never infers consent from LIVE mode
+    or attempts to create execution proof. A scheduler can be armed only with
+    the explicit operator opt-in and a verified live runtime mode.
     """
     required_first = _env_truthy("HEARTBEAT_REQUIRED_FIRST_ACTIVATION")
     heartbeat_trade_before = _env_truthy("HEARTBEAT_TRADE")
@@ -152,7 +151,7 @@ def _align_required_heartbeat_scheduler_policy() -> bool:
                 V201_MARKER,
             )
         os.environ["HEARTBEAT_TRADE"] = "false"
-    elif required_first and not heartbeat_trade_before:
+    elif live_mode and required_first and not heartbeat_trade_before:
         os.environ["HEARTBEAT_TRADE"] = "true"
         aligned_v200 = True
 
