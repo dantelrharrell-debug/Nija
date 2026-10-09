@@ -48,24 +48,8 @@ def voice_agents():
 
 @justcall_api.post("/calls")
 def initiate_call():
-    body: Dict[str, Any] = request.get_json(silent=True) or {}
-    if body.get("has_consent") is not True:
-        return jsonify({
-            "error": "Outbound AI call blocked",
-            "detail": "A verified consent record is required before has_consent can be true",
-        }), 422
-
-    try:
-        payload = JustCallClient().initiate_ai_call(
-            contact_number=str(body.get("contact_number", "")),
-            has_consent=True,
-            ai_agent_id=str(body["ai_agent_id"]) if body.get("ai_agent_id") else None,
-            dynamic_variables=body.get("dynamic_variables") or [],
-        )
-        return jsonify(payload), 200
-    except ValueError as exc:
-        return jsonify({"error": str(exc)}), 422
-    except JustCallConfigurationError as exc:
-        return jsonify({"error": str(exc)}), 503
-    except JustCallAPIError as exc:
-        return jsonify({"error": str(exc), "provider_status": exc.status_code}), 502
+    """Legacy direct-call endpoint is disabled in favor of persistent screening."""
+    return jsonify({
+        "error": "Direct outbound AI calls disabled",
+        "detail": "Use NIJA's vetted autodial queue with consent, DNC and local-hours checks.",
+    }), 409
