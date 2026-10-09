@@ -16,10 +16,28 @@ import time
 import urllib.error
 import urllib.request
 
-try:
-    import redis as redis_lib
-except ImportError:  # pragma: no cover - fallback keeps intake available
-    redis_lib = None
+# The Render liveness/frontdoor process runs with python -S. That deliberately
+# skips site initialization and third-party .pth runtime hooks, but also hides
+# pip-installed packages. Expose only the installed package directory, without
+# executing site.main() or any .pth files (which can alter trading authority).
+import sys
+import sysconfig
+
+def _load_redis_package():
+    try:
+        import redis
+        return redis
+    except ImportError:
+        purelib = sysconfig.get_paths().get("purelib", "")
+        if purelib and purelib not in sys.path:
+            sys.path.append(purelib)
+        try:
+            import redis
+            return redis
+        except ImportError:
+            return None
+
+redis_lib = _load_redis_package()
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
