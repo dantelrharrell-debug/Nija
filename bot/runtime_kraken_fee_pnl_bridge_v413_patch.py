@@ -27,7 +27,7 @@ MARKER = "20260910-runtime-kraken-fee-pnl-bridge-v413"
 _READY_FLAG = "NIJA_RUNTIME_KRAKEN_FEE_PNL_BRIDGE_V413_READY"
 _PATCH_ATTR = "_nija_runtime_kraken_fee_pnl_bridge_v413"
 _LOCK = threading.RLock()
-_FEE_CACHE: dict[str, tuple[float, str]] = {}
+_FEE_CACHE: dict[tuple[str, str], tuple[float, str]] = {}
 _FINAL = {"closed", "filled", "complete", "completed", "executed"}
 
 
@@ -230,6 +230,19 @@ def _canonical_symbol(value: Any) -> str:
     return str(value or "").strip().upper()
 
 
+def _pair_identity(value: Any) -> str:
+    """Normalize Kraken legacy pair aliases and routed suffixes for comparison."""
+    core = str(value or "").strip().upper().split(":", 1)[0]
+    if not core:
+        return ""
+    canon = _canonical_symbol(core)
+    compact = "".join(char for char in str(canon) if char.isalnum())
+    return {
+        "XXBTZUSD": "BTCUSD", "XBTUSD": "BTCUSD",
+        "XETHZUSD": "ETHUSD",
+    }.get(compact, compact)
+
+
 def _query_exact_fee(
     order_id: str, symbol: str, side: str, *, account_scope: str = "",
 ) -> tuple[dict[str, Any] | None, str]:
@@ -286,8 +299,8 @@ def _query_exact_fee(
         if vol_exec <= 0 or cost <= 0 or fee < 0:
             return None, "exact_order_fill_cost_fee_unproven"
         descr = row.get("descr") if isinstance(row.get("descr"), Mapping) else {}
-        row_symbol = _canonical_symbol(descr.get("pair"))
-        wanted_symbol = _canonical_symbol(symbol)
+        row_symbol = _pair_identity(descr.get("pair"))
+        wanted_symbol = _pair_identity(symbol)
         row_side = str(descr.get("type") or "").strip().lower()
         wanted_side = str(side or "").strip().lower()
         if not row_symbol or not wanted_symbol or row_symbol != wanted_symbol:
