@@ -115,9 +115,36 @@ def get_confirmed_performance_report(
                        "unattributed": len(verified_closes), "strategies": []}
     symbols = [{"symbol": symbol, "direction": direction, **_metrics(pnl)}
                for (symbol, direction), pnl in buckets.items()]
+    storage = getattr(ledger, "storage_verification", None)
+    if not isinstance(storage, dict):
+        storage = {
+            "state": "storage_evidence_unavailable",
+            "dedicated_mount_detected": False,
+            "restart_persistence_verified": False,
+            "migration_integrity_verified": False,
+            "backup_restore_verified": False,
+            "ready_for_historical_pnl_certification": False,
+        }
+    pending_count = None
+    if broker == "kraken":
+        try:
+            from bot.pending_kraken_close_audit_v434 import pending_summary
+            exact_scope = (
+                "platform:kraken" if user_id == "platform"
+                else f"user:{user_id}:kraken"
+            )
+            pending_count = pending_summary(
+                ledger, account_scope=exact_scope,
+            )["pending_confirmed_closes"]
+        except Exception:
+            pending_count = None
     return {
         "broker": broker, "user_id": user_id,
         "source": "canonical_confirmed_close_ledger",
+        "ledger_storage_evidence": dict(storage),
+        "historical_ledger_durability_verified": False,
+        "historical_fill_reconciliation_complete": False,
+        "pending_confirmed_closes": pending_count,
         "cost_basis": "net_of_recorded_entry_and_exit_fees",
         "carry_costs_verified": False,
         "strategy_attribution": attribution["status"],
