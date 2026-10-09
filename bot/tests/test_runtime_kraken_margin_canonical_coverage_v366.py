@@ -364,3 +364,27 @@ def test_failed_account_cache_invalidation_does_not_affect_other_account(monkeyp
     assert v366.fetch_margin_positions(user, account="user:u1:kraken", force=True)[0] is False
     assert v366.fetch_margin_positions(platform, account="platform:kraken")[2] == "cached"
 
+
+
+def test_disconnected_adapter_invalidates_cached_openpositions(monkeypatch):
+    monkeypatch.setenv("NIJA_KRAKEN_MARGIN_OPENPOSITIONS_TTL_S", "45")
+    broker = Broker(_payload({"TX-1": ETH_ROW}))
+    assert v366.fetch_margin_positions(broker, account="platform:kraken")[0] is True
+    assert broker.calls == 1
+    broker.connected = False
+    ok, rows, reason = v366.fetch_margin_positions(broker, account="platform:kraken")
+    assert ok is False and rows == {}
+    assert reason == "kraken_adapter_disconnected"
+    assert broker.calls == 1
+    broker.connected = True
+    assert v366.fetch_margin_positions(broker, account="platform:kraken")[2] == "ok"
+    assert broker.calls == 2
+
+
+def test_unknown_adapter_connection_flag_continues_authenticated_proof():
+    broker = Broker(_payload({}))
+    del broker.connected
+    ok, rows, source = v366.fetch_margin_positions(
+        broker, account="platform:kraken", force=True,
+    )
+    assert (ok, rows, source) == (True, {}, "ok")
