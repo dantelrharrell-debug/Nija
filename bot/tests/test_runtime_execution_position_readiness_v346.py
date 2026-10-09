@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+
+import pytest
 import os
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -184,3 +186,61 @@ def test_recovered_fill_without_authenticated_event_time_cannot_write_execution_
     ) is False
 
     assert not marker.exists()
+
+
+@pytest.mark.parametrize("scope", [
+    {},
+    {"broker": "kraken", "account": "user:kraken", "account_id": "user:kraken"},
+    {"broker": "coinbase", "account": "platform:kraken", "account_id": "platform:kraken"},
+    {"broker": "kraken", "account": "platform:kraken", "account_id": "user:kraken"},
+])
+def test_recovered_marker_rejects_missing_user_or_conflicting_scope(tmp_path, monkeypatch, scope):
+    import bot.runtime_execution_capital_integrity_v169_patch as v169
+    import bot.runtime_confirmed_fill_profitability_v328_patch as v328
+
+    marker = tmp_path / "proof.json"
+    monkeypatch.setattr(v169, "_execution_marker_path", lambda: marker)
+    monkeypatch.setattr(v328, "_order_id", lambda result: result.get("order_id", ""))
+    result = {"order_id": "ORDER", "recovered_fill_proof": True,
+              "broker_fill_at_epoch": 9995.0, **scope}
+    assert not v346._write_confirmed_fill_marker(
+        result=result, symbol="BTC-USD", side="buy", fill_price=100.0, filled_usd=100.0)
+    assert not marker.exists()
+
+
+@pytest.mark.parametrize("legacy_flag", ["recovered_fill_proof", "recovered_from_authenticated_history"])
+def test_recovered_marker_scope_is_validated_after_readback(monkeypatch, legacy_flag):
+    import bot.runtime_execution_capital_integrity_v169_patch as v169
+
+    monkeypatch.setattr(v169, "_execution_provenance_valid", lambda payload, stage: (False, "original"))
+    assert v346._patch_v169_provenance()
+    payload = {"source": "canonical_confirmed_fill", "proof_kind": "execution_probe", legacy_flag: True}
+    assert not v169._execution_provenance_valid(payload, "FILL_VERIFY")[0]
+    payload.update(broker="kraken", account="platform:kraken", account_id="platform:kraken")
+    assert v169._execution_provenance_valid(payload, "FILL_VERIFY")[0]
+    payload["account_id"] = "user:kraken"
+    assert not v169._execution_provenance_valid(payload, "ORDER_VERIFY")[0]
+
+
+def test_recovered_duplicate_migrates_scope_without_refreshing_event(tmp_path, monkeypatch):
+    import bot.runtime_execution_capital_integrity_v169_patch as v169
+    import bot.runtime_confirmed_fill_profitability_v328_patch as v328
+
+    marker = tmp_path / "proof.json"
+    marker.write_text(json.dumps({"verified": True, "version": 4,
+                                 "source": "canonical_confirmed_fill", "order_id": "ORDER",
+                                 "verified_at_epoch": 9995.0}))
+    monkeypatch.setattr(v169, "_execution_marker_path", lambda: marker)
+    monkeypatch.setattr(v169, "_atomic_json_write", lambda path, payload: path.write_text(json.dumps(payload)))
+    monkeypatch.setattr(v328, "_order_id", lambda result: result.get("order_id", ""))
+    result = {"order_id": "ORDER", "broker_fill_at_epoch": 9995.0, "recovered_fill_proof": True,
+              "broker": "kraken", "account": "platform:kraken", "account_id": "platform:kraken"}
+    assert v346._write_confirmed_fill_marker(
+        result=result, symbol="BTC-USD", side="buy", fill_price=100.0, filled_usd=100.0)
+    saved = json.loads(marker.read_text())
+    assert saved["verified_at_epoch"] == 9995.0
+    assert saved["account"] == saved["account_id"] == "platform:kraken"
+    assert saved["broker"] == "kraken" and saved["recovered_fill_proof"] is True
+    assert v346._write_confirmed_fill_marker(
+        result=result, symbol="BTC-USD", side="buy", fill_price=100.0, filled_usd=100.0)
+    assert json.loads(marker.read_text()) == saved

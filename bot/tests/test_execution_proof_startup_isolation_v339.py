@@ -1,7 +1,15 @@
 from __future__ import annotations
 
 import importlib.util
+import ast
+import logging
+import json
+import threading
+from collections.abc import Mapping
+from types import SimpleNamespace
 from pathlib import Path
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -102,3 +110,121 @@ def test_v346_restart_recovery_preserves_authenticated_trade_time():
 
     assert '"broker_fill_at_epoch": float(trade_ts)' in patched
     assert "must never make an older recovered fill fresh" in patched
+
+
+def _recovery_namespace(*, fill, event_time=9990.0):
+    patcher = _load_patcher()
+    patched = patcher.patch_v346_text(
+        (ROOT / "bot/runtime_execution_position_readiness_v346_patch.py").read_text()
+    )
+    function = next(n for n in ast.parse(patched).body
+                    if isinstance(n, ast.FunctionDef) and n.name == "_recover_recent_kraken_execution_proof")
+    captured = []
+    calls = []
+
+    def normalize(result, *, symbol, side):
+        captured.append(dict(result))
+        return result["filled_price"], result["filled_size_usd"]
+
+    def private_read(broker, method, params):
+        calls.append(method)
+        return {"error": [], "result": {"trades": {
+            "T": {"ordertxid": "ORDER", "type": "sell", "pair": "XXBTZUSD", "time": event_time}
+        }}}
+
+    modules = {
+        "bot.runtime_kraken_delayed_fill_reconciliation_v357_patch": SimpleNamespace(
+            _private_read=private_read,
+            _query_order_row=lambda broker, oid: {"status": "closed"},
+            _query_order_fill=lambda row: ("closed", 0.0, 0.0, 0.0),
+            _trade_history_fill=lambda broker, **kwargs: fill,
+        ),
+        "bot.runtime_confirmed_fill_profitability_v328_patch": SimpleNamespace(_normalize_dict_fill=normalize),
+    }
+    ns = {
+        "Mapping": Mapping, "Any": object, "MARKER": "test",
+        "importlib": SimpleNamespace(import_module=lambda name: modules[name]),
+        "LOGGER": logging.getLogger("test.execution_recovery"),
+        "time": SimpleNamespace(time=lambda: 10000.0, monotonic=lambda: 10000.0),
+        "_RECOVERY_LOCK": threading.RLock(), "_RECOVERY_LAST_ATTEMPT_MONO": 0.0,
+        "_RECOVERY_LAST_GENERATION": "", "_recovery_interval_s": lambda: 15.0,
+        "_recovery_max_age_s": lambda: 1800.0,
+        "_current_execution_marker_ready": lambda: (bool(captured), "test"),
+        "_writer_epoch_for_recovery": lambda: (True, "1"),
+        "_canonical_kraken_broker": lambda: object(),
+    }
+    exec(compile(ast.Module(body=[function], type_ignores=[]), str(PATCHER_PATH), "exec"), ns)
+    return ns, captured, calls
+
+
+def test_restart_recovery_accepts_five_value_trade_history_contract():
+    ns, captured, calls = _recovery_namespace(fill=(100.0, 1.0, 100.0, 1, 9995.0))
+    assert ns["_recover_recent_kraken_execution_proof"]()[0] is True
+    assert captured[0]["broker_fill_at_epoch"] == 9995.0
+    assert captured[0]["account"] == "platform:kraken"
+    assert captured[0]["broker"] == "kraken"
+    assert captured[0]["recovered_fill_proof"] is True
+    assert calls == ["TradesHistory"]
+
+
+@pytest.mark.parametrize("fill", [
+    (100.0, 1.0, 100.0, 0, 9995.0),
+    (100.0, 1.0, 100.0, 1, 0.0),
+    (0.0, 1.0, 100.0, 1, 9995.0),
+])
+def test_restart_recovery_rejects_incomplete_exact_history(fill):
+    ns, captured, _ = _recovery_namespace(fill=fill)
+    assert ns["_recover_recent_kraken_execution_proof"]()[0] is False
+    assert captured == []
+
+
+def test_restart_recovery_does_not_promote_old_history():
+    ns, captured, _ = _recovery_namespace(fill=(100.0, 1.0, 100.0, 1, 100.0), event_time=100.0)
+    assert ns["_recover_recent_kraken_execution_proof"]()[0] is False
+    assert captured == []
+
+
+def test_restart_recovery_stops_without_writer_authority():
+    ns, captured, calls = _recovery_namespace(fill=(100.0, 1.0, 100.0, 1, 9995.0))
+    ns["_writer_epoch_for_recovery"] = lambda: (False, "writer_unproven")
+    assert ns["_recover_recent_kraken_execution_proof"]() == (False, "writer_unproven")
+    assert captured == [] and calls == []
+
+
+def test_history_contract_repair_is_idempotent():
+    patcher = _load_patcher()
+    source = (ROOT / "bot/runtime_execution_position_readiness_v346_patch.py").read_text()
+    once = patcher.patch_v346_text(source)
+    assert patcher.patch_v346_text(once) == once
+
+
+def test_generated_recovery_persists_scope_through_canonical_marker(tmp_path, monkeypatch):
+    import bot.runtime_execution_position_readiness_v346_patch as v346
+    import bot.runtime_execution_capital_integrity_v169_patch as v169
+    import bot.runtime_confirmed_fill_profitability_v328_patch as v328
+
+    marker = tmp_path / "proof.json"
+    monkeypatch.setattr(v169, "_execution_marker_path", lambda: marker)
+    monkeypatch.setattr(v169, "_atomic_json_write", lambda path, payload: path.write_text(json.dumps(payload)))
+    monkeypatch.setattr(v328, "_order_id", lambda result: result.get("order_id", ""))
+    monkeypatch.setattr(v169, "_execution_provenance_valid", lambda payload, stage: (False, "original"))
+    assert v346._patch_v169_provenance()
+    ns, _, _ = _recovery_namespace(fill=(100.0, 1.0, 100.0, 1, 9995.0))
+    original_import = ns["importlib"].import_module
+    ns["importlib"] = SimpleNamespace(import_module=lambda name:
+        v169 if name == "bot.runtime_execution_capital_integrity_v169_patch" else original_import(name))
+    ns["json"] = json
+    ns["_write_confirmed_fill_marker"] = v346._write_confirmed_fill_marker
+
+    def ready():
+        if not marker.exists():
+            return False, "missing"
+        return v169._execution_provenance_valid(json.loads(marker.read_text()), "FILL_VERIFY")
+
+    ns["_current_execution_marker_ready"] = ready
+    assert ns["_recover_recent_kraken_execution_proof"]()[0]
+    saved = json.loads(marker.read_text())
+    assert saved["broker"] == "kraken"
+    assert saved["account"] == saved["account_id"] == "platform:kraken"
+    assert saved["recovered_fill_proof"] is True
+    assert saved["verified_at_epoch"] == saved["exchange_fill_time"] == 9995.0

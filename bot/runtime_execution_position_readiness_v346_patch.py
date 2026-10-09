@@ -80,6 +80,22 @@ def _existing_marker(path: Any) -> dict[str, Any]:
         return {}
 
 
+def _platform_recovery_scope_valid(payload: Mapping[str, Any]) -> bool:
+    """Require explicit, consistent platform ownership for recovered Kraken proof."""
+    return (
+        str(payload.get("broker") or "").strip().lower() == "kraken"
+        and str(payload.get("account") or "").strip().lower() == "platform:kraken"
+        and str(payload.get("account_id") or "").strip().lower() == "platform:kraken"
+    )
+
+
+def _is_recovered_fill(payload: Mapping[str, Any]) -> bool:
+    return any(bool(payload.get(key)) for key in (
+        "recovered_fill_proof", "kraken_query_order_reconciled",
+        "kraken_trade_history_reconciled", "recovered_from_authenticated_history",
+    ))
+
+
 def _write_confirmed_fill_marker(*, result: Mapping[str, Any], symbol: str, side: str, fill_price: float, filled_usd: float) -> bool:
     """Persist execution proof only after v328 has already accepted the fill."""
     try:
@@ -97,11 +113,11 @@ def _write_confirmed_fill_marker(*, result: Mapping[str, Any], symbol: str, side
         existing = _existing_marker(path)
         observed_now = time.time()
         broker_epoch = _fill_event_epoch(result)
-        recovered_fill = bool(
-            result.get("recovered_fill_proof")
-            or result.get("kraken_query_order_reconciled")
-            or result.get("kraken_trade_history_reconciled")
-        )
+        recovered_fill = _is_recovered_fill(result)
+        if recovered_fill and not _platform_recovery_scope_valid(result):
+            LOGGER.warning("CANONICAL_FILL_EXECUTION_PROOF_V346_RECOVERY_SCOPE_REJECTED "
+                           "marker=%s order_id=%s trading_fail_closed=true", MARKER, order_id)
+            return False
         if recovered_fill and not (0.0 < broker_epoch <= observed_now + 60.0):
             LOGGER.warning(
                 "CANONICAL_FILL_EXECUTION_PROOF_V346_RECOVERY_TIME_REJECTED marker=%s order_id=%s "
@@ -128,7 +144,10 @@ def _write_confirmed_fill_marker(*, result: Mapping[str, Any], symbol: str, side
             and broker_epoch > 0.0
             and abs(existing_epoch - broker_epoch) <= 1.0
         )
-        if same_v4_order and (not recovered_fill or same_authenticated_event):
+        if same_v4_order and (not recovered_fill or (
+            same_authenticated_event and _platform_recovery_scope_valid(existing)
+            and _is_recovered_fill(existing)
+        )):
             LOGGER.info(
                 "CANONICAL_FILL_EXECUTION_PROOF_V346_DUPLICATE_IGNORED marker=%s order_id=%s "
                 "existing_verified_at_epoch=%.6f proof_timestamp_refreshed=false",
@@ -157,6 +176,10 @@ def _write_confirmed_fill_marker(*, result: Mapping[str, Any], symbol: str, side
             "side": str(side or "").strip().lower(),
             "filled_price": float(fill_price),
             "filled_size_usd": float(filled_usd),
+            "broker": str(result.get("broker") or "").strip().lower(),
+            "account": str(result.get("account") or "").strip().lower(),
+            "account_id": str(result.get("account_id") or "").strip().lower(),
+            "recovered_fill_proof": recovered_fill,
             "deployment_id": str(
                 os.environ.get("NIJA_DEPLOYMENT_ID")
                 or os.environ.get("RENDER_DEPLOY_ID")
@@ -235,6 +258,8 @@ def _patch_v169_provenance() -> bool:
         if required in {"ORDER_VERIFY", "FILL_VERIFY"} and source == "canonical_confirmed_fill":
             if kind != "execution_probe":
                 return False, f"execution_proof_source_invalid:source={source}:kind={kind or 'missing'}"
+            if _is_recovered_fill(payload) and not _platform_recovery_scope_valid(payload):
+                return False, "recovered_execution_proof_platform_scope_invalid"
             return True, "canonical_confirmed_fill_provenance_ok"
         return current(payload, required_stage)
 

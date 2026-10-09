@@ -29,13 +29,14 @@ def _patch_v367_recovery() -> bool:
 
 
 def install_import_hook() -> bool:
-    ready = True
-    if ready:
-        try:
-            recover_execution_proof_once()
-        except Exception:
-            LOGGER.debug("v372 immediate recovery deferred", exc_info=True)
-    return ready
+    with threading.RLock():
+        ready = True
+        if ready:
+            try:
+                recover_execution_proof_once()
+            except Exception:
+                LOGGER.debug("v372 immediate recovery deferred", exc_info=True)
+        return ready
 """
 
 
