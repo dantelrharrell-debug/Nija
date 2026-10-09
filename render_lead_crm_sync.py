@@ -58,13 +58,17 @@ def _prepare(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_website_lead_crm_due ON website_lead_crm_sync(state, next_attempt_at)")
     # Recover only recent website leads (not the entire historical contact base).
     cutoff = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat(timespec="milliseconds").replace("+00:00", "Z")
-    conn.execute(
-        """INSERT OR IGNORE INTO website_lead_crm_sync
-           (event_key, email, name, updated_at)
-           SELECT event_key, email, name, ? FROM website_leads
-           WHERE received_at >= ?""",
-        (_now_iso(), cutoff),
-    )
+    website_table = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='website_leads'"
+    ).fetchone()
+    if website_table:
+        conn.execute(
+            """INSERT OR IGNORE INTO website_lead_crm_sync
+               (event_key, email, name, updated_at)
+               SELECT event_key, email, name, ? FROM website_leads
+               WHERE received_at >= ?""",
+            (_now_iso(), cutoff),
+        )
     conn.commit()
 
 
@@ -93,7 +97,6 @@ def _contact(name: str, email: str) -> dict[str, Any]:
         "first_name": first[:100] or "NIJA",
         "last_name": last[:100],
         "email": email,
-        "label_names": ["NIJA Website Leads"],
     }
 
 
@@ -154,7 +157,7 @@ def sync_pending(max_batch: int = 20) -> dict[str, int]:
             selected = conn.execute(
                 """SELECT event_key, email, name, attempts
                    FROM website_lead_crm_sync
-                   WHERE state='pending' AND attempts < 12 AND next_attempt_at <= ?
+                   WHERE state='pending' AND next_attempt_at <= ?
                    ORDER BY next_attempt_at, updated_at LIMIT ?""",
                 (now, min(max(1, int(max_batch)), 100)),
             ).fetchall()
@@ -186,7 +189,7 @@ def sync_pending(max_batch: int = 20) -> dict[str, int]:
                     counts["synced"] += 1
                 else:
                     attempt = int(row["attempts"]) + 1
-                    # Retry at most 12 times with bounded exponential delay.
+                    # Retry indefinitely with a bounded interval; never discard a lead.
                     wait_seconds = min(3600, 30 * (2 ** min(attempt - 1, 7)))
                     conn.execute(
                         """UPDATE website_lead_crm_sync SET attempts=?,
