@@ -397,3 +397,47 @@ def test_null_or_missing_openpositions_result_is_never_treated_as_no_positions()
         assert truth["reason"] == "invalid_openpositions_result"
         assert truth["positions"] == {}
     assert v366.normalise_open_positions({"error": [], "result": {}})["ok"] is True
+
+
+def test_newer_failed_read_supersedes_older_inflight_success(monkeypatch):
+    import threading
+    monkeypatch.setenv("NIJA_KRAKEN_MARGIN_OPENPOSITIONS_TTL_S", "45")
+    first_inside = threading.Event()
+    release_first = threading.Event()
+    attempts = {"n": 0}
+    broker = Broker()
+    responses = []
+
+    def call(method, params=None):
+        assert method == "OpenPositions"
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            first_inside.set()
+            assert release_first.wait(timeout=5), "read race timed out"
+            return _payload({"TX-1": ETH_ROW})
+        raise RuntimeError("EAPI:Rate limit exceeded")
+
+    broker._kraken_api_call = call
+
+    def first_fetch():
+        responses.append(v366.fetch_margin_positions(
+            broker, account="platform:kraken", force=True,
+        ))
+
+    worker = threading.Thread(target=first_fetch, daemon=True)
+    worker.start()
+    try:
+        assert first_inside.wait(timeout=5), "initial private query did not start"
+        failure = v366.fetch_margin_positions(
+            broker, account="platform:kraken", force=True,
+        )
+        assert failure[0] is False
+    finally:
+        release_first.set()
+        worker.join(timeout=5)
+    assert not worker.is_alive()
+    assert len(responses) == 1
+    assert responses[0] == (
+        False, {}, "superseded_by_newer_private_read_failure",
+    )
+    assert "platform:kraken" not in v366._CACHE
