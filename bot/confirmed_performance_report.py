@@ -32,6 +32,68 @@ def _metrics(values: list[float]) -> dict[str, Any]:
     }
 
 
+def _confirmed_kraken_entry_from_ledger(
+    ledger: Any, completed: Any, *, user_id: str,
+) -> bool:
+    """Closed P&L is reportable only with an exact authenticated OPEN leg."""
+    position_id = str(completed[0] or "")
+    symbol = str(completed[1] or "")
+    side = str(completed[2] or "").lower()
+    scope = "platform:kraken" if user_id == "platform" else f"user:{user_id}:kraken"
+    try:
+        with ledger._get_connection() as conn:
+            opens = conn.execute(
+                """SELECT symbol, side, order_id, price, quantity, size_usd,
+                          fee, notes FROM trade_ledger
+                   WHERE position_id=? AND user_id=? AND action='OPEN'""",
+                (position_id, user_id),
+            ).fetchall()
+        if len(opens) != 1:
+            return False
+        entry = opens[0]
+        notes = str(entry["notes"] or "")
+        oid = str(entry["order_id"] or "")
+        if not oid or not notes.startswith("authenticated_kraken_queryorders_entry; "):
+            return False
+        parts = notes.split("; ")
+        if f"account={scope}" not in parts or f"order_id={oid}" not in parts:
+            return False
+        if (
+            (side in {"long", "buy"} and entry["side"] != "BUY")
+            or (side in {"short", "sell"} and entry["side"] != "SELL")
+            or side not in {"long", "buy", "short", "sell"}
+        ):
+            return False
+        key = lambda v: "".join(
+            ch for ch in str(v or "").upper().split(":", 1)[0] if ch.isalnum()
+        )
+        aliases = {"XXBTZUSD": "BTCUSD", "XBTUSD": "BTCUSD", "XETHZUSD": "ETHUSD"}
+        norm = lambda value: aliases.get(key(value), key(value))
+        if norm(entry["symbol"]) != norm(symbol):
+            return False
+        for value, expected in (
+            (entry["price"], completed[8]),
+            (entry["quantity"], completed[9]),
+            (entry["size_usd"], completed[10]),
+            (entry["fee"], completed[6]),
+        ):
+            left, right = float(value), float(expected)
+            if not math.isfinite(left) or not math.isfinite(right):
+                return False
+            if left < 0 or right < 0 or not math.isclose(
+                left, right, rel_tol=1e-8, abs_tol=1e-7,
+            ):
+                return False
+        return True
+    except Exception as exc:
+        LOGGER.warning(
+            "CONFIRMED_KRAKEN_ENTRY_V435_UNPROVEN position_id=%s exception_type=%s "
+            "historical_pnl_excluded=true",
+            position_id, type(exc).__name__,
+        )
+        return False
+
+
 def get_confirmed_performance_report(
     ledger: Any, *, broker: str, user_id: str, limit: int = 1000,
 ) -> dict[str, Any]:
@@ -54,7 +116,8 @@ def get_confirmed_performance_report(
         rows = conn.execute(
             """
             SELECT c.position_id, c.symbol, c.side, c.net_profit, c.gross_profit,
-                   c.total_fees, c.entry_fee, c.exit_fee
+                   c.total_fees, c.entry_fee, c.exit_fee,
+                   c.entry_price, c.quantity, c.size_usd
             FROM completed_trades c
             WHERE c.user_id = ? AND c.exit_reason = 'canonical_confirmed_fill'
               AND EXISTS (
@@ -75,9 +138,16 @@ def get_confirmed_performance_report(
     buckets: dict[tuple[str, str], list[float]] = defaultdict(list)
     values: list[float] = []
     excluded = 0
+    unproven_kraken_entry_count = 0
     verified_closes = []
     for row in rows:
         try:
+            if broker == "kraken" and not _confirmed_kraken_entry_from_ledger(
+                ledger, row, user_id=user_id,
+            ):
+                excluded += 1
+                unproven_kraken_entry_count += 1
+                continue
             net, gross, fees, entry_fee, exit_fee = map(float, row[3:8])
             if not all(math.isfinite(v) for v in (net, gross, fees, entry_fee, exit_fee)):
                 raise ValueError("nonfinite P&L")
@@ -115,9 +185,36 @@ def get_confirmed_performance_report(
                        "unattributed": len(verified_closes), "strategies": []}
     symbols = [{"symbol": symbol, "direction": direction, **_metrics(pnl)}
                for (symbol, direction), pnl in buckets.items()]
+    storage = getattr(ledger, "storage_verification", None)
+    if not isinstance(storage, dict):
+        storage = {
+            "state": "storage_evidence_unavailable",
+            "dedicated_mount_detected": False,
+            "restart_persistence_verified": False,
+            "migration_integrity_verified": False,
+            "backup_restore_verified": False,
+            "ready_for_historical_pnl_certification": False,
+        }
+    pending_count = None
+    if broker == "kraken":
+        try:
+            from bot.pending_kraken_close_audit_v434 import pending_summary
+            exact_scope = (
+                "platform:kraken" if user_id == "platform"
+                else f"user:{user_id}:kraken"
+            )
+            pending_count = pending_summary(
+                ledger, account_scope=exact_scope,
+            )["pending_confirmed_closes"]
+        except Exception:
+            pending_count = None
     return {
         "broker": broker, "user_id": user_id,
         "source": "canonical_confirmed_close_ledger",
+        "ledger_storage_evidence": dict(storage),
+        "historical_ledger_durability_verified": False,
+        "historical_fill_reconciliation_complete": False,
+        "pending_confirmed_closes": pending_count,
         "cost_basis": "net_of_recorded_entry_and_exit_fees",
         "carry_costs_verified": False,
         "strategy_attribution": attribution["status"],
@@ -125,7 +222,9 @@ def get_confirmed_performance_report(
         "strategy_attribution_unproven_closes": attribution["unattributed"],
         "strategy_metrics": attribution["strategies"],
         "window_limit": limit, "window_may_be_truncated": len(rows) == limit,
-        "excluded_invalid_rows": excluded, "overall": _metrics(values),
+        "excluded_invalid_rows": excluded,
+        "excluded_kraken_closes_without_authenticated_open": unproven_kraken_entry_count,
+        "overall": _metrics(values),
         "winners": sorted((s for s in symbols if s["net_pnl_usd"] > 0),
                           key=lambda s: s["net_pnl_usd"], reverse=True),
         "losers": sorted((s for s in symbols if s["net_pnl_usd"] < 0),

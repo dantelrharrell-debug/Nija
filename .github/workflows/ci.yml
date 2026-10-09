@@ -124,6 +124,8 @@ jobs:
             bot/tests/test_kraken_all_account_exit_runtime.py \
             bot/tests/test_runtime_pnl_ledger_repair_v414.py \
             bot/tests/test_pending_kraken_close_audit_v434.py \
+            bot/tests/test_position_close_scope_v435.py \
+            bot/tests/test_trade_ledger_storage_v435.py \
             bot/tests/test_confirmed_strategy_order_provenance_v433.py \
             bot/tests/test_runtime_heartbeat_no_rearm_v433.py \
             bot/tests/test_research_edge_ranking_v432.py

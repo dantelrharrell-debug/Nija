@@ -131,10 +131,13 @@ def test_platform_account_identity_matches_platform_ledger_user(tmp_path, monkey
         symbol="XXBTZUSD", side="sell", fill_price=101000.0,
         filled_usd=101.0,
     )
-    assert db.get_open_positions(user_id="platform") == []
-    trades = db.get_trade_history(user_id="platform")
-    assert len(trades) == 1
-    assert trades[0]["net_profit"] == pytest.approx(0.45)
+    # A manual/unproven OPEN is not an authenticated Kraken entry.
+    assert len(db.get_open_positions(user_id="platform")) == 1
+    assert db.get_trade_history(user_id="platform") == []
+    from bot.pending_kraken_close_audit_v434 import pending_summary
+    assert pending_summary(db, account_scope="platform:kraken")[
+        "pending_confirmed_closes"
+    ] == 1
 
 
 def test_unrecognized_account_does_not_book_other_users_pnl(tmp_path, monkeypatch):
@@ -175,8 +178,10 @@ def test_accountless_exit_cannot_close_any_accounts_ledger(tmp_path, monkeypatch
 
 def test_authenticated_kraken_fee_cache_retains_platform_owner(monkeypatch):
     bridge = importlib.import_module("bot.runtime_kraken_fee_pnl_bridge_v413_patch")
-    monkeypatch.setitem(bridge._FEE_CACHE, "REAL-FEE-1", (0.21, "platform:kraken"))
-    fee, reason = bridge._query_exact_fee("REAL-FEE-1", "XXBTZUSD", "sell")
+    monkeypatch.setitem(bridge._FEE_CACHE, ("platform:kraken", "REAL-FEE-1"), (0.21, "platform:kraken"))
+    fee, reason = bridge._query_exact_fee(
+        "REAL-FEE-1", "XXBTZUSD", "sell", account_scope="platform:kraken",
+    )
     assert reason == "cache"
     assert fee == {
         "fee": 0.21, "broker": "kraken",
@@ -297,3 +302,146 @@ def test_configured_external_ledger_path_survives_new_instance(tmp_path, monkeyp
     second = TradeLedgerDB()
     assert len(second.get_open_positions(user_id="platform")) == 1
     assert len(second.get_ledger_transactions(user_id="platform")) == 1
+
+
+
+def test_role_label_without_authenticated_opening_cannot_book_cost_basis(tmp_path, monkeypatch):
+    db = _fresh_ledger(tmp_path, monkeypatch)
+    bridge = importlib.import_module("bot.runtime_kraken_fee_pnl_bridge_v413_patch")
+    bridge._ensure_opening_cost_basis(
+        {"order_id": "UNPROVEN-ENTRY", "opening_position_id": "UNPROVEN-POS",
+         "account": "platform:kraken", "broker": "kraken", "fee": 0.20,
+         "execution_role": "entry"},
+        symbol="XXBTZUSD", side="buy", fill_price=100000.0, filled_usd=100.0,
+    )
+    assert db.get_open_positions(user_id="platform") == []
+    assert db.get_ledger_transactions(user_id="platform") == []
+
+
+def test_cross_account_kraken_fee_cache_is_never_used(monkeypatch):
+    bridge = importlib.import_module("bot.runtime_kraken_fee_pnl_bridge_v413_patch")
+    monkeypatch.setitem(
+        bridge._FEE_CACHE, ("platform:kraken", "SHARED-ORDER"),
+        (0.80, "platform:kraken"),
+    )
+    meta, reason = bridge._query_exact_fee(
+        "SHARED-ORDER", "XXBTZUSD", "sell",
+        account_scope="user:customer:kraken",
+    )
+    assert reason != "cache"
+    assert not meta or meta["account"] == "user:customer:kraken"
+    assert bridge._query_exact_fee("SHARED-ORDER", "XXBTZUSD", "sell")[1] == (
+        "exact_kraken_account_scope_unproven"
+    )
+
+
+def test_authenticated_queryorders_fee_requires_exact_owner_pair_and_side(monkeypatch):
+    bridge = importlib.import_module("bot.runtime_kraken_fee_pnl_bridge_v413_patch")
+    v367 = importlib.import_module("bot.runtime_kraken_margin_protection_truth_v367_patch")
+    class UserBroker:
+        pass
+    user = UserBroker()
+    platform = UserBroker()
+    called = []
+    def api(broker):
+        def send(method, params):
+            called.append((broker, method, params["txid"]))
+            return {
+                "error": [],
+                "result": {
+                    "UNIQUE-USER-FEE": {
+                        "status": "closed", "vol_exec": "0.01",
+                        "cost": "100", "fee": "0.25",
+                        "descr": {"pair": "XETHZUSD", "type": "sell"},
+                    },
+                },
+            }
+        return send
+    monkeypatch.setattr(
+        v367, "_account_brokers",
+        lambda: [("platform:kraken", platform), ("user:customer:kraken", user)],
+    )
+    monkeypatch.setattr(v367, "_private_call", api)
+    assert bridge._query_exact_fee(
+        "UNIQUE-USER-FEE", "XXBTZUSD", "sell",
+        account_scope="user:customer:kraken",
+    )[1] == "exact_order_symbol_unproven"
+    fee, reason = bridge._query_exact_fee(
+        "UNIQUE-USER-FEE", "ETHUSD:BTNL", "sell",
+        account_scope="user:customer:kraken",
+    )
+    assert reason == "authenticated_exact_match"
+    assert fee["account"] == "user:customer:kraken"
+    assert fee["fee"] == 0.25
+    assert called and all(x[0] is user for x in called)
+
+
+def test_kraken_close_requires_queryorders_open_entry_and_exact_owner(tmp_path, monkeypatch):
+    db = _fresh_ledger(tmp_path, monkeypatch)
+    bridge = importlib.import_module("bot.runtime_kraken_fee_pnl_bridge_v413_patch")
+    realized = importlib.import_module("bot.runtime_realized_pnl_reconciliation_v412_patch")
+    bridge._ensure_opening_cost_basis(
+        {"order_id": "ENTRY-CROSS", "opening_position_id": "POS-CROSS",
+         "account": "platform:kraken", "fee": 0.25, "broker": "kraken",
+         "authenticated_kraken_queryorders": True,
+         "authenticated_kraken_opening_order": True},
+        symbol="XXBTZUSD", side="buy", fill_price=100000.0, filled_usd=100.0,
+    )
+    realized._reconcile_confirmed_fill(
+        {"order_id": "EXIT-CROSS", "account": "user:customer:kraken",
+         "broker": "kraken", "fee": 0.20},
+        symbol="XXBTZUSD", side="sell", fill_price=101000.0, filled_usd=101.0,
+    )
+    assert len(db.get_open_positions(user_id="platform")) == 1
+    assert db.get_trade_history(user_id="platform") == []
+    realized._reconcile_confirmed_fill(
+        {"order_id": "EXIT-WRONG-POS", "account": "platform:kraken",
+         "broker": "kraken", "fee": 0.20, "opening_position_id": "OTHER-POS"},
+        symbol="XXBTZUSD", side="sell", fill_price=101000.0, filled_usd=101.0,
+    )
+    assert len(db.get_open_positions(user_id="platform")) == 1
+    realized._reconcile_confirmed_fill(
+        {"order_id": "EXIT-CROSS", "account": "platform:kraken",
+         "broker": "kraken", "fee": 0.20, "opening_position_id": "POS-CROSS"},
+        symbol="XXBTZUSD", side="sell", fill_price=101000.0, filled_usd=101.0,
+    )
+    assert len(db.get_trade_history(user_id="platform")) == 1
+    assert db.get_open_positions(user_id="platform") == []
+
+
+
+def test_existing_open_position_with_conflicting_authenticated_fill_is_not_silent(tmp_path, monkeypatch):
+    db = _fresh_ledger(tmp_path, monkeypatch)
+    entry = dict(
+        position_id="REPLAY-POS-1", order_id="REPLAY-ENTRY-1", user_id="platform",
+        symbol="XXBTZUSD", side="LONG", entry_price=100000.0,
+        quantity=0.001, size_usd=100.0, entry_fee=0.25,
+        notes="authenticated_kraken_queryorders_entry; order_id=REPLAY-ENTRY-1; account=platform:kraken",
+    )
+    assert db.record_confirmed_entry_atomic(**entry)
+    assert db.record_confirmed_entry_atomic(**entry) is False
+    with pytest.raises(ValueError, match="existing opening position conflicts"):
+        db.record_confirmed_entry_atomic(**{**entry, "entry_fee": 0.99})
+    assert len(db.get_ledger_transactions(user_id="platform")) == 1
+    assert db.get_open_positions(user_id="platform")[0]["entry_fee"] == 0.25
+
+
+def test_orphan_open_position_without_authenticated_ledger_is_not_considered_idempotent(tmp_path, monkeypatch):
+    db = _fresh_ledger(tmp_path, monkeypatch)
+    entry = dict(
+        position_id="MISSING-OPEN-ROW", order_id="MISSING-OPEN-ORDER", user_id="platform",
+        symbol="XXBTZUSD", side="LONG", entry_price=100000.0,
+        quantity=0.001, size_usd=100.0, entry_fee=0.25,
+        notes="authenticated_kraken_queryorders_entry; order_id=MISSING-OPEN-ORDER; account=platform:kraken",
+    )
+    db.open_position(
+        position_id=entry["position_id"], user_id=entry["user_id"],
+        symbol=entry["symbol"], side=entry["side"],
+        entry_price=entry["entry_price"], quantity=entry["quantity"],
+        size_usd=entry["size_usd"], entry_fee=entry["entry_fee"],
+        notes=entry["notes"],
+    )
+    with pytest.raises(ValueError, match="lacks exact authenticated OPEN ledger"):
+        db.record_confirmed_entry_atomic(**entry)
+    assert db.get_ledger_transactions(user_id="platform") == []
+    assert len(db.get_open_positions(user_id="platform")) == 1

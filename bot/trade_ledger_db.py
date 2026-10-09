@@ -53,6 +53,31 @@ class TradeLedgerDB:
         # Initialize database schema
         self._init_database()
 
+        try:
+            from bot.runtime_trade_ledger_storage_v435 import inspect_ledger_storage
+            self.storage_verification = inspect_ledger_storage(self.db_path)
+        except Exception as exc:
+            self.storage_verification = {
+                "state": "mount_evidence_unavailable",
+                "dedicated_mount_detected": False,
+                "restart_persistence_verified": False,
+                "migration_integrity_verified": False,
+                "backup_restore_verified": False,
+                "history_completeness_verified": False,
+                "ready_for_historical_pnl_certification": False,
+            }
+            logger.warning(
+                "TRADE_LEDGER_V435_STORAGE_DIAGNOSTIC_UNAVAILABLE exception_type=%s",
+                type(exc).__name__,
+            )
+        logger.warning(
+            "TRADE_LEDGER_V435_STORAGE_EVIDENCE state=%s "
+            "dedicated_mount_detected=%s restart_persistence_verified=false "
+            "migration_integrity_verified=false backup_restore_verified=false "
+            "historical_pnl_certification=false entries_or_exits_changed=false",
+            self.storage_verification["state"],
+            self.storage_verification["dedicated_mount_detected"],
+        )
         logger.info(f"📊 Trade Ledger DB initialized at {self.db_path}")
 
     @contextmanager
@@ -471,11 +496,36 @@ class TradeLedgerDB:
         tx_side = "BUY" if side == "LONG" else "SELL"
         timestamp = datetime.now().isoformat()
         with self._get_connection() as conn:
+            # Reserve the canonical entry before checking for old trade rows.
+            # SQLite serializes concurrent attempts on this process-owned DB.
+            conn.execute("BEGIN IMMEDIATE")
             existing = conn.execute(
-                "SELECT 1 FROM open_positions WHERE position_id = ? LIMIT 1",
+                "SELECT * FROM open_positions WHERE position_id = ? LIMIT 1",
                 (position_id,),
             ).fetchone()
             if existing:
+                if not (
+                    existing["user_id"] == user_id
+                    and existing["symbol"] == symbol
+                    and existing["side"] == side
+                    and existing["notes"] == notes
+                    and math.isclose(float(existing["entry_price"]), price, rel_tol=1e-10)
+                    and math.isclose(float(existing["quantity"]), units, rel_tol=1e-10)
+                    and math.isclose(float(existing["size_usd"]), notional, rel_tol=1e-10)
+                    and math.isclose(float(existing["entry_fee"]), fee, rel_tol=1e-10)
+                ):
+                    raise ValueError("existing opening position conflicts with authenticated fill")
+                # Even matching position replay is not enough by itself:
+                # its corresponding one exact authenticated OPEN ledger row
+                # must still exist, or the account is pending reconciliation.
+                matched = conn.execute(
+                    """SELECT 1 FROM trade_ledger WHERE position_id = ?
+                       AND order_id = ? AND user_id = ? AND symbol = ?
+                       AND action = 'OPEN' AND side = ? AND notes = ? LIMIT 1""",
+                    (position_id, order_id, user_id, symbol, tx_side, notes),
+                ).fetchone()
+                if not matched:
+                    raise ValueError("existing opening position lacks exact authenticated OPEN ledger")
                 return False
             if conn.execute(
                 "SELECT 1 FROM completed_trades WHERE position_id = ? LIMIT 1",

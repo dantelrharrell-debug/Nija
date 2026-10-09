@@ -27,7 +27,7 @@ MARKER = "20260910-runtime-kraken-fee-pnl-bridge-v413"
 _READY_FLAG = "NIJA_RUNTIME_KRAKEN_FEE_PNL_BRIDGE_V413_READY"
 _PATCH_ATTR = "_nija_runtime_kraken_fee_pnl_bridge_v413"
 _LOCK = threading.RLock()
-_FEE_CACHE: dict[str, tuple[float, str]] = {}
+_FEE_CACHE: dict[tuple[str, str], tuple[float, str]] = {}
 _FINAL = {"closed", "filled", "complete", "completed", "executed"}
 
 
@@ -91,6 +91,17 @@ def _account_owner(result: Mapping[str, Any]) -> str:
     """Canonical owner for comparing independent proof and fill provenance."""
     return _ledger_user_id(result)
 
+def _exact_kraken_account_scope(result: Mapping[str, Any]) -> str:
+    """Require a specific Kraken account, never infer from a different broker."""
+    raw = str(result.get("account") or result.get("account_id") or "").strip()
+    if raw.lower() == "platform:kraken":
+        return "platform:kraken"
+    parts = raw.split(":")
+    if len(parts) == 3 and parts[0].lower() == "user" and parts[1].strip() and parts[2].lower() == "kraken":
+        return f"user:{parts[1]}:kraken"
+    return ""
+
+
 
 def _ensure_opening_cost_basis(
     result: Mapping[str, Any], *, symbol: str, side: str, fill_price: float, filled_usd: float
@@ -100,6 +111,20 @@ def _ensure_opening_cost_basis(
     This is accounting-only. It never creates broker positions or submits orders.
     The source must already be an authenticated exact QueryOrders opening proof.
     """
+    # An "entry" role is a routing hint, not authenticated exchange evidence.
+    # Only the v372 exact QueryOrders final-fill proof may write opening basis.
+    if not (
+        result.get("authenticated_kraken_queryorders") is True
+        and result.get("authenticated_kraken_opening_order") is True
+        and str(result.get("broker") or "kraken").strip().lower() == "kraken"
+    ):
+        LOGGER.warning(
+            "REALIZED_PNL_V435_ENTRY_REJECTED marker=%s "
+            "reason=authenticated_exact_opening_proof_missing "
+            "cost_basis_not_booked=true execution_authority_unchanged=true",
+            MARKER,
+        )
+        return
     position_id = str(result.get("opening_position_id") or "").strip()
     order_id = _order_id(result)
     if not position_id or not order_id or fill_price <= 0.0 or filled_usd <= 0.0:
@@ -147,8 +172,9 @@ def _ensure_opening_cost_basis(
         # two commits: a crash between those writes creates an orphaned fill.
         # SHORT entry SELL is an OPEN, not the legacy record_sell() CLOSE action.
         quantity = float(filled_usd) / float(fill_price)
+        account_scope = _exact_kraken_account_scope(result)
         user_id = _ledger_user_id(result)
-        if not user_id:
+        if not account_scope or not user_id:
             LOGGER.warning(
                 "REALIZED_PNL_V413_ENTRY_LEDGER_PENDING marker=%s order_id=%s position_id=%s "
                 "reason=authenticated_account_scope_unproven ledger_user_guessed=false",
@@ -161,7 +187,7 @@ def _ensure_opening_cost_basis(
         position_side = "LONG" if side_norm == "buy" else "SHORT"
         notes = (
             "authenticated_kraken_queryorders_entry; "
-            f"order_id={order_id}; account={str(result.get('account') or result.get('account_id') or '')}"
+            f"order_id={order_id}; account={account_scope}"
         )
         atomic_book = getattr(ledger, "record_confirmed_entry_atomic", None)
         if not callable(atomic_book):
@@ -205,71 +231,91 @@ def _canonical_symbol(value: Any) -> str:
     return str(value or "").strip().upper()
 
 
-def _query_exact_fee(order_id: str, symbol: str, side: str) -> tuple[dict[str, Any] | None, str]:
-    if order_id in _FEE_CACHE:
-        fee, account = _FEE_CACHE[order_id]
-        if not _account_owner({"account": account}):
-            return None, "cached_account_scope_unproven"
-        out: dict[str, Any] = {
-            "fee": fee, "broker": "kraken",
-            "fee_source": "authenticated_kraken_queryorders",
-            "account": account,
-        }
-        return out, "cache"
+def _pair_identity(value: Any) -> str:
+    """Normalize Kraken legacy pair aliases and routed suffixes for comparison."""
+    core = str(value or "").strip().upper().split(":", 1)[0]
+    if not core:
+        return ""
+    canon = _canonical_symbol(core)
+    compact = "".join(char for char in str(canon) if char.isalnum())
+    return {
+        "XXBTZUSD": "BTCUSD", "XBTUSD": "BTCUSD",
+        "XETHZUSD": "ETHUSD",
+    }.get(compact, compact)
+
+
+def _query_exact_fee(
+    order_id: str, symbol: str, side: str, *, account_scope: str = "",
+) -> tuple[dict[str, Any] | None, str]:
+    """Fetch exact authenticated fee only from the requested Kraken account.
+
+    A global order-id cache or a cross-user QueryOrders scan can misattribute
+    executions. No fallback to a different account is permitted.
+    """
+    account = _exact_kraken_account_scope({"account": account_scope})
+    if not account:
+        return None, "exact_kraken_account_scope_unproven"
+    key = (account, str(order_id or "").strip())
+    cached = _FEE_CACHE.get(key)
+    if cached is not None:
+        fee, cached_account = cached
+        if cached_account != account:
+            return None, "cached_account_scope_conflict"
+        return {"fee": fee, "broker": "kraken",
+                "fee_source": "authenticated_kraken_queryorders",
+                "account": account}, "cache"
     try:
         v367 = importlib.import_module("bot.runtime_kraken_margin_protection_truth_v367_patch")
         brokers_fn = getattr(v367, "_account_brokers", None)
         private_call_fn = getattr(v367, "_private_call", None)
         if not callable(brokers_fn) or not callable(private_call_fn):
             return None, "kraken_authenticated_queryorders_unavailable"
-        for account, broker in list(brokers_fn() or []):
-            call = private_call_fn(broker)
-            if not callable(call):
-                continue
-            try:
-                payload = call("QueryOrders", {"txid": order_id, "trades": "true"})
-            except Exception:
-                continue
-            if not isinstance(payload, Mapping) or payload.get("error"):
-                continue
-            rows = payload.get("result") or {}
-            if not isinstance(rows, Mapping):
-                continue
-            row = rows.get(order_id)
-            if not isinstance(row, Mapping):
-                continue
-            status = str(row.get("status") or "").strip().lower()
-            if status not in _FINAL:
-                continue
-            vol_exec = _f(row.get("vol_exec"), 0.0)
-            cost = _f(row.get("cost"), 0.0)
-            if vol_exec <= 0.0 or cost <= 0.0 or "fee" not in row:
-                continue
-            fee = _f(row.get("fee"))
-            if fee < 0.0:
-                continue
-            descr = row.get("descr") if isinstance(row.get("descr"), Mapping) else {}
-            row_symbol = _canonical_symbol(descr.get("pair") or symbol)
-            wanted_symbol = _canonical_symbol(symbol)
-            row_side = str(descr.get("type") or side or "").strip().lower()
-            wanted_side = str(side or "").strip().lower()
-            if wanted_symbol and row_symbol and wanted_symbol != row_symbol:
-                continue
-            if wanted_side and row_side and wanted_side != row_side:
-                continue
-            account_s = str(account or "")
-            if not _account_owner({"account": account_s}):
-                continue
-            _FEE_CACHE[order_id] = (float(fee), account_s)
-            out = {
-                "fee": float(fee), "broker": "kraken",
-                "fee_source": "authenticated_kraken_queryorders",
-                "account": account_s,
-            }
-            return out, "authenticated_exact_match"
+        matched_brokers = [
+            broker for broker_account, broker in list(brokers_fn() or [])
+            if str(broker_account or "").strip() == account
+        ]
+        if len(matched_brokers) != 1:
+            return None, "exact_account_broker_missing_or_ambiguous"
+        call = private_call_fn(matched_brokers[0])
+        if not callable(call):
+            return None, "exact_account_private_reader_unavailable"
+        try:
+            payload = call("QueryOrders", {"txid": order_id, "trades": "true"})
+        except Exception as exc:
+            return None, f"queryorders_private_exception:{type(exc).__name__}"
+        if not isinstance(payload, Mapping) or payload.get("error"):
+            return None, "queryorders_authenticated_response_unproven"
+        rows = payload.get("result")
+        if not isinstance(rows, Mapping):
+            return None, "queryorders_result_unproven"
+        row = rows.get(order_id)
+        if not isinstance(row, Mapping):
+            return None, "exact_order_not_found"
+        status = str(row.get("status") or "").strip().lower()
+        if status not in _FINAL:
+            return None, "exact_order_not_final"
+        vol_exec = _f(row.get("vol_exec"), 0.0)
+        cost = _f(row.get("cost"), 0.0)
+        fee = _f(row.get("fee"))
+        if vol_exec <= 0 or cost <= 0 or fee < 0:
+            return None, "exact_order_fill_cost_fee_unproven"
+        descr = row.get("descr") if isinstance(row.get("descr"), Mapping) else {}
+        row_symbol = _pair_identity(descr.get("pair"))
+        wanted_symbol = _pair_identity(symbol)
+        row_side = str(descr.get("type") or "").strip().lower()
+        wanted_side = str(side or "").strip().lower()
+        if not row_symbol or not wanted_symbol or row_symbol != wanted_symbol:
+            return None, "exact_order_symbol_unproven"
+        if row_side not in {"buy", "sell"} or wanted_side != row_side:
+            return None, "exact_order_side_mismatch"
+        _FEE_CACHE[key] = (float(fee), account)
+        return {
+            "fee": float(fee), "broker": "kraken",
+            "fee_source": "authenticated_kraken_queryorders",
+            "account": account,
+        }, "authenticated_exact_match"
     except Exception as exc:
-        return None, f"queryorders_exception:{type(exc).__name__}:{exc}"
-    return None, "exact_order_fee_not_found"
+        return None, f"queryorders_exception:{type(exc).__name__}"
 
 
 def _patch_v372_opening_proof() -> bool:
@@ -343,7 +389,10 @@ def _patch_v412_reconcile() -> bool:
                 return
             enriched = dict(result)
             if not _has_explicit_fee(enriched) and oid:
-                fee_meta, reason = _query_exact_fee(oid, symbol, side)
+                fee_meta, reason = _query_exact_fee(
+                    oid, symbol, side,
+                    account_scope=_exact_kraken_account_scope(enriched),
+                )
                 if fee_meta:
                     explicit_owner = _account_owner(enriched)
                     authenticated_owner = _account_owner(fee_meta)

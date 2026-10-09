@@ -123,40 +123,122 @@ def _ledger() -> Any:
     return getter()
 
 
-def _already_booked(ledger: Any, order_id: str) -> bool:
+def _kraken_account_scope(result: Mapping[str, Any]) -> str:
+    """An authenticated Kraken fill must name exactly one Kraken account."""
+    value = str(result.get("account") or result.get("account_id") or "").strip()
+    if value.lower() == "platform:kraken":
+        return "platform:kraken"
+    parts = value.split(":")
+    if (
+        len(parts) == 3 and parts[0].lower() == "user"
+        and parts[1].strip() and parts[2].lower() == "kraken"
+    ):
+        return f"user:{parts[1]}:kraken"
+    return ""
+
+
+def _already_booked(
+    ledger: Any, order_id: str, *, user_id: str = "", broker: str = "",
+) -> bool:
     if not order_id:
         return False
     with ledger._get_connection() as conn:
         cur = conn.cursor()
-        cur.execute(
-            "SELECT 1 FROM trade_ledger WHERE order_id = ? AND action = 'CLOSE' LIMIT 1",
-            (order_id,),
-        )
+        if broker == "kraken" and user_id:
+            cur.execute(
+                """SELECT 1 FROM trade_ledger WHERE order_id = ? AND user_id = ?
+                   AND action = 'CLOSE' AND notes LIKE ? LIMIT 1""",
+                (order_id, user_id, "%; broker=kraken; %"),
+            )
+        else:
+            # Legacy/non-Kraken handling remains conservative and unchanged.
+            cur.execute(
+                "SELECT 1 FROM trade_ledger WHERE order_id = ? AND action = 'CLOSE' LIMIT 1",
+                (order_id,),
+            )
         return cur.fetchone() is not None
 
 
-def _matching_positions(ledger: Any, symbol: str, side: str, user_hint: str) -> list[dict[str, Any]]:
+def _authenticated_kraken_open_position(
+    conn: Any, position: Mapping[str, Any], *, account_scope: str,
+) -> bool:
+    """No exact QueryOrders OPEN identity = no Kraken realized P&L."""
+    position_id = str(position.get("position_id") or "")
+    owner = str(position.get("user_id") or "")
+    if not position_id or not owner or not account_scope:
+        return False
+    entries = conn.execute(
+        """SELECT order_id, symbol, side, price, quantity, size_usd, fee, notes
+           FROM trade_ledger WHERE position_id = ? AND user_id = ?
+           AND action = 'OPEN'""",
+        (position_id, owner),
+    ).fetchall()
+    if len(entries) != 1:
+        return False
+    opened = entries[0]
+    notes = str(opened["notes"] or "")
+    order_id = str(opened["order_id"] or "")
+    if not order_id or not notes.startswith("authenticated_kraken_queryorders_entry; "):
+        return False
+    parts = notes.split("; ")
+    if f"order_id={order_id}" not in parts or f"account={account_scope}" not in parts:
+        return False
+    direction = _norm_side(position.get("side"))
+    if not (
+        (direction in {"long", "buy"} and opened["side"] == "BUY")
+        or (direction in {"short", "sell"} and opened["side"] == "SELL")
+    ):
+        return False
+    if _symbol_key(opened["symbol"]) != _symbol_key(position.get("symbol")):
+        return False
+    for left, right in (
+        (opened["price"], position.get("entry_price")),
+        (opened["quantity"], position.get("quantity")),
+        (opened["size_usd"], position.get("size_usd")),
+        (opened["fee"], position.get("entry_fee")),
+    ):
+        lf = _f(left, -1.0)
+        rf = _f(right, -1.0)
+        if lf < 0 or rf < 0 or not math.isclose(lf, rf, rel_tol=1e-10, abs_tol=1e-9):
+            return False
+    return True
+
+
+def _matching_positions(
+    ledger: Any, symbol: str, side: str, user_hint: str, *,
+    broker: str = "", account_scope: str = "", position_id_hint: str = "",
+) -> list[dict[str, Any]]:
     wanted = _symbol_key(symbol)
     closing_long = _norm_side(side) in {"sell", "short"}
     closing_short = _norm_side(side) in {"buy", "cover"}
     if not (closing_long or closing_short):
         return []
+    out: list[dict[str, Any]] = []
     with ledger._get_connection() as conn:
         cur = conn.cursor()
         cur.execute("SELECT * FROM open_positions WHERE status = 'open' ORDER BY entry_time DESC")
         rows = [dict(row) for row in cur.fetchall()]
-    out: list[dict[str, Any]] = []
-    for row in rows:
-        if _symbol_key(row.get("symbol")) != wanted:
-            continue
-        pos_side = _norm_side(row.get("side"))
-        if closing_long and pos_side not in {"long", "buy"}:
-            continue
-        if closing_short and pos_side not in {"short", "sell"}:
-            continue
-        if user_hint and str(row.get("user_id") or "").strip() != user_hint:
-            continue
-        out.append(row)
+        for row in rows:
+            if _symbol_key(row.get("symbol")) != wanted:
+                continue
+            pos_side = _norm_side(row.get("side"))
+            if closing_long and pos_side not in {"long", "buy"}:
+                continue
+            if closing_short and pos_side not in {"short", "sell"}:
+                continue
+            if user_hint and str(row.get("user_id") or "").strip() != user_hint:
+                continue
+            if position_id_hint and str(row.get("position_id") or "") != position_id_hint:
+                continue
+            if broker == "kraken":
+                if not account_scope or not _authenticated_kraken_open_position(
+                    conn, row, account_scope=account_scope
+                ):
+                    continue
+            elif str(row.get("notes") or "").startswith("authenticated_kraken_queryorders_entry; "):
+                # A Kraken-authenticated opening may not close from another venue.
+                continue
+            out.append(row)
     return out
 
 
@@ -189,8 +271,26 @@ def _reconcile_confirmed_fill(
     if not oid:
         return
     try:
+        broker = str(result.get("broker") or result.get("venue") or result.get("exchange") or "").strip().lower()
+        account_scope = _kraken_account_scope(result)
+        if broker == "kraken" and not account_scope:
+            LOGGER.warning(
+                "REALIZED_PNL_V435_PENDING marker=%s order_id=%s "
+                "reason=exact_kraken_account_scope_unproven realized_pnl_not_booked=true",
+                MARKER, oid,
+            )
+            return
         ledger = _ledger()
-        if _already_booked(ledger, oid):
+        user_hint = _candidate_user(result)
+        if user_hint == "__unresolved_account_identity__":
+            LOGGER.warning(
+                "REALIZED_PNL_V412_PENDING marker=%s order_id=%s symbol=%s "
+                "reason=authenticated_account_scope_unproven "
+                "realized_net_pnl_not_booked=true cross_account_booking_forbidden=true",
+                MARKER, oid, symbol,
+            )
+            return
+        if _already_booked(ledger, oid, user_id=user_hint, broker=broker):
             LOGGER.info(
                 "REALIZED_PNL_V412_DUPLICATE_IGNORED marker=%s order_id=%s symbol=%s idempotent=true",
                 MARKER, oid, symbol,
@@ -206,16 +306,10 @@ def _reconcile_confirmed_fill(
             )
             return
 
-        user_hint = _candidate_user(result)
-        if user_hint == "__unresolved_account_identity__":
-            LOGGER.warning(
-                "REALIZED_PNL_V412_PENDING marker=%s order_id=%s symbol=%s "
-                "reason=authenticated_account_scope_unproven "
-                "realized_net_pnl_not_booked=true cross_account_booking_forbidden=true",
-                MARKER, oid, symbol,
-            )
-            return
-        candidates = _matching_positions(ledger, symbol, side, user_hint)
+        candidates = _matching_positions(
+            ledger, symbol, side, user_hint, broker=broker, account_scope=account_scope,
+            position_id_hint=str(result.get("opening_position_id") or result.get("position_id") or "").strip(),
+        )
         if len(candidates) != 1:
             LOGGER.warning(
                 "REALIZED_PNL_V412_PENDING marker=%s order_id=%s symbol=%s reason=position_match_count_%s "
@@ -259,7 +353,6 @@ def _reconcile_confirmed_fill(
         close = getattr(ledger, "close_position_with_pnl", None)
         if not callable(close):
             raise RuntimeError("close_position_with_pnl_missing")
-        broker = str(result.get("broker") or result.get("venue") or result.get("exchange") or "").strip().lower()
         pnl = close(
             position_id=str(pos.get("position_id") or ""),
             symbol=str(pos.get("symbol") or symbol),
