@@ -135,6 +135,7 @@ scripts/*
 !scripts/apply_direct_broker_prebootstrap_v27.py
 !scripts/install_sitecustomize_defer_guard.py
 !scripts/runtime_entrypoint_attestation.py
+!scripts/nija_trade_ledger_snapshot_v436.py
 check_*.py
 verify_*.py
 validate_*.py
