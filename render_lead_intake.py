@@ -25,6 +25,7 @@ import pathlib
 import re
 import sqlite3
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -34,6 +35,8 @@ from typing import Any
 _LEAD_PATH = "/api/leads/intake"
 _ACCOUNT_CHECK_PATH = "/api/leads/account-check"
 _MAX_BODY_BYTES = 65536
+_FORWARD_LOCK_LEASE_SECONDS = 120
+_FORWARD_RETRY_BACKOFF_SECONDS = 60
 _DB_LOCK = threading.RLock()
 _SCHEMA_READY: set[str] = set()
 _EMAIL_RE = re.compile(r"[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?(?:\.[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?)+", re.IGNORECASE)
@@ -215,6 +218,11 @@ def _ensure_schema(connection: sqlite3.Connection) -> None:
             );
             CREATE INDEX IF NOT EXISTS idx_website_leads_email
                 ON website_leads(email, submitted_at);
+            CREATE TABLE IF NOT EXISTS website_lead_forwarding (
+                event_key TEXT PRIMARY KEY,
+                state TEXT NOT NULL,
+                lease_until REAL NOT NULL DEFAULT 0
+            );
             """
         )
         connection.commit()
@@ -255,6 +263,44 @@ def record_lead(payload: dict[str, Any]) -> tuple[dict[str, str], str, bool]:
         connection.commit()
         duplicate = cursor.rowcount == 0
     return canonical, event_key, duplicate
+
+
+def _claim_forward(event_key: str) -> bool:
+    """Claim the downstream notification for one event, across concurrent requests.
+
+    A sent event cannot be forwarded again. A failed/crashed attempt is eligible
+    for retry only after a short backoff or its in-flight lease expires.
+    """
+    now = time.time()
+    with _DB_LOCK, _connect() as connection:
+        _ensure_schema(connection)
+        connection.execute(
+            "INSERT OR IGNORE INTO website_lead_forwarding (event_key, state, lease_until) "
+            "VALUES (?, 'pending', 0)",
+            (event_key,),
+        )
+        claimed = connection.execute(
+            """UPDATE website_lead_forwarding
+               SET state='sending', lease_until=?
+               WHERE event_key=?
+                 AND state IN ('pending', 'sending')
+                 AND lease_until <= ?""",
+            (now + _FORWARD_LOCK_LEASE_SECONDS, event_key, now),
+        )
+        connection.commit()
+        return claimed.rowcount == 1
+
+
+def _finish_forward(event_key: str, *, sent: bool) -> None:
+    """Persist success or rate-limit retries for the same website submission."""
+    retry_at = 0 if sent else time.time() + _FORWARD_RETRY_BACKOFF_SECONDS
+    with _DB_LOCK, _connect() as connection:
+        connection.execute(
+            """UPDATE website_lead_forwarding SET state=?, lease_until=?
+               WHERE event_key=? AND state='sending'""",
+            ("sent" if sent else "pending", retry_at, event_key),
+        )
+        connection.commit()
 
 
 def _lookup_user_by_email(email: str) -> dict[str, Any]:
@@ -454,11 +500,26 @@ def handle_lead_intake_post(handler: Any) -> bool:
     forwarded = False
     forward_error = False
     try:
-        forwarded = _forward(canonical)
-    except OSError:
-        # The lead is already safely persisted. Keep the submission successful so
-        # an external webhook outage cannot destroy the source lead.
+        # A Zapier replay must not resend the same customer-facing notification.
+        # Failed attempts may retry after a bounded delay without repeating a
+        # previously confirmed successful forward.
+        claimed = _claim_forward(event_key)
+    except (OSError, sqlite3.Error):
+        claimed = False
         forward_error = True
+    if claimed:
+        try:
+            forwarded = _forward(canonical)
+        except Exception as exc:
+            # The canonical lead is already persisted; never expose webhook
+            # URL, provider credentials, or payloads in error logs.
+            forward_error = True
+            print(f"NIJA_LEAD_FORWARD_FAILED reason={type(exc).__name__}", flush=True)
+        finally:
+            try:
+                _finish_forward(event_key, sent=forwarded)
+            except (OSError, sqlite3.Error):
+                forward_error = True
 
     _send_json(
         handler,
