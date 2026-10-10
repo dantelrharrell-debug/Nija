@@ -109,6 +109,7 @@ scripts/*
 !scripts/nija_ledger_evidence_v438.py
 !scripts/nija_offline_kraken_csv_audit_v440.py
 !scripts/nija_state_store_persistence_audit_v441.py
+!scripts/nija_account_state_diagnostics.py
 !scripts/redis_connectivity_check.sh
 !scripts/credential_diagnostics.sh
 !scripts/debug_startup_safe_mode.sh
