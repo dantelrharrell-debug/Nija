@@ -166,3 +166,79 @@ def test_sent_history_survives_ephemeral_lead_database_replacement(monkeypatch, 
     assert replay_status == 201  # Source DB is fresh; durable forwarding state is not.
     assert replay["accepted"] and not replay["forwarded"]
     assert calls == ["synthetic-idempotency@example.com"]
+
+def test_missing_timestamp_replay_uses_stable_identity(monkeypatch, tmp_path):
+    _config(monkeypatch, tmp_path)
+    lead = _lead()
+    lead.pop("submitted_at")
+    times = iter([
+        "2026-10-10T12:00:00.000Z",
+        "2026-10-10T12:05:00.000Z",
+        "2026-10-10T12:10:00.000Z",
+    ])
+    monkeypatch.setattr(intake, "_utcnow", lambda: next(times, "2026-10-10T12:15:00.000Z"))
+    forwards = []
+    monkeypatch.setattr(intake, "_forward", lambda lead: forwards.append(lead) or True)
+    first_code, first = _request(lead)
+    second_code, second = _request(lead)
+    assert first_code == 201
+    assert second_code == 200 and second["duplicate"]
+    assert first["lead_id"] == second["lead_id"]
+    assert len(forwards) == 1
+
+
+def test_malformed_timestamp_replay_uses_stable_identity(monkeypatch, tmp_path):
+    _config(monkeypatch, tmp_path)
+    lead = _lead()
+    lead["submitted_at"] = "not-a-timestamp"
+    sent = []
+    monkeypatch.setattr(intake, "_forward", lambda lead: sent.append(1) or True)
+    _, first = _request(lead)
+    status, replay = _request(lead)
+    assert status == 200 and replay["duplicate"]
+    assert first["lead_id"] == replay["lead_id"] and len(sent) == 1
+
+
+def test_expired_lease_owner_cannot_override_current_claim(monkeypatch, tmp_path):
+    _config(monkeypatch, tmp_path)
+    key = "a" * 64
+    stale = intake._claim_forward(key)
+    assert stale
+    with sqlite3.connect(intake._forward_db_path()) as conn:
+        conn.execute("UPDATE website_lead_forwarding SET lease_until=0 WHERE event_key=?", (key,))
+        conn.commit()
+    current = intake._claim_forward(key)
+    assert current and current != stale
+
+    assert not intake._finish_forward(key, claim_token=stale, sent=False)
+    with sqlite3.connect(intake._forward_db_path()) as conn:
+        state = conn.execute(
+            "SELECT state, lease_token FROM website_lead_forwarding WHERE event_key=?", (key,)
+        ).fetchone()
+    assert state == ("sending", current)
+
+    assert intake._finish_forward(key, claim_token=current, sent=True)
+    assert intake._claim_forward(key) is None
+
+
+def test_legacy_forwarding_table_migrates_without_losing_sent_rows(monkeypatch, tmp_path):
+    _config(monkeypatch, tmp_path)
+    path = intake._forward_db_path()
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "CREATE TABLE website_lead_forwarding ("
+            "event_key TEXT PRIMARY KEY, state TEXT NOT NULL, "
+            "lease_until REAL NOT NULL DEFAULT 0)"
+        )
+        conn.execute(
+            "INSERT INTO website_lead_forwarding(event_key, state, lease_until) "
+            "VALUES ('legacy-sent', 'sent', 0)"
+        )
+        conn.commit()
+    assert intake._claim_forward("legacy-sent") is None
+    with sqlite3.connect(path) as conn:
+        columns = {r[1] for r in conn.execute("PRAGMA table_info(website_lead_forwarding)")}
+        state = conn.execute(
+            "SELECT state FROM website_lead_forwarding WHERE event_key='legacy-sent'"
+        ).fetchone()[0]
+    assert "lease_token" in columns and state == "sent"
