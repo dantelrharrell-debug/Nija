@@ -31,6 +31,7 @@ import importlib
 import logging
 import os
 import threading
+import time
 from functools import wraps
 from typing import Any
 
@@ -206,6 +207,70 @@ def recover_execution_proof_once() -> int:
                     )
                 continue
 
+            # v372 proved this order only through this exact broker's
+            # authenticated QueryOrders call. Preserve its identity all the
+            # way to v328/v346 and v413; a bare order ID is not sufficient
+            # to attribute fills to NIJA's platform or an end-user account.
+            # v373 is an independent retry path. Do not permit a helper
+            # change to silently drop exact historical-fill provenance:
+            # re-reading an old order must never become a fresh trade.
+            try:
+                broker_fill_epoch = (
+                    float(proof.get("broker_fill_at_epoch") or 0.0)
+                    if isinstance(proof, dict) else 0.0
+                )
+            except (TypeError, ValueError, OverflowError):
+                broker_fill_epoch = 0.0
+            if (
+                not isinstance(proof, dict)
+                or str(proof.get("order_id") or "").strip() != order_id
+                or proof.get("authenticated_kraken_queryorders") is not True
+                or proof.get("recovered_fill_proof") is not True
+                or not (0.0 < broker_fill_epoch <= time.time() + 60.0)
+            ):
+                LOGGER.warning(
+                    "KRAKEN_MARGIN_EXECUTION_READINESS_V373_DEFERRED marker=%s "
+                    "account=%s order_id=%s reason=historical_queryorders_provenance_unverified "
+                    "canonical_fill_not_admitted=true trading_fail_closed=true",
+                    MARKER, account_s or "unknown", order_id or "unknown",
+                )
+                continue
+
+            if (
+                account_s != "platform:kraken"
+                and not (
+                    account_s.startswith("user:")
+                    and account_s.endswith(":kraken")
+                    and len(account_s.split(":")) == 3
+                    and bool(account_s.split(":")[1].strip())
+                )
+            ):
+                LOGGER.warning(
+                    "KRAKEN_MARGIN_EXECUTION_READINESS_V373_DEFERRED marker=%s "
+                    "account=%s order_id=%s reason=broker_account_scope_unverified "
+                    "canonical_fill_not_admitted=true trading_fail_closed=true",
+                    MARKER, account_s or "unknown", order_id or "unknown",
+                )
+                continue
+            if (
+                not isinstance(proof, dict)
+                or any(
+                    str(proof.get(key) or "").strip() not in {"", account_s}
+                    for key in ("account", "account_id")
+                )
+                or str(proof.get("broker") or "kraken").strip().lower() != "kraken"
+            ):
+                LOGGER.warning(
+                    "KRAKEN_MARGIN_EXECUTION_READINESS_V373_DEFERRED marker=%s "
+                    "account=%s order_id=%s reason=authenticated_proof_scope_conflict "
+                    "canonical_fill_not_admitted=true trading_fail_closed=true",
+                    MARKER, account_s, order_id or "unknown",
+                )
+                continue
+            proof["broker"] = "kraken"
+            proof["account"] = account_s
+            proof["account_id"] = account_s
+
             try:
                 normalize(proof, symbol=proof["symbol"], side=proof["side"])
             except Exception as exc:
@@ -218,10 +283,11 @@ def recover_execution_proof_once() -> int:
                     )
                 continue
 
-            LOGGER.critical(
-                "KRAKEN_MARGIN_EXECUTION_READINESS_V373_RECOVERED marker=%s account=%s order_id=%s "
+            LOGGER.info(
+                "KRAKEN_MARGIN_EXECUTION_READINESS_V373_QUERYORDERS_ACCEPTED marker=%s account=%s order_id=%s "
                 "symbol=%s side=%s fill_price=%.10f filled_quantity=%.12f "
-                "exact_queryorders_match=true canonical_v328_accepted=true canonical_v346_marker_owner=true "
+                "exact_queryorders_match=true canonical_v328_accepted=true "
+                "canonical_v346_marker_admission_not_asserted=true account_scope_preserved=true "
                 "execution_ready_not_written_here=true ack_not_fill=true openpositions_not_fill=true "
                 "market_price_promoted=false requested_notional_promoted=false execution_proof_fabricated=false "
                 "safety_gates_bypassed=false",
