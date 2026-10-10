@@ -275,7 +275,47 @@ def _genuine_execution_marker_proof() -> tuple[bool, str]:
         kind = str(meta.get("proof_kind") or "").strip().lower()
         if stage not in {"ORDER_VERIFY", "FILL_VERIFY"}:
             return False, f"execution_stage_insufficient:{stage or 'missing'}"
-        if source != "heartbeat_trade" or kind != "execution_probe":
+        if kind != "execution_probe":
+            return False, "execution_provenance_unverified"
+        if source == "heartbeat_trade":
+            pass  # Existing v169-verified heartbeat/order path.
+        elif source == "canonical_confirmed_fill":
+            # A v328/v346-confirmed FILL is an existing accepted provenance
+            # source, but startup must not trust an unpatched raw marker reader.
+            # Require the independent v402 canonical verifier, which calls
+            # v169's provenance guard, and the exact same broker event time.
+            if stage != "FILL_VERIFY":
+                return False, "canonical_fill_stage_insufficient"
+            if os.environ.get("NIJA_RUNTIME_EXECUTION_CAPITAL_INTEGRITY_V169_READY") != "1":
+                return False, "canonical_provenance_guard_not_ready"
+            canonical_verifier = getattr(
+                module, "_canonical_execution_verification_status_v402", None
+            )
+            if not callable(canonical_verifier):
+                return False, "canonical_proof_verifier_unavailable"
+            canonical_ok, canonical_reason, canonical_meta = canonical_verifier()
+            if not bool(canonical_ok):
+                return False, f"canonical_proof:{canonical_reason or 'not_verified'}"
+            canonical_meta = dict(canonical_meta or {})
+            if (
+                str(canonical_meta.get("stage") or "").strip().upper() != "FILL_VERIFY"
+                or str(canonical_meta.get("source") or "").strip().lower() != "canonical_confirmed_fill"
+                or str(canonical_meta.get("proof_kind") or "").strip().lower() != "execution_probe"
+            ):
+                return False, "canonical_proof_provenance_unverified"
+            try:
+                primary_epoch = float(meta.get("verified_at_epoch") or 0.0)
+                canonical_epoch = float(canonical_meta.get("verified_at_epoch") or 0.0)
+            except (TypeError, ValueError, OverflowError):
+                return False, "canonical_proof_timestamp_invalid"
+            if not (
+                math.isfinite(primary_epoch)
+                and math.isfinite(canonical_epoch)
+                and canonical_epoch > 0.0
+                and abs(primary_epoch - canonical_epoch) < 0.001
+            ):
+                return False, "canonical_proof_identity_mismatch"
+        else:
             return False, "execution_provenance_unverified"
         verified = float(meta.get("verified_at_epoch") or 0.0)
         age = time.time() - verified

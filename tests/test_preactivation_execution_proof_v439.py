@@ -87,3 +87,87 @@ def test_collector_never_marks_execution_ready_without_proof(monkeypatch):
     assert proofs["risk_ready"] is True
     assert proofs["execution_ready"] is False
     assert details["execution_marker_detail"] == "verification_stale"
+
+
+def test_fresh_canonical_confirmed_fill_requires_independent_provenance(monkeypatch):
+    """A genuine canonical fill is eligible only after both verifiers agree."""
+    v16 = load()
+    tsm = ModuleType("bot.trading_state_machine")
+    monkeypatch.setitem(sys.modules, "bot.trading_state_machine", tsm)
+    monkeypatch.setattr(v16.time, "time", lambda: 10000)
+    monkeypatch.setenv("NIJA_RUNTIME_EXECUTION_CAPITAL_INTEGRITY_V169_READY", "1")
+    marker = dict(
+        stage="FILL_VERIFY", source="canonical_confirmed_fill",
+        proof_kind="execution_probe", verified_at_epoch=9990,
+    )
+    tsm._heartbeat_verification_status = lambda: (True, "", dict(marker))
+    tsm._canonical_execution_verification_status_v402 = lambda: (
+        True, "", dict(marker)
+    )
+    assert v16._genuine_execution_marker_proof() == (
+        True, "fresh_genuine_order_or_fill_execution_proof"
+    )
+
+
+def test_canonical_fill_proof_rejects_missing_provenance_guard_and_verifier(monkeypatch):
+    v16 = load()
+    tsm = ModuleType("bot.trading_state_machine")
+    monkeypatch.setitem(sys.modules, "bot.trading_state_machine", tsm)
+    monkeypatch.setattr(v16.time, "time", lambda: 10000)
+    marker = dict(
+        stage="FILL_VERIFY", source="canonical_confirmed_fill",
+        proof_kind="execution_probe", verified_at_epoch=9990,
+    )
+    tsm._heartbeat_verification_status = lambda: (True, "", dict(marker))
+    monkeypatch.delenv("NIJA_RUNTIME_EXECUTION_CAPITAL_INTEGRITY_V169_READY", raising=False)
+    assert v16._genuine_execution_marker_proof()[0] is False
+    monkeypatch.setenv("NIJA_RUNTIME_EXECUTION_CAPITAL_INTEGRITY_V169_READY", "1")
+    assert v16._genuine_execution_marker_proof()[0] is False
+
+
+def test_canonical_fill_proof_rejects_unverified_stage_scope_and_time(monkeypatch):
+    v16 = load()
+    tsm = ModuleType("bot.trading_state_machine")
+    monkeypatch.setitem(sys.modules, "bot.trading_state_machine", tsm)
+    monkeypatch.setattr(v16.time, "time", lambda: 10000)
+    monkeypatch.setenv("NIJA_RUNTIME_EXECUTION_CAPITAL_INTEGRITY_V169_READY", "1")
+    good = dict(
+        stage="FILL_VERIFY", source="canonical_confirmed_fill",
+        proof_kind="execution_probe", verified_at_epoch=9990,
+    )
+    tsm._heartbeat_verification_status = lambda: (True, "", dict(good))
+    for second in (
+        (False, "v169_provenance_rejected", dict(good)),
+        (True, "", {**good, "stage": "AUTH_VERIFY"}),
+        (True, "", {**good, "source": "authority_heartbeat"}),
+        (True, "", {**good, "proof_kind": "authority_liveness"}),
+        (True, "", {**good, "verified_at_epoch": 9991}),
+    ):
+        tsm._canonical_execution_verification_status_v402 = lambda value=second: value
+        assert v16._genuine_execution_marker_proof()[0] is False
+    tsm._canonical_execution_verification_status_v402 = lambda: (True, "", dict(good))
+    for bad in (
+        {**good, "stage": "ORDER_VERIFY"},
+        {**good, "verified_at_epoch": 7000},
+        {**good, "verified_at_epoch": 10030},
+        {**good, "proof_kind": "authority_liveness"},
+        {**good, "source": "unrecognized"},
+    ):
+        tsm._heartbeat_verification_status = lambda marker=bad: (True, "", marker)
+        assert v16._genuine_execution_marker_proof()[0] is False
+
+
+def test_canonical_fill_does_not_mark_execution_ready_without_real_proof(monkeypatch):
+    """Positive integration is strictly conditional on a fresh matching canonical verifier."""
+    v16 = load()
+    tsm = ModuleType("bot.trading_state_machine")
+    monkeypatch.setitem(sys.modules, "bot.trading_state_machine", tsm)
+    monkeypatch.setattr(v16.time, "time", lambda: 10000)
+    monkeypatch.setenv("NIJA_RUNTIME_EXECUTION_CAPITAL_INTEGRITY_V169_READY", "1")
+    marker = dict(
+        stage="FILL_VERIFY", source="canonical_confirmed_fill",
+        proof_kind="execution_probe", verified_at_epoch=6000,
+    )
+    tsm._heartbeat_verification_status = lambda: (True, "", dict(marker))
+    tsm._canonical_execution_verification_status_v402 = lambda: (True, "", dict(marker))
+    assert v16._genuine_execution_marker_proof()[0] is False
