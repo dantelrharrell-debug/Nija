@@ -135,4 +135,5 @@ jobs:
             tests/test_nija_state_store_persistence_audit_v441.py \
             bot/tests/test_nija_offline_kraken_csv_audit_v440.py \
             tests/test_runtime_capital_refresh_ownership_v166.py \
-            tests/test_account_state_diagnostics.py
+            tests/test_account_state_diagnostics.py \
+            tests/test_runtime_account_scoped_position_state_v289.py
