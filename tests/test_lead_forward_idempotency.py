@@ -242,3 +242,29 @@ def test_legacy_forwarding_table_migrates_without_losing_sent_rows(monkeypatch, 
             "SELECT state FROM website_lead_forwarding WHERE event_key='legacy-sent'"
         ).fetchone()[0]
     assert "lease_token" in columns and state == "sent"
+
+
+def test_same_submission_from_two_form_labels_forwards_once(monkeypatch, tmp_path):
+    _config(monkeypatch, tmp_path)
+    calls = []
+    monkeypatch.setattr(intake, "_forward", lambda lead: calls.append(lead["form_name"]) or True)
+
+    first = dict(_lead(), form_name="Lead_Gate")
+    second = dict(_lead(), form_name="lead-gate-modal")
+    first_status, first_body = _request(first)
+    second_status, second_body = _request(second)
+
+    assert first_status == 201 and first_body["forwarded"]
+    assert second_status == 201 and not second_body["duplicate"]
+    assert not second_body["forwarded"] and not second_body["forward_error"]
+    assert calls == ["Lead_Gate"]
+
+
+def test_different_submission_times_still_forward_separately(monkeypatch, tmp_path):
+    _config(monkeypatch, tmp_path)
+    calls = []
+    monkeypatch.setattr(intake, "_forward", lambda lead: calls.append(lead["submitted_at"]) or True)
+
+    _request(_lead())
+    _request(dict(_lead(), submitted_at="2026-10-11T00:00:00Z"))
+    assert len(calls) == 2

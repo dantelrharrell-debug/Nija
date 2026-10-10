@@ -251,6 +251,19 @@ def _ensure_schema(connection: sqlite3.Connection) -> None:
         _SCHEMA_READY.add(key)
 
 
+def _forward_key(payload: dict[str, Any], canonical: dict[str, str], event_key: str) -> str:
+    """Form-agnostic key so one submission relabelled by two forms forwards once.
+
+    Only a stable source timestamp is trusted; without one, fall back to the
+    per-form event key rather than risk suppressing distinct submissions.
+    """
+    stable_timestamp = _parse_timestamp(_raw_submission_timestamp(payload))
+    if not stable_timestamp:
+        return event_key
+    identity = f"submission|{canonical['email'].casefold()}|{stable_timestamp}"
+    return hashlib.sha256(identity.encode("utf-8")).hexdigest()
+
+
 def record_lead(payload: dict[str, Any]) -> tuple[dict[str, str], str, bool]:
     canonical = normalize_lead_payload(payload)
     raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
@@ -576,11 +589,12 @@ def handle_lead_intake_post(handler: Any) -> bool:
 
     forwarded = False
     forward_error = False
+    forward_key = _forward_key(payload, canonical, event_key)
     try:
         # A Zapier replay must not resend the same customer-facing notification.
         # Failed attempts may retry after a bounded delay without repeating a
         # previously confirmed successful forward.
-        claim_token = _claim_forward(event_key)
+        claim_token = _claim_forward(forward_key)
     except (OSError, sqlite3.Error):
         claim_token = None
         forward_error = True
@@ -594,7 +608,7 @@ def handle_lead_intake_post(handler: Any) -> bool:
             print(f"NIJA_LEAD_FORWARD_FAILED reason={type(exc).__name__}", flush=True)
         finally:
             try:
-                _finish_forward(event_key, claim_token=claim_token, sent=forwarded)
+                _finish_forward(forward_key, claim_token=claim_token, sent=forwarded)
             except (OSError, sqlite3.Error):
                 forward_error = True
 
