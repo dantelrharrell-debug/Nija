@@ -9,6 +9,7 @@ on:
     branches: [test/nija-course-readiness-20261010]
     paths:
       - '.github/workflows/nija-course-production-readiness.yml'
+      - 'tests/test_course_complete_delivery.py'
 
 permissions:
   contents: read
