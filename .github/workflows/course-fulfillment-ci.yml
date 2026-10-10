@@ -9,6 +9,7 @@ on:
       - 'course_portal.py'
       - 'tests/test_course_fulfillment.py'
       - 'tests/test_course_portal.py'
+      - 'tests/test_course_complete_delivery.py'
       - 'tests/test_billing_service_contract.py'
       - '.github/workflows/course-fulfillment-ci.yml'
   push:
@@ -19,6 +20,7 @@ on:
       - 'course_portal.py'
       - 'tests/test_course_fulfillment.py'
       - 'tests/test_course_portal.py'
+      - 'tests/test_course_complete_delivery.py'
       - 'tests/test_billing_service_contract.py'
 
 permissions:
@@ -40,4 +42,4 @@ jobs:
         env:
           NIJA_COURSE_DELIVERY_ENABLED: 'false'
         run: |
-          python -m pytest -q tests/test_course_fulfillment.py tests/test_course_portal.py tests/test_billing_service_contract.py
+          python -m pytest -q tests/test_course_fulfillment.py tests/test_course_portal.py tests/test_billing_service_contract.py tests/test_course_complete_delivery.py
