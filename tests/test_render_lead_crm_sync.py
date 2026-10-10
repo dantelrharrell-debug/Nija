@@ -334,6 +334,35 @@ def test_redis_rebootstrap_skips_sqlite_confirmed_contacts(monkeypatch, tmp_path
 
 
 
+
+def test_recreated_sqlite_mirror_preserves_redis_confirmed_state(monkeypatch, tmp_path):
+    # Render's ephemeral SQLite may be recreated even when Redis survived.
+    # Enqueueing the same event must not turn an acknowledged contact pending.
+    monkeypatch.setenv("NIJA_LEAD_DB_PATH", str(tmp_path / "recreated.sqlite3"))
+    monkeypatch.setenv("NIJA_LEAD_APOLLO_SYNC_ENABLED", "true")
+    fake = FakeRedis()
+    key = sync._redis_event_key("evt_confirmed")
+    fake.hset(key, mapping={
+        "email": "confirmed@example.com",
+        "name": "Confirmed QA",
+        "state": "synced",
+        "attempts": "0",
+        "next_attempt_at": "0",
+    })
+    monkeypatch.setattr(sync, "_redis_client", lambda: fake)
+    monkeypatch.setattr(sync, "start_worker", lambda: None)
+    lead = {"name": "Confirmed QA", "email": "confirmed@example.com"}
+    assert sync.enqueue_lead(lead, "evt_confirmed")
+    with sync._connect() as conn:
+        row = conn.execute(
+            "SELECT state FROM website_lead_crm_sync WHERE event_key=?",
+            ("evt_confirmed",),
+        ).fetchone()
+    assert row["state"] == "synced"
+    assert fake.zsets == {}
+
+
+
 def test_redis_retry_remains_pending(monkeypatch, tmp_path):
     fake = FakeRedis()
     monkeypatch.setenv("NIJA_LEAD_DB_PATH", str(tmp_path / "retryredis.sqlite3"))
