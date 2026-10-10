@@ -264,7 +264,7 @@ def verify_snapshot(
                         or not isinstance(declared_sha, str)
                         or len(declared_sha) != 64
                         or any(c not in "0123456789abcdef" for c in declared_sha.lower())):
-                    raise ValueError("snapshot manifest size or digest invalid: " + name)
+                    raise ValueError("snapshot manifest size mismatch or digest invalid: " + name)
                 target = stage_dir / name
                 file_reader = archive.extractfile(name)
                 if file_reader is None:
