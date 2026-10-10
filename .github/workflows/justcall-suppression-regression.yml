@@ -1,0 +1,26 @@
+name: JustCall suppression regression
+
+on:
+  pull_request:
+    paths:
+      - 'render_outreach_extension.py'
+      - 'tests/test_justcall_explicit_suppression.py'
+      - '.github/workflows/justcall-suppression-regression.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Check Python syntax
+        run: python -m compileall -q render_outreach_extension.py tests/test_justcall_explicit_suppression.py
+      - name: Test explicit contact opt-out handling
+        run: python -m unittest discover -s tests -p 'test_justcall_explicit_suppression.py' -v
