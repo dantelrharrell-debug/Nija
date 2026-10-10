@@ -27,6 +27,8 @@ from typing import Any
 
 CHUNK_SIZE = 1024 * 1024
 MAX_COMPANION_BYTES = 128 * 1024 * 1024
+MAX_SQLITE_BYTES = 2 * 1024 * 1024 * 1024
+MAX_MANIFEST_BYTES = 256 * 1024
 MANDATORY_TABLES = ("trade_ledger", "open_positions", "completed_trades")
 OPTIONAL_FILES = (
     ("pending_kraken_fills.json", "NIJA_KRAKEN_PENDING_FILL_PROOF_PATH",
@@ -198,48 +200,119 @@ def create_snapshot(source: Path, output_dir: Path) -> dict[str, Any]:
     return result
 
 
-def verify_snapshot(archive_path: Path) -> dict[str, Any]:
-    """Check member hashes and SQLite structure without extracting unsafe paths."""
+def verify_snapshot(
+    archive_path: Path, *, expected_sha256: str | None = None,
+    exercise_restore: bool = False,
+) -> dict[str, Any]:
+    """Verify a bounded archive; optionally restore to a disposable isolated DB.
+
+    Neither a valid archive nor a local restore proves off-host persistence,
+    complete broker history, or production trading eligibility. The expected
+    digest must originate from an independent copy of the source-side report.
+    """
     if not archive_path.is_file() or archive_path.is_symlink():
         raise ValueError("archive missing or is a symlink")
+    if expected_sha256 is not None:
+        expected = str(expected_sha256).strip().lower()
+        if len(expected) != 64 or any(c not in "0123456789abcdef" for c in expected):
+            raise ValueError("expected archive SHA-256 must be 64 hex characters")
+        if _sha256(archive_path) != expected:
+            raise ValueError("off-host archive SHA-256 does not match source")
+
+    approved_limits = {"trade_ledger.db": MAX_SQLITE_BYTES,
+                       "manifest.json": MAX_MANIFEST_BYTES}
+    approved_limits.update({name: MAX_COMPANION_BYTES for name, _, _ in OPTIONAL_FILES})
+
     with tempfile.TemporaryDirectory(prefix="nija-ledger-verify-") as stage:
         stage_dir = Path(stage)
         with tarfile.open(archive_path, mode="r:gz") as archive:
-            names = [entry.name for entry in archive.getmembers()]
-            if len(names) != len(set(names)):
-                raise ValueError("archive contains duplicate paths")
+            entries = archive.getmembers()
+            names = [entry.name for entry in entries]
+            if len(entries) > len(approved_limits) or len(names) != len(set(names)):
+                raise ValueError("archive has too many or duplicate members")
+            # All member names are fixed known basenames. No links, directories,
+            # paths, or data outside the bounded approved inventory can be read.
+            entry_map = {entry.name: entry for entry in entries}
+            for entry in entries:
+                if (entry.name not in approved_limits or not entry.isfile()
+                        or entry.size < 0 or entry.size > approved_limits[entry.name]):
+                    raise ValueError("archive has unsafe or oversized member")
             if "manifest.json" not in names or "trade_ledger.db" not in names:
                 raise ValueError("manifest or trading ledger missing")
-            if any("/" in n or "\\" in n or n.startswith(".") for n in names):
-                raise ValueError("archive contains an unsafe path")
-            if any(not obj.isfile() for obj in archive.getmembers()):
-                raise ValueError("archive contains a nonfile entry")
-            manifest_data = archive.extractfile("manifest.json")
-            if manifest_data is None:
+            if entry_map["trade_ledger.db"].size == 0:
+                raise ValueError("archive contains empty trading ledger")
+
+            manifest_entry = archive.extractfile("manifest.json")
+            if manifest_entry is None:
                 raise ValueError("manifest cannot be read")
-            manifest = json.load(io.TextIOWrapper(manifest_data, encoding="utf-8"))
-            if manifest.get("format_version") != 1:
+            manifest_raw = manifest_entry.read(MAX_MANIFEST_BYTES + 1)
+            if len(manifest_raw) > MAX_MANIFEST_BYTES:
+                raise ValueError("manifest exceeds maximum size")
+            manifest = json.loads(manifest_raw.decode("utf-8"))
+            if not isinstance(manifest, dict) or manifest.get("format_version") != 1:
                 raise ValueError("unsupported snapshot version")
             tracked = manifest.get("members")
             if not isinstance(tracked, dict) or set(names) != (set(tracked) | {"manifest.json"}):
                 raise ValueError("archive inventory does not match manifest")
             for name, record in tracked.items():
-                if name not in ("trade_ledger.db",) + tuple(item[0] for item in OPTIONAL_FILES):
-                    raise ValueError("unapproved snapshot member")
+                if not isinstance(record, dict):
+                    raise ValueError("malformed archive member metadata")
+                declared_bytes = record.get("bytes")
+                declared_sha = record.get("sha256")
+                if (type(declared_bytes) is not int
+                        or declared_bytes != entry_map[name].size
+                        or not isinstance(declared_sha, str)
+                        or len(declared_sha) != 64
+                        or any(c not in "0123456789abcdef" for c in declared_sha.lower())):
+                    raise ValueError("snapshot manifest size mismatch or digest invalid: " + name)
                 target = stage_dir / name
                 file_reader = archive.extractfile(name)
                 if file_reader is None:
                     raise ValueError("snapshot member cannot be read")
+                # Never stream unbounded decompressed data to the verifier's
+                # filesystem, even when the archive header is hostile.
+                remaining = declared_bytes
                 with target.open("xb") as output:
-                    shutil.copyfileobj(file_reader, output, length=CHUNK_SIZE)
-                if target.stat().st_size != int(record["bytes"]):
+                    while remaining:
+                        chunk = file_reader.read(min(CHUNK_SIZE, remaining))
+                        if not chunk:
+                            raise ValueError("snapshot member truncated: " + name)
+                        output.write(chunk)
+                        remaining -= len(chunk)
+                if target.stat().st_size != declared_bytes:
                     raise ValueError("snapshot member size mismatch: " + name)
-                if _sha256(target) != record["sha256"]:
+                if _sha256(target) != declared_sha.lower():
                     raise ValueError("snapshot member digest mismatch: " + name)
         counts = _validate_database(stage_dir / "trade_ledger.db")
         if counts != manifest.get("sqlite_tables"):
             raise ValueError("SQLite counts do not match manifest")
-    return manifest
+        if exercise_restore:
+            restored = stage_dir / "_isolated_restore.db"
+            # Restore is strictly inside TemporaryDirectory. The live source
+            # DB, its WAL, broker connections and trading state are untouched.
+            reader = sqlite3.connect(
+                (stage_dir / "trade_ledger.db").resolve().as_uri() + "?mode=ro",
+                uri=True, timeout=15,
+            )
+            writer = sqlite3.connect(str(restored), timeout=15)
+            try:
+                reader.execute("PRAGMA query_only=ON")
+                reader.backup(writer, pages=256, sleep=0.1)
+                writer.commit()
+            finally:
+                writer.close()
+                reader.close()
+            if _validate_database(restored) != counts:
+                raise ValueError("isolated restore did not preserve table counts")
+    result = dict(manifest)
+    if exercise_restore:
+        result["isolated_restore_test_verified"] = True
+        result["off_host_backup_verified"] = False
+        result["historical_fill_completeness_verified"] = False
+        result["live_trading_eligible"] = False
+    if expected_sha256 is not None:
+        result["expected_archive_sha256_matched"] = True
+    return result
 
 
 def main() -> int:
@@ -254,11 +327,19 @@ def main() -> int:
     backup.add_argument("--output-dir", required=True)
     check = actions.add_parser("verify", help="Verify archive copied off host")
     check.add_argument("--archive", required=True)
+    restoration = actions.add_parser(
+        "restore-test", help="Verify hash and restore off-host copy in disposable storage"
+    )
+    restoration.add_argument("--archive", required=True)
+    restoration.add_argument(
+        "--expected-sha256", required=True,
+        help="archive digest recorded on the original host before transfer",
+    )
     args = parser.parse_args()
     try:
         if args.action == "backup":
             result = create_snapshot(Path(args.source), Path(args.output_dir))
-        else:
+        elif args.action == "verify":
             manifest = verify_snapshot(Path(args.archive))
             result = {
                 "integrity": "verified",
@@ -266,6 +347,23 @@ def main() -> int:
                 "off_host_backup_verified": False,
                 "restore_test_verified": False,
                 "NOTE": "Verify an independent off-host copy, not the live container copy.",
+            }
+        else:
+            manifest = verify_snapshot(
+                Path(args.archive),
+                expected_sha256=args.expected_sha256,
+                exercise_restore=True,
+            )
+            result = {
+                "integrity": "verified",
+                "expected_archive_sha256_matched": True,
+                "isolated_restore_test_verified": True,
+                "sqlite_tables": manifest["sqlite_tables"],
+                "off_host_backup_verified": False,
+                "historical_fill_completeness_verified": False,
+                "live_trading_eligible": False,
+                "NOTE": "This validates the supplied copy, not where it is stored or whether "
+                        "history is complete; independently attest off-host retention.",
             }
         print(json.dumps(result, indent=2, sort_keys=True))
         return 0

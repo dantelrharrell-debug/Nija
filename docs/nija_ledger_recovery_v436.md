@@ -1,6 +1,6 @@
 # NIJA trading-ledger recovery (v436) — operator action required
 
-**No new live trading, disk mount, or deployment until the current live SQLite ledger is backed up off the container.** Render reported `ephemeral_filesystem` and `disk=null`. Code pushed to this branch does not change production.
+**Do not authorize new live trading, merge this draft repair branch, or redeploy until a separately verified off-host snapshot and isolated restore exist.** Render now shows a dedicated 1 GB disk at `/data`, but a disk mount does not prove history preservation or recover the missing entries. This branch changes only offline audit/recovery tooling, not the running instance.
 
 
 ## Critical current-production evidence — October 9, 2026
@@ -17,17 +17,25 @@ Open the [trading service in Render](https://dashboard.render.com/web/srv-d98dsr
 Example on the **current** instance once the utility is available:
 
 ```bash
-python scripts/nija_trade_ledger_snapshot_v436.py backup --source ./data/trade_ledger.db --output-dir /tmp/nija-recovery
+python scripts/nija_trade_ledger_snapshot_v436.py backup --source /data/trade_ledger.db --output-dir /tmp/nija-recovery
 ```
 
 The utility reads the source with SQLite's backup API, validates `PRAGMA integrity_check`, counts tables, includes the pending-fill registry and journal if present, and writes a SHA-256 manifest. A snapshot can be valid yet incomplete if companion files are missing or changed during copying; check `companions_stable` and `missing_companions`. A local `/tmp` archive is **not** a durable backup. Transfer it to secure off-host storage with encrypted transport, verify the checksum and archive there, then perform an isolated restore test before modifying the service.
 
 ```bash
 python scripts/nija_trade_ledger_snapshot_v436.py verify --archive /path/to/offhost-copy.tar.gz
+python scripts/nija_trade_ledger_snapshot_v436.py restore-test --archive /path/to/offhost-copy.tar.gz --expected-sha256 SOURCE_REPORTED_64_CHARACTER_SHA256
 ```
 
+**Recovery validation boundaries (October 10, 2026):**
+- Capture the archive SHA-256 printed by the source instance **before transfer** and store it in a separate authenticated record; do not copy a digest reported solely by the destination.
+- Download the archive to a **different host** with encrypted transport. Run `restore-test` there with the source-recorded hash. The script rejects unexpected paths, links and oversized members, validates the snapshot's per-file hashes and SQLite `integrity_check`, and restores SQLite into a disposable temporary database before comparing table counts.
+- `isolated_restore_test_verified=true` means a supplied snapshot restored into temporary storage. `off_host_backup_verified=false` is intentionally retained: the tool cannot determine where it was run or whether the copy survives independently. Retention/location requires operator evidence.
+- **Do not overwrite or modify `/data/trade_ledger.db`** with this test. A restored empty historical ledger plus 13 pending Kraken closes remains **accounting-incomplete** even after every structural check passes.
+- Never put private account statements, backup archives, secret-bearing journals or API credentials into CI artifacts or public GitHub comments.
+
 ## 2. Restore durable trading storage
-Use an authorized Render operator to attach a **persistent trading disk** to the service or provision an isolated transactional trading database. Do not reuse the billing Postgres instance. Because a new disk mounts an empty filesystem and triggers deployment, confirm the off-host backup and restore method **before** attaching it. Restore the database and pending evidence to the intended mount, verify SQLite integrity, counts and WAL consistency, then point `NIJA_TRADE_LEDGER_DB_PATH` at the restored ledger. Confirm the process UID can access the mount and a controlled restart retains the data.
+A dedicated **/data** disk is already attached to the Render service. Do **not** attach another disk or redeploy to attempt to repair missing records. An operator must first preserve the current /data ledger and independently inventory older off-host/previous-instance copies; compare source hashes and per-table counts before approving any restoration into the **production** database. A migration or controlled restart would require a separate authorized change plan after backup proof, not an automatic action from this runbook.
 
 ## 3. Reconcile actual Kraken fills
 The pending close audit has independently confirmed unmatched `platform:kraken` exits, including `OSW7F3-YD2NX-SR3BZB`, `O65MOF-36V4S-6DON6C`, and `OXKYEI-7ZOTF-WQNU5Z`. Read Kraken private QueryOrders/TradesHistory for each **exact** account and order. For each historical close, match the actual acquisition/position opening by exact account, position, symbol, side, filled quantity, costs, and fees. A same-symbol trade is not sufficient. If the source ledger is already lost, do not manufacture opening fills, cost basis, or P&L; record the missing history as unproven.
