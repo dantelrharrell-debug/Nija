@@ -23,6 +23,7 @@ import json
 import os
 import pathlib
 import re
+import secrets
 import sqlite3
 import threading
 import time
@@ -80,17 +81,22 @@ def normalize_email(value: object) -> str:
     return candidate if _valid_email(candidate) else ""
 
 
-def _normalize_timestamp(value: object) -> str:
+def _parse_timestamp(value: object) -> str | None:
+    """Return a stable ISO timestamp only when the source supplied one."""
     text = _clean_text(value, max_length=128)
     if not text:
-        return _utcnow()
+        return None
     try:
         parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
     except ValueError:
-        return _utcnow()
+        return None
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def _normalize_timestamp(value: object) -> str:
+    return _parse_timestamp(value) or _utcnow()
 
 
 def _nested_form(payload: dict[str, Any]) -> dict[str, Any]:
@@ -99,6 +105,34 @@ def _nested_form(payload: dict[str, Any]) -> dict[str, Any]:
         if isinstance(value, dict):
             return value
     return {}
+
+
+def _raw_submission_timestamp(payload: dict[str, Any]) -> object:
+    nested = _nested_form(payload)
+    return (
+        nested.get("submitted_at")
+        or nested.get("submissionDate")
+        or payload.get("submitted_at")
+        or payload.get("submissionDate")
+        or payload.get("submission_date")
+        or ""
+    )
+
+
+def _stable_event_fallback(payload: dict[str, Any], serialized: str) -> str:
+    """Provide a deterministic replay key when the upstream timestamp is missing.
+
+    Source IDs are preferred. With neither a source ID nor a usable timestamp,
+    identical JSON is treated as one event (fail closed against double sends).
+    """
+    nested = _nested_form(payload)
+    for key in ("event_id", "eventId", "submission_id", "submissionId"):
+        value = nested.get(key) or payload.get(key)
+        if isinstance(value, (str, int)) and not isinstance(value, bool):
+            cleaned = _clean_text(value, max_length=160)
+            if cleaned:
+                return "upstream:" + cleaned
+    return "payload-sha256:" + hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
 
 def normalize_lead_payload(payload: dict[str, Any]) -> dict[str, str]:
@@ -128,14 +162,7 @@ def normalize_lead_payload(payload: dict[str, Any]) -> dict[str, str]:
         or payload.get("email_address")
         or ""
     )
-    raw_submitted_at: object = (
-        nested.get("submitted_at")
-        or nested.get("submissionDate")
-        or payload.get("submitted_at")
-        or payload.get("submissionDate")
-        or payload.get("submission_date")
-        or ""
-    )
+    raw_submitted_at: object = _raw_submission_timestamp(payload)
 
     form_name = _clean_text(raw_form_name, max_length=160)
     name = _clean_text(raw_name, max_length=200)
@@ -227,11 +254,15 @@ def _ensure_schema(connection: sqlite3.Connection) -> None:
 def record_lead(payload: dict[str, Any]) -> tuple[dict[str, str], str, bool]:
     canonical = normalize_lead_payload(payload)
     raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    # Canonical submitted_at is the current time if the source omits it,
+    # so never use that dynamic fallback in the deduplication key.
+    stable_timestamp = _parse_timestamp(_raw_submission_timestamp(payload))
+    source_reference = stable_timestamp or _stable_event_fallback(payload, raw)
     identity = "|".join(
         (
             canonical["form_name"].casefold(),
             canonical["email"].casefold(),
-            canonical["submitted_at"],
+            source_reference,
         )
     )
     event_key = hashlib.sha256(identity.encode("utf-8")).hexdigest()
@@ -284,19 +315,39 @@ def _forward_connect() -> sqlite3.Connection:
         """CREATE TABLE IF NOT EXISTS website_lead_forwarding (
             event_key TEXT PRIMARY KEY,
             state TEXT NOT NULL,
-            lease_until REAL NOT NULL DEFAULT 0
+            lease_until REAL NOT NULL DEFAULT 0,
+            lease_token TEXT NOT NULL DEFAULT ''
         )"""
     )
+    # Preserve existing durable records; upgrade a pre-fencing table in place.
+    # BEGIN IMMEDIATE serializes the migration between service processes.
+    with _DB_LOCK:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            columns = {row["name"] for row in conn.execute(
+                "PRAGMA table_info(website_lead_forwarding)"
+            )}
+            if "lease_token" not in columns:
+                conn.execute(
+                    "ALTER TABLE website_lead_forwarding "
+                    "ADD COLUMN lease_token TEXT NOT NULL DEFAULT ''"
+                )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            conn.close()
+            raise
     return conn
 
 
-def _claim_forward(event_key: str) -> bool:
-    """Claim one downstream notification across processes and deployments.
+def _claim_forward(event_key: str) -> str | None:
+    """Claim a uniquely fenced lease; stale senders cannot finish a newer claim.
 
-    The persisted 'sent' state prevents replay. In-flight attempts are leased,
-    and unsuccessful attempts become retryable after a short backoff.
+    A provider can still receive a duplicate after a network-ambiguous failure;
+    the lease protects local state and confirmed outcomes, not exactly-once email.
     """
     now = time.time()
+    token = secrets.token_hex(16)
     with _DB_LOCK, _forward_connect() as connection:
         connection.execute(
             "INSERT OR IGNORE INTO website_lead_forwarding (event_key, state, lease_until) "
@@ -305,26 +356,28 @@ def _claim_forward(event_key: str) -> bool:
         )
         claimed = connection.execute(
             """UPDATE website_lead_forwarding
-               SET state='sending', lease_until=?
+               SET state='sending', lease_until=?, lease_token=?
                WHERE event_key=?
                  AND state IN ('pending', 'sending')
                  AND lease_until <= ?""",
-            (now + _FORWARD_LOCK_LEASE_SECONDS, event_key, now),
+            (now + _FORWARD_LOCK_LEASE_SECONDS, token, event_key, now),
         )
         connection.commit()
-        return claimed.rowcount == 1
+        return token if claimed.rowcount == 1 else None
 
 
-def _finish_forward(event_key: str, *, sent: bool) -> None:
-    """Persist completion or rate-limit retries for the same submission."""
+def _finish_forward(event_key: str, *, claim_token: str, sent: bool) -> bool:
+    """Only the current lease holder can record completion or retry state."""
     retry_at = 0 if sent else time.time() + _FORWARD_RETRY_BACKOFF_SECONDS
     with _DB_LOCK, _forward_connect() as connection:
-        connection.execute(
-            """UPDATE website_lead_forwarding SET state=?, lease_until=?
-               WHERE event_key=? AND state='sending'""",
-            ("sent" if sent else "pending", retry_at, event_key),
+        finished = connection.execute(
+            """UPDATE website_lead_forwarding
+               SET state=?, lease_until=?, lease_token=''
+               WHERE event_key=? AND state='sending' AND lease_token=?""",
+            ("sent" if sent else "pending", retry_at, event_key, claim_token),
         )
         connection.commit()
+        return finished.rowcount == 1
 
 
 def _lookup_user_by_email(email: str) -> dict[str, Any]:
@@ -527,11 +580,11 @@ def handle_lead_intake_post(handler: Any) -> bool:
         # A Zapier replay must not resend the same customer-facing notification.
         # Failed attempts may retry after a bounded delay without repeating a
         # previously confirmed successful forward.
-        claimed = _claim_forward(event_key)
+        claim_token = _claim_forward(event_key)
     except (OSError, sqlite3.Error):
-        claimed = False
+        claim_token = None
         forward_error = True
-    if claimed:
+    if claim_token:
         try:
             forwarded = _forward(canonical)
         except Exception as exc:
@@ -541,7 +594,7 @@ def handle_lead_intake_post(handler: Any) -> bool:
             print(f"NIJA_LEAD_FORWARD_FAILED reason={type(exc).__name__}", flush=True)
         finally:
             try:
-                _finish_forward(event_key, sent=forwarded)
+                _finish_forward(event_key, claim_token=claim_token, sent=forwarded)
             except (OSError, sqlite3.Error):
                 forward_error = True
 
