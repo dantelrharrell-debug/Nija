@@ -277,8 +277,11 @@ def main() -> int:
         print(json.dumps(result, sort_keys=True, indent=2))
         return 0
     except Exception as exc:
+        detail = str(exc)
+        error_code = detail if isinstance(exc, ValueError) and re.fullmatch(r"[a-z0-9_]+", detail) else "unexpected_error"
         print(json.dumps({"status": "FAILED_CLOSED", "error_type": type(exc).__name__,
-                          "mutations_performed": False, "observation_allowed": False}))
+                          "error_code": error_code, "mutations_performed": False,
+                          "observation_allowed": False}))
         return 1
 
 
