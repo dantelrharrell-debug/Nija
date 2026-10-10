@@ -155,6 +155,13 @@ RUN ./inject_git_metadata.sh
 ENV CANDLELITE_CONFIG_DIR=/tmp/candlelite
 RUN mkdir -p /app/cache /app/data /app/logs /tmp/candlelite && \
     chown -R nija:nija /app /tmp/candlelite
+# Render requires a private ~/.ssh directory and a login shell for the
+# non-root runtime user before account-level SSH public keys can authenticate.
+# This changes image configuration only; never relocate trading state here.
+RUN install -d -m 0700 -o nija -g nija /home/nija /home/nija/.ssh && \
+    usermod --home /home/nija --shell /bin/bash nija && \
+    test -x /bin/bash && \
+    test "$(stat -c '%a' /home/nija/.ssh)" = '700'
 USER nija
 HEALTHCHECK --interval=30s --timeout=30s --start-period=300s --retries=5 \
     CMD python -S -c "import json,urllib.request; r=urllib.request.urlopen('http://127.0.0.1:5000/healthz',timeout=10); p=json.loads(r.read().decode('utf-8')); raise SystemExit(0 if r.status==200 and p.get('status')=='alive' else 1)"
