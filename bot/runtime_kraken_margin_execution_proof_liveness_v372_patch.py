@@ -269,11 +269,31 @@ def _exact_queryorders_fill(call: Any, opening: Mapping[str, Any]) -> tuple[dict
         price = cost / vol_exec
     if price <= _EPS:
         return None, "queryorders_fill_price_unproven"
+    # This is a historical QueryOrders lookup, not a newly executed order.
+    # v346 must use the authenticated exchange event time, never the time
+    # at which a polling worker happened to rediscover this filled order.
+    broker_fill_epoch = _f(row.get("closetm"), 0.0)
+    observed_now = time.time()
+    if not (0.0 < broker_fill_epoch <= observed_now + 60.0):
+        return None, "queryorders_broker_fill_time_unproven"
+
     descr = row.get("descr") if isinstance(row.get("descr"), Mapping) else {}
-    symbol = _v366().canonical_symbol(descr.get("pair") or opening.get("symbol"))
-    side = str(descr.get("type") or opening.get("side") or "buy").strip().lower()
-    if not symbol or side not in {"buy", "sell"}:
+    exchange_pair = str(descr.get("pair") or "").strip()
+    exchange_side = str(descr.get("type") or "").strip().lower()
+    if not exchange_pair or exchange_side not in {"buy", "sell"}:
         return None, "queryorders_symbol_side_unproven"
+    normalize_symbol = _v366().canonical_symbol
+    symbol = normalize_symbol(exchange_pair)
+    opening_symbol = normalize_symbol(opening.get("symbol"))
+    # A routing suffix is not a distinct exchange pair; retain broker-side
+    # identity checks rather than trusting the cached candidate blindly.
+    if (
+        not symbol or not opening_symbol
+        or str(symbol).split(":", 1)[0] != str(opening_symbol).split(":", 1)[0]
+        or exchange_side != str(opening.get("side") or "").strip().lower()
+    ):
+        return None, "queryorders_opening_identity_mismatch"
+
     return {
         "order_id": order_id,
         "status": "closed",
@@ -282,7 +302,10 @@ def _exact_queryorders_fill(call: Any, opening: Mapping[str, Any]) -> tuple[dict
         "authenticated_kraken_queryorders": True,
         "opening_position_id": opening.get("position_id"),
         "symbol": symbol,
-        "side": side,
+        "side": exchange_side,
+        "broker": "kraken",
+        "broker_fill_at_epoch": broker_fill_epoch,
+        "recovered_fill_proof": True,
     }, "ok"
 
 
