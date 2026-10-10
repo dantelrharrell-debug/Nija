@@ -1,15 +1,20 @@
 """Content-free tracker identity diagnostics; never publishes readiness proof."""
 from __future__ import annotations
 
+from collections import OrderedDict
 import hashlib
 import logging
 import os
+import threading
 from typing import Any
 
 LOGGER = logging.getLogger("nija.account_state_diagnostics")
+_MAX_TRACKER_READ_SIGNATURES = 2048
+_TRACKER_READ_SIGNATURES: OrderedDict[tuple[Any, ...], None] = OrderedDict()
+_TRACKER_READ_SIGNATURES_LOCK = threading.Lock()
 
 
-def log_tracker_read(tracker: Any, read_point: str) -> None:
+def log_tracker_read(tracker: Any, read_point: str, *, force: bool = False) -> None:
     """Correlate process-local identities and redacted paths without account contents."""
     if tracker is None:
         return
@@ -25,6 +30,18 @@ def log_tracker_read(tracker: Any, read_point: str) -> None:
         location = directory if directory in {
             "/data/positions", "/app/data/positions", "/data", "/app/data"
         } else "other_redacted_directory"
+        signature = (
+            read_point, id(tracker), id(store) if store is not None else None,
+            fingerprint(scope), fingerprint(storage), fingerprint(entry), location,
+        )
+        with _TRACKER_READ_SIGNATURES_LOCK:
+            if signature in _TRACKER_READ_SIGNATURES:
+                _TRACKER_READ_SIGNATURES.move_to_end(signature)
+                if not force:
+                    return
+            _TRACKER_READ_SIGNATURES[signature] = None
+            if len(_TRACKER_READ_SIGNATURES) > _MAX_TRACKER_READ_SIGNATURES:
+                _TRACKER_READ_SIGNATURES.popitem(last=False)
         LOGGER.info(
             "ACCOUNT_STATE_TRACKER_READ point=%s pid=%d tracker_id=%s entry_store_id=%s "
             "scope_sha256=%s storage_sha256=%s entry_storage_sha256=%s "

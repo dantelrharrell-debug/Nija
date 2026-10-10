@@ -193,3 +193,20 @@ def test_tracker_log_correlates_identity_without_private_contents(caplog):
     assert "PRIVATE-SYMBOL" not in caplog.text
     assert "987" not in caplog.text
     assert "storage_directory=/app/data/positions" in caplog.text
+
+
+def test_tracker_log_suppresses_unchanged_reads_but_logs_changes_and_loads(caplog):
+    store = SimpleNamespace(_data_file="/app/data/entry_prices/platform__kraken.json")
+    tracker = SimpleNamespace(storage_file="/app/data/positions/platform__kraken.json",
+                              _eps=store, _nija_account_scope_v289="platform__kraken")
+    with caplog.at_level("INFO", logger="nija.account_state_diagnostics"):
+        log_tracker_read(tracker, "v285_snapshot_comparison")
+        log_tracker_read(tracker, "v285_snapshot_comparison")
+        tracker.storage_file = "/data/positions/platform__kraken.json"
+        log_tracker_read(tracker, "v285_snapshot_comparison")
+        tracker._eps = SimpleNamespace(_data_file="/app/data/entry_prices/platform__kraken.json")
+        log_tracker_read(tracker, "v285_snapshot_comparison")
+        log_tracker_read(tracker, "position_tracker_load", force=True)
+        log_tracker_read(tracker, "position_tracker_load", force=True)
+    assert caplog.text.count("point=v285_snapshot_comparison") == 3
+    assert caplog.text.count("point=position_tracker_load") == 2
