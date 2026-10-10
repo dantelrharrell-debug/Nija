@@ -12,6 +12,21 @@ import stat
 from pathlib import Path
 from typing import Any
 
+_SAFE_ERROR_CODES = {
+    "absolute_path_required", "unexpected_symlink", "regular_file_required",
+    "source_changed_during_inventory", "inventory_directory_missing",
+    "unexpected_special_file", "inventory_root_scope_mixup",
+    "source_set_changed_during_inventory", "duplicate_json_key_or_symbol",
+    "missing_or_ambiguous_account_scope", "empty_or_invalid_account_state",
+    "duplicate_or_missing_symbol", "invalid_account_record", "untrusted_cost_basis",
+    "backup_review_reference_required", "unsupported_manifest",
+    "checksum_or_file_set_mismatch_including_wal", "persistent_data_mount_not_verified",
+    "destination_directory_collision", "configured_state_path_not_on_target_mount",
+    "source_destination_mixup", "nested_mount_mixup", "filename_scope_mixup",
+    "destination_collision_no_overwrite", "empty_migration", "source_changed_during_dry_run",
+    "reviewed_manifest_and_scope_registry_required", "explicit_migration_dry_run_required",
+}
+
 
 def _safe_path(path: Path) -> Path:
     if not path.is_absolute() or ".." in path.parts:
@@ -277,8 +292,10 @@ def main() -> int:
         print(json.dumps(result, sort_keys=True, indent=2))
         return 0
     except Exception as exc:
-        detail = str(exc)
-        error_code = detail if isinstance(exc, ValueError) and re.fullmatch(r"[a-z0-9_]+", detail) else "unexpected_error"
+        error_code = (
+            exc.args[0] if type(exc) is ValueError and len(exc.args) == 1
+            and exc.args[0] in _SAFE_ERROR_CODES else "unexpected_error"
+        )
         print(json.dumps({"status": "FAILED_CLOSED", "error_type": type(exc).__name__,
                           "error_code": error_code, "mutations_performed": False,
                           "observation_allowed": False}))
