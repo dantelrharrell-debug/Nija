@@ -125,3 +125,44 @@ def test_authenticated_library_serves_only_purchased_content(tmp_path, monkeypat
 
     monkeypatch.setattr(portal, "_valid_paid", lambda sid: None)
     assert client.get("/course-portal/file/NIJA_Trading_Foundations_eBook.pdf", base_url="https://localhost").status_code == 403
+
+
+
+def test_claim_token_survives_disabled_and_unverified_payment(tmp_path, monkeypatch):
+    """A valid one-time link must not be burned by service/payment outages."""
+    import billing_service as billing
+    import course_portal as portal
+    from billing_service_store import BillingServiceStore
+
+    monkeypatch.setenv("BILLING_DATABASE_URL", f"sqlite:///{tmp_path / 'claim.db'}")
+    monkeypatch.setenv("NIJA_COURSE_SESSION_SECRET", "test-session-secret-" * 4)
+    monkeypatch.setenv("NIJA_COURSE_DELIVERY_ENABLED", "false")
+    monkeypatch.setattr(portal.PortalStore, "has_bundle", lambda self: True)
+    store = BillingServiceStore(f"sqlite:///{tmp_path / 'claim.db'}")
+    app = billing.create_app(store)
+    client = app.test_client()
+    tokens = app.config["COURSE_PORTAL_STORE"]
+
+    sid = "cs_claim_only_once"
+    token = tokens.mint(sid)
+    claim_url = f"/course-portal/claim?token={token}"
+
+    # Disabled delivery must not consume the token.
+    assert client.get(claim_url, base_url="https://localhost").status_code == 403
+    assert tokens.inspect_unconsumed(token) == sid
+
+    # Even when the portal is up, an unverified payment cannot burn the link.
+    monkeypatch.setenv("NIJA_COURSE_DELIVERY_ENABLED", "true")
+    monkeypatch.setattr(portal, "_valid_paid", lambda _sid: None)
+    assert client.get(claim_url, base_url="https://localhost").status_code == 403
+    assert tokens.inspect_unconsumed(token) == sid
+
+    # Upon authoritative payment verification the token works exactly once.
+    monkeypatch.setattr(portal, "_valid_paid",
+                        lambda query_sid: {"customer_email": "buyer@example.com"}
+                        if query_sid == sid else None)
+    accepted = client.get(claim_url, base_url="https://localhost")
+    assert accepted.status_code == 303
+    assert accepted.headers["Location"] == "/course-portal/library"
+    assert tokens.inspect_unconsumed(token) is None
+    assert client.get(claim_url, base_url="https://localhost").status_code == 403
