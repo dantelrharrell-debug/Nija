@@ -160,15 +160,22 @@ def inspect(
     }
     legacy: dict[str, Any] = {}
     legacy_not_preserved = False
+    legacy_inventory_unverified = False
     if legacy_root is not None:
         for kind, name in (("account_positions", "positions"), ("account_entry_prices", "entry_prices")):
             legacy_path = legacy_root / name
             legacy[kind] = _inventory(legacy_path)
-            # A separate populated legacy directory and an empty new store
-            # must not be presented as a completed migration.
+            # Separate legacy and current stores must have identical bounded
+            # inventories before their relative preservation can be assumed.
+            # A differing valid hash is unresolved evidence, not permission
+            # to copy/overwrite source files or invent historical cost basis.
             if _canonical(legacy_path) != _canonical(paths[kind]):
-                if legacy[kind].get("files", 0) > 0 and stores[kind].get("files", 0) == 0:
-                    legacy_not_preserved = True
+                old_state = legacy[kind].get("state")
+                if old_state not in ("missing_directory", "read_only_inventory"):
+                    legacy_inventory_unverified = True
+                elif old_state == "read_only_inventory" and legacy[kind].get("files", 0) > 0:
+                    if legacy[kind].get("inventory_sha256") != stores[kind].get("inventory_sha256"):
+                        legacy_not_preserved = True
     problems: list[str] = []
     if not mounted:
         problems.append("dedicated_mount_unverified")
@@ -180,8 +187,10 @@ def inspect(
     for name, inventory in stores.items():
         if not inventory.get("stable", False):
             problems.append(name + ":" + str(inventory.get("state")))
+    if legacy_inventory_unverified:
+        problems.append("legacy_store_inventory_unverified")
     if legacy_not_preserved:
-        problems.append("populated_legacy_store_not_observed_in_new_store")
+        problems.append("legacy_store_hashes_or_file_counts_do_not_match")
 
     if not all(aligned.values()):
         status = "STORAGE_PATHS_OUTSIDE_PERSISTENT_DISK"
@@ -191,8 +200,10 @@ def inspect(
         status = "TRADING_LEDGER_FILE_UNVERIFIED"
     elif any(not x.get("stable", False) for x in stores.values()):
         status = "ACCOUNT_STORE_FILES_UNVERIFIED"
+    elif legacy_inventory_unverified:
+        status = "LEGACY_ACCOUNT_STATE_INVENTORY_UNVERIFIED"
     elif legacy_not_preserved:
-        status = "LEGACY_ACCOUNT_STATE_NOT_PRESERVED"
+        status = "LEGACY_ACCOUNT_STATE_RECONCILIATION_REQUIRED"
     else:
         status = "PATHS_AND_FILES_PRESENT_HISTORY_NOT_CERTIFIED"
     aligned_and_present = bool(not problems)
@@ -206,6 +217,7 @@ def inspect(
         "account_store_inventories": stores,
         "optional_legacy_inventories": legacy,
         "possible_unmigrated_legacy_state": legacy_not_preserved,
+        "legacy_inventory_unverified": legacy_inventory_unverified,
         "incomplete_evidence": problems,
         "storage_paths_aligned": aligned_and_present,
         "sqlite_integrity_verified": False,
