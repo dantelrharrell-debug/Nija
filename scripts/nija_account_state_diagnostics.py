@@ -61,7 +61,10 @@ def _files(root: Path) -> list[Path]:
     if not root.is_dir():
         raise ValueError("inventory_directory_missing")
     output = []
-    for directory, dirs, files in os.walk(root, followlinks=False):
+    def traversal_error(error: OSError) -> None:
+        raise error
+
+    for directory, dirs, files in os.walk(root, followlinks=False, onerror=traversal_error):
         for name in dirs + files:
             path = _safe_path(Path(directory) / name)
             if path.is_file():
@@ -195,6 +198,8 @@ def dry_run(
     targets = {"positions": disk / "positions", "entry_prices": disk / "entry_prices"}
     for kind, target in targets.items():
         _safe_path(target)
+        if target.exists() and not target.is_dir():
+            raise ValueError("destination_directory_collision")
         configured = os.environ.get(
             "NIJA_ACCOUNT_POSITION_STATE_DIR" if kind == "positions" else "NIJA_ACCOUNT_ENTRY_PRICE_STATE_DIR"
         )

@@ -128,6 +128,32 @@ def test_collisions_and_path_scope_mixups_rejected(state, monkeypatch):
         diagnostics.dry_run(state.manifest, state.scopes, "review", state.mounts)
 
 
+def test_existing_non_directory_target_rejected(state, monkeypatch):
+    original_exists = Path.exists
+    original_is_dir = Path.is_dir
+    monkeypatch.setattr(Path, "exists", lambda path: str(path) == "/data/positions" or original_exists(path))
+    monkeypatch.setattr(Path, "is_dir", lambda path: False if str(path) == "/data/positions" else original_is_dir(path))
+    with pytest.raises(ValueError, match="destination_directory_collision"):
+        diagnostics.dry_run(state.manifest, state.scopes, "review", state.mounts)
+
+
+@pytest.mark.parametrize("nested", [False, True])
+def test_directory_traversal_errors_fail_closed(state, monkeypatch, nested):
+    blocked = state.positions / "nested" if nested else state.positions
+    if nested:
+        blocked.mkdir()
+    original = diagnostics.os.scandir
+
+    def unreadable(path):
+        if Path(path) == blocked:
+            raise PermissionError("unreadable inventory directory")
+        return original(path)
+
+    monkeypatch.setattr(diagnostics.os, "scandir", unreadable)
+    with pytest.raises(PermissionError):
+        state.inventory(state.positions, state.entries, state.disk, state.mounts)
+
+
 def test_unmounted_data_and_missing_review_rejected(state, monkeypatch):
     with pytest.raises(ValueError, match="backup_review"):
         diagnostics.dry_run(state.manifest, state.scopes, "", state.mounts)

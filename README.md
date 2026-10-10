@@ -25,7 +25,7 @@ An authorized operator may run the standalone **read-only** tool on the existing
 instance (it does not import brokers, open SQLite, submit orders or modify files):
 
 ```sh
-python /app/scripts/nija_account_state_diagnostics.py \
+python -S -B /app/scripts/nija_account_state_diagnostics.py \
   --positions /app/data/positions --entry-prices /app/data/entry_prices --disk /data \
   --evidence /absolute/path/to/ledger.db \
   --evidence /absolute/path/to/execution-journal \
@@ -39,6 +39,9 @@ in-memory events, incomplete ledger or active writer means completeness is
 unproven. SQLite `-wal`, `-shm` and `-journal` companions are inventoried when
 present. Repeat/compare manifests to detect concurrent writes; matching hashes
 are **not** an atomic SQLite/WAL snapshot or WAL-integrity proof.
+Use `python -S -B` for **every** invocation, including dry-runs: `-S` prevents
+production `.pth`/`sitecustomize` runtime startup hooks from executing before the
+script, and `-B` prevents bytecode writes. A guard inside the script is too late.
 
 Before any cutover planning, preserve account JSON, SQLite **with WAL**, journal
 and pending fill proof off-host through approved encrypted transport. Compare
