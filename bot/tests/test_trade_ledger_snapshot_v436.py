@@ -208,3 +208,32 @@ def test_archive_symlink_rejected(tmp_path, monkeypatch):
     link.symlink_to(Path(report["archive"]))
     with pytest.raises(ValueError, match="symlink"):
         snapshot.verify_snapshot(link)
+
+
+def test_verified_restore_uses_pinned_bytes_if_original_archive_is_replaced(tmp_path, monkeypatch):
+    """A file swap between source hash and gzip parsing cannot change restore."""
+    original = tmp_path / "live.db"
+    _ledger(original)
+    monkeypatch.chdir(tmp_path)
+    report = snapshot.create_snapshot(original, tmp_path / "exports")
+    archive = Path(report["archive"])
+    original_gzip_open = snapshot.gzip.open
+    swapped = []
+
+    def replace_original_before_decompression(path, mode):
+        if not swapped:
+            # This replaces only the untrusted *input path*, never the pinned
+            # copy the verifier already wrote to its private temp directory.
+            archive.unlink()
+            archive.write_bytes(b"tampered archive after verification")
+            swapped.append(True)
+        return original_gzip_open(path, mode)
+
+    monkeypatch.setattr(snapshot.gzip, "open", replace_original_before_decompression)
+    checked = snapshot.verify_snapshot(
+        archive, expected_sha256=report["sha256"], exercise_restore=True,
+    )
+    assert swapped
+    assert checked["expected_archive_sha256_matched"] is True
+    assert checked["isolated_restore_test_verified"] is True
+    assert checked["off_host_backup_verified"] is False
