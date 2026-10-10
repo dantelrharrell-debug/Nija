@@ -9,6 +9,7 @@ protective exits, authenticated fill reconciliation, or trading readiness.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 from pathlib import Path
 from unittest import mock
@@ -55,6 +56,39 @@ def _check_bounded_lock_retry(module) -> None:
     assert attempts == 2, "only classified local contention should be retried"
 
 
+def _check_exhausted_local_lock_budget(module) -> None:
+    """A permanently blocked read must propagate its original exception."""
+    attempts = 0
+    injected = KrakenReadLockBusy("synthetic local lock busy")
+
+    def always_busy() -> None:
+        nonlocal attempts
+        attempts += 1
+        raise injected
+
+    # Force the first proposed backoff past the existing configured budget.
+    # No real sleeping, broker I/O, or retries should occur.
+    with mock.patch.object(module, "_retry_sleep_s", return_value=1000.0):
+        try:
+            module._retry_read(always_busy, "synthetic_offline_account", "ReadOnlyBalance")
+        except KrakenReadLockBusy as observed:
+            assert observed is injected, "exhaustion must propagate actual failure"
+        else:
+            raise AssertionError("exhausted lock retry incorrectly returned success")
+    assert attempts == 1
+
+
+def _load_pure_kraken_retry_module():
+    """Import only the stateless file, never bot.__init__ or startup hooks."""
+    source = Path(__file__).resolve().parents[2] / "bot" / "runtime_kraken_read_contention_recovery_v290_patch.py"
+    spec = importlib.util.spec_from_file_location("offline_kraken_retry_v290", source)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("Could not load the read-only retry helper")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def run() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--timeout-seconds", type=float, default=5.0)
@@ -63,10 +97,10 @@ def run() -> int:
         parser.error("--timeout-seconds must be within (0, 120]")
 
     names = ["timeout_fail_closed", "connection_fail_closed",
-             "permission_fail_closed", "local_lock_retry"]
+             "permission_fail_closed", "local_lock_retry", "local_lock_budget_fail_closed"]
     results: dict[str, bool] = {name: False for name in names}
     try:
-        from bot import runtime_kraken_read_contention_recovery_v290_patch as module
+        module = _load_pure_kraken_retry_module()
 
         for name, error_type in (
             ("timeout_fail_closed", TimeoutError),
@@ -77,6 +111,8 @@ def run() -> int:
             results[name] = True
         _check_bounded_lock_retry(module)
         results["local_lock_retry"] = True
+        _check_exhausted_local_lock_budget(module)
+        results["local_lock_budget_fail_closed"] = True
     except Exception as exc:
         # Record only the exception type; never emit credentials or private data.
         print("Offline transport safety contract failed:", type(exc).__name__)
