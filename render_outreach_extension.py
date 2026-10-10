@@ -164,6 +164,7 @@ def _campaign_compliance_errors(body: dict[str, Any], contact_number: str) -> li
 
 
 def _contact_status_suppression(payload: dict[str, Any]) -> None:
+    """Suppress only an explicit positive opt-out, never a false/cleared flag."""
     if str(payload.get("type", "") or "") != "contact.status_updated":
         return
     data = payload.get("data")
@@ -177,12 +178,29 @@ def _contact_status_suppression(payload: dict[str, Any]) -> None:
     ).strip()
     if not number:
         return
-    serialized = json.dumps(data, separators=(",", ":")).lower()
-    blocked = any(
-        token in serialized
-        for token in ("dnd", "dnm", "blacklist", "do_not_call", "do not call")
+
+    def _positive(value: object) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return value == 1
+        if isinstance(value, str):
+            return value.strip().casefold() in {
+                "true", "1", "yes", "on", "enabled", "blocked",
+                "dnd", "dnm", "blacklisted", "do_not_call", "do not call",
+            }
+        return False
+
+    suppression_fields = (
+        "dnd", "dnm", "blacklist", "blacklisted", "do_not_call",
+        "do_not_message", "is_dnd", "is_blacklisted", "is_blocked",
     )
-    if blocked:
+    active = any(_positive(data.get(key)) for key in suppression_fields)
+    status = str(data.get("status") or data.get("contact_status") or "").strip().casefold()
+    active = active or status in {
+        "dnd", "dnm", "blacklisted", "do_not_call", "do not call", "blocked",
+    }
+    if active:
         set_suppression(
             contact_number=number,
             reason="JustCall contact status suppression",
