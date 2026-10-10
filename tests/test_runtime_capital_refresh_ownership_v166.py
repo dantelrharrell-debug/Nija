@@ -78,3 +78,50 @@ def test_proactive_trigger_matches_rollover_retry():
     assert v166._is_proactive_trigger("publication_deadline_v137") is True
     assert v166._is_proactive_trigger("publication_deadline_v137:v142_rollover_retry") is True
     assert v166._is_proactive_trigger("watchdog") is False
+
+
+def test_adaptive_headroom_moves_only_refresh_start_earlier(monkeypatch):
+    monkeypatch.setattr(v166, "_freshness_ttl_seconds", lambda: 90.0)
+    monkeypatch.delenv("NIJA_CAPITAL_PROACTIVE_EXPIRY_MARGIN_S", raising=False)
+    manager = SimpleNamespace(capital_watchdog_interval_s=5.0)
+    assert v166._proactive_headroom_seconds(manager) == 70.0
+    v166._record_proactive_publication_outcome(
+        manager, attempted_ok=True, current=True, remaining_s=5.0,
+    )
+    assert v166._proactive_headroom_seconds(manager) == 80.0
+    assert not hasattr(manager, "_last_snapshot_publication")
+    assert not hasattr(manager, "_capital_ready")
+
+
+def test_adaptive_headroom_failure_never_promotes_readiness(monkeypatch):
+    monkeypatch.setattr(v166, "_freshness_ttl_seconds", lambda: 90.0)
+    manager = SimpleNamespace(capital_watchdog_interval_s=5.0, _capital_ready=False)
+    v166._record_proactive_publication_outcome(
+        manager, attempted_ok=False, current=False, remaining_s=0.0,
+    )
+    assert v166._proactive_headroom_seconds(manager) == 80.0
+    assert manager._capital_ready is False
+    assert not hasattr(manager, "_last_snapshot_publication")
+
+
+def test_adaptive_headroom_recovers_after_two_timely_publications(monkeypatch):
+    monkeypatch.setattr(v166, "_freshness_ttl_seconds", lambda: 90.0)
+    manager = SimpleNamespace(capital_watchdog_interval_s=5.0)
+    v166._record_proactive_publication_outcome(
+        manager, attempted_ok=False, current=False, remaining_s=0.0,
+    )
+    assert v166._proactive_headroom_seconds(manager) == 80.0
+    for _ in range(2):
+        v166._record_proactive_publication_outcome(
+            manager, attempted_ok=True, current=True, remaining_s=80.0,
+        )
+    assert v166._proactive_headroom_seconds(manager) == 70.0
+
+
+def test_expired_pressure_does_not_raise_refresh_frequency(monkeypatch):
+    monkeypatch.setattr(v166, "_freshness_ttl_seconds", lambda: 90.0)
+    monkeypatch.setattr(v166.time, "monotonic", lambda: 1500.0)
+    manager = SimpleNamespace(
+        capital_watchdog_interval_s=5.0, _nija_v445_pressure_mono=500.0,
+    )
+    assert v166._proactive_headroom_seconds(manager) == 70.0
