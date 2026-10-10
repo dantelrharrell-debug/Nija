@@ -238,12 +238,17 @@ def enqueue_lead(canonical: dict[str, str], event_key: str) -> bool:
     service has persistence enabled. SQLite remains a local fallback/mirror.
     """
     durable = False
+    redis_already_synced = False
     client = _redis_client()
     if client is not None:
         try:
             durable = _redis_enqueue(client, canonical, event_key)
+            redis_already_synced = (
+                client.hget(_redis_event_key(event_key), "state") == "synced"
+            )
         except Exception:
             durable = False
+            redis_already_synced = False
 
     local = False
     try:
@@ -254,6 +259,15 @@ def enqueue_lead(canonical: dict[str, str], event_key: str) -> bool:
                    (event_key, email, name, updated_at) VALUES (?, ?, ?, ?)""",
                 (event_key, canonical["email"].lower(), canonical.get("name", "")[:200], _now_iso()),
             )
+            if redis_already_synced:
+                # SQLite may be recreated after a Render restart. Redis's
+                # confirmed delivery must not become locally pending again.
+                conn.execute(
+                    """UPDATE website_lead_crm_sync
+                       SET state='synced', last_error_code='', updated_at=?
+                       WHERE event_key=?""",
+                    (_now_iso(), event_key),
+                )
             conn.commit()
             local = True
     except (sqlite3.Error, OSError):
