@@ -11,6 +11,72 @@
 
 ## Current production and worldwide research — October 8, 2026
 
+### October 10 account-state persistence incident — diagnostic hold (#3024)
+
+Render's persistent disk is mounted at `/data`, but v289's unchanged relative
+defaults resolve under `/app/data/positions` and `/app/data/entry_prices`.
+**Do not redeploy, restart, change trading permission, or silently change these
+defaults.** v289 `ready=true` means installation/account scoping, not durability
+or protective-exit coverage. Six orphan removals do not resolve subsequent
+v281/v285 denials; tracker replacement, legacy reload/repopulation and snapshot
+timing remain hypotheses, not established causes.
+
+An authorized operator may run the standalone **read-only** tool on the existing
+instance (it does not import brokers, open SQLite, submit orders or modify files):
+
+```sh
+python -S -B /app/scripts/nija_account_state_diagnostics.py \
+  --positions /app/data/positions --entry-prices /app/data/entry_prices --disk /data \
+  --evidence /absolute/path/to/ledger.db \
+  --evidence /absolute/path/to/execution-journal \
+  --evidence /absolute/path/to/pending-fill-proof
+```
+
+Store output only in approved restricted evidence storage, never public logs:
+it includes account filenames, byte counts, SHA-256 hashes and mount metadata,
+but no JSON contents. Specify the actual journal/proof paths; an absent journal,
+in-memory events, incomplete ledger or active writer means completeness is
+unproven. SQLite `-wal`, `-shm` and `-journal` companions are inventoried when
+present. Repeat/compare manifests to detect concurrent writes; matching hashes
+are **not** an atomic SQLite/WAL snapshot or WAL-integrity proof.
+Use `python -S -B` for **every** invocation, including dry-runs: `-S` prevents
+production `.pth`/`sitecustomize` runtime startup hooks from executing before the
+script, and `-B` prevents bytecode writes. A guard inside the script is too late.
+
+Before any cutover planning, preserve account JSON, SQLite **with WAL**, journal
+and pending fill proof off-host through approved encrypted transport. Compare
+source-reported hashes on that separate secure host and verify an isolated
+SQLite restoration including committed WAL records. Do not checkpoint, replay,
+overwrite or restore into production. Review provenance and completeness
+independently; backing up incomplete historical evidence cannot certify P&L.
+
+After backup review, `--migration-dry-run --manifest /absolute/reviewed-manifest.json
+--scopes /absolute/reviewed-scope-registry.json --backup-review REVIEW_REFERENCE`
+opt-in checks compare current hashes (including WAL) and plan only
+`/data/positions` and `/data/entry_prices`. The restricted scope registry is a JSON
+mapping of exact filenames to independently reviewed account scopes, e.g.
+`{"platform__kraken.json": "platform__kraken"}`. Every account requires both files;
+empty/ambiguous scopes, duplicate symbols, untrusted basis, symlinks, destination
+collisions, path/environment mixups and checksum/file-set differences fail
+closed. Configured state directories, if supplied, must equal the mounted
+targets; this tool does **not** set them. Positive dry-run output is not broker
+authentication, a backup review attestation or permission to migrate. No copy,
+overwrite or cutover command is implemented.
+
+Content-free `ACCOUNT_STATE_TRACKER_READ` diagnostics correlate PID, tracker/store
+object identities, scope/path hashes and redacted storage location at v289,
+v281/v285 and tracker load points. They expose neither symbols nor user names
+and help distinguish other tracker instances or subsequent legacy reloads.
+
+Only a separately authorized, supervised cutover may change paths. Keep
+observation **blocked** until independently reviewed migration provenance and
+collision checks, broker-authenticated reconciliation for **all** accounts,
+restart durability, protective exit truth, historical entries/exits/fees,
+strategy-level P&L and genuine canonical execution proof **younger than 1,800s**
+each pass. Never synthesize holdings, basis, exit orders, fills or readiness
+proof. Existing ledger storage evidence remains unverified until these actual
+off-host/restoration/restart checks are performed.
+
 The public-market observer independently discovers and rotates through spot quotes from Kraken, Coinbase and OKX. At October 9, 00:18 UTC its catalogs included **714 Kraken**, **408 Coinbase**, and **702 OKX** spot quote listings (1,824 venue-specific listings total, not distinct assets). Verified quote counts over its first four cycles reached 80 Kraken, 80 Coinbase and 79 OKX; this is quote coverage, **not full strategy evaluation**. See the /market-observerz endpoint.
 
 NIJA's confirmed-close report exists at bot/confirmed_performance_report.py and can show fee-adjusted winners and losers per broker and account, but strategy attribution is not yet authenticated, and unmatched fills are excluded.

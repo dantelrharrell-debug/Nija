@@ -88,6 +88,8 @@ class PositionTracker:
         )
 
     def _load_positions(self) -> None:
+        from bot.account_state_diagnostics import log_tracker_read
+        log_tracker_read(self, "position_tracker_load", force=True)
         try:
             if os.path.exists(self.storage_file):
                 with open(self.storage_file, "r", encoding="utf-8") as handle:
