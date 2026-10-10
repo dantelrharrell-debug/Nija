@@ -103,6 +103,13 @@ test_state.json
 
 # Scripts not needed at runtime
 scripts/*
+# Read-only recovery diagnostics are required IN the running Render container.
+# Build-time omission would prevent safe SQLite backup and account-state audit.
+!scripts/nija_trade_ledger_snapshot_v436.py
+!scripts/nija_ledger_evidence_v438.py
+!scripts/nija_offline_kraken_csv_audit_v440.py
+!scripts/nija_state_store_persistence_audit_v441.py
+!scripts/nija_account_state_diagnostics.py
 !scripts/redis_connectivity_check.sh
 !scripts/credential_diagnostics.sh
 !scripts/debug_startup_safe_mode.sh
