@@ -281,6 +281,88 @@ def test_redis_dedupe_does_not_requeue_synced_event(monkeypatch, tmp_path):
     assert fake.zrangebyscore(f"{sync._REDIS_PREFIX}:pending", 0, time.time() + 1000) == []
 
 
+
+def test_redis_ack_prevents_sqlite_fallback_replay(monkeypatch, tmp_path):
+    # Once Apollo confirms a contact via Redis, an outage must not cause
+    # the local SQLite mirror to send that same contact again.
+    create_site_event(monkeypatch, tmp_path)
+    fake = FakeRedis()
+    monkeypatch.setattr(sync, "_redis_client", lambda: fake)
+    monkeypatch.setattr(sync, "start_worker", lambda: None)
+    assert sync.enqueue_lead(
+        {"name": "QA Website", "email": "qa@example.com"}, "evt_1"
+    )
+    sent = []
+    monkeypatch.setattr(
+        sync, "_deliver_batch",
+        lambda rows, key: sent.append([r["email"] for r in rows])
+        or {"qa@example.com"},
+    )
+    assert sync.sync_pending()["synced"] == 1
+    assert sent == [["qa@example.com"]]
+    with sync._connect() as conn:
+        row = conn.execute(
+            "SELECT state, last_error_code FROM website_lead_crm_sync "
+            "WHERE event_key='evt_1'"
+        ).fetchone()
+    assert row["state"] == "synced"
+    assert row["last_error_code"] == ""
+
+    # The Redis fallback must not attempt an already confirmed contact.
+    monkeypatch.setattr(sync, "_redis_client", lambda: None)
+    monkeypatch.setattr(
+        sync, "_deliver_batch",
+        lambda rows, key: (_ for _ in ()).throw(
+            AssertionError("synced contact must not be replayed")
+        ),
+    )
+    assert sync.sync_pending()["attempted"] == 0
+
+
+def test_redis_rebootstrap_skips_sqlite_confirmed_contacts(monkeypatch, tmp_path):
+    create_site_event(monkeypatch, tmp_path)
+    with sync._connect() as conn:
+        sync._prepare(conn)
+        conn.execute(
+            "UPDATE website_lead_crm_sync SET state='synced' "
+            "WHERE event_key='evt_1'"
+        )
+        conn.commit()
+    fresh_redis = FakeRedis()
+    assert sync._bootstrap_redis_from_sqlite(fresh_redis) == 0
+    assert fresh_redis.zsets == {}
+
+
+
+
+def test_recreated_sqlite_mirror_preserves_redis_confirmed_state(monkeypatch, tmp_path):
+    # Render's ephemeral SQLite may be recreated even when Redis survived.
+    # Enqueueing the same event must not turn an acknowledged contact pending.
+    monkeypatch.setenv("NIJA_LEAD_DB_PATH", str(tmp_path / "recreated.sqlite3"))
+    monkeypatch.setenv("NIJA_LEAD_APOLLO_SYNC_ENABLED", "true")
+    fake = FakeRedis()
+    key = sync._redis_event_key("evt_confirmed")
+    fake.hset(key, mapping={
+        "email": "confirmed@example.com",
+        "name": "Confirmed QA",
+        "state": "synced",
+        "attempts": "0",
+        "next_attempt_at": "0",
+    })
+    monkeypatch.setattr(sync, "_redis_client", lambda: fake)
+    monkeypatch.setattr(sync, "start_worker", lambda: None)
+    lead = {"name": "Confirmed QA", "email": "confirmed@example.com"}
+    assert sync.enqueue_lead(lead, "evt_confirmed")
+    with sync._connect() as conn:
+        row = conn.execute(
+            "SELECT state FROM website_lead_crm_sync WHERE event_key=?",
+            ("evt_confirmed",),
+        ).fetchone()
+    assert row["state"] == "synced"
+    assert fake.zsets == {}
+
+
+
 def test_redis_retry_remains_pending(monkeypatch, tmp_path):
     fake = FakeRedis()
     monkeypatch.setenv("NIJA_LEAD_DB_PATH", str(tmp_path / "retryredis.sqlite3"))
