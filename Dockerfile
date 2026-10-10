@@ -108,7 +108,7 @@ RUN python -S -c "import pathlib; required = [pathlib.Path('/app/apply_bot_packa
 RUN NIJA_DEFER_RUNTIME_SITE_HOOKS=1 GIT_BRANCH=build-attestation GIT_COMMIT=build-attestation DRY_RUN_MODE=true python -S /app/scripts/runtime_entrypoint_attestation.py
 
 RUN test -f /app/scripts/nija_trade_ledger_snapshot_v436.py && \
-test -f /app/scripts/public_market_observer_v428.py && \
+    test -f /app/scripts/public_market_observer_v428.py && \
     test -f /app/scripts/redis_connectivity_check.sh && \
     test -f /app/scripts/credential_diagnostics.sh && \
     test -f /app/scripts/production_bootstrap.sh && \
