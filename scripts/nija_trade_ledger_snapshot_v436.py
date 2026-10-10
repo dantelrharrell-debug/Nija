@@ -230,8 +230,6 @@ def verify_snapshot(
             names = [entry.name for entry in entries]
             if len(entries) > len(approved_limits) or len(names) != len(set(names)):
                 raise ValueError("archive has too many or duplicate members")
-            if "manifest.json" not in names or "trade_ledger.db" not in names:
-                raise ValueError("manifest or trading ledger missing")
             # All member names are fixed known basenames. No links, directories,
             # paths, or data outside the bounded approved inventory can be read.
             entry_map = {entry.name: entry for entry in entries}
@@ -239,6 +237,8 @@ def verify_snapshot(
                 if (entry.name not in approved_limits or not entry.isfile()
                         or entry.size < 0 or entry.size > approved_limits[entry.name]):
                     raise ValueError("archive has unsafe or oversized member")
+            if "manifest.json" not in names or "trade_ledger.db" not in names:
+                raise ValueError("manifest or trading ledger missing")
             if entry_map["trade_ledger.db"].size == 0:
                 raise ValueError("archive contains empty trading ledger")
 
