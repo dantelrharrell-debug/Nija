@@ -180,9 +180,16 @@ def _bootstrap_redis_from_sqlite(client) -> int:
     try:
         with _connect() as conn:
             _prepare(conn)
+            # Redis keys can be lost independently of SQLite. Do not requeue
+            # leads that Apollo already acknowledged in the local mirror.
             rows = conn.execute(
-                """SELECT event_key, email, name FROM website_leads
-                   WHERE received_at >= ? ORDER BY received_at""",
+                """SELECT leads.event_key, leads.email, leads.name
+                   FROM website_leads AS leads
+                   LEFT JOIN website_lead_crm_sync AS crm
+                     ON crm.event_key = leads.event_key
+                   WHERE leads.received_at >= ?
+                     AND COALESCE(crm.state, 'pending') != 'synced'
+                   ORDER BY leads.received_at""",
                 (cutoff,),
             ).fetchall()
     except sqlite3.Error:
@@ -195,6 +202,33 @@ def _bootstrap_redis_from_sqlite(client) -> int:
         except Exception:
             break
     return count
+
+
+
+def _acknowledge_local_mirror(event_keys: list[str]) -> None:
+    """Checkpoint Apollo-acknowledged Redis deliveries in the SQLite fallback.
+
+    Without this, a transient Redis outage can cause the fallback worker to
+    resend contacts it already delivered. The remote Apollo call remains
+    idempotent, but repeated API requests waste quota and complicate audits.
+    A local disk failure must not undo a confirmed Redis acknowledgement.
+    """
+    if not event_keys:
+        return
+    try:
+        with _connect() as conn:
+            _prepare(conn)
+            now = _now_iso()
+            conn.executemany(
+                """UPDATE website_lead_crm_sync
+                   SET state='synced', last_error_code='', updated_at=?
+                   WHERE event_key=?""",
+                [(now, event_key) for event_key in event_keys],
+            )
+            conn.commit()
+    except (OSError, sqlite3.Error):
+        # Redis is the authoritative production outbox; preserve its ack.
+        return
 
 
 def enqueue_lead(canonical: dict[str, str], event_key: str) -> bool:
@@ -315,6 +349,7 @@ def _sync_pending_redis(client, key: str, max_batch: int) -> dict[str, int]:
         confirmed = set()
         error_code = type(exc).__name__
 
+    acknowledged_event_keys: list[str] = []
     for row in rows:
         event_key = row["event_key"]
         rkey = _redis_event_key(event_key)
@@ -326,6 +361,7 @@ def _sync_pending_redis(client, key: str, max_batch: int) -> dict[str, int]:
             })
             client.zrem(f"{_REDIS_PREFIX}:pending", event_key)
             client.expire(rkey, 90 * 24 * 3600)
+            acknowledged_event_keys.append(event_key)
             counts["synced"] += 1
         else:
             attempt = int(row["attempts"]) + 1
@@ -339,6 +375,7 @@ def _sync_pending_redis(client, key: str, max_batch: int) -> dict[str, int]:
             })
             client.zadd(f"{_REDIS_PREFIX}:pending", {event_key: next_at})
             counts["retry"] += 1
+    _acknowledge_local_mirror(acknowledged_event_keys)
     return counts
 
 
