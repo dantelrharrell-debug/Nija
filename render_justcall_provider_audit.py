@@ -55,7 +55,7 @@ def _records(response: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, 
 def _call_time_utc(call: dict[str, Any]) -> datetime:
     day = str(call.get("call_date") or "").strip()
     clock = str(call.get("call_time") or "").strip()
-    if not day:
+    if not day or (len(day) == 10 and not clock):
         raise ProviderHistoryIncomplete("call_utc_timestamp_missing")
     try:
         if len(day) == 10 and clock:
