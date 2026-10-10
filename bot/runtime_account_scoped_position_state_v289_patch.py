@@ -37,6 +37,8 @@ from functools import wraps
 from types import MethodType
 from typing import Any, Mapping
 
+from bot.account_state_diagnostics import log_tracker_read
+
 LOGGER = logging.getLogger("nija.runtime_account_scoped_position_state_v289")
 MARKER = "20260830-account-scoped-position-state-v289"
 RELEASE_ID = "20260830-runtime-convergence-v289"
@@ -308,6 +310,7 @@ def _current_snapshot_rows(broker: Any) -> tuple[bool, tuple[dict[str, Any], ...
 
 def _clean_authoritative_orphans(broker: Any, scope: str) -> tuple[int, str]:
     tracker = getattr(broker, "position_tracker", None)
+    log_tracker_read(tracker, "v289_cleanup")
     if tracker is None:
         return 0, "tracker_missing"
     ready, rows, reason = _current_snapshot_rows(broker)
@@ -381,6 +384,7 @@ def reconcile_once() -> dict[str, Any]:
             continue
         scope = _broker_scope(broker)
         tracker = getattr(broker, "position_tracker", None)
+        log_tracker_read(tracker, "v289_binding")
         if tracker is not None:
             tracker_owners.setdefault(id(tracker), []).append(account)
         bound[account] = bool(tracker is not None and _bind_tracker_instance(tracker, scope))
@@ -403,14 +407,16 @@ def reconcile_once() -> dict[str, Any]:
     if signature != _LAST_SIGNATURE:
         _LAST_SIGNATURE = signature
         LOGGER.critical(
-            "ACCOUNT_SCOPED_POSITION_STATE_V289_STATE marker=%s ready=%s accounts=%s shared_tracker_objects=%d cleanup=%s legacy_global_entry_repair_stopped=true authoritative_cleanup_only=true synthetic_position=false synthetic_cost_basis=false safety_gates_bypassed=false",
+            "ACCOUNT_SCOPED_POSITION_STATE_V289_STATE marker=%s ready=%s accounts=%s shared_tracker_objects=%d cleanup=%s readiness_scope=installation_account_scoping protection_certified=false persistence_certified=false legacy_global_entry_repair_stopped=true authoritative_cleanup_only=true synthetic_position=false synthetic_cost_basis=false safety_gates_bypassed=false",
             MARKER,
             str(ready).lower(),
             tuple(accounts),
             len(shared_ids),
             cleanup,
         )
-    return {"ready": ready, "accounts": tuple(accounts), "bound": bound, "cleanup": cleanup, "shared_tracker_objects": len(shared_ids)}
+    return {"ready": ready, "accounts": tuple(accounts), "bound": bound, "cleanup": cleanup,
+            "shared_tracker_objects": len(shared_ids), "readiness_scope": "installation_account_scoping",
+            "protection_certified": False, "persistence_certified": False}
 
 
 def _monitor() -> None:

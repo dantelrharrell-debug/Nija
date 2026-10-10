@@ -463,6 +463,8 @@ def _patch_v281_account_audit() -> bool:
             for row in rows
             if _normalise_symbol(row.get("symbol"))
         }
+        from bot.account_state_diagnostics import log_tracker_read
+        log_tracker_read(getattr(broker, "position_tracker", None), "v285_snapshot_comparison")
         held, tracker_errors = tracker_reader(broker)
         reasons.extend(tracker_errors or [])
         held_symbols = set(held)

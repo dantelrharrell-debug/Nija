@@ -287,6 +287,8 @@ def _entry_price(row: Mapping[str, Any]) -> float:
 def _tracker_holdings(broker: Any) -> tuple[dict[str, dict[str, Any]], list[str]]:
     """Read local tracker state only. No broker/private/public API is called."""
     tracker = getattr(broker, "position_tracker", None)
+    from bot.account_state_diagnostics import log_tracker_read
+    log_tracker_read(tracker, "v281_holdings")
     if tracker is None:
         return {}, []
     list_positions = getattr(tracker, "get_all_positions", None)
