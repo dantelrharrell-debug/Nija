@@ -260,6 +260,37 @@ def test_same_submission_from_two_form_labels_forwards_once(monkeypatch, tmp_pat
     assert calls == ["Lead_Gate"]
 
 
+def test_legacy_sent_forwarding_state_survives_form_agnostic_key_migration(monkeypatch, tmp_path):
+    _config(monkeypatch, tmp_path)
+    payload = _lead()
+    canonical, legacy_key, _ = intake.record_lead(payload)
+    forward_key = intake._forward_key(payload, canonical, legacy_key)
+    calls = []
+    monkeypatch.setattr(intake, "_forward", lambda lead: calls.append(lead["email"]) or True)
+
+    with intake._forward_connect() as conn:
+        conn.execute(
+            "INSERT INTO website_lead_forwarding(event_key, state, lease_until) "
+            "VALUES (?, 'sent', 0)",
+            (legacy_key,),
+        )
+
+    status, result = _request(payload)
+
+    assert status == 200 and result["duplicate"]
+    assert not result["forwarded"] and not result["forward_error"]
+    assert calls == []
+    with sqlite3.connect(intake._forward_db_path()) as conn:
+        assert conn.execute(
+            "SELECT state FROM website_lead_forwarding WHERE event_key=?",
+            (legacy_key,),
+        ).fetchone()[0] == "sent"
+        assert conn.execute(
+            "SELECT state FROM website_lead_forwarding WHERE event_key=?",
+            (forward_key,),
+        ).fetchone()[0] == "sent"
+
+
 def test_different_submission_times_still_forward_separately(monkeypatch, tmp_path):
     _config(monkeypatch, tmp_path)
     calls = []

@@ -353,7 +353,7 @@ def _forward_connect() -> sqlite3.Connection:
     return conn
 
 
-def _claim_forward(event_key: str) -> str | None:
+def _claim_forward(event_key: str, *, legacy_event_key: str | None = None) -> str | None:
     """Claim a uniquely fenced lease; stale senders cannot finish a newer claim.
 
     A provider can still receive a duplicate after a network-ambiguous failure;
@@ -362,21 +362,46 @@ def _claim_forward(event_key: str) -> str | None:
     now = time.time()
     token = secrets.token_hex(16)
     with _DB_LOCK, _forward_connect() as connection:
-        connection.execute(
-            "INSERT OR IGNORE INTO website_lead_forwarding (event_key, state, lease_until) "
-            "VALUES (?, 'pending', 0)",
-            (event_key,),
-        )
-        claimed = connection.execute(
-            """UPDATE website_lead_forwarding
-               SET state='sending', lease_until=?, lease_token=?
-               WHERE event_key=?
-                 AND state IN ('pending', 'sending')
-                 AND lease_until <= ?""",
-            (now + _FORWARD_LOCK_LEASE_SECONDS, token, event_key, now),
-        )
-        connection.commit()
-        return token if claimed.rowcount == 1 else None
+        connection.execute("BEGIN IMMEDIATE")
+        try:
+            if legacy_event_key and legacy_event_key != event_key:
+                legacy_sent = connection.execute(
+                    "SELECT 1 FROM website_lead_forwarding WHERE event_key=? AND state='sent'",
+                    (legacy_event_key,),
+                ).fetchone()
+                if legacy_sent:
+                    migrated = connection.execute(
+                        "UPDATE website_lead_forwarding "
+                        "SET state='sent', lease_until=0, lease_token='' WHERE event_key=?",
+                        (event_key,),
+                    )
+                    if migrated.rowcount == 0:
+                        connection.execute(
+                            "INSERT INTO website_lead_forwarding "
+                            "(event_key, state, lease_until, lease_token) VALUES (?, 'sent', 0, '')",
+                            (event_key,),
+                        )
+                    connection.commit()
+                    return None
+
+            connection.execute(
+                "INSERT OR IGNORE INTO website_lead_forwarding (event_key, state, lease_until) "
+                "VALUES (?, 'pending', 0)",
+                (event_key,),
+            )
+            claimed = connection.execute(
+                """UPDATE website_lead_forwarding
+                   SET state='sending', lease_until=?, lease_token=?
+                   WHERE event_key=?
+                     AND state IN ('pending', 'sending')
+                     AND lease_until <= ?""",
+                (now + _FORWARD_LOCK_LEASE_SECONDS, token, event_key, now),
+            )
+            connection.commit()
+            return token if claimed.rowcount == 1 else None
+        except Exception:
+            connection.rollback()
+            raise
 
 
 def _finish_forward(event_key: str, *, claim_token: str, sent: bool) -> bool:
@@ -594,7 +619,10 @@ def handle_lead_intake_post(handler: Any) -> bool:
         # A Zapier replay must not resend the same customer-facing notification.
         # Failed attempts may retry after a bounded delay without repeating a
         # previously confirmed successful forward.
-        claim_token = _claim_forward(forward_key)
+        claim_token = _claim_forward(
+            forward_key,
+            legacy_event_key=event_key if forward_key != event_key else None,
+        )
     except (OSError, sqlite3.Error):
         claim_token = None
         forward_error = True
