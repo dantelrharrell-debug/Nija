@@ -180,10 +180,11 @@ def test_added_wal_and_missing_entry_scope_rejected(state):
 
 
 def test_tracker_log_correlates_identity_without_private_contents(caplog):
+    private_quantity = 987654321.123456
     store = SimpleNamespace(_data_file="/app/data/entry_prices/user__private_account__kraken.json")
     tracker = SimpleNamespace(storage_file="/app/data/positions/user__private_account__kraken.json",
                               _eps=store, _nija_account_scope_v289="user__private_account__kraken",
-                              positions={"PRIVATE-SYMBOL": {"quantity": 987}})
+                              positions={"PRIVATE-SYMBOL": {"quantity": private_quantity}})
     with caplog.at_level("INFO", logger="nija.account_state_diagnostics"):
         for point in ("v289_cleanup", "v281_holdings", "v285_snapshot_comparison", "position_tracker_load"):
             log_tracker_read(tracker, point)
@@ -191,7 +192,7 @@ def test_tracker_log_correlates_identity_without_private_contents(caplog):
     assert caplog.text.count(hex(id(store))) == 4
     assert "private_account" not in caplog.text
     assert "PRIVATE-SYMBOL" not in caplog.text
-    assert "987" not in caplog.text
+    assert str(private_quantity) not in caplog.text
     assert "storage_directory=/app/data/positions" in caplog.text
 
 
