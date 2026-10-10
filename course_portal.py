@@ -195,6 +195,23 @@ class PortalStore:
                 session_id=sid, expires_at=utcnow() + timedelta(hours=expiry_hours)))
         return token
 
+    def inspect_unconsumed(self, token):
+        """Check a recovery link without burning it during payment or service outages."""
+        token_hash = hashlib.sha256(token.encode()).hexdigest()
+        with self.engine.connect() as conn:
+            row = conn.execute(select(self.tokens).where(
+                self.tokens.c.token_hash == token_hash
+            )).first()
+        if row is None:
+            return None
+        data = dict(row._mapping)
+        expires = data["expires_at"]
+        if expires.tzinfo is None:
+            expires = expires.replace(tzinfo=timezone.utc)
+        if data["consumed_at"] is not None or expires <= utcnow():
+            return None
+        return data["session_id"]
+
     def consume(self, token):
         token_hash = hashlib.sha256(token.encode()).hexdigest()
         with self.engine.begin() as conn:
@@ -404,10 +421,15 @@ def register_course_portal(app, billing_store):
         token = request.args.get("token", "")
         if not token or len(token) > 128:
             return _layout("Access Link Invalid", "<p>Request a new access link from the course portal.</p>"), 403
-        sid = store.consume(token)
-        rec = _valid_paid(sid) if sid and _enabled(current_app) else None
         signer = _signer()
-        if not rec or not signer:
+        if not _enabled(current_app) or not signer:
+            return _layout("Access Link Invalid", "<p>This link is expired, already used or unavailable. "
+                '<a href="/course-portal/">Recover access</a>.</p>'), 403
+        # Verify entitlement first. A transient Stripe failure or disabled
+        # delivery must not permanently consume an otherwise valid access link.
+        sid = store.inspect_unconsumed(token)
+        rec = _valid_paid(sid) if sid else None
+        if not rec or store.consume(token) != sid:
             return _layout("Access Link Invalid", "<p>This link is expired, already used or unavailable. "
                 '<a href="/course-portal/">Recover access</a>.</p>'), 403
         cookie = signer.dumps({"sid": sid, "email": rec["customer_email"]})
