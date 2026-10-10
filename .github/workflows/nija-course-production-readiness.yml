@@ -1,4 +1,5 @@
 name: NIJA course production readiness (read only)
+# 2026-10-10 post-deployment read-only recheck; no trading or billing writes.
 
 on:
   pull_request:
