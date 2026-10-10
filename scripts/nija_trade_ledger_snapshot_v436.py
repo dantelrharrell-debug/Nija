@@ -13,6 +13,8 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import hashlib
+import gzip
+import stat
 import io
 import json
 import os
@@ -200,96 +202,223 @@ def create_snapshot(source: Path, output_dir: Path) -> dict[str, Any]:
     return result
 
 
+def _tar_octal(field: bytes) -> int:
+    """Accept only ordinary POSIX octal sizes, never GNU base-256 overrides."""
+    raw = field.strip(b"\x00 ")
+    if not raw or any(char not in b"01234567" for char in raw):
+        raise ValueError("unsafe tar header numeric field")
+    return int(raw, 8)
+
+
+def _verify_tar_header(block: bytes) -> tuple[str, int, bytes]:
+    if len(block) != 512:
+        raise ValueError("truncated tar header")
+    checksum = _tar_octal(block[148:156])
+    signed = sum(block[:148] + b"        " + block[156:])
+    if signed != checksum:
+        raise ValueError("tar header checksum invalid")
+    if block[257:263] not in (b"ustar\x00", b"ustar "):
+        raise ValueError("unsupported tar header format")
+    if block[345:500].strip(b"\x00 ") != b"":
+        raise ValueError("archive contains prefixed or nested path")
+    name_bytes = block[:100].split(b"\x00", 1)[0]
+    try:
+        name = name_bytes.decode("ascii")
+    except UnicodeError as exc:
+        raise ValueError("archive contains non-ascii member name") from exc
+    return name, _tar_octal(block[124:136]), block[156:157]
+
+
+def _verify_pax_metadata(raw: bytes) -> None:
+    """Permit timestamps only, not name/size/owner/link overrides."""
+    at = 0
+    while at < len(raw):
+        space = raw.find(b" ", at)
+        if space <= at:
+            raise ValueError("invalid pax metadata")
+        length_str = raw[at:space]
+        if not length_str.isdigit() or len(length_str) > 8:
+            raise ValueError("invalid pax record length")
+        length = int(length_str)
+        end = at + length
+        if length <= space - at or end > len(raw) or raw[end - 1:end] != b"\n":
+            raise ValueError("invalid pax record bounds")
+        entry = raw[space + 1:end - 1]
+        key, sep, _value = entry.partition(b"=")
+        if not sep or key not in {b"mtime", b"atime", b"ctime"}:
+            raise ValueError("unsafe pax metadata override")
+        at = end
+
+
+def _unpack_bounded_archive(archive_path: Path, stage_dir: Path) -> tuple[str, ...]:
+    """Single-pass gzip/tar decoder: bound headers BEFORE allocating member data.
+
+    Unlike tarfile.getmembers()/TarInfo._proc_pax, this never parses an
+    attacker-declared multi-gigabyte PAX record in memory. Generated snapshots
+    contain only known regular basenames and optional short timestamp PAX.
+    """
+    limits = {"trade_ledger.db": MAX_SQLITE_BYTES, "manifest.json": MAX_MANIFEST_BYTES}
+    limits.update({name: MAX_COMPANION_BYTES for name, _, _ in OPTIONAL_FILES})
+    max_members = len(limits)
+    max_headers = max_members * 2 + 2
+    max_tar_bytes = sum(limits.values()) + (max_headers + 2) * (512 + 16384)
+    total_read = 0
+
+    with gzip.open(archive_path, "rb") as compressed:
+        def exact(count: int) -> bytes:
+            nonlocal total_read
+            if count < 0 or total_read + count > max_tar_bytes:
+                raise ValueError("decompressed tar byte limit exceeded")
+            chunks: list[bytes] = []
+            remaining = count
+            while remaining:
+                part = compressed.read(min(remaining, CHUNK_SIZE))
+                if not part:
+                    raise ValueError("truncated archive")
+                total_read += len(part)
+                remaining -= len(part)
+                chunks.append(part)
+            return b"".join(chunks)
+
+        entries: set[str] = set()
+        metadata_headers = 0
+        while True:
+            header = exact(512)
+            if header == b"\x00" * 512:
+                if exact(512) != b"\x00" * 512:
+                    raise ValueError("invalid tar end marker")
+                # tarfile writes up to 10KB zero end-record padding.
+                trailing = 0
+                while True:
+                    block = compressed.read(CHUNK_SIZE)
+                    if not block:
+                        break
+                    trailing += len(block)
+                    if trailing > 65536 or any(block):
+                        raise ValueError("unexpected tar trailing data")
+                break
+
+            name, size, kind = _verify_tar_header(header)
+            if kind == b"x":
+                metadata_headers += 1
+                if (metadata_headers > max_members or size > 16384
+                        or name != "././@PaxHeader"):
+                    raise ValueError("unsafe or oversized pax header")
+                _verify_pax_metadata(exact(size))
+                padding = (-size) % 512
+                if padding:
+                    exact(padding)
+                continue
+            if kind not in (b"0", b"\x00"):
+                raise ValueError("archive contains nonregular member")
+            if name not in limits or name in entries or size > limits[name]:
+                raise ValueError("archive has unsafe, duplicate or oversized member")
+            if name == "trade_ledger.db" and size == 0:
+                raise ValueError("archive contains empty trading ledger")
+            entries.add(name)
+            if len(entries) > max_members:
+                raise ValueError("archive has too many members")
+            # Stream directly to private temporary files; never buffer SQLite
+            # in RAM. Each read is bounded and the tar reader tracks total bytes.
+            remaining = size
+            with (stage_dir / name).open("xb") as output:
+                while remaining:
+                    take = min(CHUNK_SIZE, remaining)
+                    output.write(exact(take))
+                    remaining -= take
+            padding = (-size) % 512
+            if padding:
+                exact(padding)
+            if len(entries) + metadata_headers > max_headers:
+                raise ValueError("archive metadata header limit exceeded")
+
+    if not {"manifest.json", "trade_ledger.db"}.issubset(entries):
+        raise ValueError("manifest or trading ledger missing")
+    return tuple(sorted(entries))
+
+
 def verify_snapshot(
     archive_path: Path, *, expected_sha256: str | None = None,
     exercise_restore: bool = False,
 ) -> dict[str, Any]:
-    """Verify a bounded archive; optionally restore to a disposable isolated DB.
+    """Pin source bytes once, then bounded-decode and test only an isolated copy.
 
-    Neither a valid archive nor a local restore proves off-host persistence,
-    complete broker history, or production trading eligibility. The expected
-    digest must originate from an independent copy of the source-side report.
+    Archive validity and a disposable restore never establish independently
+    retained off-host storage or complete historical broker accounting.
     """
     if not archive_path.is_file() or archive_path.is_symlink():
         raise ValueError("archive missing or is a symlink")
+    expected: str | None = None
     if expected_sha256 is not None:
         expected = str(expected_sha256).strip().lower()
-        if len(expected) != 64 or any(c not in "0123456789abcdef" for c in expected):
+        if len(expected) != 64 or any(ch not in "0123456789abcdef" for ch in expected):
             raise ValueError("expected archive SHA-256 must be 64 hex characters")
-        if _sha256(archive_path) != expected:
-            raise ValueError("off-host archive SHA-256 does not match source")
 
-    approved_limits = {"trade_ledger.db": MAX_SQLITE_BYTES,
-                       "manifest.json": MAX_MANIFEST_BYTES}
-    approved_limits.update({name: MAX_COMPANION_BYTES for name, _, _ in OPTIONAL_FILES})
-
+    # Checksum and parsing operate on the SAME private immutable staged bytes.
+    # Open once with O_NOFOLLOW so a symlink swap cannot redirect the source.
     with tempfile.TemporaryDirectory(prefix="nija-ledger-verify-") as stage:
         stage_dir = Path(stage)
-        with tarfile.open(archive_path, mode="r:gz") as archive:
-            entries = archive.getmembers()
-            names = [entry.name for entry in entries]
-            if len(entries) > len(approved_limits) or len(names) != len(set(names)):
-                raise ValueError("archive has too many or duplicate members")
-            # All member names are fixed known basenames. No links, directories,
-            # paths, or data outside the bounded approved inventory can be read.
-            entry_map = {entry.name: entry for entry in entries}
-            for entry in entries:
-                if (entry.name not in approved_limits or not entry.isfile()
-                        or entry.size < 0 or entry.size > approved_limits[entry.name]):
-                    raise ValueError("archive has unsafe or oversized member")
-            if "manifest.json" not in names or "trade_ledger.db" not in names:
-                raise ValueError("manifest or trading ledger missing")
-            if entry_map["trade_ledger.db"].size == 0:
-                raise ValueError("archive contains empty trading ledger")
+        staged_archive = stage_dir / "_pinned_source.tar.gz"
+        fd = os.open(str(archive_path), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        try:
+            with os.fdopen(fd, "rb") as original, staged_archive.open("xb") as output:
+                source_stat = os.fstat(original.fileno())
+                max_compressed = (
+                    MAX_SQLITE_BYTES + MAX_MANIFEST_BYTES
+                    + len(OPTIONAL_FILES) * MAX_COMPANION_BYTES + 2 * 1024 * 1024
+                )
+                if not stat.S_ISREG(source_stat.st_mode) or source_stat.st_size > max_compressed:
+                    raise ValueError("unsafe or oversized source archive")
+                digest = hashlib.sha256()
+                total = 0
+                while True:
+                    chunk = original.read(CHUNK_SIZE)
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    if total > max_compressed:
+                        raise ValueError("archive compressed-size limit exceeded")
+                    digest.update(chunk)
+                    output.write(chunk)
+                if total != source_stat.st_size:
+                    raise ValueError("source archive changed during snapshot")
+        except BaseException:
+            # os.fdopen owns the descriptor once opened; close only if
+            # construction failed before ownership was transferred.
+            if not staged_archive.exists():
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+            raise
+        if expected is not None and digest.hexdigest() != expected:
+            raise ValueError("off-host archive SHA-256 does not match source")
 
-            manifest_entry = archive.extractfile("manifest.json")
-            if manifest_entry is None:
-                raise ValueError("manifest cannot be read")
-            manifest_raw = manifest_entry.read(MAX_MANIFEST_BYTES + 1)
-            if len(manifest_raw) > MAX_MANIFEST_BYTES:
-                raise ValueError("manifest exceeds maximum size")
-            manifest = json.loads(manifest_raw.decode("utf-8"))
-            if not isinstance(manifest, dict) or manifest.get("format_version") != 1:
-                raise ValueError("unsupported snapshot version")
-            tracked = manifest.get("members")
-            if not isinstance(tracked, dict) or set(names) != (set(tracked) | {"manifest.json"}):
-                raise ValueError("archive inventory does not match manifest")
-            for name, record in tracked.items():
-                if not isinstance(record, dict):
-                    raise ValueError("malformed archive member metadata")
-                declared_bytes = record.get("bytes")
-                declared_sha = record.get("sha256")
-                if (type(declared_bytes) is not int
-                        or declared_bytes != entry_map[name].size
-                        or not isinstance(declared_sha, str)
-                        or len(declared_sha) != 64
-                        or any(c not in "0123456789abcdef" for c in declared_sha.lower())):
-                    raise ValueError("snapshot manifest size mismatch or digest invalid: " + name)
-                target = stage_dir / name
-                file_reader = archive.extractfile(name)
-                if file_reader is None:
-                    raise ValueError("snapshot member cannot be read")
-                # Never stream unbounded decompressed data to the verifier's
-                # filesystem, even when the archive header is hostile.
-                remaining = declared_bytes
-                with target.open("xb") as output:
-                    while remaining:
-                        chunk = file_reader.read(min(CHUNK_SIZE, remaining))
-                        if not chunk:
-                            raise ValueError("snapshot member truncated: " + name)
-                        output.write(chunk)
-                        remaining -= len(chunk)
-                if target.stat().st_size != declared_bytes:
-                    raise ValueError("snapshot member size mismatch: " + name)
-                if _sha256(target) != declared_sha.lower():
-                    raise ValueError("snapshot member digest mismatch: " + name)
+        names = set(_unpack_bounded_archive(staged_archive, stage_dir))
+        manifest_raw = (stage_dir / "manifest.json").read_bytes()
+        manifest = json.loads(manifest_raw.decode("utf-8"))
+        if not isinstance(manifest, dict) or manifest.get("format_version") != 1:
+            raise ValueError("unsupported snapshot format")
+        tracked = manifest.get("members")
+        if not isinstance(tracked, dict) or names != (set(tracked) | {"manifest.json"}):
+            raise ValueError("archive inventory does not match manifest")
+        for name, record in tracked.items():
+            if not isinstance(record, dict):
+                raise ValueError("malformed archive member metadata")
+            declared_size, declared_sha = record.get("bytes"), record.get("sha256")
+            if (type(declared_size) is not int or not isinstance(declared_sha, str)
+                    or len(declared_sha) != 64
+                    or any(ch not in "0123456789abcdef" for ch in declared_sha.lower())
+                    or declared_size != (stage_dir / name).stat().st_size):
+                raise ValueError("snapshot manifest size mismatch or digest invalid: " + name)
+            if _sha256(stage_dir / name) != declared_sha.lower():
+                raise ValueError("snapshot member digest mismatch: " + name)
         counts = _validate_database(stage_dir / "trade_ledger.db")
         if counts != manifest.get("sqlite_tables"):
             raise ValueError("SQLite counts do not match manifest")
+
         if exercise_restore:
             restored = stage_dir / "_isolated_restore.db"
-            # Restore is strictly inside TemporaryDirectory. The live source
-            # DB, its WAL, broker connections and trading state are untouched.
             reader = sqlite3.connect(
                 (stage_dir / "trade_ledger.db").resolve().as_uri() + "?mode=ro",
                 uri=True, timeout=15,
@@ -310,7 +439,7 @@ def verify_snapshot(
         result["off_host_backup_verified"] = False
         result["historical_fill_completeness_verified"] = False
         result["live_trading_eligible"] = False
-    if expected_sha256 is not None:
+    if expected is not None:
         result["expected_archive_sha256_matched"] = True
     return result
 
