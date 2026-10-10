@@ -6,7 +6,7 @@ on:
       - '.github/workflows/nija-course-production-readiness.yml'
       - 'tests/test_course_complete_delivery.py'
   push:
-    branches: [test/nija-course-readiness-20261010]
+    branches: [test/nija-course-readiness-20261010, audit/nija-course-final-readiness-20261010]
     paths:
       - '.github/workflows/nija-course-production-readiness.yml'
       - 'tests/test_course_complete_delivery.py'
