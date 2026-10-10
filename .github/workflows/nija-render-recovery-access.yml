@@ -1,0 +1,84 @@
+name: NIJA Render recovery access preflight
+
+# Read-only credential capability check for incident #3030.
+# This workflow never connects to a broker, deploys, or mutates any production data.
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/nija-render-recovery-access.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  render-readonly-access:
+    # Never allow a fork PR to run this job with secrets.
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Check whether existing Render automation authorization is configured
+        id: auth
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -n "${RENDER_API_KEY:-}" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Existing RENDER_API_KEY secret is configured; validating read-only permissions."
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No GitHub RENDER_API_KEY secret is configured; this GitHub runner cannot administer the current Render instance."
+          fi
+
+      - name: Verify read-only Render API access and disk snapshot inventory
+        if: steps.auth.outputs.configured == 'true'
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          response="$(mktemp)"
+          trap 'rm -f "$response"' EXIT
+
+          # A GET against this exact service cannot restart or alter it.
+          code="$(curl -sS --max-time 20 -o "$response" -w '%{http_code}' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}" \
+            -H 'Accept: application/json' \
+            'https://api.render.com/v1/services/srv-d98dsr5aeets73fpbaqg')"
+          if [ "$code" != '200' ]; then
+            echo "::error::Render read-only service query failed (HTTP ${code}); no recovery operation attempted."
+            exit 1
+          fi
+          echo "::notice::Existing GitHub automation can authenticate to Render's service API (read-only)."
+
+          # Metadata only. Never print snapshot keys, service environment, or archive contents.
+          code="$(curl -sS --max-time 20 -o "$response" -w '%{http_code}' \
+            -H "Authorization: Bearer ${RENDER_API_KEY}" \
+            -H 'Accept: application/json' \
+            'https://api.render.com/v1/disks/dsk-db4kk21srm7s7382vadg/snapshots')"
+          if [ "$code" = '200' ] || [ "$code" = '201' ]; then
+            python3 - "$response" <<'PY'
+          import json, sys
+          try:
+              data = json.load(open(sys.argv[1], encoding="utf-8"))
+              entries = data if isinstance(data, list) else data.get("snapshots", data.get("items", []))
+              count = len(entries) if isinstance(entries, list) else "unknown"
+              print(f"::notice::Render disk-snapshot metadata query succeeded; snapshot count={count}.")
+              print("::notice::Snapshot metadata alone does not certify historical ledger completeness.")
+          except (ValueError, OSError, TypeError):
+              print("::notice::Snapshot metadata returned but count could not be parsed.")
+          PY
+          else
+            echo "::notice::Render disk-snapshot metadata query returned HTTP ${code}; no restore requested."
+          fi
+
+      - name: Explain remaining safe recovery boundary
+        if: always()
+        run: |
+          echo "::notice::Render one-off jobs cannot access the production persistent disk."
+          echo "::notice::This preflight only reads API metadata and never authorizes live trading."
+          echo "::notice::A live-instance SSH identity or another explicitly authorized disk-backed execution mechanism remains necessary for off-host archive transfer and reconciliation."
