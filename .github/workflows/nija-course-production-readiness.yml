@@ -5,7 +5,7 @@ on:
     paths:
       - '.github/workflows/nija-course-production-readiness.yml'
   push:
-    branches: [audit/nija-course-readiness-20261010]
+    branches: [test/nija-course-readiness-20261010]
     paths:
       - '.github/workflows/nija-course-production-readiness.yml'
 
@@ -92,3 +92,18 @@ jobs:
           if not passed:
               sys.exit(1)
           PY
+
+  isolated-course-contract-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install billing test dependencies
+        run: python -m pip install -r requirements-billing.txt pytest
+      - name: Simulate course purchase and private access in local isolated tests
+        env:
+          NIJA_COURSE_DELIVERY_ENABLED: 'false'
+        run: python -m pytest -q tests/test_course_fulfillment.py tests/test_course_portal.py tests/test_billing_service_contract.py
