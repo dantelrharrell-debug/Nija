@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import importlib
 import logging
+import math
 import os
 import threading
 import time
@@ -160,7 +161,68 @@ def _proactive_headroom_seconds(manager: Any) -> float:
     # this returns 70s: refresh begins around snapshot age 20s, leaving enough
     # time for one bounded attempt plus watchdog cadence and a 15s safety margin.
     ceiling = max(10.0, ttl_s - 10.0)
-    return max(10.0, min(deadline_s + cadence_s + expiry_margin_s, ceiling))
+    scheduled = max(10.0, min(deadline_s + cadence_s + expiry_margin_s, ceiling))
+    # An actual slow/expired proactive publication justifies at most ten
+    # seconds of *earlier* scheduling; never extend its immutable 90s TTL,
+    # lower fetch-quality standards, or increase concurrent workers.
+    try:
+        last_pressure = float(getattr(manager, "_nija_v445_pressure_mono", 0.0) or 0.0)
+        age = time.monotonic() - last_pressure
+        if last_pressure > 0 and math.isfinite(age) and 0 <= age <= 600.0:
+            return min(ceiling, scheduled + 10.0)
+    except (ValueError, TypeError, OverflowError, AttributeError):
+        pass
+    return scheduled
+
+
+def _record_proactive_publication_outcome(
+    manager: Any, *, attempted_ok: bool, current: bool, remaining_s: float
+) -> None:
+    """Track actual canonical publication margin, not a fabricated freshness signal.
+
+    A result of None is NOT counted as a successful refresh even if another
+    worker has already published. Slow/expired attempts only adapt the next
+    scheduler deadline; they never change CapitalAuthority or activation.
+    """
+    ttl_s = _freshness_ttl_seconds()
+    try:
+        remaining = float(remaining_s)
+    except (ValueError, TypeError, OverflowError):
+        remaining = 0.0
+    if not math.isfinite(remaining):
+        remaining = 0.0
+
+    pressure = (not bool(current)) or (
+        bool(attempted_ok) and remaining < min(25.0, max(10.0, ttl_s / 4.0))
+    )
+    if pressure:
+        prior = float(getattr(manager, "_nija_v445_pressure_mono", 0.0) or 0.0)
+        setattr(manager, "_nija_v445_pressure_mono", time.monotonic())
+        setattr(manager, "_nija_v445_recovered_cycles", 0)
+        if prior <= 0:
+            LOGGER.warning(
+                "CAPITAL_V445_PROACTIVE_MARGIN_PRESSURE marker=%s remaining_s=%.1f "
+                "publication_current=%s refresh_success=%s adaptive_headroom_only=true "
+                "canonical_ttl_unchanged=true trading_gates_unchanged=true",
+                MARKER,
+                remaining,
+                str(bool(current)).lower(),
+                str(bool(attempted_ok)).lower(),
+            )
+        return
+    # Clear adaptive scheduling only after two verified timely refreshes.
+    if bool(attempted_ok) and bool(current) and remaining >= max(25.0, ttl_s / 3.0):
+        if float(getattr(manager, "_nija_v445_pressure_mono", 0.0) or 0.0) > 0:
+            good = int(getattr(manager, "_nija_v445_recovered_cycles", 0) or 0) + 1
+            setattr(manager, "_nija_v445_recovered_cycles", good)
+            if good >= 2:
+                setattr(manager, "_nija_v445_pressure_mono", 0.0)
+                setattr(manager, "_nija_v445_recovered_cycles", 0)
+                LOGGER.info(
+                    "CAPITAL_V445_HEADROOM_NORMALIZED marker=%s "
+                    "two_timely_publications=true immutable_expiry_unchanged=true",
+                    MARKER,
+                )
 
 
 def _writer_lease_owned() -> bool:
@@ -228,7 +290,33 @@ def _patch_v137_writer_ownership() -> bool:
             if _live_mode() and not _writer_lease_owned():
                 _standby_log("deadline_execute")
                 return False
-            return bool(original_execute(manager, trigger=trigger))
+            success = False
+            try:
+                success = bool(original_execute(manager, trigger=trigger))
+                return success
+            finally:
+                # The v137 caller already knows whether it actually published.
+                # Read immutable status for scheduling only; NEVER turn a
+                # failed result or old cached capital into a fresh publication.
+                try:
+                    v137_now = _v137()
+                    publication_current, meta = v137_now._publication_meta(
+                        v137_now._authority()
+                    )
+                    _record_proactive_publication_outcome(
+                        manager,
+                        attempted_ok=success,
+                        current=publication_current,
+                        remaining_s=float(meta.get("remaining_s", 0.0) or 0.0),
+                    )
+                except Exception as exc:
+                    LOGGER.debug(
+                        "CAPITAL_V445_HEADROOM_OBSERVATION_FAILED marker=%s "
+                        "error=%s:%s publication_unchanged=true",
+                        MARKER,
+                        type(exc).__name__,
+                        exc,
+                    )
 
         setattr(execute_deadline_refresh_v166, _PATCH_ATTR, True)
         setattr(execute_deadline_refresh_v166, "__wrapped__", original_execute)
