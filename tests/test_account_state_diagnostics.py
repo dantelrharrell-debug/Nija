@@ -211,3 +211,25 @@ def test_tracker_log_suppresses_unchanged_reads_but_logs_changes_and_loads(caplo
         log_tracker_read(tracker, "position_tracker_load", force=True)
     assert caplog.text.count("point=v285_snapshot_comparison") == 3
     assert caplog.text.count("point=position_tracker_load") == 2
+
+
+@pytest.mark.parametrize(
+    "error, expected_code",
+    [("checksum_or_file_set_mismatch_including_wal", "checksum_or_file_set_mismatch_including_wal"),
+     ("destination_collision_no_overwrite", "destination_collision_no_overwrite"),
+     ("sensitive exception details", "unexpected_error")],
+)
+def test_cli_exposes_only_safe_error_codes(monkeypatch, capsys, error, expected_code):
+    import sys
+
+    monkeypatch.setattr(sys, "argv", ["nija_account_state_diagnostics"])
+
+    def fail(*args, **kwargs):
+        raise ValueError(error)
+
+    monkeypatch.setattr(diagnostics, "inventory", fail)
+    assert diagnostics.main() == 1
+    output = json.loads(capsys.readouterr().out)
+    assert output["error_code"] == expected_code
+    if expected_code == "unexpected_error":
+        assert error not in json.dumps(output)
