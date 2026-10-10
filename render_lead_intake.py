@@ -218,11 +218,6 @@ def _ensure_schema(connection: sqlite3.Connection) -> None:
             );
             CREATE INDEX IF NOT EXISTS idx_website_leads_email
                 ON website_leads(email, submitted_at);
-            CREATE TABLE IF NOT EXISTS website_lead_forwarding (
-                event_key TEXT PRIMARY KEY,
-                state TEXT NOT NULL,
-                lease_until REAL NOT NULL DEFAULT 0
-            );
             """
         )
         connection.commit()
@@ -265,15 +260,44 @@ def record_lead(payload: dict[str, Any]) -> tuple[dict[str, str], str, bool]:
     return canonical, event_key, duplicate
 
 
-def _claim_forward(event_key: str) -> bool:
-    """Claim the downstream notification for one event, across concurrent requests.
+def _forward_db_path() -> pathlib.Path:
+    """Keep notification history on Render's mounted disk across bot redeploys.
 
-    A sent event cannot be forwarded again. A failed/crashed attempt is eligible
-    for retry only after a short backoff or its in-flight lease expires.
+    NIJA's live Render bot mounts persistent storage at /data, while /app/data
+    may be replaced when a new container is deployed. A test/operator override
+    permits an isolated location without affecting the trade ledger database.
+    """
+    override = str(os.getenv("NIJA_LEAD_FORWARD_DB_PATH") or "").strip()
+    if override:
+        return pathlib.Path(override)
+    mount = pathlib.Path("/data")
+    return mount / "nija_lead_forwarding.sqlite3" if mount.is_dir() else _db_path()
+
+
+def _forward_connect() -> sqlite3.Connection:
+    path = _forward_db_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(path), timeout=10.0)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout=10000")
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS website_lead_forwarding (
+            event_key TEXT PRIMARY KEY,
+            state TEXT NOT NULL,
+            lease_until REAL NOT NULL DEFAULT 0
+        )"""
+    )
+    return conn
+
+
+def _claim_forward(event_key: str) -> bool:
+    """Claim one downstream notification across processes and deployments.
+
+    The persisted 'sent' state prevents replay. In-flight attempts are leased,
+    and unsuccessful attempts become retryable after a short backoff.
     """
     now = time.time()
-    with _DB_LOCK, _connect() as connection:
-        _ensure_schema(connection)
+    with _DB_LOCK, _forward_connect() as connection:
         connection.execute(
             "INSERT OR IGNORE INTO website_lead_forwarding (event_key, state, lease_until) "
             "VALUES (?, 'pending', 0)",
@@ -292,9 +316,9 @@ def _claim_forward(event_key: str) -> bool:
 
 
 def _finish_forward(event_key: str, *, sent: bool) -> None:
-    """Persist success or rate-limit retries for the same website submission."""
+    """Persist completion or rate-limit retries for the same submission."""
     retry_at = 0 if sent else time.time() + _FORWARD_RETRY_BACKOFF_SECONDS
-    with _DB_LOCK, _connect() as connection:
+    with _DB_LOCK, _forward_connect() as connection:
         connection.execute(
             """UPDATE website_lead_forwarding SET state=?, lease_until=?
                WHERE event_key=? AND state='sending'""",
