@@ -93,3 +93,27 @@ def test_duplicate_trade_ids_fail_closed(tmp_path):
     ])
     with pytest.raises(ValueError, match="duplicate"):
         inspect(db, trades, ledgers, "platform:kraken")
+
+
+def test_blank_ledger_links_never_count_as_verified(tmp_path):
+    db, trades, ledgers = _evidence(tmp_path, ledg_ref="UNRELATED")
+    _write_csv(
+        trades, TRADE_HEADER + ["ledgers"],
+        [["TRADE1", "EXIT1", "XXBTZUSD", "sell", "100", "100", "0.20", "1", ","]],
+    )
+    report = inspect(db, trades, ledgers, "platform:kraken")
+    assert report["exit_csv_consistent"] == 0
+    assert "ledger_row_link_unproven" in report["results"][0]["unverified_reasons"]
+    assert report["all_historical_fills_reconciled"] is False
+
+
+def test_only_explicit_verified_ledger_links_count(tmp_path):
+    db, trades, ledgers = _evidence(tmp_path, ledg_ref="UNRELATED")
+    _write_csv(
+        trades, TRADE_HEADER + ["ledgers"],
+        [["TRADE1", "EXIT1", "XXBTZUSD", "sell", "100", "100", "0.20", "1", "LEDGER1"]],
+    )
+    report = inspect(db, trades, ledgers, "platform:kraken")
+    assert report["exit_csv_consistent"] == 1
+    assert report["historical_realized_pnl_certified"] is False
+    assert report["live_trading_eligible"] is False

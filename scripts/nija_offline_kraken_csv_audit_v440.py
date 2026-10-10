@@ -149,14 +149,20 @@ def inspect(db: Path, trades: Path, ledgers: Path, scope: str) -> dict[str, Any]
                     reasons.append("exit_fee_mismatch")
                 # Kraken trade IDs can appear as ledger refid; some Trades
                 # exports instead list the linked ledger txids explicitly.
-                linkage = all(
-                    row["txid"] in ledger_refs
-                    or bool(row.get("ledgers")) and all(
-                        ident.strip() in ledger_txids
-                        for ident in row["ledgers"].split(",") if ident.strip()
-                    )
-                    for row in fills
-                )
+                # A nonblank CSV field such as "," has ZERO real
+                # references; all([]) would otherwise incorrectly pass.
+                # Require at least one nonempty exchange ledger txid,
+                # and every supplied identifier must be present.
+                def has_ledger_evidence(row: dict[str, str]) -> bool:
+                    if row["txid"] in ledger_refs:
+                        return True
+                    raw_links = str(row.get("ledgers") or "")
+                    linked_ids = [ident.strip() for ident in raw_links.split(",")]
+                    if not linked_ids or not all(linked_ids):
+                        return False
+                    return all(ident in ledger_txids for ident in linked_ids)
+
+                linkage = all(has_ledger_evidence(row) for row in fills)
                 if not linkage:
                     reasons.append("ledger_row_link_unproven")
             except (InvalidOperation, ValueError, ZeroDivisionError):
