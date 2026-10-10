@@ -5,6 +5,7 @@ No broker requests, trading orders, ledger writes, or production state changes.
 from __future__ import annotations
 
 import importlib
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -22,6 +23,7 @@ def _proof(**changes):
         "filled_quantity": 0.01,
         "broker": "kraken",
         "recovered_fill_proof": True,
+        "authenticated_kraken_queryorders": True,
         "broker_fill_at_epoch": 1788800000.0,
     }
     payload.update(changes)
@@ -111,6 +113,24 @@ def test_conflicting_provenance_is_rejected(monkeypatch, conflict):
 
 def test_queryorders_no_proof_never_promotes(monkeypatch):
     result, accepted, wake = _run(monkeypatch, "platform:kraken", None)
+    assert result == 0
+    assert accepted == []
+    assert wake == []
+
+
+@pytest.mark.parametrize("invalid", [
+    {"order_id": "OTHER-ORDER"},
+    {"recovered_fill_proof": False},
+    {"authenticated_kraken_queryorders": False},
+    {"broker_fill_at_epoch": None},
+    {"broker_fill_at_epoch": float("nan")},
+    {"broker_fill_at_epoch": float("inf")},
+    {"broker_fill_at_epoch": time.time() + 3600},
+])
+def test_historical_fill_must_keep_exact_exchange_provenance(monkeypatch, invalid):
+    result, accepted, wake = _run(
+        monkeypatch, "platform:kraken", _proof(**invalid)
+    )
     assert result == 0
     assert accepted == []
     assert wake == []
