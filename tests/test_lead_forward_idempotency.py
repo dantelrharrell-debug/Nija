@@ -55,6 +55,7 @@ def _lead():
 def _config(monkeypatch, tmp_path):
     monkeypatch.setenv("NIJA_LEAD_WEBHOOK_TOKEN", "local-test-secret")
     monkeypatch.setenv("NIJA_LEAD_DB_PATH", str(tmp_path / "web_leads.sqlite3"))
+    monkeypatch.setenv("NIJA_LEAD_FORWARD_DB_PATH", str(tmp_path / "persistent_forward.sqlite3"))
     # CRM queue has its own existing idempotency and is not under test here.
     monkeypatch.setattr(sync, "enqueue_lead", lambda canonical, key: True)
 
@@ -73,7 +74,7 @@ def test_identical_webhook_replays_send_one_notification(monkeypatch, tmp_path):
     assert first["lead_id"] == replay["lead_id"]
     assert calls == ["synthetic-idempotency@example.com"]
 
-    with sqlite3.connect(intake._db_path()) as conn:
+    with sqlite3.connect(intake._forward_db_path()) as conn:
         assert conn.execute("SELECT COUNT(*) FROM website_lead_forwarding").fetchone()[0] == 1
         assert conn.execute("SELECT state FROM website_lead_forwarding").fetchone()[0] == "sent"
 
@@ -96,7 +97,7 @@ def test_failed_forward_is_retryable_but_never_spammed(monkeypatch, tmp_path):
     assert len(calls) == 1, "Immediate replay must obey retry backoff"
 
     # Simulate passing the backoff without sleeping.
-    with sqlite3.connect(intake._db_path()) as conn:
+    with sqlite3.connect(intake._forward_db_path()) as conn:
         conn.execute("UPDATE website_lead_forwarding SET lease_until=0")
         conn.commit()
     retry_status, retry = _request(_lead())
@@ -148,3 +149,20 @@ def test_empty_body_remains_rejected_without_forward(monkeypatch, tmp_path):
     status, result = _request(None)
     assert status == 422
     assert "empty" in result["error"].lower()
+
+
+
+def test_sent_history_survives_ephemeral_lead_database_replacement(monkeypatch, tmp_path):
+    _config(monkeypatch, tmp_path)
+    calls = []
+    monkeypatch.setattr(intake, "_forward", lambda lead: calls.append(lead["email"]) or True)
+    status, result = _request(_lead())
+    assert status == 201 and result["forwarded"]
+
+    # Simulate a new Render container with an empty nonpersistent intake DB,
+    # while the forward-history file survives on the separately mounted disk.
+    monkeypatch.setenv("NIJA_LEAD_DB_PATH", str(tmp_path / "replacement_container.sqlite3"))
+    replay_status, replay = _request(_lead())
+    assert replay_status == 201  # Source DB is fresh; durable forwarding state is not.
+    assert replay["accepted"] and not replay["forwarded"]
+    assert calls == ["synthetic-idempotency@example.com"]
