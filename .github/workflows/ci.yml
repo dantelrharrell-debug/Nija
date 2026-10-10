@@ -131,4 +131,5 @@ jobs:
             bot/tests/test_confirmed_strategy_order_provenance_v433.py \
             bot/tests/test_runtime_heartbeat_no_rearm_v433.py \
             bot/tests/test_research_edge_ranking_v432.py \
-            tests/test_nija_state_store_persistence_audit_v441.py
+            tests/test_nija_state_store_persistence_audit_v441.py \
+            bot/tests/test_nija_offline_kraken_csv_audit_v440.py
