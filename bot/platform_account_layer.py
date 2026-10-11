@@ -49,6 +49,11 @@ import threading
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
+try:
+    from bot.account_ownership import account_identity, business_account_profiles, personal_ownership_mode
+except ImportError:
+    from account_ownership import account_identity, business_account_profiles, personal_ownership_mode
+
 logger = logging.getLogger("nija.platform_account_layer")
 
 # ---------------------------------------------------------------------------
@@ -139,6 +144,8 @@ class PlatformStatus:
     platform_exchanges: List[str] = field(default_factory=list)
     user_connections: List[UserConnection] = field(default_factory=list)
     errors: List[str] = field(default_factory=list)
+    current_account_identity: Dict[str, object] = field(default_factory=dict)
+    staged_business_accounts: List[Dict[str, object]] = field(default_factory=list)
 
     @property
     def user_count(self) -> int:
@@ -182,6 +189,10 @@ class PlatformAccountLayer:
 
     def __init__(self) -> None:
         self._status = PlatformStatus()
+        self._status.current_account_identity = account_identity("platform")
+        if personal_ownership_mode():
+            self._status.platform_account_label = "Dante — Master User (legacy execution identity: platform)"
+            self._status.staged_business_accounts = business_account_profiles()
         # {user_id: UserConnection} — runtime-registered users (encrypted store)
         self._runtime_users: Dict[str, UserConnection] = {}
         self._validate_platform_credentials()
@@ -211,8 +222,10 @@ class PlatformAccountLayer:
             icon = "❌"
             note = "NOT CONFIGURED — set {EXCHANGE}_PLATFORM_API_KEY / SECRET"
 
-        logger.info(f"  {icon}  Platform Account  │  Owner: NIJA  │  Purpose: AI trading engine")
+        logger.info("  %s  %s", icon, s.platform_account_label)
         logger.info(f"          Status: {note}")
+        if s.staged_business_accounts:
+            logger.info("  NIJA — AI Platform: business accounts disabled; awaiting verified migration")
         logger.info("")
 
         # Connected user accounts

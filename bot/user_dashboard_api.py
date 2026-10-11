@@ -32,6 +32,11 @@ from datetime import datetime
 from flask import Flask, jsonify, request, send_file
 import io
 
+try:
+    from bot.account_ownership import account_identity, business_account_profiles, personal_ownership_mode
+except ImportError:
+    from account_ownership import account_identity, business_account_profiles, personal_ownership_mode
+
 # Import our new modules
 try:
     from bot.user_pnl_tracker import get_user_pnl_tracker
@@ -54,9 +59,12 @@ except ImportError:
 
 logger = logging.getLogger('nija.dashboard_api')
 
+from admin_access_flask import install_admin_access
+
 # Initialize Flask app
 app = Flask(__name__)
 app.config['JSON_SORT_KEYS'] = False
+install_admin_access(app, dashboard="user")
 
 
 @app.route('/api/health', methods=['GET'])
@@ -78,7 +86,10 @@ def list_users():
         hard_controls = get_hard_controls()
 
         # Check if we should include master
-        include_platform = request.args.get('include_platform', 'false').lower() == 'true'
+        include_platform = (
+            personal_ownership_mode()
+            or request.args.get('include_platform', 'false').lower() == 'true'
+        )
 
         # Get all users from various sources
         user_ids = set()
@@ -102,6 +113,7 @@ def list_users():
             can_trade, reason = hard_controls.can_trade(user_id)
 
             users.append({
+                **account_identity(user_id),
                 'user_id': user_id,
                 'can_trade': can_trade,
                 'trading_status': reason if not can_trade else 'active',
@@ -116,6 +128,7 @@ def list_users():
 
         return jsonify({
             'users': users,
+            'staged_business_accounts': business_account_profiles() if personal_ownership_mode() else [],
             'total_users': len(users),
             'timestamp': datetime.now().isoformat()
         })
@@ -142,6 +155,7 @@ def get_user_pnl(user_id: str):
 
         return jsonify({
             'user_id': user_id,
+            **account_identity(user_id),
             'stats': stats,
             'recent_trades': recent_trades,
             'daily_breakdown': [
