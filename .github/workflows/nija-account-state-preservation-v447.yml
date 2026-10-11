@@ -1,0 +1,33 @@
+name: NIJA account-state preservation v447
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/nija_account_state_preservation_v447.py'
+      - 'tests/test_nija_account_state_preservation_v447.py'
+      - '.github/workflows/nija-account-state-preservation-v447.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/nija_account_state_preservation_v447.py'
+      - 'tests/test_nija_account_state_preservation_v447.py'
+      - '.github/workflows/nija-account-state-preservation-v447.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  fail-closed-preservation-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      NIJA_DEFER_RUNTIME_SITE_HOOKS: '1'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+      - name: Test offline backup, private permissions and isolated restoration
+        run: |
+          python -S -B -m unittest discover \
+            -s tests -p 'test_nija_account_state_preservation_v447.py' -v
