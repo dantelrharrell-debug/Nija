@@ -32,6 +32,13 @@ _READY_FLAG = "NIJA_RUNTIME_KNOWN_EXECUTION_PROBE_REVALIDATION_V406_READY"
 _FALLBACK_ORDER_ID = "OSW7F3-YD2NX-SR3BZB"
 _LOCK = threading.RLock()
 _THREAD: threading.Thread | None = None
+# Authenticated closed orders whose genuine broker close time has expired do not
+# qualify for the preactivation 1,800-second execution-proof gate.  Cache only
+# this broker-verified historical outcome to avoid retrying the same private
+# QueryOrders/TradesHistory round-trip on every 10-second worker cycle.
+_HISTORICAL_PROOF_TTL_S = 1800.0
+_HISTORICAL_RECHECK_S = 600.0
+_HISTORICAL_ORDER_RECHECK_AT: dict[str, float] = {}
 
 
 def _f(value: Any) -> float:
@@ -70,8 +77,12 @@ def _candidate_order_id() -> str:
             )
             for order_id, _entry in ordered:
                 oid = str(order_id or "").strip()
-                if oid:
+                if oid and not _historical_order_backoff_active(oid):
                     return oid
+            # Pending orders exist, but each is already authenticated as old.
+            # Do not switch to an unrelated hard-coded fallback while the
+            # per-order cooldowns are active.
+            return ""
     except Exception:
         LOGGER.debug("v406 dynamic pending-order discovery deferred", exc_info=True)
     return _FALLBACK_ORDER_ID
@@ -168,15 +179,55 @@ def _promote_same_authenticated_row(order_id: str, broker: Any, row: Mapping[str
     return True, 1
 
 
+def _historical_order_backoff_active(order_id: str) -> bool:
+    """Skip repeated reads for a known old final order; never skip new IDs."""
+    now = time.monotonic()
+    with _LOCK:
+        for ident, deadline in tuple(_HISTORICAL_ORDER_RECHECK_AT.items()):
+            if now >= deadline:
+                _HISTORICAL_ORDER_RECHECK_AT.pop(ident, None)
+        return now < _HISTORICAL_ORDER_RECHECK_AT.get(order_id, 0.0)
+
+
+def _historical_final_order_age_s(row: Mapping[str, Any]) -> float:
+    """Use only an authenticated FINAL QueryOrders closure time, never seen time.
+
+    If Kraken omits closetm, continue through the existing strict v357/v346
+    verifier instead of guessing a timestamp or caching an unverified age.
+    """
+    close_epoch = _f(row.get("closetm"))
+    if close_epoch <= 0.0:
+        return 0.0
+    return time.time() - close_epoch
+
+
 def recover_once() -> bool:
     if _marker_ready():
         return True
     order_id = _candidate_order_id()
+    if not order_id or _historical_order_backoff_active(order_id):
+        return False
     broker, row = _final_authenticated_row(order_id)
     if row is None or broker is None:
         LOGGER.info(
             "KNOWN_EXECUTION_PROBE_V406_DEFERRED marker=%s order_id=%s reason=exact_authenticated_final_queryorders_row_unavailable dynamic_pending_order=true authoritative_v367_registry_enabled=true trading_fail_closed=true execution_proof_fabricated=false orders_submitted=false safety_gates_bypassed=false",
             MARKER, order_id,
+        )
+        return False
+    historical_age = _historical_final_order_age_s(row)
+    if historical_age > _HISTORICAL_PROOF_TTL_S:
+        # QueryOrders proved the exact order CLOSED with positive executed
+        # volume/cost in _final_authenticated_row. A September fill must not be
+        # restamped as an October fill or consume continual recovery API calls.
+        with _LOCK:
+            _HISTORICAL_ORDER_RECHECK_AT[order_id] = time.monotonic() + _HISTORICAL_RECHECK_S
+        LOGGER.info(
+            "KNOWN_EXECUTION_PROBE_V406_HISTORICAL_DEFERRED marker=%s order_id=%s "
+            "broker_close_age_s=%.1f recheck_after_s=%.1f "
+            "source=authenticated_queryorders_closetm old_broker_event_not_execution_ready=true "
+            "historical_ledger_unchanged=true proof_timestamp_unchanged=true "
+            "new_order_ids_unaffected=true orders_submitted=false trading_fail_closed=true",
+            MARKER, order_id, historical_age, _HISTORICAL_RECHECK_S,
         )
         return False
     try:
