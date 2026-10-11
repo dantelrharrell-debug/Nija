@@ -114,3 +114,53 @@ def test_missing_queryorders_closetm_preserves_strict_fallback(monkeypatch):
     assert v406.recover_once() is False
     assert count == {"queries": 2, "promotions": 2}
     assert v406._HISTORICAL_ORDER_RECHECK_AT == {}
+
+
+
+def test_candidate_skips_backed_off_order_and_recovers_next(monkeypatch):
+    """A stale top candidate must not starve an eligible pending order."""
+    class V363:
+        @staticmethod
+        def _load_pending():
+            return {
+                "NEWEST-BUT-OLD": {"last_seen_epoch": 30.0},
+                "RECENT-UNCHECKED": {"last_seen_epoch": 20.0},
+            }
+
+    real_import = v406.importlib.import_module
+    monkeypatch.setattr(
+        v406.importlib, "import_module",
+        lambda name: V363 if name == "bot.runtime_kraken_deferred_fill_proof_recovery_v363_patch" else real_import(name),
+    )
+    monkeypatch.setattr(v406, "_HISTORICAL_ORDER_RECHECK_AT", {"NEWEST-BUT-OLD": 900.0})
+    monkeypatch.setattr(v406.time, "monotonic", lambda: 500.0)
+    assert v406._candidate_order_id() == "RECENT-UNCHECKED"
+
+
+def test_all_known_historical_pending_orders_skip_without_fallback(monkeypatch):
+    """When all candidates are cooled down, do not query unrelated fallback."""
+    class V363:
+        @staticmethod
+        def _load_pending():
+            return {
+                "OLD-A": {"last_seen_epoch": 30.0},
+                "OLD-B": {"last_seen_epoch": 20.0},
+            }
+
+    real_import = v406.importlib.import_module
+    monkeypatch.setattr(
+        v406.importlib, "import_module",
+        lambda name: V363 if name == "bot.runtime_kraken_deferred_fill_proof_recovery_v363_patch" else real_import(name),
+    )
+    monkeypatch.setattr(v406, "_HISTORICAL_ORDER_RECHECK_AT",
+                        {"OLD-A": 900.0, "OLD-B": 950.0})
+    monkeypatch.setattr(v406.time, "monotonic", lambda: 500.0)
+    assert v406._candidate_order_id() == ""
+    monkeypatch.setattr(v406, "_marker_ready", lambda: False)
+    monkeypatch.setattr(
+        v406, "_final_authenticated_row",
+        lambda order_id: (_ for _ in ()).throw(
+            AssertionError("no broker query for already classified historical orders")
+        ),
+    )
+    assert v406.recover_once() is False
