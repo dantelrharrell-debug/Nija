@@ -77,8 +77,12 @@ def _candidate_order_id() -> str:
             )
             for order_id, _entry in ordered:
                 oid = str(order_id or "").strip()
-                if oid:
+                if oid and not _historical_order_backoff_active(oid):
                     return oid
+            # Pending orders exist, but each is already authenticated as old.
+            # Do not switch to an unrelated hard-coded fallback while the
+            # per-order cooldowns are active.
+            return ""
     except Exception:
         LOGGER.debug("v406 dynamic pending-order discovery deferred", exc_info=True)
     return _FALLBACK_ORDER_ID
@@ -201,7 +205,7 @@ def recover_once() -> bool:
     if _marker_ready():
         return True
     order_id = _candidate_order_id()
-    if _historical_order_backoff_active(order_id):
+    if not order_id or _historical_order_backoff_active(order_id):
         return False
     broker, row = _final_authenticated_row(order_id)
     if row is None or broker is None:
