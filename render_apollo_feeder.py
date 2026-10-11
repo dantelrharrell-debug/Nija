@@ -492,9 +492,11 @@ def run_sync() -> dict[str, int]:
             if not isinstance(contact, dict):
                 continue
             updated_at = str(contact.get("updated_at", "") or "")
-            if cursor and updated_at and updated_at <= cursor:
-                reached_cursor = True
-                break
+            # Re-evaluate all saved contacts on each sync. Consent, DNC,
+            # suppression and jurisdiction can change without a contact
+            # updated_at change; an incremental cursor can permanently skip
+            # otherwise eligible contacts or stale compliance evidence.
+            # Never infer or fabricate missing eligibility fields.
 
             counts["contacts_scanned"] += 1
             if updated_at and (not newest_seen or updated_at > newest_seen):
