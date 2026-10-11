@@ -297,6 +297,12 @@ def _genuine_execution_marker_proof() -> tuple[bool, str]:
             if not bool(canonical_ok):
                 return False, f"canonical_proof:{canonical_reason or 'not_verified'}"
             canonical_meta = dict(canonical_meta or {})
+            # AUTH_VERIFY lets v169 return auth_only_policy without checking
+            # canonical-fill provenance. Require the verifier to have used an
+            # execution policy; the marker's self-reported stage is insufficient.
+            required_stage = str(canonical_meta.get("required_stage") or "").strip().upper()
+            if required_stage not in {"ORDER_VERIFY", "FILL_VERIFY"}:
+                return False, "canonical_proof_execution_policy_unverified"
             if (
                 str(canonical_meta.get("stage") or "").strip().upper() != "FILL_VERIFY"
                 or str(canonical_meta.get("source") or "").strip().lower() != "canonical_confirmed_fill"
