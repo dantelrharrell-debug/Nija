@@ -14,7 +14,76 @@ limits, orders, positions, and P&L queries retain their identifiers.
 
 Four separate **NIJA — AI Platform** business profiles appear disabled:
 Kraken, Coinbase, OKX, and Alpaca. They have no execution identity, balances,
-or broker client. Master user is a descriptive role, not an authorization grant.
+or broker client. Brokerage execution identity and administrator login identity
+remain separate concepts; the legacy `platform` key is not an administrator login.
+
+## Dante's owner and administrator authority
+
+Only the enabled login account whose exact ID is pinned in `NIJA_OWNER_USER_ID`
+is the creator, master user, and owner. A person registering with the display name
+"Dante", a login ID named `platform`, a brokerage API key, a subscription tier,
+or a token containing a client-supplied role never establishes owner authority.
+
+All other login accounts start without administrator privileges. Dante alone
+can grant or revoke administrator access. A delegated administrator can operate
+protected controls but cannot create more administrators, revoke Dante, or
+transfer ownership. Ordinary users can still use existing personal-service APIs;
+the user dashboard's read-only P&L/risk/nonce requests are restricted to their own
+login IDs. Cross-account reports and dashboard mutations require administrator
+authority. The old personal `platform` records are available to Dante and his
+explicitly delegated administrators.
+
+The following authenticated endpoints share one durable permission policy in
+the Flask gateways/dashboards and FastAPI gateways:
+
+| Endpoint | Permission |
+|---|---|
+| `GET /api/admin/me` | Active authenticated login; returns server-calculated role |
+| `POST /api/admin/grants/{login_user_id}` | Dante only; grant administrator access |
+| `DELETE /api/admin/grants/{login_user_id}` | Dante only; revoke administrator access |
+
+Grants and revocations are recorded atomically in a separate permission database
+with an audit history. Revocation is checked on every protected request, even for
+already-issued tokens. Disabled login accounts are denied. Disabling the owner
+invalidates delegated authority. Permission-storage errors fail closed. Changing
+the owner binding is an operator action, not an API operation; old grants do not
+carry across that change.
+
+The owner dashboard now signs in through the existing NIJA login endpoint and
+keeps its token in memory only. Only Dante sees grant/revoke controls. Server
+authorization remains mandatory even if another user manually calls the routes.
+Expired or revoked sessions clear dashboard data by reloading. Root-directory
+static-file serving is disabled so database and source files cannot be downloaded.
+
+## Deployment prerequisites — verify before merging or activating
+
+- Verify Dante's existing login with its authenticated database record, then pin
+  that record's exact `user_id` as `NIJA_OWNER_USER_ID`. Never infer a login ID from
+  this document, the display name, the email prefix, or `platform`.
+- Set `NIJA_AUTH_USER_DB_PATH` to the existing login database on verified durable
+  storage, shared with the relevant API processes. The login singleton and
+  administrator validator now use the same configured path. Back up that database
+  before applying configuration. Do not point it at the trading ledger.
+- Set `NIJA_ADMIN_DB_PATH` on persistent storage; its directory must already
+  exist. By default the permissions database lives alongside the login database.
+- Configure the same strong `JWT_SECRET_KEY` used by the existing login issuer.
+  Administrator access accepts expiring HS256 login tokens only and checks the
+  current login record. A missing signing key does not fall back to a random key.
+- Set `NIJA_OWNER_LOGIN_URL` on the owner-dashboard service to the existing HTTPS
+  `/api/auth/login` endpoint. Its CORS configuration must permit the owner
+  dashboard's exact origin. Configure a nondefault owner PIN for the additional
+  existing PIN checks; an absent fallback PIN is denied.
+- Set `NIJA_ACCOUNT_OWNERSHIP_MODE=dante_personal` after the status changes are
+  deployed and reviewed. Verify the UI identifies Dante, ordinary users are
+  denied control endpoints, and a controlled grant/revoke works after restart.
+- Complete CI, CodeQL, security review and operator identity binding before
+  deployment. This PR does not remotely set these values or manufacture an owner
+  record. Missing configuration deliberately denies access.
+
+This secures the named API/dashboard administrator surfaces, not OS, GitHub,
+Render workspace permissions, or every alternate/archived API implementation.
+Deploy only the supported gateways with this policy; do not expose an older
+dashboard implementation as a parallel route around it.
 
 Future business credentials use a separate namespace:
 

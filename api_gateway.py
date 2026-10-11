@@ -32,6 +32,7 @@ Architecture:
 from fastapi import FastAPI, Depends, HTTPException, status, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from admin_access_fastapi import install_admin_access
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timedelta
@@ -94,6 +95,8 @@ app = FastAPI(
 )
 
 # CORS configuration
+install_admin_access(app)
+
 allowed_origins = os.getenv('ALLOWED_ORIGINS', '*')
 if allowed_origins == '*':
     logger.warning("⚠️  SECURITY WARNING: CORS is configured to allow ALL origins (*)")

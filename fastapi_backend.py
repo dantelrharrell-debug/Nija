@@ -20,6 +20,7 @@ from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
+from admin_access_fastapi import install_admin_access
 from pydantic import BaseModel, EmailStr, Field
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timedelta
@@ -85,6 +86,8 @@ app = FastAPI(
 )
 
 # CORS configuration - Security: Require explicit origins
+install_admin_access(app)
+
 allowed_origins_str = os.getenv('ALLOWED_ORIGINS', '')
 if not allowed_origins_str:
     # Development fallback - still restrictive

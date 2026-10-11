@@ -20,6 +20,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Optional, Dict, List, Any
 from flask import Flask, request, jsonify
+from admin_access_flask import install_admin_access
 from flask_cors import CORS
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
@@ -54,6 +55,10 @@ logger = logging.getLogger(__name__)
 
 # Initialize Flask app
 app = Flask(__name__)
+install_admin_access(app, protected_prefixes=(
+    "/api/emergency/kill-switch/", "/api/portfolio/", "/api/strategy/",
+    "/api/drawdown/", "/api/recycle/",
+))
 
 _allowed_origins = os.getenv('ALLOWED_ORIGINS', '*').split(',')
 if '*' in _allowed_origins:

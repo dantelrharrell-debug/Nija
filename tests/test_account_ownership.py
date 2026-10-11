@@ -98,7 +98,10 @@ class AccountOwnershipTests(unittest.TestCase):
         with patch.dict(os.environ, {"NIJA_ACCOUNT_OWNERSHIP_MODE": "dante_personal"}, clear=True), \
                 patch.object(dashboard, "get_user_pnl_tracker", return_value=tracker), \
                 patch.object(dashboard, "get_user_risk_manager", return_value=risk), \
-                patch.object(dashboard, "get_hard_controls", return_value=controls):
+                patch.object(dashboard, "get_hard_controls", return_value=controls), \
+                patch("admin_access_flask.authenticate_bearer", return_value="verified_dante"), \
+                patch("admin_access_flask.is_owner", return_value=True), \
+                patch("admin_access_flask.require_administrator"):
             client = dashboard.app.test_client()
             response = client.get("/api/users")
             self.assertEqual(response.status_code, 200)

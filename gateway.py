@@ -24,6 +24,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
 from flask import Flask, request, jsonify, send_from_directory
+from admin_access_flask import install_admin_access
 from flask_cors import CORS
 import jwt
 from functools import wraps
@@ -55,6 +56,7 @@ logger = logging.getLogger(__name__)
 
 # Initialize Flask app
 app = Flask(__name__)
+install_admin_access(app)
 CORS(app, resources={r"/api/*": {"origins": "*"}})
 
 # Configuration

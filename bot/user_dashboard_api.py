@@ -59,9 +59,12 @@ except ImportError:
 
 logger = logging.getLogger('nija.dashboard_api')
 
+from admin_access_flask import install_admin_access
+
 # Initialize Flask app
 app = Flask(__name__)
 app.config['JSON_SORT_KEYS'] = False
+install_admin_access(app, dashboard="user")
 
 
 @app.route('/api/health', methods=['GET'])

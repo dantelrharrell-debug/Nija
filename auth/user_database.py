@@ -5,6 +5,7 @@ Provides database-backed user storage with proper password hashing.
 """
 
 import logging
+import os
 import sqlite3
 import hashlib
 import secrets
@@ -511,11 +512,11 @@ class UserDatabase:
 _user_db = None
 
 
-def get_user_database(db_path: str = "users.db") -> UserDatabase:
+def get_user_database(db_path: Optional[str] = None) -> UserDatabase:
     """Get global user database instance."""
     global _user_db
     if _user_db is None:
-        _user_db = UserDatabase(db_path)
+        _user_db = UserDatabase(db_path or os.getenv("NIJA_AUTH_USER_DB_PATH", "users.db"))
     return _user_db
 
 

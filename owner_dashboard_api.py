@@ -35,10 +35,13 @@ from __future__ import annotations
 
 import logging
 import os
+import hmac
 from datetime import datetime, timezone
 from typing import Any, Dict, Tuple
+from urllib.parse import urlsplit
 
 from flask import Flask, jsonify, request, send_from_directory, Response
+from admin_access_flask import install_admin_access
 
 get_owner_control_layer: Any
 OwnerConfig: Any
@@ -154,7 +157,8 @@ logger = logging.getLogger("nija.owner_dashboard_api")
 # Flask app
 # ---------------------------------------------------------------------------
 
-app = Flask(__name__, static_folder=".", static_url_path="")
+app = Flask(__name__, static_folder=None)
+install_admin_access(app, dashboard="owner")
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -225,19 +229,18 @@ def _validate_owner_pin(pin: str) -> bool:
     Checks against OWNER_PIN environment variable first, then falls back to
     the OwnerControlLayer's configured PIN if available.
 
-    Returns True if the PIN is valid (or no PIN is configured).
+    Returns True only when a configured PIN matches. The login/administrator
+    boundary is independently required before this additional check.
     """
     expected = os.environ.get("OWNER_PIN", "")
     if not expected:
         # No PIN configured — check owner control layer
         owner = _owner()
         config = getattr(owner, "_config", None)
-        pin_value = getattr(config, "pin", "") if config is not None else ""
+        pin_value = getattr(config, "owner_pin", "") if config is not None else ""
         if isinstance(pin_value, str):
             expected = pin_value
-    if expected and pin != expected:
-        return False
-    return True
+    return bool(expected and isinstance(pin, str) and hmac.compare_digest(expected.encode(), pin.encode()))
 
 
 # ---------------------------------------------------------------------------
@@ -248,6 +251,17 @@ def _validate_owner_pin(pin: str) -> bool:
 def serve_dashboard():
     """Serve the phone-friendly owner dashboard HTML."""
     return send_from_directory(".", "owner_dashboard.html")
+
+
+@app.get("/api/owner/login-config")
+def owner_login_configuration() -> Any:
+    """Return the operator-configured existing HTTPS login endpoint for the UI."""
+    login_url = os.getenv("NIJA_OWNER_LOGIN_URL", "").strip()
+    parsed = urlsplit(login_url)
+    if (parsed.scheme != "https" or not parsed.hostname or parsed.username
+            or parsed.password or parsed.query or parsed.fragment):
+        return jsonify({"error": "Owner sign-in service is not configured"}), 503
+    return jsonify({"login_url": login_url})
 
 
 @app.route("/api/owner/status", methods=["GET"])
@@ -451,8 +465,7 @@ def kill_switch_activate():
             return jsonify({"success": False, "message": result.message}), 403
     else:
         # If owner control unavailable, use kill switch directly with env PIN
-        expected = os.environ.get("OWNER_PIN", "")
-        if expected and pin != expected:
+        if not _validate_owner_pin(pin):
             return jsonify({"success": False, "message": "Invalid PIN"}), 403
 
     ks = _get_kill_switch()

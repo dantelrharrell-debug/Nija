@@ -377,6 +377,18 @@
   <div class="header-time" id="headerTime">--:--</div>
 </div>
 
+<div class="section">
+  <span id="sessionIdentity">Sign in to manage NIJA</span>
+  <button class="modal-cancel" type="button" onclick="signOutOwner()">Sign out</button>
+  <div id="administratorAccess" hidden>
+    <p>Dante controls administrator access. Grants do not transfer ownership.</p>
+    <label for="administratorUserId">Login account ID</label>
+    <input id="administratorUserId" type="text" autocomplete="off" />
+    <button type="button" onclick="changeAdministratorAccess(true)">Grant administrator access</button>
+    <button type="button" onclick="changeAdministratorAccess(false)">Revoke administrator access</button>
+  </div>
+</div>
+
 <!-- TAB: STATUS -->
 <div class="tab active" id="tab-status">
 
@@ -611,6 +623,19 @@
 </div>
 
 <!-- PIN MODAL -->
+<div class="modal-backdrop open" id="ownerLoginModal">
+  <form class="modal" onsubmit="signInOwner(event)">
+    <div class="modal-title">Sign in to NIJA</div>
+    <p class="modal-desc">Use your existing NIJA login. Owner controls require Dante's account or his explicit grant.</p>
+    <label for="ownerLoginEmail">Email</label>
+    <input id="ownerLoginEmail" type="email" autocomplete="username" required />
+    <label for="ownerLoginPassword">Password</label>
+    <input id="ownerLoginPassword" type="password" autocomplete="current-password" required />
+    <p id="ownerLoginError" role="alert"></p>
+    <button type="submit" class="modal-confirm">Sign in</button>
+  </form>
+</div>
+
 <div class="modal-backdrop" id="pinModal">
   <div class="modal">
     <div class="modal-title" id="modalTitle">Confirm Action</div>
@@ -640,6 +665,76 @@
 // =====================================================================
 const API_BASE = window.location.origin;
 const REFRESH_MS = 10000; // auto-refresh every 10 s
+let ownerAccessToken = '';
+
+async function ownerFetch(url, options = {}) {
+  if (!ownerAccessToken) throw new Error('Sign in to continue.');
+  const target = new URL(url, API_BASE);
+  if (target.origin !== API_BASE) throw new Error('Invalid dashboard request.');
+  const headers = new Headers(options.headers || {});
+  headers.set('Authorization', 'Bearer ' + ownerAccessToken);
+  const response = await window.fetch(target.href, { ...options, headers, redirect: 'error' });
+  if (response.status === 401 || response.status === 403) {
+    signOutOwner();
+    throw new Error('Your session expired or access was revoked. Sign in again.');
+  }
+  return response;
+}
+
+async function signInOwner(event) {
+  event.preventDefault();
+  const error = document.getElementById('ownerLoginError');
+  error.textContent = '';
+  try {
+    const configResponse = await window.fetch(`${API_BASE}/api/owner/login-config`);
+    const config = await configResponse.json();
+    if (!configResponse.ok) throw new Error(config.error || 'Sign-in is unavailable.');
+    const loginResponse = await window.fetch(config.login_url, {
+      method: 'POST', redirect: 'error',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email: document.getElementById('ownerLoginEmail').value.trim(),
+        password: document.getElementById('ownerLoginPassword').value,
+      }),
+    });
+    document.getElementById('ownerLoginPassword').value = '';
+    const login = await loginResponse.json();
+    if (!loginResponse.ok || !login.access_token) throw new Error('Sign-in failed. Check your credentials.');
+    ownerAccessToken = login.access_token;
+    const identityResponse = await ownerFetch(`${API_BASE}/api/admin/me`);
+    const identity = await identityResponse.json();
+    if (!identityResponse.ok || !identity.is_administrator) throw new Error('Administrator access has not been granted.');
+    document.getElementById('sessionIdentity').textContent =
+      identity.is_creator ? 'Dante — Creator · Master User · Owner' : 'Authorized administrator';
+    document.getElementById('administratorAccess').hidden = !identity.can_manage_administrators;
+    document.getElementById('ownerLoginModal').classList.remove('open');
+    loadStatus();
+  } catch (err) {
+    ownerAccessToken = '';
+    document.getElementById('ownerLoginPassword').value = '';
+    error.textContent = err.message;
+  }
+}
+
+function signOutOwner() {
+  ownerAccessToken = '';
+  // Reload removes sensitive dashboard data as well as the in-memory session.
+  window.location.reload();
+}
+
+async function changeAdministratorAccess(grant) {
+  const userId = document.getElementById('administratorUserId').value.trim();
+  if (!userId) return showToast('Enter a login account ID.');
+  if (!window.confirm(`${grant ? 'Grant' : 'Revoke'} administrator access for ${userId}?`)) return;
+  try {
+    const response = await ownerFetch(`${API_BASE}/api/admin/grants/${encodeURIComponent(userId)}`, {
+      method: grant ? 'POST' : 'DELETE',
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Access change failed.');
+    showToast(grant ? 'Administrator access granted.' : 'Administrator access revoked.');
+  } catch (err) { showToast(err.message); }
+}
 
 // =====================================================================
 // STATE
@@ -722,8 +817,8 @@ function timeAgo(iso) {
 async function loadStatus() {
   try {
     const [statusRes, ksRes] = await Promise.all([
-      fetch(`${API_BASE}/api/owner/status`),
-      fetch(`${API_BASE}/api/owner/kill-switch`).catch(() => null),
+      ownerFetch(`${API_BASE}/api/owner/status`),
+      ownerFetch(`${API_BASE}/api/owner/kill-switch`).catch(() => null),
     ]);
     const data = await statusRes.json();
     const ksData = ksRes ? await ksRes.json() : null;
@@ -818,7 +913,7 @@ function renderSalary(s) {
 // =====================================================================
 async function loadPnl() {
   try {
-    const res = await fetch(`${API_BASE}/api/owner/pnl`);
+    const res = await ownerFetch(`${API_BASE}/api/owner/pnl`);
     const data = await res.json();
     renderPnlStats(data);
     renderDailyTarget(data.daily_target || {});
@@ -911,7 +1006,7 @@ function renderPnlSalary(s) {
 // =====================================================================
 async function loadUsers() {
   try {
-    const res = await fetch(`${API_BASE}/api/owner/users`);
+    const res = await ownerFetch(`${API_BASE}/api/owner/users`);
     const data = await res.json();
     if (data.error) {
       document.getElementById('usersSummaryCard').innerHTML = `<div class="val-muted">${data.error}</div>`;
@@ -968,7 +1063,7 @@ async function userKillSwitch(userId, activate) {
   const pin = prompt(activate ? `Stop trading for user "${userId}"?\nEnter PIN:` : `Resume trading for user "${userId}"?\nEnter PIN:`);
   if (pin === null) return;
   try {
-    const res = await fetch(`${API_BASE}/api/owner/users/${encodeURIComponent(userId)}/kill-switch`, {
+    const res = await ownerFetch(`${API_BASE}/api/owner/users/${encodeURIComponent(userId)}/kill-switch`, {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
       body: JSON.stringify({ active: activate, pin, reason: activate ? 'Stopped via dashboard' : 'Resumed via dashboard' }),
@@ -1017,7 +1112,7 @@ async function loadAlerts() {
   const listEl = document.getElementById('alertsList');
   listEl.innerHTML = '<div class="spinner"></div>';
   try {
-    const res = await fetch(`${API_BASE}/api/owner/alerts?limit=30`);
+    const res = await ownerFetch(`${API_BASE}/api/owner/alerts?limit=30`);
     const data = await res.json();
     const alerts = (data.alerts || []).reverse();
     if (!alerts.length) {
@@ -1046,8 +1141,8 @@ async function loadLedger() {
 
   try {
     const [ledgerRes, reconRes] = await Promise.all([
-      fetch(`${API_BASE}/api/owner/ledger?limit=50`),
-      fetch(`${API_BASE}/api/owner/reconcile`),
+      ownerFetch(`${API_BASE}/api/owner/ledger?limit=50`),
+      ownerFetch(`${API_BASE}/api/owner/reconcile`),
     ]);
     const ledgerData = await ledgerRes.json();
     const reconData  = await reconRes.json();
@@ -1099,8 +1194,8 @@ async function promptKillSwitch() {
   // Refresh to know current state
   try {
     const [statusRes, ksRes] = await Promise.all([
-      fetch(`${API_BASE}/api/owner/status`),
-      fetch(`${API_BASE}/api/owner/kill-switch`).catch(() => null),
+      ownerFetch(`${API_BASE}/api/owner/status`),
+      ownerFetch(`${API_BASE}/api/owner/kill-switch`).catch(() => null),
     ]);
     const sd = await statusRes.json();
     const kd = ksRes ? await ksRes.json() : null;
@@ -1124,7 +1219,7 @@ async function promptKillSwitch() {
 }
 
 async function activateKillSwitch(pin) {
-  const res = await fetch(`${API_BASE}/api/owner/kill-switch/activate`, {
+  const res = await ownerFetch(`${API_BASE}/api/owner/kill-switch/activate`, {
     method: 'POST',
     headers: {'Content-Type':'application/json'},
     body: JSON.stringify({ pin, reason: 'Mobile kill switch button' }),
@@ -1134,7 +1229,7 @@ async function activateKillSwitch(pin) {
 }
 
 async function deactivateKillSwitch(pin) {
-  const res = await fetch(`${API_BASE}/api/owner/kill-switch/deactivate`, {
+  const res = await ownerFetch(`${API_BASE}/api/owner/kill-switch/deactivate`, {
     method: 'POST',
     headers: {'Content-Type':'application/json'},
     body: JSON.stringify({ pin }),
@@ -1159,7 +1254,7 @@ async function doUnlockDailyTarget() {
   const pin = prompt('Enter owner PIN to unlock the bot:');
   if (pin === null) return;
   try {
-    const res = await fetch(`${API_BASE}/api/owner/daily-target/unlock`, {
+    const res = await ownerFetch(`${API_BASE}/api/owner/daily-target/unlock`, {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
       body: JSON.stringify({ pin, reason: 'Manual unlock via controls' }),
@@ -1246,7 +1341,7 @@ async function confirmAction() {
       return;
     }
     try {
-      const res = await fetch(`${API_BASE}/api/owner/daily-target/set`, {
+      const res = await ownerFetch(`${API_BASE}/api/owner/daily-target/set`, {
         method: 'POST',
         headers: {'Content-Type':'application/json'},
         body: JSON.stringify({ pin, target_usd: targetUsd }),
@@ -1269,7 +1364,7 @@ async function confirmAction() {
     const email = prompt('Email (optional):') || '';
     const plan = prompt('Plan (free/starter/pro/elite):') || 'starter';
     try {
-      const res = await fetch(`${API_BASE}/api/owner/users/register`, {
+      const res = await ownerFetch(`${API_BASE}/api/owner/users/register`, {
         method: 'POST',
         headers: {'Content-Type':'application/json'},
         body: JSON.stringify({ pin, display_name: displayName, email, plan }),
@@ -1287,7 +1382,7 @@ async function confirmAction() {
 
   // Standard owner control actions
   try {
-    const res = await fetch(`${API_BASE}/api/owner/control`, {
+    const res = await ownerFetch(`${API_BASE}/api/owner/control`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action, pin }),
@@ -1324,6 +1419,7 @@ function escHtml(s) {
 // =====================================================================
 let _activeTab = 'status';
 function autoRefresh() {
+  if (!ownerAccessToken) return;
   const el = document.querySelector('.nav-btn.active');
   if (el) _activeTab = el.id.replace('nav-','');
   if (_activeTab === 'status')  loadStatus();
@@ -1337,7 +1433,7 @@ setInterval(autoRefresh, REFRESH_MS);
 // =====================================================================
 // INITIAL LOAD
 // =====================================================================
-loadStatus();
+// The first data request happens only after an authenticated sign-in.
 </script>
 </body>
 </html>
