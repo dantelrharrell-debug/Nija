@@ -17,6 +17,9 @@ on:
       - 'tests/test_admin_access.py'
       - 'tests/test_account_ownership.py'
       - 'tests/owner_dashboard_auth.test.cjs'
+      - 'tests/test_ci_baseline_diagnostics.py'
+      - 'scripts/run_unittest_baseline.py'
+      - '.github/workflows/ci.yml'
       - '.github/workflows/dante-owner-access.yml'
 
 permissions:
@@ -44,4 +47,5 @@ jobs:
         run: |
           python -m unittest discover -s tests -p test_admin_access.py -v
           python -m unittest discover -s tests -p test_account_ownership.py -v
+          python -m unittest discover -s tests -p test_ci_baseline_diagnostics.py -v
           node --test tests/owner_dashboard_auth.test.cjs

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import faulthandler
 import os
 from pathlib import Path
 import sys
@@ -120,7 +121,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--baseline", required=True, type=Path)
     parser.add_argument("--start-dir", default=".")
     parser.add_argument("--pattern", default="test_*.py")
+    parser.add_argument("--traceback-after", type=int, help="Repeat diagnostic thread stacks after this many seconds")
     args = parser.parse_args(argv)
+    if args.traceback_after is not None and args.traceback_after <= 0:
+        parser.error("--traceback-after must be positive")
 
     try:
         baseline = _parse_baseline(args.baseline)
@@ -137,6 +141,8 @@ def main(argv: list[str] | None = None) -> int:
         for env_name in _TEST_RESTART_GRACE_ENV_NAMES
     }
     try:
+        if args.traceback_after is not None:
+            faulthandler.dump_traceback_later(args.traceback_after, repeat=True)
         for env_name in _TEST_RESTART_GRACE_ENV_NAMES:
             os.environ[env_name] = _TEST_RESTART_GRACE_S
 
@@ -152,6 +158,8 @@ def main(argv: list[str] | None = None) -> int:
         result = runner.run(suite)
         _reset_terminal_writer_loss_test_state()
     finally:
+        if args.traceback_after is not None:
+            faulthandler.cancel_dump_traceback_later()
         for env_name, previous in saved_restart_grace.items():
             if previous is None:
                 os.environ.pop(env_name, None)

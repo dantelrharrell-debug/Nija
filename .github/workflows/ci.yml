@@ -67,9 +67,22 @@ jobs:
           COINBASE_PEM_CONTENT: ""
         run: |
           set +e
-          python scripts/run_unittest_baseline.py \
+          python -u scripts/run_unittest_baseline.py \
             --baseline .github/ci_known_test_failures.txt \
-            > /tmp/nija-unittest-baseline.log 2>&1
+            --traceback-after 120 \
+            > /tmp/nija-unittest-baseline.log 2>&1 &
+          baseline_pid=$!
+          # Preserve recent test/stack diagnostics even when the job times out.
+          # Keep the complete suite, baseline ratchet and exit status unchanged.
+          (
+            while kill -0 "$baseline_pid" 2>/dev/null; do
+              tail -n 30 /tmp/nija-unittest-baseline.log
+              sleep 30
+            done
+          ) &
+          diagnostic_pid=$!
+          trap 'kill "$diagnostic_pid" 2>/dev/null || true' EXIT
+          wait "$baseline_pid"
           status=$?
           set -e
           if [ "$status" -ne 0 ]; then
