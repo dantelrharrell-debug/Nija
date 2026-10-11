@@ -20,6 +20,7 @@ import threading
 from datetime import datetime
 from typing import Dict, Optional
 from flask import Blueprint, jsonify, request
+from admin_access_flask import require_administrator_request
 from functools import wraps
 
 # Import Safety Controller
@@ -226,6 +227,7 @@ def get_safety_status():
 
 
 @safety_api.route('/emergency-stop', methods=['POST'])
+@require_administrator_request
 def activate_emergency_stop():
     """
     Activate emergency stop - IMMEDIATE trading halt.
@@ -281,6 +283,7 @@ def activate_emergency_stop():
 
 
 @safety_api.route('/emergency-stop', methods=['DELETE'])
+@require_administrator_request
 def deactivate_emergency_stop():
     """
     Deactivate emergency stop - allows trading to resume.

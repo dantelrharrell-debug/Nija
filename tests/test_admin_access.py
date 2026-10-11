@@ -204,6 +204,19 @@ class AdministratorAccessTests(unittest.TestCase):
         with patch.dict(os.environ, {"NIJA_OWNER_LOGIN_URL": "https://example.com/api/auth/login"}):
             self.assertEqual(client.get("/api/owner/login-config").get_json()["login_url"], "https://example.com/api/auth/login")
 
+    def test_safety_blueprint_controls_cannot_bypass_administrator_auth(self):
+        from safety_status_api import safety_api
+
+        standalone = Flask("standalone_safety")
+        standalone.register_blueprint(safety_api)
+        client = standalone.test_client()
+        with patch("builtins.open") as write_file, patch("safety_status_api.os.remove") as remove_file:
+            for method in (client.post, client.delete):
+                self.assertEqual(method("/api/safety/emergency-stop", json={}).status_code, 401)
+                self.assertEqual(method("/api/safety/emergency-stop", json={}, headers=self.header("subscriber")).status_code, 403)
+            write_file.assert_not_called()
+            remove_file.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

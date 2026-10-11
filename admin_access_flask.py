@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any
+from functools import wraps
+from typing import Any, Callable
 
 from flask import g, jsonify, request
 
@@ -10,6 +11,20 @@ from admin_access import (
     AccessDenied, authenticate_bearer, is_owner, permission_summary,
     require_administrator, set_administrator,
 )
+
+
+def require_administrator_request(function: Callable[..., Any]) -> Callable[..., Any]:
+    """Protect a blueprint control even when mounted outside the main gateway."""
+    @wraps(function)
+    def authenticated_control(*args: Any, **kwargs: Any) -> Any:
+        try:
+            actor = authenticate_bearer(request.headers.get("Authorization", ""))
+            require_administrator(actor)
+            g.authenticated_user_id = actor
+        except AccessDenied as exc:
+            return jsonify({"error": str(exc)}), exc.status_code
+        return function(*args, **kwargs)
+    return authenticated_control
 
 
 def install_admin_access(app: Any, dashboard: str = "", protected_prefixes: tuple[str, ...] = ()) -> None:

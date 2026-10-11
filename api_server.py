@@ -58,6 +58,7 @@ app = Flask(__name__)
 install_admin_access(app, protected_prefixes=(
     "/api/emergency/kill-switch/", "/api/portfolio/", "/api/strategy/",
     "/api/drawdown/", "/api/recycle/",
+    "/api/safety/emergency-stop",
 ))
 
 _allowed_origins = os.getenv('ALLOWED_ORIGINS', '*').split(',')

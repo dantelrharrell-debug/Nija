@@ -33,6 +33,10 @@ login IDs. Cross-account reports and dashboard mutations require administrator
 authority. The old personal `platform` records are available to Dante and his
 explicitly delegated administrators.
 
+Both POST and DELETE emergency-stop operations in the safety blueprint require
+the same administrator policy, including when mounted in a standalone app. The
+underlying emergency-stop mechanism is unchanged.
+
 The following authenticated endpoints share one durable permission policy in
 the Flask gateways/dashboards and FastAPI gateways:
 
