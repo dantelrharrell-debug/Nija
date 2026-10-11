@@ -36,7 +36,7 @@ import threading
 from functools import wraps
 from pathlib import Path
 from types import ModuleType
-from typing import Any
+from typing import Any, Mapping
 
 LOGGER = logging.getLogger("nija.position_sync_failure_truth_v98")
 MARKER = "20260815-position-sync-failure-truth-v98"
@@ -80,6 +80,48 @@ def _loaded_v285() -> ModuleType | None:
     return None
 
 
+
+def _relink_v286_raw_generation_if_exact(
+    broker: Any, result: list[Any], before_generation: int, after_generation: int
+) -> bool:
+    """Maintain generation parity for the same authenticated Kraken rows.
+
+    v286 already recorded the Balance result, including its raw tradable flags.
+    v315 records that returned list again, advancing v285 generation and making
+    v306/v296 reject the original raw evidence. Rebind its generation only when
+    all rows and source identity still match; never synthesize or edit rows.
+    """
+    if before_generation < 1 or after_generation != before_generation + 1:
+        return False
+    try:
+        kind = getattr(broker, "broker_type", None)
+        kind = getattr(kind, "value", kind)
+        if str(kind or "").strip().lower().rsplit(".", 1)[-1] != "kraken":
+            return False
+        raw_generation = int(
+            getattr(broker, "_nija_authoritative_position_raw_generation_v286", -1)
+        )
+        raw_rows = getattr(broker, "_nija_authoritative_position_raw_rows_v286", None)
+        if raw_generation != before_generation:
+            return False
+        if not isinstance(raw_rows, (tuple, list)) or len(raw_rows) != len(result):
+            return False
+        if any(
+            not isinstance(raw, Mapping)
+            or not isinstance(returned, Mapping)
+            or dict(raw) != dict(returned)
+            for raw, returned in zip(raw_rows, result)
+        ):
+            return False
+        setattr(broker, "_nija_authoritative_position_raw_generation_v286", after_generation)
+        return (
+            getattr(broker, "_nija_authoritative_position_raw_generation_v286", None)
+            == after_generation
+        )
+    except (TypeError, ValueError, AttributeError):
+        return False
+
+
 def _publish_v285_snapshot_if_loaded(broker: Any, result: Any) -> bool:
     """Publish the exact returned list into v285 when that authority is active.
 
@@ -96,8 +138,32 @@ def _publish_v285_snapshot_if_loaded(broker: Any, result: Any) -> bool:
     recorder = getattr(v285, "_record_snapshot_success", None)
     if not callable(recorder):
         return False
+    # v286 has already published authenticated Kraken Balance rows. v315
+    # publishes the exact same returned rows again, advancing v285 generation.
+    # Relink the v286 RAW proof generation only when all original rows match.
+    try:
+        before_generation = int(
+            getattr(broker, "_nija_authoritative_position_snapshot_generation_v285", 0) or 0
+        )
+    except (TypeError, ValueError):
+        before_generation = 0
     if not bool(recorder(broker, list(result))):
         return False
+    try:
+        after_generation = int(
+            getattr(broker, "_nija_authoritative_position_snapshot_generation_v285", 0) or 0
+        )
+    except (TypeError, ValueError):
+        after_generation = 0
+    if _relink_v286_raw_generation_if_exact(broker, result, before_generation, after_generation):
+        LOGGER.info(
+            "POSITION_SYNC_V451_RAW_GENERATION_RELINK previous_generation=%d "
+            "current_generation=%d same_authenticated_rows=true raw_evidence_unchanged=true "
+            "snapshot_ttl_unchanged=true execution_proof_unchanged=true "
+            "trading_gates_unchanged=true orders_submitted=false",
+            before_generation,
+            after_generation,
+        )
     LOGGER.critical(
         "POSITION_SYNC_V315_SNAPSHOT_BRIDGED marker=%s broker=%s positions=%d "
         "same_authoritative_response=true duplicate_broker_read=false "
