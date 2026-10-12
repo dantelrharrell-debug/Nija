@@ -366,19 +366,40 @@ def test_same_upstream_id_across_form_aliases_forwards_once(monkeypatch, tmp_pat
     assert len(sent) == 1
 
 
-def test_new_upstream_id_respects_old_timestamp_based_sent_marker(monkeypatch, tmp_path):
-    _config(monkeypatch, tmp_path)
-    payload = dict(_lead(), event_id="origin-old")
-    canonical = intake.normalize_lead_payload(payload)
-    old_identity = f"submission|{canonical['email']}|{canonical['submitted_at']}"
+def _seed_legacy_timestamp_sent_marker(payload):
+    """Set up the old record and old notification state without sending."""
     import hashlib
-    old_key = hashlib.sha256(old_identity.encode("utf-8")).hexdigest()
+
+    canonical = intake.normalize_lead_payload(payload)
+    record_identity = (
+        f"{canonical['form_name'].casefold()}|"
+        f"{canonical['email'].casefold()}|{canonical['submitted_at']}"
+    )
+    record_key = hashlib.sha256(record_identity.encode("utf-8")).hexdigest()
+    old_identity = f"submission|{canonical['email']}|{canonical['submitted_at']}"
+    forward_key = hashlib.sha256(old_identity.encode("utf-8")).hexdigest()
+    with intake._connect() as conn:
+        intake._ensure_schema(conn)
+        conn.execute(
+            """INSERT INTO website_leads
+               (event_key, form_name, name, email, submitted_at, received_at, source_payload_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (record_key, canonical["form_name"], canonical["name"], canonical["email"],
+             canonical["submitted_at"], canonical["submitted_at"], json.dumps(payload)),
+        )
     with intake._forward_connect() as conn:
         conn.execute(
             "INSERT INTO website_lead_forwarding(event_key, state, lease_until) "
             "VALUES (?, 'sent', 0)",
-            (old_key,),
+            (forward_key,),
         )
+    return canonical
+
+
+def test_new_upstream_id_respects_matching_legacy_sent_marker(monkeypatch, tmp_path):
+    _config(monkeypatch, tmp_path)
+    payload = dict(_lead(), event_id="origin-old")
+    canonical = _seed_legacy_timestamp_sent_marker(payload)
     monkeypatch.setattr(
         intake, "_forward",
         lambda lead: (_ for _ in ()).throw(AssertionError("legacy sent lead must not forward")),
@@ -390,3 +411,13 @@ def test_new_upstream_id_respects_old_timestamp_based_sent_marker(monkeypatch, t
         assert conn.execute(
             "SELECT state FROM website_lead_forwarding WHERE event_key=?", (new_key,)
         ).fetchone()[0] == "sent"
+
+
+def test_same_timestamp_legacy_marker_does_not_suppress_a_new_event(monkeypatch, tmp_path):
+    _config(monkeypatch, tmp_path)
+    _seed_legacy_timestamp_sent_marker(dict(_lead(), event_id="unrelated-old-event"))
+    calls = []
+    monkeypatch.setattr(intake, "_forward", lambda lead: calls.append(lead["event_id"]) or True)
+    status, result = _request(dict(_lead(), event_id="distinct-new-event"))
+    assert status == 201 and result["forwarded"] and not result["forward_error"]
+    assert len(calls) == 1
