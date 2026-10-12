@@ -408,6 +408,34 @@ def _risk_bounded_heartbeat_size(
     return bounded
 
 
+def _heartbeat_operator_buy_cap_error(
+    *, strategy: str, side: str, intent_type: str, reduce_only: bool,
+    size_type: str, size_usd: float, maximum_usd: Optional[str],
+) -> Optional[str]:
+    """Validate an optional operator ceiling on the planned probe BUY quote.
+
+    This ceiling does not authorize a heartbeat, include fees/slippage, or cap
+    reducing orders. Base-sized buys cannot prove a quote ceiling from a price
+    hint, so they fail closed when a ceiling is configured.
+    """
+    if (
+        strategy not in _HEARTBEAT_PROBE_STRATEGIES or side != "buy"
+        or intent_type in {"exit", "reduce"} or reduce_only
+        or maximum_usd is None
+    ):
+        return None
+    maximum = _float(maximum_usd, float("nan"))
+    if not math.isfinite(maximum) or maximum <= 0.0:
+        return "heartbeat_operator_buy_cap_invalid"
+    if str(size_type or "quote").lower() != "quote":
+        return "heartbeat_operator_buy_cap_requires_quote_size"
+    if not math.isfinite(size_usd) or size_usd <= 0.0:
+        return "heartbeat_operator_buy_notional_invalid"
+    if size_usd > maximum:
+        return "heartbeat_operator_buy_cap_exceeded"
+    return None
+
+
 def _resolve_margin_exit(preferred_broker: str, account_id: str, symbol: str) -> Dict[str, Any]:
     if preferred_broker != "kraken":
         return {}
@@ -789,6 +817,30 @@ def submit_market_order_via_pipeline(
         reduce_only = True
     if reduce_only is None:
         reduce_only = False
+
+    # Check the effective quote after minimum/risk sizing. The safe exchange
+    # floor can raise a small request; never silently exceed the operator cap.
+    heartbeat_buy_cap = os.environ.get("NIJA_HEARTBEAT_MAX_BUY_NOTIONAL_USD")
+    heartbeat_cap_error = _heartbeat_operator_buy_cap_error(
+        strategy=strategy_norm, side=side_norm, intent_type=resolved_intent,
+        reduce_only=bool(reduce_only), size_type=size_type,
+        size_usd=effective_size, maximum_usd=heartbeat_buy_cap,
+    )
+    if heartbeat_cap_error:
+        _finalize_pre_submit_v2_duplicate(incoming_metadata)
+        logger.warning(
+            "HEARTBEAT_OPERATOR_BUY_CAP_DENIED reason=%s broker_dispatch=false",
+            heartbeat_cap_error,
+        )
+        return {
+            "status": "error",
+            "error": f"INTERNAL_DISPATCH_FAILURE: {heartbeat_cap_error}",
+            "symbol": symbol,
+            "side": side_norm,
+            "account_id": account_id,
+            "broker_dispatch": False,
+            "v2_pre_submit_proven": True,
+        }
 
     capital_floor_decision = None
     try:
