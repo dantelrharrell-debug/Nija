@@ -141,6 +141,40 @@ def _normalize_named_import_failure_ids(
     return normalized
 
 
+def _load_named_modules_like_discovery(
+    names: list[str], start_dir: str = "."
+) -> unittest.TestSuite:
+    """Load explicit modules with unittest.discover's import failure behavior.
+
+    Unlike loadTestsFromNames, discovery catches *all* module-level import
+    failures, including pytest.skip.Exception (a BaseException). Preserve the
+    full import ID when constructing _FailedTest, so the exact checked-in
+    baseline continues to apply. Missing/import-failing tests are NOT skipped.
+    """
+    loader = unittest.defaultTestLoader
+    groups: list[unittest.TestSuite] = []
+    root = Path(start_dir).resolve()
+    for name in names:
+        try:
+            module = importlib.import_module(name)
+            expected = root.joinpath(*name.split(".")).with_suffix(".py").resolve()
+            actual = Path(getattr(module, "__file__", "")).resolve()
+            if actual != expected:
+                raise ImportError(f"CI_MODULE_PATH_MISMATCH: {name}")
+        except unittest.SkipTest as exc:
+            skipped_case = unittest.loader._make_skipped_test(name, exc, loader.suiteClass)
+            groups.append(skipped_case)
+        except BaseException:
+            failed_case, message = unittest.loader._make_failed_import_test(
+                name, loader.suiteClass
+            )
+            loader.errors.append(message)
+            groups.append(failed_case)
+        else:
+            groups.append(loader.loadTestsFromModule(module))
+    return loader.suiteClass(groups)
+
+
 def _print_entries(title: str, entries: set[FailureKey]) -> None:
     if not entries:
         return
@@ -201,7 +235,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.module:
             # Explicit module names let CI isolate imports to a bounded group
             # without relying on filename globs or invoking unrelated hooks.
-            suite = unittest.defaultTestLoader.loadTestsFromNames(args.module)
+            suite = _load_named_modules_like_discovery(args.module, args.start_dir)
         else:
             suite = unittest.defaultTestLoader.discover(
                 start_dir=args.start_dir,
