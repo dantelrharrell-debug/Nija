@@ -561,3 +561,22 @@ def test_predeployment_dryrun_is_read_only_for_forwarding_database(monkeypatch, 
         assert conn.execute(
             "SELECT COUNT(*) FROM website_lead_forward_aliases"
         ).fetchone()[0] == 1
+
+
+
+def test_predeploy_migration_rejects_unqualified_or_trade_ledger_destination(monkeypatch, tmp_path):
+    _config(monkeypatch, tmp_path)
+    _seed_legacy_timestamp_sent_marker(dict(_lead(), event_id="old-source"))
+    import pytest
+    monkeypatch.delenv("NIJA_LEAD_FORWARD_DB_PATH", raising=False)
+    with pytest.raises(RuntimeError, match="explicit forwarding"):
+        intake.preseed_legacy_forward_aliases(dry_run=True)
+
+    monkeypatch.setenv("NIJA_LEAD_FORWARD_DB_PATH", str(tmp_path / "trade_ledger.db"))
+    with pytest.raises(RuntimeError, match="trade ledger"):
+        intake.preseed_legacy_forward_aliases(dry_run=False)
+
+    source = str(tmp_path / "web_leads.sqlite3")
+    monkeypatch.setenv("NIJA_LEAD_FORWARD_DB_PATH", source)
+    with pytest.raises(RuntimeError, match="reuse lead source"):
+        intake.preseed_legacy_forward_aliases(dry_run=False)
