@@ -143,6 +143,12 @@ def _heartbeat_verification_max_age_seconds() -> float:
 
 def _heartbeat_verification_status() -> tuple[bool, str, Dict[str, Any]]:
     """Return heartbeat verification status with stage + freshness checks."""
+    try:
+        from bot.startup_verification_evidence import startup_attempts_allow_execution_proof
+        if not startup_attempts_allow_execution_proof():
+            return False, "startup_attempt_unreconciled", {"startup_attempt_unreconciled": True}
+    except Exception:
+        return False, "startup_attempt_store_unavailable", {"startup_attempt_store_unavailable": True}
     marker_path = _heartbeat_marker_path()
     min_required_stage = _heartbeat_min_required_stage()
     max_age_s = _heartbeat_verification_max_age_seconds()

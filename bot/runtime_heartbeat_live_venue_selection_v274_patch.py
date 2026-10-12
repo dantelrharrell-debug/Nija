@@ -118,6 +118,7 @@ def _live_venue_fallback_set() -> tuple[bool, tuple[str, ...], str]:
 
 
 def _candidate_brokers(strategy: Any) -> dict[Any, Any]:
+    from collections.abc import Mapping
     from bot.startup_verification_evidence import platform_startup_candidates
 
     try:
@@ -133,14 +134,14 @@ def _candidate_brokers(strategy: Any) -> dict[Any, Any]:
     if manager is not None:
         for attr in ("platform_brokers", "_platform_brokers"):
             mapping = getattr(manager, attr, None)
-            if isinstance(mapping, dict):
+            if isinstance(mapping, Mapping):
                 for key, candidate in mapping.items():
                     canonical.setdefault(key, candidate)
                     candidates.setdefault(key, candidate)
     broker_manager = getattr(strategy, "broker_manager", None)
     if broker_manager is not None:
         mapping = getattr(broker_manager, "brokers", None)
-        if isinstance(mapping, dict):
+        if isinstance(mapping, Mapping):
             for key, candidate in mapping.items():
                 candidates.setdefault(key, candidate)
         try:

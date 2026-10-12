@@ -32,7 +32,7 @@ def _decimal(value: Any, *, nonnegative: bool = False) -> Decimal:
 
 
 def _private_read(broker: Any, method: str, params: Optional[dict[str, Any]] = None) -> dict[str, Any]:
-    if method not in {"GetApiKeyInfo", "QueryOrders", "QueryTrades", "QueryLedgers"}:
+    if method not in {"GetApiKeyInfo", "QueryOrders", "QueryTrades", "QueryLedgers", "Ledgers"}:
         raise StartupEvidenceError("private_query_not_allowlisted")
     call = getattr(broker, "_kraken_private_call", None)
     if not callable(call):
@@ -75,7 +75,9 @@ def read_startup_broker_identity(broker: Any) -> StartupBrokerIdentity:
     if not isinstance(permissions, list) or not all(isinstance(value, str) for value in permissions):
         raise StartupEvidenceError("authenticated_key_permissions_missing")
     return StartupBrokerIdentity(
-        fingerprint, hashlib.sha256(api_key.encode()).hexdigest(), time.time(), frozenset(permissions),
+        fingerprint,
+        hashlib.scrypt(api_key.encode(), salt=b"NIJA startup key identity v1", n=16384, r=8, p=1).hex(),
+        time.time(), frozenset(permissions),
     )
 
 
@@ -252,6 +254,47 @@ def _read_ids(broker: Any, method: str, ids: list[str], **params: Any) -> dict[s
     return rows
 
 
+def _read_trade_ledgers(broker: Any, trade_ids: list[str], epochs: list[float]) -> dict[str, Any]:
+    """Read bounded ledger history and retain only exact authenticated trade references."""
+    start = math.floor(min(epochs)) - 60
+    end = math.ceil(max(epochs)) + 60
+    if end - start > 900:
+        raise StartupEvidenceError("startup_ledger_time_range_exceeded")
+    offset = 0
+    expected_count: Optional[int] = None
+    seen: set[str] = set()
+    matched: dict[str, Any] = {}
+    for _ in range(8):
+        page = _private_read(broker, "Ledgers", {"type": "trade", "start": start, "end": end, "ofs": offset})
+        rows = page.get("ledger")
+        count = page.get("count")
+        if (not isinstance(rows, Mapping) or isinstance(count, bool) or not isinstance(count, int)
+                or count < 0 or count > 400 or len(rows) > 50):
+            raise StartupEvidenceError("startup_ledger_page_invalid")
+        if expected_count is not None and count != expected_count:
+            raise StartupEvidenceError("startup_ledger_pagination_changed")
+        expected_count = count
+        if set(rows) & seen or (not rows and offset < count):
+            raise StartupEvidenceError("startup_ledger_pagination_incomplete")
+        for ledger_id, row in rows.items():
+            if not isinstance(ledger_id, str) or not isinstance(row, Mapping):
+                raise StartupEvidenceError("startup_ledger_row_invalid")
+            seen.add(ledger_id)
+            if row.get("refid") in trade_ids:
+                epoch = float(row.get("time") or 0)
+                if not math.isfinite(epoch) or not start < epoch <= end:
+                    raise StartupEvidenceError("startup_ledger_time_invalid")
+                matched[ledger_id] = dict(row)
+        offset += len(rows)
+        if offset == count:
+            if not matched:
+                raise StartupEvidenceError("startup_trade_ledger_links_missing")
+            return matched
+        if offset > count:
+            raise StartupEvidenceError("startup_ledger_count_inconsistent")
+    raise StartupEvidenceError("startup_ledger_pagination_limit_exceeded")
+
+
 def read_startup_fill_evidence(broker: Any, order_id: str, symbol: str, side: str) -> StartupFillEvidence:
     """Resolve actual base quantity and fees through exact authenticated ledger links."""
     if not order_id or side not in {"buy", "sell"} or symbol.count("-") != 1:
@@ -276,8 +319,8 @@ def read_startup_fill_evidence(broker: Any, order_id: str, symbol: str, side: st
         raise StartupEvidenceError("startup_order_fills_unproven")
     if len(set(trade_ids)) != len(trade_ids):
         raise StartupEvidenceError("startup_trade_ids_duplicated")
-    trades = _read_ids(broker, "QueryTrades", trade_ids, ledgers=True)
-    ledger_ids: list[str] = []
+    trades = _read_ids(broker, "QueryTrades", trade_ids)
+    epochs: list[float] = []
     total_volume = Decimal(0)
     latest_epoch = 0.0
     for trade_id in trade_ids:
@@ -289,20 +332,16 @@ def read_startup_fill_evidence(broker: Any, order_id: str, symbol: str, side: st
         if not math.isfinite(epoch) or not 0 < epoch <= time.time() + 60:
             raise StartupEvidenceError("startup_trade_time_invalid")
         latest_epoch = max(latest_epoch, epoch)
-        ids = trade.get("ledgers")
-        if not isinstance(ids, list) or not ids or not all(isinstance(x, str) for x in ids):
-            raise StartupEvidenceError("startup_trade_ledger_links_missing")
-        ledger_ids.extend(ids)
-    if total_volume != volume or len(set(ledger_ids)) != len(ledger_ids):
-        raise StartupEvidenceError("startup_trade_volume_or_ledger_links_inconsistent")
-    ledgers = _read_ids(broker, "QueryLedgers", ledger_ids)
+        epochs.append(epoch)
+    if total_volume != volume:
+        raise StartupEvidenceError("startup_trade_volume_inconsistent")
+    ledgers = _read_trade_ledgers(broker, trade_ids, epochs)
     gross_base = Decimal(0)
     base_fees = Decimal(0)
     quote_delta = Decimal(0)
     base_trade_refs: set[str] = set()
     quote_trade_refs: set[str] = set()
-    for ledger_id in ledger_ids:
-        row = ledgers.get(ledger_id)
+    for ledger_id, row in ledgers.items():
         if (not isinstance(row, Mapping) or row.get("refid") not in trade_ids
                 or row.get("type") != "trade"):
             raise StartupEvidenceError("startup_exact_ledger_row_missing")

@@ -111,6 +111,9 @@ def _rearm_genuine_heartbeat(*, allow_publication_arm: bool = False) -> tuple[bo
 
 def _genuine_execution_marker_ready() -> tuple[bool, str]:
     try:
+        from bot.startup_verification_evidence import startup_attempts_allow_execution_proof
+        if not startup_attempts_allow_execution_proof():
+            return False, "startup_attempt_unreconciled"
         tsm = importlib.import_module("bot.trading_state_machine")
         verifier = getattr(tsm, "_heartbeat_verification_status", None)
         if not callable(verifier):

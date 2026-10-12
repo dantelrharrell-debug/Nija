@@ -5,21 +5,31 @@ on:
     branches: [main]
     paths:
       - 'bot/startup_verification_evidence.py'
+      - 'bot/startup_verification_plan.py'
+      - 'bot/trading_state_machine.py'
+      - 'bot/runtime_execution_capital_integrity_v169_patch.py'
+      - 'bot/runtime_heartbeat_marker_convergence_v238_patch.py'
       - 'bot/trading_strategy.py'
       - 'bot/runtime_heartbeat_position_cap_failover_v273_patch.py'
       - 'bot/runtime_heartbeat_live_venue_selection_v274_patch.py'
       - 'bot/runtime_execution_position_readiness_v346_patch.py'
       - 'bot/tests/test_startup_verification_evidence.py'
+      - 'bot/tests/test_startup_verification_plan.py'
       - '.github/workflows/startup-verification-safety.yml'
   push:
     branches: [main]
     paths:
       - 'bot/startup_verification_evidence.py'
+      - 'bot/startup_verification_plan.py'
+      - 'bot/trading_state_machine.py'
+      - 'bot/runtime_execution_capital_integrity_v169_patch.py'
+      - 'bot/runtime_heartbeat_marker_convergence_v238_patch.py'
       - 'bot/trading_strategy.py'
       - 'bot/runtime_heartbeat_position_cap_failover_v273_patch.py'
       - 'bot/runtime_heartbeat_live_venue_selection_v274_patch.py'
       - 'bot/runtime_execution_position_readiness_v346_patch.py'
       - 'bot/tests/test_startup_verification_evidence.py'
+      - 'bot/tests/test_startup_verification_plan.py'
       - '.github/workflows/startup-verification-safety.yml'
 
 permissions:
@@ -38,10 +48,17 @@ jobs:
         run: |
           python -S -m py_compile \
             bot/startup_verification_evidence.py \
+            bot/startup_verification_plan.py \
+            bot/trading_state_machine.py \
+            bot/runtime_execution_capital_integrity_v169_patch.py \
+            bot/runtime_heartbeat_marker_convergence_v238_patch.py \
             bot/trading_strategy.py \
             bot/runtime_heartbeat_position_cap_failover_v273_patch.py \
             bot/runtime_heartbeat_live_venue_selection_v274_patch.py \
             bot/runtime_execution_position_readiness_v346_patch.py \
-            bot/tests/test_startup_verification_evidence.py
+            bot/tests/test_startup_verification_evidence.py \
+            bot/tests/test_startup_verification_plan.py
       - name: Verify account lock, one attempt, ledger sizing and proof isolation
         run: python -S bot/tests/test_startup_verification_evidence.py -q
+      - name: Verify fee-inclusive plans and explicit approval receipts offline
+        run: python -S bot/tests/test_startup_verification_plan.py -q
