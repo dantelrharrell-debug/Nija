@@ -58,6 +58,17 @@ jobs:
           echo "SSH_AUTH_SOCK=" >> "$GITHUB_ENV"
           echo "SSH_AGENT_PID=" >> "$GITHUB_ENV"
 
+      - name: Verify isolated unittest runner invariants
+        env:
+          NIJA_DEFER_RUNTIME_SITE_HOOKS: "1"
+        run: |
+          python -S -m unittest scripts.test_unittest_baseline_import_ids -v
+          python -S scripts/run_unittest_partitioned.py \
+            --baseline .github/ci_known_test_failures.txt \
+            --max-files 25 --min-tests 2554 --list-only \
+            > /tmp/nija-unittest-manifest.log
+          head -n 2 /tmp/nija-unittest-manifest.log
+
       - name: Run tests
         env:
           GH_TOKEN: ""
