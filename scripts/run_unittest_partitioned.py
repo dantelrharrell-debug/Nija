@@ -1,20 +1,17 @@
 #!/usr/bin/env python3
 """Run the complete NIJA unittest baseline in short-lived isolated subprocesses.
 
-The historical full-suite runner imports all 700+ discoverable test modules
-before running cases. Many NIJA modules start daemon trading-monitor threads
-on import; those long-lived threads retain mocks from unrelated tests and
-have intermittently crashed the shared Python process with SIGSEGV.
+The historical runner imports 700+ test modules into one interpreter before
+running tests. Their import-time runtime monitors can retain mocked objects and
+interfere with each other, intermittently crashing CI with SIGSEGV.
 
-This runner partitions by test filename, preserves normal unittest discovery
-within each partition, and aggregates the EXACT original failure baseline.
-It never skips a known failure, downgrades a crash, or grants trade authority.
-Only CI test orchestration changes; production behavior stays unchanged.
+This orchestrator loads all discoverable modules in bounded worker processes,
+without skipping modules or weakening the original known-failure ratchet.
+No production hooks, safety controls, or trading authority are modified.
 """
 from __future__ import annotations
 
 import argparse
-import fnmatch
 import json
 import os
 from pathlib import Path
@@ -30,72 +27,53 @@ from run_unittest_baseline import _parse_baseline, _print_entries
 FailureKey = tuple[str, str]
 
 
-def _discoverable_files(root: Path) -> list[Path]:
-    """Match Python 3.11's package-aware unittest discovery from repository root."""
-    all_files = sorted(root.rglob("test_*.py"))
-    matches: list[Path] = []
-    for path in all_files:
+def _discoverable_modules(root: Path) -> list[str]:
+    """Use Python 3.11 unittest's package-aware discovery inventory."""
+    modules: list[str] = []
+    for path in sorted(root.rglob("test_*.py")):
         relative = path.relative_to(root)
         if "__pycache__" in relative.parts or ".git" in relative.parts:
             continue
-        directories = relative.parts[:-1]
-        if all((root.joinpath(*directories[:i], "__init__.py")).is_file()
-               for i in range(1, len(directories) + 1)):
-            matches.append(relative)
-    return matches
+        dirs = relative.parts[:-1]
+        if not all(
+            (root.joinpath(*dirs[:idx], "__init__.py")).is_file()
+            for idx in range(1, len(dirs) + 1)
+        ):
+            continue
+        module_parts = relative.with_suffix("").parts
+        if any(not part.isidentifier() for part in module_parts):
+            raise RuntimeError(f"CI_DISCOVERY_INVALID_MODULE path={relative.as_posix()}")
+        modules.append(".".join(module_parts))
+    if not modules or len(modules) != len(set(modules)):
+        raise RuntimeError("CI_DISCOVERY_EMPTY_OR_DUPLICATE_MODULES")
+    return modules
 
 
-def _partitions(files: list[Path], max_files: int) -> list[tuple[str, list[Path]]]:
-    """Partition all candidate filenames into nonoverlapping unittest globs."""
-    if not files:
-        raise ValueError("No discoverable test files found")
-    suffixes = {p: p.name[len("test_"):-len(".py")] for p in files}
-    groups: list[tuple[str, list[Path]]] = []
-
-    def split(prefix: str, members: list[Path]) -> None:
-        if len(members) <= max_files:
-            groups.append(("test_" + prefix + "*.py", members))
-            return
-        exact = [p for p in members if suffixes[p] == prefix]
-        if exact:
-            groups.append(("test_" + prefix + ".py", exact))
-        children: dict[str, list[Path]] = {}
-        for path in members:
-            name = suffixes[path]
-            if len(name) == len(prefix):
-                continue
-            nxt = name[len(prefix)]
-            children.setdefault(nxt, []).append(path)
-        for nxt, subset in sorted(children.items()):
-            split(prefix + nxt, subset)
-
-    split("", files)
-    groups.sort(key=lambda x: x[0])
-    # A glob mistake could silently omit tests. Fail before starting any run.
-    for file in files:
-        selected = [pat for pat, _ in groups if fnmatch.fnmatchcase(file.name, pat)]
-        if len(selected) != 1:
-            raise RuntimeError(
-                f"CI_PARTITION_COVERAGE_INVALID file={file.as_posix()} matches={len(selected)}"
-            )
-    if sum(len(members) for _, members in groups) != len(files):
-        raise RuntimeError("CI_PARTITION_COVERAGE_INVALID duplicate file in partition list")
+def _partitions(modules: list[str], max_files: int) -> list[list[str]]:
+    """Deterministic disjoint chunks; every module must run exactly once."""
+    groups = [
+        modules[start : start + max_files]
+        for start in range(0, len(modules), max_files)
+    ]
+    flattened = [name for group in groups for name in group]
+    if flattened != modules or any(not group or len(group) > max_files for group in groups):
+        raise RuntimeError("CI_PARTITION_MANIFEST_INVALID")
     return groups
 
 
-def _log_tail(path: Path, limit: int = 90) -> str:
+def _log_tail(path: Path, limit: int = 100) -> str:
     try:
-        # Logs are bounded by per-partition test groups; read only on failure.
-        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        return "\n".join(
+            path.read_text(encoding="utf-8", errors="replace").splitlines()[-limit:]
+        )
     except OSError:
         return "[CI log unavailable]"
-    return "\n".join(lines[-limit:])
 
 
-def _load_report(path: Path, pattern: str) -> dict[str, Any]:
+def _load_report(path: Path, module_names: list[str]) -> dict[str, Any]:
     data = json.loads(path.read_text(encoding="utf-8"))
-    if data.get("schema") != 1 or data.get("pattern") != pattern:
-        raise RuntimeError("CI_PARTITION_REPORT_INVALID schema or pattern")
+    if data.get("schema") != 1 or data.get("modules") != module_names:
+        raise RuntimeError("CI_PARTITION_REPORT_INVALID module inventory")
     if not isinstance(data.get("tests_run"), int) or data["tests_run"] < 0:
         raise RuntimeError("CI_PARTITION_REPORT_INVALID test count")
     if not isinstance(data.get("observed"), list):
@@ -113,7 +91,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-files", type=int, default=25)
     parser.add_argument("--max-partition-seconds", type=int, default=540)
     parser.add_argument("--min-tests", type=int, default=2554,
-                        help="Minimum cases from the last verified 2,554-test full-suite run")
+                        help="Minimum cases from the last verified 2,554-test suite")
     parser.add_argument("--list-only", action="store_true")
     args = parser.parse_args(argv)
     if args.max_files < 1 or args.max_files > 100:
@@ -125,20 +103,20 @@ def main(argv: list[str] | None = None) -> int:
     baseline_path = args.baseline if args.baseline.is_absolute() else root / args.baseline
     try:
         baseline = _parse_baseline(baseline_path)
-        files = _discoverable_files(root)
-        groups = _partitions(files, args.max_files)
+        modules = _discoverable_modules(root)
+        groups = _partitions(modules, args.max_files)
     except (OSError, ValueError, RuntimeError) as exc:
         print(f"CI_PARTITION_SETUP_FAILED: {exc}", file=sys.stderr, flush=True)
         return 2
 
     print(
-        f"CI_PARTITION_MANIFEST files={len(files)} groups={len(groups)} "
+        f"CI_PARTITION_MANIFEST modules={len(modules)} groups={len(groups)} "
         f"max_files={args.max_files} min_tests={args.min_tests}",
         flush=True,
     )
     if args.list_only:
-        for pattern, members in groups:
-            print(f"  {pattern}: {len(members)} files")
+        for index, group in enumerate(groups, 1):
+            print(f"  partition={index} modules={len(group)} first={group[0]} last={group[-1]}")
         return 0
 
     total_tests = 0
@@ -146,67 +124,81 @@ def main(argv: list[str] | None = None) -> int:
     unexpected_successes: set[str] = set()
     with tempfile.TemporaryDirectory(prefix="nija-ci-unittest-") as work:
         workdir = Path(work)
-        for index, (pattern, members) in enumerate(groups, 1):
+        for index, module_names in enumerate(groups, 1):
             report_file = workdir / f"part-{index:03d}.json"
             log_file = workdir / f"part-{index:03d}.log"
             command = [
                 sys.executable, "-u", str(root / "scripts/run_unittest_baseline.py"),
                 "--baseline", str(baseline_path),
-                "--start-dir", ".",
-                "--pattern", pattern,
                 "--report-json", str(report_file),
                 "--traceback-after", str(args.traceback_after),
             ]
-            for module in args.preload_module:
-                command += ["--preload-module", module]
+            for module_name in module_names:
+                command += ["--module", module_name]
+            for module_name in args.preload_module:
+                command += ["--preload-module", module_name]
             print(
                 f"CI_PARTITION_START index={index}/{len(groups)} "
-                f"pattern={pattern} files={len(members)}",
+                f"modules={len(module_names)}",
                 flush=True,
             )
             started = time.monotonic()
             with log_file.open("w", encoding="utf-8") as output:
                 try:
                     completed = subprocess.run(
-                        command, cwd=root, env=os.environ.copy(),
-                        stdout=output, stderr=subprocess.STDOUT,
-                        timeout=args.max_partition_seconds, check=False,
+                        command,
+                        cwd=root,
+                        env=os.environ.copy(),
+                        stdout=output,
+                        stderr=subprocess.STDOUT,
+                        timeout=args.max_partition_seconds,
+                        check=False,
                     )
                 except subprocess.TimeoutExpired:
                     print(
-                        f"CI_PARTITION_TIMEOUT pattern={pattern} "
+                        f"CI_PARTITION_TIMEOUT index={index} "
                         f"timeout_s={args.max_partition_seconds}\n{_log_tail(log_file)}",
-                        file=sys.stderr, flush=True,
+                        file=sys.stderr,
+                        flush=True,
                     )
                     return 2
             duration = round(time.monotonic() - started, 2)
             if completed.returncode != 0:
                 print(
-                    f"CI_PARTITION_FAILED pattern={pattern} returncode={completed.returncode} "
+                    f"CI_PARTITION_FAILED index={index} returncode={completed.returncode} "
                     f"elapsed_s={duration}\n{_log_tail(log_file)}",
-                    file=sys.stderr, flush=True,
+                    file=sys.stderr,
+                    flush=True,
                 )
                 return 2
 
             try:
-                data = _load_report(report_file, pattern)
+                data = _load_report(report_file, module_names)
                 for item in data["observed"]:
-                    if (not isinstance(item, list) or len(item) != 2
-                            or not all(isinstance(part, str) for part in item)
-                            or item[0] not in {"FAIL", "ERROR"}):
+                    if (
+                        not isinstance(item, list)
+                        or len(item) != 2
+                        or item[0] not in {"FAIL", "ERROR"}
+                        or not all(isinstance(part, str) for part in item)
+                    ):
                         raise RuntimeError("CI_PARTITION_REPORT_INVALID failure entry")
                     observed.add((item[0], item[1]))
-                unexpected_successes.update(data["unexpected_successes"])
+                successes = data["unexpected_successes"]
+                if not all(isinstance(test_id, str) for test_id in successes):
+                    raise RuntimeError("CI_PARTITION_REPORT_INVALID unexpected successes")
+                unexpected_successes.update(successes)
             except (OSError, ValueError, KeyError, RuntimeError) as exc:
                 print(
-                    f"CI_PARTITION_REPORT_FAILED pattern={pattern} error={exc}",
-                    file=sys.stderr, flush=True,
+                    f"CI_PARTITION_REPORT_FAILED index={index} error={exc}",
+                    file=sys.stderr,
+                    flush=True,
                 )
                 return 2
             total_tests += data["tests_run"]
             print(
-                f"CI_PARTITION_COMPLETE pattern={pattern} tests={data['tests_run']} "
-                f"elapsed_s={duration} cumulative_tests={total_tests}",
+                f"CI_PARTITION_COMPLETE index={index}/{len(groups)} "
+                f"tests={data['tests_run']} elapsed_s={duration} "
+                f"cumulative_tests={total_tests}",
                 flush=True,
             )
 
@@ -215,7 +207,8 @@ def main(argv: list[str] | None = None) -> int:
     if total_tests < args.min_tests:
         print(
             f"CI_PARTITION_COVERAGE_FAILED tests={total_tests} min={args.min_tests}",
-            file=sys.stderr, flush=True,
+            file=sys.stderr,
+            flush=True,
         )
         return 2
     _print_entries("KNOWN_FAILURES_STILL_PRESENT", observed & baseline)
