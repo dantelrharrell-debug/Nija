@@ -368,6 +368,102 @@ def _verified_legacy_forward_key(
             continue
     return None
 
+
+def preseed_legacy_forward_aliases(*, dry_run: bool = True, max_rows: int = 50000) -> dict[str, int | bool]:
+    """Pre-migrate proven old source IDs while the original intake DB exists.
+
+    The intake DB can be replaced during a deployment; the forwarding DB must
+    live on persistent storage. Run this in a controlled maintenance window,
+    dry-run first. Never touch the trade ledger or contact customers.
+    """
+    if not isinstance(max_rows, int) or max_rows < 1 or max_rows > 50000:
+        raise ValueError("max_rows must be between 1 and 50000")
+    path = _db_path().resolve(strict=True)
+    # mode=ro ensures this preflight never creates or changes intake records.
+    source_uri = path.as_uri() + "?mode=ro"
+    with sqlite3.connect(source_uri, uri=True, timeout=10.0) as source:
+        source.row_factory = sqlite3.Row
+        available = source.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='website_leads'"
+        ).fetchone()
+        if not available:
+            raise RuntimeError("lead source database has no website_leads table")
+        total = int(source.execute("SELECT COUNT(*) FROM website_leads").fetchone()[0])
+        if total > max_rows:
+            raise RuntimeError("source lead row count exceeds migration limit")
+        rows = source.execute(
+            """SELECT event_key, form_name, email, source_payload_json
+               FROM website_leads ORDER BY received_at ASC"""
+        ).fetchall()
+
+    candidates: dict[str, str] = {}
+    skipped = 0
+    for row in rows:
+        try:
+            payload = json.loads(row["source_payload_json"])
+            if not isinstance(payload, dict) or not _source_event_id(payload):
+                continue
+            canonical = normalize_lead_payload(payload)
+            old_time = _parse_timestamp(_raw_submission_timestamp(payload))
+            if not old_time or row["email"] != canonical["email"]:
+                continue
+            # Confirm this entry was written by the historical timestamp-based
+            # algorithm, not by the new source-ID based implementation.
+            old_record = "|".join(
+                (str(row["form_name"]).casefold(), canonical["email"].casefold(), old_time)
+            )
+            old_record_key = hashlib.sha256(old_record.encode("utf-8")).hexdigest()
+            if row["event_key"] != old_record_key:
+                continue
+            old_forward = f"submission|{canonical['email'].casefold()}|{old_time}"
+            legacy_key = hashlib.sha256(old_forward.encode("utf-8")).hexdigest()
+            source_key = _forward_key(payload, canonical, row["event_key"])
+            if source_key in candidates and candidates[source_key] != legacy_key:
+                raise RuntimeError("ambiguous legacy source ID mapping")
+            candidates[source_key] = legacy_key
+        except (ValueError, TypeError, KeyError, AttributeError):
+            skipped += 1
+
+    aliased = 0
+    with _DB_LOCK, _forward_connect() as forward:
+        forward.execute("BEGIN IMMEDIATE")
+        try:
+            for source_key, legacy_key in candidates.items():
+                sent = forward.execute(
+                    "SELECT 1 FROM website_lead_forwarding WHERE event_key=? AND state='sent'",
+                    (legacy_key,),
+                ).fetchone()
+                if not sent:
+                    continue
+                aliased += 1
+                prior = forward.execute(
+                    "SELECT legacy_key FROM website_lead_forward_aliases WHERE source_key=?",
+                    (source_key,),
+                ).fetchone()
+                if prior and prior["legacy_key"] != legacy_key:
+                    raise RuntimeError("conflicting durable legacy alias")
+                if not dry_run and not prior:
+                    forward.execute(
+                        """INSERT INTO website_lead_forward_aliases
+                           (source_key, legacy_key, created_at) VALUES (?, ?, ?)""",
+                        (source_key, legacy_key, _utcnow()),
+                    )
+            if dry_run:
+                forward.rollback()
+            else:
+                forward.commit()
+        except Exception:
+            forward.rollback()
+            raise
+    return {
+        "source_rows": total,
+        "candidates": len(candidates),
+        "sent_aliases": aliased,
+        "skipped_invalid": skipped,
+        "dry_run": dry_run,
+    }
+
+
 def record_lead(payload: dict[str, Any]) -> tuple[dict[str, str], str, bool]:
     canonical = normalize_lead_payload(payload)
     raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
