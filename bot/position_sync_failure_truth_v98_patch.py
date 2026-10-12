@@ -119,11 +119,13 @@ def _reuse_exact_kraken_snapshot(broker: Any, result: list[Any], authority: Any)
         ok, _reason, rows, _age, checked_generation = status(broker)
         if error or not ok or rows != expected_rows or checked_generation != generation:
             return False
-        # Recheck ownership after the status read; no attributes are changed.
+        # Read in reverse publication order: v286 publishes the canonical
+        # generation, raw rows, then raw generation. Reading canonical
+        # generation last detects a refresh between the scalar and row reads.
         return (
-            getattr(broker, "_nija_authoritative_position_snapshot_generation_v285", None) == generation
+            tuple(getattr(broker, "_nija_authoritative_position_raw_rows_v286", ()) or ()) == raw
             and getattr(broker, "_nija_authoritative_position_raw_generation_v286", None) == generation
-            and tuple(getattr(broker, "_nija_authoritative_position_raw_rows_v286", ()) or ()) == raw
+            and getattr(broker, "_nija_authoritative_position_snapshot_generation_v285", None) == generation
         )
     except (TypeError, ValueError, AttributeError):
         return False

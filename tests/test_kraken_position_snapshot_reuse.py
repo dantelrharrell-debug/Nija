@@ -129,3 +129,28 @@ def test_canonical_rows_must_match_raw_evidence():
     v286._record_snapshot_success(broker, rows)
     broker._nija_authoritative_position_snapshot_rows_v285 = ()
     assert v98._publish_v285_snapshot_if_loaded(broker, rows) is False
+
+
+def test_identical_refresh_during_final_row_read_is_rejected():
+    class RefreshingBroker(SimpleNamespace):
+        def __getattribute__(self, name):
+            if name == '_nija_authoritative_position_raw_rows_v286':
+                reads = object.__getattribute__(self, 'raw_reads') + 1
+                object.__setattr__(self, 'raw_reads', reads)
+                # hasattr and the initial copy account for the first two reads.
+                if reads == 3 and object.__getattribute__(self, 'race_enabled'):
+                    # Complete a real publication between the final check's
+                    # field reads; identical rows must not hide a new version.
+                    object.__setattr__(self, 'race_enabled', False)
+                    v286._record_snapshot_success(self, object.__getattribute__(self, 'rows'))
+            return object.__getattribute__(self, name)
+
+    rows = _rows()
+    broker = RefreshingBroker(connected=True, broker_type='kraken', rows=rows,
+                              raw_reads=0, race_enabled=False)
+    v286._record_snapshot_success(broker, rows)
+    generation = broker._nija_authoritative_position_snapshot_generation_v285
+    broker.race_enabled = True
+    assert v98._publish_v285_snapshot_if_loaded(broker, rows) is False
+    assert broker._nija_authoritative_position_snapshot_generation_v285 == generation + 1
+    assert broker._nija_authoritative_position_raw_generation_v286 == generation + 1
