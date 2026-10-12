@@ -421,3 +421,62 @@ def test_same_timestamp_legacy_marker_does_not_suppress_a_new_event(monkeypatch,
     status, result = _request(dict(_lead(), event_id="distinct-new-event"))
     assert status == 201 and result["forwarded"] and not result["forward_error"]
     assert len(calls) == 1
+
+
+
+def test_legacy_event_replay_migrates_from_changed_form_and_timestamp(monkeypatch, tmp_path):
+    _config(monkeypatch, tmp_path)
+    original = dict(_lead(), form_name="Lead_Gate", event_id="original-source-12")
+    _seed_legacy_timestamp_sent_marker(original)
+    # The retry's form alias and source timestamp are both different.
+    replay = dict(original, form_name="lead-gate-modal", submitted_at="2026-10-12T12:00:00Z")
+    calls = []
+    monkeypatch.setattr(intake, "_forward", lambda lead: calls.append(lead) or True)
+    status, result = _request(replay)
+    assert status == 201 and result["accepted"] and not result["forwarded"]
+    assert calls == []
+
+    new_key = intake._forward_key(replay, intake.normalize_lead_payload(replay), "unused")
+    with sqlite3.connect(intake._forward_db_path()) as conn:
+        alias = conn.execute(
+            "SELECT legacy_key FROM website_lead_forward_aliases WHERE source_key=?",
+            (new_key,),
+        ).fetchone()
+        assert alias is not None
+        state = conn.execute(
+            "SELECT state FROM website_lead_forwarding WHERE event_key=?", (new_key,)
+        ).fetchone()
+        assert state == ("sent",)
+
+
+def test_durable_alias_prevents_replay_after_ephemeral_lead_database_is_replaced(monkeypatch, tmp_path):
+    _config(monkeypatch, tmp_path)
+    original = dict(_lead(), form_name="Lead_Gate", event_id="old-event-111")
+    _seed_legacy_timestamp_sent_marker(original)
+    calls = []
+    monkeypatch.setattr(intake, "_forward", lambda lead: calls.append(lead) or True)
+
+    # First retry can prove history while the original intake DB still exists.
+    changed = dict(original, form_name="LeadGate", submitted_at="2026-10-12T00:00:00Z")
+    _, first = _request(changed)
+    assert not first["forwarded"]
+    # On a redeploy the local lead store can be lost, but the forwarding DB remains.
+    monkeypatch.setenv("NIJA_LEAD_DB_PATH", str(tmp_path / "replacement_intake.sqlite3"))
+    later = dict(changed, form_name="another-site-form", submitted_at="2026-10-13T00:00:00Z")
+    _, second = _request(later)
+    assert not second["forwarded"] and not second["forward_error"]
+    assert calls == []
+
+
+def test_legacy_source_missing_after_db_replacement_requires_migration_preflight(monkeypatch, tmp_path):
+    _config(monkeypatch, tmp_path)
+    original = dict(_lead(), event_id="original-db-lost")
+    _seed_legacy_timestamp_sent_marker(original)
+    # Without a prior alias, the old forwarding marker alone has no source-ID proof.
+    # Predeployment migration must run before the original DB is replaced.
+    monkeypatch.setenv("NIJA_LEAD_DB_PATH", str(tmp_path / "replaced_database.sqlite3"))
+    new_id = intake._forward_key(original, intake.normalize_lead_payload(original), "")
+    with intake._forward_connect() as conn:
+        assert conn.execute(
+            "SELECT 1 FROM website_lead_forward_aliases WHERE source_key=?", (new_id,)
+        ).fetchone() is None
