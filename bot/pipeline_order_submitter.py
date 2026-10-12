@@ -410,7 +410,7 @@ def _risk_bounded_heartbeat_size(
 
 def _heartbeat_operator_buy_cap_error(
     *, strategy: str, side: str, intent_type: str, reduce_only: bool,
-    size_type: str, size_usd: float, maximum_usd: Optional[str],
+    size_type: str, size_usd: float, maximum_usd: Optional[str], is_exit: bool = False,
 ) -> Optional[str]:
     """Validate an optional operator ceiling on the planned probe BUY quote.
 
@@ -420,7 +420,7 @@ def _heartbeat_operator_buy_cap_error(
     """
     if (
         strategy not in _HEARTBEAT_PROBE_STRATEGIES or side != "buy"
-        or intent_type in {"exit", "reduce"} or reduce_only
+        or intent_type in {"exit", "reduce"} or reduce_only or is_exit
         or maximum_usd is None
     ):
         return None
@@ -715,7 +715,10 @@ def submit_market_order_via_pipeline(
     preferred_broker = _resolve_preferred_broker(broker)
     account_id = str(account_id_override or _resolve_account_id(broker, preferred_broker)).strip().lower()
     explicit_intent = str(intent_type or "").strip().lower()
-    is_exit = explicit_intent in {"exit", "reduce"} or str(position_effect or "").lower() in {"close", "reduce"}
+    position_effect_intent = {"close": "exit", "reduce": "reduce"}.get(
+        str(position_effect or "").lower()
+    )
+    is_exit = explicit_intent in {"exit", "reduce"} or position_effect_intent is not None
 
     size_usd = max(0.0, _float(quantity))
     price_hint_usd: Optional[float] = parsed_limit_price
@@ -809,7 +812,11 @@ def submit_market_order_via_pipeline(
     effective_size = _float(margin_fields.get("size_usd"), size_usd)
     leverage = int(_float(margin_fields.get("leverage"), 1.0))
     margin_mode = margin_fields.get("margin_mode")
-    resolved_intent = explicit_intent or str(margin_fields.get("intent_type") or "entry")
+    resolved_intent = (
+        explicit_intent
+        or position_effect_intent
+        or str(margin_fields.get("intent_type") or "entry")
+    )
     reduce_only = margin_fields.get("reduce_only")
     if reduce_only_override is not None:
         reduce_only = bool(reduce_only_override)
@@ -823,7 +830,7 @@ def submit_market_order_via_pipeline(
     heartbeat_buy_cap = os.environ.get("NIJA_HEARTBEAT_MAX_BUY_NOTIONAL_USD")
     heartbeat_cap_error = _heartbeat_operator_buy_cap_error(
         strategy=strategy_norm, side=side_norm, intent_type=resolved_intent,
-        reduce_only=bool(reduce_only), size_type=size_type,
+        reduce_only=bool(reduce_only), size_type=size_type, is_exit=is_exit,
         size_usd=effective_size, maximum_usd=heartbeat_buy_cap,
     )
     if heartbeat_cap_error:

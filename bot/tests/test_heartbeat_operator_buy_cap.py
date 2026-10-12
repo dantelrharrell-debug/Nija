@@ -72,3 +72,53 @@ def test_exchange_minimum_cannot_raise_probe_above_operator_cap(monkeypatch):
     assert result["v2_pre_submit_proven"] is True
     assert dispatched == []
     assert len(finalized) == 1
+
+
+@pytest.mark.parametrize("effect", ["close", "reduce"])
+@pytest.mark.parametrize("maximum", ["invalid", "1"])
+def test_position_effect_buy_close_validates_as_exit_or_reduce(monkeypatch, effect, maximum):
+    from bot import broker_capital_floor_guard
+    from bot.pipeline_request_contract import PipelineRequest, validate_pipeline_request
+
+    broker = SimpleNamespace(broker_type=SimpleNamespace(value="coinbase"), account_identifier="default")
+    requests = []
+
+    class Pipeline:
+        def execute(self, request):
+            requests.append(request)
+            valid, reason = validate_pipeline_request(request)
+            return SimpleNamespace(
+                success=False,
+                error="dispatch_disabled" if valid else f"validation:{reason}",
+                order_id="",
+            )
+
+    monkeypatch.setenv("NIJA_HEARTBEAT_MAX_BUY_NOTIONAL_USD", maximum)
+    monkeypatch.setattr(submitter, "_resolve_execution_pipeline_dependencies", lambda: (PipelineRequest, Pipeline))
+    monkeypatch.setattr(submitter, "assert_distributed_writer_authority", lambda: None)
+    monkeypatch.setattr(submitter, "_resolve_available_balance", lambda *_: 100.0)
+    monkeypatch.setattr(submitter, "_resolve_account_equity", lambda *_: 100.0)
+    monkeypatch.setattr(
+        broker_capital_floor_guard,
+        "evaluate_broker_capital_floor",
+        lambda **_: SimpleNamespace(
+            allowed=True,
+            equity_usd=100.0,
+            hard_floor_usd=0.0,
+            required_floor_usd=0.0,
+            projected_equity_usd=100.0,
+            estimated_stress_loss_usd=0.0,
+            state="stable",
+            reason="ok",
+            to_metadata=lambda: {},
+        ),
+    )
+    result = submitter.submit_market_order_via_pipeline(
+        broker=broker, symbol="BTC-USD", side="buy", quantity=25.0,
+        strategy="HEARTBEAT_TRADE_CLOSE", position_effect=effect,
+    )
+    assert len(requests) == 1
+    assert requests[0].intent_type == ("exit" if effect == "close" else "reduce")
+    assert requests[0].position_effect == effect
+    assert validate_pipeline_request(requests[0]) == (True, "ok")
+    assert result["error"] == "dispatch_disabled"
