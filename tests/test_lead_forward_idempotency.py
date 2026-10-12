@@ -480,3 +480,58 @@ def test_legacy_source_missing_after_db_replacement_requires_migration_preflight
         assert conn.execute(
             "SELECT 1 FROM website_lead_forward_aliases WHERE source_key=?", (new_id,)
         ).fetchone() is None
+
+
+
+def test_explicit_predeployment_alias_seeding_survives_intake_db_replacement(monkeypatch, tmp_path):
+    _config(monkeypatch, tmp_path)
+    original = dict(_lead(), form_name="Lead_Gate", event_id="already-sent-predeploy")
+    _seed_legacy_timestamp_sent_marker(original)
+
+    dry = intake.preseed_legacy_forward_aliases(dry_run=True)
+    assert dry["source_rows"] == 1
+    assert dry["candidates"] == 1
+    assert dry["sent_aliases"] == 1
+    assert dry["dry_run"] is True
+    with intake._forward_connect() as conn:
+        count = conn.execute("SELECT COUNT(*) FROM website_lead_forward_aliases").fetchone()[0]
+        assert count == 0
+
+    committed = intake.preseed_legacy_forward_aliases(dry_run=False)
+    assert committed["sent_aliases"] == 1 and committed["dry_run"] is False
+    with intake._forward_connect() as conn:
+        count = conn.execute("SELECT COUNT(*) FROM website_lead_forward_aliases").fetchone()[0]
+        assert count == 1
+
+    # The original source DB is gone before the first post-upgrade event arrives.
+    monkeypatch.setenv("NIJA_LEAD_DB_PATH", str(tmp_path / "new_ephemeral_intake.sqlite3"))
+    replay = dict(original, form_name="other_alias", submitted_at="2026-10-13T02:00:00Z")
+    calls = []
+    monkeypatch.setattr(intake, "_forward", lambda lead: calls.append(lead) or True)
+    status, result = _request(replay)
+    assert status == 201 and not result["forwarded"]
+    assert not result["forward_error"]
+    assert calls == []
+
+
+def test_predeploy_alias_migration_does_not_conflate_different_source_ids(monkeypatch, tmp_path):
+    _config(monkeypatch, tmp_path)
+    original = dict(_lead(), event_id="sent-source-a")
+    _seed_legacy_timestamp_sent_marker(original)
+    result = intake.preseed_legacy_forward_aliases(dry_run=False)
+    assert result["sent_aliases"] == 1
+    monkeypatch.setenv("NIJA_LEAD_DB_PATH", str(tmp_path / "fresh_db.sqlite3"))
+
+    sent = []
+    monkeypatch.setattr(intake, "_forward", lambda lead: sent.append(lead["event_id"]) or True)
+    new_event = dict(original, event_id="new-source-b")
+    status, reply = _request(new_event)
+    assert status == 201 and reply["forwarded"]
+    assert len(sent) == 1
+
+
+def test_predeploy_alias_seeding_requires_existing_source_database(monkeypatch, tmp_path):
+    _config(monkeypatch, tmp_path)
+    import pytest
+    with pytest.raises(FileNotFoundError):
+        intake.preseed_legacy_forward_aliases(dry_run=True)
