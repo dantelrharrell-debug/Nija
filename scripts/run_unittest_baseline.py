@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import faulthandler
 import importlib
+import json
 import os
 from pathlib import Path
 import sys
@@ -108,6 +109,72 @@ def _observed_failures(result: unittest.TestResult) -> set[FailureKey]:
     return failures | errors
 
 
+def _normalize_named_import_failure_ids(
+    observed: set[FailureKey],
+    modules: list[str],
+    baseline: set[FailureKey],
+) -> set[FailureKey]:
+    """Retain unittest discovery IDs for pre-existing import failures.
+
+    \`unittest.discover\` reports _FailedTest.bot.test_foo, but
+    \`loadTestsFromNames(['bot.test_foo'])\` can report
+    _FailedTest.test_foo. Map ONLY an unambiguous matching module
+    already present in the checked-in failure baseline, and preserve all
+    other unexpected import errors as failures.
+    """
+    prefix = "unittest.loader._FailedTest."
+    normalized: set[FailureKey] = set()
+    for kind, test_id in observed:
+        if not test_id.startswith(prefix) or (kind, test_id) in baseline:
+            normalized.add((kind, test_id))
+            continue
+        short = test_id[len(prefix):]
+        candidates = [
+            module for module in modules
+            if (module == short or module.endswith("." + short))
+            and (kind, prefix + module) in baseline
+        ]
+        if len(candidates) == 1:
+            normalized.add((kind, prefix + candidates[0]))
+        else:
+            normalized.add((kind, test_id))
+    return normalized
+
+
+def _load_named_modules_like_discovery(
+    names: list[str], start_dir: str = "."
+) -> unittest.TestSuite:
+    """Load explicit modules with unittest.discover's import failure behavior.
+
+    Unlike loadTestsFromNames, discovery catches *all* module-level import
+    failures, including pytest.skip.Exception (a BaseException). Preserve the
+    full import ID when constructing _FailedTest, so the exact checked-in
+    baseline continues to apply. Missing/import-failing tests are NOT skipped.
+    """
+    loader = unittest.defaultTestLoader
+    groups: list[unittest.TestSuite] = []
+    root = Path(start_dir).resolve()
+    for name in names:
+        try:
+            module = importlib.import_module(name)
+            expected = root.joinpath(*name.split(".")).with_suffix(".py").resolve()
+            actual = Path(getattr(module, "__file__", "")).resolve()
+            if actual != expected:
+                raise ImportError(f"CI_MODULE_PATH_MISMATCH: {name}")
+        except unittest.SkipTest as exc:
+            skipped_case = unittest.loader._make_skipped_test(name, exc, loader.suiteClass)
+            groups.append(skipped_case)
+        except BaseException:
+            failed_case, message = unittest.loader._make_failed_import_test(
+                name, loader.suiteClass
+            )
+            loader.errors.append(message)
+            groups.append(failed_case)
+        else:
+            groups.append(loader.loadTestsFromModule(module))
+    return loader.suiteClass(groups)
+
+
 def _print_entries(title: str, entries: set[FailureKey]) -> None:
     if not entries:
         return
@@ -125,6 +192,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--traceback-after", type=int, help="Repeat diagnostic thread stacks after this many seconds")
     parser.add_argument("--preload-module", action="append", default=[],
                         help="Import a dependency before discovery can start runtime monitor threads")
+    parser.add_argument("--report-json", type=Path,
+                        help="Write complete, machine-readable test results for an isolated CI partition")
+    parser.add_argument("--module", action="append", default=[],
+                        help="Run named unittest module(s) instead of importing the entire suite")
     args = parser.parse_args(argv)
     if args.traceback_after is not None and args.traceback_after <= 0:
         parser.error("--traceback-after must be positive")
@@ -161,10 +232,15 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"CI_PRELOAD_FAILED module={module_name} error={type(exc).__name__}: {exc}",
                       file=sys.stderr)
                 return 2
-        suite = unittest.defaultTestLoader.discover(
-            start_dir=args.start_dir,
-            pattern=args.pattern,
-        )
+        if args.module:
+            # Explicit module names let CI isolate imports to a bounded group
+            # without relying on filename globs or invoking unrelated hooks.
+            suite = _load_named_modules_like_discovery(args.module, args.start_dir)
+        else:
+            suite = unittest.defaultTestLoader.discover(
+                start_dir=args.start_dir,
+                pattern=args.pattern,
+            )
         runner = unittest.TextTestRunner(
             verbosity=2,
             resultclass=_IsolatedTextTestResult,
@@ -181,12 +257,41 @@ def main(argv: list[str] | None = None) -> int:
                 os.environ[env_name] = previous
 
     observed = _observed_failures(result)
+    if args.module:
+        observed = _normalize_named_import_failure_ids(observed, args.module, baseline)
+    # Partitioned CI collects every test result and enforces the original
+    # full-suite known-failure ratchet after all isolated child runs finish.
+    # Keep ordinary single-process CLI behavior entirely unchanged.
+    if args.report_json is not None:
+        payload = {
+            "schema": 1,
+            "pattern": args.pattern,
+            "modules": args.module,
+            "tests_run": result.testsRun,
+            "observed": [list(item) for item in sorted(observed)],
+            "unexpected_successes": [test.id() for test in result.unexpectedSuccesses],
+        }
+        args.report_json.parent.mkdir(parents=True, exist_ok=True)
+        args.report_json.write_text(
+            json.dumps(payload, sort_keys=True, separators=(",", ":")),
+            encoding="utf-8",
+        )
     unexpected = observed - baseline
     resolved = baseline - observed
 
     _print_entries("KNOWN_FAILURES_STILL_PRESENT", observed & baseline)
     _print_entries("KNOWN_FAILURES_RESOLVED", resolved)
     _print_entries("UNEXPECTED_TEST_RESULTS", unexpected)
+    if args.module and unexpected:
+        # Print only bounded failure context after the ratchet summary so a
+        # failing partition's final CI log tail identifies its root error.
+        # Do not print full payloads, environment or provider credentials.
+        for kind, collection in (("ERROR", result.errors), ("FAIL", result.failures)):
+            for test, traceback_text in collection:
+                if (kind, test.id()) not in unexpected:
+                    continue
+                excerpt = "\n".join(traceback_text.rstrip().splitlines()[-9:])
+                print(f"CI_PARTITION_UNEXPECTED_TRACEBACK test={test.id()}\n{excerpt}", flush=True)
 
     unexpected_successes = [test.id() for test in result.unexpectedSuccesses]
     if unexpected_successes:

@@ -58,6 +58,17 @@ jobs:
           echo "SSH_AUTH_SOCK=" >> "$GITHUB_ENV"
           echo "SSH_AGENT_PID=" >> "$GITHUB_ENV"
 
+      - name: Verify isolated unittest runner invariants
+        env:
+          NIJA_DEFER_RUNTIME_SITE_HOOKS: "1"
+        run: |
+          python -S -m unittest scripts.test_unittest_baseline_import_ids -v
+          python -S scripts/run_unittest_partitioned.py \
+            --baseline .github/ci_known_test_failures.txt \
+            --max-files 25 --min-tests 2554 --list-only \
+            > /tmp/nija-unittest-manifest.log
+          head -n 2 /tmp/nija-unittest-manifest.log
+
       - name: Run tests
         env:
           GH_TOKEN: ""
@@ -67,10 +78,21 @@ jobs:
           COINBASE_PEM_CONTENT: ""
         run: |
           set +e
-          python -u scripts/run_unittest_baseline.py \
+          # Import test modules in bounded subprocesses. The old single
+          # discovery process started many unrelated daemon monitor threads
+          # and intermittently segfaulted inside monkeypatched runtime code.
+          # Preload the 'bot' package before legacy tests prepend the bot/
+          # path, or Python may execute bot/bot.py instead of bot/__init__.py.
+          # Run the entire unittest inventory with the exact same baseline;
+          # a child crash, missing report, unexpected test, or coverage drop
+          # fails the job instead of being skipped or silently retried.
+          python -u scripts/run_unittest_partitioned.py \
             --baseline .github/ci_known_test_failures.txt \
             --preload-module requests \
+            --preload-module bot \
             --traceback-after 120 \
+            --max-files 25 \
+            --min-tests 2554 \
             > /tmp/nija-unittest-baseline.log 2>&1 &
           baseline_pid=$!
           # Preserve recent test/stack diagnostics even when the job times out.

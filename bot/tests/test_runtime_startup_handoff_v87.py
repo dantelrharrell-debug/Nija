@@ -190,7 +190,12 @@ class RuntimeStartupHandoffV87Tests(unittest.TestCase):
         with (
             patch.dict(
                 os.environ,
-                {"NIJA_CORE_REGISTRATION_RESTART_GRACE_S": "3"},
+                {
+                    "NIJA_CORE_REGISTRATION_RESTART_GRACE_S": "3",
+                    # The writer-wide setting has precedence; make this test
+                    # independent of CI runner and prior module environment.
+                    "NIJA_WRITER_AUTHORITY_RESTART_GRACE_S": "3",
+                },
                 clear=False,
             ),
             patch.object(bot_main.threading, "Timer", return_value=timer) as factory,
