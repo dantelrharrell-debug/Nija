@@ -170,17 +170,24 @@ def _ready_venue_filter(strategy: Any) -> tuple[str | None, tuple[str, ...], tup
 
 
 def _candidate_brokers(strategy: Any) -> dict[Any, Any]:
+    from bot.startup_verification_evidence import platform_startup_candidates
+
     candidates: dict[Any, Any] = {}
+    canonical: dict[Any, Any] = {}
     manager = getattr(strategy, "multi_account_manager", None)
     if manager is not None:
         try:
-            candidates.update(getattr(manager, "platform_brokers", {}) or {})
+            canonical.update(getattr(manager, "platform_brokers", {}) or {})
+            candidates.update(canonical)
         except Exception as exc:
             LOGGER.debug("Heartbeat v273 MABM lookup failed: %s", exc)
     broker_manager = getattr(strategy, "broker_manager", None)
     if broker_manager is not None:
         try:
-            candidates.update(getattr(broker_manager, "brokers", {}) or {})
+            # Preserve canonical platform adapters when a legacy/user adapter
+            # shares the same venue key. A verification may not switch owners.
+            for key, candidate in (getattr(broker_manager, "brokers", {}) or {}).items():
+                candidates.setdefault(key, candidate)
             primary = broker_manager.get_primary_broker()
             if primary is not None:
                 candidates.setdefault(getattr(primary, "broker_type", "primary"), primary)
@@ -189,7 +196,7 @@ def _candidate_brokers(strategy: Any) -> dict[Any, Any]:
     broker = getattr(strategy, "broker", None)
     if broker is not None:
         candidates.setdefault(getattr(broker, "broker_type", "cached"), broker)
-    return candidates
+    return platform_startup_candidates(candidates, canonical)
 
 
 def _wrap_hardening(current: Callable[..., Any]) -> Callable[..., Any]:
@@ -385,3 +392,4 @@ def install_import_hook() -> bool:
 
 
 __all__ = ["MARKER", "RELEASE_ID", "install", "install_import_hook", "_trusted_heartbeat_probe", "_recent_cap_block", "_quarantine_cap_venue", "_ready_venue_filter", "_wrap_hardening", "_wrap_selector", "_wrap_execute", "_patch_hardening", "_patch_trading_strategy"]
+

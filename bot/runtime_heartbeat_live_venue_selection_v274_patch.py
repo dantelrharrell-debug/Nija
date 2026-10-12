@@ -118,6 +118,8 @@ def _live_venue_fallback_set() -> tuple[bool, tuple[str, ...], str]:
 
 
 def _candidate_brokers(strategy: Any) -> dict[Any, Any]:
+    from bot.startup_verification_evidence import platform_startup_candidates
+
     try:
         v273 = importlib.import_module("bot.runtime_heartbeat_position_cap_failover_v273_patch")
         resolver = getattr(v273, "_candidate_brokers", None)
@@ -126,17 +128,21 @@ def _candidate_brokers(strategy: Any) -> dict[Any, Any]:
     except Exception:
         pass
     candidates: dict[Any, Any] = {}
+    canonical: dict[Any, Any] = {}
     manager = getattr(strategy, "multi_account_manager", None)
     if manager is not None:
         for attr in ("platform_brokers", "_platform_brokers"):
             mapping = getattr(manager, attr, None)
             if isinstance(mapping, dict):
-                candidates.update(mapping)
+                for key, candidate in mapping.items():
+                    canonical.setdefault(key, candidate)
+                    candidates.setdefault(key, candidate)
     broker_manager = getattr(strategy, "broker_manager", None)
     if broker_manager is not None:
         mapping = getattr(broker_manager, "brokers", None)
         if isinstance(mapping, dict):
-            candidates.update(mapping)
+            for key, candidate in mapping.items():
+                candidates.setdefault(key, candidate)
         try:
             primary = broker_manager.get_primary_broker()
         except Exception:
@@ -146,7 +152,7 @@ def _candidate_brokers(strategy: Any) -> dict[Any, Any]:
     broker = getattr(strategy, "broker", None)
     if broker is not None:
         candidates.setdefault(getattr(broker, "broker_type", "cached"), broker)
-    return candidates
+    return platform_startup_candidates(candidates, canonical)
 
 
 def _broker_key(strategy: Any, broker: Any) -> str:
@@ -443,3 +449,4 @@ __all__ = [
     "_heartbeat_required_notional", "_funded_heartbeat_candidates",
     "_wrap_selector", "_patch_trading_strategy",
 ]
+

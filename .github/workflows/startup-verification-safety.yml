@@ -1,0 +1,47 @@
+name: NIJA Startup Verification Safety
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'bot/startup_verification_evidence.py'
+      - 'bot/trading_strategy.py'
+      - 'bot/runtime_heartbeat_position_cap_failover_v273_patch.py'
+      - 'bot/runtime_heartbeat_live_venue_selection_v274_patch.py'
+      - 'bot/runtime_execution_position_readiness_v346_patch.py'
+      - 'bot/tests/test_startup_verification_evidence.py'
+      - '.github/workflows/startup-verification-safety.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'bot/startup_verification_evidence.py'
+      - 'bot/trading_strategy.py'
+      - 'bot/runtime_heartbeat_position_cap_failover_v273_patch.py'
+      - 'bot/runtime_heartbeat_live_venue_selection_v274_patch.py'
+      - 'bot/runtime_execution_position_readiness_v346_patch.py'
+      - 'bot/tests/test_startup_verification_evidence.py'
+      - '.github/workflows/startup-verification-safety.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  startup-evidence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Compile changed runtime modules without startup hooks
+        run: |
+          python -S -m py_compile \
+            bot/startup_verification_evidence.py \
+            bot/trading_strategy.py \
+            bot/runtime_heartbeat_position_cap_failover_v273_patch.py \
+            bot/runtime_heartbeat_live_venue_selection_v274_patch.py \
+            bot/runtime_execution_position_readiness_v346_patch.py \
+            bot/tests/test_startup_verification_evidence.py
+      - name: Verify account lock, one attempt, ledger sizing and proof isolation
+        run: python -S bot/tests/test_startup_verification_evidence.py -q
