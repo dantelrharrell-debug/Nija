@@ -6,6 +6,9 @@ on:
       - 'render_lead_intake.py'
       - 'render_lead_crm_sync.py'
       - 'render_apollo_feeder.py'
+      - 'scripts/nija_apollo_readonly_probe.py'
+      - 'tests/test_nija_apollo_readonly_probe.py'
+      - 'tests/test_render_apollo_feeder_quota_cursor.py'
       - 'tests/test_render_lead_crm_sync.py'
       - 'tests/test_lead_forward_idempotency.py'
       - '.github/workflows/lead-crm-recovery-ci.yml'
@@ -15,6 +18,9 @@ on:
       - 'render_lead_intake.py'
       - 'render_lead_crm_sync.py'
       - 'render_apollo_feeder.py'
+      - 'scripts/nija_apollo_readonly_probe.py'
+      - 'tests/test_nija_apollo_readonly_probe.py'
+      - 'tests/test_render_apollo_feeder_quota_cursor.py'
       - 'tests/test_render_lead_crm_sync.py'
       - 'tests/test_lead_forward_idempotency.py'
       - '.github/workflows/lead-crm-recovery-ci.yml'
@@ -34,4 +40,4 @@ jobs:
       - name: Install tests
         run: python -m pip install --disable-pip-version-check pytest
       - name: Verify idempotency, response speed, retry and safety
-        run: python -m pytest -q tests/test_render_lead_crm_sync.py tests/test_lead_forward_idempotency.py
+        run: python -m pytest -q tests/test_render_lead_crm_sync.py tests/test_lead_forward_idempotency.py tests/test_nija_apollo_readonly_probe.py tests/test_render_apollo_feeder_quota_cursor.py
