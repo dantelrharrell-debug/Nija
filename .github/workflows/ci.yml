@@ -67,10 +67,18 @@ jobs:
           COINBASE_PEM_CONTENT: ""
         run: |
           set +e
-          python -u scripts/run_unittest_baseline.py \
+          # Import test modules in bounded subprocesses. The old single
+          # discovery process started many unrelated daemon monitor threads
+          # and intermittently segfaulted inside monkeypatched runtime code.
+          # Run the entire unittest inventory with the exact same baseline;
+          # a child crash, missing report, unexpected test, or coverage drop
+          # fails the job instead of being skipped or silently retried.
+          python -u scripts/run_unittest_partitioned.py \
             --baseline .github/ci_known_test_failures.txt \
             --preload-module requests \
             --traceback-after 120 \
+            --max-files 25 \
+            --min-tests 2554 \
             > /tmp/nija-unittest-baseline.log 2>&1 &
           baseline_pid=$!
           # Preserve recent test/stack diagnostics even when the job times out.
