@@ -72,3 +72,30 @@ def test_exchange_minimum_cannot_raise_probe_above_operator_cap(monkeypatch):
     assert result["v2_pre_submit_proven"] is True
     assert dispatched == []
     assert len(finalized) == 1
+
+
+@pytest.mark.parametrize("effect", ["close", "reduce"])
+@pytest.mark.parametrize("maximum", ["invalid", "1"])
+def test_position_effect_buy_close_reaches_existing_guard(monkeypatch, effect, maximum):
+    from bot import broker_capital_floor_guard
+
+    broker = SimpleNamespace(broker_type=SimpleNamespace(value="coinbase"), account_identifier="default")
+    checked = []
+
+    def existing_guard(**kwargs):
+        checked.append(kwargs)
+        raise RuntimeError("isolated downstream guard sentinel")
+
+    monkeypatch.setenv("NIJA_HEARTBEAT_MAX_BUY_NOTIONAL_USD", maximum)
+    monkeypatch.setattr(submitter, "_resolve_execution_pipeline_dependencies", lambda: (object, lambda: None))
+    monkeypatch.setattr(submitter, "assert_distributed_writer_authority", lambda: None)
+    monkeypatch.setattr(submitter, "_resolve_available_balance", lambda *_: 100.0)
+    monkeypatch.setattr(submitter, "_resolve_account_equity", lambda *_: 100.0)
+    monkeypatch.setattr(broker_capital_floor_guard, "evaluate_broker_capital_floor", existing_guard)
+    result = submitter.submit_market_order_via_pipeline(
+        broker=broker, symbol="BTC-USD", side="buy", quantity=25.0,
+        strategy="HEARTBEAT_TRADE_CLOSE", position_effect=effect,
+    )
+    assert len(checked) == 1
+    assert result["error"] == "broker_capital_floor_guard_error:RuntimeError"
+    assert result["broker_dispatch"] is False
