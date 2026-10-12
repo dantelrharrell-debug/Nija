@@ -378,7 +378,13 @@ def preseed_legacy_forward_aliases(*, dry_run: bool = True, max_rows: int = 5000
     """
     if not isinstance(max_rows, int) or max_rows < 1 or max_rows > 50000:
         raise ValueError("max_rows must be between 1 and 50000")
+    if not str(os.getenv("NIJA_LEAD_FORWARD_DB_PATH", "")).strip():
+        raise RuntimeError("migration requires an explicit forwarding DB path")
     path = _db_path().resolve(strict=True)
+    destination_path = _forward_db_path().resolve()
+    if (path == destination_path or path.name == "trade_ledger.db"
+            or destination_path.name == "trade_ledger.db"):
+        raise RuntimeError("migration must not access trade ledger or reuse lead source DB")
     # mode=ro ensures this preflight never creates or changes intake records.
     source_uri = path.as_uri() + "?mode=ro"
     with sqlite3.connect(source_uri, uri=True, timeout=10.0) as source:
