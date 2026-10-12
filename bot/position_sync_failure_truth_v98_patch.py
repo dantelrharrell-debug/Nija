@@ -21,7 +21,9 @@ broker read is issued. If that recorder is present but rejects the payload, the
 fetch fails closed rather than publishing split-brain proof. Kraken's v305/v286
 ownership boundary remains authoritative because ordinary Kraken get_positions
 state is isolated by v305 and v286 records its authenticated Balance snapshot
-directly.
+directly. When v286 has already recorded the exact current Kraken response,
+v315 reuses that proof without advancing its generation or observation time.
+Existing raw proof that is stale, divergent or mismatched fails closed.
 
 No broker connectivity, risk, nonce, writer, capital, execution, order, fill, or
 activation gate is weakened or synthesized by this patch.
@@ -36,7 +38,7 @@ import threading
 from functools import wraps
 from pathlib import Path
 from types import ModuleType
-from typing import Any
+from typing import Any, Mapping
 
 LOGGER = logging.getLogger("nija.position_sync_failure_truth_v98")
 MARKER = "20260815-position-sync-failure-truth-v98"
@@ -80,6 +82,55 @@ def _loaded_v285() -> ModuleType | None:
     return None
 
 
+def _reuse_exact_kraken_snapshot(broker: Any, result: list[Any], authority: Any) -> bool | None:
+    """Reuse v286 proof without republishing its generation or observation time.
+
+    Existing Kraken raw proof is owned by the authenticated Balance reader.
+    Missing, changed, expired or concurrently advanced evidence cannot be
+    republished through v315 to become current. Other brokers retain v315.
+    """
+    kind = getattr(broker, "broker_type", None)
+    kind = getattr(kind, "value", kind)
+    if str(kind or "").strip().lower().rsplit(".", 1)[-1] != "kraken":
+        return None
+    if not hasattr(broker, "_nija_authoritative_position_raw_rows_v286"):
+        return None
+    try:
+        generation = int(getattr(broker, "_nija_authoritative_position_snapshot_generation_v285", 0))
+        raw_generation = int(getattr(broker, "_nija_authoritative_position_raw_generation_v286", -1))
+        raw = getattr(broker, "_nija_authoritative_position_raw_rows_v286", None)
+        if generation < 1 or raw_generation != generation:
+            return False
+        if not isinstance(raw, (tuple, list)) or len(raw) != len(result):
+            return False
+        if any(not isinstance(row, Mapping) for row in raw):
+            return False
+        raw = tuple(dict(row) for row in raw)
+        if any(
+            not isinstance(returned, Mapping) or observed != dict(returned)
+            for observed, returned in zip(raw, result)
+        ):
+            return False
+        status = getattr(authority, "_snapshot_status", None)
+        normalise = getattr(authority, "_snapshot_rows", None)
+        if not callable(status) or not callable(normalise):
+            return False
+        expected_rows, error = normalise(result)
+        ok, _reason, rows, _age, checked_generation = status(broker)
+        if error or not ok or rows != expected_rows or checked_generation != generation:
+            return False
+        # Read in reverse publication order: v286 publishes the canonical
+        # generation, raw rows, then raw generation. Reading canonical
+        # generation last detects a refresh between the scalar and row reads.
+        return (
+            tuple(getattr(broker, "_nija_authoritative_position_raw_rows_v286", ()) or ()) == raw
+            and getattr(broker, "_nija_authoritative_position_raw_generation_v286", None) == generation
+            and getattr(broker, "_nija_authoritative_position_snapshot_generation_v285", None) == generation
+        )
+    except (TypeError, ValueError, AttributeError):
+        return False
+
+
 def _publish_v285_snapshot_if_loaded(broker: Any, result: Any) -> bool:
     """Publish the exact returned list into v285 when that authority is active.
 
@@ -93,6 +144,9 @@ def _publish_v285_snapshot_if_loaded(broker: Any, result: Any) -> bool:
         return True
     if not isinstance(result, list):
         return True
+    reuse = _reuse_exact_kraken_snapshot(broker, result, v285)
+    if reuse is not None:
+        return reuse
     recorder = getattr(v285, "_record_snapshot_success", None)
     if not callable(recorder):
         return False
