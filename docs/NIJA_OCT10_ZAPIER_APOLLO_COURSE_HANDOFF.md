@@ -67,6 +67,30 @@ and exact replay (HTTP 200), one Apollo contact, no duplicate task, and
 one operator notification. A localStorage guard is not a server-side
 idempotency guarantee.
 
+**Legacy notification migration (required before a lead-service rebuild):**
+The temporary source database can disappear when Render replaces the container,
+while historical sent markers are stored on the persistent forwarding disk.
+Do not switch to source-ID-based forwarding until old sent markers have been
+matched to historic source events or the unresolvable histories have been
+explicitly reviewed. This is a deployment **gate**, not an automatic live edit.
+
+1. Obtain a verified backup of the *lead intake* SQLite source database and
+   confirm the persistent forwarding DB destination. Never use the trading
+   ledger file for either path. Perform in a controlled maintenance window.
+2. Run the reviewed code **offline**, with
+   `NIJA_LEAD_DB_PATH` pointed to that pre-upgrade lead DB and
+   `NIJA_LEAD_FORWARD_DB_PATH` pointed to the durable forwarding DB:
+   `python -c 'from render_lead_intake import preseed_legacy_forward_aliases as seed; print(seed(dry_run=True))'`
+3. Review the counts and unmatched legacy records; then repeat as
+   `seed(dry_run=False)` only when approved. The preseed function writes
+   proven aliases to the lead-forwarding store, not to trading systems.
+4. Back up and verify the durable forwarding DB; confirm a replay with a
+   changed form label and timestamp still creates **zero** extra notifications
+   after intentionally simulating replacement of the intake DB.
+5. A pre-upgrade event lacking a source ID cannot be mapped with certainty
+   from an old sent marker alone. Do not label the migration 100% complete
+   without recording that residual risk and the deployment decision.
+
 **Do not assume this patch is live.** The Render trading service is manually
 deployed and shares runtime with trading code. Confirm source SHA, tests,
 verified ledger backup and safety gates before scheduling any deployment.
