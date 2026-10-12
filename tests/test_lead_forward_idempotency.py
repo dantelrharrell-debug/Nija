@@ -535,3 +535,29 @@ def test_predeploy_alias_seeding_requires_existing_source_database(monkeypatch, 
     import pytest
     with pytest.raises(FileNotFoundError):
         intake.preseed_legacy_forward_aliases(dry_run=True)
+
+
+
+def test_predeployment_dryrun_is_read_only_for_forwarding_database(monkeypatch, tmp_path):
+    _config(monkeypatch, tmp_path)
+    old = dict(_lead(), event_id="historical-dryrun")
+    _seed_legacy_timestamp_sent_marker(old)
+    dest = intake._forward_db_path()
+    with sqlite3.connect(dest) as conn:
+        conn.execute("DROP TABLE website_lead_forward_aliases")
+        schema_before = conn.execute("PRAGMA schema_version").fetchone()[0]
+
+    preview = intake.preseed_legacy_forward_aliases(dry_run=True)
+    assert preview["sent_aliases"] == 1
+    with sqlite3.connect(dest) as conn:
+        assert conn.execute("PRAGMA schema_version").fetchone()[0] == schema_before
+        assert conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE name='website_lead_forward_aliases'"
+        ).fetchone() is None
+
+    actual = intake.preseed_legacy_forward_aliases(dry_run=False)
+    assert actual["sent_aliases"] == 1
+    with sqlite3.connect(dest) as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM website_lead_forward_aliases"
+        ).fetchone()[0] == 1
