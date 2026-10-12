@@ -3,7 +3,12 @@ from __future__ import annotations
 
 import unittest
 
-from scripts.run_unittest_baseline import _normalize_named_import_failure_ids
+from unittest.mock import patch
+
+from scripts.run_unittest_baseline import (
+    _normalize_named_import_failure_ids,
+    _load_named_modules_like_discovery,
+)
 
 
 class NamedImportFailureNormalizationTests(unittest.TestCase):
@@ -48,6 +53,53 @@ class NamedImportFailureNormalizationTests(unittest.TestCase):
             observed, ["bot.test_writer_authority"], baseline
         )
         self.assertEqual(observed, actual)
+
+
+class DiscoveryParityTests(unittest.TestCase):
+    def test_missing_module_is_preserved_as_explicit_failed_test(self) -> None:
+        with patch(
+            "scripts.run_unittest_baseline.importlib.import_module",
+            side_effect=ImportError("simulated missing module"),
+        ):
+            suite = _load_named_modules_like_discovery(["bot.test_missing_module"])
+        result = unittest.TestResult()
+        suite.run(result)
+        self.assertEqual(1, result.testsRun)
+        self.assertEqual(1, len(result.errors))
+        self.assertEqual(
+            "unittest.loader._FailedTest.bot.test_missing_module",
+            result.errors[0][0].id(),
+        )
+
+    def test_module_level_pytest_style_baseexception_is_not_lost(self) -> None:
+        class ModuleSkipLike(BaseException):
+            pass
+
+        with patch(
+            "scripts.run_unittest_baseline.importlib.import_module",
+            side_effect=ModuleSkipLike("synthetic pytest.skip"),
+        ):
+            suite = _load_named_modules_like_discovery(["test_optional_module"])
+        result = unittest.TestResult()
+        suite.run(result)
+        self.assertEqual(1, result.testsRun)
+        self.assertEqual(1, len(result.errors))
+        self.assertEqual(
+            "unittest.loader._FailedTest.test_optional_module",
+            result.errors[0][0].id(),
+        )
+
+    def test_unittest_skip_preserves_discovery_skip_semantics(self) -> None:
+        with patch(
+            "scripts.run_unittest_baseline.importlib.import_module",
+            side_effect=unittest.SkipTest("synthetic legitimate unittest skip"),
+        ):
+            suite = _load_named_modules_like_discovery(["bot.test_skipped_module"])
+        result = unittest.TestResult()
+        suite.run(result)
+        self.assertEqual(1, result.testsRun)
+        self.assertFalse(result.errors)
+        self.assertEqual(1, len(result.skipped))
 
 
 if __name__ == "__main__":
