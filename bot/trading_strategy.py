@@ -24,6 +24,15 @@ from contextlib import nullcontext
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from bot.startup_verification_evidence import (
+    StartupEvidenceError,
+    claim_startup_attempt,
+    platform_startup_candidates,
+    read_startup_broker_identity,
+    read_startup_fill_evidence,
+    record_startup_attempt,
+)
+
 try:
     from bot.pending_order_reconciler import reconcile_stale_pending_orders
 except ImportError:
@@ -1395,7 +1404,7 @@ class TradingStrategy:
         """
         Execute a small $5 test trade to verify the full execution stack.
 
-        This is a one-shot verification that runs once on startup.  It places
+        This verification consumes a durable account-scoped attempt. It places
         a market buy order for the configured heartbeat symbol (default BTC-USD)
         and immediately sells it to close the position.
 
@@ -1412,6 +1421,34 @@ class TradingStrategy:
         broker = self._get_heartbeat_broker()
         if broker is None:
             logger.error("❌ Heartbeat trade: no active broker available")
+            return False
+
+        # Adapter labels cannot establish which real account owns the key.
+        # Resolve authenticated identity through the existing nonce owner before
+        # consuming a persistent attempt. Never fall back to a different venue.
+        try:
+            auth_scope = (
+                startup_execution_probe_scope("HEARTBEAT_TRADE")
+                if callable(startup_execution_probe_scope)
+                else nullcontext()
+            )
+            with auth_scope:
+                startup_identity = read_startup_broker_identity(broker)
+        except StartupEvidenceError as exc:
+            logger.warning("HEARTBEAT_ACCOUNT_IDENTITY_UNPROVEN reason=%s broker_dispatch=false", exc)
+            return False
+        account_alias = str(getattr(broker, "account_identifier", "") or "").strip().lower()
+        if not account_alias:
+            logger.warning("HEARTBEAT_ACCOUNT_ALIAS_MISSING broker_dispatch=false")
+            return False
+        expected_account = os.environ.get("NIJA_HEARTBEAT_ACCOUNT_FINGERPRINT", "").strip().lower()
+        if expected_account != startup_identity.account_fingerprint:
+            logger.warning("HEARTBEAT_APPROVED_ACCOUNT_LOCK_MISSING_OR_MISMATCHED broker_dispatch=false")
+            return False
+        required_permissions = {"query-funds", "query-open-trades", "query-closed-trades", "query-ledger",
+                                "modify-trades", "close-trades"}
+        if not required_permissions.issubset(startup_identity.permissions):
+            logger.warning("HEARTBEAT_ENTRY_EXIT_OR_RECONCILIATION_PERMISSION_MISSING broker_dispatch=false")
             return False
 
         broker_name = type(broker).__name__
@@ -1536,6 +1573,23 @@ class TradingStrategy:
 
         # ── Stage 2 + 3 via heartbeat BUY order ────────────────────────────
         try:
+            # Market discovery may take longer than the identity freshness window.
+            # Refresh through the same serialized nonce owner before dispatch.
+            identity_scope = (
+                startup_execution_probe_scope("HEARTBEAT_TRADE")
+                if callable(startup_execution_probe_scope)
+                else nullcontext()
+            )
+            with identity_scope:
+                fresh_identity = read_startup_broker_identity(broker)
+            if (fresh_identity.account_fingerprint != startup_identity.account_fingerprint
+                    or fresh_identity.api_key_fingerprint != startup_identity.api_key_fingerprint
+                    or not required_permissions.issubset(fresh_identity.permissions)):
+                raise StartupEvidenceError("startup_account_key_or_permissions_changed_before_entry")
+            startup_identity = fresh_identity
+            if not claim_startup_attempt(startup_identity, account_alias, symbol):
+                logger.warning("HEARTBEAT_ACCOUNT_ATTEMPT_ALREADY_CONSUMED broker_dispatch=false no_rearm=true")
+                return False
             _report_anomaly = None
             try:
                 from bot.trading_state_machine import report_execution_anomaly as _report_anomaly
@@ -1573,6 +1627,10 @@ class TradingStrategy:
                         )
             buy_status = (buy_result or {}).get("status", "error")
             buy_order_id = (buy_result or {}).get("order_id")
+            record_startup_attempt(
+                startup_identity, "entry_pending" if buy_order_id else "state_unknown",
+                entry_order_id=str(buy_order_id or ""),
+            )
             buy_submitted = _heartbeat_result_has_confirmed_submission(buy_result)
             buy_filled = _heartbeat_result_is_confirmed_fill(buy_result)
             stage_details.update(
@@ -1632,6 +1690,16 @@ class TradingStrategy:
 
             logger.info("✅ Heartbeat BUY confirmed — order filled")
 
+            buy_evidence = read_startup_fill_evidence(broker, str(buy_order_id or ""), symbol, "buy")
+            stage_details["buy_order_id"] = buy_evidence.order_id
+            stage_details["owned_base_quantity"] = str(buy_evidence.net_base_delta)
+            stage_details["buy_quote_delta"] = str(buy_evidence.quote_delta)
+            stage_details["account_fingerprint"] = startup_identity.account_fingerprint
+            record_startup_attempt(
+                startup_identity, "entry_filled", entry_order_id=buy_evidence.order_id,
+                evidence=stage_details,
+            )
+
             # Brief pause before the sell to allow the position to settle
             time.sleep(2.0)
 
@@ -1654,17 +1722,33 @@ class TradingStrategy:
                             "error": "ExecutionPipeline submit helper unavailable; direct broker fallback blocked",
                         }
                     else:
+                        # Bind the closing leg to the same authenticated owner.
+                        exit_identity = read_startup_broker_identity(broker)
+                        if (exit_identity.account_fingerprint != startup_identity.account_fingerprint
+                                or exit_identity.api_key_fingerprint != startup_identity.api_key_fingerprint):
+                            raise StartupEvidenceError("startup_account_or_key_changed_before_exit")
                         sell_result = submit_market_order_via_pipeline(
                             broker=broker,
                             symbol=symbol,
                             side="sell",
-                            quantity=trade_amount_usd,
-                            size_type="quote",
+                            quantity=float(buy_evidence.net_base_delta),
+                            size_type="base",
                             strategy="HEARTBEAT_TRADE_CLOSE",
+                            intent_type="exit",
+                            position_effect="close",
+                            account_id_override=account_alias,
+                            reduce_only_override=True,
+                            metadata_override={
+                                "owned_base_quantity": str(buy_evidence.net_base_delta),
+                                "startup_entry_order_id": buy_evidence.order_id,
+                                "startup_account_fingerprint": startup_identity.account_fingerprint,
+                            },
                         )
             sell_status = (sell_result or {}).get("status", "error")
             sell_submitted = _heartbeat_result_has_confirmed_submission(sell_result)
             sell_filled = _heartbeat_result_is_confirmed_fill(sell_result)
+            sell_order_id = str((sell_result or {}).get("order_id") or "")
+            record_startup_attempt(startup_identity, "exit_pending", exit_order_id=sell_order_id)
             logger.info(
                 "[HeartbeatTrade] submit=%s fill=%s broker=%s pair=%s size=%s",
                 sell_submitted,
@@ -1685,7 +1769,15 @@ class TradingStrategy:
                 return False
 
             stage_details["sell_status"] = str(sell_status)
-            stage_details["sell_order_id"] = str((sell_result or {}).get("order_id") or "")
+            sell_evidence = read_startup_fill_evidence(broker, sell_order_id, symbol, "sell")
+            if buy_evidence.net_base_delta + sell_evidence.net_base_delta != 0:
+                raise StartupEvidenceError("startup_round_trip_base_quantity_not_reconciled")
+            stage_details["sell_order_id"] = sell_evidence.order_id
+            stage_details["sell_quote_delta"] = str(sell_evidence.quote_delta)
+            stage_details["broker_execution_epoch"] = sell_evidence.execution_epoch
+            record_startup_attempt(
+                startup_identity, "completed", exit_order_id=sell_evidence.order_id, evidence=stage_details,
+            )
             self._persist_heartbeat_marker(stage="FILL_VERIFY", details=stage_details)
             logger.info("✅ Heartbeat trade round-trip complete with confirmed BUY and SELL fills")
             return True
@@ -1693,7 +1785,9 @@ class TradingStrategy:
         except Exception as _trade_err:
             try:
                 from bot.trading_state_machine import report_execution_anomaly as _report_anomaly
-                _report_anomaly("rejected_orders", f"heartbeat_exception:{_trade_err}")
+                # Local evidence/storage failures are not exchange rejections.
+                if not isinstance(_trade_err, StartupEvidenceError):
+                    _report_anomaly("rejected_orders", f"heartbeat_exception:{_trade_err}")
             except Exception:
                 pass
             logger.error(
@@ -1747,12 +1841,16 @@ class TradingStrategy:
         try:
             marker = Path(marker_path)
             marker.parent.mkdir(parents=True, exist_ok=True)
+            evidence_epoch = (details or {}).get("broker_execution_epoch")
+            verified_epoch = time.time() if evidence_epoch is None else float(evidence_epoch)
+            if not 0 < verified_epoch <= time.time() + 60:
+                raise StartupEvidenceError("startup_marker_execution_epoch_invalid")
             payload = {
                 "verified": True,
                 "version": 2,
                 "stage": str(stage or "AUTH_VERIFY").strip().upper(),
-                "verified_at_epoch": float(time.time()),
-                "verified_at_iso": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "verified_at_epoch": verified_epoch,
+                "verified_at_iso": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(verified_epoch)),
                 "details": dict(details or {}),
             }
             deployment_id = (
@@ -1892,6 +1990,10 @@ class TradingStrategy:
             )
 
         ready_candidates = {}
+        candidates = platform_startup_candidates(
+            candidates,
+            getattr(self.multi_account_manager, "platform_brokers", {}) if self.multi_account_manager else {},
+        )
         for raw_key, candidate in candidates.items():
             if candidate is None:
                 continue
@@ -2801,3 +2903,4 @@ class TradingStrategy:
         """True when the heartbeat trade completed successfully."""
         with self._heartbeat_trade_lock:
             return self._heartbeat_trade_success
+

@@ -108,6 +108,14 @@ def _write_confirmed_fill_marker(*, result: Mapping[str, Any], symbol: str, side
 def _write_confirmed_fill_marker_locked(*, result: Mapping[str, Any], symbol: str, side: str, fill_price: float, filled_usd: float) -> bool:
     """Persist execution proof only after v328 has already accepted the fill."""
     try:
+        from bot.startup_verification_evidence import startup_attempts_allow_execution_proof
+
+        if not startup_attempts_allow_execution_proof():
+            LOGGER.warning(
+                "CANONICAL_FILL_EXECUTION_PROOF_STARTUP_UNRECONCILED "
+                "marker_written=false trading_fail_closed=true"
+            )
+            return False
         v169 = importlib.import_module("bot.runtime_execution_capital_integrity_v169_patch")
         path_fn = getattr(v169, "_execution_marker_path", None)
         atomic_write = getattr(v169, "_atomic_json_write", None)
@@ -514,3 +522,4 @@ __all__ = [
     "MARKER", "RELEASE_ID", "install", "install_import_hook",
     "_write_confirmed_fill_marker", "_patch_stale_platform_refresh",
 ]
+
