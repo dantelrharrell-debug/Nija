@@ -304,6 +304,12 @@ def _patch_tsm_execution_provenance() -> bool:
         def _make_status_wrapper(original: Any) -> Any:
             @wraps(original)
             def status_v169() -> tuple[bool, str, dict[str, Any]]:
+                try:
+                    from bot.startup_verification_evidence import startup_attempts_allow_execution_proof
+                    if not startup_attempts_allow_execution_proof():
+                        return False, "startup_attempt_unreconciled", {"startup_attempt_unreconciled": True}
+                except Exception:
+                    return False, "startup_attempt_store_unavailable", {"startup_attempt_unreconciled": True}
                 ok, reason, meta = original()
                 meta = dict(meta or {})
                 if not ok:
