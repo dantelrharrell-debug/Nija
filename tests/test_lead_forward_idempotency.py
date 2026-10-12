@@ -299,3 +299,94 @@ def test_different_submission_times_still_forward_separately(monkeypatch, tmp_pa
     _request(_lead())
     _request(dict(_lead(), submitted_at="2026-10-11T00:00:00Z"))
     assert len(calls) == 2
+
+
+def test_forward_includes_stable_event_id_and_consent_provenance(monkeypatch, tmp_path):
+    _config(monkeypatch, tmp_path)
+    sent = []
+    monkeypatch.setattr(intake, "_forward", lambda lead: sent.append(dict(lead)) or True)
+    lead = {
+        "source": "hero-email-optin",
+        "email": "hero-qa@example.com",
+        "submitted_at": "2026-10-12T14:10:00Z",
+        "marketing_consent": True,
+        "event_id": "hero-submission-001",
+    }
+    status, result = _request(lead)
+    assert status == 201 and result["forwarded"] and not result["forward_error"]
+    assert len(sent) == 1
+    assert sent[0]["name"] == "Website Visitor"
+    assert sent[0]["event_id"] and len(sent[0]["event_id"]) == 64
+    assert sent[0]["communications_consent"] == "true"
+    assert sent[0]["consent_source"] == "hero-email-optin"
+    assert sent[0]["consent_recorded_at"] == "2026-10-12T14:10:00.000Z"
+    replay_status, replay = _request(dict(lead))
+    assert replay_status == 200 and replay["duplicate"]
+    assert not replay["forwarded"]
+    assert len(sent) == 1
+
+
+def test_distinct_upstream_ids_same_email_and_timestamp_remain_separate(monkeypatch, tmp_path):
+    _config(monkeypatch, tmp_path)
+    sent = []
+    monkeypatch.setattr(intake, "_forward", lambda lead: sent.append(lead["event_id"]) or True)
+    first = dict(_lead(), submission_id="source-A")
+    second = dict(_lead(), submission_id="source-B")
+    a_status, a = _request(first)
+    b_status, b = _request(second)
+    assert a_status == 201 and b_status == 201
+    assert a["lead_id"] != b["lead_id"]
+    assert a["forwarded"] and b["forwarded"]
+    assert len(set(sent)) == 2
+
+
+def test_same_upstream_id_with_different_source_timestamps_is_a_replay(monkeypatch, tmp_path):
+    _config(monkeypatch, tmp_path)
+    sent = []
+    monkeypatch.setattr(intake, "_forward", lambda lead: sent.append(lead["event_id"]) or True)
+    first = dict(_lead(), eventId="source-C")
+    second = dict(first, submitted_at="2026-10-11T00:00:00Z")
+    _, accepted = _request(first)
+    status, replay = _request(second)
+    assert status == 200 and replay["duplicate"]
+    assert accepted["lead_id"] == replay["lead_id"]
+    assert len(sent) == 1
+
+
+def test_same_upstream_id_across_form_aliases_forwards_once(monkeypatch, tmp_path):
+    _config(monkeypatch, tmp_path)
+    sent = []
+    monkeypatch.setattr(intake, "_forward", lambda lead: sent.append(dict(lead)) or True)
+    first = dict(_lead(), form_name="Lead_Gate", event_id="origin-1")
+    second = dict(first, form_name="lead-gate-modal")
+    a_status, a = _request(first)
+    b_status, b = _request(second)
+    assert a_status == 201 and b_status == 201
+    assert a["forwarded"] and not b["forwarded"]
+    assert len(sent) == 1
+
+
+def test_new_upstream_id_respects_old_timestamp_based_sent_marker(monkeypatch, tmp_path):
+    _config(monkeypatch, tmp_path)
+    payload = dict(_lead(), event_id="origin-old")
+    canonical = intake.normalize_lead_payload(payload)
+    old_identity = f"submission|{canonical['email']}|{canonical['submitted_at']}"
+    import hashlib
+    old_key = hashlib.sha256(old_identity.encode("utf-8")).hexdigest()
+    with intake._forward_connect() as conn:
+        conn.execute(
+            "INSERT INTO website_lead_forwarding(event_key, state, lease_until) "
+            "VALUES (?, 'sent', 0)",
+            (old_key,),
+        )
+    monkeypatch.setattr(
+        intake, "_forward",
+        lambda lead: (_ for _ in ()).throw(AssertionError("legacy sent lead must not forward")),
+    )
+    status, result = _request(payload)
+    assert status == 201 and result["accepted"] and not result["forwarded"]
+    new_key = intake._forward_key(payload, canonical, "unused")
+    with sqlite3.connect(intake._forward_db_path()) as conn:
+        assert conn.execute(
+            "SELECT state FROM website_lead_forwarding WHERE event_key=?", (new_key,)
+        ).fetchone()[0] == "sent"
