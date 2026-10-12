@@ -6,6 +6,7 @@ on:
     paths:
       - 'bot/startup_verification_evidence.py'
       - 'bot/startup_verification_plan.py'
+      - 'scripts/apply_execution_proof_startup_isolation_v339.py'
       - 'bot/trading_state_machine.py'
       - 'bot/runtime_execution_capital_integrity_v169_patch.py'
       - 'bot/runtime_heartbeat_marker_convergence_v238_patch.py'
@@ -21,6 +22,7 @@ on:
     paths:
       - 'bot/startup_verification_evidence.py'
       - 'bot/startup_verification_plan.py'
+      - 'scripts/apply_execution_proof_startup_isolation_v339.py'
       - 'bot/trading_state_machine.py'
       - 'bot/runtime_execution_capital_integrity_v169_patch.py'
       - 'bot/runtime_heartbeat_marker_convergence_v238_patch.py'
@@ -49,6 +51,7 @@ jobs:
           python -S -m py_compile \
             bot/startup_verification_evidence.py \
             bot/startup_verification_plan.py \
+            scripts/apply_execution_proof_startup_isolation_v339.py \
             bot/trading_state_machine.py \
             bot/runtime_execution_capital_integrity_v169_patch.py \
             bot/runtime_heartbeat_marker_convergence_v238_patch.py \
