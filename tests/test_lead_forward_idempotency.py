@@ -299,3 +299,284 @@ def test_different_submission_times_still_forward_separately(monkeypatch, tmp_pa
     _request(_lead())
     _request(dict(_lead(), submitted_at="2026-10-11T00:00:00Z"))
     assert len(calls) == 2
+
+
+def test_forward_includes_stable_event_id_and_consent_provenance(monkeypatch, tmp_path):
+    _config(monkeypatch, tmp_path)
+    sent = []
+    monkeypatch.setattr(intake, "_forward", lambda lead: sent.append(dict(lead)) or True)
+    lead = {
+        "source": "hero-email-optin",
+        "email": "hero-qa@example.com",
+        "submitted_at": "2026-10-12T14:10:00Z",
+        "marketing_consent": True,
+        "event_id": "hero-submission-001",
+    }
+    status, result = _request(lead)
+    assert status == 201 and result["forwarded"] and not result["forward_error"]
+    assert len(sent) == 1
+    assert sent[0]["name"] == "Website Visitor"
+    assert sent[0]["event_id"] and len(sent[0]["event_id"]) == 64
+    assert sent[0]["communications_consent"] == "true"
+    assert sent[0]["consent_source"] == "hero-email-optin"
+    assert sent[0]["consent_recorded_at"] == "2026-10-12T14:10:00.000Z"
+    replay_status, replay = _request(dict(lead))
+    assert replay_status == 200 and replay["duplicate"]
+    assert not replay["forwarded"]
+    assert len(sent) == 1
+
+
+def test_distinct_upstream_ids_same_email_and_timestamp_remain_separate(monkeypatch, tmp_path):
+    _config(monkeypatch, tmp_path)
+    sent = []
+    monkeypatch.setattr(intake, "_forward", lambda lead: sent.append(lead["event_id"]) or True)
+    first = dict(_lead(), submission_id="source-A")
+    second = dict(_lead(), submission_id="source-B")
+    a_status, a = _request(first)
+    b_status, b = _request(second)
+    assert a_status == 201 and b_status == 201
+    assert a["lead_id"] != b["lead_id"]
+    assert a["forwarded"] and b["forwarded"]
+    assert len(set(sent)) == 2
+
+
+def test_same_upstream_id_with_different_source_timestamps_is_a_replay(monkeypatch, tmp_path):
+    _config(monkeypatch, tmp_path)
+    sent = []
+    monkeypatch.setattr(intake, "_forward", lambda lead: sent.append(lead["event_id"]) or True)
+    first = dict(_lead(), eventId="source-C")
+    second = dict(first, submitted_at="2026-10-11T00:00:00Z")
+    _, accepted = _request(first)
+    status, replay = _request(second)
+    assert status == 200 and replay["duplicate"]
+    assert accepted["lead_id"] == replay["lead_id"]
+    assert len(sent) == 1
+
+
+def test_same_upstream_id_across_form_aliases_forwards_once(monkeypatch, tmp_path):
+    _config(monkeypatch, tmp_path)
+    sent = []
+    monkeypatch.setattr(intake, "_forward", lambda lead: sent.append(dict(lead)) or True)
+    first = dict(_lead(), form_name="Lead_Gate", event_id="origin-1")
+    second = dict(first, form_name="lead-gate-modal")
+    a_status, a = _request(first)
+    b_status, b = _request(second)
+    assert a_status == 201 and b_status == 201
+    assert a["forwarded"] and not b["forwarded"]
+    assert len(sent) == 1
+
+
+def _seed_legacy_timestamp_sent_marker(payload):
+    """Set up the old record and old notification state without sending."""
+    import hashlib
+
+    canonical = intake.normalize_lead_payload(payload)
+    record_identity = (
+        f"{canonical['form_name'].casefold()}|"
+        f"{canonical['email'].casefold()}|{canonical['submitted_at']}"
+    )
+    record_key = hashlib.sha256(record_identity.encode("utf-8")).hexdigest()
+    old_identity = f"submission|{canonical['email']}|{canonical['submitted_at']}"
+    forward_key = hashlib.sha256(old_identity.encode("utf-8")).hexdigest()
+    with intake._connect() as conn:
+        intake._ensure_schema(conn)
+        conn.execute(
+            """INSERT INTO website_leads
+               (event_key, form_name, name, email, submitted_at, received_at, source_payload_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (record_key, canonical["form_name"], canonical["name"], canonical["email"],
+             canonical["submitted_at"], canonical["submitted_at"], json.dumps(payload)),
+        )
+    with intake._forward_connect() as conn:
+        conn.execute(
+            "INSERT INTO website_lead_forwarding(event_key, state, lease_until) "
+            "VALUES (?, 'sent', 0)",
+            (forward_key,),
+        )
+    return canonical
+
+
+def test_new_upstream_id_respects_matching_legacy_sent_marker(monkeypatch, tmp_path):
+    _config(monkeypatch, tmp_path)
+    payload = dict(_lead(), event_id="origin-old")
+    canonical = _seed_legacy_timestamp_sent_marker(payload)
+    monkeypatch.setattr(
+        intake, "_forward",
+        lambda lead: (_ for _ in ()).throw(AssertionError("legacy sent lead must not forward")),
+    )
+    status, result = _request(payload)
+    assert status == 201 and result["accepted"] and not result["forwarded"]
+    new_key = intake._forward_key(payload, canonical, "unused")
+    with sqlite3.connect(intake._forward_db_path()) as conn:
+        assert conn.execute(
+            "SELECT state FROM website_lead_forwarding WHERE event_key=?", (new_key,)
+        ).fetchone()[0] == "sent"
+
+
+def test_same_timestamp_legacy_marker_does_not_suppress_a_new_event(monkeypatch, tmp_path):
+    _config(monkeypatch, tmp_path)
+    _seed_legacy_timestamp_sent_marker(dict(_lead(), event_id="unrelated-old-event"))
+    calls = []
+    monkeypatch.setattr(intake, "_forward", lambda lead: calls.append(lead["event_id"]) or True)
+    status, result = _request(dict(_lead(), event_id="distinct-new-event"))
+    assert status == 201 and result["forwarded"] and not result["forward_error"]
+    assert len(calls) == 1
+
+
+
+def test_legacy_event_replay_migrates_from_changed_form_and_timestamp(monkeypatch, tmp_path):
+    _config(monkeypatch, tmp_path)
+    original = dict(_lead(), form_name="Lead_Gate", event_id="original-source-12")
+    _seed_legacy_timestamp_sent_marker(original)
+    # The retry's form alias and source timestamp are both different.
+    replay = dict(original, form_name="lead-gate-modal", submitted_at="2026-10-12T12:00:00Z")
+    calls = []
+    monkeypatch.setattr(intake, "_forward", lambda lead: calls.append(lead) or True)
+    status, result = _request(replay)
+    assert status == 201 and result["accepted"] and not result["forwarded"]
+    assert calls == []
+
+    new_key = intake._forward_key(replay, intake.normalize_lead_payload(replay), "unused")
+    with sqlite3.connect(intake._forward_db_path()) as conn:
+        alias = conn.execute(
+            "SELECT legacy_key FROM website_lead_forward_aliases WHERE source_key=?",
+            (new_key,),
+        ).fetchone()
+        assert alias is not None
+        state = conn.execute(
+            "SELECT state FROM website_lead_forwarding WHERE event_key=?", (new_key,)
+        ).fetchone()
+        assert state == ("sent",)
+
+
+def test_durable_alias_prevents_replay_after_ephemeral_lead_database_is_replaced(monkeypatch, tmp_path):
+    _config(monkeypatch, tmp_path)
+    original = dict(_lead(), form_name="Lead_Gate", event_id="old-event-111")
+    _seed_legacy_timestamp_sent_marker(original)
+    calls = []
+    monkeypatch.setattr(intake, "_forward", lambda lead: calls.append(lead) or True)
+
+    # First retry can prove history while the original intake DB still exists.
+    changed = dict(original, form_name="LeadGate", submitted_at="2026-10-12T00:00:00Z")
+    _, first = _request(changed)
+    assert not first["forwarded"]
+    # On a redeploy the local lead store can be lost, but the forwarding DB remains.
+    monkeypatch.setenv("NIJA_LEAD_DB_PATH", str(tmp_path / "replacement_intake.sqlite3"))
+    later = dict(changed, form_name="another-site-form", submitted_at="2026-10-13T00:00:00Z")
+    _, second = _request(later)
+    assert not second["forwarded"] and not second["forward_error"]
+    assert calls == []
+
+
+def test_legacy_source_missing_after_db_replacement_requires_migration_preflight(monkeypatch, tmp_path):
+    _config(monkeypatch, tmp_path)
+    original = dict(_lead(), event_id="original-db-lost")
+    _seed_legacy_timestamp_sent_marker(original)
+    # Without a prior alias, the old forwarding marker alone has no source-ID proof.
+    # Predeployment migration must run before the original DB is replaced.
+    monkeypatch.setenv("NIJA_LEAD_DB_PATH", str(tmp_path / "replaced_database.sqlite3"))
+    new_id = intake._forward_key(original, intake.normalize_lead_payload(original), "")
+    with intake._forward_connect() as conn:
+        assert conn.execute(
+            "SELECT 1 FROM website_lead_forward_aliases WHERE source_key=?", (new_id,)
+        ).fetchone() is None
+
+
+
+def test_explicit_predeployment_alias_seeding_survives_intake_db_replacement(monkeypatch, tmp_path):
+    _config(monkeypatch, tmp_path)
+    original = dict(_lead(), form_name="Lead_Gate", event_id="already-sent-predeploy")
+    _seed_legacy_timestamp_sent_marker(original)
+
+    dry = intake.preseed_legacy_forward_aliases(dry_run=True)
+    assert dry["source_rows"] == 1
+    assert dry["candidates"] == 1
+    assert dry["sent_aliases"] == 1
+    assert dry["dry_run"] is True
+    with intake._forward_connect() as conn:
+        count = conn.execute("SELECT COUNT(*) FROM website_lead_forward_aliases").fetchone()[0]
+        assert count == 0
+
+    committed = intake.preseed_legacy_forward_aliases(dry_run=False)
+    assert committed["sent_aliases"] == 1 and committed["dry_run"] is False
+    with intake._forward_connect() as conn:
+        count = conn.execute("SELECT COUNT(*) FROM website_lead_forward_aliases").fetchone()[0]
+        assert count == 1
+
+    # The original source DB is gone before the first post-upgrade event arrives.
+    monkeypatch.setenv("NIJA_LEAD_DB_PATH", str(tmp_path / "new_ephemeral_intake.sqlite3"))
+    replay = dict(original, form_name="other_alias", submitted_at="2026-10-13T02:00:00Z")
+    calls = []
+    monkeypatch.setattr(intake, "_forward", lambda lead: calls.append(lead) or True)
+    status, result = _request(replay)
+    assert status == 201 and not result["forwarded"]
+    assert not result["forward_error"]
+    assert calls == []
+
+
+def test_predeploy_alias_migration_does_not_conflate_different_source_ids(monkeypatch, tmp_path):
+    _config(monkeypatch, tmp_path)
+    original = dict(_lead(), event_id="sent-source-a")
+    _seed_legacy_timestamp_sent_marker(original)
+    result = intake.preseed_legacy_forward_aliases(dry_run=False)
+    assert result["sent_aliases"] == 1
+    monkeypatch.setenv("NIJA_LEAD_DB_PATH", str(tmp_path / "fresh_db.sqlite3"))
+
+    sent = []
+    monkeypatch.setattr(intake, "_forward", lambda lead: sent.append(lead["event_id"]) or True)
+    new_event = dict(original, event_id="new-source-b")
+    status, reply = _request(new_event)
+    assert status == 201 and reply["forwarded"]
+    assert len(sent) == 1
+
+
+def test_predeploy_alias_seeding_requires_existing_source_database(monkeypatch, tmp_path):
+    _config(monkeypatch, tmp_path)
+    import pytest
+    with pytest.raises(FileNotFoundError):
+        intake.preseed_legacy_forward_aliases(dry_run=True)
+
+
+
+def test_predeployment_dryrun_is_read_only_for_forwarding_database(monkeypatch, tmp_path):
+    _config(monkeypatch, tmp_path)
+    old = dict(_lead(), event_id="historical-dryrun")
+    _seed_legacy_timestamp_sent_marker(old)
+    dest = intake._forward_db_path()
+    with sqlite3.connect(dest) as conn:
+        conn.execute("DROP TABLE website_lead_forward_aliases")
+        schema_before = conn.execute("PRAGMA schema_version").fetchone()[0]
+
+    preview = intake.preseed_legacy_forward_aliases(dry_run=True)
+    assert preview["sent_aliases"] == 1
+    with sqlite3.connect(dest) as conn:
+        assert conn.execute("PRAGMA schema_version").fetchone()[0] == schema_before
+        assert conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE name='website_lead_forward_aliases'"
+        ).fetchone() is None
+
+    actual = intake.preseed_legacy_forward_aliases(dry_run=False)
+    assert actual["sent_aliases"] == 1
+    with sqlite3.connect(dest) as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM website_lead_forward_aliases"
+        ).fetchone()[0] == 1
+
+
+
+def test_predeploy_migration_rejects_unqualified_or_trade_ledger_destination(monkeypatch, tmp_path):
+    _config(monkeypatch, tmp_path)
+    _seed_legacy_timestamp_sent_marker(dict(_lead(), event_id="old-source"))
+    import pytest
+    monkeypatch.delenv("NIJA_LEAD_FORWARD_DB_PATH", raising=False)
+    with pytest.raises(RuntimeError, match="explicit forwarding"):
+        intake.preseed_legacy_forward_aliases(dry_run=True)
+
+    monkeypatch.setenv("NIJA_LEAD_FORWARD_DB_PATH", str(tmp_path / "trade_ledger.db"))
+    with pytest.raises(RuntimeError, match="trade ledger"):
+        intake.preseed_legacy_forward_aliases(dry_run=False)
+
+    source = str(tmp_path / "web_leads.sqlite3")
+    monkeypatch.setenv("NIJA_LEAD_FORWARD_DB_PATH", source)
+    with pytest.raises(RuntimeError, match="reuse lead source"):
+        intake.preseed_legacy_forward_aliases(dry_run=False)

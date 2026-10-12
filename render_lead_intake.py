@@ -119,21 +119,25 @@ def _raw_submission_timestamp(payload: dict[str, Any]) -> object:
     )
 
 
-def _stable_event_fallback(payload: dict[str, Any], serialized: str) -> str:
-    """Provide a deterministic replay key when the upstream timestamp is missing.
-
-    Source IDs are preferred. With neither a source ID nor a usable timestamp,
-    identical JSON is treated as one event (fail closed against double sends).
-    """
+def _source_event_id(payload: dict[str, Any]) -> str:
+    """Use an immutable upstream submission ID when supplied; never invent one."""
     nested = _nested_form(payload)
-    for key in ("event_id", "eventId", "submission_id", "submissionId"):
-        value = nested.get(key) or payload.get(key)
-        if isinstance(value, (str, int)) and not isinstance(value, bool):
-            cleaned = _clean_text(value, max_length=160)
-            if cleaned:
-                return "upstream:" + cleaned
-    return "payload-sha256:" + hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+    for source in (nested, payload):
+        for key in ("event_id", "eventId", "submission_id", "submissionId"):
+            value = source.get(key)
+            if isinstance(value, (str, int)) and not isinstance(value, bool):
+                cleaned = _clean_text(value, max_length=160)
+                if cleaned:
+                    return cleaned
+    return ""
 
+
+def _stable_event_fallback(payload: dict[str, Any], serialized: str) -> str:
+    """Use an upstream ID or deterministic payload digest; never a receive-time clock."""
+    source_id = _source_event_id(payload)
+    if source_id:
+        return "upstream:" + source_id
+    return "payload-sha256:" + hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
 def normalize_lead_payload(payload: dict[str, Any]) -> dict[str, str]:
     """Flatten website-form payload variants into NIJA's canonical lead schema."""
@@ -146,6 +150,8 @@ def normalize_lead_payload(payload: dict[str, Any]) -> dict[str, str]:
         or nested.get("formName")
         or payload.get("form_name")
         or (payload.get("formName") if isinstance(payload.get("formName"), str) else "")
+        or nested.get("source")
+        or payload.get("source")
         or "Website Lead"
     )
     raw_name: object = (
@@ -173,6 +179,9 @@ def normalize_lead_payload(payload: dict[str, Any]) -> dict[str, str]:
         raise ValueError("Lead email is missing or invalid")
     if not form_name:
         form_name = "Website Lead"
+    # Email-only signup uses a placeholder, not a verified visitor identity.
+    if not name and form_name.casefold().replace("_", "-") == "hero-email-optin":
+        name = "Website Visitor"
 
     raw_phone = (
         nested.get("Phone Number")
@@ -183,16 +192,27 @@ def normalize_lead_payload(payload: dict[str, Any]) -> dict[str, str]:
         or payload.get("phone_number")
         or ""
     )
-    raw_consent = (
-        nested.get("consent")
-        if "consent" in nested
-        else payload.get("consent", "")
+    # Prefer explicit marketing fields to generic form consent. Conflicting
+    # marketing values fail closed; consent never defaults to True.
+    sources = (nested, payload)
+    marketing_keys = (
+        "marketing_consent", "marketingConsent",
+        "communications_consent", "communicationsConsent",
     )
+    explicit_values = [
+        src[key] for src in sources for key in marketing_keys if key in src
+    ]
+    generic_values = [
+        src["consent"] for src in sources if "consent" in src
+    ]
+    values = explicit_values if explicit_values else generic_values
     phone = _clean_text(raw_phone, max_length=80)
-    consent_text = _clean_text(raw_consent, max_length=32).casefold()
-    communications_consent = consent_text in {
-        "1", "true", "yes", "on", "checked", "agree", "agreed"
-    }
+    affirmative = {"1", "true", "yes", "on", "checked", "agree", "agreed"}
+    communications_consent = bool(values) and all(
+        _clean_text(value, max_length=32).casefold() in affirmative for value in values
+    )
+    # Source timestamps remain distinguishable from server receipt times.
+    consent_timestamp = _parse_timestamp(raw_submitted_at) if communications_consent else None
 
     return {
         "form_name": form_name,
@@ -201,6 +221,8 @@ def normalize_lead_payload(payload: dict[str, Any]) -> dict[str, str]:
         "submitted_at": submitted_at,
         "phone": phone,
         "communications_consent": "true" if communications_consent else "false",
+        "consent_source": form_name if communications_consent else "",
+        "consent_recorded_at": consent_timestamp or "",
     }
 
 
@@ -254,14 +276,214 @@ def _ensure_schema(connection: sqlite3.Connection) -> None:
 def _forward_key(payload: dict[str, Any], canonical: dict[str, str], event_key: str) -> str:
     """Form-agnostic key so one submission relabelled by two forms forwards once.
 
-    Only a stable source timestamp is trusted; without one, fall back to the
-    per-form event key rather than risk suppressing distinct submissions.
+    An explicit upstream ID takes precedence so distinct same-time submissions
+    are not merged merely because their timestamps match.
     """
+    source_id = _source_event_id(payload)
+    if source_id:
+        identity = f"submission-id|{canonical['email'].casefold()}|{source_id}"
+        return hashlib.sha256(identity.encode("utf-8")).hexdigest()
     stable_timestamp = _parse_timestamp(_raw_submission_timestamp(payload))
     if not stable_timestamp:
         return event_key
     identity = f"submission|{canonical['email'].casefold()}|{stable_timestamp}"
     return hashlib.sha256(identity.encode("utf-8")).hexdigest()
+
+
+def _verified_legacy_forward_key(
+    payload: dict[str, Any], canonical: dict[str, str]
+) -> str | None:
+    """Prove a legacy sent marker by its original stored source ID.
+
+    Historical form aliases and submission timestamps may differ on replay,
+    so never derive the old marker from the retry's form label or timestamp.
+    Once proven, persist the alias on the durable forwarding disk; subsequent
+    replays no longer depend on the replaceable intake database.
+    """
+    source_id = _source_event_id(payload)
+    if not source_id:
+        return None
+    source_key = _forward_key(payload, canonical, "")
+    try:
+        with _DB_LOCK, _forward_connect() as conn:
+            aliased = conn.execute(
+                "SELECT legacy_key FROM website_lead_forward_aliases WHERE source_key=?",
+                (source_key,),
+            ).fetchone()
+            if aliased:
+                return aliased["legacy_key"]
+    except (OSError, sqlite3.Error):
+        return None
+
+    try:
+        with _DB_LOCK, _connect() as conn:
+            _ensure_schema(conn)
+            old_rows = conn.execute(
+                """SELECT event_key, form_name, source_payload_json
+                   FROM website_leads WHERE email=?
+                   ORDER BY received_at DESC LIMIT 2000""",
+                (canonical["email"],),
+            ).fetchall()
+    except (OSError, sqlite3.Error):
+        return None
+
+    for row in old_rows:
+        try:
+            old_payload = json.loads(row["source_payload_json"])
+            if not isinstance(old_payload, dict) or _source_event_id(old_payload) != source_id:
+                continue
+            old_timestamp = _parse_timestamp(_raw_submission_timestamp(old_payload))
+            if not old_timestamp:
+                continue
+            # Only pre-upgrade rows are valid evidence: current records are
+            # keyed by the upstream ID, rather than this legacy timestamp.
+            old_identity = "|".join(
+                (str(row["form_name"]).casefold(), canonical["email"].casefold(), old_timestamp)
+            )
+            old_record_key = hashlib.sha256(old_identity.encode("utf-8")).hexdigest()
+            if row["event_key"] != old_record_key:
+                continue
+            old_forward = f"submission|{canonical['email'].casefold()}|{old_timestamp}"
+            legacy_key = hashlib.sha256(old_forward.encode("utf-8")).hexdigest()
+            with _DB_LOCK, _forward_connect() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                prior_sent = conn.execute(
+                    "SELECT 1 FROM website_lead_forwarding WHERE event_key=? AND state='sent'",
+                    (legacy_key,),
+                ).fetchone()
+                if prior_sent:
+                    conn.execute(
+                        """INSERT OR IGNORE INTO website_lead_forward_aliases
+                           (source_key, legacy_key, created_at) VALUES (?, ?, ?)""",
+                        (source_key, legacy_key, _utcnow()),
+                    )
+                mapped = conn.execute(
+                    "SELECT legacy_key FROM website_lead_forward_aliases WHERE source_key=?",
+                    (source_key,),
+                ).fetchone()
+                conn.commit()
+                if mapped:
+                    return mapped["legacy_key"]
+        except (TypeError, ValueError, OSError, sqlite3.Error):
+            continue
+    return None
+
+
+def preseed_legacy_forward_aliases(*, dry_run: bool = True, max_rows: int = 50000) -> dict[str, int | bool]:
+    """Pre-migrate proven old source IDs while the original intake DB exists.
+
+    The intake DB can be replaced during a deployment; the forwarding DB must
+    live on persistent storage. Run this in a controlled maintenance window,
+    dry-run first. Never touch the trade ledger or contact customers.
+    """
+    if not isinstance(max_rows, int) or max_rows < 1 or max_rows > 50000:
+        raise ValueError("max_rows must be between 1 and 50000")
+    if not str(os.getenv("NIJA_LEAD_FORWARD_DB_PATH", "")).strip():
+        raise RuntimeError("migration requires an explicit forwarding DB path")
+    path = _db_path().resolve(strict=True)
+    destination_path = _forward_db_path().resolve()
+    if (path == destination_path or path.name == "trade_ledger.db"
+            or destination_path.name == "trade_ledger.db"):
+        raise RuntimeError("migration must not access trade ledger or reuse lead source DB")
+    # mode=ro ensures this preflight never creates or changes intake records.
+    source_uri = path.as_uri() + "?mode=ro"
+    with sqlite3.connect(source_uri, uri=True, timeout=10.0) as source:
+        source.row_factory = sqlite3.Row
+        available = source.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='website_leads'"
+        ).fetchone()
+        if not available:
+            raise RuntimeError("lead source database has no website_leads table")
+        total = int(source.execute("SELECT COUNT(*) FROM website_leads").fetchone()[0])
+        if total > max_rows:
+            raise RuntimeError("source lead row count exceeds migration limit")
+        rows = source.execute(
+            """SELECT event_key, form_name, email, source_payload_json
+               FROM website_leads ORDER BY received_at ASC"""
+        ).fetchall()
+
+    candidates: dict[str, str] = {}
+    skipped = 0
+    for row in rows:
+        try:
+            payload = json.loads(row["source_payload_json"])
+            if not isinstance(payload, dict) or not _source_event_id(payload):
+                continue
+            canonical = normalize_lead_payload(payload)
+            old_time = _parse_timestamp(_raw_submission_timestamp(payload))
+            if not old_time or row["email"] != canonical["email"]:
+                continue
+            # Confirm this entry was written by the historical timestamp-based
+            # algorithm, not by the new source-ID based implementation.
+            old_record = "|".join(
+                (str(row["form_name"]).casefold(), canonical["email"].casefold(), old_time)
+            )
+            old_record_key = hashlib.sha256(old_record.encode("utf-8")).hexdigest()
+            if row["event_key"] != old_record_key:
+                continue
+            old_forward = f"submission|{canonical['email'].casefold()}|{old_time}"
+            legacy_key = hashlib.sha256(old_forward.encode("utf-8")).hexdigest()
+            source_key = _forward_key(payload, canonical, row["event_key"])
+            if source_key in candidates and candidates[source_key] != legacy_key:
+                raise RuntimeError("ambiguous legacy source ID mapping")
+            candidates[source_key] = legacy_key
+        except (ValueError, TypeError, KeyError, AttributeError):
+            skipped += 1
+
+    # Dry-run must not create tables or migrate columns on the production
+    # forwarding store. Use SQLite read-only mode, not _forward_connect().
+    if dry_run:
+        destination = _forward_db_path().resolve(strict=True)
+        forward = sqlite3.connect(destination.as_uri() + "?mode=ro", uri=True, timeout=10.0)
+        forward.row_factory = sqlite3.Row
+    else:
+        forward = _forward_connect()
+
+    aliased = 0
+    try:
+        with _DB_LOCK, forward:
+            if not dry_run:
+                forward.execute("BEGIN IMMEDIATE")
+            try:
+                table_exists = forward.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' "
+                    "AND name='website_lead_forward_aliases'"
+                ).fetchone() is not None
+                for source_key, legacy_key in candidates.items():
+                    sent = forward.execute(
+                        "SELECT 1 FROM website_lead_forwarding WHERE event_key=? AND state='sent'",
+                        (legacy_key,),
+                    ).fetchone()
+                    if not sent:
+                        continue
+                    aliased += 1
+                    prior = forward.execute(
+                        "SELECT legacy_key FROM website_lead_forward_aliases WHERE source_key=?",
+                        (source_key,),
+                    ).fetchone() if table_exists else None
+                    if prior and prior["legacy_key"] != legacy_key:
+                        raise RuntimeError("conflicting durable legacy alias")
+                    if not dry_run and not prior:
+                        forward.execute(
+                            """INSERT INTO website_lead_forward_aliases
+                               (source_key, legacy_key, created_at) VALUES (?, ?, ?)""",
+                            (source_key, legacy_key, _utcnow()),
+                        )
+                if not dry_run:
+                    forward.commit()
+            except Exception:
+                if not dry_run:
+                    forward.rollback()
+                raise
+    finally:
+        forward.close()
+    return {
+        "source_rows": total,
+        "candidates": len(candidates),
+        "sent_aliases": aliased,
+        "skipped_invalid": skipped,
+        "dry_run": dry_run,
+    }
 
 
 def record_lead(payload: dict[str, Any]) -> tuple[dict[str, str], str, bool]:
@@ -270,7 +492,11 @@ def record_lead(payload: dict[str, Any]) -> tuple[dict[str, str], str, bool]:
     # Canonical submitted_at is the current time if the source omits it,
     # so never use that dynamic fallback in the deduplication key.
     stable_timestamp = _parse_timestamp(_raw_submission_timestamp(payload))
-    source_reference = stable_timestamp or _stable_event_fallback(payload, raw)
+    # Upstream IDs distinguish events that happen within one timestamp tick.
+    source_id = _source_event_id(payload)
+    source_reference = ("upstream:" + source_id) if source_id else (
+        stable_timestamp or _stable_event_fallback(payload, raw)
+    )
     identity = "|".join(
         (
             canonical["form_name"].casefold(),
@@ -330,6 +556,13 @@ def _forward_connect() -> sqlite3.Connection:
             state TEXT NOT NULL,
             lease_until REAL NOT NULL DEFAULT 0,
             lease_token TEXT NOT NULL DEFAULT ''
+        )"""
+    )
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS website_lead_forward_aliases (
+            source_key TEXT PRIMARY KEY,
+            legacy_key TEXT NOT NULL,
+            created_at TEXT NOT NULL
         )"""
     )
     # Preserve existing durable records; upgrade a pre-fencing table in place.
@@ -615,20 +848,23 @@ def handle_lead_intake_post(handler: Any) -> bool:
     forwarded = False
     forward_error = False
     forward_key = _forward_key(payload, canonical, event_key)
+    legacy_key = event_key if forward_key != event_key else None
+    if _source_event_id(payload):
+        # Migrate timestamp-only sent history only when an old stored lead
+        # proves it belonged to this exact upstream event. Otherwise a second
+        # real submission with the same coarse timestamp could be suppressed.
+        verified_legacy_key = _verified_legacy_forward_key(payload, canonical)
+        if verified_legacy_key:
+            legacy_key = verified_legacy_key
     try:
-        # A Zapier replay must not resend the same customer-facing notification.
-        # Failed attempts may retry after a bounded delay without repeating a
-        # previously confirmed successful forward.
-        claim_token = _claim_forward(
-            forward_key,
-            legacy_event_key=event_key if forward_key != event_key else None,
-        )
+        # Duplicate/replayed webhooks must not resend completed notifications.
+        claim_token = _claim_forward(forward_key, legacy_event_key=legacy_key)
     except (OSError, sqlite3.Error):
         claim_token = None
         forward_error = True
     if claim_token:
         try:
-            forwarded = _forward(canonical)
+            forwarded = _forward({**canonical, "event_id": forward_key})
         except Exception as exc:
             # The canonical lead is already persisted; never expose webhook
             # URL, provider credentials, or payloads in error logs.
