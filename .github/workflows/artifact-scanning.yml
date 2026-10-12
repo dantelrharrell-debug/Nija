@@ -17,6 +17,8 @@ jobs:
       contents: read
       security-events: write
     strategy:
+      # Keep scanning other images if one fails; never hide failing checks.
+      fail-fast: false
       matrix:
         dockerfile: [Dockerfile, Dockerfile.api, Dockerfile.dashboard, Dockerfile.gateway]
 
@@ -73,22 +75,29 @@ jobs:
         severity: 'CRITICAL,HIGH,MEDIUM'
         exit-code: '0'
 
+    # Refresh the Grype scanner: v3 bundled an obsolete 0.74.4 release whose
+    # stale vulnerability database caused scans to error. Keep DB age checks on.
     - name: Run Grype vulnerability scanner
-      uses: anchore/scan-action@v3
+      uses: anchore/scan-action@v7.4.0
       id: grype-scan
       with:
         image: ${{ steps.image-name.outputs.image }}
         fail-build: false
         severity-cutoff: high
+        cache-db: false
 
-    # Grype report generation is best-effort. The scanner can complete without
-    # emitting a SARIF path (for example when a matrix job is cancelled after a
-    # sibling failure). Trivy remains the required SARIF security report, so an
-    # absent optional Grype artifact must not fail the entire checksPass gate.
+    # An operational scanner failure or missing/malformed SARIF is a hard error.
+    # Known vulnerabilities remain reportable, per the existing fail-build policy.
+    - name: Validate Grype scan output
+      env:
+        GRYPE_SARIF: ${{ steps.grype-scan.outputs.sarif }}
+      run: |
+        set -euo pipefail
+        test -n "$GRYPE_SARIF" && test -s "$GRYPE_SARIF"
+        python -m json.tool "$GRYPE_SARIF" > /dev/null
+
     - name: Upload Grype scan results
       uses: github/codeql-action/upload-sarif@v3
-      if: ${{ always() && steps.grype-scan.outputs.sarif != '' }}
-      continue-on-error: true
       with:
         sarif_file: ${{ steps.grype-scan.outputs.sarif }}
         category: 'grype-${{ matrix.dockerfile }}'
