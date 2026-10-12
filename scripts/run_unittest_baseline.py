@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import faulthandler
+import importlib
 import os
 from pathlib import Path
 import sys
@@ -122,6 +123,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--start-dir", default=".")
     parser.add_argument("--pattern", default="test_*.py")
     parser.add_argument("--traceback-after", type=int, help="Repeat diagnostic thread stacks after this many seconds")
+    parser.add_argument("--preload-module", action="append", default=[],
+                        help="Import a dependency before discovery can start runtime monitor threads")
     args = parser.parse_args(argv)
     if args.traceback_after is not None and args.traceback_after <= 0:
         parser.error("--traceback-after must be positive")
@@ -147,6 +150,17 @@ def main(argv: list[str] | None = None) -> int:
             os.environ[env_name] = _TEST_RESTART_GRACE_S
 
         _reset_terminal_writer_loss_test_state()
+        # requests lazily imports urllib3. Discovery can start runtime monitors
+        # that import the same dependency concurrently through NIJA's import
+        # hooks. Import the requested dependencies first, on this main thread.
+        # A preload error remains a failed run; no test or failure is skipped.
+        for module_name in args.preload_module:
+            try:
+                importlib.import_module(module_name)
+            except Exception as exc:
+                print(f"CI_PRELOAD_FAILED module={module_name} error={type(exc).__name__}: {exc}",
+                      file=sys.stderr)
+                return 2
         suite = unittest.defaultTestLoader.discover(
             start_dir=args.start_dir,
             pattern=args.pattern,
