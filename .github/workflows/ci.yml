@@ -81,15 +81,14 @@ jobs:
           # Import test modules in bounded subprocesses. The old single
           # discovery process started many unrelated daemon monitor threads
           # and intermittently segfaulted inside monkeypatched runtime code.
+          # Preload the 'bot' package before legacy tests prepend the bot/
+          # path, or Python may execute bot/bot.py instead of bot/__init__.py.
           # Run the entire unittest inventory with the exact same baseline;
           # a child crash, missing report, unexpected test, or coverage drop
           # fails the job instead of being skipped or silently retried.
           python -u scripts/run_unittest_partitioned.py \
             --baseline .github/ci_known_test_failures.txt \
             --preload-module requests \
-            # Resolve the bot package before legacy root tests inject bot/
-            # onto sys.path; otherwise Python executes bot/bot.py (live startup)
-            # rather than using bot/__init__.py, triggering fail-closed startup.
             --preload-module bot \
             --traceback-after 120 \
             --max-files 25 \
