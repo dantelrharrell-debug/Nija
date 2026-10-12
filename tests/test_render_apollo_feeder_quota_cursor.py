@@ -3,7 +3,7 @@ from __future__ import annotations
 import render_apollo_feeder as feeder
 
 
-def test_run_sync_stops_paging_once_saved_cursor_is_reached(monkeypatch):
+def test_run_sync_rescans_contacts_at_saved_cursor(monkeypatch):
     cursor = "2026-09-05T00:00:00+00:00"
     calls: list[int] = []
     saved: dict[str, object] = {}
@@ -21,9 +21,9 @@ def test_run_sync_stops_paging_once_saved_cursor_is_reached(monkeypatch):
 
     def fake_request(path, payload):
         calls.append(payload["page"])
-        if payload["page"] != 1:
-            raise AssertionError("run_sync must not request pages older than the saved cursor")
-        return {"contacts": [newer, at_cursor] + [dict(at_cursor) for _ in range(98)]}
+        if payload["page"] == 1:
+            return {"contacts": [newer, at_cursor] + [dict(at_cursor) for _ in range(98)]}
+        return {"contacts": []}
 
     monkeypatch.setattr(feeder, "_load_cursor", lambda: cursor)
     monkeypatch.setattr(feeder, "_pages_per_sync", lambda: 5)
@@ -40,9 +40,9 @@ def test_run_sync_stops_paging_once_saved_cursor_is_reached(monkeypatch):
 
     counts = feeder.run_sync()
 
-    assert calls == [1]
-    assert counts["contacts_scanned"] == 1
-    assert counts["contacts_seen"] == 1
+    assert calls == [1, 2]
+    assert counts["contacts_scanned"] == 100
+    assert counts["contacts_seen"] == 100
     assert saved["cursor"] == newer["updated_at"]
 
 
