@@ -715,7 +715,10 @@ def submit_market_order_via_pipeline(
     preferred_broker = _resolve_preferred_broker(broker)
     account_id = str(account_id_override or _resolve_account_id(broker, preferred_broker)).strip().lower()
     explicit_intent = str(intent_type or "").strip().lower()
-    is_exit = explicit_intent in {"exit", "reduce"} or str(position_effect or "").lower() in {"close", "reduce"}
+    position_effect_intent = {"close": "exit", "reduce": "reduce"}.get(
+        str(position_effect or "").lower()
+    )
+    is_exit = explicit_intent in {"exit", "reduce"} or position_effect_intent is not None
 
     size_usd = max(0.0, _float(quantity))
     price_hint_usd: Optional[float] = parsed_limit_price
@@ -809,7 +812,11 @@ def submit_market_order_via_pipeline(
     effective_size = _float(margin_fields.get("size_usd"), size_usd)
     leverage = int(_float(margin_fields.get("leverage"), 1.0))
     margin_mode = margin_fields.get("margin_mode")
-    resolved_intent = explicit_intent or str(margin_fields.get("intent_type") or "entry")
+    resolved_intent = (
+        explicit_intent
+        or position_effect_intent
+        or str(margin_fields.get("intent_type") or "entry")
+    )
     reduce_only = margin_fields.get("reduce_only")
     if reduce_only_override is not None:
         reduce_only = bool(reduce_only_override)
