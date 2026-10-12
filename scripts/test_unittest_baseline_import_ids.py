@@ -102,5 +102,22 @@ class DiscoveryParityTests(unittest.TestCase):
         self.assertEqual(1, len(result.skipped))
 
 
+class PackageImportOrderTests(unittest.TestCase):
+    def test_preloaded_bot_package_cannot_be_shadowed_by_legacy_bot_py(self) -> None:
+        import importlib
+        from pathlib import Path
+        import sys
+
+        # Replicate the sys.path edit made by the seven old root test scripts.
+        package = importlib.import_module("bot")
+        self.assertTrue(hasattr(package, "__path__"))
+        package_dir = Path(package.__file__).resolve().parent
+        self.assertEqual(package_dir.name, "bot")
+        with patch.object(sys, "path", [str(package_dir), *sys.path]):
+            resolved = importlib.import_module("bot")
+            self.assertIs(resolved, package)
+            self.assertTrue(hasattr(resolved, "__path__"))
+
+
 if __name__ == "__main__":
     unittest.main()
