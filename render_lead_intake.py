@@ -424,37 +424,53 @@ def preseed_legacy_forward_aliases(*, dry_run: bool = True, max_rows: int = 5000
         except (ValueError, TypeError, KeyError, AttributeError):
             skipped += 1
 
+    # Dry-run must not create tables or migrate columns on the production
+    # forwarding store. Use SQLite read-only mode, not _forward_connect().
+    if dry_run:
+        destination = _forward_db_path().resolve(strict=True)
+        forward = sqlite3.connect(destination.as_uri() + "?mode=ro", uri=True, timeout=10.0)
+        forward.row_factory = sqlite3.Row
+    else:
+        forward = _forward_connect()
+
     aliased = 0
-    with _DB_LOCK, _forward_connect() as forward:
-        forward.execute("BEGIN IMMEDIATE")
-        try:
-            for source_key, legacy_key in candidates.items():
-                sent = forward.execute(
-                    "SELECT 1 FROM website_lead_forwarding WHERE event_key=? AND state='sent'",
-                    (legacy_key,),
-                ).fetchone()
-                if not sent:
-                    continue
-                aliased += 1
-                prior = forward.execute(
-                    "SELECT legacy_key FROM website_lead_forward_aliases WHERE source_key=?",
-                    (source_key,),
-                ).fetchone()
-                if prior and prior["legacy_key"] != legacy_key:
-                    raise RuntimeError("conflicting durable legacy alias")
-                if not dry_run and not prior:
-                    forward.execute(
-                        """INSERT INTO website_lead_forward_aliases
-                           (source_key, legacy_key, created_at) VALUES (?, ?, ?)""",
-                        (source_key, legacy_key, _utcnow()),
-                    )
-            if dry_run:
-                forward.rollback()
-            else:
-                forward.commit()
-        except Exception:
-            forward.rollback()
-            raise
+    try:
+        with _DB_LOCK, forward:
+            if not dry_run:
+                forward.execute("BEGIN IMMEDIATE")
+            try:
+                table_exists = forward.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' "
+                    "AND name='website_lead_forward_aliases'"
+                ).fetchone() is not None
+                for source_key, legacy_key in candidates.items():
+                    sent = forward.execute(
+                        "SELECT 1 FROM website_lead_forwarding WHERE event_key=? AND state='sent'",
+                        (legacy_key,),
+                    ).fetchone()
+                    if not sent:
+                        continue
+                    aliased += 1
+                    prior = forward.execute(
+                        "SELECT legacy_key FROM website_lead_forward_aliases WHERE source_key=?",
+                        (source_key,),
+                    ).fetchone() if table_exists else None
+                    if prior and prior["legacy_key"] != legacy_key:
+                        raise RuntimeError("conflicting durable legacy alias")
+                    if not dry_run and not prior:
+                        forward.execute(
+                            """INSERT INTO website_lead_forward_aliases
+                               (source_key, legacy_key, created_at) VALUES (?, ?, ?)""",
+                            (source_key, legacy_key, _utcnow()),
+                        )
+                if not dry_run:
+                    forward.commit()
+            except Exception:
+                if not dry_run:
+                    forward.rollback()
+                raise
+    finally:
+        forward.close()
     return {
         "source_rows": total,
         "candidates": len(candidates),
