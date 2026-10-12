@@ -128,7 +128,10 @@ def main(argv: list[str] | None = None) -> int:
             report_file = workdir / f"part-{index:03d}.json"
             log_file = workdir / f"part-{index:03d}.log"
             command = [
-                sys.executable, "-u", str(root / "scripts/run_unittest_baseline.py"),
+                # -m keeps the repository root on sys.path. Running the
+                # script by absolute path makes only scripts/ importable and
+                # turns every bot.* test into a false _FailedTest.bot error.
+                sys.executable, "-u", "-m", "scripts.run_unittest_baseline",
                 "--baseline", str(baseline_path),
                 "--report-json", str(report_file),
                 "--traceback-after", str(args.traceback_after),
