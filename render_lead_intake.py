@@ -290,6 +290,43 @@ def _forward_key(payload: dict[str, Any], canonical: dict[str, str], event_key: 
     return hashlib.sha256(identity.encode("utf-8")).hexdigest()
 
 
+def _verified_legacy_forward_key(
+    payload: dict[str, Any], canonical: dict[str, str]
+) -> str | None:
+    """Migrate an old sent marker only when its stored source event ID matches.
+
+    Earlier code chose the timestamp ahead of a supplied upstream ID. Never
+    suppress an independent event using only email + the same coarse clock.
+    """
+    source_id = _source_event_id(payload)
+    stable_timestamp = _parse_timestamp(_raw_submission_timestamp(payload))
+    if not source_id or not stable_timestamp:
+        return None
+    old_record_identity = "|".join(
+        (canonical["form_name"].casefold(), canonical["email"].casefold(), stable_timestamp)
+    )
+    old_record_key = hashlib.sha256(old_record_identity.encode("utf-8")).hexdigest()
+    try:
+        with _DB_LOCK, _connect() as conn:
+            _ensure_schema(conn)
+            row = conn.execute(
+                "SELECT source_payload_json FROM website_leads WHERE event_key=?",
+                (old_record_key,),
+            ).fetchone()
+    except (OSError, sqlite3.Error):
+        return None
+    if not row:
+        return None
+    try:
+        old_payload = json.loads(row["source_payload_json"])
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(old_payload, dict) or _source_event_id(old_payload) != source_id:
+        return None
+    old_forward_identity = f"submission|{canonical['email'].casefold()}|{stable_timestamp}"
+    return hashlib.sha256(old_forward_identity.encode("utf-8")).hexdigest()
+
+
 def record_lead(payload: dict[str, Any]) -> tuple[dict[str, str], str, bool]:
     canonical = normalize_lead_payload(payload)
     raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
@@ -647,12 +684,12 @@ def handle_lead_intake_post(handler: Any) -> bool:
     forward_key = _forward_key(payload, canonical, event_key)
     legacy_key = event_key if forward_key != event_key else None
     if _source_event_id(payload):
-        # Earlier builds used email + timestamp for the forwarded-event key.
-        # Honor their persisted sent marker during this upgrade.
-        legacy_timestamp = _parse_timestamp(_raw_submission_timestamp(payload))
-        if legacy_timestamp:
-            old_identity = f"submission|{canonical['email'].casefold()}|{legacy_timestamp}"
-            legacy_key = hashlib.sha256(old_identity.encode("utf-8")).hexdigest()
+        # Migrate timestamp-only sent history only when an old stored lead
+        # proves it belonged to this exact upstream event. Otherwise a second
+        # real submission with the same coarse timestamp could be suppressed.
+        verified_legacy_key = _verified_legacy_forward_key(payload, canonical)
+        if verified_legacy_key:
+            legacy_key = verified_legacy_key
     try:
         # Duplicate/replayed webhooks must not resend completed notifications.
         claim_token = _claim_forward(forward_key, legacy_event_key=legacy_key)
