@@ -128,6 +128,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="Import a dependency before discovery can start runtime monitor threads")
     parser.add_argument("--report-json", type=Path,
                         help="Write complete, machine-readable test results for an isolated CI partition")
+    parser.add_argument("--module", action="append", default=[],
+                        help="Run named unittest module(s) instead of importing the entire suite")
     args = parser.parse_args(argv)
     if args.traceback_after is not None and args.traceback_after <= 0:
         parser.error("--traceback-after must be positive")
@@ -164,10 +166,15 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"CI_PRELOAD_FAILED module={module_name} error={type(exc).__name__}: {exc}",
                       file=sys.stderr)
                 return 2
-        suite = unittest.defaultTestLoader.discover(
-            start_dir=args.start_dir,
-            pattern=args.pattern,
-        )
+        if args.module:
+            # Explicit module names let CI isolate imports to a bounded group
+            # without relying on filename globs or invoking unrelated hooks.
+            suite = unittest.defaultTestLoader.loadTestsFromNames(args.module)
+        else:
+            suite = unittest.defaultTestLoader.discover(
+                start_dir=args.start_dir,
+                pattern=args.pattern,
+            )
         runner = unittest.TextTestRunner(
             verbosity=2,
             resultclass=_IsolatedTextTestResult,
@@ -191,6 +198,7 @@ def main(argv: list[str] | None = None) -> int:
         payload = {
             "schema": 1,
             "pattern": args.pattern,
+            "modules": args.module,
             "tests_run": result.testsRun,
             "observed": [list(item) for item in sorted(observed)],
             "unexpected_successes": [test.id() for test in result.unexpectedSuccesses],
