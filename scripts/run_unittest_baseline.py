@@ -282,6 +282,16 @@ def main(argv: list[str] | None = None) -> int:
     _print_entries("KNOWN_FAILURES_STILL_PRESENT", observed & baseline)
     _print_entries("KNOWN_FAILURES_RESOLVED", resolved)
     _print_entries("UNEXPECTED_TEST_RESULTS", unexpected)
+    if args.module and unexpected:
+        # Print only bounded failure context after the ratchet summary so a
+        # failing partition's final CI log tail identifies its root error.
+        # Do not print full payloads, environment or provider credentials.
+        for kind, collection in (("ERROR", result.errors), ("FAIL", result.failures)):
+            for test, traceback_text in collection:
+                if (kind, test.id()) not in unexpected:
+                    continue
+                excerpt = "\n".join(traceback_text.rstrip().splitlines()[-9:])
+                print(f"CI_PARTITION_UNEXPECTED_TRACEBACK test={test.id()}\n{excerpt}", flush=True)
 
     unexpected_successes = [test.id() for test in result.unexpectedSuccesses]
     if unexpected_successes:
