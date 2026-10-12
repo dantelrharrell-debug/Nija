@@ -293,39 +293,80 @@ def _forward_key(payload: dict[str, Any], canonical: dict[str, str], event_key: 
 def _verified_legacy_forward_key(
     payload: dict[str, Any], canonical: dict[str, str]
 ) -> str | None:
-    """Migrate an old sent marker only when its stored source event ID matches.
+    """Prove a legacy sent marker by its original stored source ID.
 
-    Earlier code chose the timestamp ahead of a supplied upstream ID. Never
-    suppress an independent event using only email + the same coarse clock.
+    Historical form aliases and submission timestamps may differ on replay,
+    so never derive the old marker from the retry's form label or timestamp.
+    Once proven, persist the alias on the durable forwarding disk; subsequent
+    replays no longer depend on the replaceable intake database.
     """
     source_id = _source_event_id(payload)
-    stable_timestamp = _parse_timestamp(_raw_submission_timestamp(payload))
-    if not source_id or not stable_timestamp:
+    if not source_id:
         return None
-    old_record_identity = "|".join(
-        (canonical["form_name"].casefold(), canonical["email"].casefold(), stable_timestamp)
-    )
-    old_record_key = hashlib.sha256(old_record_identity.encode("utf-8")).hexdigest()
+    source_key = _forward_key(payload, canonical, "")
+    try:
+        with _DB_LOCK, _forward_connect() as conn:
+            aliased = conn.execute(
+                "SELECT legacy_key FROM website_lead_forward_aliases WHERE source_key=?",
+                (source_key,),
+            ).fetchone()
+            if aliased:
+                return aliased["legacy_key"]
+    except (OSError, sqlite3.Error):
+        return None
+
     try:
         with _DB_LOCK, _connect() as conn:
             _ensure_schema(conn)
-            row = conn.execute(
-                "SELECT source_payload_json FROM website_leads WHERE event_key=?",
-                (old_record_key,),
-            ).fetchone()
+            old_rows = conn.execute(
+                """SELECT event_key, form_name, source_payload_json
+                   FROM website_leads WHERE email=?
+                   ORDER BY received_at DESC LIMIT 2000""",
+                (canonical["email"],),
+            ).fetchall()
     except (OSError, sqlite3.Error):
         return None
-    if not row:
-        return None
-    try:
-        old_payload = json.loads(row["source_payload_json"])
-    except (TypeError, ValueError):
-        return None
-    if not isinstance(old_payload, dict) or _source_event_id(old_payload) != source_id:
-        return None
-    old_forward_identity = f"submission|{canonical['email'].casefold()}|{stable_timestamp}"
-    return hashlib.sha256(old_forward_identity.encode("utf-8")).hexdigest()
 
+    for row in old_rows:
+        try:
+            old_payload = json.loads(row["source_payload_json"])
+            if not isinstance(old_payload, dict) or _source_event_id(old_payload) != source_id:
+                continue
+            old_timestamp = _parse_timestamp(_raw_submission_timestamp(old_payload))
+            if not old_timestamp:
+                continue
+            # Only pre-upgrade rows are valid evidence: current records are
+            # keyed by the upstream ID, rather than this legacy timestamp.
+            old_identity = "|".join(
+                (str(row["form_name"]).casefold(), canonical["email"].casefold(), old_timestamp)
+            )
+            old_record_key = hashlib.sha256(old_identity.encode("utf-8")).hexdigest()
+            if row["event_key"] != old_record_key:
+                continue
+            old_forward = f"submission|{canonical['email'].casefold()}|{old_timestamp}"
+            legacy_key = hashlib.sha256(old_forward.encode("utf-8")).hexdigest()
+            with _DB_LOCK, _forward_connect() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                prior_sent = conn.execute(
+                    "SELECT 1 FROM website_lead_forwarding WHERE event_key=? AND state='sent'",
+                    (legacy_key,),
+                ).fetchone()
+                if prior_sent:
+                    conn.execute(
+                        """INSERT OR IGNORE INTO website_lead_forward_aliases
+                           (source_key, legacy_key, created_at) VALUES (?, ?, ?)""",
+                        (source_key, legacy_key, _utcnow()),
+                    )
+                mapped = conn.execute(
+                    "SELECT legacy_key FROM website_lead_forward_aliases WHERE source_key=?",
+                    (source_key,),
+                ).fetchone()
+                conn.commit()
+                if mapped:
+                    return mapped["legacy_key"]
+        except (TypeError, ValueError, OSError, sqlite3.Error):
+            continue
+    return None
 
 def record_lead(payload: dict[str, Any]) -> tuple[dict[str, str], str, bool]:
     canonical = normalize_lead_payload(payload)
@@ -397,6 +438,13 @@ def _forward_connect() -> sqlite3.Connection:
             state TEXT NOT NULL,
             lease_until REAL NOT NULL DEFAULT 0,
             lease_token TEXT NOT NULL DEFAULT ''
+        )"""
+    )
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS website_lead_forward_aliases (
+            source_key TEXT PRIMARY KEY,
+            legacy_key TEXT NOT NULL,
+            created_at TEXT NOT NULL
         )"""
     )
     # Preserve existing durable records; upgrade a pre-fencing table in place.
