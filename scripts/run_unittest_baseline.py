@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import faulthandler
 import importlib
+import json
 import os
 from pathlib import Path
 import sys
@@ -125,6 +126,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--traceback-after", type=int, help="Repeat diagnostic thread stacks after this many seconds")
     parser.add_argument("--preload-module", action="append", default=[],
                         help="Import a dependency before discovery can start runtime monitor threads")
+    parser.add_argument("--report-json", type=Path,
+                        help="Write complete, machine-readable test results for an isolated CI partition")
     args = parser.parse_args(argv)
     if args.traceback_after is not None and args.traceback_after <= 0:
         parser.error("--traceback-after must be positive")
@@ -181,6 +184,22 @@ def main(argv: list[str] | None = None) -> int:
                 os.environ[env_name] = previous
 
     observed = _observed_failures(result)
+    # Partitioned CI collects every test result and enforces the original
+    # full-suite known-failure ratchet after all isolated child runs finish.
+    # Keep ordinary single-process CLI behavior entirely unchanged.
+    if args.report_json is not None:
+        payload = {
+            "schema": 1,
+            "pattern": args.pattern,
+            "tests_run": result.testsRun,
+            "observed": [list(item) for item in sorted(observed)],
+            "unexpected_successes": [test.id() for test in result.unexpectedSuccesses],
+        }
+        args.report_json.parent.mkdir(parents=True, exist_ok=True)
+        args.report_json.write_text(
+            json.dumps(payload, sort_keys=True, separators=(",", ":")),
+            encoding="utf-8",
+        )
     unexpected = observed - baseline
     resolved = baseline - observed
 
