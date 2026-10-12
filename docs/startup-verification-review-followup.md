@@ -13,6 +13,8 @@ activation gate.
 - Check the durable startup attempt at the proof consumers as well as the
   publisher. A pre-existing fresh marker or cached ready verifier cannot grant
   activation during a claimed, pending, filled-but-unclosed or unknown attempt.
+  Reapplying the v339 startup source installer preserves that check alongside
+  the existing v169 provenance requirements and remains idempotent.
 - Accept `Mapping` for the canonical platform broker collection. Production's
   `MappingProxyType` must not disappear from startup candidate selection.
 - Derive the API-key identity with scrypt. The account fingerprint is unchanged,

@@ -413,6 +413,47 @@ class DurableAttemptTests(unittest.TestCase):
             self.assertTrue(env["_patch_tsm_execution_provenance"]())
             self.assertEqual(module._heartbeat_verification_status()[:2], (False, "startup_attempt_store_unavailable"))
 
+    def test_startup_installer_keeps_attempt_guard_when_reapplied(self):
+        installer_path = BOT.parent / "scripts" / "apply_execution_proof_startup_isolation_v339.py"
+        spec = importlib.util.spec_from_file_location("_startup_installer_offline", installer_path)
+        installer = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(installer)
+        source = (BOT / "runtime_heartbeat_marker_convergence_v238_patch.py").read_text()
+        patched = installer.patch_v238_text(source)
+        self.assertEqual(installer.patch_v238_text(patched), patched)
+        self.assertIn("v169_provenance_guard_not_ready", patched)
+        self.assertIn('source != "heartbeat_trade"', patched)
+        self.assertIn("startup_attempts_allow_execution_proof", patched)
+        function = next(node for node in ast.parse(patched).body
+                        if isinstance(node, ast.FunctionDef) and node.name == "_genuine_execution_marker_ready")
+        calls = []
+        namespace = {"os": os, "importlib": types.SimpleNamespace(
+            import_module=lambda _: (calls.append(True) or types.SimpleNamespace())
+        )}
+        exec(compile(ast.Module(body=[function], type_ignores=[]), str(installer_path), "exec"), namespace)
+        E.claim_startup_attempt(self.identity, "platform", "BTC-USD", path=self.path)
+        with patch.dict(os.environ, {"NIJA_STARTUP_ATTEMPT_DB": str(self.path),
+                                    "NIJA_RUNTIME_EXECUTION_CAPITAL_INTEGRITY_V169_READY": "1"}), patch.dict(
+            sys.modules, {"bot": types.ModuleType("bot"), "bot.startup_verification_evidence": E}
+        ):
+            self.assertEqual(namespace["_genuine_execution_marker_ready"](), (False, "startup_attempt_unreconciled"))
+        self.assertEqual(calls, [])
+
+    def test_startup_installer_upgrades_both_legacy_consumer_forms(self):
+        installer_path = BOT.parent / "scripts" / "apply_execution_proof_startup_isolation_v339.py"
+        spec = importlib.util.spec_from_file_location("_startup_installer_legacy_offline", installer_path)
+        installer = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(installer)
+        function = next(node for node in ast.parse(installer_path.read_text()).body
+                        if isinstance(node, ast.FunctionDef) and node.name == "patch_v238_text")
+        legacy_forms = [ast.literal_eval(node.value) for node in function.body[:2]]
+        for source in legacy_forms:
+            with self.subTest(already_hardened="v169_provenance_guard_not_ready" in source):
+                patched = installer.patch_v238_text(source)
+                self.assertEqual(installer.patch_v238_text(patched), patched)
+                self.assertIn("startup_attempts_allow_execution_proof", patched)
+                self.assertIn("v169_execution_provenance_missing", patched)
+
 
 class FlowTests(unittest.TestCase):
     def setUp(self):
