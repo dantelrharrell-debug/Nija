@@ -87,6 +87,10 @@ jobs:
           python -u scripts/run_unittest_partitioned.py \
             --baseline .github/ci_known_test_failures.txt \
             --preload-module requests \
+            # Resolve the bot package before legacy root tests inject bot/
+            # onto sys.path; otherwise Python executes bot/bot.py (live startup)
+            # rather than using bot/__init__.py, triggering fail-closed startup.
+            --preload-module bot \
             --traceback-after 120 \
             --max-files 25 \
             --min-tests 2554 \
