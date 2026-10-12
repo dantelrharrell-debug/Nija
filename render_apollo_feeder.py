@@ -192,6 +192,27 @@ def _apollo_request(path: str, payload: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def _validated_contact_page(response: dict[str, Any], page: int) -> list[dict[str, Any]]:
+    """Reject silent all-zero polls in NIJA's known populated Apollo workspace.
+
+    Empty later pages are normal.  An empty first page is not: an incorrect
+    production API key, account scope, or provider response must be surfaced
+    as a failure rather than recorded as a successful zero-contact sync.
+    Never log contact PII, tokens, response bodies, or secret account values.
+    """
+    contacts = response.get("contacts")
+    if not isinstance(contacts, list):
+        raise RuntimeError("Apollo contacts search returned an invalid contacts field")
+    if page == 1 and not contacts:
+        raise RuntimeError(
+            "Apollo contacts search returned zero records in NIJA's populated workspace; "
+            "verify production API key account and contacts_search scope"
+        )
+    if any(not isinstance(contact, dict) for contact in contacts):
+        raise RuntimeError("Apollo contacts search returned an invalid contact record")
+    return contacts
+
+
 def _custom_field(contact: dict[str, Any], env_name: str) -> object:
     field_id = os.getenv(env_name, "").strip()
     fields = contact.get("typed_custom_fields")
@@ -484,13 +505,11 @@ def run_sync() -> dict[str, int]:
                 "page": page,
             },
         )
-        contacts = response.get("contacts")
-        if not isinstance(contacts, list) or not contacts:
+        contacts = _validated_contact_page(response, page)
+        if not contacts:
             break
 
         for contact in contacts:
-            if not isinstance(contact, dict):
-                continue
             updated_at = str(contact.get("updated_at", "") or "")
             # Re-evaluate all saved contacts on each sync. Consent, DNC,
             # suppression and jurisdiction can change without a contact
