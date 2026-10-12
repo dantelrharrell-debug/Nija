@@ -109,6 +109,38 @@ def _observed_failures(result: unittest.TestResult) -> set[FailureKey]:
     return failures | errors
 
 
+def _normalize_named_import_failure_ids(
+    observed: set[FailureKey],
+    modules: list[str],
+    baseline: set[FailureKey],
+) -> set[FailureKey]:
+    """Retain unittest discovery IDs for pre-existing import failures.
+
+    \`unittest.discover\` reports _FailedTest.bot.test_foo, but
+    \`loadTestsFromNames(['bot.test_foo'])\` can report
+    _FailedTest.test_foo. Map ONLY an unambiguous matching module
+    already present in the checked-in failure baseline, and preserve all
+    other unexpected import errors as failures.
+    """
+    prefix = "unittest.loader._FailedTest."
+    normalized: set[FailureKey] = set()
+    for kind, test_id in observed:
+        if not test_id.startswith(prefix) or (kind, test_id) in baseline:
+            normalized.add((kind, test_id))
+            continue
+        short = test_id[len(prefix):]
+        candidates = [
+            module for module in modules
+            if (module == short or module.endswith("." + short))
+            and (kind, prefix + module) in baseline
+        ]
+        if len(candidates) == 1:
+            normalized.add((kind, prefix + candidates[0]))
+        else:
+            normalized.add((kind, test_id))
+    return normalized
+
+
 def _print_entries(title: str, entries: set[FailureKey]) -> None:
     if not entries:
         return
@@ -191,6 +223,8 @@ def main(argv: list[str] | None = None) -> int:
                 os.environ[env_name] = previous
 
     observed = _observed_failures(result)
+    if args.module:
+        observed = _normalize_named_import_failure_ids(observed, args.module, baseline)
     # Partitioned CI collects every test result and enforces the original
     # full-suite known-failure ratchet after all isolated child runs finish.
     # Keep ordinary single-process CLI behavior entirely unchanged.
