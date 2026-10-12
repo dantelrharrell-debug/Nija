@@ -284,6 +284,8 @@ jobs:
             bot/tests/test_preactivation_readiness_convergence_v16_patch.py
       - name: Test entrypoint writer heartbeat
         run: python -m pytest -q bot/tests/test_entrypoint_writer_heartbeat.py
+      - name: Test operator ceiling on startup verification buys
+        run: python -m pytest -q bot/tests/test_heartbeat_operator_buy_cap.py bot/tests/test_heartbeat_min_notional_local_defer_v431.py
       - name: Test prebot writer authority
         run: python -m pytest -q bot/tests/test_prebot_writer_authority_bootstrap.py
       - name: Test Render writer handoff
