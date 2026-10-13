@@ -53,6 +53,8 @@ class StartupPreflightTests(unittest.TestCase):
         }
         self.identity = types.SimpleNamespace(
             account_fingerprint="a" * 64, api_key_fingerprint="b" * 128,
+            permissions=frozenset({"query-funds", "query-open-trades", "query-closed-trades",
+                                   "query-ledger", "modify-trades", "close-trades"}),
             observed_at_epoch=time.time()
         )
         mocked = patch.object(V, "read_startup_broker_identity", return_value=self.identity)
@@ -101,6 +103,26 @@ class StartupPreflightTests(unittest.TestCase):
         with self.assertRaisesRegex(V.StartupPreflightError, "explicit_platform"):
             self.run_check()
         self.assertEqual(self.calls, [])
+
+    def test_missing_permission_prevents_all_account_mutation(self):
+        for permission in sorted(V._REQUIRED_KEY_PERMISSIONS):
+            with self.subTest(permission=permission):
+                original = self.identity.permissions
+                self.identity.permissions = original - {permission}
+                with self.assertRaisesRegex(V.StartupPreflightError, "permissions_insufficient"):
+                    self.run_check()
+                self.assertEqual(self.calls, [])
+                self.identity.permissions = original
+
+    def test_permission_metadata_must_be_authenticated(self):
+        for value in [None, "", "modify-trades", {"modify-trades": True}]:
+            with self.subTest(value=value):
+                original = self.identity.permissions
+                self.identity.permissions = value
+                with self.assertRaisesRegex(V.StartupPreflightError, "permissions_unverifiable"):
+                    self.run_check()
+                self.assertEqual(self.calls, [])
+                self.identity.permissions = original
 
     def test_credit_does_not_fund_spot_preflight(self):
         self.responses["BalanceEx"]["ZUSD"]["balance"] = "1"
@@ -188,6 +210,7 @@ class StartupPreflightTests(unittest.TestCase):
         rotated = types.SimpleNamespace(
             account_fingerprint=original.account_fingerprint,
             api_key_fingerprint="c" * 128,
+            permissions=original.permissions,
             observed_at_epoch=time.time(),
         )
         with patch.object(V, "read_startup_broker_identity",
