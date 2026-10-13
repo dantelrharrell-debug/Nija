@@ -194,6 +194,13 @@ class StartupPreflightTests(unittest.TestCase):
         with self.assertRaisesRegex(V.StartupPreflightError, "unexpected_order_id"):
             self.run_check()
 
+    def test_empty_txid_field_from_validation_is_rejected(self):
+        # An empty txid is still an unexpected schema for validation-only.
+        # Never assume an empty list proves no order was created.
+        self.responses["AddOrder"]["txid"] = []
+        with self.assertRaisesRegex(V.StartupPreflightError, "unexpected_order_id"):
+            self.run_check()
+
     def test_missing_native_protection_cannot_pass(self):
         for descr in [
             None, [], {}, {"order": []},
