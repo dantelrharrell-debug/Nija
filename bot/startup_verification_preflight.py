@@ -58,6 +58,13 @@ def _read(broker: Any, method: str, params: dict[str, Any],
     if method not in {"BalanceEx", "OpenOrders", "OpenPositions", "TradeVolume", "AddOrder"}:
         raise StartupPreflightError("startup_preflight_method_forbidden")
     if method == "AddOrder":
+        # Reject additional fields such as leverage, reduce-only, or order flags
+        # that have not been explicitly reviewed for this spot verification.
+        allowed = {"validate", "pair", "type", "ordertype", "volume", "price",
+                   "timeinforce", "oflags", "cl_ord_id", "close[ordertype]",
+                   "close[price]", "close[price2]"}
+        if set(params) - allowed:
+            raise StartupPreflightError("startup_preflight_order_parameter_not_allowlisted")
         if params.get("validate") is not True:
             raise StartupPreflightError("startup_preflight_real_order_forbidden")
         # Only a bounded, explicit limit entry with an attached stop may be
