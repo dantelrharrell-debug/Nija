@@ -70,6 +70,10 @@ class PlanTests(unittest.TestCase):
         self.assertEqual((close["type"], close["timeinforce"]), ("sell", "FOK"))
         self.assertEqual(len({entry["cl_ord_id"], protect["cl_ord_id"], close["cl_ord_id"]}), 3)
         for order in (entry, protect, close):
+            self.assertEqual(len(order["cl_ord_id"]), 18)
+            self.assertTrue(order["cl_ord_id"].isascii())
+            self.assertTrue(order["cl_ord_id"].isalnum())
+        for order in (entry, protect, close):
             self.assertRegex(order["cl_ord_id"], r"^[0-9a-f]{32}$")
             self.assertNotIn("leverage", order)
             self.assertNotIn("validate", order)
