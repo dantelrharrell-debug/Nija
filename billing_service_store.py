@@ -227,7 +227,7 @@ class BillingServiceStore:
                 if (
                     last_checkout is not None
                     and str(last_checkout).lower() not in {
-                        "expired", "mismatch", "failed",
+                        "expired",
                     }
                     and current_status not in {"canceled", "incomplete_expired"}
                 ):

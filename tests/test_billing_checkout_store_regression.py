@@ -38,6 +38,19 @@ def test_expired_checkout_can_be_replaced(tmp_path):
     assert store.latest_checkout_for_user("app-123")["checkout_session_id"] == "cs_2"
 
 
+@pytest.mark.parametrize("status", ["mismatch", "failed", "payment_failed"])
+def test_failed_checkout_cannot_be_replaced_without_confirmed_expiry(tmp_path, status):
+    store = new_store(tmp_path)
+    create(store, "cs_1")
+    store.set_checkout_status(
+        "cs_1", verification_status=status,
+        reason="unreconciled_failure", revoke_customer=True,
+    )
+    with pytest.raises(BillingIdentityMismatch):
+        create(store, "cs_2")
+    assert store.get_checkout("cs_2") is None
+
+
 def test_verified_trial_is_not_reset_by_checkout_race(tmp_path):
     store = new_store(tmp_path)
     create(store, "cs_1")

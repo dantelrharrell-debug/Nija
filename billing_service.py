@@ -514,8 +514,12 @@ def _validate_retry_session(session: Any, record: dict[str, Any]) -> None:
     )
     details = _obj_value(session, "customer_details", {}) or {}
     checkout_email = _normalized_email(_obj_value(details, "email"))
-    if checkout_email and checkout_email != _normalized_email(record["email"]):
+    supplied_email = _normalized_email(_obj_value(session, "customer_email"))
+    expected_email = _normalized_email(record["email"])
+    if any(email and email != expected_email for email in (checkout_email, supplied_email)):
         raise BillingContractViolation("checkout_customer_details_mismatch")
+    if not (checkout_email or supplied_email or _id_value(_obj_value(session, "customer"))):
+        raise BillingContractViolation("checkout_customer_identity_missing")
     if _id_value(_obj_value(session, "subscription")):
         raise BillingContractViolation("checkout_subscription_already_created")
     if record.get("verified"):
@@ -627,6 +631,11 @@ def create_app(store: Optional[BillingServiceStore] = None) -> Flask:
                 return jsonify({"error": "billing_offer_mismatch"}), 409
             if str(existing["status"]).lower() in {"active", "trialing", "past_due"} or existing["entitled"]:
                 return jsonify({"error": "subscription_already_exists"}), 409
+
+            if str(existing["status"]).lower() not in {
+                "checkout_created", "expired", "canceled", "incomplete_expired",
+            }:
+                return jsonify({"error": "subscription_or_checkout_already_exists"}), 409
 
             if str(existing["status"]).lower() in {"checkout_created", "expired"}:
                 if not latest:
