@@ -204,6 +204,26 @@ class _FetchProofProxy:
                 f"v285 authoritative snapshot publication failed: {type(exc).__name__}:{exc}"
             ) from exc
         if not snapshot_ok:
+            authority = _loaded_v285()
+            reason = "authority_unavailable"
+            if authority is not None:
+                try:
+                    status = getattr(authority, "_snapshot_status", None)
+                    if callable(status):
+                        _ok, reason, _rows, _age, _generation = status(broker)
+                except Exception as exc:
+                    reason = f"status_error:{type(exc).__name__}"
+            LOGGER.warning(
+                "POSITION_SYNC_V315_SNAPSHOT_REJECTED broker=%s reason=%s "
+                "canonical_generation=%s raw_generation=%s raw_rows_count=%s "
+                "returned_rows_count=%s fail_closed=true secrets_logged=false",
+                str(getattr(broker, "account_identifier", type(broker).__name__)),
+                reason,
+                getattr(broker, "_nija_authoritative_position_snapshot_generation_v285", None),
+                getattr(broker, "_nija_authoritative_position_raw_generation_v286", None),
+                len(getattr(broker, "_nija_authoritative_position_raw_rows_v286", ()) or ()),
+                len(result) if isinstance(result, list) else -1,
+            )
             object.__setattr__(self, "fetch_ok", False)
             object.__setattr__(self, "fetch_error", "v285_snapshot_publish_rejected")
             raise RuntimeError("v285 authoritative snapshot publication rejected")
