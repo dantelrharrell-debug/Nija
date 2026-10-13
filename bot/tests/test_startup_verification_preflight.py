@@ -189,6 +189,24 @@ class StartupPreflightTests(unittest.TestCase):
             self.run_check()
         self.assertNotIn("synthetic-secret", str(exc.exception))
 
+    def test_unreviewed_order_parameters_are_rejected_before_broker_call(self):
+        params = self.plan.order_parameters("entry")
+        params.update({"close[ordertype]": "stop-loss-limit",
+                       "close[price]": self.plan.stop_trigger,
+                       "close[price2]": self.plan.stop_limit,
+                       "validate": True})
+        for extra, value in [("leverage", "2"), ("reduce_only", True),
+                             ("trading_agreement", "agree")]:
+            with self.subTest(extra=extra):
+                self.calls.clear()
+                unsafe = dict(params)
+                unsafe[extra] = value
+                with self.assertRaisesRegex(
+                    V.StartupPreflightError, "order_parameter_not_allowlisted"
+                ):
+                    V._read(self.broker, "AddOrder", unsafe, self.assert_owner)
+                self.assertEqual(self.calls, [])
+
     def test_unexpected_order_id_from_validation_is_rejected(self):
         self.responses["AddOrder"]["txid"] = ["unexpected"]
         with self.assertRaisesRegex(V.StartupPreflightError, "unexpected_order_id"):
