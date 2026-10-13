@@ -13,6 +13,21 @@ class StartupAttemptAuditTests(unittest.TestCase):
         self.assertFalse(result["database_present"])
         self.assertEqual(result["unresolved_count"], 0)
 
+    def test_existing_directory_fails_closed(self):
+        with tempfile.TemporaryDirectory() as d:
+            result = inspect(Path(d))
+        self.assertFalse(result["proof_admissible_by_attempt_state"])
+        self.assertFalse(result["database_present"])
+        self.assertIsNotNone(result["error"])
+
+    def test_broken_symlink_fails_closed(self):
+        with tempfile.TemporaryDirectory() as d:
+            link = Path(d) / "broken.db"
+            link.symlink_to(Path(d) / "missing.db")
+            result = inspect(link)
+        self.assertFalse(result["proof_admissible_by_attempt_state"])
+        self.assertIsNotNone(result["error"])
+
     def test_unresolved_is_fail_closed_and_no_rows_modified(self):
         with tempfile.TemporaryDirectory() as d:
             path = Path(d) / "attempts.db"
