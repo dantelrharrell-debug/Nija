@@ -57,8 +57,18 @@ def _read(broker: Any, method: str, params: dict[str, Any],
           assert_nonce_owner: Callable[[], None]) -> dict[str, Any]:
     if method not in {"BalanceEx", "OpenOrders", "OpenPositions", "TradeVolume", "AddOrder"}:
         raise StartupPreflightError("startup_preflight_method_forbidden")
-    if method == "AddOrder" and params.get("validate") is not True:
-        raise StartupPreflightError("startup_preflight_real_order_forbidden")
+    if method == "AddOrder":
+        if params.get("validate") is not True:
+            raise StartupPreflightError("startup_preflight_real_order_forbidden")
+        # Only a bounded, explicit limit entry with an attached stop may be
+        # sent to Kraken's validation endpoint. Validation is not execution.
+        if (params.get("type") != "buy" or params.get("ordertype") != "limit"
+                or params.get("timeinforce") != "FOK"
+                or params.get("close[ordertype]") != "stop-loss-limit"
+                or not all(params.get(key) for key in (
+                    "pair", "volume", "price", "close[price]", "close[price2]"
+                ))):
+            raise StartupPreflightError("startup_preflight_unprotected_validation_forbidden")
     assert_nonce_owner()
     call = getattr(broker, "_kraken_private_call", None)
     if not callable(call):
