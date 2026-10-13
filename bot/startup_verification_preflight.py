@@ -181,7 +181,10 @@ def run_kraken_startup_preflight(
         raise StartupPreflightError("startup_preflight_open_orders_incomplete")
     if orders["open"]:
         raise StartupPreflightError("startup_preflight_open_orders_require_review")
-    if _read(broker, "OpenPositions", {}, assert_nonce_owner):
+    # OpenPositions is keyed by position ID; any nonempty response represents
+    # outstanding margin exposure and cannot be waived for startup.
+    positions = _read(broker, "OpenPositions", {}, assert_nonce_owner)
+    if positions:
         raise StartupPreflightError("startup_preflight_margin_positions_require_review")
 
     fees = _read(broker, "TradeVolume", {"pair": plan.pair}, assert_nonce_owner)
