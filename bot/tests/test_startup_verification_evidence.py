@@ -154,12 +154,14 @@ class EvidenceTests(unittest.TestCase):
 
     def test_readonly_validation_rejects_unlisted_fields_or_order_id(self):
         params = {"pair": "XBTUSD", "type": "buy", "ordertype": "limit", "volume": "0.001"}
-        for change in ["unknown_field", "txid"]:
+        for change in ["unknown_field", "txid", "empty_txid"]:
             with self.subTest(change=change):
                 broker = Broker()
                 data = dict(params)
                 if change == "unknown_field":
                     data["withdraw"] = True
+                elif change == "empty_txid":
+                    broker.responses["AddOrder"]["txid"] = []
                 else:
                     broker.responses["AddOrder"]["txid"] = ["unexpected"]
                 with self.assertRaises(E.StartupEvidenceError):
