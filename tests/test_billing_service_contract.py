@@ -453,7 +453,9 @@ def test_retry_requires_authoritative_customer_identity(
         assert response.get_json()["reused_checkout"] is True
 
 
-@pytest.mark.parametrize("status", ["mismatch", "payment_failed", "failed", "unpaid", "unknown"])
+@pytest.mark.parametrize("status", [
+    "mismatch", "payment_failed", "failed", "unpaid", "unknown", "canceled", "incomplete_expired",
+])
 def test_unreconciled_customer_state_never_creates_remote_checkout(monkeypatch, tmp_path, status):
     app, store = _configured_app(monkeypatch, tmp_path)
     state, stripe = _stripe_fixture()

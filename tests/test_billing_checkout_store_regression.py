@@ -1,5 +1,6 @@
 """Regression tests for safe NIJA checkout persistence during concurrent retries."""
 import pytest
+from sqlalchemy import update
 
 from billing_service_store import BillingIdentityMismatch, BillingServiceStore
 
@@ -46,6 +47,17 @@ def test_failed_checkout_cannot_be_replaced_without_confirmed_expiry(tmp_path, s
         "cs_1", verification_status=status,
         reason="unreconciled_failure", revoke_customer=True,
     )
+    with pytest.raises(BillingIdentityMismatch):
+        create(store, "cs_2")
+    assert store.get_checkout("cs_2") is None
+
+
+@pytest.mark.parametrize("status", ["canceled", "incomplete_expired"])
+def test_delayed_terminal_subscription_does_not_allow_pending_checkout_replacement(tmp_path, status):
+    store = new_store(tmp_path)
+    create(store, "cs_1")
+    with store.engine.begin() as conn:
+        conn.execute(update(store.customers).values(status=status))
     with pytest.raises(BillingIdentityMismatch):
         create(store, "cs_2")
     assert store.get_checkout("cs_2") is None

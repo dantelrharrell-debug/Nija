@@ -633,7 +633,7 @@ def create_app(store: Optional[BillingServiceStore] = None) -> Flask:
                 return jsonify({"error": "subscription_already_exists"}), 409
 
             if str(existing["status"]).lower() not in {
-                "checkout_created", "expired", "canceled", "incomplete_expired",
+                "checkout_created", "expired",
             }:
                 return jsonify({"error": "subscription_or_checkout_already_exists"}), 409
 
