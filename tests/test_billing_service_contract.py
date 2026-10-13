@@ -461,6 +461,32 @@ def test_expired_checkout_creates_new_pending_session(monkeypatch, tmp_path):
     assert store.latest_checkout_for_user("application-123")["checkout_session_id"] == "cs_nija_2"
 
 
+def test_idempotent_checkout_collision_never_expires_another_session(monkeypatch, tmp_path):
+    app, store = _configured_app(monkeypatch, tmp_path)
+    state, stripe = _stripe_fixture()
+    monkeypatch.setattr(billing, "_stripe_module", lambda: stripe)
+    client = app.test_client()
+    assert _create_checkout(client).status_code == 200
+
+    store.set_checkout_status(
+        "cs_nija_1", verification_status="expired",
+        reason="stripe_checkout_expired", revoke_customer=True,
+    )
+    stripe_session = _valid_checkout_session(payment_status="unpaid")
+    stripe_session.update({"status": "expired", "customer": None, "subscription": None})
+    state["session"] = stripe_session
+
+    def unexpected_expiry(_session_id):
+        raise AssertionError("idempotency collision must not expire an existing session")
+
+    stripe.checkout.Session.expire = unexpected_expiry
+    response = _create_checkout(client)
+    assert response.status_code == 409
+    assert response.get_json()["error"] == "checkout_identity_conflict"
+    assert store.get_customer("application-123")["status"] == "expired"
+    assert store.get_checkout("cs_nija_1")["verification_status"] == "expired"
+
+
 def test_readyz_verifies_authoritative_billing_dependencies(monkeypatch, tmp_path):
     app, _store = _configured_app(monkeypatch, tmp_path)
     monkeypatch.setenv("NIJA_BILLING_PUBLIC_URL", "https://billing.example.test")
