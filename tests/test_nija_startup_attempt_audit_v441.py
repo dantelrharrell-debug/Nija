@@ -1,0 +1,44 @@
+"""Regression tests for read-only startup-attempt diagnosis."""
+import sqlite3
+from pathlib import Path
+import tempfile
+import unittest
+from scripts.nija_startup_attempt_audit_v441 import inspect
+
+
+class StartupAttemptAuditTests(unittest.TestCase):
+    def test_missing_database_does_not_claim_execution_proof(self):
+        with tempfile.TemporaryDirectory() as d:
+            result = inspect(Path(d) / "missing.db")
+        self.assertFalse(result["database_present"])
+        self.assertEqual(result["unresolved_count"], 0)
+
+    def test_unresolved_is_fail_closed_and_no_rows_modified(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "attempts.db"
+            connection = sqlite3.connect(path)
+            connection.execute("CREATE TABLE startup_attempts (state TEXT)")
+            connection.executemany("INSERT INTO startup_attempts(state) VALUES(?)",
+                                   [("claimed",), ("completed",), ("entry_pending",)])
+            connection.commit()
+            connection.close()
+            before = path.read_bytes()
+            result = inspect(path)
+            after = path.read_bytes()
+        self.assertEqual(before, after)
+        self.assertTrue(result["readable"])
+        self.assertEqual(result["unresolved_count"], 2)
+        self.assertFalse(result["proof_admissible_by_attempt_state"])
+
+    def test_invalid_schema_fails_closed(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "attempts.db"
+            with sqlite3.connect(path) as connection:
+                connection.execute("CREATE TABLE unrelated (id INTEGER)")
+            result = inspect(path)
+        self.assertFalse(result["proof_admissible_by_attempt_state"])
+        self.assertEqual(result["error"], "OperationalError")
+
+
+if __name__ == "__main__":
+    unittest.main()
