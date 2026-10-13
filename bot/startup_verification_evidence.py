@@ -218,8 +218,15 @@ def startup_attempts_allow_execution_proof(*, path: Optional[Path] = None) -> bo
             return True
         connection = sqlite3.connect(target.as_uri() + "?mode=ro", uri=True, timeout=1.0)
         connection.execute("PRAGMA query_only=ON")
+        # A bare 'completed' flag is not execution evidence. Both genuine
+        # broker order IDs must be recorded before the startup attempt can
+        # stop vetoing activation. This predicate does not itself create proof:
+        # the canonical fill/ledger and protective-exit gates remain required.
         row = connection.execute(
-            "SELECT COUNT(*) FROM startup_attempts WHERE state != 'completed'"
+            "SELECT COUNT(*) FROM startup_attempts "
+            "WHERE state != 'completed' "
+            "OR TRIM(entry_order_id) = '' "
+            "OR TRIM(exit_order_id) = ''"
         ).fetchone()
         return row is not None and row[0] == 0
     except (StartupEvidenceError, sqlite3.Error, OSError):

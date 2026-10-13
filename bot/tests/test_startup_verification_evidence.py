@@ -332,7 +332,12 @@ class DurableAttemptTests(unittest.TestCase):
         for state in ["claimed", "entry_pending", "entry_filled", "exit_pending", "state_unknown"]:
             E.record_startup_attempt(self.identity, state, path=self.path)
             self.assertFalse(E.startup_attempts_allow_execution_proof(path=self.path))
+        # A status-only completion is not a verified round trip.
         E.record_startup_attempt(self.identity, "completed", path=self.path)
+        self.assertFalse(E.startup_attempts_allow_execution_proof(path=self.path))
+        E.record_startup_attempt(self.identity, "completed", entry_order_id="BUY", path=self.path)
+        self.assertFalse(E.startup_attempts_allow_execution_proof(path=self.path))
+        E.record_startup_attempt(self.identity, "completed", exit_order_id="SELL", path=self.path)
         self.assertTrue(E.startup_attempts_allow_execution_proof(path=self.path))
 
     def test_corrupt_attempt_store_cannot_publish_proof(self):
