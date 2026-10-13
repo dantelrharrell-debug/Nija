@@ -113,7 +113,9 @@ def validate_readonly_startup_order(broker: Any, params: Mapping[str, Any]) -> d
     if not isinstance(response, Mapping) or response.get("error"):
         raise StartupEvidenceError("readonly_order_validation_rejected")
     result = response.get("result")
-    if not isinstance(result, Mapping) or result.get("txid"):
+    # Even an empty txid is an unexpected response from validate-only AddOrder.
+    # Reject the field's presence rather than its truthiness.
+    if not isinstance(result, Mapping) or "txid" in result:
         raise StartupEvidenceError("readonly_validation_result_unexpected")
     description = result.get("descr")
     if not isinstance(description, Mapping) or not description.get("order"):
