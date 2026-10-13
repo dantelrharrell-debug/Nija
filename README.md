@@ -1,6 +1,48 @@
 # NIJA AI Trading LLC — Trading Platform Architecture & Recovery Guide
 
 **Project:** `Nija_Trading_Bot`  
+**Documentation updated:** October 12, 2026 (Pacific)  
+**Scope:** Repository changes and recovery guidance. This update does not perform or certify a live production audit.
+
+## Repository recovery work — October 12, 2026
+
+The following status is based on the linked public pull requests. A merge,
+passing CI, process health or broker connection does not by itself prove that
+the deployed system is ready for live execution.
+
+| Change | Repository status at review | Scope and remaining work |
+| --- | --- | --- |
+| [#3054](https://github.com/dantelrharrell-debug/Nija/pull/3054) — v339 installer compatibility | Merged | Preserves unfinished-attempt and provenance checks; the offline planner is not connected to a bounded native-protected live transport |
+| [#3056](https://github.com/dantelrharrell-debug/Nija/pull/3056) — CI process isolation | Merged | Isolates unittest batches and retains the 2,554-test minimum and exact known-failure baseline |
+| [#3059](https://github.com/dantelrharrell-debug/Nija/pull/3059) — proof-provenance diagnostics | Merged | Tests expose differing v16/v169 provenance contracts; this is diagnostic coverage, not a repaired acceptance gate |
+| [#3060](https://github.com/dantelrharrell-debug/Nija/pull/3060) — historical replay-age logging | Merged | Adds event/marker age diagnostics without refreshing proof or changing authorization |
+| [#3062](https://github.com/dantelrharrell-debug/Nija/pull/3062) — read-only startup-attempt audit | Merged | Diagnostic tool and regression tests; no order placement or database mutation |
+| [#3063](https://github.com/dantelrharrell-debug/Nija/pull/3063) — audit path checks and mandatory CI coverage | Open | Follow-up for directories/broken symlinks; do not assume merged or deployed |
+
+### Recovery verification priorities
+
+1. Review the execution-proof provenance contract and unfinished startup-attempt
+   evidence. Preserve authentic broker-event timestamps and fail-closed authority.
+2. Complete and verify the canonical bounded native-protected transport before
+   treating an offline plan as executable. Planning does not authorize an order.
+3. Verify the actual deployed revision and current broker/account capital,
+   positions, open orders, protective exits, accounting provenance and storage
+   durability through the canonical safety gates.
+4. Start a new 24-hour observation only after all required readiness checks pass.
+   Review the whole interval before certifying completion.
+
+**Deployment boundary:** Keep documentation updates on a branch/PR until hosted
+checks and the production release window are reviewed. Main-branch changes can
+trigger service deployments.
+
+---
+
+## Historical production snapshot — October 8–9, 2026
+
+The original lead snapshot below is retained for incident context. Its
+deployment, connectivity, readiness and observation values are dated evidence,
+not the current production state.
+
 **Latest production recheck:** October 9, 2026, 00:19 UTC (October 8, 5:19 PM Pacific)  
 **Latest verified live Render deployment:** `dep-db431ac9v7es73a861rg`  
 **Deployed commit:** `2da43f35ecf68440197908b2fab18dbb63173b0e` (PR #2975, observer packaging repair)  
