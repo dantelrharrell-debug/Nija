@@ -58,3 +58,57 @@ def test_verified_trial_is_not_reset_by_checkout_race(tmp_path):
     assert store.get_customer("app-123")["entitled"] is True
     assert store.get_customer("app-123")["stripe_subscription_id"] == "sub_1"
     assert store.get_checkout("cs_2") is None
+
+
+@pytest.mark.parametrize("delayed_status", ["expired", "payment_failed"])
+def test_delayed_stripe_failure_does_not_revoke_verified_trial(tmp_path, delayed_status):
+    store = new_store(tmp_path)
+    create(store, "cs_1")
+    store.mark_checkout_verified(
+        session_id="cs_1", customer_id="cus_1",
+        subscription_id="sub_1", payment_status="no_payment_required",
+    )
+    assert store.apply_subscription_state(
+        user_id="app-123", customer_id="cus_1", subscription_id="sub_1",
+        status="trialing", offer_code="founding_beta",
+        current_period_end=1999999999, entitled=True,
+        reason="authoritative_subscription_state", event_created=100,
+    )
+    assert store.verification_record("cs_1")["verified"] is True
+
+    store.set_checkout_status(
+        "cs_1", verification_status=delayed_status,
+        reason="out_of_order_stripe_event", verified=False,
+        revoke_customer=True,
+    )
+
+    customer = store.get_customer("app-123")
+    assert customer["status"] == "trialing"
+    assert customer["entitled"] is True
+    assert customer["stripe_subscription_id"] == "sub_1"
+    checkout = store.get_checkout("cs_1")
+    assert checkout["verified"] is True
+    assert checkout["verification_status"] == "validated"
+    assert store.verification_record("cs_1")["verified"] is True
+
+
+def test_security_mismatch_still_revokes_verified_trial(tmp_path):
+    store = new_store(tmp_path)
+    create(store, "cs_1")
+    store.mark_checkout_verified(
+        session_id="cs_1", customer_id="cus_1",
+        subscription_id="sub_1", payment_status="no_payment_required",
+    )
+    assert store.apply_subscription_state(
+        user_id="app-123", customer_id="cus_1", subscription_id="sub_1",
+        status="trialing", offer_code="founding_beta",
+        current_period_end=1999999999, entitled=True,
+        reason="authoritative_subscription_state", event_created=100,
+    )
+
+    store.mark_checkout_mismatch("cs_1", "stripe_customer_identity_mismatch")
+
+    assert store.get_customer("app-123")["entitled"] is False
+    assert store.get_customer("app-123")["status"] == "mismatch"
+    assert store.get_checkout("cs_1")["verified"] is False
+    assert store.verification_record("cs_1")["verified"] is False
