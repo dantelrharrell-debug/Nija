@@ -170,6 +170,20 @@ class BillingServiceStore:
             ).first()
         return self._row_dict(row)
 
+    def latest_checkout_for_user(self, user_id: str) -> Optional[dict[str, Any]]:
+        """Find the latest NIJA-created Checkout Session for safe retry decisions."""
+        with self.engine.connect() as conn:
+            row = conn.execute(
+                select(self.checkout_sessions)
+                .where(self.checkout_sessions.c.nija_user_id == user_id)
+                .order_by(
+                    self.checkout_sessions.c.created_at.desc(),
+                    self.checkout_sessions.c.checkout_session_id.desc(),
+                )
+                .limit(1)
+            ).first()
+        return self._row_dict(row)
+
     def create_checkout(
         self,
         *,
@@ -335,16 +349,28 @@ class BillingServiceStore:
                 .values(**values)
             )
             if revoke_customer:
-                conn.execute(
-                    update(self.customers)
-                    .where(self.customers.c.nija_user_id == user_id)
-                    .values(
-                        status=verification_status,
-                        entitled=False,
-                        entitlement_reason=reason,
-                        updated_at=now,
+                # A delayed expiration/failure from an abandoned checkout must
+                # never revoke a newer checkout or verified subscription.
+                latest = conn.execute(
+                    select(self.checkout_sessions.c.checkout_session_id)
+                    .where(self.checkout_sessions.c.nija_user_id == user_id)
+                    .order_by(
+                        self.checkout_sessions.c.created_at.desc(),
+                        self.checkout_sessions.c.checkout_session_id.desc(),
                     )
-                )
+                    .limit(1)
+                ).scalar_one_or_none()
+                if latest == session_id:
+                    conn.execute(
+                        update(self.customers)
+                        .where(self.customers.c.nija_user_id == user_id)
+                        .values(
+                            status=verification_status,
+                            entitled=False,
+                            entitlement_reason=reason,
+                            updated_at=now,
+                        )
+                    )
 
     def mark_checkout_mismatch(self, session_id: str, reason: str) -> None:
         self.set_checkout_status(
