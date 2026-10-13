@@ -24,7 +24,7 @@ def inspect(path: Path) -> dict:
                 "SELECT state, COUNT(*) FROM startup_attempts GROUP BY state"
             ).fetchall()
         counts = {str(state): int(count) for state, count in rows}
-        unresolved = sum(count for state, count in counts.items() if state != "completed")
+        unresolved = connection.execute("SELECT COUNT(*) FROM startup_attempts WHERE state != 'completed' OR TRIM(entry_order_id) = '' OR TRIM(exit_order_id) = ''").fetchone()[0]
         result.update(readable=True, state_counts=counts, unresolved_count=unresolved,
                       proof_admissible_by_attempt_state=(unresolved == 0))
     except (sqlite3.Error, OSError, ValueError) as exc:
