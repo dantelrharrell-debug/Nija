@@ -225,11 +225,8 @@ class BillingServiceStore:
                     .limit(1)
                 ).scalar_one_or_none()
                 if (
-                    last_checkout is not None
-                    and str(last_checkout).lower() not in {
-                        "expired", "mismatch", "failed",
-                    }
-                    and current_status not in {"canceled", "incomplete_expired"}
+                    last_checkout is None
+                    or str(last_checkout).lower() != "expired"
                 ):
                     raise BillingIdentityMismatch("an earlier checkout still needs reconciliation")
                 conn.execute(

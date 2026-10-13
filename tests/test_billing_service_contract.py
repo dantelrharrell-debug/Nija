@@ -5,6 +5,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import jwt
+import pytest
+from sqlalchemy import update
 
 import billing_service as billing
 from billing_service_store import BillingServiceStore
@@ -419,6 +421,52 @@ def test_second_checkout_reuses_open_session(monkeypatch, tmp_path):
     assert second.status_code == 200
     assert second.get_json()["reused_checkout"] is True
     assert second.get_json()["checkout_session_id"] == "cs_nija_1"
+
+
+@pytest.mark.parametrize("details,email,customer,expected", [
+    (None, "member@example.test", None, 200),
+    (None, "other@example.test", None, 409),
+    (None, None, None, 409),
+    ({"email": "member@example.test"}, "other@example.test", None, 409),
+    (None, None, "cus_1", 200),
+])
+def test_retry_requires_authoritative_customer_identity(
+    monkeypatch, tmp_path, details, email, customer, expected,
+):
+    app, _store = _configured_app(monkeypatch, tmp_path)
+    state, stripe = _stripe_fixture()
+    monkeypatch.setattr(billing, "_stripe_module", lambda: stripe)
+    client = app.test_client()
+    assert _create_checkout(client).status_code == 200
+    session = _valid_checkout_session(payment_status="unpaid")
+    session.update({
+        "status": "open", "expires_at": 1999999999,
+        "url": "https://checkout.stripe.test/cs_nija_1",
+        "customer_details": details, "customer_email": email,
+        "customer": customer, "subscription": None,
+    })
+    state["session"] = session
+    stripe.checkout.Session.create = lambda **_kw: pytest.fail("retry created a duplicate checkout")
+    response = _create_checkout(client)
+    assert response.status_code == expected
+    if expected == 200:
+        assert response.get_json()["reused_checkout"] is True
+
+
+@pytest.mark.parametrize("status", [
+    "mismatch", "payment_failed", "failed", "unpaid", "unknown", "canceled", "incomplete_expired",
+])
+def test_unreconciled_customer_state_never_creates_remote_checkout(monkeypatch, tmp_path, status):
+    app, store = _configured_app(monkeypatch, tmp_path)
+    state, stripe = _stripe_fixture()
+    monkeypatch.setattr(billing, "_stripe_module", lambda: stripe)
+    client = app.test_client()
+    assert _create_checkout(client).status_code == 200
+    with store.engine.begin() as conn:
+        conn.execute(update(store.customers).values(status=status))
+    stripe.checkout.Session.create = lambda **_kw: pytest.fail("unreconciled state created a remote checkout")
+    assert _create_checkout(client).status_code == 409
+
 
 def test_checkout_with_missing_expiry_fails_closed(monkeypatch, tmp_path):
     app, _store = _configured_app(monkeypatch, tmp_path)
