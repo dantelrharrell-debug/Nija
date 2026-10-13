@@ -121,80 +121,32 @@ class TestHeartbeatEmptyMarketFallback(unittest.TestCase):
             broker._last_known_balance = 100.0
         return strategy
 
-    def test_heartbeat_proceeds_when_market_discovery_returns_empty(self):
-        """When get_available_markets() returns [], heartbeat falls back and executes."""
-        from bot.trading_strategy import TradingStrategy
-
+    def test_heartbeat_rejects_unprotected_entry_even_without_market_data(self):
         broker = MagicMock()
         broker.connected = True
         broker.get_available_markets = MagicMock(return_value=[])
-        # Remove get_all_products so only get_available_markets path is exercised
-        del broker.get_all_products
-
         strategy = self._make_strategy_with_broker(broker)
+        self.assertFalse(strategy._execute_heartbeat_trade())
+        broker.get_available_markets.assert_not_called()
+        self._pipeline_mock.assert_not_called()
 
-        result = strategy._execute_heartbeat_trade()
-        # Heartbeat must succeed — it falls back to _HEARTBEAT_TRADE_SYMBOL
-        self.assertTrue(result, "Heartbeat must succeed even when market discovery returns empty")
-
-    def test_market_discovery_count_logged(self):
-        """[HeartbeatTrade] market_discovery_count=%s is emitted during execution."""
+    def test_unprotected_heartbeat_emits_fail_closed_log(self):
         import logging
-
         broker = MagicMock()
-        broker.connected = True
-        broker.get_available_markets = MagicMock(return_value=['BTC-USD', 'ETH-USD', 'SOL-USD'])
-
         strategy = self._make_strategy_with_broker(broker)
+        with self.assertLogs("nija.trading_strategy", level="ERROR") as captured:
+            self.assertFalse(strategy._execute_heartbeat_trade())
+        self.assertTrue(any("HEARTBEAT_LEGACY_MARKET_ENTRY_FORBIDDEN" in line for line in captured.output))
+        self._pipeline_mock.assert_not_called()
 
-        log_records = []
-
-        class _Capture(logging.Handler):
-            def emit(self, record):
-                log_records.append(record.getMessage())
-
-        handler = _Capture()
-        ts_logger = logging.getLogger('nija.trading_strategy')
-        ts_logger.addHandler(handler)
-        ts_logger.setLevel(logging.DEBUG)
-        try:
-            strategy._execute_heartbeat_trade()
-        finally:
-            ts_logger.removeHandler(handler)
-
-        matching = [m for m in log_records if 'market_discovery_count' in m]
-        self.assertTrue(
-            matching,
-            "[HeartbeatTrade] market_discovery_count structured log line must be emitted",
-        )
-
-    def test_heartbeat_writes_marker_and_uses_safe_minimum_size(self):
-        """Successful heartbeat writes verification marker and uses >= $10 notional."""
-        broker = MagicMock()
-        broker.connected = True
-        broker.get_available_markets = MagicMock(return_value=["BTC-USD"])
-
-        strategy = self._make_strategy_with_broker(broker)
-
+    def test_legacy_heartbeat_never_writes_execution_marker(self):
+        strategy = self._make_strategy_with_broker(MagicMock())
         with tempfile.TemporaryDirectory() as tmp:
             marker_path = f"{tmp}/heartbeat_verified.flag"
             with patch.dict("os.environ", {"HEARTBEAT_MARKER_PATH": marker_path}, clear=False):
-                result = strategy._execute_heartbeat_trade()
-
-            self.assertTrue(result, "Heartbeat should succeed and persist marker")
-            with open(marker_path, "r", encoding="utf-8") as marker_file:
-                marker_payload = json.load(marker_file)
-            self.assertTrue(marker_payload.get("verified"))
-            self.assertIn(marker_payload.get("stage"), ("ORDER_VERIFY", "FILL_VERIFY"))
-            self.assertIsNotNone(marker_payload.get("verified_at_epoch"))
-
-        # Verify the pipeline was called with a quantity >= $10 (safe minimum notional)
-        buy_call = self._pipeline_mock.call_args_list[0]
-        self.assertGreaterEqual(
-            float(buy_call.kwargs.get("quantity", 0.0)),
-            10.0,
-            "Heartbeat buy should be safely sized above micro-order thresholds",
-        )
+                self.assertFalse(strategy._execute_heartbeat_trade())
+            self.assertFalse(Path(marker_path).exists())
+        self._pipeline_mock.assert_not_called()
 
     def test_heartbeat_order_verify_does_not_override_confirmed_fill_truth(self):
         broker = MagicMock()
@@ -377,51 +329,27 @@ class TestHeartbeatEmptyMarketFallback(unittest.TestCase):
             self.assertFalse(result, "FILL_VERIFY should fail when buy order is accepted but not filled")
             self.assertFalse(Path(marker_path).exists())
 
-    def test_heartbeat_marker_refresh_updates_timestamp(self):
-        broker = MagicMock()
-        broker.connected = True
-        broker.get_available_markets = MagicMock(return_value=["BTC-USD"])
-        strategy = self._make_strategy_with_broker(broker)
+    def test_legacy_heartbeat_cannot_refresh_proof_timestamp(self):
+        strategy = self._make_strategy_with_broker(MagicMock())
         with tempfile.TemporaryDirectory() as tmp:
             marker_path = f"{tmp}/heartbeat_verified.flag"
             with patch.dict("os.environ", {"HEARTBEAT_MARKER_PATH": marker_path}, clear=False):
-                self.assertTrue(strategy._execute_heartbeat_trade())
-                with open(marker_path, "r", encoding="utf-8") as marker_file:
-                    first_payload = json.loads(marker_file.read())
-                time.sleep(0.02)
-                self.assertTrue(strategy._execute_heartbeat_trade())
-                with open(marker_path, "r", encoding="utf-8") as marker_file:
-                    second_payload = json.loads(marker_file.read())
-            self.assertGreater(
-                float(second_payload.get("verified_at_epoch", 0)),
-                float(first_payload.get("verified_at_epoch", 0)),
-                "Successful re-verification should refresh marker timestamp",
-            )
+                self.assertFalse(strategy._execute_heartbeat_trade())
+                self.assertFalse(strategy._execute_heartbeat_trade())
+            self.assertFalse(Path(marker_path).exists())
+        self._pipeline_mock.assert_not_called()
 
-    def test_heartbeat_executes_with_startup_probe_scopes(self):
-        broker = MagicMock()
-        broker.connected = True
-        broker.get_available_markets = MagicMock(return_value=["BTC-USD"])
-        strategy = self._make_strategy_with_broker(broker)
-        reasons: list[str] = []
-
+    def test_legacy_heartbeat_never_enters_startup_order_scopes(self):
+        strategy = self._make_strategy_with_broker(MagicMock())
+        reasons = []
         @contextmanager
         def _capture_scope(reason):
             reasons.append(reason)
             yield
-
         with patch("bot.trading_strategy.startup_execution_probe_scope", side_effect=_capture_scope):
-            self.assertTrue(strategy._execute_heartbeat_trade())
-
-        # The auth probe (AUTH_VERIFY stage) also uses HEARTBEAT_TRADE scope; the buy
-        # order and the sell-close order use HEARTBEAT_TRADE and HEARTBEAT_TRADE_CLOSE
-        # respectively.  Assert that both buy and close scopes are present in order.
-        self.assertIn("HEARTBEAT_TRADE", reasons, "Buy scope must be tagged HEARTBEAT_TRADE")
-        self.assertIn("HEARTBEAT_TRADE_CLOSE", reasons, "Close scope must be tagged HEARTBEAT_TRADE_CLOSE")
-        hb_idx = next(i for i, r in enumerate(reasons) if r == "HEARTBEAT_TRADE")
-        close_idx = next(i for i, r in enumerate(reasons) if r == "HEARTBEAT_TRADE_CLOSE")
-        self.assertLess(hb_idx, close_idx, "HEARTBEAT_TRADE scope must precede HEARTBEAT_TRADE_CLOSE scope")
-
+            self.assertFalse(strategy._execute_heartbeat_trade())
+        self.assertEqual(reasons, [])
+        self._pipeline_mock.assert_not_called()
 
 class TestHeartbeatExecutesOnDiscoveryFailure(unittest.TestCase):
     """Heartbeat executor continues when market discovery raises an exception."""

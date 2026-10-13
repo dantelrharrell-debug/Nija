@@ -458,95 +458,51 @@ class DurableAttemptTests(unittest.TestCase):
 
 
 class FlowTests(unittest.TestCase):
+    """Legacy startup heartbeat must never initiate a capital-bearing order."""
+
     def setUp(self):
-        self.directory = tempfile.TemporaryDirectory()
-        # Executing the extracted order flow must never import bot bootstrap or
-        # start runtime patch workers, including on a complete CI checkout.
-        state_machine = types.ModuleType("bot.trading_state_machine")
-        state_machine.report_execution_anomaly = lambda *_: None
-        self.runtime_imports = patch.dict(sys.modules, {"bot.trading_state_machine": state_machine})
-        self.runtime_imports.start()
-        self.broker = Broker()
-        identity = E.read_startup_broker_identity(self.broker)
-        self.environment = patch.dict(os.environ, {
-            "NIJA_STARTUP_ATTEMPT_DB": str(Path(self.directory.name) / "attempts.db"),
-            "NIJA_HEARTBEAT_ACCOUNT_FINGERPRINT": identity.account_fingerprint,
-        })
-        self.environment.start()
-        self.submits = []
-        self.markers = []
-        self.payloads = [dict(status="filled", order_id="BUY", filled_price=1000.0, filled_size_usd=10.0),
-                         dict(status="filled", order_id="SELL", filled_price=750.0, filled_size_usd=6.75)]
-        def submit(**kwargs):
-            self.submits.append(kwargs)
-            return dict(self.payloads[len(self.submits) - 1])
-        extra = {name: getattr(E, name) for name in ["StartupEvidenceError", "claim_startup_attempt",
-                 "read_startup_broker_identity", "read_startup_fill_evidence", "record_startup_attempt"]}
-        extra.update(_HEARTBEAT_TRADE_SYMBOL="BTC-USD", _HEARTBEAT_CONFIRMED_FILL_STATUS="filled",
-                     _HEARTBEAT_ACKNOWLEDGED_STATUSES=frozenset({"pending", "submitted", "accepted", "open"}),
-                     format_broker_identity=lambda _: "kraken:platform",
-                     _heartbeat_required_stage=lambda: "FILL_VERIFY",
-                     _heartbeat_stage_is_sufficient=lambda stage, required: stage == required,
-                     _heartbeat_rate_limited_info=lambda *_: None,
-                     startup_execution_probe_scope=lambda _: nullcontext(),
-                     runtime_correlation_scope=lambda **_: nullcontext(), submit_market_order_via_pipeline=submit,
-                     _bounded_heartbeat_market_discovery=lambda *_: [])
-        self.env = extracted("trading_strategy.py", ["_positive_float", "_heartbeat_result_is_confirmed_fill",
-                             "_heartbeat_result_has_confirmed_submission", "_execute_heartbeat_trade"], extra)
-        self.strategy = types.SimpleNamespace(_get_heartbeat_broker=lambda: self.broker,
-                         _resolve_heartbeat_trade_amount_usd=lambda _: 10.0,
-                         _heartbeat_auth_verify=lambda _: (True, "fixture-auth"),
-                         _persist_heartbeat_marker=lambda **kwargs: self.markers.append(kwargs))
+        self.calls = []
+        def forbidden(name):
+            def _call(*args, **kwargs):
+                self.calls.append((name, args, kwargs))
+                raise AssertionError("legacy heartbeat must not call " + name)
+            return _call
+        self.forbidden = forbidden
+        self.env = extracted(
+            "trading_strategy.py",
+            ["_execute_heartbeat_trade"],
+            {
+                "claim_startup_attempt": forbidden("claim_startup_attempt"),
+                "submit_market_order_via_pipeline": forbidden("submit_market_order_via_pipeline"),
+                "read_startup_broker_identity": forbidden("read_startup_broker_identity"),
+            },
+        )
+        self.strategy = types.SimpleNamespace(
+            _get_heartbeat_broker=forbidden("_get_heartbeat_broker"),
+            _persist_heartbeat_marker=forbidden("_persist_heartbeat_marker"),
+        )
 
-    def tearDown(self):
-        self.runtime_imports.stop()
-        self.environment.stop()
-        self.directory.cleanup()
+    def test_unprotected_heartbeat_never_calls_broker_or_publishes_proof(self):
+        for _ in range(2):
+            self.assertFalse(self.env["_execute_heartbeat_trade"](self.strategy))
+        self.assertEqual(self.calls, [])
 
-    def test_closes_exact_fee_adjusted_base_and_explicit_exit(self):
-        self.assertTrue(self.env["_execute_heartbeat_trade"](self.strategy))
-        close = self.submits[1]
-        self.assertEqual(close["quantity"], 0.009)
-        self.assertEqual(close["size_type"], "base")
-        self.assertEqual(close["intent_type"], "exit")
-        self.assertEqual(close["position_effect"], "close")
-        self.assertTrue(close["reduce_only_override"])
-        self.assertEqual(len(self.markers), 1)
-        self.assertLess(self.markers[0]["details"]["broker_execution_epoch"], time.time())
-        self.assertFalse(self.env["_execute_heartbeat_trade"](self.strategy))
-        self.assertEqual(len(self.submits), 2)
-
-    def test_missing_or_wrong_account_lock_prevents_entry(self):
-        for value in ["", "b" * 64]:
-            with self.subTest(value=value), patch.dict(os.environ, {"NIJA_HEARTBEAT_ACCOUNT_FINGERPRINT": value}):
+    def test_legacy_entry_is_blocked_even_if_old_heartbeat_flags_are_set(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db = Path(directory) / "attempts.db"
+            with patch.dict(os.environ, {
+                "NIJA_HEARTBEAT_ACCOUNT_FINGERPRINT": "a" * 64,
+                "NIJA_HEARTBEAT_TRADE_ENABLED": "true",
+                "NIJA_HEARTBEAT_TRADE_AMOUNT_USD": "5",
+                "NIJA_STARTUP_ATTEMPT_DB": str(db),
+            }):
                 self.assertFalse(self.env["_execute_heartbeat_trade"](self.strategy))
-        self.assertEqual(self.submits, [])
+            self.assertFalse(db.exists(), "blocked legacy entry must not claim persistent attempt")
+        self.assertEqual(self.calls, [])
 
-    def test_missing_ledger_permission_prevents_entry(self):
-        self.broker.responses["GetApiKeyInfo"]["permissions"].remove("query-ledger")
-        self.assertFalse(self.env["_execute_heartbeat_trade"](self.strategy))
-        self.assertEqual(self.submits, [])
-
-    def test_pending_buy_is_consumed_and_never_retried(self):
-        self.payloads[0] = dict(status="pending", order_id="BUY")
-        self.assertFalse(self.env["_execute_heartbeat_trade"](self.strategy))
-        self.assertFalse(self.env["_execute_heartbeat_trade"](self.strategy))
-        self.assertEqual(len(self.submits), 1)
-        self.assertEqual(self.markers, [])
-
-    def test_missing_fee_evidence_does_not_guess_quantity_or_publish_proof(self):
-        del self.broker.responses["QueryLedgers"]["BB"]["fee"]
-        self.assertFalse(self.env["_execute_heartbeat_trade"](self.strategy))
-        self.assertEqual(len(self.submits), 1)
-        self.assertEqual(self.markers, [])
-
-    def test_partial_close_leaves_proof_unpublished(self):
-        self.broker.responses["QueryOrders"]["SELL"]["vol_exec"] = "0.00450000"
-        self.broker.responses["QueryTrades"]["TS"]["vol"] = "0.00450000"
-        self.broker.responses["QueryLedgers"]["SB"]["amount"] = "-0.00450000"
-        self.assertFalse(self.env["_execute_heartbeat_trade"](self.strategy))
-        self.assertEqual(len(self.submits), 2)
-        self.assertEqual(self.markers, [])
+    def test_missing_strategy_adapter_is_still_fail_closed(self):
+        self.assertFalse(self.env["_execute_heartbeat_trade"](None))
+        self.assertEqual(self.calls, [])
 
 
 if __name__ == "__main__":
