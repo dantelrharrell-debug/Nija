@@ -503,50 +503,31 @@ class FlowTests(unittest.TestCase):
         self.environment.stop()
         self.directory.cleanup()
 
-    def test_closes_exact_fee_adjusted_base_and_explicit_exit(self):
-        self.assertTrue(self.env["_execute_heartbeat_trade"](self.strategy))
-        close = self.submits[1]
-        self.assertEqual(close["quantity"], 0.009)
-        self.assertEqual(close["size_type"], "base")
-        self.assertEqual(close["intent_type"], "exit")
-        self.assertEqual(close["position_effect"], "close")
-        self.assertTrue(close["reduce_only_override"])
-        self.assertEqual(len(self.markers), 1)
-        self.assertLess(self.markers[0]["details"]["broker_execution_epoch"], time.time())
+    def test_legacy_heartbeat_never_submits_unprotected_market_order(self):
         self.assertFalse(self.env["_execute_heartbeat_trade"](self.strategy))
-        self.assertEqual(len(self.submits), 2)
+        self.assertFalse(self.env["_execute_heartbeat_trade"](self.strategy))
+        self.assertEqual(self.submits, [])
+        self.assertEqual(self.markers, [])
 
-    def test_missing_or_wrong_account_lock_prevents_entry(self):
+    def test_legacy_heartbeat_remains_blocked_with_missing_account_lock(self):
         for value in ["", "b" * 64]:
-            with self.subTest(value=value), patch.dict(os.environ, {"NIJA_HEARTBEAT_ACCOUNT_FINGERPRINT": value}):
+            with self.subTest(value=value), patch.dict(
+                os.environ, {"NIJA_HEARTBEAT_ACCOUNT_FINGERPRINT": value}
+            ):
                 self.assertFalse(self.env["_execute_heartbeat_trade"](self.strategy))
         self.assertEqual(self.submits, [])
 
-    def test_missing_ledger_permission_prevents_entry(self):
+    def test_legacy_heartbeat_remains_blocked_with_missing_ledger_permission(self):
         self.broker.responses["GetApiKeyInfo"]["permissions"].remove("query-ledger")
         self.assertFalse(self.env["_execute_heartbeat_trade"](self.strategy))
         self.assertEqual(self.submits, [])
-
-    def test_pending_buy_is_consumed_and_never_retried(self):
-        self.payloads[0] = dict(status="pending", order_id="BUY")
-        self.assertFalse(self.env["_execute_heartbeat_trade"](self.strategy))
-        self.assertFalse(self.env["_execute_heartbeat_trade"](self.strategy))
-        self.assertEqual(len(self.submits), 1)
         self.assertEqual(self.markers, [])
 
-    def test_missing_fee_evidence_does_not_guess_quantity_or_publish_proof(self):
-        del self.broker.responses["QueryLedgers"]["BB"]["fee"]
+    def test_legacy_heartbeat_does_not_consume_attempt_or_publish_proof(self):
         self.assertFalse(self.env["_execute_heartbeat_trade"](self.strategy))
-        self.assertEqual(len(self.submits), 1)
+        self.assertEqual(self.submits, [])
         self.assertEqual(self.markers, [])
-
-    def test_partial_close_leaves_proof_unpublished(self):
-        self.broker.responses["QueryOrders"]["SELL"]["vol_exec"] = "0.00450000"
-        self.broker.responses["QueryTrades"]["TS"]["vol"] = "0.00450000"
-        self.broker.responses["QueryLedgers"]["SB"]["amount"] = "-0.00450000"
-        self.assertFalse(self.env["_execute_heartbeat_trade"](self.strategy))
-        self.assertEqual(len(self.submits), 2)
-        self.assertEqual(self.markers, [])
+        self.assertFalse(Path(os.environ["NIJA_STARTUP_ATTEMPT_DB"]).exists())
 
 
 if __name__ == "__main__":
