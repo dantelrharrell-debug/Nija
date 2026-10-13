@@ -70,7 +70,10 @@ def _read(broker: Any, method: str, params: dict[str, Any],
     except Exception:
         raise StartupPreflightError(f"startup_preflight_call_failed:{method}") from None
     if method == "AddOrder":
-        if result.get("txid"):
+        # Kraken validate-only responses must not include an executable order ID.
+        # Reject any txid field, including an empty list, rather than assuming
+        # an unexpected response shape proves that no order was created.
+        if "txid" in result:
             raise StartupPreflightError("startup_preflight_unexpected_order_id")
         description = result.get("descr")
         if (not isinstance(description, Mapping)
