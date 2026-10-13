@@ -491,6 +491,36 @@ def _process_event(stripe: Any, event_type: str, event_obj: Any, event_created: 
         _process_invoice_paid(stripe, event_obj, event_created)
 
 
+
+def _validate_retry_session(session: Any, record: dict[str, Any]) -> None:
+    """Allow a pending Checkout retry only for the original, matching NIJA identity."""
+    if _id_value(session) != record["checkout_session_id"]:
+        raise BillingContractViolation("checkout_session_id_mismatch")
+    if str(_obj_value(session, "mode", "")) != "subscription":
+        raise BillingContractViolation("checkout_mode_mismatch")
+    if str(_obj_value(session, "client_reference_id", "")) != record["nija_user_id"]:
+        raise BillingContractViolation("checkout_client_reference_mismatch")
+    metadata = _obj_value(session, "metadata", {}) or {}
+    if (
+        str(_obj_value(metadata, "nija_billing_contract", "")) != _BILLING_CONTRACT
+        or str(_obj_value(metadata, "nija_user_id", "")) != record["nija_user_id"]
+        or str(_obj_value(metadata, "nija_offer_code", "")) != record["offer_code"]
+    ):
+        raise BillingContractViolation("checkout_metadata_mismatch")
+    _validate_single_expected_item(
+        session,
+        expected_price_id=record["expected_price_id"],
+        expected_product_id=record["expected_product_id"],
+    )
+    details = _obj_value(session, "customer_details", {}) or {}
+    checkout_email = _normalized_email(_obj_value(details, "email"))
+    if checkout_email and checkout_email != _normalized_email(record["email"]):
+        raise BillingContractViolation("checkout_customer_details_mismatch")
+    if _id_value(_obj_value(session, "subscription")):
+        raise BillingContractViolation("checkout_subscription_already_created")
+    if record.get("verified"):
+        raise BillingContractViolation("checkout_already_verified")
+
 def create_app(store: Optional[BillingServiceStore] = None) -> Flask:
     """Create the standalone billing-only Flask application."""
     app = Flask(__name__)
@@ -589,15 +619,91 @@ def create_app(store: Optional[BillingServiceStore] = None) -> Flask:
             return jsonify({"error": "billing_temporarily_unavailable"}), 503
 
         existing = _store().get_customer(identity.user_id)
+        latest = _store().latest_checkout_for_user(identity.user_id) if existing else None
         if existing:
             if _normalized_email(existing["email"]) != identity.email:
                 return jsonify({"error": "billing_identity_mismatch"}), 409
             if existing["offer_code"] != identity.offer_code:
                 return jsonify({"error": "billing_offer_mismatch"}), 409
-            if str(existing["status"]).lower() in {"active", "trialing", "past_due"}:
+            if str(existing["status"]).lower() in {"active", "trialing", "past_due"} or existing["entitled"]:
                 return jsonify({"error": "subscription_already_exists"}), 409
-            if str(existing["status"]).lower() in {"active", "trialing", "past_due", "checkout_created"}:
-                return jsonify({"error": "subscription_or_checkout_already_exists"}), 409
+
+            if str(existing["status"]).lower() in {"checkout_created", "expired"}:
+                if not latest:
+                    # Never issue a second Stripe subscription if the first Checkout
+                    # cannot be recovered from the authoritative local ledger.
+                    return jsonify({"error": "checkout_recovery_unavailable"}), 503
+                try:
+                    pending = stripe.checkout.Session.retrieve(
+                        latest["checkout_session_id"],
+                        expand=["line_items.data.price.product"],
+                    )
+                    _validate_retry_session(pending, latest)
+                    if _id_value(_obj_value(pending, "customer")):
+                        _validate_customer_identity(
+                            stripe,
+                            customer_id=_id_value(_obj_value(pending, "customer")),
+                            expected_email=identity.email,
+                        )
+                except BillingContractViolation:
+                    return jsonify({"error": "checkout_identity_mismatch"}), 409
+                except Exception:
+                    logger.exception("Could not safely recover existing Stripe Checkout")
+                    return jsonify({"error": "checkout_recovery_unavailable"}), 503
+
+                status = str(_obj_value(pending, "status", "")).lower()
+                if status == "open":
+                    expires_at = _int_or_none(_obj_value(pending, "expires_at"))
+                    if expires_at is None:
+                        return jsonify({"error": "checkout_recovery_unavailable"}), 503
+                    if expires_at <= int(__import__("time").time()):
+                        try:
+                            pending = stripe.checkout.Session.expire(latest["checkout_session_id"])
+                            status = str(_obj_value(pending, "status", "")).lower()
+                        except Exception:
+                            logger.exception("Could not expire elapsed Stripe Checkout")
+                            return jsonify({"error": "checkout_recovery_unavailable"}), 503
+                    else:
+                        checkout_url = _string_or_none(_obj_value(pending, "url"))
+                        if not checkout_url:
+                            return jsonify({"error": "checkout_recovery_unavailable"}), 503
+                        return jsonify({
+                            "checkout_url": checkout_url,
+                            "checkout_session_id": latest["checkout_session_id"],
+                            "entitlement_granted": False,
+                            "reused_checkout": True,
+                        })
+                if status == "expired":
+                    _store().set_checkout_status(
+                        latest["checkout_session_id"],
+                        verification_status="expired",
+                        reason="stripe_checkout_expired",
+                        verified=False,
+                        revoke_customer=True,
+                    )
+                    existing = _store().get_customer(identity.user_id)
+                    if str(existing["status"]).lower() == "checkout_created":
+                        # Another request already created a replacement.
+                        return jsonify({"error": "checkout_retry_in_progress"}), 409
+                else:
+                    # Completed, pending, or unknown Stripe sessions may have
+                    # already created a subscription; never create a duplicate.
+                    return jsonify({"error": "subscription_or_checkout_already_exists"}), 409
+
+            if existing.get("stripe_subscription_id"):
+                try:
+                    subscription = stripe.Subscription.retrieve(existing["stripe_subscription_id"])
+                    subscription_status = str(_obj_value(subscription, "status", "")).lower()
+                    if subscription_status not in {"canceled", "incomplete_expired"}:
+                        return jsonify({"error": "subscription_already_exists"}), 409
+                    if existing.get("stripe_customer_id") and (
+                        _id_value(_obj_value(subscription, "customer"))
+                        != existing["stripe_customer_id"]
+                    ):
+                        return jsonify({"error": "stripe_subscription_identity_mismatch"}), 409
+                except Exception:
+                    logger.exception("Could not safely check prior Stripe subscription")
+                    return jsonify({"error": "subscription_recovery_unavailable"}), 503
 
         customer_identity: dict[str, str]
         if existing and existing.get("stripe_customer_id"):
@@ -643,6 +749,13 @@ def create_app(store: Optional[BillingServiceStore] = None) -> Flask:
                 subscription_data=subscription_data,
                 allow_promotion_codes=False,
                 payment_method_collection="always",
+                idempotency_key="nija-checkout-" + __import__("hashlib").sha256(
+                    (
+                        _BILLING_CONTRACT + ":" + identity.user_id + ":"
+                        + identity.offer_code + ":" +
+                        (latest["checkout_session_id"] if latest else "first")
+                    ).encode()
+                ).hexdigest(),
             )
         except Exception:
             logger.exception("Stripe Checkout Session creation failed")
@@ -665,18 +778,14 @@ def create_app(store: Optional[BillingServiceStore] = None) -> Flask:
                 customer_id=customer_id,
             )
         except BillingIdentityMismatch:
+            # The idempotent Stripe session may already belong to a concurrent
+            # successful request. Never expire it here and disrupt that buyer.
             logger.exception("Could not persist Checkout Session identity")
-            try:
-                stripe.checkout.Session.expire(session_id)
-            except Exception:
-                logger.exception("Could not expire untracked Stripe Checkout Session")
             return jsonify({"error": "checkout_identity_conflict"}), 409
         except Exception:
+            # Storage errors might race a request using this same idempotent
+            # Session. Fail closed for reconciliation instead of expiring it.
             logger.exception("Could not persist Checkout Session")
-            try:
-                stripe.checkout.Session.expire(session_id)
-            except Exception:
-                logger.exception("Could not expire untracked Stripe Checkout Session")
             return jsonify({"error": "checkout_persistence_failed"}), 503
 
         return jsonify(

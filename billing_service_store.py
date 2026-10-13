@@ -170,6 +170,20 @@ class BillingServiceStore:
             ).first()
         return self._row_dict(row)
 
+    def latest_checkout_for_user(self, user_id: str) -> Optional[dict[str, Any]]:
+        """Find the latest NIJA-created Checkout Session for safe retry decisions."""
+        with self.engine.connect() as conn:
+            row = conn.execute(
+                select(self.checkout_sessions)
+                .where(self.checkout_sessions.c.nija_user_id == user_id)
+                .order_by(
+                    self.checkout_sessions.c.created_at.desc(),
+                    self.checkout_sessions.c.checkout_session_id.desc(),
+                )
+                .limit(1)
+            ).first()
+        return self._row_dict(row)
+
     def create_checkout(
         self,
         *,
@@ -193,6 +207,31 @@ class BillingServiceStore:
                     raise BillingIdentityMismatch("billing email does not match existing NIJA identity")
                 if current["offer_code"] != offer_code:
                     raise BillingIdentityMismatch("billing offer does not match immutable NIJA assignment")
+                # Recheck under the database transaction: Stripe events or another
+                # request may have changed customer state after the HTTP-layer
+                # preflight. Never reset an active or trialing entitlement.
+                current_status = str(current.get("status") or "").lower()
+                if bool(current.get("entitled")) or current_status in {
+                    "active", "trialing", "past_due",
+                }:
+                    raise BillingIdentityMismatch("an existing subscription is still live")
+                last_checkout = conn.execute(
+                    select(self.checkout_sessions.c.verification_status)
+                    .where(self.checkout_sessions.c.nija_user_id == user_id)
+                    .order_by(
+                        self.checkout_sessions.c.created_at.desc(),
+                        self.checkout_sessions.c.checkout_session_id.desc(),
+                    )
+                    .limit(1)
+                ).scalar_one_or_none()
+                if (
+                    last_checkout is not None
+                    and str(last_checkout).lower() not in {
+                        "expired", "mismatch", "failed",
+                    }
+                    and current_status not in {"canceled", "incomplete_expired"}
+                ):
+                    raise BillingIdentityMismatch("an earlier checkout still needs reconciliation")
                 conn.execute(
                     update(self.customers)
                     .where(self.customers.c.nija_user_id == user_id)
@@ -321,6 +360,30 @@ class BillingServiceStore:
             if not row:
                 return
             user_id = str(row[0])
+            # A delayed non-security downgrade must not corrupt a verified
+            # Checkout once authoritative Stripe subscription state is live.
+            checkout = conn.execute(
+                select(self.checkout_sessions).where(
+                    self.checkout_sessions.c.checkout_session_id == session_id
+                )
+            ).first()
+            current_customer = conn.execute(
+                select(self.customers).where(
+                    self.customers.c.nija_user_id == user_id
+                )
+            ).first()
+            old_checkout = dict(checkout._mapping) if checkout else {}
+            active_customer = dict(current_customer._mapping) if current_customer else {}
+            if (
+                verification_status != "mismatch"
+                and bool(old_checkout.get("verified"))
+                and bool(active_customer.get("entitled"))
+                and str(active_customer.get("status") or "").lower()
+                in {"active", "trialing"}
+                and old_checkout.get("stripe_subscription_id")
+                == active_customer.get("stripe_subscription_id")
+            ):
+                return
             values: dict[str, Any] = {
                 "verification_status": verification_status,
                 "verification_reason": reason,
@@ -335,16 +398,45 @@ class BillingServiceStore:
                 .values(**values)
             )
             if revoke_customer:
-                conn.execute(
-                    update(self.customers)
-                    .where(self.customers.c.nija_user_id == user_id)
-                    .values(
-                        status=verification_status,
-                        entitled=False,
-                        entitlement_reason=reason,
-                        updated_at=now,
+                # An abandoned Checkout must not revoke a newer session, or
+                # override the authoritative active/trialing subscription.
+                latest = conn.execute(
+                    select(self.checkout_sessions.c.checkout_session_id)
+                    .where(self.checkout_sessions.c.nija_user_id == user_id)
+                    .order_by(
+                        self.checkout_sessions.c.created_at.desc(),
+                        self.checkout_sessions.c.checkout_session_id.desc(),
                     )
+                    .limit(1)
+                ).scalar_one_or_none()
+                customer_row = conn.execute(
+                    select(self.customers).where(
+                        self.customers.c.nija_user_id == user_id
+                    )
+                ).first()
+                customer = dict(customer_row._mapping) if customer_row else {}
+                active_entitlement = (
+                    bool(customer.get("entitled"))
+                    and str(customer.get("status") or "").lower()
+                    in {"active", "trialing"}
                 )
+                if (
+                    latest == session_id
+                    and not (
+                        active_entitlement
+                        and verification_status != "mismatch"
+                    )
+                ):
+                    conn.execute(
+                        update(self.customers)
+                        .where(self.customers.c.nija_user_id == user_id)
+                        .values(
+                            status=verification_status,
+                            entitled=False,
+                            entitlement_reason=reason,
+                            updated_at=now,
+                        )
+                    )
 
     def mark_checkout_mismatch(self, session_id: str, reason: str) -> None:
         self.set_checkout_status(
