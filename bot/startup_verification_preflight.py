@@ -16,6 +16,15 @@ from bot.startup_verification_evidence import read_startup_broker_identity
 from bot.startup_verification_plan import StartupVerificationPlan, decimal_value
 
 
+# Query permissions establish exchange evidence; trade/cancel permissions are
+# prerequisites for the later approved, protected execution/exit pathway.
+# Checking them here does not authorize or place any live order.
+_REQUIRED_KEY_PERMISSIONS = frozenset({
+    "query-funds", "query-open-trades", "query-closed-trades", "query-ledger",
+    "modify-trades", "close-trades",
+})
+
+
 class StartupPreflightError(RuntimeError):
     """Required current broker, owner, or protective-order fact is unverified."""
 
@@ -86,6 +95,16 @@ def _identity(broker: Any, plan: StartupVerificationPlan,
     if (identity.account_fingerprint != plan.account_fingerprint
             or identity.api_key_fingerprint != plan.api_key_fingerprint):
         raise StartupPreflightError("startup_preflight_account_or_key_changed")
+    # GetApiKeyInfo is the authenticated source for each permission. Never
+    # infer permission to cancel or reconcile from successful validation.
+    permissions = getattr(identity, "permissions", None)
+    if not isinstance(permissions, (set, frozenset, list, tuple)) or not all(
+        isinstance(permission, str) for permission in permissions
+    ):
+        raise StartupPreflightError("startup_preflight_permissions_unverifiable")
+    granted = {value.strip().lower() for value in permissions}
+    if not _REQUIRED_KEY_PERMISSIONS.issubset(granted):
+        raise StartupPreflightError("startup_preflight_permissions_insufficient")
 
 
 def run_kraken_startup_preflight(
