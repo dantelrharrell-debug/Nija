@@ -11,8 +11,9 @@ def inspect(path: Path) -> dict:
     result = {"database_present": path.is_file(), "readable": False,
               "proof_admissible_by_attempt_state": False,
               "state_counts": {}, "unresolved_count": None, "error": None}
-    if not path.is_file():
-        # Absence permits the startup-attempt check but is not execution proof.
+    if not path.exists():
+        # Only an absent database permits the check; existing non-files fail closed.
+        # Absence is not execution proof.
         result["proof_admissible_by_attempt_state"] = True
         result["unresolved_count"] = 0
         return result
