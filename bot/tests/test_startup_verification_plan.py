@@ -74,7 +74,7 @@ class PlanTests(unittest.TestCase):
             self.assertTrue(order["cl_ord_id"].isascii())
             self.assertTrue(order["cl_ord_id"].isalnum())
         for order in (entry, protect, close):
-            self.assertRegex(order["cl_ord_id"], r"^[0-9a-f]{32}$")
+            self.assertRegex(order["cl_ord_id"], r"^[0-9a-f]{18}$")
             self.assertNotIn("leverage", order)
             self.assertNotIn("validate", order)
 
