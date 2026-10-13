@@ -238,6 +238,19 @@ class StartupPreflightTests(unittest.TestCase):
                 V._read(self.broker, "AddOrder", {"validate": flag}, self.assert_owner)
         self.assertEqual(self.calls, [])
 
+    def test_validation_requires_bounded_protected_limit_entry(self):
+        safe = {"validate": True, "pair": "XXBTZUSD", "type": "buy",
+                "ordertype": "limit", "timeinforce": "FOK", "volume": "0.020",
+                "price": "1000", "close[ordertype]": "stop-loss-limit",
+                "close[price]": "950", "close[price2]": "900"}
+        for change in ({"ordertype": "market"}, {"type": "sell"},
+                       {"timeinforce": "GTC"}, {"close[ordertype]": None},
+                       {"close[price]": None}, {"volume": None}):
+            with self.subTest(change=change):
+                with self.assertRaisesRegex(V.StartupPreflightError, "unprotected_validation"):
+                    V._read(self.broker, "AddOrder", {**safe, **change}, self.assert_owner)
+        self.assertEqual(self.calls, [])
+
     def test_unapproved_api_method_is_forbidden(self):
         with self.assertRaisesRegex(V.StartupPreflightError, "method_forbidden"):
             V._read(self.broker, "CancelAll", {}, self.assert_owner)
