@@ -6,6 +6,7 @@ on:
     paths:
       - 'bot/startup_verification_evidence.py'
       - 'bot/startup_verification_plan.py'
+      - 'bot/startup_verification_preflight.py'
       - 'scripts/apply_execution_proof_startup_isolation_v339.py'
       - 'bot/trading_state_machine.py'
       - 'bot/runtime_execution_capital_integrity_v169_patch.py'
@@ -16,12 +17,14 @@ on:
       - 'bot/runtime_execution_position_readiness_v346_patch.py'
       - 'bot/tests/test_startup_verification_evidence.py'
       - 'bot/tests/test_startup_verification_plan.py'
+      - 'bot/tests/test_startup_verification_preflight.py'
       - '.github/workflows/startup-verification-safety.yml'
   push:
     branches: [main]
     paths:
       - 'bot/startup_verification_evidence.py'
       - 'bot/startup_verification_plan.py'
+      - 'bot/startup_verification_preflight.py'
       - 'scripts/apply_execution_proof_startup_isolation_v339.py'
       - 'bot/trading_state_machine.py'
       - 'bot/runtime_execution_capital_integrity_v169_patch.py'
@@ -32,6 +35,7 @@ on:
       - 'bot/runtime_execution_position_readiness_v346_patch.py'
       - 'bot/tests/test_startup_verification_evidence.py'
       - 'bot/tests/test_startup_verification_plan.py'
+      - 'bot/tests/test_startup_verification_preflight.py'
       - '.github/workflows/startup-verification-safety.yml'
 
 permissions:
@@ -51,6 +55,7 @@ jobs:
           python -S -m py_compile \
             bot/startup_verification_evidence.py \
             bot/startup_verification_plan.py \
+            bot/startup_verification_preflight.py \
             scripts/apply_execution_proof_startup_isolation_v339.py \
             bot/trading_state_machine.py \
             bot/runtime_execution_capital_integrity_v169_patch.py \
@@ -60,8 +65,11 @@ jobs:
             bot/runtime_heartbeat_live_venue_selection_v274_patch.py \
             bot/runtime_execution_position_readiness_v346_patch.py \
             bot/tests/test_startup_verification_evidence.py \
-            bot/tests/test_startup_verification_plan.py
+            bot/tests/test_startup_verification_plan.py \
+            bot/tests/test_startup_verification_preflight.py
       - name: Verify account lock, one attempt, ledger sizing and proof isolation
         run: python -S bot/tests/test_startup_verification_evidence.py -q
       - name: Verify fee-inclusive plans and explicit approval receipts offline
         run: python -S bot/tests/test_startup_verification_plan.py -q
+      - name: Verify bounded Kraken brokerage preflight never submits live orders
+        run: python -S bot/tests/test_startup_verification_preflight.py -q
