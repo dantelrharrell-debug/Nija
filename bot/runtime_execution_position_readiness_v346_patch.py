@@ -179,8 +179,10 @@ def _write_confirmed_fill_marker_locked(*, result: Mapping[str, Any], symbol: st
             LOGGER.info(
                 "CANONICAL_FILL_EXECUTION_PROOF_V346_OLDER_EVENT_IGNORED marker=%s order_id=%s "
                 "broker_fill_at_epoch=%.6f existing_verified_at_epoch=%.6f "
+                "broker_event_age_s=%.1f current_marker_age_s=%.1f "
                 "proof_timestamp_refreshed=false pending_admission=false",
                 MARKER, order_id, broker_epoch, existing_epoch,
+                max(0.0, observed_now - broker_epoch), max(0.0, observed_now - existing_epoch),
             )
             return False
         if same_v4_order and (not recovered_fill or (
