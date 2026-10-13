@@ -420,6 +420,47 @@ def test_second_checkout_reuses_open_session(monkeypatch, tmp_path):
     assert second.get_json()["reused_checkout"] is True
     assert second.get_json()["checkout_session_id"] == "cs_nija_1"
 
+def test_checkout_with_missing_expiry_fails_closed(monkeypatch, tmp_path):
+    app, _store = _configured_app(monkeypatch, tmp_path)
+    state, stripe = _stripe_fixture()
+    monkeypatch.setattr(billing, "_stripe_module", lambda: stripe)
+    client = app.test_client()
+    assert _create_checkout(client).status_code == 200
+
+    session = _valid_checkout_session(payment_status="unpaid")
+    session.update({
+        "status": "open", "expires_at": None,
+        "url": "https://checkout.stripe.test/cs_nija_1",
+        "customer": None, "subscription": None,
+    })
+    state["session"] = session
+    response = _create_checkout(client)
+    assert response.status_code == 503
+    assert response.get_json()["error"] == "checkout_recovery_unavailable"
+
+
+def test_expired_checkout_creates_new_pending_session(monkeypatch, tmp_path):
+    app, store = _configured_app(monkeypatch, tmp_path)
+    state, stripe = _stripe_fixture()
+    monkeypatch.setattr(billing, "_stripe_module", lambda: stripe)
+    client = app.test_client()
+    assert _create_checkout(client).status_code == 200
+
+    expired = _valid_checkout_session(payment_status="unpaid")
+    expired.update({"status": "expired", "customer": None, "subscription": None})
+    state["session"] = expired
+    stripe.checkout.Session.create = lambda **kwargs: {
+        "id": "cs_nija_2",
+        "url": "https://checkout.stripe.test/cs_nija_2",
+        "customer": None,
+    }
+    response = _create_checkout(client)
+    assert response.status_code == 200
+    assert response.get_json()["checkout_session_id"] == "cs_nija_2"
+    assert store.get_checkout("cs_nija_1")["verification_status"] == "expired"
+    assert store.latest_checkout_for_user("application-123")["checkout_session_id"] == "cs_nija_2"
+
+
 def test_readyz_verifies_authoritative_billing_dependencies(monkeypatch, tmp_path):
     app, _store = _configured_app(monkeypatch, tmp_path)
     monkeypatch.setenv("NIJA_BILLING_PUBLIC_URL", "https://billing.example.test")
