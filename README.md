@@ -1,5 +1,28 @@
 # NIJA AI Trading LLC — Trading Platform Architecture & Recovery Guide
 
+## Production execution-recovery observation — October 13, 2026 (Pacific)
+
+**Scope:** Read-only observation and recovery acceptance criteria. This README update does not change trading authorization, deploy application code, or generate execution evidence.
+
+- **Confirmed Render workspace:** `Nija_Trading_Bot` (`tea-d37fhe8gjchc73c8eo0g`).
+- **Production service:** `nija-trading-bot` (`srv-d98dsr5aeets73fpbaqg`); `main`, manual deployment (`autoDeploy=no`), Docker startup via `python -S /etc/secrets/.render-ledger-bootstrap.py`, persistent mount `/data`.
+- **Last verified deployment at this review:** `dep-db6r0caj9qps73a6lvpg`, status `live`, commit `5c976553a23897732e94bf79481bd41cbd1dc61c` (startup-audit fail-closed and CI changes). A live deployment status does not certify trading readiness.
+- **Recovery completion:** NOT VERIFIED. Registered Kraken authoritative positions, broker-local protective-exit readback, bounded one-time account authorization, real opening/closing fills, current execution proof and readiness promotion have not been established by this review.
+
+### Required production recovery acceptance sequence
+
+1. Read Kraken's authoritative account-scoped positions, balances, open orders, fills and fees. Distinguish spot holdings from margin/open positions; reject missing, ambiguous, stale or mismatched account state.
+2. Confirm protective-exit orders exist at the broker, match the account, symbol, side and position quantity, and can be observed through close/cancel lifecycle. Reject protection gaps.
+3. Implement and test a single-use, account-bound startup authorization with immutable account/instrument identity, strict aggregate maximum cost including fees/slippage, expiration, durable nonce consumption, explicit operator approval and fail-closed retries. No order on approval absence.
+4. Review code and automated tests, then deliberately deploy the reviewed revision; this production service does not auto-deploy.
+5. Only after separate explicit approval of the exact account, instrument and cost ceiling, submit a bounded protected live transaction. Verify broker-authenticated entry, exit, fees, resulting flat position, order cleanup, ledger reconciliation and genuine execution proof younger than 1,800 seconds.
+6. Keep unattended trading disabled until protective exit and complete round-trip execution pass, all independent safety gates report ready and an observation window is formally started. Stop on any disconnect, proof expiry, unmatched fill, duplicate attempt, uncovered exposure or reconciliation failure.
+
+**Observation status:** No 24-hour live-trading observation is certified as started by this documentation review. Historical observations below are not current proof. Documentation is isolated on a branch to avoid an unintended production release.
+
+---
+
+
 **Project:** `Nija_Trading_Bot`  
 **Documentation updated:** October 12, 2026 (Pacific)  
 **Scope:** Repository changes and recovery guidance. This update does not perform or certify a live production audit.
