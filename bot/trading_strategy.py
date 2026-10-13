@@ -1587,6 +1587,15 @@ class TradingStrategy:
                     or not required_permissions.issubset(fresh_identity.permissions)):
                 raise StartupEvidenceError("startup_account_key_or_permissions_changed_before_entry")
             startup_identity = fresh_identity
+            # The legacy heartbeat submits an unprotected quote-sized market
+            # buy. It cannot serve as bounded startup verification. Keep this
+            # dispatch fail-closed until a separately reviewed exact-plan,
+            # native-protection execution controller replaces it.
+            logger.error(
+                "HEARTBEAT_LEGACY_MARKET_ENTRY_FORBIDDEN "
+                "bounded_protected_startup_controller_required=true broker_dispatch=false"
+            )
+            return False
             if not claim_startup_attempt(startup_identity, account_alias, symbol):
                 logger.warning("HEARTBEAT_ACCOUNT_ATTEMPT_ALREADY_CONSUMED broker_dispatch=false no_rearm=true")
                 return False
