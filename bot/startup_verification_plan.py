@@ -113,7 +113,7 @@ class StartupVerificationPlan:
         else:
             raise StartupPlanError("startup_order_leg_invalid")
         # Kraken accepts UUIDs or free ASCII text of at most 18 characters.
-        client_id = hashlib.sha256((self.digest() + ":" + leg).encode()).hexdigest()[:32]
+        client_id = hashlib.sha256((self.digest() + ":" + leg).encode()).hexdigest()[:18]
         data.update(pair=self.pair, volume=str(quantity), oflags="fciq", cl_ord_id=client_id)
         return data
 
