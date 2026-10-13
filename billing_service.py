@@ -628,7 +628,7 @@ def create_app(store: Optional[BillingServiceStore] = None) -> Flask:
             if str(existing["status"]).lower() in {"active", "trialing", "past_due"} or existing["entitled"]:
                 return jsonify({"error": "subscription_already_exists"}), 409
 
-            if str(existing["status"]).lower() == "checkout_created":
+            if str(existing["status"]).lower() in {"checkout_created", "expired"}:
                 if not latest:
                     # Never issue a second Stripe subscription if the first Checkout
                     # cannot be recovered from the authoritative local ledger.
@@ -654,7 +654,9 @@ def create_app(store: Optional[BillingServiceStore] = None) -> Flask:
                 status = str(_obj_value(pending, "status", "")).lower()
                 if status == "open":
                     expires_at = _int_or_none(_obj_value(pending, "expires_at"))
-                    if expires_at is not None and expires_at <= int(__import__("time").time()):
+                    if expires_at is None:
+                        return jsonify({"error": "checkout_recovery_unavailable"}), 503
+                    if expires_at <= int(__import__("time").time()):
                         try:
                             pending = stripe.checkout.Session.expire(latest["checkout_session_id"])
                             status = str(_obj_value(pending, "status", "")).lower()
@@ -776,18 +778,14 @@ def create_app(store: Optional[BillingServiceStore] = None) -> Flask:
                 customer_id=customer_id,
             )
         except BillingIdentityMismatch:
+            # The idempotent Stripe session may already belong to a concurrent
+            # successful request. Never expire it here and disrupt that buyer.
             logger.exception("Could not persist Checkout Session identity")
-            try:
-                stripe.checkout.Session.expire(session_id)
-            except Exception:
-                logger.exception("Could not expire untracked Stripe Checkout Session")
             return jsonify({"error": "checkout_identity_conflict"}), 409
         except Exception:
+            # Storage errors might race a request using this same idempotent
+            # Session. Fail closed for reconciliation instead of expiring it.
             logger.exception("Could not persist Checkout Session")
-            try:
-                stripe.checkout.Session.expire(session_id)
-            except Exception:
-                logger.exception("Could not expire untracked Stripe Checkout Session")
             return jsonify({"error": "checkout_persistence_failed"}), 503
 
         return jsonify(
