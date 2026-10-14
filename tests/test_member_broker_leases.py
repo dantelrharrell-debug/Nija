@@ -42,6 +42,19 @@ class AccountLeaseTests(unittest.TestCase):
         b = self.store.acquire(self.cell, "worker-b", now=100)
         self.assertEqual(b.generation, a.generation + 1)
 
+    def test_renewal_rejects_previous_token(self):
+        old = self.store.acquire(self.cell, "worker-a", now=100)
+        renewed = self.store.renew(old, now=110)
+        self.assertTrue(self.store.validate(renewed, now=120))
+        self.assertFalse(self.store.validate(old, now=120))
+        with self.assertRaises(LeaseDenied):
+            self.store.renew(old, now=120)
+
+    def test_expired_lease_cannot_renew(self):
+        old = self.store.acquire(self.cell, "worker-a", now=100)
+        with self.assertRaises(LeaseDenied):
+            self.store.renew(old, now=131)
+
     def test_no_ephemeral_lease_database(self):
         with self.assertRaises(ValueError):
             AccountLeaseStore(":memory:")
