@@ -96,6 +96,14 @@ class BrokerVaultTests(unittest.TestCase):
             {"id": "own", "broker": "kraken", "environment": "paper"}
         ])
 
+    def test_empty_vault_zero_pages_returns_empty_metadata(self):
+        first = Mock(status_code=200)
+        first.json.return_value = {'record': {'id': 'member123', 'verified': True}}
+        second = Mock(status_code=200)
+        second.json.return_value = {'totalPages': 0, 'items': []}
+        self.session.request.side_effect = [first, second]
+        self.assertEqual(self.vault.list_metadata('member.jwt'), [])
+
     def test_rejects_incomplete_metadata_pagination(self):
         first = Mock(status_code=200)
         first.json.return_value = {"record": {"id": "member123", "verified": True}}
