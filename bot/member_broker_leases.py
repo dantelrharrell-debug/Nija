@@ -86,7 +86,7 @@ class AccountLeaseStore:
         db = self._connect()
         try:
             cursor = db.execute(
-                "DELETE FROM account_leases WHERE cell_id=? AND owner=? AND generation=? AND expires_at=?",
+                "UPDATE account_leases SET expires_at=0 WHERE cell_id=? AND owner=? AND generation=? AND expires_at=?",
                 (lease.cell_id, lease.owner, lease.generation, lease.expires_at),
             )
             return cursor.rowcount == 1
