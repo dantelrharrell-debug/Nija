@@ -20,9 +20,34 @@ def inspect(path: Path) -> dict:
         uri = path.resolve().as_uri() + "?mode=ro"
         with sqlite3.connect(uri, uri=True, timeout=2.0) as connection:
             connection.execute("PRAGMA query_only=ON")
+            columns = {row[1] for row in connection.execute(
+                "PRAGMA table_info(startup_attempts)"
+            )}
+            if "state" not in columns:
+                raise sqlite3.OperationalError("startup_attempts state column unavailable")
             rows = connection.execute(
                 "SELECT state, COUNT(*) FROM startup_attempts GROUP BY state"
             ).fetchall()
+            required = {"entry_order_id", "exit_order_id"}
+            if required <= columns:
+                unresolved = connection.execute(
+                    "SELECT COUNT(*) FROM startup_attempts WHERE "
+                    "COALESCE(state, '') != 'completed' OR "
+                    "NULLIF(TRIM(entry_order_id), '') IS NULL OR "
+                    "NULLIF(TRIM(exit_order_id), '') IS NULL"
+                ).fetchone()[0]
+            else:
+                unresolved = connection.execute(
+                    "SELECT COUNT(*) FROM startup_attempts WHERE "
+                    "COALESCE(state, '') != 'completed'"
+                ).fetchone()[0]
+            counts = {str(state): int(count) for state, count in rows}
+            result.update(
+                readable=True, state_counts=counts, unresolved_count=int(unresolved),
+                proof_admissible_by_attempt_state=(
+                    unresolved == 0 and required <= columns
+                ),
+            )
             unresolved = connection.execute(
                 "SELECT COUNT(*) FROM startup_attempts WHERE "
                 "COALESCE(state, '') != 'completed' OR "

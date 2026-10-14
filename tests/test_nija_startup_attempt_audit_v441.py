@@ -67,6 +67,7 @@ class StartupAttemptAuditTests(unittest.TestCase):
         self.assertEqual(result["unresolved_count"], 3)
         self.assertFalse(result["proof_admissible_by_attempt_state"])
 
+    def test_completed_with_blank_exit_remains_unresolved(self):
     def test_completed_with_null_or_blank_order_ids_remains_unresolved(self):
         with tempfile.TemporaryDirectory() as d:
             path = Path(d) / "attempts.db"
@@ -84,6 +85,17 @@ class StartupAttemptAuditTests(unittest.TestCase):
             self.assertEqual(path.read_bytes(), before)
         self.assertTrue(result["readable"])
         self.assertEqual(result["unresolved_count"], 1)
+        self.assertFalse(result["proof_admissible_by_attempt_state"])
+
+    def test_legacy_schema_cannot_claim_proof(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "attempts.db"
+            with sqlite3.connect(path) as connection:
+                connection.execute("CREATE TABLE startup_attempts (state TEXT)")
+                connection.execute("INSERT INTO startup_attempts VALUES ('completed')")
+            result = inspect(path)
+        self.assertTrue(result["readable"])
+        self.assertEqual(result["unresolved_count"], 0)
         self.assertFalse(result["proof_admissible_by_attempt_state"])
 
     def test_invalid_schema_fails_closed(self):
