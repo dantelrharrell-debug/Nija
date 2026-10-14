@@ -33,6 +33,21 @@ class InvitationTests(unittest.TestCase):
     def test_failure_retry(self):
         key=self.outbox.enqueue("a1","user@example.com",approved=True,verified=True)
         self.assertEqual(self.outbox.send(key,sender="support@nijaaitrading.com",api_key="fake",now=1000,opener=Mock(side_effect=OSError())),"retry")
+    def test_inflight_lease_prevents_second_send(self):
+        key=self.outbox.enqueue("a1","user@example.com",approved=True,verified=True)
+        with self.outbox.connect() as db:
+            db.execute("UPDATE onboarding_mail SET status='sending',retry_at=1120 WHERE key=?", (key,))
+        opener=Mock()
+        self.assertEqual(self.outbox.send(key,sender="support@nijaaitrading.com",api_key="fake",now=1100,opener=opener),"sending")
+        opener.assert_not_called()
+    def test_permanent_provider_error_fails_closed(self):
+        key=self.outbox.enqueue("a1","user@example.com",approved=True,verified=True)
+        err=OSError("invalid_sender")
+        err.code=403
+        opener=Mock(side_effect=err)
+        self.assertEqual(self.outbox.send(key,sender="support@nijaaitrading.com",api_key="fake",now=1000,opener=opener),"failed")
+        self.assertEqual(self.outbox.send(key,sender="support@nijaaitrading.com",api_key="fake",now=2000,opener=opener),"failed")
+        opener.assert_called_once()
     def test_no_api_key_instructions(self):
         self.assertIn("Do not enter keys",invitation_body())
 
