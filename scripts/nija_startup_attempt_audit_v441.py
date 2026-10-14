@@ -30,8 +30,22 @@ def inspect(path: Path) -> dict:
                 "TRIM(COALESCE(exit_order_id, '')) = ''"
             ).fetchone()[0]
         counts = {str(state): int(count) for state, count in rows}
+        # Legacy audit fixtures may only expose state. Never treat a completed
+        # row as proof when the broker order identifiers are unavailable.
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(startup_attempts)")}
+        if {"entry_order_id", "exit_order_id"} <= columns:
+            unresolved = connection.execute(
+                "SELECT COUNT(*) FROM startup_attempts WHERE state != 'completed' "
+                "OR NULLIF(TRIM(entry_order_id), '') IS NULL "
+                "OR NULLIF(TRIM(exit_order_id), '') IS NULL"
+            ).fetchone()[0]
+        else:
+            unresolved = connection.execute(
+                "SELECT COUNT(*) FROM startup_attempts WHERE state != 'completed'"
+            ).fetchone()[0]
+            # Legacy schemas can be diagnosed, but cannot establish broker-ID proof.
         result.update(readable=True, state_counts=counts, unresolved_count=unresolved,
-                      proof_admissible_by_attempt_state=(unresolved == 0))
+                      proof_admissible_by_attempt_state=(unresolved == 0 and {"entry_order_id", "exit_order_id"} <= columns))
     except (sqlite3.Error, OSError, ValueError) as exc:
         result["error"] = type(exc).__name__
     return result

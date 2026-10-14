@@ -48,11 +48,24 @@ class StartupAttemptAuditTests(unittest.TestCase):
         self.assertEqual(result["unresolved_count"], 2)
         self.assertFalse(result["proof_admissible_by_attempt_state"])
 
+    def test_completed_attempt_requires_both_broker_order_ids(self):
     def test_completed_with_null_or_blank_order_ids_remains_unresolved(self):
         with tempfile.TemporaryDirectory() as d:
             path = Path(d) / "attempts.db"
             with sqlite3.connect(path) as connection:
                 connection.execute(
+                    "CREATE TABLE startup_attempts (state TEXT, "
+                    "entry_order_id TEXT, exit_order_id TEXT)"
+                )
+                connection.executemany(
+                    "INSERT INTO startup_attempts VALUES (?, ?, ?)",
+                    [("completed", "ENTRY1", ""), ("completed", "ENTRY2", "EXIT2")],
+                )
+            before = path.read_bytes()
+            result = inspect(path)
+            self.assertEqual(path.read_bytes(), before)
+        self.assertTrue(result["readable"])
+        self.assertEqual(result["unresolved_count"], 1)
                     "CREATE TABLE startup_attempts (state TEXT, entry_order_id TEXT, exit_order_id TEXT)"
                 )
                 connection.executemany("INSERT INTO startup_attempts VALUES(?,?,?)", [
