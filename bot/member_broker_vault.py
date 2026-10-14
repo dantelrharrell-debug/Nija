@@ -178,7 +178,8 @@ class BrokerVault:
         rows = result.get("items")
         total_pages = result.get("totalPages")
         if (not isinstance(rows, list) or not isinstance(total_pages, int)
-                or isinstance(total_pages, bool) or total_pages not in (0, 1)\n                or (total_pages == 0 and rows)):
+                or isinstance(total_pages, bool) or total_pages not in (0, 1)
+                or (total_pages == 0 and bool(rows)))::
             raise VaultError("Vault metadata response incomplete or invalid")
         metadata: list[dict[str, str]] = []
         for row in rows:
