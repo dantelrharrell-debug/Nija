@@ -1,6 +1,9 @@
 """Durable cell lease tests using only temporary SQLite databases."""
 import os
+import sqlite3
+import threading
 import tempfile
+import time
 import unittest
 
 from bot.member_broker_cells import CellKey
@@ -13,6 +16,31 @@ class AccountLeaseTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.store = AccountLeaseStore(os.path.join(self.temp.name, "leases.sqlite3"))
         self.cell = CellKey("member1", "kraken", "live", "account1")
+
+    def _run_while_sqlite_locked(self, operation, *, lock_mode="IMMEDIATE"):
+        blocker = sqlite3.connect(self.store.path, isolation_level=None)
+        blocker.execute(f"BEGIN {lock_mode}")
+        started = threading.Event()
+        outcome = []
+
+        def run():
+            started.set()
+            try:
+                outcome.append(operation())
+            except Exception as exc:
+                outcome.append(exc)
+
+        worker = threading.Thread(target=run)
+        worker.start()
+        try:
+            self.assertTrue(started.wait(1))
+            time.sleep(1.1)
+        finally:
+            blocker.execute("ROLLBACK")
+            blocker.close()
+        worker.join(5)
+        self.assertFalse(worker.is_alive())
+        return outcome[0]
 
     def test_competing_owner_denied_until_expiration(self):
         original = self.store.acquire(self.cell, "worker-a", now=100)
@@ -54,6 +82,27 @@ class AccountLeaseTests(unittest.TestCase):
         old = self.store.acquire(self.cell, "worker-a", now=100)
         with self.assertRaises(LeaseDenied):
             self.store.renew(old, now=131)
+
+    def test_acquire_uses_time_after_waiting_for_write_lock(self):
+        self.store.acquire(self.cell, "worker-a", ttl_seconds=1)
+        result = self._run_while_sqlite_locked(
+            lambda: self.store.acquire(self.cell, "worker-b", ttl_seconds=1),
+        )
+        self.assertNotIsInstance(result, Exception)
+        self.assertEqual(result.owner, "worker-b")
+
+    def test_renew_uses_time_after_waiting_for_write_lock(self):
+        lease = self.store.acquire(self.cell, "worker-a", ttl_seconds=1)
+        result = self._run_while_sqlite_locked(lambda: self.store.renew(lease))
+        self.assertIsInstance(result, LeaseDenied)
+
+    def test_validate_uses_time_after_waiting_for_read_lock(self):
+        lease = self.store.acquire(self.cell, "worker-a", ttl_seconds=1)
+        result = self._run_while_sqlite_locked(
+            lambda: self.store.validate(lease),
+            lock_mode="EXCLUSIVE",
+        )
+        self.assertFalse(result)
 
     def test_invalid_nonfinite_ttl_rejected(self):
         for ttl in (float("nan"), float("inf"), float("-inf"), "30"):

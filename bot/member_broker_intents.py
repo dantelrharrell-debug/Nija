@@ -37,10 +37,10 @@ class IntentStore:
             raise IntentDenied("Invalid order-intent identifier")
         if lease.cell_id != cell.isolation_id:
             raise IntentDenied("Lease account mismatch")
-        now = time.time() if now is None else now
         conn = sqlite3.connect(self.path, timeout=5, isolation_level=None)
         try:
             conn.execute("BEGIN IMMEDIATE")
+            now = time.time() if now is None else now
             conn.execute("""CREATE TABLE IF NOT EXISTS account_leases (
                 cell_id TEXT PRIMARY KEY, owner TEXT NOT NULL,
                 generation INTEGER NOT NULL, expires_at REAL NOT NULL)""")

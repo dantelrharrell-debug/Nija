@@ -45,10 +45,10 @@ class AccountLeaseStore:
     def acquire(self, cell: CellKey, owner: str, ttl_seconds: float = 30, *, now: float | None = None) -> Lease:
         if not isinstance(owner, str) or not owner.strip() or not isinstance(ttl_seconds, (int, float)) or not math.isfinite(ttl_seconds) or not 1 <= ttl_seconds <= 120:
             raise LeaseDenied("Invalid lease request")
-        now = time.time() if now is None else now
         db = self._connect()
         try:
             db.execute("BEGIN IMMEDIATE")
+            now = time.time() if now is None else now
             row = db.execute(
                 "SELECT generation, expires_at FROM account_leases WHERE cell_id=?",
                 (cell.isolation_id,),
@@ -71,13 +71,13 @@ class AccountLeaseStore:
             db.close()
 
     def validate(self, lease: Lease, *, now: float | None = None) -> bool:
-        now = time.time() if now is None else now
         db = self._connect()
         try:
             row = db.execute(
                 "SELECT owner,generation,expires_at FROM account_leases WHERE cell_id=?",
                 (lease.cell_id,),
             ).fetchone()
+            now = time.time() if now is None else now
             return bool(row and row[0] == lease.owner and row[1] == lease.generation
                         and row[2] == lease.expires_at and row[2] > now)
         finally:
@@ -87,10 +87,10 @@ class AccountLeaseStore:
         """Extend only the exact live owner/generation; stale workers fail closed."""
         if not isinstance(ttl_seconds, (int, float)) or not math.isfinite(ttl_seconds) or not 1 <= ttl_seconds <= 120:
             raise LeaseDenied("Invalid renewal TTL")
-        now = time.time() if now is None else now
         db = self._connect()
         try:
             db.execute("BEGIN IMMEDIATE")
+            now = time.time() if now is None else now
             new_expiry = now + ttl_seconds
             cursor = db.execute(
                 """UPDATE account_leases SET expires_at=?

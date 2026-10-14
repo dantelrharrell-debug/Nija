@@ -1,6 +1,9 @@
 """Tests durable order intent replay protection without broker calls."""
 import os
+import sqlite3
+import threading
 import tempfile
+import time
 import unittest
 
 from bot.member_broker_cells import CellKey
@@ -16,6 +19,38 @@ class IntentTests(unittest.TestCase):
         self.leases = AccountLeaseStore(path)
         self.intents = IntentStore(path)
         self.cell = CellKey("user-a", "kraken", "live", "broker-account-a")
+
+    def test_reserve_uses_time_after_waiting_for_write_lock(self):
+        lease = self.leases.acquire(self.cell, "worker-a", ttl_seconds=1)
+        blocker = sqlite3.connect(self.intents.path, isolation_level=None)
+        blocker.execute(
+            """CREATE TABLE IF NOT EXISTS order_intent_reservations (
+                cell_id TEXT NOT NULL, intent_id TEXT NOT NULL,
+                lease_generation INTEGER NOT NULL, reserved_at REAL NOT NULL,
+                PRIMARY KEY(cell_id, intent_id))"""
+        )
+        blocker.execute("BEGIN IMMEDIATE")
+        started = threading.Event()
+        outcome = []
+
+        def reserve():
+            started.set()
+            try:
+                outcome.append(self.intents.reserve(self.cell, lease, "lock-expiry-123"))
+            except Exception as exc:
+                outcome.append(exc)
+
+        worker = threading.Thread(target=reserve)
+        worker.start()
+        try:
+            self.assertTrue(started.wait(1))
+            time.sleep(1.1)
+        finally:
+            blocker.execute("ROLLBACK")
+            blocker.close()
+        worker.join(5)
+        self.assertFalse(worker.is_alive())
+        self.assertIsInstance(outcome[0], IntentDenied)
 
     def test_reserve_once_only(self):
         lease = self.leases.acquire(self.cell, "worker-a", now=100)
