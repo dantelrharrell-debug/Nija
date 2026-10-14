@@ -106,7 +106,7 @@ class InvitationOutbox:
         now = int(time.time()) if now is None else int(now)
         with self.connect() as db:
             rows = db.execute(
-                "SELECT key FROM onboarding_mail WHERE status IN ('queued','retry') "
+                "SELECT key FROM onboarding_mail WHERE status IN ('queued','retry','sending') "
                 "AND retry_at<=? ORDER BY retry_at,key LIMIT ?",
                 (now, max(1,min(int(limit),100))),
             ).fetchall()
