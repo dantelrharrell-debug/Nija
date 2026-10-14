@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import sqlite3
 import time
+import math
 from dataclasses import dataclass
 
 from bot.member_broker_cells import CellKey
@@ -42,7 +43,7 @@ class AccountLeaseStore:
         return db
 
     def acquire(self, cell: CellKey, owner: str, ttl_seconds: float = 30, *, now: float | None = None) -> Lease:
-        if not owner or not isinstance(owner, str) or not 1 <= ttl_seconds <= 120:
+        if not isinstance(owner, str) or not owner.strip() or not isinstance(ttl_seconds, (int, float)) or not math.isfinite(ttl_seconds) or not 1 <= ttl_seconds <= 120:
             raise LeaseDenied("Invalid lease request")
         now = time.time() if now is None else now
         db = self._connect()
@@ -84,7 +85,7 @@ class AccountLeaseStore:
 
     def renew(self, lease: Lease, ttl_seconds: float = 30, *, now: float | None = None) -> Lease:
         """Extend only the exact live owner/generation; stale workers fail closed."""
-        if not 1 <= ttl_seconds <= 120:
+        if not isinstance(ttl_seconds, (int, float)) or not math.isfinite(ttl_seconds) or not 1 <= ttl_seconds <= 120:
             raise LeaseDenied("Invalid renewal TTL")
         now = time.time() if now is None else now
         db = self._connect()
