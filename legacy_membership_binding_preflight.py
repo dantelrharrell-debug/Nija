@@ -1,12 +1,9 @@
 """Fail-closed preflight for reconciling legacy Stripe memberships.
 
-This preflight never creates an entitlement, customer, checkout, or charge.
-A successful result is NOT sufficient to grant access: an authenticated NIJA
-account, original application ownership and an independent admin audit are
-still required before an authorized binding transaction.
+This helper is NOT an entitlement issuer or proof of ownership. A passing
+result still requires audited, authenticated administrative authorization.
 """
 from dataclasses import dataclass
-from typing import Mapping
 
 
 @dataclass(frozen=True)
@@ -16,6 +13,7 @@ class LegacyBindingPreflight:
 
 
 def check_legacy_binding(*, user_id: str, verified_email: str,
+                         application_email: str, authenticated_email: str,
                          application_user_id: str, stripe_customer_id: str,
                          subscription_id: str, subscription_customer_id: str,
                          subscription_status: str, expected_price_id: str,
@@ -23,12 +21,14 @@ def check_legacy_binding(*, user_id: str, verified_email: str,
                          existing_customer_owner: str | None,
                          identity_proof_complete: bool,
                          application_ownership_verified: bool) -> LegacyBindingPreflight:
-    """Check independent evidence without trusting an unverified email match."""
+    """Compare independent verified identities, never trusting names alone."""
     reasons = []
     if not user_id or user_id != application_user_id:
         reasons.append("application_user_identity")
-    if not verified_email or "@" not in verified_email:
-        reasons.append("verified_email")
+    normalized = tuple(str(value or "").strip().lower() for value in
+                       (verified_email, application_email, authenticated_email))
+    if any(not value or "@" not in value for value in normalized) or len(set(normalized)) != 1:
+        reasons.append("verified_email_mismatch")
     if not identity_proof_complete or not application_ownership_verified:
         reasons.append("identity_ownership_unverified")
     if not stripe_customer_id or stripe_customer_id != subscription_customer_id:
