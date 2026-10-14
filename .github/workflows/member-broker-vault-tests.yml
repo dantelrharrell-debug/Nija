@@ -1,0 +1,30 @@
+name: Member Broker Vault Unit Tests
+
+on:
+  pull_request:
+    paths:
+      - 'bot/member_broker_vault.py'
+      - 'tests/test_member_broker_vault.py'
+      - '.github/workflows/member-broker-vault-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  vault-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install isolated dependencies
+        run: python -m pip install 'cryptography==46.0.3' 'requests>=2.31,<3'
+      - name: Test credential vault (no trading engine)
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python -S -B -m unittest discover -s tests -p test_member_broker_vault.py -v
