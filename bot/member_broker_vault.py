@@ -175,10 +175,20 @@ class BrokerVault:
             "GET", f"/.sfs-be/api/collections/{COLLECTION}/records",
             member_token, params={"filter": f'user_id="{member.id}"', "perPage": 100},
         )
-        rows = result.get("items", [])
-        return [
-            {"id": row["id"], "broker": row["broker"], "environment": row["environment"]}
-            for row in rows
-            if row.get("user_id") == member.id
-            and row.get("broker") in BROKERS and row.get("environment") in ENVIRONMENTS
-        ]
+        rows = result.get("items")
+        total_pages = result.get("totalPages")
+        if (not isinstance(rows, list) or not isinstance(total_pages, int)
+                or isinstance(total_pages, bool) or total_pages != 1):
+            raise VaultError("Vault metadata response incomplete or invalid")
+        metadata: list[dict[str, str]] = []
+        for row in rows:
+            if not isinstance(row, dict) or row.get("user_id") != member.id:
+                raise VaultError("Vault ownership mismatch")
+            if (not isinstance(row.get("id"), str) or not row["id"]
+                    or row.get("broker") not in BROKERS
+                    or row.get("environment") not in ENVIRONMENTS):
+                raise VaultError("Vault metadata invalid")
+            metadata.append({
+                "id": row["id"], "broker": row["broker"], "environment": row["environment"]
+            })
+        return metadata
