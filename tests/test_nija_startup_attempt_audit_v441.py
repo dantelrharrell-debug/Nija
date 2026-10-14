@@ -68,6 +68,7 @@ class StartupAttemptAuditTests(unittest.TestCase):
         self.assertFalse(result["proof_admissible_by_attempt_state"])
 
     def test_completed_with_blank_exit_remains_unresolved(self):
+    def test_completed_with_null_or_blank_order_ids_remains_unresolved(self):
         with tempfile.TemporaryDirectory() as d:
             path = Path(d) / "attempts.db"
             with sqlite3.connect(path) as connection:
