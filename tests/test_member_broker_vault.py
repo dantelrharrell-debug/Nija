@@ -57,6 +57,38 @@ class BrokerVaultTests(unittest.TestCase):
             self.vault.create("member.jwt", "kraken", "live", {"key": "sample"})
         self.assertEqual(self.session.request.call_count, 1)
 
+    def test_backend_authentication_failure(self):
+        self.session.request.return_value.status_code = 401
+        with self.assertRaises(VaultError):
+            self.vault.create("invalid.jwt", "kraken", "paper", {"key": "sample"})
+        self.assertEqual(self.session.request.call_count, 1)
+
+    def test_duplicate_write_conflict_does_not_retry(self):
+        first = Mock(status_code=200)
+        first.json.return_value = {"record": {"id": "member123", "verified": True}}
+        conflict = Mock(status_code=400)
+        self.session.request.side_effect = [first, conflict]
+        with self.assertRaises(VaultError):
+            self.vault.create("member.jwt", "alpaca", "live", {"key": "sample"})
+        self.assertEqual(self.session.request.call_count, 2)
+
+    def test_metadata_excludes_other_accounts_and_ciphertext(self):
+        first = Mock(status_code=200)
+        first.json.return_value = {"record": {"id": "member123", "verified": True}}
+        second = Mock(status_code=200)
+        second.json.return_value = {"items": [
+            {"id": "own", "user_id": "member123", "broker": "kraken", "environment": "paper", "ciphertext": "SECRET"},
+            {"id": "other", "user_id": "member456", "broker": "alpaca", "environment": "live", "ciphertext": "SECRET"}
+        ]}
+        self.session.request.side_effect = [first, second]
+        self.assertEqual(self.vault.list_metadata("member.jwt"), [{"id": "own", "broker": "kraken", "environment": "paper"}])
+
+    def test_key_must_be_256_bits_and_endpoint_https(self):
+        with self.assertRaises(VaultError):
+            BrokerVault("http://example.test", KEY, lambda uid: True)
+        with self.assertRaises(VaultError):
+            BrokerVault("https://example.test", base64.b64encode(b"short").decode(), lambda uid: True)
+
     def test_create_uses_authenticated_owner(self):
         first = Mock(status_code=200)
         first.json.return_value = {"record": {"id": "member123", "verified": True}}
