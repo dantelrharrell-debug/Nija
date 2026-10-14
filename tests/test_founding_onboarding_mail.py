@@ -48,6 +48,22 @@ class InvitationTests(unittest.TestCase):
         self.assertEqual(self.outbox.send(key,sender="support@nijaaitrading.com",api_key="fake",now=1000,opener=opener),"failed")
         self.assertEqual(self.outbox.send(key,sender="support@nijaaitrading.com",api_key="fake",now=2000,opener=opener),"failed")
         opener.assert_called_once()
+    def test_delivery_status_and_due_work(self):
+        key=self.outbox.enqueue("a1","user@example.com",approved=True,verified=True)
+        self.assertEqual(self.outbox.due_keys(now=1000),[key])
+        with self.outbox.connect() as db:
+            db.execute("UPDATE onboarding_mail SET status='accepted',provider_id='email_123' WHERE key=?", (key,))
+        self.assertTrue(self.outbox.record_provider_event("email_123","email.delivered"))
+        with self.outbox.connect() as db:
+            self.assertEqual(db.execute("SELECT status FROM onboarding_mail WHERE key=?", (key,)).fetchone()[0],"delivered")
+        self.assertEqual(self.outbox.due_keys(now=1000),[])
+    def test_bounce_suppression(self):
+        key=self.outbox.enqueue("a1","user@example.com",approved=True,verified=True)
+        with self.outbox.connect() as db:
+            db.execute("UPDATE onboarding_mail SET status='accepted',provider_id='email_123' WHERE key=?", (key,))
+        self.assertTrue(self.outbox.record_provider_event("email_123","email.bounced"))
+        with self.outbox.connect() as db:
+            self.assertEqual(db.execute("SELECT status FROM onboarding_mail WHERE key=?", (key,)).fetchone()[0],"suppressed")
     def test_no_api_key_instructions(self):
         self.assertIn("Do not enter keys",invitation_body())
 
