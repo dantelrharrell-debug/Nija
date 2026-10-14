@@ -82,6 +82,32 @@ class AccountLeaseStore:
         finally:
             db.close()
 
+    def renew(self, lease: Lease, ttl_seconds: float = 30, *, now: float | None = None) -> Lease:
+        """Extend only the exact live owner/generation; stale workers fail closed."""
+        if not 1 <= ttl_seconds <= 120:
+            raise LeaseDenied("Invalid renewal TTL")
+        now = time.time() if now is None else now
+        db = self._connect()
+        try:
+            db.execute("BEGIN IMMEDIATE")
+            new_expiry = now + ttl_seconds
+            cursor = db.execute(
+                """UPDATE account_leases SET expires_at=?
+                   WHERE cell_id=? AND owner=? AND generation=?
+                   AND expires_at=? AND expires_at>?""",
+                (new_expiry, lease.cell_id, lease.owner, lease.generation, lease.expires_at, now),
+            )
+            if cursor.rowcount != 1:
+                raise LeaseDenied("Stale or expired lease")
+            db.execute("COMMIT")
+            return Lease(lease.cell_id, lease.owner, lease.generation, new_expiry)
+        except Exception:
+            if db.in_transaction:
+                db.execute("ROLLBACK")
+            raise
+        finally:
+            db.close()
+
     def release(self, lease: Lease) -> bool:
         db = self._connect()
         try:
