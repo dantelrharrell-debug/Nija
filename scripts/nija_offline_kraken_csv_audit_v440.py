@@ -105,7 +105,7 @@ def inspect(db: Path, trades: Path, ledgers: Path, scope: str) -> dict[str, Any]
         raise ValueError("Explicit full Kraken account scope required")
     pending, db_hash = _pending_rows(db, scope)
     # Never apply one exchange exit to multiple pending records.
-    pending_ids = [str(row["order_id"]).strip() for row in pending]
+    pending_ids = [str(row["order_id"]).strip() if row["order_id"] is not None else "" for row in pending]
     if not all(pending_ids) or len(set(pending_ids)) != len(pending_ids):
         raise ValueError("Pending closes contain missing or duplicate order IDs")
     trade_rows, trades_hash = _csv_rows(trades, REQUIRED_TRADE_FIELDS)
