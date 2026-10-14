@@ -23,6 +23,12 @@ def inspect(path: Path) -> dict:
             rows = connection.execute(
                 "SELECT state, COUNT(*) FROM startup_attempts GROUP BY state"
             ).fetchall()
+            unresolved = connection.execute(
+                "SELECT COUNT(*) FROM startup_attempts WHERE "
+                "COALESCE(state, '') != 'completed' OR "
+                "TRIM(COALESCE(entry_order_id, '')) = '' OR "
+                "TRIM(COALESCE(exit_order_id, '')) = ''"
+            ).fetchone()[0]
         counts = {str(state): int(count) for state, count in rows}
         # Legacy audit fixtures may only expose state. Never treat a completed
         # row as proof when the broker order identifiers are unavailable.

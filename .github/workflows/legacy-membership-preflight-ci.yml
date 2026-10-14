@@ -1,0 +1,20 @@
+name: Legacy Membership Binding Safety
+on:
+  pull_request:
+    paths:
+      - 'legacy_membership_binding_preflight.py'
+      - 'tests/test_legacy_membership_binding_preflight.py'
+      - '.github/workflows/legacy-membership-preflight-ci.yml'
+  workflow_dispatch:
+jobs:
+  identity-preflight:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Compile and test identity checks
+        run: |
+          python -m py_compile legacy_membership_binding_preflight.py tests/test_legacy_membership_binding_preflight.py
+          python -m unittest discover -s tests -p 'test_legacy_membership_binding_preflight.py' -v

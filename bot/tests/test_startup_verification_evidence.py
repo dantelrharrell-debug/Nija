@@ -167,6 +167,52 @@ class EvidenceTests(unittest.TestCase):
                 with self.assertRaises(E.StartupEvidenceError):
                     E.validate_readonly_startup_order(broker, data)
 
+    def test_terminal_round_trip_requires_exact_authenticated_fills(self):
+        broker = Broker()
+        identity = E.read_startup_broker_identity(broker)
+        plan = types.SimpleNamespace(
+            validate=lambda: None, account_fingerprint=identity.account_fingerprint,
+            api_key_fingerprint=identity.api_key_fingerprint,
+            symbol="BTC-USD", base_quantity="0.01000000", budget_usd="20",
+            digest=lambda: "approved-plan",
+        )
+        evidence = E.verify_startup_terminal_round_trip(
+            broker, plan, entry_order_id="BUY", exit_order_id="SELL"
+        )
+        self.assertEqual(evidence.net_base_delta, 0)
+        self.assertEqual(evidence.net_quote_delta, Decimal("-3.33"))
+        self.assertFalse(evidence.execution_ready)
+        broker.responses["QueryLedgers"]["SB"]["amount"] = "-0.00800000"
+        with self.assertRaises(E.StartupEvidenceError):
+            E.verify_startup_terminal_round_trip(
+                broker, plan, entry_order_id="BUY", exit_order_id="SELL"
+            )
+
+    def test_terminal_round_trip_rejects_stale_mismatched_and_over_budget(self):
+        broker = Broker()
+        identity = E.read_startup_broker_identity(broker)
+        plan = types.SimpleNamespace(
+            validate=lambda: None, account_fingerprint=identity.account_fingerprint,
+            api_key_fingerprint=identity.api_key_fingerprint,
+            symbol="BTC-USD", base_quantity="0.01000000", budget_usd="5",
+            digest=lambda: "approved-plan",
+        )
+        with self.assertRaises(E.StartupEvidenceError):
+            E.verify_startup_terminal_round_trip(
+                broker, plan, entry_order_id="BUY", exit_order_id="SELL"
+            )
+        plan.budget_usd = "20"
+        plan.account_fingerprint = "0" * 64
+        with self.assertRaises(E.StartupEvidenceError):
+            E.verify_startup_terminal_round_trip(
+                broker, plan, entry_order_id="BUY", exit_order_id="SELL"
+            )
+        plan.account_fingerprint = identity.account_fingerprint
+        with self.assertRaises(E.StartupEvidenceError):
+            E.verify_startup_terminal_round_trip(
+                broker, plan, entry_order_id="BUY", exit_order_id="BUY"
+            )
+
     def test_exact_base_credit_minus_fee_is_used(self):
         evidence = E.read_startup_fill_evidence(Broker(), "BUY", "BTC-USD", "buy")
         self.assertEqual(evidence.gross_base_quantity, Decimal("0.01"))

@@ -5,6 +5,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import jwt
+import pytest
+from sqlalchemy import update
 
 import billing_service as billing
 from billing_service_store import BillingServiceStore
@@ -399,16 +401,139 @@ def test_subscription_event_cannot_entitle_before_checkout_validation(monkeypatc
     verified = client.get("/api/billing/verify?session_id=cs_nija_1").get_json()
     assert verified["state"] == "verified"
     assert verified["verified"] is True
-def test_second_checkout_is_blocked_while_first_is_pending(monkeypatch, tmp_path):
+def test_second_checkout_reuses_open_session(monkeypatch, tmp_path):
     app, _store = _configured_app(monkeypatch, tmp_path)
-    _state, stripe = _stripe_fixture()
+    state, stripe = _stripe_fixture()
     monkeypatch.setattr(billing, "_stripe_module", lambda: stripe)
     client = app.test_client()
 
     assert _create_checkout(client).status_code == 200
+    session = _valid_checkout_session(payment_status="unpaid")
+    session.update({
+        "status": "open",
+        "expires_at": 1999999999,
+        "url": "https://checkout.stripe.test/cs_nija_1",
+        "customer": None,
+        "subscription": None,
+    })
+    state["session"] = session
     second = _create_checkout(client)
-    assert second.status_code == 409
-    assert second.get_json()["error"] == "subscription_or_checkout_already_exists"
+    assert second.status_code == 200
+    assert second.get_json()["reused_checkout"] is True
+    assert second.get_json()["checkout_session_id"] == "cs_nija_1"
+
+
+@pytest.mark.parametrize("details,email,customer,expected", [
+    (None, "member@example.test", None, 200),
+    (None, "other@example.test", None, 409),
+    (None, None, None, 409),
+    ({"email": "member@example.test"}, "other@example.test", None, 409),
+    (None, None, "cus_1", 200),
+])
+def test_retry_requires_authoritative_customer_identity(
+    monkeypatch, tmp_path, details, email, customer, expected,
+):
+    app, _store = _configured_app(monkeypatch, tmp_path)
+    state, stripe = _stripe_fixture()
+    monkeypatch.setattr(billing, "_stripe_module", lambda: stripe)
+    client = app.test_client()
+    assert _create_checkout(client).status_code == 200
+    session = _valid_checkout_session(payment_status="unpaid")
+    session.update({
+        "status": "open", "expires_at": 1999999999,
+        "url": "https://checkout.stripe.test/cs_nija_1",
+        "customer_details": details, "customer_email": email,
+        "customer": customer, "subscription": None,
+    })
+    state["session"] = session
+    stripe.checkout.Session.create = lambda **_kw: pytest.fail("retry created a duplicate checkout")
+    response = _create_checkout(client)
+    assert response.status_code == expected
+    if expected == 200:
+        assert response.get_json()["reused_checkout"] is True
+
+
+@pytest.mark.parametrize("status", [
+    "mismatch", "payment_failed", "failed", "unpaid", "unknown", "canceled", "incomplete_expired",
+])
+def test_unreconciled_customer_state_never_creates_remote_checkout(monkeypatch, tmp_path, status):
+    app, store = _configured_app(monkeypatch, tmp_path)
+    state, stripe = _stripe_fixture()
+    monkeypatch.setattr(billing, "_stripe_module", lambda: stripe)
+    client = app.test_client()
+    assert _create_checkout(client).status_code == 200
+    with store.engine.begin() as conn:
+        conn.execute(update(store.customers).values(status=status))
+    stripe.checkout.Session.create = lambda **_kw: pytest.fail("unreconciled state created a remote checkout")
+    assert _create_checkout(client).status_code == 409
+
+
+def test_checkout_with_missing_expiry_fails_closed(monkeypatch, tmp_path):
+    app, _store = _configured_app(monkeypatch, tmp_path)
+    state, stripe = _stripe_fixture()
+    monkeypatch.setattr(billing, "_stripe_module", lambda: stripe)
+    client = app.test_client()
+    assert _create_checkout(client).status_code == 200
+
+    session = _valid_checkout_session(payment_status="unpaid")
+    session.update({
+        "status": "open", "expires_at": None,
+        "url": "https://checkout.stripe.test/cs_nija_1",
+        "customer": None, "subscription": None,
+    })
+    state["session"] = session
+    response = _create_checkout(client)
+    assert response.status_code == 503
+    assert response.get_json()["error"] == "checkout_recovery_unavailable"
+
+
+def test_expired_checkout_creates_new_pending_session(monkeypatch, tmp_path):
+    app, store = _configured_app(monkeypatch, tmp_path)
+    state, stripe = _stripe_fixture()
+    monkeypatch.setattr(billing, "_stripe_module", lambda: stripe)
+    client = app.test_client()
+    assert _create_checkout(client).status_code == 200
+
+    expired = _valid_checkout_session(payment_status="unpaid")
+    expired.update({"status": "expired", "customer": None, "subscription": None})
+    state["session"] = expired
+    stripe.checkout.Session.create = lambda **kwargs: {
+        "id": "cs_nija_2",
+        "url": "https://checkout.stripe.test/cs_nija_2",
+        "customer": None,
+    }
+    response = _create_checkout(client)
+    assert response.status_code == 200
+    assert response.get_json()["checkout_session_id"] == "cs_nija_2"
+    assert store.get_checkout("cs_nija_1")["verification_status"] == "expired"
+    assert store.latest_checkout_for_user("application-123")["checkout_session_id"] == "cs_nija_2"
+
+
+def test_idempotent_checkout_collision_never_expires_another_session(monkeypatch, tmp_path):
+    app, store = _configured_app(monkeypatch, tmp_path)
+    state, stripe = _stripe_fixture()
+    monkeypatch.setattr(billing, "_stripe_module", lambda: stripe)
+    client = app.test_client()
+    assert _create_checkout(client).status_code == 200
+
+    store.set_checkout_status(
+        "cs_nija_1", verification_status="expired",
+        reason="stripe_checkout_expired", revoke_customer=True,
+    )
+    stripe_session = _valid_checkout_session(payment_status="unpaid")
+    stripe_session.update({"status": "expired", "customer": None, "subscription": None})
+    state["session"] = stripe_session
+
+    def unexpected_expiry(_session_id):
+        raise AssertionError("idempotency collision must not expire an existing session")
+
+    stripe.checkout.Session.expire = unexpected_expiry
+    response = _create_checkout(client)
+    assert response.status_code == 409
+    assert response.get_json()["error"] == "checkout_identity_conflict"
+    assert store.get_customer("application-123")["status"] == "expired"
+    assert store.get_checkout("cs_nija_1")["verification_status"] == "expired"
+
 
 def test_readyz_verifies_authoritative_billing_dependencies(monkeypatch, tmp_path):
     app, _store = _configured_app(monkeypatch, tmp_path)

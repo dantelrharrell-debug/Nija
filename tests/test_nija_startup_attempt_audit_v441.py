@@ -32,9 +32,12 @@ class StartupAttemptAuditTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             path = Path(d) / "attempts.db"
             connection = sqlite3.connect(path)
-            connection.execute("CREATE TABLE startup_attempts (state TEXT)")
-            connection.executemany("INSERT INTO startup_attempts(state) VALUES(?)",
-                                   [("claimed",), ("completed",), ("entry_pending",)])
+            connection.execute(
+                "CREATE TABLE startup_attempts (state TEXT, entry_order_id TEXT, exit_order_id TEXT)"
+            )
+            connection.executemany("INSERT INTO startup_attempts VALUES(?,?,?)",
+                                   [("claimed", None, None), ("completed", "entry", "exit"),
+                                    ("entry_pending", "entry", None)])
             connection.commit()
             connection.close()
             before = path.read_bytes()
@@ -46,6 +49,7 @@ class StartupAttemptAuditTests(unittest.TestCase):
         self.assertFalse(result["proof_admissible_by_attempt_state"])
 
     def test_completed_attempt_requires_both_broker_order_ids(self):
+    def test_completed_with_null_or_blank_order_ids_remains_unresolved(self):
         with tempfile.TemporaryDirectory() as d:
             path = Path(d) / "attempts.db"
             with sqlite3.connect(path) as connection:
@@ -62,6 +66,17 @@ class StartupAttemptAuditTests(unittest.TestCase):
             self.assertEqual(path.read_bytes(), before)
         self.assertTrue(result["readable"])
         self.assertEqual(result["unresolved_count"], 1)
+                    "CREATE TABLE startup_attempts (state TEXT, entry_order_id TEXT, exit_order_id TEXT)"
+                )
+                connection.executemany("INSERT INTO startup_attempts VALUES(?,?,?)", [
+                    ("completed", None, None), ("completed", "entry", " "),
+                    (None, "entry", "exit"), ("completed", "entry", "exit"),
+                ])
+            before = path.read_bytes()
+            result = inspect(path)
+            self.assertEqual(before, path.read_bytes())
+        self.assertTrue(result["readable"])
+        self.assertEqual(result["unresolved_count"], 3)
         self.assertFalse(result["proof_admissible_by_attempt_state"])
 
     def test_invalid_schema_fails_closed(self):

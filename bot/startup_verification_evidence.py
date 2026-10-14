@@ -377,3 +377,64 @@ def read_startup_fill_evidence(broker: Any, order_id: str, symbol: str, side: st
     if (side == "buy" and net_base <= 0) or (side == "sell" and net_base >= 0):
         raise StartupEvidenceError("startup_net_base_delta_invalid")
     return StartupFillEvidence(order_id, side, volume, net_base, quote_delta, latest_epoch)
+
+
+@dataclass(frozen=True)
+class StartupRoundTripEvidence:
+    """Broker-authenticated terminal round trip; not permission to trade."""
+
+    entry_order_id: str
+    exit_order_id: str
+    account_fingerprint: str
+    plan_digest: str
+    net_base_delta: Decimal
+    net_quote_delta: Decimal
+    verified_at_epoch: float
+    execution_ready: bool = False
+
+
+def verify_startup_terminal_round_trip(
+    broker: Any,
+    plan: Any,
+    *,
+    entry_order_id: str,
+    exit_order_id: str,
+    max_age_seconds: float = 1800.0,
+) -> StartupRoundTripEvidence:
+    """Fail closed unless genuine Kraken trade and ledger facts close the lot.
+
+    This read-only verifier cannot submit orders, mint a heartbeat marker, or
+    authorize unattended execution. A caller must independently establish
+    protective-exit coverage and reconcile all account exposure.
+    """
+    plan.validate()
+    if (not isinstance(entry_order_id, str) or not entry_order_id.strip()
+            or not isinstance(exit_order_id, str) or not exit_order_id.strip()
+            or entry_order_id == exit_order_id):
+        raise StartupEvidenceError("startup_roundtrip_order_ids_invalid")
+    now = time.time()
+    if not math.isfinite(max_age_seconds) or not 0 < max_age_seconds <= 1800:
+        raise StartupEvidenceError("startup_roundtrip_freshness_bound_invalid")
+    identity = read_startup_broker_identity(broker)
+    if (identity.account_fingerprint != plan.account_fingerprint
+            or identity.api_key_fingerprint != plan.api_key_fingerprint):
+        raise StartupEvidenceError("startup_roundtrip_account_or_key_mismatch")
+    entry = read_startup_fill_evidence(broker, entry_order_id, plan.symbol, "buy")
+    exit_fill = read_startup_fill_evidence(broker, exit_order_id, plan.symbol, "sell")
+    if (entry.gross_base_quantity != _decimal(plan.base_quantity)
+            or entry.net_base_delta <= 0
+            or exit_fill.net_base_delta >= 0
+            or entry.net_base_delta + exit_fill.net_base_delta != 0):
+        raise StartupEvidenceError("startup_roundtrip_quantity_not_reconciled")
+    if (exit_fill.execution_epoch < entry.execution_epoch
+            or not 0 <= now - exit_fill.execution_epoch <= max_age_seconds
+            or not 0 <= now - entry.execution_epoch <= max_age_seconds):
+        raise StartupEvidenceError("startup_roundtrip_fill_stale_or_reversed")
+    if (-entry.quote_delta > _decimal(plan.budget_usd)
+            or entry.quote_delta >= 0 or exit_fill.quote_delta <= 0):
+        raise StartupEvidenceError("startup_roundtrip_cash_budget_or_direction_invalid")
+    return StartupRoundTripEvidence(
+        entry_order_id, exit_order_id, identity.account_fingerprint,
+        plan.digest(), entry.net_base_delta + exit_fill.net_base_delta,
+        entry.quote_delta + exit_fill.quote_delta, now,
+    )

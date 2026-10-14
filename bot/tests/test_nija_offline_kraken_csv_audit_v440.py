@@ -117,3 +117,28 @@ def test_only_explicit_verified_ledger_links_count(tmp_path):
     assert report["exit_csv_consistent"] == 1
     assert report["historical_realized_pnl_certified"] is False
     assert report["live_trading_eligible"] is False
+
+
+@pytest.mark.parametrize("second_id", ["EXIT1", "", "  ", None, "None", "NULL"])
+def test_duplicate_or_blank_pending_order_ids_fail_closed(tmp_path, second_id):
+    db, trades, ledgers = _evidence(tmp_path)
+    original = db.read_bytes()
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "INSERT INTO pending_kraken_closes VALUES (?,?,?,?,?,?,?,?,?)",
+            ("kraken", "platform:kraken", second_id, "BTC-USD", "sell",
+             100.0, 100.0, 0.2, "pending"),
+        )
+    before = db.read_bytes()
+    with pytest.raises(ValueError, match="missing or duplicate"):
+        inspect(db, trades, ledgers, "platform:kraken")
+    assert db.read_bytes() == before
+
+
+@pytest.mark.parametrize("missing_id", [None, "", "None", "null"])
+def test_single_missing_order_id_rejected_without_modifying_ledger(tmp_path, missing_id):
+    db, trades, ledgers = _evidence(tmp_path, order=missing_id)
+    before = db.read_bytes()
+    with pytest.raises(ValueError, match="missing or duplicate"):
+        inspect(db, trades, ledgers, "platform:kraken")
+    assert db.read_bytes() == before
