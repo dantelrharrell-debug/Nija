@@ -1,0 +1,20 @@
+name: Founding 100 onboarding mail
+on:
+  pull_request:
+    paths:
+      - 'founding_onboarding_mail.py'
+      - 'tests/test_founding_onboarding_mail.py'
+      - '.github/workflows/founding-onboarding-mail-tests.yml'
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Test invitation safety and deduplication
+        run: python -m unittest discover -s tests -p 'test_founding_onboarding_mail.py' -v
