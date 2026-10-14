@@ -35,45 +35,66 @@ def collect_history(
     if not callable(private_read) or not 1 <= max_pages <= 1000:
         raise ValueError("Trusted read callable and bounded max_pages required")
 
-    collected: dict[str, dict[str, Any]] = {}
-    for endpoint, field in ENDPOINTS:
-        records: dict[str, Any] = {}
-        expected: int | None = None
-        for index in range(max_pages):
-            payload = private_read(endpoint, {"ofs": index * PAGE_SIZE})
-            if not isinstance(payload, Mapping) or payload.get("error"):
-                raise IncompleteHistory(f"{endpoint}: API failure")
-            result = payload.get("result")
-            if not isinstance(result, Mapping) or not isinstance(result.get(field), Mapping):
-                raise IncompleteHistory(f"{endpoint}: malformed result")
-            batch = result[field]
-            count = result.get("count")
-            if not isinstance(count, int) or isinstance(count, bool) or count < 0:
-                raise IncompleteHistory(f"{endpoint}: invalid count")
-            if expected is None:
-                expected = count
-            elif count != expected:
-                raise IncompleteHistory(f"{endpoint}: count changed during pagination")
-            for identifier, row in batch.items():
-                if not isinstance(identifier, str) or not identifier or not isinstance(row, Mapping):
-                    raise IncompleteHistory(f"{endpoint}: invalid record")
-                if identifier in records:
-                    raise IncompleteHistory(f"{endpoint}: duplicate identifier across pages")
-                records[identifier] = dict(row)
-            if len(records) >= expected:
-                break
-            if not batch:
-                raise IncompleteHistory(f"{endpoint}: incomplete empty page")
-        else:
-            raise IncompleteHistory(f"{endpoint}: page limit before all records")
-        if len(records) != expected:
-            raise IncompleteHistory(f"{endpoint}: expected count mismatch")
-        collected[field] = records
+    def read_all_endpoints() -> dict[str, dict[str, Any]]:
+        """Collect one bounded pass without assuming Kraken provides an atomic snapshot."""
+        output: dict[str, dict[str, Any]] = {}
+        for endpoint, field in ENDPOINTS:
+            records: dict[str, Any] = {}
+            expected: int | None = None
+            for index in range(max_pages):
+                payload = private_read(endpoint, {"ofs": index * PAGE_SIZE})
+                if not isinstance(payload, Mapping) or payload.get("error"):
+                    raise IncompleteHistory(f"{endpoint}: API failure")
+                result = payload.get("result")
+                if not isinstance(result, Mapping) or not isinstance(result.get(field), Mapping):
+                    raise IncompleteHistory(f"{endpoint}: malformed result")
+                batch = result[field]
+                count = result.get("count")
+                if not isinstance(count, int) or isinstance(count, bool) or count < 0:
+                    raise IncompleteHistory(f"{endpoint}: invalid count")
+                if len(batch) > PAGE_SIZE:
+                    raise IncompleteHistory(f"{endpoint}: oversized page")
+                if expected is None:
+                    expected = count
+                elif count != expected:
+                    raise IncompleteHistory(f"{endpoint}: count changed during pagination")
+                for identifier, row in batch.items():
+                    if not isinstance(identifier, str) or not identifier or not isinstance(row, Mapping):
+                        raise IncompleteHistory(f"{endpoint}: invalid record")
+                    if identifier in records:
+                        raise IncompleteHistory(f"{endpoint}: duplicate identifier across pages")
+                    # Freeze broker response objects: do not trust later mutation of a
+                    # nested mapping to silently change already-collected evidence.
+                    try:
+                        records[identifier] = json.loads(
+                            json.dumps(dict(row), sort_keys=True, separators=(",", ":"), allow_nan=False)
+                        )
+                    except (TypeError, ValueError) as exc:
+                        raise IncompleteHistory(f"{endpoint}: non-JSON record") from exc
+                if len(records) >= expected:
+                    break
+                if not batch:
+                    raise IncompleteHistory(f"{endpoint}: incomplete empty page")
+            else:
+                raise IncompleteHistory(f"{endpoint}: page limit before all records")
+            if len(records) != expected:
+                raise IncompleteHistory(f"{endpoint}: expected count mismatch")
+            output[field] = records
+        return output
 
-    canonical = json.dumps(collected, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    # Offset pagination is not a broker-provided atomic snapshot. A second full
+    # read catches a stable count with changed IDs or changed row contents.
+    # This reduces inconsistent evidence; it does not prove absence of ABA churn.
+    collected = read_all_endpoints()
+    if read_all_endpoints() != collected:
+        raise IncompleteHistory("history changed between verification passes")
+    envelope = {"account_scope_asserted_by_caller": account_scope, "history": collected}
+    canonical = json.dumps(envelope, sort_keys=True, separators=(",", ":"), allow_nan=False)
     return {
         "account_scope_asserted_by_caller": account_scope,
         "history": collected,
+        "repeat_read_consistent": True,
+        "atomic_broker_snapshot_verified": False,
         "evidence_sha256": hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
         "authenticated_identity_independently_verified": False,
         "ledger_links_verified": False,
