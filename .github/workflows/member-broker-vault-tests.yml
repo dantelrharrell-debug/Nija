@@ -23,6 +23,8 @@ jobs:
   vault-tests:
     runs-on: ubuntu-latest
     timeout-minutes: 8
+    env:
+      NIJA_DEFER_RUNTIME_SITE_HOOKS: '1'
     steps:
       - uses: actions/checkout@v4
         with:
