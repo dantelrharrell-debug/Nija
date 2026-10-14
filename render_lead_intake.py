@@ -113,7 +113,8 @@ def _lead_field_sources(payload: dict[str, Any]) -> list[dict[str, Any]]:
         if not isinstance(value, dict):
             continue
         sources.append(value)
-        for inner in ("data", "fields", "form_fields"):
+        for inner in ("formName", "form_name", "form", "data", "submission",
+                      "fields", "form_fields", "inputData"):
             child = value.get(inner)
             if isinstance(child, dict):
                 sources.append(child)
@@ -172,13 +173,16 @@ def normalize_lead_payload(payload: dict[str, Any]) -> dict[str, str]:
     email_keys = ("email", "email_address", "emailAddress", "Email", "Email Address")
     email_sources: list[tuple[str, dict[str, Any]]] = []
     for source in sources:
-        value = _first_form_field([source], email_keys)
-        if value == "":
-            continue
-        normalized = normalize_email(value)
-        if not normalized:
-            raise ValueError("Lead email is missing or invalid")
-        email_sources.append((normalized, source))
+        for key in email_keys:
+            if key not in source or source[key] is None or source[key] == "":
+                continue
+            value = source[key]
+            if not isinstance(value, str):
+                raise ValueError("Lead email must be a string")
+            normalized = normalize_email(value)
+            if not normalized:
+                raise ValueError("Lead email is missing or invalid")
+            email_sources.append((normalized, source))
     # Never silently pick a billing/admin address over a customer's address.
     if len({address for address, _ in email_sources}) > 1:
         raise ValueError("Conflicting lead email fields")
@@ -192,14 +196,26 @@ def normalize_lead_payload(payload: dict[str, Any]) -> dict[str, str]:
     raw_form_name = _first_form_field(
         sources, ("form_name", "formName", "form", "source", "Form", "Form Name")
     ) or "Website Lead"
-    raw_name = _first_form_field(
-        person_sources, ("name", "full_name", "fullName", "Name")
-    )
-    if not raw_name:
-        first = _first_form_field(person_sources, ("first_name", "firstName", "First Name"))
-        last = _first_form_field(person_sources, ("last_name", "lastName", "Last Name"))
-        raw_name = " ".join(part for part in (_clean_text(first, max_length=100),
-                                                 _clean_text(last, max_length=100)) if part)
+    raw_name = ""
+    for person_source in person_sources:
+        raw_name = _first_form_field(
+            [person_source], ("name", "full_name", "fullName", "Name")
+        )
+        if not raw_name:
+            first = _first_form_field(
+                [person_source], ("first_name", "firstName", "First Name")
+            )
+            last = _first_form_field(
+                [person_source], ("last_name", "lastName", "Last Name")
+            )
+            raw_name = " ".join(
+                part for part in (
+                    _clean_text(first, max_length=100),
+                    _clean_text(last, max_length=100),
+                ) if part
+            )
+        if raw_name:
+            break
     raw_submitted_at = _raw_submission_timestamp(payload)
 
     form_name = _clean_text(raw_form_name, max_length=160)
