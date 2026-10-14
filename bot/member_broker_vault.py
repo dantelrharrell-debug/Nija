@@ -101,7 +101,11 @@ class BrokerVault:
         member = Member(str(record.get("id") or ""), record.get("verified") is True)
         if not member.id or not member.verified:
             raise VaultError("Verified member required")
-        if not self._entitlement(member.id):
+        try:
+            entitled = self._entitlement(member.id)
+        except Exception:
+            raise VaultError("Founding 100 entitlement check unavailable") from None
+        if entitled is not True:
             raise VaultError("Active Founding 100 entitlement required")
         return member
 
