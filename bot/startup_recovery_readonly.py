@@ -42,3 +42,23 @@ def classify_recovery(readiness: Mapping[str, bool], *,
     if readiness.get("broker_connected") is True:
         return RecoveryDecision("READ_ONLY_RECOVERY", True, False, reasons)
     return RecoveryDecision("DISCONNECTED", False, False, reasons)
+
+
+def classify_observed_snapshot(readiness: Mapping[str, bool], *,
+                               kill_switch_clear: bool = False,
+                               startup_attempts_reconciled: bool = False,
+                               protective_exits_verified: bool = False,
+                               ledger_reconciled: bool = False) -> RecoveryDecision:
+    """Safely inspect incomplete startup telemetry without claiming safety.
+
+    Missing independent safety attestations are intentionally FALSE. This
+    diagnostic does not query a broker, create proof, or authorize orders.
+    Callers must obtain attestations from authoritative systems separately.
+    """
+    return classify_recovery(
+        readiness,
+        kill_switch_clear=kill_switch_clear,
+        startup_attempts_reconciled=startup_attempts_reconciled,
+        protective_exits_verified=protective_exits_verified,
+        ledger_reconciled=ledger_reconciled,
+    )
