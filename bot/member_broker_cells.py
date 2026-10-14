@@ -76,3 +76,29 @@ def isolation_report(
         key: cell_state(key, checks, global_emergency_stop=global_emergency_stop)
         for key, checks in checks_by_cell.items()
     }
+
+
+def validate_unique_account_bindings(keys: list[CellKey]) -> None:
+    """Reject duplicate cells or an account shared across member identities.
+
+    Broker account IDs must come from authenticated broker identity readback,
+    never user-entered labels. Identity assertions are checked by the caller.
+    """
+    seen_cells: set[CellKey] = set()
+    owners: dict[tuple[str, str, str], str] = {}
+    for key in keys:
+        if key in seen_cells:
+            raise ValueError("Duplicate broker cell")
+        seen_cells.add(key)
+        account = (key.broker, key.environment, key.brokerage_account_id)
+        if account in owners and owners[account] != key.member_id:
+            raise ValueError("Brokerage account assigned to multiple members")
+        owners[account] = key.member_id
+
+
+def verified_isolation_report(
+    checks_by_cell: dict[CellKey, CellChecks], *, global_emergency_stop: bool
+) -> dict[CellKey, CellState]:
+    """Validate broker account assignments before computing independent states."""
+    validate_unique_account_bindings(list(checks_by_cell))
+    return isolation_report(checks_by_cell, global_emergency_stop=global_emergency_stop)
