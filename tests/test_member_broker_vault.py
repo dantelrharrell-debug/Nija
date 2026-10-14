@@ -57,6 +57,26 @@ class BrokerVaultTests(unittest.TestCase):
             self.vault.create("member.jwt", "kraken", "live", {"key": "sample"})
         self.assertEqual(self.session.request.call_count, 1)
 
+    def test_entitlement_provider_error_fails_closed_without_storage(self):
+        session = Mock()
+        session.request.return_value.status_code = 200
+        session.request.return_value.json.return_value = {"record": {"id": "member123", "verified": True}}
+        def unavailable(_member_id):
+            raise RuntimeError("private upstream error")
+        vault = BrokerVault("https://example.test", KEY, unavailable, session=session)
+        with self.assertRaisesRegex(VaultError, "entitlement check unavailable"):
+            vault.create("member.jwt", "kraken", "paper", {"key": "sample"})
+        self.assertEqual(session.request.call_count, 1)
+
+    def test_nonboolean_entitlement_rejected(self):
+        session = Mock()
+        session.request.return_value.status_code = 200
+        session.request.return_value.json.return_value = {"record": {"id": "member123", "verified": True}}
+        vault = BrokerVault("https://example.test", KEY, lambda _member_id: "active", session=session)
+        with self.assertRaises(VaultError):
+            vault.create("member.jwt", "kraken", "paper", {"key": "sample"})
+        self.assertEqual(session.request.call_count, 1)
+
     def test_backend_authentication_failure(self):
         self.session.request.return_value.status_code = 401
         with self.assertRaises(VaultError):
