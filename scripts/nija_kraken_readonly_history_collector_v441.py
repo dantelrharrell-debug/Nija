@@ -11,7 +11,7 @@ import json
 from collections.abc import Callable, Mapping
 from typing import Any
 
-ENDPOINTS = (("TradesHistory", "trades"), ("ClosedOrders", "closed"))
+ENDPOINTS = (("TradesHistory", "trades"), ("ClosedOrders", "closed"), ("Ledgers", "ledger"))
 PAGE_SIZE = 50
 
 
@@ -81,3 +81,17 @@ def collect_history(
         "trading_authorized": False,
         "side_effects": "read_only_api_calls",
     }
+
+def collect_from_existing_broker(broker: Any, *, account_scope: str,
+                                 monitoring_category: Any, max_pages: int = 200) -> dict[str, Any]:
+    """Reuse existing authenticated Kraken serialization and rate controls."""
+    private_call = getattr(broker, "_kraken_private_call", None)
+    if not callable(private_call) or monitoring_category is None:
+        raise ValueError("Authenticated private call and monitoring category required")
+
+    def read(endpoint: str, params: dict[str, Any]) -> Mapping[str, Any]:
+        if endpoint not in {"TradesHistory", "ClosedOrders", "Ledgers"} or set(params) != {"ofs"}:
+            raise ValueError("Non-read-only request rejected")
+        return private_call(endpoint, params, category=monitoring_category)
+
+    return collect_history(read, account_scope=account_scope, max_pages=max_pages)
