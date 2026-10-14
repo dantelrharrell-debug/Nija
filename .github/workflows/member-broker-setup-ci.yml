@@ -1,0 +1,21 @@
+name: Member Broker Setup Safety
+on:
+  pull_request:
+    paths:
+      - 'member_broker_setup_guidance.py'
+      - 'tests/test_member_broker_setup_guidance.py'
+      - '.github/workflows/member-broker-setup-ci.yml'
+  workflow_dispatch:
+jobs:
+  member-broker-safety:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Compile and test broker setup safety checks
+        run: |
+          python -m pip install pytest
+          python -m py_compile member_broker_setup_guidance.py tests/test_member_broker_setup_guidance.py
+          python -m pytest -q tests/test_member_broker_setup_guidance.py
