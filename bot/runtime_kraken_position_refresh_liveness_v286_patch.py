@@ -414,11 +414,6 @@ def _balance_rows_while_waiting(broker: Any, flight: dict[str, Any]) -> list[dic
             if observation is None:
                 return None
             rows = v312._rows_from_observation(broker, observation)
-            # Publish the same authenticated rows to the v285 snapshot authority
-            # before returning them to the adopter. The in-flight handoff must
-            # not make adoption appear current while its snapshot is absent.
-            # No new broker I/O, TTL extension, or execution proof is created.
-            _record_snapshot_success(broker, rows)
             v312._log_handoff(broker, observation, rows, "inflight_short_ttl_handoff")
         # The existing worker remains registered and may finish normally. This
         # handoff neither cancels it nor authorizes a replacement private read.
