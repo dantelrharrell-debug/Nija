@@ -6,6 +6,7 @@ Founding 100 entitlement verifier. This module never authorizes trading.
 from __future__ import annotations
 
 import base64
+import binascii
 import json
 import os
 import secrets
@@ -34,7 +35,7 @@ class Member:
 def _bytes64(encoded: str) -> bytes:
     try:
         return base64.b64decode(encoded, validate=True)
-    except (ValueError, TypeError) as exc:
+    except (binascii.Error, ValueError, TypeError) as exc:
         raise VaultError("Invalid encryption key encoding") from exc
 
 
@@ -85,7 +86,13 @@ class BrokerVault:
             raise VaultError("Vault backend unavailable") from exc
         if response.status_code >= 300:
             raise VaultError("Vault request denied or failed")
-        return response.json()
+        try:
+            payload = response.json()
+        except (ValueError, TypeError) as exc:
+            raise VaultError("Vault backend returned invalid JSON") from exc
+        if not isinstance(payload, dict):
+            raise VaultError("Vault backend returned invalid payload")
+        return payload
 
     def _member(self, token: str) -> Member:
         # PocketBase verifies the signature and validity server-side.
