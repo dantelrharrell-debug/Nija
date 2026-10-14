@@ -20,32 +20,34 @@ def inspect(path: Path) -> dict:
         uri = path.resolve().as_uri() + "?mode=ro"
         with sqlite3.connect(uri, uri=True, timeout=2.0) as connection:
             connection.execute("PRAGMA query_only=ON")
+            columns = {row[1] for row in connection.execute(
+                "PRAGMA table_info(startup_attempts)"
+            )}
+            if "state" not in columns:
+                raise sqlite3.OperationalError("startup_attempts state column unavailable")
             rows = connection.execute(
                 "SELECT state, COUNT(*) FROM startup_attempts GROUP BY state"
             ).fetchall()
-            unresolved = connection.execute(
-                "SELECT COUNT(*) FROM startup_attempts WHERE "
-                "COALESCE(state, '') != 'completed' OR "
-                "TRIM(COALESCE(entry_order_id, '')) = '' OR "
-                "TRIM(COALESCE(exit_order_id, '')) = ''"
-            ).fetchone()[0]
-        counts = {str(state): int(count) for state, count in rows}
-        # Legacy audit fixtures may only expose state. Never treat a completed
-        # row as proof when the broker order identifiers are unavailable.
-        columns = {row[1] for row in connection.execute("PRAGMA table_info(startup_attempts)")}
-        if {"entry_order_id", "exit_order_id"} <= columns:
-            unresolved = connection.execute(
-                "SELECT COUNT(*) FROM startup_attempts WHERE state != 'completed' "
-                "OR NULLIF(TRIM(entry_order_id), '') IS NULL "
-                "OR NULLIF(TRIM(exit_order_id), '') IS NULL"
-            ).fetchone()[0]
-        else:
-            unresolved = connection.execute(
-                "SELECT COUNT(*) FROM startup_attempts WHERE state != 'completed'"
-            ).fetchone()[0]
-            # Legacy schemas can be diagnosed, but cannot establish broker-ID proof.
-        result.update(readable=True, state_counts=counts, unresolved_count=unresolved,
-                      proof_admissible_by_attempt_state=(unresolved == 0 and {"entry_order_id", "exit_order_id"} <= columns))
+            required = {"entry_order_id", "exit_order_id"}
+            if required <= columns:
+                unresolved = connection.execute(
+                    "SELECT COUNT(*) FROM startup_attempts WHERE "
+                    "COALESCE(state, '') != 'completed' OR "
+                    "NULLIF(TRIM(entry_order_id), '') IS NULL OR "
+                    "NULLIF(TRIM(exit_order_id), '') IS NULL"
+                ).fetchone()[0]
+            else:
+                unresolved = connection.execute(
+                    "SELECT COUNT(*) FROM startup_attempts WHERE "
+                    "COALESCE(state, '') != 'completed'"
+                ).fetchone()[0]
+            counts = {str(state): int(count) for state, count in rows}
+            result.update(
+                readable=True, state_counts=counts, unresolved_count=int(unresolved),
+                proof_admissible_by_attempt_state=(
+                    unresolved == 0 and required <= columns
+                ),
+            )
     except (sqlite3.Error, OSError, ValueError) as exc:
         result["error"] = type(exc).__name__
     return result
