@@ -1,7 +1,7 @@
 """Isolated account-cell policy tests. No broker network calls."""
 import unittest
 
-from bot.member_broker_cells import CellChecks, CellKey, CellState, cell_state, isolation_report
+from bot.member_broker_cells import CellChecks, CellKey, CellState, cell_state, isolation_report, validate_unique_account_bindings, verified_isolation_report
 
 
 class CellPolicyTests(unittest.TestCase):
@@ -30,6 +30,18 @@ class CellPolicyTests(unittest.TestCase):
         missing_proof = CellChecks(True, True, True, True, True, True, False, True)
         self.assertEqual(cell_state(self.a, missing_exit, global_emergency_stop=False), CellState.BLOCKED)
         self.assertEqual(cell_state(self.a, missing_proof, global_emergency_stop=False), CellState.BLOCKED)
+
+    def test_cross_member_same_broker_account_rejected(self):
+        shared = CellKey("member_b", "kraken", "live", "account_a")
+        with self.assertRaises(ValueError):
+            validate_unique_account_bindings([self.a, shared])
+        with self.assertRaises(ValueError):
+            verified_isolation_report({self.a: self.good, shared: self.good}, global_emergency_stop=False)
+
+    def test_distinct_accounts_remain_independent(self):
+        report = verified_isolation_report({self.a: self.good, self.b: self.good}, global_emergency_stop=False)
+        self.assertEqual(report[self.a], CellState.READY)
+        self.assertEqual(report[self.b], CellState.READY)
 
     def test_invalid_broker_and_unbound_account_fail(self):
         with self.assertRaises(ValueError):
