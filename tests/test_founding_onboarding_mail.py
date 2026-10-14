@@ -54,6 +54,36 @@ class InvitationTests(unittest.TestCase):
         self.assertEqual(self.outbox.send(key,sender="support@nijaaitrading.com",api_key="fake",now=1000,opener=opener),"failed")
         self.assertEqual(self.outbox.send(key,sender="support@nijaaitrading.com",api_key="fake",now=2000,opener=opener),"failed")
         opener.assert_called_once()
+    def test_http_408_timeout_is_retryable_using_identical_idempotency_key(self):
+        key = self.outbox.enqueue("a1", "user@example.com", approved=True, verified=True)
+        timeout = OSError("request timed out")
+        timeout.code = 408
+        response = Mock()
+        response.read.return_value = json.dumps({"id": "email_timeout_recovered"}).encode()
+        opener = Mock(side_effect=[timeout, response])
+        args = {"sender": "support@nijaaitrading.com", "api_key": "fake", "opener": opener}
+        self.assertEqual(self.outbox.send(key, now=1000, **args), "retry")
+        self.assertEqual(self.outbox.due_keys(now=1059), [])
+        self.assertEqual(self.outbox.send(key, now=1059, **args), "retry")
+        self.assertEqual(self.outbox.send(key, now=1060, **args), "accepted")
+        self.assertEqual(opener.call_count, 2)
+        first = opener.call_args_list[0].args[0]
+        second = opener.call_args_list[1].args[0]
+        self.assertEqual(first.get_header("Idempotency-key"), key)
+        self.assertEqual(second.get_header("Idempotency-key"), key)
+        self.assertEqual(self.outbox.send(key, now=2000, **args), "accepted")
+        self.assertEqual(opener.call_count, 2)
+
+    def test_http_429_is_retryable_without_premature_resend(self):
+        key = self.outbox.enqueue("a2", "user2@example.com", approved=True, verified=True)
+        limited = OSError("rate limit")
+        limited.code = 429
+        opener = Mock(side_effect=limited)
+        args = {"sender": "support@nijaaitrading.com", "api_key": "fake", "opener": opener}
+        self.assertEqual(self.outbox.send(key, now=1000, **args), "retry")
+        self.assertEqual(self.outbox.send(key, now=1059, **args), "retry")
+        opener.assert_called_once()
+
     def test_delivery_status_and_due_work(self):
         key=self.outbox.enqueue("a1","user@example.com",approved=True,verified=True)
         self.assertEqual(self.outbox.due_keys(now=1000),[key])
