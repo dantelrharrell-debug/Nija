@@ -89,6 +89,17 @@ class BrokerVaultTests(unittest.TestCase):
         with self.assertRaises(VaultError):
             BrokerVault("https://example.test", base64.b64encode(b"short").decode(), lambda uid: True)
 
+    def test_bad_base64_key_raises_vault_error(self):
+        with self.assertRaises(VaultError):
+            BrokerVault("https://example.test", "!not-base64!", lambda uid: True)
+
+    def test_non_json_backend_response_fails_closed(self):
+        self.session.request.return_value.status_code = 200
+        self.session.request.return_value.json.side_effect = ValueError("bad json")
+        with self.assertRaises(VaultError):
+            self.vault.create("member.jwt", "kraken", "paper", {"key": "sample"})
+        self.assertEqual(self.session.request.call_count, 1)
+
     def test_create_uses_authenticated_owner(self):
         first = Mock(status_code=200)
         first.json.return_value = {"record": {"id": "member123", "verified": True}}
