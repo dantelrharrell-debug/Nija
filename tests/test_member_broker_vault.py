@@ -1,0 +1,74 @@
+"""Unit tests for isolated broker vault cryptography and fail-closed authorization."""
+import base64
+import json
+import unittest
+from unittest.mock import Mock
+
+from bot.member_broker_vault import BrokerVault, VaultError
+
+
+KEY = base64.b64encode(bytes(range(32))).decode()
+
+
+class BrokerVaultTests(unittest.TestCase):
+    def setUp(self):
+        self.session = Mock()
+        self.vault = BrokerVault("https://example.test", KEY, lambda user: user == "member123", session=self.session)
+
+    def test_round_trip(self):
+        encrypted = self.vault.encrypt("member123", "kraken", "live", {"api_key": "example", "secret": "sample"})
+        self.assertNotIn("sample", encrypted)
+        self.assertEqual(self.vault.decrypt("member123", "kraken", "live", encrypted)["secret"], "sample")
+
+    def test_nonce_is_random(self):
+        a = self.vault.encrypt("member123", "alpaca", "paper", {"key": "sample"})
+        b = self.vault.encrypt("member123", "alpaca", "paper", {"key": "sample"})
+        self.assertNotEqual(a, b)
+
+    def test_aad_prevents_cross_scope_replay(self):
+        encrypted = self.vault.encrypt("member123", "kraken", "live", {"key": "sample"})
+        for scope in [("other", "kraken", "live"), ("member123", "alpaca", "live"), ("member123", "kraken", "paper")]:
+            with self.assertRaises(VaultError):
+                self.vault.decrypt(*scope, encrypted)
+
+    def test_tampering_rejected(self):
+        envelope = json.loads(self.vault.encrypt("member123", "kraken", "paper", {"key": "sample"}))
+        c = bytearray(base64.b64decode(envelope["c"]))
+        c[0] ^= 1
+        envelope["c"] = base64.b64encode(c).decode()
+        with self.assertRaises(VaultError):
+            self.vault.decrypt("member123", "kraken", "paper", json.dumps(envelope))
+
+    def test_invalid_broker_rejected(self):
+        with self.assertRaises(VaultError):
+            self.vault.encrypt("member123", "coinbase", "live", {"key": "sample"})
+
+    def test_unverified_member_rejected_before_storage(self):
+        self.session.request.return_value.status_code = 200
+        self.session.request.return_value.json.return_value = {"record": {"id": "member123", "verified": False}}
+        with self.assertRaises(VaultError):
+            self.vault.create("member.jwt", "kraken", "live", {"key": "sample"})
+        self.assertEqual(self.session.request.call_count, 1)
+
+    def test_entitlement_rejected_before_storage(self):
+        self.session.request.return_value.status_code = 200
+        self.session.request.return_value.json.return_value = {"record": {"id": "no-plan", "verified": True}}
+        with self.assertRaises(VaultError):
+            self.vault.create("member.jwt", "kraken", "live", {"key": "sample"})
+        self.assertEqual(self.session.request.call_count, 1)
+
+    def test_create_uses_authenticated_owner(self):
+        first = Mock(status_code=200)
+        first.json.return_value = {"record": {"id": "member123", "verified": True}}
+        second = Mock(status_code=200)
+        second.json.return_value = {"id": "vaultrecord"}
+        self.session.request.side_effect = [first, second]
+        self.assertEqual(self.vault.create("member.jwt", "kraken", "paper", {"key": "sample"}), "vaultrecord")
+        payload = self.session.request.call_args.kwargs["json"]
+        self.assertEqual(payload["user_id"], "member123")
+        self.assertNotIn("sample", payload["ciphertext"])
+        self.assertEqual(len(self.session.request.call_args_list), 2)
+
+
+if __name__ == "__main__":
+    unittest.main()
