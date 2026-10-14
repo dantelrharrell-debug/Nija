@@ -139,3 +139,56 @@ def test_nested_consent_conflict_remains_fail_closed():
     })
     assert lead["communications_consent"] == "false"
     assert lead["consent_recorded_at"] == ""
+
+
+def test_second_level_submission_inputdata_preserves_id_and_consent():
+    from render_lead_intake import _source_event_id
+    payload = {"submission": {"inputData": {
+        "Email Address": "qa@example.com", "submissionId": "event-42",
+        "marketingConsent": "yes", "firstName": "Jane", "lastName": "Doe",
+    }}}
+    lead = normalize_lead_payload(payload)
+    assert lead["email"] == "qa@example.com"
+    assert lead["communications_consent"] == "true"
+    assert lead["name"] == "Jane Doe"
+    assert _source_event_id(payload) == "event-42"
+
+
+def test_third_level_email_wrapper_is_not_traversed():
+    import pytest
+    with pytest.raises(ValueError, match="missing or invalid"):
+        normalize_lead_payload({
+            "submission": {"inputData": {"fields": {"email": "qa@example.com"}}}
+        })
+
+
+def test_same_map_conflicting_email_aliases_are_rejected():
+    import pytest
+    with pytest.raises(ValueError, match="Conflicting"):
+        normalize_lead_payload({"data": {
+            "email": "customer@example.com", "Email Address": "other@example.com"
+        }})
+
+
+def test_same_map_invalid_and_nonstring_secondary_aliases_are_rejected():
+    import pytest
+    for bad in ("invalid-address", {"value": "other@example.com"}, ["qa@example.com"]):
+        with pytest.raises(ValueError):
+            normalize_lead_payload({"data": {
+                "email": "customer@example.com", "Email Address": bad
+            }})
+
+
+def test_same_map_equivalent_email_aliases_are_accepted():
+    lead = normalize_lead_payload({"data": {
+        "email": "Customer@Example.com", "Email Address": "customer@example.com"
+    }})
+    assert lead["email"] == "customer@example.com"
+
+
+def test_customer_name_precedes_form_metadata_name():
+    lead = normalize_lead_payload({
+        "formName": {"name": "Lead Gate"},
+        "data": {"email": "qa@example.com", "firstName": "Jane", "lastName": "Doe"},
+    })
+    assert lead["name"] == "Jane Doe"
