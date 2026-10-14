@@ -44,7 +44,9 @@ jobs:
       env:
         GH_TOKEN: ${{ secrets.GH_TOKEN }}
       run: |
-        # Use Docker Hub to avoid ECR Public rate limits.\n        # A failed pull still fails this job; scanners remain mandatory.\n        docker build --no-cache \
+        # Use Docker Hub to avoid ECR Public rate limits. 
+        # A failed pull still fails this job; scanners remain mandatory. 
+        docker build --no-cache \
           --build-arg PYTHON_BASE=python:3.11-slim \
           --build-arg GH_TOKEN="${GH_TOKEN}" \
           -f ${{ matrix.dockerfile }} \
