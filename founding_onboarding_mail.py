@@ -89,7 +89,9 @@ class InvitationOutbox:
             # A permanent HTTP 4xx error must not be retried blindly: suppressed
             # recipients and invalid senders require operator intervention.
             code = getattr(exc, "code", None)
-            permanent = isinstance(code, int) and 400 <= code < 500 and code != 429
+            # HTTP 408 means the provider timed out; retry with the same Idempotency-Key.
+            # Resend 429 is also transient. Other 4xx responses fail closed.
+            permanent = isinstance(code, int) and 400 <= code < 500 and code not in (408, 429)
             state = "failed" if permanent or attempts >= 7 else "retry"
             with self.connect() as db:
                 db.execute("UPDATE onboarding_mail SET status=?,attempts=?,retry_at=?,error=? WHERE key=?",
