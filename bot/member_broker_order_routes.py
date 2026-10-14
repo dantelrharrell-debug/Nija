@@ -28,6 +28,8 @@ def validate_order_route(
     cell_status: CellState,
     global_emergency_stop: bool,
     durable_nonce_reserved: bool,
+    broker_identity_attested: bool = False,
+    account_lease_fenced: bool = False,
 ) -> str:
     """Reject cross-member/cross-account routes and unreserved duplicate attempts.
 
@@ -46,6 +48,10 @@ def validate_order_route(
         not (c.isalnum() or c in "-_") for c in intent.idempotency_key
     ):
         raise RouteDenied("Invalid idempotency key")
+    if not broker_identity_attested:
+        raise RouteDenied("Broker account identity not attested")
+    if not account_lease_fenced:
+        raise RouteDenied("Missing account-scoped execution lease")
     if not durable_nonce_reserved:
         raise RouteDenied("Missing durable single-use reservation")
     return intent.cell.isolation_id
