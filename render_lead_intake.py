@@ -99,30 +99,54 @@ def _normalize_timestamp(value: object) -> str:
     return _parse_timestamp(value) or _utcnow()
 
 
-def _nested_form(payload: dict[str, Any]) -> dict[str, Any]:
-    for key in ("formName", "form_name", "form", "data"):
+def _lead_field_sources(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """Read only explicit form field mappings; never extract emails from arbitrary mail bodies.
+
+    Zapier and IONOS sometimes separate form metadata (formName) from the
+    customer's data (data/fields/inputData). Limit traversal to known wrappers
+    and two levels so unrelated webhook metadata cannot become a lead.
+    """
+    sources: list[dict[str, Any]] = []
+    for key in ("formName", "form_name", "form", "data", "submission",
+                "fields", "form_fields", "inputData"):
         value = payload.get(key)
-        if isinstance(value, dict):
-            return value
-    return {}
+        if not isinstance(value, dict):
+            continue
+        sources.append(value)
+        for inner in ("data", "fields", "form_fields"):
+            child = value.get(inner)
+            if isinstance(child, dict):
+                sources.append(child)
+    sources.append(payload)
+    return sources
+
+
+def _first_form_field(sources: list[dict[str, Any]], keys: tuple[str, ...]) -> object:
+    """Find the first scalar form value without coercing maps/lists into strings."""
+    for source in sources:
+        for key in keys:
+            value = source.get(key)
+            if value is not None and value != "" and not isinstance(value, (dict, list)):
+                return value
+    return ""
+
+
+def _nested_form(payload: dict[str, Any]) -> dict[str, Any]:
+    # Retain historical helper behavior for call sites outside this module.
+    sources = _lead_field_sources(payload)
+    return sources[0] if len(sources) > 1 else {}
 
 
 def _raw_submission_timestamp(payload: dict[str, Any]) -> object:
-    nested = _nested_form(payload)
-    return (
-        nested.get("submitted_at")
-        or nested.get("submissionDate")
-        or payload.get("submitted_at")
-        or payload.get("submissionDate")
-        or payload.get("submission_date")
-        or ""
+    return _first_form_field(
+        _lead_field_sources(payload),
+        ("submitted_at", "submissionDate", "submission_date", "timestamp"),
     )
 
 
 def _source_event_id(payload: dict[str, Any]) -> str:
     """Use an immutable upstream submission ID when supplied; never invent one."""
-    nested = _nested_form(payload)
-    for source in (nested, payload):
+    for source in _lead_field_sources(payload):
         for key in ("event_id", "eventId", "submission_id", "submissionId"):
             value = source.get(key)
             if isinstance(value, (str, int)) and not isinstance(value, bool):
@@ -144,35 +168,42 @@ def normalize_lead_payload(payload: dict[str, Any]) -> dict[str, str]:
     if not isinstance(payload, dict):
         raise ValueError("Lead payload must be a JSON object")
 
-    nested = _nested_form(payload)
-    raw_form_name: object = (
-        nested.get("form_name")
-        or nested.get("formName")
-        or payload.get("form_name")
-        or (payload.get("formName") if isinstance(payload.get("formName"), str) else "")
-        or nested.get("source")
-        or payload.get("source")
-        or "Website Lead"
+    sources = _lead_field_sources(payload)
+    email_keys = ("email", "email_address", "emailAddress", "Email", "Email Address")
+    email_sources: list[tuple[str, dict[str, Any]]] = []
+    for source in sources:
+        value = _first_form_field([source], email_keys)
+        if value == "":
+            continue
+        normalized = normalize_email(value)
+        if not normalized:
+            raise ValueError("Lead email is missing or invalid")
+        email_sources.append((normalized, source))
+    # Never silently pick a billing/admin address over a customer's address.
+    if len({address for address, _ in email_sources}) > 1:
+        raise ValueError("Conflicting lead email fields")
+    email = email_sources[0][0] if email_sources else ""
+    # Prefer the person's name in the same map as their email; metadata can
+    # contain a form name that must not be mistaken for a customer's name.
+    person_sources = (
+        [email_sources[0][1]] + [s for s in sources if s is not email_sources[0][1]]
+        if email_sources else sources
     )
-    raw_name: object = (
-        nested.get("name")
-        or nested.get("full_name")
-        or payload.get("name")
-        or payload.get("full_name")
-        or ""
+    raw_form_name = _first_form_field(
+        sources, ("form_name", "formName", "form", "source", "Form", "Form Name")
+    ) or "Website Lead"
+    raw_name = _first_form_field(
+        person_sources, ("name", "full_name", "fullName", "Name")
     )
-    raw_email: object = (
-        nested.get("email")
-        or nested.get("email_address")
-        or payload.get("email")
-        or payload.get("email_address")
-        or ""
-    )
-    raw_submitted_at: object = _raw_submission_timestamp(payload)
+    if not raw_name:
+        first = _first_form_field(person_sources, ("first_name", "firstName", "First Name"))
+        last = _first_form_field(person_sources, ("last_name", "lastName", "Last Name"))
+        raw_name = " ".join(part for part in (_clean_text(first, max_length=100),
+                                                 _clean_text(last, max_length=100)) if part)
+    raw_submitted_at = _raw_submission_timestamp(payload)
 
     form_name = _clean_text(raw_form_name, max_length=160)
     name = _clean_text(raw_name, max_length=200)
-    email = normalize_email(raw_email)
     submitted_at = _normalize_timestamp(raw_submitted_at)
 
     if not email:
@@ -183,18 +214,10 @@ def normalize_lead_payload(payload: dict[str, Any]) -> dict[str, str]:
     if not name and form_name.casefold().replace("_", "-") == "hero-email-optin":
         name = "Website Visitor"
 
-    raw_phone = (
-        nested.get("Phone Number")
-        or nested.get("phone")
-        or nested.get("phone_number")
-        or payload.get("Phone Number")
-        or payload.get("phone")
-        or payload.get("phone_number")
-        or ""
+    raw_phone = _first_form_field(
+        person_sources, ("Phone Number", "phone", "phone_number", "phoneNumber", "Phone")
     )
-    # Prefer explicit marketing fields to generic form consent. Conflicting
-    # marketing values fail closed; consent never defaults to True.
-    sources = (nested, payload)
+    # Conflicting explicit consent in any recognized wrapper fails closed.
     marketing_keys = (
         "marketing_consent", "marketingConsent",
         "communications_consent", "communicationsConsent",

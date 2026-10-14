@@ -85,3 +85,57 @@ def test_no_source_timestamp_does_not_invent_consent_proof():
     })
     assert lead["communications_consent"] == "true"
     assert lead["consent_recorded_at"] == ""
+
+
+def test_zapier_nested_data_form_fields_and_customer_name():
+    lead = normalize_lead_payload({
+        "formName": {"form_name": "lead_gate"},
+        "data": {"fields": {"Email Address": "NEWQA@example.com", "Name": "New QA Lead"}},
+        "submitted_at": "2026-10-14T04:49:29Z",
+    })
+    assert lead["email"] == "newqa@example.com"
+    assert lead["name"] == "New QA Lead"
+    assert lead["form_name"] == "lead_gate"
+    assert lead["submitted_at"] == "2026-10-14T04:49:29.000Z"
+    assert lead["communications_consent"] == "false"
+
+
+def test_flat_zapier_email_address_and_split_name():
+    lead = normalize_lead_payload({
+        "form_name": "lead_gate",
+        "Email": "split@example.com",
+        "firstName": "Split",
+        "lastName": "Name",
+    })
+    assert lead["email"] == "split@example.com"
+    assert lead["name"] == "Split Name"
+
+
+def test_conflicting_nested_customer_emails_fail_closed():
+    import pytest
+    with pytest.raises(ValueError, match="Conflicting lead email fields"):
+        normalize_lead_payload({
+            "data": {"email": "customer@example.com"},
+            "email": "other@example.com",
+        })
+
+
+def test_no_contact_email_does_not_fall_back_to_metadata_or_headers():
+    import pytest
+    with pytest.raises(ValueError, match="Lead email is missing or invalid"):
+        normalize_lead_payload({
+            "to": "owner@nijaaitrading.com",
+            "from": "mailer@provider.example",
+            "formName": {"form_name": "lead_gate"},
+            "data": {"name": "No Email"},
+        })
+
+
+def test_nested_consent_conflict_remains_fail_closed():
+    lead = normalize_lead_payload({
+        "email": "consentqa@example.com",
+        "data": {"marketingConsent": True},
+        "communications_consent": False,
+    })
+    assert lead["communications_consent"] == "false"
+    assert lead["consent_recorded_at"] == ""
