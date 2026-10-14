@@ -37,10 +37,9 @@ def inspect(path: Path) -> dict:
             unresolved = connection.execute(
                 "SELECT COUNT(*) FROM startup_attempts WHERE state != 'completed'"
             ).fetchone()[0]
-            if unresolved == 0:
-                unresolved = connection.execute("SELECT COUNT(*) FROM startup_attempts").fetchone()[0]
+            # Legacy schemas can be diagnosed, but cannot establish broker-ID proof.
         result.update(readable=True, state_counts=counts, unresolved_count=unresolved,
-                      proof_admissible_by_attempt_state=(unresolved == 0))
+                      proof_admissible_by_attempt_state=(unresolved == 0 and {"entry_order_id", "exit_order_id"} <= columns))
     except (sqlite3.Error, OSError, ValueError) as exc:
         result["error"] = type(exc).__name__
     return result
