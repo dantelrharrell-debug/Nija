@@ -5,6 +5,8 @@ on:
     paths:
       - 'bot/member_broker_vault.py'
       - 'tests/test_member_broker_vault.py'
+      - 'bot/member_broker_cells.py'
+      - 'tests/test_member_broker_cells.py'
       - '.github/workflows/member-broker-vault-tests.yml'
   workflow_dispatch:
 
@@ -27,4 +29,6 @@ jobs:
       - name: Test credential vault (no trading engine)
         env:
           PYTHONDONTWRITEBYTECODE: '1'
-        run: python -B -m unittest discover -s tests -p test_member_broker_vault.py -v
+        run: | 
+          python -B -m unittest discover -s tests -p test_member_broker_vault.py -v
+          python -B -m unittest discover -s tests -p test_member_broker_cells.py -v
