@@ -22,6 +22,9 @@ jobs:
         run: |
           set -o pipefail
           BUILD_LOG="${RUNNER_TEMP}/nija-docker-build.log"
+          # Retry from Docker Hub only when Public ECR itself rate-limits the base image.
+          # Do not mask compilation, dependency or application build failures.
+          set +e
           docker build --no-cache \
             --build-arg PYTHON_BASE=public.ecr.aws/docker/library/python:3.11-slim \
             --build-arg GH_TOKEN="${GH_TOKEN}" \
@@ -30,6 +33,18 @@ jobs:
             --build-arg BUILD_TIMESTAMP="$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
             -t nija:latest . >"${BUILD_LOG}" 2>&1
           status=$?
+          if [ "${status}" -ne 0 ] && grep -Eq '429 Too Many Requests|toomanyrequests: Data limit exceeded' "${BUILD_LOG}"; then
+            echo "::warning::Public ECR rate limited the base image; retrying from Docker Hub"
+            docker build --no-cache \
+              --build-arg PYTHON_BASE=python:3.11-slim \
+              --build-arg GH_TOKEN="${GH_TOKEN}" \
+              --build-arg GIT_BRANCH="${GITHUB_REF_NAME}" \
+              --build-arg GIT_COMMIT="${GITHUB_SHA}" \
+              --build-arg BUILD_TIMESTAMP="$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
+              -t nija:latest . >>"${BUILD_LOG}" 2>&1
+            status=$?
+          fi
+          set -e
           echo "status=${status}" >> "${GITHUB_OUTPUT}"
           if [ "${status}" -ne 0 ]; then
             echo "::group::Docker build failure tail"
