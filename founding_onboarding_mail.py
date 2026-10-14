@@ -70,7 +70,7 @@ class InvitationOutbox:
             if row is None:
                 raise KeyError(key)
             recipient, status, attempts, retry_at = row
-            if status in ("accepted", "delivered", "suppressed") or retry_at > now:
+            if status in ("accepted", "delivered", "suppressed", "failed") or retry_at > now:
                 return status
             # Lease prevents concurrent workers from double-submitting; provider
             # idempotency key also deduplicates crash/retry submissions.
@@ -86,10 +86,16 @@ class InvitationOutbox:
             response = (opener or urllib.request.urlopen)(req, timeout=12)
             provider_id = json.loads(response.read().decode())["id"]
         except Exception as exc:
+            # A permanent HTTP 4xx error must not be retried blindly: suppressed
+            # recipients and invalid senders require operator intervention.
+            code = getattr(exc, "code", None)
+            permanent = isinstance(code, int) and 400 <= code < 500 and code != 429
+            state = "failed" if permanent or attempts >= 7 else "retry"
             with self.connect() as db:
-                db.execute("UPDATE onboarding_mail SET status='retry',attempts=?,retry_at=?,error=? WHERE key=?",
-                           (attempts+1,now+min(3600,60*(2**min(attempts,5))),type(exc).__name__,key))
-            return "retry"
+                db.execute("UPDATE onboarding_mail SET status=?,attempts=?,retry_at=?,error=? WHERE key=?",
+                           (state, attempts+1, now+min(3600, 60*(2**min(attempts,5))),
+                            type(exc).__name__, key))
+            return state
         with self.connect() as db:
             db.execute("UPDATE onboarding_mail SET status='accepted',attempts=?,provider_id=?,error=NULL WHERE key=?",
                        (attempts+1,provider_id,key))
