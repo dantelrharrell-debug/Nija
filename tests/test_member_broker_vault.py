@@ -76,12 +76,34 @@ class BrokerVaultTests(unittest.TestCase):
         first = Mock(status_code=200)
         first.json.return_value = {"record": {"id": "member123", "verified": True}}
         second = Mock(status_code=200)
-        second.json.return_value = {"items": [
+        second.json.return_value = {"totalPages": 1, "items": [
             {"id": "own", "user_id": "member123", "broker": "kraken", "environment": "paper", "ciphertext": "SECRET"},
             {"id": "other", "user_id": "member456", "broker": "alpaca", "environment": "live", "ciphertext": "SECRET"}
         ]}
         self.session.request.side_effect = [first, second]
-        self.assertEqual(self.vault.list_metadata("member.jwt"), [{"id": "own", "broker": "kraken", "environment": "paper"}])
+        with self.assertRaises(VaultError):
+            self.vault.list_metadata("member.jwt")
+
+    def test_owned_metadata_strips_ciphertext(self):
+        first = Mock(status_code=200)
+        first.json.return_value = {"record": {"id": "member123", "verified": True}}
+        second = Mock(status_code=200)
+        second.json.return_value = {"totalPages": 1, "items": [
+            {"id": "own", "user_id": "member123", "broker": "kraken", "environment": "paper", "ciphertext": "SECRET"}
+        ]}
+        self.session.request.side_effect = [first, second]
+        self.assertEqual(self.vault.list_metadata("member.jwt"), [
+            {"id": "own", "broker": "kraken", "environment": "paper"}
+        ])
+
+    def test_rejects_incomplete_metadata_pagination(self):
+        first = Mock(status_code=200)
+        first.json.return_value = {"record": {"id": "member123", "verified": True}}
+        second = Mock(status_code=200)
+        second.json.return_value = {"totalPages": 2, "items": []}
+        self.session.request.side_effect = [first, second]
+        with self.assertRaises(VaultError):
+            self.vault.list_metadata("member.jwt")
 
     def test_key_must_be_256_bits_and_endpoint_https(self):
         with self.assertRaises(VaultError):
