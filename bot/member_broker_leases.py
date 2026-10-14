@@ -93,7 +93,7 @@ class AccountLeaseStore:
             now = time.time() if now is None else now
             new_expiry = now + ttl_seconds
             cursor = db.execute(
-                """UPDATE account_leases SET expires_at=?
+                """UPDATE account_leases SET generation=generation+1, expires_at=?
                    WHERE cell_id=? AND owner=? AND generation=?
                    AND expires_at=? AND expires_at>?""",
                 (new_expiry, lease.cell_id, lease.owner, lease.generation, lease.expires_at, now),
@@ -101,7 +101,7 @@ class AccountLeaseStore:
             if cursor.rowcount != 1:
                 raise LeaseDenied("Stale or expired lease")
             db.execute("COMMIT")
-            return Lease(lease.cell_id, lease.owner, lease.generation, new_expiry)
+            return Lease(lease.cell_id, lease.owner, lease.generation + 1, new_expiry)
         except Exception:
             if db.in_transaction:
                 db.execute("ROLLBACK")

@@ -27,7 +27,7 @@ class CellKey:
     brokerage_account_id: str
 
     def __post_init__(self):
-        if not all(isinstance(s, str) and s.strip() and ":" not in s for s in (
+        if not all(isinstance(s, str) and s.strip() and ":" not in s and "\x00" not in s for s in (
             self.member_id, self.brokerage_account_id
         )):
             raise ValueError("Member and broker account binding required")

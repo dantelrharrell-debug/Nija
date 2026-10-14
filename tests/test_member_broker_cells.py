@@ -43,6 +43,11 @@ class CellPolicyTests(unittest.TestCase):
         self.assertEqual(report[self.a], CellState.READY)
         self.assertEqual(report[self.b], CellState.READY)
 
+    def test_nul_delimiter_collision_rejected(self):
+        for member, account in [('a', 'b\x00kraken\x00live\x00c'), ('a\x00kraken\x00live\x00b', 'c')]:
+            with self.assertRaises(ValueError):
+                CellKey(member, 'kraken', 'live', account)
+
     def test_invalid_broker_and_unbound_account_fail(self):
         with self.assertRaises(ValueError):
             CellKey("member", "coinbase", "live", "account")

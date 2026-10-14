@@ -78,6 +78,16 @@ class AccountLeaseTests(unittest.TestCase):
         with self.assertRaises(LeaseDenied):
             self.store.renew(old, now=120)
 
+    def test_renewal_expiry_reuse_does_not_revive_old_token(self):
+        original = self.store.acquire(self.cell, 'worker-a', now=100)
+        intermediate = self.store.renew(original, ttl_seconds=20, now=105)
+        current = self.store.renew(intermediate, ttl_seconds=20, now=110)
+        self.assertEqual(current.expires_at, original.expires_at)
+        self.assertGreater(current.generation, original.generation)
+        self.assertFalse(self.store.validate(original, now=111))
+        self.assertFalse(self.store.release(original))
+        self.assertTrue(self.store.validate(current, now=111))
+
     def test_expired_lease_cannot_renew(self):
         old = self.store.acquire(self.cell, "worker-a", now=100)
         with self.assertRaises(LeaseDenied):
