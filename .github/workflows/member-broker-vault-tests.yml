@@ -27,4 +27,4 @@ jobs:
       - name: Test credential vault (no trading engine)
         env:
           PYTHONDONTWRITEBYTECODE: '1'
-        run: python -S -B -m unittest discover -s tests -p test_member_broker_vault.py -v
+        run: python -B -m unittest discover -s tests -p test_member_broker_vault.py -v
