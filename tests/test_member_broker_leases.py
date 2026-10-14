@@ -55,6 +55,15 @@ class AccountLeaseTests(unittest.TestCase):
         with self.assertRaises(LeaseDenied):
             self.store.renew(old, now=131)
 
+    def test_invalid_nonfinite_ttl_rejected(self):
+        for ttl in (float("nan"), float("inf"), float("-inf"), "30"):
+            with self.assertRaises(LeaseDenied):
+                self.store.acquire(self.cell, "worker-a", ttl_seconds=ttl, now=100)
+        valid = self.store.acquire(self.cell, "worker-a", now=100)
+        for ttl in (float("nan"), float("inf"), "30"):
+            with self.assertRaises(LeaseDenied):
+                self.store.renew(valid, ttl_seconds=ttl, now=105)
+
     def test_no_ephemeral_lease_database(self):
         with self.assertRaises(ValueError):
             AccountLeaseStore(":memory:")
