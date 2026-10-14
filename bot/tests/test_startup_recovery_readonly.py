@@ -1,6 +1,6 @@
 """Offline recovery classifications: no broker calls or order side effects."""
 import unittest
-from bot.startup_recovery_readonly import classify_recovery
+from bot.startup_recovery_readonly import classify_recovery, classify_observed_snapshot
 
 
 class RecoveryTests(unittest.TestCase):
@@ -38,6 +38,27 @@ class RecoveryTests(unittest.TestCase):
         self.assertIn("startup_attempts", result.reasons)
         self.assertIn("protective_exits", result.reasons)
         self.assertIn("ledger", result.reasons)
+        self.assertFalse(result.allow_new_orders)
+
+    def test_observed_snapshot_defaults_unknown_attestations_to_failed(self):
+        result = classify_observed_snapshot(self.ready)
+        self.assertEqual(result.state, "READ_ONLY_RECOVERY")
+        self.assertEqual(
+            set(result.reasons),
+            {"kill_switch", "startup_attempts", "protective_exits", "ledger"},
+        )
+        self.assertFalse(result.allow_new_orders)
+
+    def test_observed_snapshot_with_stale_execution_is_diagnostic_only(self):
+        result = classify_observed_snapshot(
+            dict(self.ready, execution_ready=False),
+            kill_switch_clear=True,
+            startup_attempts_reconciled=True,
+            protective_exits_verified=True,
+            ledger_reconciled=True,
+        )
+        self.assertEqual(result.state, "READ_ONLY_RECOVERY")
+        self.assertIn("execution_ready", result.reasons)
         self.assertFalse(result.allow_new_orders)
 
     def test_disconnected_fails_closed(self):
