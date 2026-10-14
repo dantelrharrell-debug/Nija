@@ -100,3 +100,36 @@ class InvitationOutbox:
             db.execute("UPDATE onboarding_mail SET status='accepted',attempts=?,provider_id=?,error=NULL WHERE key=?",
                        (attempts+1,provider_id,key))
         return "accepted"
+
+    def due_keys(self, *, now=None, limit=25):
+        """Get due queued/retry entries for a scheduled trusted worker."""
+        now = int(time.time()) if now is None else int(now)
+        with self.connect() as db:
+            rows = db.execute(
+                "SELECT key FROM onboarding_mail WHERE status IN ('queued','retry') "
+                "AND retry_at<=? ORDER BY retry_at,key LIMIT ?",
+                (now, max(1,min(int(limit),100))),
+            ).fetchall()
+        return [row[0] for row in rows]
+
+    def record_provider_event(self, provider_id, event_type):
+        """Record an event ONLY after the webhook caller verifies its signature.
+
+        The HTTP route and provider signature verification must be implemented
+        before this method is exposed to external traffic.
+        """
+        transitions = {
+            "email.delivered": "delivered",
+            "email.bounced": "suppressed",
+            "email.complained": "suppressed",
+        }
+        state = transitions.get(event_type)
+        if state is None:
+            return False
+        with self.connect() as db:
+            cur = db.execute(
+                "UPDATE onboarding_mail SET status=? "
+                "WHERE provider_id=? AND status NOT IN ('suppressed','failed')",
+                (state, provider_id),
+            )
+            return bool(cur.rowcount)
