@@ -70,3 +70,32 @@ class IntentStore:
             raise
         finally:
             conn.close()
+
+
+def validate_and_reserve_intent(
+    store: IntentStore,
+    cell: CellKey,
+    lease: Lease,
+    intent_id: str,
+    *,
+    authenticated_member_id: str,
+    authenticated_broker_account_id: str,
+    broker_identity_attested: bool,
+    cell_ready: bool,
+    global_emergency_stop: bool,
+    now: float | None = None,
+) -> ReservedIntent:
+    """Single fail-closed application boundary before durable reservation.
+
+    Not an order placement authorization: broker-native fencing and order
+    reconciliation are required before an actual trading transport is wired.
+    """
+    if global_emergency_stop or not cell_ready:
+        raise IntentDenied("Cell unavailable")
+    if not broker_identity_attested:
+        raise IntentDenied("Broker identity not authenticated")
+    if authenticated_member_id != cell.member_id:
+        raise IntentDenied("Member mismatch")
+    if authenticated_broker_account_id != cell.brokerage_account_id:
+        raise IntentDenied("Broker account mismatch")
+    return store.reserve(cell, lease, intent_id, now=now)
