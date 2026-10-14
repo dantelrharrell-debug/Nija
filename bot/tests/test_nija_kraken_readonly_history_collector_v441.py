@@ -7,7 +7,7 @@ from scripts.nija_kraken_readonly_history_collector_v441 import (
 
 
 def _reader(endpoint, params):
-    field = {"TradesHistory": "trades", "ClosedOrders": "closed"}[endpoint]
+    field = {"TradesHistory": "trades", "ClosedOrders": "closed", "Ledgers": "ledger"}[endpoint]
     ofs = params["ofs"]
     return {"error": [], "result": {"count": 51, field: {
         str(i): {"vol": "1"} for i in range(ofs, min(51, ofs + 50))
@@ -22,7 +22,8 @@ def test_all_pages_retrieved_without_writes():
     report = collect_history(read, account_scope="platform:kraken")
     assert len(report["history"]["trades"]) == 51
     assert len(report["history"]["closed"]) == 51
-    assert len(calls) == 4
+    assert len(report["history"]["ledger"]) == 51
+    assert len(calls) == 6
     assert all(sorted(p) == ["ofs"] for _, p in calls)
     assert report["trading_authorized"] is False
     assert report["entry_exit_reconciliation_verified"] is False
@@ -51,8 +52,22 @@ def test_duplicate_ids_rejected():
     def overlapping(endpoint, params):
         result = _reader(endpoint, params)
         if params["ofs"] == 50:
-            field = "trades" if endpoint == "TradesHistory" else "closed"
+            field = {"TradesHistory": "trades", "ClosedOrders": "closed", "Ledgers": "ledger"}[endpoint]
             result["result"][field] = {"0": {"vol": "1"}}
         return result
     with pytest.raises(IncompleteHistory, match="duplicate"):
         collect_history(overlapping, account_scope="platform:kraken")
+
+
+def test_existing_broker_wrapper_restricts_endpoints_and_category():
+    from scripts.nija_kraken_readonly_history_collector_v441 import collect_from_existing_broker
+    class Broker:
+        def _kraken_private_call(self, endpoint, params, *, category):
+            assert category == "monitoring"
+            assert set(params) == {"ofs"}
+            assert endpoint in {"TradesHistory", "ClosedOrders", "Ledgers"}
+            field = {"TradesHistory": "trades", "ClosedOrders": "closed", "Ledgers": "ledger"}[endpoint]
+            return {"error": [], "result": {"count": 0, field: {}}}
+    report = collect_from_existing_broker(Broker(), account_scope="platform:kraken", monitoring_category="monitoring")
+    assert report["trading_authorized"] is False
+    assert report["ledger_links_verified"] is False
