@@ -127,6 +127,22 @@ def _genuine_execution_marker_ready() -> tuple[bool, str]:
 def _wake_activation_after_genuine_marker(source: str) -> bool:
     marker_ready, marker_detail = _genuine_execution_marker_ready()
     if not marker_ready:
+        # A read-only classification is useful even when execution proof is
+        # stale; it must not change the activation authority or send orders.
+        try:
+            from bot import readiness_table
+            from bot.startup_recovery_readonly import classify_observed_snapshot
+            decision = classify_observed_snapshot(dict(readiness_table.snapshot() or {}))
+            LOGGER.info(
+                "STARTUP_READONLY_RECOVERY_DIAGNOSTIC state=%s reasons=%s "
+                "allow_new_orders=false canonical_gate_unchanged=true",
+                decision.state, ",".join(decision.reasons),
+            )
+        except Exception as exc:
+            LOGGER.warning(
+                "STARTUP_READONLY_RECOVERY_DIAGNOSTIC_UNAVAILABLE error_type=%s "
+                "canonical_gate_unchanged=true", type(exc).__name__,
+            )
         LOGGER.info(
             "HEARTBEAT_MARKER_V238_EXECUTION_PROOF_PENDING marker=%s source=%s detail=%s "
             "execution_proof_fabricated=false activation_commit_attempted=false trading_fail_closed=true",
