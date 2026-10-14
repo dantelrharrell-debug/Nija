@@ -40,6 +40,12 @@ class InvitationTests(unittest.TestCase):
         opener=Mock()
         self.assertEqual(self.outbox.send(key,sender="support@nijaaitrading.com",api_key="fake",now=1100,opener=opener),"sending")
         opener.assert_not_called()
+    def test_expired_sending_lease_requeued_after_worker_crash(self):
+        key=self.outbox.enqueue("a1","user@example.com",approved=True,verified=True)
+        with self.outbox.connect() as db:
+            db.execute("UPDATE onboarding_mail SET status='sending',retry_at=1120 WHERE key=?", (key,))
+        self.assertEqual(self.outbox.due_keys(now=1100),[])
+        self.assertEqual(self.outbox.due_keys(now=1120),[key])
     def test_permanent_provider_error_fails_closed(self):
         key=self.outbox.enqueue("a1","user@example.com",approved=True,verified=True)
         err=OSError("invalid_sender")
