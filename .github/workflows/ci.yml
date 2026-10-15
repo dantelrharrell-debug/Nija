@@ -183,4 +183,5 @@ jobs:
             tests/test_kraken_position_snapshot_reuse.py \
             bot/tests/test_kraken_snapshot_writer_lock_v286.py \
             tests/test_kraken_atomic_proof_publication.py \
+            tests/test_kraken_public_dust_valuation_v286.py \
             tests/test_kraken_snapshot_generation_owner_regression.py

@@ -109,7 +109,7 @@ def test_raw_certificate_publication_failure_revokes_snapshot(monkeypatch):
             object.__setattr__(self, name, value)
 
     broker = Broker()
-    with pytest.raises(RuntimeError, match="kraken_raw_snapshot_publication_failed"):
+    with pytest.raises(RuntimeError, match="v286_raw_snapshot_publication_failed"):
         v286._record_snapshot_success(broker, _rows())
     assert broker._nija_authoritative_position_snapshot_fetch_ok_v285 is False
     assert not v285._snapshot_status(broker)[0]

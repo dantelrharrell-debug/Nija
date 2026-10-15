@@ -37,7 +37,9 @@ from __future__ import annotations
 
 import importlib
 import logging
+import math
 import os
+import re
 import threading
 import time
 from collections.abc import Mapping
@@ -279,6 +281,123 @@ def _cached_price(broker: Any, symbol: str) -> float:
     return max(0.0, _float(row))
 
 
+# Public market quotes are valuation observations, never historical cost basis.
+# Kraken Balance enumeration can find a genuine sub-$1 holding before a ticker
+# price has entered the broker cache. Without a broker-native positive quote,
+# the existing dust policy deliberately refuses to classify it as dust.
+# Keep public price reads bounded and coalesced so they cannot hold Balance
+# admission, extend snapshot freshness, or mint trade/execution evidence.
+_PUBLIC_QUOTE_LOCK = threading.RLock()
+_PUBLIC_QUOTE_FLIGHTS: dict[tuple[int, str], dict[str, Any]] = {}
+_PUBLIC_QUOTE_CACHE: dict[tuple[int, str], dict[str, Any]] = {}
+_PUBLIC_QUOTE_FAILURE_AT: dict[tuple[int, str], float] = {}
+_PUBLIC_QUOTE_TTL_S = 15.0
+_PUBLIC_QUOTE_BACKOFF_S = 20.0
+_PUBLIC_QUOTE_CALLER_WAIT_S = 0.15
+
+
+def _strict_public_quote_payload(payload: Any) -> float:
+    """Accept only one successful native Kraken Ticker response."""
+    if not isinstance(payload, Mapping):
+        return 0.0
+    if payload.get("error") != []:
+        return 0.0
+    results = payload.get("result")
+    if not isinstance(results, Mapping) or len(results) != 1:
+        return 0.0
+    row = next(iter(results.values()))
+    if not isinstance(row, Mapping):
+        return 0.0
+    last = row.get("c")
+    if not isinstance(last, (list, tuple)) or not last:
+        return 0.0
+    try:
+        price = float(last[0])
+    except (ValueError, TypeError, OverflowError):
+        return 0.0
+    return price if math.isfinite(price) and price > 0.0 else 0.0
+
+
+def _bounded_public_usd_quote(broker: Any, symbol: str) -> float:
+    """Observe a genuine, recent Kraken public USD ticker without blocking Balance.
+
+    A failed or slow quote returns zero and preserves the existing fail-closed
+    cost-basis/dust classification. One unfinished request per exact account and
+    symbol is retained; no emergency resolver, USD bridge, private credential
+    call, or market-price-as-entry shortcut is used.
+    """
+    if not isinstance(symbol, str) or not re.fullmatch(r"[A-Z0-9]{1,16}-USD", symbol):
+        return 0.0
+    api = getattr(broker, "api", None)
+    reader = getattr(api, "query_public", None)
+    if not callable(reader):
+        return 0.0
+    key = (id(broker), symbol)
+    now = time.monotonic()
+    with _PUBLIC_QUOTE_LOCK:
+        cached = _PUBLIC_QUOTE_CACHE.get(key)
+        if cached is not None:
+            if (cached.get("broker") is broker
+                    and 0.0 <= now - float(cached.get("observed_at", 0.0)) <= _PUBLIC_QUOTE_TTL_S):
+                return float(cached["price"])
+            _PUBLIC_QUOTE_CACHE.pop(key, None)
+        flight = _PUBLIC_QUOTE_FLIGHTS.get(key)
+        if flight is not None and flight.get("broker") is not broker:
+            _PUBLIC_QUOTE_FLIGHTS.pop(key, None)
+            flight = None
+        if flight is None:
+            failure_at = _PUBLIC_QUOTE_FAILURE_AT.get(key, 0.0)
+            if failure_at and now - failure_at < _PUBLIC_QUOTE_BACKOFF_S:
+                return 0.0
+            flight = {"broker": broker, "event": threading.Event()}
+            _PUBLIC_QUOTE_FLIGHTS[key] = flight
+
+            def read_public_price() -> None:
+                price = 0.0
+                try:
+                    response = reader("Ticker", {"pair": symbol.replace("-", "")})
+                    price = _strict_public_quote_payload(response)
+                except BaseException:
+                    price = 0.0
+                finally:
+                    with _PUBLIC_QUOTE_LOCK:
+                        if _PUBLIC_QUOTE_FLIGHTS.get(key) is flight:
+                            if price > 0.0:
+                                _PUBLIC_QUOTE_CACHE[key] = {
+                                    "broker": broker,
+                                    "price": price,
+                                    "observed_at": time.monotonic(),
+                                }
+                                _PUBLIC_QUOTE_FAILURE_AT.pop(key, None)
+                                LOGGER.info(
+                                    "KRAKEN_PUBLIC_POSITION_VALUATION_V286 symbol=%s price=%.8f "
+                                    "source=kraken_public_ticker historical_cost_basis=false "
+                                    "authenticated_balance_required=true trade_submitted=false",
+                                    symbol, price,
+                                )
+                            else:
+                                _PUBLIC_QUOTE_FAILURE_AT[key] = time.monotonic()
+                            _PUBLIC_QUOTE_FLIGHTS.pop(key, None)
+                    flight["event"].set()
+
+            threading.Thread(
+                target=read_public_price,
+                name="nija-kraken-public-dust-valuation",
+                daemon=True,
+            ).start()
+
+    # Return immediately if the quote is slow; never block a broker Balance
+    # reader on a possibly hung public HTTP request.
+    flight["event"].wait(_PUBLIC_QUOTE_CALLER_WAIT_S)
+    with _PUBLIC_QUOTE_LOCK:
+        cached = _PUBLIC_QUOTE_CACHE.get(key)
+        if cached is not None and cached.get("broker") is broker:
+            age = time.monotonic() - float(cached.get("observed_at", 0.0))
+            if 0.0 <= age <= _PUBLIC_QUOTE_TTL_S:
+                return float(cached["price"])
+    return 0.0
+
+
 def _build_authoritative_rows(broker: Any, result: Mapping[str, Any]) -> list[dict[str, Any]]:
     fiat = {"USD", "USDT", "USDC", "EUR", "GBP", "CAD", "AUD", "JPY"}
     try:
@@ -300,6 +419,8 @@ def _build_authoritative_rows(broker: Any, result: Mapping[str, Any]) -> list[di
         except Exception:
             tradable = False
         price = _cached_price(broker, symbol)
+        if price <= 0.0:
+            price = _bounded_public_usd_quote(broker, symbol)
         rows.append({
             "symbol": symbol,
             "quantity": quantity,
