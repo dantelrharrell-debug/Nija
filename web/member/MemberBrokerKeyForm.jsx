@@ -11,6 +11,7 @@ export default function MemberBrokerKeyForm({ pb }) {
   const [environment, setEnvironment] = useState("paper");
   const [apiKey, setApiKey] = useState("");
   const [apiSecret, setApiSecret] = useState("");
+  const [passphrase, setPassphrase] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   useEffect(() => {
@@ -40,7 +41,7 @@ export default function MemberBrokerKeyForm({ pb }) {
         headers: { "Content-Type": "application/json", Authorization: "Bearer " + token },
         body: JSON.stringify({
           broker, environment,
-          credentials: { api_key: apiKey.trim(), api_secret: apiSecret.trim() }
+          credentials: broker === "okx" ? { api_key: apiKey.trim(), api_secret: apiSecret.trim(), passphrase: passphrase.trim() } : { api_key: apiKey.trim(), api_secret: apiSecret.trim() }
         }),
         cache: "no-store",
       });
@@ -49,6 +50,7 @@ export default function MemberBrokerKeyForm({ pb }) {
       if (result.credentials_stored !== true) throw new Error("Credential storage could not be confirmed.");
       setApiKey("");
       setApiSecret("");
+      setPassphrase("");
       setMessage("Credentials securely stored. Brokerage verification and trading authorization are still pending.");
     } catch {
       setMessage("Secure connection could not be completed. No brokerage access has been confirmed.");
@@ -64,14 +66,15 @@ export default function MemberBrokerKeyForm({ pb }) {
       "Secure brokerage setup temporarily unavailable. Please try again later."}</p> :
     <form onSubmit={submit} autoComplete="off">
       <label>Brokerage <select value={broker} onChange={e => setBroker(e.target.value)}>
-        <option value="kraken">Kraken</option><option value="alpaca">Alpaca</option>
+        <option value="kraken">Kraken</option><option value="alpaca">Alpaca</option><option value="coinbase">Coinbase Advanced Trade</option><option value="okx">OKX</option>
       </select></label>
       <label>Environment <select value={environment} onChange={e => setEnvironment(e.target.value)}>
         <option value="paper">Paper</option><option value="live">Live (storage only; trading disabled)</option>
       </select></label>
-      <label>API key <input value={apiKey} onChange={e => setApiKey(e.target.value)} required autoComplete="off" /></label>
-      <label>API secret <input type="password" value={apiSecret} onChange={e => setApiSecret(e.target.value)} required autoComplete="new-password" /></label>
-      <button type="submit" disabled={busy}>{busy ? "Saving…" : "Save credentials securely"}</button>
+      <label>{broker === "coinbase" ? "CDP API key name" : "API key"} <input value={apiKey} onChange={e => setApiKey(e.target.value)} required autoComplete="off" /></label>
+      <label>{broker === "coinbase" ? "CDP private key (PEM)" : "API secret"} <input type="password" value={apiSecret} onChange={e => setApiSecret(e.target.value)} required autoComplete="new-password" /></label>
+      {broker === "okx" && <label>OKX API passphrase <input type="password" value={passphrase} onChange={e => setPassphrase(e.target.value)} required autoComplete="new-password" /></label>}
+      <button type="submit" disabled={busy || (broker === "okx" && !passphrase.trim())}>{busy ? "Saving…" : "Save credentials securely"}</button>
     </form>}
     {message && <p role="status">{message}</p>}
   </section>;
