@@ -106,30 +106,7 @@ class APIKeyManager:
         if not user_tokens:
             raise ValueError("user_id cannot be normalized for broker runtime")
 
-        # Runtime compatibility path: broker connectors read process env vars.
-        # Wire both short and full normalized prefixes because existing broker
-        # adapters intentionally support both formats.
-        for user_token in user_tokens:
-            prefix = f"{broker_env}_USER_{user_token}"
-            os.environ[f"{prefix}_API_KEY"] = api_key
-            os.environ[f"{prefix}_API_SECRET"] = api_secret
-
-            if additional_params and broker_env == "OKX":
-                if "passphrase" in additional_params:
-                    passphrase = additional_params.get("passphrase")
-                else:
-                    passphrase = additional_params.get("api_passphrase", "")
-                if passphrase is not None:
-                    passphrase_str = str(passphrase).strip()
-                    if passphrase_str:
-                        os.environ[f"{prefix}_PASSPHRASE"] = passphrase_str
-
-            if additional_params and broker_env == "ALPACA":
-                paper_value = additional_params.get("paper")
-                if paper_value is not None:
-                    normalized_paper = bool(paper_value)
-                    os.environ[f"{prefix}_PAPER"] = str(normalized_paper).lower()
-
+        # Customer credentials must not be exported to process-wide environment.\n        # Legacy connectors must obtain credentials through an authenticated,\n        # account-scoped adapter rather than this compatibility path.\n        logger.info("Broker environment wiring disabled for customer credentials")\n
     def _unwire_broker_env(self, user_id: str, broker: str) -> None:
         """Remove runtime env vars for a user broker connection."""
         broker_env = broker.upper()
