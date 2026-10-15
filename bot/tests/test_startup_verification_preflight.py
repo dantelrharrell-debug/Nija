@@ -80,6 +80,13 @@ class StartupPreflightTests(unittest.TestCase):
     def assert_no_order_validation(self):
         self.assertNotIn("AddOrder", [name for name, _ in self.calls])
 
+    def test_validation_requires_exact_fee_flags_and_client_order_identity(self):
+        original = self.plan.order_parameters
+        with patch.object(P.StartupVerificationPlan, "order_parameters", autospec=True, side_effect=lambda plan, leg: {**original(leg), "oflags": "fciq", "cl_ord_id": "short"}):
+            with self.assertRaisesRegex(V.StartupPreflightError, "order_identity_or_fee_flags_invalid"):
+                self.run_check()
+        self.assertNotIn("AddOrder", [method for method, _ in self.calls])
+
     def test_validation_is_not_execution_or_proof(self):
         report = self.run_check()
         self.assertTrue(report.validation_only)
