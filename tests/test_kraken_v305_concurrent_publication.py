@@ -55,3 +55,37 @@ def test_concurrent_ordinary_corruption_remains_fail_closed():
         release.set()
         worker.join(timeout=3)
     assert broker._nija_authoritative_position_snapshot_fetch_ok_v285 is False
+
+
+def test_concurrent_authenticated_empty_balance_publication_is_preserved():
+    """An authenticated zero-holding Balance generation is not an ordinary empty read."""
+    broker = Broker()
+    v286._record_snapshot_success(
+        broker, [{"symbol": "BTC-USD", "quantity": 1.0, "authoritative_balance": True}]
+    )
+    entered = threading.Event()
+    release = threading.Event()
+    result = []
+
+    def ordinary(self):
+        entered.set()
+        assert release.wait(3)
+        return []
+
+    wrapped = v305._wrap_get_positions(ordinary)
+    worker = threading.Thread(target=lambda: result.append(wrapped(broker)))
+    worker.start()
+    try:
+        assert entered.wait(3)
+        v286._record_snapshot_success(broker, [])
+    finally:
+        release.set()
+        worker.join(timeout=3)
+
+    assert not worker.is_alive()
+    assert result == [[]]
+    assert broker._nija_authoritative_position_snapshot_generation_v285 == 2
+    assert broker._nija_authoritative_position_raw_generation_v286 == 2
+    assert broker._nija_authoritative_position_snapshot_fetch_ok_v285 is True
+    assert broker._nija_authoritative_position_snapshot_rows_v285 == ()
+    assert broker._nija_authoritative_position_raw_rows_v286 == ()
