@@ -472,6 +472,33 @@ def _contact_payload(contact: dict[str, Any]) -> tuple[Optional[dict[str, Any]],
         **evidence,
     }, "ok"
 
+
+def _independent_readiness_gaps(contact: dict[str, Any]) -> tuple[str, ...]:
+    """Return overlapping evidence gaps for read-only aggregate monitoring.
+
+    These counters never grant calling permission, update records, bypass
+    suppression, or replace the existing fail-closed qualification path.
+    """
+    number, phone_meta = _phone(contact)
+    evidence = _evidence(contact, phone_meta)
+    gaps = []
+    if not number:
+        gaps.append("audit_missing_phone")
+    if not str(contact.get("time_zone", "") or "").strip():
+        gaps.append("audit_missing_timezone")
+    if not evidence["has_consent"]:
+        gaps.append("audit_missing_ai_consent")
+    if not evidence["consent_record_id"]:
+        gaps.append("audit_missing_consent_record")
+    if not evidence["legal_basis"]:
+        gaps.append("audit_missing_legal_basis")
+    if not evidence["dnc_clear"] or not evidence["dnc_checked_at"]:
+        gaps.append("audit_dnc_unverified")
+    if not _jurisdiction_evidence(contact)["recipient_jurisdiction"]:
+        gaps.append("audit_missing_jurisdiction")
+    return tuple(gaps)
+
+
 def run_sync() -> dict[str, int]:
     cursor = _load_cursor()
     newest_seen = cursor
@@ -483,6 +510,13 @@ def run_sync() -> dict[str, int]:
         "website_lead_errors": 0,
         "website_lead_missing_email": 0,
         "call_ready": 0,
+        "audit_missing_phone": 0,
+        "audit_missing_timezone": 0,
+        "audit_missing_ai_consent": 0,
+        "audit_missing_consent_record": 0,
+        "audit_missing_legal_basis": 0,
+        "audit_dnc_unverified": 0,
+        "audit_missing_jurisdiction": 0,
         "consent_required": 0,
         "consent_record_required": 0,
         "legal_basis_required": 0,
@@ -499,7 +533,6 @@ def run_sync() -> dict[str, int]:
         "errors": 0,
     }
 
-    reached_cursor = False
     for page in range(1, _pages_per_sync() + 1):
         response = _apollo_request(
             "/contacts/search",
@@ -523,6 +556,8 @@ def run_sync() -> dict[str, int]:
             # Never infer or fabricate missing eligibility fields.
 
             counts["contacts_scanned"] += 1
+            for gap in _independent_readiness_gaps(contact):
+                counts[gap] += 1
             if updated_at and (not newest_seen or updated_at > newest_seen):
                 newest_seen = updated_at
 
@@ -558,7 +593,7 @@ def run_sync() -> dict[str, int]:
             else:
                 counts["queued_or_refreshed"] += 1
 
-        if reached_cursor or len(contacts) < 100:
+        if len(contacts) < 100:
             break
 
     _save_state(newest_seen, counts)
@@ -600,6 +635,13 @@ def _worker() -> None:
                 f"dnc_pending={counts.get('dnc_pending', 0)} "
                 f"suppressed={counts.get('suppressed', 0)} "
                 f"missing_phone={counts.get('missing_phone', 0)} "
+                f"audit_missing_phone={counts.get('audit_missing_phone', 0)} "
+                f"audit_missing_timezone={counts.get('audit_missing_timezone', 0)} "
+                f"audit_missing_ai_consent={counts.get('audit_missing_ai_consent', 0)} "
+                f"audit_missing_consent_record={counts.get('audit_missing_consent_record', 0)} "
+                f"audit_missing_legal_basis={counts.get('audit_missing_legal_basis', 0)} "
+                f"audit_dnc_unverified={counts.get('audit_dnc_unverified', 0)} "
+                f"audit_missing_jurisdiction={counts.get('audit_missing_jurisdiction', 0)} "
                 f"jurisdiction_required={counts.get('recipient_jurisdiction_required', 0)} "
                 f"errors={counts.get('errors', 0) + counts.get('website_lead_errors', 0)}",
                 flush=True,
