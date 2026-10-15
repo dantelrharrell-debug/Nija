@@ -17,7 +17,7 @@ import requests
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 COLLECTION = "nija_broker_vault"
-BROKERS = frozenset({"kraken", "alpaca"})
+BROKERS = frozenset({"kraken", "alpaca", "coinbase", "okx"})
 ENVIRONMENTS = frozenset({"paper", "live"})
 MAX_CIPHERTEXT = 8192
 
