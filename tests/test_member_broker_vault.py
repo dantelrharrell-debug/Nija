@@ -41,7 +41,7 @@ class BrokerVaultTests(unittest.TestCase):
 
     def test_invalid_broker_rejected(self):
         with self.assertRaises(VaultError):
-            self.vault.encrypt("member123", "coinbase", "live", {"key": "sample"})
+            self.vault.encrypt("member123", "binance", "live", {"key": "sample"})
 
     def test_unverified_member_rejected_before_storage(self):
         self.session.request.return_value.status_code = 200

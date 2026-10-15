@@ -14,6 +14,8 @@ from bot.member_broker_vault import BrokerVault, VaultError
 _ALLOWED_FIELDS = {
     "kraken": frozenset({"api_key", "api_secret"}),
     "alpaca": frozenset({"api_key", "api_secret"}),
+    "coinbase": frozenset({"api_key", "api_secret"}),  # CDP key name + PEM private key
+    "okx": frozenset({"api_key", "api_secret", "passphrase"}),
 }
 
 

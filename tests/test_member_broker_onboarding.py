@@ -34,6 +34,33 @@ class OnboardingTests(unittest.TestCase):
         self.assertNotIn("fake-key", repr(result))
         self.assertNotIn("fake-secret", repr(result))
 
+    def test_all_nija_brokers_store_only_without_verification(self):
+        examples = {
+            "kraken": {"api_key": "fake", "api_secret": "fake"},
+            "alpaca": {"api_key": "fake", "api_secret": "fake"},
+            "coinbase": {"api_key": "organizations/fake/apiKeys/fake", "api_secret": "fake-private-key"},
+            "okx": {"api_key": "fake", "api_secret": "fake", "passphrase": "fake"},
+        }
+        for broker, credentials in examples.items():
+            with self.subTest(broker=broker):
+                result = self.flow.connect("valid-member-token", broker, "paper", credentials)
+                self.assertTrue(result.credentials_stored)
+                self.assertFalse(result.broker_verified)
+                self.assertFalse(result.live_trading_authorized)
+                self.assertNotIn("fake-private-key", repr(result))
+
+    def test_okx_requires_passphrase(self):
+        with self.assertRaises(VaultError):
+            self.flow.connect("valid-member-token", "okx", "paper",
+                              {"api_key": "fake", "api_secret": "fake"})
+        self.assertFalse(self.vault.created)
+
+    def test_coinbase_rejects_unexpected_credential_fields(self):
+        with self.assertRaises(VaultError):
+            self.flow.connect("valid-member-token", "coinbase", "paper",
+                              {"api_key": "fake", "api_secret": "fake", "passphrase": "extra"})
+        self.assertFalse(self.vault.created)
+
     def test_secret_intake_disabled_by_default(self):
         disabled = MemberBrokerOnboarding(self.vault)
         with self.assertRaisesRegex(VaultError, "not enabled"):
