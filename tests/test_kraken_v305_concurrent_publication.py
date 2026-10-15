@@ -232,17 +232,13 @@ def test_concurrent_canonical_publication_rejection_never_revives_old_proof():
     )
     entered = threading.Event()
     release = threading.Event()
-    worker_errors = []
-
     def ordinary(self):
         entered.set()
         assert release.wait(3)
         return []
 
     wrapped = v305._wrap_get_positions(ordinary)
-    worker = threading.Thread(target=lambda: (
-        wrapped(broker) if not worker_errors else None
-    ))
+    worker = threading.Thread(target=lambda: wrapped(broker))
     worker.start()
     try:
         assert entered.wait(3)
@@ -287,5 +283,32 @@ def test_canonical_publication_exception_revokes_old_proof():
         else:
             raise AssertionError("canonical writer error must fail")
     assert broker._nija_authoritative_position_snapshot_fetch_ok_v285 is False
+    assert broker._nija_authoritative_position_raw_generation_v286 == 1
+    assert broker._nija_authoritative_position_failure_serial_v286 == 1
+
+
+def test_invalid_authenticated_balance_rows_revoke_previous_snapshot():
+    """Authenticated Balance success must not survive an unsuccessful row build."""
+    from unittest.mock import patch
+
+    broker = Broker()
+    broker._kraken_private_call = lambda method, **kwargs: {
+        "error": [], "result": {"XXBT": "0.0001"}
+    }
+    v286._record_snapshot_success(
+        broker, [{"symbol": "BTC-USD", "quantity": 1.0, "authoritative_balance": True}]
+    )
+    with patch.object(v286, "_build_authoritative_rows", side_effect=ValueError("invalid_position_rows")):
+        try:
+            v286._fetch_authoritative_rows_sync(broker)
+        except RuntimeError as exc:
+            assert str(exc) == "kraken_balance_rows_build_failed"
+        else:
+            raise AssertionError("invalid Balance rows must revoke proof")
+
+    assert broker._nija_authoritative_position_snapshot_fetch_ok_v285 is False
+    assert broker._nija_authoritative_position_snapshot_error_v285 == (
+        "kraken_balance_rows_build_failed"
+    )
     assert broker._nija_authoritative_position_raw_generation_v286 == 1
     assert broker._nija_authoritative_position_failure_serial_v286 == 1
