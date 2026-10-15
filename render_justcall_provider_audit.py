@@ -84,10 +84,13 @@ def _countable(call: dict[str, Any], source: str) -> bool:
     if not isinstance(info, dict):
         raise ProviderHistoryIncomplete("call_info_missing")
     direction = str(info.get("direction") or "").strip().lower()
-    if direction and direction != "outgoing":
-        return False
-    if not direction and source == "justcall":
+    # Both provider families must explicitly identify an outbound call.
+    # A Sales Dialer record with no direction is not evidence of an
+    # accepted outbound attempt; including it could falsely meet 300/day.
+    if not direction:
         raise ProviderHistoryIncomplete("call_direction_unverified")
+    if direction != "outgoing":
+        return False
     call_type = str(info.get("type") or "").strip().lower()
     if any(term in call_type for term in _EXCLUDED_CALL_TYPES):
         return False
