@@ -415,7 +415,12 @@ def _contact_payload(contact: dict[str, Any]) -> tuple[Optional[dict[str, Any]],
     number, phone_meta = _phone(contact)
     if not number:
         return None, "missing_phone"
-    timezone_name = str(contact.get("time_zone", "") or "").strip()
+    # A recipient-local timezone must come from a reviewed recipient field.
+    # Apollo contact time_zone may be derived from employer or prospect data;
+    # never use that inference to authorize outbound calling hours.
+    timezone_name = str(
+        _custom_field(contact, "NIJA_APOLLO_RECIPIENT_TIMEZONE_FIELD_ID") or ""
+    ).strip()
     if not timezone_name:
         return None, "missing_timezone"
 
