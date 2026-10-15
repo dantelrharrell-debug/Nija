@@ -507,9 +507,12 @@ def _record_snapshot_success(broker: Any, rows: list[dict[str, Any]]) -> None:
 
 def _fetch_authoritative_rows_sync(broker: Any) -> list[dict[str, Any]]:
     if broker is None or not _connected(broker):
+        if broker is not None:
+            _record_snapshot_failure(broker, "kraken_broker_not_connected")
         raise RuntimeError("kraken_broker_not_connected")
     private_call = getattr(broker, "_kraken_private_call", None)
     if not callable(private_call):
+        _record_snapshot_failure(broker, "kraken_private_call_unavailable")
         raise RuntimeError("kraken_private_call_unavailable")
     before_seq = _busy_seq(broker)
     category = _category_from_call(broker, "Balance", ("Balance",), {})
