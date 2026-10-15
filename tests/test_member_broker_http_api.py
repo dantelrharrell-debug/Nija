@@ -1,7 +1,7 @@
 """No-real-secret tests for external member credential HTTP service."""
 import unittest
 from unittest.mock import patch
-from bot.member_broker_onboarding import MemberBrokerOnboarding
+from member_broker_onboarding import MemberBrokerOnboarding
 from member_broker_http_api import create_app
 from member_broker_entitlement import check_founding_entitlement
 

@@ -9,8 +9,8 @@ import os
 from flask import Flask, jsonify, request
 from werkzeug.exceptions import BadRequest
 
-from bot.member_broker_vault import BrokerVault, VaultError
-from bot.member_broker_onboarding import MemberBrokerOnboarding
+from member_broker_vault import BrokerVault, VaultError
+from member_broker_onboarding import MemberBrokerOnboarding
 from member_broker_entitlement import trusted_founding_entitlement
 
 
