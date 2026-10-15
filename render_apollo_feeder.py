@@ -306,26 +306,37 @@ def _evidence(contact: dict[str, Any], phone_meta: dict[str, Any]) -> dict[str, 
     )
 
     provider_dnc = str(phone_meta.get("dnc_status_cd", "") or "").strip().lower()
-    checked_now = _iso(_utcnow())
+    # Contact retrieval is not a DNC-screening transaction. Never stamp a
+    # historical Apollo status with the feeder's current sync time: the
+    # autodial worker interprets dnc_checked_at as recent screening evidence.
+    provider_checked_at = str(
+        phone_meta.get("dnc_checked_at")
+        or phone_meta.get("dnc_checked_timestamp")
+        or ""
+    ).strip()
+    custom_clear = dnc_value in {
+        "qualified", "clear", "not_found", "not found", "passed", "true", "1"
+    }
+    custom_blocked = dnc_value in {
+        "found", "blocked", "not qualified", "not_qualified", "failed"
+    }
+    provider_dnc_found = provider_dnc == "found"
 
-    if provider_dnc == "found":
+    if provider_dnc_found or provider_dnc == "pending" or custom_blocked:
+        # A blocked or unresolved screen must override otherwise-clear data.
         dnc_clear = False
-        dnc_checked_at = checked_now
-        provider_dnc_found = True
+        dnc_checked_at = provider_checked_at or custom_dnc_checked_at
     elif provider_dnc == "not_found":
-        dnc_clear = True
-        dnc_checked_at = checked_now
-        provider_dnc_found = False
-    elif provider_dnc == "pending":
-        dnc_clear = False
-        dnc_checked_at = checked_now
-        provider_dnc_found = False
+        # Provider status is usable only with its own documented timestamp.
+        # Otherwise require independently complete custom DNC evidence.
+        dnc_clear = bool(provider_checked_at or (custom_clear and custom_dnc_checked_at))
+        dnc_checked_at = (
+            provider_checked_at
+            or (custom_dnc_checked_at if custom_clear else "")
+        )
     else:
-        dnc_clear = dnc_value in {
-            "qualified", "clear", "not_found", "not found", "passed", "true", "1"
-        }
+        dnc_clear = bool(custom_clear and custom_dnc_checked_at)
         dnc_checked_at = custom_dnc_checked_at
-        provider_dnc_found = False
 
     return {
         "has_consent": has_consent,
@@ -392,7 +403,8 @@ def _qualification_reason(payload: dict[str, Any]) -> str:
         return "consent_record_required"
     if not str(payload.get("legal_basis", "") or "").strip():
         return "legal_basis_required"
-    if not _bool(payload.get("dnc_clear")):
+    if (not _bool(payload.get("dnc_clear"))
+            or not str(payload.get("dnc_checked_at", "") or "").strip()):
         return (
             "dnc_pending"
             if str(payload.get("provider_dnc_status", "") or "").lower() == "pending"
