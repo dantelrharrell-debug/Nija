@@ -329,8 +329,9 @@ def _record_snapshot_failure(broker: Any, reason: str) -> None:
 
 
 def _record_snapshot_success(broker: Any, rows: list[dict[str, Any]]) -> None:
-    # Serialize competing Kraken snapshot writers through the existing flight lock.
-    # v98 readers still validate generation consistency and fail closed on races.
+    # Prepare the raw proof before publishing a canonical success marker.
+    prepared_rows = tuple(dict(row) for row in rows)
+    # Serialize competing writers; v312 may call this while holding this RLock.
     with _AUTH_LOCK:
         v285 = _v285()
         recorder = getattr(v285, "_record_snapshot_success", None)
@@ -338,10 +339,22 @@ def _record_snapshot_success(broker: Any, rows: list[dict[str, Any]]) -> None:
             raise RuntimeError("v285_authoritative_snapshot_record_failed")
         generation = int(getattr(broker, "_nija_authoritative_position_snapshot_generation_v285", 0) or 0)
         try:
-            setattr(broker, "_nija_authoritative_position_raw_rows_v286", tuple(dict(row) for row in rows))
+            setattr(broker, "_nija_authoritative_position_raw_rows_v286", prepared_rows)
             setattr(broker, "_nija_authoritative_position_raw_generation_v286", generation)
         except Exception as exc:
-            raise RuntimeError("v286_raw_snapshot_publication_failed") from exc
+            reason = "v286_raw_snapshot_publication_failed"
+            # v285 otherwise retains fetch_ok=True from its earlier publication.
+            # That can incorrectly satisfy strong proof without matching raw data.
+            try:
+                invalidator = getattr(v285, "_record_snapshot_failure", None)
+                if callable(invalidator):
+                    invalidator(broker, reason)
+                if getattr(broker, "_nija_authoritative_position_snapshot_fetch_ok_v285", None) is True:
+                    setattr(broker, "_nija_authoritative_position_snapshot_fetch_ok_v285", False)
+                    setattr(broker, "_nija_authoritative_position_snapshot_error_v285", reason)
+            except Exception:
+                LOGGER.exception("Kraken canonical snapshot invalidation failed after raw write")
+            raise RuntimeError(reason) from exc
 
 
 def _fetch_authoritative_rows_sync(broker: Any) -> list[dict[str, Any]]:
