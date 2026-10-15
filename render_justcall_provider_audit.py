@@ -98,30 +98,53 @@ def _countable(call: dict[str, Any], source: str) -> bool:
 
 
 def _history_for_source(
-    source: str, path: str, target_date: date
-) -> tuple[set[str], dict[str, int]]:
-    # JustCall filters by the account user's timezone, which need not be Pacific.
-    # Request a deliberately wider interval and classify each call using its
-    # provider-documented UTC date/time converted into America/Los_Angeles.
+    source: str, path: str, target_date: date, now_utc: datetime
+) -> tuple[set[str], dict[str, int | str]]:
+    # In JustCall API v2.1, from_datetime/to_datetime are interpreted in the
+    # *account's* timezone. That may differ from Pacific. Start two calendar
+    # days early, then classify each UTC provider timestamp in Pacific.
     from_date = target_date - timedelta(days=2)
     to_date = target_date + timedelta(days=2)
+    # Never ask the API for future end dates; it can reject those with HTTP 400.
+    # A missing upper bound fetches through the provider's current history.
+    historical_end = to_date.isoformat() if to_date < now_utc.date() else None
     ids: set[str] = set()
     seen_page_signatures: set[tuple[str, ...]] = set()
     scanned = 0
     excluded = 0
+    page = 0
+    request_mode = "filtered"
 
-    for page in range(_MAX_PAGES):
-        query = {
-            "from_datetime": f"{from_date.isoformat()} 00:00:00",
-            "to_datetime": f"{to_date.isoformat()} 23:59:59",
+    while page < _MAX_PAGES:
+        # Date-only values are supported by v2.1 and avoid clock/timezone
+        # ambiguity at the provider. The compatibility query is deliberately
+        # narrower in query parameters, not narrower in evidence.
+        query: dict[str, Any] = {
+            "from_datetime": from_date.isoformat(),
             "page": page,
             "per_page": _PAGE_SIZE,
-            "sort": "id",
-            "order": "desc",
         }
-        if source == "justcall":
-            query["call_direction"] = "Outgoing"
-        payload = _provider_request("GET", f"{path}?{urlencode(query)}")
+        if request_mode == "filtered":
+            query.update({"sort": "id", "order": "desc"})
+            if historical_end:
+                query["to_datetime"] = historical_end
+            if source == "justcall":
+                query["call_direction"] = "Outgoing"
+        try:
+            payload = _provider_request("GET", f"{path}?{urlencode(query)}")
+        except OutreachProviderError as exc:
+            if exc.status_code != 400 or request_mode != "filtered":
+                raise
+            # One read-only fallback for accounts that reject an optional
+            # filter. Restart from page zero so nothing from an incomplete
+            # filtered response is silently mixed into a verified total.
+            request_mode = "compat"
+            ids.clear()
+            seen_page_signatures.clear()
+            scanned = 0
+            excluded = 0
+            page = 0
+            continue
         calls, container = _records(payload)
         scanned += len(calls)
         signature = tuple(_call_identity(call, source) for call in calls)
@@ -148,7 +171,13 @@ def _history_for_source(
             isinstance(total, int) and not isinstance(total, bool) and scanned < total
         )
         if not next_link and not more_by_total and len(calls) < _PAGE_SIZE:
-            return ids, {"pages": page + 1, "records_scanned": scanned, "excluded": excluded}
+            return ids, {
+                "pages": page + 1,
+                "records_scanned": scanned,
+                "excluded": excluded,
+                "query_mode": request_mode,
+            }
+        page += 1
     raise ProviderHistoryIncomplete("provider_pagination_limit_reached")
 
 
@@ -173,7 +202,7 @@ def audit_provider_today(now_utc: datetime | None = None) -> dict[str, Any]:
         ("sales_dialer", "/sales_dialer/calls"),
     ):
         try:
-            ids, info = _history_for_source(name, path, target_date)
+            ids, info = _history_for_source(name, path, target_date, now_utc)
         except (ProviderHistoryIncomplete, OutreachConfigurationError, OutreachProviderError) as exc:
             result["state"] = "provider_history_unverified"
             result["blocked_source"] = name
