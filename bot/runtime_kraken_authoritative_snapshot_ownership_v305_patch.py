@@ -107,26 +107,73 @@ def _wrap_get_positions(current: Callable[..., Any]) -> Callable[..., Any]:
 
     @wraps(current)
     def get_positions_v305(self: Any, *args: Any, **kwargs: Any) -> Any:
-        before = _snapshot_fields(self)
+        # Capture under v286's writer lock; the ordinary network read must
+        # remain OUTSIDE that lock so authenticated Balance can progress.
+        v286 = importlib.import_module("bot.runtime_kraken_position_refresh_liveness_v286_patch")
+        with v286._AUTH_LOCK:
+            before = _snapshot_fields(self)
+            raw_before = getattr(self, "_nija_authoritative_position_raw_generation_v286", None)
+            failure_before = getattr(
+                self, "_nija_authoritative_position_failure_serial_v286", 0
+            )
         try:
             return current(self, *args, **kwargs)
         finally:
-            after = _snapshot_fields(self)
-            changed = _state_changed(before, after)
-            restored = _restore_fields(self, before)
-            if changed:
-                log = LOGGER.info if restored else LOGGER.error
-                log(
-                    "KRAKEN_AUTHORITATIVE_SNAPSHOT_V305_ORDINARY_READ_ISOLATED marker=%s account=%s "
-                    "ordinary_get_positions_result_unchanged=true exception_unchanged=true "
-                    "precall_snapshot_restored=%s snapshot_timestamp_advanced=false "
-                    "snapshot_generation_advanced=false authoritative_balance_owner_v286=true "
-                    "stale_promoted=false position_success_fabricated=false cost_basis_fabricated=false "
-                    "execution_proof_fabricated=false safety_gates_bypassed=false",
-                    MARKER,
-                    str(getattr(self, "account_identifier", "unknown") or "unknown"),
-                    str(restored).lower(),
+            with v286._AUTH_LOCK:
+                raw_after = getattr(self, "_nija_authoritative_position_raw_generation_v286", None)
+                failure_after = getattr(
+                    self, "_nija_authoritative_position_failure_serial_v286", 0
                 )
+                if failure_after != failure_before:
+                    # A genuine Kraken Balance attempt failed during the
+                    # ordinary read. The raw generation may be unchanged, so
+                    # restoring the prior canonical success would be fail-open.
+                    v285 = importlib.import_module("bot.runtime_authoritative_position_coverage_v285_patch")
+                    v285._record_snapshot_failure(
+                        self, "v305_concurrent_authenticated_balance_failure"
+                    )
+                    LOGGER.critical(
+                        "KRAKEN_AUTHORITATIVE_SNAPSHOT_V305_CONCURRENT_AUTH_FAILURE "
+                        "marker=%s account=%s old_failure_serial=%s new_failure_serial=%s "
+                        "precall_snapshot_restored=false canonical_fetch_ok=false "
+                        "genuine_failure_preserved=true safety_gates_bypassed=false",
+                        MARKER, str(getattr(self, "account_identifier", "unknown")),
+                        failure_before, failure_after,
+                    )
+                elif raw_after != raw_before:
+                    # Authenticated Balance published during this ordinary read.
+                    # Restoring 'before' would roll the canonical generation
+                    # backwards while leaving v286 raw proof at its new value.
+                    # Preserve the real publication; if ordinary wrappers
+                    # corrupted it afterward, invalidate rather than fabricate.
+                    generation = getattr(self, "_nija_authoritative_position_snapshot_generation_v285", None)
+                    if generation != raw_after:
+                        v285 = importlib.import_module("bot.runtime_authoritative_position_coverage_v285_patch")
+                        v285._record_snapshot_failure(self, "v305_concurrent_publication_reconciliation_required")
+                    LOGGER.warning(
+                        "KRAKEN_AUTHORITATIVE_SNAPSHOT_V305_CONCURRENT_PUBLICATION "
+                        "marker=%s account=%s raw_before=%s raw_after=%s "
+                        "precall_snapshot_restored=false genuine_balance_preserved=true "
+                        "proof_fabricated=false fail_closed_on_mismatch=true",
+                        MARKER, str(getattr(self, "account_identifier", "unknown")),
+                        raw_before, raw_after,
+                    )
+                else:
+                    after = _snapshot_fields(self)
+                    changed = _state_changed(before, after)
+                    restored = _restore_fields(self, before)
+                    if changed:
+                        log = LOGGER.info if restored else LOGGER.error
+                        log(
+                            "KRAKEN_AUTHORITATIVE_SNAPSHOT_V305_ORDINARY_READ_ISOLATED marker=%s account=%s "
+                            "ordinary_get_positions_result_unchanged=true exception_unchanged=true "
+                            "precall_snapshot_restored=%s snapshot_timestamp_advanced=false "
+                            "snapshot_generation_advanced=false authoritative_balance_owner_v286=true "
+                            "stale_promoted=false position_success_fabricated=false cost_basis_fabricated=false "
+                            "execution_proof_fabricated=false safety_gates_bypassed=false",
+                            MARKER, str(getattr(self, "account_identifier", "unknown")),
+                            str(restored).lower(),
+                        )
 
     setattr(get_positions_v305, _PATCH_ATTR, True)
     setattr(get_positions_v305, "__wrapped__", current)

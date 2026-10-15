@@ -441,17 +441,48 @@ def _v285() -> Any:
 
 
 def _record_snapshot_failure(broker: Any, reason: str) -> None:
-    try:
-        recorder = getattr(_v285(), "_record_snapshot_failure", None)
-        if callable(recorder):
-            recorder(broker, reason)
-    except Exception:
-        pass
+    """Revoke genuinely failed Balance proof with a serialized failure epoch.
+
+    v305's overlapping ordinary get_positions() wrapper must distinguish this
+    authoritative failure from an unrelated ordinary-read failure. A failed
+    authenticated read never renews the old canonical snapshot.
+    """
+    with _AUTH_LOCK:
+        try:
+            serial = int(
+                getattr(broker, "_nija_authoritative_position_failure_serial_v286", 0) or 0
+            )
+            setattr(
+                broker, "_nija_authoritative_position_failure_serial_v286", serial + 1
+            )
+        except Exception:
+            LOGGER.exception("KRAKEN_AUTHORITATIVE_FAILURE_SERIAL_V286_UNAVAILABLE")
+        try:
+            recorder = getattr(_v285(), "_record_snapshot_failure", None)
+            if callable(recorder):
+                recorder(broker, reason)
+        except Exception:
+            LOGGER.exception("KRAKEN_CANONICAL_FAILURE_INVALIDATOR_V286_ERROR")
+        # Fail closed even if the v285 helper was absent or failed. Do not
+        # assume a callable returning normally actually revoked prior proof.
+        try:
+            setattr(broker, "_nija_authoritative_position_snapshot_fetch_ok_v285", False)
+            setattr(
+                broker, "_nija_authoritative_position_snapshot_error_v285",
+                str(reason or "kraken_authoritative_balance_failed"),
+            )
+        except Exception:
+            LOGGER.exception("KRAKEN_CANONICAL_FAILURE_DIRECT_REVOCATION_V286_ERROR")
 
 
 def _record_snapshot_success(broker: Any, rows: list[dict[str, Any]]) -> None:
-    # Prepare the raw proof before publishing a canonical success marker.
-    prepared_rows = tuple(dict(row) for row in rows)
+    # A failed canonical row preparation must invalidate the prior Balance
+    # snapshot; otherwise v305 could restore stale authenticated success.
+    try:
+        prepared_rows = tuple(dict(row) for row in rows)
+    except Exception:
+        _record_snapshot_failure(broker, "v286_raw_snapshot_preparation_failed")
+        raise
     # Serialize competing writers; v312 may call this while holding this RLock.
     # v98/v315 acquires this same re-entrant lock when validating provenance.
     # Serializing the canonical generation and its raw-row certificate prevents
@@ -461,7 +492,16 @@ def _record_snapshot_success(broker: Any, rows: list[dict[str, Any]]) -> None:
     with _AUTH_LOCK:
         v285 = _v285()
         recorder = getattr(v285, "_record_snapshot_success", None)
-        if not callable(recorder) or not bool(recorder(broker, rows)):
+        try:
+            canonical_accepted = bool(callable(recorder) and recorder(broker, rows))
+        except Exception as exc:
+            # A failed authenticated Balance publication is a genuine failure,
+            # even if its v286 raw generation has not changed. v305 must never
+            # restore an older successful snapshot over this rejection.
+            _record_snapshot_failure(broker, "v285_authoritative_snapshot_record_failed")
+            raise RuntimeError("v285_authoritative_snapshot_record_failed") from exc
+        if not canonical_accepted:
+            _record_snapshot_failure(broker, "v285_authoritative_snapshot_record_failed")
             raise RuntimeError("v285_authoritative_snapshot_record_failed")
         generation = int(getattr(broker, "_nija_authoritative_position_snapshot_generation_v285", 0) or 0)
         try:
@@ -472,9 +512,10 @@ def _record_snapshot_success(broker: Any, rows: list[dict[str, Any]]) -> None:
             # v285 otherwise retains fetch_ok=True from its earlier publication.
             # That can incorrectly satisfy strong proof without matching raw data.
             try:
-                invalidator = getattr(v285, "_record_snapshot_failure", None)
-                if callable(invalidator):
-                    invalidator(broker, reason)
+                # Raw-field publication is part of authenticated Balance
+                # ownership; increment the same failure serial before v305
+                # can restore an older pre-call canonical success.
+                _record_snapshot_failure(broker, reason)
                 if getattr(broker, "_nija_authoritative_position_snapshot_fetch_ok_v285", None) is True:
                     setattr(broker, "_nija_authoritative_position_snapshot_fetch_ok_v285", False)
                     setattr(broker, "_nija_authoritative_position_snapshot_error_v285", reason)
@@ -490,9 +531,12 @@ def _record_snapshot_success(broker: Any, rows: list[dict[str, Any]]) -> None:
 
 def _fetch_authoritative_rows_sync(broker: Any) -> list[dict[str, Any]]:
     if broker is None or not _connected(broker):
+        if broker is not None:
+            _record_snapshot_failure(broker, "kraken_broker_not_connected")
         raise RuntimeError("kraken_broker_not_connected")
     private_call = getattr(broker, "_kraken_private_call", None)
     if not callable(private_call):
+        _record_snapshot_failure(broker, "kraken_private_call_unavailable")
         raise RuntimeError("kraken_private_call_unavailable")
     before_seq = _busy_seq(broker)
     category = _category_from_call(broker, "Balance", ("Balance",), {})
@@ -520,7 +564,11 @@ def _fetch_authoritative_rows_sync(broker: Any) -> list[dict[str, Any]]:
         reason = f"kraken_balance_result_missing:{type(result).__name__}"
         _record_snapshot_failure(broker, reason)
         raise RuntimeError(reason)
-    rows = _build_authoritative_rows(broker, result)
+    try:
+        rows = _build_authoritative_rows(broker, result)
+    except Exception as exc:
+        _record_snapshot_failure(broker, "kraken_balance_rows_build_failed")
+        raise RuntimeError("kraken_balance_rows_build_failed") from exc
     _record_snapshot_success(broker, rows)
     LOGGER.critical(
         "KRAKEN_AUTHORITATIVE_BALANCE_V286_FETCHED marker=%s account=%s held_assets=%d authoritative_balance=true price_required_for_enumeration=false dust_hidden=false unsupported_hidden=false synthetic_empty=false",
