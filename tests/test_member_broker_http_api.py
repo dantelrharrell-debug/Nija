@@ -27,6 +27,35 @@ class MemberHTTPTests(unittest.TestCase):
     def test_health(self):
         self.assertEqual(self.client.get("/healthz").status_code, 200)
 
+    def test_readiness_fails_closed_without_billing_configuration(self):
+        enabled = MemberBrokerOnboarding(FakeVault(), secret_intake_enabled=True)
+        app = create_app(onboarding=enabled)
+        with patch.dict("os.environ", {
+            "NIJA_VAULT_BILLING_READONLY_URL": "",
+            "NIJA_VAULT_STRIPE_READONLY_KEY": "",
+            "NIJA_VAULT_FOUNDING_PRICE_ID": "",
+            "NIJA_VAULT_FOUNDING_PRODUCT_ID": "",
+        }):
+            response = app.test_client().get("/readyz")
+            self.assertEqual(response.status_code, 503)
+            self.assertEqual(response.get_json(), {"status": "not_ready"})
+            self.assertEqual(app.test_client().get("/healthz").status_code, 200)
+
+    def test_readiness_requires_each_entitlement_setting(self):
+        enabled = MemberBrokerOnboarding(FakeVault(), secret_intake_enabled=True)
+        app = create_app(onboarding=enabled)
+        required = {
+            "NIJA_VAULT_BILLING_READONLY_URL": "postgresql://test-only",
+            "NIJA_VAULT_STRIPE_READONLY_KEY": "test-only",
+            "NIJA_VAULT_FOUNDING_PRICE_ID": "price_test",
+            "NIJA_VAULT_FOUNDING_PRODUCT_ID": "prod_test",
+        }
+        with patch.dict("os.environ", required):
+            self.assertEqual(app.test_client().get("/readyz").status_code, 200)
+            for key in required:
+                with patch.dict("os.environ", {key: ""}):
+                    self.assertEqual(app.test_client().get("/readyz").status_code, 503)
+
     def test_no_intake_by_default(self):
         response = self.client.post("/api/member/brokers/connect", headers=self.h, json={
             "broker": "kraken", "environment": "paper",
