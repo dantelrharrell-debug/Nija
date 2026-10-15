@@ -48,7 +48,7 @@ def check_founding_entitlement(
             return False
         if row["offer_code"] != "founding_beta" or row["status"] not in ("active", "trialing"):
             return False
-        if row["entitled"] is not True:
+        if row["entitled"] not in (True, 1):
             return False
         if row["expected_price_id"] != price_id or row["expected_product_id"] != product_id:
             return False
@@ -65,12 +65,19 @@ def check_founding_entitlement(
             return False
         if _resource_id(_field(sub, "customer")) != row["stripe_customer_id"]:
             return False
-        if int(_field(sub, "current_period_end", 0) or 0) <= clock:
-            return False
         items = _field(_field(sub, "items", {}), "data", [])
         if not isinstance(items, (list, tuple)) or len(items) != 1:
             return False
         item = items[0]
+        period_end = _field(sub, "current_period_end")
+        if period_end is None:
+            period_end = _field(item, "current_period_end")
+        if int(period_end or 0) <= clock:
+            return False
+        metadata = _field(sub, "metadata", {})
+        if (_field(metadata, "nija_user_id") != member_id
+                or _field(metadata, "nija_offer_code") != "founding_beta"):
+            return False
         if int(_field(item, "quantity", 0) or 0) != 1:
             return False
         price = _field(item, "price", {})
