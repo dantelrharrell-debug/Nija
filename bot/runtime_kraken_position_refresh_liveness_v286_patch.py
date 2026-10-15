@@ -622,9 +622,10 @@ def _patch_v281_kraken_audit() -> bool:
         if broker is None or not _is_kraken_broker(broker):
             return list(dict.fromkeys(reasons)), positions
         try:
-            generation = int(getattr(broker, "_nija_authoritative_position_snapshot_generation_v285", 0) or 0)
-            raw_generation = int(getattr(broker, "_nija_authoritative_position_raw_generation_v286", -1) or -1)
-            raw_rows = tuple(getattr(broker, "_nija_authoritative_position_raw_rows_v286", ()) or ())
+            with _AUTH_LOCK:
+                generation = int(getattr(broker, "_nija_authoritative_position_snapshot_generation_v285", 0) or 0)
+                raw_generation = int(getattr(broker, "_nija_authoritative_position_raw_generation_v286", -1) or -1)
+                raw_rows = tuple(getattr(broker, "_nija_authoritative_position_raw_rows_v286", ()) or ())
         except Exception:
             generation, raw_generation, raw_rows = 0, -1, ()
         if generation <= 0 or raw_generation != generation:
