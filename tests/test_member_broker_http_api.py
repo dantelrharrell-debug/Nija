@@ -1,0 +1,77 @@
+"""No-real-secret tests for external member credential HTTP service."""
+import unittest
+from unittest.mock import patch
+from bot.member_broker_onboarding import MemberBrokerOnboarding
+from member_broker_http_api import create_app
+from member_broker_entitlement import check_founding_entitlement
+
+
+class FakeVault:
+    def list_metadata(self, token):
+        if token != "test-token":
+            raise ValueError("denied")
+        return []
+    def create(self, token, broker, environment, credentials):
+        if token != "test-token":
+            raise ValueError("denied")
+        return "dummy"
+
+
+class MemberHTTPTests(unittest.TestCase):
+    def setUp(self):
+        self.app = create_app(onboarding=MemberBrokerOnboarding(FakeVault()))
+        self.client = self.app.test_client()
+        self.h = {"Origin": "https://nijaaitrading.com",
+                  "Authorization": "Bearer test-token"}
+
+    def test_health(self):
+        self.assertEqual(self.client.get("/healthz").status_code, 200)
+
+    def test_no_intake_by_default(self):
+        response = self.client.post("/api/member/brokers/connect", headers=self.h, json={
+            "broker": "kraken", "environment": "paper",
+            "credentials": {"api_key": "dummy-key", "api_secret": "dummy-secret"},
+        })
+        self.assertEqual(response.status_code, 403)
+        self.assertNotIn(b"dummy-secret", response.data)
+
+    def test_get_never_claims_broker_live(self):
+        response = self.client.get("/api/member/brokers", headers=self.h)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json(), {"connections": []})
+
+    def test_wrong_origin_rejected(self):
+        response = self.client.get(
+            "/api/member/brokers",
+            headers={"Origin": "https://malicious.example", "Authorization": "Bearer test-token"})
+        self.assertEqual(response.status_code, 403)
+        self.assertNotIn("Access-Control-Allow-Origin", response.headers)
+
+    def test_auth_required(self):
+        response = self.client.get("/api/member/brokers",
+                                   headers={"Origin": "https://nijaaitrading.com"})
+        self.assertEqual(response.status_code, 401)
+
+    def test_entitlement_fails_closed(self):
+        self.assertFalse(check_founding_entitlement("member123"))
+        row = {"nija_user_id": "member123", "offer_code": "founding_beta",
+               "status": "trialing", "entitled": True,
+               "expected_price_id": "price_1", "expected_product_id": "prod_1",
+               "stripe_subscription_id": "sub_1", "stripe_customer_id": "cus_1",
+               "current_period_end": 4_000_000_000}
+        sub = {"id": "sub_1", "customer": "cus_1", "livemode": True,
+               "status": "trialing", "current_period_end": 4_000_000_000,
+               "items": {"data": [{"quantity": 1,
+                                   "price": {"id": "price_1", "product": "prod_1"}}]}}
+        with patch.dict("os.environ",
+                        {"NIJA_VAULT_FOUNDING_PRICE_ID": "price_1",
+                         "NIJA_VAULT_FOUNDING_PRODUCT_ID": "prod_1"}):
+            self.assertTrue(check_founding_entitlement(
+                "member123", ledger_row=row, stripe_subscription=sub, now=2_000_000_000))
+            sub["livemode"] = False
+            self.assertFalse(check_founding_entitlement(
+                "member123", ledger_row=row, stripe_subscription=sub, now=2_000_000_000))
+
+
+if __name__ == "__main__":
+    unittest.main()
