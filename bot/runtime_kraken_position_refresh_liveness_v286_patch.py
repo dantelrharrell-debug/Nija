@@ -441,12 +441,28 @@ def _v285() -> Any:
 
 
 def _record_snapshot_failure(broker: Any, reason: str) -> None:
-    try:
-        recorder = getattr(_v285(), "_record_snapshot_failure", None)
-        if callable(recorder):
-            recorder(broker, reason)
-    except Exception:
-        pass
+    """Revoke genuinely failed Balance proof with a serialized failure epoch.
+
+    v305's overlapping ordinary get_positions() wrapper must distinguish this
+    authoritative failure from an unrelated ordinary-read failure. A failed
+    authenticated read never renews the old canonical snapshot.
+    """
+    with _AUTH_LOCK:
+        try:
+            serial = int(
+                getattr(broker, "_nija_authoritative_position_failure_serial_v286", 0) or 0
+            )
+            setattr(
+                broker, "_nija_authoritative_position_failure_serial_v286", serial + 1
+            )
+        except Exception:
+            LOGGER.exception("KRAKEN_AUTHORITATIVE_FAILURE_SERIAL_V286_UNAVAILABLE")
+        try:
+            recorder = getattr(_v285(), "_record_snapshot_failure", None)
+            if callable(recorder):
+                recorder(broker, reason)
+        except Exception:
+            pass
 
 
 def _record_snapshot_success(broker: Any, rows: list[dict[str, Any]]) -> None:
@@ -472,9 +488,10 @@ def _record_snapshot_success(broker: Any, rows: list[dict[str, Any]]) -> None:
             # v285 otherwise retains fetch_ok=True from its earlier publication.
             # That can incorrectly satisfy strong proof without matching raw data.
             try:
-                invalidator = getattr(v285, "_record_snapshot_failure", None)
-                if callable(invalidator):
-                    invalidator(broker, reason)
+                # Raw-field publication is part of authenticated Balance
+                # ownership; increment the same failure serial before v305
+                # can restore an older pre-call canonical success.
+                _record_snapshot_failure(broker, reason)
                 if getattr(broker, "_nija_authoritative_position_snapshot_fetch_ok_v285", None) is True:
                     setattr(broker, "_nija_authoritative_position_snapshot_fetch_ok_v285", False)
                     setattr(broker, "_nija_authoritative_position_snapshot_error_v285", reason)
