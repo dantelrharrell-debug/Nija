@@ -144,7 +144,8 @@ def test_independent_readiness_audit_preserves_valid_evidence(monkeypatch):
         "id": "offline-test",
         "time_zone": "America/Los_Angeles",
         "phone_numbers": [
-            {"sanitized_number": "+12065550123", "dnc_status_cd": "not_found"}
+            {"sanitized_number": "+12065550123", "dnc_status_cd": "not_found",
+             "dnc_checked_at": "2026-10-15T00:00:00+00:00"}
         ],
         "typed_custom_fields": {
             "consent": True, "consent_record": "offline-record",
