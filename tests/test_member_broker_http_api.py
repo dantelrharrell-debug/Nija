@@ -49,12 +49,33 @@ class MemberHTTPTests(unittest.TestCase):
             "NIJA_VAULT_STRIPE_READONLY_KEY": "test-only",
             "NIJA_VAULT_FOUNDING_PRICE_ID": "price_test",
             "NIJA_VAULT_FOUNDING_PRODUCT_ID": "prod_test",
+            "NIJA_MEMBER_BROKER_VAULT_RULES_VERIFIED": "true",
+            "NIJA_MEMBER_BROKER_IDENTITY_MAPPING_VERIFIED": "true",
         }
         with patch.dict("os.environ", required):
             self.assertEqual(app.test_client().get("/readyz").status_code, 200)
             for key in required:
                 with patch.dict("os.environ", {key: ""}):
                     self.assertEqual(app.test_client().get("/readyz").status_code, 503)
+
+    def test_readiness_requires_independent_security_verification(self):
+        enabled = MemberBrokerOnboarding(FakeVault(), secret_intake_enabled=True)
+        app = create_app(onboarding=enabled)
+        configured = {
+            "NIJA_VAULT_BILLING_READONLY_URL": "postgresql://test-only",
+            "NIJA_VAULT_STRIPE_READONLY_KEY": "test-only",
+            "NIJA_VAULT_FOUNDING_PRICE_ID": "price_test",
+            "NIJA_VAULT_FOUNDING_PRODUCT_ID": "prod_test",
+            "NIJA_MEMBER_BROKER_VAULT_RULES_VERIFIED": "true",
+            "NIJA_MEMBER_BROKER_IDENTITY_MAPPING_VERIFIED": "true",
+        }
+        with patch.dict("os.environ", configured):
+            self.assertEqual(app.test_client().get("/readyz").status_code, 200)
+            for name in ("NIJA_MEMBER_BROKER_VAULT_RULES_VERIFIED",
+                         "NIJA_MEMBER_BROKER_IDENTITY_MAPPING_VERIFIED"):
+                for value in ("", "false", "TRUE"):
+                    with patch.dict("os.environ", {name: value}):
+                        self.assertEqual(app.test_client().get("/readyz").status_code, 503)
 
     def test_no_intake_by_default(self):
         response = self.client.post("/api/member/brokers/connect", headers=self.h, json={
