@@ -466,8 +466,13 @@ def _record_snapshot_failure(broker: Any, reason: str) -> None:
 
 
 def _record_snapshot_success(broker: Any, rows: list[dict[str, Any]]) -> None:
-    # Prepare the raw proof before publishing a canonical success marker.
-    prepared_rows = tuple(dict(row) for row in rows)
+    # A failed canonical row preparation must invalidate the prior Balance
+    # snapshot; otherwise v305 could restore stale authenticated success.
+    try:
+        prepared_rows = tuple(dict(row) for row in rows)
+    except Exception:
+        _record_snapshot_failure(broker, "v286_raw_snapshot_preparation_failed")
+        raise
     # Serialize competing writers; v312 may call this while holding this RLock.
     # v98/v315 acquires this same re-entrant lock when validating provenance.
     # Serializing the canonical generation and its raw-row certificate prevents
@@ -549,7 +554,11 @@ def _fetch_authoritative_rows_sync(broker: Any) -> list[dict[str, Any]]:
         reason = f"kraken_balance_result_missing:{type(result).__name__}"
         _record_snapshot_failure(broker, reason)
         raise RuntimeError(reason)
-    rows = _build_authoritative_rows(broker, result)
+    try:
+        rows = _build_authoritative_rows(broker, result)
+    except Exception as exc:
+        _record_snapshot_failure(broker, "kraken_balance_rows_build_failed")
+        raise RuntimeError("kraken_balance_rows_build_failed") from exc
     _record_snapshot_success(broker, rows)
     LOGGER.critical(
         "KRAKEN_AUTHORITATIVE_BALANCE_V286_FETCHED marker=%s account=%s held_assets=%d authoritative_balance=true price_required_for_enumeration=false dust_hidden=false unsupported_hidden=false synthetic_empty=false",
