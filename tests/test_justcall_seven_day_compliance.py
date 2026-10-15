@@ -346,6 +346,7 @@ class ApolloJurisdictionTests(unittest.TestCase):
             "consent_record_id": "consent-123",
             "legal_basis": "express-written-consent",
             "dnc_clear": True,
+            "dnc_checked_at": "2026-10-15T00:00:00+00:00",
             "suppression_clear": True,
             "campaign_enabled": True,
             "weekend_evidence": {},
