@@ -27,9 +27,11 @@ def create_app(*, onboarding: MemberBrokerOnboarding | None = None) -> Flask:
         try:
             vault = BrokerVault.from_environment(trusted_founding_entitlement)
             onboarding = MemberBrokerOnboarding(
-                vault, secret_intake_enabled=os.environ.get(
-                    "NIJA_VAULT_INTAKE_ENABLED", ""
-                ) == "true",
+                vault, secret_intake_enabled=(
+                    os.environ.get("NIJA_VAULT_INTAKE_ENABLED", "") == "true"
+                    and os.environ.get("NIJA_MEMBER_BROKER_VAULT_RULES_VERIFIED", "") == "true"
+                    and os.environ.get("NIJA_MEMBER_BROKER_IDENTITY_MAPPING_VERIFIED", "") == "true"
+                ),
             )
         except (KeyError, VaultError, ValueError):
             onboarding = None
