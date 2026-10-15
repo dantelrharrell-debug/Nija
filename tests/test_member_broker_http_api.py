@@ -61,6 +61,7 @@ class MemberHTTPTests(unittest.TestCase):
                "current_period_end": 4_000_000_000}
         sub = {"id": "sub_1", "customer": "cus_1", "livemode": True,
                "status": "trialing", "current_period_end": 4_000_000_000,
+               "metadata": {"nija_user_id": "member123", "nija_offer_code": "founding_beta"},
                "items": {"data": [{"quantity": 1,
                                    "price": {"id": "price_1", "product": "prod_1"}}]}}
         with patch.dict("os.environ",
@@ -68,6 +69,19 @@ class MemberHTTPTests(unittest.TestCase):
                          "NIJA_VAULT_FOUNDING_PRODUCT_ID": "prod_1"}):
             self.assertTrue(check_founding_entitlement(
                 "member123", ledger_row=row, stripe_subscription=sub, now=2_000_000_000))
+            alt = dict(sub)
+            alt["current_period_end"] = None
+            alt["items"] = {"data": [{"quantity": 1, "current_period_end": 4_000_000_000,
+                                    "price": {"id": "price_1", "product": "prod_1"}}]}
+            self.assertTrue(check_founding_entitlement(
+                "member123", ledger_row=row, stripe_subscription=alt, now=2_000_000_000))
+            alt["metadata"] = {"nija_user_id": "different", "nija_offer_code": "founding_beta"}
+            self.assertFalse(check_founding_entitlement(
+                "member123", ledger_row=row, stripe_subscription=alt, now=2_000_000_000))
+            alt["metadata"] = {"nija_user_id": "member123", "nija_offer_code": "founding_beta"}
+            alt["items"]["data"][0]["current_period_end"] = 1
+            self.assertFalse(check_founding_entitlement(
+                "member123", ledger_row=row, stripe_subscription=alt, now=2_000_000_000))
             sub["livemode"] = False
             self.assertFalse(check_founding_entitlement(
                 "member123", ledger_row=row, stripe_subscription=sub, now=2_000_000_000))
