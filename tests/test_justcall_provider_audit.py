@@ -33,6 +33,31 @@ class ProviderAuditTests(unittest.TestCase):
         self.assertEqual(result["confirmed_outbound_attempts"], 3)
         self.assertEqual(result["gap_to_target"], 297)
 
+    def test_sales_dialer_requires_explicit_outbound_direction(self):
+        undirected = row(7, source="sales_dialer")
+        del undirected["call_info"]["direction"]
+        def respond(method, path):
+            if path.startswith("/calls?"):
+                return {"data": []}
+            return {"data": [undirected]}
+        with mock.patch.object(audit, "_provider_request", side_effect=respond):
+            result = audit.audit_provider_today(NOW)
+        self.assertFalse(result["verified"])
+        self.assertEqual(result["blocked_source"], "sales_dialer")
+        self.assertEqual(result["reason"], "call_direction_unverified")
+        self.assertIsNone(result["confirmed_outbound_attempts"])
+
+    def test_inbound_sales_dialer_record_is_not_outbound(self):
+        incoming = row(7, source="sales_dialer")
+        incoming["call_info"]["direction"] = "Incoming"
+        with mock.patch.object(audit, "_provider_request", side_effect=[
+            {"data": []}, {"data": [incoming]}
+        ]):
+            result = audit.audit_provider_today(NOW)
+        self.assertTrue(result["verified"])
+        self.assertEqual(result["confirmed_outbound_attempts"], 0)
+        self.assertEqual(result["sources"]["sales_dialer"]["excluded"], 1)
+
     def test_never_counts_a_partial_provider_failure_as_verified(self):
         def respond(method, path):
             if path.startswith("/calls?"):
