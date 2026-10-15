@@ -131,11 +131,15 @@ def _current_authoritative_rows(broker: Any) -> tuple[bool, list[dict[str, Any]]
     real = _real_broker(broker)
     maximum = _snapshot_max_age_s()
     try:
-        fetch_ok = bool(getattr(real, "_nija_authoritative_position_snapshot_fetch_ok_v285", False))
-        generation = int(getattr(real, "_nija_authoritative_position_snapshot_generation_v285", 0) or 0)
-        raw_generation = int(getattr(real, "_nija_authoritative_position_raw_generation_v286", -1) or -1)
-        recorded = _float(getattr(real, "_nija_authoritative_position_snapshot_at_monotonic_v285", 0.0))
-        raw_rows = tuple(getattr(real, "_nija_authoritative_position_raw_rows_v286", ()) or ())
+        # Take the same publication lock as v286 so a valid authenticated
+        # Balance refresh cannot be observed between canonical and raw writes.
+        # No fresh timestamp or generation is created by this read.
+        with _v286()._AUTH_LOCK:
+            fetch_ok = bool(getattr(real, "_nija_authoritative_position_snapshot_fetch_ok_v285", False))
+            generation = int(getattr(real, "_nija_authoritative_position_snapshot_generation_v285", 0) or 0)
+            raw_generation = int(getattr(real, "_nija_authoritative_position_raw_generation_v286", -1) or -1)
+            recorded = _float(getattr(real, "_nija_authoritative_position_snapshot_at_monotonic_v285", 0.0))
+            raw_rows = tuple(getattr(real, "_nija_authoritative_position_raw_rows_v286", ()) or ())
     except Exception as exc:
         return False, [], float("inf"), maximum, f"snapshot_inspection_error:{type(exc).__name__}:{exc}"
 

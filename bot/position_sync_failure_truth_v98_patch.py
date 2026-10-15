@@ -91,10 +91,25 @@ def _reuse_exact_kraken_snapshot(broker: Any, result: list[Any], authority: Any)
     """
     kind = getattr(broker, "broker_type", None)
     kind = getattr(kind, "value", kind)
-    if str(kind or "").strip().lower().rsplit(".", 1)[-1] != "kraken":
+    if (str(kind or "").strip().lower().rsplit(".", 1)[-1] != "kraken"
+            and type(broker).__name__.lower() != "krakenbroker"):
         return None
+    # Missing authenticated provenance is never an invitation to create a
+    # generic v285 snapshot. v286 must publish both certificates together.
     if not hasattr(broker, "_nija_authoritative_position_raw_rows_v286"):
-        return None
+        return False
+    owner = sys.modules.get("bot.runtime_kraken_position_refresh_liveness_v286_patch")
+    if owner is None:
+        owner = sys.modules.get("runtime_kraken_position_refresh_liveness_v286_patch")
+    lock = getattr(owner, "_AUTH_LOCK", None)
+    if not callable(getattr(lock, "acquire", None)):
+        return False
+    with lock:
+        return _reuse_exact_kraken_snapshot_locked(broker, result, authority)
+
+
+def _reuse_exact_kraken_snapshot_locked(broker: Any, result: list[Any], authority: Any) -> bool:
+    """Verify one stable authenticated Balance generation under v286's writer lock."""
     try:
         generation = int(getattr(broker, "_nija_authoritative_position_snapshot_generation_v285", 0))
         raw_generation = int(getattr(broker, "_nija_authoritative_position_raw_generation_v286", -1))
@@ -143,7 +158,10 @@ def _publish_v285_snapshot_if_loaded(broker: Any, result: Any) -> bool:
     if v285 is None:
         return True
     if not isinstance(result, list):
-        return True
+        kind = getattr(broker, "broker_type", None)
+        kind = getattr(kind, "value", kind)
+        return (str(kind or "").strip().lower().rsplit(".", 1)[-1] != "kraken"
+                and type(broker).__name__.lower() != "krakenbroker")
     reuse = _reuse_exact_kraken_snapshot(broker, result, v285)
     if reuse is not None:
         return reuse

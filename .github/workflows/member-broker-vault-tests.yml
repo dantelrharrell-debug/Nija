@@ -13,6 +13,8 @@ on:
       - 'tests/test_member_broker_leases.py'
       - 'bot/member_broker_intents.py'
       - 'tests/test_member_broker_intents.py'
+      - 'bot/member_broker_onboarding.py'
+      - 'tests/test_member_broker_onboarding.py'
       - '.github/workflows/member-broker-vault-tests.yml'
   workflow_dispatch:
 
@@ -44,3 +46,4 @@ jobs:
           python -B -m unittest discover -s tests -p test_member_broker_order_routes.py -v
           python -B -m unittest discover -s tests -p test_member_broker_leases.py -v
           python -B -m unittest discover -s tests -p test_member_broker_intents.py -v
+          python -B -m unittest discover -s tests -p test_member_broker_onboarding.py -v
