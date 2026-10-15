@@ -52,10 +52,10 @@ class Broker:
                               "permissions": ["query-funds", "query-open-trades", "query-closed-trades",
                                               "query-ledger", "modify-trades", "close-trades"]},
             "QueryOrders": {
-                "BUY": {"status": "closed", "descr": {"type": "buy", "pair": "XXBTZUSD", "leverage": "none"},
-                        "vol_exec": "0.01000000", "trades": ["TB"]},
-                "SELL": {"status": "closed", "descr": {"type": "sell", "pair": "XXBTZUSD", "leverage": "none"},
-                         "vol_exec": "0.00900000", "trades": ["TS"]},
+                "BUY": {"status": "closed", "descr": {"type": "buy", "pair": "XXBTZUSD", "leverage": "none", "ordertype": "limit", "price": "1000"},
+                        "vol_exec": "0.01000000", "trades": ["TB"], "cl_ord_id": "expected-entry", "timeinforce": "FOK", "oflags": "fciq"},
+                "SELL": {"status": "closed", "descr": {"type": "sell", "pair": "XXBTZUSD", "leverage": "none", "ordertype": "limit", "price": "750"},
+                         "vol_exec": "0.00900000", "trades": ["TS"], "cl_ord_id": "expected-close", "timeinforce": "FOK", "oflags": "fciq"},
             },
             "QueryTrades": {
                 "TB": {"ordertxid": "BUY", "type": "buy", "vol": "0.01000000", "time": now},
@@ -175,6 +175,12 @@ class EvidenceTests(unittest.TestCase):
             api_key_fingerprint=identity.api_key_fingerprint,
             symbol="BTC-USD", base_quantity="0.01000000", budget_usd="20",
             digest=lambda: "approved-plan",
+            order_parameters=lambda leg, **kwargs: {
+                "cl_ord_id": "expected-entry" if leg == "entry" else "expected-close",
+                "ordertype": "limit", "price": "1000" if leg == "entry" else "750",
+                "timeinforce": "FOK", "oflags": "fciq",
+                "volume": "0.01000000" if leg == "entry" else "0.00900000",
+            },
         )
         evidence = E.verify_startup_terminal_round_trip(
             broker, plan, entry_order_id="BUY", exit_order_id="SELL"
@@ -188,6 +194,34 @@ class EvidenceTests(unittest.TestCase):
                 broker, plan, entry_order_id="BUY", exit_order_id="SELL"
             )
 
+    def test_round_trip_rejects_unbound_orders(self):
+        identity = E.read_startup_broker_identity(Broker())
+        plan = types.SimpleNamespace(
+            validate=lambda: None, account_fingerprint=identity.account_fingerprint,
+            api_key_fingerprint=identity.api_key_fingerprint,
+            symbol="BTC-USD", base_quantity="0.01000000", budget_usd="20",
+            digest=lambda: "approved-plan",
+            order_parameters=lambda leg, **kwargs: {
+                "cl_ord_id": "expected-entry" if leg == "entry" else "expected-close",
+                "ordertype": "limit", "price": "1000" if leg == "entry" else "750",
+                "timeinforce": "FOK", "oflags": "fciq",
+                "volume": "0.01000000" if leg == "entry" else "0.00900000",
+            },
+        )
+        for order_id, field, value in [
+            ("BUY", "cl_ord_id", "unrelated-entry"),
+            ("SELL", "cl_ord_id", "unrelated-close"),
+            ("BUY", "timeinforce", "GTC"),
+            ("SELL", "oflags", "post"),
+        ]:
+            with self.subTest(order=order_id, field=field):
+                broker = Broker()
+                broker.responses["QueryOrders"][order_id][field] = value
+                with self.assertRaisesRegex(E.StartupEvidenceError, "approved_order_terms_unproven"):
+                    E.verify_startup_terminal_round_trip(
+                        broker, plan, entry_order_id="BUY", exit_order_id="SELL"
+                    )
+
     def test_terminal_round_trip_rejects_stale_mismatched_and_over_budget(self):
         broker = Broker()
         identity = E.read_startup_broker_identity(broker)
@@ -196,6 +230,12 @@ class EvidenceTests(unittest.TestCase):
             api_key_fingerprint=identity.api_key_fingerprint,
             symbol="BTC-USD", base_quantity="0.01000000", budget_usd="5",
             digest=lambda: "approved-plan",
+            order_parameters=lambda leg, **kwargs: {
+                "cl_ord_id": "expected-entry" if leg == "entry" else "expected-close",
+                "ordertype": "limit", "price": "1000" if leg == "entry" else "750",
+                "timeinforce": "FOK", "oflags": "fciq",
+                "volume": "0.01000000" if leg == "entry" else "0.00900000",
+            },
         )
         with self.assertRaises(E.StartupEvidenceError):
             E.verify_startup_terminal_round_trip(

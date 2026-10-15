@@ -22,15 +22,31 @@ class FakeVault:
 class OnboardingTests(unittest.TestCase):
     def setUp(self):
         self.vault = FakeVault()
-        self.flow = MemberBrokerOnboarding(self.vault)
+        self.flow = MemberBrokerOnboarding(self.vault, secret_intake_enabled=True)
 
     def test_secure_connection_does_not_return_keys(self):
         result = self.flow.connect("valid-member-token", "kraken", "live",
                                    {"api_key": "fake-key", "api_secret": "fake-secret"})
-        self.assertEqual((result.broker, result.environment, result.connected),
-                         ("kraken", "live", True))
+        self.assertEqual((result.broker, result.environment, result.credentials_stored, result.connected),
+                         ("kraken", "live", True, False))
+        self.assertFalse(result.broker_verified)
+        self.assertFalse(result.live_trading_authorized)
         self.assertNotIn("fake-key", repr(result))
         self.assertNotIn("fake-secret", repr(result))
+
+    def test_secret_intake_disabled_by_default(self):
+        disabled = MemberBrokerOnboarding(self.vault)
+        with self.assertRaisesRegex(VaultError, "not enabled"):
+            disabled.connect("valid-member-token", "kraken", "paper",
+                             {"api_key": "fake", "api_secret": "fake"})
+        self.assertFalse(self.vault.created)
+
+    def test_preexisting_scope_rejected_before_creating_more_secrets(self):
+        self.vault.rows = [{"id": "existing", "broker": "kraken", "environment": "live"}]
+        with self.assertRaisesRegex(VaultError, "already exists"):
+            self.flow.connect("valid-member-token", "kraken", "live",
+                              {"api_key": "fake", "api_secret": "fake"})
+        self.assertFalse(self.vault.created)
 
     def test_invalid_identity_fails_closed(self):
         with self.assertRaises(VaultError):
@@ -56,6 +72,8 @@ class OnboardingTests(unittest.TestCase):
         self.vault.rows = [{"id": "a", "broker": "alpaca", "environment": "paper", "ciphertext": "opaque"}]
         result = self.flow.connections("valid-member-token")
         self.assertEqual(len(result), 1)
+        self.assertTrue(result[0].credentials_stored)
+        self.assertFalse(result[0].connected)
         self.assertNotIn("opaque", repr(result))
 
 
