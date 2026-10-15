@@ -69,6 +69,17 @@ class MemberHTTPTests(unittest.TestCase):
                          "NIJA_VAULT_FOUNDING_PRODUCT_ID": "prod_1"}):
             self.assertTrue(check_founding_entitlement(
                 "member123", ledger_row=row, stripe_subscription=sub, now=2_000_000_000))
+            row["entitled"] = 1  # PostgreSQL/SQLite integer-encoded TRUE
+            self.assertTrue(check_founding_entitlement(
+                "member123", ledger_row=row, stripe_subscription=sub, now=2_000_000_000))
+            row["entitled"] = 0
+            self.assertFalse(check_founding_entitlement(
+                "member123", ledger_row=row, stripe_subscription=sub, now=2_000_000_000))
+            row["entitled"] = True
+            missing_metadata = dict(sub)
+            missing_metadata["metadata"] = {}
+            self.assertFalse(check_founding_entitlement(
+                "member123", ledger_row=row, stripe_subscription=missing_metadata, now=2_000_000_000))
             alt = dict(sub)
             alt["current_period_end"] = None
             alt["items"] = {"data": [{"quantity": 1, "current_period_end": 4_000_000_000,
