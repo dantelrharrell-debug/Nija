@@ -462,7 +462,17 @@ def _record_snapshot_failure(broker: Any, reason: str) -> None:
             if callable(recorder):
                 recorder(broker, reason)
         except Exception:
-            pass
+            LOGGER.exception("KRAKEN_CANONICAL_FAILURE_INVALIDATOR_V286_ERROR")
+        # Fail closed even if the v285 helper was absent or failed. Do not
+        # assume a callable returning normally actually revoked prior proof.
+        try:
+            setattr(broker, "_nija_authoritative_position_snapshot_fetch_ok_v285", False)
+            setattr(
+                broker, "_nija_authoritative_position_snapshot_error_v285",
+                str(reason or "kraken_authoritative_balance_failed"),
+            )
+        except Exception:
+            LOGGER.exception("KRAKEN_CANONICAL_FAILURE_DIRECT_REVOCATION_V286_ERROR")
 
 
 def _record_snapshot_success(broker: Any, rows: list[dict[str, Any]]) -> None:
