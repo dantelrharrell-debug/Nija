@@ -259,6 +259,12 @@ def _patch_broker_get_positions() -> bool:
             except BaseException as exc:
                 _record_snapshot_failure(self, f"{type(exc).__name__}:{exc}")
                 raise
+            # Kraken's strategy-oriented get_positions() is not an authoritative
+            # Balance snapshot. Only v286's authenticated Balance reader may
+            # publish Kraken v285 snapshot generations and raw-row provenance.
+            # Leave existing proof unchanged here; v286 owns its refresh.
+            if _label(getattr(self, "broker_type", "")) == "kraken" or type(self).__name__ == "KrakenBroker":
+                return result
             if isinstance(result, list):
                 _record_snapshot_success(self, list(result))
             else:
