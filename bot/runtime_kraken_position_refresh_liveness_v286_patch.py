@@ -477,7 +477,16 @@ def _record_snapshot_success(broker: Any, rows: list[dict[str, Any]]) -> None:
     with _AUTH_LOCK:
         v285 = _v285()
         recorder = getattr(v285, "_record_snapshot_success", None)
-        if not callable(recorder) or not bool(recorder(broker, rows)):
+        try:
+            canonical_accepted = bool(callable(recorder) and recorder(broker, rows))
+        except Exception as exc:
+            # A failed authenticated Balance publication is a genuine failure,
+            # even if its v286 raw generation has not changed. v305 must never
+            # restore an older successful snapshot over this rejection.
+            _record_snapshot_failure(broker, "v285_authoritative_snapshot_record_failed")
+            raise RuntimeError("v285_authoritative_snapshot_record_failed") from exc
+        if not canonical_accepted:
+            _record_snapshot_failure(broker, "v285_authoritative_snapshot_record_failed")
             raise RuntimeError("v285_authoritative_snapshot_record_failed")
         generation = int(getattr(broker, "_nija_authoritative_position_snapshot_generation_v285", 0) or 0)
         try:
