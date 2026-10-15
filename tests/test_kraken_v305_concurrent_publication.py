@@ -188,3 +188,34 @@ def test_authoritative_failure_serial_is_account_local():
     assert getattr(first, "_nija_authoritative_position_failure_serial_v286", 0) == 0
     assert second._nija_authoritative_position_snapshot_fetch_ok_v285 is False
     assert second._nija_authoritative_position_failure_serial_v286 == 1
+
+
+def test_disconnected_authenticated_kraken_read_revokes_old_proof():
+    broker = Broker()
+    v286._record_snapshot_success(
+        broker, [{"symbol": "BTC-USD", "quantity": 1.0, "authoritative_balance": True}]
+    )
+    broker.connected = False
+    try:
+        v286._fetch_authoritative_rows_sync(broker)
+    except RuntimeError as exc:
+        assert str(exc) == "kraken_broker_not_connected"
+    else:
+        raise AssertionError("disconnected Balance must be rejected")
+    assert broker._nija_authoritative_position_snapshot_fetch_ok_v285 is False
+    assert broker._nija_authoritative_position_failure_serial_v286 == 1
+
+
+def test_missing_private_balance_client_revokes_old_proof():
+    broker = Broker()
+    v286._record_snapshot_success(
+        broker, [{"symbol": "BTC-USD", "quantity": 1.0, "authoritative_balance": True}]
+    )
+    try:
+        v286._fetch_authoritative_rows_sync(broker)
+    except RuntimeError as exc:
+        assert str(exc) == "kraken_private_call_unavailable"
+    else:
+        raise AssertionError("missing authenticated Balance client must be rejected")
+    assert broker._nija_authoritative_position_snapshot_fetch_ok_v285 is False
+    assert broker._nija_authoritative_position_failure_serial_v286 == 1
