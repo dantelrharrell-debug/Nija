@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 import unittest
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
+from urllib.parse import parse_qs, urlsplit
 from unittest import mock
 
 import render_justcall_provider_audit as audit
@@ -32,6 +33,85 @@ class ProviderAuditTests(unittest.TestCase):
         self.assertTrue(result["verified"])
         self.assertEqual(result["confirmed_outbound_attempts"], 3)
         self.assertEqual(result["gap_to_target"], 297)
+
+    def test_current_day_does_not_query_future_end_date(self):
+        paths = []
+        def respond(method, path):
+            self.assertEqual(method, "GET")
+            paths.append(path)
+            return {"data": []}
+        with mock.patch.object(audit, "_provider_request", side_effect=respond):
+            result = audit.audit_provider_today(NOW)
+        self.assertTrue(result["verified"])
+        self.assertEqual(len(paths), 2)
+        for path in paths:
+            query = parse_qs(urlsplit(path).query)
+            self.assertEqual(query["from_datetime"], ["2026-10-07"])
+            self.assertNotIn("to_datetime", query)
+
+    def test_historical_day_uses_nonfuture_end_date(self):
+        later = datetime(2026, 10, 21, tzinfo=timezone.utc)
+        paths = []
+        with mock.patch.object(
+            audit, "_provider_request",
+            side_effect=lambda method, path: (paths.append(path) or {"data": []}),
+        ):
+            audit._history_for_source("justcall", "/calls", date(2026, 10, 9), later)
+        q = parse_qs(urlsplit(paths[0]).query)
+        self.assertEqual(q["from_datetime"], ["2026-10-07"])
+        self.assertEqual(q["to_datetime"], ["2026-10-11"])
+
+    def test_400_falls_back_once_to_documented_minimal_readonly_filters(self):
+        seen = []
+        def respond(method, path):
+            self.assertEqual(method, "GET")
+            seen.append(path)
+            query = parse_qs(urlsplit(path).query)
+            if path.startswith("/sales_dialer/calls"):
+                return {"data": []}
+            if "sort" in query:
+                raise OutreachProviderError("bad request", status_code=400)
+            self.assertNotIn("call_direction", query)
+            self.assertNotIn("to_datetime", query)
+            self.assertEqual(query["from_datetime"], ["2026-10-07"])
+            return {"data": [row(9)]}
+        with mock.patch.object(audit, "_provider_request", side_effect=respond):
+            result = audit.audit_provider_today(NOW)
+        self.assertTrue(result["verified"])
+        self.assertEqual(result["confirmed_outbound_attempts"], 1)
+        self.assertEqual(result["sources"]["justcall"]["query_mode"], "compat")
+        self.assertEqual(len(seen), 3)
+
+    def test_fallback_400_stays_unverified_not_zero(self):
+        with mock.patch.object(
+            audit, "_provider_request",
+            side_effect=OutreachProviderError("bad request", status_code=400),
+        ):
+            result = audit.audit_provider_today(NOW)
+        self.assertFalse(result["verified"])
+        self.assertEqual(result["blocked_source"], "justcall")
+        self.assertEqual(result["reason"], "provider_api_error_http_400")
+        self.assertIsNone(result["confirmed_outbound_attempts"])
+        self.assertIsNone(result["gap_to_target"])
+
+    def test_400_after_partial_pagination_restarts_from_first_page(self):
+        seen = []
+        def respond(method, path):
+            q = parse_qs(urlsplit(path).query)
+            seen.append((q["page"][0], "sort" in q))
+            if path.startswith("/sales_dialer/calls"):
+                return {"data": []}
+            if "sort" in q and q["page"] == ["1"]:
+                raise OutreachProviderError("bad request", status_code=400)
+            if "sort" in q:
+                return {"data": [row(i) for i in range(100)]}
+            return {"data": [row(101)]}
+        with mock.patch.object(audit, "_provider_request", side_effect=respond):
+            result = audit.audit_provider_today(NOW)
+        self.assertTrue(result["verified"])
+        self.assertEqual(result["confirmed_outbound_attempts"], 1)
+        self.assertEqual(result["sources"]["justcall"]["query_mode"], "compat")
+        self.assertEqual(seen[:3], [("0", True), ("1", True), ("0", False)])
 
     def test_sales_dialer_requires_explicit_outbound_direction(self):
         undirected = row(7, source="sales_dialer")
