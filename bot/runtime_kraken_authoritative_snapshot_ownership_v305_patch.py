@@ -113,12 +113,34 @@ def _wrap_get_positions(current: Callable[..., Any]) -> Callable[..., Any]:
         with v286._AUTH_LOCK:
             before = _snapshot_fields(self)
             raw_before = getattr(self, "_nija_authoritative_position_raw_generation_v286", None)
+            failure_before = getattr(
+                self, "_nija_authoritative_position_failure_serial_v286", 0
+            )
         try:
             return current(self, *args, **kwargs)
         finally:
             with v286._AUTH_LOCK:
                 raw_after = getattr(self, "_nija_authoritative_position_raw_generation_v286", None)
-                if raw_after != raw_before:
+                failure_after = getattr(
+                    self, "_nija_authoritative_position_failure_serial_v286", 0
+                )
+                if failure_after != failure_before:
+                    # A genuine Kraken Balance attempt failed during the
+                    # ordinary read. The raw generation may be unchanged, so
+                    # restoring the prior canonical success would be fail-open.
+                    v285 = importlib.import_module("bot.runtime_authoritative_position_coverage_v285_patch")
+                    v285._record_snapshot_failure(
+                        self, "v305_concurrent_authenticated_balance_failure"
+                    )
+                    LOGGER.critical(
+                        "KRAKEN_AUTHORITATIVE_SNAPSHOT_V305_CONCURRENT_AUTH_FAILURE "
+                        "marker=%s account=%s old_failure_serial=%s new_failure_serial=%s "
+                        "precall_snapshot_restored=false canonical_fetch_ok=false "
+                        "genuine_failure_preserved=true safety_gates_bypassed=false",
+                        MARKER, str(getattr(self, "account_identifier", "unknown")),
+                        failure_before, failure_after,
+                    )
+                elif raw_after != raw_before:
                     # Authenticated Balance published during this ordinary read.
                     # Restoring 'before' would roll the canonical generation
                     # backwards while leaving v286 raw proof at its new value.
