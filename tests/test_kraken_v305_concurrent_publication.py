@@ -219,3 +219,73 @@ def test_missing_private_balance_client_revokes_old_proof():
         raise AssertionError("missing authenticated Balance client must be rejected")
     assert broker._nija_authoritative_position_snapshot_fetch_ok_v285 is False
     assert broker._nija_authoritative_position_failure_serial_v286 == 1
+
+
+def test_concurrent_canonical_publication_rejection_never_revives_old_proof():
+    """Failed authenticated Balance publication is not an ordinary read failure."""
+    from unittest.mock import patch
+    from bot import runtime_authoritative_position_coverage_v285_patch as v285
+
+    broker = Broker()
+    v286._record_snapshot_success(
+        broker, [{"symbol": "BTC-USD", "quantity": 1.0, "authoritative_balance": True}]
+    )
+    entered = threading.Event()
+    release = threading.Event()
+    worker_errors = []
+
+    def ordinary(self):
+        entered.set()
+        assert release.wait(3)
+        return []
+
+    wrapped = v305._wrap_get_positions(ordinary)
+    worker = threading.Thread(target=lambda: (
+        wrapped(broker) if not worker_errors else None
+    ))
+    worker.start()
+    try:
+        assert entered.wait(3)
+        with patch.object(v285, "_record_snapshot_success", return_value=False):
+            try:
+                v286._record_snapshot_success(
+                    broker, [{"symbol": "BTC-USD", "quantity": 2.0, "authoritative_balance": True}]
+                )
+            except RuntimeError as exc:
+                assert str(exc) == "v285_authoritative_snapshot_record_failed"
+            else:
+                raise AssertionError("canonical publication rejection must fail")
+    finally:
+        release.set()
+        worker.join(timeout=3)
+
+    assert not worker.is_alive()
+    assert broker._nija_authoritative_position_snapshot_fetch_ok_v285 is False
+    assert broker._nija_authoritative_position_snapshot_error_v285 == (
+        "v305_concurrent_authenticated_balance_failure"
+    )
+    assert broker._nija_authoritative_position_raw_generation_v286 == 1
+    assert broker._nija_authoritative_position_failure_serial_v286 == 1
+
+
+def test_canonical_publication_exception_revokes_old_proof():
+    """Unexpected canonical writer errors must also revoke authenticated proof."""
+    from unittest.mock import patch
+    from bot import runtime_authoritative_position_coverage_v285_patch as v285
+
+    broker = Broker()
+    v286._record_snapshot_success(
+        broker, [{"symbol": "BTC-USD", "quantity": 1.0, "authoritative_balance": True}]
+    )
+    with patch.object(v285, "_record_snapshot_success", side_effect=OSError("test_write_error")):
+        try:
+            v286._record_snapshot_success(
+                broker, [{"symbol": "BTC-USD", "quantity": 2.0, "authoritative_balance": True}]
+            )
+        except RuntimeError as exc:
+            assert str(exc) == "v285_authoritative_snapshot_record_failed"
+        else:
+            raise AssertionError("canonical writer error must fail")
+    assert broker._nija_authoritative_position_snapshot_fetch_ok_v285 is False
+    assert broker._nija_authoritative_position_raw_generation_v286 == 1
+    assert broker._nija_authoritative_position_failure_serial_v286 == 1
