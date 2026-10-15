@@ -330,7 +330,7 @@ def _record_snapshot_failure(broker: Any, reason: str) -> None:
 
 def _record_snapshot_success(broker: Any, rows: list[dict[str, Any]]) -> None:
     with _AUTH_LOCK:
-            v285 = _v285()
+        v285 = _v285()
         recorder = getattr(v285, "_record_snapshot_success", None)
         if not callable(recorder) or not bool(recorder(broker, rows)):
             raise RuntimeError("v285_authoritative_snapshot_record_failed")
