@@ -329,8 +329,8 @@ def _record_snapshot_failure(broker: Any, reason: str) -> None:
 
 
 def _record_snapshot_success(broker: Any, rows: list[dict[str, Any]]) -> None:
-    # Serialize canonical and raw publication with the v98 reuse reader.
-    # A half-published generation must never be mistaken for current proof.
+    # Serialize competing Kraken snapshot writers through the existing flight lock.
+    # v98 readers still validate generation consistency and fail closed on races.
     with _AUTH_LOCK:
         v285 = _v285()
         recorder = getattr(v285, "_record_snapshot_success", None)
