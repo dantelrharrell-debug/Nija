@@ -46,6 +46,10 @@ def test_run_sync_rescans_contacts_at_saved_cursor(monkeypatch):
     assert counts["contacts_scanned"] == 100
     assert counts["contacts_seen"] == 100
     assert saved["cursor"] == newer["updated_at"]
+    assert counts["audit_missing_ai_consent"] == 100
+    assert counts["audit_missing_consent_record"] == 100
+    assert counts["audit_missing_jurisdiction"] == 100
+    assert counts["audit_missing_phone"] == 100
 
 
 def test_run_sync_without_cursor_keeps_bootstrap_paging(monkeypatch):
@@ -109,3 +113,42 @@ def test_missing_contacts_field_is_not_silently_treated_as_empty(monkeypatch):
 
 def test_empty_later_page_is_valid():
     assert feeder._validated_contact_page({"contacts": []}, page=2) == []
+
+
+def test_independent_readiness_audit_counts_overlapping_gaps(monkeypatch):
+    contact = {"id": "offline-test", "typed_custom_fields": {}, "phone_numbers": []}
+    gaps = set(feeder._independent_readiness_gaps(contact))
+    assert gaps == {
+        "audit_missing_phone",
+        "audit_missing_timezone",
+        "audit_missing_ai_consent",
+        "audit_missing_consent_record",
+        "audit_missing_legal_basis",
+        "audit_dnc_unverified",
+        "audit_missing_jurisdiction",
+    }
+    # A diagnostic read cannot change the contact or invent calling evidence.
+    assert contact["typed_custom_fields"] == {}
+
+
+def test_independent_readiness_audit_preserves_valid_evidence(monkeypatch):
+    fields = {
+        "NIJA_APOLLO_CONSENT_FIELD_ID": "consent",
+        "NIJA_APOLLO_CONSENT_RECORD_FIELD_ID": "consent_record",
+        "NIJA_APOLLO_LEGAL_BASIS_FIELD_ID": "legal_basis",
+        "NIJA_APOLLO_RECIPIENT_JURISDICTION_FIELD_ID": "state",
+    }
+    for name, value in fields.items():
+        monkeypatch.setenv(name, value)
+    contact = {
+        "id": "offline-test",
+        "time_zone": "America/Los_Angeles",
+        "phone_numbers": [
+            {"sanitized_number": "+12065550123", "dnc_status_cd": "not_found"}
+        ],
+        "typed_custom_fields": {
+            "consent": True, "consent_record": "offline-record",
+            "legal_basis": "offline-test-basis", "state": "US-WA"
+        },
+    }
+    assert feeder._independent_readiness_gaps(contact) == ()
