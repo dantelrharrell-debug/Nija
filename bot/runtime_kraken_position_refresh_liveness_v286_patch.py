@@ -332,6 +332,8 @@ def _record_snapshot_success(broker: Any, rows: list[dict[str, Any]]) -> None:
     # v98/v315 acquires this same re-entrant lock when validating provenance.
     # Serializing the canonical generation and its raw-row certificate prevents
     # a concurrent authenticated Balance completion from splitting the pair.
+    # Serialize competing Kraken snapshot writers through the existing flight lock.
+    # v98 readers still validate generation consistency and fail closed on races.
     with _AUTH_LOCK:
         v285 = _v285()
         recorder = getattr(v285, "_record_snapshot_success", None)
@@ -346,6 +348,7 @@ def _record_snapshot_success(broker: Any, rows: list[dict[str, Any]]) -> None:
             if callable(failure):
                 failure(broker, "kraken_raw_snapshot_publication_failed")
             raise RuntimeError("kraken_raw_snapshot_publication_failed") from exc
+            raise RuntimeError("v286_raw_snapshot_publication_failed") from exc
 
 
 def _fetch_authoritative_rows_sync(broker: Any) -> list[dict[str, Any]]:

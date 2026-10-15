@@ -242,6 +242,18 @@ class _FetchProofProxy:
                 len(getattr(broker, "_nija_authoritative_position_raw_rows_v286", ()) or ()),
                 len(result) if isinstance(result, list) else -1,
             )
+            LOGGER.warning(
+                "POSITION_SYNC_V315_REJECTION_DETAIL broker=%s snapshot_fetch_ok=%s "
+                "snapshot_error=%s startup_fetch_ok=%s startup_adopted=%s "
+                "snapshot_generation=%s raw_generation=%s fail_closed=true",
+                str(getattr(broker, "account_identifier", type(broker).__name__)),
+                getattr(broker, "_nija_authoritative_position_snapshot_fetch_ok_v285", None),
+                str(getattr(broker, "_nija_authoritative_position_snapshot_error_v285", "") or "")[:120],
+                getattr(broker, "_startup_position_sync_fetch_ok", None),
+                getattr(broker, "_startup_position_sync_adopted", None),
+                getattr(broker, "_nija_authoritative_position_snapshot_generation_v285", None),
+                getattr(broker, "_nija_authoritative_position_raw_generation_v286", None),
+            )
             object.__setattr__(self, "fetch_ok", False)
             object.__setattr__(self, "fetch_error", "v285_snapshot_publish_rejected")
             raise RuntimeError("v285 authoritative snapshot publication rejected")
