@@ -329,6 +329,9 @@ def _record_snapshot_failure(broker: Any, reason: str) -> None:
 
 
 def _record_snapshot_success(broker: Any, rows: list[dict[str, Any]]) -> None:
+    # v98/v315 acquires this same re-entrant lock when validating provenance.
+    # Serializing the canonical generation and its raw-row certificate prevents
+    # a concurrent authenticated Balance completion from splitting the pair.
     # Serialize competing Kraken snapshot writers through the existing flight lock.
     # v98 readers still validate generation consistency and fail closed on races.
     with _AUTH_LOCK:
@@ -341,6 +344,10 @@ def _record_snapshot_success(broker: Any, rows: list[dict[str, Any]]) -> None:
             setattr(broker, "_nija_authoritative_position_raw_rows_v286", tuple(dict(row) for row in rows))
             setattr(broker, "_nija_authoritative_position_raw_generation_v286", generation)
         except Exception as exc:
+            failure = getattr(v285, "_record_snapshot_failure", None)
+            if callable(failure):
+                failure(broker, "kraken_raw_snapshot_publication_failed")
+            raise RuntimeError("kraken_raw_snapshot_publication_failed") from exc
             raise RuntimeError("v286_raw_snapshot_publication_failed") from exc
 
 
@@ -618,9 +625,10 @@ def _patch_v281_kraken_audit() -> bool:
         if broker is None or not _is_kraken_broker(broker):
             return list(dict.fromkeys(reasons)), positions
         try:
-            generation = int(getattr(broker, "_nija_authoritative_position_snapshot_generation_v285", 0) or 0)
-            raw_generation = int(getattr(broker, "_nija_authoritative_position_raw_generation_v286", -1) or -1)
-            raw_rows = tuple(getattr(broker, "_nija_authoritative_position_raw_rows_v286", ()) or ())
+            with _AUTH_LOCK:
+                generation = int(getattr(broker, "_nija_authoritative_position_snapshot_generation_v285", 0) or 0)
+                raw_generation = int(getattr(broker, "_nija_authoritative_position_raw_generation_v286", -1) or -1)
+                raw_rows = tuple(getattr(broker, "_nija_authoritative_position_raw_rows_v286", ()) or ())
         except Exception:
             generation, raw_generation, raw_rows = 0, -1, ()
         if generation <= 0 or raw_generation != generation:

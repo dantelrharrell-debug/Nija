@@ -69,7 +69,11 @@ def test_missing_or_non_kraken_raw_proof_never_relinked():
 
     missing = _broker('kraken')
     assert v285._record_snapshot_success(missing, rows)
-    assert v98._publish_v285_snapshot_if_loaded(missing, rows) is True
+    generation = missing._nija_authoritative_position_snapshot_generation_v285
+    # The v315 bridge must not mint a second v285 generation when the
+    # authenticated v286 raw Balance certificate is absent.
+    assert v98._publish_v285_snapshot_if_loaded(missing, rows) is False
+    assert missing._nija_authoritative_position_snapshot_generation_v285 == generation
     assert not hasattr(missing, '_nija_authoritative_position_raw_generation_v286')
 
 
