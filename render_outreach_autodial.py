@@ -989,6 +989,17 @@ def start_justcall_autodial() -> None:
             return
         _WORKER_STARTED = True
     threading.Thread(target=_worker, name="nija-justcall-autodial", daemon=True).start()
+    # Read-only provider-history monitoring runs even when autodial is disabled.
+    # It does not request calls, alter consent evidence, or change queue state.
+    try:
+        from render_justcall_provider_audit import start_readonly_provider_history_audit
+        start_readonly_provider_history_audit()
+    except Exception as exc:
+        print(
+            f"JUSTCALL_PROVIDER_HISTORY_AUDIT state=init_error error={type(exc).__name__} "
+            "fail_closed=true",
+            flush=True,
+        )
 
 
 def _queue_status() -> dict[str, Any]:

@@ -194,3 +194,102 @@ def audit_provider_today(now_utc: datetime | None = None) -> dict[str, Any]:
         }
     )
     return result
+
+# An independent, strictly read-only history poll allows Render log auditing
+# without an operator shell. It never submits a call or changes eligibility.
+import os
+import re
+import threading
+import time
+
+_AUDIT_WORKER_LOCK = threading.Lock()
+_AUDIT_WORKER_STARTED = False
+
+
+def _history_poll_seconds() -> int:
+    try:
+        requested = int(os.getenv("NIJA_JUSTCALL_HISTORY_POLL_SECONDS", "3600"))
+    except (TypeError, ValueError):
+        requested = 3600
+    return max(900, min(requested, 86400))
+
+
+def _safe_log_tag(value: object) -> str:
+    """Never print provider payloads, phone numbers, tokens, or exception text."""
+    value = str(value or "")
+    return value if re.fullmatch(r"[a-z][a-z0-9_]{0,90}", value) else "unverified"
+
+
+def _safe_log_date(value: object) -> str:
+    date_text = str(value or "")
+    try:
+        return date.fromisoformat(date_text).isoformat()
+    except ValueError:
+        return "unknown"
+
+
+def run_readonly_provider_history_audit(now_utc: datetime | None = None) -> dict[str, Any]:
+    """Log only provider-history verification state and aggregate counts."""
+    try:
+        result = audit_provider_today(now_utc)
+    except Exception as exc:
+        # Provider error bodies may contain sensitive information.
+        print(
+            "JUSTCALL_PROVIDER_HISTORY_AUDIT state=unverified "
+            f"reason=unexpected_{_safe_log_tag(type(exc).__name__.lower())} "
+            "confirmed=unverified gap=unverified fail_closed=true",
+            flush=True,
+        )
+        return {"verified": False, "state": "provider_history_unverified"}
+
+    if result.get("verified") is True:
+        confirmed = result.get("confirmed_outbound_attempts")
+        sources = result.get("sources") or {}
+        if not isinstance(confirmed, int) or isinstance(confirmed, bool) or confirmed < 0:
+            print(
+                "JUSTCALL_PROVIDER_HISTORY_AUDIT state=unverified "
+                "reason=invalid_aggregate confirmed=unverified gap=unverified "
+                "fail_closed=true",
+                flush=True,
+            )
+            return {"verified": False, "state": "provider_history_unverified"}
+        jc = (sources.get("justcall") or {}).get("matched_outbound_ids", 0)
+        sd = (sources.get("sales_dialer") or {}).get("matched_outbound_ids", 0)
+        print(
+            "JUSTCALL_PROVIDER_HISTORY_AUDIT state=verified "
+            f"date={_safe_log_date(result.get('date'))} "
+            f"confirmed={confirmed} gap={max(0, 300 - confirmed)} "
+            f"justcall={jc if isinstance(jc, int) else 0} "
+            f"sales_dialer={sd if isinstance(sd, int) else 0} "
+            "source=provider_api pacific_day=true read_only=true",
+            flush=True,
+        )
+        return result
+
+    print(
+        "JUSTCALL_PROVIDER_HISTORY_AUDIT state=unverified "
+        f"reason={_safe_log_tag(result.get('reason'))} "
+        f"blocked_source={_safe_log_tag(result.get('blocked_source'))} "
+        "confirmed=unverified gap=unverified fail_closed=true",
+        flush=True,
+    )
+    return result
+
+
+def _provider_history_worker() -> None:
+    while True:
+        run_readonly_provider_history_audit()
+        time.sleep(_history_poll_seconds())
+
+
+def start_readonly_provider_history_audit() -> None:
+    global _AUDIT_WORKER_STARTED
+    with _AUDIT_WORKER_LOCK:
+        if _AUDIT_WORKER_STARTED:
+            return
+        _AUDIT_WORKER_STARTED = True
+    threading.Thread(
+        target=_provider_history_worker,
+        name="nija-justcall-provider-history-readonly",
+        daemon=True,
+    ).start()
