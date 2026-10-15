@@ -66,5 +66,57 @@ class SnapshotWriterLockTests(unittest.TestCase):
         self.assertFalse(hasattr(broker, "_nija_authoritative_position_raw_generation_v286"))
 
 
+    def test_raw_field_write_failure_revokes_canonical_proof(self):
+        from bot import runtime_authoritative_position_coverage_v285_patch as v285
+
+        class RejectRawField(SimpleNamespace):
+            def __setattr__(self, name, value):
+                if name == self.__dict__.get("reject_field"):
+                    raise OSError("raw_field_is_read_only")
+                super().__setattr__(name, value)
+
+        for field in (
+            "_nija_authoritative_position_raw_rows_v286",
+            "_nija_authoritative_position_raw_generation_v286",
+        ):
+            with self.subTest(field=field):
+                broker = RejectRawField(reject_field=field)
+                with (
+                    mock.patch.object(v286, "_v285", return_value=v285),
+                    mock.patch.object(v285, "_connected", return_value=True),
+                ):
+                    with self.assertRaisesRegex(
+                        RuntimeError, "v286_raw_snapshot_publication_failed"
+                    ):
+                        v286._record_snapshot_success(
+                            broker, [{"symbol": "BTC-USD", "quantity": 1}]
+                        )
+                    self.assertIs(
+                        getattr(broker, "_nija_authoritative_position_snapshot_fetch_ok_v285"),
+                        False,
+                    )
+                    self.assertEqual(
+                        broker._nija_authoritative_position_snapshot_error_v285,
+                        "v286_raw_snapshot_publication_failed",
+                    )
+                    ready, reason, _rows, _age, _generation = v285._snapshot_status(broker)
+                    self.assertFalse(ready)
+                    self.assertEqual(reason, "v286_raw_snapshot_publication_failed")
+
+    def test_row_preparation_failure_never_publishes_canonical_success(self):
+        broker = SimpleNamespace()
+        authority = SimpleNamespace(
+            _record_snapshot_success=lambda *_: self.fail("canonical publisher called")
+        )
+        with mock.patch.object(v286, "_v285", return_value=authority):
+            with self.assertRaises(TypeError):
+                v286._record_snapshot_success(
+                    broker, [{"symbol": "BTC-USD", "quantity": 1}, None]
+                )
+        self.assertFalse(
+            hasattr(broker, "_nija_authoritative_position_snapshot_fetch_ok_v285")
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
