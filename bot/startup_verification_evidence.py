@@ -246,6 +246,11 @@ class StartupFillEvidence:
     net_base_delta: Decimal
     quote_delta: Decimal
     execution_epoch: float
+    client_order_id: str = ''
+    order_type: str = ''
+    limit_price: Decimal = Decimal(0)
+    time_in_force: str = ''
+    order_flags: str = ''
 
 
 def _asset_variants(asset: str) -> set[str]:
@@ -376,7 +381,15 @@ def read_startup_fill_evidence(broker: Any, order_id: str, symbol: str, side: st
     net_base = gross_base - base_fees
     if (side == "buy" and net_base <= 0) or (side == "sell" and net_base >= 0):
         raise StartupEvidenceError("startup_net_base_delta_invalid")
-    return StartupFillEvidence(order_id, side, volume, net_base, quote_delta, latest_epoch)
+    # Missing authenticated order metadata is not evidence of compliance.
+    return StartupFillEvidence(
+        order_id, side, volume, net_base, quote_delta, latest_epoch,
+        str(order.get("cl_ord_id") or "").strip(),
+        str(description.get("ordertype") or "").strip().lower(),
+        _decimal(description.get("price")),
+        str(order.get("timeinforce") or "").strip().upper(),
+        str(order.get("oflags") or "").strip().lower(),
+    )
 
 
 @dataclass(frozen=True)
@@ -412,7 +425,6 @@ def verify_startup_terminal_round_trip(
             or not isinstance(exit_order_id, str) or not exit_order_id.strip()
             or entry_order_id == exit_order_id):
         raise StartupEvidenceError("startup_roundtrip_order_ids_invalid")
-    now = time.time()
     if not math.isfinite(max_age_seconds) or not 0 < max_age_seconds <= 1800:
         raise StartupEvidenceError("startup_roundtrip_freshness_bound_invalid")
     identity = read_startup_broker_identity(broker)
@@ -421,6 +433,21 @@ def verify_startup_terminal_round_trip(
         raise StartupEvidenceError("startup_roundtrip_account_or_key_mismatch")
     entry = read_startup_fill_evidence(broker, entry_order_id, plan.symbol, "buy")
     exit_fill = read_startup_fill_evidence(broker, exit_order_id, plan.symbol, "sell")
+    # Authenticate each leg against exact deterministic approved plan terms.
+    expected_entry = plan.order_parameters("entry")
+    expected_exit = plan.order_parameters("close", owned_base=entry.net_base_delta)
+    for observed, expected in ((entry, expected_entry), (exit_fill, expected_exit)):
+        if (not observed.client_order_id
+                or observed.client_order_id != expected["cl_ord_id"]
+                or observed.order_type != expected["ordertype"]
+                or observed.limit_price != _decimal(expected["price"])
+                or observed.time_in_force != expected["timeinforce"]
+                or set(observed.order_flags.split(",")) != set(expected["oflags"].split(","))):
+            raise StartupEvidenceError("startup_roundtrip_approved_order_terms_unproven")
+    if exit_fill.gross_base_quantity != _decimal(expected_exit["volume"]):
+        raise StartupEvidenceError("startup_roundtrip_exit_quantity_not_approved")
+    # Measure proof freshness after all authenticated broker reads finish.
+    now = time.time()
     if (entry.gross_base_quantity != _decimal(plan.base_quantity)
             or entry.net_base_delta <= 0
             or exit_fill.net_base_delta >= 0
