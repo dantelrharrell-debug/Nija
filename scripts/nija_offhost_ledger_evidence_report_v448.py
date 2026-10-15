@@ -13,7 +13,11 @@ import json
 import sys
 from pathlib import Path
 
-from nija_trade_ledger_snapshot_v436 import verify_snapshot
+try:
+    from scripts.nija_trade_ledger_snapshot_v436 import verify_snapshot
+except ModuleNotFoundError:
+    # Direct invocation from the scripts/ directory also remains supported.
+    from nija_trade_ledger_snapshot_v436 import verify_snapshot
 
 
 def main(argv=None) -> int:
