@@ -1,0 +1,56 @@
+name: NIJA member broker Render readiness diagnostic
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check Render configuration without disclosing values
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+        run: |
+          python - <<'PY'
+          import json, os, sys, urllib.request, urllib.error
+          key = os.environ.get("RENDER_API_KEY", "")
+          if not key:
+              print("BLOCKED: Configure repository secret RENDER_API_KEY with a scoped Render API key.")
+              sys.exit(2)
+          url = "https://api.render.com/v1/services/srv-db84gj5g1s2s7390mrp0/env-vars?limit=100"
+          req = urllib.request.Request(url, headers={"Authorization": "Bearer " + key, "Accept": "application/json"})
+          try:
+              with urllib.request.urlopen(req, timeout=20) as response:
+                  data = json.load(response)
+          except urllib.error.HTTPError as exc:
+              print("BLOCKED: Render API request returned HTTP", exc.code)
+              sys.exit(2)
+          except Exception:
+              print("BLOCKED: Could not contact Render API.")
+              sys.exit(2)
+          if not isinstance(data, list):
+              print("BLOCKED: Unexpected Render API response format.")
+              sys.exit(2)
+          names = set()
+          for entry in data:
+              item = entry.get("envVar", entry) if isinstance(entry, dict) else {}
+              if isinstance(item, dict) and isinstance(item.get("key"), str):
+                  names.add(item["key"])
+          required = (
+              "NIJA_POCKETBASE_URL",
+              "NIJA_BROKER_VAULT_KEY_B64",
+              "NIJA_VAULT_BILLING_READONLY_URL",
+              "NIJA_VAULT_STRIPE_READONLY_KEY",
+              "NIJA_VAULT_FOUNDING_PRICE_ID",
+              "NIJA_VAULT_FOUNDING_PRODUCT_ID",
+              "NIJA_VAULT_INTAKE_ENABLED",
+              "NIJA_MEMBER_BROKER_VAULT_RULES_VERIFIED",
+              "NIJA_MEMBER_BROKER_IDENTITY_MAPPING_VERIFIED",
+          )
+          missing = [name for name in required if name not in names]
+          print("Service: nija-member-broker-api (srv-db84gj5g1s2s7390mrp0)")
+          print("Missing variable names:", ", ".join(missing) if missing else "none")
+          print("IMPORTANT: Presence does not verify nonempty values, security flag truth, vault ACL, entitlement or identity mapping.")
+          sys.exit(2 if missing else 0)
+          PY
