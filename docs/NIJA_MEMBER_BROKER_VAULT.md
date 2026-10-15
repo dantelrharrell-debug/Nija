@@ -22,6 +22,36 @@ Inject `entitlement_check(user_id)` backed by the authoritative Founding 100 mem
 
 The caller supplies a short-lived PocketBase member token. The module refresh-authenticates it with PocketBase, checks verified identity + entitlement, then encrypts and stores an owner-bound ciphertext. Member passwords must never pass through or be logged by the trading service. No browser endpoint or automatic credential enrollment is introduced by this branch. `create()` rejects duplicates through PocketBase's unique index; no overwrite or retry-on-conflict.
 
+## Optional Render configuration diagnostic
+
+Run **NIJA member broker Render readiness diagnostic** from GitHub Actions
+(`.github/workflows/member-broker-render-readiness.yml`) using **Run workflow**.
+It is a manual, read-only configuration diagnostic, not a deployment or trading
+authorization gate.
+
+Configure `RENDER_API_KEY` under repository **Settings → Secrets and variables →
+Actions → New repository secret**. Use a Render API key with the minimum available
+permissions needed to read environment variables for `nija-member-broker-api`
+(`srv-db84gj5g1s2s7390mrp0`). Restrict access to the intended service/workspace
+where supported. Never put the key in workflow inputs, repository variables,
+source files or logs.
+
+- Without the secret, the diagnostic exits successfully with an explicit
+  **SKIPPED** notice and job summary. This does **not** establish readiness.
+- With the secret, it calls the Render service's environment-variable endpoint.
+  API/authentication errors, unexpected responses and missing required variable
+  names still fail the job. For HTTP 401/403, check the key's validity and access.
+- It checks names only: `NIJA_POCKETBASE_URL`, `NIJA_BROKER_VAULT_KEY_B64`,
+  `NIJA_VAULT_BILLING_READONLY_URL`, `NIJA_VAULT_STRIPE_READONLY_KEY`,
+  `NIJA_VAULT_FOUNDING_PRICE_ID`, `NIJA_VAULT_FOUNDING_PRODUCT_ID`,
+  `NIJA_VAULT_INTAKE_ENABLED`, `NIJA_MEMBER_BROKER_VAULT_RULES_VERIFIED` and
+  `NIJA_MEMBER_BROKER_IDENTITY_MAPPING_VERIFIED`. It never prints their values.
+- A passing diagnostic does not verify nonempty values, security flag truth,
+  vault ACLs, entitlement or identity mapping. All mandatory reviews below still
+  apply. After configuring the secret or fixing service configuration, start a
+  new workflow run on the updated revision; retrying the old failed run uses its
+  original workflow.
+
 ## Important limits
 
 - The envelope is versioned, includes random 96-bit nonce and AES-GCM tag. Associated data is `{user_id}:{broker}:{environment}`; cross-account replay fails, but replay of a previous valid ciphertext under the *same* scope is not prevented. Add server-side immutable revision/rollback tracking before enabling replacements.

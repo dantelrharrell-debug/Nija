@@ -15,6 +15,8 @@ on:
       - 'tests/test_member_broker_intents.py'
       - 'bot/member_broker_onboarding.py'
       - 'tests/test_member_broker_onboarding.py'
+      - 'tests/test_member_broker_render_readiness.py'
+      - '.github/workflows/member-broker-render-readiness.yml'
       - '.github/workflows/member-broker-vault-tests.yml'
   workflow_dispatch:
 
@@ -47,3 +49,4 @@ jobs:
           python -B -m unittest discover -s tests -p test_member_broker_leases.py -v
           python -B -m unittest discover -s tests -p test_member_broker_intents.py -v
           python -B -m unittest discover -s tests -p test_member_broker_onboarding.py -v
+          python -B -m unittest discover -s tests -p test_member_broker_render_readiness.py -v

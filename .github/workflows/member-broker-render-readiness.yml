@@ -16,8 +16,16 @@ jobs:
           import json, os, sys, urllib.request, urllib.error
           key = os.environ.get("RENDER_API_KEY", "")
           if not key:
-              print("BLOCKED: Configure repository secret RENDER_API_KEY with a scoped Render API key.")
-              sys.exit(2)
+              message = (
+                  "SKIPPED: RENDER_API_KEY is not configured; Render readiness was not checked. "
+                  "Add the Actions repository secret RENDER_API_KEY with access to this service's "
+                  "environment variables, then run this workflow again."
+              )
+              print("::notice::" + message)
+              if os.environ.get("GITHUB_STEP_SUMMARY"):
+                  with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+                      summary.write(message + "\n")
+              sys.exit(0)
           url = "https://api.render.com/v1/services/srv-db84gj5g1s2s7390mrp0/env-vars?limit=100"
           req = urllib.request.Request(url, headers={"Authorization": "Bearer " + key, "Accept": "application/json"})
           try:
