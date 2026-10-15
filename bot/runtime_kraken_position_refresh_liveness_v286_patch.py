@@ -329,16 +329,19 @@ def _record_snapshot_failure(broker: Any, reason: str) -> None:
 
 
 def _record_snapshot_success(broker: Any, rows: list[dict[str, Any]]) -> None:
-    v285 = _v285()
-    recorder = getattr(v285, "_record_snapshot_success", None)
-    if not callable(recorder) or not bool(recorder(broker, rows)):
-        raise RuntimeError("v285_authoritative_snapshot_record_failed")
-    generation = int(getattr(broker, "_nija_authoritative_position_snapshot_generation_v285", 0) or 0)
-    try:
-        setattr(broker, "_nija_authoritative_position_raw_rows_v286", tuple(dict(row) for row in rows))
-        setattr(broker, "_nija_authoritative_position_raw_generation_v286", generation)
-    except Exception:
-        pass
+    # Serialize competing Kraken snapshot writers through the existing flight lock.
+    # v98 readers still validate generation consistency and fail closed on races.
+    with _AUTH_LOCK:
+        v285 = _v285()
+        recorder = getattr(v285, "_record_snapshot_success", None)
+        if not callable(recorder) or not bool(recorder(broker, rows)):
+            raise RuntimeError("v285_authoritative_snapshot_record_failed")
+        generation = int(getattr(broker, "_nija_authoritative_position_snapshot_generation_v285", 0) or 0)
+        try:
+            setattr(broker, "_nija_authoritative_position_raw_rows_v286", tuple(dict(row) for row in rows))
+            setattr(broker, "_nija_authoritative_position_raw_generation_v286", generation)
+        except Exception as exc:
+            raise RuntimeError("v286_raw_snapshot_publication_failed") from exc
 
 
 def _fetch_authoritative_rows_sync(broker: Any) -> list[dict[str, Any]]:
