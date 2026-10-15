@@ -113,9 +113,15 @@ class SnapshotWriterLockTests(unittest.TestCase):
                 v286._record_snapshot_success(
                     broker, [{"symbol": "BTC-USD", "quantity": 1}, None]
                 )
-        self.assertFalse(
-            hasattr(broker, "_nija_authoritative_position_snapshot_fetch_ok_v285")
+        self.assertIs(
+            getattr(broker, "_nija_authoritative_position_snapshot_fetch_ok_v285"),
+            False,
         )
+        self.assertEqual(
+            broker._nija_authoritative_position_snapshot_error_v285,
+            "v286_raw_snapshot_preparation_failed",
+        )
+        self.assertEqual(broker._nija_authoritative_position_failure_serial_v286, 1)
 
 
 if __name__ == "__main__":
