@@ -67,8 +67,6 @@ def _read(broker: Any, method: str, params: dict[str, Any],
             raise StartupPreflightError("startup_preflight_order_parameter_not_allowlisted")
         if params.get("validate") is not True:
             raise StartupPreflightError("startup_preflight_real_order_forbidden")
-        if params.get("oflags") != "fciq" or not isinstance(params.get("cl_ord_id"), str) or len(params["cl_ord_id"]) != 18:
-            raise StartupPreflightError("startup_preflight_order_identity_or_fee_flags_invalid")
         # Only a bounded, explicit limit entry with an attached stop may be
         # sent to Kraken's validation endpoint. Validation is not execution.
         if (params.get("type") != "buy" or params.get("ordertype") != "limit"
@@ -78,6 +76,8 @@ def _read(broker: Any, method: str, params: dict[str, Any],
                     "pair", "volume", "price", "close[price]", "close[price2]"
                 ))):
             raise StartupPreflightError("startup_preflight_unprotected_validation_forbidden")
+        if params.get("oflags") != "fciq" or not isinstance(params.get("cl_ord_id"), str) or len(params["cl_ord_id"]) != 18:
+            raise StartupPreflightError("startup_preflight_order_identity_or_fee_flags_invalid")
     assert_nonce_owner()
     call = getattr(broker, "_kraken_private_call", None)
     if not callable(call):
