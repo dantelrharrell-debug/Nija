@@ -54,6 +54,14 @@ def create_app(*, onboarding: MemberBrokerOnboarding | None = None) -> Flask:
     def health():
         return jsonify({"service": "nija-member-broker", "status": "ok"})
 
+    @app.route("/readyz", methods=["GET"])
+    def readiness():
+        # Health is process liveness; readiness requires configured vault and
+        # trusted entitlement backend. Never disclose missing secret names.
+        if onboarding is None:
+            return jsonify({"status": "not_ready"}), 503
+        return jsonify({"status": "ready"}), 200
+
     @app.route("/api/member/brokers", methods=["GET", "OPTIONS"])
     @app.route("/api/member/brokers/connect", methods=["POST", "OPTIONS"])
     def members():
