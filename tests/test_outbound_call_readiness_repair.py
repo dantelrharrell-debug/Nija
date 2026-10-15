@@ -82,6 +82,73 @@ class ApolloEvidenceTests(unittest.TestCase):
         self.assertEqual(evidence["dnc_checked_at"], "")
 
 
+    def test_provider_not_found_without_screening_timestamp_cannot_claim_fresh_dnc(self):
+        contact = {"typed_custom_fields": {
+            "consent-field": True,
+            "consent-record-field": "consent-123",
+            "legal-basis-field": "express-written-consent",
+            "campaign-field": True,
+        }}
+        with self._field_env():
+            with mock.patch.object(self.feeder, "_utcnow",
+                                   return_value=datetime(2026, 10, 15, tzinfo=timezone.utc)):
+                evidence = self.feeder._evidence(contact, {"dnc_status_cd": "not_found"})
+        self.assertFalse(evidence["dnc_clear"])
+        self.assertEqual(evidence["dnc_checked_at"], "")
+        self.assertEqual(self.feeder._qualification_reason({
+            **evidence, "suppression_clear": True, "campaign_enabled": True,
+            "weekend_evidence": {"recipient_jurisdiction": "US-WA"},
+        }), "dnc_not_clear")
+
+    def test_documented_provider_screening_time_is_preserved(self):
+        checked_at = "2026-10-15T00:10:00+00:00"
+        with self._field_env():
+            evidence = self.feeder._evidence(
+                {"typed_custom_fields": {}},
+                {"dnc_status_cd": "not_found", "dnc_checked_at": checked_at},
+            )
+        self.assertTrue(evidence["dnc_clear"])
+        self.assertEqual(evidence["dnc_checked_at"], checked_at)
+
+    def test_custom_dnc_screening_can_verify_provider_status_without_provider_timestamp(self):
+        checked_at = "2026-10-15T00:10:00+00:00"
+        with self._field_env():
+            evidence = self.feeder._evidence(
+                {"typed_custom_fields": {
+                    "dnc-status-field": "Clear",
+                    "dnc-checked-field": checked_at,
+                }},
+                {"dnc_status_cd": "not_found"},
+            )
+        self.assertTrue(evidence["dnc_clear"])
+        self.assertEqual(evidence["dnc_checked_at"], checked_at)
+
+    def test_conflicting_dnc_found_blocks_provider_clear(self):
+        with self._field_env():
+            evidence = self.feeder._evidence(
+                {"typed_custom_fields": {
+                    "dnc-status-field": "Found",
+                    "dnc-checked-field": "2026-10-15T00:10:00+00:00",
+                }},
+                {"dnc_status_cd": "not_found",
+                 "dnc_checked_at": "2026-10-15T00:12:00+00:00"},
+            )
+        self.assertFalse(evidence["dnc_clear"])
+        self.assertFalse(evidence["provider_dnc_found"])
+
+    def test_pending_provider_dnc_blocks_even_with_custom_clear(self):
+        with self._field_env():
+            evidence = self.feeder._evidence(
+                {"typed_custom_fields": {
+                    "dnc-status-field": "Clear",
+                    "dnc-checked-field": "2026-10-15T00:10:00+00:00",
+                }},
+                {"dnc_status_cd": "pending"},
+            )
+        self.assertFalse(evidence["dnc_clear"])
+        self.assertEqual(evidence["provider_dnc_status"], "pending")
+
+
 class AutodialQueueReadinessTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
