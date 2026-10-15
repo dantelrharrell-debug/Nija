@@ -58,7 +58,11 @@ def create_app(*, onboarding: MemberBrokerOnboarding | None = None) -> Flask:
     def readiness():
         # Health is process liveness; readiness requires configured vault and
         # trusted entitlement backend. Never disclose missing secret names.
-        if onboarding is None or not getattr(onboarding, "_secret_intake_enabled", False):
+        if (onboarding is None or not getattr(onboarding, "_secret_intake_enabled", False)
+                or not os.environ.get("NIJA_VAULT_BILLING_READONLY_URL", "").strip()
+                or not os.environ.get("NIJA_VAULT_STRIPE_READONLY_KEY", "").strip()
+                or not os.environ.get("NIJA_VAULT_FOUNDING_PRICE_ID", "").strip()
+                or not os.environ.get("NIJA_VAULT_FOUNDING_PRODUCT_ID", "").strip()):
             return jsonify({"status": "not_ready"}), 503
         return jsonify({"status": "ready"}), 200
 
