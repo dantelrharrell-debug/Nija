@@ -101,6 +101,25 @@ def _state_changed(before: dict[str, Any], after: dict[str, Any]) -> bool:
     return False
 
 
+def _revoke_snapshot_without_masking_broker_exception(broker: Any, reason: str) -> None:
+    """Revoke only the canonical flag/reason; never replace a broker exception.
+
+    v286 owns the authenticated failure serial and raw snapshot generation.
+    This observer may need to fail closed after an overlapping ordinary read.
+    The direct assignment matches v285's failure effect but avoids importing
+    and calling a potentially failing helper from a finally block.
+    """
+    try:
+        setattr(broker, "_nija_authoritative_position_snapshot_fetch_ok_v285", False)
+        setattr(broker, "_nija_authoritative_position_snapshot_error_v285", str(reason))
+    except Exception:
+        LOGGER.exception(
+            "KRAKEN_AUTHORITATIVE_SNAPSHOT_V305_REVOCATION_FAILED "
+            "account=%s fail_closed_unverifiable=true",
+            str(getattr(broker, "account_identifier", "unknown")),
+        )
+
+
 def _wrap_get_positions(current: Callable[..., Any]) -> Callable[..., Any]:
     if bool(getattr(current, _PATCH_ATTR, False)):
         return current
@@ -128,8 +147,7 @@ def _wrap_get_positions(current: Callable[..., Any]) -> Callable[..., Any]:
                     # A genuine Kraken Balance attempt failed during the
                     # ordinary read. The raw generation may be unchanged, so
                     # restoring the prior canonical success would be fail-open.
-                    v285 = importlib.import_module("bot.runtime_authoritative_position_coverage_v285_patch")
-                    v285._record_snapshot_failure(
+                    _revoke_snapshot_without_masking_broker_exception(
                         self, "v305_concurrent_authenticated_balance_failure"
                     )
                     LOGGER.critical(
@@ -148,8 +166,9 @@ def _wrap_get_positions(current: Callable[..., Any]) -> Callable[..., Any]:
                     # corrupted it afterward, invalidate rather than fabricate.
                     generation = getattr(self, "_nija_authoritative_position_snapshot_generation_v285", None)
                     if generation != raw_after:
-                        v285 = importlib.import_module("bot.runtime_authoritative_position_coverage_v285_patch")
-                        v285._record_snapshot_failure(self, "v305_concurrent_publication_reconciliation_required")
+                        _revoke_snapshot_without_masking_broker_exception(
+                            self, "v305_concurrent_publication_reconciliation_required"
+                        )
                     LOGGER.warning(
                         "KRAKEN_AUTHORITATIVE_SNAPSHOT_V305_CONCURRENT_PUBLICATION "
                         "marker=%s account=%s raw_before=%s raw_after=%s "
