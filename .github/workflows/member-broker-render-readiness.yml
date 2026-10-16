@@ -53,8 +53,11 @@ jobs:
               "NIJA_VAULT_FOUNDING_PRICE_ID",
               "NIJA_VAULT_FOUNDING_PRODUCT_ID",
               "NIJA_VAULT_INTAKE_ENABLED",
+              "NIJA_VAULT_VERIFICATION_ENABLED",
               "NIJA_MEMBER_BROKER_VAULT_RULES_VERIFIED",
               "NIJA_MEMBER_BROKER_IDENTITY_MAPPING_VERIFIED",
+              "NIJA_MEMBER_BROKER_BILLING_ENTITLEMENT_VERIFIED",
+              "NIJA_MEMBER_BROKER_KEY_CUSTODY_VERIFIED",
           )
           missing = [name for name in required if name not in names]
           print("Service: nija-member-broker-api (srv-db84gj5g1s2s7390mrp0)")

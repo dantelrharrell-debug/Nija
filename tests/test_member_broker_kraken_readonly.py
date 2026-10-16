@@ -56,8 +56,9 @@ def test_failure_is_fail_closed(status, body):
                                session=FakeSession(status, body), nonce=123)
 
 
-def test_invalid_secret_never_calls_exchange():
+@pytest.mark.parametrize("secret", ["not base64!", "", " "])
+def test_invalid_secret_never_calls_exchange(secret):
     session = FakeSession()
     with pytest.raises(KrakenVerificationError):
-        verify_kraken_readonly("test-key", "not base64!", session=session, nonce=123)
+        verify_kraken_readonly("test-key", secret, session=session, nonce=123)
     assert session.calls == []
