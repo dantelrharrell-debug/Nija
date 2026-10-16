@@ -137,6 +137,7 @@ def test_independent_readiness_audit_preserves_valid_evidence(monkeypatch):
         "NIJA_APOLLO_CONSENT_RECORD_FIELD_ID": "consent_record",
         "NIJA_APOLLO_LEGAL_BASIS_FIELD_ID": "legal_basis",
         "NIJA_APOLLO_RECIPIENT_JURISDICTION_FIELD_ID": "state",
+        "NIJA_APOLLO_RECIPIENT_TIMEZONE_FIELD_ID": "recipient_timezone",
     }
     for name, value in fields.items():
         monkeypatch.setenv(name, value)
@@ -149,7 +150,48 @@ def test_independent_readiness_audit_preserves_valid_evidence(monkeypatch):
         ],
         "typed_custom_fields": {
             "consent": True, "consent_record": "offline-record",
-            "legal_basis": "offline-test-basis", "state": "US-WA"
+            "legal_basis": "offline-test-basis", "state": "US-WA",
+            "recipient_timezone": "America/Los_Angeles"
         },
     }
     assert feeder._independent_readiness_gaps(contact) == ()
+
+
+def test_dnc_found_is_suppressed_before_timezone_gate(monkeypatch):
+    """Provider DNC hits cannot be discarded by unrelated missing fields."""
+    seen = []
+    monkeypatch.setattr(feeder, "set_suppression", lambda **kwargs: seen.append(kwargs))
+    contact = {
+        "id": "test-dnc-contact",
+        "typed_custom_fields": {},
+        "phone_numbers": [{
+            "sanitized_number": "+12065550123",
+            "dnc_status_cd": "found",
+        }],
+    }
+    payload, reason = feeder._contact_payload(contact)
+    assert payload is None
+    assert reason == "missing_timezone"
+    assert seen == [{
+        "contact_number": "+12065550123",
+        "reason": "apollo_dnc_found",
+        "source": "apollo",
+        "active": True,
+    }]
+
+
+def test_pending_dnc_is_not_misreported_as_found(monkeypatch):
+    seen = []
+    monkeypatch.setattr(feeder, "set_suppression", lambda **kwargs: seen.append(kwargs))
+    contact = {
+        "id": "test-pending-contact",
+        "typed_custom_fields": {},
+        "phone_numbers": [{
+            "sanitized_number": "+12065550123",
+            "dnc_status_cd": "pending",
+        }],
+    }
+    payload, reason = feeder._contact_payload(contact)
+    assert payload is None
+    assert reason == "missing_timezone"
+    assert seen == []

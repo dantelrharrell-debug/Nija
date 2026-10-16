@@ -149,6 +149,42 @@ class ApolloEvidenceTests(unittest.TestCase):
         self.assertEqual(evidence["provider_dnc_status"], "pending")
 
 
+    def test_provider_dnc_found_is_suppressed_even_when_timezone_is_missing(self):
+        contact = {
+            "id": "dnc-contact-without-timezone",
+            "phone_numbers": [
+                {"sanitized_number": "+12065550123", "dnc_status_cd": "found"}
+            ],
+            "typed_custom_fields": {},
+        }
+        with self._field_env():
+            with mock.patch.object(self.feeder, "set_suppression") as suppression:
+                payload, reason = self.feeder._contact_payload(contact)
+        self.assertIsNone(payload)
+        self.assertEqual(reason, "missing_timezone")
+        suppression.assert_called_once_with(
+            contact_number="+12065550123",
+            reason="apollo_dnc_found",
+            source="apollo",
+            active=True,
+        )
+
+    def test_unverified_dnc_does_not_create_false_positive_suppression(self):
+        contact = {
+            "id": "pending-dnc-contact",
+            "phone_numbers": [
+                {"sanitized_number": "+12065550123", "dnc_status_cd": "pending"}
+            ],
+            "typed_custom_fields": {},
+        }
+        with self._field_env():
+            with mock.patch.object(self.feeder, "set_suppression") as suppression:
+                payload, reason = self.feeder._contact_payload(contact)
+        self.assertIsNone(payload)
+        self.assertEqual(reason, "missing_timezone")
+        suppression.assert_not_called()
+
+
 class AutodialQueueReadinessTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
