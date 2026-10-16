@@ -53,6 +53,21 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
+def _validated_contact_phone(value: object) -> str:
+    """Keep an explicit form phone as CRM metadata, never dialing eligibility."""
+    if not isinstance(value, str):
+        return ""
+    phone = value.strip()
+    if not phone or len(phone) > 40:
+        return ""
+    if any(ch not in "0123456789+() .-" for ch in phone):
+        return ""
+    if phone.count("+") > 1 or ("+" in phone and not phone.startswith("+")):
+        return ""
+    digits = "".join(ch for ch in phone if ch in "0123456789")
+    return phone if 10 <= len(digits) <= 15 else ""
+
+
 def _db_path() -> pathlib.Path:
     return pathlib.Path(str(os.getenv("NIJA_LEAD_DB_PATH") or os.getenv("NIJA_OUTREACH_DB_PATH") or "/app/data/nija_outreach.sqlite3").strip())
 
@@ -72,6 +87,7 @@ def _prepare(conn: sqlite3.Connection) -> None:
             event_key TEXT PRIMARY KEY,
             email TEXT NOT NULL,
             name TEXT NOT NULL,
+            phone TEXT NOT NULL DEFAULT '',
             state TEXT NOT NULL DEFAULT 'pending',
             attempts INTEGER NOT NULL DEFAULT 0,
             next_attempt_at REAL NOT NULL DEFAULT 0,
@@ -79,6 +95,9 @@ def _prepare(conn: sqlite3.Connection) -> None:
             updated_at TEXT NOT NULL
         )"""
     )
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(website_lead_crm_sync)")}
+    if "phone" not in columns:
+        conn.execute("ALTER TABLE website_lead_crm_sync ADD COLUMN phone TEXT NOT NULL DEFAULT ''")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_website_lead_crm_due ON website_lead_crm_sync(state, next_attempt_at)")
     # Recover only recent website leads (not the entire historical contact base).
     cutoff = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat(timespec="milliseconds").replace("+00:00", "Z")
@@ -158,6 +177,7 @@ def _redis_enqueue(client, canonical: dict[str, str], event_key: str) -> bool:
     if created:
         client.hset(key, mapping={
             "name": canonical.get("name", "")[:200],
+            "phone": _validated_contact_phone(canonical.get("phone")),
             "state": "pending",
             "attempts": "0",
             "next_attempt_at": "0",
@@ -183,7 +203,7 @@ def _bootstrap_redis_from_sqlite(client) -> int:
             # Redis keys can be lost independently of SQLite. Do not requeue
             # leads that Apollo already acknowledged in the local mirror.
             rows = conn.execute(
-                """SELECT leads.event_key, leads.email, leads.name
+                """SELECT leads.event_key, leads.email, leads.name, crm.phone
                    FROM website_leads AS leads
                    LEFT JOIN website_lead_crm_sync AS crm
                      ON crm.event_key = leads.event_key
@@ -197,7 +217,7 @@ def _bootstrap_redis_from_sqlite(client) -> int:
     count = 0
     for row in rows:
         try:
-            _redis_enqueue(client, {"email": row["email"], "name": row["name"]}, row["event_key"])
+            _redis_enqueue(client, {"email": row["email"], "name": row["name"], "phone": row["phone"] or ""}, row["event_key"])
             count += 1
         except Exception:
             break
@@ -256,8 +276,9 @@ def enqueue_lead(canonical: dict[str, str], event_key: str) -> bool:
             _prepare(conn)
             conn.execute(
                 """INSERT OR IGNORE INTO website_lead_crm_sync
-                   (event_key, email, name, updated_at) VALUES (?, ?, ?, ?)""",
-                (event_key, canonical["email"].lower(), canonical.get("name", "")[:200], _now_iso()),
+                   (event_key, email, name, phone, updated_at) VALUES (?, ?, ?, ?, ?)""",
+                (event_key, canonical["email"].lower(), canonical.get("name", "")[:200],
+                 _validated_contact_phone(canonical.get("phone")), _now_iso()),
             )
             if redis_already_synced:
                 # SQLite may be recreated after a Render restart. Redis's
@@ -280,13 +301,18 @@ def enqueue_lead(canonical: dict[str, str], event_key: str) -> bool:
     return True
 
 
-def _contact(name: str, email: str) -> dict[str, Any]:
+def _contact(name: str, email: str, phone: object = "") -> dict[str, Any]:
     first, _, last = (name or "").strip().partition(" ")
-    return {
+    record: dict[str, Any] = {
         "first_name": first[:100] or "NIJA",
         "last_name": last[:100],
         "email": email,
     }
+    valid_phone = _validated_contact_phone(phone)
+    if valid_phone:
+        record["direct_phone"] = valid_phone
+    # A website form submission alone never supplies AI-voice calling consent.
+    return record
 
 
 def _deliver_batch(rows: list[dict[str, Any]], key: str) -> set[str]:
@@ -294,7 +320,7 @@ def _deliver_batch(rows: list[dict[str, Any]], key: str) -> set[str]:
     for row in rows:
         email = str(row["email"]).strip().lower()
         if email and email not in unique:
-            unique[email] = _contact(str(row["name"]), email)
+            unique[email] = _contact(str(row["name"]), email, row.get("phone", ""))
     body = json.dumps({
         "contacts": list(unique.values()),
         "run_dedupe": True,
@@ -345,6 +371,7 @@ def _sync_pending_redis(client, key: str, max_batch: int) -> dict[str, int]:
             "event_key": event_key,
             "email": record["email"],
             "name": record.get("name", ""),
+            "phone": record.get("phone", ""),
             "attempts": int(record.get("attempts", "0") or "0"),
         })
     if not rows:
@@ -399,7 +426,7 @@ def _sync_pending_sqlite(key: str, max_batch: int) -> dict[str, int]:
         _prepare(conn)
         now = time.time()
         selected = conn.execute(
-            """SELECT event_key, email, name, attempts
+            """SELECT event_key, email, name, phone, attempts
                FROM website_lead_crm_sync
                WHERE state='pending' AND next_attempt_at <= ?
                ORDER BY next_attempt_at, updated_at LIMIT ?""",
