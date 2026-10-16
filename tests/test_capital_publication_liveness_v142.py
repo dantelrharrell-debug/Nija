@@ -131,6 +131,44 @@ def test_untracked_inflight_is_replaced_once_publication_expired(monkeypatch) ->
     assert manager._capital_coordinator is replacement
 
 
+
+def test_untracked_rollover_emits_ownership_diagnostic_without_changing_gate(monkeypatch, caplog) -> None:
+    from bot import capital_publication_deadline_v137_patch as v137
+
+    now = datetime.now(timezone.utc)
+    authority = SimpleNamespace(
+        get_snapshot_publication_status=lambda: SimpleNamespace(
+            accepted=True,
+            stale=False,
+            reason="accepted",
+            timestamp=now - timedelta(seconds=91),
+            expiry=now - timedelta(seconds=1),
+        )
+    )
+    boot = SimpleNamespace(state=SimpleNamespace(value="RUNNING"))
+    old = SimpleNamespace(_in_flight=True, _boot=boot)
+    replacement = SimpleNamespace(_in_flight=False)
+    manager = SimpleNamespace(_capital_coordinator=old)
+    monkeypatch.setattr(v142, "_authority", lambda: authority)
+
+    def rollover(target_manager, *, expected_old=None, reason):
+        assert expected_old is old
+        assert reason == "untracked_inflight_with_expired_publication"
+        target_manager._capital_coordinator = replacement
+        return replacement
+
+    monkeypatch.setattr(v142, "_rollover_coordinator", rollover)
+    caplog.set_level("WARNING", logger="nija.capital_publication_liveness_v142")
+
+    assert v137._publication_meta(authority, now=now)[0] is False
+    assert v142._coordinator_in_flight_v142(manager) is False
+    assert manager._capital_coordinator is replacement
+    assert "CAPITAL_COORDINATOR_UNTRACKED_V142_DIAGNOSTIC" in caplog.text
+    assert "bootstrap_state=RUNNING" in caplog.text
+    assert "flight_thread_present=False" in caplog.text
+    assert "safe_fail_closed=true" in caplog.text
+
+
 def test_rollover_reuses_canonical_fsm_objects_and_hydration(monkeypatch) -> None:
     from bot import capital_flow_state_machine as flow
 
