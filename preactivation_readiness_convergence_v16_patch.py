@@ -47,7 +47,7 @@ def _float(value: Any, default: float = 0.0) -> float:
     try:
         result = float(value if value not in (None, "") else default)
         return result if math.isfinite(result) else default
-    except (TypeError, ValueError, OverflowError):
+    except Exception:
         return default
 
 
