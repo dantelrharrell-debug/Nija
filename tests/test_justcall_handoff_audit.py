@@ -43,3 +43,25 @@ def test_candidate_requires_voice_agent_or_transfer_trait():
     assert audit._candidate({"call_info": {"call_traits": ["Transfer"]}})
     assert not audit._candidate({"call_info": {"call_traits": ["Outbound"]}})
     assert not audit._candidate({"call_info": {}})
+
+
+def test_hourly_worker_survives_unexpected_audit_error(monkeypatch):
+    events = []
+    def failing_audit():
+        events.append("audit")
+        raise RuntimeError("unexpected provider response containing private data")
+    def stop_after_first_cycle(seconds):
+        events.append(("sleep", seconds))
+        raise KeyboardInterrupt()
+    monkeypatch.setattr(audit, "run_readonly_handoff_audit", failing_audit)
+    monkeypatch.setattr(audit.time, "sleep", stop_after_first_cycle)
+    with mock.patch("builtins.print") as log:
+        try:
+            audit._handoff_worker()
+        except KeyboardInterrupt:
+            pass
+    assert events == ["audit", ("sleep", 3600)]
+    message = " ".join(str(part) for call in log.call_args_list for part in call.args)
+    assert "state=worker_error" in message
+    assert "RuntimeError" in message
+    assert "private data" not in message
