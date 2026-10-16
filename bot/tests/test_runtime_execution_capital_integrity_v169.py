@@ -130,6 +130,69 @@ def test_detached_trading_strategy_gets_execution_provenance(monkeypatch, tmp_pa
     payload = json.loads(execution.read_text(encoding="utf-8"))
     assert payload["source"] == "heartbeat_trade"
     assert payload["proof_kind"] == "execution_probe"
+    assert "broker_event_at_epoch" not in payload
+
+
+def test_genuine_broker_event_time_is_preserved_without_refresh(monkeypatch, tmp_path: Path):
+    import time
+
+    marker = tmp_path / "heartbeat_verified.flag"
+    monkeypatch.setenv("HEARTBEAT_MARKER_PATH", str(marker))
+    detached = types.ModuleType("trading_strategy")
+    detached.__file__ = "/detached/trading_strategy.py"
+
+    class TradingStrategy:
+        def _persist_heartbeat_marker(self, *, stage: str, details=None) -> None:
+            marker.write_text(
+                json.dumps({
+                    "stage": stage,
+                    "verified_at_epoch": (details or {}).get("broker_execution_epoch"),
+                    "details": details or {},
+                }),
+                encoding="utf-8",
+            )
+
+    detached.TradingStrategy = TradingStrategy
+    assert v169._patch_trading_strategy_provenance() is True
+
+    epoch = time.time() - 60
+    TradingStrategy()._persist_heartbeat_marker(
+        stage="FILL_VERIFY", details={"broker_execution_epoch": epoch}
+    )
+    payload = json.loads(marker.read_text(encoding="utf-8"))
+    assert payload["broker_event_at_epoch"] == epoch
+    assert payload["verified_at_epoch"] == epoch
+
+
+def test_inconsistent_broker_timestamp_fails_closed(monkeypatch, tmp_path: Path):
+    import time
+
+    marker = tmp_path / "heartbeat_verified.flag"
+    monkeypatch.setenv("HEARTBEAT_MARKER_PATH", str(marker))
+    detached = types.ModuleType("trading_strategy")
+    detached.__file__ = "/detached/trading_strategy.py"
+
+    class TradingStrategy:
+        def _persist_heartbeat_marker(self, *, stage: str, details=None) -> None:
+            marker.write_text(
+                json.dumps({"stage": stage, "verified_at_epoch": time.time() - 3600}),
+                encoding="utf-8",
+            )
+
+    detached.TradingStrategy = TradingStrategy
+    assert v169._patch_trading_strategy_provenance() is True
+
+    try:
+        TradingStrategy()._persist_heartbeat_marker(
+            stage="FILL_VERIFY", details={"broker_execution_epoch": time.time()}
+        )
+    except ValueError as exc:
+        assert str(exc) == "unverified_broker_execution_epoch"
+    else:
+        raise AssertionError("mismatched broker epoch must fail closed")
+    payload = json.loads(marker.read_text(encoding="utf-8"))
+    assert "broker_event_at_epoch" not in payload
+    assert "source" not in payload
 
 
 def test_detached_tsm_still_rejects_authority_execution_proof(monkeypatch, tmp_path: Path):
