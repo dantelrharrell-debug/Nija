@@ -148,3 +148,25 @@ def test_float_parser_is_finite_only():
     for bad in ("nan", "inf", "-inf", "1e9999", 10**1000):
         assert math.isfinite(v281._float(bad))
         assert v281._float(bad) == 0.0
+
+
+class BrokenAdapterNumber:
+    def __float__(self):
+        raise RuntimeError("untrusted numeric adapter failure")
+
+
+def test_unexpected_numeric_adapter_exception_fails_closed():
+    bad = BrokenAdapterNumber()
+    result = v281.evaluate(_manager(_row(quantity=bad)), structural_exit_ready=True)
+    assert result["ready"] is False
+    assert "tracker_quantity_invalid:BTC-USD" in result["pending"]["platform:kraken"]
+
+
+def test_invalid_entry_adapter_exception_fails_closed():
+    result = v281.evaluate(
+        _manager(_row(entry_price=BrokenAdapterNumber())),
+        structural_exit_ready=True,
+    )
+    assert result["ready"] is False
+    assert "entry_price_unverified:BTC-USD" in result["pending"]["platform:kraken"]
+    assert result["positions"][0]["protective_exit_verified"] is False
