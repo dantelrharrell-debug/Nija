@@ -1,0 +1,42 @@
+name: NIJA readiness evidence safety regressions
+
+on:
+  pull_request:
+    paths:
+      - "bot/post_activation_proof_loss_v133_patch.py"
+      - "bot/test_post_activation_proof_loss_v133.py"
+      - "bot/tests/test_v458_readiness_attestation_truth.py"
+      - "preactivation_readiness_convergence_v16_patch.py"
+      - "bot/tests/test_v459_startup_proof_freshness.py"
+      - ".github/workflows/nija-readiness-evidence-safety.yml"
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  readiness-evidence-failclosed:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install test dependencies
+        run: python -m pip install pytest==8.2.2
+      - name: Exercise live-authority and proof-truth invariants
+        env:
+          GH_TOKEN: ""
+          SSH_PRIVATE_KEY: ""
+          COINBASE_API_KEY: ""
+          COINBASE_API_SECRET: ""
+        run: |
+          python -m pytest -q \
+            bot/test_post_activation_proof_loss_v133.py \
+            bot/tests/test_v458_readiness_attestation_truth.py
+          if [ -f bot/tests/test_v459_startup_proof_freshness.py ]; then
+            python -m pytest -q bot/tests/test_v459_startup_proof_freshness.py
+          fi
