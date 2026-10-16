@@ -51,7 +51,7 @@ def _canonical_execution_ready() -> tuple[bool, str]:
         if not callable(snapshot):
             return False, "readiness_snapshot_unavailable"
         table = dict(snapshot() or {})
-        ready = bool(table.get("execution_ready", False))
+        ready = table.get("execution_ready") is True
         return ready, "canonical_execution_ready" if ready else "canonical_execution_proof_pending"
     except Exception as exc:
         return False, f"readiness_snapshot_error:{type(exc).__name__}"
