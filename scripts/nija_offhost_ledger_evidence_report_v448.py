@@ -15,8 +15,10 @@ from pathlib import Path
 
 try:
     from scripts.nija_trade_ledger_snapshot_v436 import verify_snapshot
-except ModuleNotFoundError:
-    # Direct invocation from the scripts/ directory also remains supported.
+except ModuleNotFoundError as exc:
+    if exc.name not in {"scripts", "scripts.nija_trade_ledger_snapshot_v436"}:
+        raise
+    # Direct invocation from scripts/ also remains supported.
     from nija_trade_ledger_snapshot_v436 import verify_snapshot
 
 
@@ -45,7 +47,9 @@ def main(argv=None) -> int:
         "historical_reconciliation_verified": False,
         "backup_restore_verified": False,
         "production_readiness_changed": False,
-        "archive_details": result,
+        "sqlite_tables": result.get("sqlite_tables", {}),
+        "expected_archive_sha256_matched": result.get("expected_archive_sha256_matched", False),
+        "isolated_restore_test_verified": result.get("isolated_restore_test_verified", False),
     }, sort_keys=True, default=str))
     return 0
 
