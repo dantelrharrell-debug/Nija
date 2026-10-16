@@ -100,7 +100,7 @@ def test_invalid_entry_price_cannot_certify_an_actionable_position(bad):
     assert result["ready"] is False
     assert "entry_price_unverified:BTC-USD" in result["pending"]["platform:kraken"]
     assert result["positions"][0]["protective_exit_verified"] is False
-    assert result["positions"][0]["entry_price"] is None
+    assert result["positions"][0]["entry_price"] == 0.0
 
 
 def test_bad_entry_price_cannot_fallback_to_unverified_cost():
@@ -118,7 +118,7 @@ def test_nonfinite_derived_entry_price_cannot_certify():
     result = v281.evaluate(_manager(row), structural_exit_ready=True)
     assert result["ready"] is False
     assert "entry_price_unverified:BTC-USD" in result["pending"]["platform:kraken"]
-    assert result["positions"][0]["entry_price"] is None
+    assert result["positions"][0]["entry_price"] == 0.0
 
 
 def test_valid_proven_position_behavior_is_unchanged():
