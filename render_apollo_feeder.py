@@ -496,7 +496,7 @@ def _independent_readiness_gaps(contact: dict[str, Any]) -> tuple[str, ...]:
     gaps = []
     if not number:
         gaps.append("audit_missing_phone")
-    if not str(contact.get("time_zone", "") or "").strip():
+    if not str(_custom_field(contact, "NIJA_APOLLO_RECIPIENT_TIMEZONE_FIELD_ID") or "").strip():
         gaps.append("audit_missing_timezone")
     if not evidence["has_consent"]:
         gaps.append("audit_missing_ai_consent")
