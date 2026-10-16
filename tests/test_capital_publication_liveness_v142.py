@@ -294,6 +294,115 @@ def test_unknown_publication_state_preserves_inflight_coordinator(monkeypatch, c
     assert "rollover_allowed=false" in caplog.text
 
 
+
+def test_live_sync_refresh_owner_preserves_coordinator_until_deadline(monkeypatch) -> None:
+    import time
+
+    from bot import capital_publication_deadline_v137_patch as v137
+
+    now = datetime.now(timezone.utc)
+    authority = SimpleNamespace(
+        get_snapshot_publication_status=lambda: SimpleNamespace(
+            accepted=True, stale=False, reason="accepted",
+            timestamp=now - timedelta(seconds=91),
+            expiry=now - timedelta(seconds=1),
+        )
+    )
+    old = SimpleNamespace(
+        _in_flight=True,
+        _nija_v142_sync_owner_thread=threading.current_thread(),
+        _nija_v142_sync_started_monotonic=time.monotonic(),
+        _nija_v142_flight_generation=None,
+    )
+    manager = SimpleNamespace(_capital_coordinator=old)
+    monkeypatch.setattr(v142, "_authority", lambda: authority)
+    monkeypatch.setattr(v142, "_runtime_pipeline_deadline_seconds", lambda: 60.0)
+    def no_rollover(*args, **kwargs):
+        raise AssertionError("live synchronous owner must not be retired before deadline")
+    monkeypatch.setattr(v142, "_rollover_coordinator", no_rollover)
+
+    assert v137._publication_meta(authority, now=now)[0] is False
+    assert v142._coordinator_in_flight_v142(manager) is True
+    assert manager._capital_coordinator is old
+
+
+def test_sync_owner_over_deadline_can_rollover_only_on_expired_publication(monkeypatch) -> None:
+    import time
+
+    from bot import capital_publication_deadline_v137_patch as v137
+
+    now = datetime.now(timezone.utc)
+    publication = SimpleNamespace(
+        accepted=True, stale=False, reason="accepted",
+        timestamp=now - timedelta(seconds=91),
+        expiry=now - timedelta(seconds=1),
+    )
+    authority = SimpleNamespace(get_snapshot_publication_status=lambda: publication)
+    old = SimpleNamespace(
+        _in_flight=True,
+        _nija_v142_sync_owner_thread=threading.current_thread(),
+        _nija_v142_sync_started_monotonic=time.monotonic() - 120.0,
+    )
+    replacement = SimpleNamespace(_in_flight=False)
+    manager = SimpleNamespace(_capital_coordinator=old)
+    monkeypatch.setattr(v142, "_authority", lambda: authority)
+    monkeypatch.setattr(v142, "_runtime_pipeline_deadline_seconds", lambda: 60.0)
+    def rollover(target, *, expected_old, reason):
+        assert expected_old is old
+        assert reason == "untracked_inflight_with_expired_publication"
+        target._capital_coordinator = replacement
+        return replacement
+    monkeypatch.setattr(v142, "_rollover_coordinator", rollover)
+
+    assert v137._publication_meta(authority, now=now)[0] is False
+    assert v142._coordinator_in_flight_v142(manager) is False
+    assert manager._capital_coordinator is replacement
+
+
+def test_live_sync_owner_tracking_is_cleared_after_original_returns(monkeypatch) -> None:
+    from bot import capital_flow_state_machine as flow
+
+    entered = threading.Event()
+    release = threading.Event()
+
+    class Coordinator:
+        def __init__(self):
+            self._lock = threading.Lock()
+            self._in_flight = False
+            self._boot = SimpleNamespace(state=SimpleNamespace(value="BOOT_IDLE"))
+
+        def execute_refresh(self, broker_map, trigger="coordinator", open_exposure_usd=0.0):
+            with self._lock:
+                self._in_flight = True
+            entered.set()
+            release.wait(timeout=2)
+            with self._lock:
+                self._in_flight = False
+            return "snapshot"
+
+    monkeypatch.setattr(flow, "CapitalRefreshCoordinator", Coordinator)
+    monkeypatch.setattr(v142, "_reassert_bounded_fetch_contract", lambda: (True, "ok"))
+    assert v142._patch_coordinator_execute()
+    coordinator = Coordinator()
+    outputs = []
+    thread = threading.Thread(
+        target=lambda: outputs.append(coordinator.execute_refresh({})),
+        name="test-sync-capital-owner",
+    )
+    thread.start()
+    try:
+        assert entered.wait(timeout=1)
+        assert coordinator._in_flight is True
+        assert coordinator._nija_v142_sync_owner_thread is thread
+        assert coordinator._nija_v142_sync_started_monotonic > 0
+    finally:
+        release.set()
+        thread.join(timeout=3)
+    assert not thread.is_alive()
+    assert outputs == ["snapshot"]
+    assert coordinator._nija_v142_sync_owner_thread is None
+
+
 def test_rollover_reuses_canonical_fsm_objects_and_hydration(monkeypatch) -> None:
     from bot import capital_flow_state_machine as flow
 
