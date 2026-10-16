@@ -135,6 +135,7 @@ def _wake_activation_after_genuine_marker(source: str) -> bool:
             decision = classify_observed_snapshot(dict(readiness_table.snapshot() or {}))
             LOGGER.info(
                 "STARTUP_READONLY_RECOVERY_DIAGNOSTIC state=%s reasons=%s "
+                "independent_attestations=unverified reason_semantics=unknown_not_confirmed_failure "
                 "allow_new_orders=false canonical_gate_unchanged=true",
                 decision.state, ",".join(decision.reasons),
             )

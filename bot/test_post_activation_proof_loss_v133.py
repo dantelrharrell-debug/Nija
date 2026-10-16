@@ -124,6 +124,10 @@ def test_false_stale_authority_is_reconciled_from_v231_without_touching_executio
     def fake_import(name):
         if name == "bot.readiness_table":
             return table
+        if name == "bot.kill_switch":
+            return types.SimpleNamespace(
+                get_kill_switch=lambda: types.SimpleNamespace(is_active=lambda: False)
+            )
         if name == "bot.runtime_authority_nonce_truth_convergence_v231_patch":
             return types.SimpleNamespace(
                 _current_writer_authority_proof=lambda: (True, "writer_authority_current")
@@ -150,6 +154,10 @@ def test_failed_v231_authority_probe_remains_fail_closed(monkeypatch):
     def fake_import(name):
         if name == "bot.readiness_table":
             return table
+        if name == "bot.kill_switch":
+            return types.SimpleNamespace(
+                get_kill_switch=lambda: types.SimpleNamespace(is_active=lambda: False)
+            )
         if name == "bot.runtime_authority_nonce_truth_convergence_v231_patch":
             return types.SimpleNamespace(
                 _current_writer_authority_proof=lambda: (False, "writer_heartbeat_stale")
