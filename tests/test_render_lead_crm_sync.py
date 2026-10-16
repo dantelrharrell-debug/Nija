@@ -411,3 +411,105 @@ def test_redis_diagnostic_captures_exception_class_only(monkeypatch, capsys):
     assert "redis_ConnectionError" in output
     assert "secret" not in output
     assert "redis.internal" not in output
+
+
+
+def test_validated_website_phone_flows_to_apollo_without_call_authorization(monkeypatch, tmp_path):
+    create_site_event(monkeypatch, tmp_path)
+    monkeypatch.setattr(sync, "_redis_client", lambda: None)
+    monkeypatch.setattr(sync, "start_worker", lambda: None)
+    assert sync.enqueue_lead(
+        {"name": "Phone QA", "email": "phone@example.com", "phone": "(425) 555-0199",
+         "communications_consent": "true"},
+        "phone-evt",
+    )
+    with sync._connect() as conn:
+        row = conn.execute(
+            "SELECT phone FROM website_lead_crm_sync WHERE event_key='phone-evt'"
+        ).fetchone()
+        assert row["phone"] == "(425) 555-0199"
+
+    sent = []
+    def request(req, timeout):
+        sent.extend(json.loads(req.data)["contacts"])
+        return FakeHTTP({
+            "created_contacts": [
+                {"id": "qa-id", "email": "qa@example.com"},
+                {"id": "phone-id", "email": "phone@example.com"},
+            ],
+            "existing_contacts": [],
+        })
+    monkeypatch.setattr(sync.urllib.request, "urlopen", request)
+    assert sync.sync_pending()["synced"] == 2
+    contact = next(c for c in sent if c["email"] == "phone@example.com")
+    assert contact["direct_phone"] == "(425) 555-0199"
+    assert set(contact) == {"first_name", "last_name", "email", "direct_phone"}
+    assert "direct_phone" not in next(c for c in sent if c["email"] == "qa@example.com")
+
+
+def test_redis_phone_is_first_event_only_and_never_stores_consent(monkeypatch, tmp_path):
+    fake = FakeRedis()
+    monkeypatch.setenv("NIJA_LEAD_DB_PATH", str(tmp_path / "redisphone.sqlite3"))
+    monkeypatch.setattr(sync, "_redis_client", lambda: fake)
+    monkeypatch.setattr(sync, "start_worker", lambda: None)
+    first = {"name": "First QA", "email": "first@example.com",
+             "phone": "+12065550123", "communications_consent": "true"}
+    assert sync.enqueue_lead(first, "evt-first-phone")
+    key = sync._redis_event_key("evt-first-phone")
+    assert fake.hget(key, "phone") == "+12065550123"
+    assert "communications_consent" not in fake.hgetall(key)
+    assert sync.enqueue_lead({**first, "phone": "+14255550199"}, "evt-first-phone")
+    assert fake.hget(key, "phone") == "+12065550123"
+
+
+def test_phone_validation_and_legacy_sqlite_migration(monkeypatch, tmp_path):
+    assert sync._validated_contact_phone("+1 (425) 555-0199") == "+1 (425) 555-0199"
+    assert sync._validated_contact_phone("<script>1234567890</script>") == ""
+    assert sync._validated_contact_phone("not a number") == ""
+    assert sync._validated_contact_phone("++12065550123") == ""
+    assert sync._validated_contact_phone("12345") == ""
+    dbpath = tmp_path / "legacy.sqlite3"
+    monkeypatch.setenv("NIJA_LEAD_DB_PATH", str(dbpath))
+    with sync._connect() as conn:
+        conn.execute(
+            "CREATE TABLE website_lead_crm_sync "
+            "(event_key TEXT PRIMARY KEY,email TEXT NOT NULL,name TEXT NOT NULL,"
+            "state TEXT NOT NULL DEFAULT 'pending',attempts INTEGER NOT NULL DEFAULT 0,"
+            "next_attempt_at REAL NOT NULL DEFAULT 0,last_error_code TEXT NOT NULL DEFAULT '',"
+            "updated_at TEXT NOT NULL)"
+        )
+        conn.execute(
+            "INSERT INTO website_lead_crm_sync "
+            "(event_key,email,name,updated_at) VALUES (?,?,?,?)",
+            ("legacy-event", "legacy@example.com", "Legacy QA", sync._now_iso()),
+        )
+        conn.commit()
+        sync._prepare(conn)
+        assert "phone" in {row["name"] for row in conn.execute(
+            "PRAGMA table_info(website_lead_crm_sync)"
+        )}
+        preserved = conn.execute(
+            "SELECT email,name,phone,state FROM website_lead_crm_sync "
+            "WHERE event_key='legacy-event'"
+        ).fetchone()
+        assert tuple(preserved) == ("legacy@example.com", "Legacy QA", "", "pending")
+
+
+def test_sqlite_phone_survives_redis_rebootstrap(monkeypatch, tmp_path):
+    create_site_event(monkeypatch, tmp_path)
+    monkeypatch.setattr(sync, "_redis_client", lambda: None)
+    monkeypatch.setattr(sync, "start_worker", lambda: None)
+    assert sync.enqueue_lead({
+        "email": "restorephone@example.com",
+        "name": "Restore Phone",
+        "phone": "+12065550123",
+    }, "evt-restored-phone")
+    with sync._connect() as conn:
+        conn.execute(
+            "INSERT INTO website_leads (event_key,email,name,received_at) VALUES (?,?,?,?)",
+            ("evt-restored-phone", "restorephone@example.com", "Restore Phone", sync._now_iso()),
+        )
+        conn.commit()
+    fake = FakeRedis()
+    assert sync._bootstrap_redis_from_sqlite(fake) >= 1
+    assert fake.hget(sync._redis_event_key("evt-restored-phone"), "phone") == "+12065550123"
