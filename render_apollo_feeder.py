@@ -613,7 +613,10 @@ def run_sync() -> dict[str, int]:
 
 def _ensure_recipient_fields() -> None:
     """Opt-in, idempotent Apollo schema migration. Never approves a contact."""
-    if not _bool(os.getenv("NIJA_APOLLO_CREATE_RECIPIENT_FIELDS", "0")):
+    if all(os.getenv(name, "").strip() for name in (
+        "NIJA_APOLLO_RECIPIENT_TIMEZONE_FIELD_ID",
+        "NIJA_APOLLO_RECIPIENT_JURISDICTION_FIELD_ID",
+    )):
         return
     definitions = (
         ("NIJA Recipient Timezone", "NIJA_APOLLO_RECIPIENT_TIMEZONE_FIELD_ID"),
