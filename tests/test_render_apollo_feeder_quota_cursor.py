@@ -137,6 +137,7 @@ def test_independent_readiness_audit_preserves_valid_evidence(monkeypatch):
         "NIJA_APOLLO_CONSENT_RECORD_FIELD_ID": "consent_record",
         "NIJA_APOLLO_LEGAL_BASIS_FIELD_ID": "legal_basis",
         "NIJA_APOLLO_RECIPIENT_JURISDICTION_FIELD_ID": "state",
+        "NIJA_APOLLO_RECIPIENT_TIMEZONE_FIELD_ID": "recipient_timezone",
     }
     for name, value in fields.items():
         monkeypatch.setenv(name, value)
@@ -149,7 +150,8 @@ def test_independent_readiness_audit_preserves_valid_evidence(monkeypatch):
         ],
         "typed_custom_fields": {
             "consent": True, "consent_record": "offline-record",
-            "legal_basis": "offline-test-basis", "state": "US-WA"
+            "legal_basis": "offline-test-basis", "state": "US-WA",
+            "recipient_timezone": "America/Los_Angeles"
         },
     }
     assert feeder._independent_readiness_gaps(contact) == ()
