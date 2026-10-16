@@ -613,6 +613,23 @@ def run_sync() -> dict[str, int]:
 
 def _ensure_recipient_fields() -> None:
     """Opt-in, idempotent Apollo schema migration. Never approves a contact."""
+    # Persist mappings in the existing durable outreach database so a restart
+    # never turns successfully created fields back into missing configuration.
+    with _connect() as connection:
+        connection.execute(
+            "CREATE TABLE IF NOT EXISTS outreach_apollo_field_mappings "
+            "(env_name TEXT PRIMARY KEY, field_id TEXT NOT NULL)"
+        )
+        saved = connection.execute(
+            "SELECT env_name, field_id FROM outreach_apollo_field_mappings"
+        ).fetchall()
+        for row in saved:
+            name = str(row["env_name"])
+            if name in (
+                "NIJA_APOLLO_RECIPIENT_TIMEZONE_FIELD_ID",
+                "NIJA_APOLLO_RECIPIENT_JURISDICTION_FIELD_ID",
+            ) and not os.getenv(name, "").strip():
+                os.environ[name] = str(row["field_id"])
     if all(os.getenv(name, "").strip() for name in (
         "NIJA_APOLLO_RECIPIENT_TIMEZONE_FIELD_ID",
         "NIJA_APOLLO_RECIPIENT_JURISDICTION_FIELD_ID",
@@ -681,6 +698,13 @@ def _ensure_recipient_fields() -> None:
             field_id = raw_id.removeprefix("contact.")
             if not field_id or not all(ch.isalnum() or ch in "-_" for ch in field_id):
                 raise ValueError("invalid_field_id")
+            with _connect() as connection:
+                connection.execute(
+                    "INSERT INTO outreach_apollo_field_mappings(env_name, field_id) "
+                    "VALUES (?, ?) ON CONFLICT(env_name) DO UPDATE SET field_id=excluded.field_id",
+                    (env_name, field_id),
+                )
+                connection.commit()
             os.environ[env_name] = field_id
             print(f"APOLLO_FIELD_MIGRATION state={action} field={env_name} id={field_id}", flush=True)
     except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError) as exc:
