@@ -611,6 +611,83 @@ def run_sync() -> dict[str, int]:
     _save_state(newest_seen, counts)
     return counts
 
+def _ensure_recipient_fields() -> None:
+    """Opt-in, idempotent Apollo schema migration. Never approves a contact."""
+    if not _bool(os.getenv("NIJA_APOLLO_CREATE_RECIPIENT_FIELDS", "0")):
+        return
+    definitions = (
+        ("NIJA Recipient Timezone", "NIJA_APOLLO_RECIPIENT_TIMEZONE_FIELD_ID"),
+        ("NIJA Recipient Jurisdiction", "NIJA_APOLLO_RECIPIENT_JURISDICTION_FIELD_ID"),
+    )
+    key = _api_key()
+    if not key:
+        print("APOLLO_FIELD_MIGRATION state=blocked reason=missing_api_key", flush=True)
+        return
+
+    def request(method: str, payload: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+        data = json.dumps(payload).encode("utf-8") if payload is not None else None
+        req = urllib.request.Request(
+            f"{APOLLO_API_BASE}/fields",
+            data=data,
+            headers={"x-api-key": key, "accept": "application/json",
+                     "content-type": "application/json"},
+            method=method,
+        )
+        with urllib.request.urlopen(req, timeout=20.0) as response:
+            result = json.loads(response.read().decode("utf-8"))
+        if not isinstance(result, dict):
+            raise ValueError("unexpected_field_response")
+        return result
+
+    try:
+        existing = request("GET").get("fields")
+        if not isinstance(existing, list):
+            raise ValueError("invalid_fields_list")
+        for label, env_name in definitions:
+            matches = [
+                field for field in existing
+                if isinstance(field, dict)
+                and field.get("label", field.get("name")) == label
+                and field.get("modality") == "contact"
+                and field.get("source", "custom") == "custom"
+                and field.get("type") in ("string", "text")
+            ]
+            if len(matches) > 1:
+                raise ValueError("ambiguous_field")
+            if matches:
+                field = matches[0]
+                action = "reused"
+            else:
+                response = request("POST", {"label": label, "modality": "contact", "type": "string"})
+                fields = response.get("typed_custom_fields") or response.get("fields")
+                if not isinstance(fields, list):
+                    raise ValueError("create_response_missing_fields")
+                matches = [
+                    item for item in fields
+                    if isinstance(item, dict)
+                    and item.get("name", item.get("label")) == label
+                    and item.get("modality") == "contact"
+                ]
+                if len(matches) != 1:
+                    raise ValueError("create_response_ambiguous")
+                field = matches[0]
+                action = "created"
+                existing.append({"label": label, "modality": "contact",
+                                 "type": "string", "source": "custom", "id": field.get("id")})
+            raw_id = str(field.get("id") or "")
+            field_id = raw_id.removeprefix("contact.")
+            if not field_id or not all(ch.isalnum() or ch in "-_" for ch in field_id):
+                raise ValueError("invalid_field_id")
+            os.environ[env_name] = field_id
+            print(f"APOLLO_FIELD_MIGRATION state={action} field={env_name} id={field_id}", flush=True)
+    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError) as exc:
+        print(
+            f"APOLLO_FIELD_MIGRATION state=blocked reason={type(exc).__name__} "
+            "contacts_unchanged=true fail_closed=true",
+            flush=True,
+        )
+
+
 def _missing_evidence_field_mappings() -> tuple[str, ...]:
     """Report configuration gaps without exposing private field IDs or contact data."""
     required = (
@@ -627,6 +704,7 @@ def _missing_evidence_field_mappings() -> tuple[str, ...]:
 
 def _worker() -> None:
     global _LAST_ERROR
+    _ensure_recipient_fields()
     if not _enabled():
         print("APOLLO_NIJA_FEEDER state=disabled fail_closed=true", flush=True)
         return
