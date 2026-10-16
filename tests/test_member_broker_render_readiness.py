@@ -21,8 +21,11 @@ REQUIRED_NAMES = (
     "NIJA_VAULT_FOUNDING_PRICE_ID",
     "NIJA_VAULT_FOUNDING_PRODUCT_ID",
     "NIJA_VAULT_INTAKE_ENABLED",
+    "NIJA_VAULT_VERIFICATION_ENABLED",
     "NIJA_MEMBER_BROKER_VAULT_RULES_VERIFIED",
     "NIJA_MEMBER_BROKER_IDENTITY_MAPPING_VERIFIED",
+    "NIJA_MEMBER_BROKER_BILLING_ENTITLEMENT_VERIFIED",
+    "NIJA_MEMBER_BROKER_KEY_CUSTODY_VERIFIED",
 )
 
 
@@ -83,7 +86,7 @@ class RenderReadinessTests(unittest.TestCase):
         data = [{"key": name} for name in REQUIRED_NAMES[:-1]]
         code, output, _ = self._run_diagnostic(data)
         self.assertEqual(code, 2)
-        self.assertIn("Missing variable names: NIJA_MEMBER_BROKER_IDENTITY_MAPPING_VERIFIED", output)
+        self.assertIn("Missing variable names: NIJA_MEMBER_BROKER_KEY_CUSTODY_VERIFIED", output)
 
     def test_api_errors_still_fail_without_disclosing_response(self):
         for status in (401, 403, 429, 500):

@@ -20,6 +20,8 @@ REQUIRED = (
 REVIEW_FLAGS = (
     "NIJA_MEMBER_BROKER_VAULT_RULES_VERIFIED",
     "NIJA_MEMBER_BROKER_IDENTITY_MAPPING_VERIFIED",
+    "NIJA_MEMBER_BROKER_BILLING_ENTITLEMENT_VERIFIED",
+    "NIJA_MEMBER_BROKER_KEY_CUSTODY_VERIFIED",
 )
 MODULES = ("flask", "requests", "cryptography", "stripe", "sqlalchemy")
 
@@ -39,6 +41,7 @@ def preflight(environ=None, import_module=None):
     return {
         "ready_for_review": not (missing or unchecked or unavailable),
         "intake_enabled": intake_enabled,
+        "verification_enabled": env.get("NIJA_VAULT_VERIFICATION_ENABLED") == "true",
         "missing_variable_names": missing,
         "unverified_gate_names": unchecked,
         "missing_dependency_names": unavailable,

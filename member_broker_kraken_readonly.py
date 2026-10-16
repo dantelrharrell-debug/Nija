@@ -30,6 +30,8 @@ def verify_kraken_readonly(api_key: str, api_secret: str, *, session=None, nonce
     encoded = urlencode({"nonce": n})
     try:
         secret = base64.b64decode(api_secret, validate=True)
+        if not secret:
+            raise KrakenVerificationError("Kraken verification unavailable")
         digest = hashlib.sha256((n + encoded).encode("utf-8")).digest()
         signature = base64.b64encode(hmac.new(
             secret, path.encode("ascii") + digest, hashlib.sha512

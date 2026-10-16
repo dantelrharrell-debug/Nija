@@ -1,7 +1,7 @@
 """Isolated, disabled-by-default NIJA member broker credential intake API.
 
-Deploy as an independent service, never in the trading runtime. This service
-does not submit broker orders or claim to verify exchange connectivity.
+Deploy as an independent service, never in the trading runtime. Kraken verification
+is read-only authentication, never order submission or trading authorization.
 """
 from __future__ import annotations
 
@@ -12,6 +12,26 @@ from werkzeug.exceptions import BadRequest
 from member_broker_vault import BrokerVault, VaultError
 from member_broker_onboarding import MemberBrokerOnboarding
 from member_broker_entitlement import trusted_founding_entitlement
+from member_broker_kraken_readonly import KrakenVerificationError
+
+
+REVIEW_FLAGS = (
+    "NIJA_MEMBER_BROKER_VAULT_RULES_VERIFIED",
+    "NIJA_MEMBER_BROKER_IDENTITY_MAPPING_VERIFIED",
+    "NIJA_MEMBER_BROKER_BILLING_ENTITLEMENT_VERIFIED",
+    "NIJA_MEMBER_BROKER_KEY_CUSTODY_VERIFIED",
+)
+BILLING_SETTINGS = (
+    "NIJA_VAULT_BILLING_READONLY_URL", "NIJA_VAULT_STRIPE_READONLY_KEY",
+    "NIJA_VAULT_FOUNDING_PRICE_ID", "NIJA_VAULT_FOUNDING_PRODUCT_ID",
+)
+
+
+def _reviewed_configuration() -> bool:
+    return (
+        all(os.environ.get(name) == "true" for name in REVIEW_FLAGS)
+        and all(os.environ.get(name, "").strip() for name in BILLING_SETTINGS)
+    )
 
 
 def create_app(*, onboarding: MemberBrokerOnboarding | None = None) -> Flask:
@@ -29,8 +49,11 @@ def create_app(*, onboarding: MemberBrokerOnboarding | None = None) -> Flask:
             onboarding = MemberBrokerOnboarding(
                 vault, secret_intake_enabled=(
                     os.environ.get("NIJA_VAULT_INTAKE_ENABLED", "") == "true"
-                    and os.environ.get("NIJA_MEMBER_BROKER_VAULT_RULES_VERIFIED", "") == "true"
-                    and os.environ.get("NIJA_MEMBER_BROKER_IDENTITY_MAPPING_VERIFIED", "") == "true"
+                    and _reviewed_configuration()
+                ),
+                verification_enabled=(
+                    os.environ.get("NIJA_VAULT_VERIFICATION_ENABLED", "") == "true"
+                    and _reviewed_configuration()
                 ),
             )
         except (KeyError, VaultError, ValueError):
@@ -58,18 +81,15 @@ def create_app(*, onboarding: MemberBrokerOnboarding | None = None) -> Flask:
     def readiness():
         # Health is process liveness; readiness requires configured vault and
         # trusted entitlement backend. Never disclose missing secret names.
-        if (onboarding is None or not getattr(onboarding, "_secret_intake_enabled", False)
-                or os.environ.get("NIJA_MEMBER_BROKER_VAULT_RULES_VERIFIED") != "true"
-                or os.environ.get("NIJA_MEMBER_BROKER_IDENTITY_MAPPING_VERIFIED") != "true"
-                or not os.environ.get("NIJA_VAULT_BILLING_READONLY_URL", "").strip()
-                or not os.environ.get("NIJA_VAULT_STRIPE_READONLY_KEY", "").strip()
-                or not os.environ.get("NIJA_VAULT_FOUNDING_PRICE_ID", "").strip()
-                or not os.environ.get("NIJA_VAULT_FOUNDING_PRODUCT_ID", "").strip()):
+        if (onboarding is None or not _reviewed_configuration()
+                or not (onboarding.secret_intake_enabled or onboarding.verification_enabled)):
             return jsonify({"status": "not_ready"}), 503
-        return jsonify({"status": "ready"}), 200
+        return jsonify({"status": "ready", "credential_intake_enabled": onboarding.secret_intake_enabled,
+                        "verification_enabled": onboarding.verification_enabled}), 200
 
     @app.route("/api/member/brokers", methods=["GET", "OPTIONS"])
     @app.route("/api/member/brokers/connect", methods=["POST", "OPTIONS"])
+    @app.route("/api/member/brokers/verify", methods=["POST", "OPTIONS"])
     def members():
         if request.method == "OPTIONS":
             return ("", 204) if request.headers.get("Origin") in allowed else ("", 403)
@@ -92,6 +112,16 @@ def create_app(*, onboarding: MemberBrokerOnboarding | None = None) -> Flask:
             if request.mimetype != "application/json":
                 return jsonify({"error": "json_required"}), 415
             payload = request.get_json(silent=False)
+            if request.path == "/api/member/brokers/verify":
+                if not isinstance(payload, dict) or set(payload) != {"broker", "environment"}:
+                    return jsonify({"error": "invalid_request"}), 400
+                result = onboarding.verify(auth[1], payload["broker"], payload["environment"])
+                return jsonify({
+                    "broker": result.broker, "environment": result.environment,
+                    "credentials_stored": result.credentials_stored,
+                    "broker_verified": result.broker_verified,
+                    "membership_access": True, "trading_authorized": False,
+                })
             if not isinstance(payload, dict) or set(payload) != {
                 "broker", "environment", "credentials"
             }:
@@ -102,6 +132,9 @@ def create_app(*, onboarding: MemberBrokerOnboarding | None = None) -> Flask:
             return jsonify({"broker": result.broker, "environment": result.environment,
                             "credentials_stored": result.credentials_stored,
                             "broker_verified": False, "trading_authorized": False}), 201
+        except KrakenVerificationError:
+            return jsonify({"error": "broker_verification_unavailable", "broker_verified": False,
+                            "trading_authorized": False}), 502
         except (VaultError, BadRequest, TypeError, ValueError, KeyError):
             # Do not echo provider errors, token or any submitted credentials.
             return jsonify({"error": "broker_connection_unavailable_or_denied"}), 403

@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import Mapping
 
 from member_broker_vault import BrokerVault, VaultError
+from member_broker_kraken_readonly import verify_kraken_readonly
 
 _ALLOWED_FIELDS = {
     "kraken": frozenset({"api_key", "api_secret"}),
@@ -37,11 +38,45 @@ class ConnectionStatus:
 
 
 class MemberBrokerOnboarding:
-    def __init__(self, vault: BrokerVault, *, secret_intake_enabled: bool = False):
+    def __init__(
+        self, vault: BrokerVault, *, secret_intake_enabled: bool = False,
+        verification_enabled: bool = False,
+    ):
         self._vault = vault
         # Set only by trusted deployment configuration after independent review
         # of PocketBase ACL, subscription checks, and key custody.
         self._secret_intake_enabled = secret_intake_enabled is True
+        self._verification_enabled = verification_enabled is True
+
+    @property
+    def secret_intake_enabled(self) -> bool:
+        """Whether independently reviewed deployment permits new credential intake."""
+        return self._secret_intake_enabled
+
+    @property
+    def verification_enabled(self) -> bool:
+        """Whether independently reviewed deployment permits stored-key verification."""
+        return self._verification_enabled
+
+    def verify(self, member_token: str, broker: str, environment: str) -> ConnectionStatus:
+        """Check stored Kraken authentication only; never grant execution authority."""
+        if not self._verification_enabled:
+            raise VaultError("Broker verification is not enabled")
+        # Kraken Balance authenticates the real account, not a simulated paper account.
+        if broker != "kraken" or environment != "live":
+            raise VaultError("Unsupported verification scope")
+        credentials = self._vault.retrieve_credentials(member_token, broker, environment)
+        try:
+            if (set(credentials) != _ALLOWED_FIELDS[broker]
+                    or any(not isinstance(value, str) or not value.strip() or len(value) > 4096
+                           for value in credentials.values())):
+                raise VaultError("Invalid stored broker credential fields")
+            verified = verify_kraken_readonly(credentials["api_key"], credentials["api_secret"])
+            if verified is not True:
+                raise VaultError("Broker verification unavailable")
+            return ConnectionStatus(broker, environment, credentials_stored=True, broker_verified=True)
+        finally:
+            credentials.clear()
 
     def connections(self, member_token: str) -> list[ConnectionStatus]:
         # Vault checks server-authenticated identity and subscription on each call.

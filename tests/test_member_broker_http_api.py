@@ -51,6 +51,8 @@ class MemberHTTPTests(unittest.TestCase):
             "NIJA_VAULT_FOUNDING_PRODUCT_ID": "prod_test",
             "NIJA_MEMBER_BROKER_VAULT_RULES_VERIFIED": "true",
             "NIJA_MEMBER_BROKER_IDENTITY_MAPPING_VERIFIED": "true",
+            "NIJA_MEMBER_BROKER_BILLING_ENTITLEMENT_VERIFIED": "true",
+            "NIJA_MEMBER_BROKER_KEY_CUSTODY_VERIFIED": "true",
         }
         with patch.dict("os.environ", required):
             self.assertEqual(app.test_client().get("/readyz").status_code, 200)
@@ -68,11 +70,15 @@ class MemberHTTPTests(unittest.TestCase):
             "NIJA_VAULT_FOUNDING_PRODUCT_ID": "prod_test",
             "NIJA_MEMBER_BROKER_VAULT_RULES_VERIFIED": "true",
             "NIJA_MEMBER_BROKER_IDENTITY_MAPPING_VERIFIED": "true",
+            "NIJA_MEMBER_BROKER_BILLING_ENTITLEMENT_VERIFIED": "true",
+            "NIJA_MEMBER_BROKER_KEY_CUSTODY_VERIFIED": "true",
         }
         with patch.dict("os.environ", configured):
             self.assertEqual(app.test_client().get("/readyz").status_code, 200)
             for name in ("NIJA_MEMBER_BROKER_VAULT_RULES_VERIFIED",
-                         "NIJA_MEMBER_BROKER_IDENTITY_MAPPING_VERIFIED"):
+                         "NIJA_MEMBER_BROKER_IDENTITY_MAPPING_VERIFIED",
+                         "NIJA_MEMBER_BROKER_BILLING_ENTITLEMENT_VERIFIED",
+                         "NIJA_MEMBER_BROKER_KEY_CUSTODY_VERIFIED"):
                 for value in ("", "false", "TRUE"):
                     with patch.dict("os.environ", {name: value}):
                         self.assertEqual(app.test_client().get("/readyz").status_code, 503)
