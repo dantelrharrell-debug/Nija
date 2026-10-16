@@ -50,6 +50,25 @@ def _state_value(sm: Any | None = None) -> str:
         return "UNAVAILABLE"
 
 
+def _kill_switch_verified_clear() -> bool:
+    """An independent live stop check is required before repairing authority.
+
+    A writer lease alone cannot prove that execution is permitted while an
+    operator or emergency kill switch is active. Missing/invalid stop evidence
+    fails closed and leaves the original false authority proof unchanged.
+    """
+    try:
+        switch = importlib.import_module("bot.kill_switch").get_kill_switch()
+        return switch.is_active() is False
+    except Exception as exc:
+        LOGGER.warning(
+            "AUTHORITY_V133_KILL_SWITCH_UNVERIFIED marker=%s error=%s fail_closed=true",
+            MARKER,
+            type(exc).__name__,
+        )
+        return False
+
+
 def _reconcile_current_authority_proof(proofs: dict[str, bool]) -> dict[str, bool]:
     """Repair only stale authority snapshots from the canonical v231 proof.
 
@@ -59,7 +78,9 @@ def _reconcile_current_authority_proof(proofs: dict[str, bool]) -> dict[str, boo
     healthy.  Re-probe only that one key; all other proofs remain untouched.
     """
     current = dict(proofs or {})
-    if bool(current.get("authority_ready", False)):
+    if current.get("authority_ready") is True:
+        return current
+    if not _kill_switch_verified_clear():
         return current
     try:
         v231 = importlib.import_module("bot.runtime_authority_nonce_truth_convergence_v231_patch")
@@ -67,7 +88,7 @@ def _reconcile_current_authority_proof(proofs: dict[str, bool]) -> dict[str, boo
         if not callable(probe):
             return current
         ready, detail = probe()
-        if bool(ready):
+        if ready is True:
             current["authority_ready"] = True
             LOGGER.info(
                 "AUTHORITY_V133_V231_RECONCILED marker=%s detail=%s "
@@ -75,8 +96,8 @@ def _reconcile_current_authority_proof(proofs: dict[str, bool]) -> dict[str, boo
                 "nonce_ready_unchanged=%s proof_fabricated=false",
                 MARKER,
                 str(detail or "current_writer_authority"),
-                str(bool(current.get("execution_ready", False))).lower(),
-                str(bool(current.get("nonce_ready", False))).lower(),
+                str(current.get("execution_ready") is True).lower(),
+                str(current.get("nonce_ready") is True).lower(),
             )
     except Exception as exc:
         LOGGER.debug(
@@ -90,12 +111,12 @@ def _revoke_false_readiness(proofs: dict[str, bool]) -> tuple[dict[str, bool], l
     proofs = _reconcile_current_authority_proof(proofs)
     table = importlib.import_module("bot.readiness_table")
     for key in _CRITICAL_KEYS:
-        if bool(proofs.get(key, False)):
+        if proofs.get(key) is True:
             table.mark_ready(key)
         else:
             table.revoke_ready(key, reason="v133_current_proof_false")
     after = dict(table.snapshot())
-    pending = [key for key in _CRITICAL_KEYS if not bool(proofs.get(key, False))]
+    pending = [key for key in _CRITICAL_KEYS if proofs.get(key) is not True or after.get(key) is not True]
     os.environ["NIJA_PREACTIVATION_READINESS_V16_READY"] = "1" if not pending else "0"
     return after, pending
 
