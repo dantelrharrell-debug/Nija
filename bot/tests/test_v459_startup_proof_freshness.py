@@ -63,3 +63,23 @@ def test_float_rejects_nonfinite_values():
     assert v16._float("nan", 42.0) == 42.0
     assert v16._float("inf", 42.0) == 42.0
     assert v16._float("1e9999", 42.0) == 42.0
+
+
+def test_stale_capital_handoff_is_rejected(monkeypatch):
+    monkeypatch.setattr(v16.time, "time", lambda: 1000.0)
+    _capital(monkeypatch, 900.0)
+    assert v16._fresh_capital_handoff() is None
+
+
+def test_writer_heartbeat_tolerates_small_clock_skew(monkeypatch):
+    monkeypatch.setattr(v16.time, "time", lambda: 1000.0)
+    monkeypatch.setenv("NIJA_WRITER_HEARTBEAT_ACTIVE", "1")
+    monkeypatch.setenv("NIJA_WRITER_HEARTBEAT_ALIVE_TS", "1002")
+    assert v16._heartbeat_ready()[0] is True
+
+
+def test_stale_writer_heartbeat_is_rejected(monkeypatch):
+    monkeypatch.setattr(v16.time, "time", lambda: 1000.0)
+    monkeypatch.setenv("NIJA_WRITER_HEARTBEAT_ACTIVE", "1")
+    monkeypatch.setenv("NIJA_WRITER_HEARTBEAT_ALIVE_TS", "850")
+    assert v16._heartbeat_ready()[0] is False
