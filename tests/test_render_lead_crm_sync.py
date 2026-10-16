@@ -478,11 +478,21 @@ def test_phone_validation_and_legacy_sqlite_migration(monkeypatch, tmp_path):
             "next_attempt_at REAL NOT NULL DEFAULT 0,last_error_code TEXT NOT NULL DEFAULT '',"
             "updated_at TEXT NOT NULL)"
         )
+        conn.execute(
+            "INSERT INTO website_lead_crm_sync "
+            "(event_key,email,name,updated_at) VALUES (?,?,?,?)",
+            ("legacy-event", "legacy@example.com", "Legacy QA", sync._now_iso()),
+        )
         conn.commit()
         sync._prepare(conn)
         assert "phone" in {row["name"] for row in conn.execute(
             "PRAGMA table_info(website_lead_crm_sync)"
         )}
+        preserved = conn.execute(
+            "SELECT email,name,phone,state FROM website_lead_crm_sync "
+            "WHERE event_key='legacy-event'"
+        ).fetchone()
+        assert tuple(preserved) == ("legacy@example.com", "Legacy QA", "", "pending")
 
 
 def test_sqlite_phone_survives_redis_rebootstrap(monkeypatch, tmp_path):
