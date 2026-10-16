@@ -96,3 +96,12 @@ def test_provider_transfer_evidence_does_not_attest_human_identity(monkeypatch):
     assert result["provider_transfer_evidence"] is True
     assert result["human_identity_independently_verified"] is False
     assert audit.os.getenv("NIJA_JUSTCALL_HUMAN_HANDOFF_VERIFIED") == "0"
+
+
+def test_malformed_selected_agent_id_fails_closed_without_provider_call(monkeypatch):
+    monkeypatch.setenv("JUSTCALL_AI_AGENT_ID", "agent_abc/../../unsafe")
+    with mock.patch.object(audit, "_provider_request") as provider:
+        result = audit.audit_recent_handoff()
+    assert result["state"] == "unverified"
+    assert result["reason"] == "selected_agent_id_missing_or_invalid"
+    provider.assert_not_called()
