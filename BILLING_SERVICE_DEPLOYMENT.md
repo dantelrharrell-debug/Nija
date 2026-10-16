@@ -10,6 +10,168 @@ broker execution state as the billing system of record.
 The service grants no broker execution authority.  Trading safety and protected
 entry/exit gates remain independent.
 
+## Founding 100 transactional onboarding (release gated)
+
+The standalone service can host the Founding 100 outbox independently of Stripe
+webhook processing. **This is not evidence of a live rollout.** Issue #3081 must
+remain open until the upstream approved-member hookup, security review, current
+CI, deployment, staging and real-recipient acceptance evidence are recorded.
+Email acceptance/delivery never activates a member or authorizes trading.
+
+### Storage and provider prerequisites
+
+Set server secrets/configuration on the billing host, not in the browser, Zapier
+form data, source control, or email:
+
+```text
+NIJA_ONBOARDING_DB_PATH=/var/lib/nija-onboarding/outbox.sqlite3
+NIJA_ONBOARDING_IDENTITY_SECRET=<dedicated lifecycle/status assertion secret>
+NIJA_ONBOARDING_OPERATOR_SECRET=<separate operator assertion secret>
+RESEND_API_KEY=<existing transactional provider server credential>
+RESEND_ONBOARDING_WEBHOOK_SECRET=<Resend Svix whsec_ signing secret>
+NIJA_ONBOARDING_SENDER=support@nijaaitrading.com
+NIJA_ONBOARDING_DOMAIN_VERIFIED=true
+NIJA_ONBOARDING_SEND_MODE=disabled
+NIJA_ONBOARDING_TEST_RECIPIENTS=<controlled verified recipient only>
+```
+
+Mount `/var/lib/nija-onboarding` on a **durable local volume**, readable/writable
+only by the service account. The outbox contains personal email data: restrict
+access, encrypt the volume/backups, and apply the customer-data retention policy.
+Back up and restore the SQLite database consistently; never run with an ephemeral
+container filesystem. All web/worker processes must use the **same database
+file on one host** (no separate per-service volumes or network-filesystem SQLite).
+If the host cannot share a local volume between processes, use the scheduled
+authenticated work endpoint on that web service instead of a separate worker
+service. Horizontal/multi-host deployment needs a shared-SQL outbox migration
+first. The absolute path is mandatory; no configured path means no onboarding
+routes. Startup serializes schema migration and preserves old invitations.
+
+Verify SPF, DKIM and DMARC for `nijaaitrading.com` and Resend domain verification
+before setting `NIJA_ONBOARDING_DOMAIN_VERIFIED=true`; this flag is an operator
+attestation, not an automated DNS test. Sender is restricted to that domain.
+Register the deployed HTTPS `/api/onboarding/resend/webhook` in Resend for
+`email.sent`, `email.delivered`, `email.bounced`, `email.complained`, `email.failed`
+and `email.delivery_delayed`. The route verifies raw-body Svix v1 signatures,
+timestamp tolerance (300 seconds) and accepts key-rotation signature lists.
+Never proxy/re-encode the signed JSON body. Synchronize the host clock.
+
+### Authoritative lifecycle hookup
+
+The approved application/identity server must call `POST /api/onboarding/events`
+**after committing** its authoritative state. Use a durable upstream event
+dispatcher and retry until HTTP 202; the outbox atomically saves the identity
+binding and event-specific mail. This repository does not establish approval or
+email ownership from Stripe, Gmail, a browser form, or Zapier. Deploying the
+receiver alone does not complete this upstream integration.
+
+Use a short-lived (at most 300 seconds) HS256 bearer assertion signed with
+`NIJA_ONBOARDING_IDENTITY_SECRET`, with:
+
+```text
+iss=nija-identity
+aud=nija-onboarding-events
+sub=<immutable NIJA owner ID, same owner as the existing billing ledger>
+application_id=<immutable approved-application ID>
+email=<canonical identity-provider verified email>
+email_verified=true
+event_type=application.received | enrollment.approved | identity.registered
+approved=true  (required for enrollment.approved)
+iat=<now>
+exp=<now + at most 300 seconds>
+```
+
+Only the identity server holding independent approval and mailbox-verification
+proof may mint these assertions. Do not share that signing secret with Zapier or
+the browser. JSON body flags are ignored. Unverified receipt addresses are not
+mailed: persist them upstream and emit the receipt only after ownership proof.
+Approval queues a separate invitation; registration updates identity state only.
+Stable application + event keys survive Stripe replays, Zapier retries, repeated
+approval assertions and process restarts. Email/owner changes fail closed for
+manual verified reconciliation; a resend cannot retarget an existing event.
+
+`GET /api/onboarding/status` requires a separate assertion audience
+`nija-onboarding-status` for the authenticated owner's `sub`. Proxy this from
+the authenticated member server; never mint a status assertion from a submitted
+email. It reports `queued`, `accepted`, `delivered`, or `failed` per message
+(`suppressed` is separately identified), plus approval, registration and
+entitlement-link status. Billing is read only by immutable owner ID. A checkout
+email difference returns `identity_reconciliation_required`, not a new checkout
+or an email-based subscription attachment. Establish proof of both identities
+in the authoritative identity/billing system before reconciling; this mail API
+cannot perform that reconciliation. Existing trials, subscriptions and dates
+are not changed. `broker_connection_ready` and `member_activated` remain false
+with `requires_independent_authenticated_readiness` until a separately tested
+authoritative readiness integration exists. Do not treat them as mail statuses.
+The templates offer register/login and official brokerage choices, no checkout,
+and prohibit emailing secrets or entering keys before production-tested secure
+credential intake. This change does not enable credential intake.
+
+### Durable worker, alerts and recovery
+
+On the same host/volume, supervise and automatically restart:
+
+```text
+flask --app billing_service onboarding-worker
+```
+
+It processes bounded batches every 30 seconds; `--once` runs one batch. Alternatively
+schedule `POST /api/onboarding/operator/work` every 30 seconds from an external
+supervisor. Both paths enforce `disabled` (default), `controlled` (only explicit
+test recipients), or `enabled` send mode and verified sender/provider prerequisites.
+Do not start the continuous worker in disabled mode. A persistent queue without
+a supervised worker/scheduler and external monitoring is **not production ready**.
+
+Operator endpoints require HS256 assertions with `iss=nija-identity`,
+`aud=nija-onboarding-operator`, operator `sub`, `scope=onboarding:operate`,
+`iat`, and `exp` at most 300 seconds later, using the separate operator secret.
+Monitor authenticated `GET /api/onboarding/operator/alerts` every minute from
+outside the worker host; **page on HTTP 503, missing response, or authentication
+failure**. It returns durable dead-letter/bounce/complaint/delay alerts and creates
+an alert if queued or accepted mail has no delivery proof after one hour. Route
+`nija.onboarding` error logs to the on-call destination too. Verify an actual
+page is received, not merely that the API returns JSON.
+
+Transient network/408/429 errors retry with exponential backoff; permanent 4xx
+or eight failed attempts dead-letter. Resend acceptance is not delivery.
+Webhooks arriving before the send response are persisted for reconciliation;
+bounces/complaints suppress the address across all current and future events
+and can never be overwritten by delivered events.
+
+After fixing a transient configuration/provider problem, an operator may
+`POST /api/onboarding/operator/redrive` with JSON `{"key":"<alert message key>"}`.
+Re-drive retains the identical provider key/payload and never clears a
+suppressed address. Resend's idempotency retention is 24 hours: at 23 hours from
+the first attempt, ambiguous sends fail closed with `reconcile_before_redrive`.
+Legacy in-flight/retry rows without first-attempt proof also fail closed.
+For these cases, inspect Resend's records by the message key and recover delivery
+evidence through signed events; do not delete/requeue rows or mint a fresh event
+to force a resend. Cases lacking provider proof require a separately audited
+manual reconciliation, not an automatic retry. Keep the alert open until resolved.
+
+### Required acceptance evidence (not yet performed here)
+
+1. Record approved-member source owner, durable upstream dispatcher and immutable
+   owner mapping; confirm an actual approved+verified event reaches the receiver.
+2. Record security review and current-head CI URLs. Local mocked tests and the
+   historical #3082 CI checkpoint are not deployment or delivery evidence.
+3. In staging, use `controlled` mode and record event/message/provider IDs.
+   Exercise sign-up, registered member, mismatched checkout email, replay,
+   outage/backoff/crashed lease, bounce/complaint, stale/invalid signatures,
+   missing-delivery page and safe operator re-drive. Verify no trial, billing,
+   checkout, broker credentials or trading state changed.
+4. Deploy the durable store, signed webhook, supervisor and external alert monitor.
+   Record release SHA, host/volume/backup evidence, verified domain and alert page.
+5. In production `controlled` mode, send to a consenting verified recipient.
+   Record signed `email.delivered` plus the recipient's actual inbox confirmation,
+   correct register/login links, authenticated registration and owner-bound
+   entitlement linkage separately. Test email mismatch with verified identity
+   proof without creating another subscription. Do not include personal addresses,
+   assertion tokens or secrets in public acceptance records.
+6. Only after those gates pass, authorize `enabled` mode. Record rollback to
+   `disabled` and verify it stops submissions without discarding queued records.
+   Do not close #3081 or claim activation/live readiness while any gate is pending.
+
 ## Required runtime
 
 Start command:

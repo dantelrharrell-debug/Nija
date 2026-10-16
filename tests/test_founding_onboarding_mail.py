@@ -103,4 +103,92 @@ class InvitationTests(unittest.TestCase):
     def test_no_api_key_instructions(self):
         self.assertIn("Do not enter keys",invitation_body())
 
+    def test_bounce_suppresses_future_events_and_cannot_be_delivered(self):
+        key = self.outbox.enqueue("a1", "user@example.com", approved=True, verified=True)
+        with self.outbox.connect() as db:
+            db.execute("UPDATE onboarding_mail SET status='accepted',provider_id='mail1' WHERE key=?", (key,))
+        self.outbox.record_provider_event("mail1", "email.bounced")
+        self.outbox.record_provider_event("mail1", "email.delivered")
+        second = self.outbox.enqueue("a2", "user@example.com", approved=True, verified=True)
+        opener = Mock()
+        self.assertEqual(self.outbox.send(second, sender="support@nijaaitrading.com",
+                                         api_key="fake", opener=opener), "suppressed")
+        opener.assert_not_called()
+        with self.outbox.connect() as db:
+            self.assertEqual(db.execute("SELECT status FROM onboarding_mail WHERE key=?", (key,)).fetchone()[0],
+                             "suppressed")
+        self.assertEqual(self.outbox.alerts()[0]["reason"], "email.bounced")
+
+    def test_early_webhook_survives_response_race(self):
+        key = self.outbox.enqueue("a1", "user@example.com", approved=True, verified=True)
+        self.outbox.record_provider_event("early", "email.delivered")
+        response = Mock()
+        response.read.return_value = b'{"id":"early"}'
+        self.assertEqual(self.outbox.send(key, sender="support@nijaaitrading.com", api_key="fake",
+                                         opener=Mock(return_value=response)), "delivered")
+
+    def test_late_acceptance_does_not_overwrite_bounce(self):
+        key = self.outbox.enqueue("a1", "user@example.com", approved=True, verified=True)
+
+        def respond(*args, **kwargs):
+            self.outbox.record_provider_event("early", "email.bounced")
+            response = Mock()
+            response.read.return_value = b'{"id":"early"}'
+            return response
+
+        self.assertEqual(self.outbox.send(key, sender="support@nijaaitrading.com", api_key="fake",
+                                         opener=respond), "suppressed")
+
+    def test_redrive_preserves_key_and_refuses_expired_provider_window(self):
+        key = self.outbox.enqueue("a1", "user@example.com", approved=True, verified=True)
+        err = OSError()
+        err.code = 403
+        self.outbox.send(key, sender="support@nijaaitrading.com", api_key="fake",
+                         opener=Mock(side_effect=err), now=1000)
+        self.outbox.redrive(key, now=1100)
+        self.assertEqual(self.outbox.due_keys(now=1100), [key])
+        self.outbox.send(key, sender="support@nijaaitrading.com", api_key="fake",
+                         opener=Mock(side_effect=err), now=1100)
+        with self.assertRaises(ValueError):
+            self.outbox.redrive(key, now=1000 + 24 * 3600)
+
+    def test_retry_after_provider_idempotency_expiry_never_resubmits(self):
+        key = self.outbox.enqueue("a1", "user@example.com", approved=True, verified=True)
+        opener = Mock(side_effect=OSError())
+        args = dict(sender="support@nijaaitrading.com", api_key="fake", opener=opener)
+        self.outbox.send(key, now=1000, **args)
+        self.assertEqual(self.outbox.send(key, now=1000 + 24 * 3600, **args), "failed")
+        opener.assert_called_once()
+        self.assertEqual(self.outbox.alerts()[0]["reason"], "reconcile_before_redrive")
+
+    def test_sustained_outage_and_missing_delivery_alert(self):
+        key = self.outbox.enqueue("a1", "user@example.com", approved=True, verified=True)
+        with self.outbox.connect() as db:
+            db.execute("UPDATE onboarding_mail SET created_at=1000 WHERE key=?", (key,))
+        self.assertEqual(self.outbox.alerts(now=4599), [])
+        self.assertEqual(self.outbox.alerts(now=4600)[0]["key"], key)
+        response = Mock()
+        response.read.return_value = b'{"id":"accepted"}'
+        self.outbox.send(key, sender="support@nijaaitrading.com", api_key="fake",
+                         opener=Mock(return_value=response), now=4600)
+        self.outbox.record_provider_event("accepted", "email.delivered")
+        self.assertEqual(self.outbox.alerts(now=9000), [])
+
+    def test_retry_exhaustion_dead_letters_with_actionable_alert(self):
+        key = self.outbox.enqueue("a1", "user@example.com", approved=True, verified=True)
+        with self.outbox.connect() as db:
+            db.execute("UPDATE onboarding_mail SET attempts=7,first_attempt_at=1000 WHERE key=?", (key,))
+        self.assertEqual(self.outbox.send(key, sender="support@nijaaitrading.com", api_key="fake",
+                                         opener=Mock(side_effect=OSError()), now=2000), "failed")
+        self.assertEqual(self.outbox.alerts()[0]["key"], key)
+
+    def test_legacy_ambiguous_retry_fails_closed(self):
+        key = self.outbox.enqueue("a1", "user@example.com", approved=True, verified=True)
+        with self.outbox.connect() as db:
+            db.execute("UPDATE onboarding_mail SET attempts=1,status='retry' WHERE key=?", (key,))
+        opener = Mock()
+        self.assertEqual(self.outbox.send(key, sender="support@nijaaitrading.com",
+                                         api_key="fake", opener=opener), "failed")
+        opener.assert_not_called()
+
 if __name__=="__main__": unittest.main()

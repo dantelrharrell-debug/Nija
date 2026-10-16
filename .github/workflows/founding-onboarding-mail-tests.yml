@@ -3,7 +3,10 @@ on:
   pull_request:
     paths:
       - 'founding_onboarding_mail.py'
-      - 'tests/test_founding_onboarding_mail.py'
+      - 'founding_onboarding_api.py'
+      - 'billing_service.py'
+      - 'requirements-billing.txt'
+      - 'tests/test_founding_onboarding_*.py'
       - '.github/workflows/founding-onboarding-mail-tests.yml'
   workflow_dispatch:
 jobs:
@@ -17,4 +20,8 @@ jobs:
         with:
           python-version: '3.11'
       - name: Test invitation safety and deduplication
-        run: python -m unittest discover -s tests -p 'test_founding_onboarding_mail.py' -v
+        env:
+          NIJA_DEFER_RUNTIME_SITE_HOOKS: "1"
+        run: |
+          pip install -r requirements-billing.txt
+          python -m unittest discover -s tests -p 'test_founding_onboarding_*.py' -v
