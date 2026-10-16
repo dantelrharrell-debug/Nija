@@ -98,8 +98,9 @@ def _candidate(call: dict[str, Any]) -> bool:
 def audit_recent_handoff(now_utc: datetime | None = None) -> dict[str, Any]:
     now_utc = now_utc or datetime.now(timezone.utc)
     agent_id = os.getenv("JUSTCALL_AI_AGENT_ID", "").strip()
-    if not agent_id.startswith("agent_"):
-        return {"state": "unverified", "reason": "selected_agent_id_missing"}
+    from render_outreach_routes import _AGENT_ID_RE
+    if not _AGENT_ID_RE.fullmatch(agent_id):
+        return {"state": "unverified", "reason": "selected_agent_id_missing_or_invalid"}
     from_date = (now_utc - timedelta(days=3)).date().isoformat()
     scanned = 0
     candidates = 0
