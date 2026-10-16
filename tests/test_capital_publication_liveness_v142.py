@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import threading
+import time
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -168,6 +169,108 @@ def test_untracked_rollover_emits_ownership_diagnostic_without_changing_gate(mon
     assert "flight_thread_present=False" in caplog.text
     assert "safe_fail_closed=true" in caplog.text
 
+
+
+
+def test_live_synchronous_refresh_owner_prevents_premature_rollover(monkeypatch) -> None:
+    """An active preterminal refresh is not an untracked ownerless worker."""
+    from bot import capital_flow_state_machine as flow
+
+    entered = threading.Event()
+    release = threading.Event()
+    errors: list[BaseException] = []
+
+    def slow_original(self, broker_map, trigger="coordinator", open_exposure_usd=0.0):
+        with self._lock:
+            self._in_flight = True
+        entered.set()
+        try:
+            assert release.wait(timeout=5.0)
+            return "completed"
+        finally:
+            with self._lock:
+                self._in_flight = False
+
+    monkeypatch.setattr(flow.CapitalRefreshCoordinator, "execute_refresh", slow_original)
+    monkeypatch.setattr(v142, "_runtime_terminal", lambda _: False)
+    monkeypatch.setattr(v142, "_reassert_bounded_fetch_contract", lambda: (True, "verified"))
+    monkeypatch.setattr(v142, "_runtime_pipeline_deadline_seconds", lambda: 80.0)
+    monkeypatch.setattr(
+        v142,
+        "_authority",
+        lambda: (_ for _ in ()).throw(AssertionError("active owner must not probe stale publication")),
+    )
+    monkeypatch.setattr(
+        v142,
+        "_rollover_coordinator",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("owner still alive")),
+    )
+
+    coordinator = flow.CapitalRefreshCoordinator(
+        flow.get_capital_event_bus(),
+        flow.get_capital_bootstrap_fsm(),
+        flow.get_capital_runtime_fsm(),
+    )
+    manager = SimpleNamespace(_capital_coordinator=coordinator)
+    assert v142._patch_coordinator_execute()
+
+    def run() -> None:
+        try:
+            assert coordinator.execute_refresh({}, trigger="startup_test") == "completed"
+        except BaseException as exc:
+            errors.append(exc)
+
+    worker = threading.Thread(target=run, daemon=True)
+    worker.start()
+    try:
+        assert entered.wait(timeout=5.0)
+        assert getattr(coordinator, "_nija_v142_sync_owner_thread") is worker
+        assert getattr(coordinator, "_nija_v142_sync_trigger") == "startup_test"
+        assert v142._coordinator_in_flight_v142(manager) is True
+        assert manager._capital_coordinator is coordinator
+    finally:
+        release.set()
+        worker.join(timeout=5.0)
+
+    assert not worker.is_alive()
+    assert not errors
+    assert coordinator._nija_v142_sync_owner_thread is None
+    assert coordinator._in_flight is False
+
+
+def test_expired_synchronous_refresh_keeps_existing_fenced_rollover(monkeypatch) -> None:
+    """Owner tracking never extends the original pipeline or publication limits."""
+    from bot import capital_publication_deadline_v137_patch as v137
+
+    now = datetime.now(timezone.utc)
+    authority = SimpleNamespace(
+        get_snapshot_publication_status=lambda: SimpleNamespace(
+            accepted=True, stale=False, reason="accepted",
+            timestamp=now - timedelta(seconds=91),
+            expiry=now - timedelta(seconds=1),
+        )
+    )
+    owner = threading.current_thread()
+    old = SimpleNamespace(
+        _in_flight=True,
+        _nija_v142_sync_owner_thread=owner,
+        _nija_v142_sync_started_monotonic=time.monotonic() - 120.0,
+    )
+    replacement = SimpleNamespace(_in_flight=False)
+    manager = SimpleNamespace(_capital_coordinator=old)
+    monkeypatch.setattr(v142, "_runtime_pipeline_deadline_seconds", lambda: 80.0)
+    monkeypatch.setattr(v142, "_authority", lambda: authority)
+
+    def rollover(target, *, expected_old=None, reason):
+        assert expected_old is old
+        assert reason == "untracked_inflight_with_expired_publication"
+        target._capital_coordinator = replacement
+        return replacement
+
+    monkeypatch.setattr(v142, "_rollover_coordinator", rollover)
+    assert v137._publication_meta(authority, now=now)[0] is False
+    assert v142._coordinator_in_flight_v142(manager) is False
+    assert manager._capital_coordinator is replacement
 
 
 def test_unknown_publication_state_preserves_inflight_coordinator(monkeypatch, caplog) -> None:
