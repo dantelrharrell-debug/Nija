@@ -69,9 +69,10 @@ def _fresh_capital_handoff() -> dict[str, Any] | None:
     real = _float(os.environ.get("NIJA_CAPITAL_HANDOFF_REAL"), 0.0)
     registered = _int(os.environ.get("NIJA_CAPITAL_HANDOFF_BROKER_COUNT"), 0)
     ttl = max(1.0, _float(os.environ.get("NIJA_CAPITAL_HANDOFF_TTL_S"), 90.0))
-    age = time.time() - accepted_at if accepted_at > 0 else float("inf")
-    if accepted_at <= 0.0 or real <= 0.0 or registered <= 0 or age < -5.0 or age > ttl:
+    measured_age = time.time() - accepted_at if accepted_at > 0 else float("inf")
+    if accepted_at <= 0.0 or real <= 0.0 or registered <= 0 or measured_age < -5.0 or measured_age > ttl:
         return None
+    age = max(0.0, measured_age)  # Preserve non-negative accepted-age telemetry.
     return {
         "hydrated": True,
         "stale": False,
@@ -197,9 +198,10 @@ def _heartbeat_ready() -> tuple[bool, str]:
     if alive <= 0.0:
         return False, "writer_heartbeat_alive_ts_missing"
     max_age = max(5.0, _float(os.environ.get("NIJA_PREACTIVATION_HEARTBEAT_MAX_AGE_S"), 90.0))
-    age = time.time() - alive
-    if age < -5.0:
-        return False, f"writer_heartbeat_future:{age:.1f}s"
+    measured_age = time.time() - alive
+    if measured_age < -5.0:
+        return False, f"writer_heartbeat_future:{measured_age:.1f}s"
+    age = max(0.0, measured_age)  # Preserve existing fresh-age diagnostics.
     if age > max_age:
         return False, f"writer_heartbeat_stale:{age:.1f}>{max_age:.1f}"
     return True, f"writer_heartbeat_fresh:{age:.1f}s"
