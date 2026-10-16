@@ -33,3 +33,13 @@ References:
 - Preserve all operator kill switches and protective exit requirements.
 - Require independent verified off-host retention, isolated restore integrity, exact-account Kraken reconciliation, position-sync freshness, confirmed protective exits, and legitimate fresh canonical execution provenance before any separately authorized rollout.
 - This PR does not install a new verification record or set any production flag. An offline report does NOT prove custody or historical fill completeness.
+
+## Research update: precise authenticated API budget and remote execution (2026-10-15)
+
+Kraken's August 2026 limit guidance says per-key **private spot REST** calls have different weights: `TradesHistory`, `ClosedOrders`, and `Ledgers` increase the private call counter by **4**, while `Balance`/`TradeBalance` typically increase it by **1**. Avoid solving position refresh staleness by issuing repeated unthrottled history reads; preserve per-key serialized admission, bounded freshness checks, and documented backoff. https://support.kraken.com/articles/206548367-what-are-the-api-rate-limits-?mode=consumerapp
+
+Render supports SSH to the **actual** running service, including `render ssh SERVICE_ID -- COMMAND ...` via Render CLI, provided the operator has authenticated CLI/SSH access. This is distinct from a separate ephemeral instance, which cannot read the service's mounted disk. An operator may use the existing running-instance session to *inspect* the already completed backup's archive inventory and source checksum. Do not print private data or attach archives to PRs. https://render.com/tutorials/render-cli-power-user/ssh-and-psql and https://render.com/docs/ssh
+
+Kraken conditional close orders for spot margin are **not** comprehensive OCO stop-loss + take-profit coverage, and closing independently can leave an active conditional close that may open the inverse exposure. Any protective-exit audit must read actual open orders and current exposure; absence of open margin positions cannot certify another venue or account. https://support.kraken.com/au/articles/360038640052-conditional-close
+
+The production log `backup_restore_verified=false` is emitted by v435 mount-observation code with a deliberately constant false value. It is not evidence that a completed operator restore test failed; neither is it evidence that one passed. Match existing operator reports to the archive source SHA-256, restoration results, and independent custody records before changing an attestation layer.
