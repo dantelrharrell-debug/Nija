@@ -103,9 +103,30 @@ def collect_history(
         "side_effects": "read_only_api_calls",
     }
 
+def _broker_account_scope(broker: Any) -> str:
+    """Resolve software routing metadata, not authenticated brokerage ownership."""
+    broker_type = getattr(broker, "broker_type", None)
+    account_type = getattr(broker, "account_type", None)
+    broker_type = getattr(broker_type, "value", broker_type)
+    account_type = getattr(account_type, "value", account_type)
+    user_id = getattr(broker, "user_id", object())
+    if broker_type == "kraken":
+        if account_type == "platform" and user_id is None:
+            return "platform:kraken"
+        if (account_type == "user" and isinstance(user_id, str)
+                and user_id and user_id == user_id.strip() and ":" not in user_id):
+            return f"user:{user_id}:kraken"
+    raise ValueError("Unambiguous Kraken broker account metadata required")
+
+
 def collect_from_existing_broker(broker: Any, *, account_scope: str,
                                  monitoring_category: Any, max_pages: int = 200) -> dict[str, Any]:
-    """Reuse existing authenticated Kraken serialization and rate controls."""
+    """Reuse Kraken read controls without relabeling another software account."""
+    def require_matching_scope() -> None:
+        if _broker_account_scope(broker) != account_scope:
+            raise ValueError("Requested scope does not match selected Kraken broker")
+
+    require_matching_scope()
     private_call = getattr(broker, "_kraken_private_call", None)
     if not callable(private_call) or monitoring_category is None:
         raise ValueError("Authenticated private call and monitoring category required")
@@ -113,6 +134,9 @@ def collect_from_existing_broker(broker: Any, *, account_scope: str,
     def read(endpoint: str, params: dict[str, Any]) -> Mapping[str, Any]:
         if endpoint not in {"TradesHistory", "ClosedOrders", "Ledgers"} or set(params) != {"ofs"}:
             raise ValueError("Non-read-only request rejected")
-        return private_call(endpoint, params, category=monitoring_category)
+        require_matching_scope()
+        payload = private_call(endpoint, params, category=monitoring_category)
+        require_matching_scope()
+        return payload
 
     return collect_history(read, account_scope=account_scope, max_pages=max_pages)
