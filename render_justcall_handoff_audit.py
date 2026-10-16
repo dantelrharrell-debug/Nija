@@ -148,7 +148,16 @@ _HANDOFF_STARTED = False
 
 def _handoff_worker() -> None:
     while True:
-        run_readonly_handoff_audit()
+        try:
+            run_readonly_handoff_audit()
+        except Exception as exc:
+            # Provider response anomalies must not terminate the monitoring loop.
+            # Never log exception text: upstream payloads may contain PII.
+            print(
+                f"JUSTCALL_HANDOFF_PROVIDER_AUDIT state=worker_error "
+                f"error={type(exc).__name__} fail_closed=true",
+                flush=True,
+            )
         time.sleep(3600)
 
 
