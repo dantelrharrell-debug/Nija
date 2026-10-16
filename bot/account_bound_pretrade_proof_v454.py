@@ -19,6 +19,15 @@ CHECKS = (
 )
 
 
+def _finite_number(value: Any) -> bool:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    try:
+        return math.isfinite(value)
+    except (OverflowError, TypeError, ValueError):
+        return False
+
+
 @dataclass(frozen=True)
 class EvidenceAssessment:
     pretrade_checks_pass: bool
@@ -42,8 +51,8 @@ def assess(
     authorization machine or independently trigger any order.
     """
     records = attestations if isinstance(attestations, Mapping) else {}
-    clock_ok = isinstance(now, (int, float)) and not isinstance(now, bool) and math.isfinite(now) and now > 0
-    ttl_ok = isinstance(ttl_seconds, (int, float)) and not isinstance(ttl_seconds, bool) and math.isfinite(ttl_seconds) and 0 < ttl_seconds <= 300
+    clock_ok = isinstance(now, (int, float)) and not isinstance(now, bool) and _finite_number(now) and now > 0
+    ttl_ok = isinstance(ttl_seconds, (int, float)) and not isinstance(ttl_seconds, bool) and _finite_number(ttl_seconds) and 0 < ttl_seconds <= 300
     account_ok = isinstance(account, str) and bool(account.strip())
     rejected = []
     missing = []
@@ -58,7 +67,7 @@ def assess(
         time_ok = (
             clock_ok and ttl_ok
             and isinstance(ts, (int, float)) and not isinstance(ts, bool)
-            and math.isfinite(ts)
+            and _finite_number(ts)
             and 0 <= now - ts <= ttl_seconds
         )
         if not (
