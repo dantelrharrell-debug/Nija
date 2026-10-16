@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 import sys
 from types import SimpleNamespace, ModuleType
@@ -218,3 +219,94 @@ def test_canonical_fill_requires_execution_policy_and_unchanged_freshness(monkey
                 False, "v169_provenance_rejected", dict(value)
             )
             assert v16._genuine_execution_marker_proof()[0] is False
+
+
+def test_heartbeat_marker_rejects_future_and_stale_proofs_with_provenance(tmp_path, monkeypatch):
+    from bot import startup_verification_evidence, trading_state_machine
+
+    marker = tmp_path / "execution-proof.json"
+    monkeypatch.setenv("HEARTBEAT_MARKER_PATH", str(marker))
+    monkeypatch.setenv("HEARTBEAT_VERIFICATION_REQUIRED_STAGE", "FILL_VERIFY")
+    monkeypatch.setenv("HEARTBEAT_VERIFICATION_MAX_AGE_SECONDS", "1800")
+    monkeypatch.setattr(
+        startup_verification_evidence,
+        "startup_attempts_allow_execution_proof",
+        lambda: True,
+    )
+    monkeypatch.setattr(trading_state_machine.time, "time", lambda: 10000.0)
+    payload = {
+        "stage": "FILL_VERIFY",
+        "source": "canonical_confirmed_fill",
+        "proof_kind": "execution_probe",
+        "producer": "test-fill-writer",
+        "verified_at_epoch": 10006.0,
+        "broker_event_at_epoch": 10006.0,
+    }
+    marker.write_text(json.dumps(payload), encoding="utf-8")
+
+    ready, detail, metadata = trading_state_machine._heartbeat_verification_status()
+    assert ready is False
+    assert "future" in detail
+    assert metadata["failure_condition"] == "verification_future"
+    assert metadata["age_s"] == -6.0
+    assert metadata["producer"] == "test-fill-writer"
+    assert metadata["broker_event_at_epoch"] == 10006.0
+
+    payload["verified_at_epoch"] = 8199.0
+    marker.write_text(json.dumps(payload), encoding="utf-8")
+    ready, detail, metadata = trading_state_machine._heartbeat_verification_status()
+    assert ready is False
+    assert "stale" in detail
+    assert metadata["failure_condition"] == "verification_stale"
+    assert metadata["age_s"] == 1801.0
+
+    payload.pop("verified_at_epoch")
+    marker.write_text(json.dumps(payload), encoding="utf-8")
+    ready, detail, metadata = trading_state_machine._heartbeat_verification_status()
+    assert ready is False
+    assert detail == "marker_missing_timestamp"
+    assert metadata["producer"] == "test-fill-writer"
+    assert metadata["failure_condition"] == "marker_missing_timestamp"
+
+
+def test_missing_heartbeat_marker_fails_closed(tmp_path, monkeypatch):
+    from bot import startup_verification_evidence, trading_state_machine
+
+    monkeypatch.setenv("HEARTBEAT_MARKER_PATH", str(tmp_path / "missing.json"))
+    monkeypatch.setattr(
+        startup_verification_evidence,
+        "startup_attempts_allow_execution_proof",
+        lambda: True,
+    )
+    ready, detail, _ = trading_state_machine._heartbeat_verification_status()
+    assert ready is False
+    assert detail == "marker_missing"
+
+
+def test_preactivation_logs_proof_producer_and_failure_condition(monkeypatch, caplog):
+    v16 = load()
+    tsm = ModuleType("bot.trading_state_machine")
+    monkeypatch.setitem(sys.modules, "bot.trading_state_machine", tsm)
+    tsm._heartbeat_verification_status = lambda: (
+        False,
+        "verification_stale",
+        {
+            "source": "canonical_confirmed_fill",
+            "stage": "FILL_VERIFY",
+            "producer": "fill-writer-v346",
+            "verified_at_epoch": 9000.0,
+            "broker_event_at_epoch": 9000.0,
+        },
+    )
+    monkeypatch.setattr(v16.time, "time", lambda: 10000.0)
+
+    ready, detail = v16._genuine_execution_marker_proof()
+
+    assert ready is False
+    assert detail == "execution_marker:verification_stale"
+    assert "source=canonical_confirmed_fill" in caplog.text
+    assert "stage=FILL_VERIFY" in caplog.text
+    assert "producer=fill-writer-v346" in caplog.text
+    assert "broker_event_at_epoch=9000.000000" in caplog.text
+    assert "verification_age_s=1000.0" in caplog.text
+    assert "failing_condition=execution_marker" in caplog.text

@@ -196,7 +196,11 @@ def _heartbeat_verification_status() -> tuple[bool, str, Dict[str, Any]]:
                     "path": marker_path,
                     "required_stage": min_required_stage,
                     "stage": parsed_stage,
+                    "source": str(payload.get("source", "") or "").strip().lower(),
+                    "proof_kind": str(payload.get("proof_kind", "") or "").strip().lower(),
+                    "producer": str(payload.get("producer", "") or "").strip(),
                     "max_age_s": max_age_s,
+                    "failure_condition": "marker_missing_timestamp",
                 }
         else:
             return False, "legacy_marker_non_fresh", {
@@ -206,6 +210,20 @@ def _heartbeat_verification_status() -> tuple[bool, str, Dict[str, Any]]:
                 "legacy_marker": True,
             }
 
+        source = str(payload.get("source", "") or "").strip().lower() if raw.startswith("{") else ""
+        proof_kind = str(payload.get("proof_kind", "") or "").strip().lower() if raw.startswith("{") else ""
+        producer = str(payload.get("producer", "") or "").strip() if raw.startswith("{") else ""
+        details = payload.get("details", {}) if raw.startswith("{") else {}
+        broker_event_at = (
+            payload.get("broker_event_at_epoch")
+            or payload.get("broker_fill_at_epoch")
+            or payload.get("broker_execution_epoch")
+            or (details.get("broker_execution_epoch") if isinstance(details, dict) else None)
+        )
+        try:
+            broker_event_at_epoch = float(broker_event_at)
+        except (TypeError, ValueError, OverflowError):
+            broker_event_at_epoch = 0.0
         required_rank = _HEARTBEAT_STAGE_ORDER[min_required_stage]
         stage_rank = _HEARTBEAT_STAGE_ORDER.get(parsed_stage, 0)
         if stage_rank < required_rank:
@@ -213,44 +231,47 @@ def _heartbeat_verification_status() -> tuple[bool, str, Dict[str, Any]]:
                 "path": marker_path,
                 "required_stage": min_required_stage,
                 "stage": parsed_stage,
+                "source": source,
+                "proof_kind": proof_kind,
+                "producer": producer,
                 "verified_at_epoch": verified_at_epoch,
+                "broker_event_at_epoch": broker_event_at_epoch,
                 "max_age_s": max_age_s,
                 "legacy_marker": legacy_marker,
+                "failure_condition": "stage_too_low",
             }
 
-        age_s = max(0.0, time.time() - verified_at_epoch) if verified_at_epoch > 0 else float("inf")
+        now_epoch = time.time()
+        age_s = now_epoch - verified_at_epoch if verified_at_epoch > 0 else float("inf")
+        marker_meta = {
+            "path": marker_path,
+            "required_stage": min_required_stage,
+            "stage": parsed_stage,
+            "source": source,
+            "proof_kind": proof_kind,
+            "producer": producer,
+            "verified_at_epoch": verified_at_epoch,
+            "broker_event_at_epoch": broker_event_at_epoch,
+            "age_s": age_s,
+            "max_age_s": max_age_s,
+            "legacy_marker": legacy_marker,
+        }
+        if age_s < -5.0:
+            return False, f"verification_future age_s={age_s:.1f}", {
+                **marker_meta, "failure_condition": "verification_future",
+            }
         if max_age_s > 0:
             # Legacy marker files are treated as non-fresh under enforced expiry semantics.
             if legacy_marker:
                 return False, "legacy_marker_non_fresh", {
-                    "path": marker_path,
-                    "required_stage": min_required_stage,
-                    "stage": parsed_stage,
-                    "verified_at_epoch": verified_at_epoch,
-                    "age_s": age_s,
-                    "max_age_s": max_age_s,
-                    "legacy_marker": True,
+                    **marker_meta, "failure_condition": "legacy_marker_non_fresh",
                 }
             if age_s > max_age_s:
                 return False, f"verification_stale age_s={age_s:.1f} max_age_s={max_age_s:.1f}", {
-                    "path": marker_path,
-                    "required_stage": min_required_stage,
-                    "stage": parsed_stage,
-                    "verified_at_epoch": verified_at_epoch,
-                    "age_s": age_s,
-                    "max_age_s": max_age_s,
-                    "legacy_marker": False,
+                    **marker_meta, "failure_condition": "verification_stale",
                 }
 
-        return True, "", {
-            "path": marker_path,
-            "required_stage": min_required_stage,
-            "stage": parsed_stage,
-            "verified_at_epoch": verified_at_epoch,
-            "age_s": age_s if verified_at_epoch > 0 else 0.0,
-            "max_age_s": max_age_s,
-            "legacy_marker": legacy_marker,
-        }
+        return True, "", marker_meta
     except Exception as exc:
         return False, f"marker_read_failed:{exc}", {
             "path": marker_path,

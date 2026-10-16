@@ -209,11 +209,13 @@ def _write_confirmed_fill_marker_locked(*, result: Mapping[str, Any], symbol: st
             "version": 4,
             "stage": "FILL_VERIFY",
             "verified_at_epoch": now,
+            "broker_event_at_epoch": broker_epoch,
             "broker_fill_at_epoch": broker_epoch if now == broker_epoch else 0.0,
             "timestamp_source": "broker_fill_event" if now == broker_epoch else "observation_time",
             "verified_at_iso": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
             "source": "canonical_confirmed_fill",
             "proof_kind": "execution_probe",
+            "producer": MARKER,
             "order_id": order_id,
             "symbol": str(symbol or "").strip().upper(),
             "side": str(side or "").strip().lower(),
@@ -254,9 +256,14 @@ def _write_confirmed_fill_marker_locked(*, result: Mapping[str, Any], symbol: st
             MARKER, order_id, payload["symbol"], payload["side"], float(fill_price), float(filled_usd),
         )
         LOGGER.info(
-            "CANONICAL_FILL_EXECUTION_PROOF_V346_TIME marker=%s order_id=%s verified_at_epoch=%.6f "
-            "timestamp_source=%s replay_freshness_refresh=false",
-            MARKER, order_id, now, "broker_fill_event" if broker_epoch > 0.0 else "observation_time",
+            "CANONICAL_FILL_EXECUTION_PROOF_V346_TIME marker=%s order_id=%s producer=%s "
+            "stage=FILL_VERIFY broker_event_at_epoch=%s verified_at_epoch=%.6f "
+            "verification_age_s=%.1f timestamp_source=%s replay_freshness_refresh=false",
+            MARKER, order_id, MARKER,
+            f"{payload['broker_event_at_epoch']:.6f}" if payload["broker_event_at_epoch"] > 0.0 else "missing",
+            now,
+            max(0.0, observed_now - broker_epoch) if broker_epoch > 0.0 else 0.0,
+            "broker_fill_event" if now == broker_epoch else "observation_time",
         )
         return True
     except Exception as exc:
@@ -524,4 +531,3 @@ __all__ = [
     "MARKER", "RELEASE_ID", "install", "install_import_hook",
     "_write_confirmed_fill_marker", "_patch_stale_platform_refresh",
 ]
-
