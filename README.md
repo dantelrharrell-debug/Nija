@@ -1,5 +1,21 @@
 # NIJA AI Trading LLC — Trading Platform Architecture & Recovery Guide
 
+## AI outreach recovery status — October 16, 2026 (verified)
+
+**Scope:** Apollo → NIJA feeder → JustCall AI Voice Agent. This is operational documentation, not authorization to call contacts or change trading permissions.
+
+- **Production:** Render service `srv-d98dsr5aeets73fpbaqg` in workspace `tea-d37fhe8gjchc73c8eo0g`. Deployment `dep-db8sidrl550s73f2342g` of commit `7eb8bdcdf19303f3246ae500a37c8bcf7e534aa7` was verified **live**.
+- **Apollo custom fields:** `NIJA Recipient Timezone` (string) ID `6ad1c96ec3b5c100104663e5`; `NIJA Recipient Jurisdiction` (string) ID `6ad1c96fbc7bda001862ae16`. Created and independently observed through Apollo's field catalog. The feeder reports `APOLLO_NIJA_FEEDER_CONFIG state=mapped`. Their field IDs are recorded in NIJA's existing outreach database so the migration does not rely exclusively on process-local environment variables.
+- **Latest feeder snapshot:** 316 contacts scanned, **0 call-ready**, **0 queued**, 148 with no recognized valid phone number, 316 missing AI voice consent evidence, consent record IDs, legal-basis evidence, fresh DNC verification and recipient-jurisdiction evidence; the post-migration audit also reported 316 missing reviewed recipient timezone values. Field existence is not recipient evidence.
+- **JustCall:** The autodial worker reported `state=ready fail_closed=true`, weekdays only, recipient-local 9 AM–8 PM hours, a 300/day **cap** and 120-second minimum interval. The October 15 (Pacific) JustCall provider-history audit confirmed **0 attempts**, 300 below the target. Apollo analytics for October 16 reported 0 completed calls. Neither a healthy worker nor the daily cap proves 300 calls were made.
+- **Human handoff:** The owner reported that a controlled AI warm-transfer test successfully rang the business line and was answered. **Operator-confirmed, not independently provider-verified.** Read-only agent metadata still reported `warm_transfer_action_listed=false` and `human_handoff_verified=false`. Obtain the provider call ID, transfer event, destination and answer/disposition before setting `NIJA_JUSTCALL_HUMAN_HANDOFF_VERIFIED=1`. Never use a second AI as a substitute for a real human in that attestation.
+- **No prospect release:** Obtain auditable, specific AI-voice marketing consent and current DNC/suppression verification; independently validate phone number, recipient timezone, jurisdiction, allowable calling window, and agent/handoff details. Do not infer permission from generic email/communication opt-in, populate approval flags without evidence, or disable fail-closed gates.
+- **Remaining steps:** Verify transfer in JustCall provider records; add an explicit optional AI voice consent capture path to the IONOS website with durable disclosure/version/signature/timestamp provenance; screen existing opt-in contacts against current DNC and suppression sources; verify eligible volume and provider-accepted call IDs. The 300 weekday call **goal is not complete**. Separate trading execution authorization and emergency stops remain unchanged.
+
+See `integrations/justcall/ACTIVATION_EVIDENCE_HANDOFF_20261009.md` for compliance and transfer acceptance criteria. An operator-reported test result is not a substitute for JustCall event evidence.
+
+---
+
 ## Production execution-recovery observation — October 13, 2026 (Pacific)
 
 **Scope:** Read-only observation and recovery acceptance criteria. This README update does not change trading authorization, deploy application code, or generate execution evidence.
