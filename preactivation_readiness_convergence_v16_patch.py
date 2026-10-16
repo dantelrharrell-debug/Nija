@@ -361,7 +361,24 @@ def _collect_proofs() -> tuple[dict[str, bool], dict[str, Any]]:
         "nonce_ready": strict_ok,
         "bootstrap_ready": bootstrap_ok,
     }
+    # Independent preflight visibility: deliberately NOT an activation gate.
+    # Do not use an older fill to infer that order dispatch is presently safe.
+    preflight = bool(
+        execution and risk and authority and strict_ok and bootstrap_ok
+        and strategy and hydrated and funded and registered and _live_mode()
+    )
     return proofs, {
+        "preflight_operational_ready_observed": preflight,
+        "preflight_is_authorization": False,
+        "post_trade_execution_evidence_verified": execution_proof_ok,
+        "preflight_missing": [
+            key for key, ok in (
+                ("pipeline", execution), ("risk", risk), ("authority", authority),
+                ("writer", strict_ok), ("bootstrap", bootstrap_ok),
+                ("strategy", strategy), ("capital", hydrated and funded and registered),
+                ("live_mode", _live_mode()),
+            ) if not ok
+        ],
         "capital": capital,
         "strict_authority": strict_detail,
         "kill_switch": kill_detail or "clear",
