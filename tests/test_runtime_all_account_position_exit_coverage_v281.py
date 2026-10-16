@@ -1,6 +1,31 @@
 from types import SimpleNamespace
 
+import pytest
+
 from bot import runtime_all_account_position_exit_coverage_v281_patch as v281
+
+
+@pytest.fixture(autouse=True)
+def _isolate_v281_tracker_coverage_from_newer_v285_broker_probes(monkeypatch):
+    """Use only explicit test-fixture snapshots when exercising v281 logic.
+
+    v285's authenticated broker-reader contract is tested separately. These
+    legacy unit tests cover the v281 tracker/coverage reconciliation layer.
+    Production still calls v285 and fails closed on unavailable proof.
+    """
+
+    def snapshot(broker):
+        if getattr(broker, "_startup_position_sync_fetch_ok", None) is not True:
+            return False, set(), "authoritative_position_fetch_unproven"
+        if getattr(broker, "_startup_position_sync_adopted", None) is not True:
+            return False, set(), "authoritative_snapshot_not_adopted"
+        symbols = {
+            v281._normalise_symbol(item)
+            for item in broker._startup_position_sync_symbols
+        }
+        return True, symbols, "test_fixture_authoritative_snapshot"
+
+    monkeypatch.setattr(v281, "_authoritative_snapshot_symbols", snapshot)
 
 
 class Tracker:
