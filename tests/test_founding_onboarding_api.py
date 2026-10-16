@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import json
 import os
+import sqlite3
 import tempfile
 import time
 import unittest
@@ -130,6 +131,14 @@ class OnboardingAPITests(unittest.TestCase):
         self.assertTrue(self.status().json["entitlement_linked"])
         self.assertFalse(self.status().json["member_activated"])
 
+    def test_invalid_stored_billing_email_reports_reconciliation_not_client_error(self):
+        self.post_event()
+        self.store.get_customer.return_value = {"email": "legacy invalid email", "entitled": True}
+        response = self.status()
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json["identity_reconciliation_required"])
+        self.assertFalse(response.json["entitlement_linked"])
+
     def test_wrong_signature_audience_and_browser_flags_rejected(self):
         headers = self.headers()
         headers["Authorization"] += "tampered"
@@ -227,6 +236,29 @@ class OnboardingAPITests(unittest.TestCase):
         app = Flask("restarted")
         register_onboarding_routes(app, self.store)
         self.assertEqual(app.config["ONBOARDING_OUTBOX"].due_keys(), self.outbox.due_keys())
+
+    def test_controlled_recipient_not_starved_by_unrelated_queue(self):
+        for index in range(30):
+            self.outbox.enqueue(str(index), "other@example.test", approved=True, verified=True)
+        self.post_event()
+        os.environ["NIJA_ONBOARDING_SEND_MODE"] = "controlled"
+        os.environ["NIJA_ONBOARDING_TEST_RECIPIENTS"] = "member@example.test"
+        response = Mock()
+        response.read.return_value = b'{"id":"mail1"}'
+        with patch("urllib.request.urlopen", return_value=response) as send:
+            result = self.app.test_cli_runner().invoke(args=["onboarding-worker", "--once"])
+            self.assertEqual(result.exit_code, 0, result.output)
+            send.assert_called_once()
+        self.assertEqual(self.status().json["messages"][0]["status"], "accepted")
+
+    def test_storage_failure_on_one_message_does_not_abort_batch(self):
+        self.post_event()
+        self.post_event(application_id="app2", sub="member2")
+        os.environ["NIJA_ONBOARDING_SEND_MODE"] = "enabled"
+        with patch.object(self.outbox, "send", side_effect=[sqlite3.OperationalError("locked"), "accepted"]) as send:
+            result = self.app.test_cli_runner().invoke(args=["onboarding-worker", "--once"])
+            self.assertEqual(result.exit_code, 0, result.output)
+            self.assertEqual(send.call_count, 2)
 
     def test_unconfigured_routes_are_absent(self):
         os.environ.pop("NIJA_ONBOARDING_DB_PATH")

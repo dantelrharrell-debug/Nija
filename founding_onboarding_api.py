@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 import time
 
 import click
@@ -89,7 +90,10 @@ def register_onboarding_routes(app, billing_store) -> None:
         # Only an existing immutable NIJA owner binding is considered. Email is
         # a consistency check, NEVER a lookup or subscription attachment method.
         customer = billing_store.get_customer(claims["sub"])
-        mismatch = bool(customer and normalize_email(customer["email"]) != status["canonical_email"])
+        try:
+            mismatch = bool(customer and normalize_email(customer["email"]) != status["canonical_email"])
+        except ValueError:
+            mismatch = True
         linked = bool(customer and not mismatch and customer["entitled"] and status["registered"])
         status.update(entitlement_linked=linked, identity_reconciliation_required=mismatch,
                       broker_connection_ready=False, member_activated=False,
@@ -131,14 +135,15 @@ def register_onboarding_routes(app, billing_store) -> None:
             raise RuntimeError("verified_provider_configuration_required")
         allowlist = {normalize_email(e) for e in os.getenv("NIJA_ONBOARDING_TEST_RECIPIENTS", "").split(",") if e}
         states = []
-        for key in outbox.due_keys():
-            if mode == "controlled":
-                with outbox.connect() as db:
-                    recipient = db.execute("SELECT recipient FROM onboarding_mail WHERE key=?", (key,)).fetchone()[0]
-                if recipient not in allowlist:
-                    continue
-            states.append(outbox.send(key, sender=sender))
-        return {"processed": len(states), "alerts": outbox.alerts(), "timestamp": int(time.time())}
+        errors = 0
+        for key in outbox.due_keys(recipients=allowlist if mode == "controlled" else None):
+            try:
+                states.append(outbox.send(key, sender=sender))
+            except sqlite3.Error:
+                errors += 1
+                app.logger.error("Onboarding worker storage error: key=%s", key)
+        return {"processed": len(states), "errors": errors,
+                "alerts": outbox.alerts(), "timestamp": int(time.time())}
 
     @routes.post("/api/onboarding/operator/work")
     def work():
@@ -150,8 +155,14 @@ def register_onboarding_routes(app, billing_store) -> None:
     def worker(once: bool) -> None:
         """Run under a process supervisor with the web service's durable volume."""
         while True:
-            result = process_batch()
-            app.logger.info("Onboarding worker processed=%s alerts=%s", result["processed"], len(result["alerts"]))
+            try:
+                result = process_batch()
+                app.logger.info("Onboarding worker processed=%s alerts=%s errors=%s",
+                                result["processed"], len(result["alerts"]), result["errors"])
+            except sqlite3.Error:
+                app.logger.error("Onboarding worker storage unavailable")
+                if once:
+                    raise
             if once:
                 return
             time.sleep(30)

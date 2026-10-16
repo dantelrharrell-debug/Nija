@@ -12,6 +12,8 @@ import os
 import sqlite3
 import time
 import urllib.request
+from contextlib import contextmanager
+from typing import Iterator
 
 REGISTER = "https://nijaaitrading.com/register"
 LOGIN = "https://nijaaitrading.com/login"
@@ -103,8 +105,15 @@ class InvitationOutbox:
             db.execute("""INSERT OR IGNORE INTO onboarding_suppression
                 SELECT recipient,'legacy_suppression' FROM onboarding_mail WHERE status='suppressed'""")
 
-    def connect(self):
-        return sqlite3.connect(self.db_path, timeout=15)
+    @contextmanager
+    def connect(self) -> Iterator[sqlite3.Connection]:
+        """Commit/rollback each short transaction and always close its connection."""
+        db = sqlite3.connect(self.db_path, timeout=15)
+        try:
+            with db:
+                yield db
+        finally:
+            db.close()
 
     def enqueue(self, application_id, email, *, approved=False, verified=False):
         if not approved or not verified:
@@ -242,14 +251,23 @@ class InvitationOutbox:
             state = db.execute("SELECT status FROM onboarding_mail WHERE key=?", (key,)).fetchone()[0]
         return state
 
-    def due_keys(self, *, now=None, limit=25):
+    def due_keys(self, *, now=None, limit=25, recipients=None):
         """Get due queued/retry entries for a scheduled trusted worker."""
         now = int(time.time()) if now is None else int(now)
+        params = [now]
+        recipient_filter = ""
+        if recipients is not None:
+            recipients = sorted(set(recipients))
+            if not recipients:
+                return []
+            recipient_filter = " AND recipient IN (" + ",".join("?" for _ in recipients) + ")"
+            params.extend(recipients)
+        params.append(max(1, min(int(limit), 100)))
         with self.connect() as db:
             rows = db.execute(
                 "SELECT key FROM onboarding_mail WHERE status IN ('queued','retry','sending') "
-                "AND retry_at<=? ORDER BY retry_at,key LIMIT ?",
-                (now, max(1,min(int(limit),100))),
+                "AND retry_at<=?" + recipient_filter + " ORDER BY retry_at,key LIMIT ?",
+                params,
             ).fetchall()
         return [row[0] for row in rows]
 
@@ -285,7 +303,7 @@ class InvitationOutbox:
         elif event_type == "email.delivered" and status not in ("suppressed", "failed"):
             db.execute("UPDATE onboarding_mail SET status='delivered' WHERE key=?", (key,))
             db.execute("UPDATE onboarding_alerts SET resolved_at=? WHERE key=?", (now, key))
-        elif event_type == "email.delivery_delayed":
+        elif event_type == "email.delivery_delayed" and status in ("accepted", "sending"):
             self._alert(db, key, event_type, now)
         return True
 

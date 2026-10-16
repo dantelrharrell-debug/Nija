@@ -1,4 +1,5 @@
 import json
+import sqlite3
 import tempfile
 import unittest
 from unittest.mock import Mock
@@ -190,5 +191,25 @@ class InvitationTests(unittest.TestCase):
         self.assertEqual(self.outbox.send(key, sender="support@nijaaitrading.com",
                                          api_key="fake", opener=opener), "failed")
         opener.assert_not_called()
+
+    def test_connections_close_and_failed_transactions_roll_back(self):
+        with self.outbox.connect() as db:
+            db.execute("SELECT 1")
+        with self.assertRaises(sqlite3.ProgrammingError):
+            db.execute("SELECT 1")
+        with self.assertRaises(ValueError):
+            with self.outbox.connect() as db:
+                db.execute("INSERT INTO onboarding_suppression VALUES ('rollback@example.test','test')")
+                raise ValueError("rollback")
+        with self.outbox.connect() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM onboarding_suppression").fetchone()[0], 0)
+
+    def test_delayed_event_after_delivery_does_not_reopen_alert(self):
+        key = self.outbox.enqueue("a1", "user@example.com", approved=True, verified=True)
+        with self.outbox.connect() as db:
+            db.execute("UPDATE onboarding_mail SET status='accepted',provider_id='mail1' WHERE key=?", (key,))
+        self.outbox.record_provider_event("mail1", "email.delivered")
+        self.outbox.record_provider_event("mail1", "email.delivery_delayed")
+        self.assertEqual(self.outbox.alerts(), [])
 
 if __name__=="__main__": unittest.main()
