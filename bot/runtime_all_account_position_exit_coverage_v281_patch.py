@@ -137,7 +137,8 @@ def _float(value: Any, default: float = 0.0) -> float:
     try:
         number = float(value)
         return number if math.isfinite(number) else default
-    except (TypeError, ValueError, OverflowError):
+    except Exception:
+        # Preserve legacy fail-closed handling for numeric adapter errors.
         return default
 
 
