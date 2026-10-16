@@ -594,6 +594,25 @@ def _coordinator_in_flight_v142(manager: Any) -> bool:
             current = False
         should_roll = not current
 
+    if should_roll and not tracked:
+        boot = getattr(coordinator, "_boot", None)
+        boot_state = getattr(boot, "state", None) if boot is not None else None
+        LOGGER.warning(
+            "CAPITAL_COORDINATOR_UNTRACKED_V142_DIAGNOSTIC marker=%s "
+            "in_flight=%s bootstrap_state=%s flight_generation=%s "
+            "flight_started_present=%s flight_thread_present=%s "
+            "flight_thread_alive=%s publication_current=%s "
+            "safe_fail_closed=true publication_expiry_unchanged=true",
+            MARKER,
+            bool(getattr(coordinator, "_in_flight", False)),
+            str(getattr(boot_state, "value", boot_state)),
+            getattr(coordinator, "_nija_v142_flight_generation", None),
+            bool(getattr(coordinator, "_nija_v142_flight_started_monotonic", None)),
+            thread is not None,
+            thread_alive,
+            bool(current),
+        )
+
     if should_roll:
         replacement = _rollover_coordinator(
             manager,
