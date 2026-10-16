@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import importlib
 import logging
+import math
 import os
 import sys
 import threading
@@ -135,8 +136,8 @@ def _authoritative_snapshot_symbols(broker: Any) -> tuple[bool, set[str], str]:
 def _float(value: Any, default: float = 0.0) -> float:
     try:
         number = float(value)
-        return default if number != number else number
-    except Exception:
+        return number if math.isfinite(number) else default
+    except (TypeError, ValueError, OverflowError):
         return default
 
 
@@ -267,7 +268,9 @@ def _expected_accounts(manager: Any) -> dict[str, Any]:
 def _position_quantity(row: Mapping[str, Any]) -> float:
     for key in ("quantity", "qty", "amount", "size", "units", "balance"):
         if row.get(key) is not None:
-            return _float(row.get(key))
+            # A present but invalid broker/tracker amount must never become
+            # zero, which would silently drop it from protective-exit coverage.
+            return _float(row.get(key), float("nan"))
     return 0.0
 
 
@@ -276,12 +279,20 @@ def _entry_price(row: Mapping[str, Any]) -> float:
         "entry_price", "avg_entry_price", "average_price", "cost_basis_price",
         "average_filled_price", "avg_fill_price", "avg_price", "purchase_price",
     ):
-        value = _float(row.get(key))
+        raw = row.get(key)
+        if raw is None:
+            continue
+        value = _float(raw, float("nan"))
+        if not math.isfinite(value):
+            return float("nan")
         if value > 0:
             return value
     quantity = abs(_position_quantity(row))
-    total_cost = _float(row.get("cost_basis_usd", row.get("total_cost", row.get("size_usd"))))
-    return total_cost / quantity if quantity > 0 and total_cost > 0 else 0.0
+    total_cost = _float(
+        row.get("cost_basis_usd", row.get("total_cost", row.get("size_usd"))),
+        float("nan"),
+    )
+    return total_cost / quantity if math.isfinite(quantity) and quantity > 0 and total_cost > 0 else 0.0
 
 
 def _tracker_holdings(broker: Any) -> tuple[dict[str, dict[str, Any]], list[str]]:
@@ -336,6 +347,9 @@ def _tracker_holdings(broker: Any) -> tuple[dict[str, dict[str, Any]], list[str]
             errors.append(f"tracker_position_missing:{symbol}")
             continue
         quantity = _position_quantity(row)
+        if not math.isfinite(quantity):
+            errors.append(f"tracker_quantity_invalid:{symbol}")
+            continue
         if abs(quantity) <= 0.0:
             continue
         held[symbol] = {
@@ -377,6 +391,7 @@ def _account_audit(account: str, broker: Any, structural_exit_ready: bool) -> tu
         row = held[symbol]
         verified = bool(row["cost_basis_verified"])
         entry = float(row["entry_price"])
+        entry_valid = math.isfinite(entry) and entry > 0.0
         blocked = bool(row["auto_exit_blocked"])
         dust_not_actionable = bool(
             row.get("dust_excluded") is True
@@ -385,19 +400,19 @@ def _account_audit(account: str, broker: Any, structural_exit_ready: bool) -> tu
         in_snapshot = symbol in snapshot_symbols
         if not verified and not dust_not_actionable:
             reasons.append(f"cost_basis_unverified:{symbol}")
-        if entry <= 0.0 and not dust_not_actionable:
+        if not entry_valid and not dust_not_actionable:
             reasons.append(f"entry_price_unverified:{symbol}")
         if blocked and not dust_not_actionable:
             reasons.append(f"auto_exit_blocked:{symbol}")
         protection_verified = bool(
-            structural_exit_ready and in_snapshot and verified and entry > 0.0 and not blocked
+            structural_exit_ready and in_snapshot and verified and entry_valid and not blocked
         )
         positions.append({
             "account": account,
             "broker": venue,
             "symbol": symbol,
             "quantity": row["quantity"],
-            "entry_price": entry,
+            "entry_price": entry if math.isfinite(entry) else None,
             "cost_basis_verified": verified,
             "auto_exit_blocked": blocked,
             "authoritative_snapshot_adopted": in_snapshot,
