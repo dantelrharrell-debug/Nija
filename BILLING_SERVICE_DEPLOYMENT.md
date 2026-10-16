@@ -151,6 +151,17 @@ manual reconciliation, not an automatic retry. Keep the alert open until resolve
 
 ### Required acceptance evidence (not yet performed here)
 
+Repository-only validation checkpoint (2026-10-16): 82 targeted onboarding and
+existing billing regression tests passed, Python syntax/whitespace checks passed,
+secret scans were clean, and the actual Flask worker CLI/route registration
+passed an isolated smoke test. A dedicated read-only static security review found
+no vulnerabilities in scope. The parallel validator's automated code-review
+binary was unavailable; its Python CodeQL analysis was skipped because the
+database was too large (zero reported alerts is **not** a completed scan).
+GitHub workflows for this PR require approval (`action_required`, no jobs in the
+onboarding run). No external send, deployment or recipient acceptance was performed.
+These limitations remain release blockers, not passing production evidence.
+
 1. Record approved-member source owner, durable upstream dispatcher and immutable
    owner mapping; confirm an actual approved+verified event reaches the receiver.
 2. Record security review and current-head CI URLs. Local mocked tests and the
