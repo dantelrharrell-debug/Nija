@@ -65,3 +65,34 @@ def test_hourly_worker_survives_unexpected_audit_error(monkeypatch):
     assert "state=worker_error" in message
     assert "RuntimeError" in message
     assert "private data" not in message
+
+
+def test_provider_shape_rejects_malformed_or_failed_response():
+    import pytest
+    with pytest.raises(ValueError):
+        audit._call_rows({"data": {"calls": [None]}})
+    with pytest.raises(ValueError):
+        audit._call_rows({"success": False, "data": []})
+    with pytest.raises(ValueError):
+        audit._call_rows({"data": {"unexpected": []}})
+
+
+def test_provider_transfer_evidence_does_not_attest_human_identity(monkeypatch):
+    monkeypatch.setenv("JUSTCALL_AI_AGENT_ID", "agent_abc")
+    monkeypatch.setenv("NIJA_JUSTCALL_HUMAN_HANDOFF_VERIFIED", "0")
+    def fake_get(method, path, **kwargs):
+        assert method == "GET"
+        if path.startswith("/calls?"):
+            return {"data": [{"id": "call_123", "call_info": {"call_traits": ["Voice Agent"]}}]}
+        if path == "/calls/call_123/voice-agent":
+            return {"data": {"ai_agent_id": "agent_abc", "actions": [{
+                "type": "call_transfer", "status": "success",
+                "output": {"mode": "warm", "is_answered": True}
+            }]}}
+        raise AssertionError("unexpected provider path")
+    monkeypatch.setattr(audit, "_provider_request", fake_get)
+    result = audit.audit_recent_handoff()
+    assert result["state"] == "answered_warm_transfer"
+    assert result["provider_transfer_evidence"] is True
+    assert result["human_identity_independently_verified"] is False
+    assert audit.os.getenv("NIJA_JUSTCALL_HUMAN_HANDOFF_VERIFIED") == "0"
