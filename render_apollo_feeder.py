@@ -611,6 +611,20 @@ def run_sync() -> dict[str, int]:
     _save_state(newest_seen, counts)
     return counts
 
+def _missing_evidence_field_mappings() -> tuple[str, ...]:
+    """Report configuration gaps without exposing private field IDs or contact data."""
+    required = (
+        "NIJA_APOLLO_CONSENT_FIELD_ID",
+        "NIJA_APOLLO_CONSENT_RECORD_FIELD_ID",
+        "NIJA_APOLLO_LEGAL_BASIS_FIELD_ID",
+        "NIJA_APOLLO_DNC_STATUS_FIELD_ID",
+        "NIJA_APOLLO_DNC_CHECKED_AT_FIELD_ID",
+        "NIJA_APOLLO_RECIPIENT_TIMEZONE_FIELD_ID",
+        "NIJA_APOLLO_RECIPIENT_JURISDICTION_FIELD_ID",
+    )
+    return tuple(name for name in required if not os.getenv(name, "").strip())
+
+
 def _worker() -> None:
     global _LAST_ERROR
     if not _enabled():
@@ -623,6 +637,20 @@ def _worker() -> None:
             flush=True,
         )
         return
+    missing_mappings = _missing_evidence_field_mappings()
+    if missing_mappings:
+        print(
+            "APOLLO_NIJA_FEEDER_CONFIG state=incomplete "
+            f"missing_field_mappings={','.join(missing_mappings)} "
+            "auto_approve=false fail_closed=true",
+            flush=True,
+        )
+    else:
+        print(
+            "APOLLO_NIJA_FEEDER_CONFIG state=mapped "
+            "evidence_values_still_required=true fail_closed=true",
+            flush=True,
+        )
     print(
         f"APOLLO_NIJA_FEEDER state=ready poll_s={_poll_seconds():.0f} "
         f"max_pages={_pages_per_sync()} pipeline_version={_PIPELINE_VERSION} "
