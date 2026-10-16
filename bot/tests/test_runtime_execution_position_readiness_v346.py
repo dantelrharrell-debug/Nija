@@ -117,6 +117,8 @@ def test_confirmed_fill_marker_uses_broker_event_time_and_does_not_refresh_same_
     first = json.loads(marker.read_text(encoding="utf-8"))
     assert first["version"] == 4
     assert first["verified_at_epoch"] == broker_fill_epoch
+    assert first["broker_event_at_epoch"] == broker_fill_epoch
+    assert first["producer"] == v346.MARKER
 
     assert v346._write_confirmed_fill_marker(
         result={"order_id": "kraken-fill-1", "broker_fill_at_epoch": broker_fill_epoch + 999.0},

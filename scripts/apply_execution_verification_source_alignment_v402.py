@@ -99,21 +99,35 @@ def _canonical_execution_verification_status_v402() -> tuple[bool, str, Dict[str
             return False, "canonical_execution_marker_timestamp_missing_v402", {"path": str(marker)}
 
         max_age_s = _heartbeat_verification_max_age_seconds()
-        age_s = max(0.0, time.time() - verified_at)
+        age_s = time.time() - verified_at
+        producer = str(payload.get("producer", "") or "").strip()
+        broker_event_at = (
+            payload.get("broker_event_at_epoch")
+            or payload.get("broker_fill_at_epoch")
+            or payload.get("broker_execution_epoch")
+        )
+        try:
+            broker_event_at = float(broker_event_at)
+        except (TypeError, ValueError, OverflowError):
+            broker_event_at = 0.0
+        metadata = {
+            "path": str(marker), "required_stage": required_stage, "stage": stage,
+            "verified_at_epoch": verified_at, "age_s": age_s, "max_age_s": max_age_s,
+            "source": source, "proof_kind": kind, "producer": producer,
+            "broker_event_at_epoch": broker_event_at,
+        }
+        if age_s < -5.0:
+            return False, f"canonical_execution_verification_future_v402 age_s={age_s:.1f}", {
+                **metadata, "failure_condition": "verification_future",
+            }
         if max_age_s > 0.0 and age_s > max_age_s:
             return False, (
                 f"canonical_execution_verification_stale_v402 age_s={age_s:.1f} "
                 f"max_age_s={max_age_s:.1f}"
-            ), {
-                "path": str(marker), "required_stage": required_stage, "stage": stage,
-                "verified_at_epoch": verified_at, "age_s": age_s, "max_age_s": max_age_s,
-                "source": source, "proof_kind": kind,
-            }
+            ), {**metadata, "failure_condition": "verification_stale"}
 
         return True, "", {
-            "path": str(marker), "required_stage": required_stage, "stage": stage,
-            "verified_at_epoch": verified_at, "age_s": age_s, "max_age_s": max_age_s,
-            "source": source, "proof_kind": kind,
+            **metadata,
             "verification_source": "canonical_execution_marker_v402",
         }
     except Exception as exc:

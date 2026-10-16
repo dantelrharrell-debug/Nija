@@ -58,6 +58,42 @@ def _int(value: Any, default: int = 0) -> int:
         return default
 
 
+def _execution_proof_result(
+    ready: bool, condition: str, metadata: dict[str, Any] | None = None,
+) -> tuple[bool, str]:
+    """Log non-secret proof provenance and the exact readiness failure condition."""
+    meta = metadata or {}
+
+    def safe_token(value: Any) -> str:
+        text = str(value or "missing").strip()
+        return "".join(char for char in text if char.isalnum() or char in "_.-")[:64] or "missing"
+
+    verified_at = _float(meta.get("verified_at_epoch"), 0.0)
+    event_at = _float(
+        meta.get("broker_event_at_epoch")
+        or meta.get("broker_fill_at_epoch")
+        or meta.get("broker_execution_epoch"),
+        0.0,
+    )
+    verification_age = time.time() - verified_at if verified_at > 0 else float("inf")
+    failure_condition = meta.get("failure_condition") or condition.split(":", 1)[0]
+    logger.log(
+        logging.INFO if ready else logging.WARNING,
+        "PREACTIVATION_EXECUTION_PROOF_V16 ready=%s source=%s stage=%s producer=%s "
+        "broker_event_at_epoch=%s verification_age_s=%s failing_condition=%s "
+        "trading_fail_closed=%s",
+        str(bool(ready)).lower(),
+        safe_token(meta.get("source")),
+        safe_token(meta.get("stage")),
+        safe_token(meta.get("producer")),
+        f"{event_at:.6f}" if event_at > 0 else "missing",
+        f"{verification_age:.1f}" if math.isfinite(verification_age) else "missing",
+        safe_token(failure_condition if not ready else "none"),
+        str(not ready).lower(),
+    )
+    return bool(ready), condition
+
+
 def _live_mode() -> bool:
     return _truthy("LIVE_CAPITAL_VERIFIED") and not _truthy("DRY_RUN_MODE") and not _truthy("PAPER_MODE")
 
@@ -264,24 +300,27 @@ def _genuine_execution_marker_proof() -> tuple[bool, str]:
     loading.  If the strict verifier has not installed yet, the source/kind
     fields will be absent and this check fails closed.
     """
+    meta: dict[str, Any] = {}
     try:
         module = sys.modules.get("bot.trading_state_machine")
         if module is None:
             module = importlib.import_module("bot.trading_state_machine")
         verifier = getattr(module, "_heartbeat_verification_status", None)
         if not callable(verifier):
-            return False, "execution_verifier_unavailable"
+            return _execution_proof_result(False, "execution_verifier_unavailable")
         ok, reason, meta = verifier()
-        if not bool(ok):
-            return False, f"execution_marker:{reason or 'not_verified'}"
         meta = dict(meta or {})
+        if not bool(ok):
+            return _execution_proof_result(
+                False, f"execution_marker:{reason or 'not_verified'}", meta,
+            )
         stage = str(meta.get("stage") or "").strip().upper()
         source = str(meta.get("source") or "").strip().lower()
         kind = str(meta.get("proof_kind") or "").strip().lower()
         if stage not in {"ORDER_VERIFY", "FILL_VERIFY"}:
-            return False, f"execution_stage_insufficient:{stage or 'missing'}"
+            return _execution_proof_result(False, f"execution_stage_insufficient:{stage or 'missing'}", meta)
         if kind != "execution_probe":
-            return False, "execution_provenance_unverified"
+            return _execution_proof_result(False, "execution_provenance_unverified", meta)
         if source == "heartbeat_trade":
             pass  # Existing v169-verified heartbeat/order path.
         elif source == "canonical_confirmed_fill":
@@ -290,56 +329,63 @@ def _genuine_execution_marker_proof() -> tuple[bool, str]:
             # Require the independent v402 canonical verifier, which calls
             # v169's provenance guard, and the exact same broker event time.
             if stage != "FILL_VERIFY":
-                return False, "canonical_fill_stage_insufficient"
+                return _execution_proof_result(False, "canonical_fill_stage_insufficient", meta)
             if os.environ.get("NIJA_RUNTIME_EXECUTION_CAPITAL_INTEGRITY_V169_READY") != "1":
-                return False, "canonical_provenance_guard_not_ready"
+                return _execution_proof_result(False, "canonical_provenance_guard_not_ready", meta)
             canonical_verifier = getattr(
                 module, "_canonical_execution_verification_status_v402", None
             )
             if not callable(canonical_verifier):
-                return False, "canonical_proof_verifier_unavailable"
+                return _execution_proof_result(False, "canonical_proof_verifier_unavailable", meta)
+            primary_meta = dict(meta)
             canonical_ok, canonical_reason, canonical_meta = canonical_verifier()
             if not bool(canonical_ok):
-                return False, f"canonical_proof:{canonical_reason or 'not_verified'}"
+                meta.update(dict(canonical_meta or {}))
+                return _execution_proof_result(
+                    False, f"canonical_proof:{canonical_reason or 'not_verified'}", meta,
+                )
             canonical_meta = dict(canonical_meta or {})
+            meta.update(canonical_meta)
             # AUTH_VERIFY lets v169 return auth_only_policy without checking
             # canonical-fill provenance. Require the verifier to have used an
             # execution policy; the marker's self-reported stage is insufficient.
             required_stage = str(canonical_meta.get("required_stage") or "").strip().upper()
             if required_stage not in {"ORDER_VERIFY", "FILL_VERIFY"}:
-                return False, "canonical_proof_execution_policy_unverified"
+                return _execution_proof_result(False, "canonical_proof_execution_policy_unverified", meta)
             if (
                 str(canonical_meta.get("stage") or "").strip().upper() != "FILL_VERIFY"
                 or str(canonical_meta.get("source") or "").strip().lower() != "canonical_confirmed_fill"
                 or str(canonical_meta.get("proof_kind") or "").strip().lower() != "execution_probe"
             ):
-                return False, "canonical_proof_provenance_unverified"
+                return _execution_proof_result(False, "canonical_proof_provenance_unverified", meta)
             try:
-                primary_epoch = float(meta.get("verified_at_epoch") or 0.0)
+                primary_epoch = float(primary_meta.get("verified_at_epoch") or 0.0)
                 canonical_epoch = float(canonical_meta.get("verified_at_epoch") or 0.0)
             except (TypeError, ValueError, OverflowError):
-                return False, "canonical_proof_timestamp_invalid"
+                return _execution_proof_result(False, "canonical_proof_timestamp_invalid", meta)
             if not (
                 math.isfinite(primary_epoch)
                 and math.isfinite(canonical_epoch)
                 and canonical_epoch > 0.0
                 and abs(primary_epoch - canonical_epoch) < 0.001
             ):
-                return False, "canonical_proof_identity_mismatch"
+                return _execution_proof_result(False, "canonical_proof_identity_mismatch", meta)
         else:
-            return False, "execution_provenance_unverified"
+            return _execution_proof_result(False, "execution_provenance_unverified", meta)
         verified = float(meta.get("verified_at_epoch") or 0.0)
         age = time.time() - verified
         if not math.isfinite(verified) or not math.isfinite(age):
-            return False, "execution_marker_timestamp_invalid"
+            return _execution_proof_result(False, "execution_marker_timestamp_invalid", meta)
         # A 30-minute upper bound is mandatory even if an optional legacy
         # policy disables its own age limit.  Never use writer heartbeat age
         # as execution evidence.
         if verified <= 0 or age < -5.0 or age > 1800.0:
-            return False, "execution_marker_missing_future_or_stale"
-        return True, "fresh_genuine_order_or_fill_execution_proof"
+            return _execution_proof_result(False, "execution_marker_missing_future_or_stale", meta)
+        return _execution_proof_result(True, "fresh_genuine_order_or_fill_execution_proof", meta)
     except Exception as exc:
-        return False, f"execution_proof_unavailable:{type(exc).__name__}"
+        return _execution_proof_result(
+            False, f"execution_proof_unavailable:{type(exc).__name__}", meta,
+        )
 
 
 def _collect_proofs() -> tuple[dict[str, bool], dict[str, Any]]:

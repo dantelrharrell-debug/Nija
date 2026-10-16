@@ -252,6 +252,9 @@ def _patch_trading_strategy_provenance() -> bool:
                 payload["stage"] = normalized
                 payload["source"] = _EXECUTION_SOURCE
                 payload["proof_kind"] = _EXECUTION_KIND
+                payload["producer"] = MARKER
+                if evidence_epoch is not None:
+                    payload["broker_event_at_epoch"] = verified_epoch
                 payload.setdefault("verified_at_epoch", time.time())
                 _atomic_json_write(path, payload)
                 LOGGER.critical(
@@ -325,6 +328,13 @@ def _patch_tsm_execution_provenance() -> bool:
                 provenance_ok, provenance_reason = _execution_provenance_valid(payload, required)
                 meta["source"] = str(payload.get("source", "") or "")
                 meta["proof_kind"] = str(payload.get("proof_kind", "") or "")
+                meta["producer"] = str(payload.get("producer", "") or "unknown")
+                meta["verified_at_epoch"] = payload.get("verified_at_epoch")
+                meta["broker_event_at_epoch"] = (
+                    payload.get("broker_event_at_epoch")
+                    or payload.get("broker_fill_at_epoch")
+                    or payload.get("broker_execution_epoch")
+                )
                 meta["v169_provenance"] = provenance_reason
                 if not provenance_ok:
                     LOGGER.critical(
