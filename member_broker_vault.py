@@ -9,6 +9,7 @@ import base64
 import binascii
 import json
 import os
+import re
 import secrets
 from dataclasses import dataclass
 from typing import Callable, Mapping
@@ -97,11 +98,14 @@ class BrokerVault:
     def _member(self, token: str) -> Member:
         # PocketBase verifies the signature and validity server-side.
         response = self._request("POST", "/.sfs-be/api/collections/users/auth-refresh", token)
-        record = response.get("record") or {}
-        member = Member(str(record.get("id") or ""), record.get("verified") is True)
-        if not member.id or not member.verified:
+        record = response.get("record")
+        if not isinstance(record, dict):
             raise VaultError("Verified member required")
-        if not self._entitlement(member.id):
+        member = Member(record.get("id"), record.get("verified") is True)
+        if (not isinstance(member.id, str) or not re.fullmatch(r"[A-Za-z0-9_-]+", member.id)
+                or not member.verified):
+            raise VaultError("Verified member required")
+        if self._entitlement(member.id) is not True:
             raise VaultError("Active Founding 100 entitlement required")
         return member
 
@@ -171,6 +175,27 @@ class BrokerVault:
     def list_metadata(self, member_token: str) -> list[dict[str, str]]:
         """Only return identifiers/labels; never return ciphertext to clients."""
         member = self._member(member_token)
+        return [
+            {"id": row["id"], "broker": row["broker"], "environment": row["environment"]}
+            for row in self._owned_records(member_token, member)
+        ]
+
+    def retrieve_credentials(
+        self, member_token: str, broker: str, environment: str,
+    ) -> dict[str, str]:
+        """Decrypt one authenticated owner's scope inside the trusted backend only."""
+        self._scope(broker, environment)
+        member = self._member(member_token)
+        rows = self._owned_records(member_token, member)
+        matches = [row for row in rows if row["broker"] == broker and row["environment"] == environment]
+        if len(matches) != 1:
+            raise VaultError("Exactly one owned credential record required")
+        envelope = matches[0].get("ciphertext")
+        if not isinstance(envelope, str) or not envelope or len(envelope) > MAX_CIPHERTEXT:
+            raise VaultError("Invalid encrypted credential record")
+        return self.decrypt(member.id, broker, environment, envelope)
+
+    def _owned_records(self, member_token: str, member: Member) -> list[dict]:
         result = self._request(
             "GET", f"/.sfs-be/api/collections/{COLLECTION}/records",
             member_token, params={"filter": f'user_id="{member.id}"', "perPage": 100},
@@ -181,7 +206,8 @@ class BrokerVault:
                 or isinstance(total_pages, bool) or total_pages not in (0, 1)
                 or (total_pages == 0 and bool(rows))):
             raise VaultError("Vault metadata response incomplete or invalid")
-        metadata: list[dict[str, str]] = []
+        scopes = set()
+        identifiers = set()
         for row in rows:
             if not isinstance(row, dict) or row.get("user_id") != member.id:
                 raise VaultError("Vault ownership mismatch")
@@ -189,7 +215,9 @@ class BrokerVault:
                     or row.get("broker") not in BROKERS
                     or row.get("environment") not in ENVIRONMENTS):
                 raise VaultError("Vault metadata invalid")
-            metadata.append({
-                "id": row["id"], "broker": row["broker"], "environment": row["environment"]
-            })
-        return metadata
+            scope = (row["broker"], row["environment"])
+            if scope in scopes or row["id"] in identifiers:
+                raise VaultError("Duplicate broker credential record")
+            scopes.add(scope)
+            identifiers.add(row["id"])
+        return rows
