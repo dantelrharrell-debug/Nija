@@ -286,7 +286,7 @@ class BillingServiceStore:
         customer_id: str,
         subscription_id: str,
         payment_status: str,
-    ) -> None:
+    ) -> bool:
         now = self._now()
         with self.engine.begin() as conn:
             row = conn.execute(
@@ -297,6 +297,36 @@ class BillingServiceStore:
             if not row:
                 raise BillingIdentityMismatch("Checkout Session was not created by NIJA billing")
             session = dict(row._mapping)
+            customer_row = conn.execute(
+                select(self.customers)
+                .where(self.customers.c.nija_user_id == session["nija_user_id"])
+                .with_for_update()
+            ).first()
+            customer = dict(customer_row._mapping) if customer_row else {}
+            authoritative_active = str(customer.get("status") or "").lower() in {
+                "active",
+                "trialing",
+            }
+            if (
+                (session.get("stripe_subscription_id") not in (None, subscription_id))
+                or (
+                    authoritative_active
+                    and customer.get("stripe_subscription_id") not in (None, subscription_id)
+                )
+            ):
+                conn.execute(
+                    update(self.checkout_sessions)
+                    .where(self.checkout_sessions.c.checkout_session_id == session_id)
+                    .values(
+                        payment_status=payment_status,
+                        verification_status="conflict",
+                        verification_reason="another_subscription_is_authoritatively_bound",
+                        verified=False,
+                        updated_at=now,
+                    )
+                )
+                return False
+
             conn.execute(
                 update(self.checkout_sessions)
                 .where(self.checkout_sessions.c.checkout_session_id == session_id)
@@ -310,16 +340,6 @@ class BillingServiceStore:
                     updated_at=now,
                 )
             )
-            customer_row = conn.execute(
-                select(self.customers).where(
-                    self.customers.c.nija_user_id == session["nija_user_id"]
-                )
-            ).first()
-            customer = dict(customer_row._mapping) if customer_row else {}
-            authoritative_active = str(customer.get("status") or "").lower() in {
-                "active",
-                "trialing",
-            }
             conn.execute(
                 update(self.customers)
                 .where(self.customers.c.nija_user_id == session["nija_user_id"])
@@ -335,6 +355,7 @@ class BillingServiceStore:
                     updated_at=now,
                 )
             )
+        return True
 
     def set_checkout_status(
         self,
