@@ -413,7 +413,7 @@ def _account_audit(account: str, broker: Any, structural_exit_ready: bool) -> tu
             "broker": venue,
             "symbol": symbol,
             "quantity": row["quantity"],
-            "entry_price": entry if math.isfinite(entry) else None,
+            "entry_price": entry if math.isfinite(entry) else 0.0,
             "cost_basis_verified": verified,
             "auto_exit_blocked": blocked,
             "authoritative_snapshot_adopted": in_snapshot,
