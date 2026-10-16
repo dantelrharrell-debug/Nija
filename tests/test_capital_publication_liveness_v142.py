@@ -169,6 +169,28 @@ def test_untracked_rollover_emits_ownership_diagnostic_without_changing_gate(mon
     assert "safe_fail_closed=true" in caplog.text
 
 
+
+def test_unknown_publication_state_preserves_inflight_coordinator(monkeypatch, caplog) -> None:
+    old = SimpleNamespace(_in_flight=True)
+    manager = SimpleNamespace(_capital_coordinator=old)
+
+    def unavailable_authority():
+        raise RuntimeError("status_probe_unavailable")
+
+    def forbidden_rollover(*args, **kwargs):
+        raise AssertionError("must not replace coordinator on unknown publication state")
+
+    monkeypatch.setattr(v142, "_authority", unavailable_authority)
+    monkeypatch.setattr(v142, "_rollover_coordinator", forbidden_rollover)
+    caplog.set_level("WARNING", logger="nija.capital_publication_liveness_v142")
+
+    assert v142._coordinator_in_flight_v142(manager) is True
+    assert manager._capital_coordinator is old
+    assert old._in_flight is True
+    assert "CAPITAL_PUBLICATION_V142_STATUS_UNVERIFIED" in caplog.text
+    assert "rollover_allowed=false" in caplog.text
+
+
 def test_rollover_reuses_canonical_fsm_objects_and_hydration(monkeypatch) -> None:
     from bot import capital_flow_state_machine as flow
 
