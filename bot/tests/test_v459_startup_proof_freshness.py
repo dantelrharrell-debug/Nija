@@ -23,7 +23,7 @@ def test_small_capital_clock_skew_is_tolerated(monkeypatch):
     _capital(monkeypatch, 1002.0)
     record = v16._fresh_capital_handoff()
     assert record is not None and record["hydrated"] is True
-    assert record["handoff_age_s"] < 0
+    assert record["handoff_age_s"] == 0
 
 
 @pytest.mark.parametrize("bad", ["nan", "inf", "-inf", "1e9999"])
