@@ -8,7 +8,7 @@ export default function MemberBrokerKeyForm({ pb }) {
   const [ready, setReady] = useState(false);
   const [checking, setChecking] = useState(true);
   const [broker, setBroker] = useState("kraken");
-  const [environment, setEnvironment] = useState("paper");
+  const [environment, setEnvironment] = useState("live");
   const [apiKey, setApiKey] = useState("");
   const [apiSecret, setApiSecret] = useState("");
   const [passphrase, setPassphrase] = useState("");
@@ -55,6 +55,9 @@ export default function MemberBrokerKeyForm({ pb }) {
     } catch {
       setMessage("Secure connection could not be completed. No brokerage access has been confirmed.");
     } finally {
+      setApiKey("");
+      setApiSecret("");
+      setPassphrase("");
       setBusy(false);
     }
   }
@@ -65,11 +68,11 @@ export default function MemberBrokerKeyForm({ pb }) {
     {!canUse ? <p role="status">{checking ? "Checking secure setup availability…" :
       "Secure brokerage setup temporarily unavailable. Please try again later."}</p> :
     <form onSubmit={submit} autoComplete="off">
-      <label>Brokerage <select value={broker} onChange={e => setBroker(e.target.value)}>
+      <label>Brokerage <select value={broker} onChange={e => { setBroker(e.target.value); setEnvironment("live"); setApiKey(""); setApiSecret(""); setPassphrase(""); setMessage(""); }}>
         <option value="kraken">Kraken</option><option value="alpaca">Alpaca</option><option value="coinbase">Coinbase Advanced Trade</option><option value="okx">OKX</option>
       </select></label>
       <label>Environment <select value={environment} onChange={e => setEnvironment(e.target.value)}>
-        <option value="paper">Paper</option><option value="live">Live (storage only; trading disabled)</option>
+        {broker === "alpaca" && <option value="paper">Paper</option>}<option value="live">Live (storage only; trading disabled)</option>
       </select></label>
       <label>{broker === "coinbase" ? "CDP API key name" : "API key"} <input value={apiKey} onChange={e => setApiKey(e.target.value)} required autoComplete="off" /></label>
       <label>{broker === "coinbase" ? "CDP private key (PEM)" : "API secret"} <input type="password" value={apiSecret} onChange={e => setApiSecret(e.target.value)} required autoComplete="new-password" /></label>
