@@ -139,6 +139,33 @@ def audit_recent_handoff(now_utc: datetime | None = None) -> dict[str, Any]:
             "scanned": scanned, "candidates": candidates, "enriched": enriched}
 
 
+import threading
+import time
+
+_HANDOFF_LOCK = threading.Lock()
+_HANDOFF_STARTED = False
+
+
+def _handoff_worker() -> None:
+    while True:
+        run_readonly_handoff_audit()
+        time.sleep(3600)
+
+
+def start_readonly_handoff_audit() -> None:
+    """Start a single hourly provider-evidence poll, with no outbound calls."""
+    global _HANDOFF_STARTED
+    with _HANDOFF_LOCK:
+        if _HANDOFF_STARTED:
+            return
+        _HANDOFF_STARTED = True
+    threading.Thread(
+        target=_handoff_worker,
+        name="nija-justcall-handoff-readonly",
+        daemon=True,
+    ).start()
+
+
 def run_readonly_handoff_audit() -> dict[str, Any]:
     """Log only non-sensitive counts; never attest to a human recipient."""
     try:
