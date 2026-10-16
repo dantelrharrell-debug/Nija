@@ -1,6 +1,6 @@
 """Regression tests for safe NIJA checkout persistence during concurrent retries."""
 import pytest
-from sqlalchemy import update
+from sqlalchemy import insert, update
 
 from billing_service_store import BillingIdentityMismatch, BillingServiceStore
 
@@ -83,6 +83,50 @@ def test_verified_trial_is_not_reset_by_checkout_race(tmp_path):
     assert store.get_customer("app-123")["entitled"] is True
     assert store.get_customer("app-123")["stripe_subscription_id"] == "sub_1"
     assert store.get_checkout("cs_2") is None
+
+
+def test_delayed_completed_checkout_cannot_replace_live_subscription(tmp_path):
+    store = new_store(tmp_path)
+    create(store, "cs_1")
+    assert store.mark_checkout_verified(
+        session_id="cs_1", customer_id="cus_1",
+        subscription_id="sub_1", payment_status="no_payment_required",
+    )
+    assert store.apply_subscription_state(
+        user_id="app-123", customer_id="cus_1", subscription_id="sub_1",
+        status="trialing", offer_code="founding_beta",
+        current_period_end=1999999999, entitled=True,
+        reason="authoritative_subscription_state", event_created=100,
+    )
+
+    now = store._now()
+    with store.engine.begin() as conn:
+        conn.execute(
+            insert(store.checkout_sessions).values(
+                checkout_session_id="cs_delayed",
+                nija_user_id="app-123",
+                email="member@example.test",
+                offer_code="founding_beta",
+                expected_price_id="price_1",
+                expected_product_id="prod_1",
+                verification_status="pending",
+                verified=False,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+
+    assert not store.mark_checkout_verified(
+        session_id="cs_delayed", customer_id="cus_2",
+        subscription_id="sub_2", payment_status="no_payment_required",
+    )
+    customer = store.get_customer("app-123")
+    assert customer["status"] == "trialing"
+    assert customer["entitled"] is True
+    assert customer["stripe_customer_id"] == "cus_1"
+    assert customer["stripe_subscription_id"] == "sub_1"
+    assert store.get_checkout("cs_delayed")["verification_status"] == "conflict"
+    assert store.get_checkout("cs_delayed")["verified"] is False
 
 
 @pytest.mark.parametrize("delayed_status", ["expired", "payment_failed"])
