@@ -1,0 +1,39 @@
+name: NIJA protective coverage numeric safety
+
+on:
+  pull_request:
+    paths:
+      - "bot/runtime_all_account_position_exit_coverage_v281_patch.py"
+      - "tests/test_runtime_all_account_position_exit_coverage_v281.py"
+      - "tests/test_v460_protective_coverage_numeric.py"
+      - ".github/workflows/nija-protective-coverage-numeric.yml"
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-protective-coverage-evidence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install offline test dependencies
+        run: python -m pip install pytest==8.2.2
+      - name: Verify numeric safety and existing coverage behavior
+        env:
+          GH_TOKEN: ""
+          SSH_PRIVATE_KEY: ""
+          KRAKEN_API_KEY: ""
+          KRAKEN_API_SECRET: ""
+          COINBASE_API_KEY: ""
+          COINBASE_API_SECRET: ""
+        run: |
+          python -m pytest -q \
+            tests/test_runtime_all_account_position_exit_coverage_v281.py \
+            tests/test_v460_protective_coverage_numeric.py
