@@ -153,3 +153,43 @@ def test_independent_readiness_audit_preserves_valid_evidence(monkeypatch):
         },
     }
     assert feeder._independent_readiness_gaps(contact) == ()
+
+
+def test_dnc_found_is_suppressed_before_timezone_gate(monkeypatch):
+    """Provider DNC hits cannot be discarded by unrelated missing fields."""
+    seen = []
+    monkeypatch.setattr(feeder, "set_suppression", lambda **kwargs: seen.append(kwargs))
+    contact = {
+        "id": "test-dnc-contact",
+        "typed_custom_fields": {},
+        "phone_numbers": [{
+            "sanitized_number": "+12065550123",
+            "dnc_status_cd": "found",
+        }],
+    }
+    payload, reason = feeder._contact_payload(contact)
+    assert payload is None
+    assert reason == "missing_timezone"
+    assert seen == [{
+        "contact_number": "+12065550123",
+        "reason": "apollo_dnc_found",
+        "source": "apollo",
+        "active": True,
+    }]
+
+
+def test_pending_dnc_is_not_misreported_as_found(monkeypatch):
+    seen = []
+    monkeypatch.setattr(feeder, "set_suppression", lambda **kwargs: seen.append(kwargs))
+    contact = {
+        "id": "test-pending-contact",
+        "typed_custom_fields": {},
+        "phone_numbers": [{
+            "sanitized_number": "+12065550123",
+            "dnc_status_cd": "pending",
+        }],
+    }
+    payload, reason = feeder._contact_payload(contact)
+    assert payload is None
+    assert reason == "missing_timezone"
+    assert seen == []
