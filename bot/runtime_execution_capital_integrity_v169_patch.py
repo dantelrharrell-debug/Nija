@@ -253,7 +253,24 @@ def _patch_trading_strategy_provenance() -> bool:
                 payload["source"] = _EXECUTION_SOURCE
                 payload["proof_kind"] = _EXECUTION_KIND
                 payload["producer"] = MARKER
+                # Only publish broker event time when the original proof
+                # preserved the exact event timestamp supplied by the broker.
+                # Never synthesize event time from observation time.
+                evidence_epoch = (
+                    details.get("broker_execution_epoch")
+                    if isinstance(details, dict) else None
+                )
                 if evidence_epoch is not None:
+                    try:
+                        verified_epoch = float(evidence_epoch)
+                        marker_epoch = float(payload["verified_at_epoch"])
+                    except (TypeError, ValueError, KeyError, OverflowError) as exc:
+                        raise ValueError("invalid_broker_execution_epoch") from exc
+                    if not (
+                        0.0 < verified_epoch <= time.time() + 60.0
+                        and abs(marker_epoch - verified_epoch) < 0.001
+                    ):
+                        raise ValueError("unverified_broker_execution_epoch")
                     payload["broker_event_at_epoch"] = verified_epoch
                 payload.setdefault("verified_at_epoch", time.time())
                 _atomic_json_write(path, payload)
