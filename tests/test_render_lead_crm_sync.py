@@ -494,6 +494,12 @@ def test_sqlite_phone_survives_redis_rebootstrap(monkeypatch, tmp_path):
         "name": "Restore Phone",
         "phone": "+12065550123",
     }, "evt-restored-phone")
+    with sync._connect() as conn:
+        conn.execute(
+            "INSERT INTO website_leads (event_key,email,name,received_at) VALUES (?,?,?,?)",
+            ("evt-restored-phone", "restorephone@example.com", "Restore Phone", sync._now_iso()),
+        )
+        conn.commit()
     fake = FakeRedis()
     assert sync._bootstrap_redis_from_sqlite(fake) >= 1
     assert fake.hget(sync._redis_event_key("evt-restored-phone"), "phone") == "+12065550123"
