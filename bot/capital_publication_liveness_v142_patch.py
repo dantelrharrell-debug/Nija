@@ -590,8 +590,16 @@ def _coordinator_in_flight_v142(manager: Any) -> bool:
         try:
             v137 = importlib.import_module("bot.capital_publication_deadline_v137_patch")
             current, _meta = v137._publication_meta(_authority())
-        except Exception:
-            current = False
+        except Exception as exc:
+            # Unknown publication status is not evidence of expiry. Avoid
+            # replacing a possibly active bootstrap coordinator on probe error.
+            LOGGER.warning(
+                "CAPITAL_PUBLICATION_V142_STATUS_UNVERIFIED marker=%s "
+                "error=%s rollover_allowed=false trading_fail_closed=true",
+                MARKER,
+                type(exc).__name__,
+            )
+            return True
         should_roll = not current
 
     if should_roll and not tracked:
