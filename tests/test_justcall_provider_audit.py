@@ -176,6 +176,14 @@ class ProviderAuditTests(unittest.TestCase):
         with mock.patch.object(audit, "_provider_request", return_value={"data": [bad]}):
             result = audit.audit_provider_today(NOW)
         self.assertFalse(result["verified"])
+        self.assertEqual(result["reason"], "call_utc_timestamp_missing")
+        self.assertIsNone(result["confirmed_outbound_attempts"])
+
+    def test_invalid_timestamp_is_unverified_not_zero(self):
+        bad = row(1, clock="not-a-time")
+        with mock.patch.object(audit, "_provider_request", return_value={"data": [bad]}):
+            result = audit.audit_provider_today(NOW)
+        self.assertFalse(result["verified"])
         self.assertEqual(result["reason"], "call_utc_timestamp_invalid")
         self.assertIsNone(result["confirmed_outbound_attempts"])
 
