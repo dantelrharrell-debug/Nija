@@ -1,8 +1,11 @@
 """Fail-closed tests for read-only, account-scoped Kraken evidence pagination."""
+from enum import Enum
+from types import SimpleNamespace
+
 import pytest
 
 from scripts.nija_kraken_readonly_history_collector_v441 import (
-    IncompleteHistory, collect_history,
+    IncompleteHistory, collect_from_existing_broker, collect_history,
 )
 
 
@@ -60,8 +63,11 @@ def test_duplicate_ids_rejected():
 
 
 def test_existing_broker_wrapper_restricts_endpoints_and_category():
-    from scripts.nija_kraken_readonly_history_collector_v441 import collect_from_existing_broker
     class Broker:
+        broker_type = "kraken"
+        account_type = "platform"
+        user_id = None
+
         def _kraken_private_call(self, endpoint, params, *, category):
             assert category == "monitoring"
             assert set(params) == {"ofs"}
@@ -71,6 +77,90 @@ def test_existing_broker_wrapper_restricts_endpoints_and_category():
     report = collect_from_existing_broker(Broker(), account_scope="platform:kraken", monitoring_category="monitoring")
     assert report["trading_authorized"] is False
     assert report["ledger_links_verified"] is False
+
+
+@pytest.mark.parametrize(("account_type", "user_id", "scope"), [
+    ("user", "client", "platform:kraken"),
+    ("platform", None, "user:client:kraken"),
+    ("user", "client", "user:other:kraken"),
+])
+def test_existing_broker_rejects_cross_account_scope_before_read(account_type, user_id, scope):
+    calls = []
+    broker = SimpleNamespace(
+        broker_type="kraken", account_type=account_type, user_id=user_id,
+        _kraken_private_call=lambda *args, **kwargs: calls.append(args),
+    )
+    with pytest.raises(ValueError, match="does not match"):
+        collect_from_existing_broker(broker, account_scope=scope, monitoring_category="monitoring")
+    assert calls == []
+
+
+@pytest.mark.parametrize("metadata", [
+    {},
+    {"broker_type": "okx", "account_type": "platform"},
+    {"broker_type": "kraken"},
+    {"broker_type": "kraken", "account_type": "platform"},
+    {"broker_type": "kraken", "account_type": "unknown"},
+    {"broker_type": "kraken", "account_type": "platform", "user_id": "client"},
+    {"broker_type": "kraken", "account_type": "user", "user_id": None},
+    {"broker_type": "kraken", "account_type": "user", "user_id": ""},
+    {"broker_type": "kraken", "account_type": "user", "user_id": " client "},
+    {"broker_type": "kraken", "account_type": "user", "user_id": "client:kraken"},
+    {"broker_type": "kraken", "account_type": "user", "user_id": 123},
+])
+def test_existing_broker_rejects_ambiguous_metadata_before_read(metadata):
+    calls = []
+    broker = SimpleNamespace(**metadata, _kraken_private_call=lambda *args, **kwargs: calls.append(args))
+    with pytest.raises(ValueError, match="metadata required"):
+        collect_from_existing_broker(broker, account_scope="platform:kraken", monitoring_category="monitoring")
+    assert calls == []
+
+
+def test_existing_user_broker_accepts_exact_enum_routing_without_certifying_identity():
+    class BrokerType(Enum):
+        KRAKEN = "kraken"
+
+    class AccountType(Enum):
+        USER = "user"
+
+    calls = []
+
+    def read(endpoint, params, *, category):
+        calls.append((endpoint, dict(params), category))
+        field = dict(TradesHistory="trades", ClosedOrders="closed", Ledgers="ledger")[endpoint]
+        return {"error": [], "result": {"count": 0, field: {}}}
+
+    broker = SimpleNamespace(
+        broker_type=BrokerType.KRAKEN, account_type=AccountType.USER, user_id="client",
+        _kraken_private_call=read,
+    )
+    report = collect_from_existing_broker(
+        broker, account_scope="user:client:kraken", monitoring_category="monitoring",
+    )
+    assert len(calls) == 6
+    assert report["account_scope_asserted_by_caller"] == "user:client:kraken"
+    assert report["authenticated_identity_independently_verified"] is False
+    assert report["entry_exit_reconciliation_verified"] is False
+    assert report["trading_authorized"] is False
+
+
+@pytest.mark.parametrize("change_on_call", [1, 6])
+def test_existing_broker_scope_change_during_read_aborts_report(change_on_call):
+    calls = []
+    broker = SimpleNamespace(broker_type="kraken", account_type="platform", user_id=None)
+
+    def read(endpoint, params, *, category):
+        calls.append(endpoint)
+        if len(calls) == change_on_call:
+            broker.account_type = "user"
+            broker.user_id = "other"
+        field = dict(TradesHistory="trades", ClosedOrders="closed", Ledgers="ledger")[endpoint]
+        return {"error": [], "result": {"count": 0, field: {}}}
+
+    broker._kraken_private_call = read
+    with pytest.raises(ValueError, match="does not match"):
+        collect_from_existing_broker(broker, account_scope="platform:kraken", monitoring_category="monitoring")
+    assert len(calls) == change_on_call
 
 
 def test_equal_counts_with_changed_record_content_fail_closed():
