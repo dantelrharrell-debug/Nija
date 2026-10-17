@@ -166,7 +166,7 @@ def test_v142_repaired_runtime_path_uses_proactive_caller_deadline(monkeypatch):
     monkeypatch.setattr(v142, "_reassert_bounded_fetch_contract", lambda: (True, "ok"))
     monkeypatch.setattr(v142, "_runtime_terminal", lambda _: True)
     monkeypatch.setattr(v142, "_runtime_pipeline_deadline_seconds", lambda: 80.0)
-    monkeypatch.setattr(v142, "_runtime_publication_matches_result", lambda _snapshot: None)
+    monkeypatch.setattr(v142, "_runtime_publication_matches_result", lambda _snapshot: True)
     monkeypatch.setattr(v166, "_proactive_pipeline_deadline_seconds", lambda: 40.0)
     assert v176._patch_proactive_deadline_context()
 
@@ -313,6 +313,15 @@ def test_v176_outside_v142_rearms_once_after_runtime_refresh(monkeypatch):
         v142._ACTIVE_GENERATION = old_active
         v142._NEXT_GENERATION = old_next
         v142._ROLLOVER_OCCURRED = old_rollover
+
+
+def test_publication_status_probe_failure_is_not_rearm_eligible(monkeypatch):
+    monkeypatch.setattr(
+        v142,
+        "_authority",
+        lambda: (_ for _ in ()).throw(RuntimeError("authority unavailable")),
+    )
+    assert v142._runtime_publication_matches_result(SimpleNamespace()) is False
 
 
 def test_rearm_wrapper_detection_uses_code_identity_not_copied_markers(monkeypatch):

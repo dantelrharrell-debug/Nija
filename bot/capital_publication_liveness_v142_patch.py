@@ -260,12 +260,12 @@ def _runtime_deadline_with_caller_context_v142(trigger: str) -> float:
         restorer(previous)
 
 
-def _runtime_publication_matches_result(snapshot: Any) -> bool | None:
+def _runtime_publication_matches_result(snapshot: Any) -> bool:
     try:
         authority = _authority()
         status_fn = getattr(authority, "get_snapshot_publication_status", None)
         if not callable(status_fn):
-            return None
+            return False
         status = status_fn()
         if status is None or not bool(getattr(status, "accepted", False)):
             return False
@@ -275,7 +275,7 @@ def _runtime_publication_matches_result(snapshot: Any) -> bool | None:
         computed_at = getattr(snapshot, "computed_at", None)
         return published_at is None or computed_at is None or published_at == computed_at
     except Exception:
-        return None
+        return False
 
 
 def _reassert_bounded_fetch_contract() -> tuple[bool, str]:
@@ -624,10 +624,9 @@ def _patch_coordinator_execute() -> bool:
                 == generation
                 and active_generation == generation
             )
-            if not generation_current or current_publication is False:
+            if not generation_current or not current_publication:
                 return None
-            if current_publication is True:
-                _rearm_inner_v176(trigger)
+            _rearm_inner_v176(trigger)
             return result
         except queue.Empty:
             with self._lock:
