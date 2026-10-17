@@ -199,3 +199,53 @@ def test_nonfinite_snapshot_mark_cannot_erase_verified_entry(monkeypatch, tmp_pa
     assert after["cost_basis_verified"] is True
     assert after["last_broker_snapshot_price"] == 0.0
     assert after["last_broker_snapshot_value_usd"] == 0.0
+
+
+def test_invalid_entry_price_store_quantity_cannot_verify_basis(monkeypatch, tmp_path):
+    """Untrusted stored quantities cannot become 'unknown quantity' wildcards.
+
+    Keep EntryPriceStore enabled: the original tests disabled the fallback
+    containing the invalid-quantity verification bypass.
+    """
+    from bot.entry_price_store import EntryPriceStore
+
+    monkeypatch.setattr(position_tracker, "ENTRY_PRICE_STORE_AVAILABLE", True)
+    monkeypatch.setattr(position_tracker, "DustPositionManager", None)
+    store = EntryPriceStore(str(tmp_path / "entry_prices.json"))
+    monkeypatch.setattr(position_tracker, "get_entry_price_store", lambda: store)
+    tracker = position_tracker.PositionTracker(str(tmp_path / "positions.json"))
+
+    for bad_qty in (float("inf"), float("-inf"), float("nan"), -1.0):
+        store.save("BABY-USD", 0.035, source="api", quantity=bad_qty)
+        assert tracker.sync_position_snapshot("BABY-USD", 0.00142)
+        row = tracker.get_position("BABY-USD")
+        assert row["quantity"] == 0.00142
+        assert row["entry_price"] == 0.0
+        assert row["entry_price_source"] == "reconciliation_required"
+        assert row["cost_basis_verified"] is False
+        assert row["auto_exit_blocked"] is True
+
+    # A correctly scoped stored quantity remains eligible for verified reuse.
+    store.save("BABY-USD", 0.035, source="api", quantity=0.00142)
+    assert tracker.sync_position_snapshot("BABY-USD", 0.00142)
+    verified = tracker.get_position("BABY-USD")
+    assert verified["entry_price"] == 0.035
+    assert verified["cost_basis_verified"] is True
+    assert verified["auto_exit_blocked"] is False
+
+
+def test_legacy_zero_store_quantity_keeps_explicit_compatibility(monkeypatch, tmp_path):
+    """Preserve historical quantity=0 matching, but never for malformed data."""
+    from bot.entry_price_store import EntryPriceStore
+
+    monkeypatch.setattr(position_tracker, "ENTRY_PRICE_STORE_AVAILABLE", True)
+    monkeypatch.setattr(position_tracker, "DustPositionManager", None)
+    store = EntryPriceStore(str(tmp_path / "entry_prices.json"))
+    monkeypatch.setattr(position_tracker, "get_entry_price_store", lambda: store)
+    store.save("BTC-USD", 20000.0, source="trade_history", quantity=0.0)
+    tracker = position_tracker.PositionTracker(str(tmp_path / "positions.json"))
+
+    assert tracker.sync_position_snapshot("BTC-USD", 0.001)
+    row = tracker.get_position("BTC-USD")
+    assert row["entry_price"] == 20000.0
+    assert row["cost_basis_verified"] is True
