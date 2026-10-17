@@ -404,14 +404,34 @@ def _patch_coordinator_execute() -> bool:
             return None
 
         # Bootstrap transitions are thread-owned. Preserve the exact legacy
-        # synchronous path until the capital bootstrap FSM is terminal.
+        # synchronous path until the capital bootstrap FSM is terminal. Track
+        # the actual owning thread separately from runtime generation workers;
+        # a live synchronous refresh must not appear to be ownerless merely
+        # because it has no v142 worker generation.
         if not _runtime_terminal(self):
-            return original(
-                self,
-                broker_map=broker_map,
-                trigger=trigger,
-                open_exposure_usd=open_exposure_usd,
-            )
+            sync_owned = False
+            with self._lock:
+                if (
+                    not bool(getattr(self, "_in_flight", False))
+                    and getattr(self, "_nija_v142_sync_owner_thread", None) is None
+                ):
+                    self._nija_v142_sync_owner_thread = threading.current_thread()
+                    self._nija_v142_sync_started_monotonic = time.monotonic()
+                    self._nija_v142_sync_trigger = str(trigger)
+                    sync_owned = True
+            try:
+                return original(
+                    self,
+                    broker_map=broker_map,
+                    trigger=trigger,
+                    open_exposure_usd=open_exposure_usd,
+                )
+            finally:
+                if sync_owned:
+                    with self._lock:
+                        if getattr(self, "_nija_v142_sync_owner_thread", None) is threading.current_thread():
+                            self._nija_v142_sync_owner_thread = None
+                            self._nija_v142_sync_finished_monotonic = time.monotonic()
 
         with self._lock:
             if bool(getattr(self, "_in_flight", False)):
@@ -585,8 +605,30 @@ def _coordinator_in_flight_v142(manager: Any) -> bool:
 
     should_roll = bool(timed_out or (tracked and (not thread_alive or age_s > limit_s + 1.0)))
     if not tracked:
-        # A pre-v142/untracked flight cannot prove the total-runtime bound. Only
-        # replace it once the immutable publication itself is no longer current.
+        # Synchronous bootstrap refreshes are owned by an actual thread, not
+        # a v142 runtime-generation worker. Do not replace a live, bounded
+        # refresh solely because an older publication reached its original
+        # expiry. Once its unchanged pipeline deadline passes, the existing
+        # publication expiry and fail-closed rollover policy applies.
+        sync_owner = getattr(coordinator, "_nija_v142_sync_owner_thread", None)
+        sync_alive_fn = getattr(sync_owner, "is_alive", None)
+        try:
+            sync_alive = bool(sync_alive_fn()) if callable(sync_alive_fn) else False
+        except Exception:
+            sync_alive = False
+        try:
+            sync_started = float(
+                getattr(coordinator, "_nija_v142_sync_started_monotonic", 0.0) or 0.0
+            )
+        except (TypeError, ValueError):
+            sync_started = 0.0
+        sync_age_s = max(0.0, time.monotonic() - sync_started) if sync_started > 0.0 else float("inf")
+        if sync_alive and sync_age_s <= limit_s:
+            return True
+
+        # An untracked flight cannot prove a total-runtime bound once its owner
+        # has ended or exceeded the deadline. Replace only when the original
+        # immutable publication has also expired.
         try:
             v137 = importlib.import_module("bot.capital_publication_deadline_v137_patch")
             current, _meta = v137._publication_meta(_authority())
