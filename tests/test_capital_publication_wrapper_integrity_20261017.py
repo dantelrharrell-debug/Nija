@@ -166,6 +166,7 @@ def test_v142_repaired_runtime_path_uses_proactive_caller_deadline(monkeypatch):
     monkeypatch.setattr(v142, "_reassert_bounded_fetch_contract", lambda: (True, "ok"))
     monkeypatch.setattr(v142, "_runtime_terminal", lambda _: True)
     monkeypatch.setattr(v142, "_runtime_pipeline_deadline_seconds", lambda: 80.0)
+    monkeypatch.setattr(v142, "_runtime_publication_matches_result", lambda _snapshot: None)
     monkeypatch.setattr(v166, "_proactive_pipeline_deadline_seconds", lambda: 40.0)
     assert v176._patch_proactive_deadline_context()
 
@@ -243,7 +244,7 @@ def test_v142_outside_v176_rearms_only_successful_current_publication(monkeypatc
         assert calls == []
 
         monkeypatch.setattr(v142, "_runtime_publication_matches_result", lambda _snapshot: False)
-        assert execute(_runtime_coordinator(lambda **_kwargs: snapshot), {}) is snapshot
+        assert execute(_runtime_coordinator(lambda **_kwargs: snapshot), {}) is None
         assert calls == []
 
         monkeypatch.setattr(v142, "_runtime_publication_matches_result", lambda _snapshot: True)
@@ -255,7 +256,7 @@ def test_v142_outside_v176_rearms_only_successful_current_publication(monkeypatc
             )
             return snapshot
 
-        assert execute(_runtime_coordinator(retired_pipeline), {}) is snapshot
+        assert execute(_runtime_coordinator(retired_pipeline), {}) is None
         assert calls == []
     finally:
         v142._ACTIVE_GENERATION = old_active
@@ -268,11 +269,16 @@ def test_v176_outside_v142_rearms_once_after_runtime_refresh(monkeypatch):
     from bot import runtime_capital_reactivation_v176_patch as v176
 
     calls = []
+    publication_current = [True]
     monkeypatch.setattr(flow.CapitalRefreshCoordinator, "execute_refresh", _fake_execute)
     monkeypatch.setattr(v142, "_reassert_bounded_fetch_contract", lambda: (True, "ok"))
     monkeypatch.setattr(v142, "_runtime_terminal", lambda _coordinator: True)
     monkeypatch.setattr(v142, "_runtime_pipeline_deadline_seconds", lambda: 0.02)
-    monkeypatch.setattr(v142, "_runtime_publication_matches_result", lambda _snapshot: True)
+    monkeypatch.setattr(
+        v142,
+        "_runtime_publication_matches_result",
+        lambda _snapshot: publication_current[0],
+    )
     monkeypatch.setattr(v142, "_canonical_manager", lambda: None)
     assert v142._patch_coordinator_execute()
     assert v176._patch_coordinator()
@@ -286,6 +292,23 @@ def test_v176_outside_v142_rearms_once_after_runtime_refresh(monkeypatch):
         execute = flow.CapitalRefreshCoordinator.execute_refresh
         assert execute(_runtime_coordinator(lambda **_kwargs: result), {}) is result
         assert calls == ["coordinator"]
+
+        calls.clear()
+        publication_current[0] = False
+        assert execute(_runtime_coordinator(lambda **_kwargs: result), {}) is None
+        assert calls == []
+
+        publication_current[0] = True
+
+        def retired_pipeline(**_kwargs):
+            v142._retire_generation(
+                getattr(v142._LOCAL, "refresh_generation", None),
+                "test_outer_wrapper_retired_generation",
+            )
+            return result
+
+        assert execute(_runtime_coordinator(retired_pipeline), {}) is None
+        assert calls == []
     finally:
         v142._ACTIVE_GENERATION = old_active
         v142._NEXT_GENERATION = old_next

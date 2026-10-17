@@ -260,12 +260,12 @@ def _runtime_deadline_with_caller_context_v142(trigger: str) -> float:
         restorer(previous)
 
 
-def _runtime_publication_matches_result(snapshot: Any) -> bool:
+def _runtime_publication_matches_result(snapshot: Any) -> bool | None:
     try:
         authority = _authority()
         status_fn = getattr(authority, "get_snapshot_publication_status", None)
         if not callable(status_fn):
-            return True
+            return None
         status = status_fn()
         if status is None or not bool(getattr(status, "accepted", False)):
             return False
@@ -275,7 +275,7 @@ def _runtime_publication_matches_result(snapshot: Any) -> bool:
         computed_at = getattr(snapshot, "computed_at", None)
         return published_at is None or computed_at is None or published_at == computed_at
     except Exception:
-        return False
+        return None
 
 
 def _reassert_bounded_fetch_contract() -> tuple[bool, str]:
@@ -618,12 +618,15 @@ def _patch_coordinator_execute() -> bool:
             if outcome != "ok" or result is None:
                 return None
             active_generation, _rolled = _generation_state()
-            if (
+            current_publication = _runtime_publication_matches_result(result)
+            generation_current = (
                 int(getattr(self, "_nija_v142_flight_generation", 0) or 0)
                 == generation
                 and active_generation == generation
-                and _runtime_publication_matches_result(result)
-            ):
+            )
+            if not generation_current or current_publication is False:
+                return None
+            if current_publication is True:
                 _rearm_inner_v176(trigger)
             return result
         except queue.Empty:
