@@ -319,12 +319,42 @@ def _policy_dust_excluded(position: Optional[Dict]) -> bool:
     )
 
 
+def _log_sync_outcome(
+    broker_name: str,
+    *,
+    observed_at_epoch: float,
+    source: str,
+    classification: str,
+    fetched: Optional[int] = None,
+    resolved: Optional[int] = None,
+    error_type: str = "",
+) -> None:
+    logger.info(
+        "EXCHANGE_POSITION_SYNC_RESULT broker=%s observed_at_epoch=%.6f source=%s "
+        "classification=%s fetched=%s resolved=%s error_type=%s",
+        broker_name,
+        observed_at_epoch,
+        source,
+        classification,
+        fetched if fetched is not None else "unknown",
+        resolved if resolved is not None else "unknown",
+        error_type or "none",
+    )
+
+
 def _adopt_broker_positions(broker: Any, broker_name: str, eps: Optional[Any]) -> int:
     """Fetch and exactly reconcile open positions for one broker."""
+    observed_at_epoch = time.time()
     tracker = getattr(broker, "position_tracker", None)
     if tracker is None:
         setattr(broker, "_startup_position_sync_adopted", False)
         logger.warning("EXCHANGE_POSITION_SYNC broker=%s has no position_tracker — skipping", broker_name)
+        _log_sync_outcome(
+            broker_name,
+            observed_at_epoch=observed_at_epoch,
+            source="position_tracker",
+            classification="skipped_no_tracker",
+        )
         return 0
 
     before_count = _tracker_count(tracker)
@@ -333,6 +363,13 @@ def _adopt_broker_positions(broker: Any, broker_name: str, eps: Optional[Any]) -
     except Exception as exc:
         setattr(broker, "_startup_position_sync_adopted", False)
         logger.warning("EXCHANGE_POSITION_SYNC broker=%s fetch_failed error=%s", broker_name, exc)
+        _log_sync_outcome(
+            broker_name,
+            observed_at_epoch=observed_at_epoch,
+            source="broker.get_positions",
+            classification="fetch_failed",
+            error_type=type(exc).__name__,
+        )
         return 0
 
     # Only an explicit list can prove an authoritative broker snapshot.  None,
@@ -348,6 +385,13 @@ def _adopt_broker_positions(broker: Any, broker_name: str, eps: Optional[Any]) -
             _ENTRY_PRICE_BOUND_MARKER,
             broker_name,
             type(raw_positions).__name__,
+        )
+        _log_sync_outcome(
+            broker_name,
+            observed_at_epoch=observed_at_epoch,
+            source="broker.get_positions",
+            classification="invalid_snapshot",
+            error_type=type(raw_positions).__name__,
         )
         return 0
 
@@ -370,6 +414,14 @@ def _adopt_broker_positions(broker: Any, broker_name: str, eps: Optional[Any]) -
         # explicit list successfully in this exact call.
         setattr(broker, "_startup_position_sync_adopted", True)
         setattr(broker, "_startup_position_sync_symbols", tuple())
+        _log_sync_outcome(
+            broker_name,
+            observed_at_epoch=observed_at_epoch,
+            source="broker.get_positions",
+            classification="synchronized_empty",
+            fetched=0,
+            resolved=0,
+        )
         return 0
 
     reconciled = 0
@@ -563,6 +615,19 @@ def _adopt_broker_positions(broker: Any, broker_name: str, eps: Optional[Any]) -
         len(dust_excluded_symbols),
         len(resolved_symbols),
         len(positions),
+    )
+    _log_sync_outcome(
+        broker_name,
+        observed_at_epoch=observed_at_epoch,
+        source="broker.get_positions",
+        classification=(
+            "synchronized" if fully_synced else
+            "partially_synchronized" if resolved_symbols else
+            "reconciliation_failed"
+        ),
+        fetched=len(positions),
+        resolved=len(resolved_symbols),
+        error_type="PositionReconciliationError" if errors or skipped_invalid else "",
     )
     return reconciled
 
