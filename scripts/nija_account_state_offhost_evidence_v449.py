@@ -85,7 +85,9 @@ def _json_object(raw: bytes) -> dict:
 
 
 def _read_unchanged(folder_fd: int, name: str) -> bytes:
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    # A named pipe with a valid account filename must not block the backup
+    # before fstat() can reject it. O_NONBLOCK is harmless on regular files.
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
     fd = os.open(name, flags, dir_fd=folder_fd)
     with os.fdopen(fd, "rb") as source:
         before = os.fstat(source.fileno())
@@ -109,14 +111,28 @@ def _read_unchanged(folder_fd: int, name: str) -> bytes:
 def _inventory(root: Path, directories: dict[str, Path]) -> dict[str, bytes]:
     payload: dict[str, bytes] = {}
     total_bytes = 0
+    seen_directories: set[tuple[int, int]] = set()
     for kind in KINDS:
-        directory = directories[kind].resolve(strict=True)
+        requested = directories[kind]
+        # Allow the documented /app/data *parent* symlink to the /data mount,
+        # but never allow positions/ or entry_prices/ themselves to be aliases.
+        if requested.is_symlink():
+            raise ValueError("account-state source directory symlink rejected")
+        directory = requested.resolve(strict=True)
         if not _inside(directory, root):
             raise ValueError("account-state directory outside persistent root")
-        # Open the resolved directory itself, refusing a replacement symlink.
         flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
-        fd = os.open(directory, flags)
+        # Open the original requested leaf (not the resolved path) so that
+        # O_NOFOLLOW still rejects a leaf swapped to a symlink.
+        fd = os.open(requested, flags)
         try:
+            metadata = os.fstat(fd)
+            if not stat.S_ISDIR(metadata.st_mode):
+                raise ValueError("unsafe account-state source directory")
+            identity = (metadata.st_dev, metadata.st_ino)
+            if identity in seen_directories:
+                raise ValueError("account-state source directories share filesystem identity")
+            seen_directories.add(identity)
             names = os.listdir(fd)
             if len(names) > MAX_FILES:
                 raise ValueError("too many account-state files")
