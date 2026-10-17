@@ -56,7 +56,13 @@ def _json_object(raw: bytes) -> dict:
             raw.decode("utf-8"), parse_constant=reject_constant,
             object_pairs_hook=reject_duplicate_keys,
         )
-    except (UnicodeError, ValueError, TypeError) as exc:
+    except ValueError as exc:
+        # Keep the explicit ambiguity diagnostic; do not conceal a duplicate
+        # object key as a generic parsing failure in an audit report.
+        if str(exc) == "duplicate account JSON object key":
+            raise
+        raise ValueError("malformed account JSON evidence") from exc
+    except (UnicodeError, TypeError) as exc:
         raise ValueError("malformed account JSON evidence") from exc
     if not isinstance(value, dict):
         raise ValueError("account JSON evidence must be an object")
