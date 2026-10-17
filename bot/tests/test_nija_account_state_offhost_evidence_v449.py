@@ -272,3 +272,37 @@ def test_parent_data_symlink_to_persistent_mount_still_works(tmp_path):
     assert audit.verify_archive(Path(report["archive"]), expected_sha256=report["sha256"])[
         "trading_authorized"
     ] is False
+
+
+def test_parent_alias_swap_does_not_escape_pinned_root(monkeypatch, tmp_path):
+    root, positions, entries, _, _ = _fixture(tmp_path)
+    app = tmp_path / "app"
+    app.mkdir()
+    alias = app / "data"
+    alias.symlink_to(root, target_is_directory=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "positions").mkdir()
+    (outside / "entry_prices").mkdir()
+    (outside / "positions" / "platform__kraken.json").write_text(
+        '{"positions":{"UNAUTHORIZED":{"quantity":999}}}'
+    )
+    original = audit._open_root_anchored_directory
+    calls = []
+
+    def swap_after_resolution(root_fd, parts):
+        if not calls:
+            alias.unlink()
+            alias.symlink_to(outside, target_is_directory=True)
+        calls.append(1)
+        return original(root_fd, parts)
+
+    monkeypatch.setattr(audit, "_open_root_anchored_directory", swap_after_resolution)
+    result = _backup(tmp_path, root=root, positions=alias / "positions",
+                     entries=alias / "entry_prices")
+    assert calls
+    with zipfile.ZipFile(result["archive"]) as archive:
+        content = archive.read("positions/platform__kraken.json")
+    assert b"UNAUTHORIZED" not in content
+    assert audit.verify_archive(Path(result["archive"]),
+                                expected_sha256=result["sha256"])["trading_authorized"] is False
