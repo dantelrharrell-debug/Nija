@@ -221,6 +221,29 @@ def _has_exact_v142_wrapper(callable_obj: Any, implementation: str) -> bool:
     return False
 
 
+def _runtime_deadline_with_caller_context_v142(trigger: str) -> float:
+    """Evaluate v166/v176's proactive deadline in the caller's trigger context.
+
+    If v142 is reinstalled outside surviving v166/v176 execute wrappers, its
+    runtime path invokes _pipeline directly, bypassing those inner execute
+    wrappers. Explicitly scope only the deadline evaluation to the same
+    thread-local trigger contract; never extend publication expiry.
+    """
+    v166 = (
+        sys.modules.get("bot.runtime_capital_refresh_ownership_v166_patch")
+        or sys.modules.get("runtime_capital_refresh_ownership_v166_patch")
+    )
+    setter = getattr(v166, "_set_trigger", None)
+    restorer = getattr(v166, "_restore_trigger", None)
+    if not callable(setter) or not callable(restorer):
+        return _runtime_pipeline_deadline_seconds()
+    previous = setter(trigger)
+    try:
+        return _runtime_pipeline_deadline_seconds()
+    finally:
+        restorer(previous)
+
+
 def _reassert_bounded_fetch_contract() -> tuple[bool, str]:
     """Prove the actual wrappers are present, not merely their environment flags."""
     try:
@@ -532,7 +555,7 @@ def _patch_coordinator_execute() -> bool:
             self._nija_v142_flight_thread = worker
         worker.start()
 
-        deadline_s = _runtime_pipeline_deadline_seconds()
+        deadline_s = _runtime_deadline_with_caller_context_v142(trigger)
         try:
             outcome, result = result_queue.get(timeout=deadline_s)
             return result if outcome == "ok" else None
