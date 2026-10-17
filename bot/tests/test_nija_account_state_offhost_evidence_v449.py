@@ -70,8 +70,13 @@ def test_all_account_scopes_are_distinct_in_archive(tmp_path):
 
 def test_invalid_source_raises_without_creating_archive(tmp_path):
     root, positions, entries, position, _ = _fixture(tmp_path)
-    cases = ('{"x": NaN}', '{"x": Infinity}',
-             '{"positions":{"BABY":{"price":1e999}}}', "[]", "not-json")
+    cases = (
+        '{"x": NaN}', '{"x": Infinity}',
+        '{"positions":{"BABY":{"price":1e999}}}',
+        '{"positions":{},"positions":{"BABY":{}}}',
+        '{"positions":{"BABY":{"quantity":1,"quantity":2}}}',
+        "[]", "not-json",
+    )
     for contents in cases:
         position.write_text(contents)
         with pytest.raises(ValueError, match="account JSON"):
@@ -193,3 +198,18 @@ def test_account_archive_total_memory_budget_fails_closed(monkeypatch, tmp_path)
     with pytest.raises(ValueError, match="total byte budget"):
         _backup(tmp_path, root=root, positions=positions, entries=entries)
     assert not (tmp_path / "out").exists()
+
+
+def test_duplicate_manifest_keys_fail_closed(tmp_path):
+    record = _backup(tmp_path)
+    original = Path(record["archive"])
+    with zipfile.ZipFile(original, "r") as source:
+        manifest = source.read("manifest.json")
+    assert b'"format_version":1' in manifest
+    tampered = manifest.replace(
+        b'"format_version":1', b'"format_version":1,"format_version":1', 1,
+    )
+    archive = tmp_path / "duplicate-manifest.zip"
+    digest = _rewrite(original, archive, {"manifest.json": tampered})
+    with pytest.raises(ValueError, match="duplicate account JSON"):
+        audit.verify_archive(archive, expected_sha256=digest)
