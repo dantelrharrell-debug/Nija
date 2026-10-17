@@ -178,6 +178,8 @@ jobs:
             tests/test_nija_startup_attempt_audit_v441.py \
             bot/tests/test_nija_offline_kraken_csv_audit_v440.py \
             bot/tests/test_nija_kraken_readonly_history_collector_v441.py \
+            bot/tests/test_startup_position_sync_outcomes.py \
+            tests/test_runtime_registered_platform_capital_completeness_v270.py \
             tests/test_runtime_capital_refresh_ownership_v166.py \
             tests/test_account_state_diagnostics.py \
             tests/test_runtime_account_scoped_position_state_v289.py \

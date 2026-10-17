@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import importlib
 import logging
+import math
 import os
 import threading
 from functools import wraps
@@ -45,7 +46,7 @@ def _platform_mapping(manager: Any) -> dict[Any, Any]:
         raw = getattr(manager, "_platform_brokers", None)
     if not isinstance(raw, Mapping):
         return {}
-    return {key: broker for key, broker in raw.items() if broker is not None}
+    return dict(raw)
 
 
 def _platform_counts(manager: Any) -> tuple[int, int]:
@@ -90,8 +91,12 @@ def _result_valid_brokers(result: Any) -> int:
     if not isinstance(result, Mapping):
         return 0
     try:
-        return max(0, int(float(result.get("valid_brokers", 0) or 0)))
-    except (TypeError, ValueError):
+        value = result.get("valid_brokers", 0)
+        if isinstance(value, bool):
+            return 0
+        count = float(value or 0)
+        return int(count) if math.isfinite(count) and count >= 0 and count.is_integer() else 0
+    except (TypeError, ValueError, OverflowError):
         return 0
 
 
@@ -99,39 +104,31 @@ def _current_publication_accepted_and_fresh(authority: Any) -> bool:
     if authority is None:
         return False
     status_getter = getattr(authority, "get_snapshot_publication_status", None)
-    if callable(status_getter):
-        try:
-            status = status_getter()
-            if not bool(getattr(status, "accepted", False)):
-                return False
-            if bool(getattr(status, "stale", False)):
-                return False
-        except Exception:
-            return False
     stale = getattr(authority, "is_stale", None)
-    if callable(stale):
-        try:
-            if bool(stale()):
-                return False
-        except Exception:
-            return False
     complete = getattr(authority, "is_brokers_complete", None)
-    if callable(complete):
-        try:
-            if not bool(complete()):
-                return False
-        except Exception:
-            return False
-    return True
+    if not all(callable(check) for check in (status_getter, stale, complete)):
+        return False
+    try:
+        status = status_getter()
+        return bool(
+            getattr(status, "accepted", None) is True
+            and getattr(status, "stale", None) is False
+            and stale() is False
+            and complete() is True
+        )
+    except Exception:
+        return False
 
 
 def _fail_closed_result(manager: Any, result: Any, *, registered: int, connected: int) -> Any:
     valid = _result_valid_brokers(result)
-    if not isinstance(result, Mapping):
-        return result
     if registered <= 0:
         return result
-    if connected >= registered and valid >= registered:
+    publication_current = _current_publication_accepted_and_fresh(_authority())
+    if (
+        isinstance(result, Mapping) and connected >= registered
+        and valid >= registered and publication_current
+    ):
         return result
 
     state_lock = getattr(manager, "_capital_state_lock", None) or _LOCK
@@ -143,15 +140,16 @@ def _fail_closed_result(manager: Any, result: Any, *, registered: int, connected
         setattr(manager, "_capital_ready", False)
         setattr(manager, "_trading_halted_due_to_capital", True)
 
-    corrected = dict(result)
+    corrected = dict(result) if isinstance(result, Mapping) else {}
     corrected["ready"] = 0.0
     corrected["pending"] = 1.0
     corrected["registered_platform_brokers"] = float(registered)
     corrected["connected_platform_brokers"] = float(connected)
     corrected["registered_platform_complete"] = 0.0
+    corrected["publication_current"] = publication_current
     LOGGER.critical(
         "REGISTERED_PLATFORM_CAPITAL_V270_FAIL_CLOSED marker=%s "
-        "registered=%d connected=%d valid_brokers=%d original_ready=%s "
+        "registered=%d connected=%d valid_brokers=%d original_ready=%s publication_current=%s "
         "capital_mutated=false freshness_extended=false publication_expiry_extended=false "
         "execution_authority_unchanged=true forced_trade=false forced_activation=false "
         "safety_gates_bypassed=false",
@@ -159,7 +157,8 @@ def _fail_closed_result(manager: Any, result: Any, *, registered: int, connected
         registered,
         connected,
         valid,
-        result.get("ready"),
+        result.get("ready") if isinstance(result, Mapping) else None,
+        publication_current,
     )
     return corrected
 

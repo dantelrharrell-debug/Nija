@@ -4,6 +4,7 @@ import logging
 from types import SimpleNamespace
 
 from bot import startup_position_sync
+from bot import position_tracker
 
 
 class PositionTracker:
@@ -72,4 +73,64 @@ def test_explicit_empty_snapshot_is_distinguished_from_fetch_failure(caplog):
     assert "fetched=0" in result
     assert "resolved=0" in result
     assert tracker.positions == [{"symbol": "ETH-USD", "quantity": 0.5}]
+    assert broker._startup_position_sync_adopted is True
+
+
+def test_baby_unknown_basis_survives_intermittent_sync_and_restart(monkeypatch, tmp_path):
+    monkeypatch.setattr(position_tracker, "ENTRY_PRICE_STORE_AVAILABLE", False)
+    monkeypatch.setattr(position_tracker, "DustPositionManager", None)
+    path = tmp_path / "positions.json"
+    tracker = position_tracker.PositionTracker(str(path))
+    snapshot = [{"symbol": "BABY-USD", "quantity": 0.00142, "current_price": 0.0}]
+    broker = SimpleNamespace(position_tracker=tracker, get_positions=lambda: snapshot)
+
+    for attempt in range(3):
+        if attempt == 1:
+            def fail_fetch():
+                raise TimeoutError("snapshot timeout")
+            broker.get_positions = fail_fetch
+        else:
+            broker.get_positions = lambda: snapshot
+        startup_position_sync._adopt_broker_positions(broker, "platform:kraken", None)
+        row = tracker.get_position("BABY-USD")
+        assert row["quantity"] == 0.00142
+        assert row["entry_price"] == 0.0
+        assert row["entry_price_source"] == "reconciliation_required"
+        assert row["cost_basis_verified"] is False
+        assert row["auto_exit_blocked"] is True
+        assert broker._startup_position_sync_adopted is False
+
+    reloaded = position_tracker.PositionTracker(str(path))
+    assert reloaded.get_position("BABY-USD") == tracker.get_position("BABY-USD")
+
+
+def test_verified_basis_is_not_erased_by_intermittent_reads(monkeypatch, tmp_path):
+    monkeypatch.setattr(position_tracker, "ENTRY_PRICE_STORE_AVAILABLE", False)
+    monkeypatch.setattr(position_tracker, "DustPositionManager", None)
+    tracker = position_tracker.PositionTracker(str(tmp_path / "positions.json"))
+    snapshot = [{"symbol": "BABY-USD", "quantity": 0.00142}]
+    broker = SimpleNamespace(
+        position_tracker=tracker, get_positions=lambda: snapshot,
+        get_real_entry_price=lambda symbol: 0.035,
+    )
+    startup_position_sync._adopt_broker_positions(broker, "platform:kraken", None)
+    before = tracker.get_position("BABY-USD")
+    assert before["cost_basis_verified"] is True
+    assert broker._startup_position_sync_adopted is True
+
+    def fail_fetch():
+        raise TimeoutError("snapshot timeout")
+
+    broker.get_positions = fail_fetch
+    startup_position_sync._adopt_broker_positions(broker, "platform:kraken", None)
+    assert broker._startup_position_sync_adopted is False
+    assert tracker.get_position("BABY-USD") == before
+
+    broker.get_positions = lambda: snapshot
+    broker.get_real_entry_price = lambda symbol: 0.0
+    startup_position_sync._adopt_broker_positions(broker, "platform:kraken", None)
+    after = tracker.get_position("BABY-USD")
+    assert after["quantity"] == before["quantity"]
+    assert after["entry_price"] == before["entry_price"]
+    assert after["cost_basis_verified"] is True
     assert broker._startup_position_sync_adopted is True
