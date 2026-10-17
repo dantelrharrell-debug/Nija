@@ -222,6 +222,58 @@ def _has_exact_v142_wrapper(callable_obj: Any, implementation: str) -> bool:
     return False
 
 
+def _has_exact_wrapper_v142(
+    callable_obj: Any,
+    *,
+    module_name: str,
+    marker: str,
+    implementation: str,
+) -> bool:
+    seen: set[int] = set()
+    current = callable_obj
+    for _ in range(32):
+        if not callable(current) or id(current) in seen:
+            return False
+        seen.add(id(current))
+        code = getattr(current, "__code__", None)
+        owner = getattr(current, "__globals__", {}) or {}
+        if (
+            bool(getattr(current, marker, False))
+            and str(getattr(code, "co_name", "")) == implementation
+            and owner.get("__name__") == module_name
+        ):
+            return True
+        current = getattr(current, "__wrapped__", None)
+    return False
+
+
+def _restore_surviving_execute_wrappers_v142(
+    original: Any,
+    execute_wrapper: Any,
+) -> bool:
+    """Keep surviving caller trigger context outside a repaired wrapper."""
+    context_module_name = "bot.runtime_capital_pipeline_completion_v176_patch"
+    context_marker = "_nija_runtime_capital_pipeline_completion_v176"
+    needs_context = _has_exact_wrapper_v142(
+        original,
+        module_name=context_module_name,
+        marker=context_marker,
+        implementation="execute_refresh_v176",
+    )
+    if not needs_context:
+        return True
+
+    try:
+        delattr(execute_wrapper, context_marker)
+    except AttributeError:
+        pass
+    try:
+        module = importlib.import_module(context_module_name)
+        return bool(module._patch_execute_trigger_context())
+    except Exception:
+        return False
+
+
 def _runtime_deadline_with_caller_context_v142(trigger: str) -> float:
     """Evaluate v166/v176's proactive deadline in the caller's trigger context.
 
@@ -591,7 +643,8 @@ def _patch_coordinator_execute() -> bool:
     setattr(execute_refresh_v142, _PATCH_ATTR, True)
     setattr(execute_refresh_v142, "_nija_v142_original", original)
     cls.execute_refresh = execute_refresh_v142
-    return _restore_reactivation_hook(cls)
+    context_ok = _restore_surviving_execute_wrappers_v142(original, execute_refresh_v142)
+    return bool(context_ok and _restore_reactivation_hook(cls))
 
 
 def _restore_reactivation_hook(cls: type) -> bool:
@@ -631,8 +684,6 @@ def _restore_reactivation_hook(cls: type) -> bool:
     setattr(execute_refresh_v142_reactivation, _REACTIVATION_HOOK_ATTR, True)
     cls.execute_refresh = execute_refresh_v142_reactivation
     return True
-
-
 def _has_outer_reactivation_hook(callable_obj: Any) -> bool:
     seen: set[int] = set()
     current = callable_obj
@@ -669,6 +720,12 @@ def _patch_publication_generation_fence() -> bool:
     if _has_exact_v142_wrapper(current, "publish_snapshot_v142"):
         return True
     original = current
+    seed_context_survived = _has_exact_wrapper_v142(
+        original,
+        module_name="bot.runtime_bootstrap_capital_publication_v179_patch",
+        marker="_nija_runtime_bootstrap_capital_publication_v179",
+        implementation="publish_v179",
+    )
 
     @wraps(original)
     def publish_snapshot_v142(self: Any, snapshot: Any, writer_id: str) -> bool:
@@ -702,6 +759,21 @@ def _patch_publication_generation_fence() -> bool:
     setattr(publish_snapshot_v142, _PATCH_ATTR, True)
     setattr(publish_snapshot_v142, "_nija_v142_original", original)
     cls.publish_snapshot = publish_snapshot_v142
+    if seed_context_survived:
+        try:
+            delattr(
+                publish_snapshot_v142,
+                "_nija_runtime_bootstrap_capital_publication_v179",
+            )
+        except AttributeError:
+            pass
+        try:
+            v179 = importlib.import_module(
+                "bot.runtime_bootstrap_capital_publication_v179_patch"
+            )
+            return bool(v179._patch_capital_publish_seed_context())
+        except Exception:
+            return False
     return True
 
 

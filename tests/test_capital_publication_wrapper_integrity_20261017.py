@@ -238,3 +238,82 @@ def test_v142_repaired_runtime_path_rearms_after_successful_publication(monkeypa
         ("publish", "publication_deadline_v137"),
         ("rearm", "publication_deadline_v137"),
     ]
+
+
+def test_v142_repair_restores_v176_runtime_hooks_outside_execute_wrapper(monkeypatch):
+    from bot import capital_flow_state_machine as flow
+    from bot import runtime_capital_pipeline_completion_v176_patch as v176
+    from bot import runtime_capital_reactivation_v176_patch as reactivation
+    from bot import runtime_capital_refresh_ownership_v166_patch as v166
+
+    monkeypatch.setattr(flow.CapitalRefreshCoordinator, "execute_refresh", _fake_execute)
+    assert v176._patch_execute_trigger_context()
+    assert reactivation._patch_coordinator()
+    surviving_wrappers = flow.CapitalRefreshCoordinator.execute_refresh
+
+    observed_context = []
+    rearmed = []
+
+    def record_caller_context():
+        observed_context.append(v166._is_proactive_trigger())
+        return True, "ok"
+
+    monkeypatch.setattr(v142, "_reassert_bounded_fetch_contract", record_caller_context)
+    monkeypatch.setattr(v142, "_runtime_terminal", lambda _: True)
+    monkeypatch.setattr(v142, "_runtime_deadline_with_caller_context_v142", lambda _: 1.0)
+    monkeypatch.setattr(
+        reactivation,
+        "_rearm_after_publication",
+        lambda trigger: rearmed.append(trigger),
+    )
+    assert v142._patch_coordinator_execute()
+
+    repaired = flow.CapitalRefreshCoordinator.execute_refresh
+    assert repaired is not surviving_wrappers
+    assert repaired.__wrapped__ is not surviving_wrappers
+
+    coordinator = SimpleNamespace(
+        _lock=threading.RLock(),
+        _in_flight=False,
+        _pipeline=lambda **kwargs: {"fresh": True},
+    )
+    result = repaired(coordinator, {}, trigger="publication_deadline_v137")
+    assert result == {"fresh": True}
+    assert observed_context == [True]
+    assert rearmed == ["publication_deadline_v137"]
+
+
+def test_v142_fence_repair_restores_v179_bootstrap_seed_context(monkeypatch):
+    from bot import capital_authority as ca
+    from bot import runtime_bootstrap_capital_publication_v179_patch as v179
+
+    accepted_generations = []
+
+    def publish(self, snapshot, writer_id):
+        accepted_generations.append(getattr(v142._LOCAL, "refresh_generation", None))
+        return writer_id == self._AUTHORIZED_WRITER_ID
+
+    monkeypatch.setattr(ca.CapitalAuthority, "publish_snapshot", publish)
+    monkeypatch.setattr(v179, "_v142_module", lambda: v142)
+    assert v142._patch_publication_generation_fence()
+    assert v179._patch_capital_publish_seed_context()
+    surviving_v179 = ca.CapitalAuthority.publish_snapshot
+    assert getattr(surviving_v179, v179._PATCH_ATTR, False)
+
+    # Simulate a missing fence under a surviving v179 wrapper. The wrapper body
+    # remains intact, while its exposed chain no longer proves the fence exists.
+    surviving_v179.__wrapped__ = publish
+    monkeypatch.setattr(ca.CapitalAuthority, "publish_snapshot", surviving_v179)
+    monkeypatch.setattr(v142, "_ACTIVE_GENERATION", 7)
+    monkeypatch.setattr(v142, "_ROLLOVER_OCCURRED", True)
+    assert v142._patch_publication_generation_fence()
+
+    snapshot = object()
+    v179._mark_bootstrap_seed(snapshot)
+    authority = SimpleNamespace(_AUTHORIZED_WRITER_ID="mabm_capital_refresh_coordinator")
+    assert ca.CapitalAuthority.publish_snapshot(
+        authority, snapshot, "mabm_capital_refresh_coordinator"
+    )
+    assert accepted_generations == [7]
+    assert not hasattr(v142._LOCAL, "refresh_generation")
+    assert not v179._is_marked_bootstrap_seed(snapshot)
