@@ -32,8 +32,10 @@ Operator evidence/review checklist:
    `scripts/nija_trade_ledger_snapshot_v436.py` **backup** command with
    `--source /data/trade_ledger.db` and an absolute `--output-dir`. Invoke the
    script using its absolute path in the production checkout. Preserve its
-   manifest, digest, all SQLite tables (including pending closes), account-scoped
-   position/entry-price files, pending fill evidence, and execution journal.
+   manifest, digest, all SQLite tables (including pending closes), pending
+   fill evidence, and execution journal. **The v436 archive does NOT include
+   account-scoped positions/ and entry_prices/ directory JSON files.** Preserve
+   those using the separate v449 account-state snapshot below.
    Inspect missing/unstable companion warnings; a file-only journal may omit
    in-memory events. Copy the archive off-host and run **restore-test** against
    that independent copy with the original `--expected-sha256`. A local backup
@@ -78,6 +80,63 @@ Operator evidence/review checklist:
    `verification_stale` stays a denial. Never stamp history with collection
    time, manufacture a marker, place a probe/test order, or relax kill-switch,
    nonce, protective-exit or execution-proof gates.
+
+### Account-scoped recovery evidence (v449; read-only)
+
+A SQLite snapshot alone does **not** preserve the registered platform/user account
+JSON directories. Issue #3024 documents that `/app/data` was observed to resolve
+to the `/data` mount on October 11, but current paths, integrity and restart
+durability must be verified in the **current live instance** before any redeploy.
+
+Run only from an authorized Render owner shell with the current checkout,
+with no new trades, restarts, or state changes. **The current trading deployment
+may predate v449**; do not restart/redeploy it merely to make this tool
+available. After independent review, transfer the exact approved/pinned v449
+script to a private temporary path on the existing live instance by an
+authorized secure method, and verify its source hash before running it.
+The following creates two **local, private** archives under `/tmp`, and does
+not itself copy either archive off-host:
+
+```bash
+cd /app
+python -S scripts/nija_state_store_persistence_audit_v441.py \
+  --persistent-root /data --ledger /data/trade_ledger.db \
+  --positions-dir /app/data/positions --entry-prices-dir /app/data/entry_prices
+python -S scripts/nija_trade_ledger_snapshot_v436.py backup \
+  --source /data/trade_ledger.db --output-dir /tmp/nija-recovery-private
+python -S /tmp/approved-nija-account-state-v449.py snapshot \
+  --persistent-root /data \
+  --positions-dir /app/data/positions --entry-prices-dir /app/data/entry_prices \
+  --output-dir /tmp/nija-recovery-private
+```
+
+The account-state archive rejects unexpected names, symlinks, non-object JSON,
+NaN/Infinity, untrusted paths, size overflows, and changing files. It records
+per-member SHA-256 and returns the archive SHA-256; the archive contains private
+position information and must be handled as sensitive. **Do not print archive
+contents or upload the archive to a public issue or GitHub Actions artifact.**
+
+Transfer each archive through an approved encrypted channel to a restricted
+**independent off-host** location. Record the exact SHA-256 from the originating
+host and then run these on an isolated verification machine against the copied
+archives (replace placeholders with actual verified paths and hashes):
+
+```bash
+python -S scripts/nija_trade_ledger_snapshot_v436.py restore-test \
+  --archive /restricted/offhost/trading-ledger.tar.gz \
+  --expected-sha256 ORIGINAL_LEDGER_SHA256
+python -S scripts/nija_account_state_offhost_evidence_v449.py verify \
+  --archive /restricted/offhost/account-state.zip \
+  --expected-sha256 ORIGINAL_ACCOUNT_SHA256
+```
+
+Even if both passes succeed, the snapshots are not **cross-store atomic**:
+compare capture timestamps, all original hashes, current authoritative
+per-account broker positions, executed trades, pending closes, and exchange
+protective exits. Neither script certifies independent off-host custody by
+itself, authenticates Kraken ownership, reconstructs BABY historical basis, or
+permits LIVE_ACTIVE execution. Retain a separate signed operational attestation
+of transfer, isolated restore, identity/reconciliation and rollback review.
 
 ### Tables
 
