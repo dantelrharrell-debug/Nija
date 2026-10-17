@@ -108,47 +108,74 @@ def _read_unchanged(folder_fd: int, name: str) -> bytes:
     return first
 
 
+def _open_root_anchored_directory(root_fd: int, parts: tuple[str, ...]) -> int:
+    """Traverse from an already-open persistent root without following symlinks.
+
+    In particular, never re-open the original /app/data alias after resolving
+    its intended directory. A parent symlink swap cannot redirect fd traversal
+    outside the pinned root. Every component is opened relative to its parent.
+    """
+    if not parts or any(part in ("", ".", "..") for part in parts):
+        raise ValueError("invalid root-relative account-state directory")
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    current = os.dup(root_fd)
+    try:
+        for part in parts:
+            next_fd = os.open(part, flags, dir_fd=current)
+            os.close(current)
+            current = next_fd
+        return current
+    except BaseException:
+        os.close(current)
+        raise
+
+
 def _inventory(root: Path, directories: dict[str, Path]) -> dict[str, bytes]:
     payload: dict[str, bytes] = {}
     total_bytes = 0
     seen_directories: set[tuple[int, int]] = set()
-    for kind in KINDS:
-        requested = directories[kind]
-        # Allow the documented /app/data *parent* symlink to the /data mount,
-        # but never allow positions/ or entry_prices/ themselves to be aliases.
-        if requested.is_symlink():
-            raise ValueError("account-state source directory symlink rejected")
-        directory = requested.resolve(strict=True)
-        if not _inside(directory, root):
-            raise ValueError("account-state directory outside persistent root")
-        flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
-        # Open the original requested leaf (not the resolved path) so that
-        # O_NOFOLLOW still rejects a leaf swapped to a symlink.
-        fd = os.open(requested, flags)
-        try:
-            metadata = os.fstat(fd)
-            if not stat.S_ISDIR(metadata.st_mode):
-                raise ValueError("unsafe account-state source directory")
-            identity = (metadata.st_dev, metadata.st_ino)
-            if identity in seen_directories:
-                raise ValueError("account-state source directories share filesystem identity")
-            seen_directories.add(identity)
-            names = os.listdir(fd)
-            if len(names) > MAX_FILES:
-                raise ValueError("too many account-state files")
-            for name in sorted(names):
-                if not ACCOUNT_FILE.fullmatch(name):
-                    raise ValueError("unexpected account-state filename")
-                key = kind + "/" + name
-                if key in payload or len(payload) >= MAX_FILES:
-                    raise ValueError("duplicate or excess account-state file")
-                raw = _read_unchanged(fd, name)
-                total_bytes += len(raw)
-                if total_bytes > MAX_TOTAL_JSON_BYTES:
-                    raise ValueError("account-state evidence exceeds total byte budget")
-                payload[key] = raw
-        finally:
-            os.close(fd)
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    # The canonical /data directory is the only traversal anchor. Its descriptor
+    # stays open throughout this inventory, independent of /app/data mutations.
+    root_fd = os.open(root, flags)
+    try:
+        for kind in KINDS:
+            requested = directories[kind]
+            # Parent mount aliases are allowed during *resolution only*; leaf
+            # aliases are not accepted, even if their target is within /data.
+            if requested.is_symlink():
+                raise ValueError("account-state source directory symlink rejected")
+            directory = requested.resolve(strict=True)
+            if not _inside(directory, root):
+                raise ValueError("account-state directory outside persistent root")
+            relative = directory.relative_to(root)
+            fd = _open_root_anchored_directory(root_fd, relative.parts)
+            try:
+                metadata = os.fstat(fd)
+                if not stat.S_ISDIR(metadata.st_mode):
+                    raise ValueError("unsafe account-state source directory")
+                identity = (metadata.st_dev, metadata.st_ino)
+                if identity in seen_directories:
+                    raise ValueError("account-state source directories share filesystem identity")
+                seen_directories.add(identity)
+                names = os.listdir(fd)
+                if len(names) > MAX_FILES:
+                    raise ValueError("too many account-state files")
+                for name in sorted(names):
+                    if not ACCOUNT_FILE.fullmatch(name):
+                        raise ValueError("unexpected account-state filename")
+                    key = kind + "/" + name
+                    if key in payload or len(payload) >= MAX_FILES:
+                        raise ValueError("duplicate or excess account-state file")
+                    raw = _read_unchanged(fd, name)
+                    total_bytes += len(raw)
+                    if total_bytes > MAX_TOTAL_JSON_BYTES:
+                        raise ValueError("account-state evidence exceeds total byte budget")
+                    payload[key] = raw
+            finally:
+                os.close(fd)
+    finally:
+        os.close(root_fd)
     if not any(key.startswith("positions/") for key in payload):
         raise ValueError("position account-state directory is empty")
     return payload
