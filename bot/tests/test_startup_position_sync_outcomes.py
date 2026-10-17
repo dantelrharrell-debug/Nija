@@ -134,3 +134,68 @@ def test_verified_basis_is_not_erased_by_intermittent_reads(monkeypatch, tmp_pat
     assert after["entry_price"] == before["entry_price"]
     assert after["cost_basis_verified"] is True
     assert broker._startup_position_sync_adopted is True
+
+
+def test_position_tracker_rejects_nonfinite_broker_values(monkeypatch, tmp_path):
+    """Malformed numeric evidence cannot become real positions, basis, or marks."""
+    monkeypatch.setattr(position_tracker, "ENTRY_PRICE_STORE_AVAILABLE", False)
+    monkeypatch.setattr(position_tracker, "DustPositionManager", None)
+    path = tmp_path / "positions.json"
+    tracker = position_tracker.PositionTracker(str(path))
+
+    for invalid in (float("inf"), float("-inf"), float("nan"),
+                    "inf", "-Infinity", "NaN"):
+        assert tracker._safe_float(invalid) == 0.0
+
+    assert tracker.sync_position_snapshot(
+        "BABY-USD", 0.00142,
+        entry_price=float("inf"),
+        current_price=float("-inf"),
+        size_usd=float("nan"),
+        entry_price_source="trade_history",
+    )
+    before = tracker.get_position("BABY-USD")
+    assert before["quantity"] == 0.00142
+    assert before["entry_price"] == 0.0
+    assert before["cost_basis_verified"] is False
+    assert before["auto_exit_blocked"] is True
+    assert before["last_broker_snapshot_price"] == 0.0
+    assert before["last_broker_snapshot_value_usd"] == 0.0
+
+    for invalid_quantity in (float("inf"), float("-inf"), float("nan")):
+        assert not tracker.sync_position_snapshot(
+            "BABY-USD", invalid_quantity,
+            entry_price=0.5, entry_price_source="trade_history",
+        )
+        assert tracker.get_position("BABY-USD") == before
+
+    persisted = path.read_text(encoding="utf-8")
+    assert "NaN" not in persisted
+    assert "Infinity" not in persisted
+
+
+def test_nonfinite_snapshot_mark_cannot_erase_verified_entry(monkeypatch, tmp_path):
+    """Invalid marks are not evidence of an entry or a changed cost basis."""
+    monkeypatch.setattr(position_tracker, "ENTRY_PRICE_STORE_AVAILABLE", False)
+    monkeypatch.setattr(position_tracker, "DustPositionManager", None)
+    tracker = position_tracker.PositionTracker(str(tmp_path / "positions.json"))
+    assert tracker.sync_position_snapshot(
+        "BTC-USD", 0.5, entry_price=35000.0,
+        entry_price_source="trade_history",
+    )
+    before = tracker.get_position("BTC-USD")
+    assert before["cost_basis_verified"] is True
+
+    assert tracker.sync_position_snapshot(
+        "BTC-USD", 0.5,
+        entry_price=float("inf"),
+        current_price=float("nan"),
+        size_usd=float("inf"),
+        entry_price_source="trade_history",
+    )
+    after = tracker.get_position("BTC-USD")
+    assert after["entry_price"] == before["entry_price"] == 35000.0
+    assert after["quantity"] == before["quantity"] == 0.5
+    assert after["cost_basis_verified"] is True
+    assert after["last_broker_snapshot_price"] == 0.0
+    assert after["last_broker_snapshot_value_usd"] == 0.0
