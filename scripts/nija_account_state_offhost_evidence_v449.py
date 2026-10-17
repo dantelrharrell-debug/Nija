@@ -13,6 +13,7 @@ import argparse
 import datetime as dt
 import hashlib
 import json
+import math
 import os
 import re
 import secrets
@@ -46,6 +47,21 @@ def _json_object(raw: bytes) -> None:
         raise ValueError("malformed account JSON evidence") from exc
     if not isinstance(value, dict):
         raise ValueError("account JSON evidence must be an object")
+    # json.loads can decode 1e999 to float('inf') without calling
+    # parse_constant; recursively reject non-finite values from either path.
+    pending = [value]
+    checked = 0
+    while pending:
+        node = pending.pop()
+        checked += 1
+        if checked > 200000:
+            raise ValueError("account JSON evidence structure too large")
+        if isinstance(node, float) and not math.isfinite(node):
+            raise ValueError("non-finite account JSON evidence")
+        if isinstance(node, dict):
+            pending.extend(node.values())
+        elif isinstance(node, list):
+            pending.extend(node)
 
 
 def _read_unchanged(folder_fd: int, name: str) -> bytes:
