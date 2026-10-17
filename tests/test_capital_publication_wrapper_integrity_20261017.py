@@ -126,3 +126,75 @@ def test_stale_untracked_owner_log_names_missing_wrapper_without_changing_rollov
     assert "sync_owner_alive=True" in caplog.text
     assert "execute_wrapper_verified=False" in caplog.text
     assert "publication_expiry_unchanged=true" in caplog.text
+
+
+def test_v142_repair_preserves_v176_proactive_deadline_context(monkeypatch):
+    """Surviving inner v176 wrappers cannot be relied on for caller context."""
+    from bot import capital_flow_state_machine as flow
+    from bot import runtime_capital_refresh_ownership_v166_patch as v166
+    from bot import runtime_capital_pipeline_completion_v176_patch as v176
+
+    monkeypatch.setattr(v142, "_runtime_pipeline_deadline_seconds", lambda: 80.0)
+    monkeypatch.setattr(v166, "_proactive_pipeline_deadline_seconds", lambda: 40.0)
+    assert v176._patch_proactive_deadline_context()
+
+    @wraps(_fake_execute)
+    def surviving_v176(*args, **kwargs):
+        return _fake_execute(*args, **kwargs)
+
+    setattr(surviving_v176, v176._PATCH_ATTR, True)
+    setattr(surviving_v176, v142._PATCH_ATTR, True)  # copied stale marker
+    monkeypatch.setattr(flow.CapitalRefreshCoordinator, "execute_refresh", surviving_v176)
+    assert v142._patch_coordinator_execute()
+    repaired = flow.CapitalRefreshCoordinator.execute_refresh
+    assert repaired.__wrapped__ is surviving_v176
+
+    assert not v166._is_proactive_trigger()
+    assert v142._runtime_deadline_with_caller_context_v142(
+        "publication_deadline_v137"
+    ) == 40.0
+    assert v142._runtime_deadline_with_caller_context_v142("startup") == 80.0
+    assert not v166._is_proactive_trigger()
+
+
+def test_v142_repaired_runtime_path_uses_proactive_caller_deadline(monkeypatch):
+    """Exercise the actual worker wait, not just the deadline helper."""
+    from bot import capital_flow_state_machine as flow
+    from bot import runtime_capital_refresh_ownership_v166_patch as v166
+    from bot import runtime_capital_pipeline_completion_v176_patch as v176
+
+    monkeypatch.setattr(v142, "_reassert_bounded_fetch_contract", lambda: (True, "ok"))
+    monkeypatch.setattr(v142, "_runtime_terminal", lambda _: True)
+    monkeypatch.setattr(v142, "_runtime_pipeline_deadline_seconds", lambda: 80.0)
+    monkeypatch.setattr(v166, "_proactive_pipeline_deadline_seconds", lambda: 40.0)
+    assert v176._patch_proactive_deadline_context()
+
+    @wraps(_fake_execute)
+    def surviving_v176(*args, **kwargs):
+        raise AssertionError("runtime worker must not use stale inner execute chain")
+
+    setattr(surviving_v176, v142._PATCH_ATTR, True)
+    setattr(surviving_v176, v176._PATCH_ATTR, True)
+    monkeypatch.setattr(flow.CapitalRefreshCoordinator, "execute_refresh", surviving_v176)
+    assert v142._patch_coordinator_execute()
+
+    observed = []
+    original_deadline = v142._runtime_pipeline_deadline_seconds
+
+    def capture_deadline():
+        deadline = original_deadline()
+        observed.append((v166._is_proactive_trigger(), deadline))
+        return deadline
+
+    monkeypatch.setattr(v142, "_runtime_pipeline_deadline_seconds", capture_deadline)
+    coordinator = SimpleNamespace(
+        _lock=threading.RLock(),
+        _in_flight=False,
+        _pipeline=lambda **kwargs: {"fresh": True},
+    )
+    result = flow.CapitalRefreshCoordinator.execute_refresh(
+        coordinator, {}, trigger="publication_deadline_v137"
+    )
+    assert result == {"fresh": True}
+    assert observed == [(True, 40.0)]
+    assert not v166._is_proactive_trigger()
