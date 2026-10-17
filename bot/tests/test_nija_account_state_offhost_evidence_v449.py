@@ -213,3 +213,21 @@ def test_duplicate_manifest_keys_fail_closed(tmp_path):
     digest = _rewrite(original, archive, {"manifest.json": tampered})
     with pytest.raises(ValueError, match="duplicate account JSON"):
         audit.verify_archive(archive, expected_sha256=digest)
+
+
+def test_boolean_manifest_version_is_not_format_v1(tmp_path):
+    record = _backup(tmp_path)
+    original = Path(record["archive"])
+    with zipfile.ZipFile(original, "r") as source:
+        manifest = source.read("manifest.json")
+    assert b'"format_version":1' in manifest
+    archive = tmp_path / "boolean-version.zip"
+    digest = _rewrite(
+        original, archive, {
+            "manifest.json": manifest.replace(
+                b'"format_version":1', b'"format_version":true', 1,
+            ),
+        },
+    )
+    with pytest.raises(ValueError, match="invalid archive manifest"):
+        audit.verify_archive(archive, expected_sha256=digest)
