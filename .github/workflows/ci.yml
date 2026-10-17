@@ -173,6 +173,7 @@ jobs:
             bot/tests/test_trade_ledger_storage_v435.py \
             bot/tests/test_trade_ledger_snapshot_v436.py \
             bot/tests/test_offhost_ledger_evidence_report_v448.py \
+            bot/tests/test_nija_account_state_offhost_evidence_v449.py \
             bot/tests/test_confirmed_strategy_order_provenance_v433.py \
             bot/tests/test_runtime_heartbeat_no_rearm_v433.py \
             bot/tests/test_research_edge_ranking_v432.py \
