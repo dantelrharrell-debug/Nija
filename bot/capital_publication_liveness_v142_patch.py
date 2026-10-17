@@ -221,6 +221,22 @@ def _has_exact_v142_wrapper(callable_obj: Any, implementation: str) -> bool:
     return False
 
 
+def _callable_chain_has_code(callable_obj: Any, code: Any, module_name: str) -> bool:
+    seen: set[int] = set()
+    current = callable_obj
+    for _ in range(64):
+        if not callable(current) or id(current) in seen:
+            return False
+        seen.add(id(current))
+        if (
+            getattr(current, "__code__", None) is code
+            and (getattr(current, "__globals__", None) or {}).get("__name__") == module_name
+        ):
+            return True
+        current = getattr(current, "__wrapped__", None)
+    return False
+
+
 def _runtime_deadline_with_caller_context_v142(trigger: str) -> float:
     """Evaluate v166/v176's proactive deadline in the caller's trigger context.
 
@@ -242,6 +258,24 @@ def _runtime_deadline_with_caller_context_v142(trigger: str) -> float:
         return _runtime_pipeline_deadline_seconds()
     finally:
         restorer(previous)
+
+
+def _runtime_publication_matches_result(snapshot: Any) -> bool:
+    try:
+        authority = _authority()
+        status_fn = getattr(authority, "get_snapshot_publication_status", None)
+        if not callable(status_fn):
+            return False
+        status = status_fn()
+        if status is None or not bool(getattr(status, "accepted", False)):
+            return False
+        if bool(getattr(status, "stale", True)):
+            return False
+        published_at = getattr(status, "timestamp", None)
+        computed_at = getattr(snapshot, "computed_at", None)
+        return published_at is None or computed_at is None or published_at == computed_at
+    except Exception:
+        return False
 
 
 def _reassert_bounded_fetch_contract() -> tuple[bool, str]:
@@ -437,6 +471,29 @@ def _patch_coordinator_execute() -> bool:
         return True
     original = current
 
+    def _rearm_inner_v176(trigger: str) -> None:
+        try:
+            module = importlib.import_module(
+                "bot.runtime_capital_reactivation_v176_patch"
+            )
+            wrapper_code = getattr(module, "_EXECUTE_REFRESH_V176_CODE", None)
+            callback = getattr(module, "_rearm_after_publication", None)
+            if (
+                wrapper_code is not None
+                and _callable_chain_has_code(original, wrapper_code, module.__name__)
+                and callable(callback)
+            ):
+                callback(str(trigger or "coordinator"))
+        except Exception as exc:
+            LOGGER.warning(
+                "CAPITAL_V142_POST_PUBLICATION_REARM_ERROR marker=%s trigger=%s "
+                "error=%s:%s trading_fail_closed=true",
+                MARKER,
+                trigger,
+                type(exc).__name__,
+                exc,
+            )
+
     @wraps(original)
     def execute_refresh_v142(
         self: Any,
@@ -558,7 +615,19 @@ def _patch_coordinator_execute() -> bool:
         deadline_s = _runtime_deadline_with_caller_context_v142(trigger)
         try:
             outcome, result = result_queue.get(timeout=deadline_s)
-            return result if outcome == "ok" else None
+            if outcome != "ok" or result is None:
+                return None
+            active_generation, _rolled = _generation_state()
+            current_publication = _runtime_publication_matches_result(result)
+            generation_current = (
+                int(getattr(self, "_nija_v142_flight_generation", 0) or 0)
+                == generation
+                and active_generation == generation
+            )
+            if not generation_current or not current_publication:
+                return None
+            _rearm_inner_v176(trigger)
+            return result
         except queue.Empty:
             with self._lock:
                 self._nija_v142_flight_timed_out = True
@@ -608,31 +677,77 @@ def _patch_publication_generation_fence() -> bool:
     @wraps(original)
     def publish_snapshot_v142(self: Any, snapshot: Any, writer_id: str) -> bool:
         generation = getattr(_LOCAL, "refresh_generation", None)
+        prior_generation = generation
+        borrowed_generation = False
         active, rolled = _generation_state()
         authorized = str(writer_id or "") == str(
             getattr(self, "_AUTHORIZED_WRITER_ID", "mabm_capital_refresh_coordinator")
         )
-        if authorized:
-            if generation is not None and int(generation) != active:
-                LOGGER.warning(
-                    "CAPITAL_PUBLICATION_V142_RETIRED_GENERATION_REJECTED marker=%s "
-                    "generation=%s active=%s publication_status_unchanged=true",
-                    MARKER,
-                    generation,
-                    active,
+        v179 = None
+        marked_seed = False
+        exact_v179_wrapper = False
+        try:
+            try:
+                v179 = importlib.import_module(
+                    "bot.runtime_bootstrap_capital_publication_v179_patch"
                 )
-                return False
-            if generation is None and rolled:
-                # Covers a legacy coordinator that entered before v142 was
-                # installed and only returned after a rollover occurred.
-                LOGGER.warning(
-                    "CAPITAL_PUBLICATION_V142_UNTAGGED_AFTER_ROLLOVER_REJECTED marker=%s "
-                    "active=%s publication_status_unchanged=true",
-                    MARKER,
-                    active,
+                v179_code = getattr(v179, "_PUBLISH_V179_CODE", None)
+                marked_fn = getattr(v179, "_is_marked_bootstrap_seed", None)
+                if callable(marked_fn):
+                    marked_seed = bool(marked_fn(snapshot))
+                exact_v179_wrapper = bool(
+                    v179_code is not None
+                    and _callable_chain_has_code(original, v179_code, v179.__name__)
                 )
-                return False
-        return bool(original(self, snapshot, writer_id))
+            except Exception:
+                v179 = None
+
+            if (
+                authorized
+                and marked_seed
+                and exact_v179_wrapper
+                and generation is None
+                and rolled
+                and active > 0
+            ):
+                generation = active
+                _LOCAL.refresh_generation = generation
+                borrowed_generation = True
+
+            if authorized:
+                if generation is not None and int(generation) != active:
+                    LOGGER.warning(
+                        "CAPITAL_PUBLICATION_V142_RETIRED_GENERATION_REJECTED marker=%s "
+                        "generation=%s active=%s publication_status_unchanged=true",
+                        MARKER,
+                        generation,
+                        active,
+                    )
+                    return False
+                if generation is None and rolled:
+                    # Covers a legacy coordinator that entered before v142 was
+                    # installed and only returned after a rollover occurred.
+                    LOGGER.warning(
+                        "CAPITAL_PUBLICATION_V142_UNTAGGED_AFTER_ROLLOVER_REJECTED marker=%s "
+                        "active=%s publication_status_unchanged=true",
+                        MARKER,
+                        active,
+                    )
+                    return False
+            return bool(original(self, snapshot, writer_id))
+        finally:
+            if marked_seed and v179 is not None:
+                forget = getattr(v179, "_forget_bootstrap_seed", None)
+                if callable(forget):
+                    forget(snapshot)
+            if borrowed_generation:
+                if prior_generation is None:
+                    try:
+                        delattr(_LOCAL, "refresh_generation")
+                    except AttributeError:
+                        pass
+                else:
+                    _LOCAL.refresh_generation = prior_generation
 
     setattr(publish_snapshot_v142, _PATCH_ATTR, True)
     setattr(publish_snapshot_v142, "_nija_v142_original", original)
