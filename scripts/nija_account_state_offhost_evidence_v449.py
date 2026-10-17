@@ -255,7 +255,7 @@ def verify_archive(path: Path, *, expected_sha256: str) -> dict[str, object]:
             # Validate manifest with the same duplicate-key and finite-number
             # rules as the per-account evidence, before trusting member claims.
             manifest = _json_object(observed.pop("manifest.json"))
-            if manifest.get("format_version") != 1:
+            if type(manifest.get("format_version")) is not int or manifest["format_version"] != 1:
                 raise ValueError("invalid archive manifest")
             records = manifest.get("account_state_members")
             if not isinstance(records, dict) or set(records) != set(observed):
