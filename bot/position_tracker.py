@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 from datetime import datetime
 from threading import Lock
@@ -55,7 +56,9 @@ class PositionTracker:
             parsed = float(value or 0.0)
         except (TypeError, ValueError, OverflowError):
             return default
-        return parsed if parsed == parsed else default
+        # Non-finite quantities/prices are invalid broker evidence; preserve
+        # an unknown cost basis rather than persisting infinity or NaN.
+        return parsed if math.isfinite(parsed) else default
 
     @staticmethod
     def _source_verified(source: str, price: float) -> bool:
