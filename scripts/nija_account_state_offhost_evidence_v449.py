@@ -39,11 +39,23 @@ def _inside(path: Path, root: Path) -> bool:
     return path == root or root in path.parents
 
 
-def _json_object(raw: bytes) -> None:
+def _json_object(raw: bytes) -> dict:
     def reject_constant(value: str):
         raise ValueError("non-finite account JSON evidence")
+
+    def reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict:
+        output: dict = {}
+        for key, value in pairs:
+            if key in output:
+                raise ValueError("duplicate account JSON object key")
+            output[key] = value
+        return output
+
     try:
-        value = json.loads(raw.decode("utf-8"), parse_constant=reject_constant)
+        value = json.loads(
+            raw.decode("utf-8"), parse_constant=reject_constant,
+            object_pairs_hook=reject_duplicate_keys,
+        )
     except (UnicodeError, ValueError, TypeError) as exc:
         raise ValueError("malformed account JSON evidence") from exc
     if not isinstance(value, dict):
@@ -63,6 +75,7 @@ def _json_object(raw: bytes) -> None:
             pending.extend(node.values())
         elif isinstance(node, list):
             pending.extend(node)
+    return value
 
 
 def _read_unchanged(folder_fd: int, name: str) -> bytes:
@@ -233,8 +246,10 @@ def verify_archive(path: Path, *, expected_sha256: str) -> dict[str, object]:
                     if len(raw) != row.file_size or len(raw) > maximum:
                         raise ValueError("unexpected decompressed member size")
                 observed[name] = raw
-            manifest = json.loads(observed.pop("manifest.json").decode("utf-8"))
-            if not isinstance(manifest, dict) or manifest.get("format_version") != 1:
+            # Validate manifest with the same duplicate-key and finite-number
+            # rules as the per-account evidence, before trusting member claims.
+            manifest = _json_object(observed.pop("manifest.json"))
+            if manifest.get("format_version") != 1:
                 raise ValueError("invalid archive manifest")
             records = manifest.get("account_state_members")
             if not isinstance(records, dict) or set(records) != set(observed):
