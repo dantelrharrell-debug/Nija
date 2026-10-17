@@ -13,6 +13,72 @@ The NIJA Trading Bot now includes a comprehensive trade ledger system that recor
 
 ## Database Schema
 
+### Fail-closed Kraken reconciliation (issue #3173)
+
+The 2026-10-17 BABY-USD observation (`quantity=0.00142000`, unknown entry
+price) is **not** evidence of a zero-cost purchase. Preserve the quantity and
+`reconciliation_required` / `auto_exit_blocked` state until the original
+account-scoped acquisition evidence is independently verified. A market mark,
+dust classification, or hydrated capital total cannot establish historical basis.
+
+No production data repair, trading, activation, deployment, or test order is
+authorized by this procedure. The coding sandbox has no authenticated Kraken
+credentials or `/data/trade_ledger.db`; actual basis determinability, unmatched
+fills, pending closes, and historical execution proof remain **unverified**.
+
+Operator evidence/review checklist:
+
+1. Before considering any database write, use the existing
+   `scripts/nija_trade_ledger_snapshot_v436.py` **backup** command with
+   `--source /data/trade_ledger.db` and an absolute `--output-dir`. Invoke the
+   script using its absolute path in the production checkout. Preserve its
+   manifest, digest, all SQLite tables (including pending closes), account-scoped
+   position/entry-price files, pending fill evidence, and execution journal.
+   Inspect missing/unstable companion warnings; a file-only journal may omit
+   in-memory events. Copy the archive off-host and run **restore-test** against
+   that independent copy with the original `--expected-sha256`. A local backup
+   alone is insufficient.
+2. From the existing authenticated **platform:kraken** broker, call
+   `collect_from_existing_broker` in
+   `scripts/nija_kraken_readonly_history_collector_v441.py` with
+   `account_scope="platform:kraken"`, the runtime's monitoring request category,
+   and `include_balance=True`. This reuses account routing, private-call nonce
+   and rate controls; it only reads Balance, TradesHistory, ClosedOrders and
+   Ledgers. Balance reads bracket two full history passes. API failure,
+   pagination truncation, or changing evidence invalidates collection.
+   Repeat-read consistency does not prove an atomic exchange snapshot or
+   independently authenticate account ownership.
+3. Retain the evidence hash and exact BABY trade/order IDs, timestamps, pair and
+   quote currency, quantities, costs, fees/fee assets, and linked ledger IDs.
+   Compare current BABY balance with the full inventory history, including
+   sales, transfers, rewards and fees. Record whether basis is determinable and
+   why; missing opening fills, unexplained quantity changes, mixed quotes or
+   unsupported ledger links must remain unresolved. Never substitute a current
+   price, divide unrelated historical cost by current quantity, or delete the
+   holding to make reconciliation pass.
+4. Compare the verified backup's open positions, ledger fills, pending closes
+   and pending-fill evidence using exact broker/account/order provenance.
+   Legacy `open_positions` rows do not contain a broker column: matching only
+   symbol/user/side is insufficient. The existing offline CSV audit can triage
+   pending closes but does not certify authenticated provenance, entry basis or
+   realized P&L. Preserve unmatched evidence and prevent duplicate booking.
+   Any eventual write requires separate approval, a reviewed per-row change
+   plan, independent before/after audit records and verified backups.
+5. For capital, compare the **same refresh** result's valid contributor count
+   against all three registered platform brokers, independently of connectivity
+   and the displayed hydrated total (approximately $758.62 in the incident).
+   Require an accepted, non-stale publication and complete current authority
+   data. v270 retains missing broker instances in the denominator and reports
+   `publication_current` on fail-closed results. Do not reduce the denominator,
+   extend freshness, or treat an earlier complete result as the current one.
+6. Assess execution proof separately using genuine historical, account-scoped
+   broker order/fill events and their original execution timestamps. Compare
+   exact identities and existing canonical verifier results; old historical
+   evidence may help reconciliation without satisfying current proof freshness.
+   `verification_stale` stays a denial. Never stamp history with collection
+   time, manufacture a marker, place a probe/test order, or relax kill-switch,
+   nonce, protective-exit or execution-proof gates.
+
 ### Tables
 
 #### `trade_ledger`
