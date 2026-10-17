@@ -544,10 +544,14 @@ class TestOKXPatchIdempotency(unittest.TestCase):
         okx_patch._RISK_INSTALLER_READY = False
 
         call_count = [0]
-        original_apply = okx_patch._apply
+        installer_thread_id = threading.get_ident()
 
         def counting_apply():
-            call_count[0] += 1
+            # install() starts a separate convergence monitor, which also
+            # invokes _apply(). Count only the direct installer path here;
+            # monitor-loop behavior is outside this idempotency assertion.
+            if threading.get_ident() == installer_thread_id:
+                call_count[0] += 1
             # Return stub success without touching real modules
             return True, {"classes": "test_only"}
 

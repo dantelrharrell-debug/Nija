@@ -27,6 +27,7 @@ bypasses risk/execution gates.
 """
 from __future__ import annotations
 
+from datetime import datetime
 import importlib
 import logging
 import os
@@ -273,7 +274,15 @@ def _runtime_publication_matches_result(snapshot: Any) -> bool:
             return False
         published_at = getattr(status, "timestamp", None)
         computed_at = getattr(snapshot, "computed_at", None)
-        return published_at is None or computed_at is None or published_at == computed_at
+        # A fresh publication belonging to a *different* coordinator result
+        # cannot authorize the v176 rearm callback. Both exact timestamps
+        # must exist, as in the canonical v170 publication-identity guard.
+        # Missing or untyped identity fails closed; no freshness extension.
+        return (
+            isinstance(published_at, datetime)
+            and isinstance(computed_at, datetime)
+            and published_at == computed_at
+        )
     except Exception:
         return False
 
