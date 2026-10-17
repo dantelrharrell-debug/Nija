@@ -289,6 +289,8 @@ def test_parent_alias_swap_does_not_escape_pinned_root(monkeypatch, tmp_path):
     )
     original = audit._open_root_anchored_directory
     calls = []
+    original_read = audit._read_unchanged
+    captured = []
 
     def swap_after_resolution(root_fd, parts):
         if not calls:
@@ -297,7 +299,13 @@ def test_parent_alias_swap_does_not_escape_pinned_root(monkeypatch, tmp_path):
         calls.append(1)
         return original(root_fd, parts)
 
+    def record_read(folder_fd, name):
+        raw = original_read(folder_fd, name)
+        captured.append((name, raw))
+        return raw
+
     monkeypatch.setattr(audit, "_open_root_anchored_directory", swap_after_resolution)
+    monkeypatch.setattr(audit, "_read_unchanged", record_read)
     # First pass uses root-anchored descriptors even after the alias is
     # retargeted; the second pass must reject the now out-of-root alias.
     # No unsafe archive is created and no outside data is captured.
@@ -305,4 +313,6 @@ def test_parent_alias_swap_does_not_escape_pinned_root(monkeypatch, tmp_path):
         _backup(tmp_path, root=root, positions=alias / "positions",
                 entries=alias / "entry_prices")
     assert len(calls) == 1
+    assert captured == [("platform__kraken.json", positions.joinpath(
+        "platform__kraken.json").read_bytes())]
     assert not (tmp_path / "out").exists()
