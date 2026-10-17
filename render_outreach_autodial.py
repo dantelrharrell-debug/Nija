@@ -767,9 +767,7 @@ def _eligibility(row: sqlite3.Row, now_utc: datetime) -> tuple[list[str], dateti
         if not allowed:
             blockers.append(window_reason)
             retry_at = max(retry_at, window_retry)
-    if _bool(os.getenv("NIJA_JUSTCALL_REQUIRE_HUMAN_HANDOFF", "1")) and not _bool(
-        os.getenv("NIJA_JUSTCALL_HUMAN_HANDOFF_VERIFIED", "0")
-    ):
+    if not _bool(os.getenv("NIJA_JUSTCALL_HUMAN_HANDOFF_VERIFIED", "0")):
         blockers.append("human_handoff_not_verified")
     if _active_call_exists(str(row["contact_number"] or ""), now_utc):
         blockers.append("duplicate_active_call")
@@ -961,7 +959,7 @@ def _worker() -> None:
         f"quota_tz={getattr(_quota_zone(), 'key', 'America/Los_Angeles')} "
         f"local_hours={_calling_hours()[0]}-{_calling_hours()[1]} "
         f"weekdays_only={str(_weekdays_only()).lower()} weekend_per_recipient_gate=true "
-        f"human_handoff_required={str(_bool(os.getenv('NIJA_JUSTCALL_REQUIRE_HUMAN_HANDOFF', '1'))).lower()} "
+        "human_handoff_required=true "
         f"quarantined={quarantined}",
         flush=True,
     )
@@ -1041,7 +1039,7 @@ def _queue_status() -> dict[str, Any]:
         "weekdays_only": _weekdays_only(),
         "seven_day_mode": not _weekdays_only(),
         "weekend_recipient_clearance_required": True,
-        "human_handoff_required": _bool(os.getenv("NIJA_JUSTCALL_REQUIRE_HUMAN_HANDOFF", "1")),
+        "human_handoff_required": True,
         "human_handoff_verified": _bool(os.getenv("NIJA_JUSTCALL_HUMAN_HANDOFF_VERIFIED", "0")),
         "counts": counts,
         "blockers": {str(row["blocker"]): int(row["count"] or 0) for row in blocker_rows},
