@@ -84,15 +84,15 @@ Operator evidence/review checklist:
 ### Account-scoped recovery evidence (v449; read-only)
 
 A SQLite snapshot alone does **not** preserve the registered platform/user account
-JSON directories. Issue #3024 documents that \`/app/data\` was observed to resolve
-to the \`/data\` mount on October 11, but current paths, integrity and restart
+JSON directories. Issue #3024 documents that `/app/data` was observed to resolve
+to the `/data` mount on October 11, but current paths, integrity and restart
 durability must be verified in the **current live instance** before any redeploy.
 
 Run only from an authorized Render owner shell with the current checkout, with
 no new trades, restarts, or state changes. The following creates two **local,
-private** archives under \`/tmp\`, and does not itself copy either archive off-host:
+private** archives under `/tmp`, and does not itself copy either archive off-host:
 
-\`\`\`bash
+```bash
 cd /app
 python -S scripts/nija_state_store_persistence_audit_v441.py \
   --persistent-root /data --ledger /data/trade_ledger.db \
@@ -103,7 +103,7 @@ python -S scripts/nija_account_state_offhost_evidence_v449.py snapshot \
   --persistent-root /data \
   --positions-dir /app/data/positions --entry-prices-dir /app/data/entry_prices \
   --output-dir /tmp/nija-recovery-private
-\`\`\`
+```
 
 The account-state archive rejects unexpected names, symlinks, non-object JSON,
 NaN/Infinity, untrusted paths, size overflows, and changing files. It records
@@ -116,14 +116,14 @@ Transfer each archive through an approved encrypted channel to a restricted
 host and then run these on an isolated verification machine against the copied
 archives (replace placeholders with actual verified paths and hashes):
 
-\`\`\`bash
+```bash
 python -S scripts/nija_trade_ledger_snapshot_v436.py restore-test \
   --archive /restricted/offhost/trading-ledger.tar.gz \
   --expected-sha256 ORIGINAL_LEDGER_SHA256
 python -S scripts/nija_account_state_offhost_evidence_v449.py verify \
   --archive /restricted/offhost/account-state.zip \
   --expected-sha256 ORIGINAL_ACCOUNT_SHA256
-\`\`\`
+```
 
 Even if both passes succeed, the snapshots are not **cross-store atomic**:
 compare capture timestamps, all original hashes, current authoritative
