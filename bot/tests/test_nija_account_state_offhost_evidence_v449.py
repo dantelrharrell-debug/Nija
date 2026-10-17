@@ -231,3 +231,44 @@ def test_boolean_manifest_version_is_not_format_v1(tmp_path):
     )
     with pytest.raises(ValueError, match="invalid archive manifest"):
         audit.verify_archive(archive, expected_sha256=digest)
+
+
+def test_fifo_account_file_fails_immediately(tmp_path):
+    """O_NONBLOCK must reject a valid-looking FIFO without a writer/hang."""
+    import os
+    root, positions, entries, _, _ = _fixture(tmp_path)
+    fifo = positions / "platform__fifo.json"
+    os.mkfifo(fifo)
+    with pytest.raises(ValueError, match="unsafe or oversized"):
+        _backup(tmp_path, root=root, positions=positions, entries=entries)
+    assert not (tmp_path / "out").exists()
+
+
+def test_same_directory_cannot_be_positions_and_entry_prices(tmp_path):
+    root, positions, entries, _, _ = _fixture(tmp_path)
+    with pytest.raises(ValueError, match="share filesystem identity"):
+        _backup(tmp_path, root=root, positions=positions, entries=positions)
+    assert not (tmp_path / "out").exists()
+
+
+def test_leaf_directory_symlink_refused_inside_mount(tmp_path):
+    root, positions, entries, _, price = _fixture(tmp_path)
+    price.unlink()
+    entries.rmdir()
+    entries.symlink_to(positions, target_is_directory=True)
+    with pytest.raises(ValueError, match="source directory symlink"):
+        _backup(tmp_path, root=root, positions=positions, entries=entries)
+    assert not (tmp_path / "out").exists()
+
+
+def test_parent_data_symlink_to_persistent_mount_still_works(tmp_path):
+    root, positions, entries, _, _ = _fixture(tmp_path)
+    app = tmp_path / "app"
+    app.mkdir()
+    (app / "data").symlink_to(root, target_is_directory=True)
+    report = _backup(tmp_path, root=root, positions=app / "data" / "positions",
+                     entries=app / "data" / "entry_prices")
+    assert report["account_files"] == 2
+    assert audit.verify_archive(Path(report["archive"]), expected_sha256=report["sha256"])[
+        "trading_authorized"
+    ] is False
