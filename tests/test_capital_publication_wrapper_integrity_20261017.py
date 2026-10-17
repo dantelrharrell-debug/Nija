@@ -324,6 +324,78 @@ def test_publication_status_probe_failure_is_not_rearm_eligible(monkeypatch):
     assert v142._runtime_publication_matches_result(SimpleNamespace()) is False
 
 
+def test_post_publication_rearm_requires_exact_typed_timestamp_identity(monkeypatch):
+    """Accepted current status alone cannot rearm a different or untyped result."""
+    timestamp = datetime.now(timezone.utc)
+    status = SimpleNamespace(accepted=True, stale=False, timestamp=timestamp)
+    authority = SimpleNamespace(get_snapshot_publication_status=lambda: status)
+    monkeypatch.setattr(v142, "_authority", lambda: authority)
+
+    snapshot = SimpleNamespace(computed_at=timestamp)
+    assert v142._runtime_publication_matches_result(snapshot) is True
+
+    snapshot.computed_at = timestamp + timedelta(microseconds=1)
+    assert v142._runtime_publication_matches_result(snapshot) is False
+
+    snapshot.computed_at = timestamp
+    status.timestamp = None
+    assert v142._runtime_publication_matches_result(snapshot) is False
+
+    status.timestamp = "accepted-but-untyped"
+    assert v142._runtime_publication_matches_result(snapshot) is False
+
+    status.timestamp = timestamp
+    snapshot.computed_at = None
+    assert v142._runtime_publication_matches_result(snapshot) is False
+
+    snapshot.computed_at = "result-but-untyped"
+    assert v142._runtime_publication_matches_result(snapshot) is False
+
+    snapshot.computed_at = timestamp
+    status.accepted = False
+    assert v142._runtime_publication_matches_result(snapshot) is False
+
+    status.accepted = True
+    status.stale = True
+    assert v142._runtime_publication_matches_result(snapshot) is False
+
+
+def test_outer_v142_rearm_rejects_result_without_matching_publication(monkeypatch):
+    """Exercise actual terminal worker path instead of mocking identity guard."""
+    real_guard = v142._runtime_publication_matches_result
+    calls = []
+    execute = _install_v142_outside_v176(monkeypatch, callback=calls.append)
+    monkeypatch.setattr(v142, "_runtime_publication_matches_result", real_guard)
+
+    timestamp = datetime.now(timezone.utc)
+    status = SimpleNamespace(accepted=True, stale=False, timestamp=timestamp)
+    monkeypatch.setattr(
+        v142,
+        "_authority",
+        lambda: SimpleNamespace(get_snapshot_publication_status=lambda: status),
+    )
+
+    old_active = v142._ACTIVE_GENERATION
+    old_next = v142._NEXT_GENERATION
+    old_rollover = v142._ROLLOVER_OCCURRED
+    try:
+        snapshot = SimpleNamespace(computed_at=timestamp)
+        assert execute(_runtime_coordinator(lambda **_kwargs: snapshot), {}) is snapshot
+        assert calls == ["coordinator"]
+
+        status.timestamp = timestamp + timedelta(microseconds=1)
+        assert execute(_runtime_coordinator(lambda **_kwargs: snapshot), {}) is None
+        assert calls == ["coordinator"]
+
+        status.timestamp = None
+        assert execute(_runtime_coordinator(lambda **_kwargs: snapshot), {}) is None
+        assert calls == ["coordinator"]
+    finally:
+        v142._ACTIVE_GENERATION = old_active
+        v142._NEXT_GENERATION = old_next
+        v142._ROLLOVER_OCCURRED = old_rollover
+
+
 def test_rearm_wrapper_detection_uses_code_identity_not_copied_markers(monkeypatch):
     from bot import capital_flow_state_machine as flow
     from bot import runtime_capital_reactivation_v176_patch as v176
