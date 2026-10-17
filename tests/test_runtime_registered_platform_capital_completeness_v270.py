@@ -4,6 +4,8 @@ import os
 import threading
 from types import SimpleNamespace
 
+import pytest
+
 from bot import runtime_registered_platform_capital_completeness_v270_patch as v270
 
 
@@ -75,8 +77,9 @@ def test_three_registered_two_connected_forces_ready_false() -> None:
     assert manager._trading_halted_due_to_capital is True
 
 
-def test_three_registered_three_connected_three_valid_remains_ready() -> None:
+def test_three_registered_three_connected_three_valid_remains_ready(monkeypatch) -> None:
     manager = _Manager((True, True, True))
+    monkeypatch.setattr(v270, "_authority", lambda: _Authority())
     result = {"ready": 1.0, "total_capital": 103.35, "valid_brokers": 3.0}
 
     corrected = v270._fail_closed_result(
@@ -153,3 +156,68 @@ def test_install_helper_does_not_mutate_execution_safety_environment(monkeypatch
     )
 
     assert {name: os.environ[name] for name in names} == before
+
+
+def test_missing_registered_instance_does_not_shrink_denominator() -> None:
+    manager = _Manager((True, True, True))
+    manager._platform_brokers["kraken"] = None
+    assert v270._platform_counts(manager) == (3, 2)
+
+
+@pytest.mark.parametrize("count", [0, 1, 2, 2.9, float("nan"), float("inf"), -1, True, "invalid", None])
+def test_hydrated_capital_cannot_replace_three_valid_contributors(monkeypatch, count) -> None:
+    manager = _Manager((True, True, True))
+    monkeypatch.setattr(v270, "_authority", lambda: _Authority())
+    result = {"ready": 1.0, "total_capital": 758.62, "valid_brokers": count}
+    corrected = v270._fail_closed_result(manager, result, registered=3, connected=3)
+    assert corrected["ready"] == 0.0
+    assert corrected["total_capital"] == 758.62
+    assert manager._capital_ready is False
+    assert manager._trading_halted_due_to_capital is True
+
+
+@pytest.mark.parametrize("authority", [
+    None, SimpleNamespace(),
+    _Authority(accepted=False), _Authority(stale=True), _Authority(complete=False),
+    _Authority(accepted="true"), _Authority(stale=None), _Authority(complete=None),
+])
+def test_three_counts_never_replace_current_accepted_publication(monkeypatch, authority) -> None:
+    manager = _Manager((True, True, True))
+    monkeypatch.setattr(v270, "_authority", lambda: authority)
+    corrected = v270._fail_closed_result(
+        manager, {"ready": 1.0, "total_capital": 758.62, "valid_brokers": 3},
+        registered=3, connected=3,
+    )
+    assert corrected["ready"] == 0.0
+    assert corrected["publication_current"] is False
+    assert manager._capital_ready is False
+
+
+def test_malformed_refresh_result_revokes_sticky_readiness(monkeypatch) -> None:
+    manager = _Manager((True, True, True))
+    monkeypatch.setattr(v270, "_authority", lambda: _Authority())
+    corrected = v270._fail_closed_result(manager, None, registered=3, connected=3)
+    assert corrected["ready"] == 0.0
+    assert manager._capital_ready is False
+
+
+def test_publication_read_failure_fails_closed() -> None:
+    authority = _Authority()
+
+    def fail():
+        raise RuntimeError("publication unavailable")
+
+    authority.get_snapshot_publication_status = fail
+    assert v270._current_publication_accepted_and_fresh(authority) is False
+
+
+def test_intermittent_capital_refresh_requires_current_complete_result(monkeypatch) -> None:
+    manager = _Manager((True, True, True))
+    authority = _Authority()
+    monkeypatch.setattr(v270, "_authority", lambda: authority)
+    for valid, stale, expected_ready in [(3, False, 1.0), (0, False, 0.0), (3, True, 0.0), (3, False, 1.0)]:
+        authority._stale = stale
+        result = {"ready": 1.0, "total_capital": 758.62, "valid_brokers": valid}
+        corrected = v270._fail_closed_result(manager, result, registered=3, connected=3)
+        assert corrected["ready"] == expected_ready
+        assert corrected["total_capital"] == 758.62

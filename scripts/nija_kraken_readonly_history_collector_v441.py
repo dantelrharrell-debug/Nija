@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Callable, Mapping
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 ENDPOINTS = (("TradesHistory", "trades"), ("ClosedOrders", "closed"), ("Ledgers", "ledger"))
@@ -24,7 +25,9 @@ def collect_history(
     *,
     account_scope: str,
     max_pages: int = 200,
+    include_balance: bool = False,
 ) -> dict[str, Any]:
+    """Collect repeat-checked history, optionally bracketed by private balances."""
     if not (account_scope == "platform:kraken" or (
         account_scope.startswith("user:")
         and account_scope.endswith(":kraken")
@@ -34,6 +37,24 @@ def collect_history(
         raise ValueError("Explicit Kraken account scope required")
     if not callable(private_read) or not 1 <= max_pages <= 1000:
         raise ValueError("Trusted read callable and bounded max_pages required")
+
+    def read_balance() -> dict[str, str]:
+        payload = private_read("Balance", {})
+        if not isinstance(payload, Mapping) or payload.get("error"):
+            raise IncompleteHistory("Balance: API failure")
+        result = payload.get("result")
+        if not isinstance(result, Mapping):
+            raise IncompleteHistory("Balance: malformed result")
+        balances: dict[str, str] = {}
+        for asset, value in result.items():
+            try:
+                amount = Decimal(str(value))
+            except (InvalidOperation, TypeError, ValueError) as exc:
+                raise IncompleteHistory("Balance: invalid amount") from exc
+            if not isinstance(asset, str) or not asset or not amount.is_finite() or amount < 0:
+                raise IncompleteHistory("Balance: invalid asset or amount")
+            balances[asset] = str(amount)
+        return balances
 
     def read_all_endpoints() -> dict[str, dict[str, Any]]:
         """Collect one bounded pass without assuming Kraken provides an atomic snapshot."""
@@ -85,14 +106,18 @@ def collect_history(
     # Offset pagination is not a broker-provided atomic snapshot. A second full
     # read catches a stable count with changed IDs or changed row contents.
     # This reduces inconsistent evidence; it does not prove absence of ABA churn.
+    balance = read_balance() if include_balance else None
     collected = read_all_endpoints()
     if read_all_endpoints() != collected:
         raise IncompleteHistory("history changed between verification passes")
+    if include_balance and read_balance() != balance:
+        raise IncompleteHistory("balance changed during history collection")
     envelope = {"account_scope_asserted_by_caller": account_scope, "history": collected}
+    if include_balance:
+        envelope["balance"] = balance
     canonical = json.dumps(envelope, sort_keys=True, separators=(",", ":"), allow_nan=False)
     return {
-        "account_scope_asserted_by_caller": account_scope,
-        "history": collected,
+        **envelope,
         "repeat_read_consistent": True,
         "atomic_broker_snapshot_verified": False,
         "evidence_sha256": hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
@@ -120,7 +145,8 @@ def _broker_account_scope(broker: Any) -> str:
 
 
 def collect_from_existing_broker(broker: Any, *, account_scope: str,
-                                 monitoring_category: Any, max_pages: int = 200) -> dict[str, Any]:
+                                 monitoring_category: Any, max_pages: int = 200,
+                                 include_balance: bool = False) -> dict[str, Any]:
     """Reuse Kraken read controls without relabeling another software account."""
     def require_matching_scope() -> None:
         if _broker_account_scope(broker) != account_scope:
@@ -132,11 +158,15 @@ def collect_from_existing_broker(broker: Any, *, account_scope: str,
         raise ValueError("Authenticated private call and monitoring category required")
 
     def read(endpoint: str, params: dict[str, Any]) -> Mapping[str, Any]:
-        if endpoint not in {"TradesHistory", "ClosedOrders", "Ledgers"} or set(params) != {"ofs"}:
+        history_read = endpoint in {"TradesHistory", "ClosedOrders", "Ledgers"} and set(params) == {"ofs"}
+        balance_read = include_balance and endpoint == "Balance" and not params
+        if not (history_read or balance_read):
             raise ValueError("Non-read-only request rejected")
         require_matching_scope()
         payload = private_call(endpoint, params, category=monitoring_category)
         require_matching_scope()
         return payload
 
-    return collect_history(read, account_scope=account_scope, max_pages=max_pages)
+    return collect_history(
+        read, account_scope=account_scope, max_pages=max_pages, include_balance=include_balance,
+    )
