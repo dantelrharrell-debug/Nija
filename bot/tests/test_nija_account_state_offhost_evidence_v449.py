@@ -298,11 +298,11 @@ def test_parent_alias_swap_does_not_escape_pinned_root(monkeypatch, tmp_path):
         return original(root_fd, parts)
 
     monkeypatch.setattr(audit, "_open_root_anchored_directory", swap_after_resolution)
-    result = _backup(tmp_path, root=root, positions=alias / "positions",
-                     entries=alias / "entry_prices")
-    assert calls
-    with zipfile.ZipFile(result["archive"]) as archive:
-        content = archive.read("positions/platform__kraken.json")
-    assert b"UNAUTHORIZED" not in content
-    assert audit.verify_archive(Path(result["archive"]),
-                                expected_sha256=result["sha256"])["trading_authorized"] is False
+    # First pass uses root-anchored descriptors even after the alias is
+    # retargeted; the second pass must reject the now out-of-root alias.
+    # No unsafe archive is created and no outside data is captured.
+    with pytest.raises(ValueError, match="outside persistent root"):
+        _backup(tmp_path, root=root, positions=alias / "positions",
+                entries=alias / "entry_prices")
+    assert len(calls) == 1
+    assert not (tmp_path / "out").exists()
