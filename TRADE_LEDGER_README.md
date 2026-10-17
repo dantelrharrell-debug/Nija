@@ -88,9 +88,14 @@ JSON directories. Issue #3024 documents that `/app/data` was observed to resolve
 to the `/data` mount on October 11, but current paths, integrity and restart
 durability must be verified in the **current live instance** before any redeploy.
 
-Run only from an authorized Render owner shell with the current checkout, with
-no new trades, restarts, or state changes. The following creates two **local,
-private** archives under `/tmp`, and does not itself copy either archive off-host:
+Run only from an authorized Render owner shell with the current checkout,
+with no new trades, restarts, or state changes. **The current trading deployment
+may predate v449**; do not restart/redeploy it merely to make this tool
+available. After independent review, transfer the exact approved/pinned v449
+script to a private temporary path on the existing live instance by an
+authorized secure method, and verify its source hash before running it.
+The following creates two **local, private** archives under `/tmp`, and does
+not itself copy either archive off-host:
 
 ```bash
 cd /app
@@ -99,7 +104,7 @@ python -S scripts/nija_state_store_persistence_audit_v441.py \
   --positions-dir /app/data/positions --entry-prices-dir /app/data/entry_prices
 python -S scripts/nija_trade_ledger_snapshot_v436.py backup \
   --source /data/trade_ledger.db --output-dir /tmp/nija-recovery-private
-python -S scripts/nija_account_state_offhost_evidence_v449.py snapshot \
+python -S /tmp/approved-nija-account-state-v449.py snapshot \
   --persistent-root /data \
   --positions-dir /app/data/positions --entry-prices-dir /app/data/entry_prices \
   --output-dir /tmp/nija-recovery-private
