@@ -70,7 +70,8 @@ def test_all_account_scopes_are_distinct_in_archive(tmp_path):
 
 def test_invalid_source_raises_without_creating_archive(tmp_path):
     root, positions, entries, position, _ = _fixture(tmp_path)
-    cases = ('{"x": NaN}', '{"x": Infinity}', "[]", "not-json")
+    cases = ('{"x": NaN}', '{"x": Infinity}',
+             '{"positions":{"BABY":{"price":1e999}}}', "[]", "not-json")
     for contents in cases:
         position.write_text(contents)
         with pytest.raises(ValueError, match="account JSON"):
