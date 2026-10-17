@@ -198,3 +198,228 @@ def test_v142_repaired_runtime_path_uses_proactive_caller_deadline(monkeypatch):
     assert result == {"fresh": True}
     assert observed == [(True, 40.0)]
     assert not v166._is_proactive_trigger()
+
+
+def _runtime_coordinator(pipeline):
+    return SimpleNamespace(
+        _lock=threading.RLock(),
+        _in_flight=False,
+        _pipeline=pipeline,
+    )
+
+
+def _install_v142_outside_v176(monkeypatch, *, callback):
+    from bot import capital_flow_state_machine as flow
+    from bot import runtime_capital_reactivation_v176_patch as v176
+
+    monkeypatch.setattr(flow.CapitalRefreshCoordinator, "execute_refresh", _fake_execute)
+    assert v176._patch_coordinator()
+    monkeypatch.setattr(v176, "_rearm_after_publication", callback)
+    monkeypatch.setattr(v142, "_reassert_bounded_fetch_contract", lambda: (True, "ok"))
+    monkeypatch.setattr(v142, "_runtime_terminal", lambda _coordinator: True)
+    monkeypatch.setattr(v142, "_runtime_pipeline_deadline_seconds", lambda: 0.02)
+    monkeypatch.setattr(v142, "_runtime_publication_matches_result", lambda _snapshot: True)
+    monkeypatch.setattr(v142, "_canonical_manager", lambda: None)
+    assert v142._patch_coordinator_execute()
+    return flow.CapitalRefreshCoordinator.execute_refresh
+
+
+def test_v142_outside_v176_rearms_only_successful_current_publication(monkeypatch):
+    calls = []
+    execute = _install_v142_outside_v176(monkeypatch, callback=calls.append)
+    old_active = v142._ACTIVE_GENERATION
+    old_next = v142._NEXT_GENERATION
+    old_rollover = v142._ROLLOVER_OCCURRED
+    try:
+        snapshot = SimpleNamespace(computed_at=object())
+        assert execute(_runtime_coordinator(lambda **_kwargs: snapshot), {}) is snapshot
+        assert calls == ["coordinator"]
+
+        calls.clear()
+        assert execute(
+            _runtime_coordinator(lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("failed"))),
+            {},
+        ) is None
+        assert calls == []
+
+        monkeypatch.setattr(v142, "_runtime_publication_matches_result", lambda _snapshot: False)
+        assert execute(_runtime_coordinator(lambda **_kwargs: snapshot), {}) is snapshot
+        assert calls == []
+
+        monkeypatch.setattr(v142, "_runtime_publication_matches_result", lambda _snapshot: True)
+
+        def retired_pipeline(**_kwargs):
+            v142._retire_generation(
+                getattr(v142._LOCAL, "refresh_generation", None),
+                "test_retired_generation",
+            )
+            return snapshot
+
+        assert execute(_runtime_coordinator(retired_pipeline), {}) is snapshot
+        assert calls == []
+    finally:
+        v142._ACTIVE_GENERATION = old_active
+        v142._NEXT_GENERATION = old_next
+        v142._ROLLOVER_OCCURRED = old_rollover
+
+
+def test_v176_outside_v142_rearms_once_after_runtime_refresh(monkeypatch):
+    from bot import capital_flow_state_machine as flow
+    from bot import runtime_capital_reactivation_v176_patch as v176
+
+    calls = []
+    monkeypatch.setattr(flow.CapitalRefreshCoordinator, "execute_refresh", _fake_execute)
+    monkeypatch.setattr(v142, "_reassert_bounded_fetch_contract", lambda: (True, "ok"))
+    monkeypatch.setattr(v142, "_runtime_terminal", lambda _coordinator: True)
+    monkeypatch.setattr(v142, "_runtime_pipeline_deadline_seconds", lambda: 0.02)
+    monkeypatch.setattr(v142, "_runtime_publication_matches_result", lambda _snapshot: True)
+    monkeypatch.setattr(v142, "_canonical_manager", lambda: None)
+    assert v142._patch_coordinator_execute()
+    assert v176._patch_coordinator()
+    monkeypatch.setattr(v176, "_rearm_after_publication", calls.append)
+
+    old_active = v142._ACTIVE_GENERATION
+    old_next = v142._NEXT_GENERATION
+    old_rollover = v142._ROLLOVER_OCCURRED
+    try:
+        result = SimpleNamespace()
+        execute = flow.CapitalRefreshCoordinator.execute_refresh
+        assert execute(_runtime_coordinator(lambda **_kwargs: result), {}) is result
+        assert calls == ["coordinator"]
+    finally:
+        v142._ACTIVE_GENERATION = old_active
+        v142._NEXT_GENERATION = old_next
+        v142._ROLLOVER_OCCURRED = old_rollover
+
+
+def test_rearm_wrapper_detection_uses_code_identity_not_copied_markers(monkeypatch):
+    from bot import capital_flow_state_machine as flow
+    from bot import runtime_capital_reactivation_v176_patch as v176
+
+    _install_v142_outside_v176(monkeypatch, callback=lambda _trigger: None)
+    wrapper_code = v176._EXECUTE_REFRESH_V176_CODE
+    assert wrapper_code is not None
+    assert v142._callable_chain_has_code(
+        flow.CapitalRefreshCoordinator.execute_refresh,
+        wrapper_code,
+        v176.__name__,
+    )
+
+    @wraps(_fake_execute)
+    def copied_marker(*args, **kwargs):
+        return _fake_execute(*args, **kwargs)
+
+    setattr(copied_marker, v176._PATCH_ATTR, True)
+    assert not v142._callable_chain_has_code(copied_marker, wrapper_code, v176.__name__)
+
+
+def test_v142_timeout_does_not_rearm_inner_v176(monkeypatch):
+    import threading as threading_module
+
+    calls = []
+    execute = _install_v142_outside_v176(monkeypatch, callback=calls.append)
+    started = threading_module.Event()
+    release = threading_module.Event()
+    finished = threading_module.Event()
+    old_active = v142._ACTIVE_GENERATION
+    old_next = v142._NEXT_GENERATION
+    old_rollover = v142._ROLLOVER_OCCURRED
+
+    def slow_pipeline(**_kwargs):
+        started.set()
+        release.wait(1.0)
+        finished.set()
+        return SimpleNamespace()
+
+    try:
+        assert execute(_runtime_coordinator(slow_pipeline), {}) is None
+        assert started.is_set()
+        assert calls == []
+    finally:
+        release.set()
+        assert finished.wait(1.0)
+        v142._ACTIVE_GENERATION = old_active
+        v142._NEXT_GENERATION = old_next
+        v142._ROLLOVER_OCCURRED = old_rollover
+
+
+def _bootstrap_publication_chain(monkeypatch, *, v142_is_outer):
+    from bot import capital_authority as ca
+    from bot import runtime_bootstrap_capital_publication_v179_patch as v179
+
+    calls = []
+
+    def base_publish(self, snapshot, writer_id):
+        calls.append((snapshot, writer_id))
+        return writer_id == self._AUTHORIZED_WRITER_ID
+
+    monkeypatch.setattr(ca.CapitalAuthority, "publish_snapshot", base_publish)
+    monkeypatch.setattr(v179, "_canonical_ca_module", lambda: ca)
+    monkeypatch.setattr(v179, "_v142_module", lambda: v142)
+    if not v142_is_outer:
+        assert v142._patch_publication_generation_fence()
+    assert v179._patch_capital_publish_seed_context()
+    if v142_is_outer:
+        assert v142._patch_publication_generation_fence()
+    return ca, v179, calls
+
+
+def _reset_generation_context(monkeypatch, *, active):
+    monkeypatch.setattr(v142, "_ACTIVE_GENERATION", active)
+    monkeypatch.setattr(v142, "_NEXT_GENERATION", active)
+    monkeypatch.setattr(v142, "_ROLLOVER_OCCURRED", True)
+    try:
+        delattr(v142._LOCAL, "refresh_generation")
+    except AttributeError:
+        pass
+
+
+def test_v142_outer_fence_allows_only_exact_authorized_v179_seed(monkeypatch):
+    ca, v179, calls = _bootstrap_publication_chain(monkeypatch, v142_is_outer=True)
+    _reset_generation_context(monkeypatch, active=42)
+    authority = object.__new__(ca.CapitalAuthority)
+    authority._AUTHORIZED_WRITER_ID = "mabm_capital_refresh_coordinator"
+
+    authorized_seed = SimpleNamespace()
+    v179._mark_bootstrap_seed(authorized_seed)
+    assert authority.publish_snapshot(
+        authorized_seed, authority._AUTHORIZED_WRITER_ID
+    ) is True
+    assert calls == [(authorized_seed, authority._AUTHORIZED_WRITER_ID)]
+    assert not v179._is_marked_bootstrap_seed(authorized_seed)
+    assert not hasattr(v142._LOCAL, "refresh_generation")
+
+    unmarked = SimpleNamespace()
+    assert authority.publish_snapshot(unmarked, authority._AUTHORIZED_WRITER_ID) is False
+    assert calls == [(authorized_seed, authority._AUTHORIZED_WRITER_ID)]
+
+    unauthorized_seed = SimpleNamespace()
+    v179._mark_bootstrap_seed(unauthorized_seed)
+    assert authority.publish_snapshot(unauthorized_seed, "untrusted-writer") is False
+    assert calls[-1] == (unauthorized_seed, "untrusted-writer")
+    assert not v179._is_marked_bootstrap_seed(unauthorized_seed)
+
+    retired_seed = SimpleNamespace()
+    v179._mark_bootstrap_seed(retired_seed)
+    v142._LOCAL.refresh_generation = 41
+    assert authority.publish_snapshot(
+        retired_seed, authority._AUTHORIZED_WRITER_ID
+    ) is False
+    assert calls[-1] == (unauthorized_seed, "untrusted-writer")
+    assert not v179._is_marked_bootstrap_seed(retired_seed)
+    assert v142._LOCAL.refresh_generation == 41
+    delattr(v142._LOCAL, "refresh_generation")
+
+
+def test_v179_outer_seed_context_preserves_v142_publication_fence(monkeypatch):
+    ca, v179, calls = _bootstrap_publication_chain(monkeypatch, v142_is_outer=False)
+    _reset_generation_context(monkeypatch, active=43)
+    authority = object.__new__(ca.CapitalAuthority)
+    authority._AUTHORIZED_WRITER_ID = "mabm_capital_refresh_coordinator"
+    seed = SimpleNamespace()
+    v179._mark_bootstrap_seed(seed)
+
+    assert authority.publish_snapshot(seed, authority._AUTHORIZED_WRITER_ID) is True
+    assert calls == [(seed, authority._AUTHORIZED_WRITER_ID)]
+    assert not v179._is_marked_bootstrap_seed(seed)
+    assert not hasattr(v142._LOCAL, "refresh_generation")

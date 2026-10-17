@@ -48,6 +48,7 @@ RELEASE_ID = "20260821-runtime-convergence-v176"
 _READY_FLAG = "NIJA_RUNTIME_CAPITAL_REACTIVATION_V176_READY"
 _PATCH_ATTR = "_nija_runtime_capital_reactivation_v176"
 _LOCK = threading.RLock()
+_EXECUTE_REFRESH_V176_CODE = None
 
 
 def _publication_is_fresh() -> tuple[bool, str]:
@@ -205,6 +206,7 @@ def _install_v189_platform_source_graph() -> bool:
 
 
 def _patch_coordinator() -> bool:
+    global _EXECUTE_REFRESH_V176_CODE
     try:
         module = importlib.import_module("bot.capital_flow_state_machine")
         cls = getattr(module, "CapitalRefreshCoordinator", None)
@@ -226,6 +228,7 @@ def _patch_coordinator() -> bool:
 
         setattr(execute_refresh_v176, _PATCH_ATTR, True)
         setattr(execute_refresh_v176, "__wrapped__", original)
+        _EXECUTE_REFRESH_V176_CODE = execute_refresh_v176.__code__
         cls.execute_refresh = execute_refresh_v176
         return True
     except Exception:
