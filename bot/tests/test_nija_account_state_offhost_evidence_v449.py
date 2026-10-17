@@ -166,3 +166,30 @@ def test_symlinked_output_directory_rejected(tmp_path):
     with pytest.raises(ValueError, match="output"):
         audit.create_archive(persistent_root=root, positions_dir=positions,
                              entry_prices_dir=entries, output_dir=alias)
+
+
+def test_cross_account_change_between_passes_aborts(monkeypatch, tmp_path):
+    root, positions, entries, position, _ = _fixture(tmp_path)
+    original = audit._inventory
+    calls = []
+
+    def mutate_between_passes(persistent, directories):
+        captured = original(persistent, directories)
+        calls.append(1)
+        if len(calls) == 1:
+            position.write_text('{"positions":{"BABY-USD":{"quantity":2}}}')
+        return captured
+
+    monkeypatch.setattr(audit, "_inventory", mutate_between_passes)
+    with pytest.raises(ValueError, match="changed across collection passes"):
+        _backup(tmp_path, root=root, positions=positions, entries=entries)
+    assert len(calls) == 2
+    assert not (tmp_path / "out").exists()
+
+
+def test_account_archive_total_memory_budget_fails_closed(monkeypatch, tmp_path):
+    root, positions, entries, _, _ = _fixture(tmp_path)
+    monkeypatch.setattr(audit, "MAX_TOTAL_JSON_BYTES", 8)
+    with pytest.raises(ValueError, match="total byte budget"):
+        _backup(tmp_path, root=root, positions=positions, entries=entries)
+    assert not (tmp_path / "out").exists()
