@@ -192,6 +192,58 @@ def _chain_contains(callable_obj: Any, *, marker: str, expected_name: str = "") 
     return False
 
 
+def _has_exact_v142_wrapper(callable_obj: Any, implementation: str) -> bool:
+    """Require the actual v142 function in a wrapper chain, not copied metadata.
+
+    functools.wraps copies the wrapped function's __dict__, including ownership
+    flags. An unrelated outer function with a copied flag is not proof that the
+    generation tracker or publication fence is present.
+    """
+    seen: set[int] = set()
+    current = callable_obj
+    for _ in range(64):
+        if not callable(current) or id(current) in seen:
+            return False
+        seen.add(id(current))
+        code = getattr(current, "__code__", None)
+        owner = getattr(current, "__globals__", {}) or {}
+        if (
+            bool(getattr(current, _PATCH_ATTR, False))
+            and str(getattr(code, "co_name", "")) == implementation
+            and owner.get("MARKER") == MARKER
+            and owner.get("__name__") in {
+                "bot.capital_publication_liveness_v142_patch",
+                "capital_publication_liveness_v142_patch",
+            }
+        ):
+            return True
+        current = getattr(current, "__wrapped__", None)
+    return False
+
+
+def _runtime_deadline_with_caller_context_v142(trigger: str) -> float:
+    """Evaluate v166/v176's proactive deadline in the caller's trigger context.
+
+    If v142 is reinstalled outside surviving v166/v176 execute wrappers, its
+    runtime path invokes _pipeline directly, bypassing those inner execute
+    wrappers. Explicitly scope only the deadline evaluation to the same
+    thread-local trigger contract; never extend publication expiry.
+    """
+    v166 = (
+        sys.modules.get("bot.runtime_capital_refresh_ownership_v166_patch")
+        or sys.modules.get("runtime_capital_refresh_ownership_v166_patch")
+    )
+    setter = getattr(v166, "_set_trigger", None)
+    restorer = getattr(v166, "_restore_trigger", None)
+    if not callable(setter) or not callable(restorer):
+        return _runtime_pipeline_deadline_seconds()
+    previous = setter(trigger)
+    try:
+        return _runtime_pipeline_deadline_seconds()
+    finally:
+        restorer(previous)
+
+
 def _reassert_bounded_fetch_contract() -> tuple[bool, str]:
     """Prove the actual wrappers are present, not merely their environment flags."""
     try:
@@ -381,7 +433,7 @@ def _patch_coordinator_execute() -> bool:
     current = getattr(cls, "execute_refresh", None)
     if not callable(current):
         return False
-    if getattr(current, _PATCH_ATTR, False):
+    if _has_exact_v142_wrapper(current, "execute_refresh_v142"):
         return True
     original = current
 
@@ -503,7 +555,7 @@ def _patch_coordinator_execute() -> bool:
             self._nija_v142_flight_thread = worker
         worker.start()
 
-        deadline_s = _runtime_pipeline_deadline_seconds()
+        deadline_s = _runtime_deadline_with_caller_context_v142(trigger)
         try:
             outcome, result = result_queue.get(timeout=deadline_s)
             return result if outcome == "ok" else None
@@ -549,7 +601,7 @@ def _patch_publication_generation_fence() -> bool:
     current = getattr(cls, "publish_snapshot", None)
     if not callable(current):
         return False
-    if getattr(current, _PATCH_ATTR, False):
+    if _has_exact_v142_wrapper(current, "publish_snapshot_v142"):
         return True
     original = current
 
@@ -652,6 +704,8 @@ def _coordinator_in_flight_v142(manager: Any) -> bool:
             "in_flight=%s bootstrap_state=%s flight_generation=%s "
             "flight_started_present=%s flight_thread_present=%s "
             "flight_thread_alive=%s publication_current=%s "
+            "sync_owner_present=%s sync_owner_alive=%s sync_age_s=%.1f "
+            "execute_wrapper_verified=%s "
             "safe_fail_closed=true publication_expiry_unchanged=true",
             MARKER,
             bool(getattr(coordinator, "_in_flight", False)),
@@ -661,6 +715,13 @@ def _coordinator_in_flight_v142(manager: Any) -> bool:
             thread is not None,
             thread_alive,
             bool(current),
+            sync_owner is not None,
+            sync_alive,
+            sync_age_s,
+            _has_exact_v142_wrapper(
+                getattr(type(coordinator), "execute_refresh", None),
+                "execute_refresh_v142",
+            ),
         )
 
     if should_roll:

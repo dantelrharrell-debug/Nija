@@ -183,6 +183,7 @@ jobs:
             bot/tests/test_startup_position_sync_outcomes.py \
             tests/test_runtime_registered_platform_capital_completeness_v270.py \
             tests/test_runtime_capital_refresh_ownership_v166.py \
+            tests/test_capital_publication_wrapper_integrity_20261017.py \
             tests/test_account_state_diagnostics.py \
             tests/test_runtime_account_scoped_position_state_v289.py \
             tests/test_kraken_position_snapshot_reuse.py \

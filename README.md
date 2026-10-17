@@ -1,5 +1,24 @@
 # NIJA AI Trading LLC — Trading Platform Architecture & Recovery Guide
 
+## Production trading recovery — October 17, 2026 (07:09 PDT; read-only evidence)
+
+**Trading activation: NOT COMPLETE.** Render service `nija-trading-bot` (`srv-d98dsr5aeets73fpbaqg`) in workspace `tea-d37fhe8gjchc73c8eo0g` reported live deployment `dep-db9cohfbtjjs73b83je0`, commit `255217ee905288363d7fadeb436ebc1d5d6cc39f` (deployed October 16, 2026 at 18:18 PDT). A live process is **not** evidence of 24/7 authorized trading.
+
+**Read-only Render log observations around 14:07–14:09 UTC, October 17:**
+
+- Bootstrap remained `RUNNING_SUPERVISED`; `execution_authority=False`, `trading_engine_ready=False`, and `execution_ready=False`.
+- Activation was deferred specifically on `proof.execution_ready`. The execution-proof recovery reported `no_recent_final_exact_kraken_fill`, `read_only=true`, `no_order_submitted=true`; the older execution marker was stale (>713,000 seconds against a 1,800-second maximum).
+- Broker connectivity, writer/nonce, strategy and risk proofs were positive in sampled cycles, and capital frequently refreshed successfully. **Capital was not continuously ready**: intermittent stale publications, including `capital_ready=False` in the same period.
+- The deployed v142 coordinator repeatedly reported `CAPITAL_COORDINATOR_ROLLOVER_V142 reason=untracked_inflight_with_expired_publication`. Source review identified overly permissive copied-wrapper-flag detection as an independently actionable correctness gap, **not yet proven to be the sole production root cause**.
+- Kraken all-account position/exit coverage fluctuated between READY and PENDING (`authoritative_position_fetch_unproven`) for platform/user Kraken snapshots. A single READY entry is insufficient to certify sustained protected-exit coverage; historical position and ledger proof remains unverified.
+- `STARTUP_READONLY_RECOVERY_DIAGNOSTIC` explicitly reported `allow_new_orders=false`, with execution evidence, kill-switch, startup-attempt, protective-exit and ledger independent attestations unresolved or unknown.
+
+**Code recovery in progress:** [PR #3181](https://github.com/dantelrharrell-debug/Nija/pull/3181) is a **draft**, separately tested proposal to verify the *actual* v142 execute-refresh and publication-fence wrappers and emit owner diagnostics, preserving the existing rollover and publication-expiry policy. This documentation or PR does not claim the repair is deployed, activate trading, authorize a transaction, change credentials, or bypass risk controls.
+
+**Remaining acceptance:** Pass CI and independent review of PR #3181; investigate actual capital owner/refresh lifecycle and recurring stale publication under the deployed wrapper chain; verify broker-authenticated account-scoped Kraken positions/open orders, genuine protective exits, durable ledger reconciliation, startup attempt recovery, and active kill-switch truth; resolve the circular execution-proof startup dependency through an independently reviewed protocol that separates non-trading preflight from verified post-trade fills without weakening per-order safety; deploy only an approved revision deliberately; and observe positive `execution_authority`, `trading_engine_ready`, authentic order/fill/exit records, and sustained protected operation before certifying 24/7 trading.
+
+---
+
 ## AI outreach recovery status — October 16, 2026 (verified)
 
 **Scope:** Apollo → NIJA feeder → JustCall AI Voice Agent. This is operational documentation, not authorization to call contacts or change trading permissions.
