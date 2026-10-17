@@ -65,7 +65,7 @@ def test_stale_marker_does_not_block_reinstallation_of_execute_wrapper(monkeypat
     assert v142._patch_coordinator_execute()
     repaired = flow.CapitalRefreshCoordinator.execute_refresh
     assert repaired is not unrelated
-    assert repaired.__wrapped__ is unrelated
+    assert repaired.__wrapped__.__wrapped__ is unrelated
     assert v142._has_exact_v142_wrapper(repaired, "execute_refresh_v142")
 
 
@@ -147,7 +147,7 @@ def test_v142_repair_preserves_v176_proactive_deadline_context(monkeypatch):
     monkeypatch.setattr(flow.CapitalRefreshCoordinator, "execute_refresh", surviving_v176)
     assert v142._patch_coordinator_execute()
     repaired = flow.CapitalRefreshCoordinator.execute_refresh
-    assert repaired.__wrapped__ is surviving_v176
+    assert repaired.__wrapped__.__wrapped__ is surviving_v176
 
     assert not v166._is_proactive_trigger()
     assert v142._runtime_deadline_with_caller_context_v142(
@@ -198,3 +198,43 @@ def test_v142_repaired_runtime_path_uses_proactive_caller_deadline(monkeypatch):
     assert result == {"fresh": True}
     assert observed == [(True, 40.0)]
     assert not v166._is_proactive_trigger()
+
+
+def test_v142_repaired_runtime_path_rearms_after_successful_publication(monkeypatch):
+    from bot import capital_flow_state_machine as flow
+    from bot import runtime_capital_reactivation_v176_patch as v176
+
+    events = []
+    snapshot = {"fresh": True}
+    monkeypatch.setattr(v142, "_reassert_bounded_fetch_contract", lambda: (True, "ok"))
+    monkeypatch.setattr(v142, "_runtime_terminal", lambda _: True)
+    monkeypatch.setattr(v142, "_runtime_deadline_with_caller_context_v142", lambda _: 1.0)
+    monkeypatch.setattr(
+        v176,
+        "_rearm_after_publication",
+        lambda trigger: events.append(("rearm", trigger)),
+    )
+
+    @wraps(_fake_execute)
+    def surviving_v176(*args, **kwargs):
+        raise AssertionError("runtime worker must not use stale inner execute chain")
+
+    setattr(surviving_v176, v142._PATCH_ATTR, True)
+    setattr(surviving_v176, v176._PATCH_ATTR, True)
+    monkeypatch.setattr(flow.CapitalRefreshCoordinator, "execute_refresh", surviving_v176)
+    assert v142._patch_coordinator_execute()
+
+    coordinator = SimpleNamespace(
+        _lock=threading.RLock(),
+        _in_flight=False,
+        _pipeline=lambda **kwargs: (events.append(("publish", kwargs["trigger"])) or snapshot),
+    )
+    result = flow.CapitalRefreshCoordinator.execute_refresh(
+        coordinator, {}, trigger="publication_deadline_v137"
+    )
+
+    assert result is snapshot
+    assert events == [
+        ("publish", "publication_deadline_v137"),
+        ("rearm", "publication_deadline_v137"),
+    ]

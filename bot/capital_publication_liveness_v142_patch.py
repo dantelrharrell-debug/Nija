@@ -43,6 +43,7 @@ MARKER = "20260818-capital-publication-liveness-v142"
 RELEASE_ID = "20260818-runtime-convergence-v142"
 _FLAG = "NIJA_CAPITAL_PUBLICATION_LIVENESS_V142_READY"
 _PATCH_ATTR = "_nija_capital_publication_liveness_v142"
+_REACTIVATION_HOOK_ATTR = "_nija_capital_publication_liveness_v142_reactivation_hook"
 _LOCK = threading.RLock()
 _ROLLOVER_LOCK = threading.RLock()
 _GENERATION_LOCK = threading.RLock()
@@ -434,7 +435,7 @@ def _patch_coordinator_execute() -> bool:
     if not callable(current):
         return False
     if _has_exact_v142_wrapper(current, "execute_refresh_v142"):
-        return True
+        return _restore_reactivation_hook(cls)
     original = current
 
     @wraps(original)
@@ -590,7 +591,71 @@ def _patch_coordinator_execute() -> bool:
     setattr(execute_refresh_v142, _PATCH_ATTR, True)
     setattr(execute_refresh_v142, "_nija_v142_original", original)
     cls.execute_refresh = execute_refresh_v142
+    return _restore_reactivation_hook(cls)
+
+
+def _restore_reactivation_hook(cls: type) -> bool:
+    """Keep v176's post-publication proof recheck outside the v142 runtime path."""
+    current = getattr(cls, "execute_refresh", None)
+    if _has_outer_reactivation_hook(current):
+        return True
+    try:
+        reactivation = importlib.import_module(
+            "bot.runtime_capital_reactivation_v176_patch"
+        )
+        rearm_after_publication = getattr(reactivation, "_rearm_after_publication", None)
+    except Exception:
+        return False
+    if not callable(rearm_after_publication) or not callable(current):
+        return False
+    original = current
+
+    @wraps(original)
+    def execute_refresh_v142_reactivation(
+        self: Any,
+        broker_map: dict[str, Any],
+        trigger: str = "coordinator",
+        open_exposure_usd: float = 0.0,
+    ) -> Any:
+        runtime_path = _runtime_terminal(self)
+        snapshot = original(
+            self,
+            broker_map=broker_map,
+            trigger=trigger,
+            open_exposure_usd=open_exposure_usd,
+        )
+        if runtime_path and snapshot is not None:
+            rearm_after_publication(str(trigger or "coordinator"))
+        return snapshot
+
+    setattr(execute_refresh_v142_reactivation, _REACTIVATION_HOOK_ATTR, True)
+    cls.execute_refresh = execute_refresh_v142_reactivation
     return True
+
+
+def _has_outer_reactivation_hook(callable_obj: Any) -> bool:
+    seen: set[int] = set()
+    current = callable_obj
+    for _ in range(64):
+        if not callable(current) or id(current) in seen:
+            return False
+        seen.add(id(current))
+        code = getattr(current, "__code__", None)
+        owner = getattr(current, "__globals__", {}) or {}
+        if (
+            bool(getattr(current, _REACTIVATION_HOOK_ATTR, False))
+            and str(getattr(code, "co_name", "")) == "execute_refresh_v142_reactivation"
+            and owner.get("MARKER") == MARKER
+        ):
+            return True
+        if (
+            bool(getattr(current, _PATCH_ATTR, False))
+            and str(getattr(code, "co_name", "")) == "execute_refresh_v142"
+            and owner.get("MARKER") == MARKER
+        ):
+            return False
+        current = getattr(current, "__wrapped__", None)
+    return False
 
 
 def _patch_publication_generation_fence() -> bool:
