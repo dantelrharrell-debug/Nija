@@ -184,6 +184,13 @@ class QueueAndDirectRouteTests(unittest.TestCase):
         ):
             blockers, _ = dial._eligibility(self.row(), utc("2026-10-11T16:00:00Z"))
             self.assertIn("human_handoff_not_verified", blockers)
+            # Disabling the former opt-out must never bypass verified handoff.
+            with mock.patch.dict(os.environ, {
+                "NIJA_JUSTCALL_REQUIRE_HUMAN_HANDOFF": "0",
+                "NIJA_JUSTCALL_HUMAN_HANDOFF_VERIFIED": "0",
+            }):
+                blockers, _ = dial._eligibility(self.row(), utc("2026-10-11T16:00:00Z"))
+                self.assertIn("human_handoff_not_verified", blockers)
             with mock.patch.dict(os.environ, {"NIJA_JUSTCALL_HUMAN_HANDOFF_VERIFIED": "1"}):
                 blockers, _ = dial._eligibility(self.row(), utc("2026-10-11T16:00:00Z"))
                 self.assertEqual(blockers, [])
