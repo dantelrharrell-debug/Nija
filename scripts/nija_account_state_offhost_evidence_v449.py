@@ -23,9 +23,10 @@ import zipfile
 from pathlib import Path
 
 MAX_FILES = 256
-MAX_JSON_BYTES = 4 * 1024 * 1024
+MAX_JSON_BYTES = 2 * 1024 * 1024
+MAX_TOTAL_JSON_BYTES = 32 * 1024 * 1024
 MAX_MANIFEST_BYTES = 128 * 1024
-MAX_ARCHIVE_BYTES = MAX_FILES * MAX_JSON_BYTES + MAX_MANIFEST_BYTES + 1024 * 1024
+MAX_ARCHIVE_BYTES = 64 * 1024 * 1024
 ACCOUNT_FILE = re.compile(r"(?:platform|user)__[A-Za-z0-9_.-]{1,90}\.json\Z")
 KINDS = ("positions", "entry_prices")
 
@@ -88,6 +89,7 @@ def _read_unchanged(folder_fd: int, name: str) -> bytes:
 
 def _inventory(root: Path, directories: dict[str, Path]) -> dict[str, bytes]:
     payload: dict[str, bytes] = {}
+    total_bytes = 0
     for kind in KINDS:
         directory = directories[kind].resolve(strict=True)
         if not _inside(directory, root):
@@ -105,7 +107,11 @@ def _inventory(root: Path, directories: dict[str, Path]) -> dict[str, bytes]:
                 key = kind + "/" + name
                 if key in payload or len(payload) >= MAX_FILES:
                     raise ValueError("duplicate or excess account-state file")
-                payload[key] = _read_unchanged(fd, name)
+                raw = _read_unchanged(fd, name)
+                total_bytes += len(raw)
+                if total_bytes > MAX_TOTAL_JSON_BYTES:
+                    raise ValueError("account-state evidence exceeds total byte budget")
+                payload[key] = raw
         finally:
             os.close(fd)
     if not any(key.startswith("positions/") for key in payload):
@@ -121,7 +127,12 @@ def create_archive(*, persistent_root: Path, positions_dir: Path,
     output = output_dir.resolve()
     if _inside(output, root) or output_dir.is_symlink():
         raise ValueError("output must not be in the live persistent mount")
-    payload = _inventory(root, {"positions": positions_dir, "entry_prices": entry_prices_dir})
+    directories = {"positions": positions_dir, "entry_prices": entry_prices_dir}
+    payload = _inventory(root, directories)
+    # Two full passes catch a file changed while another account was copied.
+    # This still does NOT make SQLite and JSON snapshots atomic.
+    if _inventory(root, directories) != payload:
+        raise ValueError("account-state changed across collection passes")
     manifest = {
         "format_version": 1,
         "created_at_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
@@ -215,7 +226,7 @@ def verify_archive(path: Path, *, expected_sha256: str) -> dict[str, object]:
                 if row.file_size > maximum or row.compress_size > MAX_ARCHIVE_BYTES:
                     raise ValueError("oversized archive member")
                 limit += row.file_size
-                if limit > MAX_ARCHIVE_BYTES:
+                if limit > MAX_TOTAL_JSON_BYTES + MAX_MANIFEST_BYTES:
                     raise ValueError("decompressed archive size exceeded")
                 with saved.open(row, "r") as source:
                     raw = source.read(maximum + 1)
