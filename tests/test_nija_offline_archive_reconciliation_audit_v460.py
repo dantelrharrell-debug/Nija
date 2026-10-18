@@ -203,3 +203,25 @@ def test_report_is_private_and_never_overwritten(tmp_path):
     again = subprocess.run(cmd, text=True, capture_output=True)
     assert again.returncode != 0
     assert report.read_bytes() == before
+
+def test_nested_gzip_decompression_bomb_fails_before_tar_parsing(tmp_path, monkeypatch):
+    archive, crosswalk, digest = _fixture(tmp_path)
+    # Keep the compressed synthetic archive within this cap but its larger
+    # expanded members outside it, exposing gzip-bomb behavior deterministically.
+    compressed_size = archive.stat().st_size
+    assert compressed_size < 16_000
+    monkeypatch.setattr(audit, 'MAX_ARCHIVE_BYTES', compressed_size + 100)
+    with pytest.raises(ValueError, match='decompressed_archive_limit_exceeded'):
+        audit.audit(archive, crosswalk, digest)
+
+
+def test_nonfinite_json_account_state_rejected(tmp_path):
+    archive, crosswalk, digest = _fixture(tmp_path)
+    with tarfile.open(archive, 'r:gz') as original:
+        contents = [(item.name, original.extractfile(item).read()) for item in original if item.isfile()]
+    poisoned = [(name, b'{"BTC-USD": NaN}' if name == 'positions/platform__kraken.json' else raw)
+                for name, raw in contents]
+    archive.write_bytes(_tar_members(poisoned))
+    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+    with pytest.raises(ValueError, match='non_finite_json_number'):
+        audit.audit(archive, crosswalk, digest)
