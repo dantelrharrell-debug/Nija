@@ -225,3 +225,20 @@ def test_nonfinite_json_account_state_rejected(tmp_path):
     digest = hashlib.sha256(archive.read_bytes()).hexdigest()
     with pytest.raises(ValueError, match='non_finite_json_number'):
         audit.audit(archive, crosswalk, digest)
+
+def test_operator_csv_case_and_status_never_echo_sensitive_values(tmp_path):
+    archive, crosswalk, digest = _fixture(tmp_path, exact_match='NOT_FOUND')
+    secret = 'private-account-number-123456'
+    with crosswalk.open('r', encoding='utf-8', newline='') as source:
+        original = list(csv.DictReader(source))
+    original[0]['case'] = secret
+    original[0]['exact_order_id_match'] = 'UNVERIFIED:' + secret
+    with crosswalk.open('w', encoding='utf-8', newline='') as out:
+        writer = csv.DictWriter(out, fieldnames=list(audit.REQUIRED_CSV))
+        writer.writeheader()
+        writer.writerows(original)
+    result = audit.audit(archive, crosswalk, digest)
+    assert result['crosswalk_missing_evidence_cases'] == [
+        {'case': '1', 'symbol_class': 'SPOT_OR_OTHER', 'csv_status': 'OTHER_NON_MATCH'}]
+    assert result['live_trading_authorized'] is False
+    assert secret not in json.dumps(result)
