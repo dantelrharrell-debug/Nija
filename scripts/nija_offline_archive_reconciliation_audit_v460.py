@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import gzip
 import hashlib
 import io
 import json
@@ -83,6 +84,10 @@ def _expected_hash(value: str) -> str:
     return digest
 
 
+def _reject_nonfinite_json_constant(constant):
+    raise ValueError("non_finite_json_number")
+
+
 def _no_duplicate_json_keys(pairs):
     obj = {}
     for key, value in pairs:
@@ -94,9 +99,15 @@ def _no_duplicate_json_keys(pairs):
 
 def members(raw: bytes, max_total: int) -> dict[str, bytes]:
     """Bounded in-memory unpack; never write archive-controlled paths to disk."""
+    # A tiny gzip can claim gigantic decompressed members (including gigantic
+    # PAX headers). Bound decompression before tarfile parses any metadata.
+    with gzip.GzipFile(fileobj=io.BytesIO(raw), mode="rb") as compressed:
+        plain = compressed.read(max_total + 1)
+    if len(plain) > max_total:
+        raise ValueError('decompressed_archive_limit_exceeded')
     output: dict[str, bytes] = {}
     total = 0
-    with tarfile.open(fileobj=io.BytesIO(raw),mode='r:gz') as tar:
+    with tarfile.open(fileobj=io.BytesIO(plain),mode='r:') as tar:
         for item in tar:
             p=PurePosixPath(item.name)
             if p.is_absolute() or not item.name or '..' in p.parts or '\\' in item.name:
@@ -173,7 +184,7 @@ def audit(archive: Path, crosswalk: Path, expected_archive_sha256: str)->dict[st
     inner=members(nested[0][1],MAX_ARCHIVE_BYTES)
     if 'manifest.json' not in inner or 'trade_ledger.db' not in inner:
         raise ValueError('nested ledger and manifest required')
-    manifest=json.loads(inner['manifest.json'], object_pairs_hook=_no_duplicate_json_keys)
+    manifest=json.loads(inner['manifest.json'], object_pairs_hook=_no_duplicate_json_keys, parse_constant=_reject_nonfinite_json_constant)
     if not isinstance(manifest,dict) or type(manifest.get('format_version')) is not int or manifest['format_version']!=1:
         raise ValueError('unexpected inner manifest format')
     tracked=manifest.get('members')
@@ -195,7 +206,7 @@ def audit(archive: Path, crosswalk: Path, expected_archive_sha256: str)->dict[st
     positions=[name for name in outer if name.startswith('positions/') and name.endswith('.json')]
     entry_prices=[name for name in outer if name.startswith('entry_prices/') and name.endswith('.json')]
     for name in positions+entry_prices:
-        if not isinstance(json.loads(outer[name], object_pairs_hook=_no_duplicate_json_keys),dict):
+        if not isinstance(json.loads(outer[name], object_pairs_hook=_no_duplicate_json_keys, parse_constant=_reject_nonfinite_json_constant),dict):
             raise ValueError('account JSON not object')
     csv_raw=_pinned_read_file(crosswalk,MAX_CSV_BYTES)
     text=csv_raw.decode('utf-8-sig')
