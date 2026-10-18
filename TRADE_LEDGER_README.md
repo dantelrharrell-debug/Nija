@@ -472,13 +472,45 @@ with open('trades_export.csv', 'w') as f:
 
 ### Backup Database
 
-```bash
-# Create backup
-cp data/trade_ledger.db data/trade_ledger_backup_$(date +%Y%m%d).db
+**Production warning:** Do not use a raw `cp` of a running SQLite database.
+NIJA uses WAL-mode SQLite; raw file copying can omit committed changes in
+`-wal` files, yield an inconsistent snapshot, and falsely certify recovery.
 
-# Or use SQLite backup command
-sqlite3 data/trade_ledger.db ".backup data/trade_ledger_backup.db"
+From an authenticated shell **inside the existing running Render trading
+instance** (never a separate Render job, build, or pre-deploy instance), first
+confirm the current database path and mount, then use the existing v436
+SQLite online-backup implementation:
+
+```bash
+cd /app
+python -S scripts/nija_ledger_evidence_v438.py --ledger /data/trade_ledger.db
+python -S scripts/nija_trade_ledger_snapshot_v436.py backup \
+  --source /data/trade_ledger.db \
+  --output-dir /tmp/nija-recovery-private
 ```
+
+The command above creates a **local** backup only. Transfer the generated
+archive through approved encrypted transport to restricted independent
+off-host storage and compare its exact source SHA-256 with the received
+copy. Run `restore-test` on an isolated host:
+
+```bash
+python -S scripts/nija_trade_ledger_snapshot_v436.py restore-test \
+  --archive /restricted/offhost/nija-trading-ledger-snapshot.tar.gz \
+  --expected-sha256 ORIGINAL_SOURCE_SHA256
+```
+
+Preserve separately the current account-scoped JSON position and entry-price
+state using the vetted v449/v447 procedures in this README. Verify the current
+ledger and JSON evidence against authenticated broker records before any
+write, restart, deploy, trade, or protective-exit modification. A successful
+SQLite integrity check or backup **does not** prove historical cost basis,
+cross-store consistency, broker identity, or permission to trade.
+
+The read-only `scripts/nija_offline_archive_reconciliation_audit_v460.py`
+can check an **old historical** off-host recovery bundle against an operator
+CSV crosswalk, but cannot certify brokerage authenticity or the current
+production ledger. An archived match is not a release gate.
 
 ### Database Maintenance
 
