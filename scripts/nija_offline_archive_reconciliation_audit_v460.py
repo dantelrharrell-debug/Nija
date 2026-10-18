@@ -230,9 +230,11 @@ def audit(archive: Path, crosswalk: Path, expected_archive_sha256: str)->dict[st
     if mismatches:
         raise ValueError('crosswalk symbol/side conflicts with archived ledger')
     match_count=sum(row['exact_order_id_match']=='MATCH' and row['pdf_trade_id_match']=='MATCH' and row['pdf_both_ledger_ids_match']=='MATCH' for row in records)
-    gaps=[{'case':row['case'],'symbol_class':'ETH_MARGIN_CLOSE' if ':' in row['nija_symbol'] else 'SPOT_OR_OTHER',
-           'csv_status':row['exact_order_id_match']}
-          for row in records if row['exact_order_id_match']!='MATCH' or row['pdf_trade_id_match']!='MATCH' or row['pdf_both_ledger_ids_match']!='MATCH']
+    # Never echo arbitrary operator CSV values in a report. A malformed case
+    # label or status could otherwise smuggle personal/account data into logs.
+    gaps=[{'case':str(i),'symbol_class':'ETH_MARGIN_CLOSE' if ':' in row['nija_symbol'] else 'SPOT_OR_OTHER',
+           'csv_status':row['exact_order_id_match'] if row['exact_order_id_match'] in ('MATCH','NOT_FOUND') else 'OTHER_NON_MATCH'}
+          for i,row in enumerate(records,1) if row['exact_order_id_match']!='MATCH' or row['pdf_trade_id_match']!='MATCH' or row['pdf_both_ledger_ids_match']!='MATCH']
     # The CSV is operator-supplied; a positive text claim is never independently
     # authenticated by comparing it to the *same* historical archive.
     csv_claimed_auth=sum(row['broker_authenticated_account_scope']=='VERIFIED' for row in records)
