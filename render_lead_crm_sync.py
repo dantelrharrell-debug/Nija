@@ -315,6 +315,25 @@ def _contact(name: str, email: str, phone: object = "") -> dict[str, Any]:
     return record
 
 
+def _apollo_error_category(exc: urllib.error.HTTPError) -> str:
+    """Return only an allowlisted validation category; never log API response data."""
+    if exc.code != 422:
+        return f"HTTP_{int(exc.code)}"
+    try:
+        response = exc.read(8192).decode("utf-8", errors="replace").lower()
+    except (OSError, UnicodeError):
+        return "HTTP_422_unknown"
+    if "email" in response:
+        return "HTTP_422_email"
+    if "phone" in response:
+        return "HTTP_422_phone"
+    if "label" in response:
+        return "HTTP_422_label"
+    if "contact" in response:
+        return "HTTP_422_contact"
+    return "HTTP_422_unknown"
+
+
 def _deliver_batch(rows: list[dict[str, Any]], key: str) -> set[str]:
     unique: dict[str, dict[str, Any]] = {}
     for row in rows:
@@ -382,7 +401,7 @@ def _sync_pending_redis(client, key: str, max_batch: int) -> dict[str, int]:
         confirmed = _deliver_batch(rows, key)
     except urllib.error.HTTPError as exc:
         confirmed = set()
-        error_code = f"HTTP_{int(exc.code)}"
+        error_code = _apollo_error_category(exc)
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         confirmed = set()
         error_code = type(exc).__name__
@@ -443,7 +462,7 @@ def _sync_pending_sqlite(key: str, max_batch: int) -> dict[str, int]:
         confirmed = _deliver_batch(rows, key)
     except urllib.error.HTTPError as exc:
         confirmed = set()
-        error_code = f"HTTP_{int(exc.code)}"
+        error_code = _apollo_error_category(exc)
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         confirmed = set()
         error_code = type(exc).__name__
