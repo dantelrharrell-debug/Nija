@@ -417,6 +417,8 @@ def _sync_pending_redis(client, key: str, max_batch: int) -> dict[str, int]:
             client.zadd(f"{_REDIS_PREFIX}:pending", {event_key: next_at})
             counts["retry"] += 1
     _acknowledge_local_mirror(acknowledged_event_keys)
+    if counts["retry"]:
+        counts["retry_error_code"] = error_code or "not_acknowledged"
     return counts
 
 
@@ -470,6 +472,8 @@ def _sync_pending_sqlite(key: str, max_batch: int) -> dict[str, int]:
                 )
                 counts["retry"] += 1
         conn.commit()
+    if counts["retry"]:
+        counts["retry_error_code"] = error_code or "not_acknowledged"
     return counts
 
 
@@ -505,7 +509,9 @@ def _worker_loop() -> None:
                 print(
                     "NIJA_LEAD_APOLLO_RECOVERY "
                     f"attempted={result['attempted']} synced={result['synced']} "
-                    f"retry={result['retry']} no_marketing_sent=true",
+                    f"retry={result['retry']} "
+                    f"retry_error_code={result.get('retry_error_code', 'none')} "
+                    "no_marketing_sent=true",
                     flush=True,
                 )
         except Exception as exc:
