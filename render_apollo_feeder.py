@@ -771,6 +771,8 @@ def _worker() -> None:
             _LAST_ERROR = None
             print(
                 "APOLLO_NIJA_FEEDER_SYNC "
+                "qualification_counts_first_blocker_only=true "
+                "audit_counts_independent_overlapping=true "
                 f"scanned={counts.get('contacts_scanned', 0)} "
                 f"seen={counts.get('contacts_seen', 0)} "
                 f"lead_mirrored={counts.get('website_leads_mirrored', 0)} "
