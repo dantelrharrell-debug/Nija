@@ -513,3 +513,14 @@ def test_sqlite_phone_survives_redis_rebootstrap(monkeypatch, tmp_path):
     fake = FakeRedis()
     assert sync._bootstrap_redis_from_sqlite(fake) >= 1
     assert fake.hget(sync._redis_event_key("evt-restored-phone"), "phone") == "+12065550123"
+
+
+def test_apollo_validation_error_category_is_redacted():
+    import urllib.error
+    for payload, expected in [
+        (b'{"errors":["invalid email: private@example.com"]}', "HTTP_422_email"),
+        (b'{"errors":["invalid phone 5551230000"]}', "HTTP_422_phone"),
+        (b'{"errors":["unknown payload"]}', "HTTP_422_unknown"),
+    ]:
+        exc = urllib.error.HTTPError("https://api.apollo.io/", 422, "unprocessable", {}, io.BytesIO(payload))
+        assert sync._apollo_error_category(exc) == expected
