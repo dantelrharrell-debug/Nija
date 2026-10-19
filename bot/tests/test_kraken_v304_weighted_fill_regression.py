@@ -16,7 +16,7 @@ class TestKrakenV304HistoryVWAP(unittest.TestCase):
             def _kraken_private_call(self, method, params, category=None):
                 assert method == "TradesHistory"
                 assert params == {"ofs": 50}
-                return {"error": [], "result": {"count": 53, "trades": trades}}
+                return {"error": [], "result": {"count": 50 + len(trades), "trades": trades}}
 
         with (
             patch.object(v304, "_symbol_match_sets", return_value={"BABY-USD": ("BABY", {"BABYUSD"})}),
