@@ -1,6 +1,7 @@
 """CI-discovered, offline tests: v2 shadow inbox NEVER authorizes trading."""
 from __future__ import annotations
 
+import sqlite3
 import tempfile
 from pathlib import Path
 import unittest
@@ -163,6 +164,27 @@ class TestV2DurableShadowJournal(unittest.TestCase):
                 symbol="BABY-USD", side="buy", requested_qty="3",
                 request_digest="a"*64, writer_generation=5,
             )
+
+    def test_existing_live_style_ledger_is_never_modified(self):
+        ledger = Path(self.temp.name) / "trade_ledger.db"
+        with sqlite3.connect(ledger) as conn:
+            conn.execute("CREATE TABLE real_trades (trade_id TEXT PRIMARY KEY)")
+            conn.execute("INSERT INTO real_trades VALUES ('existing-trade')")
+        with self.assertRaisesRegex(ShadowEvidenceError, "shadow_database_identity_mismatch"):
+            initialize_shadow_journal(ledger)
+        with self.assertRaisesRegex(ShadowEvidenceError, "shadow_database_identity_mismatch"):
+            shadow_journal_counts(ledger)
+        with sqlite3.connect(ledger) as conn:
+            self.assertEqual(conn.execute(
+                "SELECT trade_id FROM real_trades"
+            ).fetchall(), [("existing-trade",)])
+            self.assertEqual(conn.execute("PRAGMA application_id").fetchone()[0], 0)
+
+    def test_schema_reinitialization_requires_known_shadow_identity(self):
+        initialize_shadow_journal(self.path)
+        self.intent()
+        initialize_shadow_journal(self.path)
+        self.assertEqual(shadow_journal_counts(self.path)["intents"], 1)
 
     def test_import_and_schema_have_no_trading_side_effects(self):
         self._prepared()
