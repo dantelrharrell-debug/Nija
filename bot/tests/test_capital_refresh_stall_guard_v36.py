@@ -79,3 +79,46 @@ def test_v62_operator_can_raise_or_lower_dedicated_broker_timeout(monkeypatch):
 def test_v62_unknown_broker_still_uses_generic_bound(monkeypatch):
     monkeypatch.setenv("NIJA_CAPITAL_BROKER_FETCH_TIMEOUT_S", "9")
     assert cap._broker_timeout_seconds("alpaca") == 9.0
+
+
+def test_overlapping_batches_both_receive_identical_success(monkeypatch):
+    _reset()
+    monkeypatch.setenv("NIJA_CAPITAL_BROKER_FETCH_TIMEOUT_S", "2")
+    gate = threading.Event()
+    calls = []
+
+    class Broker:
+        def get_account_balance(self):
+            calls.append(1)
+            gate.wait(1.0)
+            return 123.45
+
+    broker = Broker()
+    first = cap._BalanceFetchBatch({"kraken": broker})
+    second = cap._BalanceFetchBatch({"kraken": broker})
+    assert first._flights["kraken"] is second._flights["kraken"]
+    gate.set()
+    assert first.result_for("kraken", broker) == 123.45
+    assert second.result_for("kraken", broker) == 123.45
+    assert len(calls) == 1
+    assert "kraken" in cap.current_refresh_fallback_status()["live_brokers"]
+
+
+def test_overlapping_batches_both_receive_failure_without_false_success(monkeypatch):
+    _reset()
+    monkeypatch.setenv("NIJA_CAPITAL_BROKER_FETCH_TIMEOUT_S", "2")
+    gate = threading.Event()
+
+    class Broker:
+        def get_account_balance(self):
+            gate.wait(1.0)
+            raise RuntimeError("offline")
+
+    broker = Broker()
+    first = cap._BalanceFetchBatch({"kraken": broker})
+    second = cap._BalanceFetchBatch({"kraken": broker})
+    gate.set()
+    assert first.result_for("kraken", broker) == 0.0
+    assert second.result_for("kraken", broker) == 0.0
+    assert "kraken" not in cap.current_refresh_fallback_status()["live_brokers"]
+    assert "kraken" in cap.current_refresh_fallback_status()["excluded_brokers"]
