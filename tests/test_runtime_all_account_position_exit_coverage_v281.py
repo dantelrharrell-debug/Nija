@@ -238,6 +238,8 @@ def test_dust_exemption_audit_log_explicitly_disclaims_protection(caplog, monkey
     assert result["dust_exempt_not_protected_count"] == 1
     assert "coverage_scope=actionable_positions_only" in caplog.text
     assert "dust_exempt_not_protected_count=1" in caplog.text
+    assert "independent_broker_exit_proof_performed=false" in caplog.text
+    assert "execution_authorization_provided=false" in caplog.text
     assert result["positions"][0]["cost_basis_verified"] is False
     assert result["positions"][0]["auto_exit_blocked"] is True
     assert result["positions"][0]["protective_exit_verified"] is False
