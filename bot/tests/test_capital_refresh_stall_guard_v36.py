@@ -122,3 +122,24 @@ def test_overlapping_batches_both_receive_failure_without_false_success(monkeypa
     assert second.result_for("kraken", broker) == 0.0
     assert "kraken" not in cap.current_refresh_fallback_status()["live_brokers"]
     assert "kraken" in cap.current_refresh_fallback_status()["excluded_brokers"]
+
+
+def test_distinct_broker_instances_never_share_an_inflight_balance(monkeypatch):
+    _reset()
+    monkeypatch.setenv("NIJA_CAPITAL_BROKER_FETCH_TIMEOUT_S", "2")
+    gate = threading.Event()
+
+    class Broker:
+        def __init__(self, value):
+            self.value = value
+        def get_account_balance(self):
+            gate.wait(1.0)
+            return self.value
+
+    old_broker, new_broker = Broker(1.0), Broker(2.0)
+    old_batch = cap._BalanceFetchBatch({"kraken": old_broker})
+    new_batch = cap._BalanceFetchBatch({"kraken": new_broker})
+    assert old_batch._flights["kraken"] is not new_batch._flights["kraken"]
+    gate.set()
+    assert old_batch.result_for("kraken", old_broker) == 1.0
+    assert new_batch.result_for("kraken", new_broker) == 2.0
