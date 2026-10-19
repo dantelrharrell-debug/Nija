@@ -84,8 +84,6 @@ class MemberHTTPTests(unittest.TestCase):
                         self.assertEqual(app.test_client().get("/readyz").status_code, 503)
 
     def test_readiness_logs_only_fixed_non_secret_blocker(self):
-        import logging
-        from unittest.mock import Mock
         from member_broker_http_api import _readiness_blocker
 
         enabled = MemberBrokerOnboarding(FakeVault(), secret_intake_enabled=True)
