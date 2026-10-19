@@ -129,7 +129,7 @@ def _history_category() -> Any:
 
 
 def _supplement_older_history(broker: Any, missing_symbols: tuple[str, ...]) -> dict[str, float]:
-    """Read only pages 2..5 for symbols page 1 did not resolve."""
+    """Read only pages 2..5, matching exact broker pair aliases only."""
     private_call = getattr(broker, "_kraken_private_call", None)
     if not callable(private_call) or not missing_symbols:
         return {}
@@ -184,7 +184,7 @@ def _supplement_older_history(broker: Any, missing_symbols: tuple[str, ...]) -> 
                 if not pair:
                     continue
                 for symbol, (currency, pair_set) in matches.items():
-                    if pair not in pair_set and currency not in pair:
+                    if pair not in pair_set:
                         continue
                     try:
                         price = float(trade.get("price", 0.0) or 0.0)
