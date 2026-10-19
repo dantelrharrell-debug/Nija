@@ -60,6 +60,9 @@ class _Flight(NamedTuple):
     sequence: int
     started_monotonic: float
     timeout_s: float
+    # Shared immutable outcome: multiple batches can read one in-flight fetch.
+    result_event: Optional[threading.Event] = None
+    result_holder: Optional[dict] = None
 
 
 _IN_FLIGHT: Dict[str, _Flight] = {}
@@ -281,6 +284,8 @@ class _BalanceFetchBatch:
                 seq = _BROKER_SEQUENCE.get(bid, 0) + 1
                 _BROKER_SEQUENCE[bid] = seq
                 result_queue: queue.Queue = queue.Queue(maxsize=1)
+                result_event = threading.Event()
+                result_holder: dict = {}
                 started = time.monotonic()
 
                 def _call(
@@ -307,23 +312,19 @@ class _BalanceFetchBatch:
                                     observed_epoch=observed_epoch,
                                     sequence=broker_seq,
                                 )
+                        payload = (True, value, broker_seq, observed_mono, observed_epoch)
+                        result_holder["payload"] = payload
+                        result_event.set()
                         try:
-                            output.put_nowait(
-                                (
-                                    True,
-                                    value,
-                                    broker_seq,
-                                    observed_mono,
-                                    observed_epoch,
-                                )
-                            )
+                            output.put_nowait(payload)
                         except queue.Full:
                             pass
                     except BaseException as exc:
+                        payload = (False, exc, broker_seq, observed_mono, observed_epoch)
+                        result_holder["payload"] = payload
+                        result_event.set()
                         try:
-                            output.put_nowait(
-                                (False, exc, broker_seq, observed_mono, observed_epoch)
-                            )
+                            output.put_nowait(payload)
                         except queue.Full:
                             pass
                     finally:
@@ -343,6 +344,8 @@ class _BalanceFetchBatch:
                     sequence=seq,
                     started_monotonic=started,
                     timeout_s=timeout_s,
+                    result_event=result_event,
+                    result_holder=result_holder,
                 )
                 _IN_FLIGHT[bid] = flight
                 self._flights[bid] = flight
@@ -365,12 +368,22 @@ class _BalanceFetchBatch:
             0.0,
             min(broker_deadline, self._cycle_deadline) - time.monotonic(),
         )
-        try:
-            ok, value, result_seq, observed_mono, observed_epoch = (
-                flight.result_queue.get(timeout=remaining)
-            )
-        except queue.Empty:
-            return self._handle_failure(bid, "timeout")
+        if flight.result_event is not None and flight.result_holder is not None:
+            # The queue is retained for compatibility, but is single-consumer.
+            # Reused flights must expose the same outcome to every batch.
+            if not flight.result_event.wait(timeout=remaining):
+                return self._handle_failure(bid, "timeout")
+            payload = flight.result_holder.get("payload")
+            if payload is None:
+                return self._handle_failure(bid, "missing_result")
+            ok, value, result_seq, observed_mono, observed_epoch = payload
+        else:
+            try:
+                ok, value, result_seq, observed_mono, observed_epoch = (
+                    flight.result_queue.get(timeout=remaining)
+                )
+            except queue.Empty:
+                return self._handle_failure(bid, "timeout")
 
         if int(result_seq) != int(flight.sequence):
             LOGGER.warning(
