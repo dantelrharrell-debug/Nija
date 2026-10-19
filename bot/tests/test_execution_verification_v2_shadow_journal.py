@@ -126,6 +126,19 @@ class TestV2DurableShadowJournal(unittest.TestCase):
         with self.assertRaisesRegex(ShadowEvidenceError, "conflicting_execution_id"):
             self.fill(event_digest="d" * 64)
 
+    def test_same_execution_digest_with_changed_fill_payload_is_not_duplicate(self):
+        self._prepared()
+        self.fill()
+        for change in (
+            {"fill_qty": "2"},
+            {"fill_price": "8.00"},
+            {"cumulative_qty": "2"},
+            {"source": "authenticated_rest"},
+        ):
+            with self.assertRaisesRegex(ShadowEvidenceError, "conflicting_execution_id"):
+                self.fill(**change)
+        self.assertEqual(shadow_journal_counts(self.path)["fill_candidates"], 1)
+
     def test_cumulative_sequence_gap_fails_closed(self):
         self._prepared()
         with self.assertRaisesRegex(ShadowEvidenceError, "fill_sequence_gap"):
