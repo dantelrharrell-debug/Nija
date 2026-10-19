@@ -126,3 +126,60 @@ def test_v288_source_chains_v304():
     source = open(v288.__file__, "r", encoding="utf-8").read()
     assert "runtime_kraken_cost_basis_history_pagination_v304_patch" in source
     assert "v304_history_pagination" in source
+
+
+def test_multiple_authenticated_buys_on_same_history_page_use_volume_weighted_price(monkeypatch):
+    """Every valid buy fill on a page contributes to the reported VWAP."""
+    class Broker:
+        account_identifier = "PLATFORM"
+
+        def _kraken_private_call(self, method, params, category=None):
+            assert method == "TradesHistory"
+            assert params == {"ofs": 50}
+            return {
+                "error": [],
+                "result": {
+                    "count": 54,
+                    "trades": {
+                        "a": {"type": "buy", "pair": "BABYUSD", "price": "10", "vol": "2", "time": "1"},
+                        "b": {"type": "buy", "pair": "BABYUSD", "price": "20", "vol": "1", "time": "2"},
+                        "c": {"type": "sell", "pair": "BABYUSD", "price": "999", "vol": "1", "time": "3"},
+                    },
+                },
+            }
+
+    @v304.contextmanager
+    def fake_priority():
+        yield
+
+    monkeypatch.setattr(v304, "_authoritative_history_priority", fake_priority)
+    monkeypatch.setattr(v304, "_history_category", lambda: "monitoring")
+    assert v304._supplement_older_history(Broker(), ("BABY-USD",)) == {"BABY-USD": 40 / 3}
+
+
+def test_nonfinite_history_prices_and_volumes_do_not_produce_verified_cost_basis(monkeypatch):
+    """NaN/Infinity may parse as floats, but are not broker price evidence."""
+    class Broker:
+        account_identifier = "PLATFORM"
+
+        def _kraken_private_call(self, method, params, category=None):
+            return {
+                "error": [],
+                "result": {
+                    "count": 53,
+                    "trades": {
+                        "nan": {"type": "buy", "pair": "BABYUSD", "price": "nan", "vol": "1", "time": "1"},
+                        "inf": {"type": "buy", "pair": "BABYUSD", "price": "inf", "vol": "1", "time": "1"},
+                        "vol": {"type": "buy", "pair": "BABYUSD", "price": "2", "vol": "inf", "time": "1"},
+                    },
+                },
+            }
+
+    @v304.contextmanager
+    def fake_priority():
+        yield
+
+    monkeypatch.setattr(v304, "_authoritative_history_priority", fake_priority)
+    monkeypatch.setattr(v304, "_history_category", lambda: "monitoring")
+    assert v304._supplement_older_history(Broker(), ("BABY-USD",)) == {}
+    assert v304._positive_price_map({"BABY-USD": float("inf"), "ETH-USD": float("nan")}) == {}
