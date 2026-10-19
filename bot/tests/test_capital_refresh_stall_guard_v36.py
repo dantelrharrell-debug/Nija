@@ -143,3 +143,63 @@ def test_distinct_broker_instances_never_share_an_inflight_balance(monkeypatch):
     gate.set()
     assert old_batch.result_for("kraken", old_broker) == 1.0
     assert new_batch.result_for("kraken", new_broker) == 2.0
+
+
+def test_multibroker_flights_publish_only_to_their_own_result_holders(monkeypatch):
+    """Catch late-bound loop closures when three workers finish after construction."""
+    _reset()
+    gate = threading.Event()
+
+    class Broker:
+        def __init__(self, amount):
+            self.amount = amount
+
+        def get_account_balance(self):
+            assert gate.wait(2.0)
+            return self.amount
+
+    brokers = {
+        "kraken": Broker(11.0),
+        "okx": Broker(22.0),
+        "coinbase": Broker(33.0),
+    }
+    batch = cap._BalanceFetchBatch(brokers)
+    assert len({id(f.result_holder) for f in batch._flights.values()}) == 3
+    assert len({id(f.result_event) for f in batch._flights.values()}) == 3
+    gate.set()
+    assert batch.result_for("kraken", brokers["kraken"]) == 11.0
+    assert batch.result_for("okx", brokers["okx"]) == 22.0
+    assert batch.result_for("coinbase", brokers["coinbase"]) == 33.0
+
+    status = cap.current_refresh_fallback_status()
+    assert status["used_fallback"] is False
+    assert set(status["live_brokers"]) == set(brokers)
+
+
+def test_multibroker_failure_does_not_release_or_overwrite_other_workers(monkeypatch):
+    _reset()
+    gate = threading.Event()
+
+    class Broker:
+        def __init__(self, amount=None):
+            self.amount = amount
+
+        def get_account_balance(self):
+            assert gate.wait(2.0)
+            if self.amount is None:
+                raise RuntimeError("simulated_broker_failure")
+            return self.amount
+
+    brokers = {
+        "kraken": Broker(11.0),
+        "okx": Broker(None),
+        "coinbase": Broker(33.0),
+    }
+    batch = cap._BalanceFetchBatch(brokers)
+    gate.set()
+    assert batch.result_for("kraken", brokers["kraken"]) == 11.0
+    assert batch.result_for("okx", brokers["okx"]) == 0.0
+    assert batch.result_for("coinbase", brokers["coinbase"]) == 33.0
+    status = cap.current_refresh_fallback_status()
+    assert set(status["live_brokers"]) == {"kraken", "coinbase"}
+    assert "okx" in status["excluded_brokers"]
