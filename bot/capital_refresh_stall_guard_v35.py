@@ -63,6 +63,7 @@ class _Flight(NamedTuple):
     # Shared immutable outcome: multiple batches can read one in-flight fetch.
     result_event: Optional[threading.Event] = None
     result_holder: Optional[dict] = None
+    broker_identity: Optional[int] = None
 
 
 _IN_FLIGHT: Dict[str, _Flight] = {}
@@ -269,7 +270,8 @@ class _BalanceFetchBatch:
             timeout_s = _broker_timeout_seconds(bid)
             with _IN_FLIGHT_LOCK:
                 existing = _IN_FLIGHT.get(bid)
-                if existing is not None and existing.thread.is_alive():
+                if (existing is not None and existing.thread.is_alive()
+                        and existing.broker_identity == id(broker)):
                     self._flights[bid] = existing
                     LOGGER.debug(
                         "CAPITAL_REFRESH_INFLIGHT_REUSED marker=%s broker=%s seq=%d age_s=%.2f timeout_s=%.1f",
@@ -346,6 +348,7 @@ class _BalanceFetchBatch:
                     timeout_s=timeout_s,
                     result_event=result_event,
                     result_holder=result_holder,
+                    broker_identity=id(broker),
                 )
                 _IN_FLIGHT[bid] = flight
                 self._flights[bid] = flight
