@@ -451,6 +451,11 @@ def evaluate(manager: Any, *, structural_exit_ready: Any = None) -> dict[str, An
         "expected_accounts": tuple(expected),
         "pending": pending,
         "positions": tuple(positions),
+        # Dust exemptions satisfy the actionable-only policy but do not become
+        # certified protected positions, regardless of their tracker flags.
+        "dust_exempt_not_protected_count": sum(
+            1 for row in positions if row.get("dust_excluded") is True
+        ),
         "structural_exit_ready": structural,
     }
 
@@ -463,6 +468,8 @@ def _state_signature(result: Mapping[str, Any]) -> str:
             (
                 str(row.get("account")), str(row.get("symbol")), str(row.get("quantity")),
                 str(row.get("entry_price")), str(row.get("protective_exit_verified")),
+                str(row.get("dust_excluded")), str(row.get("protective_exit_required")),
+                str(row.get("cost_basis_verified")), str(row.get("auto_exit_blocked")),
             )
             for row in positions if isinstance(row, Mapping)
         )
@@ -494,6 +501,7 @@ def audit_once(manager: Any = None, *, structural_exit_ready: Any = None) -> dic
         log = LOGGER.critical if ready else LOGGER.warning
         log(
             "ALL_ACCOUNT_POSITION_EXIT_COVERAGE_V281_%s marker=%s expected=%s pending=%s positions=%s "
+            "coverage_scope=actionable_positions_only dust_exempt_not_protected_count=%d "
             "protective_exit_authority_v265=%s broker_io=false tracker_mutation=false "
             "platform_activation_unchanged=true user_execution_isolation_preserved=true "
             "position_success_fabricated=false cost_basis_fabricated=false exit_protection_fabricated=false "
@@ -503,6 +511,7 @@ def audit_once(manager: Any = None, *, structural_exit_ready: Any = None) -> dic
             result["expected_accounts"],
             result["pending"],
             result["positions"],
+            result["dust_exempt_not_protected_count"],
             str(result["structural_exit_ready"]).lower(),
         )
     return result
