@@ -156,7 +156,7 @@ class TestV2DurableShadowJournal(unittest.TestCase):
         self.assertEqual(shadow_journal_counts(self.path)["fill_candidates"], 0)
 
     def test_input_path_must_be_explicit_and_preinitialized(self):
-        unknown = Path(self.temp.name) / "never-created.sqlite"
+        unknown = Path(self.temp.name) / "never-created-shadow.sqlite"
         with self.assertRaisesRegex(ShadowEvidenceError, "shadow_database_uninitialized"):
             persist_shadow_intent(
                 unknown, venue="kraken", account_fingerprint="account-A",
