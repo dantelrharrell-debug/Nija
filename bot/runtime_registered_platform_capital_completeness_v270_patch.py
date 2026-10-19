@@ -120,17 +120,49 @@ def _current_publication_accepted_and_fresh(authority: Any) -> bool:
         return False
 
 
+def _capital_failure_reasons(
+    result: Any, *, registered: int, connected: int, valid: int,
+    publication_current: bool,
+) -> tuple[str, ...]:
+    """Classify evidence gaps using bounded, non-secret fixed reason codes.
+
+    Diagnostic only: never infer connectivity, manufacture fresh balances,
+    extend a publication TTL, or promote trading readiness.
+    """
+    reasons: list[str] = []
+    if not isinstance(result, Mapping):
+        reasons.append("refresh_result_unavailable")
+    if connected != registered:
+        reasons.append("registered_connectivity_incomplete")
+    if valid != registered:
+        reasons.append("contributing_broker_count_mismatch")
+    if valid > connected:
+        reasons.append("contributors_exceed_connected")
+    if not publication_current:
+        reasons.append("publication_unaccepted_stale_or_incomplete")
+    if isinstance(result, Mapping):
+        if result.get("dedup") is True or result.get("dedup") == 1.0:
+            reasons.append("coalesced_refresh")
+        if result.get("pending") is True or result.get("pending") == 1.0:
+            reasons.append("upstream_refresh_pending")
+    return tuple(sorted(set(reasons)))
+
+
 def _fail_closed_result(manager: Any, result: Any, *, registered: int, connected: int) -> Any:
     valid = _result_valid_brokers(result)
     if registered <= 0:
         return result
     publication_current = _current_publication_accepted_and_fresh(_authority())
     if (
-        isinstance(result, Mapping) and connected >= registered
-        and valid >= registered and publication_current
+        isinstance(result, Mapping) and connected == registered
+        and valid == registered and publication_current
     ):
         return result
 
+    failure_reasons = _capital_failure_reasons(
+        result, registered=registered, connected=connected, valid=valid,
+        publication_current=publication_current,
+    )
     state_lock = getattr(manager, "_capital_state_lock", None) or _LOCK
     try:
         with state_lock:
@@ -150,7 +182,7 @@ def _fail_closed_result(manager: Any, result: Any, *, registered: int, connected
     LOGGER.critical(
         "REGISTERED_PLATFORM_CAPITAL_V270_FAIL_CLOSED marker=%s "
         "registered=%d connected=%d valid_brokers=%d original_ready=%s publication_current=%s "
-        "capital_mutated=false freshness_extended=false publication_expiry_extended=false "
+        "failure_reasons=%s capital_mutated=false freshness_extended=false publication_expiry_extended=false "
         "execution_authority_unchanged=true forced_trade=false forced_activation=false "
         "safety_gates_bypassed=false",
         MARKER,
@@ -159,6 +191,7 @@ def _fail_closed_result(manager: Any, result: Any, *, registered: int, connected
         valid,
         result.get("ready") if isinstance(result, Mapping) else None,
         publication_current,
+        ",".join(failure_reasons),
     )
     return corrected
 
@@ -335,6 +368,7 @@ __all__ = [
     "_result_valid_brokers",
     "_current_publication_accepted_and_fresh",
     "_fail_closed_result",
+    "_capital_failure_reasons",
     "_patch_refresh",
     "_patch_finalize",
     "_patch_release_manifest",
