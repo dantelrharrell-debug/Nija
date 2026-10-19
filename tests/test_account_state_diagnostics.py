@@ -196,6 +196,31 @@ def test_tracker_log_correlates_identity_without_private_contents(caplog):
     assert "storage_directory=/app/data/positions" in caplog.text
 
 
+def test_tracker_log_marks_ephemeral_paths_without_certifying_durability(caplog):
+    from bot.account_state_diagnostics import _path_within_persistent_root
+
+    assert _path_within_persistent_root("/data/positions/platform__kraken.json")
+    assert not _path_within_persistent_root("/app/data/positions/platform__kraken.json")
+    assert not _path_within_persistent_root("/data-other/positions.json")
+    assert not _path_within_persistent_root("")
+
+    store = SimpleNamespace(_data_file="/app/data/entry_prices/platform__kraken.json")
+    tracker = SimpleNamespace(
+        storage_file="/app/data/positions/platform__kraken.json",
+        _eps=store,
+        _nija_account_scope_v289="platform__kraken",
+    )
+    with caplog.at_level("INFO", logger="nija.account_state_diagnostics"):
+        log_tracker_read(tracker, "v289_binding")
+        tracker.storage_file = "/data/positions/platform__kraken.json"
+        store._data_file = "/data/entry_prices/platform__kraken.json"
+        log_tracker_read(tracker, "v289_binding")
+    assert "storage_on_persistent_root=false entry_on_persistent_root=false" in caplog.text
+    assert "storage_on_persistent_root=true entry_on_persistent_root=true" in caplog.text
+    assert caplog.text.count("persistence_verified=false") == 2
+    assert "platform__kraken" not in caplog.text
+
+
 def test_tracker_log_suppresses_unchanged_reads_but_logs_changes_and_loads(caplog):
     store = SimpleNamespace(_data_file="/app/data/entry_prices/platform__kraken.json")
     tracker = SimpleNamespace(storage_file="/app/data/positions/platform__kraken.json",
