@@ -54,7 +54,8 @@ def _positive(value: Any) -> Decimal:
 @contextmanager
 def _transaction(path: str | Path, *, create: bool = False) -> Iterator[sqlite3.Connection]:
     target = Path(path)
-    if (not target.is_absolute() or target.is_symlink() or not target.parent.is_dir()\n            or "shadow" not in target.stem.lower()):
+    if (not target.is_absolute() or target.is_symlink() or not target.parent.is_dir()
+            or "shadow" not in target.stem.lower()):
         raise ShadowEvidenceError("shadow_database_path_invalid")
     existed = target.exists()
     if not create and not target.is_file():
