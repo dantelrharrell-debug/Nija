@@ -238,12 +238,20 @@ def persist_shadow_fill_candidate(
         if (intent[1], intent[2], intent[4]) != (symbol, side, broker_id):
             raise ShadowEvidenceError("broker_order_or_market_mismatch")
         previous = conn.execute(
-            """SELECT client_order_id, event_digest FROM shadow_fill_candidates
+            """SELECT client_order_id, event_digest, fill_qty, fill_price,
+               cumulative_qty, source FROM shadow_fill_candidates
                WHERE venue=? AND account_fingerprint=? AND execution_id=?""",
             (venue, account, exec_id),
         ).fetchone()
         if previous is not None:
-            if previous == (client_id, digest):
+            if (
+                previous[0] == client_id
+                and previous[1] == digest
+                and Decimal(previous[2]) == qty
+                and Decimal(previous[3]) == price
+                and Decimal(previous[4]) == cumulative
+                and previous[5] == source
+            ):
                 return "duplicate_fill_candidate"
             raise ShadowEvidenceError("conflicting_execution_id")
         filled = conn.execute(
