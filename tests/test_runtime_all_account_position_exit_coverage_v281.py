@@ -203,3 +203,69 @@ def test_structural_exit_authority_is_required_without_mutating_platform_readine
     assert result["pending"]["__protective_exit__"] == (
         "protective_exit_authority_v265_unready",
     )
+
+
+def test_dust_exemption_never_claims_verified_protection_even_with_other_ready_flags():
+    broker = Broker(
+        symbols=("BABY-USD",),
+        rows={"BABY-USD": position("BABY-USD", qty=0.00142, entry=0.01217,
+                                   verified=True, blocked=False)},
+        dust_symbols=("BABY-USD",),
+    )
+    result = v281.evaluate(manager(platform={"kraken": broker}), structural_exit_ready=True)
+
+    assert result["ready"] is True  # Actionable-position policy; NOT all holdings protected.
+    assert result["dust_exempt_not_protected_count"] == 1
+    row = result["positions"][0]
+    assert row["dust_excluded"] is True
+    assert row["protective_exit_required"] is False
+    assert row["protective_exit_verified"] is False
+    assert row["coverage_basis"] == "dust_policy_not_actionable"
+
+
+def test_dust_exemption_audit_log_explicitly_disclaims_protection(caplog, monkeypatch):
+    broker = Broker(
+        symbols=("BABY-USD",),
+        rows={"BABY-USD": position("BABY-USD", qty=0.00142, verified=False,
+                                   blocked=True)},
+        dust_symbols=("BABY-USD",),
+    )
+    monkeypatch.setattr(v281, "_LAST_SIGNATURE", "")
+    with caplog.at_level("CRITICAL", logger="nija.runtime_all_account_position_exit_coverage_v281"):
+        result = v281.audit_once(manager(platform={"kraken": broker}),
+                                 structural_exit_ready=True)
+
+    assert result["dust_exempt_not_protected_count"] == 1
+    assert "coverage_scope=actionable_positions_only" in caplog.text
+    assert "dust_exempt_not_protected_count=1" in caplog.text
+    assert "independent_broker_exit_proof_performed=false" in caplog.text
+    assert "execution_authorization_provided=false" in caplog.text
+    assert result["positions"][0]["cost_basis_verified"] is False
+    assert result["positions"][0]["auto_exit_blocked"] is True
+    assert result["positions"][0]["protective_exit_verified"] is False
+
+
+def test_dust_exemption_protection_fields_participate_in_state_signature():
+    original = {
+        "ready": True,
+        "expected_accounts": ("platform:kraken",),
+        "pending": {},
+        "positions": ({
+            "account": "platform:kraken",
+            "symbol": "BABY-USD",
+            "quantity": 0.00142,
+            "entry_price": 0.01217,
+            "protective_exit_verified": False,
+            "cost_basis_verified": False,
+            "auto_exit_blocked": True,
+            "dust_excluded": True,
+            "protective_exit_required": False,
+        },),
+        "structural_exit_ready": True,
+    }
+    changed = dict(original)
+    changed["positions"] = (dict(original["positions"][0], dust_excluded=False),)
+    assert v281._state_signature(original) != v281._state_signature(changed)
+
+    changed["positions"] = (dict(original["positions"][0], cost_basis_verified=True),)
+    assert v281._state_signature(original) != v281._state_signature(changed)
