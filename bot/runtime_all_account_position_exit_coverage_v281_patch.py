@@ -406,7 +406,8 @@ def _account_audit(account: str, broker: Any, structural_exit_ready: bool) -> tu
         if blocked and not dust_not_actionable:
             reasons.append(f"auto_exit_blocked:{symbol}")
         protection_verified = bool(
-            structural_exit_ready and in_snapshot and verified and entry_valid and not blocked
+            structural_exit_ready and in_snapshot and verified and entry_valid
+            and not blocked and not dust_not_actionable
         )
         positions.append({
             "account": account,
