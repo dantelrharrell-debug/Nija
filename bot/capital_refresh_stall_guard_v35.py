@@ -295,6 +295,10 @@ class _BalanceFetchBatch:
                     output: queue.Queue = result_queue,
                     broker_seq: int = seq,
                     broker_key: str = bid,
+                    # Freeze each flight's sink; a later loop iteration must
+                    # not replace where a previous broker publishes its result.
+                    shared_result: dict = result_holder,
+                    shared_event: threading.Event = result_event,
                 ) -> None:
                     observed_mono = 0.0
                     observed_epoch = 0.0
@@ -315,16 +319,16 @@ class _BalanceFetchBatch:
                                     sequence=broker_seq,
                                 )
                         payload = (True, value, broker_seq, observed_mono, observed_epoch)
-                        result_holder["payload"] = payload
-                        result_event.set()
+                        shared_result["payload"] = payload
+                        shared_event.set()
                         try:
                             output.put_nowait(payload)
                         except queue.Full:
                             pass
                     except BaseException as exc:
                         payload = (False, exc, broker_seq, observed_mono, observed_epoch)
-                        result_holder["payload"] = payload
-                        result_event.set()
+                        shared_result["payload"] = payload
+                        shared_event.set()
                         try:
                             output.put_nowait(payload)
                         except queue.Full:
