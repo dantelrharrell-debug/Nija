@@ -502,7 +502,7 @@ def audit_once(manager: Any = None, *, structural_exit_ready: Any = None) -> dic
         log = LOGGER.critical if ready else LOGGER.warning
         log(
             "ALL_ACCOUNT_POSITION_EXIT_COVERAGE_V281_%s marker=%s expected=%s pending=%s positions=%s "
-            "coverage_scope=actionable_positions_only dust_exempt_not_protected_count=%d "
+            "coverage_scope=actionable_positions_only dust_exempt_not_protected_count=%d independent_broker_exit_proof_performed=false execution_authorization_provided=false "
             "protective_exit_authority_v265=%s broker_io=false tracker_mutation=false "
             "platform_activation_unchanged=true user_execution_isolation_preserved=true "
             "position_success_fabricated=false cost_basis_fabricated=false exit_protection_fabricated=false "
