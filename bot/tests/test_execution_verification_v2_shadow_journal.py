@@ -166,7 +166,7 @@ class TestV2DurableShadowJournal(unittest.TestCase):
             )
 
     def test_existing_live_style_ledger_is_never_modified(self):
-        ledger = Path(self.temp.name) / "trade_ledger.db"
+        ledger = Path(self.temp.name) / "unrelated_shadow_ledger.db"
         with sqlite3.connect(ledger) as conn:
             conn.execute("CREATE TABLE real_trades (trade_id TEXT PRIMARY KEY)")
             conn.execute("INSERT INTO real_trades VALUES ('existing-trade')")
@@ -179,6 +179,12 @@ class TestV2DurableShadowJournal(unittest.TestCase):
                 "SELECT trade_id FROM real_trades"
             ).fetchall(), [("existing-trade",)])
             self.assertEqual(conn.execute("PRAGMA application_id").fetchone()[0], 0)
+
+    def test_new_production_style_ledger_path_cannot_be_initialised(self):
+        production_path = Path(self.temp.name) / "trade_ledger.db"
+        with self.assertRaisesRegex(ShadowEvidenceError, "shadow_database_path_invalid"):
+            initialize_shadow_journal(production_path)
+        self.assertFalse(production_path.exists())
 
     def test_schema_reinitialization_requires_known_shadow_identity(self):
         initialize_shadow_journal(self.path)
