@@ -21,19 +21,26 @@ def _refresh_source():
     return refresh, ast.unparse(refresh)
 
 
+def _missing_coordinator_guard(refresh):
+    """Match both conditions regardless of AST parentheses inserted by unparse."""
+    return next(
+        n for n in ast.walk(refresh) if isinstance(n, ast.If)
+        and "self._capital_coordinator is not None" in ast.unparse(n.test)
+        and "snapshot is None" in ast.unparse(n.test)
+    )
+
+
 class TestCanonicalCapitalRefreshSingleWriter(unittest.TestCase):
     def test_coordinator_null_snapshot_is_explicitly_fail_closed(self):
         _, source = _refresh_source()
-        self.assertIn("self._capital_coordinator is not None and snapshot is None", source)
+        self.assertIn("self._capital_coordinator is not None", source)
+        self.assertIn("snapshot is None", source)
         self.assertIn("'coordinator_snapshot_missing': 1.0", source)
         self.assertIn("self._capital_ready = False", source)
 
     def test_null_coordinator_snapshot_returns_before_legacy_authority_refresh(self):
         refresh, _ = _refresh_source()
-        guard = next(
-            n for n in ast.walk(refresh) if isinstance(n, ast.If)
-            and "self._capital_coordinator is not None and snapshot is None" in ast.unparse(n.test)
-        )
+        guard = _missing_coordinator_guard(refresh)
         self.assertTrue(any(isinstance(n, ast.Return) for n in guard.body))
         self.assertFalse(any(
             isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
@@ -43,8 +50,7 @@ class TestCanonicalCapitalRefreshSingleWriter(unittest.TestCase):
 
     def test_legacy_fallback_not_used_on_coordinator_failure(self):
         refresh, source = _refresh_source()
-        guard = next(n for n in ast.walk(refresh) if isinstance(n, ast.If)
-                     and "self._capital_coordinator is not None and snapshot is None" in ast.unparse(n.test))
+        guard = _missing_coordinator_guard(refresh)
         first_return = next(n for n in ast.walk(guard) if isinstance(n, ast.Return))
         fallback = source.find("authority.refresh(")
         self.assertGreater(fallback, 0)
@@ -57,8 +63,7 @@ class TestCanonicalCapitalRefreshSingleWriter(unittest.TestCase):
 
     def test_no_ready_or_nonzero_capital_claimed_from_missing_snapshot(self):
         refresh, _ = _refresh_source()
-        guard = next(n for n in ast.walk(refresh) if isinstance(n, ast.If)
-                     and "self._capital_coordinator is not None and snapshot is None" in ast.unparse(n.test))
+        guard = _missing_coordinator_guard(refresh)
         ret = next(n for n in guard.body if isinstance(n, ast.Return))
         output = ast.literal_eval(ret.value)
         self.assertEqual(output["ready"], 0.0)
