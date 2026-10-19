@@ -15,6 +15,9 @@ import sqlite3
 from typing import Any, Iterator
 
 
+_SHADOW_APPLICATION_ID = 0x4E4A5332  # NJS2: only this SQLite application is eligible.
+
+
 class ShadowEvidenceError(ValueError):
     """Input mismatch or durable evidence invariant failed; keep fail-closed."""
 
@@ -53,14 +56,25 @@ def _transaction(path: str | Path, *, create: bool = False) -> Iterator[sqlite3.
     target = Path(path)
     if not target.is_absolute() or target.is_symlink() or not target.parent.is_dir():
         raise ShadowEvidenceError("shadow_database_path_invalid")
+    existed = target.exists()
     if not create and not target.is_file():
         raise ShadowEvidenceError("shadow_database_uninitialized")
+    prior_size = target.stat().st_size if existed and target.is_file() else 0
     try:
         with closing(sqlite3.connect(str(target), timeout=5.0)) as conn:
             conn.execute("PRAGMA foreign_keys=ON")
             conn.execute("PRAGMA synchronous=FULL")
+            app_id = conn.execute("PRAGMA application_id").fetchone()[0]
+            if create:
+                if existed and prior_size > 0 and app_id != _SHADOW_APPLICATION_ID:
+                    raise ShadowEvidenceError("shadow_database_identity_mismatch")
+            elif app_id != _SHADOW_APPLICATION_ID:
+                raise ShadowEvidenceError("shadow_database_identity_mismatch")
             conn.execute("BEGIN IMMEDIATE")
             try:
+                if create:
+                    conn.execute("PRAGMA application_id = " + str(_SHADOW_APPLICATION_ID))
+                    conn.execute("PRAGMA user_version = 1")
                 yield conn
             except BaseException:
                 conn.rollback()
