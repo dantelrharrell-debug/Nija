@@ -142,6 +142,10 @@ def _cost_basis(row: Mapping[str, Any], quantity: float, entry_price: float) -> 
 
 def _snapshot_rows(raw_positions: list[Any]) -> tuple[tuple[dict[str, Any], ...], str]:
     rows: list[dict[str, Any]] = []
+    # Downstream tracker and exit coverage are keyed by normalized symbol.
+    # A duplicate would otherwise be collapsed by those consumers, hiding
+    # unmatched exposure and potentially certifying incomplete coverage.
+    seen_symbols: set[str] = set()
     for raw in raw_positions:
         if not isinstance(raw, Mapping):
             return (), f"invalid_position_payload:{type(raw).__name__}"
@@ -149,6 +153,9 @@ def _snapshot_rows(raw_positions: list[Any]) -> tuple[tuple[dict[str, Any], ...]
         quantity = _quantity(raw)
         if not symbol or quantity <= 0:
             return (), f"invalid_position_row:symbol={symbol or 'missing'}:quantity={quantity}"
+        if symbol in seen_symbols:
+            return (), f"duplicate_authoritative_position_symbol:{symbol}"
+        seen_symbols.add(symbol)
         entry = _entry_price(raw)
         rows.append({
             "symbol": symbol,

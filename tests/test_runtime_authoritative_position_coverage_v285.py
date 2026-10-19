@@ -212,3 +212,40 @@ def test_v399_stale_snapshot_still_fails_closed_during_active_refresh(monkeypatc
     ready, reason = v285._strong_broker_proof(b)
     assert ready is False
     assert reason == "refresh_pending"
+
+
+def test_duplicate_normalized_authoritative_symbol_fails_closed():
+    rows, error = v285._snapshot_rows([
+        {"symbol": "BTC/USD", "quantity": 0.02, "entry_price": 50000.0},
+        {"symbol": "BTC-USD", "quantity": 0.03, "entry_price": 51000.0},
+    ])
+    assert rows == ()
+    assert error == "duplicate_authoritative_position_symbol:BTC-USD"
+
+
+def test_duplicate_snapshot_invalidates_prior_current_proof():
+    b = broker()
+    assert v285._record_snapshot_success(
+        b, [{"symbol": "BTC-USD", "quantity": 0.01, "entry_price": 50000.0}]
+    ) is True
+    assert v285._record_snapshot_success(
+        b,
+        [
+            {"symbol": "BTC-USD", "quantity": 0.02, "entry_price": 50000.0},
+            {"symbol": "BTC/USD", "quantity": 0.03, "entry_price": 50000.0},
+        ],
+    ) is False
+    ready, reason = v285._strong_broker_proof(b)
+    assert ready is False
+    assert "duplicate_authoritative_position_symbol" in reason
+
+
+def test_distinct_authoritative_symbols_still_preserve_quantity():
+    rows, error = v285._snapshot_rows([
+        {"symbol": "ETH/USD", "quantity": 0.2, "entry_price": 3000.0},
+        {"symbol": "BTC/USD", "quantity": 0.02, "entry_price": 50000.0},
+    ])
+    assert error == ""
+    assert [(row["symbol"], row["quantity"]) for row in rows] == [
+        ("BTC-USD", 0.02), ("ETH-USD", 0.2),
+    ]
