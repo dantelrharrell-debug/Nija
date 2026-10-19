@@ -14,6 +14,17 @@ _TRACKER_READ_SIGNATURES: OrderedDict[tuple[Any, ...], None] = OrderedDict()
 _TRACKER_READ_SIGNATURES_LOCK = threading.Lock()
 
 
+def _path_within_persistent_root(path: str, root: str = "/data") -> bool:
+    """Report path location only; this does not verify mount or backup durability."""
+    if not path:
+        return False
+    try:
+        resolved_root = os.path.realpath(root)
+        return os.path.commonpath((os.path.realpath(path), resolved_root)) == resolved_root
+    except (OSError, ValueError):
+        return False
+
+
 def log_tracker_read(tracker: Any, read_point: str, *, force: bool = False) -> None:
     """Correlate process-local identities and redacted paths without account contents."""
     if tracker is None:
@@ -30,9 +41,12 @@ def log_tracker_read(tracker: Any, read_point: str, *, force: bool = False) -> N
         location = directory if directory in {
             "/data/positions", "/app/data/positions", "/data", "/app/data"
         } else "other_redacted_directory"
+        storage_on_persistent_root = _path_within_persistent_root(storage)
+        entry_on_persistent_root = _path_within_persistent_root(entry)
         signature = (
             read_point, id(tracker), id(store) if store is not None else None,
             fingerprint(scope), fingerprint(storage), fingerprint(entry), location,
+            storage_on_persistent_root, entry_on_persistent_root,
         )
         with _TRACKER_READ_SIGNATURES_LOCK:
             if signature in _TRACKER_READ_SIGNATURES:
@@ -45,10 +59,13 @@ def log_tracker_read(tracker: Any, read_point: str, *, force: bool = False) -> N
         LOGGER.info(
             "ACCOUNT_STATE_TRACKER_READ point=%s pid=%d tracker_id=%s entry_store_id=%s "
             "scope_sha256=%s storage_sha256=%s entry_storage_sha256=%s "
-            "storage_directory=%s legacy_global_file=%s scoping_is_not_protection_or_durability=true",
+            "storage_directory=%s legacy_global_file=%s "
+            "storage_on_persistent_root=%s entry_on_persistent_root=%s "
+            "persistence_verified=false scoping_is_not_protection_or_durability=true",
             read_point, os.getpid(), hex(id(tracker)), hex(id(store)) if store is not None else "missing",
             fingerprint(scope), fingerprint(storage), fingerprint(entry), location,
             str(os.path.basename(storage) == "positions.json").lower(),
+            str(storage_on_persistent_root).lower(), str(entry_on_persistent_root).lower(),
         )
     except Exception:
         LOGGER.warning("ACCOUNT_STATE_TRACKER_READ diagnostic_unavailable=true")
