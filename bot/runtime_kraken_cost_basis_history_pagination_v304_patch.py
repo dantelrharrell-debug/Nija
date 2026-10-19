@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import importlib
 import logging
+import math
 import os
 import threading
 from contextlib import contextmanager
@@ -74,7 +75,7 @@ def _positive_price_map(value: Any) -> dict[str, float]:
             price = float(raw or 0.0)
         except (TypeError, ValueError):
             price = 0.0
-        if symbol and price > 0.0:
+        if symbol and math.isfinite(price) and price > 0.0:
             parsed[symbol] = price
     return parsed
 
@@ -183,8 +184,6 @@ def _supplement_older_history(broker: Any, missing_symbols: tuple[str, ...]) -> 
                 if not pair:
                     continue
                 for symbol, (currency, pair_set) in matches.items():
-                    if symbol in buy_rows:
-                        continue
                     if pair not in pair_set and currency not in pair:
                         continue
                     try:
@@ -193,7 +192,10 @@ def _supplement_older_history(broker: Any, missing_symbols: tuple[str, ...]) -> 
                         trade_time = float(trade.get("time", 0.0) or 0.0)
                     except (TypeError, ValueError):
                         continue
-                    if price > 0.0 and volume > 0.0:
+                    # Aggregate every authenticated BUY on the page, not just
+                    # the first matching fill.  Missing or nonfinite values
+                    # must never be promoted into verified acquisition cost.
+                    if all(math.isfinite(v) for v in (trade_time, price, volume)) and price > 0.0 and volume > 0.0:
                         buy_rows.setdefault(symbol, []).append((trade_time, price, volume))
                     break
 
@@ -206,10 +208,10 @@ def _supplement_older_history(broker: Any, missing_symbols: tuple[str, ...]) -> 
     recovered: dict[str, float] = {}
     for symbol, rows in buy_rows.items():
         total_volume = sum(volume for _, _, volume in rows)
-        if total_volume <= 0.0:
+        if not math.isfinite(total_volume) or total_volume <= 0.0:
             continue
         vwap = sum(price * volume for _, price, volume in rows) / total_volume
-        if vwap > 0.0:
+        if math.isfinite(vwap) and vwap > 0.0:
             recovered[symbol] = vwap
 
     account = str(getattr(broker, "account_identifier", "unknown") or "unknown")
