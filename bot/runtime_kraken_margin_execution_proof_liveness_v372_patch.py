@@ -228,6 +228,7 @@ def _candidate_opening_orders(account: str, broker: Any) -> tuple[list[dict[str,
                     "opened_at_epoch": opened,
                     "symbol": module.canonical_symbol(raw.get("symbol") or symbol),
                     "side": str(raw.get("side") or "buy").strip().lower(),
+                    "authenticated_account_id": account,
                 }
             )
     candidates.sort(key=lambda item: float(item.get("opened_at_epoch") or 0.0), reverse=True)
@@ -256,7 +257,7 @@ def _exact_queryorders_fill(call: Any, opening: Mapping[str, Any]) -> tuple[dict
     if not isinstance(row, Mapping):
         return None, "queryorders_exact_row_missing"
     status = str(row.get("status") or "").strip().lower()
-    if status not in {"closed", "filled", "complete", "completed", "executed"}:
+    if status != "closed":
         return None, f"queryorders_nonfinal:{status or 'missing'}"
     vol_exec = max(0.0, _f(row.get("vol_exec")))
     cost = max(0.0, _f(row.get("cost")))
@@ -274,8 +275,11 @@ def _exact_queryorders_fill(call: Any, opening: Mapping[str, Any]) -> tuple[dict
     # at which a polling worker happened to rediscover this filled order.
     broker_fill_epoch = _f(row.get("closetm"), 0.0)
     observed_now = time.time()
-    if not (0.0 < broker_fill_epoch <= observed_now + 60.0):
+    if not (0.0 < broker_fill_epoch <= observed_now + 5.0):
         return None, "queryorders_broker_fill_time_unproven"
+
+    if observed_now - broker_fill_epoch > 1800.0:
+        return None, "queryorders_broker_fill_stale"
 
     descr = row.get("descr") if isinstance(row.get("descr"), Mapping) else {}
     exchange_pair = str(descr.get("pair") or "").strip()
@@ -294,8 +298,22 @@ def _exact_queryorders_fill(call: Any, opening: Mapping[str, Any]) -> tuple[dict
     ):
         return None, "queryorders_opening_identity_mismatch"
 
+    from bot.kraken_authenticated_execution_evidence_v451 import validate_kraken_order_evidence
+
+    account = str(opening.get("authenticated_account_id") or "").strip()
+    validation = validate_kraken_order_evidence(
+        order_id, account, dict(row, txid=order_id),
+        authenticated_account_id=account, event_epoch=broker_fill_epoch,
+        now_epoch=observed_now,
+    )
+    if not account or validation.get("verified") is not True:
+        return None, "queryorders_strict_evidence_rejected:" + str(validation.get("reason"))
+
     return {
         "order_id": order_id,
+        "cost": cost,
+        "vol_exec": vol_exec,
+        "authenticated_account_id": account,
         "status": "closed",
         "filled_price": price,
         "filled_quantity": vol_exec,
