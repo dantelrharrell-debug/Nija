@@ -71,6 +71,7 @@ def verify_protective_orders(
     failures = []
     if not account:
         return False, ["account_missing"]
+    required = {}
     for position in positions:
         if not isinstance(position, Mapping) or position.get("account") != account:
             failures.append("position_account_invalid")
@@ -83,12 +84,20 @@ def verify_protective_orders(
         if side not in {"long", "short"} or not position.get("symbol"):
             failures.append("position_identity_invalid")
             continue
-        exit_side = "sell" if side == "long" else "buy"
+        symbol = position.get("symbol")
+        if not isinstance(symbol, str) or not symbol.strip():
+            failures.append("position_identity_invalid")
+            continue
+        key = (symbol, "sell" if side == "long" else "buy")
+        required[key] = required.get(key, Decimal(0)) + quantity
+    # One exit quantity must not be reused for each lot of the same asset.
+    # Aggregate all exposure before comparing it to unique broker orders.
+    seen = set()
+    for (symbol, exit_side), quantity in required.items():
         covered = Decimal(0)
-        seen = set()
         for order in broker_orders:
             if (not isinstance(order, Mapping) or order.get("account") != account
-                    or order.get("symbol") != position.get("symbol")
+                    or order.get("symbol") != symbol
                     or order.get("side") != exit_side
                     or order.get("status") != "open"
                     or order.get("protective_verified") is not True
