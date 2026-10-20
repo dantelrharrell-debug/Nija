@@ -63,30 +63,32 @@ def _marker_ready() -> bool:
     return False
 
 
-def _candidate_order_id() -> str:
-    """Prefer the newest real pending Kraken order over the historical fallback."""
+def _candidate_order_ids() -> list[str]:
+    """Inspect all known pending IDs, newest first, without inventing orders."""
     try:
         v363 = importlib.import_module("bot.runtime_kraken_deferred_fill_proof_recovery_v363_patch")
         loader = getattr(v363, "_load_pending", None)
         pending = dict(loader() or {}) if callable(loader) else {}
+        ordered = sorted(
+            pending.items(),
+            key=lambda item: _f(dict(item[1] or {}).get("last_seen_epoch")
+                                or dict(item[1] or {}).get("first_seen_epoch")),
+            reverse=True,
+        )
+        ids = [str(oid).strip() for oid, _ in ordered
+               if str(oid or "").strip() and not _historical_order_backoff_active(str(oid).strip())]
         if pending:
-            ordered = sorted(
-                pending.items(),
-                key=lambda item: float(dict(item[1] or {}).get("last_seen_epoch") or dict(item[1] or {}).get("first_seen_epoch") or 0.0),
-                reverse=True,
-            )
-            for order_id, _entry in ordered:
-                oid = str(order_id or "").strip()
-                if oid and not _historical_order_backoff_active(oid):
-                    return oid
-            # Pending orders exist, but each is already authenticated as old.
-            # Do not switch to an unrelated hard-coded fallback while the
-            # per-order cooldowns are active.
-            return ""
+            return ids
     except Exception:
-        LOGGER.debug("v406 dynamic pending-order discovery deferred", exc_info=True)
-    LOGGER.info("KNOWN_EXECUTION_PROBE_V406_NO_PENDING reason=no_pending_candidate historical_fallback_only=true fresh_execution_not_proven=true trading_fail_closed=true")
-    return _FALLBACK_ORDER_ID
+        LOGGER.exception("KNOWN_EXECUTION_PROBE_V406_PENDING_DISCOVERY_FAILED fail_closed=true")
+        return []
+    LOGGER.info("KNOWN_EXECUTION_PROBE_V406_NO_PENDING historical_fallback_only=true fresh_execution_not_proven=true trading_fail_closed=true")
+    return [] if _historical_order_backoff_active(_FALLBACK_ORDER_ID) else [_FALLBACK_ORDER_ID]
+
+
+def _candidate_order_id() -> str:
+    """Compatibility wrapper; recovery itself inspects every candidate."""
+    return next(iter(_candidate_order_ids()), "")
 
 
 def _candidate_brokers() -> list[Any]:
@@ -205,14 +207,32 @@ def _historical_final_order_age_s(row: Mapping[str, Any]) -> float:
 def recover_once() -> bool:
     if _marker_ready():
         return True
-    order_id = _candidate_order_id()
-    if not order_id or _historical_order_backoff_active(order_id):
+    candidates = _candidate_order_ids()
+    if not candidates:
+        LOGGER.info("KNOWN_EXECUTION_PROBE_V406_NO_ELIGIBLE_CANDIDATES pending_candidate_count=0 trading_fail_closed=true")
         return False
+    LOGGER.info("KNOWN_EXECUTION_PROBE_V406_CANDIDATES count=%d read_only=true", len(candidates))
+    for order_id in candidates:
+        if _recover_candidate(order_id):
+            return True
+    return False
+
+
+def _recover_candidate(order_id: str) -> bool:
+    """Authenticate and reconcile one candidate; never authorize on lookup alone."""
     broker, row = _final_authenticated_row(order_id)
     if row is None or broker is None:
         LOGGER.info(
             "KNOWN_EXECUTION_PROBE_V406_DEFERRED marker=%s order_id=%s reason=exact_authenticated_final_queryorders_row_unavailable dynamic_pending_order=true authoritative_v367_registry_enabled=true trading_fail_closed=true execution_proof_fabricated=false orders_submitted=false safety_gates_bypassed=false",
             MARKER, order_id,
+        )
+        return False
+    close_epoch = _f(row.get("closetm"))
+    if close_epoch <= 0.0 or close_epoch > time.time() + 30.0:
+        LOGGER.warning(
+            "KNOWN_EXECUTION_PROBE_V406_INVALID_CLOSE_TIME order_id=%s "
+            "reason=missing_or_future_authenticated_closetm trading_fail_closed=true",
+            order_id,
         )
         return False
     historical_age = _historical_final_order_age_s(row)
