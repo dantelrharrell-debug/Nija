@@ -122,6 +122,10 @@ def test_missing_independent_attestor_does_not_grant_authority(monkeypatch):
     assert proofs["execution_ready"] is False
 
 
+def test_authenticated_pretrade_producer_requires_scope_freshness_and_provenance():
+    import importlib.util
+    source = SOURCE.parents[0] / "bot" / "pretrade_independent_attestation.py"
+    spec = importlib.util.spec_from_file_location("nija_attestor_test", source)
 def test_integrated_attestation_contract_is_fail_closed():
     import importlib.util
     source = SOURCE.parents[0] / "bot" / "pretrade_independent_attestation.py"
@@ -141,6 +145,8 @@ def test_integrated_attestation_contract_is_fail_closed():
     assert not any(module.current_authenticated_attestations(account, now=1061.0).values())
     evidence["checks"]["protective_exit_readback"] = "true"
     assert module.current_authenticated_attestations(account, now=1020.0)["protective_exit_readback"] is False
+    evidence["source"] = "local_cache"
+    assert not any(module.current_authenticated_attestations(account, now=1020.0).values())
 
 
 def test_adapter_requires_risk_and_kill_switch_evidence():
