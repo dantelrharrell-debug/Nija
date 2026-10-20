@@ -31,7 +31,7 @@ def collector(candidate, conn):
 
 
 def fence(candidate):
-    pass
+    return True
 
 
 @pytest.fixture
@@ -156,4 +156,22 @@ def test_missing_corrupt_and_unmigrated_databases_deny(tmp_path):
     with pytest.raises(api.AdmissionDenied, match='schema_missing'):
         store.install_schema()
     with pytest.raises(sqlite3.OperationalError):
+        store.reserve(C)
+
+
+@pytest.mark.parametrize('answer', [False, None, 1, 'true'])
+def test_fence_requires_literal_true(ledger, answer):
+    store = api.AccountOrderAdmission(ledger, collector, lambda candidate: answer)
+    with pytest.raises(api.AdmissionDenied, match='writer_fence_not_verified'):
+        store.reserve(C)
+
+
+def test_fact_age_checked_after_slow_fence(ledger, monkeypatch):
+    clock = [100000.0]
+    monkeypatch.setattr(api.time, 'time', lambda: clock[0])
+    def slow_fence(candidate):
+        clock[0] += 31
+        return True
+    store = api.AccountOrderAdmission(ledger, collector, slow_fence)
+    with pytest.raises(api.AdmissionDenied, match='stale_or_invalid'):
         store.reserve(C)

@@ -157,3 +157,16 @@ Live inspection access: Render connector has no process exec/SQLite interface.
 Opera connector was attempted and returned Browser not connected. A connected
 authenticated Render browser shell or approved shell access is required to inspect
 the current ledger; no live ledger certification was obtained.
+
+## Fence review follow-up
+
+Require the writer-fence callback to return literal True, rejecting False, None,
+integer and string substitutes. Evaluate fact freshness after that callback so
+a slow fence cannot admit account evidence that expired during its execution.
+32 focused admission tests pass, including five new regression cases.
+
+All hosted workflows for ce86e291 passed. Live browser inspection reached the
+Render sign-in page; authentication is still required before ledger inspection.
+The v363 recovery completion clears pending proof after v346 marker admission;
+it does not independently establish the transactional ledger match needed to
+release an account reservation. No terminal release was wired to that marker.

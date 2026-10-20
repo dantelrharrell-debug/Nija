@@ -31,7 +31,7 @@ class Reservation:
 
 # Installed collectors are dependencies, not facts supplied by an order caller.
 Collector = Callable[[Candidate, sqlite3.Connection], tuple[Mapping[str, CurrentFact], OrderOutcome]]
-Fence = Callable[[Candidate], None]
+Fence = Callable[[Candidate], bool]
 
 
 class AccountOrderAdmission:
@@ -98,12 +98,17 @@ class AccountOrderAdmission:
             facts, outcome = self.collector(candidate, conn)
         finally:
             conn.execute("PRAGMA query_only=OFF")
+        # Explicit positive acknowledgement is required; False/None must never
+        # be mistaken for a successful fence merely because no exception arose.
+        if self.fence(candidate) is not True:
+            raise AdmissionDenied("writer_fence_not_verified")
+        # Fence calls can take time. Evaluate observation ages AFTER that call
+        # so slow fencing cannot make stale account/ledger facts admissible.
         decision = evaluate_candidate(candidate, facts, outcome, now=time.time())
         if not decision.eligible_for_canonical_dispatch:
             raise AdmissionDenied(";".join(decision.reasons))
         # A collector label is not authentication. The reviewed runtime adapter
         # is responsible for producing these two mandatory independent facts.
-        self.fence(candidate)
 
     def reserve(self, candidate: Candidate) -> Reservation:
         """Check account/ledger evidence and atomically reserve this account."""
