@@ -31,10 +31,10 @@ def classify_recovery(readiness: Mapping[str, bool], *,
                 "position_sync_ready", "execution_ready")
     reasons = tuple(
         [name for name in required if readiness.get(name) is not True]
-        + (["kill_switch"] if not kill_switch_clear else [])
-        + (["startup_attempts"] if not startup_attempts_reconciled else [])
-        + (["protective_exits"] if not protective_exits_verified else [])
-        + (["ledger"] if not ledger_reconciled else [])
+        + (["kill_switch"] if kill_switch_clear is not True else [])
+        + (["startup_attempts"] if startup_attempts_reconciled is not True else [])
+        + (["protective_exits"] if protective_exits_verified is not True else [])
+        + (["ledger"] if ledger_reconciled is not True else [])
     )
     if not reasons:
         # This helper is *never* an execution-authorization source.

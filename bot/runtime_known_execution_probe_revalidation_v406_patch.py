@@ -39,9 +39,14 @@ _THREAD: threading.Thread | None = None
 _HISTORICAL_PROOF_TTL_S = 1800.0
 _HISTORICAL_RECHECK_S = 600.0
 _HISTORICAL_ORDER_RECHECK_AT: dict[str, float] = {}
+_RECENT_DISCOVERY_RECHECK_AT = 0.0
+_RECENT_DISCOVERY_INTERVAL_S = 60.0
+_RECENT_DISCOVERY_LIMIT = 10
 
 
 def _f(value: Any) -> float:
+    if isinstance(value, bool):
+        return 0.0
     try:
         parsed = float(value)
         return parsed if math.isfinite(parsed) else 0.0
@@ -63,29 +68,32 @@ def _marker_ready() -> bool:
     return False
 
 
-def _candidate_order_id() -> str:
-    """Prefer the newest real pending Kraken order over the historical fallback."""
+def _candidate_order_ids() -> list[str]:
+    """Inspect all known pending IDs, newest first, without inventing orders."""
     try:
         v363 = importlib.import_module("bot.runtime_kraken_deferred_fill_proof_recovery_v363_patch")
         loader = getattr(v363, "_load_pending", None)
         pending = dict(loader() or {}) if callable(loader) else {}
+        ordered = sorted(
+            pending.items(),
+            key=lambda item: _f(dict(item[1] or {}).get("last_seen_epoch")
+                                or dict(item[1] or {}).get("first_seen_epoch")),
+            reverse=True,
+        )
+        ids = [str(oid).strip() for oid, _ in ordered
+               if str(oid or "").strip() and not _historical_order_backoff_active(str(oid).strip())]
         if pending:
-            ordered = sorted(
-                pending.items(),
-                key=lambda item: float(dict(item[1] or {}).get("last_seen_epoch") or dict(item[1] or {}).get("first_seen_epoch") or 0.0),
-                reverse=True,
-            )
-            for order_id, _entry in ordered:
-                oid = str(order_id or "").strip()
-                if oid and not _historical_order_backoff_active(oid):
-                    return oid
-            # Pending orders exist, but each is already authenticated as old.
-            # Do not switch to an unrelated hard-coded fallback while the
-            # per-order cooldowns are active.
-            return ""
+            return ids
     except Exception:
-        LOGGER.debug("v406 dynamic pending-order discovery deferred", exc_info=True)
-    return _FALLBACK_ORDER_ID
+        LOGGER.exception("KNOWN_EXECUTION_PROBE_V406_PENDING_DISCOVERY_FAILED fail_closed=true")
+        return []
+    LOGGER.info("KNOWN_EXECUTION_PROBE_V406_NO_PENDING historical_fallback_only=true fresh_execution_not_proven=true trading_fail_closed=true")
+    return [] if _historical_order_backoff_active(_FALLBACK_ORDER_ID) else [_FALLBACK_ORDER_ID]
+
+
+def _candidate_order_id() -> str:
+    """Compatibility wrapper; recovery itself inspects every candidate."""
+    return next(iter(_candidate_order_ids()), "")
 
 
 def _candidate_brokers() -> list[Any]:
@@ -114,6 +122,87 @@ def _candidate_brokers() -> list[Any]:
     return found
 
 
+def _platform_broker(broker: Any) -> bool:
+    """Require unambiguous canonical platform ownership, never user evidence."""
+    try:
+        v357 = importlib.import_module("bot.runtime_kraken_delayed_fill_reconciliation_v357_patch")
+        scope = v357._recovery_scope(broker)
+        return isinstance(scope, Mapping) and all(
+            scope.get(key) == value for key, value in (
+                ("broker", "kraken"), ("account", "platform:kraken"),
+                ("account_id", "platform:kraken"),
+            )
+        )
+    except Exception:
+        return False
+
+
+def _recent_candidate_order_ids() -> list[str]:
+    """Discover candidates through bounded authenticated reads, never fill proof.
+
+    Search by *closure* time so an older order filled recently is discoverable.
+    A single page (at most 50 rows) is inspected once per minute; at most ten
+    candidates then require the existing exact QueryOrders/canonical verifier.
+    No ClosedOrders payload or observation timestamp is promoted to evidence.
+    """
+    global _RECENT_DISCOVERY_RECHECK_AT
+    with _LOCK:
+        mono = time.monotonic()
+        if mono < _RECENT_DISCOVERY_RECHECK_AT:
+            return []
+        _RECENT_DISCOVERY_RECHECK_AT = mono + _RECENT_DISCOVERY_INTERVAL_S
+    try:
+        brokers = [broker for broker in _candidate_brokers() if _platform_broker(broker)]
+        if len(brokers) != 1:
+            LOGGER.info("KNOWN_EXECUTION_PROBE_V406_RECENT_UNAVAILABLE "
+                        "reason=platform_scope_missing_or_ambiguous trading_fail_closed=true")
+            return []
+        v357 = importlib.import_module("bot.runtime_kraken_delayed_fill_reconciliation_v357_patch")
+        now = time.time()
+        if not math.isfinite(now) or now <= _HISTORICAL_PROOF_TTL_S:
+            return []
+        payload = v357._private_read(brokers[0], "ClosedOrders", {
+            "start": math.floor(now - _HISTORICAL_PROOF_TTL_S) - 1,
+            "end": math.ceil(now), "closetime": "close", "trades": False,
+            "without_count": True,
+        })
+        if not isinstance(payload, Mapping) or payload.get("error") != []:
+            LOGGER.info("KNOWN_EXECUTION_PROBE_V406_RECENT_UNAVAILABLE "
+                        "reason=authenticated_read_unproven trading_fail_closed=true")
+            return []
+        result = payload.get("result")
+        closed = result.get("closed") if isinstance(result, Mapping) else None
+        if not isinstance(closed, Mapping) or len(closed) > 50:
+            return []
+        candidates = []
+        for order_id, row in closed.items():
+            if (not isinstance(order_id, str) or not order_id.strip()
+                    or order_id != order_id.strip() or "," in order_id
+                    or not isinstance(row, Mapping)):
+                continue
+            age = now - _f(row.get("closetm"))
+            descr = row.get("descr")
+            if (str(row.get("status") or "").lower() != "closed"
+                    or not 0.0 <= age <= _HISTORICAL_PROOF_TTL_S
+                    or _f(row.get("vol_exec")) <= 0.0 or _f(row.get("cost")) <= 0.0
+                    or not isinstance(descr, Mapping) or not str(descr.get("pair") or "").strip()
+                    or descr.get("type") not in {"buy", "sell"}
+                    or _historical_order_backoff_active(order_id)):
+                continue
+            candidates.append((_f(row.get("closetm")), order_id))
+        candidates.sort(reverse=True)
+        LOGGER.info("KNOWN_EXECUTION_PROBE_V406_RECENT_CANDIDATES count=%d "
+                    "scan_rows=%d scan_truncated_possible=%s max_age_s=1800 "
+                    "exact_queryorders_still_required=true trading_authority_unchanged=true",
+                    min(len(candidates), _RECENT_DISCOVERY_LIMIT), len(closed),
+                    str(len(closed) == 50).lower())
+        return [order_id for _, order_id in candidates[:_RECENT_DISCOVERY_LIMIT]]
+    except Exception as exc:
+        LOGGER.warning("KNOWN_EXECUTION_PROBE_V406_RECENT_UNAVAILABLE "
+                       "reason=%s trading_fail_closed=true", type(exc).__name__)
+        return []
+
+
 def _final_authenticated_row(order_id: str) -> tuple[Any | None, Mapping[str, Any] | None]:
     """Return broker + exact authenticated final QueryOrders row, or no proof."""
     try:
@@ -123,6 +212,8 @@ def _final_authenticated_row(order_id: str) -> tuple[Any | None, Mapping[str, An
         if not callable(query) or not brokers:
             return None, None
         for broker in brokers:
+            if not _platform_broker(broker):
+                continue
             try:
                 row = query(broker, order_id)
             except Exception:
@@ -161,6 +252,14 @@ def _promote_same_authenticated_row(order_id: str, broker: Any, row: Mapping[str
     enriched = enrich(broker, probe, symbol=symbol, side=side)
     if not isinstance(enriched, Mapping):
         return False, 0
+    # The second exact lookup may fail or expose different evidence. Never use
+    # a final-status probe or a fresh first read to bless an unproven requery.
+    if (str(enriched.get("order_id") or "").strip() != order_id
+            or not any(enriched.get(key) is True for key in (
+                "kraken_query_order_reconciled", "kraken_trade_history_reconciled"))
+            or not _platform_broker(broker)
+            or not 0.0 <= time.time() - _f(enriched.get("broker_fill_at_epoch")) <= _HISTORICAL_PROOF_TTL_S):
+        return False, 0
 
     promoted = bool(promote(enriched, symbol=symbol, side=side))
     if not promoted:
@@ -192,8 +291,8 @@ def _historical_order_backoff_active(order_id: str) -> bool:
 def _historical_final_order_age_s(row: Mapping[str, Any]) -> float:
     """Use only an authenticated FINAL QueryOrders closure time, never seen time.
 
-    If Kraken omits closetm, continue through the existing strict v357/v346
-    verifier instead of guessing a timestamp or caching an unverified age.
+    The caller rejects missing closure time before invoking this helper; never
+    guess a timestamp or cache an unverified age as a historical outcome.
     """
     close_epoch = _f(row.get("closetm"))
     if close_epoch <= 0.0:
@@ -204,7 +303,19 @@ def _historical_final_order_age_s(row: Mapping[str, Any]) -> float:
 def recover_once() -> bool:
     if _marker_ready():
         return True
-    order_id = _candidate_order_id()
+    candidates = list(dict.fromkeys(_recent_candidate_order_ids() + _candidate_order_ids()))
+    if not candidates:
+        LOGGER.info("KNOWN_EXECUTION_PROBE_V406_NO_ELIGIBLE_CANDIDATES pending_candidate_count=0 trading_fail_closed=true")
+        return False
+    LOGGER.info("KNOWN_EXECUTION_PROBE_V406_CANDIDATES count=%d read_only=true", len(candidates))
+    for order_id in candidates:
+        if _recover_candidate(order_id):
+            return True
+    return False
+
+
+def _recover_candidate(order_id: str) -> bool:
+    """Authenticate and reconcile one candidate; never authorize on lookup alone."""
     if not order_id or _historical_order_backoff_active(order_id):
         return False
     broker, row = _final_authenticated_row(order_id)
@@ -212,6 +323,14 @@ def recover_once() -> bool:
         LOGGER.info(
             "KNOWN_EXECUTION_PROBE_V406_DEFERRED marker=%s order_id=%s reason=exact_authenticated_final_queryorders_row_unavailable dynamic_pending_order=true authoritative_v367_registry_enabled=true trading_fail_closed=true execution_proof_fabricated=false orders_submitted=false safety_gates_bypassed=false",
             MARKER, order_id,
+        )
+        return False
+    close_epoch = _f(row.get("closetm"))
+    if close_epoch <= 0.0 or close_epoch > time.time():
+        LOGGER.warning(
+            "KNOWN_EXECUTION_PROBE_V406_INVALID_CLOSE_TIME order_id=%s "
+            "reason=missing_or_future_authenticated_closetm trading_fail_closed=true",
+            order_id,
         )
         return False
     historical_age = _historical_final_order_age_s(row)
