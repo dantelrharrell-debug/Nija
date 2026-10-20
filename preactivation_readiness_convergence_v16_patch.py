@@ -438,6 +438,15 @@ def _collect_proofs() -> tuple[dict[str, bool], dict[str, Any]]:
         "execution_pipeline_wired": execution,
         "execution_marker_ready": execution_proof_ok,
         "execution_marker_detail": execution_proof_detail,
+        # The age of a historic fill is not an account preflight result.
+        # Keep the legacy 1,800-second execution gate unchanged until an
+        # independently approved pre-trade authorization migration exists.
+        "stale_execution_proof_blocks_legacy_activation": not execution_proof_ok,
+        "stale_execution_proof_does_not_establish_broker_health": True,
+        "next_safe_recovery_action": (
+            "authenticated_read_only_order_and_fill_reconciliation"
+            if not execution_proof_ok else "independent_risk_and_account_review"
+        ),
     }
 
 
