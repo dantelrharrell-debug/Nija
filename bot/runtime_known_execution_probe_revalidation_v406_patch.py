@@ -227,6 +227,14 @@ def _recover_candidate(order_id: str) -> bool:
             MARKER, order_id,
         )
         return False
+    close_epoch = _f(row.get("closetm"))
+    if close_epoch <= 0.0 or close_epoch > time.time() + 30.0:
+        LOGGER.warning(
+            "KNOWN_EXECUTION_PROBE_V406_INVALID_CLOSE_TIME order_id=%s "
+            "reason=missing_or_future_authenticated_closetm trading_fail_closed=true",
+            order_id,
+        )
+        return False
     historical_age = _historical_final_order_age_s(row)
     if historical_age > _HISTORICAL_PROOF_TTL_S:
         # QueryOrders proved the exact order CLOSED with positive executed
