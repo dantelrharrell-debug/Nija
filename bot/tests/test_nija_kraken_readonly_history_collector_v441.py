@@ -225,3 +225,69 @@ def test_invalid_nonfinite_broker_row_fails_closed():
 
     with pytest.raises(IncompleteHistory, match="non-JSON"):
         collect_history(nonfinite, account_scope="platform:kraken")
+
+
+def test_balance_brackets_history_and_is_hashed_without_authorizing():
+    calls = []
+
+    def read(endpoint, params):
+        calls.append((endpoint, params))
+        if endpoint == "Balance":
+            assert params == {}
+            return {"error": [], "result": {"BABY": "0.00142000"}}
+        return _reader(endpoint, params)
+
+    report = collect_history(read, account_scope="platform:kraken", include_balance=True)
+    assert calls[0] == calls[-1] == ("Balance", {})
+    assert report["balance"] == {"BABY": "0.00142000"}
+    assert report["entry_exit_reconciliation_verified"] is False
+    assert report["trading_authorized"] is False
+    assert report["atomic_broker_snapshot_verified"] is False
+    history_only = collect_history(_reader, account_scope="platform:kraken")
+    assert report["evidence_sha256"] != history_only["evidence_sha256"]
+
+
+@pytest.mark.parametrize("value", ["NaN", "Infinity", "-0.001", "invalid", None])
+def test_invalid_balance_fails_closed(value):
+    def read(endpoint, params):
+        if endpoint == "Balance":
+            return {"error": [], "result": {"BABY": value}}
+        return _reader(endpoint, params)
+
+    with pytest.raises(IncompleteHistory, match="Balance: invalid"):
+        collect_history(read, account_scope="platform:kraken", include_balance=True)
+
+
+def test_changing_balance_fails_closed():
+    balances = iter(["0.00142000", "0"])
+
+    def read(endpoint, params):
+        if endpoint == "Balance":
+            return {"error": [], "result": {"BABY": next(balances)}}
+        return _reader(endpoint, params)
+
+    with pytest.raises(IncompleteHistory, match="balance changed"):
+        collect_history(read, account_scope="platform:kraken", include_balance=True)
+
+
+def test_existing_broker_balance_uses_same_monitoring_controls():
+    calls = []
+
+    def read(endpoint, params, *, category):
+        assert category == "monitoring"
+        calls.append(endpoint)
+        if endpoint == "Balance":
+            assert params == {}
+            return {"error": [], "result": {"BABY": "0.00142000"}}
+        return _reader(endpoint, params)
+
+    broker = SimpleNamespace(
+        broker_type="kraken", account_type="platform", user_id=None,
+        _kraken_private_call=read,
+    )
+    report = collect_from_existing_broker(
+        broker, account_scope="platform:kraken", monitoring_category="monitoring", include_balance=True,
+    )
+    assert calls[0] == calls[-1] == "Balance"
+    assert report["balance"]["BABY"] == "0.00142000"
+    assert report["authenticated_identity_independently_verified"] is False

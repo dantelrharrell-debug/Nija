@@ -11871,6 +11871,16 @@ class KrakenBroker(BaseBroker):
 
     def _get_asset_usd_price(self, symbol: str):
         """Resolve asset price in USD with USDT fallback."""
+        if str(symbol).upper() == "BABY":
+            # Only Kraken-confirmed metadata and ticker may value this residual.
+            # An unavailable quote leaves the existing authenticated TradeBalance
+            # aggregate-equity fallback responsible for capital confidence.
+            try:
+                from bot.kraken_baby_valuation_v461 import resolve_baby_usd_price
+                return resolve_baby_usd_price(self.api)
+            except Exception:
+                logger.exception("KRAKEN_BABY_V461_PRICE_UNAVAILABLE fail_closed=true")
+                return None
         price = self.get_current_price(f"{symbol}-USD")
         if price is not None and price > 0:
             return price
@@ -11948,14 +11958,17 @@ class KrakenBroker(BaseBroker):
                     total += qty
                 continue
             non_usd_count += 1
-            price = price_lookup(symbol)
-            parsed_price = _to_positive_float(price)
-            if parsed_price is None:
-                # Secondary lookup path to avoid zeroing non-fiat holdings when the
-                # injected price_lookup is unavailable/intermittent.
+            if symbol == "BABY":
+                # Do not let an unverified injected price or stale generic cache
+                # bypass Kraken Assets/AssetPairs/Ticker identity checks.
                 parsed_price = _to_positive_float(self._get_asset_usd_price(symbol))
-            if parsed_price is None:
-                parsed_price = _get_cached_pair_price(symbol)
+            else:
+                price = price_lookup(symbol)
+                parsed_price = _to_positive_float(price)
+                if parsed_price is None:
+                    parsed_price = _to_positive_float(self._get_asset_usd_price(symbol))
+                if parsed_price is None:
+                    parsed_price = _get_cached_pair_price(symbol)
             if parsed_price is not None:
                 total += qty * parsed_price
                 priced_count += 1

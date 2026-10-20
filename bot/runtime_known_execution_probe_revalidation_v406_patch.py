@@ -317,7 +317,19 @@ def recover_once() -> bool:
 def _recover_candidate(order_id: str) -> bool:
     """Authenticate and reconcile one candidate; never authorize on lookup alone."""
     if not order_id or _historical_order_backoff_active(order_id):
+    candidates = _candidate_order_ids()
+    if not candidates:
+        LOGGER.info("KNOWN_EXECUTION_PROBE_V406_NO_ELIGIBLE_CANDIDATES pending_candidate_count=0 trading_fail_closed=true")
         return False
+    LOGGER.info("KNOWN_EXECUTION_PROBE_V406_CANDIDATES count=%d read_only=true", len(candidates))
+    for order_id in candidates:
+        if _recover_candidate(order_id):
+            return True
+    return False
+
+
+def _recover_candidate(order_id: str) -> bool:
+    """Authenticate and reconcile one candidate; never authorize on lookup alone."""
     broker, row = _final_authenticated_row(order_id)
     if row is None or broker is None:
         LOGGER.info(
@@ -327,6 +339,7 @@ def _recover_candidate(order_id: str) -> bool:
         return False
     close_epoch = _f(row.get("closetm"))
     if close_epoch <= 0.0 or close_epoch > time.time():
+    if close_epoch <= 0.0 or close_epoch > time.time() + 30.0:
         LOGGER.warning(
             "KNOWN_EXECUTION_PROBE_V406_INVALID_CLOSE_TIME order_id=%s "
             "reason=missing_or_future_authenticated_closetm trading_fail_closed=true",

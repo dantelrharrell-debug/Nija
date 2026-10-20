@@ -38,6 +38,7 @@ _LOCK = threading.RLock()
 _SEED_LOCK = threading.RLock()
 _SEED_IDS: dict[int, float] = {}
 _SEED_TTL_S = 60.0
+_PUBLISH_V179_CODE = None
 
 
 def _canonical_ca_module():
@@ -149,6 +150,7 @@ def _patch_mabm_seed() -> bool:
 
 
 def _patch_capital_publish_seed_context() -> bool:
+    global _PUBLISH_V179_CODE
     module = _canonical_ca_module()
     cls = getattr(module, "CapitalAuthority", None)
     if not isinstance(cls, type):
@@ -208,6 +210,7 @@ def _patch_capital_publish_seed_context() -> bool:
 
     setattr(publish_v179, _PATCH_ATTR, True)
     setattr(publish_v179, "__wrapped__", original)
+    _PUBLISH_V179_CODE = publish_v179.__code__
     cls.publish_snapshot = publish_v179
     return True
 

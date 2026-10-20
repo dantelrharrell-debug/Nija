@@ -73,6 +73,16 @@ jobs:
             > /tmp/nija-unittest-manifest.log
           head -n 2 /tmp/nija-unittest-manifest.log
 
+      - name: Verify historical recovery archive fail-closed regressions (v460)
+        env:
+          NIJA_DEFER_RUNTIME_SITE_HOOKS: "1"
+          GH_TOKEN: ""
+          SSH_PRIVATE_KEY: ""
+          COINBASE_API_KEY: ""
+          COINBASE_API_SECRET: ""
+        run: |
+          python -m pytest -q tests/test_nija_offline_archive_reconciliation_audit_v460.py
+
       - name: Run tests
         env:
           GH_TOKEN: ""
@@ -138,7 +148,9 @@ jobs:
         run: |
           python -m pytest -q \
             bot/tests/test_canonical_kraken_recovery_deferral.py \
+            bot/tests/test_production_readiness_regression_20261017.py \
             bot/tests/test_production_runtime_convergence_v88.py \
+            bot/tests/test_production_readiness_regression_20261017.py \
             bot/tests/test_v420_monitor_start_order_v421.py \
             tests/test_authority_marker_atomic_publication.py \
             bot/tests/test_runtime_execution_capital_integrity_v169.py \
@@ -171,6 +183,7 @@ jobs:
             bot/tests/test_trade_ledger_storage_v435.py \
             bot/tests/test_trade_ledger_snapshot_v436.py \
             bot/tests/test_offhost_ledger_evidence_report_v448.py \
+            bot/tests/test_nija_account_state_offhost_evidence_v449.py \
             bot/tests/test_confirmed_strategy_order_provenance_v433.py \
             bot/tests/test_runtime_heartbeat_no_rearm_v433.py \
             bot/tests/test_research_edge_ranking_v432.py \
@@ -178,7 +191,10 @@ jobs:
             tests/test_nija_startup_attempt_audit_v441.py \
             bot/tests/test_nija_offline_kraken_csv_audit_v440.py \
             bot/tests/test_nija_kraken_readonly_history_collector_v441.py \
+            bot/tests/test_startup_position_sync_outcomes.py \
+            tests/test_runtime_registered_platform_capital_completeness_v270.py \
             tests/test_runtime_capital_refresh_ownership_v166.py \
+            tests/test_capital_publication_wrapper_integrity_20261017.py \
             tests/test_account_state_diagnostics.py \
             tests/test_runtime_account_scoped_position_state_v289.py \
             tests/test_kraken_position_snapshot_reuse.py \

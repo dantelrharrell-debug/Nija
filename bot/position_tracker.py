@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 from datetime import datetime
 from threading import Lock
@@ -55,7 +56,9 @@ class PositionTracker:
             parsed = float(value or 0.0)
         except (TypeError, ValueError, OverflowError):
             return default
-        return parsed if parsed == parsed else default
+        # Non-finite quantities/prices are invalid broker evidence; preserve
+        # an unknown cost basis rather than persisting infinity or NaN.
+        return parsed if math.isfinite(parsed) else default
 
     @staticmethod
     def _source_verified(source: str, price: float) -> bool:
@@ -305,10 +308,22 @@ class PositionTracker:
                     record = self._eps.get(symbol) if callable(getattr(self._eps, "get", None)) else None
                     stored_entry = self._safe_float(getattr(record, "price", 0.0))
                     stored_source = str(getattr(record, "source", "") or "")
-                    stored_qty = self._safe_float(getattr(record, "quantity", 0.0))
+                    # Invalid persisted quantities must not be interpreted as
+                    # an absent/legacy (zero) quantity. In particular, infinity
+                    # must never match an arbitrary fresh broker snapshot and
+                    # accidentally certify cost basis or unblock auto-exits.
+                    stored_qty = self._safe_float(
+                        getattr(record, "quantity", 0.0), default=float("nan")
+                    )
                     qty_matches = (
-                        stored_qty <= 0
-                        or abs(stored_qty - quantity) <= max(1e-10, quantity * 0.05)
+                        math.isfinite(stored_qty)
+                        and (
+                            stored_qty == 0.0
+                            or (
+                                stored_qty > 0.0
+                                and abs(stored_qty - quantity) <= max(1e-10, quantity * 0.05)
+                            )
+                        )
                     )
                     if stored_entry > 0 and qty_matches and self._source_verified(stored_source, stored_entry):
                         effective_entry = stored_entry

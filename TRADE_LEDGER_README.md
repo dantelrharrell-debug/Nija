@@ -13,6 +13,131 @@ The NIJA Trading Bot now includes a comprehensive trade ledger system that recor
 
 ## Database Schema
 
+### Fail-closed Kraken reconciliation (issue #3173)
+
+The 2026-10-17 BABY-USD observation (`quantity=0.00142000`, unknown entry
+price) is **not** evidence of a zero-cost purchase. Preserve the quantity and
+`reconciliation_required` / `auto_exit_blocked` state until the original
+account-scoped acquisition evidence is independently verified. A market mark,
+dust classification, or hydrated capital total cannot establish historical basis.
+
+No production data repair, trading, activation, deployment, or test order is
+authorized by this procedure. The coding sandbox has no authenticated Kraken
+credentials or `/data/trade_ledger.db`; actual basis determinability, unmatched
+fills, pending closes, and historical execution proof remain **unverified**.
+
+Operator evidence/review checklist:
+
+1. Before considering any database write, use the existing
+   `scripts/nija_trade_ledger_snapshot_v436.py` **backup** command with
+   `--source /data/trade_ledger.db` and an absolute `--output-dir`. Invoke the
+   script using its absolute path in the production checkout. Preserve its
+   manifest, digest, all SQLite tables (including pending closes), pending
+   fill evidence, and execution journal. **The v436 archive does NOT include
+   account-scoped positions/ and entry_prices/ directory JSON files.** Preserve
+   those using the separate v449 account-state snapshot below.
+   Inspect missing/unstable companion warnings; a file-only journal may omit
+   in-memory events. Copy the archive off-host and run **restore-test** against
+   that independent copy with the original `--expected-sha256`. A local backup
+   alone is insufficient.
+2. From the existing authenticated **platform:kraken** broker, call
+   `collect_from_existing_broker` in
+   `scripts/nija_kraken_readonly_history_collector_v441.py` with
+   `account_scope="platform:kraken"`, the runtime's monitoring request category,
+   and `include_balance=True`. This reuses account routing, private-call nonce
+   and rate controls; it only reads Balance, TradesHistory, ClosedOrders and
+   Ledgers. Balance reads bracket two full history passes. API failure,
+   pagination truncation, or changing evidence invalidates collection.
+   Repeat-read consistency does not prove an atomic exchange snapshot or
+   independently authenticate account ownership.
+3. Retain the evidence hash and exact BABY trade/order IDs, timestamps, pair and
+   quote currency, quantities, costs, fees/fee assets, and linked ledger IDs.
+   Compare current BABY balance with the full inventory history, including
+   sales, transfers, rewards and fees. Record whether basis is determinable and
+   why; missing opening fills, unexplained quantity changes, mixed quotes or
+   unsupported ledger links must remain unresolved. Never substitute a current
+   price, divide unrelated historical cost by current quantity, or delete the
+   holding to make reconciliation pass.
+4. Compare the verified backup's open positions, ledger fills, pending closes
+   and pending-fill evidence using exact broker/account/order provenance.
+   Legacy `open_positions` rows do not contain a broker column: matching only
+   symbol/user/side is insufficient. The existing offline CSV audit can triage
+   pending closes but does not certify authenticated provenance, entry basis or
+   realized P&L. Preserve unmatched evidence and prevent duplicate booking.
+   Any eventual write requires separate approval, a reviewed per-row change
+   plan, independent before/after audit records and verified backups.
+5. For capital, compare the **same refresh** result's valid contributor count
+   against all three registered platform brokers, independently of connectivity
+   and the displayed hydrated total (approximately $758.62 in the incident).
+   Require an accepted, non-stale publication and complete current authority
+   data. v270 retains missing broker instances in the denominator and reports
+   `publication_current` on fail-closed results. Do not reduce the denominator,
+   extend freshness, or treat an earlier complete result as the current one.
+6. Assess execution proof separately using genuine historical, account-scoped
+   broker order/fill events and their original execution timestamps. Compare
+   exact identities and existing canonical verifier results; old historical
+   evidence may help reconciliation without satisfying current proof freshness.
+   `verification_stale` stays a denial. Never stamp history with collection
+   time, manufacture a marker, place a probe/test order, or relax kill-switch,
+   nonce, protective-exit or execution-proof gates.
+
+### Account-scoped recovery evidence (v449; read-only)
+
+A SQLite snapshot alone does **not** preserve the registered platform/user account
+JSON directories. Issue #3024 documents that `/app/data` was observed to resolve
+to the `/data` mount on October 11, but current paths, integrity and restart
+durability must be verified in the **current live instance** before any redeploy.
+
+Run only from an authorized Render owner shell with the current checkout,
+with no new trades, restarts, or state changes. **The current trading deployment
+may predate v449**; do not restart/redeploy it merely to make this tool
+available. After independent review, transfer the exact approved/pinned v449
+script to a private temporary path on the existing live instance by an
+authorized secure method, and verify its source hash before running it.
+The following creates two **local, private** archives under `/tmp`, and does
+not itself copy either archive off-host:
+
+```bash
+cd /app
+python -S scripts/nija_state_store_persistence_audit_v441.py \
+  --persistent-root /data --ledger /data/trade_ledger.db \
+  --positions-dir /app/data/positions --entry-prices-dir /app/data/entry_prices
+python -S scripts/nija_trade_ledger_snapshot_v436.py backup \
+  --source /data/trade_ledger.db --output-dir /tmp/nija-recovery-private
+python -S /tmp/approved-nija-account-state-v449.py snapshot \
+  --persistent-root /data \
+  --positions-dir /app/data/positions --entry-prices-dir /app/data/entry_prices \
+  --output-dir /tmp/nija-recovery-private
+```
+
+The account-state archive rejects unexpected names, symlinks, non-object JSON,
+NaN/Infinity, untrusted paths, size overflows, and changing files. It records
+per-member SHA-256 and returns the archive SHA-256; the archive contains private
+position information and must be handled as sensitive. **Do not print archive
+contents or upload the archive to a public issue or GitHub Actions artifact.**
+
+Transfer each archive through an approved encrypted channel to a restricted
+**independent off-host** location. Record the exact SHA-256 from the originating
+host and then run these on an isolated verification machine against the copied
+archives (replace placeholders with actual verified paths and hashes):
+
+```bash
+python -S scripts/nija_trade_ledger_snapshot_v436.py restore-test \
+  --archive /restricted/offhost/trading-ledger.tar.gz \
+  --expected-sha256 ORIGINAL_LEDGER_SHA256
+python -S scripts/nija_account_state_offhost_evidence_v449.py verify \
+  --archive /restricted/offhost/account-state.zip \
+  --expected-sha256 ORIGINAL_ACCOUNT_SHA256
+```
+
+Even if both passes succeed, the snapshots are not **cross-store atomic**:
+compare capture timestamps, all original hashes, current authoritative
+per-account broker positions, executed trades, pending closes, and exchange
+protective exits. Neither script certifies independent off-host custody by
+itself, authenticates Kraken ownership, reconstructs BABY historical basis, or
+permits LIVE_ACTIVE execution. Retain a separate signed operational attestation
+of transfer, isolated restore, identity/reconciliation and rollback review.
+
 ### Tables
 
 #### `trade_ledger`
@@ -347,13 +472,45 @@ with open('trades_export.csv', 'w') as f:
 
 ### Backup Database
 
-```bash
-# Create backup
-cp data/trade_ledger.db data/trade_ledger_backup_$(date +%Y%m%d).db
+**Production warning:** Do not use a raw `cp` of a running SQLite database.
+NIJA uses WAL-mode SQLite; raw file copying can omit committed changes in
+`-wal` files, yield an inconsistent snapshot, and falsely certify recovery.
 
-# Or use SQLite backup command
-sqlite3 data/trade_ledger.db ".backup data/trade_ledger_backup.db"
+From an authenticated shell **inside the existing running Render trading
+instance** (never a separate Render job, build, or pre-deploy instance), first
+confirm the current database path and mount, then use the existing v436
+SQLite online-backup implementation:
+
+```bash
+cd /app
+python -S scripts/nija_ledger_evidence_v438.py --ledger /data/trade_ledger.db
+python -S scripts/nija_trade_ledger_snapshot_v436.py backup \
+  --source /data/trade_ledger.db \
+  --output-dir /tmp/nija-recovery-private
 ```
+
+The command above creates a **local** backup only. Transfer the generated
+archive through approved encrypted transport to restricted independent
+off-host storage and compare its exact source SHA-256 with the received
+copy. Run `restore-test` on an isolated host:
+
+```bash
+python -S scripts/nija_trade_ledger_snapshot_v436.py restore-test \
+  --archive /restricted/offhost/nija-trading-ledger-snapshot.tar.gz \
+  --expected-sha256 ORIGINAL_SOURCE_SHA256
+```
+
+Preserve separately the current account-scoped JSON position and entry-price
+state using the vetted v449/v447 procedures in this README. Verify the current
+ledger and JSON evidence against authenticated broker records before any
+write, restart, deploy, trade, or protective-exit modification. A successful
+SQLite integrity check or backup **does not** prove historical cost basis,
+cross-store consistency, broker identity, or permission to trade.
+
+The read-only `scripts/nija_offline_archive_reconciliation_audit_v460.py`
+can check an **old historical** off-host recovery bundle against an operator
+CSV crosswalk, but cannot certify brokerage authenticity or the current
+production ledger. An archived match is not a release gate.
 
 ### Database Maintenance
 

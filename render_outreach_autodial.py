@@ -767,9 +767,7 @@ def _eligibility(row: sqlite3.Row, now_utc: datetime) -> tuple[list[str], dateti
         if not allowed:
             blockers.append(window_reason)
             retry_at = max(retry_at, window_retry)
-    if _bool(os.getenv("NIJA_JUSTCALL_REQUIRE_HUMAN_HANDOFF", "1")) and not _bool(
-        os.getenv("NIJA_JUSTCALL_HUMAN_HANDOFF_VERIFIED", "0")
-    ):
+    if not _bool(os.getenv("NIJA_JUSTCALL_HUMAN_HANDOFF_VERIFIED", "0")):
         blockers.append("human_handoff_not_verified")
     if _active_call_exists(str(row["contact_number"] or ""), now_utc):
         blockers.append("duplicate_active_call")
