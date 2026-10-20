@@ -13,6 +13,13 @@ REQUIRED_PREFLIGHT = (
     "capital_fresh", "positions_reconciled", "kraken_ledger_reconciled",
     "protective_exits_verified", "risk_ready", "strategy_ready",
     "kill_switch_clear",
+    # Independent, account-scoped authorization and safety attestations.
+    # These are not inferred from credentials, process liveness or old fills.
+    "operator_live_authorization_verified",
+    "account_scope_verified",
+    "open_orders_reconciled",
+    "unresolved_submissions_clear",
+    "writer_fencing_generation_valid",
 )
 
 
