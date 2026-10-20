@@ -4,6 +4,8 @@ on:
   pull_request:
     branches: [main, release/justcall-handoff-only-20261017]
     paths:
+      - 'bot/order_admission_policy.py'
+      - 'tests/test_order_admission_policy.py'
       - 'bot/runtime_known_execution_probe_revalidation_v406_patch.py'
       - 'bot/startup_recovery_readonly.py'
       - 'tests/test_kraken*execution*.py'
@@ -41,6 +43,8 @@ jobs:
       - name: Compile the repair without production startup hooks
         run: |
           python -S -m py_compile \
+            bot/order_admission_policy.py \
+            tests/test_order_admission_policy.py \
             bot/runtime_known_execution_probe_revalidation_v406_patch.py \
             bot/startup_recovery_readonly.py \
             tests/test_kraken_recent_execution_discovery.py \
@@ -50,6 +54,9 @@ jobs:
       - name: Scan changed runtime and test files for secrets
         run: |
           python -m detect_secrets scan --all-files --no-verify \
+            bot/order_admission_policy.py \
+            tests/test_order_admission_policy.py \
+            docs/order-admission-integration-review.md \
             bot/runtime_known_execution_probe_revalidation_v406_patch.py \
             bot/startup_recovery_readonly.py \
             tests/test_kraken_recent_execution_discovery.py \
@@ -69,6 +76,7 @@ jobs:
       - name: Verify execution, independent exits, and ledger invariants offline
         run: |
           python -m pytest -q \
+            tests/test_order_admission_policy.py \
             tests/test_kraken_recent_execution_discovery.py \
             tests/test_kraken_execution_recovery_candidates_v406.py \
             tests/test_runtime_known_execution_probe_v406_dynamic.py \
