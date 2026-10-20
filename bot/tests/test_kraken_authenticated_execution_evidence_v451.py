@@ -4,7 +4,8 @@ from bot.kraken_authenticated_execution_evidence_v451 import validate_kraken_ord
 
 def sample():
     return dict(txid="A-123", status="closed", vol_exec="0.25",
-                cost="500.00", descr={"pair": "ETHUSD", "type": "buy"})
+                cost="500.00", closetm=1000.0,
+                descr={"pair": "ETHUSD", "type": "buy"})
 
 
 def check(order=None, **changes):
@@ -66,3 +67,39 @@ def test_reject_missing_pair_and_side():
 
 def test_cannot_extend_freshness_limit():
     assert check(max_age_seconds=7200)["verified"] is False
+
+
+def test_recent_observation_cannot_retimestamp_an_old_broker_close():
+    order = sample()
+    order["closetm"] = 100.0
+    result = check(order, event_epoch=1050.0, now_epoch=1100.0)
+    assert result == {"verified": False, "reason": "broker_event_timestamp_mismatch"}
+
+
+def test_stale_close_cannot_be_refreshed_to_current_clock():
+    order = sample()
+    result = check(order, event_epoch=2790.0, now_epoch=2800.0)
+    assert result["reason"] == "broker_event_timestamp_mismatch"
+
+
+def test_missing_or_invalid_broker_close_time_denied():
+    for value in (None, 0, -1, float("nan"), float("inf"), True, "bad"):
+        order = sample()
+        order["closetm"] = value
+        assert check(order)["verified"] is False
+    order = sample()
+    del order["closetm"]
+    assert check(order)["verified"] is False
+
+
+def test_broker_close_time_strict_freshness_boundary():
+    assert check(now_epoch=2800.0)["verified"] is True
+    assert check(now_epoch=2800.000001)["verified"] is False
+    assert check(now_epoch=995.0)["verified"] is True
+    assert check(now_epoch=994.9)["reason"] == "broker_event_stale_or_future"
+
+
+def test_event_assertion_only_matches_exact_broker_timestamp():
+    assert check(event_epoch=1000.0000005)["verified"] is True
+    assert check(event_epoch=1000.002)["reason"] == "broker_event_timestamp_mismatch"
+    assert check(event_epoch=True)["verified"] is False
