@@ -66,5 +66,14 @@ def certificate_from_independent_evidence(
     remain responsibilities of the authenticated attestation producer.
     This is NOT an activation decision or a broker evidence verifier.
     """
+    # These independently attested prerequisites cannot be represented by a
+    # single mapped field; reject the entire certificate if any is unknown.
+    global_required = (
+        "authenticated_readonly_probe", "positions_reconciled",
+        "risk_ready", "strategy_ready", "kill_switch_clear",
+        "account_scope_verified", "writer_fencing_generation_valid",
+    )
+    prerequisites_ok = all(attestations.get(key) is True for key in global_required)
+    return {target: prerequisites_ok and attestations.get(source) is True
     return {target: attestations.get(source) is True
             for target, source in _CERTIFICATE_INPUTS.items()}

@@ -98,10 +98,10 @@ def test_independent_pretrade_certificate_requires_every_literal_true(monkeypatc
         "open_order_reconciliation", "duplicate_order_fence",
         "writer_lease", "nonce_sequence", "operator_authorization",
     )
-    module.current_authenticated_attestations = lambda: {key: True for key in fields}
+    module.current_authenticated_attestations = lambda account: {key: True for key in fields}
     monkeypatch.setitem(sys.modules, name, module)
     assert v16._independent_pretrade_certificate() == (True, [])
-    module.current_authenticated_attestations = lambda: {
+    module.current_authenticated_attestations = lambda account: {
         **{key: True for key in fields}, "protective_exit_readback": "true"
     }
     ok, missing = v16._independent_pretrade_certificate()
@@ -122,6 +122,37 @@ def test_missing_independent_attestor_does_not_grant_authority(monkeypatch):
     assert proofs["execution_ready"] is False
 
 
+def test_integrated_attestation_contract_is_fail_closed():
+    import importlib.util
+    source = SOURCE.parents[0] / "bot" / "pretrade_independent_attestation.py"
+    spec = importlib.util.spec_from_file_location("nija_attestor_integrated", source)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    account = "platform:kraken"
+    assert not any(module.current_authenticated_attestations(account).values())
+    evidence = {
+        "account": account, "source": "authenticated_independent",
+        "observed_at_epoch": 1000.0, "read_only": True, "scope_verified": True,
+        "checks": {field: True for field in module.FIELDS},
+    }
+    module.install_authenticated_collector(lambda _: evidence)
+    assert all(module.current_authenticated_attestations(account, now=1020.0).values())
+    assert not any(module.current_authenticated_attestations("user:other:kraken", now=1020.0).values())
+    assert not any(module.current_authenticated_attestations(account, now=1061.0).values())
+    evidence["checks"]["protective_exit_readback"] = "true"
+    assert module.current_authenticated_attestations(account, now=1020.0)["protective_exit_readback"] is False
+
+
+def test_adapter_requires_risk_and_kill_switch_evidence():
+    import importlib.util
+    source = SOURCE.parents[0] / "bot" / "preflight_observability.py"
+    spec = importlib.util.spec_from_file_location("nija_preflight_adapter_integrated", source)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    evidence = {field: True for field in module.REQUIRED_PREFLIGHT}
+    assert all(module.certificate_from_independent_evidence(evidence).values())
+    evidence["kill_switch_clear"] = False
+    assert not any(module.certificate_from_independent_evidence(evidence).values())
 def test_certificate_adapter_requires_literal_true_and_never_authorizes():
     import importlib.util
     source = SOURCE.parents[0] / "bot" / "preflight_observability.py"
