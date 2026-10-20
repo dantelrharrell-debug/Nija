@@ -75,4 +75,5 @@ def certificate_from_independent_evidence(
     )
     prerequisites_ok = all(attestations.get(key) is True for key in global_required)
     return {target: prerequisites_ok and attestations.get(source) is True
+    return {target: attestations.get(source) is True
             for target, source in _CERTIFICATE_INPUTS.items()}

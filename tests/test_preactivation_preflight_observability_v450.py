@@ -153,3 +153,16 @@ def test_adapter_requires_risk_and_kill_switch_evidence():
     assert all(module.certificate_from_independent_evidence(evidence).values())
     evidence["kill_switch_clear"] = False
     assert not any(module.certificate_from_independent_evidence(evidence).values())
+def test_certificate_adapter_requires_literal_true_and_never_authorizes():
+    import importlib.util
+    source = SOURCE.parents[0] / "bot" / "preflight_observability.py"
+    spec = importlib.util.spec_from_file_location("nija_preflight_adapter", source)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    evidence = {field: True for field in module.REQUIRED_PREFLIGHT}
+    result = module.certificate_from_independent_evidence(evidence)
+    assert all(result.values())
+    evidence["protective_exits_verified"] = "true"
+    result = module.certificate_from_independent_evidence(evidence)
+    assert result["protective_exit_readback"] is False
+    assert module.observe_preflight(evidence)["activation_allowed"] is False

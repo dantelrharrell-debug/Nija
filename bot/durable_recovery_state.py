@@ -12,6 +12,16 @@ import tempfile
 from typing import Any, Mapping
 
 
+def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """Never let duplicate JSON keys silently overwrite pending order history."""
+    decoded: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in decoded:
+            raise ValueError("recovery_state_duplicate_json_key")
+        decoded[key] = value
+    return decoded
+
+
 def read_recovery_state(path: Path, bucket: str) -> dict[str, dict[str, Any]]:
     """Read exact records; only a genuinely absent file means no records."""
     if path.is_symlink():
@@ -20,7 +30,7 @@ def read_recovery_state(path: Path, bucket: str) -> dict[str, dict[str, Any]]:
         raw = path.read_text(encoding="utf-8")
     except FileNotFoundError:
         return {}
-    data = json.loads(raw)
+    data = json.loads(raw, object_pairs_hook=_reject_duplicate_keys)
     if not isinstance(data, dict) or data.get("version") != 1 or not isinstance(data.get(bucket), dict):
         raise ValueError("recovery_state_schema_invalid")
     rows = data[bucket]
