@@ -65,3 +65,15 @@ def test_symlink_is_rejected_without_touching_target(tmp_path):
     with pytest.raises(ValueError):
         state.write_recovery_state(link, {"version": 1, "orders": {}})
     assert target.read_text() == "original"
+
+
+@pytest.mark.parametrize("raw", [
+    '{"version":1,"orders":{"oid":{"status":"pending"},"oid":{"status":"reconciled"}}}',
+    '{"version":1,"orders":{"oid":{}},"orders":{}}',
+    '{"version":1,"orders":{"oid":{"status":"pending","status":"reconciled"}}}',
+])
+def test_duplicate_json_keys_do_not_erase_pending_recovery_history(tmp_path, raw):
+    path = tmp_path / "history.json"
+    path.write_text(raw, encoding="utf-8")
+    with pytest.raises(ValueError, match="recovery_state_duplicate_json_key"):
+        state.read_recovery_state(path, "orders")
