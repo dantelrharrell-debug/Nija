@@ -388,6 +388,38 @@ def _genuine_execution_marker_proof() -> tuple[bool, str]:
         )
 
 
+def _independent_pretrade_certificate() -> tuple[bool, list[str]]:
+    """Independent, non-authorizing pre-trade certification.
+
+    A passing process health check is never sufficient. Every attestation
+    must be explicitly True, from an independent authenticated producer;
+    no environment variable or stale fill may self-certify this state.
+    """
+    required = (
+        "account_permissions", "account_identity", "broker_balances",
+        "position_ledger_reconciliation", "protective_exit_readback",
+        "open_order_reconciliation", "duplicate_order_fence",
+        "writer_lease", "nonce_sequence", "operator_authorization",
+    )
+    try:
+        module = importlib.import_module("bot.pretrade_independent_attestation")
+        verifier = getattr(module, "current_authenticated_attestations", None)
+        evidence = verifier(os.environ.get("NIJA_PREFLIGHT_ACCOUNT_SCOPE", "")) if callable(verifier) else None
+    except Exception:
+        evidence = None
+    if not isinstance(evidence, dict):
+        return False, list(required)
+    missing = [key for key in required if evidence.get(key) is not True]
+    logger.info(
+        "PRETRADE_INDEPENDENT_CERTIFICATION_V6 ready=%s account_scope_configured=%s "
+        "missing=%s diagnostic_only=true legacy_execution_gate_unchanged=true",
+        str(not missing).lower(),
+        str(bool(os.environ.get("NIJA_PREFLIGHT_ACCOUNT_SCOPE", "").strip())).lower(),
+        ",".join(missing) if missing else "none",
+    )
+    return not missing, missing
+
+
 def _collect_proofs() -> tuple[dict[str, bool], dict[str, Any]]:
     capital = _capital_snapshot()
     strict_ok, strict_detail = _strict_authority_ready()
@@ -407,6 +439,7 @@ def _collect_proofs() -> tuple[dict[str, bool], dict[str, Any]]:
     except Exception:
         pass
 
+    independent_pretrade_ok, independent_pretrade_missing = _independent_pretrade_certificate()
     hydrated = bool(capital.get("hydrated")) and not bool(capital.get("stale"))
     funded = _float(capital.get("real")) > 0.0
     registered = _int(capital.get("registered")) > 0
@@ -435,6 +468,9 @@ def _collect_proofs() -> tuple[dict[str, bool], dict[str, Any]]:
         "independent_certificate_observed": independent_certificate,
         "independent_certificate_is_authorization": False,
         "post_trade_execution_evidence_verified": execution_proof_ok,
+        "independent_pretrade_certified": independent_pretrade_ok,
+        "independent_pretrade_missing": independent_pretrade_missing,
+        "independent_pretrade_is_authorization": False,
         "preflight_missing": [
             key for key, ok in (
                 ("pipeline", execution), ("risk", risk), ("authority", authority),
@@ -451,6 +487,15 @@ def _collect_proofs() -> tuple[dict[str, bool], dict[str, Any]]:
         "execution_pipeline_wired": execution,
         "execution_marker_ready": execution_proof_ok,
         "execution_marker_detail": execution_proof_detail,
+        # The age of a historic fill is not an account preflight result.
+        # Keep the legacy 1,800-second execution gate unchanged until an
+        # independently approved pre-trade authorization migration exists.
+        "stale_execution_proof_blocks_legacy_activation": not execution_proof_ok,
+        "stale_execution_proof_does_not_establish_broker_health": True,
+        "next_safe_recovery_action": (
+            "authenticated_read_only_order_and_fill_reconciliation"
+            if not execution_proof_ok else "independent_risk_and_account_review"
+        ),
     }
 
 

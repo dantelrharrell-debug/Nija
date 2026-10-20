@@ -47,7 +47,7 @@ def test_reject_unproven_historical_evidence(changes, reason):
     assert detail == reason
 
 
-def test_valid_old_fill_retains_event_time_and_recovery_label():
+def test_valid_old_fill_is_rejected_as_stale_execution_proof():
     old = time.time() - 7200
     with patch.object(v372, "_v366") as module:
         module.return_value.canonical_symbol = lambda v: {
@@ -55,12 +55,8 @@ def test_valid_old_fill_retains_event_time_and_recovery_label():
         }.get(str(v), str(v))
         proof, detail = v372._exact_queryorders_fill(
             _query(_payload(closetm=str(old))), _opening())
-    assert detail == "ok"
-    assert proof["broker_fill_at_epoch"] == pytest.approx(old)
-    assert proof["recovered_fill_proof"] is True
-    assert proof["broker"] == "kraken"
-    assert proof["authenticated_kraken_queryorders"] is True
-    assert proof["opening_position_id"] == "MARGIN-POS"
+    assert proof is None
+    assert detail == "queryorders_broker_fill_stale"
 
 
 def test_nonfinal_order_is_not_execution_proof():
