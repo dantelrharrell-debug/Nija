@@ -23,6 +23,22 @@ class TestRecoveryCandidates(unittest.TestCase):
             self.assertFalse(module.recover_once())
             recover.assert_not_called()
 
+    def test_missing_close_time_is_not_promoted(self):
+        module = importlib.import_module(MODULE)
+        row = {"status": "closed", "vol_exec": "1", "cost": "10"}
+        with patch.object(module, "_final_authenticated_row", return_value=(object(), row)), \
+             patch.object(module, "_promote_same_authenticated_row") as promote:
+            self.assertFalse(module._recover_candidate("missing"))
+            promote.assert_not_called()
+
+    def test_future_close_time_is_not_promoted(self):
+        module = importlib.import_module(MODULE)
+        row = {"status": "closed", "closetm": 9999999999, "vol_exec": "1", "cost": "10"}
+        with patch.object(module, "_final_authenticated_row", return_value=(object(), row)), \
+             patch.object(module, "_promote_same_authenticated_row") as promote:
+            self.assertFalse(module._recover_candidate("future"))
+            promote.assert_not_called()
+
     def test_stale_authenticated_close_is_not_promoted(self):
         module = importlib.import_module(MODULE)
         with patch.object(module, "_final_authenticated_row", return_value=(object(), {"closetm": 1})), \
