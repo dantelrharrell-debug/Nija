@@ -40,7 +40,8 @@ def test_old_authenticated_kraken_close_backoff(monkeypatch):
     """An actual old final QueryOrders row must not repeatedly consume reads."""
     monkeypatch.setattr(v406, "_HISTORICAL_ORDER_RECHECK_AT", {})
     monkeypatch.setattr(v406, "_marker_ready", lambda: False)
-    monkeypatch.setattr(v406, "_candidate_order_id", lambda: "HISTORICAL-ORDER")
+    monkeypatch.setattr(v406, "_candidate_order_ids", lambda: ["HISTORICAL-ORDER"])
+    monkeypatch.setattr(v406, "_recent_candidate_order_ids", lambda: [])
     state = {"mono": 200.0, "queries": 0}
     monkeypatch.setattr(v406.time, "time", lambda: 10000.0)
     monkeypatch.setattr(v406.time, "monotonic", lambda: state["mono"])
@@ -68,7 +69,8 @@ def test_new_order_not_blocked_by_different_stale_order(monkeypatch):
     """Backoff is per actual order ID, not a blanket freeze of recoveries."""
     monkeypatch.setattr(v406, "_HISTORICAL_ORDER_RECHECK_AT", {"OLD": 950.0})
     monkeypatch.setattr(v406, "_marker_ready", lambda: False)
-    monkeypatch.setattr(v406, "_candidate_order_id", lambda: "NEW")
+    monkeypatch.setattr(v406, "_candidate_order_ids", lambda: ["NEW"])
+    monkeypatch.setattr(v406, "_recent_candidate_order_ids", lambda: [])
     monkeypatch.setattr(v406.time, "time", lambda: 10000.0)
     monkeypatch.setattr(v406.time, "monotonic", lambda: 500.0)
     queried = []
@@ -92,11 +94,12 @@ def test_new_order_not_blocked_by_different_stale_order(monkeypatch):
     assert "NEW" not in v406._HISTORICAL_ORDER_RECHECK_AT
 
 
-def test_missing_queryorders_closetm_preserves_strict_fallback(monkeypatch):
-    """Missing event time must not be guessed, nor cached as proven stale."""
+def test_missing_queryorders_closetm_never_promotes_or_guesses_age(monkeypatch):
+    """Missing close time cannot be promoted or cached as proven stale."""
     monkeypatch.setattr(v406, "_HISTORICAL_ORDER_RECHECK_AT", {})
     monkeypatch.setattr(v406, "_marker_ready", lambda: False)
-    monkeypatch.setattr(v406, "_candidate_order_id", lambda: "UNKNOWN-EPOCH")
+    monkeypatch.setattr(v406, "_candidate_order_ids", lambda: ["UNKNOWN-EPOCH"])
+    monkeypatch.setattr(v406, "_recent_candidate_order_ids", lambda: [])
     count = {"queries": 0, "promotions": 0}
 
     def query(_order_id):
@@ -112,7 +115,7 @@ def test_missing_queryorders_closetm_preserves_strict_fallback(monkeypatch):
     monkeypatch.setattr(v406, "_promote_same_authenticated_row", promote)
     assert v406.recover_once() is False
     assert v406.recover_once() is False
-    assert count == {"queries": 2, "promotions": 2}
+    assert count == {"queries": 2, "promotions": 0}
     assert v406._HISTORICAL_ORDER_RECHECK_AT == {}
 
 
@@ -157,6 +160,7 @@ def test_all_known_historical_pending_orders_skip_without_fallback(monkeypatch):
     monkeypatch.setattr(v406.time, "monotonic", lambda: 500.0)
     assert v406._candidate_order_id() == ""
     monkeypatch.setattr(v406, "_marker_ready", lambda: False)
+    monkeypatch.setattr(v406, "_recent_candidate_order_ids", lambda: [])
     monkeypatch.setattr(
         v406, "_final_authenticated_row",
         lambda order_id: (_ for _ in ()).throw(

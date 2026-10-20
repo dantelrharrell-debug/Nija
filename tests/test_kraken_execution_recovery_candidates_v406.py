@@ -10,6 +10,7 @@ class TestRecoveryCandidates(unittest.TestCase):
     def test_scans_next_candidate_after_stale_or_unavailable(self):
         module = importlib.import_module(MODULE)
         with patch.object(module, "_marker_ready", return_value=False), \
+             patch.object(module, "_recent_candidate_order_ids", return_value=[]), \
              patch.object(module, "_candidate_order_ids", return_value=["old", "new"]), \
              patch.object(module, "_recover_candidate", side_effect=[False, True]) as recover:
             self.assertTrue(module.recover_once())
@@ -18,6 +19,7 @@ class TestRecoveryCandidates(unittest.TestCase):
     def test_no_candidate_never_authorizes(self):
         module = importlib.import_module(MODULE)
         with patch.object(module, "_marker_ready", return_value=False), \
+             patch.object(module, "_recent_candidate_order_ids", return_value=[]), \
              patch.object(module, "_candidate_order_ids", return_value=[]), \
              patch.object(module, "_recover_candidate") as recover:
             self.assertFalse(module.recover_once())
