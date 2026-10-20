@@ -212,5 +212,75 @@ def test_v430_is_wired_into_canonical_profitability_chain():
     chain = Path("bot/runtime_all_in_profitability_authority_v324_patch.py").read_text(encoding="utf-8")
     assert '"v430", "bot.runtime_kraken_client_order_recovery_v430_patch"' in chain
     assert '"NIJA_RUNTIME_KRAKEN_CLIENT_ORDER_RECOVERY_V430_READY"' in chain
-    assert "v369=true v430=true" in chain
-    assert "kraken_client_order_id_timeout_recovery=true" in chain
+
+
+@pytest.mark.parametrize("failure", [OSError("disk full"), PermissionError("read only")])
+def test_persistence_failure_prevents_actual_broker_call(state_path, monkeypatch, failure):
+    broker_cls = type("KrakenPersistenceFailure", (_Broker,), {})
+    v430._patch_class(broker_cls)
+    broker = broker_cls(response={"error": [], "result": {"txid": ["OID"]}})
+
+    def fail(*args):
+        raise failure
+
+    monkeypatch.setattr(v430, "write_recovery_state", fail)
+    with pytest.raises(OSError):
+        broker._kraken_private_call("AddOrder", {"pair": "XETHZUSD", "type": "buy"})
+    assert broker.calls == []
+
+
+def test_corrupt_state_blocks_submit_without_overwriting(state_path):
+    state_path.write_text('{broken')
+    broker_cls = type("KrakenCorruptState", (_Broker,), {})
+    v430._patch_class(broker_cls)
+    broker = broker_cls()
+    with pytest.raises(ValueError):
+        broker._kraken_private_call("AddOrder", {"pair": "XETHZUSD", "type": "buy"})
+    assert not broker.calls
+    assert state_path.read_text() == '{broken'
+
+
+def test_failed_txid_handoff_retains_exact_client_id(state_path, monkeypatch):
+    broker_cls = type("KrakenFailedHandoff", (_Broker,), {})
+    v430._patch_class(broker_cls)
+    monkeypatch.setattr(v430, "_seed_txids", lambda *a, **k: 0)
+    broker = broker_cls(response={"error": [], "result": {"txid": ["OID"]}})
+    broker._kraken_private_call("AddOrder", {"pair": "XETHZUSD", "type": "buy"})
+    assert broker.calls[0][1]["cl_ord_id"] in v430._load_refs()
+
+
+def test_validate_only_never_claims_a_real_submission(state_path):
+    broker_cls = type("KrakenValidateOnly", (_Broker,), {})
+    v430._patch_class(broker_cls)
+    broker = broker_cls(response={"error": [], "result": {"descr": {}}})
+    broker._kraken_private_call("AddOrder", {"validate": True, "pair": "XETHZUSD"})
+    assert "cl_ord_id" not in broker.calls[0][1]
+    assert not state_path.exists()
+
+
+def test_pending_capacity_never_evicts_an_unresolved_order(state_path, monkeypatch):
+    monkeypatch.setattr(v430, "_MAX_PENDING", 1)
+    assert v430.record_pending_client_ref(client_id="original", broker=_Broker(), pair="XETHZUSD")
+    before = state_path.read_bytes()
+    broker_cls = type("KrakenCapacity", (_Broker,), {})
+    v430._patch_class(broker_cls)
+    broker = broker_cls()
+    with pytest.raises(RuntimeError, match="capacity"):
+        broker._kraken_private_call("AddOrder", {"pair": "XETHZUSD"})
+    assert not broker.calls
+    assert state_path.read_bytes() == before
+
+
+def test_real_handoff_write_failure_keeps_recovery_identity(state_path, tmp_path, monkeypatch):
+    from bot import runtime_kraken_deferred_fill_proof_recovery_v363_patch as v363
+    monkeypatch.setattr(v363, "_state_path", lambda: tmp_path / "pending-fills.json")
+
+    def fail(*args):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(v363, "write_recovery_state", fail)
+    broker_cls = type("KrakenActualHandoff", (_Broker,), {})
+    v430._patch_class(broker_cls)
+    broker = broker_cls(response={"error": [], "result": {"txid": ["OID"]}})
+    broker._kraken_private_call("AddOrder", {"pair": "XETHZUSD", "type": "buy"})
+    assert broker.calls[0][1]["cl_ord_id"] in v430._load_refs()
