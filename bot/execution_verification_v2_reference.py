@@ -89,6 +89,16 @@ def classify_broker_observation(
         if not isinstance(a, str) or not a or a != b:
             result["reason"] = "identity_mismatch:" + key
             return result
+    # A broker-order ID must agree with the persisted intent for every
+    # event, including acknowledgements and terminal status transitions.
+    expected_order_id = intent.get("broker_order_id")
+    observed_order_id = observation.get("broker_order_id")
+    if not isinstance(observed_order_id, str) or not observed_order_id:
+        result["reason"] = "broker_order_id_missing"
+        return result
+    if expected_order_id and observed_order_id != expected_order_id:
+        result["reason"] = "broker_order_identity_mismatch"
+        return result
     if observation.get("authenticated_by_adapter") is not True:
         result["reason"] = "authenticated_broker_source_missing"
         return result
@@ -110,10 +120,6 @@ def classify_broker_observation(
         return result
     if not isinstance(observation.get("broker_order_id"), str) or not observation["broker_order_id"]:
         result["reason"] = "broker_order_id_missing"
-        return result
-    expected_order_id = intent.get("broker_order_id")
-    if expected_order_id and observation["broker_order_id"] != expected_order_id:
-        result["reason"] = "broker_order_identity_mismatch"
         return result
     exec_id = observation.get("execution_id")
     if not isinstance(exec_id, str) or not exec_id:

@@ -57,6 +57,27 @@ class TestExecutionV2Reference(unittest.TestCase):
         self.assertFalse(result["preflight_candidate_observed"])
         self.assertIn("authenticated_account_snapshot_fresh", result["preflight_missing"])
 
+
+    def test_ack_wrong_order_is_quarantined(self):
+        result = classify_broker_observation(
+            _intent(), _fill(event_kind="acknowledged", broker_order_id="other"),
+            prior_fill_digests={})
+        self.assertEqual(result["status"], "quarantine")
+        self.assertEqual(result["reason"], "broker_order_identity_mismatch")
+
+    def test_terminal_wrong_order_is_quarantined(self):
+        result = classify_broker_observation(
+            _intent(), _fill(event_kind="canceled", broker_order_id="other"),
+            prior_fill_digests={})
+        self.assertEqual(result["status"], "quarantine")
+        self.assertEqual(result["reason"], "broker_order_identity_mismatch")
+
+    def test_terminal_without_broker_order_id_is_quarantined(self):
+        result = classify_broker_observation(
+            _intent(), _fill(event_kind="rejected", broker_order_id=""),
+            prior_fill_digests={})
+        self.assertEqual(result["reason"], "broker_order_id_missing")
+
     def test_ack_not_fill(self):
         result = classify_broker_observation(
             _intent(), _fill(event_kind="acknowledged"), prior_fill_digests={})
