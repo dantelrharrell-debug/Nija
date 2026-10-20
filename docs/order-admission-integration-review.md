@@ -122,3 +122,38 @@ compilation and detect-secrets passed with zero findings. The locally unavailabl
 runtime-tools-secret_scanning and codeql_checker were not run; hosted review is
 still required. No backtest applies to this pure, unconnected policy component;
 any later strategy change would need one.
+
+## Account reservation boundary, follow-up review
+
+Added `bot/account_order_admission.py` with an explicit migration on the existing
+canonical ledger, SQLite BEGIN IMMEDIATE/FULL synchronous commits, an account-wide
+unique unresolved reservation and permanent account/intent replay uniqueness.
+Separate processes, credentials and symbols cannot obtain simultaneous entry
+reservations for the same canonical broker account. Missing/corrupt databases
+fail closed; the component never creates an empty replacement ledger.
+
+The reservation boundary obtains facts through an installed collector, supplies
+a read-only view of its ledger transaction, evaluates every mandatory policy
+control, checks the writer fence, and commits before returning a reservation.
+Single-use consume repeats these checks and persists submitting before returning.
+An exception, timeout or process restart never releases the account. This is not
+a substitute for the terminal transport's writer/nonce checks. Canonical account
+identity must be stable across credential rotation and all entry routes must use
+the same persistent database; neither property is established merely by this API.
+
+27 new offline tests pass, including six concurrent processes, restart/old-state
+retention, credential rotation, identity substitution, collector write rejection,
+and loss of every required fact between reservation and consume. Test collectors
+are synthetic and provide no production evidence.
+
+**Not installed in production:** audited broker account/ledger collectors, terminal
+reconciliation/release, route coverage and the coordinated startup authorization
+replacement remain unfinished. There is deliberately no generic release method.
+Installing this component alone would leave an account blocked after its first
+reservation; do not wire or deploy it as a complete solution. No new authorization
+consumer was changed. Existing protective exits are unaffected.
+
+Live inspection access: Render connector has no process exec/SQLite interface.
+Opera connector was attempted and returned Browser not connected. A connected
+authenticated Render browser shell or approved shell access is required to inspect
+the current ledger; no live ledger certification was obtained.
