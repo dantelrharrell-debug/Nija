@@ -120,3 +120,18 @@ def test_missing_independent_attestor_does_not_grant_authority(monkeypatch):
     assert details["independent_pretrade_is_authorization"] is False
     assert "position_ledger_reconciliation" in details["independent_pretrade_missing"]
     assert proofs["execution_ready"] is False
+
+
+def test_certificate_adapter_requires_literal_true_and_never_authorizes():
+    import importlib.util
+    source = SOURCE.parents[0] / "bot" / "preflight_observability.py"
+    spec = importlib.util.spec_from_file_location("nija_preflight_adapter", source)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    evidence = {field: True for field in module.REQUIRED_PREFLIGHT}
+    result = module.certificate_from_independent_evidence(evidence)
+    assert all(result.values())
+    evidence["protective_exits_verified"] = "true"
+    result = module.certificate_from_independent_evidence(evidence)
+    assert result["protective_exit_readback"] is False
+    assert module.observe_preflight(evidence)["activation_allowed"] is False
