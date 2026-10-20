@@ -2499,14 +2499,38 @@ class MultiAccountBrokerManager:
                     open_exposure_usd=0.0,
                 )
 
-            # ── Derive return dict from snapshot or fall back to legacy read ──
+            # A configured canonical coordinator owns the capital publication.
+            # A None snapshot can mean another refresh is in flight, a rejected
+            # generation, or a failed publication. Never run the legacy
+            # authority.refresh() fallback in that case: it is a second writer
+            # and can overwrite a good 3-broker publication with an empty one.
+            # Preserve the last accepted publication untouched and fail closed
+            # for this refresh. The next watchdog cycle will retry.
+            if _CAPITAL_FSM_AVAILABLE and self._capital_coordinator is not None and snapshot is None:
+                logger.warning(
+                    "[CapitalAuthorityRefresh] trigger=%s coordinator_snapshot_missing "
+                    "legacy_fallback_skipped=true ready=false capital_publication_unchanged=true",
+                    trigger,
+                )
+                with self._capital_state_lock:
+                    self._capital_ready = False
+                return {
+                    "ready": 0.0,
+                    "total_capital": 0.0,
+                    "valid_brokers": 0.0,
+                    "pending": 1.0,
+                    "coordinator_snapshot_missing": 1.0,
+                }
+
+            # Legacy authority refresh is available ONLY when there is no
+            # configured canonical coordinator. Never create a second writer.
             authority = get_capital_authority()
             if snapshot is not None:
                 total_capital = snapshot.real_capital
                 kraken_capital = snapshot.broker_balances.get("kraken", 0.0)
                 valid_brokers = snapshot.broker_count
             else:
-                # Coordinator not available or rejected snapshot — read CA directly.
+                # No canonical coordinator configured: use legacy read path.
                 # _bypass_startup_lock=True is required here: this bootstrap path
                 # BUILDS the initial snapshot, so it must bypass the startup lock
                 # that guards external/consumer callers.  finalize_bootstrap_ready()

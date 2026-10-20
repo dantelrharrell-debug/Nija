@@ -5,6 +5,7 @@ is read-only authentication, never order submission or trading authorization.
 """
 from __future__ import annotations
 
+import logging
 import os
 from flask import Flask, jsonify, request
 from werkzeug.exceptions import BadRequest
@@ -34,6 +35,22 @@ def _reviewed_configuration() -> bool:
     )
 
 
+LOGGER = logging.getLogger("nija.member_broker_http_api")
+
+
+def _readiness_blocker(onboarding: MemberBrokerOnboarding | None) -> str | None:
+    """Return a fixed non-secret reason; never echo environment names or values."""
+    if onboarding is None:
+        return "vault_unavailable"
+    if any(os.environ.get(name) != "true" for name in REVIEW_FLAGS):
+        return "security_review_incomplete"
+    if any(not os.environ.get(name, "").strip() for name in BILLING_SETTINGS):
+        return "billing_configuration_incomplete"
+    if not (onboarding.secret_intake_enabled or onboarding.verification_enabled):
+        return "capabilities_disabled"
+    return None
+
+
 def create_app(*, onboarding: MemberBrokerOnboarding | None = None) -> Flask:
     """Construct the standalone, fail-closed HTTPS service."""
     app = Flask(__name__)
@@ -56,7 +73,12 @@ def create_app(*, onboarding: MemberBrokerOnboarding | None = None) -> Flask:
                     and _reviewed_configuration()
                 ),
             )
-        except (KeyError, VaultError, ValueError):
+        except (KeyError, VaultError, ValueError) as exc:
+            # Never log exception text: vault exceptions may contain secrets.
+            LOGGER.warning(
+                "MEMBER_BROKER_VAULT_INIT_FAILED reason=vault_unavailable error_type=%s",
+                type(exc).__name__,
+            )
             onboarding = None
 
     @app.after_request
@@ -81,8 +103,10 @@ def create_app(*, onboarding: MemberBrokerOnboarding | None = None) -> Flask:
     def readiness():
         # Health is process liveness; readiness requires configured vault and
         # trusted entitlement backend. Never disclose missing secret names.
-        if (onboarding is None or not _reviewed_configuration()
-                or not (onboarding.secret_intake_enabled or onboarding.verification_enabled)):
+        blocker = _readiness_blocker(onboarding)
+        if blocker is not None:
+            # Log only a fixed category, not variable names, tokens, or values.
+            LOGGER.warning("MEMBER_BROKER_READINESS ready=false reason=%s", blocker)
             return jsonify({"status": "not_ready"}), 503
         return jsonify({"status": "ready", "credential_intake_enabled": onboarding.secret_intake_enabled,
                         "verification_enabled": onboarding.verification_enabled}), 200

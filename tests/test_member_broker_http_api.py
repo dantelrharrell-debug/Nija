@@ -83,6 +83,54 @@ class MemberHTTPTests(unittest.TestCase):
                     with patch.dict("os.environ", {name: value}):
                         self.assertEqual(app.test_client().get("/readyz").status_code, 503)
 
+    def test_readiness_logs_only_fixed_non_secret_blocker(self):
+        from member_broker_http_api import _readiness_blocker
+
+        enabled = MemberBrokerOnboarding(FakeVault(), secret_intake_enabled=True)
+        settings = {
+            "NIJA_VAULT_BILLING_READONLY_URL": "synthetic-private-billing-url",
+            "NIJA_VAULT_STRIPE_READONLY_KEY": "synthetic-private-key",
+            "NIJA_VAULT_FOUNDING_PRICE_ID": "synthetic-price",
+            "NIJA_VAULT_FOUNDING_PRODUCT_ID": "synthetic-product",
+            "NIJA_MEMBER_BROKER_VAULT_RULES_VERIFIED": "true",
+            "NIJA_MEMBER_BROKER_IDENTITY_MAPPING_VERIFIED": "true",
+            "NIJA_MEMBER_BROKER_BILLING_ENTITLEMENT_VERIFIED": "true",
+            "NIJA_MEMBER_BROKER_KEY_CUSTODY_VERIFIED": "true",
+        }
+        with patch.dict("os.environ", settings, clear=True):
+            self.assertEqual(_readiness_blocker(None), "vault_unavailable")
+            self.assertIsNone(_readiness_blocker(enabled))
+            self.assertEqual(_readiness_blocker(MemberBrokerOnboarding(FakeVault())),
+                             "capabilities_disabled")
+            with patch.dict("os.environ", {"NIJA_VAULT_STRIPE_READONLY_KEY": ""}):
+                self.assertEqual(_readiness_blocker(enabled),
+                                 "billing_configuration_incomplete")
+            with patch.dict("os.environ",
+                            {"NIJA_MEMBER_BROKER_KEY_CUSTODY_VERIFIED": "false"}):
+                self.assertEqual(_readiness_blocker(enabled),
+                                 "security_review_incomplete")
+            with patch("member_broker_http_api.LOGGER.warning") as warning:
+                with patch.dict("os.environ", {"NIJA_VAULT_STRIPE_READONLY_KEY": ""}):
+                    response = create_app(onboarding=enabled).test_client().get("/readyz")
+                self.assertEqual(response.status_code, 503)
+                self.assertEqual(response.get_json(), {"status": "not_ready"})
+                self.assertEqual(warning.call_args.args,
+                                 ("MEMBER_BROKER_READINESS ready=false reason=%s",
+                                  "billing_configuration_incomplete"))
+                self.assertNotIn(b"synthetic-private", response.data)
+
+    def test_vault_init_error_logs_type_without_exception_secret(self):
+        with patch("member_broker_http_api.BrokerVault.from_environment",
+                   side_effect=ValueError("synthetic-private-key")):
+            with patch("member_broker_http_api.LOGGER.warning") as warning:
+                response = create_app().test_client().get("/readyz")
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.get_json(), {"status": "not_ready"})
+        self.assertEqual(warning.call_args_list[0].args,
+                         ("MEMBER_BROKER_VAULT_INIT_FAILED reason=vault_unavailable error_type=%s",
+                          "ValueError"))
+        self.assertNotIn("synthetic-private-key", str(warning.call_args_list))
+
     def test_no_intake_by_default(self):
         response = self.client.post("/api/member/brokers/connect", headers=self.h, json={
             "broker": "kraken", "environment": "paper",
