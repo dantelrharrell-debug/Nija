@@ -10,6 +10,10 @@ on:
       - 'bot/tests/test_durable_recovery_state.py'
       - 'bot/tests/test_runtime_kraken_client_order_recovery_v430.py'
       - 'bot/tests/test_runtime_kraken_deferred_fill_proof_recovery_v363.py'
+      - 'bot/preflight_observability.py'
+      - 'bot/pretrade_broker_evidence_checks.py'
+      - 'tests/test_preflight_certificate_prerequisites.py'
+      - 'tests/test_pretrade_broker_evidence_checks.py'
       - 'bot/account_order_admission.py'
       - 'tests/test_account_order_admission.py'
       - 'bot/order_admission_policy.py'
@@ -59,6 +63,10 @@ jobs:
             bot/tests/test_durable_recovery_state.py \
             bot/tests/test_runtime_kraken_client_order_recovery_v430.py \
             bot/tests/test_runtime_kraken_deferred_fill_proof_recovery_v363.py \
+            bot/preflight_observability.py \
+            bot/pretrade_broker_evidence_checks.py \
+            tests/test_preflight_certificate_prerequisites.py \
+            tests/test_pretrade_broker_evidence_checks.py \
             bot/account_order_admission.py \
             tests/test_account_order_admission.py \
             bot/order_admission_policy.py \
@@ -80,6 +88,10 @@ jobs:
             bot/tests/test_durable_recovery_state.py \
             bot/tests/test_runtime_kraken_client_order_recovery_v430.py \
             bot/tests/test_runtime_kraken_deferred_fill_proof_recovery_v363.py \
+            bot/preflight_observability.py \
+            bot/pretrade_broker_evidence_checks.py \
+            tests/test_preflight_certificate_prerequisites.py \
+            tests/test_pretrade_broker_evidence_checks.py \
             bot/account_order_admission.py \
             tests/test_account_order_admission.py \
             bot/order_admission_policy.py \
@@ -106,6 +118,8 @@ jobs:
       - name: Verify execution, independent exits, and ledger invariants offline
         run: |
           python -m pytest -q \
+            tests/test_preflight_certificate_prerequisites.py \
+            tests/test_pretrade_broker_evidence_checks.py \
             bot/tests/test_durable_recovery_state.py \
             bot/tests/test_runtime_kraken_client_order_recovery_v430.py \
             bot/tests/test_runtime_kraken_deferred_fill_proof_recovery_v363.py \
