@@ -39,3 +39,32 @@ def observe_preflight(attestations: Mapping[str, Any],
         ),
         "execution_evidence_separate": True,
     }
+
+
+# Explicit mapping only: each field must be independently attested by the
+# caller. This adapter never reads environment flags, broker caches or old fills.
+_CERTIFICATE_INPUTS = {
+    "account_permissions": "broker_permissions_verified",
+    "account_identity": "broker_identity_verified",
+    "broker_balances": "capital_fresh",
+    "position_ledger_reconciliation": "kraken_ledger_reconciled",
+    "protective_exit_readback": "protective_exits_verified",
+    "open_order_reconciliation": "open_orders_reconciled",
+    "duplicate_order_fence": "unresolved_submissions_clear",
+    "writer_lease": "writer_lease_valid",
+    "nonce_sequence": "nonce_ready",
+    "operator_authorization": "operator_live_authorization_verified",
+}
+
+
+def certificate_from_independent_evidence(
+    attestations: Mapping[str, Any],
+) -> dict[str, bool]:
+    """Fail closed unless all required source fields are literal True.
+
+    Source provenance, account scope, timestamps, and signature validation
+    remain responsibilities of the authenticated attestation producer.
+    This is NOT an activation decision or a broker evidence verifier.
+    """
+    return {target: attestations.get(source) is True
+            for target, source in _CERTIFICATE_INPUTS.items()}

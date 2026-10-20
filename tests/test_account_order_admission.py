@@ -250,3 +250,29 @@ def test_duplicate_close_rows_deny_reconciled_label(ledger):
             conn.execute("INSERT INTO trade_ledger VALUES ('platform','broker-order','position','CLOSE')")
     with pytest.raises(api.AdmissionDenied, match='close_missing_or_ambiguous'):
         api.AccountOrderAdmission(ledger, collector, fence).reserve(C)
+
+
+@pytest.mark.parametrize(
+    "ambiguous_scope",
+    [None, "", "user::kraken", "user:other:wrong", "platform:coinbase"],
+)
+def test_unscoped_or_malformed_kraken_close_never_looks_like_clean_history(ledger, ambiguous_scope):
+    with sqlite3.connect(ledger) as conn:
+        conn.execute(
+            "INSERT INTO pending_kraken_closes VALUES (?,?,?,?,?,?)",
+            ("kraken", ambiguous_scope, "platform", "historical-close", "pending", None),
+        )
+    with pytest.raises(api.AdmissionDenied, match="ledger_ambiguous_kraken_account_scope"):
+        api.AccountOrderAdmission(ledger, collector, fence).reserve(C)
+    with sqlite3.connect(ledger) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM account_entry_reservations").fetchone() == (0,)
+
+
+def test_inconsistent_foreign_kraken_account_owner_never_hides_unscoped_close(ledger):
+    with sqlite3.connect(ledger) as conn:
+        conn.execute(
+            "INSERT INTO pending_kraken_closes VALUES (?,?,?,?,?,?)",
+            ("kraken", "user:other:kraken", "platform", "foreign-close", "pending", None),
+        )
+    with pytest.raises(api.AdmissionDenied, match="ledger_ambiguous_kraken_account_scope"):
+        api.AccountOrderAdmission(ledger, collector, fence).reserve(C)
