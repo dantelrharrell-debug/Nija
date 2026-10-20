@@ -21,7 +21,7 @@ def validate_kraken_order_evidence(
     now_epoch: float | None = None,
     max_age_seconds: float = 1800.0,
 ) -> dict[str, Any]:
-    """Fail closed unless the exact authenticated order has a genuine recent fill."""
+    """Require Kraken-reported close time to match the claimed execution event."""
     now = time.time() if now_epoch is None else now_epoch
     failed = {"verified": False, "reason": "invalid_execution_evidence"}
     if not isinstance(order, Mapping):
@@ -33,20 +33,28 @@ def validate_kraken_order_evidence(
         return {"verified": False, "reason": "order_identity_mismatch"}
     if str(order.get("status", "")).lower() != "closed":
         return {"verified": False, "reason": "order_not_final_closed"}
+    # Only the broker-returned close time can establish freshness.
+    # An event_epoch supplied by the caller is a consistency assertion, never
+    # an opportunity to refresh old executions with a new observation time.
+    if isinstance(event_epoch, bool) or isinstance(order.get("closetm"), bool):
+        return failed
     try:
         volume = float(order["vol_exec"])
         cost = float(order["cost"])
         event = float(event_epoch)
+        broker_closed_at = float(order["closetm"])
         clock = float(now)
         maximum = float(max_age_seconds)
     except (KeyError, TypeError, ValueError, OverflowError):
         return failed
-    if not all(math.isfinite(x) for x in (volume, cost, event, clock, maximum)):
+    if not all(math.isfinite(x) for x in (volume, cost, event, broker_closed_at, clock, maximum)):
         return failed
-    if volume <= 0 or cost <= 0 or maximum != 1800.0:
+    if volume <= 0 or cost <= 0 or maximum != 1800.0 or broker_closed_at <= 0:
         return failed
-    age = clock - event
-    if event <= 0 or age < -5 or age > maximum:
+    if not math.isclose(event, broker_closed_at, rel_tol=0.0, abs_tol=1e-6):
+        return {"verified": False, "reason": "broker_event_timestamp_mismatch"}
+    age = clock - broker_closed_at
+    if age < -5 or age > maximum:
         return {"verified": False, "reason": "broker_event_stale_or_future"}
     description = order.get("descr")
     if not isinstance(description, Mapping):
