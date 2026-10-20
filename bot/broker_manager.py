@@ -11871,6 +11871,16 @@ class KrakenBroker(BaseBroker):
 
     def _get_asset_usd_price(self, symbol: str):
         """Resolve asset price in USD with USDT fallback."""
+        if str(symbol).upper() == "BABY":
+            # Only Kraken-confirmed metadata and ticker may value this residual.
+            # An unavailable quote leaves the existing authenticated TradeBalance
+            # aggregate-equity fallback responsible for capital confidence.
+            try:
+                from bot.kraken_baby_valuation_v461 import resolve_baby_usd_price
+                return resolve_baby_usd_price(self.api)
+            except Exception:
+                logger.exception("KRAKEN_BABY_V461_PRICE_UNAVAILABLE fail_closed=true")
+                return None
         price = self.get_current_price(f"{symbol}-USD")
         if price is not None and price > 0:
             return price
