@@ -404,7 +404,7 @@ def _independent_pretrade_certificate() -> tuple[bool, list[str]]:
     try:
         module = importlib.import_module("bot.pretrade_independent_attestation")
         verifier = getattr(module, "current_authenticated_attestations", None)
-        evidence = verifier() if callable(verifier) else None
+        evidence = verifier(os.environ.get("NIJA_PREFLIGHT_ACCOUNT_SCOPE", "")) if callable(verifier) else None
     except Exception:
         evidence = None
     if not isinstance(evidence, dict):
