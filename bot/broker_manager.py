@@ -11958,14 +11958,17 @@ class KrakenBroker(BaseBroker):
                     total += qty
                 continue
             non_usd_count += 1
-            price = price_lookup(symbol)
-            parsed_price = _to_positive_float(price)
-            if parsed_price is None:
-                # Secondary lookup path to avoid zeroing non-fiat holdings when the
-                # injected price_lookup is unavailable/intermittent.
+            if symbol == "BABY":
+                # Do not let an unverified injected price or stale generic cache
+                # bypass Kraken Assets/AssetPairs/Ticker identity checks.
                 parsed_price = _to_positive_float(self._get_asset_usd_price(symbol))
-            if parsed_price is None:
-                parsed_price = _get_cached_pair_price(symbol)
+            else:
+                price = price_lookup(symbol)
+                parsed_price = _to_positive_float(price)
+                if parsed_price is None:
+                    parsed_price = _to_positive_float(self._get_asset_usd_price(symbol))
+                if parsed_price is None:
+                    parsed_price = _get_cached_pair_price(symbol)
             if parsed_price is not None:
                 total += qty * parsed_price
                 priced_count += 1
