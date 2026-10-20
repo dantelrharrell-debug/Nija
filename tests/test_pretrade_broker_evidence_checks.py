@@ -22,3 +22,14 @@ def test_protection_requires_authenticated_reducing_open_order():
                                        [{**order, "reduce_only_verified": False}])[0]
     assert not verify_protective_orders("platform:kraken", [position],
                                        [{**order, "remaining_quantity": "0.01"}])[0]
+
+
+def test_one_exit_cannot_cover_two_positions():
+    position = dict(account="platform:kraken", symbol="ETHUSD", side="long", quantity="0.1")
+    order = dict(account="platform:kraken", symbol="ETHUSD", side="sell",
+                 status="open", order_id="O-exit", remaining_quantity="0.1",
+                 protective_verified=True, reduce_only_verified=True)
+    ok, reasons = verify_protective_orders("platform:kraken", [position, position], [order])
+    assert not ok
+    assert "protective_coverage_insufficient" in reasons
+    assert not verify_protective_orders("platform:kraken", [], [])[0]
