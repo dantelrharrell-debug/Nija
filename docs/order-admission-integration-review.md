@@ -170,3 +170,32 @@ Render sign-in page; authentication is still required before ledger inspection.
 The v363 recovery completion clears pending proof after v346 marker admission;
 it does not independently establish the transactional ledger match needed to
 release an account reservation. No terminal release was wired to that marker.
+
+## Live ledger inspection and direct ledger guard, October 20
+
+Render authentication succeeded and the running service's Web Shell was inspected
+using python -S and SQLite mode=ro/query_only. This supersedes the earlier live
+access blocker. Canonical /data/trade_ledger.db passed integrity_check. Its trade,
+open-position, completed-trade and strategy-intent tables each contain zero rows;
+13 pending records remain, all scoped to platform Kraken. Both inspected October
+12 database backups contain the same counts, so they do not restore missing history.
+
+The saved October 12 assessment distinguishes seven spot buys not proven to be
+closes, five spot sells without verified opening lots/intent, and one margin close
+with opening links but no certified strategy attribution. This is historical audit
+evidence, not a new authenticated broker snapshot or current holdings certificate.
+No database records, trading controls or production processes were modified.
+
+The proposed admission boundary now queries account-scoped pending ledger records
+inside the same SQLite transaction used to reserve and consume. A positive collector
+boolean cannot override unresolved records. Missing audit schema, unknown states,
+wrong owner/venue and a reconciled label without exactly one matching ledger CLOSE
+all deny admission. The matching-row check is a necessary local invariant, not a
+replacement for authenticated amount/fee/history reconciliation or protective exits.
+Other accounts remain isolated. Twelve added regression cases bring the full local
+suite to 341 passing tests; compilation and secret scan also pass.
+
+The authorization integration remains uninstalled. Complete broker history and
+current account state must still be reconciled through the running broker's shared
+nonce/read controls; importing a second live bot into the shell is not an acceptable
+collector. Terminal reservation release and all-route wiring remain release blockers.

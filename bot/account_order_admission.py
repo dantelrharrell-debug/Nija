@@ -89,12 +89,44 @@ class AccountOrderAdmission:
             conn.execute("""CREATE UNIQUE INDEX IF NOT EXISTS account_entry_single_unresolved
                 ON account_entry_reservations(account) WHERE state != 'reconciled'""")
 
+    def _check_pending_ledger(self, candidate: Candidate, conn: sqlite3.Connection) -> None:
+        """Reject unresolved Kraken accounting directly from the locked ledger.
+
+        Collector booleans cannot override local pending evidence. An empty
+        trade table is not by itself an empty broker history. Missing audit
+        schema and unknown record states remain errors, not certification.
+        """
+        if not candidate.account.endswith(":kraken"):
+            return
+        parts = candidate.account.split(":")
+        if parts == ["platform", "kraken"]:
+            owner = "platform"
+        elif len(parts) == 3 and parts[0] == "user" and parts[1]:
+            owner = parts[1]
+        else:
+            raise AdmissionDenied("kraken_account_scope_invalid")
+        rows = conn.execute(
+            """SELECT broker,user_id,order_id,state,matched_position_id
+               FROM pending_kraken_closes WHERE account_scope=?""", (candidate.account,)
+        ).fetchall()
+        for broker, user_id, order_id, state, position_id in rows:
+            if (broker != "kraken" or user_id != owner or not order_id
+                    or state != "reconciled" or not position_id):
+                raise AdmissionDenied("ledger_unresolved_kraken_fill")
+            count = conn.execute(
+                """SELECT COUNT(*) FROM trade_ledger WHERE user_id=? AND order_id=?
+                   AND position_id=? AND action='CLOSE'""", (owner, order_id, position_id)
+            ).fetchone()[0]
+            if count != 1:
+                raise AdmissionDenied("ledger_reconciled_close_missing_or_ambiguous")
+
     def _check(self, candidate: Candidate, conn: sqlite3.Connection) -> None:
         # Collector receives a read-only view of the locked ledger transaction.
         # It must fail if authenticated scope, pagination, coverage or matching
         # historical fills are incomplete; zero rows alone is not certification.
         conn.execute("PRAGMA query_only=ON")
         try:
+            self._check_pending_ledger(candidate, conn)
             facts, outcome = self.collector(candidate, conn)
         finally:
             conn.execute("PRAGMA query_only=OFF")

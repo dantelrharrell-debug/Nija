@@ -21,7 +21,7 @@ for name in ('order_admission_policy', 'account_order_admission'):
     spec.loader.exec_module(module)
 policy = sys.modules[PACKAGE + '.order_admission_policy']
 api = sys.modules[PACKAGE + '.account_order_admission']
-C = policy.Candidate('kraken:synthetic-account', 'synthetic-credential', 3, 'a' * 64)
+C = policy.Candidate('platform:kraken', 'synthetic-credential', 3, 'a' * 64)
 
 
 def collector(candidate, conn):
@@ -38,8 +38,11 @@ def fence(candidate):
 def ledger(tmp_path):
     path = tmp_path / 'ledger.db'
     with sqlite3.connect(path) as conn:
-        for table in ('trade_ledger', 'open_positions', 'completed_trades', 'strategy_order_intents'):
+        for table in ('open_positions', 'completed_trades', 'strategy_order_intents'):
             conn.execute('CREATE TABLE ' + table + ' (id INTEGER)')
+        conn.execute('CREATE TABLE trade_ledger (user_id TEXT,order_id TEXT,position_id TEXT,action TEXT)')
+        conn.execute('''CREATE TABLE pending_kraken_closes (broker TEXT,account_scope TEXT,
+                     user_id TEXT,order_id TEXT,state TEXT,matched_position_id TEXT)''')
     api.AccountOrderAdmission(path, collector, fence).install_schema()
     return path
 
@@ -84,7 +87,7 @@ def test_restart_timeout_and_rotated_key_do_not_release_account(ledger):
 def test_independent_accounts_are_not_blocked(ledger):
     store = api.AccountOrderAdmission(ledger, collector, fence)
     store.reserve(C)
-    store.reserve(replace(C, account='kraken:another-account'))
+    store.reserve(replace(C, account='user:another-account:kraken'))
 
 
 @pytest.mark.parametrize('field,value', [('account', 'other'), ('credential_fingerprint', 'other'),
@@ -175,3 +178,75 @@ def test_fact_age_checked_after_slow_fence(ledger, monkeypatch):
     store = api.AccountOrderAdmission(ledger, collector, slow_fence)
     with pytest.raises(api.AdmissionDenied, match='stale_or_invalid'):
         store.reserve(C)
+
+
+def insert_pending(path, *, account='platform:kraken', state='pending', position=None):
+    with sqlite3.connect(path) as conn:
+        conn.execute('INSERT INTO pending_kraken_closes VALUES (?,?,?,?,?,?)',
+                     ('kraken', account, 'platform', 'broker-order', state, position))
+
+
+def test_live_empty_ledger_with_13_unresolved_records_cannot_pass_collector(ledger):
+    for _ in range(13):
+        insert_pending(ledger)
+    with pytest.raises(api.AdmissionDenied, match='ledger_unresolved'):
+        api.AccountOrderAdmission(ledger, collector, fence).reserve(C)
+
+
+def test_pending_fill_appearing_after_reservation_blocks_consume(ledger):
+    store = api.AccountOrderAdmission(ledger, collector, fence)
+    reservation = store.reserve(C)
+    insert_pending(ledger)
+    with pytest.raises(api.AdmissionDenied, match='ledger_unresolved'):
+        store.consume(reservation)
+
+
+@pytest.mark.parametrize('state', ['pending', 'unknown', '', None, 'discarded'])
+def test_nonreconciled_record_state_never_passes(ledger, state):
+    insert_pending(ledger, state=state)
+    with pytest.raises(api.AdmissionDenied):
+        api.AccountOrderAdmission(ledger, collector, fence).reserve(C)
+
+
+def test_reconciled_label_without_exact_close_does_not_pass(ledger):
+    insert_pending(ledger, state='reconciled', position='position')
+    with pytest.raises(api.AdmissionDenied, match='close_missing'):
+        api.AccountOrderAdmission(ledger, collector, fence).reserve(C)
+    with sqlite3.connect(ledger) as conn:
+        conn.execute("INSERT INTO trade_ledger VALUES ('another-owner','broker-order','position','CLOSE')")
+    with pytest.raises(api.AdmissionDenied, match='close_missing'):
+        api.AccountOrderAdmission(ledger, collector, fence).reserve(C)
+
+
+def test_missing_pending_schema_is_not_empty_history(ledger):
+    with sqlite3.connect(ledger) as conn:
+        conn.execute('DROP TABLE pending_kraken_closes')
+    with pytest.raises(sqlite3.OperationalError):
+        api.AccountOrderAdmission(ledger, collector, fence).reserve(C)
+
+
+def test_pending_account_isolation(ledger):
+    insert_pending(ledger)
+    api.AccountOrderAdmission(ledger, collector, fence).reserve(
+        replace(C, account='user:another-account:kraken'))
+
+
+def test_exact_close_still_requires_independent_collector(ledger):
+    insert_pending(ledger, state='reconciled', position='position')
+    with sqlite3.connect(ledger) as conn:
+        conn.execute("INSERT INTO trade_ledger VALUES ('platform','broker-order','position','CLOSE')")
+    def unverified(candidate, conn):
+        facts, outcome = collector(candidate, conn)
+        facts['ledger_reconciliation'] = replace(facts['ledger_reconciliation'], verified=False)
+        return facts, outcome
+    with pytest.raises(api.AdmissionDenied, match='ledger_reconciliation'):
+        api.AccountOrderAdmission(ledger, unverified, fence).reserve(C)
+
+
+def test_duplicate_close_rows_deny_reconciled_label(ledger):
+    insert_pending(ledger, state='reconciled', position='position')
+    with sqlite3.connect(ledger) as conn:
+        for _ in range(2):
+            conn.execute("INSERT INTO trade_ledger VALUES ('platform','broker-order','position','CLOSE')")
+    with pytest.raises(api.AdmissionDenied, match='close_missing_or_ambiguous'):
+        api.AccountOrderAdmission(ledger, collector, fence).reserve(C)
