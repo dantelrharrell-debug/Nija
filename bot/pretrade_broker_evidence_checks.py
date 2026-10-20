@@ -72,6 +72,11 @@ def verify_protective_orders(
     if not account:
         return False, ["account_missing"]
     required = {}
+    if not positions:
+        return False, ["position_snapshot_completeness_unverified"]
+    # An exchange order can only cover a single position's quantity once.
+    # Reusing its quantity across positions would falsely certify coverage.
+    globally_allocated_orders: set[str] = set()
     for position in positions:
         if not isinstance(position, Mapping) or position.get("account") != account:
             failures.append("position_account_invalid")
@@ -105,10 +110,11 @@ def verify_protective_orders(
                 continue
             oid = order.get("order_id")
             remaining = _nonnegative(order.get("remaining_quantity"))
-            if not isinstance(oid, str) or not oid or oid in seen or remaining is None:
+            if not isinstance(oid, str) or not oid or oid in seen or oid in globally_allocated_orders or remaining is None:
                 failures.append("protective_order_invalid")
                 continue
             seen.add(oid)
+            globally_allocated_orders.add(oid)
             covered += remaining
         if covered < quantity:
             failures.append("protective_coverage_insufficient")
