@@ -170,3 +170,42 @@ def test_canonical_recovery_is_required_after_exact_authenticated_read(runtime, 
     assert proof[0]["account"] == "platform:kraken"
     assert proof[0]["filled_size"] == 0.1
     assert proof[0]["filled_size_usd"] == 10.0
+
+
+@pytest.mark.parametrize("payload,reason", [
+    (None, "response_not_mapping"),
+    ({}, "error_envelope_missing_or_invalid"),
+    ({"error": "secret"}, "error_envelope_missing_or_invalid"),
+    ({"error": []}, "result_missing_or_invalid"),
+    ({"error": [], "result": {}}, "closed_orders_missing_or_invalid"),
+    ({"error": ["EGeneral:Permission denied"]}, "permission_denied"),
+    ({"error": ["EAPI:Invalid key"]}, "invalid_key"),
+    ({"error": ["EAPI:Invalid signature"]}, "invalid_signature"),
+    ({"error": ["EAPI:Invalid nonce"]}, "invalid_nonce"),
+    ({"error": ["EAPI:Rate limit exceeded"]}, "rate_limited"),
+    ({"error": ["EService:Unavailable"]}, "service_unavailable"),
+    ({"error": ["EGeneral:Invalid arguments"]}, "invalid_arguments"),
+    ({"error": ["sensitive provider detail"]}, "provider_error_redacted"),
+    ({"error": [{"detail": "value"}]}, "provider_error_redacted"),
+])
+def test_failed_reads_have_fixed_redacted_reasons(payload, reason):
+    assert v406._recent_read_failure(payload) == reason
+
+
+def test_empty_history_is_distinct_from_failed_read(runtime, caplog):
+    _, response, _ = runtime
+    response["result"]["closed"] = {}
+    with caplog.at_level("INFO", logger=v406.LOGGER.name):
+        assert v406._recent_candidate_order_ids() == []
+    assert "empty_history_proven=true" in caplog.text
+    assert "execution_proven=false" in caplog.text
+
+
+def test_failed_read_does_not_claim_empty_history(runtime, caplog):
+    _, response, _ = runtime
+    response["error"] = ["EGeneral:Permission denied", "sensitive detail"]
+    with caplog.at_level("INFO", logger=v406.LOGGER.name):
+        assert v406._recent_candidate_order_ids() == []
+    assert "reason=permission_denied" in caplog.text
+    assert "empty_history_proven=false" in caplog.text
+    assert "sensitive detail" not in caplog.text
