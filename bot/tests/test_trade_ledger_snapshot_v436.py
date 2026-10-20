@@ -58,19 +58,18 @@ def test_snapshot_archive_rejects_member_tampering(tmp_path):
     result = snapshot.create_snapshot(original, tmp_path / "exports")
     import tarfile
     import io
-    import json
     archive = Path(result["archive"])
-    manifest = snapshot.verify_snapshot(archive)
+    snapshot.verify_snapshot(archive)
     payload = io.BytesIO()
-    with tarfile.open(fileobj=payload, mode="w:gz") as output:
-        raw = b"malicious substitution"
-        entry = tarfile.TarInfo("trade_ledger.db")
-        entry.size = len(raw)
-        output.addfile(entry, io.BytesIO(raw))
-        data = json.dumps(manifest).encode()
-        entry = tarfile.TarInfo("manifest.json")
-        entry.size = len(data)
-        output.addfile(entry, io.BytesIO(data))
+    # Preserve the complete inventory (including optional recovery files), so
+    # this exercises member tampering rather than an unrelated missing member.
+    with tarfile.open(archive, "r:gz") as source, tarfile.open(fileobj=payload, mode="w:gz") as output:
+        for entry in source.getmembers():
+            raw = source.extractfile(entry).read()
+            if entry.name == "trade_ledger.db":
+                raw = b"malicious substitution"
+            entry.size = len(raw)
+            output.addfile(entry, io.BytesIO(raw))
     archive.write_bytes(payload.getvalue())
     with pytest.raises(ValueError, match="digest mismatch|size mismatch"):
         snapshot.verify_snapshot(archive)

@@ -180,7 +180,7 @@ def test_recovery_without_fill_evidence_stays_fail_closed(tmp_path, monkeypatch)
     assert "ORDER-B" in _pending(tmp_path)
 
 
-def test_expired_pending_entry_is_discarded(tmp_path, monkeypatch):
+def test_expired_pending_entry_is_retained_for_reconciliation(tmp_path, monkeypatch):
     v363.record_pending_order(order_id="ORDER-C", symbol="ETH-USD", side="buy")
     monkeypatch.setenv("NIJA_KRAKEN_FILL_PROOF_MAX_AGE_S", "60")
     path = tmp_path / "pending.json"
@@ -190,7 +190,7 @@ def test_expired_pending_entry_is_discarded(tmp_path, monkeypatch):
 
     monkeypatch.setattr(v363, "_kraken_brokers", lambda: [KrakenBroker({})])
     assert v363.recover_once() == 0
-    assert _pending(tmp_path) == {}
+    assert "ORDER-C" in _pending(tmp_path)
 
 
 def test_proven_result_clears_any_pending_entry(tmp_path):
