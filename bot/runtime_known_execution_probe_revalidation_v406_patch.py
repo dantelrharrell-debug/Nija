@@ -197,10 +197,12 @@ def _recent_candidate_order_ids() -> list[str]:
         started = time.monotonic()
         LOGGER.info("KNOWN_EXECUTION_PROBE_V406_RECENT_READ_STARTED "
                     "endpoint=ClosedOrders max_age_s=1800 read_only=true")
+        # Discovery needs only order rows, not trade IDs or an optional count
+        # optimization. Omit default booleans rather than sending Python bools
+        # through form-encoded adapters; production rejected that request shape.
         payload = v357._private_read(brokers[0], "ClosedOrders", {
             "start": math.floor(now - _HISTORICAL_PROOF_TTL_S) - 1,
-            "end": math.ceil(now), "closetime": "close", "trades": False,
-            "without_count": True,
+            "end": math.ceil(now), "closetime": "close",
         })
         failure = _recent_read_failure(payload)
         if failure:
