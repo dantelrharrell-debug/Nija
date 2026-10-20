@@ -105,13 +105,31 @@ class AccountOrderAdmission:
             owner = parts[1]
         else:
             raise AdmissionDenied("kraken_account_scope_invalid")
+        # Scan the whole Kraken audit registry for malformed/legacy scopes.
+        # Filtering first by account would silently hide NULL, blank or invalid
+        # account_scope rows and permit a false "no unresolved closes" result.
+        # Legitimate pending rows belonging to a different authenticated account
+        # remain isolated; only ambiguous ownership blocks all Kraken entries.
         rows = conn.execute(
-            """SELECT broker,user_id,order_id,state,matched_position_id
-               FROM pending_kraken_closes WHERE account_scope=?""", (candidate.account,)
+            """SELECT broker,account_scope,user_id,order_id,state,matched_position_id
+               FROM pending_kraken_closes"""
         ).fetchall()
-        for broker, user_id, order_id, state, position_id in rows:
-            if (broker != "kraken" or user_id != owner or not order_id
-                    or state != "reconciled" or not position_id):
+        for broker, scope, user_id, order_id, state, position_id in rows:
+            if scope == "platform:kraken":
+                scoped_owner = "platform"
+            elif isinstance(scope, str):
+                row_parts = scope.split(":")
+                if len(row_parts) == 3 and row_parts[0] == "user" and row_parts[1] and row_parts[2] == "kraken":
+                    scoped_owner = row_parts[1]
+                else:
+                    raise AdmissionDenied("ledger_ambiguous_kraken_account_scope")
+            else:
+                raise AdmissionDenied("ledger_ambiguous_kraken_account_scope")
+            if broker != "kraken" or user_id != scoped_owner or not order_id:
+                raise AdmissionDenied("ledger_ambiguous_kraken_account_scope")
+            if scope != candidate.account:
+                continue
+            if user_id != owner or state != "reconciled" or not position_id:
                 raise AdmissionDenied("ledger_unresolved_kraken_fill")
             count = conn.execute(
                 """SELECT COUNT(*) FROM trade_ledger WHERE user_id=? AND order_id=?
