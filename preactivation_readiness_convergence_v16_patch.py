@@ -396,6 +396,17 @@ def _collect_proofs() -> tuple[dict[str, bool], dict[str, Any]]:
     strategy = _strategy_published()
     execution = _execution_pipeline_ready()
     execution_proof_ok, execution_proof_detail = _genuine_execution_marker_proof()
+    # v455: diagnostic-only independent preflight integration. The v454
+    # transition proposal has no trusted live providers or dispatch authority.
+    # Missing providers MUST remain missing; never translate this diagnostic
+    # into proof.execution_ready or an order authorization.
+    independent_certificate = {"certified": False, "missing": ["producer_unwired"], "authorizes_orders": False}
+    try:
+        from bot.pretrade_authenticated_provider_adapter_v453 import collect_independent_pretrade_evidence
+        independent_certificate = collect_independent_pretrade_evidence({})["certificate"]
+    except Exception:
+        pass
+
     hydrated = bool(capital.get("hydrated")) and not bool(capital.get("stale"))
     funded = _float(capital.get("real")) > 0.0
     registered = _int(capital.get("registered")) > 0
@@ -421,6 +432,8 @@ def _collect_proofs() -> tuple[dict[str, bool], dict[str, Any]]:
     return proofs, {
         "preflight_operational_ready_observed": preflight,
         "preflight_is_authorization": False,
+        "independent_certificate_observed": independent_certificate,
+        "independent_certificate_is_authorization": False,
         "post_trade_execution_evidence_verified": execution_proof_ok,
         "preflight_missing": [
             key for key, ok in (
