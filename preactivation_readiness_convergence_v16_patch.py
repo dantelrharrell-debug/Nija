@@ -388,6 +388,31 @@ def _genuine_execution_marker_proof() -> tuple[bool, str]:
         )
 
 
+def _independent_pretrade_certificate() -> tuple[bool, list[str]]:
+    """Independent, non-authorizing pre-trade certification.
+
+    A passing process health check is never sufficient. Every attestation
+    must be explicitly True, from an independent authenticated producer;
+    no environment variable or stale fill may self-certify this state.
+    """
+    required = (
+        "account_permissions", "account_identity", "broker_balances",
+        "position_ledger_reconciliation", "protective_exit_readback",
+        "open_order_reconciliation", "duplicate_order_fence",
+        "writer_lease", "nonce_sequence", "operator_authorization",
+    )
+    try:
+        module = importlib.import_module("bot.pretrade_independent_attestation")
+        verifier = getattr(module, "current_authenticated_attestations", None)
+        evidence = verifier() if callable(verifier) else None
+    except Exception:
+        evidence = None
+    if not isinstance(evidence, dict):
+        return False, list(required)
+    missing = [key for key in required if evidence.get(key) is not True]
+    return not missing, missing
+
+
 def _collect_proofs() -> tuple[dict[str, bool], dict[str, Any]]:
     capital = _capital_snapshot()
     strict_ok, strict_detail = _strict_authority_ready()
@@ -396,6 +421,7 @@ def _collect_proofs() -> tuple[dict[str, bool], dict[str, Any]]:
     strategy = _strategy_published()
     execution = _execution_pipeline_ready()
     execution_proof_ok, execution_proof_detail = _genuine_execution_marker_proof()
+    independent_pretrade_ok, independent_pretrade_missing = _independent_pretrade_certificate()
     hydrated = bool(capital.get("hydrated")) and not bool(capital.get("stale"))
     funded = _float(capital.get("real")) > 0.0
     registered = _int(capital.get("registered")) > 0
@@ -422,6 +448,9 @@ def _collect_proofs() -> tuple[dict[str, bool], dict[str, Any]]:
         "preflight_operational_ready_observed": preflight,
         "preflight_is_authorization": False,
         "post_trade_execution_evidence_verified": execution_proof_ok,
+        "independent_pretrade_certified": independent_pretrade_ok,
+        "independent_pretrade_missing": independent_pretrade_missing,
+        "independent_pretrade_is_authorization": False,
         "preflight_missing": [
             key for key, ok in (
                 ("pipeline", execution), ("risk", risk), ("authority", authority),

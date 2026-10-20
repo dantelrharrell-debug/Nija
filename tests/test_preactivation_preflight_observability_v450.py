@@ -85,3 +85,38 @@ def test_missing_execution_evidence_cannot_be_replaced_by_preflight(monkeypatch)
     assert details["preflight_is_authorization"] is False
     assert details["post_trade_execution_evidence_verified"] is False
     assert proofs["execution_ready"] is False
+
+
+def test_independent_pretrade_certificate_requires_every_literal_true(monkeypatch):
+    from types import ModuleType
+    v16 = load()
+    name = "bot.pretrade_independent_attestation"
+    module = ModuleType(name)
+    fields = (
+        "account_permissions", "account_identity", "broker_balances",
+        "position_ledger_reconciliation", "protective_exit_readback",
+        "open_order_reconciliation", "duplicate_order_fence",
+        "writer_lease", "nonce_sequence", "operator_authorization",
+    )
+    module.current_authenticated_attestations = lambda: {key: True for key in fields}
+    monkeypatch.setitem(sys.modules, name, module)
+    assert v16._independent_pretrade_certificate() == (True, [])
+    module.current_authenticated_attestations = lambda: {
+        **{key: True for key in fields}, "protective_exit_readback": "true"
+    }
+    ok, missing = v16._independent_pretrade_certificate()
+    assert not ok and missing == ["protective_exit_readback"]
+
+
+def test_missing_independent_attestor_does_not_grant_authority(monkeypatch):
+    v16 = load()
+    configure(monkeypatch, v16)
+    monkeypatch.setattr(v16, "_genuine_execution_marker_proof",
+                        lambda: (False, "verification_stale"))
+    monkeypatch.setattr(v16, "_independent_pretrade_certificate",
+                        lambda: (False, ["position_ledger_reconciliation"]))
+    proofs, details = v16._collect_proofs()
+    assert details["independent_pretrade_certified"] is False
+    assert details["independent_pretrade_is_authorization"] is False
+    assert "position_ledger_reconciliation" in details["independent_pretrade_missing"]
+    assert proofs["execution_ready"] is False
