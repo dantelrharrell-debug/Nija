@@ -49,7 +49,6 @@ def test_old_opening_recent_close_is_discovered_with_fixed_freshness(runtime):
     assert v406._recent_candidate_order_ids() == ["RECENT"]
     assert calls == [("ClosedOrders", {
         "start": 8199, "end": 10000, "closetime": "close",
-        "trades": False, "without_count": True,
     })]
 
 
