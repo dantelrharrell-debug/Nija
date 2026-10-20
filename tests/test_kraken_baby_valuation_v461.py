@@ -30,6 +30,15 @@ class TestBabyResolver(unittest.TestCase):
     def test_missing_price(self):
         self.assertIsNone(resolve_baby_usd_price(FakeKraken(ticker="0")))
 
+    def test_public_api_error_is_not_a_price(self):
+        class Rejected(FakeKraken):
+            def query_public(self, endpoint, params):
+                return {"error": ["EGeneral:Unavailable"], "result": {}}
+        self.assertIsNone(resolve_baby_usd_price(Rejected()))
+
+    def test_no_api_is_not_a_price(self):
+        self.assertIsNone(resolve_baby_usd_price(None))
+
     def test_nonfinite_price(self):
         self.assertIsNone(resolve_baby_usd_price(FakeKraken(ticker="nan")))
 
