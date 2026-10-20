@@ -410,6 +410,13 @@ def _independent_pretrade_certificate() -> tuple[bool, list[str]]:
     if not isinstance(evidence, dict):
         return False, list(required)
     missing = [key for key in required if evidence.get(key) is not True]
+    logger.info(
+        "PRETRADE_INDEPENDENT_CERTIFICATION_V6 ready=%s account_scope_configured=%s "
+        "missing=%s diagnostic_only=true legacy_execution_gate_unchanged=true",
+        str(not missing).lower(),
+        str(bool(os.environ.get("NIJA_PREFLIGHT_ACCOUNT_SCOPE", "").strip())).lower(),
+        ",".join(missing) if missing else "none",
+    )
     return not missing, missing
 
 
