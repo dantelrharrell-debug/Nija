@@ -18,6 +18,12 @@ on:
       - 'tests/test_account_order_admission.py'
       - 'bot/order_admission_policy.py'
       - 'bot/kraken_authenticated_execution_evidence_v451.py'
+      - 'bot/pretrade_attestation_validation_v452.py'
+      - 'bot/pretrade_authenticated_provider_adapter_v453.py'
+      - 'bot/startup_transition_candidate_v454.py'
+      - 'bot/tests/test_pretrade_attestation_validation_v452.py'
+      - 'bot/tests/test_pretrade_authenticated_provider_adapter_v453.py'
+      - 'bot/tests/test_startup_transition_candidate_v454.py'
       - 'bot/tests/test_kraken_authenticated_execution_evidence_v451.py'
       - 'tests/test_order_admission_policy.py'
       - 'bot/runtime_known_execution_probe_revalidation_v406_patch.py'
@@ -71,6 +77,12 @@ jobs:
             tests/test_account_order_admission.py \
             bot/order_admission_policy.py \
             bot/kraken_authenticated_execution_evidence_v451.py \
+            bot/pretrade_attestation_validation_v452.py \
+            bot/pretrade_authenticated_provider_adapter_v453.py \
+            bot/startup_transition_candidate_v454.py \
+            bot/tests/test_pretrade_attestation_validation_v452.py \
+            bot/tests/test_pretrade_authenticated_provider_adapter_v453.py \
+            bot/tests/test_startup_transition_candidate_v454.py \
             tests/test_order_admission_policy.py \
             bot/tests/test_kraken_authenticated_execution_evidence_v451.py \
             bot/runtime_known_execution_probe_revalidation_v406_patch.py \
@@ -96,6 +108,12 @@ jobs:
             tests/test_account_order_admission.py \
             bot/order_admission_policy.py \
             bot/kraken_authenticated_execution_evidence_v451.py \
+            bot/pretrade_attestation_validation_v452.py \
+            bot/pretrade_authenticated_provider_adapter_v453.py \
+            bot/startup_transition_candidate_v454.py \
+            bot/tests/test_pretrade_attestation_validation_v452.py \
+            bot/tests/test_pretrade_authenticated_provider_adapter_v453.py \
+            bot/tests/test_startup_transition_candidate_v454.py \
             tests/test_order_admission_policy.py \
             bot/tests/test_kraken_authenticated_execution_evidence_v451.py \
             docs/order-admission-integration-review.md \
@@ -126,6 +144,9 @@ jobs:
             tests/test_account_order_admission.py \
             tests/test_order_admission_policy.py \
             bot/tests/test_kraken_authenticated_execution_evidence_v451.py \
+            bot/tests/test_pretrade_attestation_validation_v452.py \
+            bot/tests/test_pretrade_authenticated_provider_adapter_v453.py \
+            bot/tests/test_startup_transition_candidate_v454.py \
             tests/test_kraken_recent_execution_discovery.py \
             tests/test_kraken_execution_recovery_candidates_v406.py \
             tests/test_runtime_known_execution_probe_v406_dynamic.py \
