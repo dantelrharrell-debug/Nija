@@ -4,6 +4,12 @@ on:
   pull_request:
     branches: [main, release/justcall-handoff-only-20261017]
     paths:
+      - 'bot/durable_recovery_state.py'
+      - 'bot/runtime_kraken_client_order_recovery_v430_patch.py'
+      - 'bot/runtime_kraken_deferred_fill_proof_recovery_v363_patch.py'
+      - 'bot/tests/test_durable_recovery_state.py'
+      - 'bot/tests/test_runtime_kraken_client_order_recovery_v430.py'
+      - 'bot/tests/test_runtime_kraken_deferred_fill_proof_recovery_v363.py'
       - 'bot/order_admission_policy.py'
       - 'tests/test_order_admission_policy.py'
       - 'bot/runtime_known_execution_probe_revalidation_v406_patch.py'
@@ -43,6 +49,12 @@ jobs:
       - name: Compile the repair without production startup hooks
         run: |
           python -S -m py_compile \
+            bot/durable_recovery_state.py \
+            bot/runtime_kraken_client_order_recovery_v430_patch.py \
+            bot/runtime_kraken_deferred_fill_proof_recovery_v363_patch.py \
+            bot/tests/test_durable_recovery_state.py \
+            bot/tests/test_runtime_kraken_client_order_recovery_v430.py \
+            bot/tests/test_runtime_kraken_deferred_fill_proof_recovery_v363.py \
             bot/order_admission_policy.py \
             tests/test_order_admission_policy.py \
             bot/runtime_known_execution_probe_revalidation_v406_patch.py \
@@ -54,6 +66,12 @@ jobs:
       - name: Scan changed runtime and test files for secrets
         run: |
           python -m detect_secrets scan --all-files --no-verify \
+            bot/durable_recovery_state.py \
+            bot/runtime_kraken_client_order_recovery_v430_patch.py \
+            bot/runtime_kraken_deferred_fill_proof_recovery_v363_patch.py \
+            bot/tests/test_durable_recovery_state.py \
+            bot/tests/test_runtime_kraken_client_order_recovery_v430.py \
+            bot/tests/test_runtime_kraken_deferred_fill_proof_recovery_v363.py \
             bot/order_admission_policy.py \
             tests/test_order_admission_policy.py \
             docs/order-admission-integration-review.md \
@@ -76,6 +94,9 @@ jobs:
       - name: Verify execution, independent exits, and ledger invariants offline
         run: |
           python -m pytest -q \
+            bot/tests/test_durable_recovery_state.py \
+            bot/tests/test_runtime_kraken_client_order_recovery_v430.py \
+            bot/tests/test_runtime_kraken_deferred_fill_proof_recovery_v363.py \
             tests/test_order_admission_policy.py \
             tests/test_kraken_recent_execution_discovery.py \
             tests/test_kraken_execution_recovery_candidates_v406.py \

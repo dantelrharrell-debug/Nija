@@ -37,6 +37,8 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any
 
+from bot.durable_recovery_state import read_recovery_state, write_recovery_state
+
 LOGGER = logging.getLogger("nija.runtime_kraken_client_order_recovery_v430")
 MARKER = "20260921-runtime-kraken-client-order-recovery-v430"
 _READY_FLAG = "NIJA_RUNTIME_KRAKEN_CLIENT_ORDER_RECOVERY_V430_READY"
@@ -72,20 +74,7 @@ def _max_age_s() -> float:
 
 
 def _load_refs() -> dict[str, dict[str, Any]]:
-    try:
-        raw = _state_path().read_text(encoding="utf-8").strip()
-        payload = json.loads(raw) if raw.startswith("{") else {}
-    except Exception:
-        return {}
-    refs = payload.get("client_refs") if isinstance(payload, Mapping) else None
-    if not isinstance(refs, Mapping):
-        return {}
-    out: dict[str, dict[str, Any]] = {}
-    for client_id, entry in refs.items():
-        cid = str(client_id or "").strip()
-        if cid and isinstance(entry, Mapping):
-            out[cid] = dict(entry)
-    return out
+    return read_recovery_state(_state_path(), "client_refs")
 
 
 def _store_refs(refs: Mapping[str, Mapping[str, Any]]) -> None:
@@ -97,15 +86,13 @@ def _store_refs(refs: Mapping[str, Mapping[str, Any]]) -> None:
         "client_refs": {str(k): dict(v) for k, v in refs.items()},
     }
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(path.suffix + ".tmp")
-        tmp.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
-        tmp.replace(path)
+        write_recovery_state(path, payload)
     except Exception as exc:
         LOGGER.warning(
             "KRAKEN_CLIENT_ORDER_V430_STATE_WRITE_FAILED marker=%s error=%s:%s fail_closed=true",
             MARKER, type(exc).__name__, exc,
         )
+        raise
 
 
 def _account_key(broker: Any) -> str:
@@ -130,11 +117,13 @@ def record_pending_client_ref(
     ordertype: str = "",
 ) -> bool:
     cid = str(client_id or "").strip()
-    if not cid or len(cid) > 18:
+    if not cid or len(cid) > 18 or not _account_key(broker):
         return False
     now = time.time()
     with _STATE_LOCK:
         refs = _load_refs()
+        if cid in refs:
+            return False
         entry = dict(refs.get(cid) or {})
         entry.setdefault("first_seen_epoch", now)
         entry["last_seen_epoch"] = now
@@ -144,12 +133,7 @@ def record_pending_client_ref(
         entry["ordertype"] = str(ordertype or entry.get("ordertype") or "").strip().lower()
         refs[cid] = entry
         if len(refs) > _MAX_PENDING:
-            ordered = sorted(
-                refs.items(),
-                key=lambda item: float(item[1].get("first_seen_epoch") or 0.0),
-                reverse=True,
-            )
-            refs = dict(ordered[:_MAX_PENDING])
+            raise RuntimeError("client_recovery_capacity_exhausted_no_records_evicted")
         _store_refs(refs)
     LOGGER.info(
         "KRAKEN_CLIENT_ORDER_V430_PENDING_RECORDED marker=%s client_id=%s account=%s pair=%s side=%s "
@@ -220,19 +204,22 @@ def _patch_class(cls: type) -> bool:
     def private_call_v430(self: Any, method: str, params: Any = None, *args: Any, **kwargs: Any):
         safe = dict(params or {})
         generated_id = ""
-        if str(method or "").strip().lower() == "addorder":
+        validation_only = safe.get("validate") is True or str(safe.get("validate", "")).lower() == "true"
+        if str(method or "").strip().lower() == "addorder" and not validation_only:
             existing_client = str(safe.get("cl_ord_id") or "").strip()
             has_userref = safe.get("userref") not in (None, "")
             if not existing_client and not has_userref:
                 generated_id = _new_client_id()
                 safe["cl_ord_id"] = generated_id
-                record_pending_client_ref(
+                persisted = record_pending_client_ref(
                     client_id=generated_id,
                     broker=self,
                     pair=str(safe.get("pair") or ""),
                     side=str(safe.get("type") or ""),
                     ordertype=str(safe.get("ordertype") or ""),
                 )
+                if persisted is not True:
+                    raise RuntimeError("client_order_identity_not_persisted")
                 LOGGER.critical(
                     "KRAKEN_CLIENT_ORDER_V430_BOUND marker=%s client_id=%s account=%s pair=%s side=%s "
                     "client_id_only=true order_rules_unchanged=true existing_userref_untouched=true "
@@ -251,13 +238,14 @@ def _patch_class(cls: type) -> bool:
             errors = response.get("error") if isinstance(response, Mapping) else None
             txids = _txids(response)
             if txids:
-                _seed_txids(
+                seeded = _seed_txids(
                     txids,
                     pair=str(safe.get("pair") or ""),
                     side=str(safe.get("type") or ""),
                     status="ack",
                 )
-                _discard_client_ref(generated_id, "exchange_txid_observed")
+                if seeded == len(txids):
+                    _discard_client_ref(generated_id, "exchange_txid_durably_handed_off")
             elif errors:
                 # Kraken explicitly rejected the AddOrder, so no uncertain
                 # accepted order remains to recover for this generated id.
@@ -356,7 +344,7 @@ def recover_client_refs_once() -> int:
         except (TypeError, ValueError, OverflowError):
             first_seen = now
         if now - first_seen > _max_age_s():
-            _discard_client_ref(client_id, "recovery_window_expired")
+            LOGGER.warning("KRAKEN_CLIENT_ORDER_V430_QUARANTINED client_id=%s reason=recovery_window_expired retained=true", client_id)
             continue
 
         wanted_account = str(entry.get("account") or "").strip().lower()
@@ -365,7 +353,7 @@ def recover_client_refs_once() -> int:
 
         for broker in brokers:
             broker_account = _account_key(broker)
-            if wanted_account and broker_account and wanted_account != broker_account:
+            if not wanted_account or not broker_account or wanted_account != broker_account:
                 continue
             order_id, row, source = _exact_client_row(broker, client_id)
             if not order_id:

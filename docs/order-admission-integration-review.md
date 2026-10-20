@@ -1,8 +1,52 @@
 # Order admission replacement: integration review
 
-Status: policy and offline tests only. NOT connected to live authority or
-dispatch. NOT a completed deadlock repair. Do not deploy this as an activation
-fix or interpret its eligible result as permission to place an order.
+Status: admission policy remains unconnected; actual Kraken recovery paths now
+have persistence hardening in this branch. NOT a completed deadlock repair.
+Do not deploy this as an activation fix or interpret policy eligibility as
+permission to place an order.
+
+## Integration review findings and runtime repairs, October 20
+
+Reviewed the canonical pipeline dispatch/ACK timeout, execution journal, Kraken
+private-call recovery v430, deferred-fill recovery v363, and ledger storage/
+inventory contracts. The execution journal's memory fallback is telemetry, not
+a durable submission lock. The outer ACK timeout can leave a running worker;
+the mutation deadline bounds a late send but does not undo a request already
+accepted by the broker. Neither property proves at-most-once execution.
+
+The actual v430 pre-submit recorder swallowed storage exceptions, then reported
+success. Its direct ACK path discarded the client ID even when v363 handoff
+failed. Both recovery queues evicted unresolved records at capacity or expiry.
+These runtime defects are corrected in this branch:
+
+- Atomic file replacement with file and directory fsync; errors propagate.
+- Corruption and unreadable files no longer masquerade as empty queues.
+- Generated-client-ID submission stops if persistence fails or account scope
+  is missing. Existing client IDs/userrefs retain their separate behavior.
+- ACK handoff clears the client ID only if every txid was successfully recorded
+  by v363; a v363 write failure retains the original recovery identity.
+- Capacity rejects new records instead of evicting old ones; expired unresolved
+  records remain quarantined. Validation-only calls create no submission record.
+- Recovery refuses a broker with a missing or mismatched account scope.
+
+153 focused tests passed including the real v430-to-v363 handoff with injected
+storage failure, file/directory fsync failure, corruption, queue capacity,
+timeout retention, and existing proof/freshness regressions. Two obsolete
+log-text assertions were removed from the existing wiring test; its actual
+canonical installer and required-flag assertions remain.
+
+Remaining critical findings: these JSON stores still rely on process-local
+serialization and existing writer fencing; they are NOT the required atomic
+account-wide order reservation. Pre-existing client/user references and
+non-Kraken venues need their own covered paths. A missing file alone cannot
+prove that durable history was never lost. No operational certification can
+be derived from the ledger inventory script or mount detection. The Render
+connector exposes logs/deployments but no shell or SQLite query, so live
+ledger contents and process-local collectors were not independently inspected.
+
+No new live admission path was connected and no service was restarted.
+Source: https://docs.kraken.com/api-reference/account-data/get-closed-orders
+confirms client-ID filtering; exact broker verification remains required.
 
 ## Implemented contract
 
@@ -59,12 +103,15 @@ must not refresh timestamps when assembling a report.
 
 ## Release gate
 
-No live integration is present in this PR. All items above are release blockers,
+No admission integration is present in this PR. All items above are release blockers,
 not optional follow-ups. AGENTS.md requires human review for the eventual
 startup/authority/broker changes and hosted CI/security checks before merge.
 Do not clear a stop, reset attempt history, manufacture reconciliation or
 refresh old evidence to obtain a green status. Reverting the policy files has
-no runtime effect because they have no live callers.
+no runtime effect because they have no live callers. Reverting the recovery
+changes restores the previous lossy persistence behavior; do not remove state
+files as a rollback. Storage errors can now block generated-ID submissions,
+which is intentional and requires deployment review.
 
 ## Validation
 

@@ -53,6 +53,8 @@ from functools import wraps
 from pathlib import Path
 from typing import Any
 
+from bot.durable_recovery_state import read_recovery_state, write_recovery_state
+
 LOGGER = logging.getLogger("nija.runtime_kraken_deferred_fill_proof_recovery_v363")
 MARKER = "20260904-runtime-kraken-deferred-fill-proof-recovery-v363"
 RELEASE_ID = "20260904-runtime-convergence-v363"
@@ -100,26 +102,7 @@ def _v328() -> Any:
 
 
 def _load_pending() -> dict[str, dict[str, Any]]:
-    path = _state_path()
-    try:
-        raw = path.read_text(encoding="utf-8").strip()
-    except Exception:
-        return {}
-    if not raw.startswith("{"):
-        return {}
-    try:
-        payload = json.loads(raw)
-    except Exception:
-        return {}
-    orders = payload.get("orders") if isinstance(payload, Mapping) else None
-    if not isinstance(orders, Mapping):
-        return {}
-    out: dict[str, dict[str, Any]] = {}
-    for order_id, entry in orders.items():
-        oid = str(order_id or "").strip()
-        if oid and isinstance(entry, Mapping):
-            out[oid] = dict(entry)
-    return out
+    return read_recovery_state(_state_path(), "orders")
 
 
 def _store_pending(orders: Mapping[str, Mapping[str, Any]]) -> None:
@@ -131,15 +114,13 @@ def _store_pending(orders: Mapping[str, Mapping[str, Any]]) -> None:
         "orders": {str(k): dict(v) for k, v in orders.items()},
     }
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(path.suffix + ".tmp")
-        tmp.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
-        tmp.replace(path)
+        write_recovery_state(path, payload)
     except Exception as exc:
         LOGGER.warning(
             "KRAKEN_FILL_PROOF_V363_STATE_WRITE_FAILED marker=%s error=%s:%s fail_closed=true",
             MARKER, type(exc).__name__, exc,
         )
+        raise
 
 
 def record_pending_order(
@@ -164,12 +145,7 @@ def record_pending_order(
         entry["status"] = str(status or entry.get("status") or "").strip().lower()
         pending[oid] = entry
         if len(pending) > _MAX_PENDING:
-            ordered = sorted(
-                pending.items(),
-                key=lambda item: float(item[1].get("first_seen_epoch") or 0.0),
-                reverse=True,
-            )
-            pending = dict(ordered[:_MAX_PENDING])
+            raise RuntimeError("fill_recovery_capacity_exhausted_no_records_evicted")
         _store_pending(pending)
     LOGGER.info(
         "KRAKEN_FILL_PROOF_V363_PENDING_RECORDED marker=%s order_id=%s symbol=%s side=%s status=%s "
@@ -372,7 +348,7 @@ def recover_once() -> int:
         except (TypeError, ValueError):
             first_seen = now
         if now - first_seen > max_age:
-            _discard_pending(order_id, "recovery_window_expired")
+            LOGGER.warning("KRAKEN_FILL_PROOF_V363_QUARANTINED order_id=%s reason=recovery_window_expired retained=true", order_id)
             continue
 
         symbol = str(entry.get("symbol") or "").strip().upper()
