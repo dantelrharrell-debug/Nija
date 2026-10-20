@@ -85,6 +85,7 @@ def _candidate_order_id() -> str:
             return ""
     except Exception:
         LOGGER.debug("v406 dynamic pending-order discovery deferred", exc_info=True)
+    LOGGER.info("KNOWN_EXECUTION_PROBE_V406_NO_PENDING reason=no_pending_candidate historical_fallback_only=true fresh_execution_not_proven=true trading_fail_closed=true")
     return _FALLBACK_ORDER_ID
 
 
