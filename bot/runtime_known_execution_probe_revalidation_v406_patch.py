@@ -137,6 +137,39 @@ def _platform_broker(broker: Any) -> bool:
         return False
 
 
+def _recent_read_failure(payload: Any) -> str:
+    """Classify failed reads using fixed labels; never expose provider payloads."""
+    if not isinstance(payload, Mapping):
+        return "response_not_mapping"
+    errors = payload.get("error")
+    if not isinstance(errors, list):
+        return "error_envelope_missing_or_invalid"
+    if errors:
+        # Exact known codes only. Unknown provider text may contain account data.
+        known = {
+            "EGeneral:Permission denied": "permission_denied",
+            "EAPI:Invalid key": "invalid_key",
+            "EAPI:Invalid signature": "invalid_signature",
+            "EAPI:Invalid nonce": "invalid_nonce",
+            "EAPI:Rate limit exceeded": "rate_limited",
+            "EService:Unavailable": "service_unavailable",
+            "EGeneral:Invalid arguments": "invalid_arguments",
+        }
+        for error in errors:
+            if isinstance(error, str) and error in known:
+                return known[error]
+        return "provider_error_redacted"
+    result = payload.get("result")
+    if not isinstance(result, Mapping):
+        return "result_missing_or_invalid"
+    closed = result.get("closed")
+    if not isinstance(closed, Mapping):
+        return "closed_orders_missing_or_invalid"
+    if len(closed) > 50:
+        return "page_size_exceeded"
+    return ""
+
+
 def _recent_candidate_order_ids() -> list[str]:
     """Discover candidates through bounded authenticated reads, never fill proof.
 
@@ -161,19 +194,25 @@ def _recent_candidate_order_ids() -> list[str]:
         now = time.time()
         if not math.isfinite(now) or now <= _HISTORICAL_PROOF_TTL_S:
             return []
+        started = time.monotonic()
+        LOGGER.info("KNOWN_EXECUTION_PROBE_V406_RECENT_READ_STARTED "
+                    "endpoint=ClosedOrders max_age_s=1800 read_only=true")
         payload = v357._private_read(brokers[0], "ClosedOrders", {
             "start": math.floor(now - _HISTORICAL_PROOF_TTL_S) - 1,
             "end": math.ceil(now), "closetime": "close", "trades": False,
             "without_count": True,
         })
-        if not isinstance(payload, Mapping) or payload.get("error") != []:
+        failure = _recent_read_failure(payload)
+        if failure:
             LOGGER.info("KNOWN_EXECUTION_PROBE_V406_RECENT_UNAVAILABLE "
-                        "reason=authenticated_read_unproven trading_fail_closed=true")
+                        "reason=%s elapsed_s=%.3f empty_history_proven=false "
+                        "trading_fail_closed=true", failure, time.monotonic() - started)
             return []
-        result = payload.get("result")
-        closed = result.get("closed") if isinstance(result, Mapping) else None
-        if not isinstance(closed, Mapping) or len(closed) > 50:
-            return []
+        closed = payload["result"]["closed"]
+        LOGGER.info("KNOWN_EXECUTION_PROBE_V406_RECENT_READ_COMPLETED "
+                    "scan_rows=%d elapsed_s=%.3f empty_history_proven=%s "
+                    "execution_proven=false", len(closed), time.monotonic() - started,
+                    str(not closed).lower())
         candidates = []
         for order_id, row in closed.items():
             if (not isinstance(order_id, str) or not order_id.strip()
