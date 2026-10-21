@@ -284,16 +284,18 @@ def enqueue_lead(canonical: dict[str, str], event_key: str) -> bool:
     """
     durable = False
     redis_already_synced = False
+    redis_already_reviewed = False
     client = _redis_client()
     if client is not None:
         try:
             durable = _redis_enqueue(client, canonical, event_key)
-            redis_already_synced = (
-                client.hget(_redis_event_key(event_key), "state") == "synced"
-            )
+            persisted_state = client.hget(_redis_event_key(event_key), "state")
+            redis_already_synced = persisted_state == "synced"
+            redis_already_reviewed = persisted_state == "needs_review"
         except Exception:
             durable = False
             redis_already_synced = False
+            redis_already_reviewed = False
 
     local = False
     try:
@@ -312,6 +314,16 @@ def enqueue_lead(canonical: dict[str, str], event_key: str) -> bool:
                     """UPDATE website_lead_crm_sync
                        SET state='synced', last_error_code='', updated_at=?
                        WHERE event_key=?""",
+                    (_now_iso(), event_key),
+                )
+            if redis_already_reviewed:
+                # Persist the same provider-rejected state in the local mirror
+                # to prevent a Redis outage from replaying invalid records.
+                conn.execute(
+                    """UPDATE website_lead_crm_sync
+                       SET state='needs_review', next_attempt_at=0,
+                           last_error_code='HTTP_422_review', updated_at=?
+                       WHERE event_key=? AND state!='synced'""",
                     (_now_iso(), event_key),
                 )
             conn.commit()
@@ -415,9 +427,13 @@ def _deliver_batch_isolating_422(
         if exc.code != 422:
             raise
         if len(rows) == 1:
-            return set(), {
-                str(rows[0]["event_key"]): _apollo_error_category(exc)
-            }
+            category = _apollo_error_category(exc)
+            # A non-field-specific 422 may indicate a broken integration
+            # rather than a bad contact. Retry those rather than quarantining
+            # every lead in the entire outbox.
+            if category not in {"HTTP_422_email", "HTTP_422_phone"}:
+                raise ValueError("apollo_non_contact_specific_validation_error")
+            return set(), {str(rows[0]["event_key"]): category}
         middle = len(rows) // 2
         accepted_a, rejected_a = _deliver_batch_isolating_422(rows[:middle], key)
         accepted_b, rejected_b = _deliver_batch_isolating_422(rows[middle:], key)
