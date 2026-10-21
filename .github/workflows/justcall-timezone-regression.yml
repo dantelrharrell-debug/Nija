@@ -1,0 +1,28 @@
+name: JustCall timezone safety regression
+
+on:
+  pull_request:
+    paths:
+      - 'render_outreach_autodial.py'
+      - 'tests/test_autodial_timezone_gate.py'
+      - '.github/workflows/justcall-timezone-regression.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  timezone-regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install test dependencies
+        run: python -m pip install pytest requests
+      - name: Compile module and test
+        run: python -m py_compile render_outreach_autodial.py tests/test_autodial_timezone_gate.py
+      - name: Run fail-closed regression suite
+        run: python -m pytest -q tests/test_autodial_timezone_gate.py
