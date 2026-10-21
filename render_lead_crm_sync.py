@@ -251,28 +251,47 @@ def _acknowledge_local_mirror(event_keys: list[str]) -> None:
         return
 
 
-def _hold_local_mirror_for_review(rejected: dict[str, str]) -> None:
-    """Retain provider-rejected leads for correction without replaying bad data.
+def _hold_local_mirror_for_review(
+    rejected: dict[str, str], candidates: list[dict[str, Any]]
+) -> None:
+    """Keep the review hold even if the local SQLite mirror was recreated.
 
-    Redis and SQLite must agree that a rejected record was not delivered.
-    Website-lead originals are not changed and no call permission is inferred.
+    Redis is primary; an interrupted mirror update must not cause a fallback
+    to replay a validated-bad CRM record. All source data stays intact.
     """
     if not rejected:
         return
+    by_event = {str(row["event_key"]): row for row in candidates}
     try:
         with _connect() as conn:
             _prepare(conn)
             now = _now_iso()
-            conn.executemany(
-                """UPDATE website_lead_crm_sync
-                   SET state='needs_review', next_attempt_at=0,
-                       last_error_code=?, updated_at=?
-                   WHERE event_key=? AND state='pending'""",
-                [(code, now, event_key) for event_key, code in rejected.items()],
-            )
+            for event_key, code in rejected.items():
+                row = by_event.get(event_key)
+                if row is None:
+                    continue
+                conn.execute(
+                    """INSERT OR IGNORE INTO website_lead_crm_sync
+                       (event_key,email,name,phone,state,attempts,
+                        next_attempt_at,last_error_code,updated_at)
+                       VALUES (?,?,?,?,'needs_review',?,0,?,?)""",
+                    (
+                        event_key, str(row["email"]).strip().lower(),
+                        str(row.get("name", ""))[:200],
+                        _validated_contact_phone(row.get("phone", "")),
+                        int(row.get("attempts", 0)) + 1, code, now,
+                    ),
+                )
+                conn.execute(
+                    """UPDATE website_lead_crm_sync
+                       SET state='needs_review', next_attempt_at=0,
+                           last_error_code=?, updated_at=?
+                       WHERE event_key=? AND state='pending'""",
+                    (code, now, event_key),
+                )
             conn.commit()
-    except (OSError, sqlite3.Error):
-        # Redis stays authoritative if the local mirror cannot be updated.
+    except (OSError, sqlite3.Error, KeyError, ValueError):
+        # Redis remains authoritative when SQLite is temporarily unavailable.
         return
 
 
@@ -516,7 +535,7 @@ def _sync_pending_redis(client, key: str, max_batch: int) -> dict[str, int]:
             client.zadd(f"{_REDIS_PREFIX}:pending", {event_key: next_at})
             counts["retry"] += 1
     _acknowledge_local_mirror(acknowledged_event_keys)
-    _hold_local_mirror_for_review(reviewed)
+    _hold_local_mirror_for_review(reviewed, rows)
     if reviewed:
         counts["review"] = len(reviewed)
         categories = set(reviewed.values())
