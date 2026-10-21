@@ -676,3 +676,28 @@ def test_redis_review_state_survives_local_mirror_recreation(monkeypatch, tmp_pa
     assert row["state"] == "needs_review"
     monkeypatch.setattr(sync, "_redis_client", lambda: None)
     assert sync.sync_pending()["attempted"] == 0
+
+
+def test_redis_rejection_backfills_missing_sqlite_review_mirror(monkeypatch, tmp_path):
+    create_site_event(monkeypatch, tmp_path, email="bad-email")
+    fake = FakeRedis()
+    # Simulate Redis write succeeding before its local SQLite mirror was
+    # checkpointed. Recovery must not resend the bad record after Redis loss.
+    sync._redis_enqueue(
+        fake, {"email": "bad-email", "name": "Pending Review"}, "evt_1"
+    )
+    monkeypatch.setattr(sync, "_redis_client", lambda: fake)
+    monkeypatch.setattr(
+        sync, "_deliver_batch",
+        lambda rows, key: (_ for _ in ()).throw(
+            _test_apollo_error(422, b'{"errors":["invalid email"]}')
+        ),
+    )
+    assert sync.sync_pending()["review"] == 1
+    with sync._connect() as conn:
+        row = conn.execute(
+            "SELECT state FROM website_lead_crm_sync WHERE event_key='evt_1'"
+        ).fetchone()
+    assert row["state"] == "needs_review"
+    monkeypatch.setattr(sync, "_redis_client", lambda: None)
+    assert sync.sync_pending()["attempted"] == 0
