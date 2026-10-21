@@ -40,18 +40,26 @@ def reconcile_order_fills(
                 failures.append(label + "_account_invalid")
                 continue
             order_id, trade_id = row.get("order_id"), row.get("trade_id")
-            if not isinstance(order_id, str) or not order_id or not isinstance(trade_id, str) or not trade_id:
+            if (not isinstance(order_id, str) or not order_id or order_id != order_id.strip()
+                    or not isinstance(trade_id, str) or not trade_id or trade_id != trade_id.strip()):
                 failures.append(label + "_identity_invalid")
+                continue
+            symbol, side = row.get("symbol"), row.get("side")
+            if (not isinstance(symbol, str) or not symbol or symbol != symbol.strip()
+                    or side not in {"buy", "sell"}):
+                # Two equally incomplete records are NOT an authenticated
+                # fill match. Exact symbol and trade direction are required.
+                failures.append(label + "_trade_terms_invalid")
                 continue
             key = (order_id, trade_id)
             if key in result:
                 failures.append(label + "_duplicate_fill")
                 continue
             numbers = tuple(_nonnegative(row.get(k)) for k in ("quantity", "cost", "fee"))
-            if any(v is None for v in numbers) or numbers[0] == 0:
+            if any(v is None for v in numbers) or numbers[0] == 0 or numbers[1] == 0:
                 failures.append(label + "_amount_invalid")
                 continue
-            result[key] = (row.get("symbol"), row.get("side"), numbers)
+            result[key] = (symbol, side, numbers)
         return result
     broker = normalize(broker_fills, "broker")
     ledger = normalize(ledger_fills, "ledger")
