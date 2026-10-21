@@ -4,6 +4,11 @@ on:
   pull_request:
     branches: [main, release/justcall-handoff-only-20261017]
     paths:
+      - 'bot/kraken_live_history_recovery.py'
+      - 'scripts/nija_kraken_readonly_history_collector_v441.py'
+      - 'tests/test_kraken_live_history_recovery.py'
+      - 'docs/kraken-live-history-recovery.md'
+      - 'bot/tests/test_nija_kraken_readonly_history_collector_v441.py'
       - 'bot/durable_recovery_state.py'
       - 'bot/runtime_kraken_client_order_recovery_v430_patch.py'
       - 'bot/runtime_kraken_deferred_fill_proof_recovery_v363_patch.py'
@@ -71,6 +76,10 @@ jobs:
       - name: Compile the repair without production startup hooks
         run: |
           python -S -m py_compile \
+            bot/kraken_live_history_recovery.py \
+            scripts/nija_kraken_readonly_history_collector_v441.py \
+            tests/test_kraken_live_history_recovery.py \
+            bot/tests/test_nija_kraken_readonly_history_collector_v441.py \
             bot/durable_recovery_state.py \
             bot/runtime_kraken_client_order_recovery_v430_patch.py \
             bot/runtime_kraken_deferred_fill_proof_recovery_v363_patch.py \
@@ -110,6 +119,10 @@ jobs:
       - name: Scan changed runtime and test files for secrets
         run: |
           python -m detect_secrets scan --all-files --no-verify \
+            bot/kraken_live_history_recovery.py \
+            scripts/nija_kraken_readonly_history_collector_v441.py \
+            tests/test_kraken_live_history_recovery.py \
+            bot/tests/test_nija_kraken_readonly_history_collector_v441.py \
             bot/durable_recovery_state.py \
             bot/runtime_kraken_client_order_recovery_v430_patch.py \
             bot/runtime_kraken_deferred_fill_proof_recovery_v363_patch.py \
@@ -160,6 +173,8 @@ jobs:
       - name: Verify execution, independent exits, and ledger invariants offline
         run: |
           python -m pytest -q \
+            tests/test_kraken_live_history_recovery.py \
+            bot/tests/test_nija_kraken_readonly_history_collector_v441.py \
             tests/test_preflight_certificate_prerequisites.py \
             tests/test_pretrade_broker_evidence_checks.py \
             bot/tests/test_durable_recovery_state.py \

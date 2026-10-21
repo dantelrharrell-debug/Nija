@@ -22,6 +22,56 @@ class KrakenBroker:
         return value() if callable(value) else value
 
 
+def test_history_collection_is_disabled_without_explicit_directory(monkeypatch):
+    monkeypatch.delenv("NIJA_KRAKEN_HISTORY_RECOVERY_DIR", raising=False)
+    monkeypatch.setattr(v363, "_kraken_brokers", lambda: pytest.fail("unexpected broker access"))
+    v363._start_requested_history_collection()
+
+
+def test_history_collection_uses_existing_client_and_monitoring_enum(tmp_path, monkeypatch):
+    import sys
+    import types
+    (tmp_path / "request.json").write_text("{}")
+    monkeypatch.setenv("NIJA_KRAKEN_HISTORY_RECOVERY_DIR", str(tmp_path))
+    monkeypatch.setattr(v363, "_HISTORY_THREAD", None)
+    broker, category = object(), object()
+    calls = []
+    collector = types.ModuleType("bot.kraken_live_history_recovery")
+    collector.collect_requested_history = lambda *args, **kwargs: calls.append((args, kwargs))
+    monkeypatch.setitem(sys.modules, collector.__name__, collector)
+    monkeypatch.setattr(v363, "_kraken_brokers", lambda: [broker])
+    monkeypatch.setattr(v363, "_v357", lambda: types.SimpleNamespace(_monitoring_category=lambda: category))
+    class Thread:
+        def __init__(self, *, target, name, daemon):
+            assert daemon and name == "KrakenReadOnlyHistoryRecovery"
+            self.target = target
+        def start(self):
+            self.target()
+        def is_alive(self):
+            return True
+    monkeypatch.setattr(v363.threading, "Thread", Thread)
+    v363._start_requested_history_collection()
+    v363._start_requested_history_collection()
+    assert calls == [((tmp_path, [broker]), {"monitoring_category": category})]
+
+
+def test_history_launcher_failure_does_not_kill_pending_fill_worker(monkeypatch):
+    calls = []
+    monkeypatch.setattr(v363, "_patch_v357_enrichment", lambda: None)
+    monkeypatch.setattr(v363, "recover_once", lambda: calls.append("pending_fill_recovery"))
+    def fail():
+        raise ValueError("bad request directory")
+    monkeypatch.setattr(v363, "_start_requested_history_collection", fail)
+    class StopIterationTest(Exception):
+        pass
+    def stop(_):
+        raise StopIterationTest()
+    monkeypatch.setattr(v363.time, "sleep", stop)
+    with pytest.raises(StopIterationTest):
+        v363._worker()
+    assert calls == ["pending_fill_recovery"]
+
+
 @pytest.fixture(autouse=True)
 def _isolated_state(tmp_path, monkeypatch):
     import bot.runtime_execution_position_readiness_v346_patch as v346
