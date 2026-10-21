@@ -33,6 +33,9 @@ def test_fresh_independent_producer_never_grants_authority(monkeypatch):
         "backup_restore_certified", "account_scope_verified",
     )}
     monkeypatch.setattr(attestation.time, "time", lambda: 1000.0)
+    monkeypatch.setattr(
+        "bot.pretrade_independent_attestation.time.time", lambda: 1000.0
+    )
     ready = evaluate_authenticated_startup_candidate(
         "platform:kraken", external,
         pending_execution=False, posttrade_verified=False
