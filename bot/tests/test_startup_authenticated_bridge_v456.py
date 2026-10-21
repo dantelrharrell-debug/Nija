@@ -32,6 +32,9 @@ def test_fresh_independent_producer_never_grants_authority(monkeypatch):
         "risk_ready", "strategy_ready", "capital_ready", "kill_switch_clear",
         "backup_restore_certified", "account_scope_verified",
     )}
+    # Patch the already-imported attestation module clock directly. The
+    # package attribute need not be bound when Python loaded its submodule;
+    # a dotted-string monkeypatch can fail before this safety test executes.
     monkeypatch.setattr(attestation.time, "time", lambda: 1000.0)
     ready = evaluate_authenticated_startup_candidate(
         "platform:kraken", external,
@@ -87,3 +90,24 @@ def test_incomplete_external_gate_rejects_certificate(monkeypatch):
     )
     assert "backup_restore_certified" in result["missing"]
     assert result["activation_allowed"] is False
+
+
+def test_incomplete_attestation_mapping_fails_closed_without_error(monkeypatch):
+    """A partially returned or extra-key producer can never certify the account."""
+    monkeypatch.setitem(
+        evaluate_authenticated_startup_candidate.__globals__,
+        "current_authenticated_attestations",
+        lambda account: {"account_permissions": True, "unexpected": True},
+    )
+    external = {key: True for key in (
+        "risk_ready", "strategy_ready", "capital_ready",
+        "kill_switch_clear", "backup_restore_certified", "account_scope_verified",
+    )}
+    result = evaluate_authenticated_startup_candidate(
+        "platform:kraken", external, pending_execution=False, posttrade_verified=False,
+    )
+    assert result["activation_allowed"] is False
+    assert result["pretrade_candidate_ready"] is False
+    assert "authenticated_pretrade_certificate" in result["missing"]
+    assert "broker_identity" in result["missing"]
+    assert "protective_exits_verified" in result["missing"]

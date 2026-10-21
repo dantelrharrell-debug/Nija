@@ -401,23 +401,35 @@ def _independent_pretrade_certificate() -> tuple[bool, list[str]]:
         "open_order_reconciliation", "duplicate_order_fence",
         "writer_lease", "nonce_sequence", "operator_authorization",
     )
-    try:
-        module = importlib.import_module("bot.pretrade_independent_attestation")
-        verifier = getattr(module, "current_authenticated_attestations", None)
-        evidence = verifier(os.environ.get("NIJA_PREFLIGHT_ACCOUNT_SCOPE", "")) if callable(verifier) else None
-    except Exception:
-        evidence = None
+    # A verifier's affirmative response never establishes which account was
+    # checked if the canonical scope is unset or malformed. Reject it before
+    # asking any collector to provide evidence (diagnostic-only).
+    account_scope = os.environ.get("NIJA_PREFLIGHT_ACCOUNT_SCOPE", "")
+    scope_valid = bool(
+        isinstance(account_scope, str)
+        and account_scope
+        and account_scope == account_scope.strip()
+        and not any(char.isspace() for char in account_scope)
+    )
+    evidence = None
+    if scope_valid:
+        try:
+            module = importlib.import_module("bot.pretrade_independent_attestation")
+            verifier = getattr(module, "current_authenticated_attestations", None)
+            evidence = verifier(account_scope) if callable(verifier) else None
+        except Exception:
+            evidence = None
     if not isinstance(evidence, dict):
-        return False, list(required)
+        evidence = {}
     missing = [key for key in required if evidence.get(key) is not True]
     logger.info(
         "PRETRADE_INDEPENDENT_CERTIFICATION_V6 ready=%s account_scope_configured=%s "
         "missing=%s diagnostic_only=true legacy_execution_gate_unchanged=true",
-        str(not missing).lower(),
-        str(bool(os.environ.get("NIJA_PREFLIGHT_ACCOUNT_SCOPE", "").strip())).lower(),
+        str(scope_valid and not missing).lower(),
+        str(scope_valid).lower(),
         ",".join(missing) if missing else "none",
     )
-    return not missing, missing
+    return bool(scope_valid and not missing), missing
 
 
 def _collect_proofs() -> tuple[dict[str, bool], dict[str, Any]]:
