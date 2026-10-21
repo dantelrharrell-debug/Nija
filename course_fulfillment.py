@@ -92,7 +92,7 @@ def reconcile_session(stripe, ledger, session_id):
     expected = expected_course_identity()
     if expected is None:
         return None
-    link_id, price_id, product_id, expected_live = expected
+    link_id, price_id, expected_product_id, expected_live = expected
     session = stripe.checkout.Session.retrieve(session_id)
     if (not _matches_mode(session, expected_live) or
             session.get("payment_link") != link_id or session.get("mode") != "payment"):
@@ -105,7 +105,7 @@ def reconcile_session(stripe, ledger, session_id):
     product = price.get("product")
     product_id = product if isinstance(product, str) else (product or {}).get("id")
     if (items[0].get("quantity") != 1 or price.get("id") != price_id
-            or product_id != product_id or price.get("unit_amount") != 9900
+            or product_id != expected_product_id or price.get("unit_amount") != 9900
             or price.get("currency") != "usd"):
         return None
     # Unit course price is $99; Stripe Tax may increase the actual charged total.
