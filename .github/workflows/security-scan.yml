@@ -4,7 +4,7 @@ on:
   push:
     branches: [ main, develop ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, release/justcall-handoff-only-20261017 ]
   schedule:
     # Run security scan weekly on Sundays at 2am UTC
     - cron: '0 2 * * 0'
@@ -51,11 +51,38 @@ jobs:
       with:
         fetch-depth: 0
 
+    # Scan the checked-out PR head against the merge-base. This avoids the
+    # action's stale event-range selection after a PR branch is rebased.
+    - name: Verify PR scan history
+      if: github.event_name == 'pull_request'
+      run: |
+        git fetch --no-tags origin "${{ github.event.pull_request.base.sha }}" "${{ github.event.pull_request.head.sha }}"
+        git cat-file -e "${{ github.event.pull_request.base.sha }}^{commit}"
+        git cat-file -e "${{ github.event.pull_request.head.sha }}^{commit}"
+
     - name: Gitleaks Secret Scan (with config)
+      if: github.event_name != 'pull_request'
       uses: gitleaks/gitleaks-action@v2
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }} # Only required for Gitleaks Enterprise
+
+    - name: Gitleaks Secret Scan (PR diff, pinned revisions)
+      if: github.event_name == 'pull_request'
+      run: |
+        set -eu
+        GITLEAKS_VERSION=8.24.3
+        curl --fail --location --silent --show-error \
+          "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+          -o /tmp/gitleaks.tar.gz
+        tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+        base="${{ github.event.pull_request.base.sha }}"
+        head="${{ github.event.pull_request.head.sha }}"
+        merge_base="$(git merge-base "$base" "$head")"
+        test -n "$merge_base"
+        /tmp/gitleaks git --redact --config .gitleaks.toml --exit-code 2 \
+          --log-opts="$merge_base..$head" .
+        echo "Gitleaks verified PR commit range: $merge_base..$head"
 
     - name: TruffleHog Secret Scan (Pull Request)
       if: github.event_name == 'pull_request'

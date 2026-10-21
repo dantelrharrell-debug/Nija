@@ -338,7 +338,7 @@ def _patch_guard(guard: ModuleType) -> bool:
                 float(getattr(self, "_cycle_deadline", started) or started),
             )
             logger.warning(
-                "CAPITAL_REFRESH_FETCH_TIMEOUT marker=%s cycle_id=%s broker=%s elapsed=%.3f last_success_age=%s fetch_start=%.6f deadline=%.6f",
+                "CAPITAL_REFRESH_FETCH_TIMEOUT marker=%s cycle_id=%s broker=%s elapsed=%.3f last_success_age=%s fetch_start=%.6f deadline=%.6f deadline_overrun_s=%.3f freshness_ttl_s=%.3f cache_expired=%s",
                 MARKER,
                 getattr(_CTX, "cycle_id", "external"),
                 bid,
@@ -346,6 +346,9 @@ def _patch_guard(guard: ModuleType) -> bool:
                 "inf" if not math.isfinite(age_s) else f"{age_s:.3f}",
                 started,
                 deadline,
+                max(0.0, now - deadline),
+                ttl_s,
+                str(not fresh).lower(),
             )
 
         refresh = getattr(guard, "_REFRESH_CONTEXT", None)
