@@ -64,6 +64,7 @@ _PATCH_ATTR = "_nija_kraken_deferred_fill_proof_recovery_v363"
 _LOCK = threading.RLock()
 _STATE_LOCK = threading.RLock()
 _THREAD: threading.Thread | None = None
+_HISTORY_THREAD: threading.Thread | None = None
 
 _DEFAULT_STATE_PATH = "./data/kraken_pending_fill_proof.json"
 _DEFAULT_INTERVAL_S = 20.0
@@ -480,6 +481,34 @@ def _register_manifest() -> bool:
         return False
 
 
+def _start_requested_history_collection() -> None:
+    """Do not stall ordinary pending-fill recovery behind historical reads."""
+    global _HISTORY_THREAD
+    directory = os.environ.get("NIJA_KRAKEN_HISTORY_RECOVERY_DIR", "")
+    if not directory or not (Path(directory) / "request.json").exists():
+        return
+
+    def collect() -> None:
+        try:
+            from bot.kraken_live_history_recovery import collect_requested_history
+            collect_requested_history(
+                Path(directory), _kraken_brokers(),
+                monitoring_category=_v357()._monitoring_category(),
+            )
+        except Exception as exc:
+            LOGGER.warning(
+                "KRAKEN_HISTORY_COLLECTION_DEFERRED exception_type=%s "
+                "trading_authority_unchanged=true", type(exc).__name__,
+            )
+
+    with _LOCK:
+        if _HISTORY_THREAD is None or not _HISTORY_THREAD.is_alive():
+            _HISTORY_THREAD = threading.Thread(
+                target=collect, name="KrakenReadOnlyHistoryRecovery", daemon=True,
+            )
+            _HISTORY_THREAD.start()
+
+
 def _worker() -> None:
     while True:
         try:
@@ -487,6 +516,12 @@ def _worker() -> None:
             recover_once()
         except Exception:
             LOGGER.debug("v363 worker pulse failed", exc_info=True)
+        # Explicit opt-in only. Reuse this process's already connected clients;
+        # a Web Shell process must never instantiate a second nonce owner.
+        try:
+            _start_requested_history_collection()
+        except Exception as exc:
+            LOGGER.warning("KRAKEN_HISTORY_REQUEST_DEFERRED exception_type=%s", type(exc).__name__)
         time.sleep(_interval_s())
 
 
