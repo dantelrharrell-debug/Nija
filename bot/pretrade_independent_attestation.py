@@ -58,6 +58,19 @@ def current_authenticated_attestations(
             return denied
         if raw.get("read_only") is not True or raw.get("scope_verified") is not True:
             return denied
+        # Require explicit authenticated provenance and complete account reads.
+        provenance = raw.get("provenance")
+        if not isinstance(provenance, Mapping):
+            return denied
+        required_provenance = (
+            "authenticated_broker_read_verified",
+            "ledger_snapshot_verified",
+            "complete_pagination_verified",
+            "collector_identity_verified",
+            "account_scope_verified",
+        )
+        if not all(provenance.get(key) is True for key in required_provenance):
+            return denied
         checks = raw.get("checks")
         if not isinstance(checks, Mapping):
             return denied

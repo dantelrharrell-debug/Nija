@@ -31,6 +31,14 @@ on:
       - 'tests/test_kraken*execution*.py'
       - 'tests/test_runtime_known_execution_probe_v406_dynamic.py'
       - 'tests/test_independent_recovery_certification.py'
+      - 'bot/pretrade_independent_attestation.py'
+      - 'bot/startup_authenticated_bridge_v456.py'
+      - 'bot/startup_two_phase_policy_v8.py'
+      - 'preactivation_readiness_convergence_v16_patch.py'
+      - 'bot/tests/test_startup_authenticated_bridge_v456.py'
+      - 'tests/test_pretrade_provenance_guard.py'
+      - 'tests/test_preactivation_preflight_observability_v450.py'
+      - 'tests/test_startup_two_phase_policy_v8.py'
       - '.github/workflows/nija-execution-recovery-certification.yml'
   workflow_dispatch:
 
@@ -80,6 +88,14 @@ jobs:
             bot/pretrade_attestation_validation_v452.py \
             bot/pretrade_authenticated_provider_adapter_v453.py \
             bot/startup_transition_candidate_v454.py \
+            bot/pretrade_independent_attestation.py \
+            bot/startup_authenticated_bridge_v456.py \
+            bot/startup_two_phase_policy_v8.py \
+            preactivation_readiness_convergence_v16_patch.py \
+            bot/tests/test_startup_authenticated_bridge_v456.py \
+            tests/test_pretrade_provenance_guard.py \
+            tests/test_preactivation_preflight_observability_v450.py \
+            tests/test_startup_two_phase_policy_v8.py \
             bot/tests/test_pretrade_attestation_validation_v452.py \
             bot/tests/test_pretrade_authenticated_provider_adapter_v453.py \
             bot/tests/test_startup_transition_candidate_v454.py \
@@ -111,6 +127,14 @@ jobs:
             bot/pretrade_attestation_validation_v452.py \
             bot/pretrade_authenticated_provider_adapter_v453.py \
             bot/startup_transition_candidate_v454.py \
+            bot/pretrade_independent_attestation.py \
+            bot/startup_authenticated_bridge_v456.py \
+            bot/startup_two_phase_policy_v8.py \
+            preactivation_readiness_convergence_v16_patch.py \
+            bot/tests/test_startup_authenticated_bridge_v456.py \
+            tests/test_pretrade_provenance_guard.py \
+            tests/test_preactivation_preflight_observability_v450.py \
+            tests/test_startup_two_phase_policy_v8.py \
             bot/tests/test_pretrade_attestation_validation_v452.py \
             bot/tests/test_pretrade_authenticated_provider_adapter_v453.py \
             bot/tests/test_startup_transition_candidate_v454.py \
@@ -147,6 +171,10 @@ jobs:
             bot/tests/test_pretrade_attestation_validation_v452.py \
             bot/tests/test_pretrade_authenticated_provider_adapter_v453.py \
             bot/tests/test_startup_transition_candidate_v454.py \
+            bot/tests/test_startup_authenticated_bridge_v456.py \
+            tests/test_pretrade_provenance_guard.py \
+            tests/test_preactivation_preflight_observability_v450.py \
+            tests/test_startup_two_phase_policy_v8.py \
             tests/test_kraken_recent_execution_discovery.py \
             tests/test_kraken_execution_recovery_candidates_v406.py \
             tests/test_runtime_known_execution_probe_v406_dynamic.py \
