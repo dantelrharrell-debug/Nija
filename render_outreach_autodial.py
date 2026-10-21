@@ -197,6 +197,7 @@ def _static_readiness(body: dict[str, Any]) -> tuple[bool, str]:
     """Evaluate only durable, non-time-window call-readiness evidence."""
     checks = (
         (_bool(body.get("has_consent")), "verified_consent_required"),
+        (bool(_validate_timezone(str(body.get("contact_timezone", "") or ""))), "contact_timezone_required"),
         (bool(str(body.get("consent_record_id", "") or "").strip()), "consent_record_id_required"),
         (bool(str(body.get("legal_basis", "") or "").strip()), "legal_basis_required"),
         (_bool(body.get("dnc_clear")), "dnc_clear_required"),
@@ -230,6 +231,7 @@ def _quarantine_static_nonready() -> int:
                     WHEN TRIM(COALESCE(dnc_checked_at,''))='' THEN 'dnc_checked_at_required'
                     WHEN suppression_clear=0 THEN 'suppression_clear_required'
                     WHEN campaign_enabled=0 THEN 'campaign_not_enabled'
+                    WHEN TRIM(COALESCE(contact_timezone,''))='' THEN 'contact_timezone_required'
                     ELSE 'static_readiness_review_required'
                 END,
                 next_attempt_at=?,
@@ -243,6 +245,7 @@ def _quarantine_static_nonready() -> int:
                  OR TRIM(COALESCE(dnc_checked_at,''))=''
                  OR suppression_clear=0
                  OR campaign_enabled=0
+                 OR TRIM(COALESCE(contact_timezone,''))=''
               )
             """,
             (now, now),
