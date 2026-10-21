@@ -48,6 +48,11 @@ _BALANCE_ATTR = "_nija_kraken_platform_balance_capital_feed_v415_balance"
 _LOCK = threading.RLock()
 _GUARD_LOCK = threading.Lock()
 _GUARD_STARTED = False
+# An authenticated Balance event belongs only to the same invocation/thread
+# of get_account_balance(). Broker-instance sequence counters are telemetry,
+# not evidence ownership: concurrent cache reads must never inherit another
+# worker's authenticated event.
+_BALANCE_READ_SCOPE = threading.local()
 
 
 def _chain_has(callable_obj: Any, attr: str) -> bool:
@@ -142,8 +147,13 @@ def _patch_kraken_class() -> bool:
             try:
                 seq = int(getattr(self, "_nija_v415_platform_balance_seq", 0) or 0) + 1
                 setattr(self, "_nija_v415_platform_balance_seq", seq)
-                setattr(self, "_nija_v415_platform_balance_observed_monotonic", time.monotonic())
-                setattr(self, "_nija_v415_platform_balance_observed_wall", datetime.now(timezone.utc))
+                observed_mono = time.monotonic()
+                observed_wall = datetime.now(timezone.utc)
+                setattr(self, "_nija_v415_platform_balance_observed_monotonic", observed_mono)
+                setattr(self, "_nija_v415_platform_balance_observed_wall", observed_wall)
+                scope = getattr(_BALANCE_READ_SCOPE, "active", None)
+                if isinstance(scope, dict) and scope.get("broker") is self:
+                    scope["event"] = (observed_mono, observed_wall)
                 LOGGER.critical(
                     "KRAKEN_PLATFORM_BALANCE_V415_OBSERVED marker=%s account=PLATFORM sequence=%d "
                     "authenticated_balance=true credential_proven=true new_broker_io=false "
@@ -167,16 +177,27 @@ def _patch_kraken_class() -> bool:
 
         @wraps(original_balance)
         def get_account_balance_v415(self: Any, *args: Any, **kwargs: Any):
-            before_seq = int(getattr(self, "_nija_v415_platform_balance_seq", 0) or 0)
-            result = original_balance(self, *args, **kwargs)
+            previous_scope = getattr(_BALANCE_READ_SCOPE, "active", None)
+            scope = {"broker": self, "event": None}
+            _BALANCE_READ_SCOPE.active = scope
+            try:
+                result = original_balance(self, *args, **kwargs)
+            finally:
+                # Even failed/early-returned reads cannot leak a successful
+                # observation to another call on a reused worker thread.
+                if previous_scope is None:
+                    delattr(_BALANCE_READ_SCOPE, "active")
+                else:
+                    _BALANCE_READ_SCOPE.active = previous_scope
             if not _is_platform_account(self):
                 return result
-            after_seq = int(getattr(self, "_nija_v415_platform_balance_seq", 0) or 0)
-            if after_seq <= before_seq:
+            event = scope["event"]
+            if event is None:
+                # A concurrent request may have completed a real Balance read,
+                # but this invocation must not publish its cached balance.
                 return result
 
-            observed_mono = _scalar(getattr(self, "_nija_v415_platform_balance_observed_monotonic", 0.0))
-            observed_wall = getattr(self, "_nija_v415_platform_balance_observed_wall", None)
+            observed_mono, observed_wall = event
             age_s = max(0.0, time.monotonic() - observed_mono) if observed_mono > 0.0 else float("inf")
             # This bridge is only for the just-completed invocation.  A long-tail
             # valuation must not turn an old private observation into fresh capital.
