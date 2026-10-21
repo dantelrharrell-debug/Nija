@@ -126,6 +126,29 @@ def test_authenticated_pretrade_producer_requires_scope_freshness_and_provenance
     import importlib.util
     source = SOURCE.parents[0] / "bot" / "pretrade_independent_attestation.py"
     spec = importlib.util.spec_from_file_location("nija_attestor_test", source)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    account = "platform:kraken"
+    evidence = {
+        "account": account, "source": "authenticated_independent",
+        "observed_at_epoch": 1000.0, "read_only": True, "scope_verified": True,
+        "checks": {field: True for field in module.FIELDS},
+        "provenance": {
+            "authenticated_broker_read_verified": True,
+            "ledger_snapshot_verified": True,
+            "complete_pagination_verified": True,
+            "collector_identity_verified": True,
+            "account_scope_verified": True,
+        },
+    }
+    module.install_authenticated_collector(lambda _: evidence)
+    assert all(module.current_authenticated_attestations(account, now=1001.0).values())
+    assert not any(module.current_authenticated_attestations("platform:other", now=1001.0).values())
+    assert not any(module.current_authenticated_attestations(account, now=1061.0).values())
+    evidence["provenance"]["complete_pagination_verified"] = False
+    assert not any(module.current_authenticated_attestations(account, now=1001.0).values())
+
+
 def test_integrated_attestation_contract_is_fail_closed():
     import importlib.util
     source = SOURCE.parents[0] / "bot" / "pretrade_independent_attestation.py"
@@ -138,6 +161,13 @@ def test_integrated_attestation_contract_is_fail_closed():
         "account": account, "source": "authenticated_independent",
         "observed_at_epoch": 1000.0, "read_only": True, "scope_verified": True,
         "checks": {field: True for field in module.FIELDS},
+        "provenance": {
+            "authenticated_broker_read_verified": True,
+            "ledger_snapshot_verified": True,
+            "complete_pagination_verified": True,
+            "collector_identity_verified": True,
+            "account_scope_verified": True,
+        },
     }
     module.install_authenticated_collector(lambda _: evidence)
     assert all(module.current_authenticated_attestations(account, now=1020.0).values())
