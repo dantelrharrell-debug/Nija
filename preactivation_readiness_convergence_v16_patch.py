@@ -449,7 +449,8 @@ def _collect_proofs() -> tuple[dict[str, bool], dict[str, Any]]:
         "capital_ready": bool(_live_mode() and hydrated and funded),
         "risk_ready": risk,
         "strategy_ready": strategy,
-        "execution_ready": bool(execution and risk and authority and execution_proof_ok),
+        "execution_ready": bool(execution and risk and authority and execution_proof_ok
+                                and hydrated and funded and registered and _live_mode()),
         "nonce_ready": strict_ok,
         "bootstrap_ready": bootstrap_ok,
     }
