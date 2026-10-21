@@ -9,7 +9,6 @@ from collections.abc import Mapping
 from typing import Any
 
 from bot.pretrade_independent_attestation import FIELDS, current_authenticated_attestations
-from bot.pretrade_independent_attestation import current_authenticated_attestations
 from bot.startup_two_phase_policy_v8 import evaluate_startup_transition
 
 _REQUIRED_EXTERNAL = (
@@ -36,17 +35,7 @@ def evaluate_authenticated_startup_candidate(
         "writer_lease_valid": broker.get("writer_lease") is True,
         "nonce_ready": broker.get("nonce_sequence") is True,
         "operator_authorized": broker.get("operator_authorization") is True,
-        "authenticated_pretrade_certificate": all(value is True for value in broker.values()),
-        "broker_permissions": broker["account_permissions"] is True,
-        "broker_identity": broker["account_identity"] is True,
-        "broker_balances": broker["broker_balances"] is True,
-        "ledger_reconciled": broker["position_ledger_reconciliation"] is True,
-        "protective_exits_verified": broker["protective_exit_readback"] is True,
-        "open_orders_reconciled": broker["open_order_reconciliation"] is True,
-        "duplicate_fence_clear": broker["duplicate_order_fence"] is True,
-        "writer_lease_valid": broker["writer_lease"] is True,
-        "nonce_ready": broker["nonce_sequence"] is True,
-        "operator_authorized": broker["operator_authorization"] is True,
+
     }
     for key in _REQUIRED_EXTERNAL:
         facts[key] = isinstance(external, Mapping) and external.get(key) is True
