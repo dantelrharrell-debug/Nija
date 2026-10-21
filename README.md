@@ -1,5 +1,37 @@
 # NIJA AI Trading LLC — Trading Platform Architecture & Recovery Guide
 
+## Recovery milestone — October 21, 2026 (Pacific)
+
+**Deployed recovery progress is confirmed. Live trading authorization remains incomplete.** This dated checkpoint supersedes earlier status summaries below; retain those sections as incident history.
+
+### Progress confirmed in read-only production checks
+
+- The deployed revision matches [commit `89b38c1`](https://github.com/dantelrharrell-debug/Nija/commit/89b38c1abb7e319d74d20e377a1aa259dc32b1b8).
+- The sampled runtime reported positive broker connectivity, balance hydration, position synchronization, capital, authority prerequisite, nonce, risk, strategy and bootstrap checks.
+- The same sample reported execution readiness, execution authority and trading-engine readiness as **false**. A positive authority prerequisite does not grant execution authority.
+- These observations establish a recovery milestone at the time of inspection. They do not certify sustained readiness, authenticated account-wide reconciliation, complete protective coverage, or active trading.
+
+### Remaining acceptance
+
+1. Reconcile broker-authenticated balances, positions, orders, fills and fees against the durable ledger, including unresolved Kraken closes.
+2. Independently certify protective exits, fresh capital across all required brokers, and single-writer/nonce authority for each relevant account.
+3. Preserve state in an approved off-host backup and verify an isolated restore before disruptive recovery work.
+4. Complete independent pre-trade certification and the reviewed transition in the actual live admission controller. Startup must not depend circularly on a newly placed trade; strict post-trade verification must remain intact. This checkpoint does not certify that integration as complete.
+5. Preserve the **1,800-second execution-evidence freshness requirement** wherever policy requires execution proof. Re-reading a historical fill must never refresh its broker event timestamp.
+6. Verify explicit execution-controller authorization and authentic order/fill/exit records, then complete a new observation interval before claiming sustained or 24/7 operation.
+
+### Safeguards for future releases
+
+- Preserve distributed single-writer locking, heartbeat/generation checks, nonce ownership, required-broker completeness, capital freshness, duplicate prevention, protective exits, risk limits and fail-closed denials.
+- Do not submit artificial/test trades, clear the kill switch, synthesize attestations, reuse stale markers or grant authority merely because the service is running.
+- Keep documentation separate from runtime releases. Review hosted CI/security results and the intended production branch before deliberately deploying reviewed code.
+- Maintain exact deployment and account-scoped evidence references in restricted operational records. Keep credentials and sensitive account evidence out of this public README.
+- When evidence expires, a broker disconnects, reconciliation fails or protection is unproven, retain fail-closed behavior and record the regression. Documentation supports recovery; it cannot guarantee that failures will never recur.
+
+**Scope:** Documentation only. No executable code, runtime configuration, database state or trading permissions are changed. No completed independent certification or live-trading observation is claimed.
+
+---
+
 ## Production trading recovery — October 17, 2026 (07:09 PDT; read-only evidence)
 
 **Trading activation: NOT COMPLETE.** Render service `nija-trading-bot` (`srv-d98dsr5aeets73fpbaqg`) in workspace `tea-d37fhe8gjchc73c8eo0g` reported live deployment `dep-db9cohfbtjjs73b83je0`, commit `255217ee905288363d7fadeb436ebc1d5d6cc39f` (deployed October 16, 2026 at 18:18 PDT). A live process is **not** evidence of 24/7 authorized trading.
