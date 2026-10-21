@@ -58,3 +58,30 @@ def test_exit_order_identity_cannot_cover_different_assets():
               for s in ("ETHUSD", "BTCUSD")]
     assert not verify_protective_orders("platform:kraken", positions, orders)[0]
     assert not verify_protective_orders("platform:kraken", [], [])[0]
+
+
+def test_matching_incomplete_fill_terms_are_not_certified():
+    """A shared missing field cannot prove an authenticated historical fill."""
+    valid = dict(account="platform:kraken", order_id="O-1", trade_id="T-1",
+                 symbol="ETHUSD", side="buy", quantity="0.1", cost="220", fee="0.5")
+    for changes in (
+        {"symbol": None}, {"symbol": ""}, {"symbol": " "},
+        {"symbol": " ETHUSD"}, {"side": None}, {"side": "unknown"},
+        {"side": ""}, {"cost": 0}, {"cost": "NaN"},
+        {"order_id": " "}, {"trade_id": " T-1"},
+    ):
+        incomplete = {**valid, **changes}
+        ok, reasons = reconcile_order_fills(
+            "platform:kraken", [incomplete], [incomplete],
+        )
+        assert not ok, (changes, reasons)
+
+
+def test_complete_fill_terms_and_positive_cost_remain_reconcilable():
+    valid = dict(account="platform:kraken", order_id="O-1", trade_id="T-1",
+                 symbol="ETHUSD", side="buy", quantity="0.1", cost="220", fee="0.0")
+    assert reconcile_order_fills("platform:kraken", [valid], [valid])[0]
+    # A different authenticated fill direction or symbol never matches.
+    for key, changed in (("side", "sell"), ("symbol", "BTCUSD")):
+        alt = {**valid, key: changed}
+        assert not reconcile_order_fills("platform:kraken", [valid], [alt])[0]
