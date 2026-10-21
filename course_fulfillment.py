@@ -1,6 +1,8 @@
 """Fail-closed course payment verification, independent of subscription/broker entitlements."""
 from __future__ import annotations
 
+import os
+from urllib.parse import urlsplit
 from datetime import datetime, timezone
 
 from flask import Blueprint, jsonify, request
@@ -9,6 +11,46 @@ from sqlalchemy import Boolean, Column, DateTime, MetaData, String, Table, selec
 COURSE_PRICE = "price_1U02soI0gfJjTf3EFtISyrYf"
 COURSE_PRODUCT = "prod_V01AbvtwLMQPkn"
 COURSE_LINK = "plink_1UEtWDI0gfJjTf3E5L0wb3K9"
+
+# Separate Stripe-account objects: test-mode IDs cannot be used with live keys.
+# No production identifiers, database connection, or entitlement are changed.
+SANDBOX_COURSE_LINK = "plink_1USrBiRS5Ezp77RQDmNYULEA"
+SANDBOX_COURSE_PRICE = "price_1U018cRS5Ezp77RQj9SttnhQ"
+SANDBOX_COURSE_PRODUCT = "prod_V01AbvtwLMQPkn"
+
+
+def expected_course_identity():
+    """A sandbox identity is allowed only in an explicitly isolated test runtime."""
+    if os.getenv("NIJA_COURSE_SANDBOX_MODE", "").strip().lower() != "true":
+        return (COURSE_LINK, COURSE_PRICE, COURSE_PRODUCT, True)
+
+    key = os.getenv("STRIPE_SECRET_KEY", "")
+    db = os.getenv("BILLING_DATABASE_URL", "")
+    origin = os.getenv("NIJA_COURSE_PUBLIC_URL", "")
+    # Explicit sandbox-only account, storage, origin and owner attestation.
+    # Do not accept a sandbox event into the production customer ledger.
+    if not key.startswith(("sk_test_", "rk_test_")):
+        return None
+    if os.getenv("NIJA_COURSE_SANDBOX_DB_ISOLATED", "").lower() != "true":
+        return None
+    if "nija_course_sandbox" not in urlsplit(db).path.lower():
+        return None
+    if not (origin.startswith("https://") and "sandbox" in urlsplit(origin).netloc.lower()):
+        return None
+    return (SANDBOX_COURSE_LINK, SANDBOX_COURSE_PRICE, SANDBOX_COURSE_PRODUCT, False)
+
+
+def expected_course_link():
+    expected = expected_course_identity()
+    return expected[0] if expected else None
+
+
+def _matches_mode(obj, expected_live):
+    # In sandbox the provider must explicitly attest livemode=false.
+    # Legacy mock fixtures in live-mode tests omit this field.
+    value = obj.get("livemode")
+    return value is not False if expected_live else value is False
+
 
 
 class CourseLedger:
@@ -47,8 +89,13 @@ class CourseLedger:
 
 def reconcile_session(stripe, ledger, session_id):
     """Never trust browser success redirects or the webhook event payload as payment proof."""
+    expected = expected_course_identity()
+    if expected is None:
+        return None
+    link_id, price_id, product_id, expected_live = expected
     session = stripe.checkout.Session.retrieve(session_id)
-    if session.get("payment_link") != COURSE_LINK or session.get("mode") != "payment":
+    if (not _matches_mode(session, expected_live) or
+            session.get("payment_link") != link_id or session.get("mode") != "payment"):
         return None
     lines = stripe.checkout.Session.list_line_items(session_id, limit=10, expand=["data.price.product"])
     items = lines.get("data", [])
@@ -57,8 +104,8 @@ def reconcile_session(stripe, ledger, session_id):
     price = items[0].get("price") or {}
     product = price.get("product")
     product_id = product if isinstance(product, str) else (product or {}).get("id")
-    if (items[0].get("quantity") != 1 or price.get("id") != COURSE_PRICE
-            or product_id != COURSE_PRODUCT or price.get("unit_amount") != 9900
+    if (items[0].get("quantity") != 1 or price.get("id") != price_id
+            or product_id != product_id or price.get("unit_amount") != 9900
             or price.get("currency") != "usd"):
         return None
     # Unit course price is $99; Stripe Tax may increase the actual charged total.
@@ -80,7 +127,7 @@ def reconcile_session(stripe, ledger, session_id):
     intent_id = intent if isinstance(intent, str) else (intent or {}).get("id")
     if intent_id:
         intent_obj = stripe.PaymentIntent.retrieve(intent_id)
-        charge_paid = (
+        charge_paid = _matches_mode(intent_obj, expected_live) and (
             intent_obj.get("status") == "succeeded"
             and intent_obj.get("amount_received") == total
             and intent_obj.get("currency") == "usd"
@@ -91,7 +138,8 @@ def reconcile_session(stripe, ledger, session_id):
         if charge_id and charge_paid:
             charge = stripe.Charge.retrieve(charge_id)
             charge_paid = (
-                charge.get("paid") is True
+                _matches_mode(charge, expected_live)
+                and charge.get("paid") is True
                 and charge.get("status") == "succeeded"
                 and charge.get("currency") == "usd"
                 and charge.get("amount") == total
@@ -119,7 +167,9 @@ def handle_course_event(stripe, ledger, event_type, obj):
     if not session_id or not session_id.startswith("cs_"):
         return
     # Ignore every other Stripe product without changing its subscription state.
-    if obj.get("payment_link") != COURSE_LINK:
+    expected = expected_course_identity()
+    if (not expected or obj.get("payment_link") != expected[0] or
+            not _matches_mode(obj, expected[3])):
         return
     reconcile_session(stripe, ledger, session_id)
 
