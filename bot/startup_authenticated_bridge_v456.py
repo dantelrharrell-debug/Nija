@@ -22,6 +22,17 @@ def evaluate_authenticated_startup_candidate(
     pending_execution: bool, posttrade_verified: bool,
 ) -> dict[str, Any]:
     """Read authenticated attestation and explicitly verified external gates."""
+    # Never accept a missing, noncanonical or whitespace-padded account scope.
+    # Without an exact account identity, no broker or external fact is trusted.
+    if not isinstance(account, str) or not account or account != account.strip():
+        return dict(
+            evaluate_startup_transition(
+                {}, pending_execution=pending_execution,
+                posttrade_verified=posttrade_verified,
+            ),
+            account_scope=None,
+            independent_attestation_diagnostic=True,
+        )
     broker = current_authenticated_attestations(account)
     facts = {
         "authenticated_pretrade_certificate": all(broker.get(field) is True for field in FIELDS),

@@ -111,3 +111,19 @@ def test_incomplete_attestation_mapping_fails_closed_without_error(monkeypatch):
     assert "authenticated_pretrade_certificate" in result["missing"]
     assert "broker_identity" in result["missing"]
     assert "protective_exits_verified" in result["missing"]
+
+
+def test_invalid_account_scope_never_accepts_external_readiness(monkeypatch):
+    monkeypatch.setattr(attestation, "_COLLECTOR", None)
+    external = {key: True for key in (
+        "risk_ready", "strategy_ready", "capital_ready", "kill_switch_clear",
+        "backup_restore_certified", "account_scope_verified",
+    )}
+    for account in ("", " platform:kraken", "platform:kraken ", None, 123):
+        result = evaluate_authenticated_startup_candidate(
+            account, external, pending_execution=False, posttrade_verified=False
+        )
+        assert result["pretrade_candidate_ready"] is False
+        assert result["activation_allowed"] is False
+        assert "account_scope_verified" in result["missing"]
+        assert result["account_scope"] is None

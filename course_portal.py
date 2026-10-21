@@ -23,7 +23,7 @@ from flask import Blueprint, current_app, jsonify, make_response, redirect, requ
 from sqlalchemy import Boolean, Column, DateTime, Integer, LargeBinary, MetaData, String, Table, Text, insert, select, update
 from sqlalchemy.exc import IntegrityError
 
-from course_fulfillment import COURSE_LINK, CourseLedger, reconcile_session
+from course_fulfillment import expected_course_link, CourseLedger, reconcile_session
 
 log = logging.getLogger("nija.billing.course_portal")
 COOKIE = "nija_foundations_session"
@@ -569,8 +569,11 @@ def register_course_portal(app, billing_store):
         if not _admin_allowed():
             return jsonify({"error": "unauthorized"}), 403
         # A reconciliation preview never changes entitlements or sends email.
+        link = expected_course_link()
+        if not link:
+            return jsonify({"error": "course_identity_not_ready"}), 503
         try:
-            sessions = _stripe().checkout.Session.list(payment_link=COURSE_LINK, limit=100)
+            sessions = _stripe().checkout.Session.list(payment_link=link, limit=100)
             data = sessions.get("data", [])
         except Exception:
             return jsonify({"error": "stripe_history_unavailable"}), 503

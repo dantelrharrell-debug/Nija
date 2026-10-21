@@ -37,6 +37,11 @@ def test_timezone_is_required_for_static_readiness():
     assert "contact_timezone_required" in blocker
 
 
+def test_invalid_timezone_fails_static_readiness():
+    with pytest.raises(ValueError, match="valid IANA timezone"):
+        autodial._static_readiness(_candidate(contact_timezone="Invalid/Zone"))
+
+
 def test_valid_timezone_passes_static_readiness():
     ready, blocker = autodial._static_readiness(_candidate())
     assert ready

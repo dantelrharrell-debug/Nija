@@ -198,6 +198,7 @@ def _static_readiness(body: dict[str, Any]) -> tuple[bool, str]:
     checks = (
         (_bool(body.get("has_consent")), "verified_consent_required"),
         (bool(str(body.get("contact_timezone", "") or "").strip()), "contact_timezone_required"),
+        (bool(_validate_timezone(str(body.get("contact_timezone", "") or ""))), "contact_timezone_required"),
         (bool(str(body.get("consent_record_id", "") or "").strip()), "consent_record_id_required"),
         (bool(str(body.get("legal_basis", "") or "").strip()), "legal_basis_required"),
         (_bool(body.get("dnc_clear")), "dnc_clear_required"),
