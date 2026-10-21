@@ -222,7 +222,7 @@ def test_pretrade_certificate_requires_explicit_canonical_account_scope(monkeypa
     )
     monkeypatch.setitem(sys.modules, "bot.pretrade_independent_attestation", module)
 
-    for scope in ("", " ", " platform:kraken", "platform:kraken ", "platform:\\nkraken"):
+    for scope in ("", " ", " platform:kraken", "platform:kraken ", "platform:" + chr(10) + "kraken"):
         monkeypatch.setenv("NIJA_PREFLIGHT_ACCOUNT_SCOPE", scope)
         valid, missing = v16._independent_pretrade_certificate()
         assert not valid
