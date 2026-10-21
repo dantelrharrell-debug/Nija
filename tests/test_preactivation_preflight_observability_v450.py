@@ -90,6 +90,7 @@ def test_missing_execution_evidence_cannot_be_replaced_by_preflight(monkeypatch)
 def test_independent_pretrade_certificate_requires_every_literal_true(monkeypatch):
     from types import ModuleType
     v16 = load()
+    monkeypatch.setenv("NIJA_PREFLIGHT_ACCOUNT_SCOPE", "platform:kraken")
     name = "bot.pretrade_independent_attestation"
     module = ModuleType(name)
     fields = (
@@ -202,3 +203,50 @@ def test_certificate_adapter_requires_literal_true_and_never_authorizes():
     result = module.certificate_from_independent_evidence(evidence)
     assert result["protective_exit_readback"] is False
     assert module.observe_preflight(evidence)["activation_allowed"] is False
+
+
+def test_pretrade_certificate_requires_explicit_canonical_account_scope(monkeypatch):
+    """Even a permissive mock verifier cannot certify an omitted scope."""
+    from types import ModuleType
+    v16 = load()
+    module = ModuleType("bot.pretrade_independent_attestation")
+    fields = (
+        "account_permissions", "account_identity", "broker_balances",
+        "position_ledger_reconciliation", "protective_exit_readback",
+        "open_order_reconciliation", "duplicate_order_fence",
+        "writer_lease", "nonce_sequence", "operator_authorization",
+    )
+    called = []
+    module.current_authenticated_attestations = lambda account: (
+        called.append(account) or {key: True for key in fields}
+    )
+    monkeypatch.setitem(sys.modules, "bot.pretrade_independent_attestation", module)
+
+    for scope in ("", " ", " platform:kraken", "platform:kraken ", "platform:" + chr(10) + "kraken"):
+        monkeypatch.setenv("NIJA_PREFLIGHT_ACCOUNT_SCOPE", scope)
+        valid, missing = v16._independent_pretrade_certificate()
+        assert not valid
+        assert set(missing) == set(fields)
+        assert called == []
+
+    monkeypatch.setenv("NIJA_PREFLIGHT_ACCOUNT_SCOPE", "platform:kraken")
+    assert v16._independent_pretrade_certificate() == (True, [])
+    assert called == ["platform:kraken"]
+
+
+def test_pretrade_certificate_missing_or_exception_producer_fails_closed(monkeypatch):
+    """A missing or failing collector emits failure without an activation side effect."""
+    from types import ModuleType
+    v16 = load()
+    monkeypatch.setenv("NIJA_PREFLIGHT_ACCOUNT_SCOPE", "platform:kraken")
+    module = ModuleType("bot.pretrade_independent_attestation")
+    monkeypatch.setitem(sys.modules, "bot.pretrade_independent_attestation", module)
+    ok, missing = v16._independent_pretrade_certificate()
+    assert ok is False and len(missing) == 10
+
+    def fail(_account):
+        raise RuntimeError("authentication_unavailable")
+
+    module.current_authenticated_attestations = fail
+    ok, missing = v16._independent_pretrade_certificate()
+    assert ok is False and len(missing) == 10
