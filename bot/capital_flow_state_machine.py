@@ -1022,6 +1022,10 @@ class CapitalRefreshCoordinator:
         """
         with self._lock:
             if self._in_flight:
+                logger.warning(
+                    "CAPITAL_COORDINATOR_OUTCOME reason=in_flight trigger=%s broker_count=%d publication_unchanged=true",
+                    trigger, len(broker_map),
+                )
                 logger.debug(
                     "[Coordinator] refresh already in-flight — duplicate %s skipped",
                     trigger,
@@ -1029,13 +1033,22 @@ class CapitalRefreshCoordinator:
                 return None
             self._in_flight = True
         try:
-            return self._pipeline(
+            result = self._pipeline(
                 broker_map=broker_map,
                 trigger=trigger,
                 open_exposure_usd=open_exposure_usd,
             )
+            logger.info(
+                "CAPITAL_COORDINATOR_OUTCOME reason=%s trigger=%s broker_count=%d accepted_count=%d publication_unchanged=%s",
+                "snapshot_accepted" if result is not None else "pipeline_returned_none",
+                trigger, len(broker_map),
+                len(result.broker_balances) if result is not None else 0,
+                result is None,
+            )
+            return result
         except Exception as exc:
             logger.error("[Coordinator] pipeline exception (%s): %s", trigger, exc)
+            logger.error("CAPITAL_COORDINATOR_OUTCOME reason=pipeline_exception trigger=%s broker_count=%d exception_type=%s publication_unchanged=true", trigger, len(broker_map), type(exc).__name__)
             self._bus.emit(CapitalEvent(
                 event_type=CapitalEventType.SNAPSHOT_REJECTED,
                 trigger=trigger,
@@ -1382,6 +1395,7 @@ class CapitalRefreshCoordinator:
         except RuntimeError as exc:
             if "lock acquisition timed out" not in str(exc):
                 raise
+            logger.warning("CAPITAL_COORDINATOR_OUTCOME reason=publication_lock_timeout trigger=%s contributors=%d publication_unchanged=true", trigger, len(snapshot.broker_balances))
             logger.warning(
                 "[Coordinator] capital authority publish lock timed out — "
                 "queuing a fresh non-recursive refresh: %s",
@@ -1397,6 +1411,7 @@ class CapitalRefreshCoordinator:
             return None
 
         if not accepted:
+            logger.warning("CAPITAL_COORDINATOR_OUTCOME reason=publication_rejected trigger=%s contributors=%d expected=%d publication_unchanged=true", trigger, len(snapshot.broker_balances), expected)
             # A snapshot that aged out while waiting for the authority lock must
             # be retried with fresh broker observations.  Queue the refresh on the
             # event bus rather than recursing into the coordinator while this run
@@ -1428,6 +1443,7 @@ class CapitalRefreshCoordinator:
                 is_stale=authoritative_stale,
             )
             if authoritative_stale:
+                logger.warning("CAPITAL_COORDINATOR_OUTCOME reason=post_publish_stale trigger=%s contributors=%d execution_ready_unchanged=true", trigger, len(snapshot.broker_balances))
                 self._bus.request_refresh("stale_snapshot_post_publish")
                 return None
 
