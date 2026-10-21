@@ -17,7 +17,7 @@ from flask import Flask, current_app, jsonify, request
 from flask_cors import CORS
 
 from billing_service_store import BillingIdentityMismatch, BillingServiceStore
-from course_fulfillment import handle_course_event, register_course_routes
+from course_fulfillment import expected_course_identity, handle_course_event, register_course_routes
 from course_portal import on_course_payment, register_course_portal
 from founding_onboarding_api import register_onboarding_routes
 from pricing_policy import (
@@ -870,11 +870,28 @@ def create_app(store: Optional[BillingServiceStore] = None) -> Flask:
         if not event_id or not event_type:
             return jsonify({"error": "invalid_stripe_event"}), 400
 
+        data = _obj_value(event, "data", {}) or {}
+        event_obj = _obj_value(data, "object", {}) or {}
+        if os.getenv("NIJA_COURSE_SANDBOX_MODE", "").strip().lower() == "true":
+            # A dedicated sandbox host cannot mutate membership/subscription state
+            # and must never process signed live events or other Stripe products.
+            expected = expected_course_identity()
+            if expected is None:
+                return jsonify({"error": "sandbox_isolation_not_verified"}), 503
+            if _obj_value(event, "livemode") is not False:
+                return jsonify({"error": "sandbox_live_event_rejected"}), 400
+            if event_type not in {
+                "checkout.session.completed", "checkout.session.async_payment_succeeded",
+                "checkout.session.async_payment_failed", "checkout.session.expired",
+            }:
+                return jsonify({"received": True, "ignored": True})
+            if (_obj_value(event_obj, "livemode") is not False or
+                    _obj_value(event_obj, "payment_link") != expected[0]):
+                return jsonify({"received": True, "ignored": True})
+
         if not _store().claim_event(event_id, event_type):
             return jsonify({"received": True, "duplicate": True})
 
-        data = _obj_value(event, "data", {}) or {}
-        event_obj = _obj_value(data, "object", {}) or {}
         try:
             _process_event(stripe, event_type, event_obj, event_created)
             handle_course_event(stripe, current_app.config["COURSE_LEDGER"], event_type, event_obj)
