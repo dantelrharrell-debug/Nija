@@ -67,7 +67,8 @@ def test_matching_incomplete_fill_terms_are_not_certified():
     for changes in (
         {"symbol": None}, {"symbol": ""}, {"symbol": " "},
         {"symbol": " ETHUSD"}, {"side": None}, {"side": "unknown"},
-        {"side": ""}, {"cost": 0}, {"cost": "NaN"},
+        {"side": ""}, {"side": []}, {"side": {}}, {"side": 0},
+        {"cost": 0}, {"cost": "NaN"},
         {"order_id": " "}, {"trade_id": " T-1"},
     ):
         incomplete = {**valid, **changes}
