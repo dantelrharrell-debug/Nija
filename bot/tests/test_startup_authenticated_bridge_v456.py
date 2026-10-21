@@ -32,10 +32,10 @@ def test_fresh_independent_producer_never_grants_authority(monkeypatch):
         "risk_ready", "strategy_ready", "capital_ready", "kill_switch_clear",
         "backup_restore_certified", "account_scope_verified",
     )}
+    # Patch the already-imported attestation module clock directly. The
+    # package attribute need not be bound when Python loaded its submodule;
+    # a dotted-string monkeypatch can fail before this safety test executes.
     monkeypatch.setattr(attestation.time, "time", lambda: 1000.0)
-    monkeypatch.setattr(
-        "bot.pretrade_independent_attestation.time.time", lambda: 1000.0
-    )
     ready = evaluate_authenticated_startup_candidate(
         "platform:kraken", external,
         pending_execution=False, posttrade_verified=False
