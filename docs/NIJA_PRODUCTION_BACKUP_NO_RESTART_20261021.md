@@ -10,20 +10,20 @@ stops, place test orders, or manufacture execution proof.
 
 ## Evidence and change boundary
 
-- Render service: \`srv-d98dsr5aeets73fpbaqg\` in workspace
-  \`tea-d37fhe8gjchc73c8eo0g\`, dedicated 1 GiB disk mounted at \`/data\`.
-- At 2026-10-21 22:13 UTC, a deployment of commit \`135759b7\` became live,
-  after the previously observed \`89b38c1\` build. It was a JustCall/Apollo
+- Render service: `srv-d98dsr5aeets73fpbaqg` in workspace
+  `tea-d37fhe8gjchc73c8eo0g`, dedicated 1 GiB disk mounted at `/data`.
+- At 2026-10-21 22:13 UTC, a deployment of commit `135759b7` became live,
+  after the previously observed `89b38c1` build. It was a JustCall/Apollo
   change, **not** recovery certification. Future restarts are **not** permitted
   merely to make a recovery status green.
-- The deployed source at \`135759b7\` includes all three read-only scripts
+- The deployed source at `135759b7` includes all three read-only scripts
   listed below; the Dockerfile checks their presence at image build time.
   **Verify file presence on the actual running instance anyway.** If missing,
   stop; use a separately reviewed, content-hash-pinned secure operator handoff.
   Do not deploy merely to copy a script into the container.
-- Runtime observations: SQLite integrity \`ok\` but 13 pending Kraken closes,
-  no trade/position rows; \`TRADE_LEDGER_V435_STORAGE_EVIDENCE\` reported
-  \`backup_restore_verified=false\`, \`restart_persistence_verified=false\`.
+- Runtime observations: SQLite integrity `ok` but 13 pending Kraken closes,
+  no trade/position rows; `TRADE_LEDGER_V435_STORAGE_EVIDENCE` reported
+  `backup_restore_verified=false`, `restart_persistence_verified=false`.
   Execution producer missing, freshness invalid and live authority withheld.
 - The October 11 off-host archive passed historical integrity checks. **It
   does not certify or replace the October 21 live ledger and JSON state.**
@@ -77,15 +77,15 @@ sha256sum scripts/nija_state_store_persistence_audit_v441.py \
 
 Do not proceed if the audit returns nonzero, resolves a scoped store outside
 the actual dedicated disk, finds an unverified ledger or unstable JSON state,
-or finds unknown files/collisions. A symlinked \`/app/data\` parent can be valid
-only when its verified resolved paths remain inside the mounted \`/data\`.
+or finds unknown files/collisions. A symlinked `/app/data` parent can be valid
+only when its verified resolved paths remain inside the mounted `/data`.
 Never move or overwrite the existing state to force the audit to pass.
 
 Then capture both **separate** archive types. The new local directory is
 private and intentionally outside the production disk. These scripts do not
-place broker orders or mutate the live ledger; \`v436\` uses SQLite's online
+place broker orders or mutate the live ledger; `v436` uses SQLite's online
 backup API to capture a transactionally consistent SQLite snapshot including
-WAL content; \`v449\` independently checks account JSON read stability.
+WAL content; `v449` independently checks account JSON read stability.
 
 ~~~bash
 out="$(mktemp -d /tmp/nija-current-recovery-XXXXXXXX)"
@@ -107,7 +107,7 @@ sha256sum "$out"/nija-trading-ledger-*.tar.gz \
 ~~~
 
 **Do not delete the private archives or restart after this step.** Inspect
-the \`v436\` manifest for missing or unstable companion evidence. A successful
+the `v436` manifest for missing or unstable companion evidence. A successful
 local archive is still **not** a verified off-host backup; the two stores are
 **not** cross-store atomic; no user balances, cost basis, exit coverage or
 trading permission is certified.
@@ -138,8 +138,8 @@ python -S scripts/nija_account_state_offhost_evidence_v449.py verify \
   --expected-sha256 ORIGINAL_ACCOUNT_SHA256
 ~~~
 
-A passing \`v436\` restore performs an isolated SQLite restoration plus
-\`PRAGMA integrity_check\` and count verification. A passing \`v449\` check
+A passing `v436` restore performs an isolated SQLite restoration plus
+`PRAGMA integrity_check` and count verification. A passing `v449` check
 validates JSON account inventory and member hashes. **Neither command
 attests independent custody by itself**: the operator must retain separate
 verified transfer and access-control evidence.
