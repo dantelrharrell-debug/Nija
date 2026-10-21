@@ -46,7 +46,7 @@ def reconcile_order_fills(
                 continue
             symbol, side = row.get("symbol"), row.get("side")
             if (not isinstance(symbol, str) or not symbol or symbol != symbol.strip()
-                    or side not in {"buy", "sell"}):
+                    or not isinstance(side, str) or side not in {"buy", "sell"}):
                 # Two equally incomplete records are NOT an authenticated
                 # fill match. Exact symbol and trade direction are required.
                 failures.append(label + "_trade_terms_invalid")
