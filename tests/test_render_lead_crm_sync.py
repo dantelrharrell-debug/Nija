@@ -524,3 +524,180 @@ def test_apollo_validation_error_category_is_redacted():
     ]:
         exc = urllib.error.HTTPError("https://api.apollo.io/", 422, "unprocessable", {}, io.BytesIO(payload))
         assert sync._apollo_error_category(exc) == expected
+
+
+# Validation failures must not strand unrelated website leads in CRM recovery.
+# None of these tests initiate calls or grant outbound marketing eligibility.
+def _test_apollo_error(code, response):
+    import urllib.error
+    return urllib.error.HTTPError(
+        sync._APOLLO_URL, code, "rejected", {}, io.BytesIO(response)
+    )
+
+
+def test_mixed_apollo_422_isolates_bad_sqlite_lead(monkeypatch, tmp_path):
+    create_site_event(monkeypatch, tmp_path)
+    monkeypatch.setattr(sync, "_redis_client", lambda: None)
+    monkeypatch.setattr(sync, "start_worker", lambda: None)
+    assert sync.enqueue_lead(
+        {"email": "invalid-email", "name": "Invalid Lead"}, "bad-event"
+    )
+    sent = []
+
+    def deliver(rows, key):
+        sent.append([r["email"] for r in rows])
+        if any(r["email"] == "invalid-email" for r in rows):
+            raise _test_apollo_error(422, b'{"errors":["invalid email"]}')
+        return {r["email"] for r in rows}
+
+    monkeypatch.setattr(sync, "_deliver_batch", deliver)
+    result = sync.sync_pending()
+    assert result["attempted"] == 2
+    assert result["synced"] == 1
+    assert result["review"] == 1
+    assert result["retry"] == 0
+    assert result["review_error_code"] == "HTTP_422_email"
+    with sync._connect() as conn:
+        rows = conn.execute(
+            "SELECT event_key, state, last_error_code "
+            "FROM website_lead_crm_sync ORDER BY event_key"
+        ).fetchall()
+    assert [tuple(row) for row in rows] == [
+        ("bad-event", "needs_review", "HTTP_422_email"),
+        ("evt_1", "synced", ""),
+    ]
+    assert sync.sync_pending()["attempted"] == 0
+    assert sent[0] == ["invalid-email", "qa@example.com"] or set(sent[0]) == {
+        "invalid-email", "qa@example.com"
+    }
+
+
+def test_mixed_apollo_422_isolates_bad_redis_lead(monkeypatch, tmp_path):
+    create_site_event(monkeypatch, tmp_path)
+    fake = FakeRedis()
+    monkeypatch.setattr(sync, "_redis_client", lambda: fake)
+    monkeypatch.setattr(sync, "start_worker", lambda: None)
+    assert sync.enqueue_lead(
+        {"email": "qa@example.com", "name": "Good Lead"}, "evt_1"
+    )
+    assert sync.enqueue_lead(
+        {"email": "not-an-email", "name": "Bad Lead"}, "evt_bad"
+    )
+
+    def deliver(rows, key):
+        if any(r["email"] == "not-an-email" for r in rows):
+            raise _test_apollo_error(422, b'{"errors":["invalid email"]}')
+        return {r["email"] for r in rows}
+
+    monkeypatch.setattr(sync, "_deliver_batch", deliver)
+    result = sync.sync_pending()
+    assert (result["attempted"], result["synced"], result["review"]) == (2, 1, 1)
+    assert fake.hget(sync._redis_event_key("evt_1"), "state") == "synced"
+    assert fake.hget(sync._redis_event_key("evt_bad"), "state") == "needs_review"
+    assert fake.zrangebyscore(
+        f"{sync._REDIS_PREFIX}:pending", 0, time.time() + 9999
+    ) == []
+    with sync._connect() as conn:
+        state = conn.execute(
+            "SELECT state FROM website_lead_crm_sync WHERE event_key='evt_bad'"
+        ).fetchone()[0]
+    assert state == "needs_review"
+    assert sync.sync_pending()["attempted"] == 0
+    # Replayed website events must not remove provider validation quarantine.
+    assert sync.enqueue_lead(
+        {"email": "not-an-email", "name": "Bad Lead"}, "evt_bad"
+    )
+    assert sync.sync_pending()["attempted"] == 0
+
+
+def test_apollo_transient_failure_still_retries(monkeypatch, tmp_path):
+    create_site_event(monkeypatch, tmp_path)
+    monkeypatch.setattr(sync, "_redis_client", lambda: None)
+    monkeypatch.setattr(
+        sync, "_deliver_batch",
+        lambda rows, key: (_ for _ in ()).throw(
+            _test_apollo_error(503, b"service unavailable")
+        ),
+    )
+    result = sync.sync_pending()
+    assert result["retry"] == 1
+    assert result["synced"] == 0
+    assert result.get("review", 0) == 0
+    with sync._connect() as conn:
+        row = conn.execute(
+            "SELECT state,last_error_code FROM website_lead_crm_sync"
+        ).fetchone()
+    assert tuple(row) == ("pending", "HTTP_503")
+
+
+def test_noncontact_apollo_422_preserves_retry_and_source(monkeypatch, tmp_path):
+    create_site_event(monkeypatch, tmp_path)
+    monkeypatch.setattr(sync, "_redis_client", lambda: None)
+    monkeypatch.setattr(
+        sync, "_deliver_batch",
+        lambda rows, key: (_ for _ in ()).throw(
+            _test_apollo_error(422, b'{"errors":["invalid label schema"]}')
+        ),
+    )
+    result = sync.sync_pending()
+    assert result["retry"] == 1
+    assert result.get("review", 0) == 0
+    with sync._connect() as conn:
+        row = conn.execute(
+            "SELECT state,last_error_code FROM website_lead_crm_sync"
+        ).fetchone()
+    assert tuple(row) == ("pending", "ValueError")
+
+
+def test_redis_review_state_survives_local_mirror_recreation(monkeypatch, tmp_path):
+    create_site_event(monkeypatch, tmp_path, email="invalid-email")
+    fake = FakeRedis()
+    monkeypatch.setattr(sync, "_redis_client", lambda: fake)
+    monkeypatch.setattr(sync, "start_worker", lambda: None)
+    assert sync.enqueue_lead(
+        {"email": "invalid-email", "name": "Review Lead"}, "evt_1"
+    )
+    monkeypatch.setattr(
+        sync, "_deliver_batch",
+        lambda rows, key: (_ for _ in ()).throw(
+            _test_apollo_error(422, b'{"errors":["invalid email"]}')
+        ),
+    )
+    result = sync.sync_pending()
+    assert result["review"] == 1
+    monkeypatch.setenv("NIJA_LEAD_DB_PATH", str(tmp_path / "fresh.sqlite3"))
+    assert sync.enqueue_lead(
+        {"email": "invalid-email", "name": "Review Lead"}, "evt_1"
+    )
+    with sync._connect() as conn:
+        row = conn.execute(
+            "SELECT state FROM website_lead_crm_sync WHERE event_key='evt_1'"
+        ).fetchone()
+    assert row["state"] == "needs_review"
+    monkeypatch.setattr(sync, "_redis_client", lambda: None)
+    assert sync.sync_pending()["attempted"] == 0
+
+
+def test_redis_rejection_backfills_missing_sqlite_review_mirror(monkeypatch, tmp_path):
+    create_site_event(monkeypatch, tmp_path, email="bad-email")
+    fake = FakeRedis()
+    # Simulate Redis write succeeding before its local SQLite mirror was
+    # checkpointed. Recovery must not resend the bad record after Redis loss.
+    sync._redis_enqueue(
+        fake, {"email": "bad-email", "name": "Pending Review"}, "evt_1"
+    )
+    monkeypatch.setattr(sync, "_redis_client", lambda: fake)
+    monkeypatch.setattr(
+        sync, "_deliver_batch",
+        lambda rows, key: (_ for _ in ()).throw(
+            _test_apollo_error(422, b'{"errors":["invalid email"]}')
+        ),
+    )
+    assert sync.sync_pending()["review"] == 1
+    with sync._connect() as conn:
+        row = conn.execute(
+            "SELECT state FROM website_lead_crm_sync WHERE event_key='evt_1'"
+        ).fetchone()
+    assert row["state"] == "needs_review"
+    monkeypatch.setattr(sync, "_redis_client", lambda: None)
+    assert sync.sync_pending()["attempted"] == 0
