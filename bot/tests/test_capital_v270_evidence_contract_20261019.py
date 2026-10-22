@@ -106,5 +106,46 @@ class TestCapitalV270ExactEvidence(unittest.TestCase):
         ))
 
 
+    def test_coalesced_and_pending_refreshes_never_promote_cached_capital(self):
+        manager = _Manager()
+        pending = {"ready": 0.0, "valid_brokers": 0, "pending": 1.0}
+        with patch.object(v270, "_authority", return_value=_Authority()):
+            with patch.object(v270.LOGGER, "critical") as logged:
+                result = v270._fail_closed_result(
+                    manager, pending, registered=3, connected=3
+                )
+        self.assertEqual(result["ready"], 0.0)
+        self.assertFalse(manager._capital_ready)
+        self.assertTrue(manager._trading_halted_due_to_capital)
+        self.assertEqual(
+            v270._refresh_evidence_stage(
+                pending, registered=3, connected=3, valid=0, publication_current=True
+            ), "upstream_pending"
+        )
+        args = logged.call_args.args
+        self.assertIn("refresh_evidence_stage=%s", args[0])
+        self.assertEqual(args[-1], "upstream_pending")
+        self.assertIn("contributing_broker_count_mismatch", args[-2])
+
+    def test_refresh_evidence_stage_distinguishes_upstream_and_broker_failures(self):
+        cases = (
+            (None, 3, 3, 0, True, "result_unavailable"),
+            ({"pending": 1.0, "dedup": 1.0}, 3, 3, 0, True, "upstream_pending"),
+            ({"dedup": 1.0}, 3, 3, 0, True, "coalesced"),
+            ({}, 3, 2, 2, True, "broker_registry_incomplete"),
+            ({}, 3, 3, 0, True, "contributors_incomplete"),
+            ({}, 3, 3, 4, True, "contributors_exceed_registered"),
+            ({}, 3, 3, 3, False, "publication_unaccepted"),
+            ({}, 3, 3, 3, True, "refresh_verified"),
+        )
+        for result, registered, connected, valid, current, expected in cases:
+            with self.subTest(expected=expected):
+                actual = v270._refresh_evidence_stage(
+                    result, registered=registered, connected=connected,
+                    valid=valid, publication_current=current,
+                )
+                self.assertEqual(actual, expected)
+
+
 if __name__ == "__main__":
     unittest.main()
