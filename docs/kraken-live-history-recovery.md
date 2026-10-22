@@ -35,7 +35,10 @@ Never place credentials, API keys or arbitrary endpoints in the request.
 
 The consumer rejects malformed/shared/foreign-owned/symlinked request files,
 duplicate JSON keys, out-of-range pages and ambiguous brokers before reads.
-The maximum is ten pages per endpoint per pass. Missing client/category leaves
+The maximum is 100 pages per endpoint per pass, but ONLY when an approved,
+explicit one-shot request selects that budget via `max_pages`. An existing
+request retains its original budget; the example uses two pages. Missing
+client/category leaves
 the request pending. A private process lock prevents simultaneous consumers.
 A permanent, fsynced `<request_id>.claimed.json` is created before reading.
 Interrupted or failed collections are not automatically replayed. Retain claims
@@ -46,13 +49,26 @@ through the existing broker's private-call controls. Two complete historical
 passes must agree and before/after balances must match. A changed count, row,
 balance, incomplete page or API failure produces failure evidence. Output is
 atomically committed as mode-0600 `<request_id>.evidence.json`. Error receipts
-contain exception type only. Raw history is never emitted to application logs.
+contain exception type and fixed allowlisted failure labels only. Raw history
+is never emitted to application logs.
 
 These are bounded page reads, not a global hard wall-clock timeout. A currently
 running private read retains the broker transport's timeout. Monitoring reads
 can still consume shared rate capacity; use this one-shot operation deliberately.
-If the account history exceeds the requested page budget, the attempt fails;
-do not treat partial data as complete history or automatically increase it.
+If a broker count shows that the history exceeds the explicit page budget,
+collection fails on its first history page. Never treat partial data as complete
+history, replay a consumed request, or automatically increase its budget.
+Preserve the failed claim and evidence. A new request ID and separately approved
+rate/budget plan are required for a new attempt.
+
+Kraken private-history endpoints consume +4 units of the account's REST
+rate counter per call. Standard-tier capacity replenishes 0.5 units/second
+(see https://support.kraken.com/articles/206548367-what-are-the-api-rate-limits-).
+Two passes across three paginated endpoints can take substantial time. Before
+approving a request above ten pages, independently verify the broker's
+monitoring throttles, rate budget, account scope and production impact.
+This opt-in capability does not override broker throttles, safety gates,
+backup/restore requirements, historical reconciliation or proof freshness.
 
 No ledger writes, order placement/cancellation, kill-switch changes, execution
 marker writes or authority promotion occur. Historical broker timestamps stay
