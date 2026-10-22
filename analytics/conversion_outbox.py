@@ -121,6 +121,15 @@ class ConversionOutbox:
         # Fail before claiming when delivery has not been authorized.
         if not enabled:
             raise DeliveryDisabled("ga4_conversion_delivery_disabled")
+        # Validate attribution and configuration before taking an irreversible
+        # claim. A malformed client ID must not strand a pending conversion.
+        import re
+        if not isinstance(client_id, str) or not re.fullmatch(r"[0-9]{1,20}\\.[0-9]{1,20}", client_id):
+            raise ValueError("invalid_client_id")
+        if not isinstance(measurement_id, str) or not re.fullmatch(r"G-[A-Z0-9]{5,20}", measurement_id):
+            raise ValueError("invalid_measurement_id")
+        if not isinstance(api_secret, str) or not api_secret.strip():
+            raise ValueError("missing_api_secret")
         if not self.claim(dedupe_key):
             return False
         with self.engine.connect() as connection:
