@@ -110,6 +110,10 @@ def collect_history(
                     raise IncompleteHistory(f"{endpoint}: oversized page")
                 if expected is None:
                     expected = count
+                    # Reject an insufficient operator budget before exhausting
+                    # the shared, rate-limited private history API allowance.
+                    if expected > max_pages * PAGE_SIZE:
+                        raise IncompleteHistory(f"{endpoint}: page limit before all records")
                 elif count != expected:
                     raise IncompleteHistory(f"{endpoint}: count changed during pagination")
                 for identifier, row in batch.items():
