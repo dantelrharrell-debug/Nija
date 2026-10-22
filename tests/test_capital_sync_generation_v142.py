@@ -212,10 +212,12 @@ class CapitalSyncGenerationTests(unittest.TestCase):
         release = threading.Event()
 
         def get_account_balance():
-            private_api_key = "NIJA_SUPER_SECRET_MUST_NOT_LOG"
+            # Use an opaque object rather than a credential-shaped literal:
+            # source secret scanners must not be suppressed for this test.
+            opaque_marker = object()
             entered.set()
             self.assertTrue(release.wait(timeout=3))
-            return private_api_key
+            return opaque_marker
 
         worker = threading.Thread(target=get_account_balance, daemon=True)
         worker.start()
