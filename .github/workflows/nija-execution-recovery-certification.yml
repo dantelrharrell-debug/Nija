@@ -4,6 +4,8 @@ on:
   pull_request:
     branches: [main, release/justcall-handoff-only-20261017]
     paths:
+      - 'bot/capital_publication_liveness_v142_patch.py'
+      - 'tests/test_capital_sync_generation_v142.py'
       - 'bot/kraken_live_history_recovery.py'
       - 'scripts/nija_kraken_readonly_history_collector_v441.py'
       - 'tests/test_kraken_live_history_recovery.py'
@@ -76,6 +78,8 @@ jobs:
       - name: Compile the repair without production startup hooks
         run: |
           python -S -m py_compile \
+            bot/capital_publication_liveness_v142_patch.py \
+            tests/test_capital_sync_generation_v142.py \
             bot/kraken_live_history_recovery.py \
             scripts/nija_kraken_readonly_history_collector_v441.py \
             tests/test_kraken_live_history_recovery.py \
@@ -119,6 +123,8 @@ jobs:
       - name: Scan changed runtime and test files for secrets
         run: |
           python -m detect_secrets scan --all-files --no-verify \
+            bot/capital_publication_liveness_v142_patch.py \
+            tests/test_capital_sync_generation_v142.py \
             bot/kraken_live_history_recovery.py \
             scripts/nija_kraken_readonly_history_collector_v441.py \
             tests/test_kraken_live_history_recovery.py \
@@ -170,6 +176,8 @@ jobs:
               raise SystemExit('Secret scan findings in: ' + ', '.join(sorted(results)))
           print('Changed-file secret scan passed')
           PY
+      - name: Verify synchronous capital generation fence without startup hooks
+        run: python -S tests/test_capital_sync_generation_v142.py
       - name: Verify execution, independent exits, and ledger invariants offline
         run: |
           python -m pytest -q \
@@ -225,3 +233,4 @@ jobs:
       - uses: github/codeql-action/analyze@v3
         with:
           category: '/language:python/recovery-release'
+
