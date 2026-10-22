@@ -111,12 +111,14 @@ RUN NIJA_DEFER_RUNTIME_SITE_HOOKS=1 python -S -m py_compile \
         /app/scripts/nija_offline_kraken_csv_audit_v440.py \
         /app/scripts/nija_state_store_persistence_audit_v441.py \
         /app/scripts/nija_account_state_offhost_evidence_v449.py \
+        /app/scripts/nija_legacy_global_state_evidence_v462.py \
         /app/scripts/nija_account_state_diagnostics.py && \
     test -s /app/scripts/nija_trade_ledger_snapshot_v436.py && \
     test -s /app/scripts/nija_ledger_evidence_v438.py && \
     test -s /app/scripts/nija_offline_kraken_csv_audit_v440.py && \
     test -s /app/scripts/nija_state_store_persistence_audit_v441.py && \
     test -s /app/scripts/nija_account_state_offhost_evidence_v449.py && \
+    test -s /app/scripts/nija_legacy_global_state_evidence_v462.py && \
     test -s /app/scripts/nija_account_state_diagnostics.py
 RUN NIJA_DEFER_RUNTIME_SITE_HOOKS=1 GIT_BRANCH=build-attestation GIT_COMMIT=build-attestation DRY_RUN_MODE=true python -S /app/scripts/runtime_entrypoint_attestation.py
 
