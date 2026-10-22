@@ -103,7 +103,7 @@ def test_wrong_account_and_disconnected_clients_do_not_read(root):
 
 @pytest.mark.parametrize("changes", [
     {"created_at": 699}, {"created_at": 1001}, {"created_at": True},
-    {"created_at": float("nan")}, {"max_pages": True}, {"max_pages": 11},
+    {"created_at": float("nan")}, {"max_pages": True}, {"max_pages": 101},
     {"account_scope": "user: member:kraken"}, {"account_scope": "user::kraken"},
     {"request_id": "../escape"}, {"unknown": True},
 ])
@@ -211,7 +211,7 @@ def test_failed_collection_records_safe_reason_and_keeps_claim(root, caplog, sce
     assert (root / (ID + ".claimed.json")).exists()
     assert "sensitive-canary" not in raw + caplog.text
     assert "KRAKEN_HISTORY_COLLECTION_FAILED" in caplog.text
-    assert len(calls) == {"api": 1, "count": 2, "pages": 3}[scenario]
+    assert len(calls) == {"api": 1, "count": 2, "pages": 2}[scenario]
     assert not run(root, [broker])
 
 
@@ -244,3 +244,66 @@ def test_exception_subclass_cannot_supply_diagnostic_text():
             raise AssertionError("Upstream exception text must not be inspected")
 
     assert history_failure_diagnostic(UpstreamError()) == {}
+
+
+def test_explicit_eleven_page_history_request_retains_fail_closed_authority(root):
+    """A larger opt-in history budget must not activate trading."""
+    request(root, max_pages=11)
+    broker = Broker()
+    calls = []
+
+    def read(endpoint, params, *, category):
+        assert category is CATEGORY
+        calls.append((endpoint, dict(params)))
+        if endpoint == "Balance":
+            assert params == {}
+            return {"error": [], "result": {"ZUSD": "100"}}
+        assert set(params) == {"ofs"}
+        field = {"TradesHistory": "trades", "ClosedOrders": "closed", "Ledgers": "ledger"}[endpoint]
+        count = 501 if endpoint == "TradesHistory" else 0
+        offset = params["ofs"]
+        batch = {str(i): {"vol": "1"} for i in range(offset, min(count, offset + 50))}
+        return {"error": [], "result": {"count": count, field: batch}}
+
+    broker._kraken_private_call = read
+    assert run(root, [broker])
+    result = json.loads((root / (ID + ".evidence.json")).read_text())
+    assert result["collection_succeeded"] is True
+    assert len(result["evidence"]["history"]["trades"]) == 501
+    assert result["evidence"]["repeat_read_consistent"] is True
+    assert result["evidence"]["trading_authorized"] is False
+    assert result["evidence"]["authenticated_identity_independently_verified"] is False
+    assert result["evidence"]["ledger_links_verified"] is False
+    assert result["evidence"]["entry_exit_reconciliation_verified"] is False
+    assert result["trading_authorized"] is False
+    assert len(calls) == 28  # two balances, 22 trade pages, four empty endpoint pages
+    assert {endpoint for endpoint, _ in calls} <= {
+        "Balance", "TradesHistory", "ClosedOrders", "Ledgers"
+    }
+    assert (root / (ID + ".claimed.json")).exists()
+    assert not run(root, [broker])
+
+
+def test_history_count_exceeding_explicit_budget_stops_on_first_page(root):
+    request(root, max_pages=11)
+    broker = Broker()
+    calls = []
+
+    def read(endpoint, params, *, category):
+        assert category is CATEGORY
+        calls.append(endpoint)
+        if endpoint == "Balance":
+            return {"error": [], "result": {"ZUSD": "100"}}
+        assert endpoint == "TradesHistory" and params == {"ofs": 0}
+        return {"error": [], "result": {"count": 551, "trades": {"first": {"vol": "1"}}}}
+
+    broker._kraken_private_call = read
+    assert run(root, [broker])
+    result = json.loads((root / (ID + ".evidence.json")).read_text())
+    assert result["collection_succeeded"] is False
+    assert result["error_code"] == "page_limit"
+    assert result["error_endpoint"] == "TradesHistory"
+    assert result["trading_authorized"] is False
+    assert calls == ["Balance", "TradesHistory"]
+    assert (root / (ID + ".claimed.json")).exists()
+    assert not run(root, [broker])
