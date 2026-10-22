@@ -8,6 +8,8 @@ on:
       - 'tests/test_capital_sync_generation_v142.py'
       - 'bot/kraken_live_history_recovery.py'
       - 'scripts/nija_kraken_readonly_history_collector_v441.py'
+      - 'scripts/nija_legacy_global_state_evidence_v462.py'
+      - 'bot/tests/test_nija_legacy_global_state_evidence_v462.py'
       - 'tests/test_kraken_live_history_recovery.py'
       - 'docs/kraken-live-history-recovery.md'
       - 'bot/tests/test_nija_kraken_readonly_history_collector_v441.py'
@@ -82,6 +84,8 @@ jobs:
             tests/test_capital_sync_generation_v142.py \
             bot/kraken_live_history_recovery.py \
             scripts/nija_kraken_readonly_history_collector_v441.py \
+            scripts/nija_legacy_global_state_evidence_v462.py \
+            bot/tests/test_nija_legacy_global_state_evidence_v462.py \
             tests/test_kraken_live_history_recovery.py \
             bot/tests/test_nija_kraken_readonly_history_collector_v441.py \
             bot/durable_recovery_state.py \
@@ -127,6 +131,8 @@ jobs:
             tests/test_capital_sync_generation_v142.py \
             bot/kraken_live_history_recovery.py \
             scripts/nija_kraken_readonly_history_collector_v441.py \
+            scripts/nija_legacy_global_state_evidence_v462.py \
+            bot/tests/test_nija_legacy_global_state_evidence_v462.py \
             tests/test_kraken_live_history_recovery.py \
             bot/tests/test_nija_kraken_readonly_history_collector_v441.py \
             bot/durable_recovery_state.py \
@@ -212,6 +218,7 @@ jobs:
             bot/tests/test_startup_verification_evidence.py \
             bot/tests/test_trade_ledger_storage_v435.py \
             bot/tests/test_trade_ledger_snapshot_v436.py \
+            bot/tests/test_nija_legacy_global_state_evidence_v462.py \
             bot/tests/test_nija_ledger_evidence_v438.py \
             bot/tests/test_offhost_ledger_evidence_report_v448.py
 
