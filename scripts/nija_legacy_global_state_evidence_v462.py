@@ -147,6 +147,13 @@ def create_archive(
         payload["legacy/" + label] = raw
     if not records:
         raise ValueError("no legacy bytes found: default-path absence is not proof")
+    # A stable per-file read is insufficient if a second source changes while
+    # other files are inventoried. Recheck bytes and inode from every captured
+    # path before committing a manifest. This is NOT cross-store atomicity.
+    for label, details in sorted(records.items()):
+        reread = _read_stable_file(Path(str(details["source_path"])))
+        if reread is None or reread[0] != payload["legacy/" + label]:
+            raise ValueError("legacy source changed across capture passes")
     manifest = {
         "format_version": 1,
         "created_at_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
