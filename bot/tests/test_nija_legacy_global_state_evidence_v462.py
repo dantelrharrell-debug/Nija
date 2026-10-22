@@ -109,14 +109,11 @@ def test_source_changes_mid_read_are_denied(tmp_path, monkeypatch):
         return raw
 
     monkeypatch.setattr(recovery, "_read_stable_file", changed)
-    # A single source read should preserve exactly the bytes read; no claim
-    # of a cross-file atomic snapshot is permitted.
-    result = recovery.create_archive(
-        {"legacy": position}, tmp_path / "first", persistent_root=root,
-    )
-    with zipfile.ZipFile(result["archive"]) as archive:
-        assert archive.read("legacy/legacy") != position.read_bytes()
-        assert json.loads(archive.read("manifest.json"))["cross_store_atomicity_verified"] is False
+    with pytest.raises(ValueError, match="changed across capture passes"):
+        recovery.create_archive(
+            {"legacy": position}, tmp_path / "first", persistent_root=root,
+        )
+    assert not list((tmp_path / "first").glob("*.zip"))
 
 
 def test_output_inside_live_mount_and_world_readable_output_denied(tmp_path):
