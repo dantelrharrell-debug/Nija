@@ -121,15 +121,20 @@ class ConversionOutbox:
         # Fail before claiming when delivery has not been authorized.
         if not enabled:
             raise DeliveryDisabled("ga4_conversion_delivery_disabled")
-        # Validate attribution and configuration before taking an irreversible
-        # claim. A malformed client ID must not strand a pending conversion.
-        import re
-        if not isinstance(client_id, str) or not re.fullmatch(r"[0-9]{1,20}\.[0-9]{1,20}", client_id):
-            raise ValueError("invalid_client_id")
-        if not isinstance(measurement_id, str) or not re.fullmatch(r"G-[A-Z0-9]{5,20}", measurement_id):
-            raise ValueError("invalid_measurement_id")
-        if not isinstance(api_secret, str) or not api_secret.strip():
-            raise ValueError("missing_api_secret")
+        # Validate event content and attribution before claiming; bad inputs
+        # must never strand a pending row in an unretryable claimed state.
+        from analytics.conversion_delivery import validate_ga4_event
+        with self.engine.connect() as connection:
+            candidate = connection.execute(select(self.table).where(
+                self.table.c.dedupe_key == dedupe_key,
+                self.table.c.state == "pending",
+            )).first()
+        if candidate is None:
+            return False
+        candidate_event = {"event_name": candidate.event_name,
+                           "parameters": json.loads(candidate.payload_json)}
+        validate_ga4_event(candidate_event, client_id=client_id,
+                           measurement_id=measurement_id, api_secret=api_secret)
         if not self.claim(dedupe_key):
             return False
         with self.engine.connect() as connection:
