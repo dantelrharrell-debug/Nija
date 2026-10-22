@@ -490,6 +490,44 @@ def _rollover_coordinator(
         return replacement
 
 
+
+# Safe, bounded function-name-only diagnostics for expired capital workers.
+# Never read Python frame locals, arguments, code source, account IDs or secrets.
+_CAPITAL_TIMEOUT_STAGE_FRAMES_V142 = {
+    "get_account_balance": "broker_balance_fetch",
+    "get_balance": "broker_balance_fetch",
+    "fetch_balance": "broker_balance_fetch",
+    "publish_snapshot": "capital_publication",
+    "dispatch_pending": "capital_event_dispatch",
+    "on_snapshot_received": "capital_runtime_fsm",
+}
+
+
+def _timeout_worker_stage_hint_v142(worker: threading.Thread) -> str:
+    """Sample one overdue worker without changing any broker or safety state.
+
+    Only allowlisted Python function names are consulted, mapped to static stage
+    labels.  Unknown/stopped workers stay unknown; this is a diagnostic hint,
+    never authorization evidence or an input to the publication/freshness gate.
+    """
+    try:
+        thread_id = getattr(worker, "ident", None)
+        if not isinstance(thread_id, int):
+            return "unavailable"
+        frame = sys._current_frames().get(thread_id)
+        for _ in range(32):
+            if frame is None:
+                break
+            name = frame.f_code.co_name
+            stage = _CAPITAL_TIMEOUT_STAGE_FRAMES_V142.get(name)
+            if stage is not None:
+                return stage
+            frame = frame.f_back
+    except (AttributeError, RuntimeError, TypeError, ValueError):
+        return "unavailable"
+    return "unknown"
+
+
 def _patch_coordinator_execute() -> bool:
     flow = _capital_flow_module()
     cls = getattr(flow, "CapitalRefreshCoordinator", None)
@@ -673,6 +711,9 @@ def _patch_coordinator_execute() -> bool:
             _rearm_inner_v176(trigger)
             return result
         except queue.Empty:
+            # Capture a safe stage hint before generation retirement/rollover.
+            # Do not inspect frame locals: those may contain broker credentials.
+            stage_hint = _timeout_worker_stage_hint_v142(worker)
             with self._lock:
                 self._nija_v142_flight_timed_out = True
             _retire_generation(generation, "runtime_pipeline_deadline_exceeded")
@@ -686,14 +727,16 @@ def _patch_coordinator_execute() -> bool:
                 )
             LOGGER.critical(
                 "CAPITAL_RUNTIME_PIPELINE_V142_TIMEOUT marker=%s trigger=%s generation=%d "
-                "deadline_s=%.1f age_s=%.1f rollover=%s late_publication_fenced=true "
-                "publication_expiry_extended=false trading_fail_closed=true",
+                "deadline_s=%.1f age_s=%.1f rollover=%s stage_hint=%s "
+                "late_publication_fenced=true publication_expiry_extended=false "
+                "trading_fail_closed=true",
                 MARKER,
                 trigger,
                 generation,
                 deadline_s,
                 _flight_age_s(self),
                 replacement is not None and replacement is not self,
+                stage_hint,
             )
             # Do not clear this retired instance's _in_flight flag here. Its
             # daemon owns that flag until it actually unwinds. The manager has
