@@ -49,6 +49,8 @@ jobs:
             api.github.com:443
             github.com:443
             objects.githubusercontent.com:443
+            results-receiver.actions.githubusercontent.com:443
+            *.blob.core.windows.net:443
             registry.npmjs.org:443
             pypi.org:443
             files.pythonhosted.org:443
@@ -125,6 +127,8 @@ jobs:
             github-releases.githubusercontent.com:443
             release-assets.githubusercontent.com:443
             objects.githubusercontent.com:443
+            results-receiver.actions.githubusercontent.com:443
+            *.blob.core.windows.net:443
             pkg-containers.githubusercontent.com:443
             ghcr.io:443
             get.trivy.dev:443
@@ -222,6 +226,8 @@ jobs:
             api.github.com:443
             github.com:443
             objects.githubusercontent.com:443
+            results-receiver.actions.githubusercontent.com:443
+            *.blob.core.windows.net:443
             pypi.org:443
             files.pythonhosted.org:443
 
