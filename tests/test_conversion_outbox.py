@@ -160,3 +160,21 @@ def test_invalid_attribution_does_not_claim_pending_conversion(tmp_path):
                               client_id="unverified", measurement_id="G-ABCDE12345",
                               api_secret="test-only-secret")
     assert outbox.pending()[0]["state"] == "pending"
+
+
+def test_invalid_purchase_payload_does_not_claim_or_send(tmp_path):
+    import pytest
+    engine = create_engine("sqlite:///" + str(tmp_path / "conversion.db"))
+    outbox = ConversionOutbox(engine)
+    assert outbox.enqueue_verified_course(
+        FakeLedger({"status": "paid", "granted": True}), "cs_123", consent=True
+    )
+    with engine.begin() as connection:
+        connection.execute(outbox.table.update().values(
+            payload_json='{"transaction_id":"cs_123","currency":"USD","value":0}'
+        ))
+    with pytest.raises(ValueError, match="invalid_course_value"):
+        outbox.deliver_claimed("course:cs_123", enabled=True,
+                              client_id="123.456", measurement_id="G-ABCDE12345",
+                              api_secret="test-only-secret")
+    assert outbox.pending()[0]["state"] == "pending"
