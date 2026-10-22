@@ -167,5 +167,130 @@ class CapitalSyncGenerationTests(unittest.TestCase):
         retire.assert_called_once_with(7, "test_sync_timeout")
 
 
+    def _off_owner_coordinator(self, pipeline):
+        """A non-bootstrap caller must use the bounded worker, not original execute."""
+        class Coordinator:
+            def __init__(inner):
+                inner._lock = threading.Lock()
+                inner._in_flight = False
+                inner._boot = SimpleNamespace(
+                    state="BOOT_IDLE", is_owner_thread=lambda: False,
+                )
+
+            def execute_refresh(inner, broker_map, trigger="coordinator", open_exposure_usd=0.0):
+                raise AssertionError("legacy synchronous path entered off bootstrap owner")
+
+            def _pipeline(inner, broker_map, trigger, open_exposure_usd):
+                return pipeline(inner)
+
+        with (
+            patch.object(self.v142, "_capital_flow_module", return_value=SimpleNamespace(
+                CapitalRefreshCoordinator=Coordinator,
+            )),
+            patch.object(self.v142, "_reassert_bounded_fetch_contract", return_value=(True, "ok")),
+        ):
+            self.assertTrue(self.v142._patch_coordinator_execute())
+        self.v142._reassert_bounded_fetch_contract = lambda: (True, "ok")
+        return Coordinator()
+
+    def test_non_owner_bootstrap_refresh_uses_bounded_worker_and_real_publication_identity(self) -> None:
+        """Non-owner watchdog may refresh capital; it cannot advance bootstrap FSM."""
+        from datetime import datetime, timezone
+
+        caller_thread = threading.get_ident()
+        workers = []
+        snapshot = SimpleNamespace(computed_at=datetime.now(timezone.utc))
+
+        def pipeline(_):
+            workers.append(threading.get_ident())
+            self.assertTrue(self.authority.publish_snapshot(
+                snapshot, self.authority._AUTHORIZED_WRITER_ID,
+            ))
+            return snapshot
+
+        coordinator = self._off_owner_coordinator(pipeline)
+        publication = SimpleNamespace(get_snapshot_publication_status=lambda: SimpleNamespace(
+            accepted=True, stale=False, timestamp=snapshot.computed_at,
+        ))
+        with (
+            patch.object(self.v142, "_authority", return_value=publication),
+            patch.object(self.v142, "_runtime_deadline_with_caller_context_v142", return_value=1.0),
+        ):
+            self.assertIs(coordinator.execute_refresh({}), snapshot)
+
+        self.assertEqual(len(self.published), 1)
+        self.assertEqual(len(workers), 1)
+        self.assertNotEqual(workers[0], caller_thread)
+        self.assertEqual(coordinator._boot.state, "BOOT_IDLE")
+        self.assertFalse(coordinator._in_flight)
+        self.assertFalse(hasattr(self.v142._LOCAL, "refresh_generation"))
+
+    def test_non_owner_bootstrap_refresh_does_not_accept_unverified_publication(self) -> None:
+        """A returned snapshot cannot bypass publication's accepted/stale/identity check."""
+        from datetime import datetime, timezone
+
+        snapshot = SimpleNamespace(computed_at=datetime.now(timezone.utc))
+        coordinator = self._off_owner_coordinator(lambda _: snapshot)
+        not_accepted = SimpleNamespace(get_snapshot_publication_status=lambda: SimpleNamespace(
+            accepted=False, stale=True, timestamp=snapshot.computed_at,
+        ))
+        with (
+            patch.object(self.v142, "_authority", return_value=not_accepted),
+            patch.object(self.v142, "_runtime_deadline_with_caller_context_v142", return_value=1.0),
+        ):
+            self.assertIsNone(coordinator.execute_refresh({}))
+        self.assertEqual(self.published, [])
+        self.assertFalse(coordinator._in_flight)
+
+    def test_non_owner_bootstrap_timeout_fences_late_publication(self) -> None:
+        """An over-budget off-owner worker must never publish after retirement."""
+        entered = threading.Event()
+        release = threading.Event()
+        finished = threading.Event()
+        results = []
+
+        def pipeline(_):
+            entered.set()
+            try:
+                self.assertTrue(release.wait(timeout=2.0))
+                results.append(self._publish())
+            finally:
+                finished.set()
+            return SimpleNamespace()
+
+        coordinator = self._off_owner_coordinator(pipeline)
+        with (
+            patch.object(self.v142, "_runtime_deadline_with_caller_context_v142", return_value=0.025),
+            patch.object(self.v142, "_canonical_manager", return_value=None),
+        ):
+            try:
+                self.assertIsNone(coordinator.execute_refresh({}))
+                self.assertTrue(entered.wait(timeout=1.0))
+                self.assertTrue(self.v142._ROLLOVER_OCCURRED)
+            finally:
+                release.set()
+                self.assertTrue(finished.wait(timeout=2.0))
+
+        self.assertEqual(results, [False])
+        self.assertEqual(self.published, [])
+        self.assertEqual(coordinator._boot.state, "BOOT_IDLE")
+
+    def test_bootstrap_owner_probe_fails_closed_to_existing_sync_path(self) -> None:
+        """Unknown ownership must not silently claim independent authority."""
+        coordinator = self._coordinator(lambda _: self._publish())
+        self.assertTrue(self.v142._bootstrap_owner_is_caller(coordinator))
+        coordinator._boot = SimpleNamespace(is_owner_thread=lambda: True)
+        self.assertTrue(self.v142._bootstrap_owner_is_caller(coordinator))
+        coordinator._boot = SimpleNamespace(is_owner_thread=lambda: False)
+        self.assertFalse(self.v142._bootstrap_owner_is_caller(coordinator))
+
+        def unavailable():
+            raise RuntimeError("owner_unknown")
+
+        coordinator._boot = SimpleNamespace(is_owner_thread=unavailable)
+        self.assertTrue(self.v142._bootstrap_owner_is_caller(coordinator))
+
+
+
 if __name__ == "__main__":
     unittest.main()
