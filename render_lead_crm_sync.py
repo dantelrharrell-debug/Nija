@@ -185,7 +185,7 @@ def _redis_enqueue(client, canonical: dict[str, str], event_key: str) -> bool:
             "updated_at": now,
         })
     state = client.hget(key, "state")
-    if state != "synced":
+    if state not in {"synced", "needs_review"}:
         score_raw = client.hget(key, "next_attempt_at") or "0"
         try:
             score = float(score_raw)
@@ -208,7 +208,7 @@ def _bootstrap_redis_from_sqlite(client) -> int:
                    LEFT JOIN website_lead_crm_sync AS crm
                      ON crm.event_key = leads.event_key
                    WHERE leads.received_at >= ?
-                     AND COALESCE(crm.state, 'pending') != 'synced'
+                     AND COALESCE(crm.state, 'pending') NOT IN ('synced', 'needs_review')
                    ORDER BY leads.received_at""",
                 (cutoff,),
             ).fetchall()
@@ -251,6 +251,50 @@ def _acknowledge_local_mirror(event_keys: list[str]) -> None:
         return
 
 
+def _hold_local_mirror_for_review(
+    rejected: dict[str, str], candidates: list[dict[str, Any]]
+) -> None:
+    """Keep the review hold even if the local SQLite mirror was recreated.
+
+    Redis is primary; an interrupted mirror update must not cause a fallback
+    to replay a validated-bad CRM record. All source data stays intact.
+    """
+    if not rejected:
+        return
+    by_event = {str(row["event_key"]): row for row in candidates}
+    try:
+        with _connect() as conn:
+            _prepare(conn)
+            now = _now_iso()
+            for event_key, code in rejected.items():
+                row = by_event.get(event_key)
+                if row is None:
+                    continue
+                conn.execute(
+                    """INSERT OR IGNORE INTO website_lead_crm_sync
+                       (event_key,email,name,phone,state,attempts,
+                        next_attempt_at,last_error_code,updated_at)
+                       VALUES (?,?,?,?,'needs_review',?,0,?,?)""",
+                    (
+                        event_key, str(row["email"]).strip().lower(),
+                        str(row.get("name", ""))[:200],
+                        _validated_contact_phone(row.get("phone", "")),
+                        int(row.get("attempts", 0)) + 1, code, now,
+                    ),
+                )
+                conn.execute(
+                    """UPDATE website_lead_crm_sync
+                       SET state='needs_review', next_attempt_at=0,
+                           last_error_code=?, updated_at=?
+                       WHERE event_key=? AND state='pending'""",
+                    (code, now, event_key),
+                )
+            conn.commit()
+    except (OSError, sqlite3.Error, KeyError, ValueError):
+        # Redis remains authoritative when SQLite is temporarily unavailable.
+        return
+
+
 def enqueue_lead(canonical: dict[str, str], event_key: str) -> bool:
     """Queue after the website lead has been persisted; never delay HTTP receipt.
 
@@ -259,16 +303,18 @@ def enqueue_lead(canonical: dict[str, str], event_key: str) -> bool:
     """
     durable = False
     redis_already_synced = False
+    redis_already_reviewed = False
     client = _redis_client()
     if client is not None:
         try:
             durable = _redis_enqueue(client, canonical, event_key)
-            redis_already_synced = (
-                client.hget(_redis_event_key(event_key), "state") == "synced"
-            )
+            persisted_state = client.hget(_redis_event_key(event_key), "state")
+            redis_already_synced = persisted_state == "synced"
+            redis_already_reviewed = persisted_state == "needs_review"
         except Exception:
             durable = False
             redis_already_synced = False
+            redis_already_reviewed = False
 
     local = False
     try:
@@ -287,6 +333,16 @@ def enqueue_lead(canonical: dict[str, str], event_key: str) -> bool:
                     """UPDATE website_lead_crm_sync
                        SET state='synced', last_error_code='', updated_at=?
                        WHERE event_key=?""",
+                    (_now_iso(), event_key),
+                )
+            if redis_already_reviewed:
+                # Persist the same provider-rejected state in the local mirror
+                # to prevent a Redis outage from replaying invalid records.
+                conn.execute(
+                    """UPDATE website_lead_crm_sync
+                       SET state='needs_review', next_attempt_at=0,
+                           last_error_code='HTTP_422_review', updated_at=?
+                       WHERE event_key=? AND state!='synced'""",
                     (_now_iso(), event_key),
                 )
             conn.commit()
@@ -373,6 +429,36 @@ def _deliver_batch(rows: list[dict[str, Any]], key: str) -> set[str]:
     return acknowledged & set(unique)
 
 
+def _deliver_batch_isolating_422(
+    rows: list[dict[str, Any]], key: str
+) -> tuple[set[str], dict[str, str]]:
+    """Bisect rejected Apollo bulk requests, retaining single bad records.
+
+    Successful CRM-only syncs are acknowledged; failed rows remain held for
+    explicit source correction. HTTP 401/403 and transport errors stay retryable.
+    No email, calls, sequences, or consent authority are created here.
+    """
+    if not rows:
+        return set(), {}
+    try:
+        return _deliver_batch(rows, key), {}
+    except urllib.error.HTTPError as exc:
+        if exc.code != 422:
+            raise
+        if len(rows) == 1:
+            category = _apollo_error_category(exc)
+            # A non-field-specific 422 may indicate a broken integration
+            # rather than a bad contact. Retry those rather than quarantining
+            # every lead in the entire outbox.
+            if category not in {"HTTP_422_email", "HTTP_422_phone"}:
+                raise ValueError("apollo_non_contact_specific_validation_error")
+            return set(), {str(rows[0]["event_key"]): category}
+        middle = len(rows) // 2
+        accepted_a, rejected_a = _deliver_batch_isolating_422(rows[:middle], key)
+        accepted_b, rejected_b = _deliver_batch_isolating_422(rows[middle:], key)
+        return accepted_a | accepted_b, {**rejected_a, **rejected_b}
+
+
 def _sync_pending_redis(client, key: str, max_batch: int) -> dict[str, int]:
     counts = {"attempted": 0, "synced": 0, "retry": 0, "waiting": 0}
     now = time.time()
@@ -397,8 +483,9 @@ def _sync_pending_redis(client, key: str, max_batch: int) -> dict[str, int]:
         return counts
     counts["attempted"] = len(rows)
     error_code = ""
+    rejected: dict[str, str] = {}
     try:
-        confirmed = _deliver_batch(rows, key)
+        confirmed, rejected = _deliver_batch_isolating_422(rows, key)
     except urllib.error.HTTPError as exc:
         confirmed = set()
         error_code = _apollo_error_category(exc)
@@ -410,9 +497,21 @@ def _sync_pending_redis(client, key: str, max_batch: int) -> dict[str, int]:
         error_code = type(exc).__name__
 
     acknowledged_event_keys: list[str] = []
+    reviewed: dict[str, str] = {}
     for row in rows:
         event_key = row["event_key"]
         rkey = _redis_event_key(event_key)
+        if event_key in rejected:
+            client.hset(rkey, mapping={
+                "state": "needs_review",
+                "attempts": str(int(row["attempts"]) + 1),
+                "next_attempt_at": "0",
+                "last_error_code": rejected[event_key],
+                "updated_at": _now_iso(),
+            })
+            client.zrem(f"{_REDIS_PREFIX}:pending", event_key)
+            reviewed[event_key] = rejected[event_key]
+            continue
         if row["email"].lower() in confirmed:
             client.hset(rkey, mapping={
                 "state": "synced",
@@ -436,6 +535,13 @@ def _sync_pending_redis(client, key: str, max_batch: int) -> dict[str, int]:
             client.zadd(f"{_REDIS_PREFIX}:pending", {event_key: next_at})
             counts["retry"] += 1
     _acknowledge_local_mirror(acknowledged_event_keys)
+    _hold_local_mirror_for_review(reviewed, rows)
+    if reviewed:
+        counts["review"] = len(reviewed)
+        categories = set(reviewed.values())
+        counts["review_error_code"] = (
+            next(iter(categories)) if len(categories) == 1 else "HTTP_422_mixed"
+        )
     if counts["retry"]:
         counts["retry_error_code"] = error_code or "not_acknowledged"
     return counts
@@ -458,8 +564,9 @@ def _sync_pending_sqlite(key: str, max_batch: int) -> dict[str, int]:
         return counts
     counts["attempted"] = len(rows)
     error_code = ""
+    rejected: dict[str, str] = {}
     try:
-        confirmed = _deliver_batch(rows, key)
+        confirmed, rejected = _deliver_batch_isolating_422(rows, key)
     except urllib.error.HTTPError as exc:
         confirmed = set()
         error_code = _apollo_error_category(exc)
@@ -470,8 +577,19 @@ def _sync_pending_sqlite(key: str, max_batch: int) -> dict[str, int]:
         confirmed = set()
         error_code = type(exc).__name__
 
+    reviewed: dict[str, str] = {}
     with _connect() as conn:
         for row in rows:
+            if row["event_key"] in rejected:
+                code = rejected[row["event_key"]]
+                conn.execute(
+                    """UPDATE website_lead_crm_sync
+                       SET state='needs_review', attempts=?, next_attempt_at=0,
+                           last_error_code=?, updated_at=? WHERE event_key=?""",
+                    (int(row["attempts"]) + 1, code, _now_iso(), row["event_key"]),
+                )
+                reviewed[row["event_key"]] = code
+                continue
             if row["email"].lower() in confirmed:
                 conn.execute(
                     """UPDATE website_lead_crm_sync SET state='synced',
@@ -491,6 +609,12 @@ def _sync_pending_sqlite(key: str, max_batch: int) -> dict[str, int]:
                 )
                 counts["retry"] += 1
         conn.commit()
+    if reviewed:
+        counts["review"] = len(reviewed)
+        categories = set(reviewed.values())
+        counts["review_error_code"] = (
+            next(iter(categories)) if len(categories) == 1 else "HTTP_422_mixed"
+        )
     if counts["retry"]:
         counts["retry_error_code"] = error_code or "not_acknowledged"
     return counts
@@ -530,6 +654,8 @@ def _worker_loop() -> None:
                     f"attempted={result['attempted']} synced={result['synced']} "
                     f"retry={result['retry']} "
                     f"retry_error_code={result.get('retry_error_code', 'none')} "
+                    f"review={result.get('review', 0)} "
+                    f"review_error_code={result.get('review_error_code', 'none')} "
                     "no_marketing_sent=true",
                     flush=True,
                 )
