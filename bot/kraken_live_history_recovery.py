@@ -25,7 +25,7 @@ from scripts.nija_kraken_readonly_history_collector_v441 import (
 LOGGER = logging.getLogger(__name__)
 
 MAX_REQUEST_BYTES = 4096
-MAX_PAGES = 10
+MAX_PAGES = 100  # Explicit operator budget only; collection never retries automatically
 REQUEST_TTL_S = 300
 
 
