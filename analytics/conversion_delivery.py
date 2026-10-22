@@ -16,16 +16,13 @@ class DeliveryDisabled(RuntimeError):
     pass
 
 
-def deliver_ga4(event, *, client_id, measurement_id, api_secret,
-                enabled=False, transport=None):
-    """Return True only on GA4 transport acceptance, never on event creation.
+def validate_ga4_event(event, *, client_id, measurement_id, api_secret):
+    """Validate every event field without sending or claiming anything."""
+    _validate_ga4(event, client_id, measurement_id, api_secret)
+    return True
 
-    HTTP 2xx is not proof of analytics reporting or Google Ads attribution.
-    The caller must atomically claim before calling, and acknowledge only after
-    True. Uncertain outcomes require reconciliation, not blind retries.
-    """
-    if not enabled:
-        raise DeliveryDisabled("ga4_conversion_delivery_disabled")
+
+def _validate_ga4(event, client_id, measurement_id, api_secret):
     if not isinstance(event, dict) or event.get("event_name") not in _ALLOWED:
         raise ValueError("unsupported_conversion_event")
     if not isinstance(client_id, str) or not _CLIENT_ID.fullmatch(client_id):
@@ -37,6 +34,25 @@ def deliver_ga4(event, *, client_id, measurement_id, api_secret,
     params = event.get("parameters")
     if not isinstance(params, dict):
         raise ValueError("invalid_event_parameters")
+    if event["event_name"] == "nija_verified_course_purchase":
+        if not isinstance(params.get("transaction_id"), str) or not params["transaction_id"].startswith("cs_"):
+            raise ValueError("missing_transaction_id")
+        if params.get("currency") != "USD" or params.get("value") != 99.0:
+            raise ValueError("invalid_course_value")
+
+
+def deliver_ga4(event, *, client_id, measurement_id, api_secret,
+                enabled=False, transport=None):
+    """Return True only on GA4 transport acceptance, never on event creation.
+
+    HTTP 2xx is not proof of analytics reporting or Google Ads attribution.
+    The caller must atomically claim before calling, and acknowledge only after
+    True. Uncertain outcomes require reconciliation, not blind retries.
+    """
+    if not enabled:
+        raise DeliveryDisabled("ga4_conversion_delivery_disabled")
+    _validate_ga4(event, client_id, measurement_id, api_secret)
+    params = event["parameters"]
     if event["event_name"] == "nija_verified_course_purchase":
         if not isinstance(params.get("transaction_id"), str) or not params["transaction_id"].startswith("cs_"):
             raise ValueError("missing_transaction_id")
