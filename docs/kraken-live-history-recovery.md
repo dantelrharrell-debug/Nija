@@ -37,7 +37,8 @@ The consumer rejects malformed/shared/foreign-owned/symlinked request files,
 duplicate JSON keys, out-of-range pages and ambiguous brokers before reads.
 The maximum is 100 pages per endpoint per pass, but ONLY when an approved,
 explicit one-shot request selects that budget via `max_pages`. An existing
-request retains its original budget; the example uses two pages. Missing client/category leaves
+request retains its original budget; the example uses two pages. Missing
+client/category leaves
 the request pending. A private process lock prevents simultaneous consumers.
 A permanent, fsynced `<request_id>.claimed.json` is created before reading.
 Interrupted or failed collections are not automatically replayed. Retain claims
@@ -48,7 +49,8 @@ through the existing broker's private-call controls. Two complete historical
 passes must agree and before/after balances must match. A changed count, row,
 balance, incomplete page or API failure produces failure evidence. Output is
 atomically committed as mode-0600 `<request_id>.evidence.json`. Error receipts
-contain exception type only. Raw history is never emitted to application logs.
+contain exception type and fixed allowlisted failure labels only. Raw history
+is never emitted to application logs.
 
 These are bounded page reads, not a global hard wall-clock timeout. A currently
 running private read retains the broker transport's timeout. Monitoring reads
