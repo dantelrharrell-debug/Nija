@@ -109,6 +109,49 @@ class ConversionOutbox:
             )
             return result.rowcount == 1
 
+    def deliver_claimed(self, dedupe_key, *, client_id, measurement_id,
+                        api_secret, enabled=False, transport=None):
+        """Explicit opt-in delivery; never auto-send or blindly retry.
+
+        A failed or uncertain send remains claimed for manual reconciliation.
+        This method is not connected to production routes or workers.
+        """
+        from analytics.conversion_delivery import deliver_ga4, DeliveryDisabled
+
+        # Fail before claiming when delivery has not been authorized.
+        if not enabled:
+            raise DeliveryDisabled("ga4_conversion_delivery_disabled")
+        # Validate event content and attribution before claiming; bad inputs
+        # must never strand a pending row in an unretryable claimed state.
+        from analytics.conversion_delivery import validate_ga4_event
+        with self.engine.connect() as connection:
+            candidate = connection.execute(select(self.table).where(
+                self.table.c.dedupe_key == dedupe_key,
+                self.table.c.state == "pending",
+            )).first()
+        if candidate is None:
+            return False
+        candidate_event = {"event_name": candidate.event_name,
+                           "parameters": json.loads(candidate.payload_json)}
+        validate_ga4_event(candidate_event, client_id=client_id,
+                           measurement_id=measurement_id, api_secret=api_secret)
+        if not self.claim(dedupe_key):
+            return False
+        with self.engine.connect() as connection:
+            row = connection.execute(select(self.table).where(
+                self.table.c.dedupe_key == dedupe_key,
+                self.table.c.state == "claimed",
+            )).first()
+        if row is None:
+            return False
+        event = {"event_name": row.event_name,
+                 "parameters": json.loads(row.payload_json)}
+        if deliver_ga4(event, client_id=client_id,
+                       measurement_id=measurement_id, api_secret=api_secret,
+                       enabled=True, transport=transport):
+            return self.mark_delivered(dedupe_key)
+        return False
+
     def pending(self):
         """Read-only inspection; no publishing or implicit retries."""
         with self.engine.connect() as connection:

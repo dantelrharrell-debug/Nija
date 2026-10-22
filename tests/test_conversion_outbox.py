@@ -109,3 +109,72 @@ def test_reconciliation_error_never_queues_conversion(monkeypatch, tmp_path):
         outbox.enqueue_reconciled_course(object(), FakeLedger({"status": "paid", "granted": True}),
                                          "cs_123", consent=True)
     assert outbox.pending() == []
+
+
+def test_opt_in_outbox_delivery_is_once_only(monkeypatch, tmp_path):
+    from analytics.conversion_delivery import DeliveryDisabled
+    from analytics import conversion_delivery
+
+    engine = create_engine("sqlite:///" + str(tmp_path / "conversion.db"))
+    outbox = ConversionOutbox(engine)
+    assert outbox.enqueue_verified_lead({"id": "lead-opt-in", "persisted": True}, consent=True)
+    delivered = []
+    monkeypatch.setattr(conversion_delivery, "deliver_ga4",
+                        lambda event, **kwargs: delivered.append(event) or True)
+    args = dict(client_id="123.456", measurement_id="G-ABCDE12345", api_secret="secret")
+    with __import__("pytest").raises(DeliveryDisabled):
+        outbox.deliver_claimed("lead:lead-opt-in", **args)
+    assert outbox.pending()[0]["state"] == "pending"
+    assert outbox.deliver_claimed("lead:lead-opt-in", enabled=True, **args) is True
+    assert outbox.deliver_claimed("lead:lead-opt-in", enabled=True, **args) is False
+    assert len(delivered) == 1
+    assert outbox.pending()[0]["state"] == "delivered"
+
+
+def test_uncertain_delivery_remains_claimed(monkeypatch, tmp_path):
+    from analytics import conversion_delivery
+    import pytest
+
+    engine = create_engine("sqlite:///" + str(tmp_path / "conversion.db"))
+    outbox = ConversionOutbox(engine)
+    assert outbox.enqueue_verified_lead({"id": "lead-uncertain", "persisted": True}, consent=True)
+
+    def failed(_event, **_kwargs):
+        raise TimeoutError("unknown_provider_acceptance")
+
+    monkeypatch.setattr(conversion_delivery, "deliver_ga4", failed)
+    args = dict(client_id="123.456", measurement_id="G-ABCDE12345", api_secret="secret", enabled=True)
+    with pytest.raises(TimeoutError):
+        outbox.deliver_claimed("lead:lead-uncertain", **args)
+    assert outbox.pending()[0]["state"] == "claimed"
+    assert outbox.deliver_claimed("lead:lead-uncertain", **args) is False
+
+
+def test_invalid_attribution_does_not_claim_pending_conversion(tmp_path):
+    import pytest
+    engine = create_engine("sqlite:///" + str(tmp_path / "conversion.db"))
+    outbox = ConversionOutbox(engine)
+    assert outbox.enqueue_verified_lead({"id": "lead-invalid-client", "persisted": True}, consent=True)
+    with pytest.raises(ValueError, match="invalid_client_id"):
+        outbox.deliver_claimed("lead:lead-invalid-client", enabled=True,
+                              client_id="unverified", measurement_id="G-ABCDE12345",
+                              api_secret="test-only-secret")
+    assert outbox.pending()[0]["state"] == "pending"
+
+
+def test_invalid_purchase_payload_does_not_claim_or_send(tmp_path):
+    import pytest
+    engine = create_engine("sqlite:///" + str(tmp_path / "conversion.db"))
+    outbox = ConversionOutbox(engine)
+    assert outbox.enqueue_verified_course(
+        FakeLedger({"status": "paid", "granted": True}), "cs_123", consent=True
+    )
+    with engine.begin() as connection:
+        connection.execute(outbox.table.update().values(
+            payload_json='{"transaction_id":"cs_123","currency":"USD","value":0}'
+        ))
+    with pytest.raises(ValueError, match="invalid_course_value"):
+        outbox.deliver_claimed("course:cs_123", enabled=True,
+                              client_id="123.456", measurement_id="G-ABCDE12345",
+                              api_secret="test-only-secret")
+    assert outbox.pending()[0]["state"] == "pending"
