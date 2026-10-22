@@ -309,6 +309,43 @@ def _live_initialize_with_handoff(manager: Any) -> bool:
 
         remaining = deadline - time.monotonic()
         if remaining <= 0:
+            # The v94 deadline is a strict fail-closed startup bound. Capture
+            # only non-secret registration/readiness metadata so an intermittent
+            # slow initializer can be distinguished from a missing registration
+            # latch without adding exchange I/O or extending the deadline.
+            registered, connected, _ = _platform_counts(manager)
+            contract_ok, contract_reason = _manager_contract(manager)
+            readiness_ok, readiness_reason, readiness = _readiness_handoff_proof()
+            registration = getattr(manager, "_broker_registration_complete", None)
+            registration_is_set = getattr(registration, "is_set", None)
+            try:
+                finalized = bool(registration_is_set()) if callable(registration_is_set) else False
+            except Exception:
+                finalized = False
+            missing = sorted(
+                key for key in _HANDOFF_READINESS_KEYS
+                if not bool(readiness.get(key, False))
+            )
+            logger.error(
+                "CANONICAL_BROKER_PREBOOTSTRAP_V94_TIMEOUT "
+                "timeout_s=%.1f initializer_alive=%s initializer_done=%s "
+                "fsm_initialized=%s registry_finalized=%s registered=%d "
+                "connected=%d manager_contract_ok=%s manager_contract_reason=%s "
+                "readiness_ok=%s readiness_reason=%s readiness_missing=%s "
+                "execution_authority_granted=false trading_fail_closed=true",
+                timeout_s,
+                thread.is_alive(),
+                done.is_set(),
+                bool(getattr(manager, "_fsm_initialized", False)),
+                finalized,
+                registered,
+                connected,
+                contract_ok,
+                contract_reason.split(":", 1)[0],
+                readiness_ok,
+                readiness_reason.split(":", 1)[0],
+                ",".join(missing),
+            )
             raise RuntimeError(
                 "canonical broker prebootstrap live handoff timed out "
                 f"after {timeout_s:.1f}s (last_blocker={last_reason})"
