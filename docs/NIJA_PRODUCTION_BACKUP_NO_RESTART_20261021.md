@@ -106,6 +106,146 @@ sha256sum "$out"/nija-trading-ledger-*.tar.gz \
   "$out"/nija-account-state-*.zip
 ~~~
 
+### Optional bounded legacy-state archive (future verified deployment only)
+
+When the **actual running instance** already has
+`scripts/nija_legacy_global_state_evidence_v462.py` available and independently
+reviewed, it can supplement the explicit legacy-file preservation procedure
+below. **Do not restart or redeploy just to install this utility.** It is
+not present on older production images.
+
+After the v436 and v449 steps, with the same private `"$out"` directory,
+a qualified operator may run:
+
+~~~bash
+test -s /app/scripts/nija_legacy_global_state_evidence_v462.py
+python -S /app/scripts/nija_legacy_global_state_evidence_v462.py snapshot \
+  --persistent-root /data --output-dir "$out"
+~~~
+
+The command captures only existing default candidate legacy global files.
+If a non-default source was verified by the original tracker/store's owner,
+pass an explicit bounded `--source LABEL=/absolute/path` for that source;
+labels are not account identities. The utility rejects absence of all
+candidates and deliberately marks `legacy_path_inventory_complete=false`,
+`off_host_custody_verified=false`, and `trading_authorized=false`.
+
+Transfer the archive through an approved encrypted channel and verify the
+unchanged source hash against the off-host copy:
+
+~~~bash
+python -S scripts/nija_legacy_global_state_evidence_v462.py verify \
+  --archive /restricted/offhost/nija-legacy-state-CAPTURE.zip \
+  --expected-sha256 ORIGINAL_RECORDED_SHA256
+~~~
+
+The v462 verifier inspects pinned archive bytes without extraction or
+mutation; a successful verification alone is not an isolated full-state
+restoration. It does not prove source account identity, reconciliation,
+ledger/JSON atomicity, or broker protection. Continue the no-restart HOLD.
+On the **current deployed image**, follow the existing owner-shell procedure
+below without triggering another deployment.
+
+### Preserve unscoped legacy tracker evidence separately
+
+The deployed diagnostics also report `legacy_global_file=true` with
+`entry_on_persistent_root=false` for a tracker. Neither a scoped JSON
+backup nor a SQLite archive captures every possible older global state
+file. **Do not delete, migrate, overwrite or assume these files are
+disposable.** The status is a diagnostic signal, not proof of a known
+source location.
+
+After the v436 and v449 snapshots, inventory and copy only existing
+legacy global files from the original running instance into the same
+private temporary directory. The known default candidates are
+`/app/data/positions.json`, `/app/data/entry_prices.json`, and
+`/app/positions.json`; inspect the trusted live configuration and
+actual tracker/store paths for any additional non-default files.
+Run this from the *same authorized owner shell*. It deliberately
+refuses leaf symlinks, unstable files, special files, oversized source
+files, shared output directories and overwrites:
+
+~~~bash
+NIJA_RECOVERY_OUT="$out" python -S - <<'PY'
+import hashlib
+import os
+import stat
+from pathlib import Path
+
+root = Path("/data").resolve(strict=True)
+output = Path(os.environ["NIJA_RECOVERY_OUT"])
+if output.is_symlink():
+    raise SystemExit("FAIL CLOSED: output symlink")
+output = output.resolve(strict=True)
+if (not output.is_dir() or output == root or root in output.parents
+        or stat.S_IMODE(output.stat().st_mode) & 0o077):
+    raise SystemExit("FAIL CLOSED: output must be private and off the live disk")
+
+sources = {
+    "data-positions.json": Path("/app/data/positions.json"),
+    "data-entry_prices.json": Path("/app/data/entry_prices.json"),
+    "app-positions.json": Path("/app/positions.json"),
+}
+limit = 4 * 1024 * 1024
+flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+copied = 0
+
+for label, source in sources.items():
+    try:
+        initial = source.lstat()
+    except FileNotFoundError:
+        print(label + ": not present at default path")
+        continue
+    if not stat.S_ISREG(initial.st_mode):
+        raise SystemExit("FAIL CLOSED: unexpected legacy source type " + label)
+    fd = os.open(source, flags)
+    with os.fdopen(fd, "rb") as stream:
+        before = os.fstat(stream.fileno())
+        if not stat.S_ISREG(before.st_mode) or before.st_size > limit:
+            raise SystemExit("FAIL CLOSED: unsafe legacy file " + label)
+        content = stream.read(limit + 1)
+        stream.seek(0)
+        second = stream.read(limit + 1)
+        after = os.fstat(stream.fileno())
+    current = source.lstat()
+    identity = lambda s: (s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns)
+    if (len(content) > limit or len(content) != before.st_size
+            or content != second or identity(initial) != identity(before)
+            or identity(before) != identity(after)
+            or identity(after) != identity(current)):
+        raise SystemExit("FAIL CLOSED: unstable legacy file " + label)
+    destination = output / ("legacy-" + label)
+    dstfd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                    | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    with os.fdopen(dstfd, "wb") as saved:
+        saved.write(content)
+        saved.flush()
+        os.fsync(saved.fileno())
+    digest = hashlib.sha256(content).hexdigest()
+    if hashlib.sha256(destination.read_bytes()).hexdigest() != digest:
+        raise SystemExit("FAIL CLOSED: local copy hash mismatch " + label)
+    actual = source.resolve(strict=True)
+    in_mount = actual == root or root in actual.parents
+    print(f"{label}: sha256={digest} bytes={len(content)} "
+          f"on_persistent_disk={in_mount} account_provenance_verified=false")
+    copied += 1
+
+print(f"legacy_files_copied={copied} off_host_restore_verified=false "
+      "trading_authorized=false")
+PY
+~~~
+
+Securely transfer any `legacy-*.json` artifacts **alongside** the v436
+and v449 backups. Recompute and compare their source SHA-256 on the
+independent off-host system; retain the operator custody receipt.
+A missing default file does not establish that a non-default file is
+absent. Resolve any such paths with the trusted live runtime owner
+before declaring backup coverage complete.
+
+Do not restore legacy files into an account-scoped live store, infer
+account ownership from filename alone, synthesize historical cost
+basis, or authorize trades from checksum or archived CSV matches.
+
 **Do not delete the private archives or restart after this step.** Inspect
 the `v436` manifest for missing or unstable companion evidence. A successful
 local archive is still **not** a verified off-host backup; the two stores are

@@ -108,8 +108,10 @@ scripts/*
 !scripts/nija_trade_ledger_snapshot_v436.py
 !scripts/nija_ledger_evidence_v438.py
 !scripts/nija_offline_kraken_csv_audit_v440.py
+!scripts/nija_kraken_readonly_history_collector_v441.py
 !scripts/nija_state_store_persistence_audit_v441.py
 !scripts/nija_account_state_offhost_evidence_v449.py
+!scripts/nija_legacy_global_state_evidence_v462.py
 !scripts/nija_startup_attempt_audit_v441.py
 !scripts/nija_account_state_diagnostics.py
 !scripts/redis_connectivity_check.sh
