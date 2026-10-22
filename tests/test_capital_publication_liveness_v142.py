@@ -214,6 +214,12 @@ def test_live_synchronous_refresh_owner_prevents_premature_rollover(monkeypatch)
     manager = SimpleNamespace(_capital_coordinator=coordinator)
     assert v142._patch_coordinator_execute()
 
+    # This fixture models the actual bootstrap owner thread. Non-owner
+    # watchdog refreshes must instead take the bounded v142 worker path.
+    coordinator._boot = SimpleNamespace(
+        is_owner_thread=lambda: threading.current_thread() is worker,
+    )
+
     def run() -> None:
         try:
             assert coordinator.execute_refresh({}, trigger="startup_test") == "completed"
