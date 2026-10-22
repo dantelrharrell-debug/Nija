@@ -64,6 +64,23 @@ class ConversionOutbox:
             {**record, "session_id": session_id}, consent=consent
         ))
 
+    def enqueue_reconciled_course(self, stripe, ledger, session_id, *, consent):
+        """Stage only after a fresh authenticated Stripe reconciliation.
+
+        This is an opt-in entrypoint, not wired to production. The authoritative
+        ledger must reflect the same checkout and a paid/granted entitlement.
+        A failed provider call propagates and never queues a conversion.
+        """
+        if not consent or not isinstance(session_id, str) or not session_id.startswith("cs_"):
+            return False
+        from course_fulfillment import reconcile_session
+        verification = reconcile_session(stripe, ledger, session_id)
+        if not verification or verification.get("paid") is not True:
+            return False
+        if verification.get("session_id") != session_id:
+            return False
+        return self.enqueue_verified_course(ledger, session_id, consent=True)
+
     def claim(self, dedupe_key):
         """Atomically claim a pending row; concurrent workers cannot both claim.
 
