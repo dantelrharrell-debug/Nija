@@ -109,6 +109,9 @@ RUN NIJA_DEFER_RUNTIME_SITE_HOOKS=1 python -S -m py_compile \
         /app/scripts/nija_trade_ledger_snapshot_v436.py \
         /app/scripts/nija_ledger_evidence_v438.py \
         /app/scripts/nija_offline_kraken_csv_audit_v440.py \
+        /app/scripts/nija_kraken_readonly_history_collector_v441.py \
+        /app/bot/kraken_live_history_recovery.py \
+        /app/bot/durable_recovery_state.py \
         /app/scripts/nija_state_store_persistence_audit_v441.py \
         /app/scripts/nija_account_state_offhost_evidence_v449.py \
         /app/scripts/nija_legacy_global_state_evidence_v462.py \
@@ -120,6 +123,9 @@ RUN NIJA_DEFER_RUNTIME_SITE_HOOKS=1 python -S -m py_compile \
     test -s /app/scripts/nija_account_state_offhost_evidence_v449.py && \
     test -s /app/scripts/nija_legacy_global_state_evidence_v462.py && \
     test -s /app/scripts/nija_account_state_diagnostics.py
+# Import the recovery dependency chain without starting the bot package or a broker.
+RUN NIJA_DEFER_RUNTIME_SITE_HOOKS=1 python -S -c "import importlib, sys, types; package = types.ModuleType('bot'); package.__path__ = ['/app/bot']; sys.modules['bot'] = package; recovery = importlib.import_module('bot.kraken_live_history_recovery'); assert callable(recovery.collect_requested_history), 'missing read-only history entrypoint'; print('NIJA_READONLY_HISTORY_IMPORT_OK')"
+
 RUN NIJA_DEFER_RUNTIME_SITE_HOOKS=1 GIT_BRANCH=build-attestation GIT_COMMIT=build-attestation DRY_RUN_MODE=true python -S /app/scripts/runtime_entrypoint_attestation.py
 
 RUN test -f /app/scripts/nija_trade_ledger_snapshot_v436.py && \
