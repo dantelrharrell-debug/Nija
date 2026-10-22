@@ -148,3 +148,15 @@ def test_uncertain_delivery_remains_claimed(monkeypatch, tmp_path):
         outbox.deliver_claimed("lead:lead-uncertain", **args)
     assert outbox.pending()[0]["state"] == "claimed"
     assert outbox.deliver_claimed("lead:lead-uncertain", **args) is False
+
+
+def test_invalid_attribution_does_not_claim_pending_conversion(tmp_path):
+    import pytest
+    engine = create_engine("sqlite:///" + str(tmp_path / "conversion.db"))
+    outbox = ConversionOutbox(engine)
+    assert outbox.enqueue_verified_lead({"id": "lead-invalid-client", "persisted": True}, consent=True)
+    with pytest.raises(ValueError, match="invalid_client_id"):
+        outbox.deliver_claimed("lead:lead-invalid-client", enabled=True,
+                              client_id="unverified", measurement_id="G-ABCDE12345",
+                              api_secret="test-only-secret")
+    assert outbox.pending()[0]["state"] == "pending"
