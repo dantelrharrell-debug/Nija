@@ -409,7 +409,11 @@ def _rollover_coordinator(
         if expected_old is not None and old is not expected_old:
             return old
 
-        generation = int(getattr(old, "_nija_v142_flight_generation", 0) or 0)
+        generation = int(
+            getattr(old, "_nija_v142_flight_generation", 0)
+            or getattr(old, "_nija_v142_sync_generation", 0)
+            or 0
+        )
         _retire_generation(generation, reason)
 
         flow = _capital_flow_module()
@@ -525,18 +529,23 @@ def _patch_coordinator_execute() -> bool:
         # synchronous path until the capital bootstrap FSM is terminal. Track
         # the actual owning thread separately from runtime generation workers;
         # a live synchronous refresh must not appear to be ownerless merely
-        # because it has no v142 worker generation.
+        # because it has no v142 worker generation. Give its publication the
+        # same generation fence as runtime work, without moving thread-owned
+        # bootstrap transitions onto a worker or extending their deadlines.
         if not _runtime_terminal(self):
-            sync_owned = False
             with self._lock:
                 if (
-                    not bool(getattr(self, "_in_flight", False))
-                    and getattr(self, "_nija_v142_sync_owner_thread", None) is None
+                    bool(getattr(self, "_in_flight", False))
+                    or getattr(self, "_nija_v142_sync_owner_thread", None) is not None
                 ):
-                    self._nija_v142_sync_owner_thread = threading.current_thread()
-                    self._nija_v142_sync_started_monotonic = time.monotonic()
-                    self._nija_v142_sync_trigger = str(trigger)
-                    sync_owned = True
+                    return None
+                generation = _next_generation()
+                self._nija_v142_sync_owner_thread = threading.current_thread()
+                self._nija_v142_sync_generation = generation
+                self._nija_v142_sync_started_monotonic = time.monotonic()
+                self._nija_v142_sync_trigger = str(trigger)
+            previous_generation = getattr(_LOCAL, "refresh_generation", None)
+            _LOCAL.refresh_generation = generation
             try:
                 return original(
                     self,
@@ -545,11 +554,20 @@ def _patch_coordinator_execute() -> bool:
                     open_exposure_usd=open_exposure_usd,
                 )
             finally:
-                if sync_owned:
-                    with self._lock:
-                        if getattr(self, "_nija_v142_sync_owner_thread", None) is threading.current_thread():
-                            self._nija_v142_sync_owner_thread = None
-                            self._nija_v142_sync_finished_monotonic = time.monotonic()
+                if previous_generation is None:
+                    try:
+                        delattr(_LOCAL, "refresh_generation")
+                    except AttributeError:
+                        pass
+                else:
+                    _LOCAL.refresh_generation = previous_generation
+                with self._lock:
+                    if (
+                        getattr(self, "_nija_v142_sync_owner_thread", None) is threading.current_thread()
+                        and getattr(self, "_nija_v142_sync_generation", None) == generation
+                    ):
+                        self._nija_v142_sync_owner_thread = None
+                        self._nija_v142_sync_finished_monotonic = time.monotonic()
 
         with self._lock:
             if bool(getattr(self, "_in_flight", False)):
@@ -1100,3 +1118,4 @@ __all__ = [
     "_patch_readiness_truth",
     "_patch_release_manifest",
 ]
+
