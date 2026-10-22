@@ -206,5 +206,79 @@ class CapitalSyncGenerationTests(unittest.TestCase):
         retire.assert_called_once_with(7, "test_sync_timeout")
 
 
+    def test_timeout_stage_hint_allowlists_only_function_names(self) -> None:
+        """A blocked worker reports a fixed label without logging frame locals."""
+        entered = threading.Event()
+        release = threading.Event()
+
+        def get_account_balance():
+            private_api_key = "NIJA_SUPER_SECRET_MUST_NOT_LOG"
+            entered.set()
+            self.assertTrue(release.wait(timeout=3))
+            return private_api_key
+
+        worker = threading.Thread(target=get_account_balance, daemon=True)
+        worker.start()
+        try:
+            self.assertTrue(entered.wait(timeout=2))
+            self.assertEqual(
+                self.v142._timeout_worker_stage_hint_v142(worker),
+                "broker_balance_fetch",
+            )
+        finally:
+            release.set()
+            worker.join(timeout=3)
+        self.assertFalse(worker.is_alive())
+
+    def test_timeout_stage_hint_unknown_function_and_unstarted_worker(self) -> None:
+        from unittest.mock import Mock
+
+        self.assertEqual(
+            self.v142._timeout_worker_stage_hint_v142(threading.Thread(target=lambda: None)),
+            "unavailable",
+        )
+        self.assertEqual(
+            self.v142._timeout_worker_stage_hint_v142(Mock(ident=None)),
+            "unavailable",
+        )
+
+        entered = threading.Event()
+        release = threading.Event()
+
+        def unrelated_blocked_function():
+            entered.set()
+            self.assertTrue(release.wait(timeout=3))
+
+        worker = threading.Thread(target=unrelated_blocked_function, daemon=True)
+        worker.start()
+        try:
+            self.assertTrue(entered.wait(timeout=2))
+            self.assertEqual(
+                self.v142._timeout_worker_stage_hint_v142(worker), "unknown",
+            )
+        finally:
+            release.set()
+            worker.join(timeout=3)
+
+    def test_stage_hint_cannot_change_capital_authority(self) -> None:
+        entered = threading.Event()
+        release = threading.Event()
+
+        def get_account_balance():
+            entered.set()
+            self.assertTrue(release.wait(timeout=3))
+
+        worker = threading.Thread(target=get_account_balance, daemon=True)
+        worker.start()
+        try:
+            self.assertTrue(entered.wait(timeout=2))
+            before = len(self.published)
+            self.assertEqual(self.v142._timeout_worker_stage_hint_v142(worker), "broker_balance_fetch")
+            self.assertEqual(len(self.published), before)
+        finally:
+            release.set()
+            worker.join(timeout=3)
+
+
 if __name__ == "__main__":
     unittest.main()
