@@ -369,6 +369,24 @@ def _runtime_terminal(coordinator: Any) -> bool:
     return value in {"READY", "RUNNING"}
 
 
+def _caller_owns_bootstrap(coordinator: Any) -> bool:
+    """Only the actual FSM owner may run an unbounded bootstrap-thread refresh.
+
+    Background watchdog/deadline callers do not own bootstrap transitions.
+    Even if the FSM remains BOOT_IDLE, run their refresh on the already-fenced,
+    bounded runtime worker path. Missing/failed ownership proof never grants
+    bootstrap transition authority.
+    """
+    boot = getattr(coordinator, "_boot", None)
+    checker = getattr(boot, "is_owner_thread", None)
+    if not callable(checker):
+        return False
+    try:
+        return bool(checker())
+    except Exception:
+        return False
+
+
 def _emit_snapshot_rejected(coordinator: Any, trigger: str, exc: BaseException) -> None:
     try:
         flow = _capital_flow_module()
@@ -525,14 +543,13 @@ def _patch_coordinator_execute() -> bool:
             )
             return None
 
-        # Bootstrap transitions are thread-owned. Preserve the exact legacy
-        # synchronous path until the capital bootstrap FSM is terminal. Track
-        # the actual owning thread separately from runtime generation workers;
-        # a live synchronous refresh must not appear to be ownerless merely
-        # because it has no v142 worker generation. Give its publication the
-        # same generation fence as runtime work, without moving thread-owned
-        # bootstrap transitions onto a worker or extending their deadlines.
-        if not _runtime_terminal(self):
+        # Bootstrap transitions are thread-owned: preserve synchronous
+        # execution ONLY for the proven bootstrap owner while preterminal.
+        # A watchdog/deadline caller cannot advance the bootstrap FSM and must
+        # not monopolize the coordinator beyond publication expiry just because
+        # the FSM is still BOOT_IDLE. Such callers use the existing bounded,
+        # generation-fenced worker below; this does not grant bootstrap readiness.
+        if not _runtime_terminal(self) and _caller_owns_bootstrap(self):
             with self._lock:
                 if (
                     bool(getattr(self, "_in_flight", False))
