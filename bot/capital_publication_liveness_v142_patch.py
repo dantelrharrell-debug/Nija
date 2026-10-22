@@ -369,6 +369,28 @@ def _runtime_terminal(coordinator: Any) -> bool:
     return value in {"READY", "RUNNING"}
 
 
+
+def _bootstrap_owner_is_caller(coordinator: Any) -> bool:
+    """Keep bootstrap FSM transitions on their verified owning thread.
+
+    Before the bootstrap FSM becomes terminal, watchdog/recovery callers are
+    not permitted to take the unbounded synchronous bootstrap path.  The
+    underlying coordinator pipeline explicitly skips bootstrap transitions
+    on a non-owner thread; its genuine capital fetch/publication can instead
+    use v142's bounded runtime worker and generation fence.  If the ownership
+    probe is unavailable or raises, preserve legacy synchronization rather
+    than assert that the caller is not the bootstrap owner.
+    """
+    boot = getattr(coordinator, "_boot", None)
+    owner_probe = getattr(boot, "is_owner_thread", None)
+    if not callable(owner_probe):
+        return True
+    try:
+        return bool(owner_probe())
+    except Exception:
+        return True
+
+
 def _emit_snapshot_rejected(coordinator: Any, trigger: str, exc: BaseException) -> None:
     try:
         flow = _capital_flow_module()
@@ -532,7 +554,7 @@ def _patch_coordinator_execute() -> bool:
         # because it has no v142 worker generation. Give its publication the
         # same generation fence as runtime work, without moving thread-owned
         # bootstrap transitions onto a worker or extending their deadlines.
-        if not _runtime_terminal(self):
+        if not _runtime_terminal(self) and _bootstrap_owner_is_caller(self):
             with self._lock:
                 if (
                     bool(getattr(self, "_in_flight", False))
