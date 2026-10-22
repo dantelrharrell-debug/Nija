@@ -173,3 +173,74 @@ def test_claim_survives_failure_to_persist_output(root, monkeypatch):
     before = len(broker.calls)
     assert not run(root, [broker])
     assert len(broker.calls) == before
+
+@pytest.mark.parametrize("scenario,code,endpoint", [
+    ("api", "api_failure", "Balance"),
+    ("count", "invalid_count", "TradesHistory"),
+    ("pages", "page_limit", "TradesHistory"),
+])
+def test_failed_collection_records_safe_reason_and_keeps_claim(root, caplog, scenario, code, endpoint):
+    request(root)
+    broker = Broker()
+    calls = []
+
+    def read(name, params, *, category):
+        calls.append(name)
+        assert category is CATEGORY
+        if name == "Balance":
+            if scenario == "api":
+                return {"error": ["sensitive-canary"], "result": {}}
+            return {"error": [], "result": {"ZUSD": "100"}}
+        assert name == "TradesHistory"
+        if scenario == "count":
+            return {"error": [], "result": {"count": True, "trades": {}}}
+        offset = params["ofs"]
+        return {"error": [], "result": {
+            "count": 101, "trades": {str(i): {"note": "sensitive-canary"} for i in range(offset, offset + 50)},
+        }}
+
+    broker._kraken_private_call = read
+    with caplog.at_level("WARNING"):
+        assert run(root, [broker])
+    raw = (root / (ID + ".evidence.json")).read_text()
+    result = json.loads(raw)
+    assert result["error_code"] == code
+    assert result["error_endpoint"] == endpoint
+    assert result["collection_succeeded"] is False
+    assert result["trading_authorized"] is False
+    assert (root / (ID + ".claimed.json")).exists()
+    assert "sensitive-canary" not in raw + caplog.text
+    assert "KRAKEN_HISTORY_COLLECTION_FAILED" in caplog.text
+    assert len(calls) == {"api": 1, "count": 2, "pages": 3}[scenario]
+    assert not run(root, [broker])
+
+
+def test_unknown_collector_message_is_not_persisted(root, monkeypatch, caplog):
+    from scripts.nija_kraken_readonly_history_collector_v441 import IncompleteHistory
+
+    request(root)
+
+    def fail(*args, **kwargs):
+        raise IncompleteHistory("TradesHistory: sensitive-canary")
+
+    monkeypatch.setattr(api, "collect_from_existing_broker", fail)
+    with caplog.at_level("WARNING"):
+        assert run(root, [Broker()])
+    raw = (root / (ID + ".evidence.json")).read_text()
+    result = json.loads(raw)
+    assert result["error_code"] == "history_incomplete_unknown"
+    assert "error_endpoint" not in result
+    assert "sensitive-canary" not in raw + caplog.text
+    assert result["trading_authorized"] is False
+
+
+def test_exception_subclass_cannot_supply_diagnostic_text():
+    from scripts.nija_kraken_readonly_history_collector_v441 import (
+        IncompleteHistory, history_failure_diagnostic,
+    )
+
+    class UpstreamError(IncompleteHistory):
+        def __str__(self):
+            raise AssertionError("Upstream exception text must not be inspected")
+
+    assert history_failure_diagnostic(UpstreamError()) == {}

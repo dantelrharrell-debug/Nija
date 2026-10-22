@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import fcntl
 import json
+import logging
 import math
 import os
 from pathlib import Path
@@ -18,8 +19,10 @@ from typing import Any, Iterable
 
 from .durable_recovery_state import write_recovery_state
 from scripts.nija_kraken_readonly_history_collector_v441 import (
-    _broker_account_scope, collect_from_existing_broker,
+    _broker_account_scope, collect_from_existing_broker, history_failure_diagnostic,
 )
+
+LOGGER = logging.getLogger(__name__)
 
 MAX_REQUEST_BYTES = 4096
 MAX_PAGES = 10
@@ -150,17 +153,26 @@ def collect_requested_history(
                 max_pages=request["max_pages"], include_balance=True,
             )
         except Exception as exc:
-            # Never persist exception text: upstream clients may include keys.
+            # Persist only fixed collector-owned diagnostic labels.
+            diagnostic = history_failure_diagnostic(exc)
             write_recovery_state(output, {
                 "request_id": identity, "collection_succeeded": False,
                 "error_type": type(exc).__name__, "trading_authorized": False,
+                **diagnostic,
             })
+            LOGGER.warning(
+                "KRAKEN_HISTORY_COLLECTION_FAILED request_id=%s error_code=%s "
+                "error_endpoint=%s trading_authorized=false",
+                identity, diagnostic.get("error_code", "unexpected_exception"),
+                diagnostic.get("error_endpoint", "unknown"),
+            )
             return True
         write_recovery_state(output, {
             "request_id": identity, "collection_succeeded": True,
             "collection_started_at": started, "collection_finished_at": time.time(),
             "evidence": evidence, "trading_authorized": False,
         })
+        LOGGER.info("KRAKEN_HISTORY_COLLECTION_COMPLETED request_id=%s trading_authorized=false", identity)
         return True
     finally:
         os.close(fd)
