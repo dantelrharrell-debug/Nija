@@ -118,6 +118,7 @@ def create_archive(
     payload: dict[str, bytes] = {}
     absent: list[str] = []
     identities: set[tuple[int, int]] = set()
+    source_identities: dict[str, tuple[int, int, int, int, int]] = {}
     total = 0
     for label, candidate in sorted(sources.items()):
         if not isinstance(label, str) or not LABEL.fullmatch(label):
@@ -134,6 +135,7 @@ def create_archive(
         if inode in identities:
             raise ValueError("duplicate legacy source inode")
         identities.add(inode)
+        source_identities[label] = _identity(stats)
         total += len(raw)
         if total > MAX_TOTAL_BYTES:
             raise ValueError("legacy source budget exceeded")
@@ -152,7 +154,9 @@ def create_archive(
     # path before committing a manifest. This is NOT cross-store atomicity.
     for label, details in sorted(records.items()):
         reread = _read_stable_file(Path(str(details["source_path"])))
-        if reread is None or reread[0] != payload["legacy/" + label]:
+        if (reread is None
+                or reread[0] != payload["legacy/" + label]
+                or _identity(reread[1]) != source_identities[label]):
             raise ValueError("legacy source changed across capture passes")
     manifest = {
         "format_version": 1,
