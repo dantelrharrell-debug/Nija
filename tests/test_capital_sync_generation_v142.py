@@ -40,6 +40,8 @@ class CapitalSyncGenerationTests(unittest.TestCase):
             def __init__(inner):
                 inner._lock = threading.Lock()
                 inner._in_flight = False
+                inner._boot = SimpleNamespace(is_owner_thread=lambda: True)
+                inner._pipeline = lambda broker_map, trigger, open_exposure_usd: pipeline(inner)
 
             def execute_refresh(inner, broker_map, trigger="coordinator", open_exposure_usd=0.0):
                 with inner._lock:
@@ -153,6 +155,43 @@ class CapitalSyncGenerationTests(unittest.TestCase):
         self.assertFalse(worker.is_alive())
         self.assertEqual(results, [True])
         self.assertEqual(len(self.published), 1)
+
+    def test_nonowner_preterminal_refresh_uses_bounded_worker(self) -> None:
+        """BOOT_IDLE alone must not force watchdog calls onto synchronous bootstrap."""
+        entered = threading.Event()
+        release = threading.Event()
+
+        def slow_pipeline(_):
+            entered.set()
+            self.assertTrue(release.wait(timeout=3))
+            return self._publish()
+
+        coordinator = self._coordinator(slow_pipeline)
+        coordinator._boot = SimpleNamespace(is_owner_thread=lambda: False)
+        with (
+            patch.object(self.v142, "_runtime_deadline_with_caller_context_v142", return_value=0.05),
+            patch.object(self.v142, "_canonical_manager", return_value=None),
+        ):
+            try:
+                self.assertIsNone(coordinator.execute_refresh({}, trigger="watchdog"))
+                self.assertTrue(entered.is_set())
+                self.assertEqual(self.published, [])
+                self.assertIsNone(getattr(coordinator, "_nija_v142_sync_owner_thread", None))
+                self.assertTrue(coordinator._nija_v142_flight_timed_out)
+            finally:
+                release.set()
+                coordinator._nija_v142_flight_thread.join(timeout=3)
+        self.assertFalse(coordinator._nija_v142_flight_thread.is_alive())
+        self.assertEqual(self.published, [])
+
+    def test_nonowner_refresh_cannot_claim_bootstrap_thread(self) -> None:
+        coordinator = self._coordinator(lambda _: self._publish())
+        coordinator._boot = SimpleNamespace(is_owner_thread=lambda: False)
+        self.assertFalse(self.v142._caller_owns_bootstrap(coordinator))
+        coordinator._boot = SimpleNamespace(is_owner_thread=lambda: (_ for _ in ()).throw(RuntimeError("unavailable")))
+        self.assertFalse(self.v142._caller_owns_bootstrap(coordinator))
+        coordinator._boot = SimpleNamespace(is_owner_thread=lambda: True)
+        self.assertTrue(self.v142._caller_owns_bootstrap(coordinator))
 
     def test_rollover_retires_exact_sync_generation(self) -> None:
         old = SimpleNamespace(_nija_v142_sync_generation=7)
