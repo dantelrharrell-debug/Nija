@@ -52,3 +52,33 @@ def test_rejects_invalid_attribution_and_event():
     with pytest.raises(ValueError):
         deliver_ga4({"event_name": "page_view", "parameters": {}}, enabled=True, **kwargs_for(sender))
     assert sender.calls == []
+
+
+def test_http_failure_does_not_report_delivery():
+    sender = FakeTransport()
+    class Rejected:
+        status_code = 403
+        def raise_for_status(self):
+            raise RuntimeError("provider_rejected")
+    sender.post = lambda *args, **kwargs: Rejected()
+    with pytest.raises(RuntimeError, match="provider_rejected"):
+        deliver_ga4({"event_name": "nija_verified_lead", "parameters": {}},
+                    enabled=True, **kwargs_for(sender))
+
+
+def test_invalid_course_value_never_sends():
+    sender = FakeTransport()
+    with pytest.raises(ValueError, match="invalid_course_value"):
+        deliver_ga4({"event_name": "nija_verified_course_purchase",
+                     "parameters": {"transaction_id": "cs_123",
+                                    "currency": "USD", "value": 0}},
+                    enabled=True, **kwargs_for(sender))
+    assert sender.calls == []
+
+
+def test_unsupported_event_never_sends():
+    sender = FakeTransport()
+    with pytest.raises(ValueError, match="unsupported_conversion_event"):
+        deliver_ga4({"event_name": "purchase", "parameters": {}},
+                    enabled=True, **kwargs_for(sender))
+    assert sender.calls == []
