@@ -415,3 +415,37 @@ def test_writer_wrapper_repatch_does_not_duplicate_or_unwrap_layers(monkeypatch)
     assert guard._wrapper_chain_has_marker(second, guard._ACQUIRE_WRAP_ATTR)
     assert second() is True
     assert sequence == ["recovery", "base", "prebootstrap"]
+
+
+def test_live_timeout_logs_registration_diagnostics_without_granting_authority(monkeypatch, caplog):
+    release = threading.Event()
+
+    class Manager(_ReadyManager):
+        def has_attempted_connections(self):
+            return False
+
+        def initialize(self):
+            release.wait(timeout=5)
+
+    manager = Manager()
+    monkeypatch.setenv("NIJA_PREBOOTSTRAP_HANDOFF_TIMEOUT_S", "1")
+    monkeypatch.setattr(
+        guard, "_prebootstrap_handoff_proof",
+        lambda _: (False, "broker_registration_not_finalized", {}),
+    )
+    monkeypatch.setattr(
+        guard, "_readiness_handoff_proof",
+        lambda: (False, "readiness_false:capital_ready", {"capital_ready": False}),
+    )
+    try:
+        with pytest.raises(RuntimeError, match="broker_registration_not_finalized"):
+            guard._live_initialize_with_handoff(manager)
+        logs = caplog.text
+        assert "CANONICAL_BROKER_PREBOOTSTRAP_V94_TIMEOUT" in logs
+        assert "registry_finalized=False" in logs
+        assert "registered=1" in logs
+        assert "manager_contract_reason=broker_registration_not_finalized" in logs
+        assert "readiness_missing=balance_hydrated,broker_connected,capital_ready,risk_ready" in logs
+        assert "execution_authority_granted=false trading_fail_closed=true" in logs
+    finally:
+        release.set()
