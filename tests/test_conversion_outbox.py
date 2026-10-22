@@ -66,3 +66,46 @@ def test_nonexistent_claim_and_ack_fail_closed(tmp_path):
     outbox = ConversionOutbox(engine)
     assert outbox.claim("lead:missing") is False
     assert outbox.mark_delivered("lead:missing") is False
+
+
+def test_reconciled_course_requires_fresh_verified_stripe(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    import course_fulfillment
+
+    engine = create_engine("sqlite:///" + str(tmp_path / "conversion.db"))
+    outbox = ConversionOutbox(engine)
+    ledger = FakeLedger({"status": "paid", "granted": True})
+    stripe = SimpleNamespace()
+
+    monkeypatch.setattr(course_fulfillment, "reconcile_session",
+                        lambda _stripe, _ledger, sid: {"session_id": sid, "paid": False})
+    assert outbox.enqueue_reconciled_course(stripe, ledger, "cs_verified", consent=True) is False
+    assert outbox.pending() == []
+
+    monkeypatch.setattr(course_fulfillment, "reconcile_session",
+                        lambda _stripe, _ledger, sid: {"session_id": "cs_other", "paid": True})
+    assert outbox.enqueue_reconciled_course(stripe, ledger, "cs_verified", consent=True) is False
+
+    monkeypatch.setattr(course_fulfillment, "reconcile_session",
+                        lambda _stripe, _ledger, sid: {"session_id": sid, "paid": True})
+    assert outbox.enqueue_reconciled_course(stripe, ledger, "cs_verified", consent=False) is False
+    assert outbox.enqueue_reconciled_course(stripe, ledger, "cs_verified", consent=True) is True
+    assert outbox.enqueue_reconciled_course(stripe, ledger, "cs_verified", consent=True) is False
+    assert len(outbox.pending()) == 1
+
+
+def test_reconciliation_error_never_queues_conversion(monkeypatch, tmp_path):
+    import course_fulfillment
+
+    engine = create_engine("sqlite:///" + str(tmp_path / "conversion.db"))
+    outbox = ConversionOutbox(engine)
+
+    def unavailable(_stripe, _ledger, _sid):
+        raise RuntimeError("stripe_unavailable")
+
+    monkeypatch.setattr(course_fulfillment, "reconcile_session", unavailable)
+    import pytest
+    with pytest.raises(RuntimeError, match="stripe_unavailable"):
+        outbox.enqueue_reconciled_course(object(), FakeLedger({"status": "paid", "granted": True}),
+                                         "cs_123", consent=True)
+    assert outbox.pending() == []
