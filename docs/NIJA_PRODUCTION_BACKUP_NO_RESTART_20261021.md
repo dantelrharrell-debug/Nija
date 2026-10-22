@@ -106,6 +106,46 @@ sha256sum "$out"/nija-trading-ledger-*.tar.gz \
   "$out"/nija-account-state-*.zip
 ~~~
 
+### Optional bounded legacy-state archive (future verified deployment only)
+
+When the **actual running instance** already has
+`scripts/nija_legacy_global_state_evidence_v462.py` available and independently
+reviewed, it can supplement the explicit legacy-file preservation procedure
+below. **Do not restart or redeploy just to install this utility.** It is
+not present on older production images.
+
+After the v436 and v449 steps, with the same private `"$out"` directory,
+a qualified operator may run:
+
+~~~bash
+test -s /app/scripts/nija_legacy_global_state_evidence_v462.py
+python -S /app/scripts/nija_legacy_global_state_evidence_v462.py snapshot \
+  --persistent-root /data --output-dir "$out"
+~~~
+
+The command captures only existing default candidate legacy global files.
+If a non-default source was verified by the original tracker/store's owner,
+pass an explicit bounded `--source LABEL=/absolute/path` for that source;
+labels are not account identities. The utility rejects absence of all
+candidates and deliberately marks `legacy_path_inventory_complete=false`,
+`off_host_custody_verified=false`, and `trading_authorized=false`.
+
+Transfer the archive through an approved encrypted channel and verify the
+unchanged source hash against the off-host copy:
+
+~~~bash
+python -S scripts/nija_legacy_global_state_evidence_v462.py verify \
+  --archive /restricted/offhost/nija-legacy-state-CAPTURE.zip \
+  --expected-sha256 ORIGINAL_RECORDED_SHA256
+~~~
+
+The v462 verifier inspects pinned archive bytes without extraction or
+mutation; a successful verification alone is not an isolated full-state
+restoration. It does not prove source account identity, reconciliation,
+ledger/JSON atomicity, or broker protection. Continue the no-restart HOLD.
+On the **current deployed image**, follow the existing owner-shell procedure
+below without triggering another deployment.
+
 ### Preserve unscoped legacy tracker evidence separately
 
 The deployed diagnostics also report `legacy_global_file=true` with
