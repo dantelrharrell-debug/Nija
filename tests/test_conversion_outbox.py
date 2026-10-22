@@ -20,6 +20,7 @@ def test_duplicate_lead_is_staged_once(tmp_path):
     assert outbox.enqueue_verified_lead(lead, consent=True) is False
     rows = outbox.pending()
     assert len(rows) == 1
+    assert rows[0]["state"] == "pending"
     assert "private@example.com" not in str(rows)
 
 
@@ -43,3 +44,25 @@ def test_paid_course_dedup_survives_reinstantiation(tmp_path):
     rows = outbox.pending()
     assert rows[0]["parameters"]["transaction_id"] == "cs_123"
     assert "secret@example.com" not in str(rows)
+
+
+def test_atomic_claim_and_acknowledgment(tmp_path):
+    engine = create_engine("sqlite:///" + str(tmp_path / "conversion.db"))
+    first = ConversionOutbox(engine)
+    second = ConversionOutbox(engine)
+    assert first.enqueue_verified_lead({"id": "lead-123", "persisted": True}, consent=True)
+    assert first.mark_delivered("lead:lead-123") is False
+    assert first.claim("lead:lead-123") is True
+    assert second.claim("lead:lead-123") is False
+    assert second.pending()[0]["state"] == "claimed"
+    assert second.mark_delivered("lead:lead-123") is True
+    assert first.mark_delivered("lead:lead-123") is False
+    assert first.claim("lead:lead-123") is False
+    assert first.pending()[0]["state"] == "delivered"
+
+
+def test_nonexistent_claim_and_ack_fail_closed(tmp_path):
+    engine = create_engine("sqlite:///" + str(tmp_path / "conversion.db"))
+    outbox = ConversionOutbox(engine)
+    assert outbox.claim("lead:missing") is False
+    assert outbox.mark_delivered("lead:missing") is False
