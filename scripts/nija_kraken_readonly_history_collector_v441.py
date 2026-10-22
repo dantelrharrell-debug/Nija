@@ -20,6 +20,39 @@ class IncompleteHistory(RuntimeError):
     """Stop rather than silently certify a partial account history."""
 
 
+def history_failure_diagnostic(exc: BaseException) -> dict[str, str]:
+    """Return fixed labels for known failures without serializing broker data."""
+    if type(exc) is not IncompleteHistory:
+        return {}
+    reasons = {
+        "API failure": "api_failure",
+        "malformed result": "malformed_result",
+        "invalid amount": "invalid_amount",
+        "invalid asset or amount": "invalid_balance",
+        "invalid count": "invalid_count",
+        "oversized page": "oversized_page",
+        "count changed during pagination": "pagination_count_changed",
+        "invalid record": "invalid_record",
+        "duplicate identifier across pages": "duplicate_record",
+        "non-JSON record": "non_json_record",
+        "incomplete empty page": "empty_page_before_completion",
+        "page limit before all records": "page_limit",
+        "expected count mismatch": "record_count_mismatch",
+    }
+    if len(exc.args) != 1 or type(exc.args[0]) is not str:
+        return {"error_code": "history_incomplete_unknown"}
+    message = exc.args[0]
+    for endpoint in ("Balance", "TradesHistory", "ClosedOrders", "Ledgers"):
+        for suffix, reason in reasons.items():
+            if message == f"{endpoint}: {suffix}":
+                return {"error_code": reason, "error_endpoint": endpoint}
+    if message == "history changed between verification passes":
+        return {"error_code": "repeat_history_changed", "error_endpoint": "history"}
+    if message == "balance changed during history collection":
+        return {"error_code": "balance_changed", "error_endpoint": "Balance"}
+    return {"error_code": "history_incomplete_unknown"}
+
+
 def collect_history(
     private_read: Callable[[str, dict[str, Any]], Mapping[str, Any]],
     *,
