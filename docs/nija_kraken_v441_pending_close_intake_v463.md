@@ -15,13 +15,13 @@ v441 is already opt-in and must be run against a unique connected Kraken client 
 3. Run on an isolated machine against preserved copies where possible. Do not change any execution-control setting:
 
 ```sh
-python -S -B scripts/nija_kraken_history_ledger_intake_v463.py \\
-  --receipt /private/recovery/<request_id>.evidence.json \\
-  --ledger /private/recovery/trade_ledger.db \\
+python -S -B scripts/nija_kraken_history_ledger_intake_v463.py \
+  --receipt /private/recovery/ACTUAL_REQUEST_ID.evidence.json \
+  --ledger /private/recovery/trade_ledger.db \
   --account-scope platform:kraken
 ```
 
-`<request_id>` is a placeholder for the actual operator-approved claimed request ID, not a literal value. Never copy raw account data or private receipts into a pull request, CI artifact, application log or conversation.
+`ACTUAL_REQUEST_ID` must be replaced with the actual approved, 32-character lowercase hexadecimal request ID before running the command; it is not a literal filename. Never copy raw account data or private receipts into a pull request, CI artifact, application log or conversation.
 
 ## Scope and safety guarantees
 
