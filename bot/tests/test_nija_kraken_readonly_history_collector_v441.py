@@ -410,3 +410,59 @@ def test_open_order_clock_regression_cannot_refresh_evidence(monkeypatch, clock_
 
     with pytest.raises(IncompleteHistory, match="invalid observation clock"):
         collect_history(read, account_scope="platform:kraken", include_open_orders=True)
+
+
+def test_v463_readonly_intake_reconciles_no_live_state(tmp_path):
+    """Existing recovery CI also runs a real v441 -> v463 integration test."""
+    import json
+    import sqlite3
+    import time
+
+    from scripts.nija_kraken_history_ledger_intake_v463 import inspect_intake
+
+    def read(endpoint, params):
+        if endpoint == "Balance":
+            return {"error": [], "result": {"ZUSD": "10"}}
+        if endpoint == "OpenOrders":
+            return {"error": [], "result": {"open": {}, "cursor": {"next": ""}}}
+        field = {"TradesHistory": "trades", "ClosedOrders": "closed", "Ledgers": "ledger"}[endpoint]
+        records = {
+            "trades": {"T1": {"ordertxid": "C1", "vol": "0.01", "fee": "0.01"}},
+            "closed": {"C1": {"status": "closed"}},
+            "ledger": {"L1": {"refid": "T1"}},
+        }
+        return {"error": [], "result": {"count": 1, field: records[field]}}
+
+    started = time.time()
+    evidence = collect_history(
+        read, account_scope="platform:kraken", include_balance=True, include_open_orders=True,
+    )
+    receipt = tmp_path / "receipt.json"
+    row = {
+        "request_id": "a" * 32, "collection_succeeded": True,
+        "collection_started_at": started, "collection_finished_at": time.time(),
+        "evidence": evidence, "trading_authorized": False,
+    }
+    receipt.write_text(json.dumps(row), encoding="utf-8")
+    receipt.chmod(0o600)
+    database = tmp_path / "ledger.db"
+    with sqlite3.connect(database) as db:
+        for name in ("trade_ledger", "open_positions", "completed_trades"):
+            db.execute('CREATE TABLE "' + name + '" (id INTEGER PRIMARY KEY)')
+        db.execute("CREATE TABLE pending_kraken_closes "
+                   "(broker TEXT, account_scope TEXT, order_id TEXT, state TEXT)")
+        db.execute("INSERT INTO pending_kraken_closes VALUES (?,?,?,?)",
+                   ("kraken", "platform:kraken", "C1", "pending"))
+    report = inspect_intake(receipt, database, "platform:kraken")
+    assert report["status"] == "READ_ONLY_INTAKE_COMPLETE"
+    assert report["both_order_and_trade_ids_present"] == 1
+    assert report["pending_closes_still_unresolved"] == 1
+    assert report["execution_ready"] is False
+    assert report["execution_authority"] is False
+    assert report["authorizes_orders"] is False
+    row["evidence"]["history"]["closed"]["C1"]["status"] = "tampered"
+    receipt.write_text(json.dumps(row), encoding="utf-8")
+    receipt.chmod(0o600)
+    invalid = inspect_intake(receipt, database, "platform:kraken")
+    assert invalid["failure_code"] == "receipt_digest_mismatch"
+    assert invalid["authorizes_orders"] is False
