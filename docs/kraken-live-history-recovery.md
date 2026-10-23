@@ -48,9 +48,12 @@ The collector reads only Balance, TradesHistory, ClosedOrders and Ledgers,
 through the existing broker's private-call controls. Two complete historical
 passes must agree and before/after balances must match. A changed count, row,
 balance, incomplete page or API failure produces failure evidence. Output is
-atomically committed as mode-0600 `<request_id>.evidence.json`. Error receipts
-contain exception type and fixed allowlisted failure labels only. Raw history
-is never emitted to application logs.
+atomically committed as mode-0600 `<request_id>.evidence.json`. Error receipts contain exception type and fixed allowlisted failure labels.
+For an insufficient page budget with a broker-provided count, the private
+mode-0600 evidence receipt also records integer `requested_pages` and
+`required_pages` for operator planning. Those counts are NOT logged and do
+not imply authenticated ownership or permission to increase the request.
+Raw history is never emitted to application logs.
 
 These are bounded page reads, not a global hard wall-clock timeout. A currently
 running private read retains the broker transport's timeout. Monitoring reads
