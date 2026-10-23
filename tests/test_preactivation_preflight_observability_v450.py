@@ -109,6 +109,92 @@ def test_independent_pretrade_certificate_requires_every_literal_true(monkeypatc
     assert not ok and missing == ["protective_exit_readback"]
 
 
+def test_missing_scope_and_collector_are_distinguishable_without_authorization(
+    monkeypatch, caplog,
+):
+    import logging
+    from bot import pretrade_independent_attestation as att
+
+    v16 = load()
+    monkeypatch.setitem(sys.modules, "bot.pretrade_independent_attestation", att)
+    monkeypatch.setattr(att, "_COLLECTOR", None)
+    monkeypatch.delenv("NIJA_PREFLIGHT_ACCOUNT_SCOPE", raising=False)
+
+    with caplog.at_level(logging.INFO, logger="nija.preactivation_readiness_convergence_v16"):
+        ok, missing = v16._independent_pretrade_certificate()
+    assert ok is False and len(missing) == len(att.FIELDS)
+    assert "producer_status=scope_missing_or_invalid" in caplog.text
+    assert "collector_installed=false" in caplog.text
+
+    caplog.clear()
+    monkeypatch.setenv("NIJA_PREFLIGHT_ACCOUNT_SCOPE", "platform:kraken")
+    with caplog.at_level(logging.INFO, logger="nija.preactivation_readiness_convergence_v16"):
+        ok, missing = v16._independent_pretrade_certificate()
+    assert ok is False and len(missing) == len(att.FIELDS)
+    assert "producer_status=collector_missing" in caplog.text
+    assert "collector_installed=false" in caplog.text
+
+    configure(monkeypatch, v16)
+    monkeypatch.setattr(v16, "_genuine_execution_marker_proof",
+                        lambda: (False, "verification_stale"))
+    proofs, details = v16._collect_proofs()
+    assert proofs["execution_ready"] is False
+    assert details["independent_pretrade_is_authorization"] is False
+
+
+def test_attestation_inspection_rejects_stale_unproven_and_foreign_evidence(monkeypatch):
+    from bot import pretrade_independent_attestation as att
+
+    account = "platform:kraken"
+    monkeypatch.setattr(att, "_COLLECTOR", None)
+    report = att.inspect_authenticated_attestations(account, now=1001.0)
+    assert report["producer_status"] == "collector_missing"
+    assert report["authorizes_orders"] is False
+    assert not any(report["checks"].values())
+
+    evidence = {
+        "account": account, "source": "authenticated_independent",
+        "observed_at_epoch": 1000.0, "read_only": True, "scope_verified": True,
+        "checks": {field: True for field in att.FIELDS},
+        "provenance": {
+            "authenticated_broker_read_verified": True,
+            "ledger_snapshot_verified": True,
+            "complete_pagination_verified": True,
+            "collector_identity_verified": True,
+            "account_scope_verified": True,
+        },
+    }
+    monkeypatch.setattr(att, "_COLLECTOR", lambda _: evidence)
+    ok = att.inspect_authenticated_attestations(account, now=1001.0)
+    assert ok["producer_status"] == "checks_passed_diagnostic_only"
+    assert all(ok["checks"].values())
+    assert ok["authorizes_orders"] is False
+    assert att.inspect_authenticated_attestations(account, now=1061.0)[
+        "producer_status"
+    ] == "observation_missing_future_or_stale"
+    assert att.inspect_authenticated_attestations(
+        "user:other:kraken", now=1001.0
+    )["producer_status"] == "account_scope_mismatch"
+
+    evidence["provenance"]["complete_pagination_verified"] = False
+    unproven = att.inspect_authenticated_attestations(account, now=1001.0)
+    assert unproven["producer_status"] == "provenance_unverified"
+    assert not any(unproven["checks"].values())
+    evidence["provenance"]["complete_pagination_verified"] = True
+    evidence["checks"]["protective_exit_readback"] = "true"
+    partial = att.inspect_authenticated_attestations(account, now=1001.0)
+    assert partial["producer_status"] == "checks_incomplete"
+    assert partial["checks"]["protective_exit_readback"] is False
+
+    def unavailable(_):
+        raise RuntimeError("sensitive-private-value-must-not-be-logged")
+    monkeypatch.setattr(att, "_COLLECTOR", unavailable)
+    failed = att.inspect_authenticated_attestations(account, now=1001.0)
+    assert failed["producer_status"] == "collector_exception"
+    assert "sensitive-private-value" not in str(failed)
+    assert not any(failed["checks"].values())
+
+
 def test_missing_independent_attestor_does_not_grant_authority(monkeypatch):
     v16 = load()
     configure(monkeypatch, v16)
