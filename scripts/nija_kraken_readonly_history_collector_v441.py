@@ -21,6 +21,12 @@ PAGE_SIZE = 50
 class IncompleteHistory(RuntimeError):
     """Stop rather than silently certify a partial account history."""
 
+    def __init__(self, reason: str, *, required_pages: int | None = None,
+                 requested_pages: int | None = None) -> None:
+        super().__init__(reason)
+        self.required_pages = required_pages
+        self.requested_pages = requested_pages
+
 
 def history_failure_diagnostic(exc: BaseException) -> dict[str, str]:
     """Return fixed labels for known failures without serializing broker data."""
@@ -50,7 +56,17 @@ def history_failure_diagnostic(exc: BaseException) -> dict[str, str]:
     for endpoint in ("Balance", "TradesHistory", "ClosedOrders", "Ledgers", "OpenOrders"):
         for suffix, reason in reasons.items():
             if message == f"{endpoint}: {suffix}":
-                return {"error_code": reason, "error_endpoint": endpoint}
+                diagnostic = {"error_code": reason, "error_endpoint": endpoint}
+                # Counts are stored only in the private mode-0600 receipt,
+                # never in the public application log or error message.
+                if (reason == "page_limit"
+                        and type(exc.required_pages) is int
+                        and type(exc.requested_pages) is int
+                        and 1 <= exc.requested_pages <= 1000
+                        and exc.requested_pages < exc.required_pages <= 10_000_000):
+                    diagnostic["required_pages"] = exc.required_pages
+                    diagnostic["requested_pages"] = exc.requested_pages
+                return diagnostic
     if message == "history changed between verification passes":
         return {"error_code": "repeat_history_changed", "error_endpoint": "history"}
     if message == "balance changed during history collection":
@@ -173,7 +189,11 @@ def collect_history(
                     # Reject an insufficient operator budget before exhausting
                     # the shared, rate-limited private history API allowance.
                     if expected > max_pages * PAGE_SIZE:
-                        raise IncompleteHistory(f"{endpoint}: page limit before all records")
+                        raise IncompleteHistory(
+                            f"{endpoint}: page limit before all records",
+                            required_pages=(expected + PAGE_SIZE - 1) // PAGE_SIZE,
+                            requested_pages=max_pages,
+                        )
                 elif count != expected:
                     raise IncompleteHistory(f"{endpoint}: count changed during pagination")
                 for identifier, row in batch.items():
