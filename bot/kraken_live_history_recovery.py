@@ -151,6 +151,7 @@ def collect_requested_history(
                 selected[0], account_scope=request["account_scope"],
                 monitoring_category=monitoring_category,
                 max_pages=request["max_pages"], include_balance=True,
+                include_open_orders=True,
             )
         except Exception as exc:
             # Persist only fixed collector-owned diagnostic labels.

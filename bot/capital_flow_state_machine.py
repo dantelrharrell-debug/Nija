@@ -1516,6 +1516,16 @@ class CapitalRefreshCoordinator:
                     confidence.band.value,
                 )
         self._nija_v142_pipeline_stage = "runtime_fsm"
+        # These are diagnostic breadcrumbs on the existing worker. No timeout,
+        # capital state, transition, or writer-generation rule is changed.
+        self._nija_v142_pipeline_stage = "runtime_transition"
+        _runtime_transition_started = time.monotonic()
+        logger.info("CAPITAL_PIPELINE_SUBSTAGE_V142 stage=runtime_transition status=start")
+        self._runtime.transition(CapitalRuntimeState.RUN_REFRESHING, "coordinator_publish")
+        logger.info(
+            "CAPITAL_PIPELINE_SUBSTAGE_V142 stage=runtime_transition status=done duration_ms=%.1f",
+            (time.monotonic() - _runtime_transition_started) * 1000,
+        )
         _nija_runtime_stage_started = time.monotonic()
         logger.info("[CapitalStageTiming] stage=runtime_transition status=start")
         self._runtime.transition(CapitalRuntimeState.RUN_REFRESHING, "coordinator_publish")
@@ -1523,7 +1533,14 @@ class CapitalRefreshCoordinator:
         _nija_runtime_stage_started = time.monotonic()
         # on_snapshot_received may enqueue additional CAPITAL_READY / CAPITAL_DEGRADED
         # / CAPITAL_STALE events; they are captured in the same dispatch below.
+        self._nija_v142_pipeline_stage = "snapshot_received"
+        _snapshot_received_started = time.monotonic()
+        logger.info("CAPITAL_PIPELINE_SUBSTAGE_V142 stage=snapshot_received status=start")
         self._runtime.on_snapshot_received(snapshot, self._bus)
+        logger.info(
+            "CAPITAL_PIPELINE_SUBSTAGE_V142 stage=snapshot_received status=done duration_ms=%.1f",
+            (time.monotonic() - _snapshot_received_started) * 1000,
+        )
         logger.info("[CapitalStageTiming] stage=snapshot_received status=done duration_ms=%.1f", (time.monotonic() - _nija_runtime_stage_started) * 1000)
 
         # ── Notify CSM-v2 BEFORE the bootstrap FSM advances ──────────────────────
@@ -1533,13 +1550,21 @@ class CapitalRefreshCoordinator:
         # the CSM-v2 to be hydrated *before* that callback runs, so ingest here
         # — after the snapshot is accepted by CapitalAuthority but before the
         # bootstrap FSM transitions.
+        self._nija_v142_pipeline_stage = "csm_ingest"
+        _csm_ingest_started = time.monotonic()
+        logger.info("CAPITAL_PIPELINE_SUBSTAGE_V142 stage=csm_ingest status=start")
         try:
             from bot.capital_csm_v2 import get_csm_v2 as _get_csm_v2  # noqa: PLC0415
             _get_csm_v2().ingest_snapshot(snapshot)
         except ImportError:
-            pass
+            logger.info("CAPITAL_PIPELINE_SUBSTAGE_V142 stage=csm_ingest status=unavailable")
         except Exception as _csm_exc:
             logger.warning("[Coordinator] CSM-v2 ingest failed (non-fatal): %s", _csm_exc)
+        else:
+            logger.info(
+                "CAPITAL_PIPELINE_SUBSTAGE_V142 stage=csm_ingest status=done duration_ms=%.1f",
+                (time.monotonic() - _csm_ingest_started) * 1000,
+            )
 
         # ── Synchronous event flush (same-tick guarantee) ─────────────────────
         # Drain every event enqueued during this pipeline run — SNAPSHOT_PUBLISHED,

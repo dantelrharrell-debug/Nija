@@ -51,6 +51,8 @@ class Broker:
     def _kraken_private_call(self, endpoint, params, *, category):
         assert category is CATEGORY
         self.calls.append((endpoint, dict(params)))
+        if endpoint == "OpenOrders":
+            return {"error": [], "result": {"open": {}}}
         if endpoint == "Balance":
             return {"error": [], "result": {"ZUSD": "100"}}
         field = dict(TradesHistory="trades", ClosedOrders="closed", Ledgers="ledger")[endpoint]
@@ -68,8 +70,8 @@ def test_exact_existing_broker_read_only_evidence_and_permanent_claim(root):
     request(root)
     broker = Broker()
     assert run(root, [broker, broker])
-    assert len(broker.calls) == 8  # two balances + two full three-endpoint passes
-    assert all(e in {"Balance", "TradesHistory", "ClosedOrders", "Ledgers"} for e, _ in broker.calls)
+    assert len(broker.calls) == 10  # balances, history and two current open-order reads
+    assert all(e in {"Balance", "TradesHistory", "ClosedOrders", "Ledgers", "OpenOrders"} for e, _ in broker.calls)
     out = json.loads((root / (ID + ".evidence.json")).read_text())
     assert out["collection_succeeded"] is True and out["trading_authorized"] is False
     assert out["evidence"]["authenticated_identity_independently_verified"] is False
@@ -81,7 +83,7 @@ def test_exact_existing_broker_read_only_evidence_and_permanent_claim(root):
     request(root)
     with pytest.raises(ValueError, match="replay"):
         run(root, [broker])
-    assert len(broker.calls) == 8
+    assert len(broker.calls) == 10
 
 
 @pytest.mark.parametrize("brokers,category", [([], CATEGORY), ([Broker(), Broker()], CATEGORY), ([Broker()], None)])
@@ -255,6 +257,8 @@ def test_explicit_eleven_page_history_request_retains_fail_closed_authority(root
     def read(endpoint, params, *, category):
         assert category is CATEGORY
         calls.append((endpoint, dict(params)))
+        if endpoint == "OpenOrders":
+            return {"error": [], "result": {"open": {}}}
         if endpoint == "Balance":
             assert params == {}
             return {"error": [], "result": {"ZUSD": "100"}}
@@ -276,9 +280,9 @@ def test_explicit_eleven_page_history_request_retains_fail_closed_authority(root
     assert result["evidence"]["ledger_links_verified"] is False
     assert result["evidence"]["entry_exit_reconciliation_verified"] is False
     assert result["trading_authorized"] is False
-    assert len(calls) == 28  # two balances, 22 trade pages, four empty endpoint pages
+    assert len(calls) == 30  # two balances, 26 history pages and two open-order reads
     assert {endpoint for endpoint, _ in calls} <= {
-        "Balance", "TradesHistory", "ClosedOrders", "Ledgers"
+        "Balance", "TradesHistory", "ClosedOrders", "Ledgers", "OpenOrders"
     }
     assert (root / (ID + ".claimed.json")).exists()
     assert not run(root, [broker])
@@ -292,6 +296,8 @@ def test_history_count_exceeding_explicit_budget_stops_on_first_page(root):
     def read(endpoint, params, *, category):
         assert category is CATEGORY
         calls.append(endpoint)
+        if endpoint == "OpenOrders":
+            return {"error": [], "result": {"open": {}}}
         if endpoint == "Balance":
             return {"error": [], "result": {"ZUSD": "100"}}
         assert endpoint == "TradesHistory" and params == {"ofs": 0}
@@ -303,7 +309,82 @@ def test_history_count_exceeding_explicit_budget_stops_on_first_page(root):
     assert result["collection_succeeded"] is False
     assert result["error_code"] == "page_limit"
     assert result["error_endpoint"] == "TradesHistory"
+    assert result["required_pages"] == 12
+    assert result["requested_pages"] == 11
     assert result["trading_authorized"] is False
     assert calls == ["Balance", "TradesHistory"]
+    assert (root / (ID + ".claimed.json")).exists()
+    assert not run(root, [broker])
+
+
+def test_closed_orders_page_budget_reported_only_in_private_receipt(root, caplog):
+    request(root, max_pages=11)
+    broker = Broker()
+    calls = []
+
+    def read(endpoint, params, *, category):
+        assert category is CATEGORY
+        calls.append((endpoint, dict(params)))
+        if endpoint == "Balance":
+            return {"error": [], "result": {"ZUSD": "100"}}
+        field = {"TradesHistory": "trades", "ClosedOrders": "closed"}[endpoint]
+        if endpoint == "TradesHistory":
+            return {"error": [], "result": {"count": 0, field: {}}}
+        assert endpoint == "ClosedOrders" and params == {"ofs": 0}
+        return {"error": [], "result": {"count": 552, field: {"order-id": {"vol": "1"}}}}
+def test_open_order_permission_failure_keeps_claim_without_false_certificate(root, caplog):
+    request(root)
+    broker = Broker()
+    original = broker._kraken_private_call
+
+    def read(endpoint, params, *, category):
+        if endpoint == "OpenOrders":
+            return {"error": ["private-open-order-error-canary"]}
+        return original(endpoint, params, category=category)
+
+    broker._kraken_private_call = read
+    with caplog.at_level("WARNING"):
+        assert run(root, [broker])
+    result = json.loads((root / (ID + ".evidence.json")).read_text())
+    assert result["collection_succeeded"] is False
+    assert result["error_code"] == "page_limit"
+    assert result["error_endpoint"] == "ClosedOrders"
+    assert result["requested_pages"] == 11
+    assert result["required_pages"] == 12
+    assert result["trading_authorized"] is False
+    assert "552" not in caplog.text
+    assert "order-id" not in caplog.text
+    assert calls == [
+        ("Balance", {}), ("TradesHistory", {"ofs": 0}),
+        ("ClosedOrders", {"ofs": 0}),
+    ]
+    assert (root / (ID + ".claimed.json")).exists()
+    assert not run(root, [broker])
+
+
+def test_unknown_failure_cannot_inject_page_budget(root, monkeypatch):
+    from scripts.nija_kraken_readonly_history_collector_v441 import IncompleteHistory
+    request(root)
+
+    def fail(*args, **kwargs):
+        raise IncompleteHistory(
+            "ClosedOrders: untrusted-message",
+            required_pages=999999, requested_pages=1,
+        )
+
+    monkeypatch.setattr(api, "collect_from_existing_broker", fail)
+    assert run(root, [Broker()])
+    result = json.loads((root / (ID + ".evidence.json")).read_text())
+    assert result["error_code"] == "history_incomplete_unknown"
+    assert "required_pages" not in result
+    assert "requested_pages" not in result
+    assert result["trading_authorized"] is False
+    raw = (root / (ID + ".evidence.json")).read_text()
+    result = json.loads(raw)
+    assert result["collection_succeeded"] is False
+    assert result["error_code"] == "api_failure"
+    assert result["error_endpoint"] == "OpenOrders"
+    assert result["trading_authorized"] is False
+    assert "private-open-order-error-canary" not in raw + caplog.text
     assert (root / (ID + ".claimed.json")).exists()
     assert not run(root, [broker])
