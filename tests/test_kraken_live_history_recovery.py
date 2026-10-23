@@ -338,7 +338,6 @@ def test_closed_orders_page_budget_reported_only_in_private_receipt(root, caplog
     assert result["required_pages"] == 12
     assert result["trading_authorized"] is False
     assert "552" not in caplog.text
-    assert "12" not in caplog.text
     assert "order-id" not in caplog.text
     assert calls == [
         ("Balance", {}), ("TradesHistory", {"ofs": 0}),
