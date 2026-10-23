@@ -24,7 +24,8 @@ def evaluate_authenticated_startup_candidate(
     """Read authenticated attestation and explicitly verified external gates."""
     # Never accept a missing, noncanonical or whitespace-padded account scope.
     # Without an exact account identity, no broker or external fact is trusted.
-    if not isinstance(account, str) or not account or account != account.strip():
+    if (not isinstance(account, str) or not account or account != account.strip()
+            or any(char.isspace() for char in account)):
         return dict(
             evaluate_startup_transition(
                 {}, pending_execution=pending_execution,
