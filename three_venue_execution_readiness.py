@@ -42,6 +42,9 @@ _STATE_FILE = Path(
     )
 )
 _LOCK = threading.RLock()
+# Wake the existing single verifier worker after a canonical capital handoff.
+# This event conveys no broker evidence and never grants order authority.
+_REEVALUATE_WAKE = threading.Event()
 _INSTALLED = False
 _LAST_SIGNATURE = ""
 
@@ -807,12 +810,25 @@ def reconcile_execution_readiness(*, trigger: str = "manual", force: bool = Fals
     return payload
 
 
+def request_reevaluation() -> None:
+    """Wake the existing verifier without broker I/O or changing any gates.
+
+    Calls from the capital publisher only signal; the verifier's own worker
+    performs independent authenticated reads and can still deny readiness.
+    Repeated requests coalesce into one pending wake-up.
+    """
+    _REEVALUATE_WAKE.set()
+
+
 def _monitor() -> None:
     interval = max(
         2.0,
         float(os.getenv("NIJA_THREE_VENUE_VERIFY_INTERVAL_S", "5") or 5),
     )
     while True:
+        # Clear before reconciliation so requests arriving during a slow
+        # broker read remain pending for the next monitored pass.
+        _REEVALUATE_WAKE.clear()
         try:
             reconcile_execution_readiness(trigger="monitor")
         except Exception as exc:
@@ -824,7 +840,7 @@ def _monitor() -> None:
                 MARKER,
                 exc,
             )
-        time.sleep(interval)
+        _REEVALUATE_WAKE.wait(timeout=interval)
 
 
 def install() -> None:
@@ -862,5 +878,6 @@ __all__ = [
     "evaluate_all",
     "publish_once",
     "reconcile_execution_readiness",
+    "request_reevaluation",
     "install",
 ]

@@ -245,7 +245,7 @@ def test_exception_subclass_cannot_supply_diagnostic_text():
         def __str__(self):
             raise AssertionError("Upstream exception text must not be inspected")
 
-    assert history_failure_diagnostic(UpstreamError()) == {}
+    assert history_failure_diagnostic(UpstreamError("OpenOrders: API failure")) == {}
 
 
 def test_explicit_eleven_page_history_request_retains_fail_closed_authority(root):
@@ -332,20 +332,12 @@ def test_closed_orders_page_budget_reported_only_in_private_receipt(root, caplog
             return {"error": [], "result": {"count": 0, field: {}}}
         assert endpoint == "ClosedOrders" and params == {"ofs": 0}
         return {"error": [], "result": {"count": 552, field: {"order-id": {"vol": "1"}}}}
-def test_open_order_permission_failure_keeps_claim_without_false_certificate(root, caplog):
-    request(root)
-    broker = Broker()
-    original = broker._kraken_private_call
-
-    def read(endpoint, params, *, category):
-        if endpoint == "OpenOrders":
-            return {"error": ["private-open-order-error-canary"]}
-        return original(endpoint, params, category=category)
 
     broker._kraken_private_call = read
     with caplog.at_level("WARNING"):
         assert run(root, [broker])
-    result = json.loads((root / (ID + ".evidence.json")).read_text())
+    raw = (root / (ID + ".evidence.json")).read_text()
+    result = json.loads(raw)
     assert result["collection_succeeded"] is False
     assert result["error_code"] == "page_limit"
     assert result["error_endpoint"] == "ClosedOrders"
@@ -362,7 +354,31 @@ def test_open_order_permission_failure_keeps_claim_without_false_certificate(roo
     assert not run(root, [broker])
 
 
-def test_unknown_failure_cannot_inject_page_budget(root, monkeypatch):
+def test_open_order_permission_failure_keeps_claim_without_false_certificate(root, caplog):
+    request(root)
+    broker = Broker()
+    original = broker._kraken_private_call
+
+    def read(endpoint, params, *, category):
+        if endpoint == "OpenOrders":
+            return {"error": ["private-open-order-error-canary"]}
+        return original(endpoint, params, category=category)
+
+    broker._kraken_private_call = read
+    with caplog.at_level("WARNING"):
+        assert run(root, [broker])
+    raw = (root / (ID + ".evidence.json")).read_text()
+    result = json.loads(raw)
+    assert result["collection_succeeded"] is False
+    assert result["error_code"] == "api_failure"
+    assert result["error_endpoint"] == "OpenOrders"
+    assert result["trading_authorized"] is False
+    assert "private-open-order-error-canary" not in raw + caplog.text
+    assert (root / (ID + ".claimed.json")).exists()
+    assert not run(root, [broker])
+
+
+def test_unknown_failure_cannot_inject_page_budget(root, monkeypatch, caplog):
     from scripts.nija_kraken_readonly_history_collector_v441 import IncompleteHistory
     request(root)
 
@@ -373,18 +389,16 @@ def test_unknown_failure_cannot_inject_page_budget(root, monkeypatch):
         )
 
     monkeypatch.setattr(api, "collect_from_existing_broker", fail)
-    assert run(root, [Broker()])
-    result = json.loads((root / (ID + ".evidence.json")).read_text())
-    assert result["error_code"] == "history_incomplete_unknown"
-    assert "required_pages" not in result
-    assert "requested_pages" not in result
-    assert result["trading_authorized"] is False
+    with caplog.at_level("WARNING"):
+        assert run(root, [Broker()])
     raw = (root / (ID + ".evidence.json")).read_text()
     result = json.loads(raw)
     assert result["collection_succeeded"] is False
-    assert result["error_code"] == "api_failure"
-    assert result["error_endpoint"] == "OpenOrders"
+    assert result["error_code"] == "history_incomplete_unknown"
+    assert "error_endpoint" not in result
+    assert "required_pages" not in result
+    assert "requested_pages" not in result
     assert result["trading_authorized"] is False
-    assert "private-open-order-error-canary" not in raw + caplog.text
+    assert "untrusted-message" not in raw + caplog.text
     assert (root / (ID + ".claimed.json")).exists()
-    assert not run(root, [broker])
+    assert not run(root, [Broker()])
