@@ -388,7 +388,10 @@ class CapitalCSMv2:
         else:
             _gate_reason = "snapshot is stale"
 
+        _csm_lock_wait_started = time.monotonic()
+        logger.info("CSM_INGEST_LOCK_TIMING stage=first_snapshot_lock status=waiting")
         with self._lock:
+            logger.info("CSM_INGEST_LOCK_TIMING stage=first_snapshot_lock status=acquired wait_ms=%.1f", (time.monotonic() - _csm_lock_wait_started) * 1000)
             _was_already_accepted = self._first_snap_accepted
             if _all_gate_conditions_met and not _was_already_accepted:
                 self._first_snap_accepted = True
@@ -494,7 +497,10 @@ class CapitalCSMv2:
             new_reason = " ".join(reason_parts)
 
         # ── Atomic state update ───────────────────────────────────────────────
+        _csm_update_lock_wait_started = time.monotonic()
+        logger.info("CSM_INGEST_LOCK_TIMING stage=state_update_lock status=waiting")
         with self._lock:
+            logger.info("CSM_INGEST_LOCK_TIMING stage=state_update_lock status=acquired wait_ms=%.1f", (time.monotonic() - _csm_update_lock_wait_started) * 1000)
             old_state = self._state
             self._state = new_state
             self._blocked_reason = new_reason if new_state == CapitalCSMState.BLOCKED else ""
