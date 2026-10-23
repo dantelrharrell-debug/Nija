@@ -49,3 +49,37 @@ Apply to NIJA-owned contact/lead capture flows at `/apply` and `/free` **and any
 **This document does not authorize calling, site publication, new monthly charges, production deployment, testing via real phones, or trading changes.** IONOS implementation must be reviewed/published separately by its authorized operator. Live trading Render service has `autoDeploy` off and should not be restarted or redeployed for this website-only task. Do not merge infrastructure changes into the trading service while its preservation/certification prerequisites remain unresolved.
 
 Requested post-implementation evidence: published form URLs/screenshots, disclosure/version text, redacted source receipt metadata, QA outcomes, independent Apollo field mapping review, provider written activation, approved call-test record, and day-scoped JustCall provider history.
+
+
+## IONOS administrator preview — release acceptance addendum (October 23, 2026)
+
+**Source classification:** The IONOS site builder reported that the preview route `/admin/ai-voice-consent` is implemented, not that a production browser or running-server test has passed. The report includes 188/188 consent/reject/withdraw/tamper tests passing, seven mutation checks, earlier consent suites, unrelated payment/commerce/privacy regressions and a successful site build. These results are user-provided and **not independently reproduced**. Treat all routes as unverified until witnessed.
+
+**Access limitation:** On October 23, attempts to inspect `https://nijaaitrading.com/free`, `/apply`, `/ai-voice-opt-out` and `/admin/ai-voice-consent` through the available public-web tooling did not return accessible pages; the Opera browser connector was disconnected. A direct public network request also failed DNS resolution from the inspection runtime. **No visual screenshots, authenticated IONOS preview inspection, actual live schema migration or real-server verification has been completed by the reviewer.** These failures do not prove the live site is down for end users.
+
+### Pre-publish, human-reviewed release gate
+
+| Test | Required observation / evidence | State |
+| --- | --- | --- |
+| Four named routes, desktop and mobile | Open on narrow phone and desktop viewport; verify correct navigation, layout, controls, disclosure, privacy/terms and unsubscribe/withdrawal behavior; capture eight redacted screenshots or other sufficient viewport evidence | NOT INDEPENDENTLY TESTED |
+| Admin authorization | Unauthenticated, ordinary member, account without admin role and wrong account type denied on all four admin endpoints; admin allowed, session expiration fail closed | REPORTED PASS; NOT INDEPENDENTLY TESTED |
+| Admin review UI | Masked phone by default; controlled reveal; status and disclosure/version comparison; independent evidence reference and note; server-owned verifier identity/timestamp | REPORTED PRESENT; NOT INDEPENDENTLY TESTED |
+| Approval safety | Withdrawn, older/superseded, tampered, unsupported, suppressed, DNC-hit or missing server-origin record cannot be approved; malformed extra fields rejected; legacy approval without evidence does not qualify | REPORTED PASS; NOT INDEPENDENTLY TESTED |
+| Data preservation and migration | Confirm consent schema/index migration, off-host backup/rollback path, preservation of original receipts/history and no unaudited retroactive approval | NOT TESTED ON RUNNING SERVER |
+| External-bypass review | Ensure IONOS, Zapier, Apollo, JustCall and other connectors cannot dial from raw form claims, approved UI state alone, generic communications opt-in or lists | NOT INDEPENDENTLY VERIFIED |
+| Trading, billing, checkout | No changes to financial execution gates, payment systems or pricing; calls remain disabled | TO RECHECK AFTER PUBLISH |
+
+**Do not publish before visual and migration safety gates pass.** Do not treat a preview screenshot as evidence that a consent is valid, and do not submit identifiable contacts to JustCall until consent provenance has been independently validated.
+
+### After an authorized publish: controlled server tests (no calls)
+
+Use separate NIJA-controlled, uniquely labeled QA records/phone numbers that will never be placed in the production dialing queue; do **not** impersonate a real prospect or trigger a live call. Perform these through the real running IONOS server, under a signed-in permitted administrator; retain redacted response, persisted audit ID and relevant request time for each case. Use **distinct** test records when a terminal transition prevents subsequent testing:
+
+1. **Record A — unchecked:** submit without the optional AI-call checkbox; confirm no independently validated AI calling authorization is created and no Apollo call-ready record results.
+2. **Record B — checked and separately verified:** submit with the AI-call checkbox; confirm a browser claim alone is unverified. Add independently authentic evidence reference using the approved admin workflow; verify server derives verifier identity/time, immutable disclosure/version and chained audit signature. Approval must still **not** enqueue a call.
+3. **Record C — withdrawal:** submit a separate consent claim, perform the independently verified approval where appropriate, withdraw using the published opt-out; confirm suppression is effective and subsequent approval/replay is rejected, with original evidence preserved.
+4. **Record D — rejection:** submit a separate claim and reject it with source-backed review evidence; confirm a prior approval for the claim is revoked if applicable, re-verification of that same rejected opt-in is refused and calling stays disabled.
+5. **Record E — adversarial/failure:** use an isolated QA record to confirm extra approval/verifier/timestamp fields, altered signature, old disclosure, newer replacement, missing evidence reference, suppressed or DNC-blocked state each fail closed; verify no partial audit mutation when verification fails.
+6. **Integration audit:** re-run the Render provider-history, feeder and human-handoff audits; compare Apollo accepted/queued state against authentic independent consent receipts; inspect any external JustCall/Zapier/Apollo trigger paths. Zero valid contacts **must remain zero queued**. Test records must be excluded from eligible outreach.
+
+**Do not assert successful verification until post-publish server responses, database audit receipts, UI screenshots and security checks are actually observed.** Keep JustCall provider entitlement and answered staffed warm transfer as separate prerequisites; written business-use-case eligibility alone is insufficient.
