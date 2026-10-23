@@ -11,7 +11,6 @@ may bridge object-publication lag without inventing balance or broker state.
 """
 from __future__ import annotations
 
-import importlib
 import logging
 import os
 import sys
@@ -62,17 +61,33 @@ def _publish_ready(source: str, snapshot: Any) -> None:
         broker_count,
         now,
     )
+    # Do not run the synchronous three-venue evaluator on the capital
+    # coordinator thread: it calls authenticated broker balance/market APIs.
+    # Signal only the existing dedicated readiness monitor.  That monitor
+    # continues to compute its own current writer/capital/broker evidence.
+    # Avoid importing the module here; import hooks can block publication too.
     try:
-        readiness = importlib.import_module("three_venue_execution_readiness")
-        publish = getattr(readiness, "publish_once", None)
-        if callable(publish):
-            publish(force=True)
+        readiness = sys.modules.get("three_venue_execution_readiness")
+        request = getattr(readiness, "request_reevaluation", None)
+        if callable(request):
+            request()
+            LOGGER.info(
+                "CAPITAL_READINESS_HANDOFF_V34_REEVALUATION_QUEUED marker=%s "
+                "broker_io=false execution_authority_unchanged=true",
+                MARKER,
+            )
+        else:
+            LOGGER.info(
+                "CAPITAL_READINESS_HANDOFF_V34_REEVALUATION_DEFERRED marker=%s "
+                "reason=verifier_unavailable broker_io=false trading_fail_closed=true",
+                MARKER,
+            )
     except Exception as exc:
         LOGGER.warning(
-            "CAPITAL_READINESS_HANDOFF_V34_REEVALUATION_DEFERRED marker=%s error=%s:%s",
+            "CAPITAL_READINESS_HANDOFF_V34_REEVALUATION_DEFERRED marker=%s "
+            "reason=signal_exception error_type=%s broker_io=false trading_fail_closed=true",
             MARKER,
             type(exc).__name__,
-            exc,
         )
 
 
