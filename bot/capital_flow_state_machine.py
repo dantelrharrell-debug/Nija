@@ -1526,6 +1526,11 @@ class CapitalRefreshCoordinator:
             "CAPITAL_PIPELINE_SUBSTAGE_V142 stage=runtime_transition status=done duration_ms=%.1f",
             (time.monotonic() - _runtime_transition_started) * 1000,
         )
+        _nija_runtime_stage_started = time.monotonic()
+        logger.info("[CapitalStageTiming] stage=runtime_transition status=start")
+        self._runtime.transition(CapitalRuntimeState.RUN_REFRESHING, "coordinator_publish")
+        logger.info("[CapitalStageTiming] stage=runtime_transition status=done duration_ms=%.1f", (time.monotonic() - _nija_runtime_stage_started) * 1000)
+        _nija_runtime_stage_started = time.monotonic()
         # on_snapshot_received may enqueue additional CAPITAL_READY / CAPITAL_DEGRADED
         # / CAPITAL_STALE events; they are captured in the same dispatch below.
         self._nija_v142_pipeline_stage = "snapshot_received"
@@ -1536,6 +1541,7 @@ class CapitalRefreshCoordinator:
             "CAPITAL_PIPELINE_SUBSTAGE_V142 stage=snapshot_received status=done duration_ms=%.1f",
             (time.monotonic() - _snapshot_received_started) * 1000,
         )
+        logger.info("[CapitalStageTiming] stage=snapshot_received status=done duration_ms=%.1f", (time.monotonic() - _nija_runtime_stage_started) * 1000)
 
         # ── Notify CSM-v2 BEFORE the bootstrap FSM advances ──────────────────────
         # The bootstrap transition below fires _on_capital_bootstrap_ready
@@ -1567,7 +1573,10 @@ class CapitalRefreshCoordinator:
         # time _on_ready_callbacks fire (inside transition(READY) below), all event
         # bus subscribers have already processed the CAPITAL_READY notification.
         self._nija_v142_pipeline_stage = "event_dispatch"
+        _nija_dispatch_started = time.monotonic()
+        logger.info("[CapitalStageTiming] stage=event_dispatch status=start")
         self._bus.dispatch_pending()
+        logger.info("[CapitalStageTiming] stage=event_dispatch status=done duration_ms=%.1f", (time.monotonic() - _nija_dispatch_started) * 1000)
 
         # ── Advance bootstrap FSM to terminal state ───────────────────────────
         # _on_ready_callbacks are fired synchronously inside transition() when
