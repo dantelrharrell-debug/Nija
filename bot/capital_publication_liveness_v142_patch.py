@@ -499,7 +499,7 @@ _CAPITAL_TIMEOUT_STAGE_FRAMES_V142 = {
     "fetch_balance": "broker_balance_fetch",
     "publish_snapshot": "capital_publication",
     "dispatch_pending": "capital_event_dispatch",
-    "on_snapshot_received": "capital_runtime_fsm",
+    "on_snapshot_received": "snapshot_received",
 }
 
 # These are literal, non-sensitive pipeline stages. They only describe an
@@ -513,6 +513,9 @@ _CAPITAL_TIMEOUT_SAFE_STAGES_V142 = frozenset({
     "confidence",
     "publish",
     "runtime_fsm",
+    "runtime_transition",
+    "snapshot_received",
+    "csm_ingest",
     "event_dispatch",
     "bootstrap_fsm",
     "complete",
