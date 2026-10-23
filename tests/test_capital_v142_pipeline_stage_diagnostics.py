@@ -98,7 +98,69 @@ def test_pipeline_records_fixed_stage_sequence_without_new_authority_reads():
     ]
     assert assigned_stages == [
         "refresh_start", "broker_balance_fetch", "normalize", "valuate",
-        "confidence", "publish", "runtime_fsm", "event_dispatch",
+        "confidence", "publish", "runtime_fsm", "runtime_transition",
+        "snapshot_received", "csm_ingest", "event_dispatch",
         "bootstrap_fsm", "complete",
     ]
     assert set(assigned_stages) <= v142._CAPITAL_TIMEOUT_SAFE_STAGES_V142
+
+
+def test_runtime_substage_hints_are_safe_and_only_from_exact_worker():
+    worker, release = _blocked_thread(lambda: None)
+    try:
+        coordinator = SimpleNamespace(_nija_v142_flight_thread=worker)
+        for stage in ("runtime_transition", "snapshot_received", "csm_ingest"):
+            coordinator._nija_v142_pipeline_stage = stage
+            assert v142._timeout_worker_stage_hint_v142(worker, coordinator) == stage
+        coordinator._nija_v142_flight_thread = object()
+        assert v142._timeout_worker_stage_hint_v142(worker, coordinator) == "unknown"
+    finally:
+        release.set()
+        worker.join(timeout=3)
+    assert not worker.is_alive()
+
+
+def test_snapshot_handler_frame_maps_to_exact_runtime_substage():
+    entered = threading.Event()
+    release = threading.Event()
+
+    def on_snapshot_received():
+        entered.set()
+        assert release.wait(timeout=3)
+
+    worker = threading.Thread(target=on_snapshot_received, daemon=True)
+    worker.start()
+    try:
+        assert entered.wait(timeout=2)
+        coordinator = SimpleNamespace(
+            _nija_v142_flight_thread=worker,
+            _nija_v142_pipeline_stage="snapshot_received",
+        )
+        assert v142._timeout_worker_stage_hint_v142(worker, coordinator) == "snapshot_received"
+    finally:
+        release.set()
+        worker.join(timeout=3)
+    assert not worker.is_alive()
+
+
+def test_substage_instrumentation_preserves_one_call_per_existing_step():
+    path = ROOT / "bot" / "capital_flow_state_machine.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    cls = next(n for n in tree.body if isinstance(n, ast.ClassDef)
+               and n.name == "CapitalRefreshCoordinator")
+    method = next(n for n in cls.body if isinstance(n, ast.FunctionDef)
+                  and n.name == "_pipeline")
+
+    def call_count(name):
+        return sum(
+            1 for node in ast.walk(method)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == name
+        )
+
+    assert call_count("on_snapshot_received") == 1
+    assert call_count("ingest_snapshot") == 1
+    assert call_count("dispatch_pending") == 1
+    assert "snapshot_received" in v142._CAPITAL_TIMEOUT_SAFE_STAGES_V142
+    assert "csm_ingest" in v142._CAPITAL_TIMEOUT_SAFE_STAGES_V142
