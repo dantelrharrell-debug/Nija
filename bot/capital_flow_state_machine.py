@@ -1059,6 +1059,9 @@ class CapitalRefreshCoordinator:
 
         bootstrap_owner_thread = self._boot.is_owner_thread()
         bootstrap_active = False
+        # Static diagnostic stage only. It is not consumed by capital or
+        # execution admission; v142 reads it solely after a worker timeout.
+        self._nija_v142_pipeline_stage = "refresh_start"
 
         self._bus.emit(CapitalEvent(
             event_type=CapitalEventType.REFRESH_STARTED,
@@ -1128,6 +1131,7 @@ class CapitalRefreshCoordinator:
         # diagnostics (fetch timestamp, pricing coverage, error count) for use
         # in Stage 4 confidence scoring.
         # =================================================================
+        self._nija_v142_pipeline_stage = "broker_balance_fetch"
         raw_balances: Dict[str, float] = {}   # broker_id → fetched scalar
         balance_fetched_successfully = False
         kraken_present = False
@@ -1262,6 +1266,7 @@ class CapitalRefreshCoordinator:
         # The authority's last_updated age is used for snapshot_age_s (reflects
         # how stale the PREVIOUS snapshot was when this refresh was triggered).
         # =================================================================
+        self._nija_v142_pipeline_stage = "normalize"
         new_balances: Dict[str, float] = {
             k: v for k, v in raw_balances.items() if v > 0.0
         }
@@ -1320,6 +1325,7 @@ class CapitalRefreshCoordinator:
         # STAGE 3: VALUATE
         # Derive real / usable / risk capital from normalised broker totals.
         # =================================================================
+        self._nija_v142_pipeline_stage = "valuate"
         reserve_pct = authority.reserve_pct
         expected = authority.expected_brokers
         # In opportunistic mode only 1 broker is required for freshness; in
@@ -1333,6 +1339,7 @@ class CapitalRefreshCoordinator:
         # STAGE 4: CONFIDENCE
         # Weight three orthogonal signals into a single quality score.
         # =================================================================
+        self._nija_v142_pipeline_stage = "confidence"
         confidence = CapitalConfidence.compute(
             kraken_response_age_s=kraken_response_age_s,
             assets_priced_success_pct=assets_priced_success_pct,
@@ -1377,6 +1384,7 @@ class CapitalRefreshCoordinator:
         # Single atomic write to CapitalAuthority.  Rejected if writer_id
         # does not match the authorised constant.
         # =================================================================
+        self._nija_v142_pipeline_stage = "publish"
         try:
             accepted = authority.publish_snapshot(snapshot, writer_id=self.WRITER_ID)
         except RuntimeError as exc:
@@ -1507,6 +1515,7 @@ class CapitalRefreshCoordinator:
                     snapshot.real_capital,
                     confidence.band.value,
                 )
+        self._nija_v142_pipeline_stage = "runtime_fsm"
         self._runtime.transition(CapitalRuntimeState.RUN_REFRESHING, "coordinator_publish")
         # on_snapshot_received may enqueue additional CAPITAL_READY / CAPITAL_DEGRADED
         # / CAPITAL_STALE events; they are captured in the same dispatch below.
@@ -1533,12 +1542,14 @@ class CapitalRefreshCoordinator:
         # bootstrap FSM advances to its terminal state.  This ensures that by the
         # time _on_ready_callbacks fire (inside transition(READY) below), all event
         # bus subscribers have already processed the CAPITAL_READY notification.
+        self._nija_v142_pipeline_stage = "event_dispatch"
         self._bus.dispatch_pending()
 
         # ── Advance bootstrap FSM to terminal state ───────────────────────────
         # _on_ready_callbacks are fired synchronously inside transition() when
         # _boot_target is READY.  They observe a fully-dispatched event queue
         # and a fully-hydrated CSM-v2 (ingested above).
+        self._nija_v142_pipeline_stage = "bootstrap_fsm"
         if bootstrap_owner_thread and bootstrap_active:
             self._boot.transition(_boot_target, _boot_reason)
             # Drive the FSM all the way to its documented terminal success state
@@ -1566,6 +1577,7 @@ class CapitalRefreshCoordinator:
                 _skip_reason,
             )
 
+        self._nija_v142_pipeline_stage = "complete"
         logger.info(
             "[Coordinator] published  real=$%.2f  confidence=%.3f(%s)  "
             "freshness=%.3f  pricing=%.3f  errors=%d  "

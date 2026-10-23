@@ -44,9 +44,12 @@ A permanent, fsynced `<request_id>.claimed.json` is created before reading.
 Interrupted or failed collections are not automatically replayed. Retain claims
 and failure evidence for review; do not erase them to get a success result.
 
-The collector reads only Balance, TradesHistory, ClosedOrders and Ledgers,
+The collector reads only Balance, TradesHistory, ClosedOrders, Ledgers and OpenOrders,
 through the existing broker's private-call controls. Two complete historical
-passes must agree and before/after balances must match. A changed count, row,
+passes must agree and before/after balances must match. After history collection,
+two complete cursor-paginated OpenOrders reads must agree. The operator-selected
+`max_pages` also bounds each open-order pass (50 orders per page). No symbol,
+client-ID or user-reference filter is applied. A changed count, row,
 balance, incomplete page or API failure produces failure evidence. Output is
 atomically committed as mode-0600 `<request_id>.evidence.json`. Error receipts contain exception type and fixed allowlisted failure labels.
 For an insufficient page budget with a broker-provided count, the private
@@ -64,9 +67,9 @@ history, replay a consumed request, or automatically increase its budget.
 Preserve the failed claim and evidence. A new request ID and separately approved
 rate/budget plan are required for a new attempt.
 
-Kraken private-history endpoints consume +4 units of the account's REST
-rate counter per call. Standard-tier capacity replenishes 0.5 units/second
-(see https://support.kraken.com/articles/206548367-what-are-the-api-rate-limits-).
+Kraken documents a per-key REST call counter: ledger/trade-history calls cost
+two units, most other reads one; decay depends on tier
+(https://docs.kraken.com/exchange/guides/rest/ratelimits).
 Two passes across three paginated endpoints can take substantial time. Before
 approving a request above ten pages, independently verify the broker's
 monitoring throttles, rate budget, account scope and production impact.
@@ -76,7 +79,7 @@ backup/restore requirements, historical reconciliation or proof freshness.
 No ledger writes, order placement/cancellation, kill-switch changes, execution
 marker writes or authority promotion occur. Historical broker timestamps stay
 unchanged. Repeat-read agreement is not an atomic broker snapshot, independent
-account identity, current protective-order readback or ledger reconciliation.
+account identity, protective-order coverage or ledger reconciliation.
 The output explicitly preserves those unverified states.
 
 After a successful collection, independently reconcile all historical fills
@@ -89,3 +92,28 @@ Kraken records or authorize trading.
 Rollback: disable the optional directory setting through the reviewed release
 process and revert this code if necessary. Preserve requests, claims and evidence;
 do not remove ledger state, recovery queues or historical execution records.
+
+## Current open-order evidence
+
+The evidence envelope now includes `open_orders` keyed by broker order ID and
+`open_orders_observations` containing the request-start and response-finish time
+of each pass. Both fields participate in the evidence hash. Historical order/fill
+timestamps remain untouched. Use the first request-start as the conservative
+observation bound; report completion must not refresh it. These sequential reads
+are not an atomic account snapshot and cannot exclude intervening changes.
+
+Open-order read errors, malformed pages, duplicate IDs, repeated/invalid cursors,
+page-budget exhaustion, clock regression and changes between passes reject the
+whole collection. Error receipts keep fixed labels without broker error text.
+The existing private request claim prevents automatic retries.
+
+`protective_exit_coverage_verified` remains false: an order being present does
+not prove account ownership, position linkage, remaining quantity, correct side
+or stop coverage. Those checks and fresh dispatch-time evidence remain mandatory.
+This change supplies the missing readback to the existing recovery path; it does
+not install the pre-trade certification producer or enable admission.
+
+Endpoint contract: https://docs.kraken.com/api-reference/account-data/get-open-orders
+
+Rollback of this addition: revert the readback change without deleting requests,
+claims or evidence; historical receipts remain historical. No schema migration.

@@ -148,6 +148,33 @@ def _capital_failure_reasons(
     return tuple(sorted(set(reasons)))
 
 
+def _refresh_evidence_stage(
+    result: Any, *, registered: int, connected: int, valid: int,
+    publication_current: bool,
+) -> str:
+    """Classify the refresh handoff, not broker health or order eligibility.
+
+    A canonical snapshot may be current while a different coordinator call
+    reports pending or coalesced. Never promote that incomplete call to READY.
+    All strings are fixed and safe to include in production log records.
+    """
+    if not isinstance(result, Mapping):
+        return "result_unavailable"
+    if result.get("pending") is True or result.get("pending") == 1.0:
+        return "upstream_pending"
+    if result.get("dedup") is True or result.get("dedup") == 1.0:
+        return "coalesced"
+    if connected != registered:
+        return "broker_registry_incomplete"
+    if valid < registered:
+        return "contributors_incomplete"
+    if valid > registered:
+        return "contributors_exceed_registered"
+    if not publication_current:
+        return "publication_unaccepted"
+    return "refresh_verified"
+
+
 def _fail_closed_result(manager: Any, result: Any, *, registered: int, connected: int) -> Any:
     valid = _result_valid_brokers(result)
     if registered <= 0:
@@ -160,6 +187,10 @@ def _fail_closed_result(manager: Any, result: Any, *, registered: int, connected
         return result
 
     failure_reasons = _capital_failure_reasons(
+        result, registered=registered, connected=connected, valid=valid,
+        publication_current=publication_current,
+    )
+    evidence_stage = _refresh_evidence_stage(
         result, registered=registered, connected=connected, valid=valid,
         publication_current=publication_current,
     )
@@ -182,7 +213,8 @@ def _fail_closed_result(manager: Any, result: Any, *, registered: int, connected
     LOGGER.critical(
         "REGISTERED_PLATFORM_CAPITAL_V270_FAIL_CLOSED marker=%s "
         "registered=%d connected=%d valid_brokers=%d original_ready=%s publication_current=%s "
-        "failure_reasons=%s capital_mutated=false freshness_extended=false publication_expiry_extended=false "
+        "failure_reasons=%s refresh_evidence_stage=%s "
+        "capital_mutated=false freshness_extended=false publication_expiry_extended=false "
         "execution_authority_unchanged=true forced_trade=false forced_activation=false "
         "safety_gates_bypassed=false",
         MARKER,
@@ -192,6 +224,7 @@ def _fail_closed_result(manager: Any, result: Any, *, registered: int, connected
         result.get("ready") if isinstance(result, Mapping) else None,
         publication_current,
         ",".join(failure_reasons),
+        evidence_stage,
     )
     return corrected
 

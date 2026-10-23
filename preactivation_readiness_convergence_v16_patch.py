@@ -412,22 +412,51 @@ def _independent_pretrade_certificate() -> tuple[bool, list[str]]:
         and not any(char.isspace() for char in account_scope)
     )
     evidence = None
+    producer_status = "scope_missing_or_invalid" if not scope_valid else "verifier_missing"
+    collector_installed = False
     if scope_valid:
         try:
             module = importlib.import_module("bot.pretrade_independent_attestation")
-            verifier = getattr(module, "current_authenticated_attestations", None)
-            evidence = verifier(account_scope) if callable(verifier) else None
+            inspector = getattr(module, "inspect_authenticated_attestations", None)
+            if callable(inspector):
+                report = inspector(account_scope)
+                if isinstance(report, dict):
+                    evidence = report.get("checks")
+                    # Fixed allowlist: never log a provider's raw error or account ID.
+                    allowed = {
+                        "account_scope_invalid", "collector_missing",
+                        "collector_result_invalid", "observation_missing_future_or_stale",
+                        "account_scope_mismatch", "producer_source_untrusted",
+                        "authenticated_readback_unverified", "provenance_missing",
+                        "provenance_unverified", "checks_missing", "checks_incomplete",
+                        "checks_passed_diagnostic_only", "collector_exception",
+                    }
+                    candidate = report.get("producer_status")
+                    producer_status = (candidate if isinstance(candidate, str)
+                                       and candidate in allowed else "inspector_result_invalid")
+                    collector_installed = report.get("collector_installed") is True
+                else:
+                    producer_status = "inspector_result_invalid"
+            else:
+                # Older injected verifiers remain supported; they must still
+                # return every check as literal True to qualify diagnostically.
+                verifier = getattr(module, "current_authenticated_attestations", None)
+                evidence = verifier(account_scope) if callable(verifier) else None
+                producer_status = "legacy_verifier" if callable(verifier) else "verifier_missing"
         except Exception:
-            evidence = None
+            producer_status = "verifier_exception"
     if not isinstance(evidence, dict):
         evidence = {}
     missing = [key for key in required if evidence.get(key) is not True]
     logger.info(
         "PRETRADE_INDEPENDENT_CERTIFICATION_V6 ready=%s account_scope_configured=%s "
-        "missing=%s diagnostic_only=true legacy_execution_gate_unchanged=true",
+        "missing=%s producer_status=%s collector_installed=%s "
+        "diagnostic_only=true legacy_execution_gate_unchanged=true",
         str(scope_valid and not missing).lower(),
         str(scope_valid).lower(),
         ",".join(missing) if missing else "none",
+        producer_status,
+        str(collector_installed).lower(),
     )
     return bool(scope_valid and not missing), missing
 
