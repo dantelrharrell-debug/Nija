@@ -291,3 +291,122 @@ def test_existing_broker_balance_uses_same_monitoring_controls():
     assert calls[0] == calls[-1] == "Balance"
     assert report["balance"]["BABY"] == "0.00142000"
     assert report["authenticated_identity_independently_verified"] is False
+
+
+def test_current_orders_paginate_repeat_and_preserve_observation_intervals(monkeypatch):
+    from scripts import nija_kraken_readonly_history_collector_v441 as api
+    import hashlib
+    import json
+
+    calls = []
+    clock = iter([1000.0, 1001.0, 1002.0, 1003.0, 1004.0, 1005.0])
+    monkeypatch.setattr(api.time, "time", lambda: next(clock))
+
+    def read(endpoint, params):
+        calls.append((endpoint, dict(params)))
+        if endpoint != "OpenOrders":
+            return _reader(endpoint, params)
+        assert params["with_cursor"] is True and params["trades"] is True
+        assert params["limit"] == 50
+        if "cursor" not in params:
+            return {"error": [], "result": {
+                "open": {"stop": {"status": "open", "vol": "1", "descr": {"ordertype": "stop-loss"}}},
+                "cursor": {"next": "page-two"},
+            }}
+        assert params["cursor"] == "page-two"
+        return {"error": [], "result": {"open": {"other": {"status": "open"}}}}
+
+    report = api.collect_history(read, account_scope="platform:kraken", include_open_orders=True)
+    assert set(report["open_orders"]) == {"stop", "other"}
+    assert report["open_orders_observations"] == [
+        {"request_started_at": 1000.0, "response_finished_at": 1002.0},
+        {"request_started_at": 1003.0, "response_finished_at": 1005.0},
+    ]
+    assert len([x for x in calls if x[0] == "OpenOrders"]) == 4
+    assert report["protective_exit_coverage_verified"] is False
+    assert report["trading_authorized"] is False
+    envelope = {k: report[k] for k in (
+        "account_scope_asserted_by_caller", "history", "open_orders", "open_orders_observations",
+    )}
+    assert report["evidence_sha256"] == hashlib.sha256(
+        json.dumps(envelope, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+    ).hexdigest()
+
+
+@pytest.mark.parametrize("scenario,reason", [
+    ("permission", "API failure"), ("missing_error", "API failure"),
+    ("malformed", "malformed result"), ("cursor", "invalid cursor"),
+    ("repeat_cursor", "repeated cursor"), ("duplicate", "duplicate identifier"),
+    ("empty_next", "incomplete empty page"), ("page_limit", "page limit"),
+    ("oversized", "oversized page"), ("changed", "changed between"),
+    ("nan", "non-JSON record"),
+])
+def test_open_order_incomplete_or_changing_readback_denies_report(scenario, reason):
+    calls = 0
+
+    def read(endpoint, params):
+        nonlocal calls
+        if endpoint != "OpenOrders":
+            field = dict(TradesHistory="trades", ClosedOrders="closed", Ledgers="ledger")[endpoint]
+            return {"error": [], "result": {"count": 0, field: {}}}
+        calls += 1
+        row = {"error": [], "result": {"open": {"stop": {"vol": "1"}}}}
+        if scenario == "permission":
+            row["error"] = ["private-upstream-canary"]
+        elif scenario == "missing_error":
+            del row["error"]
+        elif scenario == "malformed":
+            row["result"] = {}
+        elif scenario == "cursor":
+            row["result"]["cursor"] = {"next": False}
+        elif scenario in {"repeat_cursor", "duplicate", "page_limit", "empty_next"}:
+            row["result"]["cursor"] = {"next": "same"}
+            if scenario == "repeat_cursor":
+                row["result"]["open"] = {str(calls): {"vol": "1"}}
+            elif scenario == "empty_next":
+                row["result"]["open"] = {}
+        elif scenario == "oversized":
+            row["result"]["open"] = {str(i): {} for i in range(51)}
+        elif scenario == "changed" and calls == 2:
+            row["result"]["open"] = {}
+        elif scenario == "nan":
+            row["result"]["open"]["stop"]["vol"] = float("nan")
+        return row
+
+    with pytest.raises(IncompleteHistory, match=reason) as error:
+        collect_history(read, account_scope="platform:kraken", include_open_orders=True,
+                        max_pages=1 if scenario == "page_limit" else 2)
+    assert "private-upstream-canary" not in str(error.value)
+
+
+def test_open_order_scope_change_in_existing_broker_aborts():
+    broker = SimpleNamespace(broker_type="kraken", account_type="platform", user_id=None)
+
+    def read(endpoint, params, *, category):
+        assert category == "monitoring"
+        if endpoint == "OpenOrders":
+            broker.user_id = "different"
+            return {"error": [], "result": {"open": {}}}
+        return _reader(endpoint, params)
+
+    broker._kraken_private_call = read
+    with pytest.raises(ValueError, match="metadata required"):
+        collect_from_existing_broker(broker, account_scope="platform:kraken",
+                                     monitoring_category="monitoring", include_open_orders=True)
+
+
+@pytest.mark.parametrize("clock_values", [
+    [100.0, 99.0], [100.0, float("nan")], [100.0, 101.0, 99.0, 102.0],
+])
+def test_open_order_clock_regression_cannot_refresh_evidence(monkeypatch, clock_values):
+    from scripts import nija_kraken_readonly_history_collector_v441 as api
+    clock = iter(clock_values)
+    monkeypatch.setattr(api.time, "time", lambda: next(clock))
+
+    def read(endpoint, params):
+        if endpoint == "OpenOrders":
+            return {"error": [], "result": {"open": {}}}
+        return _reader(endpoint, params)
+
+    with pytest.raises(IncompleteHistory, match="invalid observation clock"):
+        collect_history(read, account_scope="platform:kraken", include_open_orders=True)
