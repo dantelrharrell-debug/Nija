@@ -5,6 +5,8 @@ on:
     branches: [main, release/justcall-handoff-only-20261017]
     paths:
       - 'bot/capital_publication_liveness_v142_patch.py'
+      - 'bot/capital_flow_state_machine.py'
+      - 'tests/test_capital_v142_pipeline_stage_diagnostics.py'
       - 'tests/test_capital_sync_generation_v142.py'
       - 'bot/runtime_registered_platform_capital_completeness_v270_patch.py'
       - 'bot/tests/test_capital_v270_evidence_contract_20261019.py'
@@ -83,6 +85,8 @@ jobs:
         run: |
           python -S -m py_compile \
             bot/capital_publication_liveness_v142_patch.py \
+            bot/capital_flow_state_machine.py \
+            tests/test_capital_v142_pipeline_stage_diagnostics.py \
             tests/test_capital_sync_generation_v142.py \
             bot/runtime_registered_platform_capital_completeness_v270_patch.py \
             bot/tests/test_capital_v270_evidence_contract_20261019.py \
@@ -132,6 +136,8 @@ jobs:
         run: |
           python -m detect_secrets scan --all-files --no-verify \
             bot/capital_publication_liveness_v142_patch.py \
+            bot/capital_flow_state_machine.py \
+            tests/test_capital_v142_pipeline_stage_diagnostics.py \
             tests/test_capital_sync_generation_v142.py \
             bot/runtime_registered_platform_capital_completeness_v270_patch.py \
             bot/tests/test_capital_v270_evidence_contract_20261019.py \
@@ -210,6 +216,7 @@ jobs:
             tests/test_pretrade_provenance_guard.py \
             tests/test_preactivation_preflight_observability_v450.py \
             bot/tests/test_capital_v270_evidence_contract_20261019.py \
+            tests/test_capital_v142_pipeline_stage_diagnostics.py \
             tests/test_startup_two_phase_policy_v8.py \
             tests/test_kraken_recent_execution_discovery.py \
             tests/test_kraken_execution_recovery_candidates_v406.py \
