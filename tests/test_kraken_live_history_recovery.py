@@ -303,7 +303,65 @@ def test_history_count_exceeding_explicit_budget_stops_on_first_page(root):
     assert result["collection_succeeded"] is False
     assert result["error_code"] == "page_limit"
     assert result["error_endpoint"] == "TradesHistory"
+    assert result["required_pages"] == 12
+    assert result["requested_pages"] == 11
     assert result["trading_authorized"] is False
     assert calls == ["Balance", "TradesHistory"]
     assert (root / (ID + ".claimed.json")).exists()
     assert not run(root, [broker])
+
+
+def test_closed_orders_page_budget_reported_only_in_private_receipt(root, caplog):
+    request(root, max_pages=11)
+    broker = Broker()
+    calls = []
+
+    def read(endpoint, params, *, category):
+        assert category is CATEGORY
+        calls.append((endpoint, dict(params)))
+        if endpoint == "Balance":
+            return {"error": [], "result": {"ZUSD": "100"}}
+        field = {"TradesHistory": "trades", "ClosedOrders": "closed"}[endpoint]
+        if endpoint == "TradesHistory":
+            return {"error": [], "result": {"count": 0, field: {}}}
+        assert endpoint == "ClosedOrders" and params == {"ofs": 0}
+        return {"error": [], "result": {"count": 552, field: {"order-id": {"vol": "1"}}}}
+
+    broker._kraken_private_call = read
+    with caplog.at_level("WARNING"):
+        assert run(root, [broker])
+    result = json.loads((root / (ID + ".evidence.json")).read_text())
+    assert result["collection_succeeded"] is False
+    assert result["error_code"] == "page_limit"
+    assert result["error_endpoint"] == "ClosedOrders"
+    assert result["requested_pages"] == 11
+    assert result["required_pages"] == 12
+    assert result["trading_authorized"] is False
+    assert "552" not in caplog.text
+    assert "12" not in caplog.text
+    assert "order-id" not in caplog.text
+    assert calls == [
+        ("Balance", {}), ("TradesHistory", {"ofs": 0}),
+        ("ClosedOrders", {"ofs": 0}),
+    ]
+    assert (root / (ID + ".claimed.json")).exists()
+    assert not run(root, [broker])
+
+
+def test_unknown_failure_cannot_inject_page_budget(root, monkeypatch):
+    from scripts.nija_kraken_readonly_history_collector_v441 import IncompleteHistory
+    request(root)
+
+    def fail(*args, **kwargs):
+        raise IncompleteHistory(
+            "ClosedOrders: untrusted-message",
+            required_pages=999999, requested_pages=1,
+        )
+
+    monkeypatch.setattr(api, "collect_from_existing_broker", fail)
+    assert run(root, [Broker()])
+    result = json.loads((root / (ID + ".evidence.json")).read_text())
+    assert result["error_code"] == "history_incomplete_unknown"
+    assert "required_pages" not in result
+    assert "requested_pages" not in result
+    assert result["trading_authorized"] is False
