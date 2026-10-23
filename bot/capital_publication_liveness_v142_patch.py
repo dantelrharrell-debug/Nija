@@ -502,8 +502,26 @@ _CAPITAL_TIMEOUT_STAGE_FRAMES_V142 = {
     "on_snapshot_received": "capital_runtime_fsm",
 }
 
+# These are literal, non-sensitive pipeline stages. They only describe an
+# overdue worker; never use them as capital publication or activation proof.
+_CAPITAL_TIMEOUT_SAFE_STAGES_V142 = frozenset({
+    "pipeline_entry",
+    "refresh_start",
+    "broker_balance_fetch",
+    "normalize",
+    "valuate",
+    "confidence",
+    "publish",
+    "runtime_fsm",
+    "event_dispatch",
+    "bootstrap_fsm",
+    "complete",
+})
 
-def _timeout_worker_stage_hint_v142(worker: threading.Thread) -> str:
+
+def _timeout_worker_stage_hint_v142(
+    worker: threading.Thread, coordinator: Any = None,
+) -> str:
     """Sample one overdue worker without changing any broker or safety state.
 
     Only allowlisted Python function names are consulted, mapped to static stage
@@ -525,6 +543,19 @@ def _timeout_worker_stage_hint_v142(worker: threading.Thread) -> str:
             frame = frame.f_back
     except (AttributeError, RuntimeError, TypeError, ValueError):
         return "unavailable"
+    # A wrapped pipeline can block inside code with an unrecognized function
+    # name. Read only this coordinator's fixed stage marker, and only when the
+    # observed thread is the exact tracked worker; never inspect frame locals.
+    try:
+        if (
+            coordinator is not None
+            and getattr(coordinator, "_nija_v142_flight_thread", None) is worker
+        ):
+            hint = getattr(coordinator, "_nija_v142_pipeline_stage", None)
+            if type(hint) is str and hint in _CAPITAL_TIMEOUT_SAFE_STAGES_V142:
+                return hint
+    except (AttributeError, RuntimeError, TypeError, ValueError):
+        pass
     return "unknown"
 
 
@@ -641,6 +672,8 @@ def _patch_coordinator_execute() -> bool:
             self._nija_v142_flight_started_monotonic = time.monotonic()
             self._nija_v142_flight_trigger = str(trigger)
             self._nija_v142_flight_timed_out = False
+            # Diagnostic only; core pipeline advances this literal stage label.
+            self._nija_v142_pipeline_stage = "pipeline_entry"
 
         result_queue: queue.Queue[tuple[str, Any]] = queue.Queue(maxsize=1)
 
@@ -713,7 +746,7 @@ def _patch_coordinator_execute() -> bool:
         except queue.Empty:
             # Capture a safe stage hint before generation retirement/rollover.
             # Do not inspect frame locals: those may contain broker credentials.
-            stage_hint = _timeout_worker_stage_hint_v142(worker)
+            stage_hint = _timeout_worker_stage_hint_v142(worker, self)
             with self._lock:
                 self._nija_v142_flight_timed_out = True
             _retire_generation(generation, "runtime_pipeline_deadline_exceeded")
