@@ -146,8 +146,6 @@ jobs:
             tests/test_kraken_execution_recovery_candidates_v406.py \
             tests/test_runtime_known_execution_probe_v406_dynamic.py \
             tests/test_independent_recovery_certification.py \
-            tests/test_pretrade_independent_attestation_regression_3370.py \
-            tests/test_pretrade_certified_provider_bridge_3370.py \
             bot/pretrade_certified_provider_bridge_3370.py \
             tests/test_pretrade_independent_attestation_regression_3370.py \
             tests/test_pretrade_certified_provider_bridge_3370.py
@@ -252,6 +250,8 @@ jobs:
             tests/test_kraken_execution_recovery_candidates_v406.py \
             tests/test_runtime_known_execution_probe_v406_dynamic.py \
             tests/test_independent_recovery_certification.py \
+            tests/test_pretrade_independent_attestation_regression_3370.py \
+            tests/test_pretrade_certified_provider_bridge_3370.py
             tests/test_execution_proof_deadlock_crossguards_v451.py \
             tests/test_preactivation_execution_proof_v439.py \
             tests/test_runtime_all_account_position_exit_coverage_v281.py \
