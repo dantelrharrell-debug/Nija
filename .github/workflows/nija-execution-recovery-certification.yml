@@ -36,6 +36,9 @@ on:
       - 'bot/kraken_authenticated_execution_evidence_v451.py'
       - 'bot/pretrade_attestation_validation_v452.py'
       - 'bot/pretrade_authenticated_provider_adapter_v453.py'
+      - 'bot/pretrade_composition_bridge_v465.py'
+      - 'tests/test_pretrade_composition_bridge_v465.py'
+      - 'docs/nija_pretrade_composition_bridge_v465_20261024.md'
       - 'bot/startup_transition_candidate_v454.py'
       - 'bot/tests/test_pretrade_attestation_validation_v452.py'
       - 'bot/tests/test_pretrade_authenticated_provider_adapter_v453.py'
@@ -118,6 +121,8 @@ jobs:
             bot/kraken_authenticated_execution_evidence_v451.py \
             bot/pretrade_attestation_validation_v452.py \
             bot/pretrade_authenticated_provider_adapter_v453.py \
+            bot/pretrade_composition_bridge_v465.py \
+            tests/test_pretrade_composition_bridge_v465.py \
             bot/startup_transition_candidate_v454.py \
             bot/pretrade_independent_attestation.py \
             bot/startup_authenticated_bridge_v456.py \
@@ -129,6 +134,7 @@ jobs:
             tests/test_startup_two_phase_policy_v8.py \
             bot/tests/test_pretrade_attestation_validation_v452.py \
             bot/tests/test_pretrade_authenticated_provider_adapter_v453.py \
+            tests/test_pretrade_composition_bridge_v465.py \
             bot/tests/test_startup_transition_candidate_v454.py \
             tests/test_order_admission_policy.py \
             bot/tests/test_kraken_authenticated_execution_evidence_v451.py \
@@ -172,6 +178,8 @@ jobs:
             bot/kraken_authenticated_execution_evidence_v451.py \
             bot/pretrade_attestation_validation_v452.py \
             bot/pretrade_authenticated_provider_adapter_v453.py \
+            bot/pretrade_composition_bridge_v465.py \
+            tests/test_pretrade_composition_bridge_v465.py \
             bot/startup_transition_candidate_v454.py \
             bot/pretrade_independent_attestation.py \
             bot/startup_authenticated_bridge_v456.py \
@@ -187,6 +195,7 @@ jobs:
             tests/test_order_admission_policy.py \
             bot/tests/test_kraken_authenticated_execution_evidence_v451.py \
             docs/order-admission-integration-review.md \
+            docs/nija_pretrade_composition_bridge_v465_20261024.md \
             bot/runtime_known_execution_probe_revalidation_v406_patch.py \
             bot/startup_recovery_readonly.py \
             tests/test_kraken_recent_execution_discovery.py \
