@@ -18,6 +18,9 @@ on:
       - 'tests/test_kraken_exact_pending_order_recovery_v466.py'
       - 'docs/nija_kraken_exact_pending_order_readback_v466_20261024.md'
       - 'scripts/nija_kraken_readonly_history_collector_v441.py'
+      - 'scripts/nija_kraken_exact_pending_readback_v466.py'
+      - 'tests/test_nija_kraken_exact_pending_readback_v466.py'
+      - 'docs/nija_kraken_exact_pending_readback_v466_20261024.md'
       - 'scripts/nija_legacy_global_state_evidence_v462.py'
       - 'bot/tests/test_nija_legacy_global_state_evidence_v462.py'
       - 'tests/test_kraken_live_history_recovery.py'
@@ -105,6 +108,8 @@ jobs:
             bot/kraken_live_history_recovery.py \
             bot/kraken_exact_pending_order_recovery_v466.py \
             scripts/nija_kraken_readonly_history_collector_v441.py \
+            scripts/nija_kraken_exact_pending_readback_v466.py \
+            tests/test_nija_kraken_exact_pending_readback_v466.py \
             scripts/nija_legacy_global_state_evidence_v462.py \
             bot/tests/test_nija_legacy_global_state_evidence_v462.py \
             tests/test_kraken_live_history_recovery.py \
@@ -164,6 +169,8 @@ jobs:
             bot/kraken_live_history_recovery.py \
             bot/kraken_exact_pending_order_recovery_v466.py \
             scripts/nija_kraken_readonly_history_collector_v441.py \
+            scripts/nija_kraken_exact_pending_readback_v466.py \
+            tests/test_nija_kraken_exact_pending_readback_v466.py \
             scripts/nija_legacy_global_state_evidence_v462.py \
             bot/tests/test_nija_legacy_global_state_evidence_v462.py \
             tests/test_kraken_live_history_recovery.py \
@@ -202,6 +209,7 @@ jobs:
             tests/test_order_admission_policy.py \
             bot/tests/test_kraken_authenticated_execution_evidence_v451.py \
             docs/order-admission-integration-review.md \
+            docs/nija_kraken_exact_pending_readback_v466_20261024.md \
             docs/nija_kraken_exact_pending_order_readback_v466_20261024.md \
             docs/nija_pretrade_composition_bridge_v465_20261024.md \
             bot/runtime_known_execution_probe_revalidation_v406_patch.py \
@@ -226,6 +234,7 @@ jobs:
         run: |
           python -m pytest -q \
             tests/test_kraken_live_history_recovery.py \
+            tests/test_nija_kraken_exact_pending_readback_v466.py \
             tests/test_kraken_exact_pending_order_recovery_v466.py \
             bot/tests/test_nija_kraken_readonly_history_collector_v441.py \
             tests/test_preflight_certificate_prerequisites.py \
