@@ -710,7 +710,9 @@ def _active_call_exists(number: str, now_utc: datetime) -> bool:
                 (pkey,),
             ).fetchone()
         except sqlite3.OperationalError:
-            return False
+            # Losing visibility into active calls is not proof the recipient
+            # has no ongoing call. Block submission until history recovers.
+            return True
     if row is None:
         return False
     latest = str(row["latest_event_type"] or "")
