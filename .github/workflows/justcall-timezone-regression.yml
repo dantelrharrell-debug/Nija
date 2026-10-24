@@ -5,6 +5,8 @@ on:
     paths:
       - 'render_outreach_autodial.py'
       - 'tests/test_autodial_timezone_gate.py'
+      - 'tests/test_justcall_active_call_lookup_failclosed.py tests/test_justcall_provider_launch_gate.py'
+      - 'tests/test_justcall_provider_launch_gate.py'
       - '.github/workflows/justcall-timezone-regression.yml'
   workflow_dispatch:
 
@@ -23,6 +25,6 @@ jobs:
       - name: Install test dependencies
         run: python -m pip install pytest requests
       - name: Compile module and test
-        run: python -m py_compile render_outreach_autodial.py tests/test_autodial_timezone_gate.py
+        run: python -m py_compile render_outreach_autodial.py tests/test_autodial_timezone_gate.py tests/test_justcall_active_call_lookup_failclosed.py tests/test_justcall_provider_launch_gate.py
       - name: Run fail-closed regression suite
-        run: python -m pytest -q tests/test_autodial_timezone_gate.py
+        run: python -m pytest -q tests/test_autodial_timezone_gate.py tests/test_justcall_active_call_lookup_failclosed.py tests/test_justcall_provider_launch_gate.py

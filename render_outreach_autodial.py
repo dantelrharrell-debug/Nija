@@ -405,8 +405,20 @@ def enqueue_candidate(body: dict[str, Any]) -> dict[str, Any]:
         "blocker": static_blocker or None,
     }
 
+def _provider_launch_approved() -> bool:
+    """Require separately recorded JustCall approval and operator release."""
+    return (
+        _bool(os.getenv("NIJA_JUSTCALL_PROVIDER_OUTBOUND_APPROVED", "0"))
+        and bool(os.getenv("NIJA_JUSTCALL_PROVIDER_APPROVAL_REFERENCE", "").strip())
+        and _bool(os.getenv("NIJA_JUSTCALL_LIVE_CALLING_AUTHORIZED", "0"))
+    )
+
+
 def _worker_enabled() -> bool:
-    return _bool(os.getenv("NIJA_JUSTCALL_AUTODIAL_ENABLED", "0"))
+    return (
+        _bool(os.getenv("NIJA_JUSTCALL_AUTODIAL_ENABLED", "0"))
+        and _provider_launch_approved()
+    )
 
 
 def _poll_seconds() -> float:
@@ -710,7 +722,9 @@ def _active_call_exists(number: str, now_utc: datetime) -> bool:
                 (pkey,),
             ).fetchone()
         except sqlite3.OperationalError:
-            return False
+            # Losing visibility into active calls is not proof the recipient
+            # has no ongoing call. Block submission until history recovers.
+            return True
     if row is None:
         return False
     latest = str(row["latest_event_type"] or "")
@@ -725,6 +739,8 @@ def _active_call_exists(number: str, now_utc: datetime) -> bool:
 def _eligibility(row: sqlite3.Row, now_utc: datetime) -> tuple[list[str], datetime]:
     blockers: list[str] = []
     retry_at = now_utc + timedelta(minutes=15)
+    if not _provider_launch_approved():
+        blockers.append("provider_outbound_approval_required")
     if not bool(row["has_consent"]):
         blockers.append("verified_consent_required")
     if not str(row["consent_record_id"] or "").strip():
@@ -1035,6 +1051,7 @@ def _queue_status() -> dict[str, Any]:
     counts = {str(row["state"]): int(row["count"] or 0) for row in rows}
     return {
         "enabled": _worker_enabled(),
+        "provider_launch_approved": _provider_launch_approved(),
         "worker_started": _WORKER_STARTED,
         "poll_seconds": _poll_seconds(),
         "batch_size": _batch_size(),
