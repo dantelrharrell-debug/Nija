@@ -291,6 +291,13 @@ def _reconcile_confirmed_fill(
             )
             return
         if _already_booked(ledger, oid, user_id=user_hint, broker=broker):
+            # The ledger commit can succeed before the separate pending-audit
+            # update fails. Retry only that exact audit transition on replay;
+            # never book the CLOSE/P&L again or infer a missing opening lot.
+            if broker == "kraken":
+                from bot.pending_kraken_close_audit_v434 import mark_reconciled
+
+                mark_reconciled(ledger, result=result, order_id=oid)
             LOGGER.info(
                 "REALIZED_PNL_V412_DUPLICATE_IGNORED marker=%s order_id=%s symbol=%s idempotent=true",
                 MARKER, oid, symbol,

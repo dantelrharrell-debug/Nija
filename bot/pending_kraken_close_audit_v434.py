@@ -163,20 +163,38 @@ def record_unmatched_confirmed_close(
 
 
 def mark_reconciled(
-    ledger: Any, *, result: Mapping[str, Any], order_id: str, position_id: str,
+    ledger: Any, *, result: Mapping[str, Any], order_id: str, position_id: str | None = None,
 ) -> bool:
-    """Mark a previously pending exact fill only after canonical P&L was booked."""
+    """Resolve an exact booked close, including replay after a lost audit update.
+
+    A missing position ID is recovered only from one canonical Kraken CLOSE
+    for this account/order. Never choose one of several matching records.
+    """
     scope, user_id = _owner(result.get("account") or result.get("account_id"))
     oid, pid = str(order_id or "").strip(), str(position_id or "").strip()
     broker = str(result.get("broker") or result.get("venue") or "").strip().lower()
     result_oid = str(result.get("order_id") or result.get("id") or result.get("exchange_order_id") or "").strip()
-    if not (broker == "kraken" and scope and oid and pid and result_oid == oid):
+    if not (broker == "kraken" and scope and oid and result_oid == oid):
         return False
     try:
         with ledger._get_connection() as conn:
             conn.execute(_SCHEMA)
+            conn.execute("BEGIN IMMEDIATE")
+            closes = conn.execute(
+                """SELECT position_id, notes FROM trade_ledger
+                   WHERE action='CLOSE' AND order_id=? AND user_id=?""",
+                (oid, user_id),
+            ).fetchall()
+            if len(closes) != 1:
+                return False
+            booked_pid = closes[0]["position_id"]
+            if (not isinstance(booked_pid, str) or not booked_pid
+                    or (pid and pid != booked_pid)
+                    or "broker=kraken" not in str(closes[0]["notes"] or "").split("; ")):
+                return False
+            pid = booked_pid
             # The canonical CLOSE transaction and completed trade must exist.
-            recorded = conn.execute(
+            records = conn.execute(
                 """SELECT l.symbol, l.side, l.price, l.size_usd, l.fee,
                           c.symbol AS completed_symbol, c.exit_price, c.exit_fee
                    FROM trade_ledger l
@@ -184,11 +202,12 @@ def mark_reconciled(
                      ON c.position_id = l.position_id AND c.user_id = l.user_id
                    WHERE l.action = 'CLOSE' AND l.order_id = ?
                      AND l.position_id = ? AND l.user_id = ?
-                     AND c.exit_reason = 'canonical_confirmed_fill' LIMIT 1""",
+                     AND c.exit_reason = 'canonical_confirmed_fill'""",
                 (oid, pid, user_id),
-            ).fetchone()
-            if not recorded:
+            ).fetchall()
+            if len(records) != 1:
                 return False
+            recorded = records[0]
             pending = conn.execute(
                 """SELECT symbol, side, fill_price, filled_usd, exit_fee
                    FROM pending_kraken_closes
