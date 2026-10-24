@@ -15,6 +15,8 @@ permissions:
 jobs:
   public-consent-viewports:
     runs-on: ubuntu-latest
+    container:
+      image: mcr.microsoft.com/playwright:v1.58.2-noble
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
@@ -28,7 +30,6 @@ jobs:
           cd "$RUNNER_TEMP/nija-playwright"
           printf '{"name":"nija-visual-qa","private":true}\n' > package.json
           npm install --no-save --no-package-lock --ignore-scripts playwright@1.58.2
-          npx playwright install --with-deps chromium
           echo "NODE_PATH=$RUNNER_TEMP/nija-playwright/node_modules" >> "$GITHUB_ENV"
       - name: Capture public NIJA consent pages without interaction
         run: node scripts/nija_consent_public_qa.cjs
