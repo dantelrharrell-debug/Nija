@@ -467,7 +467,7 @@ def _contact_payload(contact: dict[str, Any]) -> tuple[Optional[dict[str, Any]],
         and (
             explicit_campaign_enabled
             or (
-                _bool(os.getenv("NIJA_APOLLO_AUTO_ENABLE_QUALIFIED", "1"))
+                _bool(os.getenv("NIJA_APOLLO_AUTO_ENABLE_QUALIFIED", "0"))
                 and complete
             )
         )
