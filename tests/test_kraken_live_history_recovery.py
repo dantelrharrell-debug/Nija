@@ -1,25 +1,12 @@
 """Offline read-only collector tests; synthetic responses are not live proof."""
 import fcntl
-import importlib.util
 import json
 import os
-from pathlib import Path
-import sys
-import types
 
 import pytest
 
-ROOT = Path(__file__).resolve().parents[1]
-PACKAGE = "offline_live_history"
-package = types.ModuleType(PACKAGE)
-package.__path__ = [str(ROOT / "bot")]
-sys.modules[PACKAGE] = package
-spec = importlib.util.spec_from_file_location(
-    PACKAGE + ".kraken_live_history_recovery", ROOT / "bot/kraken_live_history_recovery.py",
-)
-api = importlib.util.module_from_spec(spec)
-sys.modules[spec.name] = api
-spec.loader.exec_module(api)
+from bot import kraken_live_history_recovery as api
+
 NOW = 1000.0
 ID = "a" * 32
 
