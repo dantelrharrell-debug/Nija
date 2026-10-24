@@ -1,0 +1,37 @@
+name: NIJA consent anonymous visual evidence
+
+# Manual-only. Fetches public pages and captures anonymous screenshots; never POSTs.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  public-consent-viewports:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install Playwright in isolated temporary directory
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/nija-playwright"
+          cd "$RUNNER_TEMP/nija-playwright"
+          printf '{"name":"nija-visual-qa","private":true}\n' > package.json
+          npm install --no-save --no-package-lock --ignore-scripts playwright@1.58.2
+          npx playwright install --with-deps chromium
+          echo "NODE_PATH=$RUNNER_TEMP/nija-playwright/node_modules" >> "$GITHUB_ENV"
+      - name: Capture public NIJA consent pages without interaction
+        run: node scripts/nija_consent_public_qa.cjs
+      - name: Upload anonymous visual evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nija-consent-visual-evidence
+          path: artifacts/nija-consent-visual/
+          if-no-files-found: warn
+          retention-days: 7
