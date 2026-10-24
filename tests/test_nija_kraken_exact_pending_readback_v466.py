@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-SOURCE = Path(__file__).parent / "scripts" / "nija_kraken_exact_pending_readback_v466.py"
+SOURCE = Path(__file__).resolve().parents[1] / "scripts" / "nija_kraken_exact_pending_readback_v466.py"
 SPEC = importlib.util.spec_from_file_location("v466_exact_pending_readback", SOURCE)
 readback = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(readback)

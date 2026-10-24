@@ -404,10 +404,14 @@ def _recover_candidate(order_id: str) -> bool:
 
 
 def _worker() -> None:
-    while not _marker_ready():
+    """Keep recovery available after a genuine proof expires or is revoked.
+
+    recover_once short-circuits while proof is fresh, so an idle worker makes
+    no broker requests and never refreshes the marker's timestamp.
+    """
+    while True:
         try:
-            if recover_once():
-                return
+            recover_once()
         except Exception:
             LOGGER.exception("KNOWN_EXECUTION_PROBE_V406_WORKER_RETRY marker=%s", MARKER)
         time.sleep(10.0)
