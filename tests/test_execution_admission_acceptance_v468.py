@@ -1,4 +1,5 @@
 from bot.execution_admission_acceptance_v468 import inspect_execution_admission
+from bot.pretrade_independent_attestation import FIELDS
 
 
 def test_acceptance_never_authorizes_orders(monkeypatch):
@@ -6,7 +7,7 @@ def test_acceptance_never_authorizes_orders(monkeypatch):
     import preactivation_readiness_convergence_v16_patch as readiness
 
     monkeypatch.setattr(att, "inspect_authenticated_attestations", lambda scope: {
-        "checks": {"account_permissions": True, "protective_exit_readback": True},
+        "checks": {field: True for field in FIELDS},
         "collector_installed": True, "producer_status": "checks_passed_diagnostic_only",
     })
     monkeypatch.setattr(readiness, "_strict_authority_ready", lambda: (True, "verified"))
@@ -22,7 +23,7 @@ def test_missing_protective_exit_fails_closed(monkeypatch):
     import preactivation_readiness_convergence_v16_patch as readiness
 
     monkeypatch.setattr(att, "inspect_authenticated_attestations", lambda scope: {
-        "checks": {"account_permissions": True, "protective_exit_readback": False},
+        "checks": {**{field: True for field in FIELDS}, "protective_exit_readback": False},
         "collector_installed": True, "producer_status": "checks_incomplete",
     })
     monkeypatch.setattr(readiness, "_strict_authority_ready", lambda: (True, "verified"))

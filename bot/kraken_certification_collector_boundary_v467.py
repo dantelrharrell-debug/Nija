@@ -12,6 +12,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from bot.pretrade_independent_attestation import FIELDS, install_authenticated_collector
+from bot.pretrade_composition_bridge_v465 import make_collector
 
 PROVENANCE = (
     "authenticated_broker_read_verified",
@@ -61,3 +62,13 @@ def build_kraken_certification_collector(readback):
 def install_kraken_certification_collector(readback) -> None:
     """Explicit installation; does not authorize orders or hook dispatch."""
     install_authenticated_collector(build_kraken_certification_collector(readback))
+
+
+def build_audited_kraken_collector(providers_by_account, *, trusted_provider_ids):
+    """Use v465 validated independent producers, never self-reported booleans.
+
+    A complete, independently audited provider registry must exist first.
+    This function does not install the collector or authorize execution.
+    """
+    independent = make_collector(providers_by_account, trusted_provider_ids=trusted_provider_ids)
+    return build_kraken_certification_collector(independent)
