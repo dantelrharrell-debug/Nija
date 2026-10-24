@@ -26,6 +26,9 @@ def inspect_execution_admission(account_scope: str) -> dict[str, Any]:
     writer_ok, writer_reason = _strict_authority_ready()
     kill_clear, kill_reason = _kill_switch_clear()
     execution_proof_ok, execution_reason = _genuine_execution_marker_proof()
+    # Startup eligibility is a distinct, non-authorizing review signal. It
+    # cannot replace the canonical execution gate or permit dispatch.
+    startup_certification_eligible = bool(independently_certified and writer_ok and kill_clear)
     # A pretrade certificate is not order authority. The legacy execution
     # proof is mandatory until the separate admission migration is reviewed.
     eligible_for_existing_gate = bool(
@@ -39,6 +42,8 @@ def inspect_execution_admission(account_scope: str) -> dict[str, Any]:
         "kill_switch_clear": kill_clear,
         "execution_proof_fresh": execution_proof_ok,
         "eligible_for_existing_gate": eligible_for_existing_gate,
+        "startup_certification_eligible": startup_certification_eligible,
+        "startup_admission_migration_required": bool(startup_certification_eligible and not execution_proof_ok),
         "authorizes_orders": False,
         "missing_checks": [key for key in FIELDS if not isinstance(checks, dict) or checks.get(key) is not True],
         "producer_status": attestation.get("producer_status"),
