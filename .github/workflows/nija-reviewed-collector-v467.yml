@@ -1,0 +1,39 @@
+name: NIJA reviewed collector registration v467
+
+on:
+  pull_request:
+    branches: [main, release/justcall-handoff-only-20261017]
+    paths:
+      - 'bot/pretrade_reviewed_registration_v467.py'
+      - 'tests/test_pretrade_reviewed_registration_v467.py'
+      - '.github/workflows/nija-reviewed-collector-v467.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  offline-collector-registration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      NIJA_DEFER_RUNTIME_SITE_HOOKS: '1'
+      KRAKEN_API_KEY: ''
+      KRAKEN_API_SECRET: ''
+      COINBASE_API_KEY: ''
+      COINBASE_API_SECRET: ''
+      OKX_API_KEY: ''
+      OKX_API_SECRET: ''
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install offline test runner
+        run: python -m pip install pytest==8.2.2
+      - name: Compile registration and tests
+        run: python -S -m py_compile bot/pretrade_reviewed_registration_v467.py tests/test_pretrade_reviewed_registration_v467.py
+      - name: Test fail-closed registration with no broker credentials
+        run: python -m pytest -q tests/test_pretrade_reviewed_registration_v467.py
