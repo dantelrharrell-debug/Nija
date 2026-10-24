@@ -191,7 +191,25 @@ class QueueAndDirectRouteTests(unittest.TestCase):
             }):
                 blockers, _ = dial._eligibility(self.row(), utc("2026-10-11T16:00:00Z"))
                 self.assertIn("human_handoff_not_verified", blockers)
-            with mock.patch.dict(os.environ, {"NIJA_JUSTCALL_HUMAN_HANDOFF_VERIFIED": "1"}):
+            # Human handoff alone cannot remove the independent provider/owner
+            # launch gate. Keep it explicitly denied in the first check.
+            with mock.patch.dict(os.environ, {
+                "NIJA_JUSTCALL_HUMAN_HANDOFF_VERIFIED": "1",
+                "NIJA_JUSTCALL_PROVIDER_OUTBOUND_APPROVED": "0",
+                "NIJA_JUSTCALL_PROVIDER_APPROVAL_REFERENCE": "",
+                "NIJA_JUSTCALL_LIVE_CALLING_AUTHORIZED": "0",
+            }):
+                blockers, _ = dial._eligibility(self.row(), utc("2026-10-11T16:00:00Z"))
+                self.assertEqual(blockers, ["provider_outbound_approval_required"])
+
+            # Simulate all approvals ONLY inside this offline unit test to
+            # isolate the handoff behavior; this does not authorize live calls.
+            with mock.patch.dict(os.environ, {
+                "NIJA_JUSTCALL_HUMAN_HANDOFF_VERIFIED": "1",
+                "NIJA_JUSTCALL_PROVIDER_OUTBOUND_APPROVED": "1",
+                "NIJA_JUSTCALL_PROVIDER_APPROVAL_REFERENCE": "unit-test-only-reference",
+                "NIJA_JUSTCALL_LIVE_CALLING_AUTHORIZED": "1",
+            }):
                 blockers, _ = dial._eligibility(self.row(), utc("2026-10-11T16:00:00Z"))
                 self.assertEqual(blockers, [])
 
