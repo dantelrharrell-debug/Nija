@@ -156,3 +156,59 @@ def test_pending_resolution_accepts_equivalent_kraken_symbol_alias(tmp_path, mon
     with ledger._get_connection() as conn:
         conn.execute("UPDATE pending_kraken_closes SET state='pending', symbol='BTC-USD'")
     assert mark_reconciled(ledger, result=_fill(), order_id="EXIT-434", position_id="P-434")
+
+
+def test_booked_close_replay_recovers_failed_audit_without_double_pnl(tmp_path, monkeypatch):
+    from bot import pending_kraken_close_audit_v434 as audit
+
+    # Lose the audit write after the canonical ledger transaction commits.
+    original = audit.mark_reconciled
+    ledger = _ledger(tmp_path)
+    from bot import trade_ledger_db, runtime_kraken_fee_pnl_bridge_v413_patch as bridge
+    monkeypatch.setattr(trade_ledger_db, "_trade_ledger_db", ledger)
+    assert _record(ledger)
+    bridge._ensure_opening_cost_basis(
+        {"order_id": "ENTRY-434", "opening_position_id": "P-434",
+         "account": "platform:kraken", "broker": "kraken", "fee": 0.12,
+         "authenticated_kraken_queryorders": True,
+         "authenticated_kraken_opening_order": True},
+        symbol="XXBTZUSD", side="buy", fill_price=100000.0, filled_usd=100.0,
+    )
+    monkeypatch.setattr(audit, "mark_reconciled", lambda *a, **kw: False)
+    realized._reconcile_confirmed_fill(
+        _fill(), symbol="XXBTZUSD", side="sell", fill_price=101000.0, filled_usd=101.0,
+    )
+    assert pending_summary(ledger, account_scope="platform:kraken")["pending_confirmed_closes"] == 1
+    before = ledger.get_trade_history(user_id="platform")
+    assert len(before) == 1
+    monkeypatch.setattr(audit, "mark_reconciled", original)
+    for _ in range(2):
+        realized._reconcile_confirmed_fill(
+            _fill(), symbol="XXBTZUSD", side="sell", fill_price=101000.0, filled_usd=101.0,
+        )
+    assert pending_summary(ledger, account_scope="platform:kraken")["pending_confirmed_closes"] == 0
+    assert ledger.get_trade_history(user_id="platform") == before
+    with ledger._get_connection() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM trade_ledger WHERE action='CLOSE'").fetchone()[0] == 1
+
+
+@pytest.mark.parametrize("corruption", ["duplicate_close", "other_broker", "fee_mismatch", "wrong_owner"])
+def test_booked_replay_preserves_pending_on_ambiguous_or_mismatched_ledger(tmp_path, monkeypatch, corruption):
+    test_pending_closure_reconciles_only_after_authenticated_entry_and_confirmed_close(tmp_path, monkeypatch)
+    ledger = _ledger(tmp_path)
+    from bot import trade_ledger_db
+    monkeypatch.setattr(trade_ledger_db, "_trade_ledger_db", ledger)
+    with ledger._get_connection() as conn:
+        conn.execute("UPDATE pending_kraken_closes SET state='pending', matched_position_id=NULL")
+        if corruption == "duplicate_close":
+            columns = [row[1] for row in conn.execute("PRAGMA table_info(trade_ledger)") if row[1] != "id"]
+            names = ",".join(columns)
+            conn.execute(f"INSERT INTO trade_ledger ({names}) SELECT {names} FROM trade_ledger WHERE action='CLOSE'")
+        elif corruption == "other_broker":
+            conn.execute("UPDATE trade_ledger SET notes='broker=coinbase' WHERE action='CLOSE'")
+        elif corruption == "fee_mismatch":
+            conn.execute("UPDATE pending_kraken_closes SET exit_fee=99")
+        else:
+            conn.execute("UPDATE trade_ledger SET user_id='another-owner' WHERE action='CLOSE'")
+    assert not mark_reconciled(ledger, result=_fill(), order_id="EXIT-434")
+    assert pending_summary(ledger, account_scope="platform:kraken")["pending_confirmed_closes"] == 1
