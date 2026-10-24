@@ -1,8 +1,13 @@
 name: NIJA consent anonymous visual evidence
 
-# Manual-only. Fetches public pages and captures anonymous screenshots; never POSTs.
+# Isolated one-time QA branch push trigger; main remains manual-only. Anonymous GETs only.
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - qa/consent-visual-run-20261023
+    paths:
+      - .github/workflows/nija-consent-public-qa.yml
 
 permissions:
   contents: read
