@@ -485,16 +485,36 @@ def _start_requested_history_collection() -> None:
     """Do not stall ordinary pending-fill recovery behind historical reads."""
     global _HISTORY_THREAD
     directory = os.environ.get("NIJA_KRAKEN_HISTORY_RECOVERY_DIR", "")
-    if not directory or not (Path(directory) / "request.json").exists():
+    if not directory:
+        return
+    root = Path(directory)
+    history_request = (root / "request.json").exists()
+    exact_request = (root / "exact_request.json").exists()
+    if history_request and exact_request:
+        LOGGER.warning(
+            "KRAKEN_HISTORY_REQUEST_DEFERRED reason=multiple_recovery_modes "
+            "trading_authority_unchanged=true"
+        )
+        return
+    if not (history_request or exact_request):
         return
 
     def collect() -> None:
         try:
-            from bot.kraken_live_history_recovery import collect_requested_history
-            collect_requested_history(
-                Path(directory), _kraken_brokers(),
-                monitoring_category=_v357()._monitoring_category(),
-            )
+            if exact_request:
+                from bot.kraken_exact_pending_order_recovery_v466 import (
+                    collect_requested_exact_pending_orders,
+                )
+                collect_requested_exact_pending_orders(
+                    root, _kraken_brokers(),
+                    monitoring_category=_v357()._monitoring_category(),
+                )
+            else:
+                from bot.kraken_live_history_recovery import collect_requested_history
+                collect_requested_history(
+                    root, _kraken_brokers(),
+                    monitoring_category=_v357()._monitoring_category(),
+                )
         except Exception as exc:
             LOGGER.warning(
                 "KRAKEN_HISTORY_COLLECTION_DEFERRED exception_type=%s "
