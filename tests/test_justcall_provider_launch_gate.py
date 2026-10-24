@@ -3,7 +3,6 @@ from datetime import datetime, timezone
 from unittest import mock
 
 import render_outreach_autodial as dial
-import render_apollo_feeder as feeder
 
 
 def test_missing_approval_prevents_worker_start_even_when_enabled():
@@ -50,7 +49,12 @@ def test_provider_gate_rechecked_for_each_candidate():
         assert "provider_outbound_approval_required" in blockers
 
 
-def test_apollo_auto_enable_default_is_off():
-    with mock.patch.dict("os.environ", {"NIJA_APOLLO_AUTO_ENABLE_QUALIFIED": ""}):
-        # Explicit verification of the default via source-independent call boundary.
-        assert not feeder._bool("")
+def test_no_launch_approval_without_explicit_environment_values():
+    with mock.patch.dict("os.environ", {
+        "NIJA_JUSTCALL_AUTODIAL_ENABLED": "1",
+        "NIJA_JUSTCALL_PROVIDER_OUTBOUND_APPROVED": "",
+        "NIJA_JUSTCALL_PROVIDER_APPROVAL_REFERENCE": "",
+        "NIJA_JUSTCALL_LIVE_CALLING_AUTHORIZED": "",
+    }):
+        assert not dial._provider_launch_approved()
+        assert not dial._worker_enabled()
