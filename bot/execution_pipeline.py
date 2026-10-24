@@ -2385,32 +2385,6 @@ class ExecutionPipeline:
             )
             assert request.validated is True, "FATAL: Order bypassed ECEL"
 
-        # v471: require a durable, account-scoped entry reservation before any
-        # router or broker can submit an opening order. Exits remain governed
-        # by their existing protective-close and authority checks.
-        # Runtime collectors are NOT inferred from request metadata.
-        intent = str(getattr(request, "intent_type", "") or "").strip().lower()
-        closing = (
-            intent in {"exit", "reduce", "close"}
-            or getattr(request, "reduce_only", False) is True
-            or str(getattr(request, "position_effect", "") or "").lower() in {"close", "reduce"}
-        )
-        if not closing:
-            try:
-                from bot.account_admission_dispatch_boundary_v470 import consume_verified_entry
-                from bot.order_admission_policy import Candidate
-                admission = getattr(self, "_account_order_admission", None)
-                candidate_provider = getattr(self, "_trusted_entry_candidate_provider", None)
-                if not callable(candidate_provider):
-                    raise RuntimeError("trusted_entry_candidate_provider_missing")
-                candidate = candidate_provider(request)
-                if type(candidate) is not Candidate:
-                    raise RuntimeError("trusted_entry_candidate_invalid")
-                consume_verified_entry(admission, candidate)
-            except Exception as exc:
-                logger.error("ENTRY_ADMISSION_DENIED fail_closed=true reason=%s", type(exc).__name__)
-                return self._deny(request, t_start, "EntryAdmission deny: authenticated_reservation_unavailable")
-
         dispatch_snapshot = runtime_authority_snapshot()
         dispatch_enabled = getattr(dispatch_snapshot, "dispatch_enabled", True)
         if dispatch_enabled is False:
@@ -2437,6 +2411,32 @@ class ExecutionPipeline:
                 error="dispatch_disabled: dispatch.enabled=false",
                 latency_ms=(time.monotonic() - t_start) * 1000,
             )
+
+        # v471: require a durable, account-scoped entry reservation before any
+        # router or broker can submit an opening order. Exits remain governed
+        # by their existing protective-close and authority checks.
+        # Runtime collectors are NOT inferred from request metadata.
+        intent = str(getattr(request, "intent_type", "") or "").strip().lower()
+        closing = (
+            intent in {"exit", "reduce", "close"}
+            or getattr(request, "reduce_only", False) is True
+            or str(getattr(request, "position_effect", "") or "").lower() in {"close", "reduce"}
+        )
+        if not closing:
+            try:
+                from bot.account_admission_dispatch_boundary_v470 import consume_verified_entry
+                from bot.order_admission_policy import Candidate
+                admission = getattr(self, "_account_order_admission", None)
+                candidate_provider = getattr(self, "_trusted_entry_candidate_provider", None)
+                if not callable(candidate_provider):
+                    raise RuntimeError("trusted_entry_candidate_provider_missing")
+                candidate = candidate_provider(request)
+                if type(candidate) is not Candidate:
+                    raise RuntimeError("trusted_entry_candidate_invalid")
+                consume_verified_entry(admission, candidate)
+            except Exception as exc:
+                logger.error("ENTRY_ADMISSION_DENIED fail_closed=true reason=%s", type(exc).__name__)
+                return self._deny(request, t_start, "EntryAdmission deny: authenticated_reservation_unavailable")
 
         logger.info(
             "🚀 [Pipeline._dispatch] DISPATCHING ORDER TO BROKER | symbol=%s side=%s size_usd=%.2f "
