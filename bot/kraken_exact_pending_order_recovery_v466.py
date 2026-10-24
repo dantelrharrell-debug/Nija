@@ -140,7 +140,18 @@ def _collect(broker: Any, category: Any,
             tids.add(tid)
     if not 1 <= len(tids) <= 50:
         raise ExactReadDenied("trade_count_exceeds_budget")
-    trades = _query(broker, category, "platform:kraken", "QueryTrades", sorted(tids))
+    # Kraken QueryTrades accepts no more than 20 IDs per request. Never
+    # silently truncate a result or exceed an explicitly bounded read budget.
+    trades: dict[str, Any] = {}
+    ordered_tids = sorted(tids)
+    for start in range(0, len(ordered_tids), 20):
+        chunk = ordered_tids[start:start + 20]
+        response = _query(broker, category, "platform:kraken", "QueryTrades", chunk)
+        if any(tid in trades for tid in response):
+            raise ExactReadDenied("trade_id_duplicate_across_batches")
+        trades.update(response)
+    if set(trades) != tids:
+        raise ExactReadDenied("trade_batch_union_incomplete")
     for tid, trade in trades.items():
         if not isinstance(trade, dict) or trade.get("ordertxid") not in pending:
             raise ExactReadDenied("trade_order_link_missing")
