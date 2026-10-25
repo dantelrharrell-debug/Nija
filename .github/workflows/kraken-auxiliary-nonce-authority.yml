@@ -6,6 +6,8 @@ on:
       - 'member_broker_kraken_readonly.py'
       - 'validate_broker_credentials.py'
       - 'tests/test_kraken_auxiliary_nonce_authority.py'
+      - 'tests/test_kraken_auxiliary_broker_lock.py'
+      - 'bot/runtime_kraken_credential_lock_scope_v293_patch.py'
       - 'tests/test_member_broker_kraken_readonly.py'
       - '.github/workflows/kraken-auxiliary-nonce-authority.yml'
 permissions:
@@ -19,4 +21,4 @@ jobs:
         with:
           python-version: '3.11'
       - run: python -m pip install pytest==9.1.1 requests==2.32.5
-      - run: python -m pytest -q tests/test_kraken_auxiliary_nonce_authority.py tests/test_member_broker_kraken_readonly.py
+      - run: python -m pytest -q tests/test_kraken_auxiliary_nonce_authority.py tests/test_kraken_auxiliary_broker_lock.py tests/test_member_broker_kraken_readonly.py tests/test_runtime_kraken_credential_lock_scope_v293.py

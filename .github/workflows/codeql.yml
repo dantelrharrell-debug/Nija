@@ -2,9 +2,9 @@ name: "CodeQL Security Scanning"
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [ main, develop, release/justcall-handoff-only-20261017 ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, release/justcall-handoff-only-20261017 ]
   schedule:
     # Run CodeQL scan every Monday at 6am UTC
     - cron: '0 6 * * 1'

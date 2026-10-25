@@ -425,6 +425,10 @@ class TestExecutionPipelineACKTimeout(unittest.TestCase):
         self.assertIsNotNone(candidate)
         self.assertIsNone(provider(object()))
         admission = pipeline._account_order_admission
+        admission.reserve.assert_called_once_with(provider.return_value)
+        admission.consume.assert_called_once()
+        consumed = admission.consume.call_args.args[0]
+        self.assertEqual(consumed.candidate, provider.return_value)
         with sqlite3.connect(admission.ledger) as conn:
             rows = conn.execute(
                 "SELECT account, credential_fingerprint, writer_generation, intent_digest, state "
@@ -495,11 +499,15 @@ class TestExecutionPipelineACKTimeout(unittest.TestCase):
             ledger, read_only_test_collector, test_writer_fence
         )
         store.install_schema()
+        # Spy on real durable operations; do not replace the admission boundary.
+        store.reserve = MagicMock(wraps=store.reserve)
+        store.consume = MagicMock(wraps=store.consume)
         pipeline._account_order_admission = store
         # Exact object identity: another request cannot inherit this test
         # candidate; no caller metadata or runtime flags supply authority.
-        pipeline._trusted_entry_candidate_provider = (
-            lambda observed: candidate if observed is request else None
+        pipeline._trusted_entry_candidate_provider = MagicMock(
+            return_value=candidate,
+            side_effect=lambda observed: candidate if observed is request else None,
         )
         self._offline_ack_ledger = ledger
 
