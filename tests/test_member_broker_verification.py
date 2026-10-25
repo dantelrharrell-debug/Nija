@@ -1,5 +1,6 @@
 """Offline HTTP-to-vault-to-Kraken regressions using synthetic credentials only."""
 import base64
+from contextlib import nullcontext
 import copy
 import unittest
 from unittest.mock import Mock, patch
@@ -41,6 +42,10 @@ class MemberVerificationTests(unittest.TestCase):
         self.kraken_response.json.return_value = {"error": [], "result": {"ZUSD": "sensitive-balance"}}
         self.kraken = patch("member_broker_kraken_readonly.requests.post",
                             return_value=self.kraken_response).start()
+        # HTTP contract tests inject nonce authority as well as transport;
+        # production must still obtain the canonical writer's real authority.
+        patch("member_broker_kraken_readonly.coordinated_kraken_nonce",
+              side_effect=lambda _key: nullcontext(123456789)).start()
         self.addCleanup(patch.stopall)
 
     def backend(self, method, url, **kwargs):
