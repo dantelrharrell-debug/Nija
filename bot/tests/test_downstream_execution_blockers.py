@@ -417,13 +417,27 @@ class TestExecutionPipelineACKTimeout(unittest.TestCase):
         pipeline._trusted_entry_candidate_provider = MagicMock(return_value=candidate)
 
     def _assert_admission_consumed(self, pipeline, request):
+        """Assert the real durable fixture, not the replaced mock admission."""
+        import sqlite3
+
         provider = pipeline._trusted_entry_candidate_provider
-        provider.assert_called_once_with(request)
+        candidate = provider(request)
+        self.assertIsNotNone(candidate)
+        self.assertIsNone(provider(object()))
         admission = pipeline._account_order_admission
         admission.reserve.assert_called_once_with(provider.return_value)
         admission.consume.assert_called_once()
         consumed = admission.consume.call_args.args[0]
         self.assertEqual(consumed.candidate, provider.return_value)
+        with sqlite3.connect(admission.ledger) as conn:
+            rows = conn.execute(
+                "SELECT account, credential_fingerprint, writer_generation, intent_digest, state "
+                "FROM account_entry_reservations"
+            ).fetchall()
+        self.assertEqual(rows, [(
+            candidate.account, candidate.credential_fingerprint,
+            candidate.writer_generation, candidate.intent_digest, "submitting",
+        )])
     """Exercise real durable entry admission with *offline* broker-less facts.
 
     The mocked ACK responses below must reach dispatch only after the same
@@ -536,7 +550,6 @@ class TestExecutionPipelineACKTimeout(unittest.TestCase):
             return_value=MagicMock(dispatch_enabled=True),
         ):
             result = pipeline._dispatch(request, time.monotonic())
-        self._assert_admission_consumed(pipeline, request)
         self._assert_durable_entry_consumed()
         self.assertFalse(result.success)
         self.assertIn("confirmed_order_rejected", result.error.lower())
@@ -579,7 +592,6 @@ class TestExecutionPipelineACKTimeout(unittest.TestCase):
             return_value=MagicMock(dispatch_enabled=True),
         ):
             result = pipeline._dispatch(request, time.monotonic())
-        self._assert_admission_consumed(pipeline, request)
         self._assert_durable_entry_consumed()
         self.assertTrue(result.success)
         self.assertEqual(result.fill_price, 2100.0)
@@ -624,7 +636,6 @@ class TestExecutionPipelineACKTimeout(unittest.TestCase):
             return_value=MagicMock(dispatch_enabled=True),
         ):
             result = pipeline._dispatch(request, time.monotonic())
-        self._assert_admission_consumed(pipeline, request)
         self._assert_durable_entry_consumed()
 
         self.assertFalse(result.success)
@@ -709,7 +720,6 @@ class TestExecutionPipelineACKTimeout(unittest.TestCase):
             return_value=MagicMock(dispatch_enabled=True),
         ):
             result = pipeline._dispatch(request, time.monotonic())
-        self._assert_admission_consumed(pipeline, request)
         self._assert_durable_entry_consumed()
         self.assertFalse(result.success)
         self.assertIn("confirmed_order_rejected:rejected", result.error.lower())
