@@ -433,9 +433,18 @@ def _independent_pretrade_certificate() -> tuple[bool, list[str]]:
     # checked if the canonical scope is unset or malformed. Reject it before
     # asking any collector to provide evidence (diagnostic-only).
     account_scope = os.environ.get("NIJA_PREFLIGHT_ACCOUNT_SCOPE", "")
+    broker_scope = account_scope.split(":") if isinstance(account_scope, str) else []
+    allowed_brokers = {"kraken", "coinbase", "okx", "alpaca"}
+    canonical_platform = bool(
+        len(broker_scope) == 2 and broker_scope[0] == "platform"
+        and broker_scope[1] in allowed_brokers
+    )
+    canonical_user = bool(
+        len(broker_scope) == 3 and broker_scope[0] == "user"
+        and broker_scope[1] and broker_scope[2] in allowed_brokers
+    )
     scope_valid = bool(
-        isinstance(account_scope, str)
-        and account_scope
+        (canonical_platform or canonical_user)
         and account_scope == account_scope.strip()
         and not any(char.isspace() for char in account_scope)
     )
@@ -476,6 +485,13 @@ def _independent_pretrade_certificate() -> tuple[bool, list[str]]:
     if not isinstance(evidence, dict):
         evidence = {}
     missing = [key for key in required if evidence.get(key) is not True]
+    # Legacy mappings, self-reported all-True check arrays, and a callable
+    # verifier without an explicitly installed audited collector are not a
+    # certification, even when their ten diagnostic values are True.
+    if scope_valid and not missing and not (
+        collector_installed and producer_status == "checks_passed_diagnostic_only"
+    ):
+        missing.append("authenticated_collector_provenance")
     logger.info(
         "PRETRADE_INDEPENDENT_CERTIFICATION_V6 ready=%s account_scope_configured=%s "
         "missing=%s producer_status=%s collector_installed=%s "
