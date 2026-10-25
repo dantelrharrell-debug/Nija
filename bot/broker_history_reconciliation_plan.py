@@ -14,12 +14,18 @@ def plan_opening_reconciliation(
     account: str,
     broker_fills: Sequence[Mapping[str, Any]],
     ledger_rows: Sequence[Mapping[str, Any]],
+    *,
+    authenticated_readback: bool = False,
+    complete_pagination: bool = False,
+    account_identity_verified: bool = False,
 ) -> dict[str, Any]:
     """Return matched, unmatched and ambiguous fills without inventing intents.
 
     Caller must independently authenticate and paginate the broker readback.
     The resulting plan is not a migration approval or execution certificate.
     """
+    if not all((authenticated_readback is True, complete_pagination is True, account_identity_verified is True)):
+        raise ValueError("independent_broker_readback_certification_required")
     if not isinstance(account, str) or not account.strip() or account != account.strip():
         raise ValueError("account_scope_required")
     if not isinstance(broker_fills, (list, tuple)) or not isinstance(ledger_rows, (list, tuple)):
