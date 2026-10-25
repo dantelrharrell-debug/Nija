@@ -66,6 +66,7 @@ on:
       - 'bot/tests/test_startup_authenticated_bridge_v456.py'
       - 'tests/test_pretrade_provenance_guard.py'
       - 'tests/test_preactivation_preflight_observability_v450.py'
+      - 'tests/test_preactivation_execution_proof_v439.py'
       - 'tests/test_startup_two_phase_policy_v8.py'
       - '.github/workflows/nija-execution-recovery-certification.yml'
   workflow_dispatch:
@@ -144,6 +145,7 @@ jobs:
             bot/tests/test_startup_authenticated_bridge_v456.py \
             tests/test_pretrade_provenance_guard.py \
             tests/test_preactivation_preflight_observability_v450.py \
+            tests/test_preactivation_execution_proof_v439.py \
             tests/test_startup_two_phase_policy_v8.py \
             bot/tests/test_pretrade_attestation_validation_v452.py \
             bot/tests/test_pretrade_authenticated_provider_adapter_v453.py \
@@ -208,6 +210,7 @@ jobs:
             bot/tests/test_startup_authenticated_bridge_v456.py \
             tests/test_pretrade_provenance_guard.py \
             tests/test_preactivation_preflight_observability_v450.py \
+            tests/test_preactivation_execution_proof_v439.py \
             tests/test_startup_two_phase_policy_v8.py \
             bot/tests/test_pretrade_attestation_validation_v452.py \
             bot/tests/test_pretrade_authenticated_provider_adapter_v453.py \
@@ -269,7 +272,7 @@ jobs:
             tests/test_runtime_known_execution_probe_v406_dynamic.py \
             tests/test_independent_recovery_certification.py \
             tests/test_pretrade_independent_attestation_regression_3370.py \
-            tests/test_pretrade_certified_provider_bridge_3370.py
+            tests/test_pretrade_certified_provider_bridge_3370.py \
             tests/test_execution_proof_deadlock_crossguards_v451.py \
             tests/test_preactivation_execution_proof_v439.py \
             tests/test_runtime_all_account_position_exit_coverage_v281.py \

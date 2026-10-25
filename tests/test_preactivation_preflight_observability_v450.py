@@ -101,13 +101,59 @@ def test_independent_pretrade_certificate_requires_every_literal_true(monkeypatc
     )
     module.current_authenticated_attestations = lambda account: {key: True for key in fields}
     monkeypatch.setitem(sys.modules, name, module)
-    assert v16._independent_pretrade_certificate() == (True, [])
+    assert v16._independent_pretrade_certificate() == (False, ["authenticated_collector_provenance"])
     module.current_authenticated_attestations = lambda account: {
         **{key: True for key in fields}, "protective_exit_readback": "true"
     }
     ok, missing = v16._independent_pretrade_certificate()
     assert not ok and missing == ["protective_exit_readback"]
 
+
+
+def test_independent_pretrade_requires_installed_authenticated_collector(monkeypatch):
+    from types import ModuleType
+    v16 = load()
+    monkeypatch.setenv("NIJA_PREFLIGHT_ACCOUNT_SCOPE", "platform:kraken")
+    name = "bot.pretrade_independent_attestation"
+    module = ModuleType(name)
+    fields = (
+        "account_permissions", "account_identity", "broker_balances",
+        "position_ledger_reconciliation", "protective_exit_readback",
+        "open_order_reconciliation", "duplicate_order_fence",
+        "writer_lease", "nonce_sequence", "operator_authorization",
+    )
+    result = {
+        "checks": {key: True for key in fields},
+        "collector_installed": False,
+        "producer_status": "checks_passed_diagnostic_only",
+    }
+    module.inspect_authenticated_attestations = lambda _: dict(result)
+    monkeypatch.setitem(sys.modules, name, module)
+    assert v16._independent_pretrade_certificate() == (
+        False, ["authenticated_collector_provenance"]
+    )
+    result["collector_installed"] = True
+    result["producer_status"] = "checks_incomplete"
+    assert v16._independent_pretrade_certificate()[0] is False
+    result["producer_status"] = "checks_passed_diagnostic_only"
+    assert v16._independent_pretrade_certificate() == (True, [])
+    # This remains diagnostic-only and cannot affect execution authority.
+
+
+def test_independent_pretrade_rejects_noncanonical_account_scope(monkeypatch):
+    from types import ModuleType
+    v16 = load()
+    called = []
+    name = "bot.pretrade_independent_attestation"
+    module = ModuleType(name)
+    module.inspect_authenticated_attestations = lambda scope: called.append(scope)
+    monkeypatch.setitem(sys.modules, name, module)
+    for scope in ("platform:unknown", "platform:kraken:other", "user::kraken",
+                  "user:alice:unknown", "other:kraken", "platform:kraken\\n"):
+        monkeypatch.setenv("NIJA_PREFLIGHT_ACCOUNT_SCOPE", scope)
+        ok, missing = v16._independent_pretrade_certificate()
+        assert not ok and len(missing) == 10
+    assert called == []
 
 def test_missing_scope_and_collector_are_distinguishable_without_authorization(
     monkeypatch, caplog,
@@ -316,7 +362,7 @@ def test_pretrade_certificate_requires_explicit_canonical_account_scope(monkeypa
         assert called == []
 
     monkeypatch.setenv("NIJA_PREFLIGHT_ACCOUNT_SCOPE", "platform:kraken")
-    assert v16._independent_pretrade_certificate() == (True, [])
+    assert v16._independent_pretrade_certificate() == (False, ["authenticated_collector_provenance"])
     assert called == ["platform:kraken"]
 
 
