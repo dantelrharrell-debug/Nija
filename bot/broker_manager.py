@@ -10395,7 +10395,7 @@ class KrakenBroker(BaseBroker):
                                     _nonce_state = nonce_error_diagnostic(self, parenthesized=False)
                                     logger.warning(
                                         "⚠️  NONCE ERROR [%s] attempt %d/%d: %s%s — "
-                                        "nonce manager will rebuild on next call",
+                                        "nonce rejected; investigate credential-scoped nonce authority",
                                         cred_label, attempt, max_attempts,
                                         error_msgs, _nonce_state,
                                     )
