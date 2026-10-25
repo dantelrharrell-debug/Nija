@@ -403,6 +403,84 @@ class TestExecutionPipelineSoftReject(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class TestExecutionPipelineACKTimeout(unittest.TestCase):
+    """Exercise real durable entry admission with *offline* broker-less facts.
+
+    The mocked ACK responses below must reach dispatch only after the same
+    on-disk reservation boundary as production. These fixtures are synthetic
+    local CI evidence, not authenticated brokerage observations or an
+    installation of production collectors.
+    """
+
+    def _install_offline_entry_admission(self, pipeline, request):
+        import hashlib
+        import sqlite3
+        import tempfile
+        from pathlib import Path
+
+        from bot.account_order_admission import AccountOrderAdmission
+        from bot.order_admission_policy import (
+            Candidate, CurrentFact, OrderOutcome, REQUIRED_CONTROLS,
+        )
+
+        folder = tempfile.TemporaryDirectory(prefix="nija-ack-offline-")
+        self.addCleanup(folder.cleanup)
+        ledger = Path(folder.name) / "test-ledger.sqlite3"
+        with sqlite3.connect(ledger) as conn:
+            for table in ("open_positions", "completed_trades", "strategy_order_intents"):
+                conn.execute("CREATE TABLE " + table + " (id INTEGER)")
+            conn.execute(
+                "CREATE TABLE trade_ledger "
+                "(user_id TEXT, order_id TEXT, position_id TEXT, action TEXT)"
+            )
+            conn.execute(
+                "CREATE TABLE pending_kraken_closes "
+                "(broker TEXT, account_scope TEXT, user_id TEXT, order_id TEXT, "
+                "state TEXT, matched_position_id TEXT)"
+            )
+
+        digest = hashlib.sha256(
+            (self.id() + ":" + str(request.request_id)).encode("utf-8")
+        ).hexdigest()
+        candidate = Candidate(
+            account="platform:kraken",
+            credential_fingerprint="synthetic-ci-credential-only",
+            writer_generation=1,
+            intent_digest=digest,
+        )
+
+        def read_only_test_collector(bound_candidate, conn):
+            self.assertEqual(conn.execute("PRAGMA query_only").fetchone(), (1,))
+            conn.execute("SELECT COUNT(*) FROM trade_ledger").fetchone()
+            facts = {
+                key: CurrentFact(bound_candidate, True, time.time(), "offline-ci-fixture")
+                for key in REQUIRED_CONTROLS
+            }
+            return facts, OrderOutcome(bound_candidate.account, "none")
+
+        def test_writer_fence(bound_candidate):
+            return bound_candidate == candidate
+
+        store = AccountOrderAdmission(
+            ledger, read_only_test_collector, test_writer_fence
+        )
+        store.install_schema()
+        pipeline._account_order_admission = store
+        # Exact object identity: another request cannot inherit this test
+        # candidate; no caller metadata or runtime flags supply authority.
+        pipeline._trusted_entry_candidate_provider = (
+            lambda observed: candidate if observed is request else None
+        )
+        self._offline_ack_ledger = ledger
+
+    def _assert_durable_entry_consumed(self):
+        import sqlite3
+        with sqlite3.connect(self._offline_ack_ledger) as conn:
+            rows = conn.execute(
+                "SELECT state FROM account_entry_reservations"
+            ).fetchall()
+        # Timeout and reconciliation never silently release a reservation.
+        self.assertEqual(rows, [("submitting",)])
+
     def test_dispatch_returns_failure_on_timeout(self):
         from bot.execution_pipeline import ExecutionPipeline, PipelineRequest
 
@@ -426,11 +504,13 @@ class TestExecutionPipelineACKTimeout(unittest.TestCase):
         )
 
         # _dispatch should return a failure PipelineResult rather than hanging
+        self._install_offline_entry_admission(pipeline, request)
         with patch(
             "bot.execution_pipeline.runtime_authority_snapshot",
             return_value=MagicMock(dispatch_enabled=True),
         ):
             result = pipeline._dispatch(request, time.monotonic())
+        self._assert_durable_entry_consumed()
         self.assertFalse(result.success)
         self.assertIn("confirmed_order_rejected", result.error.lower())
 
@@ -465,11 +545,13 @@ class TestExecutionPipelineACKTimeout(unittest.TestCase):
             metadata={"broker_client": _ReconBroker()},
         )
 
+        self._install_offline_entry_admission(pipeline, request)
         with patch(
             "bot.execution_pipeline.runtime_authority_snapshot",
             return_value=MagicMock(dispatch_enabled=True),
         ):
             result = pipeline._dispatch(request, time.monotonic())
+        self._assert_durable_entry_consumed()
         self.assertTrue(result.success)
         self.assertEqual(result.fill_price, 2100.0)
         self.assertEqual(result.filled_size_usd, 200.0)
@@ -506,11 +588,13 @@ class TestExecutionPipelineACKTimeout(unittest.TestCase):
             metadata={"broker_client": _ReconBroker()},
         )
 
+        self._install_offline_entry_admission(pipeline, request)
         with patch(
             "bot.execution_pipeline.runtime_authority_snapshot",
             return_value=MagicMock(dispatch_enabled=True),
         ):
             result = pipeline._dispatch(request, time.monotonic())
+        self._assert_durable_entry_consumed()
 
         self.assertFalse(result.success)
         self.assertEqual(result.filled_size_usd, 0.0)
@@ -547,11 +631,13 @@ class TestExecutionPipelineACKTimeout(unittest.TestCase):
             metadata={"broker_client": _ReconBroker()},
         )
 
+        self._install_offline_entry_admission(pipeline, request)
         with patch(
             "bot.execution_pipeline.runtime_authority_snapshot",
             return_value=MagicMock(dispatch_enabled=True),
         ):
             result = pipeline._dispatch(request, time.monotonic())
+        self._assert_durable_entry_consumed()
 
         self.assertTrue(result.success)
         self.assertEqual(result.fill_price, 2000.0)
@@ -584,13 +670,37 @@ class TestExecutionPipelineACKTimeout(unittest.TestCase):
             metadata={"broker_client": _ReconBroker()},
         )
 
+        self._install_offline_entry_admission(pipeline, request)
+        with patch(
+            "bot.execution_pipeline.runtime_authority_snapshot",
+            return_value=MagicMock(dispatch_enabled=True),
+        ):
+            result = pipeline._dispatch(request, time.monotonic())
+        self._assert_durable_entry_consumed()
+        self.assertFalse(result.success)
+        self.assertIn("confirmed_order_rejected:rejected", result.error.lower())
+
+
+    def test_missing_offline_admission_still_denies_entry_before_router(self):
+        from bot.execution_pipeline import ExecutionPipeline, PipelineRequest
+
+        pipeline = ExecutionPipeline.__new__(ExecutionPipeline)
+        pipeline._ecel_required = False
+        pipeline._ack_timeout_s = 0.05
+        pipeline._multi_router = None
+        mock_router = MagicMock()
+        pipeline._router = mock_router
+        request = PipelineRequest(
+            symbol="ETH-USD", side="buy", size_usd=200.0, validated=True,
+        )
         with patch(
             "bot.execution_pipeline.runtime_authority_snapshot",
             return_value=MagicMock(dispatch_enabled=True),
         ):
             result = pipeline._dispatch(request, time.monotonic())
         self.assertFalse(result.success)
-        self.assertIn("confirmed_order_rejected:rejected", result.error.lower())
+        self.assertIn("authenticated_reservation_unavailable", result.error)
+        mock_router.execute.assert_not_called()
 
     def test_dispatch_blocks_when_dispatch_enabled_false(self):
         from bot.execution_pipeline import ExecutionPipeline, PipelineRequest
