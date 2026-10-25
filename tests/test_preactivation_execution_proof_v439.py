@@ -38,7 +38,8 @@ def test_stale_and_auth_only_never_authorize(monkeypatch):
     monkeypatch.setitem(sys.modules, "bot.trading_state_machine", tsm)
     monkeypatch.setattr(v16.time, "time", lambda: 10000)
     valid = dict(stage="ORDER_VERIFY", source="heartbeat_trade",
-                 proof_kind="execution_probe", verified_at_epoch=9999)
+                 proof_kind="execution_probe", verified_at_epoch=9999,
+                 broker_event_at_epoch=9999)
     for meta in (
         {**valid, "stage": "AUTH_VERIFY"},
         {**valid, "source": "authority_heartbeat"},
@@ -61,7 +62,8 @@ def test_fresh_verified_order_proof_is_accepted(monkeypatch):
     monkeypatch.setattr(v16.time, "time", lambda: 10000)
     tsm._heartbeat_verification_status = lambda: (
         True, "", {"stage": "ORDER_VERIFY", "source": "heartbeat_trade",
-                    "proof_kind": "execution_probe", "verified_at_epoch": 9990}
+                    "proof_kind": "execution_probe", "verified_at_epoch": 9990,
+                    "broker_event_at_epoch": 9990}
     )
     assert v16._genuine_execution_marker_proof()[0] is True
 
@@ -100,6 +102,7 @@ def test_fresh_canonical_confirmed_fill_requires_independent_provenance(monkeypa
     marker = dict(
         stage="FILL_VERIFY", source="canonical_confirmed_fill",
         required_stage="FILL_VERIFY", proof_kind="execution_probe", verified_at_epoch=9990,
+        broker_event_at_epoch=9990,
     )
     tsm._heartbeat_verification_status = lambda: (True, "", dict(marker))
     tsm._canonical_execution_verification_status_v402 = lambda: (
@@ -118,6 +121,7 @@ def test_canonical_fill_proof_rejects_missing_provenance_guard_and_verifier(monk
     marker = dict(
         stage="FILL_VERIFY", source="canonical_confirmed_fill",
         required_stage="FILL_VERIFY", proof_kind="execution_probe", verified_at_epoch=9990,
+        broker_event_at_epoch=9990,
     )
     tsm._heartbeat_verification_status = lambda: (True, "", dict(marker))
     monkeypatch.delenv("NIJA_RUNTIME_EXECUTION_CAPITAL_INTEGRITY_V169_READY", raising=False)
@@ -135,6 +139,7 @@ def test_canonical_fill_proof_rejects_unverified_stage_scope_and_time(monkeypatc
     good = dict(
         stage="FILL_VERIFY", source="canonical_confirmed_fill",
         required_stage="FILL_VERIFY", proof_kind="execution_probe", verified_at_epoch=9990,
+        broker_event_at_epoch=9990,
     )
     tsm._heartbeat_verification_status = lambda: (True, "", dict(good))
     for second in (
@@ -168,6 +173,7 @@ def test_canonical_fill_does_not_mark_execution_ready_without_real_proof(monkeyp
     marker = dict(
         stage="FILL_VERIFY", source="canonical_confirmed_fill",
         required_stage="FILL_VERIFY", proof_kind="execution_probe", verified_at_epoch=6000,
+        broker_event_at_epoch=6000,
     )
     tsm._heartbeat_verification_status = lambda: (True, "", dict(marker))
     tsm._canonical_execution_verification_status_v402 = lambda: (True, "", dict(marker))
@@ -184,6 +190,7 @@ def test_canonical_fill_rejects_auth_only_or_missing_execution_policy(monkeypatc
     marker = dict(
         stage="FILL_VERIFY", source="canonical_confirmed_fill",
         proof_kind="execution_probe", verified_at_epoch=9990,
+        broker_event_at_epoch=9990,
     )
     tsm._heartbeat_verification_status = lambda: (True, "", dict(marker))
     for policy in (None, "", "AUTH_VERIFY", "AUTH_ONLY", "unknown", False, 1):
@@ -208,6 +215,7 @@ def test_canonical_fill_requires_execution_policy_and_unchanged_freshness(monkey
             marker = dict(
                 stage="FILL_VERIFY", source="canonical_confirmed_fill",
                 proof_kind="execution_probe", verified_at_epoch=epoch,
+                broker_event_at_epoch=epoch,
                 required_stage=policy,
             )
             tsm._heartbeat_verification_status = lambda value=marker: (True, "", dict(value))
@@ -220,6 +228,74 @@ def test_canonical_fill_requires_execution_policy_and_unchanged_freshness(monkey
             )
             assert v16._genuine_execution_marker_proof()[0] is False
 
+
+
+def test_recent_verification_cannot_refresh_old_broker_event(monkeypatch, caplog):
+    import logging
+    v16 = load()
+    tsm = ModuleType("bot.trading_state_machine")
+    monkeypatch.setitem(sys.modules, "bot.trading_state_machine", tsm)
+    monkeypatch.setattr(v16.time, "time", lambda: 10000.0)
+    base = {
+        "stage": "ORDER_VERIFY",
+        "source": "heartbeat_trade",
+        "proof_kind": "execution_probe",
+        "verified_at_epoch": 9999.0,
+    }
+    for event, expected in (
+        (None, "broker_execution_event_missing_future_or_stale"),
+        (8199.0, "broker_execution_event_missing_future_or_stale"),
+        (10006.0, "broker_execution_event_missing_future_or_stale"),
+        (10005.0, "broker_execution_event_after_verification"),
+        (float("nan"), "broker_execution_event_missing_future_or_stale"),
+        (True, "broker_execution_event_missing_future_or_stale"),
+    ):
+        marker = dict(base)
+        if event is not None:
+            marker["broker_event_at_epoch"] = event
+        tsm._heartbeat_verification_status = lambda m=marker: (True, "", dict(m))
+        with caplog.at_level(logging.WARNING, logger="nija.preactivation_readiness_convergence_v16"):
+            allowed, reason = v16._genuine_execution_marker_proof()
+        assert allowed is False
+        assert reason == expected
+    # The broker event age, not the recent verification age, is observable.
+    assert "broker_event_age_s=" in caplog.text
+    assert "verification_age_s=" in caplog.text
+
+
+def test_real_broker_event_1800_second_limit_is_inclusive(monkeypatch):
+    v16 = load()
+    tsm = ModuleType("bot.trading_state_machine")
+    monkeypatch.setitem(sys.modules, "bot.trading_state_machine", tsm)
+    monkeypatch.setattr(v16.time, "time", lambda: 10000.0)
+    for epoch, allowed in ((8200.0, True), (8199.999, False)):
+        payload = dict(stage="ORDER_VERIFY", source="heartbeat_trade",
+                       proof_kind="execution_probe", verified_at_epoch=9990.0,
+                       broker_event_at_epoch=epoch)
+        tsm._heartbeat_verification_status = lambda m=payload: (True, "", dict(m))
+        assert v16._genuine_execution_marker_proof()[0] is allowed
+
+
+def test_canonical_verifiers_must_agree_on_broker_event_time(monkeypatch):
+    v16 = load()
+    tsm = ModuleType("bot.trading_state_machine")
+    monkeypatch.setitem(sys.modules, "bot.trading_state_machine", tsm)
+    monkeypatch.setattr(v16.time, "time", lambda: 10000.0)
+    monkeypatch.setenv("NIJA_RUNTIME_EXECUTION_CAPITAL_INTEGRITY_V169_READY", "1")
+    marker = dict(stage="FILL_VERIFY", source="canonical_confirmed_fill",
+                  required_stage="FILL_VERIFY", proof_kind="execution_probe",
+                  verified_at_epoch=9990.0, broker_event_at_epoch=9989.0)
+    tsm._heartbeat_verification_status = lambda: (True, "", dict(marker))
+    tsm._canonical_execution_verification_status_v402 = lambda: (
+        True, "", {**marker, "broker_event_at_epoch": 9988.0}
+    )
+    assert v16._genuine_execution_marker_proof() == (
+        False, "canonical_broker_event_identity_mismatch"
+    )
+    tsm._canonical_execution_verification_status_v402 = lambda: (
+        True, "", dict(marker)
+    )
+    assert v16._genuine_execution_marker_proof()[0] is True
 
 def test_heartbeat_marker_rejects_future_and_stale_proofs_with_provenance(tmp_path, monkeypatch):
     from bot import startup_verification_evidence, trading_state_machine
