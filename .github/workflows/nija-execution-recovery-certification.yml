@@ -67,12 +67,16 @@ on:
       - 'tests/test_runtime_known_execution_probe_v406_dynamic.py'
       - 'tests/test_independent_recovery_certification.py'
       - 'bot/pretrade_independent_attestation.py'
+      - 'bot/pretrade_certified_provider_bridge_3370.py'
+      - 'tests/test_pretrade_independent_attestation_regression_3370.py'
+      - 'tests/test_pretrade_certified_provider_bridge_3370.py'
       - 'bot/startup_authenticated_bridge_v456.py'
       - 'bot/startup_two_phase_policy_v8.py'
       - 'preactivation_readiness_convergence_v16_patch.py'
       - 'bot/tests/test_startup_authenticated_bridge_v456.py'
       - 'tests/test_pretrade_provenance_guard.py'
       - 'tests/test_preactivation_preflight_observability_v450.py'
+      - 'tests/test_preactivation_execution_proof_v439.py'
       - 'tests/test_startup_two_phase_policy_v8.py'
       - '.github/workflows/nija-execution-recovery-certification.yml'
   workflow_dispatch:
@@ -161,6 +165,7 @@ jobs:
             bot/tests/test_startup_authenticated_bridge_v456.py \
             tests/test_pretrade_provenance_guard.py \
             tests/test_preactivation_preflight_observability_v450.py \
+            tests/test_preactivation_execution_proof_v439.py \
             tests/test_startup_two_phase_policy_v8.py \
             bot/tests/test_pretrade_attestation_validation_v452.py \
             bot/tests/test_pretrade_authenticated_provider_adapter_v453.py \
@@ -173,7 +178,10 @@ jobs:
             tests/test_kraken_recent_execution_discovery.py \
             tests/test_kraken_execution_recovery_candidates_v406.py \
             tests/test_runtime_known_execution_probe_v406_dynamic.py \
-            tests/test_independent_recovery_certification.py
+            tests/test_independent_recovery_certification.py \
+            bot/pretrade_certified_provider_bridge_3370.py \
+            tests/test_pretrade_independent_attestation_regression_3370.py \
+            tests/test_pretrade_certified_provider_bridge_3370.py
       - name: Scan changed runtime and test files for secrets
         run: |
           python -m detect_secrets scan --all-files --no-verify \
@@ -232,6 +240,7 @@ jobs:
             bot/tests/test_startup_authenticated_bridge_v456.py \
             tests/test_pretrade_provenance_guard.py \
             tests/test_preactivation_preflight_observability_v450.py \
+            tests/test_preactivation_execution_proof_v439.py \
             tests/test_startup_two_phase_policy_v8.py \
             bot/tests/test_pretrade_attestation_validation_v452.py \
             bot/tests/test_pretrade_authenticated_provider_adapter_v453.py \
@@ -248,6 +257,9 @@ jobs:
             tests/test_kraken_execution_recovery_candidates_v406.py \
             tests/test_runtime_known_execution_probe_v406_dynamic.py \
             tests/test_independent_recovery_certification.py \
+            bot/pretrade_certified_provider_bridge_3370.py \
+            tests/test_pretrade_independent_attestation_regression_3370.py \
+            tests/test_pretrade_certified_provider_bridge_3370.py \
             .github/workflows/nija-execution-recovery-certification.yml \
             docs/nija_execution_recovery_release_20261020.md > /tmp/recovery-secret-scan.json
           python - <<'PY'
@@ -295,6 +307,8 @@ jobs:
             tests/test_kraken_execution_recovery_candidates_v406.py \
             tests/test_runtime_known_execution_probe_v406_dynamic.py \
             tests/test_independent_recovery_certification.py \
+            tests/test_pretrade_independent_attestation_regression_3370.py \
+            tests/test_pretrade_certified_provider_bridge_3370.py \
             tests/test_execution_proof_deadlock_crossguards_v451.py \
             tests/test_preactivation_execution_proof_v439.py \
             tests/test_runtime_all_account_position_exit_coverage_v281.py \

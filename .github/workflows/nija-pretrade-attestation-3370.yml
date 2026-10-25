@@ -1,0 +1,37 @@
+name: NIJA independent pretrade fail-closed tests
+on:
+  pull_request:
+    branches: [main, release/justcall-handoff-only-20261017]
+    paths:
+      - 'bot/pretrade_independent_attestation.py'
+      - 'bot/pretrade_certified_provider_bridge_3370.py'
+      - 'tests/test_pretrade_certified_provider_bridge_3370.py'
+      - 'tests/test_pretrade_independent_attestation_regression_3370.py'
+      - '.github/workflows/nija-pretrade-attestation-3370.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  offline-attestation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      NIJA_DEFER_RUNTIME_SITE_HOOKS: '1'
+      KRAKEN_API_KEY: ''
+      KRAKEN_API_SECRET: ''
+      REDIS_URL: ''
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Compile offline attestation and regression tests
+        run: python -S -m py_compile bot/pretrade_independent_attestation.py tests/test_pretrade_independent_attestation_regression_3370.py bot/pretrade_certified_provider_bridge_3370.py tests/test_pretrade_certified_provider_bridge_3370.py
+      - name: Verify independent attestation fails closed
+        run: |
+          python -m unittest discover -s tests -p test_pretrade_independent_attestation_regression_3370.py -v
+          python -m unittest discover -s tests -p test_pretrade_certified_provider_bridge_3370.py -v

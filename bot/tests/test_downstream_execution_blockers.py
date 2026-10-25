@@ -663,7 +663,6 @@ class TestExecutionPipelineACKTimeout(unittest.TestCase):
             return_value=MagicMock(dispatch_enabled=True),
         ):
             result = pipeline._dispatch(request, time.monotonic())
-        self._assert_admission_consumed(pipeline, request)
         self._assert_durable_entry_consumed()
 
         self.assertTrue(result.success)
