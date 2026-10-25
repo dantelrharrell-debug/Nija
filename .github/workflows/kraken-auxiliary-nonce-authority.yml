@@ -1,0 +1,22 @@
+name: Kraken auxiliary nonce authority
+on:
+  pull_request:
+    paths:
+      - 'kraken_private_nonce.py'
+      - 'member_broker_kraken_readonly.py'
+      - 'validate_broker_credentials.py'
+      - 'tests/test_kraken_auxiliary_nonce_authority.py'
+      - 'tests/test_member_broker_kraken_readonly.py'
+      - '.github/workflows/kraken-auxiliary-nonce-authority.yml'
+permissions:
+  contents: read
+jobs:
+  nonce-regression:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install pytest==9.1.1 requests==2.32.5
+      - run: python -m pytest -q tests/test_kraken_auxiliary_nonce_authority.py tests/test_member_broker_kraken_readonly.py
