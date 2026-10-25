@@ -58,6 +58,21 @@ def _int(value: Any, default: int = 0) -> int:
         return default
 
 
+def _broker_event_epoch(meta: dict[str, Any]) -> float:
+    """Read the actual broker event clock, never a later verification/refresh time."""
+    for key in ("broker_event_at_epoch", "broker_fill_at_epoch", "broker_execution_epoch"):
+        if key in meta:
+            raw = meta[key]
+            if isinstance(raw, bool):
+                return 0.0
+            try:
+                epoch = float(raw)
+            except (TypeError, ValueError, OverflowError):
+                return 0.0
+            return epoch if math.isfinite(epoch) and epoch > 0.0 else 0.0
+    return 0.0
+
+
 def _execution_proof_result(
     ready: bool, condition: str, metadata: dict[str, Any] | None = None,
 ) -> tuple[bool, str]:
@@ -69,24 +84,22 @@ def _execution_proof_result(
         return "".join(char for char in text if char.isalnum() or char in "_.-")[:64] or "missing"
 
     verified_at = _float(meta.get("verified_at_epoch"), 0.0)
-    event_at = _float(
-        meta.get("broker_event_at_epoch")
-        or meta.get("broker_fill_at_epoch")
-        or meta.get("broker_execution_epoch"),
-        0.0,
-    )
-    verification_age = time.time() - verified_at if verified_at > 0 else float("inf")
+    event_at = _broker_event_epoch(meta)
+    now = time.time()
+    verification_age = now - verified_at if verified_at > 0 else float("inf")
+    broker_event_age = now - event_at if event_at > 0 else float("inf")
     failure_condition = meta.get("failure_condition") or condition.split(":", 1)[0]
     logger.log(
         logging.INFO if ready else logging.WARNING,
         "PREACTIVATION_EXECUTION_PROOF_V16 ready=%s source=%s stage=%s producer=%s "
-        "broker_event_at_epoch=%s verification_age_s=%s failing_condition=%s "
+        "broker_event_at_epoch=%s broker_event_age_s=%s verification_age_s=%s failing_condition=%s "
         "trading_fail_closed=%s",
         str(bool(ready)).lower(),
         safe_token(meta.get("source")),
         safe_token(meta.get("stage")),
         safe_token(meta.get("producer")),
         f"{event_at:.6f}" if event_at > 0 else "missing",
+        f"{broker_event_age:.1f}" if math.isfinite(broker_event_age) else "missing",
         f"{verification_age:.1f}" if math.isfinite(verification_age) else "missing",
         safe_token(failure_condition if not ready else "none"),
         str(not ready).lower(),
@@ -370,17 +383,32 @@ def _genuine_execution_marker_proof() -> tuple[bool, str]:
                 and abs(primary_epoch - canonical_epoch) < 0.001
             ):
                 return _execution_proof_result(False, "canonical_proof_identity_mismatch", meta)
+            primary_broker_epoch = _broker_event_epoch(primary_meta)
+            canonical_broker_epoch = _broker_event_epoch(canonical_meta)
+            if (
+                primary_broker_epoch <= 0.0
+                or canonical_broker_epoch <= 0.0
+                or abs(primary_broker_epoch - canonical_broker_epoch) > 0.001
+            ):
+                return _execution_proof_result(False, "canonical_broker_event_identity_mismatch", meta)
         else:
             return _execution_proof_result(False, "execution_provenance_unverified", meta)
         verified = float(meta.get("verified_at_epoch") or 0.0)
-        age = time.time() - verified
+        broker_event = _broker_event_epoch(meta)
+        now = time.time()
+        age = now - verified
+        broker_event_age = now - broker_event if broker_event > 0.0 else float("inf")
         if not math.isfinite(verified) or not math.isfinite(age):
             return _execution_proof_result(False, "execution_marker_timestamp_invalid", meta)
-        # A 30-minute upper bound is mandatory even if an optional legacy
-        # policy disables its own age limit.  Never use writer heartbeat age
-        # as execution evidence.
+        # Both the verification and the independently authenticated broker event
+        # must be no older than 1,800 seconds. A delayed/replayed fill may never
+        # inherit the collector's recent verification timestamp as its age.
         if verified <= 0 or age < -5.0 or age > 1800.0:
             return _execution_proof_result(False, "execution_marker_missing_future_or_stale", meta)
+        if not math.isfinite(broker_event_age) or broker_event_age < -5.0 or broker_event_age > 1800.0:
+            return _execution_proof_result(False, "broker_execution_event_missing_future_or_stale", meta)
+        if broker_event > verified + 5.0:
+            return _execution_proof_result(False, "broker_execution_event_after_verification", meta)
         return _execution_proof_result(True, "fresh_genuine_order_or_fill_execution_proof", meta)
     except Exception as exc:
         return _execution_proof_result(
