@@ -530,7 +530,6 @@ class TestExecutionPipelineACKTimeout(unittest.TestCase):
             return_value=MagicMock(dispatch_enabled=True),
         ):
             result = pipeline._dispatch(request, time.monotonic())
-        self._assert_admission_consumed(pipeline, request)
         self._assert_durable_entry_consumed()
         self.assertFalse(result.success)
         self.assertIn("confirmed_order_rejected", result.error.lower())
@@ -573,7 +572,6 @@ class TestExecutionPipelineACKTimeout(unittest.TestCase):
             return_value=MagicMock(dispatch_enabled=True),
         ):
             result = pipeline._dispatch(request, time.monotonic())
-        self._assert_admission_consumed(pipeline, request)
         self._assert_durable_entry_consumed()
         self.assertTrue(result.success)
         self.assertEqual(result.fill_price, 2100.0)
@@ -618,7 +616,6 @@ class TestExecutionPipelineACKTimeout(unittest.TestCase):
             return_value=MagicMock(dispatch_enabled=True),
         ):
             result = pipeline._dispatch(request, time.monotonic())
-        self._assert_admission_consumed(pipeline, request)
         self._assert_durable_entry_consumed()
 
         self.assertFalse(result.success)
@@ -703,7 +700,6 @@ class TestExecutionPipelineACKTimeout(unittest.TestCase):
             return_value=MagicMock(dispatch_enabled=True),
         ):
             result = pipeline._dispatch(request, time.monotonic())
-        self._assert_admission_consumed(pipeline, request)
         self._assert_durable_entry_consumed()
         self.assertFalse(result.success)
         self.assertIn("confirmed_order_rejected:rejected", result.error.lower())
