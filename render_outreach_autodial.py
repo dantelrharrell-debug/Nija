@@ -688,6 +688,8 @@ def _weekend_call_eligibility(
     if local.weekday() < 5:
         return True, "ok"
 
+    if not _weekend_clearance_valid(evidence, number, campaign, consent_record_id):
+        return False, "weekend_clearance_signature_invalid"
     if evidence.get("approved") is not True:
         return False, "weekend_clearance_required"
     if not str(evidence.get("clearance_id") or "").strip():
