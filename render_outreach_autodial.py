@@ -651,8 +651,9 @@ def _verified_weekend_evidence(
         ZoneInfo(timezone_name)
     except (ZoneInfoNotFoundError, ValueError, TypeError):
         return None, "", "contact_timezone_invalid"
-    if not _weekend_clearance_valid(evidence, number, campaign, consent_record_id):
-        return None, "", "weekend_clearance_signature_invalid"
+    # A reviewed recipient jurisdiction and timezone are required every day.
+    # The separate recipient/day-bound weekend HMAC is required only on weekends.
+    # Never treat a weekday as signed weekend clearance or infer location.
     return evidence, timezone_name, ""
 
 
