@@ -403,11 +403,32 @@ class TestExecutionPipelineSoftReject(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class TestExecutionPipelineACKTimeout(unittest.TestCase):
+    def _install_offline_admission(self, pipeline):
+        """Isolate transport tests after the separately tested admission boundary."""
+        from bot.account_order_admission import AccountOrderAdmission, Reservation
+        from bot.order_admission_policy import Candidate
+
+        candidate = Candidate("platform:kraken", "offline-credential", 1, "a" * 64)
+        reservation = Reservation("offline-reservation", candidate)
+        admission = AccountOrderAdmission.__new__(AccountOrderAdmission)
+        admission.reserve = MagicMock(return_value=reservation)
+        admission.consume = MagicMock()
+        pipeline._account_order_admission = admission
+        pipeline._trusted_entry_candidate_provider = MagicMock(return_value=candidate)
+
+    def _assert_admission_consumed(self, pipeline, request):
+        provider = pipeline._trusted_entry_candidate_provider
+        provider.assert_called_once_with(request)
+        admission = pipeline._account_order_admission
+        admission.reserve.assert_called_once_with(provider.return_value)
+        admission.consume.assert_called_once_with(admission.reserve.return_value)
+
     def test_dispatch_returns_failure_on_timeout(self):
         from bot.execution_pipeline import ExecutionPipeline, PipelineRequest
 
         pipeline = ExecutionPipeline.__new__(ExecutionPipeline)
         pipeline._ecel_required = False
+        self._install_offline_admission(pipeline)
         pipeline._ack_timeout_s = 0.05   # very short for test
 
         def _slow_router_factory():
@@ -431,6 +452,7 @@ class TestExecutionPipelineACKTimeout(unittest.TestCase):
             return_value=MagicMock(dispatch_enabled=True),
         ):
             result = pipeline._dispatch(request, time.monotonic())
+        self._assert_admission_consumed(pipeline, request)
         self.assertFalse(result.success)
         self.assertIn("confirmed_order_rejected", result.error.lower())
 
@@ -451,6 +473,7 @@ class TestExecutionPipelineACKTimeout(unittest.TestCase):
 
         pipeline = ExecutionPipeline.__new__(ExecutionPipeline)
         pipeline._ecel_required = False
+        self._install_offline_admission(pipeline)
         pipeline._ack_timeout_s = 0.05
         pipeline._multi_router = _SlowRouter()
         pipeline._router = None
@@ -470,6 +493,7 @@ class TestExecutionPipelineACKTimeout(unittest.TestCase):
             return_value=MagicMock(dispatch_enabled=True),
         ):
             result = pipeline._dispatch(request, time.monotonic())
+        self._assert_admission_consumed(pipeline, request)
         self.assertTrue(result.success)
         self.assertEqual(result.fill_price, 2100.0)
         self.assertEqual(result.filled_size_usd, 200.0)
@@ -492,6 +516,7 @@ class TestExecutionPipelineACKTimeout(unittest.TestCase):
 
         pipeline = ExecutionPipeline.__new__(ExecutionPipeline)
         pipeline._ecel_required = False
+        self._install_offline_admission(pipeline)
         pipeline._ack_timeout_s = 0.05
         pipeline._multi_router = _SlowRouter()
         pipeline._router = None
@@ -511,6 +536,7 @@ class TestExecutionPipelineACKTimeout(unittest.TestCase):
             return_value=MagicMock(dispatch_enabled=True),
         ):
             result = pipeline._dispatch(request, time.monotonic())
+        self._assert_admission_consumed(pipeline, request)
 
         self.assertFalse(result.success)
         self.assertEqual(result.filled_size_usd, 0.0)
@@ -533,6 +559,7 @@ class TestExecutionPipelineACKTimeout(unittest.TestCase):
 
         pipeline = ExecutionPipeline.__new__(ExecutionPipeline)
         pipeline._ecel_required = False
+        self._install_offline_admission(pipeline)
         pipeline._ack_timeout_s = 0.05
         pipeline._multi_router = _SlowRouter()
         pipeline._router = None
@@ -552,6 +579,7 @@ class TestExecutionPipelineACKTimeout(unittest.TestCase):
             return_value=MagicMock(dispatch_enabled=True),
         ):
             result = pipeline._dispatch(request, time.monotonic())
+        self._assert_admission_consumed(pipeline, request)
 
         self.assertTrue(result.success)
         self.assertEqual(result.fill_price, 2000.0)
@@ -570,6 +598,7 @@ class TestExecutionPipelineACKTimeout(unittest.TestCase):
 
         pipeline = ExecutionPipeline.__new__(ExecutionPipeline)
         pipeline._ecel_required = False
+        self._install_offline_admission(pipeline)
         pipeline._ack_timeout_s = 0.05
         pipeline._multi_router = _SlowRouter()
         pipeline._router = None
@@ -589,6 +618,7 @@ class TestExecutionPipelineACKTimeout(unittest.TestCase):
             return_value=MagicMock(dispatch_enabled=True),
         ):
             result = pipeline._dispatch(request, time.monotonic())
+        self._assert_admission_consumed(pipeline, request)
         self.assertFalse(result.success)
         self.assertIn("confirmed_order_rejected:rejected", result.error.lower())
 
@@ -597,6 +627,7 @@ class TestExecutionPipelineACKTimeout(unittest.TestCase):
 
         pipeline = ExecutionPipeline.__new__(ExecutionPipeline)
         pipeline._ecel_required = False
+        self._install_offline_admission(pipeline)
         pipeline._ack_timeout_s = 0.05
         pipeline._multi_router = None
         pipeline._router = None
@@ -614,6 +645,8 @@ class TestExecutionPipelineACKTimeout(unittest.TestCase):
         ):
             result = pipeline._dispatch(request, time.monotonic())
 
+        pipeline._account_order_admission.reserve.assert_not_called()
+        pipeline._account_order_admission.consume.assert_not_called()
         self.assertFalse(result.success)
         self.assertIn("dispatch_disabled", result.error)
 

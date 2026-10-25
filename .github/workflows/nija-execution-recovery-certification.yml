@@ -46,6 +46,7 @@ on:
       - 'tests/test_execution_startup_admission_review_v469.py'
       - 'tests/test_account_admission_dispatch_boundary_v470.py'
       - 'tests/test_pipeline_entry_admission_v471.py'
+      - 'bot/tests/test_downstream_execution_blockers.py'
       - 'tests/test_account_order_admission.py'
       - 'bot/order_admission_policy.py'
       - 'bot/kraken_authenticated_execution_evidence_v451.py'
@@ -144,6 +145,7 @@ jobs:
             tests/test_execution_startup_admission_review_v469.py \
             tests/test_account_admission_dispatch_boundary_v470.py \
             tests/test_pipeline_entry_admission_v471.py \
+            bot/tests/test_downstream_execution_blockers.py \
             tests/test_account_order_admission.py \
             bot/order_admission_policy.py \
             bot/kraken_authenticated_execution_evidence_v451.py \
@@ -214,6 +216,7 @@ jobs:
             tests/test_execution_startup_admission_review_v469.py \
             tests/test_account_admission_dispatch_boundary_v470.py \
             tests/test_pipeline_entry_admission_v471.py \
+            bot/tests/test_downstream_execution_blockers.py \
             tests/test_account_order_admission.py \
             bot/order_admission_policy.py \
             bot/kraken_authenticated_execution_evidence_v451.py \
@@ -275,6 +278,7 @@ jobs:
             tests/test_execution_startup_admission_review_v469.py \
             tests/test_account_admission_dispatch_boundary_v470.py \
             tests/test_pipeline_entry_admission_v471.py \
+            bot/tests/test_downstream_execution_blockers.py \
             tests/test_order_admission_policy.py \
             bot/tests/test_kraken_authenticated_execution_evidence_v451.py \
             bot/tests/test_pretrade_attestation_validation_v452.py \
