@@ -1,4 +1,10 @@
-from bot.broker_history_reconciliation_plan import plan_opening_reconciliation
+from bot.broker_history_reconciliation_plan import plan_opening_reconciliation as _plan_opening_reconciliation
+
+
+def plan_opening_reconciliation(account, fills, ledger):
+    return _plan_opening_reconciliation(account, fills, ledger,
+        authenticated_readback=True, complete_pagination=True,
+        account_identity_verified=True)
 import pytest
 
 
@@ -32,3 +38,4 @@ def test_duplicate_broker_trade_is_ambiguous():
 def test_account_scope_mismatch_fails_closed():
     with pytest.raises(ValueError):
         plan_opening_reconciliation("platform:kraken", [fill("t1", "o1", "platform:coinbase")], [])
+\n\ndef test_uncertified_readback_is_rejected():\n    with pytest.raises(ValueError, match="independent_broker_readback_certification_required"):\n        _plan_opening_reconciliation("platform:kraken", [fill("t1", "o1")], [])\n
