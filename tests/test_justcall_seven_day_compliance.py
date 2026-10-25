@@ -88,6 +88,39 @@ class WeekendRulesTests(unittest.TestCase):
         self.assertFalse(allowed)
         self.assertEqual(reason, "recipient_jurisdiction_required")
 
+    def test_weekday_does_not_require_weekend_hmac_but_does_require_location(self):
+        # Ordinary weekdays require independently reviewed recipient location,
+        # but not a signature specifically authorizing weekend outreach.
+        plain = {
+            "recipient_jurisdiction": "US-WA",
+            "recipient_timezone": "America/Los_Angeles",
+        }
+        self.assertEqual(self.decide(plain, now="2026-10-09T16:00:00Z"), (True, "ok"))
+        self.assertEqual(
+            self.decide({**plain, "recipient_timezone": ""}, now="2026-10-09T16:00:00Z"),
+            (False, "recipient_timezone_required"),
+        )
+        self.assertEqual(
+            self.decide({**plain, "recipient_jurisdiction": ""}, now="2026-10-09T16:00:00Z"),
+            (False, "recipient_jurisdiction_required"),
+        )
+
+    def test_weekend_missing_or_forged_signature_remains_blocked(self):
+        plain = {
+            "recipient_jurisdiction": "US-WA",
+            "recipient_timezone": "America/Los_Angeles",
+        }
+        self.assertEqual(
+            self.decide(plain, now="2026-10-11T16:00:00Z"),
+            (False, "weekend_clearance_signature_invalid"),
+        )
+        forged = evidence()
+        forged["signature"] = "0" * 64
+        self.assertEqual(
+            self.decide(forged),
+            (False, "weekend_clearance_signature_invalid"),
+        )
+
     def test_sunday_bans_apply_even_with_approval(self):
         for state in ("US-PA", "US-AL", "US-MS"):
             with self.subTest(state=state):
