@@ -805,21 +805,27 @@ def _kraken_private_request(
     """
     Make an authenticated Kraken private API request.
 
-    Uses the global KrakenNonceManager so every nonce is strictly monotonic
-    and consistent with the bot's nonce state.
+    Uses the same per-key authority and request lock as the trading runtime.
+    Without runtime writer authority this diagnostic must fail closed.
     """
-    try:
-        from bot.global_kraken_nonce import get_kraken_nonce as _get_kraken_nonce
-    except ImportError:
-        try:
-            from global_kraken_nonce import get_kraken_nonce as _get_kraken_nonce
-        except ImportError:
-            _get_kraken_nonce = lambda: int(time.time() * 1000)  # noqa: E731
+    from kraken_private_nonce import coordinated_kraken_nonce
+
+    if data is not None and "nonce" in data:
+        raise ValueError("Caller-supplied Kraken nonce is not permitted")
+
+    with coordinated_kraken_nonce(api_key) as nonce:
+        return _kraken_private_request_with_nonce(endpoint, api_key, api_secret, data, timeout, nonce)
+
+
+def _kraken_private_request_with_nonce(
+    endpoint: str, api_key: str, api_secret: str, data: Optional[dict], timeout: int, allocated_nonce: int,
+) -> dict:
+    """Sign and send while the caller holds the coordinated request lock."""
 
     url_path = f"/0/private/{endpoint}"
     url = f"https://api.kraken.com{url_path}"
 
-    nonce = str(_get_kraken_nonce())
+    nonce = str(allocated_nonce)
     post_data = {"nonce": nonce}
     if data:
         post_data.update(data)
