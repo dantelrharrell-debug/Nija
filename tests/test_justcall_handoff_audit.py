@@ -85,7 +85,7 @@ def test_provider_transfer_evidence_does_not_attest_human_identity(monkeypatch):
         if path.startswith("/calls?"):
             return {"data": [{"id": "call_123", "call_info": {"call_traits": ["Voice Agent"]}}]}
         if path == "/calls/call_123/voice-agent":
-            return {"data": {"ai_agent_id": "agent_abc", "actions": [{
+            return {"data": {"id": "call_123", "ai_agent_id": "agent_abc", "actions": [{
                 "type": "call_transfer", "status": "success",
                 "output": {"mode": "warm", "is_answered": True}
             }]}}

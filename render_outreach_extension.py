@@ -58,6 +58,8 @@ _ALLOWED_WEBHOOK_TYPES = {
 }
 _AUTOCONFIG_EVENTS = (
     "call.initiated",
+    "call.missed",
+    "call.voicemail",
     "call.completed",
     "call.updated",
     "call.ai_voice_agent",
@@ -93,6 +95,11 @@ def _read_raw_json(handler: Any) -> tuple[bytes, dict[str, Any]]:
 
 
 def _signature_valid(handler: Any, payload: dict[str, Any]) -> bool:
+    """Validate JustCall v1 routing metadata, not the unsigned event body.
+
+    JustCall's documented HMAC excludes data and request_id. Never use this
+    check alone to certify a staffed transfer or authorize outbound calling.
+    """
     signature = str(handler.headers.get("x-justcall-signature", "") or "").strip().lower()
     version = str(handler.headers.get("x-justcall-signature-version", "") or "").strip().lower()
     timestamp = str(handler.headers.get("x-justcall-request-timestamp", "") or "").strip()
@@ -101,7 +108,7 @@ def _signature_valid(handler: Any, payload: dict[str, Any]) -> bool:
     secret = os.getenv("JUSTCALL_API_SECRET", "").strip()
     if not all((signature, timestamp, webhook_url, event_type, secret)):
         return False
-    if version and version != "v1":
+    if version != "v1" or webhook_url != _webhook_url():
         return False
     encoded_url = urllib.parse.quote(webhook_url, safe="")
     material = f"{secret}|{encoded_url}|{event_type}|{timestamp}"
