@@ -26,6 +26,68 @@ def _decision() -> UserDecisionContext:
 
 
 class TestPost2823FinalSafety(unittest.TestCase):
+    def _install_offline_entry_admission(self, pipeline, request):
+        import hashlib
+        import sqlite3
+        import tempfile
+        from pathlib import Path
+
+        from bot.account_order_admission import AccountOrderAdmission
+        from bot.order_admission_policy import (
+            Candidate, CurrentFact, OrderOutcome, REQUIRED_CONTROLS,
+        )
+
+        folder = tempfile.TemporaryDirectory(prefix="nija-v2-offline-")
+        self.addCleanup(folder.cleanup)
+        ledger = Path(folder.name) / "test-ledger.sqlite3"
+        with sqlite3.connect(ledger) as conn:
+            for table in ("open_positions", "completed_trades", "strategy_order_intents"):
+                conn.execute("CREATE TABLE " + table + " (id INTEGER)")
+            conn.execute(
+                "CREATE TABLE trade_ledger "
+                "(user_id TEXT, order_id TEXT, position_id TEXT, action TEXT)"
+            )
+            conn.execute(
+                "CREATE TABLE pending_kraken_closes "
+                "(broker TEXT, account_scope TEXT, user_id TEXT, order_id TEXT, "
+                "state TEXT, matched_position_id TEXT)"
+            )
+
+        digest = hashlib.sha256(
+            (self.id() + ":" + str(request.request_id)).encode("utf-8")
+        ).hexdigest()
+        candidate = Candidate(
+            account="platform:kraken",
+            credential_fingerprint="synthetic-ci-credential-only",
+            writer_generation=1,
+            intent_digest=digest,
+        )
+
+        def read_only_test_collector(bound_candidate, conn):
+            self.assertEqual(conn.execute("PRAGMA query_only").fetchone(), (1,))
+            conn.execute("SELECT COUNT(*) FROM trade_ledger").fetchone()
+            facts = {
+                key: CurrentFact(bound_candidate, True, time.time(), "offline-ci-fixture")
+                for key in REQUIRED_CONTROLS
+            }
+            return facts, OrderOutcome(bound_candidate.account, "none")
+
+        def test_writer_fence(bound_candidate):
+            return bound_candidate == candidate
+
+        store = AccountOrderAdmission(
+            ledger, read_only_test_collector, test_writer_fence
+        )
+        store.install_schema()
+        pipeline._account_order_admission = store
+        # Exact object identity: another request cannot inherit this test
+        # candidate; no caller metadata or runtime flags supply authority.
+        pipeline._trusted_entry_candidate_provider = (
+            lambda observed: candidate if observed is request else None
+        )
+        self._offline_v2_ledger = ledger
+
+
     def test_key_and_token_without_shared_authority_flag_is_partial(self):
         self.assertEqual(
             _v2_duplicate_metadata_state(
@@ -91,6 +153,10 @@ class TestPost2823FinalSafety(unittest.TestCase):
             take_profit_pct=0.02,
             validated=True,
         )
+
+        # Exercise the real durable admission boundary with offline-only facts.
+        # This fixture is never installed in production or a provider account.
+        self._install_offline_entry_admission(pipeline, request)
 
         with patch(
             "bot.execution_pipeline.runtime_authority_snapshot",
@@ -162,6 +228,10 @@ class TestPost2823FinalSafety(unittest.TestCase):
             validated=True,
         )
 
+        # Exercise the real durable admission boundary with offline-only facts.
+        # This fixture is never installed in production or a provider account.
+        self._install_offline_entry_admission(pipeline, request)
+
         with patch(
             "bot.execution_pipeline.runtime_authority_snapshot",
             return_value=SimpleNamespace(dispatch_enabled=True),
@@ -196,6 +266,10 @@ class TestPost2823FinalSafety(unittest.TestCase):
             take_profit_pct=0.02,
             validated=True,
         )
+
+        # Exercise the real durable admission boundary with offline-only facts.
+        # This fixture is never installed in production or a provider account.
+        self._install_offline_entry_admission(pipeline, request)
 
         with patch(
             "bot.execution_pipeline.runtime_authority_snapshot",

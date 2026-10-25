@@ -37,6 +37,16 @@ on:
       - 'tests/test_preflight_certificate_prerequisites.py'
       - 'tests/test_pretrade_broker_evidence_checks.py'
       - 'bot/account_order_admission.py'
+      - 'bot/pretrade_reviewed_registration_v467.py'
+      - 'bot/execution_admission_acceptance_v468.py'
+      - 'bot/account_admission_dispatch_boundary_v470.py'
+      - 'bot/execution_pipeline.py'
+      - 'tests/test_pretrade_reviewed_registration_v467.py'
+      - 'tests/test_execution_admission_acceptance_v468.py'
+      - 'tests/test_execution_startup_admission_review_v469.py'
+      - 'tests/test_account_admission_dispatch_boundary_v470.py'
+      - 'tests/test_pipeline_entry_admission_v471.py'
+      - 'bot/tests/test_downstream_execution_blockers.py'
       - 'tests/test_account_order_admission.py'
       - 'bot/order_admission_policy.py'
       - 'bot/kraken_authenticated_execution_evidence_v451.py'
@@ -130,6 +140,16 @@ jobs:
             tests/test_preflight_certificate_prerequisites.py \
             tests/test_pretrade_broker_evidence_checks.py \
             bot/account_order_admission.py \
+            bot/pretrade_reviewed_registration_v467.py \
+            bot/execution_admission_acceptance_v468.py \
+            bot/account_admission_dispatch_boundary_v470.py \
+            bot/execution_pipeline.py \
+            tests/test_pretrade_reviewed_registration_v467.py \
+            tests/test_execution_admission_acceptance_v468.py \
+            tests/test_execution_startup_admission_review_v469.py \
+            tests/test_account_admission_dispatch_boundary_v470.py \
+            tests/test_pipeline_entry_admission_v471.py \
+            bot/tests/test_downstream_execution_blockers.py \
             tests/test_account_order_admission.py \
             bot/order_admission_policy.py \
             bot/kraken_authenticated_execution_evidence_v451.py \
@@ -195,6 +215,16 @@ jobs:
             tests/test_preflight_certificate_prerequisites.py \
             tests/test_pretrade_broker_evidence_checks.py \
             bot/account_order_admission.py \
+            bot/pretrade_reviewed_registration_v467.py \
+            bot/execution_admission_acceptance_v468.py \
+            bot/account_admission_dispatch_boundary_v470.py \
+            bot/execution_pipeline.py \
+            tests/test_pretrade_reviewed_registration_v467.py \
+            tests/test_execution_admission_acceptance_v468.py \
+            tests/test_execution_startup_admission_review_v469.py \
+            tests/test_account_admission_dispatch_boundary_v470.py \
+            tests/test_pipeline_entry_admission_v471.py \
+            bot/tests/test_downstream_execution_blockers.py \
             tests/test_account_order_admission.py \
             bot/order_admission_policy.py \
             bot/kraken_authenticated_execution_evidence_v451.py \
@@ -255,6 +285,12 @@ jobs:
             bot/tests/test_runtime_kraken_client_order_recovery_v430.py \
             bot/tests/test_runtime_kraken_deferred_fill_proof_recovery_v363.py \
             tests/test_account_order_admission.py \
+            tests/test_pretrade_reviewed_registration_v467.py \
+            tests/test_execution_admission_acceptance_v468.py \
+            tests/test_execution_startup_admission_review_v469.py \
+            tests/test_account_admission_dispatch_boundary_v470.py \
+            tests/test_pipeline_entry_admission_v471.py \
+            bot/tests/test_downstream_execution_blockers.py \
             tests/test_order_admission_policy.py \
             bot/tests/test_kraken_authenticated_execution_evidence_v451.py \
             bot/tests/test_pretrade_attestation_validation_v452.py \
