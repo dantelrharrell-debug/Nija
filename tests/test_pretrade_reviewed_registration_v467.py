@@ -1,8 +1,11 @@
 """Offline fail-closed tests for explicit reviewed collector registration."""
+import importlib
+
 import pytest
 
 from bot.pretrade_attestation_validation_v452 import REQUIRED
-from bot.pretrade_reviewed_registration_v467 import register_reviewed_pretrade_providers
+registration = importlib.import_module("bot.pretrade_reviewed_registration_v467")
+register_reviewed_pretrade_providers = registration.register_reviewed_pretrade_providers
 
 
 def _providers():
@@ -16,7 +19,7 @@ def _identities():
 def test_review_required_before_install(monkeypatch):
     called = []
     monkeypatch.setattr(
-        "bot.pretrade_reviewed_registration_v467.install_audited_collector",
+        registration, "install_audited_collector",
         lambda *args, **kwargs: called.append((args, kwargs)),
     )
     with pytest.raises(PermissionError, match="independent_provider_review_required"):
@@ -43,7 +46,7 @@ def test_invalid_account_scope_rejected_by_v465(monkeypatch, scope):
 def test_missing_provider_rejected(monkeypatch):
     called = []
     monkeypatch.setattr(
-        "bot.pretrade_reviewed_registration_v467.install_audited_collector",
+        registration, "install_audited_collector",
         lambda *args, **kwargs: called.append((args, kwargs)),
     )
     providers = _providers()
@@ -59,7 +62,7 @@ def test_missing_provider_rejected(monkeypatch):
 def test_missing_trusted_identity_rejected(monkeypatch):
     called = []
     monkeypatch.setattr(
-        "bot.pretrade_reviewed_registration_v467.install_audited_collector",
+        registration, "install_audited_collector",
         lambda *args, **kwargs: called.append((args, kwargs)),
     )
     identities = _identities()
@@ -85,7 +88,7 @@ def test_cross_authority_provider_reuse_rejected():
 def test_valid_registration_is_diagnostic_only(monkeypatch):
     calls = []
     monkeypatch.setattr(
-        "bot.pretrade_reviewed_registration_v467.install_audited_collector",
+        registration, "install_audited_collector",
         lambda *args, **kwargs: calls.append((args, kwargs)),
     )
     register_reviewed_pretrade_providers(
