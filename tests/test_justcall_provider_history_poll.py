@@ -92,6 +92,8 @@ def test_autodial_boot_starts_read_only_poll_even_if_worker_disabled():
     with mock.patch.object(dial.threading, "Thread", return_value=mock_thread):
         with mock.patch.object(dial, "_WORKER_STARTED", False):
             with mock.patch.object(audit, "start_readonly_provider_history_audit") as start:
-                dial.start_justcall_autodial()
+                with mock.patch("render_justcall_handoff_audit.start_readonly_handoff_audit") as handoff:
+                    dial.start_justcall_autodial()
     start.assert_called_once()
+    handoff.assert_called_once()
     mock_thread.start.assert_called_once()
