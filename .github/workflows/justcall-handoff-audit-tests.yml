@@ -3,14 +3,22 @@ on:
   push:
     paths:
       - 'render_justcall_handoff_audit.py'
+      - 'render_outreach_extension.py'
+      - 'render_outreach_store.py'
       - 'render_outreach_autodial.py'
       - 'tests/test_justcall_handoff_audit.py'
+      - 'tests/test_justcall_signed_transfer_evidence.py'
+      - 'tests/test_justcall_provider_history_poll.py'
       - '.github/workflows/justcall-handoff-audit-tests.yml'
   pull_request:
     paths:
       - 'render_justcall_handoff_audit.py'
+      - 'render_outreach_extension.py'
+      - 'render_outreach_store.py'
       - 'render_outreach_autodial.py'
       - 'tests/test_justcall_handoff_audit.py'
+      - 'tests/test_justcall_signed_transfer_evidence.py'
+      - 'tests/test_justcall_provider_history_poll.py'
       - '.github/workflows/justcall-handoff-audit-tests.yml'
   workflow_dispatch:
 permissions:
@@ -19,6 +27,10 @@ jobs:
   audit-tests:
     runs-on: ubuntu-latest
     timeout-minutes: 8
+    env:
+      NIJA_DEFER_RUNTIME_SITE_HOOKS: '1'
+      NIJA_JUSTCALL_AUTODIAL_ENABLED: '0'
+      NIJA_JUSTCALL_HUMAN_HANDOFF_VERIFIED: '0'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -27,4 +39,8 @@ jobs:
       - name: Install test runner
         run: python -m pip install pytest
       - name: Run fail-closed handoff audit tests
-        run: python -m pytest -q tests/test_justcall_handoff_audit.py tests/test_justcall_campaign_route_safety.py
+        run: >-
+          python -m pytest -q tests/test_justcall_handoff_audit.py
+          tests/test_justcall_campaign_route_safety.py
+          tests/test_justcall_signed_transfer_evidence.py
+          tests/test_justcall_provider_history_poll.py

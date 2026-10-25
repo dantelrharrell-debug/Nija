@@ -29,6 +29,8 @@ def _voice_agent_data(payload: dict[str, Any]) -> dict[str, Any] | None:
     for _ in range(4):
         if not isinstance(node, dict):
             return None
+        if node.get("success") is False or str(node.get("status", "")).casefold() in ("error", "failed"):
+            return None
         if "ai_agent_id" in node and isinstance(node.get("actions"), list):
             return node
         node = node.get("data")
@@ -129,6 +131,11 @@ def audit_recent_handoff(now_utc: datetime | None = None) -> dict[str, Any]:
                     continue
                 raise
             enriched += 1
+            # Evidence must belong to the fetched call, not merely the same AI
+            # agent. Neither a webhook signature nor an agent listing proves it.
+            data = _voice_agent_data(details)
+            if not data or call_id not in {str(data.get("id") or ""), str(data.get("call_sid") or "")}:
+                continue
             if _answered_warm_transfer(details, agent_id):
                 return {"state": "answered_warm_transfer", "provider_transfer_evidence": True,
                         "scanned": scanned, "candidates": candidates, "enriched": enriched,
