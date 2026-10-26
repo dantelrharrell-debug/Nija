@@ -10388,19 +10388,14 @@ class KrakenBroker(BaseBroker):
                                 # ── Structured logging for nonce / auth / reconnect ───────────
                                 if is_nonce_error:
                                     # Always warn on nonce errors — they indicate a real sync issue
-                                    _nonce_state = ""
-                                    if get_global_nonce_manager is not None:
-                                        try:
-                                            _mgr = get_global_nonce_manager()
-                                            _nonce_state = (
-                                                f" nonce={_mgr.get_last_nonce()}"
-                                                f" nuclear_resets={_mgr.nuclear_reset_count}"
-                                            )
-                                        except Exception:
-                                            pass
+                                    try:
+                                        from bot.kraken_nonce_diagnostics import nonce_error_diagnostic
+                                    except ImportError:
+                                        from kraken_nonce_diagnostics import nonce_error_diagnostic
+                                    _nonce_state = nonce_error_diagnostic(self, parenthesized=False)
                                     logger.warning(
                                         "⚠️  NONCE ERROR [%s] attempt %d/%d: %s%s — "
-                                        "nonce manager will rebuild on next call",
+                                        "nonce rejected; investigate credential-scoped nonce authority",
                                         cred_label, attempt, max_attempts,
                                         error_msgs, _nonce_state,
                                     )
@@ -10423,16 +10418,11 @@ class KrakenBroker(BaseBroker):
                                 )
                                 self.last_connection_error = f"{_reason}: {error_msgs}"
                                 if is_nonce_error:
-                                    _nonce_state = ""
-                                    if get_global_nonce_manager is not None:
-                                        try:
-                                            _mgr = get_global_nonce_manager()
-                                            _nonce_state = (
-                                                f" (nonce={_mgr.get_last_nonce()}"
-                                                f", nuclear_resets={_mgr.nuclear_reset_count})"
-                                            )
-                                        except Exception:
-                                            pass
+                                    try:
+                                        from bot.kraken_nonce_diagnostics import nonce_error_diagnostic
+                                    except ImportError:
+                                        from kraken_nonce_diagnostics import nonce_error_diagnostic
+                                    _nonce_state = nonce_error_diagnostic(self, parenthesized=True)
                                     logger.error(
                                         "❌ NONCE ERROR [%s] reason=%s all %d attempts exhausted: %s%s",
                                         cred_label, _reason, max_attempts, error_msgs, _nonce_state,
