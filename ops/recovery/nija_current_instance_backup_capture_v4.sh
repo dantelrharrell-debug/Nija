@@ -6,7 +6,7 @@ umask 077
 trap 'rc=$?; printf "SOURCE_CAPTURE=FAILED_CLOSED exit_code=%s\n" "$rc" >&2' ERR
 
 readonly EXPECTED_SERVICE='srv-d98dsr5aeets73fpbaqg'
-readonly EXPECTED_COMMIT='0ae35d1b2b84dc788bfd6ae10a8b459ae806a752'
+readonly EXPECTED_COMMIT="${NIJA_EXPECTED_DEPLOYED_COMMIT:-}"
 readonly DATA_ROOT=/data
 readonly LEDGER=/data/trade_ledger.db
 readonly POSITIONS=/app/data/positions
@@ -19,8 +19,8 @@ readonly -a FILES=(
 )
 cd /app
 
-if [[ "${RENDER_SERVICE_ID:-}" != "$EXPECTED_SERVICE" || "${RENDER_GIT_COMMIT:-}" != "$EXPECTED_COMMIT" ]]; then
-  echo 'STOP: Render service or deployed commit identity not independently established' >&2
+if [[ ! "$EXPECTED_COMMIT" =~ ^[0-9a-f]{40}$ || "${RENDER_SERVICE_ID:-}" != "$EXPECTED_SERVICE" || "${RENDER_GIT_COMMIT:-}" != "$EXPECTED_COMMIT" ]]; then
+  echo 'STOP: provide independently confirmed NIJA_EXPECTED_DEPLOYED_COMMIT (40-char SHA) matching the actual Render service deployment' >&2
   exit 1
 fi
 
@@ -67,8 +67,10 @@ PY
 
 started="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 out="$(mktemp -d /tmp/nija-current-recovery-v4-XXXXXXXX)"
-[[ -d "$out" && ! -L "$out" && "$(stat -c %a "$out")" == '700' ]] || {
-  echo 'STOP: output must be private and outside /data' >&2; exit 1;
+[[ -d "$out" && ! -L "$out" && -O "$out" ]] || { echo 'STOP: private output directory ownership/type invalid' >&2; exit 1; }
+mode="$(stat -c %a "$out")"
+(( (8#$mode & 0077) == 0 && (8#$mode & 0700) == 0700 )) || {
+  echo 'STOP: output must deny all group/other access and allow owner access' >&2; exit 1;
 }
 mkdir -m 700 "$out/verifiers"
 for name in "${FILES[@]}"; do
