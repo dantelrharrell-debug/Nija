@@ -3,6 +3,7 @@ import unittest
 from unittest.mock import patch
 from member_broker_onboarding import MemberBrokerOnboarding
 from member_broker_http_api import create_app
+from member_broker_vault import VaultError
 from member_broker_entitlement import check_founding_entitlement
 
 
@@ -127,9 +128,26 @@ class MemberHTTPTests(unittest.TestCase):
         self.assertEqual(response.status_code, 503)
         self.assertEqual(response.get_json(), {"status": "not_ready"})
         self.assertEqual(warning.call_args_list[0].args,
-                         ("MEMBER_BROKER_VAULT_INIT_FAILED reason=vault_unavailable error_type=%s",
-                          "ValueError"))
+                         ("MEMBER_BROKER_VAULT_INIT_FAILED reason=%s",
+                          "vault_initialization_failed"))
         self.assertNotIn("synthetic-private-key", str(warning.call_args_list))
+
+    def test_vault_missing_and_invalid_configuration_have_safe_codes(self):
+        for exception, expected in (
+            (KeyError("NIJA_BROKER_VAULT_KEY_B64"), "vault_config_missing"),
+            (VaultError("synthetic-private-secret"), "vault_config_invalid"),
+        ):
+            with self.subTest(expected=expected):
+                with patch("member_broker_http_api.BrokerVault.from_environment",
+                           side_effect=exception):
+                    with patch("member_broker_http_api.LOGGER.warning") as warning:
+                        response = create_app().test_client().get("/readyz")
+                self.assertEqual(response.status_code, 503)
+                self.assertEqual(response.get_json(), {"status": "not_ready"})
+                self.assertEqual(warning.call_args.args,
+                                 ("MEMBER_BROKER_VAULT_INIT_FAILED reason=%s", expected))
+                self.assertNotIn("synthetic-private", str(warning.call_args_list))
+                self.assertNotIn("NIJA_BROKER_VAULT_KEY_B64", str(warning.call_args_list))
 
     def test_no_intake_by_default(self):
         response = self.client.post("/api/member/brokers/connect", headers=self.h, json={
