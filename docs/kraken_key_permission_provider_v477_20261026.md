@@ -1,0 +1,13 @@
+# NIJA v477 — Kraken key-permission producer contract (review only)
+
+This patch adds one **read-only, non-authorizing** candidate provider for the `account_permissions` field of the v452/v465 pretrade certificate. It calls Kraken `GetApiKeyInfo` only through the already-running, nonce-owning broker's `_kraken_private_call`, with the existing monitoring category. It never creates another client, changes credentials, alters ledger/positions, writes environment, submits orders, or installs itself.
+
+It requires an independently reviewed exact NIJA account scope, broker instance, key-fingerprint pin (SHA-256 of the Kraken API public key ID, reviewed outside the broker response), and provider identity. It fails closed on missing/mismatched key fingerprints, malformed/expired/time-restricted key metadata, missing required read scopes, disconnected or scope-switched brokers, or a slow/stale observation. Reports contain no key or broker rows. The returned v452 evidence is not legal owner proof, historical pagination, reconciled fills/fees, open-order/protective-exit proof, writer/nonce/risk/kill state or execution authority.
+
+**Crucial limitation:** this patch does not provide the other twelve independently attested v452 fields, does not perform live Kraken reconciliation, and is **not installed in production**. The expected Kraken key-info field names and exact privilege labels must be confirmed against authenticated Kraken documentation or redacted real responses before any use. Strict 60-second evidence freshness and all pre-existing gates remain unchanged. No startup/dispatch integration, deployment, or trade is authorized.
+
+Local isolated synthetic tests: 11 passed (with a local mirror of account-scope and certificate dependencies); repository CI, security review, and actual API schema verification are pending. Do not merge/deploy until reviewed.
+
+Production state at 2026-10-26 22:13 UTC: `execution_ready=false`, `execution_authority=false`, `trading_engine_ready=false`, `collector_installed=false`, `account_scope_configured=false`, old fill `verification_stale`, and ledger/protective-exit certification incomplete. This PR does not alter those states.
+
+Follow-up: independently verify the complete per-account authenticated provider inventory, ledger and Kraken order/fill/fees reconciliation, protective exits, off-host restore, then request separate review of startup admission migration. The existing controller alone decides live authority.
