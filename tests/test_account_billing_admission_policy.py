@@ -44,3 +44,30 @@ def test_unverified_exposure_cannot_be_declared_flat():
         billing_verified=True, subscription_status="canceled",
         exposure_verified=False, has_open_exposure=False))
     assert result.must_reconcile_exposure
+
+
+def test_coverage_keeps_unknown_exposure_even_if_suspended():
+    from bot.account_billing_admission_policy import coverage_scope_for_account
+    assert coverage_scope_for_account(
+        "user:member:kraken",
+        AccountEvidence(billing_verified=True, subscription_status="canceled"),
+    )
+
+
+def test_coverage_excludes_only_verified_flat_suspended_account():
+    from bot.account_billing_admission_policy import coverage_scope_for_account
+    evidence = AccountEvidence(
+        billing_verified=True, subscription_status="canceled",
+        exposure_verified=True, has_open_exposure=False,
+    )
+    assert not coverage_scope_for_account("user:member:kraken", evidence, verified_flat=True)
+    assert coverage_scope_for_account("platform:kraken", evidence, verified_flat=True)
+
+
+def test_coverage_keeps_entitled_member_even_if_flat():
+    from bot.account_billing_admission_policy import coverage_scope_for_account
+    evidence = AccountEvidence(
+        billing_verified=True, subscription_status="active",
+        exposure_verified=True, has_open_exposure=False,
+    )
+    assert coverage_scope_for_account("user:member:kraken", evidence, verified_flat=True)
