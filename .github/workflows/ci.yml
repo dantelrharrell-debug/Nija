@@ -202,4 +202,5 @@ jobs:
             tests/test_kraken_atomic_proof_publication.py \
             tests/test_kraken_v305_concurrent_publication.py \
             tests/test_kraken_public_dust_valuation_v286.py \
-            tests/test_kraken_snapshot_generation_owner_regression.py
+            tests/test_kraken_snapshot_generation_owner_regression.py \
+            tests/test_runtime_platform_position_sync_denominator_v320.py
