@@ -31,12 +31,14 @@ def build_diagnostic_collector(
     provider identity as a trusted binding.
     """
     def collect(account: str) -> dict[str, Any]:
-        observed_at = clock()
+        # Evaluate freshness after all provider I/O completes. A timestamp
+        # captured before a slow read can accept evidence already expired.
         report = collect_independent_pretrade_evidence(
             providers, account=account,
             trusted_provider_ids=trusted_provider_ids,
-            now_epoch=observed_at,
+            now_epoch=None,
         )
+        observed_at = clock()
         cert = report["certificate"]
         observations = report["observations"]
         missing = set(cert["missing"])
