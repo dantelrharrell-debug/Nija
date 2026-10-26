@@ -269,3 +269,72 @@ def test_dust_exemption_protection_fields_participate_in_state_signature():
 
     changed["positions"] = (dict(original["positions"][0], cost_basis_verified=True),)
     assert v281._state_signature(original) != v281._state_signature(changed)
+
+
+def test_platform_scope_diagnostic_isolates_disconnected_member_without_granting_authority():
+    platform = Broker(symbols=(), rows={})
+    disconnected = Broker(connected=False, fetch_ok=False, adopted=False)
+    mgr = manager(
+        platform={"kraken": platform},
+        all_users={("daivon", "kraken"): disconnected},
+        metadata={"daivon": {"brokers": {"kraken": True}}},
+    )
+    full = v281.evaluate(mgr, structural_exit_ready=True)
+    assert full["ready"] is False
+    assert "user:daivon:kraken" in full["pending"]
+    scoped = v281.platform_scope_diagnostics(full)
+    assert scoped["platform_ready"] is True
+    assert scoped["platform_expected"] == ("platform:kraken",)
+    assert scoped["platform_pending"] == {}
+    assert "user:daivon:kraken" in scoped["user_pending"]
+    assert scoped["all_account_ready"] is False
+    assert scoped["diagnostic_only"] is True
+    assert scoped["authorizes_orders"] is False
+
+
+def test_platform_scope_diagnostic_preserves_platform_disconnect_blocker():
+    mgr = manager(platform={"kraken": Broker(connected=False)})
+    full = v281.evaluate(mgr, structural_exit_ready=True)
+    scoped = v281.platform_scope_diagnostics(full)
+    assert scoped["platform_ready"] is False
+    assert scoped["platform_pending"]["platform:kraken"] == ("disconnected",)
+
+
+def test_platform_scope_diagnostic_preserves_actionable_exit_failure():
+    broker = Broker(
+        symbols=("BTC-USD",),
+        rows={"BTC-USD": position(verified=False, blocked=True)},
+    )
+    full = v281.evaluate(manager(platform={"okx": broker}), structural_exit_ready=True)
+    scoped = v281.platform_scope_diagnostics(full)
+    assert scoped["platform_ready"] is False
+    assert "platform:okx" in scoped["platform_pending"]
+    assert scoped["authorizes_orders"] is False
+
+
+def test_platform_scope_diagnostic_rejects_missing_global_or_malformed_proof():
+    platform = Broker(symbols=(), rows={})
+    full = v281.evaluate(manager(platform={"kraken": platform}), structural_exit_ready=False)
+    scoped = v281.platform_scope_diagnostics(full)
+    assert scoped["platform_ready"] is False
+    assert "__protective_exit__" in scoped["platform_pending"]
+    for bad in (None, {}, {"ready": True, "expected_accounts": ("platform:kraken",), "pending": {}}):
+        rejected = v281.platform_scope_diagnostics(bad)
+        assert rejected["platform_ready"] is False
+        assert rejected["authorizes_orders"] is False
+
+
+def test_platform_scope_diagnostic_rejects_unverified_position_row():
+    result = {
+        "ready": True,
+        "expected_accounts": ("platform:kraken",),
+        "pending": {},
+        "positions": ({"account": "platform:kraken", "protective_exit_required": True,
+                       "protective_exit_verified": False},),
+        "structural_exit_ready": True,
+    }
+    scoped = v281.platform_scope_diagnostics(result)
+    assert scoped["platform_ready"] is False
+    assert scoped["platform_pending"]["platform:kraken"] == (
+        "actionable_position_protection_unverified",
+    )
