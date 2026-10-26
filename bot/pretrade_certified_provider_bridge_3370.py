@@ -36,7 +36,7 @@ def build_diagnostic_collector(
         report = collect_independent_pretrade_evidence(
             providers, account=account,
             trusted_provider_ids=trusted_provider_ids,
-            now_epoch=None,
+            clock=clock,
         )
         observed_at = clock()
         cert = report["certificate"]
