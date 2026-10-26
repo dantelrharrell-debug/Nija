@@ -461,6 +461,87 @@ def evaluate(manager: Any, *, structural_exit_ready: Any = None) -> dict[str, An
     }
 
 
+
+def platform_scope_diagnostics(all_account_result: Any) -> dict[str, Any]:
+    """Describe platform versus user coverage from ONE v281 snapshot.
+
+    This is diagnostic-only. It cannot replace the all-account protective
+    coverage certification used by v347 or authorize a platform/user order.
+    Unknown or malformed evidence remains fail-closed.
+    """
+    denied = {
+        "platform_ready": False,
+        "platform_expected": (),
+        "platform_pending": {"__scope__": ("v281_result_unverified",)},
+        "user_pending": {},
+        "all_account_ready": False,
+        "diagnostic_only": True,
+        "authorizes_orders": False,
+    }
+    if not isinstance(all_account_result, Mapping):
+        return denied
+    expected = all_account_result.get("expected_accounts")
+    pending = all_account_result.get("pending")
+    positions = all_account_result.get("positions")
+    if not isinstance(expected, (tuple, list)) or not isinstance(pending, Mapping):
+        return denied
+    if not isinstance(positions, (tuple, list)):
+        return denied
+    if not all(
+        isinstance(account, str) and (
+            account.startswith("platform:") or account.startswith("user:")
+        )
+        for account in expected
+    ):
+        return denied
+    if not all(
+        isinstance(account, str) and isinstance(reasons, (tuple, list))
+        for account, reasons in pending.items()
+    ):
+        return denied
+
+    platform_expected = tuple(
+        account for account in expected if account.startswith("platform:")
+    )
+    platform_accounts = set(platform_expected)
+    # Every non-user failure, including unknown/global failures, blocks the
+    # platform diagnostic. User failures stay visible and remain globally
+    # fail-closed without being relabelled as platform-account failures.
+    platform_pending = {
+        account: tuple(reasons)
+        for account, reasons in pending.items() if not account.startswith("user:")
+    }
+    user_pending = {
+        account: tuple(reasons)
+        for account, reasons in pending.items() if account.startswith("user:")
+    }
+    for row in positions:
+        if not isinstance(row, Mapping) or not isinstance(row.get("account"), str):
+            platform_pending["__position_rows__"] = ("position_row_unverified",)
+            continue
+        account = row["account"]
+        if account.startswith("platform:") and account not in platform_accounts:
+            platform_pending["__position_rows__"] = ("unregistered_platform_position",)
+        if account in platform_accounts and row.get("protective_exit_required") is not False:
+            if row.get("protective_exit_required") is not True:
+                platform_pending[account] = ("protective_exit_requirement_unverified",)
+            elif row.get("protective_exit_verified") is not True:
+                platform_pending[account] = ("actionable_position_protection_unverified",)
+
+    if all_account_result.get("structural_exit_ready") is not True:
+        platform_pending["__protective_exit__"] = ("structural_protection_unverified",)
+    if not platform_expected:
+        platform_pending["__registry__"] = ("platform_scope_empty",)
+    return {
+        "platform_ready": bool(platform_expected) and not platform_pending,
+        "platform_expected": platform_expected,
+        "platform_pending": platform_pending,
+        "user_pending": user_pending,
+        "all_account_ready": all_account_result.get("ready") is True,
+        "diagnostic_only": True,
+        "authorizes_orders": False,
+    }
+
 def _state_signature(result: Mapping[str, Any]) -> str:
     pending = result.get("pending", {}) if isinstance(result, Mapping) else {}
     positions = result.get("positions", ()) if isinstance(result, Mapping) else ()
@@ -549,5 +630,5 @@ def install_import_hook() -> bool:
 
 __all__ = [
     "MARKER", "install", "install_import_hook", "audit_once", "evaluate",
-    "_expected_accounts", "_account_audit", "_tracker_holdings", "_canonical_manager", "coverage_status",
+    "_expected_accounts", "_account_audit", "_tracker_holdings", "_canonical_manager", "coverage_status", "platform_scope_diagnostics",
 ]
