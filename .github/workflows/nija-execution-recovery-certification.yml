@@ -15,6 +15,8 @@ on:
       - 'bot/tests/test_capital_v270_evidence_contract_20261019.py'
       - 'bot/kraken_live_history_recovery.py'
       - 'bot/kraken_exact_pending_order_recovery_v466.py'
+      - 'bot/kraken_authenticated_key_info_v477.py'
+      - 'tests/test_kraken_authenticated_key_info_v477.py'
       - 'tests/test_kraken_exact_pending_order_recovery_v466.py'
       - 'docs/nija_kraken_exact_pending_order_readback_v466_20261024.md'
       - 'scripts/nija_kraken_readonly_history_collector_v441.py'
@@ -53,6 +55,8 @@ on:
       - 'bot/pretrade_attestation_validation_v452.py'
       - 'bot/pretrade_authenticated_provider_adapter_v453.py'
       - 'bot/pretrade_composition_bridge_v465.py'
+      - 'bot/pretrade_multi_account_registration_v474.py'
+      - 'tests/test_pretrade_multi_account_registration_v474.py'
       - 'tests/test_pretrade_composition_bridge_v465.py'
       - 'docs/nija_pretrade_composition_bridge_v465_20261024.md'
       - 'bot/startup_transition_candidate_v454.py'
@@ -121,6 +125,8 @@ jobs:
             bot/tests/test_capital_v270_evidence_contract_20261019.py \
             bot/kraken_live_history_recovery.py \
             bot/kraken_exact_pending_order_recovery_v466.py \
+            bot/kraken_authenticated_key_info_v477.py \
+            tests/test_kraken_authenticated_key_info_v477.py \
             scripts/nija_kraken_readonly_history_collector_v441.py \
             scripts/nija_kraken_exact_pending_readback_v466.py \
             tests/test_nija_kraken_exact_pending_readback_v466.py \
@@ -128,6 +134,7 @@ jobs:
             bot/tests/test_nija_legacy_global_state_evidence_v462.py \
             tests/test_kraken_live_history_recovery.py \
             tests/test_kraken_exact_pending_order_recovery_v466.py \
+            tests/test_kraken_authenticated_key_info_v477.py \
             bot/tests/test_nija_kraken_readonly_history_collector_v441.py \
             bot/durable_recovery_state.py \
             bot/runtime_kraken_client_order_recovery_v430_patch.py \
@@ -145,6 +152,7 @@ jobs:
             bot/account_admission_dispatch_boundary_v470.py \
             bot/execution_pipeline.py \
             tests/test_pretrade_reviewed_registration_v467.py \
+            tests/test_pretrade_multi_account_registration_v474.py \
             tests/test_execution_admission_acceptance_v468.py \
             tests/test_execution_startup_admission_review_v469.py \
             tests/test_account_admission_dispatch_boundary_v470.py \
@@ -156,6 +164,8 @@ jobs:
             bot/pretrade_attestation_validation_v452.py \
             bot/pretrade_authenticated_provider_adapter_v453.py \
             bot/pretrade_composition_bridge_v465.py \
+            bot/pretrade_multi_account_registration_v474.py \
+            tests/test_pretrade_multi_account_registration_v474.py \
             tests/test_pretrade_composition_bridge_v465.py \
             bot/startup_transition_candidate_v454.py \
             bot/pretrade_independent_attestation.py \
@@ -196,6 +206,8 @@ jobs:
             bot/tests/test_capital_v270_evidence_contract_20261019.py \
             bot/kraken_live_history_recovery.py \
             bot/kraken_exact_pending_order_recovery_v466.py \
+            bot/kraken_authenticated_key_info_v477.py \
+            tests/test_kraken_authenticated_key_info_v477.py \
             scripts/nija_kraken_readonly_history_collector_v441.py \
             scripts/nija_kraken_exact_pending_readback_v466.py \
             tests/test_nija_kraken_exact_pending_readback_v466.py \
@@ -203,6 +215,7 @@ jobs:
             bot/tests/test_nija_legacy_global_state_evidence_v462.py \
             tests/test_kraken_live_history_recovery.py \
             tests/test_kraken_exact_pending_order_recovery_v466.py \
+            tests/test_kraken_authenticated_key_info_v477.py \
             bot/tests/test_nija_kraken_readonly_history_collector_v441.py \
             bot/durable_recovery_state.py \
             bot/runtime_kraken_client_order_recovery_v430_patch.py \
@@ -220,6 +233,7 @@ jobs:
             bot/account_admission_dispatch_boundary_v470.py \
             bot/execution_pipeline.py \
             tests/test_pretrade_reviewed_registration_v467.py \
+            tests/test_pretrade_multi_account_registration_v474.py \
             tests/test_execution_admission_acceptance_v468.py \
             tests/test_execution_startup_admission_review_v469.py \
             tests/test_account_admission_dispatch_boundary_v470.py \
@@ -231,6 +245,8 @@ jobs:
             bot/pretrade_attestation_validation_v452.py \
             bot/pretrade_authenticated_provider_adapter_v453.py \
             bot/pretrade_composition_bridge_v465.py \
+            bot/pretrade_multi_account_registration_v474.py \
+            tests/test_pretrade_multi_account_registration_v474.py \
             tests/test_pretrade_composition_bridge_v465.py \
             bot/startup_transition_candidate_v454.py \
             bot/pretrade_independent_attestation.py \
@@ -278,6 +294,7 @@ jobs:
             tests/test_kraken_live_history_recovery.py \
             tests/test_nija_kraken_exact_pending_readback_v466.py \
             tests/test_kraken_exact_pending_order_recovery_v466.py \
+            tests/test_kraken_authenticated_key_info_v477.py \
             bot/tests/test_nija_kraken_readonly_history_collector_v441.py \
             tests/test_preflight_certificate_prerequisites.py \
             tests/test_pretrade_broker_evidence_checks.py \
@@ -286,6 +303,7 @@ jobs:
             bot/tests/test_runtime_kraken_deferred_fill_proof_recovery_v363.py \
             tests/test_account_order_admission.py \
             tests/test_pretrade_reviewed_registration_v467.py \
+            tests/test_pretrade_multi_account_registration_v474.py \
             tests/test_execution_admission_acceptance_v468.py \
             tests/test_execution_startup_admission_review_v469.py \
             tests/test_account_admission_dispatch_boundary_v470.py \
