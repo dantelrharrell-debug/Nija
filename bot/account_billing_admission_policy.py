@@ -44,3 +44,20 @@ def evaluate_account_policy(evidence: AccountEvidence) -> AccountPolicy:
     if status not in {"active", "trialing"}:
         return AccountPolicy(False, reconcile, "subscription_not_entitled")
     return AccountPolicy(True, reconcile, "billing_entitled_execution_gates_required")
+
+def coverage_scope_for_account(
+    account_key: str,
+    evidence: AccountEvidence,
+    *,
+    verified_flat: bool = False,
+) -> bool:
+    """Conservative coverage rule for a separately verified entitlement source.
+
+    Return False only for a non-entitled account whose lack of exposure was
+    independently certified. Billing-only evidence must never remove coverage.
+    This does not disconnect accounts or change execution authority.
+    """
+    if not account_key.startswith("user:"):
+        return True
+    policy = evaluate_account_policy(evidence)
+    return policy.may_admit_new_trades or policy.must_reconcile_exposure or not verified_flat
