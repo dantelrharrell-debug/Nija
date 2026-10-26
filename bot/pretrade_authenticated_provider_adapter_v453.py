@@ -6,6 +6,7 @@ self-declared source string, and is NOT connected to trading admission.
 """
 from __future__ import annotations
 
+import time
 from collections.abc import Callable, Mapping
 from typing import Any
 
@@ -20,6 +21,7 @@ def collect_independent_pretrade_evidence(
     account: str | None = None,
     trusted_provider_ids: Mapping[str, str] | None = None,
     now_epoch: float | None = None,
+    clock: Callable[[], float] = time.time,
 ) -> dict[str, Any]:
     """Call separately registered read-only producers; reject absent or faulty ones.
 
@@ -44,7 +46,7 @@ def collect_independent_pretrade_evidence(
             errors[key] = "provider_exception:" + type(exc).__name__
     certificate = evaluate_pretrade_certificate(
         observed, account=account, trusted_provider_ids=trusted_provider_ids,
-        now_epoch=now_epoch,
+        now_epoch=clock() if now_epoch is None else now_epoch,
     )
     return {
         "certificate": certificate,
