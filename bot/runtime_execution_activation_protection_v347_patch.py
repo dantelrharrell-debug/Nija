@@ -134,6 +134,32 @@ def _audit_protective_coverage() -> bool:
                 "tracker_mutation=false protection_fabricated=false dust_policy_unchanged=true",
                 MARKER, str(ready).lower(), str(result)[:1200],
             )
+            # The v475 scope projection is diagnostic only.  It must never
+            # replace v281's all-account result as the activation predicate.
+            # This exposes whether a PLATFORM or a USER account is pending
+            # without silently excluding disconnected users or open positions.
+            project = getattr(v281, "platform_scope_diagnostics", None)
+            if callable(project):
+                try:
+                    scope = project(result)
+                    LOGGER.info(
+                        "PROTECTIVE_COVERAGE_V347_SCOPE marker=%s "
+                        "platform_ready=%s platform_pending=%s user_pending=%s "
+                        "all_account_ready=%s diagnostic_only=true "
+                        "activation_predicate=v281_all_account_unchanged "
+                        "execution_authority_unchanged=true",
+                        MARKER,
+                        str(scope.get("platform_ready") is True).lower(),
+                        str(scope.get("platform_pending", {}))[:900],
+                        str(scope.get("user_pending", {}))[:900],
+                        str(ready).lower(),
+                    )
+                except Exception as exc:
+                    LOGGER.warning(
+                        "PROTECTIVE_COVERAGE_V347_SCOPE_UNAVAILABLE marker=%s "
+                        "error_type=%s activation_predicate=v281_all_account_unchanged",
+                        MARKER, type(exc).__name__,
+                    )
             return ready
         # v281 already owns protection attachment and logs its authoritative
         # coverage state. Absence of a public read helper is not a reason to
