@@ -159,3 +159,45 @@ def test_v347_rechecks_protection_after_marker_probe(monkeypatch):
 
     assert v347._wake_activation() is False
     assert calls == {"coverage": 2, "wake": 0}
+
+
+def test_v347_logs_platform_and_user_scope_without_changing_all_account_gate(monkeypatch, caplog):
+    class V281:
+        @staticmethod
+        def coverage_status():
+            return {"ready": False, "expected_accounts": ("platform:kraken", "user:daivon:kraken"),
+                    "pending": {"user:daivon:kraken": ("disconnected",)},
+                    "positions": (), "structural_exit_ready": True}
+
+        @staticmethod
+        def platform_scope_diagnostics(result):
+            assert result["ready"] is False
+            return {"platform_ready": True, "platform_pending": {},
+                    "user_pending": {"user:daivon:kraken": ("disconnected",)},
+                    "all_account_ready": False}
+
+    real_import = v347.importlib.import_module
+    monkeypatch.setattr(v347.importlib, "import_module",
+                        lambda name: V281 if name == "bot.runtime_all_account_position_exit_coverage_v281_patch"
+                        else real_import(name))
+    with caplog.at_level("INFO"):
+        assert v347._audit_protective_coverage() is False
+    assert "PROTECTIVE_COVERAGE_V347_SCOPE" in caplog.text
+    assert "platform_ready=true" in caplog.text
+    assert "all_account_ready=false" in caplog.text
+
+
+def test_v347_scope_diagnostic_failure_still_blocks_activation(monkeypatch):
+    class V281:
+        @staticmethod
+        def coverage_status():
+            return {"ready": False}
+        @staticmethod
+        def platform_scope_diagnostics(result):
+            raise ValueError("invalid scope")
+
+    real_import = v347.importlib.import_module
+    monkeypatch.setattr(v347.importlib, "import_module",
+                        lambda name: V281 if name == "bot.runtime_all_account_position_exit_coverage_v281_patch"
+                        else real_import(name))
+    assert v347._audit_protective_coverage() is False
