@@ -7,7 +7,6 @@ Its result is NOT a substitute for authenticated dashboard and vault acceptance.
 from __future__ import annotations
 
 import argparse
-import json
 import os
 from pathlib import Path
 import sqlite3
@@ -230,7 +229,12 @@ def main() -> int:
                    billing_url=os.getenv("BILLING_DATABASE_URL", ""),
                    onboarding_db_path=os.getenv("NIJA_ONBOARDING_DB_PATH", ""),
                    stripe_key=os.getenv("STRIPE_SECRET_KEY", ""))
-    print(json.dumps(report, sort_keys=True))
+    # Print only one of two fixed string constants. Do not serialize source-derived
+    # reports or tokens into stdout, shell transcripts, or CI logs.
+    if report["authoritative_member_verified"] is True:
+        print('{"authoritative_member_verified":true,"full_onboarding_certified":false}')
+    else:
+        print('{"authoritative_member_verified":false,"full_onboarding_certified":false}')
     # Zero only means membership verified, NOT onboarding/trading ready.
     return 0 if report["authoritative_member_verified"] else 2
 
