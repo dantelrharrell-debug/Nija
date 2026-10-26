@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import builtins
 import importlib
+from collections.abc import Mapping
 import logging
 import os
 import sys
@@ -70,6 +71,32 @@ def _is_v285_strong_status(callable_obj: Any) -> bool:
         current = getattr(current, "__wrapped__", None)
     return False
 
+ 
+def _platform_denominator_v320(manager: Any) -> set[str] | None:
+    """Read enabled platform scope from v281's complete, account-aware registry.
+
+    A disconnected platform may disappear from v95's connected-broker list,
+    but it must not silently disappear from canonical platform readiness.
+    Registry failure is unverified, never proof that omitted brokers are safe.
+    """
+    if manager is None:
+        return None
+    try:
+        v281 = importlib.import_module("bot.runtime_all_account_position_exit_coverage_v281_patch")
+        getter = getattr(v281, "_expected_accounts", None)
+        if not callable(getter):
+            return None
+        expected = getter(manager)
+        if not isinstance(expected, Mapping):
+            return None
+        return {
+            str(account)
+            for account in expected
+            if str(account).startswith("platform:")
+        }
+    except Exception:
+        return None
+
 
 def _patch_v95_after_v285() -> bool:
     """Filter canonical activation status only after v285 strong proof exists."""
@@ -95,8 +122,16 @@ def _patch_v95_after_v285() -> bool:
             for name, ready in dict(all_status or {}).items()
             if str(name).startswith("platform:")
         }
+        # v285's strong proof applies to connected brokers, but the v281
+        # denominator includes enabled/disconnected and failed platform brokers.
+        # Missing platform entries must be false, not silently omitted.
+        expected_platform = _platform_denominator_v320(manager)
+        if expected_platform is not None:
+            for account in expected_platform:
+                status.setdefault(account, False)
         pending = sorted(name for name, ready in status.items() if not ready)
-        ready = bool(status) and not pending
+        registry_verified = bool(expected_platform)
+        ready = bool(status) and not pending and registry_verified
 
         user_status = {
             str(name): bool(value)
@@ -114,6 +149,7 @@ def _patch_v95_after_v285() -> bool:
         log(
             "PLATFORM_POSITION_SYNC_ISOLATION_V320_STATE marker=%s ready=%s "
             "platform_pending=%s platform_status=%s user_pending=%s "
+            "expected_platform=%s registry_verified=%s "
             "v285_strong_proof_required=true all_connected_platform_required=true "
             "user_entries_fail_closed=true user_exits_preserved=true "
             "user_readiness_fabricated=false platform_readiness_fabricated=false "
@@ -123,6 +159,8 @@ def _patch_v95_after_v285() -> bool:
             pending,
             status,
             user_pending,
+            sorted(expected_platform or ()),
+            str(registry_verified).lower(),
         )
         return bool(ready), pending, status
 
