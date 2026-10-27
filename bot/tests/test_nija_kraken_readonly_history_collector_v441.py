@@ -32,6 +32,40 @@ def test_all_pages_retrieved_without_writes():
     assert report["entry_exit_reconciliation_verified"] is False
 
 
+def test_transport_nonce_mutation_does_not_contaminate_open_order_cursor():
+    """krakenex adds nonce to its input dict; cursor state must stay read-only."""
+    calls = []
+
+    class Broker:
+        broker_type = "kraken"
+        account_type = "platform"
+        user_id = None
+
+        def _kraken_private_call(self, endpoint, params, *, category):
+            assert category == "monitoring"
+            assert "nonce" not in params
+            calls.append((endpoint, dict(params)))
+            # Model the real krakenex signing boundary, including its mutation.
+            params["nonce"] = len(calls)
+            if endpoint == "OpenOrders":
+                if "cursor" not in params:
+                    return {"error": [], "result": {
+                        "open": {"stop-a": {"vol": "1"}}, "cursor": {"next": "page-2"},
+                    }}
+                assert params["cursor"] == "page-2"
+                return {"error": [], "result": {"open": {"stop-b": {"vol": "2"}}}}
+            return _reader(endpoint, params)
+
+    result = collect_from_existing_broker(
+        Broker(), account_scope="platform:kraken", monitoring_category="monitoring",
+        include_open_orders=True,
+    )
+    assert set(result["open_orders"]) == {"stop-a", "stop-b"}
+    assert len([endpoint for endpoint, _ in calls if endpoint == "OpenOrders"]) == 4
+    assert result["repeat_read_consistent"] is True
+    assert result["trading_authorized"] is False
+
+
 def test_page_limit_fails_closed():
     with pytest.raises(IncompleteHistory, match="page limit"):
         collect_history(_reader, account_scope="platform:kraken", max_pages=1)
