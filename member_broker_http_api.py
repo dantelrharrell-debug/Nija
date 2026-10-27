@@ -74,11 +74,15 @@ def create_app(*, onboarding: MemberBrokerOnboarding | None = None) -> Flask:
                 ),
             )
         except (KeyError, VaultError, ValueError) as exc:
-            # Never log exception text: vault exceptions may contain secrets.
-            LOGGER.warning(
-                "MEMBER_BROKER_VAULT_INIT_FAILED reason=vault_unavailable error_type=%s",
-                type(exc).__name__,
-            )
+            # Fixed diagnostic categories only. Never log exception messages,
+            # configuration names, values, URLs, tokens, or provider responses.
+            if isinstance(exc, KeyError):
+                reason = "vault_config_missing"
+            elif isinstance(exc, VaultError):
+                reason = "vault_config_invalid"
+            else:
+                reason = "vault_initialization_failed"
+            LOGGER.warning("MEMBER_BROKER_VAULT_INIT_FAILED reason=%s", reason)
             onboarding = None
 
     @app.after_request

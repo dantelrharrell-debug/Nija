@@ -20,6 +20,7 @@ from billing_service_store import BillingIdentityMismatch, BillingServiceStore
 from course_fulfillment import expected_course_identity, handle_course_event, register_course_routes
 from course_portal import on_course_payment, register_course_portal
 from founding_onboarding_api import register_onboarding_routes
+from member_broker_availability import member_broker_setup_available
 from pricing_policy import (
     BETA_TRIAL_DAYS,
     FOUNDING_BETA_OFFER,
@@ -623,6 +624,20 @@ def create_app(store: Optional[BillingServiceStore] = None) -> Flask:
             logger.exception("Billing checkout configuration is incomplete")
             return jsonify({"error": "billing_temporarily_unavailable"}), 503
 
+        # Issuing or reusing a trial checkout must require working secure setup.
+        # Subscription webhooks and existing member access remain independent.
+        if offer.trial_days > 0 and not member_broker_setup_available():
+            logger.warning("BROKER_TRIAL_CHECKOUT_DEFERRED reason=member_setup_unavailable")
+            response = jsonify({
+                "error": "brokerage_setup_temporarily_unavailable",
+                "message": "Secure brokerage setup is unavailable. Please retry before starting your trial.",
+                "checkout_created": False,
+                "entitlement_granted": False,
+            })
+            response.headers["Retry-After"] = "300"
+            response.headers["Cache-Control"] = "no-store"
+            return response, 503
+
         existing = _store().get_customer(identity.user_id)
         latest = _store().latest_checkout_for_user(identity.user_id) if existing else None
         if existing:
@@ -911,6 +926,11 @@ def create_app(store: Optional[BillingServiceStore] = None) -> Flask:
     register_course_routes(app, app.config["BILLING_STORE"])
     register_course_portal(app, app.config["BILLING_STORE"])
     register_onboarding_routes(app, app.config["BILLING_STORE"])
+
+    # Opt-in only: audit existing Founding 100 identity and entitlement through
+    # the internal billing network. Never change a customer, trial or gate.
+    from founding100_boot_audit import launch_opt_in_audit
+    launch_opt_in_audit()
 
     # Register the Bitcoin rail only on the standalone billing service. The
     # module intentionally contains no broker/execution imports; verified

@@ -13,6 +13,8 @@ from billing_service_store import BillingServiceStore
 
 
 def _configured_app(monkeypatch, tmp_path):
+    # Contract fixtures model a healthy member service; outage cases override it.
+    monkeypatch.setattr(billing, "member_broker_setup_available", lambda: True)
     monkeypatch.setenv("NIJA_BILLING_IDENTITY_SECRET", "identity-secret")
     monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_placeholder")
     monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "whsec_test")
@@ -161,6 +163,34 @@ def test_checkout_is_server_bound_and_does_not_grant_entitlement(monkeypatch, tm
     assert created["customer_email"] == "member@example.test"
 
     assert store.get_checkout("cs_nija_1")["verified"] is False
+    assert store.get_customer("application-123")["entitled"] is False
+
+
+def test_trial_outage_creates_no_checkout_or_membership(monkeypatch, tmp_path):
+    app, store = _configured_app(monkeypatch, tmp_path)
+    state, stripe = _stripe_fixture()
+    monkeypatch.setattr(billing, "_stripe_module", lambda: stripe)
+    monkeypatch.setattr(billing, "member_broker_setup_available", lambda: False)
+    response = _create_checkout(app.test_client())
+    assert response.status_code == 503
+    assert response.get_json()["error"] == "brokerage_setup_temporarily_unavailable"
+    assert response.get_json()["checkout_created"] is False
+    assert response.headers["Retry-After"] == "300"
+    assert response.headers["Cache-Control"] == "no-store"
+    assert state["created"] == {}
+    assert store.get_customer("application-123") is None
+
+
+def test_open_trial_checkout_not_reissued_during_setup_outage(monkeypatch, tmp_path):
+    app, store = _configured_app(monkeypatch, tmp_path)
+    state, stripe = _stripe_fixture()
+    monkeypatch.setattr(billing, "_stripe_module", lambda: stripe)
+    client = app.test_client()
+    assert _create_checkout(client).status_code == 200
+    state["created"] = {}
+    monkeypatch.setattr(billing, "member_broker_setup_available", lambda: False)
+    assert _create_checkout(client).status_code == 503
+    assert state["created"] == {}
     assert store.get_customer("application-123")["entitled"] is False
 
 
