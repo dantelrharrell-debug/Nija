@@ -103,6 +103,11 @@ class Tests(TestCase):
             vault[rule] = '@request.auth.verified = true'
             self.assertIn('rule_' + rule, inspect_collection(vault, users)['missing_or_unverified'])
 
+    def test_whitespace_inside_auth_string_must_not_be_normalized(self):
+        vault, users = fixture()
+        vault['viewRule'] = vault['viewRule'].replace('id != ""', 'id != " "')
+        self.assertIn('rule_viewRule', inspect_collection(vault, users)['missing_or_unverified'])
+
     def test_reassignment_update_rule_rejected(self):
         vault, users = fixture()
         vault['updateRule'] = vault['viewRule']
