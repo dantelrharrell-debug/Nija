@@ -70,7 +70,8 @@ def run_opt_in_audit(*, environ: Mapping[str, str] | None = None,
         if membership_verified:
             code = "none"
         # Only fixed labels and booleans; no source-provided strings or IDs.
-        values = ",".join("true" if f else "false" for f in flags)
+        values = ",".join(name + ":" + ("true" if passed else "false")
+                          for name, passed in zip(_FLAG_NAMES, flags))
         write("NIJA_FOUNDING100_AUDIT result=" +
               ("membership_verified" if membership_verified else "blocked") +
               " flags=" + values + " blocking_sources=" + code +
