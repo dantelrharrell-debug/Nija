@@ -149,9 +149,36 @@ def inspect_collection(vault: Mapping, users: Mapping) -> dict:
         max_select = relation.get("maxSelect", rel_opts.get("maxSelect"))
         if (relation.get("type") != "relation"
                 or relation.get("required") is not True
+                or relation.get("hidden") is True
                 or collection_id != user_collection_id
                 or type(max_select) is not int or max_select not in (0, 1)):
             failed.append("verified_owner_relation")
+        # Reject schema shapes that silently permit unsupported broker scopes
+        # or hide owner-scoped metadata from the member API. Legacy and
+        # current PocketBase select-field option locations are both supported.
+        for name, expected_values in (
+            ("broker", {"kraken", "alpaca", "coinbase", "okx"}),
+            ("environment", {"paper", "live"}),
+        ):
+            field = named.get(name, {})
+            options = field.get("options", {})
+            options = options if isinstance(options, Mapping) else {}
+            values = field.get("values", options.get("values"))
+            select_max = field.get("maxSelect", options.get("maxSelect"))
+            if (field.get("type") != "select"
+                    or field.get("required") is not True
+                    or field.get("hidden") is True
+                    or not isinstance(values, list)
+                    or len(values) != len(expected_values)
+                    or any(not isinstance(item, str) for item in values)
+                    or set(values) != expected_values
+                    or type(select_max) is not int or select_max not in (0, 1)):
+                failed.append("field_scope_" + name)
+        ciphertext = named.get("ciphertext", {})
+        if (ciphertext.get("type") != "text"
+                or ciphertext.get("required") is not True
+                or ciphertext.get("hidden") is True):
+            failed.append("field_ciphertext_storage")
     return {
         "status": "STRUCTURE_MATCH" if not failed else "REVIEW_REQUIRED",
         "structural_rule_checks_passed": not failed,
