@@ -260,11 +260,22 @@ class OnboardingAPITests(unittest.TestCase):
             self.assertEqual(result.exit_code, 0, result.output)
             self.assertEqual(send.call_count, 2)
 
-    def test_unconfigured_routes_are_absent(self):
+    def test_unconfigured_onboarding_reports_unavailable_not_missing_member(self):
         os.environ.pop("NIJA_ONBOARDING_DB_PATH")
         app = Flask("disabled")
         register_onboarding_routes(app, self.store)
-        self.assertEqual(app.test_client().post("/api/onboarding/events", json={}).status_code, 404)
+        client = app.test_client()
+        # No durable store => no event intake, no mail, no new enrollment.
+        self.assertEqual(client.post("/api/onboarding/events", json={}).status_code, 404)
+        response = client.get("/api/onboarding/status")
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json["error"], "onboarding_temporarily_unavailable")
+        self.assertIs(response.json["full_onboarding_certified"], False)
+        self.assertIs(response.json["member_activated"], False)
+        self.assertIs(response.json["broker_connection_ready"], False)
+        self.assertEqual(response.headers["Cache-Control"], "no-store")
+        self.assertEqual(response.headers["Retry-After"], "300")
+        self.store.get_customer.assert_not_called()
 
     def test_real_billing_app_keeps_existing_trial_and_all_billing_rows_unchanged(self):
         from sqlalchemy import select, update
