@@ -1,0 +1,35 @@
+name: NIJA Kraken open-order v482 offline evidence
+on:
+  pull_request:
+    branches: [main, release/justcall-handoff-only-20261017]
+    paths:
+      - 'bot/kraken_authenticated_open_order_reconciliation_v482.py'
+      - 'tests/test_kraken_authenticated_open_order_reconciliation_v482.py'
+      - 'docs/kraken_authenticated_open_order_reconciliation_v482.md'
+      - '.github/workflows/kraken-open-order-v482.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  offline-review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      NIJA_DEFER_RUNTIME_SITE_HOOKS: '1'
+      KRAKEN_API_KEY: ''
+      KRAKEN_API_SECRET: ''
+      COINBASE_API_KEY: ''
+      COINBASE_API_SECRET: ''
+      OKX_API_KEY: ''
+      OKX_API_SECRET: ''
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Compile offline provider and tests
+        run: python -S -m py_compile bot/kraken_authenticated_open_order_reconciliation_v482.py tests/test_kraken_authenticated_open_order_reconciliation_v482.py
+      - name: Test evidence safety and refusals without broker requests
+        run: python -S -B -m unittest discover -s tests -p test_kraken_authenticated_open_order_reconciliation_v482.py -v
