@@ -22,9 +22,11 @@ def fixture():
         "fields": [
             {"name": "user_id", "type": "relation", "required": True,
              "options": {"collectionId": "user_coll_1", "maxSelect": 1}},
-            {"name": "broker", "type": "select"},
-            {"name": "environment", "type": "select"},
-            {"name": "ciphertext", "type": "text"},
+            {"name": "broker", "type": "select", "required": True, "maxSelect": 1,
+             "values": ["kraken", "alpaca", "coinbase", "okx"]},
+            {"name": "environment", "type": "select", "required": True, "maxSelect": 1,
+             "values": ["paper", "live"]},
+            {"name": "ciphertext", "type": "text", "required": True},
         ],
     }
     users = {"name": "users", "type": "auth", "id": "user_coll_1"}
@@ -129,6 +131,28 @@ class Tests(TestCase):
             vault, users = fixture()
             vault['fields'][0].update(variant)
             self.assertIn('verified_owner_relation', inspect_collection(vault, users)['missing_or_unverified'])
+
+    def test_broker_select_must_prevent_unsupported_or_multiple_scopes(self):
+        vault, users = fixture()
+        vault["fields"][1]["values"] = ["kraken", "alpaca", "coinbase", "okx", "unverified"]
+        self.assertIn("field_scope_broker", inspect_collection(vault, users)["missing_or_unverified"])
+        vault, users = fixture()
+        vault["fields"][2]["maxSelect"] = 3
+        self.assertIn("field_scope_environment", inspect_collection(vault, users)["missing_or_unverified"])
+
+    def test_missing_ciphertext_or_required_owner_scope_denied(self):
+        vault, users = fixture()
+        vault["fields"][3]["required"] = False
+        self.assertIn("field_ciphertext_storage", inspect_collection(vault, users)["missing_or_unverified"])
+        vault, users = fixture()
+        vault["fields"][0]["required"] = False
+        self.assertIn("verified_owner_relation", inspect_collection(vault, users)["missing_or_unverified"])
+
+    def test_legacy_select_field_options_are_supported(self):
+        vault, users = fixture()
+        for field in vault["fields"][1:3]:
+            field["options"] = {"values": field.pop("values"), "maxSelect": field.pop("maxSelect")}
+        self.assertTrue(inspect_collection(vault, users)["structural_rule_checks_passed"])
 
     def test_unauthorized_or_gateway_failures_are_redacted(self):
         vault, users = fixture()
