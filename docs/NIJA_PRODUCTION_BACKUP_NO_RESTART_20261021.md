@@ -56,7 +56,7 @@ independent proof of transfer custody, broker reconciliation, ledger
 completeness, protective exits or authority to trade.
 
 The companion regression test
-`bot/tests/test_nija_offhost_backup_verify_deployment_pin.py` uses only synthetic
+`bot/tests/test_offhost_ledger_evidence_report_v448.py` uses only synthetic
 invalid archives to prove matching-deployment validation can proceed to the
 real restore checks, mismatched deployments stop, and missing/invalid
 independent SHA arguments are denied. It cannot certify a production backup.
