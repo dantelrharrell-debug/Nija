@@ -1,0 +1,60 @@
+name: Kraken authenticated balance provider
+
+on:
+  pull_request:
+    branches: [main, release/justcall-handoff-only-20261017]
+    paths:
+      - 'bot/kraken_authenticated_balance_provider.py'
+      - 'tests/test_kraken_authenticated_balance_provider.py'
+      - 'bot/kraken_authenticated_identity_v480.py'
+      - 'bot/kraken_authenticated_key_info_v477.py'
+      - 'bot/pretrade_attestation_validation_v452.py'
+      - '.github/workflows/kraken-authenticated-balance-provider.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  offline-provider:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      NIJA_DEFER_RUNTIME_SITE_HOOKS: '1'
+      KRAKEN_API_KEY: ''
+      KRAKEN_API_SECRET: ''
+      COINBASE_API_KEY: ''
+      COINBASE_API_SECRET: ''
+      OKX_API_KEY: ''
+      OKX_API_SECRET: ''
+      REDIS_URL: ''
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install offline security scanner
+        run: python -m pip install detect-secrets==1.5.0
+      - name: Compile provider and tests without runtime startup
+        run: python -S -m py_compile bot/kraken_authenticated_balance_provider.py tests/test_kraken_authenticated_balance_provider.py
+      - name: Validate account binding and refusals without network
+        run: python -S -B -m unittest discover -s tests -p test_kraken_authenticated_balance_provider.py -v
+      - name: Fail on detected secrets
+        shell: python
+        run: |
+          from detect_secrets import SecretsCollection
+          from detect_secrets.settings import default_settings
+          paths = [
+              'bot/kraken_authenticated_balance_provider.py',
+              'tests/test_kraken_authenticated_balance_provider.py',
+              'docs/kraken_authenticated_balance_provider.md',
+              '.github/workflows/kraken-authenticated-balance-provider.yml',
+          ]
+          findings = SecretsCollection()
+          with default_settings():
+              for path in paths:
+                  findings.scan_file(path)
+          if findings.json():
+              raise SystemExit('Potential secret detected; review privately before release')
