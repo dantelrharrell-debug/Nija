@@ -11,7 +11,11 @@ from scripts.founding100_readonly_certification import audit
 
 
 class FakeStripe:
-    def __init__(self, expires, *, duplicate=False, status="trialing", email="member@example.test"):
+    def __init__(self, expires, *, duplicate=False, status="trialing", email="member@example.test",
+                 checkout_email="member@example.test", checkout_reference=None,
+                 checkout_metadata=None, checkout_link="plink_synthetic",
+                 checkout_mode="subscription", checkout_has_more=False,
+                 checkout_count=1, supplied_email=None):
         self.api_key = None
         self.Customer = SimpleNamespace(retrieve=lambda _: dict(
             id="cus1", livemode=True, email=email, metadata={
@@ -30,11 +34,17 @@ class FakeStripe:
                                  "current_period_end": expires, "quantity": 1}]}),
             list=lambda **_: {"data": [{"id": "sub1"}] + ([{"id": "sub2"}] if duplicate else []),
                               "has_more": False})
+        session = {
+            "livemode": True, "mode": checkout_mode, "subscription": "sub1",
+            "customer": "cus1", "status": "complete", "payment_link": checkout_link,
+            "client_reference_id": checkout_reference,
+            "metadata": {} if checkout_metadata is None else checkout_metadata,
+            "customer_details": {"email": checkout_email},
+            "customer_email": supplied_email,
+        }
         self.checkout = SimpleNamespace(Session=SimpleNamespace(
-            list=lambda **_: {"data": [{"livemode": True, "subscription": "sub1",
-                                         "customer": "cus1", "status": "complete",
-                                         "client_reference_id": None, "metadata": {}}],
-                              "has_more": False}))
+            list=lambda **_: {"data": [session] * checkout_count,
+                              "has_more": checkout_has_more}))
 
 
 def test_approved_existing_trial_is_not_full_onboarding():
@@ -71,6 +81,49 @@ def test_approved_existing_trial_is_not_full_onboarding():
         assert check(FakeStripe(expires, status="canceled"))["authoritative_member_verified"] is False
         assert check(FakeStripe(expires, email="wrong@example.test"))["authoritative_member_verified"] is False
         assert check(FakeStripe(expires), application_id="wrong")["authoritative_member_verified"] is False
+        # Legacy generic Payment Links cannot prove a different email merely
+        # through mutable subscription operator-link metadata.
+        assert check(FakeStripe(expires, checkout_email="other@example.test"))[
+            "legacy_checkout_identity_reconciled"] is False
+        assert check(FakeStripe(expires, checkout_email="other@example.test"))[
+            "authoritative_member_verified"] is False
+        assert check(FakeStripe(expires, checkout_email=None))["authoritative_member_verified"] is False
+        assert check(FakeStripe(expires, checkout_email="MEMBER@EXAMPLE.TEST"))[
+            "authoritative_member_verified"] is True
+        assert check(FakeStripe(expires, supplied_email="other@example.test"))[
+            "authoritative_member_verified"] is False
+        assert check(FakeStripe(expires, checkout_link=None))["authoritative_member_verified"] is False
+        assert check(FakeStripe(expires, checkout_metadata={"nija_user_id": "member1"}))[
+            "authoritative_member_verified"] is False
+        assert check(FakeStripe(expires, checkout_reference="app1"))[
+            "authoritative_member_verified"] is False
+        assert check(FakeStripe(expires, checkout_count=2))["authoritative_member_verified"] is False
+        assert check(FakeStripe(expires, checkout_count=0))["authoritative_member_verified"] is False
+        assert check(FakeStripe(expires, checkout_has_more=True))["authoritative_member_verified"] is False
+        assert check(FakeStripe(expires, checkout_mode="payment"))["authoritative_member_verified"] is False
+
+        # An authoritative NIJA checkout references the immutable user ID
+        # rather than the application ID and carries the complete contract.
+        signed_metadata = {
+            "nija_billing_contract": "nija_web_subscription_v1",
+            "nija_user_id": "member1",
+            "nija_offer_code": "founding_beta",
+        }
+        assert check(FakeStripe(expires, checkout_reference="member1",
+                                checkout_metadata=signed_metadata, checkout_email=None))[
+            "authoritative_member_verified"] is True
+        assert check(FakeStripe(expires, checkout_reference="app1",
+                                checkout_metadata=signed_metadata))[
+            "authoritative_member_verified"] is False
+        assert check(FakeStripe(expires, checkout_reference="member1",
+                                checkout_metadata={"nija_user_id": "member1"}))[
+            "authoritative_member_verified"] is False
+        assert check(FakeStripe(expires, checkout_reference="member1",
+                                checkout_metadata=signed_metadata, checkout_email="other@example.test"))[
+            "authoritative_member_verified"] is False
+        assert check(FakeStripe(expires, checkout_reference="member1",
+                                checkout_metadata={**signed_metadata, "nija_application_id": "wrong-app"}))[
+            "authoritative_member_verified"] is False
         with engine.connect() as conn:
             assert conn.execute(text("SELECT * FROM billing_customers")).all() == before
         engine.dispose()
