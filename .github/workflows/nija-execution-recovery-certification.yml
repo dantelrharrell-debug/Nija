@@ -16,7 +16,9 @@ on:
       - 'bot/kraken_live_history_recovery.py'
       - 'bot/kraken_exact_pending_order_recovery_v466.py'
       - 'bot/kraken_authenticated_key_info_v477.py'
+      - 'bot/kraken_authenticated_account_identity_v478.py'
       - 'tests/test_kraken_authenticated_key_info_v477.py'
+      - 'tests/test_kraken_authenticated_account_identity_v478.py'
       - 'tests/test_kraken_exact_pending_order_recovery_v466.py'
       - 'docs/nija_kraken_exact_pending_order_readback_v466_20261024.md'
       - 'scripts/nija_kraken_readonly_history_collector_v441.py'
@@ -126,7 +128,9 @@ jobs:
             bot/kraken_live_history_recovery.py \
             bot/kraken_exact_pending_order_recovery_v466.py \
             bot/kraken_authenticated_key_info_v477.py \
+            bot/kraken_authenticated_account_identity_v478.py \
             tests/test_kraken_authenticated_key_info_v477.py \
+            tests/test_kraken_authenticated_account_identity_v478.py \
             scripts/nija_kraken_readonly_history_collector_v441.py \
             scripts/nija_kraken_exact_pending_readback_v466.py \
             tests/test_nija_kraken_exact_pending_readback_v466.py \
@@ -135,6 +139,7 @@ jobs:
             tests/test_kraken_live_history_recovery.py \
             tests/test_kraken_exact_pending_order_recovery_v466.py \
             tests/test_kraken_authenticated_key_info_v477.py \
+            tests/test_kraken_authenticated_account_identity_v478.py \
             bot/tests/test_nija_kraken_readonly_history_collector_v441.py \
             bot/durable_recovery_state.py \
             bot/runtime_kraken_client_order_recovery_v430_patch.py \
@@ -207,7 +212,9 @@ jobs:
             bot/kraken_live_history_recovery.py \
             bot/kraken_exact_pending_order_recovery_v466.py \
             bot/kraken_authenticated_key_info_v477.py \
+            bot/kraken_authenticated_account_identity_v478.py \
             tests/test_kraken_authenticated_key_info_v477.py \
+            tests/test_kraken_authenticated_account_identity_v478.py \
             scripts/nija_kraken_readonly_history_collector_v441.py \
             scripts/nija_kraken_exact_pending_readback_v466.py \
             tests/test_nija_kraken_exact_pending_readback_v466.py \
@@ -216,6 +223,7 @@ jobs:
             tests/test_kraken_live_history_recovery.py \
             tests/test_kraken_exact_pending_order_recovery_v466.py \
             tests/test_kraken_authenticated_key_info_v477.py \
+            tests/test_kraken_authenticated_account_identity_v478.py \
             bot/tests/test_nija_kraken_readonly_history_collector_v441.py \
             bot/durable_recovery_state.py \
             bot/runtime_kraken_client_order_recovery_v430_patch.py \
@@ -295,6 +303,7 @@ jobs:
             tests/test_nija_kraken_exact_pending_readback_v466.py \
             tests/test_kraken_exact_pending_order_recovery_v466.py \
             tests/test_kraken_authenticated_key_info_v477.py \
+            tests/test_kraken_authenticated_account_identity_v478.py \
             bot/tests/test_nija_kraken_readonly_history_collector_v441.py \
             tests/test_preflight_certificate_prerequisites.py \
             tests/test_pretrade_broker_evidence_checks.py \
