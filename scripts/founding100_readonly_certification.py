@@ -181,32 +181,53 @@ def audit(member_id: str, application_id: str, *, billing_url: str,
             not bool(_value(listed, "has_more")) and len(subscriptions) == 1
             and _value(subscriptions[0], "id") == subscription_id
         )
-        # A generic Payment Link checkout can have no NIJA reference. In that
-        # legacy case require the independently signed approved/registered
-        # application and matching operator-verified Stripe identity chain.
+        # Require provenance for a completed checkout, not a later operator tag.
+        # NIJA-created checkouts use the immutable NIJA user ID as the Stripe
+        # client_reference_id, never the application ID. Legacy Payment Links
+        # do not have that reference, so their original buyer address must
+        # match the independently approved and registered canonical identity.
+        # A distinct checkout email requires separately verified, durable
+        # original-owner alias evidence (not supported by this audit yet).
         checkouts = stripe.checkout.Session.list(subscription=subscription_id, limit=100)
         sessions = list(_value(checkouts, "data", []) or [])
         if not _value(checkouts, "has_more") and len(sessions) == 1:
             session = sessions[0]
             session_metadata = _value(session, "metadata", {}) or {}
-            checkout_has_owner = (
-                _value(session, "client_reference_id") == application_id
-                or (_value(session_metadata, "nija_application_id") == application_id
-                    and _value(session_metadata, "nija_user_id") == member_id)
+            details = _value(session, "customer_details", {}) or {}
+            checkout_email = _normalized(_value(details, "email"))
+            supplied_email = _normalized(_value(session, "customer_email"))
+            address_conflict = any(
+                email and email != canonical_email
+                for email in (checkout_email, supplied_email)
+            )
+            exact_nija_checkout = (
+                _value(session, "client_reference_id") == member_id
+                and _value(session_metadata, "nija_billing_contract") == "nija_web_subscription_v1"
+                and _value(session_metadata, "nija_user_id") == member_id
+                and _value(session_metadata, "nija_offer_code") == "founding_beta"
+                and _value(session_metadata, "nija_application_id") in (None, "", application_id)
+            )
+            original_legacy_checkout = (
+                _value(session, "client_reference_id") in (None, "")
+                and not session_metadata
+                and bool(_value(session, "payment_link"))
+                and bool(checkout_email or supplied_email)
+                and not address_conflict
+                and result["application_binding_verified"]
+                and result["registration_approved"]
+                and result["registered_account"]
+                and result["canonical_email_matches_billing"]
+                and result["stripe_customer_identity_verified"]
+                and _value(sub_metadata, "nija_link_method") == "operator_verified_existing_trial"
             )
             result["legacy_checkout_identity_reconciled"] = (
                 _value(session, "livemode") is True
+                and _value(session, "mode") == "subscription"
                 and _value(session, "subscription") == subscription_id
                 and _value(session, "customer") == customer_id
                 and _value(session, "status") == "complete"
-                and (checkout_has_owner or (
-                    result["application_binding_verified"]
-                    and result["registration_approved"]
-                    and result["registered_account"]
-                    and result["canonical_email_matches_billing"]
-                    and result["stripe_customer_identity_verified"]
-                    and _value(sub_metadata, "nija_link_method") == "operator_verified_existing_trial"
-                ))
+                and not address_conflict
+                and (exact_nija_checkout or original_legacy_checkout)
             )
         result["authoritative_member_verified"] = all(result[name] for name in FIELDS)
         result["conclusion"] = (
