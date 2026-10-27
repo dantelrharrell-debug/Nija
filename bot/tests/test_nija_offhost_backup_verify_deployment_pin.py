@@ -15,7 +15,7 @@ import tempfile
 import unittest
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 VERIFY_SCRIPT = ROOT / "ops/recovery/nija_offhost_backup_verify_v4.sh"
 VERIFIERS = (
     "nija_state_store_persistence_audit_v441.py",
