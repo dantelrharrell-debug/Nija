@@ -8,12 +8,12 @@ from bot.kraken_authenticated_identity_v480 import (
 )
 from bot.pretrade_attestation_validation_v452 import REQUIRED, evaluate_pretrade_certificate
 
-API_KEY = "synthetic-public-key-identifier"
+PUBLIC_KEY_ID = "synthetic-public-key-identifier"
 IIBAN = "AA00 TEST TEST TEST"
 SCOPE = "platform:kraken"
 CATEGORY = object()
 PID = "independently-reviewed-kraken-identity-1"
-KEY_PIN = hashlib.sha256(API_KEY.encode("utf-8")).hexdigest()
+KEY_PIN = hashlib.sha256(PUBLIC_KEY_ID.encode("utf-8")).hexdigest()
 ACCOUNT_PIN = hashlib.sha256(("kraken\0" + IIBAN).encode("utf-8")).hexdigest()
 
 
@@ -27,7 +27,7 @@ class Broker:
         self.calls = []
         self.on_call = None
         self.reply = {"error": [], "result": {
-            "apiKey": API_KEY, "iban": IIBAN, "validUntil": "0",
+            "apiKey": PUBLIC_KEY_ID, "iban": IIBAN, "validUntil": "0",
         }}
 
     def _kraken_private_call(self, endpoint, params, *, category):
@@ -55,7 +55,7 @@ def test_account_and_key_both_pinned_but_not_execution_authority():
     assert observation["source"] == "authenticated_broker"
     assert observation["verified"] is True
     assert observation["read_only"] is True
-    assert API_KEY not in repr(observation)
+    assert PUBLIC_KEY_ID not in repr(observation)
     assert IIBAN not in repr(observation)
     assert KEY_PIN not in repr(observation)
     assert ACCOUNT_PIN not in repr(observation)
@@ -120,7 +120,7 @@ def test_invalid_identity_or_api_error_safely_denied():
     broker.reply["result"]["iban"] = ""
     with pytest.raises(KrakenIdentityDenied, match="account_identifier_invalid"):
         make(broker)()
-    broker.reply = {"error": ["PRIVATE-SECRET"], "result": {"iban": IIBAN, "apiKey": API_KEY}}
+    broker.reply = {"error": ["PRIVATE-SECRET"], "result": {"iban": IIBAN, "apiKey": PUBLIC_KEY_ID}}
     with pytest.raises(KrakenIdentityDenied, match="identity_read_unverified") as e:
         make(broker)()
     assert "PRIVATE-SECRET" not in str(e.value)
