@@ -5,6 +5,7 @@ on:
     paths:
       - 'bot/kraken_reviewed_producer_bundle_v483.py'
       - 'tests/test_kraken_reviewed_producer_bundle_v483.py'
+      - 'tests/test_kraken_reviewed_producer_integration_v483.py'
       - '.github/workflows/kraken-provider-bundle-v483.yml'
   workflow_dispatch:
 permissions:
@@ -25,6 +26,8 @@ jobs:
         with:
           python-version: '3.11'
       - name: Compile with startup hooks disabled
-        run: python -S -m py_compile bot/kraken_reviewed_producer_bundle_v483.py tests/test_kraken_reviewed_producer_bundle_v483.py
+        run: python -S -m py_compile bot/kraken_reviewed_producer_bundle_v483.py tests/test_kraken_reviewed_producer_bundle_v483.py tests/test_kraken_reviewed_producer_integration_v483.py
       - name: Offline refusal tests
         run: python -S -B -m unittest discover -s tests -p test_kraken_reviewed_producer_bundle_v483.py -v
+      - name: Offline four-provider integration tests
+        run: python -S -B -m unittest discover -s tests -p test_kraken_reviewed_producer_integration_v483.py -v
