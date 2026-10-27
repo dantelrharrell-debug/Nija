@@ -72,7 +72,12 @@ def _get_collection(url: str, token: str, opener) -> Mapping:
 def _compact(value: object) -> str | None:
     if not isinstance(value, str):
         return None
-    return re.sub(r"\s+", "", value.replace("'", '"'))
+    # Never remove whitespace inside quoted literals: e.g. auth.id != " "
+    # must NOT be normalized into the required auth.id != "" check.
+    normalized = value.replace("'", '"')
+    if re.findall(r'"[^"\\]*"', normalized) != ['""']:
+        return None
+    return re.sub(r"\s+", "", normalized)
 
 
 def _rule(*terms: str) -> str:
