@@ -36,6 +36,23 @@ def register_onboarding_routes(app, billing_store) -> None:
     """Register a volume-backed outbox only when its absolute durable path is configured."""
     path = os.getenv("NIJA_ONBOARDING_DB_PATH", "").strip()
     if not path:
+        # An unavailable durable identity store is a server outage, NOT a
+        # missing applicant. A 404 can incorrectly trigger a second enrollment
+        # or checkout in consumers. Expose only a generic fail-closed status.
+        @app.get("/api/onboarding/status")
+        def onboarding_status_unavailable():
+            response = jsonify({
+                "error": "onboarding_temporarily_unavailable",
+                "full_onboarding_certified": False,
+                "member_activated": False,
+                "broker_connection_ready": False,
+            })
+            response.headers["Cache-Control"] = "no-store"
+            response.headers["Retry-After"] = "300"
+            return response, 503
+
+        # Events, mail, and operator writes remain disabled without durable
+        # storage and authenticated identity provenance.
         return
     if not os.path.isabs(path) or path == ":memory:":
         raise RuntimeError("onboarding_requires_absolute_durable_db_path")
