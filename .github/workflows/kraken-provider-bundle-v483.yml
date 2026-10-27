@@ -1,0 +1,30 @@
+name: NIJA v483 Kraken trusted producer bundle
+on:
+  pull_request:
+    branches: [release/justcall-handoff-only-20261017]
+    paths:
+      - 'bot/kraken_reviewed_producer_bundle_v483.py'
+      - 'tests/test_kraken_reviewed_producer_bundle_v483.py'
+      - '.github/workflows/kraken-provider-bundle-v483.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  offline-verification:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      NIJA_DEFER_RUNTIME_SITE_HOOKS: '1'
+      KRAKEN_API_KEY: ''
+      KRAKEN_API_SECRET: ''
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Compile with startup hooks disabled
+        run: python -S -m py_compile bot/kraken_reviewed_producer_bundle_v483.py tests/test_kraken_reviewed_producer_bundle_v483.py
+      - name: Offline refusal tests
+        run: python -S -B -m unittest discover -s tests -p test_kraken_reviewed_producer_bundle_v483.py -v
