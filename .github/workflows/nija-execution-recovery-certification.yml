@@ -17,6 +17,8 @@ on:
       - 'bot/kraken_exact_pending_order_recovery_v466.py'
       - 'bot/kraken_authenticated_key_info_v477.py'
       - 'bot/kraken_authenticated_account_identity_v478.py'
+      - 'bot/kraken_authenticated_identity_v480.py'
+      - 'tests/test_kraken_authenticated_identity_v480.py'
       - 'tests/test_kraken_authenticated_key_info_v477.py'
       - 'tests/test_kraken_authenticated_account_identity_v478.py'
       - 'tests/test_kraken_exact_pending_order_recovery_v466.py'
@@ -131,6 +133,10 @@ jobs:
             bot/kraken_authenticated_account_identity_v478.py \
             tests/test_kraken_authenticated_key_info_v477.py \
             tests/test_kraken_authenticated_account_identity_v478.py \
+            bot/kraken_authenticated_identity_v480.py \
+            tests/test_kraken_authenticated_identity_v480.py \
+            tests/test_kraken_authenticated_key_info_v477.py \
+            tests/test_kraken_authenticated_identity_v480.py \
             scripts/nija_kraken_readonly_history_collector_v441.py \
             scripts/nija_kraken_exact_pending_readback_v466.py \
             tests/test_nija_kraken_exact_pending_readback_v466.py \
@@ -213,6 +219,8 @@ jobs:
             bot/kraken_exact_pending_order_recovery_v466.py \
             bot/kraken_authenticated_key_info_v477.py \
             bot/kraken_authenticated_account_identity_v478.py \
+            bot/kraken_authenticated_identity_v480.py \
+            tests/test_kraken_authenticated_identity_v480.py \
             tests/test_kraken_authenticated_key_info_v477.py \
             tests/test_kraken_authenticated_account_identity_v478.py \
             scripts/nija_kraken_readonly_history_collector_v441.py \
