@@ -82,3 +82,18 @@ def run_opt_in_audit(*, environ: Mapping[str, str] | None = None,
         # database URL or customer field from the trusted sources.
         write("NIJA_FOUNDING100_AUDIT result=blocked reason=source_error full_onboarding_certified=false")
         return False
+
+
+def launch_opt_in_audit(*, environ: Mapping[str, str] | None = None) -> bool:
+    """Start the opt-in audit without holding billing request startup hostage.
+
+    Render may run multiple worker processes, so logs may contain more than one
+    identical read-only diagnostic. This never sends customer notifications.
+    """
+    env = os.environ if environ is None else environ
+    if env.get("NIJA_FOUNDING100_AUDIT_ON_STARTUP") != "true":
+        return False
+    from threading import Thread
+    Thread(target=run_opt_in_audit, kwargs={"environ": dict(env)},
+           name="nija-founding100-readonly-audit", daemon=True).start()
+    return True
