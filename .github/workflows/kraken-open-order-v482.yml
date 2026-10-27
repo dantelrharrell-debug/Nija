@@ -5,6 +5,7 @@ on:
     paths:
       - 'bot/kraken_authenticated_open_order_reconciliation_v482.py'
       - 'tests/test_kraken_authenticated_open_order_reconciliation_v482.py'
+      - 'tests/test_kraken_authenticated_open_order_integration_v482.py'
       - 'docs/kraken_authenticated_open_order_reconciliation_v482.md'
       - '.github/workflows/kraken-open-order-v482.yml'
   workflow_dispatch:
@@ -30,6 +31,8 @@ jobs:
         with:
           python-version: '3.11'
       - name: Compile offline provider and tests
-        run: python -S -m py_compile bot/kraken_authenticated_open_order_reconciliation_v482.py tests/test_kraken_authenticated_open_order_reconciliation_v482.py
+        run: python -S -m py_compile bot/kraken_authenticated_open_order_reconciliation_v482.py tests/test_kraken_authenticated_open_order_reconciliation_v482.py tests/test_kraken_authenticated_open_order_integration_v482.py
       - name: Test evidence safety and refusals without broker requests
         run: python -S -B -m unittest discover -s tests -p test_kraken_authenticated_open_order_reconciliation_v482.py -v
+      - name: Test real v480 identity dependency integration offline
+        run: python -S -B -m unittest discover -s tests -p test_kraken_authenticated_open_order_integration_v482.py -v
