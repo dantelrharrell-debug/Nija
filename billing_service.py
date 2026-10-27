@@ -929,8 +929,8 @@ def create_app(store: Optional[BillingServiceStore] = None) -> Flask:
 
     # Opt-in only: audit existing Founding 100 identity and entitlement through
     # the internal billing network. Never change a customer, trial or gate.
-    from founding100_boot_audit import run_opt_in_audit
-    run_opt_in_audit()
+    from founding100_boot_audit import launch_opt_in_audit
+    launch_opt_in_audit()
 
     # Register the Bitcoin rail only on the standalone billing service. The
     # module intentionally contains no broker/execution imports; verified
