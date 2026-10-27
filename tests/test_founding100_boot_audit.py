@@ -1,7 +1,8 @@
 """Synthetic tests: no external sources, secret logging or state mutation."""
 import unittest
 
-from founding100_boot_audit import _FLAG_NAMES, run_opt_in_audit
+from founding100_boot_audit import _FLAG_NAMES, run_opt_in_audit, launch_opt_in_audit
+from unittest.mock import patch
 
 
 class BootAuditTests(unittest.TestCase):
@@ -19,6 +20,15 @@ class BootAuditTests(unittest.TestCase):
         report = {key: True for key in _FLAG_NAMES}
         report.update(authoritative_member_verified=True, blocking_sources=[])
         return report
+
+    def test_launch_is_background_and_opt_in_only(self):
+        with patch("threading.Thread") as factory:
+            self.assertFalse(launch_opt_in_audit(environ={}))
+            factory.assert_not_called()
+            self.assertTrue(launch_opt_in_audit(environ=self.settings()))
+            factory.assert_called_once()
+            self.assertTrue(factory.call_args.kwargs["daemon"])
+            factory.return_value.start.assert_called_once()
 
     def test_disabled_does_not_read_sources(self):
         events = []
