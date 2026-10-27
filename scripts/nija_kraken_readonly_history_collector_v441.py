@@ -302,7 +302,9 @@ def collect_from_existing_broker(broker: Any, *, account_scope: str,
         if not (history_read or balance_read or open_orders_read):
             raise ValueError("Non-read-only request rejected")
         require_matching_scope()
-        payload = private_call(endpoint, params, category=monitoring_category)
+        # krakenex stamps nonce into its argument dict. Keep that transport-only
+        # mutation out of the next cursor page and the strict read-only allowlist.
+        payload = private_call(endpoint, dict(params), category=monitoring_category)
         require_matching_scope()
         return payload
 
