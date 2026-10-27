@@ -1,0 +1,32 @@
+name: NIJA PocketBase vault rule inspector (offline)
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'scripts/nija_pocketbase_vault_rule_inspection_v481.py'
+      - 'tests/test_nija_pocketbase_vault_rule_inspection_v481.py'
+      - '.github/workflows/nija-pocketbase-vault-rule-inspection-v481.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  offline-vault-rule-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      NIJA_POCKETBASE_URL: ''
+      NIJA_POCKETBASE_ADMIN_TOKEN: ''
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Compile without production imports
+        run: python -m py_compile scripts/nija_pocketbase_vault_rule_inspection_v481.py tests/test_nija_pocketbase_vault_rule_inspection_v481.py
+      - name: Run synthetic fail-closed security cases (no network)
+        run: python -m unittest discover -s tests -p 'test_nija_pocketbase_vault_rule_inspection_v481.py' -v
