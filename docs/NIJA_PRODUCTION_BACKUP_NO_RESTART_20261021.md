@@ -28,6 +28,39 @@ stops, place test orders, or manufacture execution proof.
 - The October 11 off-host archive passed historical integrity checks. **It
   does not certify or replace the October 21 live ledger and JSON state.**
 
+## October 27 v4 verifier correction: independently pinned source deployment
+
+The off-host verifier formerly compared the captured source deployment to one
+hard-coded old release commit. That rejected newer legitimate captures even when
+their source checksums, verifier blob pins and transfer seals were intact.
+
+On an **independent off-host machine**, after the existing live-instance capture,
+encrypted transfer and separately retained original source seal, verify which
+Render deployment SHA was active **at the capture UTC time** using an
+independent Render deployment record. Obtain this SHA independently of
+`CAPTURE_CONTEXT.json`, its manifest and the copied archive. Do not copy it
+out of the capture as the trusted argument. Run:
+
+~~~bash
+bash ops/recovery/nija_offhost_backup_verify_v4.sh \
+  "/restricted/offhost/PRIVATE_CAPTURE_DIR" \
+  "INDEPENDENT_SOURCE_CAPTURE_SEAL_SHA256" \
+  "INDEPENDENTLY_CONFIRMED_RENDER_DEPLOY_COMMIT_40_HEX"
+~~~
+
+The third argument is mandatory. The verifier requires the captured commit
+to match that independent pin and still enforces source-seal checks,
+per-file hashes, pinned script blobs, private directories and isolated
+SQLite/account/legacy restore validation. A verified SHA is **not**
+independent proof of transfer custody, broker reconciliation, ledger
+completeness, protective exits or authority to trade.
+
+The companion regression test
+`tests/test_nija_offhost_backup_verify_deployment_pin.py` uses only synthetic
+invalid archives to prove matching-deployment validation can proceed to the
+real restore checks, mismatched deployments stop, and missing/invalid
+independent SHA arguments are denied. It cannot certify a production backup.
+
 ## A. Capture from the existing, live Render owner shell
 
 Only execute these commands in the **existing instance** using the operator's

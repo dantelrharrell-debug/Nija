@@ -1,26 +1,28 @@
 #!/usr/bin/env bash
 # NIJA recovery v4. Operator runs on independent private machine, NEVER on Render.
-# Usage: bash nija_offhost_backup_verify_v4.sh PRIVATE_CAPTURE_DIR SOURCE_CAPTURE_SEAL_SHA256
+# Usage: bash nija_offhost_backup_verify_v4.sh PRIVATE_CAPTURE_DIR SOURCE_CAPTURE_SEAL_SHA256 INDEPENDENTLY_CONFIRMED_DEPLOY_SHA
 # Source seal must come from independently retained source terminal output,
 # NOT from a file bundled with the transferred capture directory.
 set -Eeuo pipefail
 umask 077
 trap 'rc=$?; printf "OFF_HOST_VERIFICATION=FAILED_CLOSED exit_code=%s\n" "$rc" >&2' ERR
-if (( $# != 2 )) || [[ ! "$2" =~ ^[a-f0-9]{64}$ ]]; then
-  echo 'Usage: nija_offhost_backup_verify_v4.sh PRIVATE_CAPTURE_DIR SOURCE_CAPTURE_SEAL_SHA256' >&2
+if (( $# != 3 )) || [[ ! "$2" =~ ^[a-f0-9]{64}$ ]] || [[ ! "$3" =~ ^[a-f0-9]{40}$ ]]; then
+  echo 'Usage: nija_offhost_backup_verify_v4.sh PRIVATE_CAPTURE_DIR SOURCE_CAPTURE_SEAL_SHA256 INDEPENDENTLY_CONFIRMED_DEPLOY_SHA' >&2
   exit 2
 fi
 capture="$(cd -- "$1" && pwd -P)"
 expected_seal="$2"
+# Pin the source commit to a separately verified Render deployment, not the archive.
+expected_deployed_sha="$3"
 
-python -S - "$capture" "$expected_seal" <<'PY'
+python -S - "$capture" "$expected_seal" "$expected_deployed_sha" <<'PY'
 import hashlib
 import json
 import pathlib
 import re
 import stat
 import sys
-root = pathlib.Path(sys.argv[1]); expected_seal = sys.argv[2]
+root = pathlib.Path(sys.argv[1]); expected_seal = sys.argv[2]; expected_deployed_sha = sys.argv[3]
 verifier_dir = root / 'verifiers'
 pins = {
   'nija_state_store_persistence_audit_v441.py': '54b8109658dd7ca9031edad7c0092f3402b92613',
@@ -87,7 +89,7 @@ for name, sha in pins.items():
 context = json.loads(safe(root/'CAPTURE_CONTEXT.json',16384))
 paths = json.loads(safe(root/'source_persistence_audit.json',32768))
 if (context.get('source_service_id') != 'srv-d98dsr5aeets73fpbaqg'
-    or context.get('source_deployed_sha') != '0ae35d1b2b84dc788bfd6ae10a8b459ae806a752'
+    or context.get('source_deployed_sha') != expected_deployed_sha
     or context.get('deployment_authorized') is not False
     or context.get('trading_authorized') is not False
     or context.get('executed_on_existing_instance') is not True
