@@ -161,6 +161,12 @@ class TestProtection(unittest.TestCase):
         with self.assertRaises(KrakenProtectionDenied):
             build(broker, stale)()
 
+    def test_unverified_exchange_order_ids_denied(self):
+        broker, ledger = Broker(), Ledger()
+        ledger.positions["lot-1"]["stop_order_id"] = "local-stop-1"
+        with self.assertRaises(KrakenProtectionDenied):
+            build(broker, ledger)()
+
     def test_wrong_scope_denied(self):
         with self.assertRaises(KrakenProtectionDenied):
             make_kraken_protective_exit_provider(
