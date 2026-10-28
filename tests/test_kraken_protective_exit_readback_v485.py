@@ -134,6 +134,33 @@ class TestProtection(unittest.TestCase):
         with self.assertRaises(KrakenProtectionDenied):
             build(broker, ledger)()
 
+    def test_wrong_exit_direction_denied(self):
+        broker, ledger = Broker(), Ledger()
+        broker.orders[STOP]["descr"]["type"] = "buy"
+        with self.assertRaises(KrakenProtectionDenied):
+            build(broker, ledger)()
+
+    def test_changed_ledger_snapshot_denied(self):
+        broker, ledger = Broker(), Ledger()
+        original = ledger.__call__
+        def changed():
+            row = original()
+            if ledger.calls == 2:
+                row["snapshot_id"] = "snapshot-2"
+            return row
+        with self.assertRaises(KrakenProtectionDenied):
+            build(broker, changed)()
+
+    def test_stale_ledger_denied(self):
+        broker, ledger = Broker(), Ledger()
+        original = ledger.__call__
+        def stale():
+            row = original()
+            row["observed_at_epoch"] = 900.0
+            return row
+        with self.assertRaises(KrakenProtectionDenied):
+            build(broker, stale)()
+
     def test_wrong_scope_denied(self):
         with self.assertRaises(KrakenProtectionDenied):
             make_kraken_protective_exit_provider(
