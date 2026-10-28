@@ -207,19 +207,22 @@ def inspect_authenticated_kraken_ledger_gaps(
         ).fetchall()
         connection.execute("COMMIT")
         if len(rows) > MAX_LOCAL_ROWS or len(intent_rows) > MAX_LOCAL_ROWS:
-            return reject("ledger_comparison_row_budget_exceeded")
+            raise ValueError("ledger_comparison_row_budget_exceeded")
         ledger_orders, unattributed = _summarize_ledger(rows)
         counts["platform_ledger_rows_without_exchange_id"] = unattributed
         counts["platform_kraken_intent_rows"] = len(intent_rows)
         intent_ids = set()
         for (order_id,) in intent_rows:
             if not isinstance(order_id, str) or not _ORDER_ID.fullmatch(order_id):
-                return reject("kraken_strategy_intent_identity_invalid")
+                raise ValueError("kraken_strategy_intent_identity_invalid")
             if order_id in intent_ids:
-                return reject("duplicate_kraken_strategy_intent")
+                raise ValueError("duplicate_kraken_strategy_intent")
             intent_ids.add(order_id)
-    except (sqlite3.Error, ValueError, TypeError):
+    except (sqlite3.Error, ValueError, TypeError) as exc:
         connection.close()
+        reason = str(exc)
+        if reason in {"ledger_comparison_row_budget_exceeded", "kraken_strategy_intent_identity_invalid", "duplicate_kraken_strategy_intent"}:
+            return reject(reason)
         return reject("ledger_accounting_records_invalid")
 
     try:
