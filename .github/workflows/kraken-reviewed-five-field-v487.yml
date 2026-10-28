@@ -1,0 +1,25 @@
+name: Kraken reviewed five-field bundle v487
+
+on:
+  pull_request:
+    paths:
+      - 'bot/kraken_reviewed_five_field_bundle_v487.py'
+      - 'tests/test_kraken_reviewed_five_field_bundle_v487.py'
+      - '.github/workflows/kraken-reviewed-five-field-v487.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  offline-regression:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Compile reviewed adapter and test
+        run: python -m py_compile bot/kraken_reviewed_five_field_bundle_v487.py tests/test_kraken_reviewed_five_field_bundle_v487.py
+      - name: Offline non-authorizing regression
+        run: python -m unittest discover -s tests -p 'test_kraken_reviewed_five_field_bundle_v487.py' -v
