@@ -1,0 +1,29 @@
+name: Kraken protective exit offline regression
+on:
+  pull_request:
+    branches:
+      - release/justcall-handoff-only-20261017
+    paths:
+      - 'bot/kraken_protective_exit_readback_v485.py'
+      - 'tests/test_kraken_protective_exit_readback_v485.py'
+      - '.github/workflows/kraken-protective-exit-v486.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Compile with runtime hooks disabled
+        run: |
+          NIJA_DEFER_RUNTIME_SITE_HOOKS=1 python -S -m py_compile bot/kraken_protective_exit_readback_v485.py tests/test_kraken_protective_exit_readback_v485.py
+      - name: Run isolated Kraken exit verification tests
+        run: |
+          NIJA_DEFER_RUNTIME_SITE_HOOKS=1 python -S -B -m unittest discover -s tests -p test_kraken_protective_exit_readback_v485.py -v
