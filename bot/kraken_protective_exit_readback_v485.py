@@ -17,7 +17,7 @@ from typing import Any
 
 from bot.kraken_authenticated_identity_v480 import make_kraken_account_identity_provider
 from bot.kraken_authenticated_open_order_reconciliation_v482 import (
-    _broker_orders, _canonical_pair, _decimal,
+    _ORDER_ID, _broker_orders, _canonical_pair, _decimal,
 )
 
 STOP_TYPES = frozenset({"stop-loss", "stop-loss-limit", "trailing-stop", "trailing-stop-limit"})
@@ -96,7 +96,7 @@ def make_kraken_protective_exit_provider(
                 raise KrakenProtectionDenied("ledger_quantity_invalid") from None
             stop, profit = lot["stop_order_id"], lot["take_profit_order_id"]
             if (not isinstance(stop, str) or not isinstance(profit, str)
-                    or not stop or not profit or stop == profit
+                    or not _ORDER_ID.fullmatch(stop) or not _ORDER_ID.fullmatch(profit) or stop == profit
                     or stop in used or profit in used):
                 raise KrakenProtectionDenied("exit_identity_missing_or_reused")
             used.update((stop, profit))
