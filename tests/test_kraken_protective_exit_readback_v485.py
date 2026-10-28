@@ -18,7 +18,7 @@ from bot.kraken_protective_exit_readback_v485 import (
 KEY = "synthetic-key"
 IBAN = "AA00 TEST"
 KEY_PIN = hashlib.sha256(KEY.encode()).hexdigest()
-IBAN_PIN = hashlib.sha256(("kraken\\0" + IBAN).encode()).hexdigest()
+IBAN_PIN = hashlib.sha256(("kraken" + chr(0) + IBAN).encode()).hexdigest()
 CATEGORY = object()
 STOP = "OABCDE-ABCDE-ABCDEF"
 PROFIT = "OBCDEF-BCDEF-BCDEFG"
