@@ -7,8 +7,10 @@ on:
     paths:
       - 'bot/kraken_collector_composition_v487.py'
       - 'bot/kraken_sqlite_readonly_preflight_v488.py'
+      - 'bot/kraken_authenticated_ledger_gap_audit_v489.py'
       - 'tests/test_kraken_collector_composition_v487.py'
       - 'tests/test_kraken_sqlite_readonly_preflight_v488.py'
+      - 'tests/test_kraken_authenticated_ledger_gap_audit_v489.py'
       - '.github/workflows/kraken-collector-v487.yml'
   workflow_dispatch:
 permissions:
@@ -26,8 +28,9 @@ jobs:
           python-version: '3.11'
       - name: Compile collector and negative tests
         run: |
-          NIJA_DEFER_RUNTIME_SITE_HOOKS=1 python -S -m py_compile bot/kraken_collector_composition_v487.py tests/test_kraken_collector_composition_v487.py bot/kraken_sqlite_readonly_preflight_v488.py tests/test_kraken_sqlite_readonly_preflight_v488.py
+          NIJA_DEFER_RUNTIME_SITE_HOOKS=1 python -S -m py_compile bot/kraken_collector_composition_v487.py tests/test_kraken_collector_composition_v487.py bot/kraken_sqlite_readonly_preflight_v488.py tests/test_kraken_sqlite_readonly_preflight_v488.py bot/kraken_authenticated_ledger_gap_audit_v489.py tests/test_kraken_authenticated_ledger_gap_audit_v489.py
       - name: Execute fail-closed offline regression
         run: |
           NIJA_DEFER_RUNTIME_SITE_HOOKS=1 python -S -B -m unittest discover -s tests -p test_kraken_collector_composition_v487.py -v
           NIJA_DEFER_RUNTIME_SITE_HOOKS=1 python -S -B -m unittest discover -s tests -p test_kraken_sqlite_readonly_preflight_v488.py -v
+          NIJA_DEFER_RUNTIME_SITE_HOOKS=1 python -S -B -m unittest discover -s tests -p test_kraken_authenticated_ledger_gap_audit_v489.py -v
