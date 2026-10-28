@@ -1,5 +1,13 @@
 """Offline, no-broker-I/O regression for reviewed Kraken registry composition."""
 import unittest
+import sys
+import types
+from pathlib import Path
+
+if "bot" not in sys.modules:
+    pkg = types.ModuleType("bot")
+    pkg.__path__ = [str(Path(__file__).resolve().parents[1] / "bot")]
+    sys.modules["bot"] = pkg
 
 from bot.kraken_reviewed_registry_composition_v484 import (
     KrakenRegistryIncomplete, compose_reviewed_kraken_registry,
