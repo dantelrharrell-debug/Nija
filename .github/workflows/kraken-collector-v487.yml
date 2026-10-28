@@ -1,0 +1,30 @@
+name: Kraken independent collector v487 offline regression
+on:
+  pull_request:
+    branches:
+      - main
+      - release/justcall-handoff-only-20261017
+    paths:
+      - 'bot/kraken_collector_composition_v487.py'
+      - 'tests/test_kraken_collector_composition_v487.py'
+      - '.github/workflows/kraken-collector-v487.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  offline-regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Compile collector and negative tests
+        run: |
+          NIJA_DEFER_RUNTIME_SITE_HOOKS=1 python -S -m py_compile bot/kraken_collector_composition_v487.py tests/test_kraken_collector_composition_v487.py
+      - name: Execute fail-closed offline regression
+        run: |
+          NIJA_DEFER_RUNTIME_SITE_HOOKS=1 python -S -B -m unittest discover -s tests -p test_kraken_collector_composition_v487.py -v
