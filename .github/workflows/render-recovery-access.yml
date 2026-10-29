@@ -136,7 +136,23 @@ jobs:
           if not prior.is_file() or prior.is_symlink():
               raise SystemExit('BLOCKED: prior history claim must remain preserved')
           print('NIJA_PRIOR_HISTORY_CLAIM_PRESERVED')
-          request_id = 'd7baa71731e633d1c6f4c9848505ab98'
+          # Operator-selected legacy probe after the terminal cursor failure;
+          # this is not automatic fallback and never replays the failed ID.
+          cursor_receipt = root / 'd7baa71731e633d1c6f4c9848505ab98.evidence.json'
+          if (cursor_receipt.is_symlink() or not cursor_receipt.is_file()
+                  or cursor_receipt.stat().st_uid != os.geteuid()
+                  or stat.S_IMODE(cursor_receipt.stat().st_mode) & 0o077
+                  or cursor_receipt.stat().st_size > 8192):
+              raise SystemExit('BLOCKED: preserved terminal cursor failure required')
+          failure = json.loads(cursor_receipt.read_text())
+          if any(failure.get(key) != value for key, value in {
+                  'request_id': 'd7baa71731e633d1c6f4c9848505ab98',
+                  'collection_succeeded': False, 'trading_authorized': False,
+                  'error_code': 'api_failure', 'error_endpoint': 'TradesHistory',
+                  'api_failure_reason': 'invalid_arguments',
+          }.items()):
+              raise SystemExit('BLOCKED: expected terminal cursor diagnostic missing')
+          request_id = '97dbb6dc01e97936829e0e3656fdbcf1'
           claim = root / (request_id + '.claimed.json')
           receipt = root / (request_id + '.evidence.json')
           if receipt.exists():
@@ -204,7 +220,7 @@ jobs:
                   if (root / 'exact_request.json').exists() or (root / 'exact_request.json').is_symlink():
                       raise SystemExit('BLOCKED: another recovery mode is pending')
                   request = dict(request_id=request_id, account_scope='platform:kraken',
-                                 created_at=time.time(), max_pages=1, use_cursor=True)
+                                 created_at=time.time(), max_pages=1, use_cursor=False)
                   temporary_fd, temporary_path = tempfile.mkstemp(prefix='.request-', dir=root)
                   try:
                       with os.fdopen(temporary_fd, 'w') as stream:
