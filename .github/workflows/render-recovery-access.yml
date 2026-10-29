@@ -111,10 +111,16 @@ jobs:
           if report.get('sqlite_integrity_ok') is not True:
               raise SystemExit('BLOCKED: ledger integrity required before history request')
           collector_source = Path('/app/bot/kraken_live_history_recovery.py')
-          collector_hash = '0f51770c94b63df62dd43404f95d6431f8f6eae3e66092b546f98b878daafe5e'
+          collector_hash = 'f75497755d38550c7371c82275de5bb046a2e83cb913f17858ab9d8230ca76bc'
           if (collector_source.is_symlink()
                   or hashlib.sha256(collector_source.read_bytes()).hexdigest() != collector_hash):
               raise SystemExit('BLOCKED: reviewed history request implementation changed')
+          exit_source = Path('/app/bot/universal_broker_exit_supervisor_patch.py')
+          exit_hash = '7970751561b5dfa6dde1542903289c4351ba15c47b84a7ab315abe39c3aa1758'
+          if (exit_source.is_symlink()
+                  or hashlib.sha256(exit_source.read_bytes()).hexdigest() != exit_hash):
+              raise SystemExit('BLOCKED: reviewed exit observer implementation changed')
+          print('NIJA_REPAIR_SOURCE_HASHES_VERIFIED')
           root = Path('/data/kraken-history-recovery')
           if root.is_symlink() or root.resolve() != root:
               raise SystemExit('BLOCKED: recovery path not canonical')
@@ -124,14 +130,24 @@ jobs:
               raise SystemExit('BLOCKED: recovery directory not private')
           # One immutable request ID: rerunning this workflow never replays an
           # interrupted claim or submits another history collection.
-          request_id = '997eae3f9df551e06ffab7a9cf0dc60d'
+          # Explicit bounded compatibility probe after the approved deployment.
+          # Preserve the interrupted full-history claim; do not replay its ID.
+          prior = root / '997eae3f9df551e06ffab7a9cf0dc60d.claimed.json'
+          if not prior.is_file() or prior.is_symlink():
+              raise SystemExit('BLOCKED: prior history claim must remain preserved')
+          print('NIJA_PRIOR_HISTORY_CLAIM_PRESERVED')
+          request_id = 'd7baa71731e633d1c6f4c9848505ab98'
           claim = root / (request_id + '.claimed.json')
           receipt = root / (request_id + '.evidence.json')
           if receipt.exists():
               if receipt.is_symlink() or stat.S_IMODE(receipt.stat().st_mode) & 0o077:
                   raise SystemExit('BLOCKED: history receipt not private')
               row = json.loads(receipt.read_text())
-              state = 'completed' if row.get('collection_succeeded') is True else 'failed'
+              if (row.get('request_id') != request_id
+                      or type(row.get('collection_succeeded')) is not bool
+                      or row.get('trading_authorized') is not False):
+                  raise SystemExit('BLOCKED: probe receipt identity or outcome invalid')
+              state = 'completed' if row['collection_succeeded'] else 'failed'
               print('NIJA_HISTORY_RECOVERY_' + state.upper())
               safe_codes = {
                   'api_failure', 'malformed_result', 'invalid_count', 'invalid_cursor',
@@ -142,7 +158,15 @@ jobs:
                   'balance_changed', 'open_orders_changed', 'history_incomplete_unknown',
               }
               safe_endpoints = {'Balance', 'TradesHistory', 'ClosedOrders', 'Ledgers', 'OpenOrders', 'history'}
+              safe_reasons = {
+                  'permission_denied', 'invalid_key', 'invalid_signature', 'invalid_nonce',
+                  'rate_limited', 'temporary_lockout', 'invalid_arguments', 'service_unavailable',
+                  'deadline_elapsed', 'account_disabled', 'account_unconfirmed', 'throttled',
+                  'unknown_api_error', 'malformed_api_response', 'multiple_api_errors',
+              }
+              reason = row.get('api_failure_reason')
               print(json.dumps({
+                  'history_api_failure_reason': reason if type(reason) is str and reason in safe_reasons else 'not_available',
                   'history_error_code': row.get('error_code') if row.get('error_code') in safe_codes else 'unspecified',
                   'history_error_endpoint': row.get('error_endpoint') if row.get('error_endpoint') in safe_endpoints else 'unspecified',
               }, sort_keys=True))
@@ -164,5 +188,38 @@ jobs:
           elif (root / 'request.json').exists():
               print('NIJA_HISTORY_RECOVERY_REQUEST_ALREADY_PENDING')
           else:
-              raise SystemExit('BLOCKED: existing single-use recovery request missing; no request submitted')
+              fd = os.open(root / 'collector.lock', os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+              try:
+                  info = os.fstat(fd)
+                  if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
+                          or stat.S_IMODE(info.st_mode) & 0o077 or info.st_nlink != 1):
+                      raise SystemExit('BLOCKED: recovery lock not private regular file')
+                  try:
+                      fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                  except BlockingIOError:
+                      raise SystemExit('BLOCKED: another history collection is active')
+                  if any(path.exists() or path.is_symlink()
+                         for path in (claim, receipt, root / 'request.json')):
+                      raise SystemExit('BLOCKED: recovery request state changed before submission')
+                  if (root / 'exact_request.json').exists() or (root / 'exact_request.json').is_symlink():
+                      raise SystemExit('BLOCKED: another recovery mode is pending')
+                  request = dict(request_id=request_id, account_scope='platform:kraken',
+                                 created_at=time.time(), max_pages=1, use_cursor=True)
+                  temporary_fd, temporary_path = tempfile.mkstemp(prefix='.request-', dir=root)
+                  try:
+                      with os.fdopen(temporary_fd, 'w') as stream:
+                          json.dump(request, stream, allow_nan=False)
+                          stream.flush()
+                          os.fsync(stream.fileno())
+                      os.link(temporary_path, root / 'request.json', follow_symlinks=False)
+                  finally:
+                      os.unlink(temporary_path)
+                  directory_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+                  try:
+                      os.fsync(directory_fd)
+                  finally:
+                      os.close(directory_fd)
+                  print('NIJA_HISTORY_RECOVERY_REQUEST_SUBMITTED')
+              finally:
+                  os.close(fd)
           PY
