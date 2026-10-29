@@ -55,6 +55,9 @@ def net_profit_report(
     """
     if not re.fullmatch(r"\d{4}-(?:0[1-9]|1[0-2])", reporting_period):
         raise ValueError("reporting_period must be YYYY-MM")
+    for label, value in (("visitors", certified_unique_visitors), ("leads", certified_qualified_leads)):
+        if value is not None and (type(value) is not int or value < 0 or value > 10**12):
+            raise ValueError("Certified " + label + " must be a nonnegative integer")
 
     raw_revenue = list(revenue_events)
     matching_revenue = [
