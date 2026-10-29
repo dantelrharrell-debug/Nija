@@ -59,6 +59,29 @@ class NetProfitReportTests(unittest.TestCase):
         self.assertEqual(result["rejected_period_events"], 1)
         self.assertIsNone(result["net_profit_per_visitor_usd"])
 
+    def test_certified_aggregate_counts_do_not_create_fake_visitor_events(self):
+        result = net_profit_report(
+            self.revenue(), self.costs(), reporting_period="2026-10",
+            revenue_complete=True, costs_complete=True,
+            certified_unique_visitors=100, certified_qualified_leads=4,
+        )
+        self.assertEqual(result["unique_visitors"], 100)
+        self.assertEqual(result["unique_qualified_leads"], 4)
+        self.assertEqual(result["net_profit_per_visitor_usd"], "0.04")
+        self.assertEqual(result["net_profit_per_qualified_lead_usd"], "1.00")
+
+    def test_rejects_invalid_certified_counts(self):
+        with self.assertRaises(ValueError):
+            net_profit_report(
+                self.revenue(), self.costs(), reporting_period="2026-10",
+                certified_unique_visitors=True,
+            )
+        with self.assertRaises(ValueError):
+            net_profit_report(
+                self.revenue(), self.costs(), reporting_period="2026-10",
+                certified_unique_visitors=1,
+            )
+
     def test_revenue_completeness_required(self):
         result = net_profit_report(self.revenue(), self.costs(), reporting_period="2026-10", costs_complete=True)
         self.assertEqual(result["status"], "incomplete_cost_or_revenue_evidence")
