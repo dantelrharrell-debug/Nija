@@ -927,6 +927,12 @@ def create_app(store: Optional[BillingServiceStore] = None) -> Flask:
     register_course_portal(app, app.config["BILLING_STORE"])
     register_onboarding_routes(app, app.config["BILLING_STORE"])
 
+    # Restricted, GET-only revenue reporting; no changes to Checkout or Stripe webhooks.
+    # Unprovisioned report keys/evidence fail closed with HTTP 503.
+    from website_profit_reporting_api import create_profit_blueprint
+
+    app.register_blueprint(create_profit_blueprint())
+
     # Opt-in only: audit existing Founding 100 identity and entitlement through
     # the internal billing network. Never change a customer, trial or gate.
     from founding100_boot_audit import launch_opt_in_audit
