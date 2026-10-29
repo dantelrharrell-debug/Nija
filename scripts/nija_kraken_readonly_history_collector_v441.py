@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 import time
 from collections.abc import Callable, Mapping
 from decimal import Decimal, InvalidOperation
@@ -17,15 +18,64 @@ from typing import Any
 ENDPOINTS = (("TradesHistory", "trades"), ("ClosedOrders", "closed"), ("Ledgers", "ledger"))
 PAGE_SIZE = 50
 
+# Exact exchange-owned values only. Never retain arbitrary error strings: the
+# response may contain account data or transport-injected credential values.
+_API_ERROR_REASONS = {
+    "EGeneral:Permission denied": "permission_denied",
+    "EAccount:Invalid permissions": "permission_denied",
+    "EAPI:Invalid key": "invalid_key",
+    "EAPI:Invalid signature": "invalid_signature",
+    "EAPI:Invalid nonce": "invalid_nonce",
+    "EAPI:Rate limit exceeded": "rate_limited",
+    "EAuth:Rate limit exceeded": "rate_limited",
+    "EAuth:Too many requests": "rate_limited",
+    "EGeneral:Temporary lockout": "temporary_lockout",
+    "EGeneral:Invalid arguments": "invalid_arguments",
+    "EService:Unavailable": "service_unavailable",
+    "EService:Deadline elapsed": "deadline_elapsed",
+    "EAuth:Account temporary disabled": "account_disabled",
+    "EAuth:Account unconfirmed": "account_unconfirmed",
+}
+API_FAILURE_REASONS = frozenset(_API_ERROR_REASONS.values()) | {
+    "throttled", "unknown_api_error", "malformed_api_response", "multiple_api_errors",
+}
+
+
+def _api_failure_reason(payload: Any) -> str:
+    """Classify a failed response without retaining any of its free text."""
+    if not isinstance(payload, Mapping):
+        return "malformed_api_response"
+    errors = payload.get("error")
+    if type(errors) is not list or not errors or any(type(e) is not str for e in errors):
+        return "malformed_api_response"
+    if len(errors) != 1:
+        return "multiple_api_errors"
+    error = errors[0]
+    if error in _API_ERROR_REASONS:
+        return _API_ERROR_REASONS[error]
+    if re.fullmatch(r"EService: ?Throttled: [0-9]{1,12}", error):
+        return "throttled"
+    return "unknown_api_error"
+
+
+def _api_failure(endpoint: str, payload: Any) -> IncompleteHistory:
+    """Build a redacted failure; do not store the broker payload or exception."""
+    return IncompleteHistory(
+        f"{endpoint}: API failure", api_failure_reason=_api_failure_reason(payload),
+    )
+
 
 class IncompleteHistory(RuntimeError):
     """Stop rather than silently certify a partial account history."""
 
     def __init__(self, reason: str, *, required_pages: int | None = None,
-                 requested_pages: int | None = None) -> None:
+                 requested_pages: int | None = None,
+                 api_failure_reason: str | None = None) -> None:
         super().__init__(reason)
         self.required_pages = required_pages
         self.requested_pages = requested_pages
+        self.api_failure_reason = (api_failure_reason if type(api_failure_reason) is str
+                                   and api_failure_reason in API_FAILURE_REASONS else None)
 
 
 def history_failure_diagnostic(exc: BaseException) -> dict[str, str]:
@@ -57,6 +107,9 @@ def history_failure_diagnostic(exc: BaseException) -> dict[str, str]:
         for suffix, reason in reasons.items():
             if message == f"{endpoint}: {suffix}":
                 diagnostic = {"error_code": reason, "error_endpoint": endpoint}
+                if (reason == "api_failure" and type(exc.api_failure_reason) is str
+                        and exc.api_failure_reason in API_FAILURE_REASONS):
+                    diagnostic["api_failure_reason"] = exc.api_failure_reason
                 # Counts are stored only in the private mode-0600 receipt,
                 # never in the public application log or error message.
                 if (reason == "page_limit"
@@ -111,7 +164,7 @@ def collect_history(
         for _ in range(max_pages):
             payload = private_read(endpoint, dict(params))
             if not isinstance(payload, Mapping) or payload.get("error") != []:
-                raise IncompleteHistory(f"{endpoint}: API failure")
+                raise _api_failure(endpoint, payload)
             result = payload.get("result")
             if not isinstance(result, Mapping) or not isinstance(result.get(field), Mapping):
                 raise IncompleteHistory(f"{endpoint}: malformed result")
@@ -164,7 +217,7 @@ def collect_history(
                 raise IncompleteHistory("OpenOrders: invalid observation clock")
             previous = finished
             if not isinstance(payload, Mapping) or payload.get("error") != []:
-                raise IncompleteHistory("OpenOrders: API failure")
+                raise _api_failure("OpenOrders", payload)
             result = payload.get("result")
             if not isinstance(result, Mapping) or not isinstance(result.get("open"), Mapping):
                 raise IncompleteHistory("OpenOrders: malformed result")
@@ -200,8 +253,8 @@ def collect_history(
 
     def read_balance() -> dict[str, str]:
         payload = private_read("Balance", {})
-        if not isinstance(payload, Mapping) or payload.get("error"):
-            raise IncompleteHistory("Balance: API failure")
+        if not isinstance(payload, Mapping) or payload.get("error") != []:
+            raise _api_failure("Balance", payload)
         result = payload.get("result")
         if not isinstance(result, Mapping):
             raise IncompleteHistory("Balance: malformed result")
@@ -227,8 +280,8 @@ def collect_history(
             expected: int | None = None
             for index in range(max_pages):
                 payload = private_read(endpoint, {"ofs": index * PAGE_SIZE})
-                if not isinstance(payload, Mapping) or payload.get("error"):
-                    raise IncompleteHistory(f"{endpoint}: API failure")
+                if not isinstance(payload, Mapping) or payload.get("error") != []:
+                    raise _api_failure(endpoint, payload)
                 result = payload.get("result")
                 if not isinstance(result, Mapping) or not isinstance(result.get(field), Mapping):
                     raise IncompleteHistory(f"{endpoint}: malformed result")
