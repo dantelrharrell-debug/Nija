@@ -1,7 +1,7 @@
 name: NIJA isolated backup restore (no trading authority)
 on:
   push:
-    branches: [ops/nija-independent-recovery-20261029]
+    branches: [fix/nija-independent-recovery-20261029]
     paths: ['.github/workflows/nija-independent-recovery-20261029.yml']
 permissions:
   contents: read
@@ -10,7 +10,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   offhost-restore:
-    if: github.ref == 'refs/heads/ops/nija-independent-recovery-20261029'
+    if: github.ref == 'refs/heads/fix/nija-independent-recovery-20261029'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -146,7 +146,7 @@ jobs:
 
   publish-sanitized-result:
     needs: offhost-restore
-    if: always() && github.ref == 'refs/heads/ops/nija-independent-recovery-20261029'
+    if: always() && github.ref == 'refs/heads/fix/nija-independent-recovery-20261029'
     runs-on: ubuntu-latest
     timeout-minutes: 3
     permissions:
