@@ -89,10 +89,10 @@ jobs:
             exit 2
           }
           echo 'RENDER_SOURCE_CAPTURE=COMPLETE'
-          # Render officially supports scp -s with SFTP. The runner temporarily
+          # OpenSSH 9+ uses SFTP by default; omit legacy -s. Runner temporarily
           # holds plain archives only in a private directory, never artifacts.
           install -d -m 700 "$secure/pulled"
-          if ! scp -s -q -p -r "${ssh_opts[@]}" "$remote:$capture" "$secure/pulled/"; then
+          if ! scp -q -p -r "${ssh_opts[@]}" "$remote:$capture" "$secure/pulled/"; then
             echo 'BLOCKED: authenticated encrypted SCP transfer failed'
             exit 2
           fi
