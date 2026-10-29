@@ -124,7 +124,7 @@ jobs:
               raise SystemExit('BLOCKED: recovery directory not private')
           # One immutable request ID: rerunning this workflow never replays an
           # interrupted claim or submits another history collection.
-          request_id = '91cefe76c2c7d7164608bb4ffb195532'
+          request_id = '997eae3f9df551e06ffab7a9cf0dc60d'
           claim = root / (request_id + '.claimed.json')
           receipt = root / (request_id + '.evidence.json')
           if receipt.exists():
@@ -167,7 +167,7 @@ jobs:
                   if (root / 'exact_request.json').exists() or (root / 'exact_request.json').is_symlink():
                       raise SystemExit('BLOCKED: another recovery mode is pending')
                   request = dict(request_id=request_id, account_scope='platform:kraken',
-                                 created_at=time.time(), max_pages=100, use_cursor=True)
+                                 created_at=time.time(), max_pages=100, use_cursor=False)
                   temporary_fd, temporary_path = tempfile.mkstemp(prefix='.request-', dir=root)
                   try:
                       with os.fdopen(temporary_fd, 'w') as stream:
