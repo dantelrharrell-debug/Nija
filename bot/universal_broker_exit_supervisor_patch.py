@@ -472,12 +472,19 @@ def _start() -> None:
 
 
 def _patch_module(module: Any) -> bool:
+    # Inspect only names already bound in the namespace. getattr() on lazy
+    # modules (e.g. numpy.lib) can import another module, re-enter this hook,
+    # and recurse until the interpreter crashes before any broker is found.
+    try:
+        namespace = vars(module)
+    except TypeError:
+        return False
     patched = False
     for class_name in (
         "KrakenBroker", "KrakenBrokerAdapter", "CoinbaseBroker", "CoinbaseBrokerAdapter",
         "_CoinbaseInvalidProductFilter", "OKXBroker", "OKXBrokerAdapter",
     ):
-        cls = getattr(module, class_name, None)
+        cls = namespace.get(class_name)
         if not isinstance(cls, type) or getattr(cls, _PATCHED, False):
             continue
         original_init = getattr(cls, "__init__", None)

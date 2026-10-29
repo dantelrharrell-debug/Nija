@@ -1,0 +1,71 @@
+name: Render recovery access (read-only)
+on:
+  workflow_dispatch:
+  push:
+    branches: [ops/render-recovery-runner-20261029]
+    paths: ['.github/workflows/render-recovery-access.yml']
+permissions:
+  contents: read
+concurrency:
+  group: render-recovery-access
+  cancel-in-progress: false
+jobs:
+  network:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Check regional SSH network path without credentials
+        shell: bash
+        run: |
+          python3 -I - <<'PY'
+          import socket
+          host = 'ssh.oregon.render.com'
+          try:
+              socket.getaddrinfo(host, 22, type=socket.SOCK_STREAM)
+          except OSError:
+              raise SystemExit('BLOCKED: regional SSH hostname did not resolve')
+          print('RENDER_SSH_DNS_OK')
+          try:
+              with socket.create_connection((host, 22), timeout=15):
+                  pass
+          except OSError:
+              raise SystemExit('BLOCKED: regional SSH TCP connection failed')
+          print('RENDER_SSH_TCP_OK')
+          PY
+  authenticated-access:
+    needs: network
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Verify only a fixed read-only shell marker
+        shell: bash
+        env:
+          RENDER_RECOVERY_SSH_KEY: ${{ secrets.NIJA_RENDER_RECOVERY_SSH_PRIVATE_KEY }}
+        run: |
+          set -eu
+          if [ -z "$RENDER_RECOVERY_SSH_KEY" ]; then
+            echo 'BLOCKED: configure NIJA_RENDER_RECOVERY_SSH_PRIVATE_KEY and register its public key in Render'
+            exit 2
+          fi
+          umask 077
+          recovery_dir=$(mktemp -d)
+          trap 'rm -rf "$recovery_dir"' EXIT
+          printf '%s\n' "$RENDER_RECOVERY_SSH_KEY" > "$recovery_dir/key"
+          unset RENDER_RECOVERY_SSH_KEY
+          ssh-keygen -y -P '' -f "$recovery_dir/key" >/dev/null 2>&1 || {
+            echo 'BLOCKED: dedicated SSH key is invalid or requires interactive unlocking'
+            exit 2
+          }
+          ssh-keyscan -t ed25519 -T 15 ssh.oregon.render.com > "$recovery_dir/known_hosts" 2>/dev/null
+          observed=$(ssh-keygen -lf "$recovery_dir/known_hosts" -E sha256 | awk '{print $2}' | sort -u)
+          if [ "$observed" != 'SHA256:KkZPgnApmttFYSkdJsCi7B01sgZPMI6kY53MDbbanGM' ]; then
+            echo 'BLOCKED: Render Oregon host key does not match its published fingerprint'
+            exit 2
+          fi
+          ssh -T -i "$recovery_dir/key" \
+            -o BatchMode=yes -o IdentitiesOnly=yes -o IdentityAgent=none \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$recovery_dir/known_hosts" \
+            -o HostKeyAlgorithms=ssh-ed25519 -o ConnectTimeout=15 \
+            -o ConnectionAttempts=1 -o ServerAliveInterval=10 -o ServerAliveCountMax=1 \
+            srv-d98dsr5aeets73fpbaqg@ssh.oregon.render.com \
+            "printf '%s\\n' NIJA_SHELL_ACCESS_VERIFIED"

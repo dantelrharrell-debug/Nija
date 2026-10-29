@@ -11,7 +11,7 @@ import pytest
 
 spec = importlib.util.spec_from_file_location(
     "nija_kraken_failure_receipt_triage_v464",
-    Path(__file__).with_name("nija_kraken_failure_receipt_triage_v464.py"),
+    Path(__file__).resolve().parents[1] / "scripts" / "nija_kraken_failure_receipt_triage_v464.py",
 )
 api = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = api

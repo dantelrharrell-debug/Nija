@@ -66,8 +66,11 @@ def _request(root: Path, now: float, filename: str = "request.json") -> dict[str
     finally:
         os.close(fd)
     row = json.loads(raw, object_pairs_hook=_unique_keys)
-    if not isinstance(row, dict) or set(row) != {"request_id", "account_scope", "created_at", "max_pages"}:
+    required = {"request_id", "account_scope", "created_at", "max_pages"}
+    if not isinstance(row, dict) or set(row) not in (required, required | {"use_cursor"}):
         raise ValueError("recovery_request_schema_invalid")
+    if "use_cursor" in row and type(row["use_cursor"]) is not bool:
+        raise ValueError("recovery_request_cursor_invalid")
     identity = row["request_id"]
     scope = row["account_scope"]
     stamp = row["created_at"]
@@ -152,6 +155,7 @@ def collect_requested_history(
                 monitoring_category=monitoring_category,
                 max_pages=request["max_pages"], include_balance=True,
                 include_open_orders=True,
+                use_cursor=request.get("use_cursor", False),
             )
         except Exception as exc:
             # Persist only fixed collector-owned diagnostic labels.
@@ -163,9 +167,10 @@ def collect_requested_history(
             })
             LOGGER.warning(
                 "KRAKEN_HISTORY_COLLECTION_FAILED request_id=%s error_code=%s "
-                "error_endpoint=%s trading_authorized=false",
+                "error_endpoint=%s api_failure_reason=%s trading_authorized=false",
                 identity, diagnostic.get("error_code", "unexpected_exception"),
                 diagnostic.get("error_endpoint", "unknown"),
+                diagnostic.get("api_failure_reason", "not_available"),
             )
             return True
         write_recovery_state(output, {

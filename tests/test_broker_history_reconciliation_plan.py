@@ -38,4 +38,8 @@ def test_duplicate_broker_trade_is_ambiguous():
 def test_account_scope_mismatch_fails_closed():
     with pytest.raises(ValueError):
         plan_opening_reconciliation("platform:kraken", [fill("t1", "o1", "platform:coinbase")], [])
-\n\ndef test_uncertified_readback_is_rejected():\n    with pytest.raises(ValueError, match="independent_broker_readback_certification_required"):\n        _plan_opening_reconciliation("platform:kraken", [fill("t1", "o1")], [])\n
+
+
+def test_uncertified_readback_is_rejected():
+    with pytest.raises(ValueError, match="independent_broker_readback_certification_required"):
+        _plan_opening_reconciliation("platform:kraken", [fill("t1", "o1")], [])

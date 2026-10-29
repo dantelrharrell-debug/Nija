@@ -1,0 +1,49 @@
+# Alternative Render recovery access
+
+The GitHub-hosted runner checks its own DNS/TCP route to the Render Oregon SSH
+endpoint, then uses a dedicated SSH credential to run one fixed command:
+`printf '%s\n' NIJA_SHELL_ACCESS_VERIFIED`.
+
+It does not deploy, restart, modify trading controls, read account data, install
+the independent collector, or execute arbitrary input. Network reachability is
+reported separately from authenticated access. A passing network job alone is
+not proof of SSH authentication or collector installation.
+
+## One-time credential setup
+
+An authorized account owner must generate a dedicated Ed25519 SSH key on a
+trusted device, register the PUBLIC key in Render Account Settings → SSH Public
+Keys, and save the PRIVATE key as the encrypted GitHub Actions repository secret
+`NIJA_RENDER_RECOVERY_SSH_PRIVATE_KEY` in `dantelrharrell-debug/Nija`.
+
+Never put a private key in chat, a repository file, an issue, a workflow input,
+or a log. Do not reuse a GitHub dependency/deploy key. This runner requires a key
+that is available non-interactively; it does not support a passphrase prompt.
+Registration grants SSH access and must be completed or approved by the owner.
+No account key or Actions secret is created by this PR.
+
+## Run and interpret
+
+The feature-branch push performs the initial probe. If credentials are missing,
+the authenticated job intentionally fails with a fixed setup message. After
+owner setup, rerun the failed job and inspect its result. A manual dispatch is
+also defined for when the workflow is available on the repository default branch.
+
+The SSH server fingerprint must match Render's published Oregon Ed25519
+fingerprint, checked October 29, 2026:
+`SHA256:KkZPgnApmttFYSkdJsCi7B01sgZPMI6kY53MDbbanGM`.
+The runner refuses a mismatch, verifies host keys strictly, and deletes temporary
+credential files at exit. It has no checkout step and grants only contents:read
+to its GitHub token. The dedicated SSH secret is exposed only to its SSH step.
+
+References:
+- https://render.com/docs/ssh
+- https://docs.github.com/en/actions/security-for-github-actions/security-guides/using-secrets-in-github-actions
+
+## Remaining recovery work
+
+Once the marker proves access, review the complete production repair command
+before adding it to a separately reviewed workflow. Do not change this probe to
+accept arbitrary shell input. Complete the genuine ledger, broker, writer,
+operator and risk evidence, then install the audited collector in the canonical
+running process. No readiness flag or shell marker can replace that evidence.
