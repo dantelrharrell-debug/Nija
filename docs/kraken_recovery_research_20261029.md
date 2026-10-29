@@ -23,6 +23,20 @@ repair the financial ledger, install an independent attestation collector, clear
 stops, or enable orders. A deployment would interrupt the pending recovery thread;
 do not deploy merely to change its diagnostic messages.
 
+## Repository-wide validation repair
+
+The first complete CI run crashed in the existing exit supervisor import hook:
+its module scan used `getattr(module, broker_class_name)`, which invoked NumPy's
+lazy module attribute loader and recursively re-entered the import hook. The
+repair reads only names already bound in the module namespace. It retains the
+existing broker class wrapping, instance registration, connect return values,
+exit worker, thresholds and idempotence. Tests exercise a reentrant lazy module
+and actual class registration. No test partition, baseline or safety check is
+skipped or relaxed.
+
+Python documents that direct module namespace access does not invoke a module's
+`__getattr__`: https://docs.python.org/3.11/reference/datamodel.html#customizing-module-attribute-access
+
 ## Verified primary references
 
 - https://docs.kraken.com/api-reference/account-data/get-trades-history
