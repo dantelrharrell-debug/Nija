@@ -33,25 +33,27 @@ the authenticated job intentionally fails with a fixed setup message. After
 owner setup, rerun the failed job and inspect its result. A manual dispatch is
 also defined for when the workflow is available on the repository default branch.
 
-A previous revision submitted one explicit private history-recovery request
-using the deployed existing-client protocol. Its fixed request ID is permanently
-single-use, and the page budget is 100 per endpoint/pass. The current workflow
-only inspects that existing request and cannot submit a new one.
-It verifies the reviewed request implementation's source hash and preserves all
-claims and receipts. When a claim has no terminal receipt, it performs a
-nonblocking shared lock probe and reports whether the collector lock is busy or
-free. A busy lock is not a completion or progress certificate. Never force-unlock
-or replay a claimed request. Repeated workflow runs only report
-pending/claimed/terminal status for this request; they never replay it or create
-a new request ID. History responses remain private on the Render disk. This is
-read-only broker collection, not independent certification or trading activation.
+The approved PR #3491 was merged and deployed as commit
+`37cf08a504a0ea31401aefbdd3aa71d13e943b5d`. That deployment interrupted the
+unfinished full-history attempt `997eae3f9df551e06ffab7a9cf0dc60d`; its claim
+remains preserved and is never replayed. The earlier cursor request
+`91cefe76c2c7d7164608bb4ffb195532` failed with `api_failure` at TradesHistory;
+its claim and failure receipt remain preserved too.
 
-The first cursor request (`91cefe76c2c7d7164608bb4ffb195532`) completed with
-`api_failure` at TradesHistory. Its claim and failure receipt are preserved.
-After reviewing that terminal failure, the operator selected the existing offset
-implementation for a separate explicit request (`997eae3f9df551e06ffab7a9cf0dc60d`,
-`use_cursor: false`). This is a deliberate compatibility attempt, not an automatic
-fallback, a replay, or a certification. It also has a permanently single-use ID.
+The current workflow verifies exact source hashes for the deployed history
+request handler and repaired exit observer. It submits ONE explicit bounded
+cursor compatibility probe, `d7baa71731e633d1c6f4c9848505ab98`, with a one-page
+budget per endpoint/pass. A `page_limit` outcome is an expected bounded-probe
+result, not complete history or independent certification. The probe uses only
+NIJA's existing client and nonce/rate controls; it never changes ledger rows,
+orders, protections, or trading authorization.
+
+The private request is created exclusively under the collector lock, after
+checking that no other recovery request is queued. Repeated workflow runs only
+inspect the same immutable request ID. When a claim has no terminal receipt,
+a nonblocking shared lock probe reports busy/free; a busy lock alone is not a
+progress certificate. Fixed allowlisted API failure reasons can be reported
+without upstream free text, credentials, holdings, or account identifiers.
 
 The SSH server fingerprint must match Render's published Oregon Ed25519
 fingerprint, checked October 29, 2026:
