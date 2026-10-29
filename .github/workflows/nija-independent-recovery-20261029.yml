@@ -3,6 +3,10 @@ on:
   push:
     branches: [fix/nija-independent-recovery-20261029]
     paths: ['.github/workflows/nija-independent-recovery-20261029.yml']
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [release/justcall-handoff-only-20261017]
+    paths: ['.github/workflows/nija-independent-recovery-20261029.yml']
 permissions:
   contents: read
 concurrency:
@@ -10,7 +14,12 @@ concurrency:
   cancel-in-progress: false
 jobs:
   offhost-restore:
-    if: github.ref == 'refs/heads/fix/nija-independent-recovery-20261029'
+    if: >-
+      (github.event_name == 'push' && github.ref == 'refs/heads/fix/nija-independent-recovery-20261029') ||
+      (github.event_name == 'pull_request' && github.event.pull_request.number == 3499 &&
+       github.event.pull_request.head.repo.full_name == github.repository &&
+       github.event.pull_request.head.ref == 'fix/nija-independent-recovery-20261029' &&
+       github.event.pull_request.base.ref == 'release/justcall-handoff-only-20261017')
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -146,7 +155,12 @@ jobs:
 
   publish-sanitized-result:
     needs: offhost-restore
-    if: always() && github.ref == 'refs/heads/fix/nija-independent-recovery-20261029'
+    if: >-
+      always() && ((github.event_name == 'push' && github.ref == 'refs/heads/fix/nija-independent-recovery-20261029') ||
+      (github.event_name == 'pull_request' && github.event.pull_request.number == 3499 &&
+       github.event.pull_request.head.repo.full_name == github.repository &&
+       github.event.pull_request.head.ref == 'fix/nija-independent-recovery-20261029' &&
+       github.event.pull_request.base.ref == 'release/justcall-handoff-only-20261017'))
     runs-on: ubuntu-latest
     timeout-minutes: 3
     permissions:
@@ -157,6 +171,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RESTORE_JOB_RESULT: ${{ needs.offhost-restore.result }}
+          RECOVERY_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -Eeuo pipefail
           if [ "$RESTORE_JOB_RESULT" = success ]; then
@@ -173,5 +188,5 @@ jobs:
             --header 'Accept: application/vnd.github+json' \
             --header 'X-GitHub-Api-Version: 2022-11-28' \
             --data "$payload" \
-            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" >/dev/null
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/statuses/$RECOVERY_SOURCE_SHA" >/dev/null
           printf 'SANITIZED_RECOVERY_STATUS_RECORDED=%s\n' "$state"
