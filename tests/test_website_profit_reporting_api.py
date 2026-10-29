@@ -60,6 +60,7 @@ class WebsiteProfitApiTests(unittest.TestCase):
                 "visitor_counts_verified": certify,
                 "provider_revenue_verified": certify,
                 "all_costs_verified": certify,
+                "qualified_leads_verified": certify,
             },
         }
         body["signature"] = sign_evidence(body, self.key)
@@ -121,6 +122,43 @@ class WebsiteProfitApiTests(unittest.TestCase):
         response = self.request(period="2099-01")
         self.assertEqual(response.get_json()["status"], "reporting_period_open")
         self.assertIsNone(response.get_json()["net_profit_usd"])
+
+    def test_certified_aggregate_visitor_counts_without_fake_pageviews(self):
+        record = self.evidence()
+        record["aggregate_counts"] = {
+            "unique_visitors": 100,
+            "unique_qualified_leads": 4,
+            "visitor_source": "ga4:546929929",
+            "lead_source": "reconciled_nija_crm",
+        }
+        record["signature"] = sign_evidence(record, self.key)
+        Path(self.tempdir.name, "2025-04.json").write_text(json.dumps(record), encoding="utf-8")
+        data = self.request().get_json()
+        self.assertEqual(data["status"], "verified")
+        self.assertEqual(data["unique_visitors"], 100)
+        self.assertEqual(data["unique_qualified_leads"], 4)
+        self.assertEqual(data["net_profit_per_visitor_usd"], "0.06")
+        self.assertEqual(data["net_profit_per_qualified_lead_usd"], "1.50")
+        self.assertEqual(data["visitor_count_source"], "certified_aggregate")
+
+    def test_unattested_leads_have_no_profit_ratio(self):
+        record = self.evidence()
+        record["certification"]["qualified_leads_verified"] = False
+        record["signature"] = sign_evidence(record, self.key)
+        Path(self.tempdir.name, "2025-04.json").write_text(json.dumps(record), encoding="utf-8")
+        data = self.request().get_json()
+        self.assertEqual(data["status"], "verified")
+        self.assertEqual(data["net_profit_per_visitor_usd"], "3.00")
+        self.assertIsNone(data["net_profit_per_qualified_lead_usd"])
+
+    def test_rejects_certified_aggregate_smaller_than_observed(self):
+        record = self.evidence()
+        record["aggregate_counts"] = {"unique_visitors": 1}
+        record["signature"] = sign_evidence(record, self.key)
+        Path(self.tempdir.name, "2025-04.json").write_text(json.dumps(record), encoding="utf-8")
+        response = self.request()
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.get_json()["status"], "invalid_evidence")
 
     def test_invalid_period_rejected(self):
         response = self.request(period="../2025-04")
