@@ -1,0 +1,42 @@
+name: NIJA Website Revenue and Net Profit Tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'website_revenue_attribution.py'
+      - 'website_net_profit.py'
+      - 'tests/test_website_revenue_attribution.py'
+      - 'tests/test_website_net_profit.py'
+      - '.github/workflows/website-profit-tests.yml'
+  pull_request:
+    paths:
+      - 'website_revenue_attribution.py'
+      - 'website_net_profit.py'
+      - 'tests/test_website_revenue_attribution.py'
+      - 'tests/test_website_net_profit.py'
+      - '.github/workflows/website-profit-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  website-profit-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Run website revenue and profitability regression tests in isolation
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmpdir="$(mktemp -d)"
+          mkdir -p "$tmpdir/tests"
+          cp website_revenue_attribution.py website_net_profit.py "$tmpdir/"
+          cp tests/test_website_revenue_attribution.py tests/test_website_net_profit.py "$tmpdir/tests/"
+          cd "$tmpdir"
+          PYTHONNOUSERSITE=1 python -m unittest discover -s tests -p 'test_website*.py' -v
