@@ -1,4 +1,5 @@
 name: NIJA Website Revenue and Net Profit Tests
+# Verify only website accounting code, never trading runtime or live secrets.
 
 on:
   push:
