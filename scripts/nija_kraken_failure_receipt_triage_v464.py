@@ -16,6 +16,15 @@ import re
 import stat
 from typing import Any
 
+# Kept local so this restricted offline CLI remains directly executable without
+# importing the application. A contract test checks parity with the collector.
+API_FAILURE_REASONS = frozenset({
+    "permission_denied", "invalid_key", "invalid_signature", "invalid_nonce",
+    "rate_limited", "temporary_lockout", "invalid_arguments", "service_unavailable",
+    "deadline_elapsed", "account_disabled", "account_unconfirmed", "throttled",
+    "unknown_api_error", "malformed_api_response", "multiple_api_errors",
+})
+
 REQUEST_ID = re.compile(r"[a-f0-9]{32}\Z")
 MAX_CLAIM_BYTES = 4096
 MAX_RECEIPT_BYTES = 8192
@@ -104,7 +113,10 @@ def inspect_failure(root: Path, request_id: str) -> dict[str, Any]:
     claim = _private_read(root / (request_id + ".claimed.json"), MAX_CLAIM_BYTES)
     receipt = _private_read(root / (request_id + ".evidence.json"), MAX_RECEIPT_BYTES)
 
-    if (set(claim) != {"request_id", "account_scope", "created_at", "max_pages"}
+    if (set(claim) not in (
+            {"request_id", "account_scope", "created_at", "max_pages"},
+            {"request_id", "account_scope", "created_at", "max_pages", "use_cursor"})
+            or ("use_cursor" in claim and type(claim["use_cursor"]) is not bool)
             or claim["request_id"] != request_id
             or claim["account_scope"] != "platform:kraken"
             or type(claim["max_pages"]) is not int
@@ -125,9 +137,15 @@ def inspect_failure(root: Path, request_id: str) -> dict[str, Any]:
         raise TriageFailure("receipt_failure_label_invalid")
     allowed = {"request_id", "collection_succeeded", "trading_authorized",
                "error_type", "error_code", "error_endpoint",
-               "requested_pages", "required_pages"}
+               "requested_pages", "required_pages", "api_failure_reason"}
     if set(receipt) - allowed:
         raise TriageFailure("receipt_contains_unexpected_fields")
+
+    api_reason = receipt.get("api_failure_reason")
+    if ("api_failure_reason" in receipt and (
+            code != "api_failure" or type(api_reason) is not str
+            or api_reason not in API_FAILURE_REASONS)):
+        raise TriageFailure("receipt_api_failure_reason_invalid")
 
     result: dict[str, Any] = {
         "status": "FAILED_COLLECTION_TRIAGED",
@@ -143,6 +161,8 @@ def inspect_failure(root: Path, request_id: str) -> dict[str, Any]:
         "protective_exit_coverage_verified": False,
         "execution_authorized": False,
     }
+    if api_reason is not None:
+        result["api_failure_reason"] = api_reason
     requested, required = receipt.get("requested_pages"), receipt.get("required_pages")
     if requested is None and required is None:
         result["complete_page_budget_known"] = False
