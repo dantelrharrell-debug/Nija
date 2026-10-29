@@ -9,7 +9,7 @@ status and an allowlist of fixed technical issue labels. Counters, rows, holding
 account identifiers and credential values are never printed.
 
 It does not deploy, restart, modify trading controls or ledger records, install
-the independent collector, or execute arbitrary input. Network reachability is
+the independent certification collector, or execute arbitrary input. Network reachability is
 reported separately from authenticated access. A passing network job alone is
 not proof of SSH authentication or collector installation.
 
@@ -32,6 +32,16 @@ The feature-branch push performs the initial probe. If credentials are missing,
 the authenticated job intentionally fails with a fixed setup message. After
 owner setup, rerun the failed job and inspect its result. A manual dispatch is
 also defined for when the workflow is available on the repository default branch.
+
+The current workflow also submits one explicit private history-recovery request
+using the deployed existing-client protocol. Its fixed request ID is permanently
+single-use, `use_cursor` is true, and the page budget is 100 per endpoint/pass.
+It verifies the reviewed request implementation's source hash, preserves any
+older interrupted claim, never overwrites a queued request, and checks the
+collector's exclusive lock before submitting. Repeated workflow runs only report
+pending/claimed/terminal status for this request; they never replay it or create
+a new request ID. History responses remain private on the Render disk. This is
+read-only broker collection, not independent certification or trading activation.
 
 The SSH server fingerprint must match Render's published Oregon Ed25519
 fingerprint, checked October 29, 2026:
