@@ -147,10 +147,6 @@ jobs:
                   'history_error_endpoint': row.get('error_endpoint') if row.get('error_endpoint') in safe_endpoints else 'unspecified',
               }, sort_keys=True))
           elif claim.exists():
-              print('NIJA_HISTORY_RECOVERY_CLAIMED_NO_TERMINAL_RECEIPT')
-          elif (root / 'request.json').exists():
-              print('NIJA_HISTORY_RECOVERY_REQUEST_ALREADY_PENDING')
-          else:
               fd = os.open(root / 'collector.lock', os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
               try:
                   info = os.fstat(fd)
@@ -158,31 +154,15 @@ jobs:
                           or stat.S_IMODE(info.st_mode) & 0o077 or info.st_nlink != 1):
                       raise SystemExit('BLOCKED: recovery lock not private regular file')
                   try:
-                      fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                      fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
                   except BlockingIOError:
-                      raise SystemExit('BLOCKED: another history collection is active')
-                  if any(path.exists() or path.is_symlink()
-                         for path in (claim, receipt, root / 'request.json')):
-                      raise SystemExit('BLOCKED: recovery request state changed before submission')
-                  if (root / 'exact_request.json').exists() or (root / 'exact_request.json').is_symlink():
-                      raise SystemExit('BLOCKED: another recovery mode is pending')
-                  request = dict(request_id=request_id, account_scope='platform:kraken',
-                                 created_at=time.time(), max_pages=100, use_cursor=False)
-                  temporary_fd, temporary_path = tempfile.mkstemp(prefix='.request-', dir=root)
-                  try:
-                      with os.fdopen(temporary_fd, 'w') as stream:
-                          json.dump(request, stream, allow_nan=False)
-                          stream.flush()
-                          os.fsync(stream.fileno())
-                      os.link(temporary_path, root / 'request.json', follow_symlinks=False)
-                  finally:
-                      os.unlink(temporary_path)
-                  directory_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
-                  try:
-                      os.fsync(directory_fd)
-                  finally:
-                      os.close(directory_fd)
-                  print('NIJA_HISTORY_RECOVERY_REQUEST_SUBMITTED')
+                      print('NIJA_HISTORY_RECOVERY_CLAIMED_COLLECTOR_LOCK_BUSY')
+                  else:
+                      print('NIJA_HISTORY_RECOVERY_CLAIMED_COLLECTOR_LOCK_FREE')
               finally:
                   os.close(fd)
+          elif (root / 'request.json').exists():
+              print('NIJA_HISTORY_RECOVERY_REQUEST_ALREADY_PENDING')
+          else:
+              raise SystemExit('BLOCKED: existing single-use recovery request missing; no request submitted')
           PY
