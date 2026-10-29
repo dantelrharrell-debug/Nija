@@ -133,6 +133,14 @@ def create_profit_blueprint() -> Blueprint:
         verified_visitors = certifications.get("visitor_counts_verified") is True
         verified_revenue = certifications.get("provider_revenue_verified") is True
         verified_expenses = certifications.get("all_costs_verified") is True
+        verified_leads = certifications.get("qualified_leads_verified") is True
+        aggregates = evidence.get("aggregate_counts")
+        if aggregates is not None and not isinstance(aggregates, dict):
+            response = jsonify({"status": "invalid_evidence", "reporting_period": period})
+            response.headers["Cache-Control"] = "no-store"
+            return response, 503
+        if aggregates is None:
+            aggregates = {}
         period_closed = period < datetime.now(timezone.utc).strftime("%Y-%m")
         revenue_complete = (
             period_closed and verified_visitors and verified_revenue
@@ -149,6 +157,8 @@ def create_profit_blueprint() -> Blueprint:
                 reporting_period=period,
                 revenue_complete=revenue_complete,
                 costs_complete=costs_complete,
+                certified_unique_visitors=aggregates.get("unique_visitors") if verified_visitors else None,
+                certified_qualified_leads=aggregates.get("unique_qualified_leads") if verified_leads else None,
             )
         except (ValueError, TypeError, KeyError, AttributeError):
             response = jsonify({"status": "invalid_evidence", "reporting_period": period})
@@ -164,11 +174,16 @@ def create_profit_blueprint() -> Blueprint:
             result["net_profit_per_qualified_lead_usd"] = None
             result["visitor_target_met"] = None
 
+        if not verified_leads:
+            # Do not claim a per-lead profit ratio for unverified CRM evidence.
+            result["net_profit_per_qualified_lead_usd"] = None
+            result["qualified_lead_count_source"] = "unverified"
         result["target_usd_per_visitor"] = "1.00"
         result["source_status"] = {
             "visitor_counts_verified": verified_visitors,
             "provider_revenue_verified": verified_revenue,
             "all_costs_verified": verified_expenses,
+            "qualified_leads_verified": verified_leads,
             "reporting_period_closed": period_closed,
         }
         response = jsonify(result)
