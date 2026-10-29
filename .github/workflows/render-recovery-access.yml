@@ -37,7 +37,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
-      - name: Verify only a fixed read-only shell marker
+      - name: Inspect fixed read-only production preflight
         shell: bash
         env:
           RENDER_RECOVERY_SSH_KEY: ${{ secrets.NIJA_RENDER_RECOVERY_SSH_PRIVATE_KEY }}
@@ -68,4 +68,39 @@ jobs:
             -o HostKeyAlgorithms=ssh-ed25519 -o ConnectTimeout=15 \
             -o ConnectionAttempts=1 -o ServerAliveInterval=10 -o ServerAliveCountMax=1 \
             srv-d98dsr5aeets73fpbaqg@ssh.oregon.render.com \
-            "printf '%s\\n' NIJA_SHELL_ACCESS_VERIFIED"
+            'command python -S -' <<'PY'
+          import hashlib
+          import json
+          import runpy
+          from pathlib import Path
+
+          source = Path('/app/bot/kraken_sqlite_readonly_preflight_v488.py')
+          expected = '480e01a7ee4326ee9fc85b202f0fafb413f733cd035d9d957142488d69a05452'
+          if source.is_symlink() or hashlib.sha256(source.read_bytes()).hexdigest() != expected:
+              raise SystemExit('BLOCKED: reviewed production preflight source changed')
+          namespace = runpy.run_path(str(source), run_name='_readonly_preflight')
+          report = namespace['inspect_kraken_ledger'](Path('/data/trade_ledger.db'))
+          # Only fixed technical issue labels leave the service. Never emit
+          # database rows, counters, broker holdings, credentials or identifiers.
+          allowed = {
+              'persistent_ledger_path_unverified', 'sqlite_integrity_unverified',
+              'ledger_audit_row_budget_exceeded', 'open_position_entry_basis_unverified',
+              'opening_ledger_order_links_unverified', 'exchange_protective_order_id_mapping_missing',
+              'exchange_protective_order_ids_unverified', 'pending_kraken_closes_require_reconciliation',
+              'ledger_changed_during_readonly_audit', 'readonly_ledger_query_failed',
+          }
+          tables = {'trade_ledger', 'open_positions', 'completed_trades',
+                    'strategy_order_intents', 'pending_kraken_closes'}
+          allowed.update('required_table_or_columns_missing:' + name for name in tables)
+          issues = report.get('issues')
+          if not isinstance(issues, list) or any(item not in allowed for item in issues):
+              raise SystemExit('BLOCKED: unexpected preflight diagnostic shape')
+          print('NIJA_SHELL_ACCESS_VERIFIED')
+          print(json.dumps({
+              'sqlite_integrity_ok': report.get('sqlite_integrity_ok') is True,
+              'issues': issues,
+              'collector_install_allowed': False,
+              'production_state_changed': False,
+              'financial_data_logged': False,
+          }, sort_keys=True))
+          PY
