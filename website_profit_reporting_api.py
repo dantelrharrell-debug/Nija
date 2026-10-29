@@ -47,11 +47,11 @@ def _load_signed_evidence(period: str, folder: str, signing_key: str) -> dict[st
     if not root.is_dir():
         return None
     path = root / (period + ".json")
-    if path.is_symlink() or not path.is_file() or path.stat().st_size > _MAX_BYTES:
-        return None
-    if path.resolve().parent != root:
-        return None
     try:
+        if path.is_symlink() or not path.is_file() or path.stat().st_size > _MAX_BYTES:
+            return None
+        if path.resolve().parent != root:
+            return None
         with path.open("rb") as stream:
             raw = stream.read(_MAX_BYTES + 1)
         if len(raw) > _MAX_BYTES:
@@ -62,9 +62,13 @@ def _load_signed_evidence(period: str, folder: str, signing_key: str) -> dict[st
     if not isinstance(envelope, dict):
         return None
     provided = envelope.get("signature")
-    if not isinstance(provided, str) or len(provided) != 64:
+    if not isinstance(provided, str) or re.fullmatch(r"[0-9a-f]{64}", provided) is None:
         return None
-    if not hmac.compare_digest(provided, sign_evidence(envelope, signing_key)):
+    try:
+        expected = sign_evidence(envelope, signing_key)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not hmac.compare_digest(provided, expected):
         return None
     if envelope.get("reporting_period") != period:
         return None
@@ -87,7 +91,8 @@ def create_profit_blueprint() -> Blueprint:
         signing_key = os.getenv("NIJA_PROFIT_EVIDENCE_HMAC_KEY", "").strip()
         folder = os.getenv("NIJA_PROFIT_EVIDENCE_DIR", "").strip()
         # Unprovisioned deployment is explicitly NOT an enabled dashboard.
-        if min(len(dashboard_key), len(signing_key)) < 32 or not folder:
+        if (min(len(dashboard_key), len(signing_key)) < 32
+                or not folder or hmac.compare_digest(dashboard_key, signing_key)):
             response = jsonify({"status": "unavailable", "reason": "profit_reporting_not_configured"})
             response.headers["Cache-Control"] = "no-store"
             return response, 503
