@@ -41,19 +41,31 @@ remains preserved and is never replayed. The earlier cursor request
 its claim and failure receipt remain preserved too.
 
 The current workflow verifies exact source hashes for the deployed history
-request handler and repaired exit observer. It submits ONE explicit bounded
-cursor compatibility probe, `d7baa71731e633d1c6f4c9848505ab98`, with a one-page
-budget per endpoint/pass. A `page_limit` outcome is an expected bounded-probe
-result, not complete history or independent certification. The probe uses only
-NIJA's existing client and nonce/rate controls; it never changes ledger rows,
-orders, protections, or trading authorization.
+request handler and repaired exit observer. The post-deploy single-use cursor
+probe `d7baa71731e633d1c6f4c9848505ab98` returned `api_failure` at TradesHistory
+with the newly captured reason `invalid_arguments` at 13:53:26Z. A separate
+operator-selected offset probe `97dbb6dc01e97936829e0e3656fdbcf1` successfully
+crossed that API boundary and stopped at its deliberate one-page budget at
+13:59:25Z (`page_limit`, TradesHistory). This establishes offset compatibility;
+it does not establish the cause of the cursor-parameter rejection or complete
+historical reconciliation.
 
-The private request is created exclusively under the collector lock, after
+After reviewing both terminal receipts, the operator selected the explicit full
+offset request `aec7c56e2aa9cff292f1f6ffe94829d4`, with the previously approved
+100-page budget per endpoint/pass. Its submission requires the preserved cursor
+failure and bounded offset receipt, including an observed first-endpoint page
+requirement within the approved budget. This remains one immutable single-use
+request. It is not automatic fallback, replay, or trading certification. All
+prior claims and receipts remain preserved.
+
+The private request is created exclusively under the collector lock after
 checking that no other recovery request is queued. Repeated workflow runs only
 inspect the same immutable request ID. When a claim has no terminal receipt,
 a nonblocking shared lock probe reports busy/free; a busy lock alone is not a
 progress certificate. Fixed allowlisted API failure reasons can be reported
 without upstream free text, credentials, holdings, or account identifiers.
+All broker reads use NIJA's existing client and nonce/rate controls. The runner
+never changes ledger rows, orders, protections, or trading authorization.
 
 The SSH server fingerprint must match Render's published Oregon Ed25519
 fingerprint, checked October 29, 2026:
