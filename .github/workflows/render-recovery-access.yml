@@ -133,6 +133,19 @@ jobs:
               row = json.loads(receipt.read_text())
               state = 'completed' if row.get('collection_succeeded') is True else 'failed'
               print('NIJA_HISTORY_RECOVERY_' + state.upper())
+              safe_codes = {
+                  'api_failure', 'malformed_result', 'invalid_count', 'invalid_cursor',
+                  'repeated_cursor', 'oversized_page', 'duplicate_record', 'invalid_record',
+                  'non_json_record', 'empty_page_before_completion', 'page_limit',
+                  'pagination_count_changed', 'record_count_mismatch', 'invalid_amount',
+                  'invalid_balance', 'invalid_observation_clock', 'repeat_history_changed',
+                  'balance_changed', 'open_orders_changed', 'history_incomplete_unknown',
+              }
+              safe_endpoints = {'Balance', 'TradesHistory', 'ClosedOrders', 'Ledgers', 'OpenOrders', 'history'}
+              print(json.dumps({
+                  'history_error_code': row.get('error_code') if row.get('error_code') in safe_codes else 'unspecified',
+                  'history_error_endpoint': row.get('error_endpoint') if row.get('error_endpoint') in safe_endpoints else 'unspecified',
+              }, sort_keys=True))
           elif claim.exists():
               print('NIJA_HISTORY_RECOVERY_CLAIMED_NO_TERMINAL_RECEIPT')
           elif (root / 'request.json').exists():
@@ -151,6 +164,8 @@ jobs:
                   if any(path.exists() or path.is_symlink()
                          for path in (claim, receipt, root / 'request.json')):
                       raise SystemExit('BLOCKED: recovery request state changed before submission')
+                  if (root / 'exact_request.json').exists() or (root / 'exact_request.json').is_symlink():
+                      raise SystemExit('BLOCKED: another recovery mode is pending')
                   request = dict(request_id=request_id, account_scope='platform:kraken',
                                  created_at=time.time(), max_pages=100, use_cursor=True)
                   temporary_fd, temporary_path = tempfile.mkstemp(prefix='.request-', dir=root)
