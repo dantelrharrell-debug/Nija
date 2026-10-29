@@ -69,9 +69,14 @@ jobs:
             -o ConnectionAttempts=1 -o ServerAliveInterval=10 -o ServerAliveCountMax=1 \
             srv-d98dsr5aeets73fpbaqg@ssh.oregon.render.com \
             'command python -S -' <<'PY'
+          import fcntl
           import hashlib
           import json
+          import os
           import runpy
+          import stat
+          import tempfile
+          import time
           from pathlib import Path
 
           source = Path('/app/bot/kraken_sqlite_readonly_preflight_v488.py')
@@ -100,7 +105,69 @@ jobs:
               'sqlite_integrity_ok': report.get('sqlite_integrity_ok') is True,
               'issues': issues,
               'collector_install_allowed': False,
-              'production_state_changed': False,
+              'ledger_state_changed': False,
               'financial_data_logged': False,
           }, sort_keys=True))
+          if report.get('sqlite_integrity_ok') is not True:
+              raise SystemExit('BLOCKED: ledger integrity required before history request')
+          collector_source = Path('/app/bot/kraken_live_history_recovery.py')
+          collector_hash = '0f51770c94b63df62dd43404f95d6431f8f6eae3e66092b546f98b878daafe5e'
+          if (collector_source.is_symlink()
+                  or hashlib.sha256(collector_source.read_bytes()).hexdigest() != collector_hash):
+              raise SystemExit('BLOCKED: reviewed history request implementation changed')
+          root = Path('/data/kraken-history-recovery')
+          if root.is_symlink() or root.resolve() != root:
+              raise SystemExit('BLOCKED: recovery path not canonical')
+          info = root.stat()
+          if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid()
+                  or stat.S_IMODE(info.st_mode) & 0o077):
+              raise SystemExit('BLOCKED: recovery directory not private')
+          # One immutable request ID: rerunning this workflow never replays an
+          # interrupted claim or submits another history collection.
+          request_id = '91cefe76c2c7d7164608bb4ffb195532'
+          claim = root / (request_id + '.claimed.json')
+          receipt = root / (request_id + '.evidence.json')
+          if receipt.exists():
+              if receipt.is_symlink() or stat.S_IMODE(receipt.stat().st_mode) & 0o077:
+                  raise SystemExit('BLOCKED: history receipt not private')
+              row = json.loads(receipt.read_text())
+              state = 'completed' if row.get('collection_succeeded') is True else 'failed'
+              print('NIJA_HISTORY_RECOVERY_' + state.upper())
+          elif claim.exists():
+              print('NIJA_HISTORY_RECOVERY_CLAIMED_NO_TERMINAL_RECEIPT')
+          elif (root / 'request.json').exists():
+              print('NIJA_HISTORY_RECOVERY_REQUEST_ALREADY_PENDING')
+          else:
+              fd = os.open(root / 'collector.lock', os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+              try:
+                  info = os.fstat(fd)
+                  if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
+                          or stat.S_IMODE(info.st_mode) & 0o077 or info.st_nlink != 1):
+                      raise SystemExit('BLOCKED: recovery lock not private regular file')
+                  try:
+                      fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                  except BlockingIOError:
+                      raise SystemExit('BLOCKED: another history collection is active')
+                  if any(path.exists() or path.is_symlink()
+                         for path in (claim, receipt, root / 'request.json')):
+                      raise SystemExit('BLOCKED: recovery request state changed before submission')
+                  request = dict(request_id=request_id, account_scope='platform:kraken',
+                                 created_at=time.time(), max_pages=100, use_cursor=True)
+                  temporary_fd, temporary_path = tempfile.mkstemp(prefix='.request-', dir=root)
+                  try:
+                      with os.fdopen(temporary_fd, 'w') as stream:
+                          json.dump(request, stream, allow_nan=False)
+                          stream.flush()
+                          os.fsync(stream.fileno())
+                      os.link(temporary_path, root / 'request.json', follow_symlinks=False)
+                  finally:
+                      os.unlink(temporary_path)
+                  directory_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+                  try:
+                      os.fsync(directory_fd)
+                  finally:
+                      os.close(directory_fd)
+                  print('NIJA_HISTORY_RECOVERY_REQUEST_SUBMITTED')
+              finally:
+                  os.close(fd)
           PY
