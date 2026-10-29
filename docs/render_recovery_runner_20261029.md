@@ -33,12 +33,15 @@ the authenticated job intentionally fails with a fixed setup message. After
 owner setup, rerun the failed job and inspect its result. A manual dispatch is
 also defined for when the workflow is available on the repository default branch.
 
-The current workflow also submits one explicit private history-recovery request
+A previous revision submitted one explicit private history-recovery request
 using the deployed existing-client protocol. Its fixed request ID is permanently
-single-use, and the page budget is 100 per endpoint/pass.
-It verifies the reviewed request implementation's source hash, preserves any
-older interrupted claim, never overwrites a queued request, and checks the
-collector's exclusive lock before submitting. Repeated workflow runs only report
+single-use, and the page budget is 100 per endpoint/pass. The current workflow
+only inspects that existing request and cannot submit a new one.
+It verifies the reviewed request implementation's source hash and preserves all
+claims and receipts. When a claim has no terminal receipt, it performs a
+nonblocking shared lock probe and reports whether the collector lock is busy or
+free. A busy lock is not a completion or progress certificate. Never force-unlock
+or replay a claimed request. Repeated workflow runs only report
 pending/claimed/terminal status for this request; they never replay it or create
 a new request ID. History responses remain private on the Render disk. This is
 read-only broker collection, not independent certification or trading activation.
