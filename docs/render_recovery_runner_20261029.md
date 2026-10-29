@@ -35,13 +35,20 @@ also defined for when the workflow is available on the repository default branch
 
 The current workflow also submits one explicit private history-recovery request
 using the deployed existing-client protocol. Its fixed request ID is permanently
-single-use, `use_cursor` is true, and the page budget is 100 per endpoint/pass.
+single-use, and the page budget is 100 per endpoint/pass.
 It verifies the reviewed request implementation's source hash, preserves any
 older interrupted claim, never overwrites a queued request, and checks the
 collector's exclusive lock before submitting. Repeated workflow runs only report
 pending/claimed/terminal status for this request; they never replay it or create
 a new request ID. History responses remain private on the Render disk. This is
 read-only broker collection, not independent certification or trading activation.
+
+The first cursor request (`91cefe76c2c7d7164608bb4ffb195532`) completed with
+`api_failure` at TradesHistory. Its claim and failure receipt are preserved.
+After reviewing that terminal failure, the operator selected the existing offset
+implementation for a separate explicit request (`997eae3f9df551e06ffab7a9cf0dc60d`,
+`use_cursor: false`). This is a deliberate compatibility attempt, not an automatic
+fallback, a replay, or a certification. It also has a permanently single-use ID.
 
 The SSH server fingerprint must match Render's published Oregon Ed25519
 fingerprint, checked October 29, 2026:
