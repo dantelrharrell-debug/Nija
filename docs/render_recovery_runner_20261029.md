@@ -1,10 +1,14 @@
 # Alternative Render recovery access
 
 The GitHub-hosted runner checks its own DNS/TCP route to the Render Oregon SSH
-endpoint, then uses a dedicated SSH credential to run one fixed command:
-`printf '%s\n' NIJA_SHELL_ACCESS_VERIFIED`.
+endpoint, then uses a dedicated SSH credential to run a fixed read-only preflight
+through `command python -S -`. It verifies the deployed preflight module's exact
+SHA-256 before loading it directly, avoiding application startup imports. It
+opens the real SQLite ledger in read-only/query-only mode and emits only integrity
+status and an allowlist of fixed technical issue labels. Counters, rows, holdings,
+account identifiers and credential values are never printed.
 
-It does not deploy, restart, modify trading controls, read account data, install
+It does not deploy, restart, modify trading controls or ledger records, install
 the independent collector, or execute arbitrary input. Network reachability is
 reported separately from authenticated access. A passing network job alone is
 not proof of SSH authentication or collector installation.
@@ -42,8 +46,14 @@ References:
 
 ## Remaining recovery work
 
-Once the marker proves access, review the complete production repair command
+Once the preflight identifies blockers, review the complete production repair command
 before adding it to a separately reviewed workflow. Do not change this probe to
 accept arbitrary shell input. Complete the genuine ledger, broker, writer,
 operator and risk evidence, then install the audited collector in the canonical
 running process. No readiness flag or shell marker can replace that evidence.
+
+## Verified access result
+
+Run 40868246451, attempt 2, authenticated successfully and returned the fixed
+`NIJA_SHELL_ACCESS_VERIFIED` marker after owner credential setup. This proves the
+GitHub runner access path works; it does not certify the ledger or enable trading.
