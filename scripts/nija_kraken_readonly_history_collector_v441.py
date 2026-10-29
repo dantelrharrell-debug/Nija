@@ -83,6 +83,7 @@ def collect_history(
     max_pages: int = 200,
     include_balance: bool = False,
     include_open_orders: bool = False,
+    use_cursor: bool = False,
 ) -> dict[str, Any]:
     """Collect repeat-checked history, optionally bracketed by private balances."""
     if not (account_scope == "platform:kraken" or (
@@ -94,6 +95,56 @@ def collect_history(
         raise ValueError("Explicit Kraken account scope required")
     if not callable(private_read) or type(max_pages) is not int or not 1 <= max_pages <= 1000:
         raise ValueError("Trusted read callable and bounded max_pages required")
+    if type(use_cursor) is not bool:
+        raise ValueError("Explicit boolean cursor selection required")
+
+    def read_cursor_endpoint(endpoint: str, field: str) -> dict[str, Any]:
+        """Require an explicit cursor envelope; never fall back to offset reads.
+
+        Counts are not completion evidence in cursor mode: Kraken returns null
+        for Ledgers and zero for ClosedOrders. Only terminal cursor exhaustion
+        completes a pass. Unknown or unsupported response shapes fail closed.
+        """
+        records: dict[str, Any] = {}
+        seen_cursors: set[str] = set()
+        params: dict[str, Any] = {"with_cursor": True}
+        for _ in range(max_pages):
+            payload = private_read(endpoint, dict(params))
+            if not isinstance(payload, Mapping) or payload.get("error") != []:
+                raise IncompleteHistory(f"{endpoint}: API failure")
+            result = payload.get("result")
+            if not isinstance(result, Mapping) or not isinstance(result.get(field), Mapping):
+                raise IncompleteHistory(f"{endpoint}: malformed result")
+            batch = result[field]
+            if len(batch) > PAGE_SIZE:
+                raise IncompleteHistory(f"{endpoint}: oversized page")
+            cursor = result.get("cursor")
+            if not isinstance(cursor, Mapping) or set(cursor) - {"next"}:
+                raise IncompleteHistory(f"{endpoint}: invalid cursor")
+            next_cursor = cursor.get("next")
+            if next_cursor is not None and next_cursor != "":
+                if not isinstance(next_cursor, str) or not next_cursor.strip():
+                    raise IncompleteHistory(f"{endpoint}: invalid cursor")
+                if next_cursor in seen_cursors:
+                    raise IncompleteHistory(f"{endpoint}: repeated cursor")
+                if not batch:
+                    raise IncompleteHistory(f"{endpoint}: incomplete empty page")
+                seen_cursors.add(next_cursor)
+            for identifier, row in batch.items():
+                if not isinstance(identifier, str) or not identifier or not isinstance(row, Mapping):
+                    raise IncompleteHistory(f"{endpoint}: invalid record")
+                if identifier in records:
+                    raise IncompleteHistory(f"{endpoint}: duplicate identifier across pages")
+                try:
+                    records[identifier] = json.loads(
+                        json.dumps(dict(row), sort_keys=True, separators=(",", ":"), allow_nan=False)
+                    )
+                except (TypeError, ValueError) as exc:
+                    raise IncompleteHistory(f"{endpoint}: non-JSON record") from exc
+            if next_cursor is None or next_cursor == "":
+                return records
+            params = {"with_cursor": True, "cursor": next_cursor}
+        raise IncompleteHistory(f"{endpoint}: page limit before all records")
 
     def read_open_orders() -> tuple[dict[str, Any], dict[str, float]]:
         """Read every cursor page without account, symbol or client-ID filters.
@@ -169,6 +220,9 @@ def collect_history(
         """Collect one bounded pass without assuming Kraken provides an atomic snapshot."""
         output: dict[str, dict[str, Any]] = {}
         for endpoint, field in ENDPOINTS:
+            if use_cursor:
+                output[field] = read_cursor_endpoint(endpoint, field)
+                continue
             records: dict[str, Any] = {}
             expected: int | None = None
             for index in range(max_pages):
@@ -220,7 +274,7 @@ def collect_history(
             output[field] = records
         return output
 
-    # Offset pagination is not a broker-provided atomic snapshot. A second full
+    # Neither pagination mode is a broker-provided atomic snapshot. A second full
     # read catches a stable count with changed IDs or changed row contents.
     # This reduces inconsistent evidence; it does not prove absence of ABA churn.
     balance = read_balance() if include_balance else None
@@ -240,6 +294,8 @@ def collect_history(
     if include_balance and read_balance() != balance:
         raise IncompleteHistory("balance changed during history collection")
     envelope = {"account_scope_asserted_by_caller": account_scope, "history": collected}
+    if use_cursor:
+        envelope["history_pagination"] = "cursor"
     if include_balance:
         envelope["balance"] = balance
     if include_open_orders:
@@ -278,7 +334,8 @@ def _broker_account_scope(broker: Any) -> str:
 def collect_from_existing_broker(broker: Any, *, account_scope: str,
                                  monitoring_category: Any, max_pages: int = 200,
                                  include_balance: bool = False,
-                                 include_open_orders: bool = False) -> dict[str, Any]:
+                                 include_open_orders: bool = False,
+                                 use_cursor: bool = False) -> dict[str, Any]:
     """Reuse Kraken read controls without relabeling another software account."""
     def require_matching_scope() -> None:
         if _broker_account_scope(broker) != account_scope:
@@ -291,6 +348,13 @@ def collect_from_existing_broker(broker: Any, *, account_scope: str,
 
     def read(endpoint: str, params: dict[str, Any]) -> Mapping[str, Any]:
         history_read = endpoint in {"TradesHistory", "ClosedOrders", "Ledgers"} and set(params) == {"ofs"}
+        if use_cursor:
+            history_read = (
+                endpoint in {"TradesHistory", "ClosedOrders", "Ledgers"}
+                and set(params) in ({"with_cursor"}, {"with_cursor", "cursor"})
+                and params.get("with_cursor") is True
+                and ("cursor" not in params or isinstance(params["cursor"], str) and bool(params["cursor"].strip()))
+            )
         balance_read = include_balance and endpoint == "Balance" and not params
         open_orders_read = (
             include_open_orders and endpoint == "OpenOrders"
@@ -311,4 +375,5 @@ def collect_from_existing_broker(broker: Any, *, account_scope: str,
     return collect_history(
         read, account_scope=account_scope, max_pages=max_pages, include_balance=include_balance,
         include_open_orders=include_open_orders,
+        use_cursor=use_cursor,
     )
