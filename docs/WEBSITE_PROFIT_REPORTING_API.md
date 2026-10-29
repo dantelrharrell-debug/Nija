@@ -43,8 +43,16 @@ Each `YYYY-MM.json` must include:
 - `revenue_complete`, `costs_complete`: set to true only after authenticated
   reconciliation and monthly close.
 - `certification`: `visitor_counts_verified`,
-  `provider_revenue_verified`, and `all_costs_verified`, each true only
-  after independent approval.
+  `provider_revenue_verified`, `qualified_leads_verified`, and `all_costs_verified`,
+  each true only after independent approval. Uncertified qualified leads never
+  receive a net-profit-per-lead ratio.
+- Optional `aggregate_counts`: `unique_visitors` and `unique_qualified_leads`
+  as nonnegative integers from independently reconciled first-party analytics
+  and CRM sources, plus explanatory `visitor_source` and `lead_source`.
+  The signed aggregate overrides an event-based denominator without generating
+  fake pageview events; the aggregate must not be lower than deduplicated
+  evidence events. Only use this after the corresponding certification flags
+  are approved.
 - `signature`: lower-case hex HMAC-SHA256 of canonical JSON excluding signature.
 
 Canonical JSON format is `json.dumps(obj, sort_keys=True, separators=(',', ':'),
@@ -72,3 +80,17 @@ The isolated `NIJA Website Revenue and Net Profit Tests` GitHub Actions job runs
 all `tests/test_website*.py` unit tests, including authentication, signed-file
 tampering, missing evidence, profit accounting, data minimization and reporting
 period boundaries. The existing billing service readiness checks remain unchanged.
+
+## Data-quality gate before certifying October 2026
+
+Connected GA4 currently reports more new users than total users for October 1–29.
+GA4/Google Ads also report thousands of advertising conversion events without
+matching independently verified NIJA lead records. Several large referral
+sources are not obviously relevant to trading education. These are unresolved
+data-quality and attribution anomalies, **not proof of fraud**. Do not
+approve `visitor_counts_verified` or `qualified_leads_verified` until
+analytics coverage, bot filtering, referral quality and canonical lead
+submissions are independently reconciled. Treat the current period as OPEN.
+
+The reporting endpoint is not a collector, campaign controller or database
+query proxy. It cannot fix advertising attribution or generate paid customers.
