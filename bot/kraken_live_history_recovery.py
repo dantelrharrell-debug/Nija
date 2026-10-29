@@ -167,9 +167,10 @@ def collect_requested_history(
             })
             LOGGER.warning(
                 "KRAKEN_HISTORY_COLLECTION_FAILED request_id=%s error_code=%s "
-                "error_endpoint=%s trading_authorized=false",
+                "error_endpoint=%s api_failure_reason=%s trading_authorized=false",
                 identity, diagnostic.get("error_code", "unexpected_exception"),
                 diagnostic.get("error_endpoint", "unknown"),
+                diagnostic.get("api_failure_reason", "not_available"),
             )
             return True
         write_recovery_state(output, {
