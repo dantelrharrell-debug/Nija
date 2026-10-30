@@ -1,0 +1,42 @@
+name: NIJA SSH connectivity proof (no production changes)
+on:
+  push:
+    branches: [ops/render-recovery-runner-20261029]
+    paths: ['.github/workflows/nija-ssh-connectivity-proof.yml']
+permissions:
+  contents: read
+jobs:
+  proof:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Prove authenticated Render SSH with fixed read-only marker
+        shell: bash
+        env:
+          NIJA_SSH_KEY: ${{ secrets.NIJA_RENDER_RECOVERY_SSH_PRIVATE_KEY }}
+        run: |
+          set -eu
+          if [ -z "$NIJA_SSH_KEY" ]; then
+            echo 'BLOCKED: dedicated Render SSH Actions secret missing'
+            exit 2
+          fi
+          umask 077
+          d=$(mktemp -d)
+          trap 'rm -rf "$d"' EXIT
+          printf '%s\n' "$NIJA_SSH_KEY" > "$d/key"
+          unset NIJA_SSH_KEY
+          ssh-keygen -y -P '' -f "$d/key" >/dev/null 2>&1 || {
+            echo 'BLOCKED: SSH key unusable'
+            exit 2
+          }
+          ssh-keyscan -t ed25519 -T 15 ssh.oregon.render.com > "$d/hosts" 2>/dev/null
+          observed=$(ssh-keygen -lf "$d/hosts" -E sha256 | awk '{print $2}' | sort -u)
+          [ "$observed" = 'SHA256:KkZPgnApmttFYSkdJsCi7B01sgZPMI6kY53MDbbanGM' ] || {
+            echo 'BLOCKED: host key mismatch'
+            exit 2
+          }
+          ssh -T -i "$d/key" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$d/hosts" \
+            -o ConnectTimeout=15 -o ConnectionAttempts=1 \
+            srv-d98dsr5aeets73fpbaqg@ssh.oregon.render.com \
+            "printf '%s\\n' NIJA_SSH_CONNECTED_READONLY"
