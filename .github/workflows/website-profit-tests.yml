@@ -8,20 +8,24 @@ on:
       - 'website_revenue_attribution.py'
       - 'website_net_profit.py'
       - 'website_profit_reporting_api.py'
+      - 'website_persisted_lead_audit.py'
       - 'billing_service.py'
       - 'tests/test_website_revenue_attribution.py'
       - 'tests/test_website_net_profit.py'
       - 'tests/test_website_profit_reporting_api.py'
+      - 'tests/test_website_persisted_lead_audit.py'
       - '.github/workflows/website-profit-tests.yml'
   pull_request:
     paths:
       - 'website_revenue_attribution.py'
       - 'website_net_profit.py'
       - 'website_profit_reporting_api.py'
+      - 'website_persisted_lead_audit.py'
       - 'billing_service.py'
       - 'tests/test_website_revenue_attribution.py'
       - 'tests/test_website_net_profit.py'
       - 'tests/test_website_profit_reporting_api.py'
+      - 'tests/test_website_persisted_lead_audit.py'
       - '.github/workflows/website-profit-tests.yml'
   workflow_dispatch:
 
@@ -45,7 +49,7 @@ jobs:
           set -euo pipefail
           tmpdir="$(mktemp -d)"
           mkdir -p "$tmpdir/tests"
-          cp website_revenue_attribution.py website_net_profit.py website_profit_reporting_api.py "$tmpdir/"
-          cp tests/test_website_revenue_attribution.py tests/test_website_net_profit.py tests/test_website_profit_reporting_api.py "$tmpdir/tests/"
+          cp website_revenue_attribution.py website_net_profit.py website_profit_reporting_api.py website_persisted_lead_audit.py "$tmpdir/"
+          cp tests/test_website_revenue_attribution.py tests/test_website_net_profit.py tests/test_website_profit_reporting_api.py tests/test_website_persisted_lead_audit.py "$tmpdir/tests/"
           cd "$tmpdir"
           PYTHONNOUSERSITE=1 python -m unittest discover -s tests -p 'test_website*.py' -v
