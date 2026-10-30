@@ -17,6 +17,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from bot.kraken_authenticated_identity_v480 import make_kraken_account_identity_provider
+from bot.kraken_cursor_read_wire_v490 import cursor_read_params
 
 _ORDER_ID = re.compile(r"O[A-Z0-9]{5}-[A-Z0-9]{5}-[A-Z0-9]{6}\Z")
 _PAIR = re.compile(r"[A-Z0-9]{3,32}\Z")
@@ -129,7 +130,7 @@ def _broker_orders(broker: Any, *, monitoring_category: Any) -> dict[str, tuple[
     for _ in range(_MAX_PAGES):
         try:
             # The nonce-owning transport may stamp its input; keep cursor state immutable.
-            response = read("OpenOrders", dict(params), category=monitoring_category)
+            response = read("OpenOrders", cursor_read_params(broker, "OpenOrders", params), category=monitoring_category)
         except Exception:
             raise KrakenOpenOrderDenied("authenticated_open_order_read_failed") from None
         if (not isinstance(response, Mapping) or response.get("error") != []
