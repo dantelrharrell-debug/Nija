@@ -63,7 +63,7 @@ jobs:
           for item in "${cases[@]}"; do
             label="${item%%:*}"
             id="${item##*:}"
-            request="cd /app && python -B -S scripts/nija_kraken_failure_receipt_triage_v464.py --recovery-dir \"${NIJA_KRAKEN_HISTORY_RECOVERY_DIR}\" --request-id $id"
+            request="cd /app && python -B -S scripts/nija_kraken_failure_receipt_triage_v464.py --recovery-dir \"\${NIJA_KRAKEN_HISTORY_RECOVERY_DIR}\" --request-id $id"
             if result="$(ssh "${ssh_opts[@]}" "$remote" "$request" 2>/dev/null)"; then
               printf '%s\n' "$result" | jq -ce --arg case "$label" \
                 '{case:$case,status:.status,failure_code:.failure_code,failure_endpoint:.failure_endpoint,api_failure_reason:.api_failure_reason,complete_page_budget_known:.complete_page_budget_known,requested_pages:.requested_pages,required_pages:.required_pages,execution_authorized:.execution_authorized}'
