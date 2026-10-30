@@ -1,0 +1,138 @@
+name: NIJA public course commerce readiness
+
+# No Stripe charges, lead submissions, customer emails, or brokerage calls.
+on:
+  schedule:
+    - cron: '23 12 * * *'
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/website-commerce-readiness.yml'
+      - 'FOUNDATIONS_DELIVERY_RUNBOOK.md'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/website-commerce-readiness.yml'
+      - 'FOUNDATIONS_DELIVERY_RUNBOOK.md'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nija-public-course-commerce-readiness
+  cancel-in-progress: false
+
+jobs:
+  read-only-course-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify public storefront, payment backend and private asset protection
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import sys
+          import time
+          from urllib.error import HTTPError, URLError
+          from urllib.request import Request, urlopen
+
+          billing = "https://nija-billing-api.onrender.com"
+          website = "https://nijaaitrading.com"
+          status = {}
+          errors = []
+
+          def fetch(host, path, attempts=3):
+              last = None
+              for n in range(attempts):
+                  req = Request(host + path, headers={
+                      "User-Agent": "NIJA-ReadOnly-Commerce-Health/1.0",
+                      "Accept": "application/json,text/html",
+                  }, method="GET")
+                  try:
+                      with urlopen(req, timeout=20) as response:
+                          return response.status, response.read(8192)
+                  except HTTPError as exc:
+                      last = (exc.code, exc.read(8192))
+                      if exc.code < 500 or n == attempts - 1:
+                          return last
+                  except (URLError, TimeoutError, OSError) as exc:
+                      last = (0, b"")
+                      errors.append(type(exc).__name__)
+                  if n < attempts - 1:
+                      time.sleep(2)
+              return last or (0, b"")
+
+          def json_path(host, path):
+              code, raw = fetch(host, path)
+              try:
+                  obj = json.loads(raw)
+              except (ValueError, UnicodeError):
+                  obj = {}
+              return code, obj
+
+          health_code, health = json_path(billing, "/healthz")
+          status["billing_health"] = health_code == 200 and health.get("status") == "ok"
+
+          billing_code, billing_ready = json_path(billing, "/readyz")
+          status["billing_provider_ready"] = billing_code == 200 and billing_ready.get("status") == "ready"
+
+          course_code, course = json_path(billing, "/course-portal/readyz")
+          for flag in ["ready", "access_ready", "assets_present",
+                       "email_configured", "access_key_configured"]:
+              status["course_" + flag] = course_code == 200 and course.get(flag) is True
+
+          # checkout_access_enabled concerns server-created Checkout, not the
+          # existing active live Stripe Payment Link. Treat as informational.
+          course_checkout_access = course.get("checkout_access_enabled")
+
+          portal_code, portal_body = fetch(billing, "/course-portal/")
+          status["course_recovery_page_online"] = (
+              portal_code == 200 and b"Course Access" in portal_body
+          )
+          page_code, _ = fetch(website, "/trading-foundations")
+          status["public_course_page_online"] = page_code == 200
+
+          forbidden_file_code, _ = fetch(
+              billing, "/course-portal/file/NIJA_Trading_Foundations_eBook.pdf"
+          )
+          status["anonymous_paid_file_denied"] = forbidden_file_code == 403
+
+          invalid_claim_code, _ = fetch(
+              billing, "/course-portal/claim?token=public-health-invalid"
+          )
+          status["invalid_access_claim_denied"] = invalid_claim_code == 403
+
+          profit_code, _ = json_path(
+              billing, "/api/admin/website-profit?period=2026-09"
+          )
+          status["anonymous_profit_access_denied"] = profit_code in (401, 503)
+          if profit_code == 200:
+              errors.append("profit_admin_endpoint_publicly_accessible")
+
+          passed = all(status.values()) and not errors
+          report = {
+              "read_only_probes_passed": passed,
+              "checks": status,
+              "server_created_course_checkout_access_reported": course_checkout_access,
+              "stripe_payment_link_active_from_live_api": "not_checked_no_secrets",
+              "real_paid_course_purchase_completed": "not_checked_no_charge",
+              "profit_per_unique_visitor_verified": False,
+              "customer_records_changed": False,
+              "emails_sent": False,
+              "test_charges_created": False,
+              "broker_or_trading_calls": False,
+              "errors": errors,
+          }
+          text = json.dumps(report, indent=2, sort_keys=True)
+          print(text)
+          summary = os.getenv("GITHUB_STEP_SUMMARY")
+          if summary:
+              with open(summary, "a", encoding="utf-8") as stream:
+                  stream.write("## NIJA public commerce readiness\n\n")
+                  stream.write("No test charges, emails, leads or trading operations.\n\n")
+                  stream.write("~~~~json\n" + text + "\n~~~~\n")
+          if not passed:
+              sys.exit(1)
+          PY
