@@ -537,7 +537,7 @@ def test_form_transport_receives_lowercase_boolean_tokens(use_cursor):
 
     broker = SimpleNamespace(
         broker_type="kraken", account_type="platform", user_id=None,
-        _kraken_private_call=read,
+        _gateway_url="", _gateway_only_mode=False, _kraken_private_call=read,
     )
     report = collect_from_existing_broker(
         broker, account_scope="platform:kraken", monitoring_category="monitoring",

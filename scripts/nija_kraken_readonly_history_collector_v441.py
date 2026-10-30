@@ -392,12 +392,16 @@ def collect_from_existing_broker(broker: Any, *, account_scope: str,
                                  monitoring_category: Any, max_pages: int = 200,
                                  include_balance: bool = False,
                                  include_open_orders: bool = False,
-                                 use_cursor: bool = False) -> dict[str, Any]:
+                                 use_cursor: bool = False,
+                                 on_private_read: Callable[[str, str], None] | None = None,
+                                 ) -> dict[str, Any]:
     """Reuse Kraken read controls without relabeling another software account."""
     def require_matching_scope() -> None:
         if _broker_account_scope(broker) != account_scope:
             raise ValueError("Requested scope does not match selected Kraken broker")
 
+    if on_private_read is not None and not callable(on_private_read):
+        raise ValueError("Read progress callback must be callable")
     require_matching_scope()
     private_call = getattr(broker, "_kraken_private_call", None)
     if not callable(private_call) or monitoring_category is None:
@@ -423,20 +427,22 @@ def collect_from_existing_broker(broker: Any, *, account_scope: str,
         if not (history_read or balance_read or open_orders_read):
             raise ValueError("Non-read-only request rejected")
         require_matching_scope()
-        # krakenex stamps nonce into its argument dict. Keep that transport-only
-        # mutation out of the next cursor page and the strict read-only allowlist.
-        payload = private_call(
-            endpoint, cursor_read_params(broker, endpoint, params),
-            category=monitoring_category,
-        )
-        # krakenex form-encodes values; Python bools otherwise become
-        # "True"/"False", rather than Kraken's lowercase boolean tokens.
-        # Normalize only after the strict semantic read allowlist above.
-        wire_params = {
-            key: ("true" if value else "false") if type(value) is bool else value
-            for key, value in params.items()
-        }
-        payload = private_call(endpoint, wire_params, category=monitoring_category)
+        # The serializer returns a fresh dict: nonce stamping must not leak into
+        # the next cursor page. Call the existing client exactly once per read.
+        if on_private_read is not None:
+            on_private_read(endpoint, "started")
+        try:
+            payload = private_call(
+                endpoint, cursor_read_params(broker, endpoint, params),
+                category=monitoring_category,
+            )
+        except Exception:
+            if on_private_read is not None:
+                on_private_read(endpoint, "raised")
+            raise
+        if on_private_read is not None:
+            # Returned describes transport completion, never broker acceptance.
+            on_private_read(endpoint, "returned")
         require_matching_scope()
         return payload
 
