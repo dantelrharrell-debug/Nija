@@ -1,0 +1,192 @@
+name: NIJA isolated backup restore (no trading authority)
+on:
+  push:
+    branches: [fix/nija-independent-recovery-20261029]
+    paths: ['.github/workflows/nija-independent-recovery-20261029.yml']
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [release/justcall-handoff-only-20261017]
+    paths: ['.github/workflows/nija-independent-recovery-20261029.yml']
+permissions:
+  contents: read
+concurrency:
+  group: nija-independent-recovery-20261029
+  cancel-in-progress: false
+jobs:
+  offhost-restore:
+    if: >-
+      (github.event_name == 'push' && github.ref == 'refs/heads/fix/nija-independent-recovery-20261029') ||
+      (github.event_name == 'pull_request' && github.event.pull_request.number == 3499 &&
+       github.event.pull_request.head.repo.full_name == github.repository &&
+       github.event.pull_request.head.ref == 'fix/nija-independent-recovery-20261029' &&
+       github.event.pull_request.base.ref == 'release/justcall-handoff-only-20261017')
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout the exact independently verified production recovery scripts
+        uses: actions/checkout@v4
+        with:
+          ref: 37cf08a504a0ea31401aefbdd3aa71d13e943b5d
+          persist-credentials: false
+      - name: Capture, SCP and verify isolated restore without any trading control changes
+        id: recovery
+        shell: bash
+        env:
+          RENDER_RECOVERY_SSH_KEY: ${{ secrets.NIJA_RENDER_RECOVERY_SSH_PRIVATE_KEY }}
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          expected_sha=37cf08a504a0ea31401aefbdd3aa71d13e943b5d
+          service=srv-d98dsr5aeets73fpbaqg
+          host=ssh.oregon.render.com
+          remote="$service@$host"
+          if [ -z "${RENDER_RECOVERY_SSH_KEY:-}" ]; then
+            echo 'BLOCKED: dedicated GitHub recovery SSH secret is missing'
+            exit 2
+          fi
+          secure="$(mktemp -d)"
+          trap 'rm -rf "$secure"' EXIT
+          printf '%s\n' "$RENDER_RECOVERY_SSH_KEY" > "$secure/key"
+          unset RENDER_RECOVERY_SSH_KEY
+          chmod 600 "$secure/key"
+          ssh-keygen -y -P '' -f "$secure/key" > "$secure/recipient.pub" 2>/dev/null || {
+            echo 'BLOCKED: recovery key is unavailable or passphrase-protected'
+            exit 2
+          }
+          grep -Eq '^ssh-ed25519 ' "$secure/recipient.pub" || {
+            echo 'BLOCKED: expected Ed25519 encryption recipient missing'
+            exit 2
+          }
+          ssh-keyscan -t ed25519 -T 15 "$host" > "$secure/known_hosts" 2>/dev/null
+          observed="$(ssh-keygen -lf "$secure/known_hosts" -E sha256 | awk '{print $2}' | sort -u)"
+          test "$observed" = 'SHA256:KkZPgnApmttFYSkdJsCi7B01sgZPMI6kY53MDbbanGM' || {
+            echo 'BLOCKED: Render SSH host key fingerprint mismatch'
+            exit 2
+          }
+          ssh_opts=(
+            -i "$secure/key" -o BatchMode=yes -o IdentitiesOnly=yes
+            -o IdentityAgent=none -o StrictHostKeyChecking=yes
+            -o "UserKnownHostsFile=$secure/known_hosts" -o HostKeyAlgorithms=ssh-ed25519
+            -o ConnectTimeout=15 -o ConnectionAttempts=1
+            -o ServerAliveInterval=10 -o ServerAliveCountMax=2
+          )
+          # The exact service identity and running deploy must match. No balances,
+          # credentials, ledger rows, account numbers or position IDs are printed.
+          remote_guard="test \"\${RENDER_SERVICE_ID:-}\" = '$service' && test \"\${RENDER_GIT_COMMIT:-}\" = '$expected_sha' && test -s /data/trade_ledger.db && test -d /app/data/positions && test -d /app/data/entry_prices"
+          if ! ssh -T "${ssh_opts[@]}" "$remote" "$remote_guard" >/dev/null; then
+            echo 'BLOCKED: deployed commit, required source paths, or remote SSH identity mismatch'
+            exit 2
+          fi
+          echo 'RENDER_PINNED_PRODUCTION_PATHS=PASS'
+          # The reviewed capture script is deliberately read-only on source /data.
+          # The sole output on Render is a private /tmp snapshot directory.
+          if ! receipt="$(ssh -T "${ssh_opts[@]}" "$remote" "cd /app && NIJA_EXPECTED_DEPLOYED_COMMIT=$expected_sha bash ops/recovery/nija_current_instance_backup_capture_v4.sh")"; then
+            echo 'BLOCKED: read-only production source capture failed'
+            exit 2
+          fi
+          printf '%s\n' "$receipt" | grep -Fxq 'SOURCE_CAPTURE=COMPLETE'
+          printf '%s\n' "$receipt" | grep -Fxq 'SOURCE_VERIFIER_GIT_BLOB_PINS=PASS'
+          printf '%s\n' "$receipt" | grep -Fxq 'SOURCE_PERSISTENT_PATHS=PASS'
+          capture="$(printf '%s\n' "$receipt" | sed -n 's/^CAPTURE_DIR=//p')"
+          seal="$(printf '%s\n' "$receipt" | sed -n 's/^SOURCE_CAPTURE_SEAL_SHA256=//p')"
+          [[ "$capture" =~ ^/tmp/nija-current-recovery-v4-[a-zA-Z0-9]+$ ]] || {
+            echo 'BLOCKED: invalid source capture path'
+            exit 2
+          }
+          [[ "$seal" =~ ^[0-9a-f]{64}$ ]] || {
+            echo 'BLOCKED: invalid independently retained source seal'
+            exit 2
+          }
+          echo 'RENDER_SOURCE_CAPTURE=COMPLETE'
+          # OpenSSH 9+ uses SFTP by default; omit legacy -s. Runner temporarily
+          # holds plain archives only in a private directory, never artifacts.
+          install -d -m 700 "$secure/pulled"
+          if ! scp -q -p -r "${ssh_opts[@]}" "$remote:$capture" "$secure/pulled/"; then
+            echo 'BLOCKED: authenticated encrypted SCP transfer failed'
+            exit 2
+          fi
+          # Ensure source deployment has not changed while transferring files.
+          if ! ssh -T "${ssh_opts[@]}" "$remote" "$remote_guard" >/dev/null; then
+            echo 'BLOCKED: Render instance or commit changed during transfer'
+            exit 2
+          fi
+          local_capture="$secure/pulled/${capture##*/}"
+          verifier=ops/recovery/nija_offhost_backup_verify_v4.sh
+          if ! bash "$verifier" "$local_capture" "$seal" "$expected_sha" > "$secure/private-restore.log" 2>&1; then
+            echo 'OFF_HOST_VERIFICATION=FAILED_CLOSED (private verifier details suppressed)'
+            exit 2
+          fi
+          for evidence in OFF_HOST_SOURCE_SEAL=PASS OFF_HOST_ARCHIVE_AND_RECEIPT_HASHES=PASS OFF_HOST_PINNED_VERIFIERS=PASS OFF_HOST_RESTORE_AND_ARCHIVE_VERIFICATION=PASS; do
+            grep -Fxq "$evidence" "$secure/private-restore.log" || {
+              echo 'OFF_HOST_VERIFICATION=FAILED_CLOSED (missing required success evidence)'
+              exit 2
+            }
+            echo "$evidence"
+          done
+          # All artifacts are encrypted for the existing owner's Ed25519 SSH
+          # recovery key. The owner must independently retain and restore-test
+          # that private key; CI does not certify independent key custody.
+          sudo apt-get update -qq >/dev/null
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq age >/dev/null
+          tar -C "$secure/pulled" -czf "$secure/source.tar.gz" "${capture##*/}"
+          ciphertext="nija-recovery-${expected_sha:0:12}-20261029.tar.gz.age"
+          age -R "$secure/recipient.pub" -o "$GITHUB_WORKSPACE/$ciphertext" "$secure/source.tar.gz"
+          age -d -i "$secure/key" -o "$secure/decrypt-check.tar.gz" "$GITHUB_WORKSPACE/$ciphertext"
+          if ! cmp -s "$secure/source.tar.gz" "$secure/decrypt-check.tar.gz"; then
+            echo 'BLOCKED: encrypted package roundtrip verification failed'
+            exit 2
+          fi
+          (cd "$GITHUB_WORKSPACE" && sha256sum "$ciphertext" > "${ciphertext}.sha256")
+          echo 'ENCRYPTED_OFFHOST_PACKAGE=READY'
+          echo 'ENCRYPTION_KEY_CUSTODY=UNVERIFIED'
+          echo 'CROSS_STORE_ATOMICITY=UNVERIFIED'
+          echo 'BROKER_RECONCILIATION=UNVERIFIED'
+          echo 'INDEPENDENT_COLLECTOR_INSTALLED=false'
+          echo 'TRADING_AUTHORIZED=false'
+      - name: Upload encrypted recovery package and checksum only
+        uses: actions/upload-artifact@v4
+        with:
+          name: nija-encrypted-independent-backup-20261029
+          if-no-files-found: error
+          retention-days: 30
+          path: |
+            nija-recovery-37cf08a504a0-20261029.tar.gz.age
+            nija-recovery-37cf08a504a0-20261029.tar.gz.age.sha256
+
+  publish-sanitized-result:
+    needs: offhost-restore
+    if: >-
+      always() && ((github.event_name == 'push' && github.ref == 'refs/heads/fix/nija-independent-recovery-20261029') ||
+      (github.event_name == 'pull_request' && github.event.pull_request.number == 3499 &&
+       github.event.pull_request.head.repo.full_name == github.repository &&
+       github.event.pull_request.head.ref == 'fix/nija-independent-recovery-20261029' &&
+       github.event.pull_request.base.ref == 'release/justcall-handoff-only-20261017'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      statuses: write
+    steps:
+      - name: Write only a pass/fail marker to the recovery commit
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESTORE_JOB_RESULT: ${{ needs.offhost-restore.result }}
+          RECOVERY_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -Eeuo pipefail
+          if [ "$RESTORE_JOB_RESULT" = success ]; then
+            state=success
+            description='Verified isolated restore and encrypted runner backup'
+          else
+            state=failure
+            description='Independent restore did not pass; trading remains blocked'
+          fi
+          payload="$(jq -cn --arg state "$state" --arg desc "$description" \
+            '{state:$state,description:$desc,context:"nija/offhost-restore"}')"
+          curl --fail-with-body --silent --show-error --retry 2 \
+            --request POST --header "Authorization: Bearer $GH_TOKEN" \
+            --header 'Accept: application/vnd.github+json' \
+            --header 'X-GitHub-Api-Version: 2022-11-28' \
+            --data "$payload" \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/statuses/$RECOVERY_SOURCE_SHA" >/dev/null
+          printf 'SANITIZED_RECOVERY_STATUS_RECORDED=%s\n' "$state"
