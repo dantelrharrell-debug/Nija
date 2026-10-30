@@ -429,6 +429,14 @@ def collect_from_existing_broker(broker: Any, *, account_scope: str,
             endpoint, cursor_read_params(broker, endpoint, params),
             category=monitoring_category,
         )
+        # krakenex form-encodes values; Python bools otherwise become
+        # "True"/"False", rather than Kraken's lowercase boolean tokens.
+        # Normalize only after the strict semantic read allowlist above.
+        wire_params = {
+            key: ("true" if value else "false") if type(value) is bool else value
+            for key, value in params.items()
+        }
+        payload = private_call(endpoint, wire_params, category=monitoring_category)
         require_matching_scope()
         return payload
 
