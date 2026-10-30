@@ -149,6 +149,28 @@ def collect_requested_history(
         if _request(root, time.time() if now is None else now, claim.name) != request:
             raise ValueError("recovery_request_changed_before_claim")
         started = time.time()
+        progress_path = root / (identity + ".progress.json")
+        read_sequence = 0
+
+        def progress(endpoint: str, phase: str) -> None:
+            """Persist fixed call labels, never request parameters or broker data."""
+            nonlocal read_sequence
+            if endpoint not in {"Balance", "TradesHistory", "ClosedOrders", "Ledgers", "OpenOrders"}:
+                raise ValueError("recovery_progress_endpoint_invalid")
+            if phase not in {"started", "returned", "raised"}:
+                raise ValueError("recovery_progress_phase_invalid")
+            if phase == "started":
+                read_sequence += 1
+            write_recovery_state(progress_path, {
+                "request_id": identity,
+                "endpoint": endpoint,
+                "phase": phase,
+                "read_sequence": read_sequence,
+                "observed_at_epoch": time.time(),
+                "diagnostic_only": True,
+                "trading_authorized": False,
+            })
+
         try:
             evidence = collect_from_existing_broker(
                 selected[0], account_scope=request["account_scope"],
@@ -156,6 +178,7 @@ def collect_requested_history(
                 max_pages=request["max_pages"], include_balance=True,
                 include_open_orders=True,
                 use_cursor=request.get("use_cursor", False),
+                on_private_read=progress,
             )
         except Exception as exc:
             # Persist only fixed collector-owned diagnostic labels.

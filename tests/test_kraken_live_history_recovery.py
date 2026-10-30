@@ -389,3 +389,139 @@ def test_unknown_failure_cannot_inject_page_budget(root, monkeypatch, caplog):
     assert "untrusted-message" not in raw + caplog.text
     assert (root / (ID + ".claimed.json")).exists()
     assert not run(root, [Broker()])
+
+
+def test_private_progress_is_visible_before_each_read_without_broker_values(root):
+    request(root)
+    broker = Broker()
+    original = broker._kraken_private_call
+    seen = []
+
+    def read(endpoint, params, *, category):
+        progress_path = root / (ID + ".progress.json")
+        row = json.loads(progress_path.read_text())
+        assert set(row) == {
+            "request_id", "endpoint", "phase", "read_sequence",
+            "observed_at_epoch", "diagnostic_only", "trading_authorized",
+        }
+        assert row["endpoint"] == endpoint
+        assert row["phase"] == "started"
+        assert row["read_sequence"] == len(seen) + 1
+        assert row["diagnostic_only"] is True
+        assert row["trading_authorized"] is False
+        assert progress_path.stat().st_mode & 0o077 == 0
+        seen.append(row)
+        result = original(endpoint, params, category=category)
+        params["nonce"] = "private-nonce-canary"
+        return result
+
+    broker._kraken_private_call = read
+    assert run(root, [broker])
+    assert len(seen) == len(broker.calls) == 10
+    row = json.loads((root / (ID + ".progress.json")).read_text())
+    assert row["phase"] == "returned" and row["endpoint"] == "Balance"
+    assert row["read_sequence"] == 10
+    raw = (root / (ID + ".progress.json")).read_text()
+    assert "private-nonce-canary" not in raw and "ZUSD" not in raw
+    assert not run(root, [broker])
+
+
+def test_transport_exception_records_fixed_progress_without_exception_text(root):
+    request(root)
+    broker = Broker()
+    original = broker._kraken_private_call
+
+    def read(endpoint, params, *, category):
+        if endpoint == "ClosedOrders":
+            raise RuntimeError("private-upstream-secret-canary")
+        return original(endpoint, params, category=category)
+
+    broker._kraken_private_call = read
+    assert run(root, [broker])
+    progress = root / (ID + ".progress.json")
+    row = json.loads(progress.read_text())
+    assert row["endpoint"] == "ClosedOrders"
+    assert row["phase"] == "raised"
+    assert row["read_sequence"] == 3
+    receipt = root / (ID + ".evidence.json")
+    assert json.loads(receipt.read_text())["collection_succeeded"] is False
+    assert "private-upstream-secret-canary" not in progress.read_text() + receipt.read_text()
+    assert not run(root, [broker])
+
+
+def test_progress_write_failure_performs_no_broker_read_and_preserves_claim(root, monkeypatch):
+    request(root)
+    broker = Broker()
+
+    def fail(*args, **kwargs):
+        raise OSError("disk unavailable")
+
+    monkeypatch.setattr(api, "write_recovery_state", fail)
+    with pytest.raises(OSError):
+        run(root, [broker])
+    assert broker.calls == []
+    assert (root / (ID + ".claimed.json")).exists()
+    assert not (root / "request.json").exists()
+    assert not run(root, [broker])
+
+
+def test_progress_callback_must_be_callable_before_broker_io():
+    from scripts.nija_kraken_readonly_history_collector_v441 import collect_from_existing_broker
+
+    broker = Broker()
+    with pytest.raises(ValueError, match="callback must be callable"):
+        collect_from_existing_broker(
+            broker, account_scope="platform:kraken",
+            monitoring_category=CATEGORY, on_private_read=True,
+        )
+    assert broker.calls == []
+
+
+@pytest.mark.parametrize("gateway", ["", "https://gateway.invalid", None])
+def test_single_read_preserves_direct_gateway_and_unknown_transport(root, gateway):
+    request(root, use_cursor=True)
+    broker = Broker()
+    if gateway is not None:
+        broker._gateway_url = gateway
+        broker._gateway_only_mode = False
+    calls = []
+
+    def read(endpoint, params, *, category):
+        assert category is CATEGORY and "nonce" not in params
+        calls.append(endpoint)
+        if endpoint == "Balance":
+            return {"error": [], "result": {"ZUSD": "100"}}
+        expected = "true" if gateway == "" else True
+        assert params["with_cursor"] == expected
+        assert type(params["with_cursor"]) is type(expected)
+        if endpoint == "OpenOrders":
+            assert params["trades"] == expected
+            result = {"error": [], "result": {"open": {}}}
+        else:
+            field = dict(TradesHistory="trades", ClosedOrders="closed", Ledgers="ledger")[endpoint]
+            result = {"error": [], "result": {field: {}, "cursor": {}}}
+        params["nonce"] = "transport-only-canary"
+        return result
+
+    broker._kraken_private_call = read
+    assert run(root, [broker])
+    assert len(calls) == 10
+    report = json.loads((root / (ID + ".evidence.json")).read_text())
+    assert report["collection_succeeded"] is True
+    assert report["trading_authorized"] is False
+    assert not run(root, [broker])
+
+
+def test_returned_progress_does_not_claim_broker_acceptance(root):
+    request(root)
+    broker = Broker()
+    broker._kraken_private_call = lambda *a, **k: {"error": ["private-api-canary"]}
+    assert run(root, [broker])
+    progress_path = root / (ID + ".progress.json")
+    row = json.loads(progress_path.read_text())
+    assert row["phase"] == "returned" and row["diagnostic_only"] is True
+    receipt_path = root / (ID + ".evidence.json")
+    receipt = json.loads(receipt_path.read_text())
+    assert receipt["collection_succeeded"] is False
+    assert receipt["trading_authorized"] is False
+    assert "private-api-canary" not in progress_path.read_text() + receipt_path.read_text()
