@@ -1,0 +1,27 @@
+name: Kraken existing governor diagnostic targeted tests
+on:
+  push:
+    branches:
+      - fix/collector-six-source-contract-20261029
+    paths:
+      - 'bot/kraken_existing_risk_governor_diagnostic_v492.py'
+      - 'tests/test_kraken_existing_risk_governor_diagnostic_v492.py'
+      - '.github/workflows/kraken-existing-governor-diagnostic-tests.yml'
+  pull_request:
+    paths:
+      - 'bot/kraken_existing_risk_governor_diagnostic_v492.py'
+      - 'tests/test_kraken_existing_risk_governor_diagnostic_v492.py'
+      - '.github/workflows/kraken-existing-governor-diagnostic-tests.yml'
+permissions:
+  contents: read
+jobs:
+  diagnostic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Validate fail-closed existing governor diagnostic
+        run: python -m unittest discover -s tests -p test_kraken_existing_risk_governor_diagnostic_v492.py -v
