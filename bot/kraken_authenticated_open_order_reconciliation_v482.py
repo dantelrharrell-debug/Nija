@@ -128,7 +128,8 @@ def _broker_orders(broker: Any, *, monitoring_category: Any) -> dict[str, tuple[
     cursors: set[str] = set()
     for _ in range(_MAX_PAGES):
         try:
-            response = read("OpenOrders", params, category=monitoring_category)
+            # The nonce-owning transport may stamp its input; keep cursor state immutable.
+            response = read("OpenOrders", dict(params), category=monitoring_category)
         except Exception:
             raise KrakenOpenOrderDenied("authenticated_open_order_read_failed") from None
         if (not isinstance(response, Mapping) or response.get("error") != []
@@ -138,6 +139,7 @@ def _broker_orders(broker: Any, *, monitoring_category: Any) -> dict[str, tuple[
         batch, page = result.get("open"), result.get("cursor")
         if (not isinstance(batch, Mapping) or len(batch) > _PAGE_SIZE
                 or not isinstance(page, Mapping)
+                or set(page) - {"next"}
                 or set(result) - {"open", "cursor"}):
             # Explicit cursor proof is required. A non-cursor endpoint response
             # must never be mistaken for a complete first page.
