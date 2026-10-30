@@ -88,6 +88,44 @@ class TestReadback(unittest.TestCase):
     def denied(self, b, l, **kwargs):
         with self.assertRaises(KrakenOpenOrderDenied):
             self.provider(b, l, **kwargs)()
+    def test_direct_cursor_form_normalization_keeps_authenticated_order_readback(self):
+        b, l = Broker(), Ledger()
+        b._gateway_url = ""
+        b._gateway_only_mode = False
+        observed = []
+
+        def direct_params(params):
+            observed.append(dict(params))
+            self.assertEqual(params["with_cursor"], "true")
+            self.assertEqual(params["trades"], "true")
+            self.assertEqual(params["limit"], 50)
+            self.assertNotIn("nonce", params)
+            return {"error": [], "result": {"open": copy.deepcopy(b.orders), "cursor": {}}}
+
+        b.callback = direct_params
+        result = self.provider(b, l)()
+        self.assertTrue(result["verified"])
+        self.assertFalse(result["authorizes_orders"])
+        self.assertEqual(len(observed), 2)
+
+    def test_gateway_cursor_preserves_boolean_json_types(self):
+        b, l = Broker(), Ledger()
+        b._gateway_url = "https://gateway.example"
+        b._gateway_only_mode = True
+        observed = []
+
+        def gateway_params(params):
+            observed.append(dict(params))
+            self.assertIs(params["with_cursor"], True)
+            self.assertIs(params["trades"], True)
+            return {"error": [], "result": {"open": copy.deepcopy(b.orders), "cursor": {}}}
+
+        b.callback = gateway_params
+        result = self.provider(b, l)()
+        self.assertTrue(result["verified"])
+        self.assertFalse(result["authorizes_orders"])
+        self.assertEqual(len(observed), 2)
+
     def test_exact_match_and_no_side_effects(self):
         b, l = Broker(), Ledger()
         provider = self.provider(b, l)
