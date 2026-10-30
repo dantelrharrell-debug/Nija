@@ -1,0 +1,128 @@
+name: NIJA Read-Only Website Lead Store Audit
+on:
+  push:
+    branches: [feature/website-lead-live-audit-20261029]
+    paths: ['.github/workflows/website-lead-live-audit.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nija-website-lead-audit
+  cancel-in-progress: false
+
+jobs:
+  safe-aggregate:
+    name: Verify existing production lead totals without PII
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - name: Read-only aggregate from existing Render application SQLite store
+        env:
+          RENDER_RECOVERY_SSH_KEY: ${{ secrets.NIJA_RENDER_RECOVERY_SSH_PRIVATE_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "$RENDER_RECOVERY_SSH_KEY" ]; then
+            echo "BLOCKED: approved Render SSH Actions secret not configured"
+            exit 2
+          fi
+          umask 077
+          d=$(mktemp -d)
+          trap 'rm -rf "$d"' EXIT
+          printf '%s\n' "$RENDER_RECOVERY_SSH_KEY" > "$d/key"
+          unset RENDER_RECOVERY_SSH_KEY
+          ssh-keygen -y -P '' -f "$d/key" > /dev/null 2>&1 || {
+            echo "BLOCKED: dedicated SSH key unusable"
+            exit 2
+          }
+          ssh-keyscan -t ed25519 -T 15 ssh.oregon.render.com > "$d/known_hosts" 2>/dev/null
+          fingerprint=$(ssh-keygen -lf "$d/known_hosts" -E sha256 | awk '{print $2}' | sort -u)
+          if [ "$fingerprint" != 'SHA256:KkZPgnApmttFYSkdJsCi7B01sgZPMI6kY53MDbbanGM' ]; then
+            echo "BLOCKED: Render SSH host key differs from pinned identity"
+            exit 2
+          fi
+          ssh -T -i "$d/key" \
+            -o BatchMode=yes -o IdentitiesOnly=yes -o IdentityAgent=none \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$d/known_hosts" \
+            -o HostKeyAlgorithms=ssh-ed25519 -o ConnectTimeout=12 \
+            -o ConnectionAttempts=1 -o ServerAliveInterval=8 -o ServerAliveCountMax=1 \
+            srv-d98dsr5aeets73fpbaqg@ssh.oregon.render.com 'command python -S -' <<'PY'
+          import json
+          import os
+          import pathlib
+          import sqlite3
+          import stat
+          import time
+
+          period = "2026-10"
+          configured = (
+              os.environ.get("NIJA_LEAD_DB_PATH")
+              or os.environ.get("NIJA_OUTREACH_DB_PATH")
+              or "/app/data/nija_outreach.sqlite3"
+          )
+          original = pathlib.Path(configured).expanduser()
+          if not original.is_absolute() or original.is_symlink():
+              raise SystemExit("BLOCKED: source path not approved")
+          try:
+              resolved = original.resolve(strict=True)
+              info = original.stat()
+          except OSError:
+              raise SystemExit("BLOCKED: lead database not accessible; do not assume zero")
+          if not stat.S_ISREG(info.st_mode) or info.st_size > 1073741824:
+              raise SystemExit("BLOCKED: source is not a bounded regular database")
+          if not str(resolved).startswith(("/data/", "/app/data/")):
+              raise SystemExit("BLOCKED: lead source is not within approved data directory")
+
+          started = time.monotonic()
+          try:
+              conn = sqlite3.connect(resolved.as_uri() + "?mode=ro", uri=True, timeout=2)
+              conn.execute("PRAGMA query_only=ON")
+              conn.execute("PRAGMA busy_timeout=2000")
+              conn.set_progress_handler(
+                  lambda: 1 if time.monotonic() - started > 8 else 0,
+                  10000
+              )
+              fields = {row[1] for row in conn.execute("PRAGMA table_info(website_leads)")}
+              if not {"event_key", "email", "form_name", "received_at"}.issubset(fields):
+                  raise SystemExit("BLOCKED: website_leads table or reviewed columns absent")
+              totals = conn.execute(
+                  "SELECT COUNT(*), COUNT(DISTINCT event_key), "
+                  "COUNT(DISTINCT lower(trim(email))) FROM website_leads "
+                  "WHERE substr(received_at, 1, 7) = ?",
+                  (period,),
+              ).fetchone()
+              kinds = conn.execute(
+                  "SELECT CASE "
+                  "WHEN lower(trim(form_name)) IN ('founding_waitlist','founding_100_waitlist','founding-100-waitlist') "
+                  "THEN 'founding_waitlist' "
+                  "WHEN lower(trim(form_name)) IN ('free_assessment','hero-email-optin') "
+                  "THEN 'free_assessment_or_optin' "
+                  "WHEN lower(trim(form_name)) IN ('pilot_application','founding_100_application') "
+                  "THEN 'pilot_or_beta_application' "
+                  "ELSE 'other' END AS category, count(*) "
+                  "FROM website_leads WHERE substr(received_at, 1, 7) = ? "
+                  "GROUP BY category ORDER BY category",
+                  (period,),
+              ).fetchall()
+              conn.close()
+          except sqlite3.Error as exc:
+              raise SystemExit("BLOCKED: read-only aggregate " + type(exc).__name__)
+          print("NIJA_PRODUCTION_WEBSITE_LEAD_AGGREGATE")
+          print(json.dumps({
+              "reporting_period": period,
+              "period_closed": False,
+              "store": "Render website_leads on existing deployed service",
+              "durable_disk": str(resolved).startswith("/data/"),
+              "saved_submissions": totals[0],
+              "distinct_event_ids": totals[1],
+              "distinct_contacts": totals[2],
+              "form_categories": dict(kinds),
+              "qualified_leads_verified": False,
+              "all_ionos_sources_reconciled": False,
+              "no_customer_pii_exported": True,
+              "no_data_writes": True,
+              "no_trading_calls": True
+          }, sort_keys=True))
+          PY
