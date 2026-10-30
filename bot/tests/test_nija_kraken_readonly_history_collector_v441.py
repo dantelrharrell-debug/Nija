@@ -500,3 +500,50 @@ def test_v463_readonly_intake_reconciles_no_live_state(tmp_path):
     invalid = inspect_intake(receipt, database, "platform:kraken")
     assert invalid["failure_code"] == "receipt_digest_mismatch"
     assert invalid["authorizes_orders"] is False
+
+
+@pytest.mark.parametrize("use_cursor", [True, False])
+def test_form_transport_receives_lowercase_boolean_tokens(use_cursor):
+    """Exercise the actual form encoding boundary without broker credentials."""
+    from urllib.parse import parse_qs, urlencode
+
+    calls = []
+    fields = dict(TradesHistory="trades", ClosedOrders="closed", Ledgers="ledger")
+
+    def read(endpoint, params, *, category):
+        assert category == "monitoring"
+        assert "nonce" not in params
+        encoded = parse_qs(urlencode(params))
+        assert not any(value in {"True", "False"} for values in encoded.values() for value in values)
+        calls.append((endpoint, dict(params)))
+        params["nonce"] = len(calls)
+        if endpoint == "Balance":
+            return {"error": [], "result": {"ZUSD": "10"}}
+        if endpoint == "OpenOrders":
+            assert encoded["with_cursor"] == ["true"]
+            assert encoded["trades"] == ["true"]
+            assert encoded["limit"] == ["50"]
+            if "cursor" not in params:
+                return {"error": [], "result": {
+                    "open": {"stop-a": {"vol": "1"}}, "cursor": {"next": "opaque+token"},
+                }}
+            assert encoded["cursor"] == ["opaque+token"]
+            return {"error": [], "result": {"open": {"stop-b": {"vol": "2"}}}}
+        if use_cursor:
+            assert encoded["with_cursor"] == ["true"]
+            return {"error": [], "result": {fields[endpoint]: {}, "cursor": {}}}
+        assert encoded["ofs"] == ["0"]
+        return {"error": [], "result": {fields[endpoint]: {}, "count": 0}}
+
+    broker = SimpleNamespace(
+        broker_type="kraken", account_type="platform", user_id=None,
+        _kraken_private_call=read,
+    )
+    report = collect_from_existing_broker(
+        broker, account_scope="platform:kraken", monitoring_category="monitoring",
+        use_cursor=use_cursor, include_balance=True, include_open_orders=True,
+    )
+    assert len(calls) == 12
+    assert set(report["open_orders"]) == {"stop-a", "stop-b"}
+    assert report["trading_authorized"] is False
+    assert report["authenticated_identity_independently_verified"] is False
