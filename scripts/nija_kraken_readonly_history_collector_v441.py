@@ -211,7 +211,8 @@ def collect_history(
         started = time.time()
         previous = started
         for _ in range(max_pages):
-            payload = private_read("OpenOrders", params)
+            # Keep pagination state separate from transport nonce/signature mutation.
+            payload = private_read("OpenOrders", dict(params))
             finished = time.time()
             if not all(math.isfinite(x) and x > 0 for x in (started, finished)) or finished < previous:
                 raise IncompleteHistory("OpenOrders: invalid observation clock")
@@ -236,7 +237,8 @@ def collect_history(
                 except (TypeError, ValueError) as exc:
                     raise IncompleteHistory("OpenOrders: non-JSON record") from exc
             cursor = result.get("cursor", {})
-            if not isinstance(cursor, Mapping):
+            if not isinstance(cursor, Mapping) or set(cursor) - {"next"}:
+                # Unrecognized cursor fields must not imply terminal exhaustion.
                 raise IncompleteHistory("OpenOrders: invalid cursor")
             next_cursor = cursor.get("next")
             if next_cursor is None or next_cursor == "":
