@@ -36,6 +36,17 @@ class SixSourceContractTests(unittest.TestCase):
                 independently_reviewed=True,
             )
 
+    def test_refuses_reused_callable_identity(self):
+        shared = lambda: {}
+        providers = dict(self.providers)
+        providers["risk_limits"] = shared
+        providers["kill_switch_clear"] = shared
+        with self.assertRaises(IndependentSourceBindingRequired):
+            validate_six_source_bindings(
+                providers, reviewed_source_owners=self.owners,
+                independently_reviewed=True,
+            )
+
     def test_accepts_only_complete_structural_contract_without_invocation(self):
         called = []
         providers = {field: (lambda field=field: called.append(field))
