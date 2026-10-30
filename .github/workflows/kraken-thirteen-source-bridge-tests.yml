@@ -1,0 +1,27 @@
+name: Kraken thirteen-source bridge targeted tests
+on:
+  push:
+    branches:
+      - fix/collector-six-source-contract-20261029
+    paths:
+      - 'bot/kraken_thirteen_source_reviewed_bridge_v491.py'
+      - 'tests/test_kraken_thirteen_source_reviewed_bridge_v491.py'
+      - '.github/workflows/kraken-thirteen-source-bridge-tests.yml'
+  pull_request:
+    paths:
+      - 'bot/kraken_thirteen_source_reviewed_bridge_v491.py'
+      - 'tests/test_kraken_thirteen_source_reviewed_bridge_v491.py'
+      - '.github/workflows/kraken-thirteen-source-bridge-tests.yml'
+permissions:
+  contents: read
+jobs:
+  bridge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Validate thirteen-source offline bridge
+        run: python -m unittest discover -s tests -p test_kraken_thirteen_source_reviewed_bridge_v491.py -v
