@@ -54,4 +54,6 @@ def validate_six_source_bindings(
             raise IndependentSourceBindingRequired("source_owner_mismatch")
         if not callable(providers[field]):
             raise IndependentSourceBindingRequired("source_not_callable")
+    if len({id(provider) for provider in providers.values()}) != len(EXPECTED_OWNERS):
+        raise IndependentSourceBindingRequired("source_callable_reused")
     return dict(providers)
