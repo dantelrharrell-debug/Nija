@@ -15,6 +15,8 @@ from collections.abc import Callable, Mapping
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
+from bot.kraken_cursor_read_wire_v490 import cursor_read_params
+
 ENDPOINTS = (("TradesHistory", "trades"), ("ClosedOrders", "closed"), ("Ledgers", "ledger"))
 PAGE_SIZE = 50
 
@@ -423,7 +425,10 @@ def collect_from_existing_broker(broker: Any, *, account_scope: str,
         require_matching_scope()
         # krakenex stamps nonce into its argument dict. Keep that transport-only
         # mutation out of the next cursor page and the strict read-only allowlist.
-        payload = private_call(endpoint, dict(params), category=monitoring_category)
+        payload = private_call(
+            endpoint, cursor_read_params(broker, endpoint, params),
+            category=monitoring_category,
+        )
         require_matching_scope()
         return payload
 
