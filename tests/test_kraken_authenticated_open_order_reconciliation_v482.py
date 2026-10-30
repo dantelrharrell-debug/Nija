@@ -88,6 +88,44 @@ class TestReadback(unittest.TestCase):
     def denied(self, b, l, **kwargs):
         with self.assertRaises(KrakenOpenOrderDenied):
             self.provider(b, l, **kwargs)()
+    def test_direct_cursor_form_normalization_keeps_authenticated_order_readback(self):
+        b, l = Broker(), Ledger()
+        b._gateway_url = ""
+        b._gateway_only_mode = False
+        observed = []
+
+        def direct_params(params):
+            observed.append(dict(params))
+            self.assertEqual(params["with_cursor"], "true")
+            self.assertEqual(params["trades"], "true")
+            self.assertEqual(params["limit"], 50)
+            self.assertNotIn("nonce", params)
+            return {"error": [], "result": {"open": copy.deepcopy(b.orders), "cursor": {}}}
+
+        b.callback = direct_params
+        result = self.provider(b, l)()
+        self.assertTrue(result["verified"])
+        self.assertFalse(result["authorizes_orders"])
+        self.assertEqual(len(observed), 2)
+
+    def test_gateway_cursor_preserves_boolean_json_types(self):
+        b, l = Broker(), Ledger()
+        b._gateway_url = "https://gateway.example"
+        b._gateway_only_mode = True
+        observed = []
+
+        def gateway_params(params):
+            observed.append(dict(params))
+            self.assertIs(params["with_cursor"], True)
+            self.assertIs(params["trades"], True)
+            return {"error": [], "result": {"open": copy.deepcopy(b.orders), "cursor": {}}}
+
+        b.callback = gateway_params
+        result = self.provider(b, l)()
+        self.assertTrue(result["verified"])
+        self.assertFalse(result["authorizes_orders"])
+        self.assertEqual(len(observed), 2)
+
     def test_exact_match_and_no_side_effects(self):
         b, l = Broker(), Ledger()
         provider = self.provider(b, l)
@@ -180,6 +218,42 @@ class TestReadback(unittest.TestCase):
             b.callback = callback
             with self.subTest(callback=callback):
                 self.denied(b, l)
+    def test_unknown_cursor_metadata_is_not_a_terminal_page(self):
+        b, l = Broker(), Ledger()
+        b.callback = lambda params: {"error": [], "result": {
+            "open": {ORDER: orders_row()},
+            "cursor": {"previous": "unverified"},
+        }}
+        with self.assertRaisesRegex(KrakenOpenOrderDenied, "open_order_pagination_unverified"):
+            self.provider(b, l)()
+        self.assertEqual(b.calls, 1)
+
+    def test_nonce_stamping_does_not_change_next_page_request(self):
+        b, l = Broker(), Ledger()
+        other = "OABCDE-ABCDF-ABCDEF"
+        l.rows[other] = copy.deepcopy(l.rows[ORDER])
+        calls = []
+
+        def pages(params):
+            self.assertNotIn("nonce", params)
+            calls.append(dict(params))
+            second = "cursor" in params
+            params["nonce"] = len(calls)  # Actual krakenex mutates the supplied mapping.
+            if not second:
+                return {"error": [], "result": {
+                    "open": {ORDER: orders_row()}, "cursor": {"next": "second"},
+                }}
+            self.assertEqual(params["cursor"], "second")
+            return {"error": [], "result": {
+                "open": {other: orders_row()}, "cursor": {},
+            }}
+
+        b.callback = pages
+        result = self.provider(b, l)()
+        self.assertTrue(result["verified"])
+        self.assertFalse(result["authorizes_orders"])
+        self.assertEqual((b.calls, len(calls)), (4, 4))
+
     def test_multi_page_complete_and_exact(self):
         b, l = Broker(), Ledger()
         other = "OABCDE-ABCDF-ABCDEF"
