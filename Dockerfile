@@ -110,6 +110,7 @@ RUN NIJA_DEFER_RUNTIME_SITE_HOOKS=1 python -S -m py_compile \
         /app/scripts/nija_ledger_evidence_v438.py \
         /app/scripts/nija_offline_kraken_csv_audit_v440.py \
         /app/scripts/nija_kraken_readonly_history_collector_v441.py \
+        /app/scripts/nija_kraken_failure_receipt_triage_v464.py \
         /app/bot/kraken_live_history_recovery.py \
         /app/bot/durable_recovery_state.py \
         /app/scripts/nija_state_store_persistence_audit_v441.py \
@@ -119,6 +120,7 @@ RUN NIJA_DEFER_RUNTIME_SITE_HOOKS=1 python -S -m py_compile \
     test -s /app/scripts/nija_trade_ledger_snapshot_v436.py && \
     test -s /app/scripts/nija_ledger_evidence_v438.py && \
     test -s /app/scripts/nija_offline_kraken_csv_audit_v440.py && \
+    test -s /app/scripts/nija_kraken_failure_receipt_triage_v464.py && \
     test -s /app/scripts/nija_state_store_persistence_audit_v441.py && \
     test -s /app/scripts/nija_account_state_offhost_evidence_v449.py && \
     test -s /app/scripts/nija_legacy_global_state_evidence_v462.py && \
