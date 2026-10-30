@@ -1,0 +1,28 @@
+name: Kraken six-source contract
+on:
+  push:
+    branches: [fix/collector-six-source-contract-20261029]
+    paths:
+      - 'bot/kraken_six_source_binding_contract_v490.py'
+      - 'tests/test_kraken_six_source_binding_contract_v490.py'
+      - '.github/workflows/kraken-six-source-contract.yml'
+  pull_request:
+    paths:
+      - 'bot/kraken_six_source_binding_contract_v490.py'
+      - 'tests/test_kraken_six_source_binding_contract_v490.py'
+      - '.github/workflows/kraken-six-source-contract.yml'
+permissions:
+  contents: read
+jobs:
+  offline-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Compile and run isolated contract tests
+        run: |
+          python -m py_compile bot/kraken_six_source_binding_contract_v490.py tests/test_kraken_six_source_binding_contract_v490.py
+          python -m unittest discover -s tests -p 'test_kraken_six_source_binding_contract_v490.py' -v

@@ -15,6 +15,8 @@ from collections.abc import Callable, Mapping
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
+from bot.kraken_cursor_read_wire_v490 import cursor_read_params
+
 ENDPOINTS = (("TradesHistory", "trades"), ("ClosedOrders", "closed"), ("Ledgers", "ledger"))
 PAGE_SIZE = 50
 
@@ -211,7 +213,8 @@ def collect_history(
         started = time.time()
         previous = started
         for _ in range(max_pages):
-            payload = private_read("OpenOrders", params)
+            # Keep pagination state separate from transport nonce/signature mutation.
+            payload = private_read("OpenOrders", dict(params))
             finished = time.time()
             if not all(math.isfinite(x) and x > 0 for x in (started, finished)) or finished < previous:
                 raise IncompleteHistory("OpenOrders: invalid observation clock")
@@ -236,7 +239,8 @@ def collect_history(
                 except (TypeError, ValueError) as exc:
                     raise IncompleteHistory("OpenOrders: non-JSON record") from exc
             cursor = result.get("cursor", {})
-            if not isinstance(cursor, Mapping):
+            if not isinstance(cursor, Mapping) or set(cursor) - {"next"}:
+                # Unrecognized cursor fields must not imply terminal exhaustion.
                 raise IncompleteHistory("OpenOrders: invalid cursor")
             next_cursor = cursor.get("next")
             if next_cursor is None or next_cursor == "":
@@ -421,7 +425,18 @@ def collect_from_existing_broker(broker: Any, *, account_scope: str,
         require_matching_scope()
         # krakenex stamps nonce into its argument dict. Keep that transport-only
         # mutation out of the next cursor page and the strict read-only allowlist.
-        payload = private_call(endpoint, dict(params), category=monitoring_category)
+        payload = private_call(
+            endpoint, cursor_read_params(broker, endpoint, params),
+            category=monitoring_category,
+        )
+        # krakenex form-encodes values; Python bools otherwise become
+        # "True"/"False", rather than Kraken's lowercase boolean tokens.
+        # Normalize only after the strict semantic read allowlist above.
+        wire_params = {
+            key: ("true" if value else "false") if type(value) is bool else value
+            for key, value in params.items()
+        }
+        payload = private_call(endpoint, wire_params, category=monitoring_category)
         require_matching_scope()
         return payload
 

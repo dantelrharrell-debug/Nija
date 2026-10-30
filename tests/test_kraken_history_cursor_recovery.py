@@ -130,3 +130,54 @@ def test_private_request_selects_cursor_explicitly_without_replay(tmp_path, curs
     assert report["collection_succeeded"] is True
     assert report["trading_authorized"] is False
     assert not collect_requested_history(tmp_path, [broker], monitoring_category="monitoring", now=1000)
+
+
+def test_open_orders_rejects_unknown_cursor_fields_instead_of_claiming_completion():
+    """An unrecognized cursor object cannot silently certify an incomplete order set."""
+    calls = []
+
+    def read(endpoint, params):
+        calls.append((endpoint, dict(params)))
+        if endpoint == "OpenOrders":
+            return {"error": [], "result": {
+                "open": {"open-order-a": {"vol": "1"}},
+                "cursor": {"previous": "opaque-but-not-next"},
+            }}
+        field = FIELDS[endpoint]
+        return {"error": [], "result": {field: {}, "count": 0}}
+
+    with pytest.raises(IncompleteHistory, match="OpenOrders: invalid cursor"):
+        collect_history(read, account_scope="platform:kraken",
+                        include_open_orders=True, max_pages=2)
+    assert [ep for ep, _ in calls].count("OpenOrders") == 1
+
+
+def test_direct_open_order_reader_isolates_transport_nonce_between_cursor_pages():
+    """The raw reader may mutate its input exactly as krakenex does."""
+    calls = []
+
+    def read(endpoint, params):
+        assert "nonce" not in params
+        calls.append((endpoint, dict(params)))
+        if endpoint != "OpenOrders":
+            field = FIELDS[endpoint]
+            return {"error": [], "result": {field: {}, "count": 0}}
+        page_two = "cursor" in params
+        params["nonce"] = len(calls)
+        if not page_two:
+            return {"error": [], "result": {
+                "open": {"order-a": {"vol": "1"}},
+                "cursor": {"next": "page-two"},
+            }}
+        assert params["cursor"] == "page-two"
+        return {"error": [], "result": {
+            "open": {"order-b": {"vol": "2"}},
+            "cursor": {},
+        }}
+
+    evidence = collect_history(read, account_scope="platform:kraken",
+                               include_open_orders=True, max_pages=2)
+    assert set(evidence["open_orders"]) == {"order-a", "order-b"}
+    assert [ep for ep, _ in calls].count("OpenOrders") == 4
+    assert evidence["trading_authorized"] is False
+    assert evidence["protective_exit_coverage_verified"] is False

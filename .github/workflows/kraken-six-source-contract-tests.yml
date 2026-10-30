@@ -1,0 +1,27 @@
+name: Kraken six-source contract targeted tests
+on:
+  push:
+    branches:
+      - fix/collector-six-source-contract-20261029
+    paths:
+      - 'bot/kraken_six_source_binding_contract_v490.py'
+      - 'tests/test_kraken_six_source_binding_contract_v490.py'
+      - '.github/workflows/kraken-six-source-contract-tests.yml'
+  pull_request:
+    paths:
+      - 'bot/kraken_six_source_binding_contract_v490.py'
+      - 'tests/test_kraken_six_source_binding_contract_v490.py'
+      - '.github/workflows/kraken-six-source-contract-tests.yml'
+permissions:
+  contents: read
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Validate six-source boundary offline
+        run: python -m unittest discover -s tests -p test_kraken_six_source_binding_contract_v490.py -v
