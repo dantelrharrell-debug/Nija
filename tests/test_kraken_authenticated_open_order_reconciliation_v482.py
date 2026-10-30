@@ -180,6 +180,42 @@ class TestReadback(unittest.TestCase):
             b.callback = callback
             with self.subTest(callback=callback):
                 self.denied(b, l)
+    def test_unknown_cursor_metadata_is_not_a_terminal_page(self):
+        b, l = Broker(), Ledger()
+        b.callback = lambda params: {"error": [], "result": {
+            "open": {ORDER: orders_row()},
+            "cursor": {"previous": "unverified"},
+        }}
+        with self.assertRaisesRegex(KrakenOpenOrderDenied, "open_order_pagination_unverified"):
+            self.provider(b, l)()
+        self.assertEqual(b.calls, 1)
+
+    def test_nonce_stamping_does_not_change_next_page_request(self):
+        b, l = Broker(), Ledger()
+        other = "OABCDE-ABCDF-ABCDEF"
+        l.rows[other] = copy.deepcopy(l.rows[ORDER])
+        calls = []
+
+        def pages(params):
+            self.assertNotIn("nonce", params)
+            calls.append(dict(params))
+            second = "cursor" in params
+            params["nonce"] = len(calls)  # Actual krakenex mutates the supplied mapping.
+            if not second:
+                return {"error": [], "result": {
+                    "open": {ORDER: orders_row()}, "cursor": {"next": "second"},
+                }}
+            self.assertEqual(params["cursor"], "second")
+            return {"error": [], "result": {
+                "open": {other: orders_row()}, "cursor": {},
+            }}
+
+        b.callback = pages
+        result = self.provider(b, l)()
+        self.assertTrue(result["verified"])
+        self.assertFalse(result["authorizes_orders"])
+        self.assertEqual((b.calls, len(calls)), (4, 4))
+
     def test_multi_page_complete_and_exact(self):
         b, l = Broker(), Ledger()
         other = "OABCDE-ABCDF-ABCDEF"
