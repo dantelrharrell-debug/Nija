@@ -69,7 +69,14 @@ jobs:
                 '{case:$case,status:.status,failure_code:.failure_code,failure_endpoint:.failure_endpoint,api_failure_reason:.api_failure_reason,complete_page_budget_known:.complete_page_budget_known,requested_pages:.requested_pages,required_pages:.required_pages,execution_authorized:.execution_authorized}'
               good=$((good + 1))
             else
-              echo "RECEIPT_${label}=NOT_VERIFIED"
+              # Read-only on-host CLI emits only fixed, redacted errors; do not
+              # print stderr or uninterpreted remote output.
+              code="$(printf '%s\n' "$result" | jq -er '
+                select(.status == "FAILED_CLOSED" and .execution_authorized == false) |
+                .failure_code |
+                select(type == "string" and (length < 80) and test("^[a-z_]+$"))
+              ' 2>/dev/null)" || code=remote_command_or_receipt_unavailable
+              echo "RECEIPT_${label}=$code"
             fi
           done
           echo 'RECEIPT_TRIAGE_PERFORMED_BROKER_READS=false'
