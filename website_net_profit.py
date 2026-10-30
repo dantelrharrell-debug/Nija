@@ -40,6 +40,8 @@ def net_profit_report(
     reporting_period: str,
     revenue_complete: bool = False,
     costs_complete: bool = False,
+    certified_unique_visitors: int | None = None,
+    certified_qualified_leads: int | None = None,
 ) -> dict:
     """Produce 2 independent net-profit ratios for a single calendar month.
 
@@ -53,6 +55,9 @@ def net_profit_report(
     """
     if not re.fullmatch(r"\d{4}-(?:0[1-9]|1[0-2])", reporting_period):
         raise ValueError("reporting_period must be YYYY-MM")
+    for label, value in (("visitors", certified_unique_visitors), ("leads", certified_qualified_leads)):
+        if value is not None and (type(value) is not int or value < 0 or value > 10**12):
+            raise ValueError("Certified " + label + " must be a nonnegative integer")
 
     raw_revenue = list(revenue_events)
     matching_revenue = [
@@ -98,8 +103,14 @@ def net_profit_report(
         and rejected_period_events == 0
         and revenue["rejected_events"] == 0
     )
-    visitors = revenue["unique_visitors"]
-    leads = revenue["unique_qualified_leads"]
+    observed_visitors = revenue["unique_visitors"]
+    observed_leads = revenue["unique_qualified_leads"]
+    if certified_unique_visitors is not None and certified_unique_visitors < observed_visitors:
+        raise ValueError("Certified visitor aggregate cannot be below logged visitor count")
+    if certified_qualified_leads is not None and certified_qualified_leads < observed_leads:
+        raise ValueError("Certified lead aggregate cannot be below logged lead count")
+    visitors = certified_unique_visitors if certified_unique_visitors is not None else observed_visitors
+    leads = certified_qualified_leads if certified_qualified_leads is not None else observed_leads
     net_cents = int(Decimal(revenue["net_verified_revenue_usd"]) * 100) - cost_total
 
     def per(count: int) -> str | None:
@@ -109,6 +120,10 @@ def net_profit_report(
 
     return {
         **revenue,
+        "unique_visitors": visitors,
+        "unique_qualified_leads": leads,
+        "visitor_count_source": "certified_aggregate" if certified_unique_visitors is not None else "event_evidence",
+        "qualified_lead_count_source": "certified_aggregate" if certified_qualified_leads is not None else "event_evidence",
         "reporting_period": reporting_period,
         "revenue_evidence_complete": complete and revenue_complete,
         "cost_evidence_complete": complete and costs_complete,
