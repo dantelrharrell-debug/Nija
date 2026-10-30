@@ -39,48 +39,42 @@ jobs:
             echo 'BLOCKED: SSH host identity mismatch'
             exit 2
           }
-          ssh -T -i "$secure/key" -o BatchMode=yes -o IdentitiesOnly=yes \
-            -o IdentityAgent=none -o StrictHostKeyChecking=yes \
-            -o "UserKnownHostsFile=$secure/known_hosts" \
-            -o HostKeyAlgorithms=ssh-ed25519 -o ConnectTimeout=15 \
-            -o ServerAliveInterval=10 -o ServerAliveCountMax=1 \
-            srv-d98dsr5aeets73fpbaqg@ssh.oregon.render.com \
-            "python -B -S -" <<'PY'
-          import hashlib
-          import json
-          import os
-          from pathlib import Path
-          import sys
-          if (os.environ.get("RENDER_SERVICE_ID") != "srv-d98dsr5aeets73fpbaqg"
-              or os.environ.get("RENDER_GIT_COMMIT") != "37cf08a504a0ea31401aefbdd3aa71d13e943b5d"):
-              raise SystemExit("BLOCKED: production SHA mismatch")
-          script = Path("/app/scripts/nija_kraken_failure_receipt_triage_v464.py")
-          raw = script.read_bytes()
-          pin = "28f5c2ce315866e96e00548fbceef3352684678c"
-          if (script.is_symlink() or
-              hashlib.sha1(b"blob " + str(len(raw)).encode() + b"\0" + raw).hexdigest() != pin):
-              raise SystemExit("BLOCKED: triage code is not the reviewed production version")
-          directory = os.environ.get("NIJA_KRAKEN_HISTORY_RECOVERY_DIR")
-          if not directory:
-              raise SystemExit("BLOCKED: historical receipt storage not configured")
-          sys.path.insert(0, "/app")
-          from scripts.nija_kraken_failure_receipt_triage_v464 import inspect_failure, TriageFailure
-          cases = (
-              ("initial_history", "91cefe76c2c7d7164608bb4ffb195532"),
-              ("cursor_history", "d7baa71731e633d1c6f4c9848505ab98"),
-              ("offset_page_budget", "97dbb6dc01e97936829e0e3656fdbcf1"),
-              ("open_orders", "aec7c56e2aa9cff292f1f6ffe94829d4"),
+          ssh_opts=(
+            -T -i "$secure/key" -o BatchMode=yes -o IdentitiesOnly=yes
+            -o IdentityAgent=none -o StrictHostKeyChecking=yes
+            -o "UserKnownHostsFile=$secure/known_hosts"
+            -o HostKeyAlgorithms=ssh-ed25519 -o ConnectTimeout=15
+            -o ServerAliveInterval=10 -o ServerAliveCountMax=1
           )
-          fields = ("status", "failure_code", "failure_endpoint",
-                    "api_failure_reason", "complete_page_budget_known",
-                    "requested_pages", "required_pages", "execution_authorized")
-          for label, request_id in cases:
-              try:
-                  result = inspect_failure(Path(directory), request_id)
-                  sanitized = {field: result[field] for field in fields if field in result}
-                  print(json.dumps({"case": label, **sanitized}, sort_keys=True))
-              except (TriageFailure, ValueError, OSError):
-                  print(json.dumps({"case": label, "status": "RECEIPT_NOT_VERIFIED"}, sort_keys=True))
-          print("RECEIPT_TRIAGE_PERFORMED_BROKER_READS=false")
-          print("TRADING_AUTHORIZED=false")
-          PY
+          remote=srv-d98dsr5aeets73fpbaqg@ssh.oregon.render.com
+          remote_guard='test "${RENDER_SERVICE_ID:-}" = "srv-d98dsr5aeets73fpbaqg" && test "${RENDER_GIT_COMMIT:-}" = "37cf08a504a0ea31401aefbdd3aa71d13e943b5d" && test -n "${NIJA_KRAKEN_HISTORY_RECOVERY_DIR:-}"'
+          ssh "${ssh_opts[@]}" "$remote" "$remote_guard" >/dev/null || {
+            echo 'BLOCKED: no verified recovery receipt directory on pinned production'
+            exit 2
+          }
+          echo 'KRAKEN_RECOVERY_RECEIPT_STORE=VERIFIED_CONFIGURED'
+          good=0
+          cases=(
+            initial_history:91cefe76c2c7d7164608bb4ffb195532
+            cursor_history:d7baa71731e633d1c6f4c9848505ab98
+            offset_page_budget:97dbb6dc01e97936829e0e3656fdbcf1
+            open_orders:aec7c56e2aa9cff292f1f6ffe94829d4
+          )
+          for item in "${cases[@]}"; do
+            label="${item%%:*}"
+            id="${item##*:}"
+            request="cd /app && python -B -S scripts/nija_kraken_failure_receipt_triage_v464.py --recovery-dir \"${NIJA_KRAKEN_HISTORY_RECOVERY_DIR}\" --request-id $id"
+            if result="$(ssh "${ssh_opts[@]}" "$remote" "$request" 2>/dev/null)"; then
+              printf '%s\n' "$result" | jq -ce --arg case "$label" \
+                '{case:$case,status:.status,failure_code:.failure_code,failure_endpoint:.failure_endpoint,api_failure_reason:.api_failure_reason,complete_page_budget_known:.complete_page_budget_known,requested_pages:.requested_pages,required_pages:.required_pages,execution_authorized:.execution_authorized}'
+              good=$((good + 1))
+            else
+              echo "RECEIPT_${label}=NOT_VERIFIED"
+            fi
+          done
+          echo 'RECEIPT_TRIAGE_PERFORMED_BROKER_READS=false'
+          echo 'TRADING_AUTHORIZED=false'
+          test "$good" -gt 0 || {
+            echo 'BLOCKED: no historical Kraken failure receipt could be validated'
+            exit 2
+          }
