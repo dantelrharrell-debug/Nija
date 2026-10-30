@@ -82,6 +82,21 @@ jobs:
             # Shell interpolation of directory occurs ONLY on authenticated Render.
             cmd="python -B -S - --recovery-dir \"\${NIJA_KRAKEN_HISTORY_RECOVERY_DIR}\" --request-id $id"
             if raw="$(ssh "${opts[@]}" "$remote" "$cmd" < "$script" 2>/dev/null)"; then
+              status=0
+            else
+              status=$?
+            fi
+            # A failed read-only SSH transport can be retried once; the source
+            # request ID is already consumed and NO brokerage API call occurs.
+            if [ "$status" != 0 ] && [ -z "$raw" ]; then
+              sleep 3
+              if raw="$(ssh "${opts[@]}" "$remote" "$cmd" < "$script" 2>/dev/null)"; then
+                status=0
+              else
+                status=$?
+              fi
+            fi
+            if [ "$status" = 0 ]; then
               safe="$(printf '%s\n' "$raw" | jq -er '
                 select(.status == "FAILED_COLLECTION_TRIAGED" and
                        .execution_authorized == false and
@@ -91,6 +106,23 @@ jobs:
               if [ "$safe" != invalid_triage_result ]; then
                 good=$((good + 1))
                 echo "CASE_$label=TRIAGED:$safe"
+                if [ "$label" = OFFSET_PAGE_BUDGET ] && [ "$safe" = page_limit ]; then
+                  # The reviewed v464 verifier already cross-checks these
+                  # integers against the consumed claim and the broker count.
+                  budget="$(printf '%s\n' "$raw" | jq -er '
+                    select(.complete_page_budget_known == true and
+                           (.requested_pages|type) == "number" and
+                           (.required_pages|type) == "number" and
+                           .requested_pages > 0 and
+                           .required_pages > .requested_pages) |
+                    "\(.requested_pages):\(.required_pages)"
+                  ' 2>/dev/null)" || budget=unverified
+                  if [ "$budget" = unverified ]; then
+                    echo 'HISTORY_REQUIRED_PAGES=UNVERIFIED'
+                  else
+                    echo "VERIFIED_HISTORY_PAGE_BUDGET=$budget"
+                  fi
+                fi
               else
                 echo "CASE_$label=INVALID_TRIAGE_RESULT"
               fi
