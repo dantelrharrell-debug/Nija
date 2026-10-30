@@ -1,0 +1,143 @@
+name: NIJA pinned stdin Kraken receipt triage (no broker API)
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [release/justcall-handoff-only-20261017]
+    paths:
+      - '.github/workflows/nija-kraken-stdin-triage-20261029.yml'
+permissions:
+  contents: read
+concurrency:
+  group: nija-kraken-stdin-triage-20261029
+  cancel-in-progress: false
+jobs:
+  triage:
+    if: >-
+      github.event.pull_request.number == 3499 &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'fix/nija-independent-recovery-20261029' &&
+      github.event.pull_request.base.ref == 'release/justcall-handoff-only-20261017'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout the exact production-pinned reviewed triage source
+        uses: actions/checkout@v4
+        with:
+          ref: 37cf08a504a0ea31401aefbdd3aa71d13e943b5d
+          persist-credentials: false
+      - name: Authenticate to pinned instance and triage four already consumed IDs
+        shell: bash
+        env:
+          NIJA_RENDER_RECOVERY_KEY: ${{ secrets.NIJA_RENDER_RECOVERY_SSH_PRIVATE_KEY }}
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          script=scripts/nija_kraken_failure_receipt_triage_v464.py
+          test "$(git hash-object "$script")" = "28f5c2ce315866e96e00548fbceef3352684678c" || {
+            echo 'BLOCKED: pinned v464 triage source mismatch'
+            exit 2
+          }
+          if [ -z "${NIJA_RENDER_RECOVERY_KEY:-}" ]; then
+            echo 'BLOCKED: authenticated Render recovery key missing'
+            exit 2
+          fi
+          scratch="$(mktemp -d)"
+          trap 'rm -rf "$scratch"' EXIT
+          printf '%s\n' "$NIJA_RENDER_RECOVERY_KEY" > "$scratch/key"
+          unset NIJA_RENDER_RECOVERY_KEY
+          chmod 600 "$scratch/key"
+          ssh-keygen -y -P '' -f "$scratch/key" > /dev/null 2>&1 || exit 2
+          ssh-keyscan -t ed25519 -T 15 ssh.oregon.render.com > "$scratch/known_hosts" 2>/dev/null
+          observed="$(ssh-keygen -lf "$scratch/known_hosts" -E sha256 | awk '{print $2}' | sort -u)"
+          test "$observed" = 'SHA256:KkZPgnApmttFYSkdJsCi7B01sgZPMI6kY53MDbbanGM' || {
+            echo 'BLOCKED: Render SSH host fingerprint mismatch'
+            exit 2
+          }
+          opts=(
+            -T -i "$scratch/key" -o BatchMode=yes -o IdentitiesOnly=yes
+            -o IdentityAgent=none -o StrictHostKeyChecking=yes
+            -o "UserKnownHostsFile=$scratch/known_hosts"
+            -o HostKeyAlgorithms=ssh-ed25519 -o ConnectTimeout=15
+            -o ConnectionAttempts=1 -o ServerAliveInterval=10 -o ServerAliveCountMax=2
+          )
+          remote=srv-d98dsr5aeets73fpbaqg@ssh.oregon.render.com
+          guard='test "${RENDER_SERVICE_ID:-}" = "srv-d98dsr5aeets73fpbaqg" && test "${RENDER_GIT_COMMIT:-}" = "37cf08a504a0ea31401aefbdd3aa71d13e943b5d" && test -n "${NIJA_KRAKEN_HISTORY_RECOVERY_DIR:-}"'
+          if ! ssh "${opts[@]}" "$remote" "$guard" >/dev/null 2>&1; then
+            echo 'BLOCKED: source instance, deployed commit, or recovery directory configuration mismatch'
+            exit 2
+          fi
+          echo 'PINNED_RENDER_INSTANCE=PASS'
+          ids=(
+            INITIAL_HISTORY:91cefe76c2c7d7164608bb4ffb195532
+            CURSOR_HISTORY:d7baa71731e633d1c6f4c9848505ab98
+            OFFSET_PAGE_BUDGET:97dbb6dc01e97936829e0e3656fdbcf1
+            OPEN_ORDERS:aec7c56e2aa9cff292f1f6ffe94829d4
+          )
+          good=0
+          for row in "${ids[@]}"; do
+            label="${row%%:*}"
+            id="${row##*:}"
+            # Source comes from the exact reviewed production Git blob; stdin
+            # avoids writing any file to the running Render container.
+            # Shell interpolation of directory occurs ONLY on authenticated Render.
+            cmd="python -B -S - --recovery-dir \"\${NIJA_KRAKEN_HISTORY_RECOVERY_DIR}\" --request-id $id"
+            if raw="$(ssh "${opts[@]}" "$remote" "$cmd" < "$script" 2>/dev/null)"; then
+              status=0
+            else
+              status=$?
+            fi
+            # A failed read-only SSH transport can be retried once; the source
+            # request ID is already consumed and NO brokerage API call occurs.
+            if [ "$status" != 0 ] && [ -z "$raw" ]; then
+              sleep 3
+              if raw="$(ssh "${opts[@]}" "$remote" "$cmd" < "$script" 2>/dev/null)"; then
+                status=0
+              else
+                status=$?
+              fi
+            fi
+            if [ "$status" = 0 ]; then
+              safe="$(printf '%s\n' "$raw" | jq -er '
+                select(.status == "FAILED_COLLECTION_TRIAGED" and
+                       .execution_authorized == false and
+                       .broker_reads_performed_by_triage == false) |
+                .failure_code | select(type == "string" and test("^[a-z_]+$"))
+              ' 2>/dev/null)" || safe=invalid_triage_result
+              if [ "$safe" != invalid_triage_result ]; then
+                good=$((good + 1))
+                echo "CASE_$label=TRIAGED:$safe"
+                if [ "$label" = OFFSET_PAGE_BUDGET ] && [ "$safe" = page_limit ]; then
+                  # The reviewed v464 verifier already cross-checks these
+                  # integers against the consumed claim and the broker count.
+                  budget="$(printf '%s\n' "$raw" | jq -er '
+                    select(.complete_page_budget_known == true and
+                           (.requested_pages|type) == "number" and
+                           (.required_pages|type) == "number" and
+                           .requested_pages > 0 and
+                           .required_pages > .requested_pages) |
+                    "\(.requested_pages):\(.required_pages)"
+                  ' 2>/dev/null)" || budget=unverified
+                  if [ "$budget" = unverified ]; then
+                    echo 'HISTORY_REQUIRED_PAGES=UNVERIFIED'
+                  else
+                    echo "VERIFIED_HISTORY_PAGE_BUDGET=$budget"
+                  fi
+                fi
+              else
+                echo "CASE_$label=INVALID_TRIAGE_RESULT"
+              fi
+            else
+              safe="$(printf '%s\n' "$raw" | jq -er '
+                select(.status == "FAILED_CLOSED" and .execution_authorized == false) |
+                .failure_code | select(type == "string" and test("^[a-z_]+$"))
+              ' 2>/dev/null)" || safe=remote_command_unavailable
+              echo "CASE_$label=$safe"
+            fi
+          done
+          echo "VALIDATED_FAILED_RECEIPTS=$good"
+          echo 'BROKER_REQUESTS_PERFORMED=false'
+          echo 'TRADING_AUTHORIZED=false'
+          if [ "$good" = 0 ]; then
+            echo 'BLOCKED: none of the four consumed failure receipts has verifiable scope and seal'
+            exit 2
+          fi
