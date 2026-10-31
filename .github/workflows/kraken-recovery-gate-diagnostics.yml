@@ -71,7 +71,7 @@ jobs:
               checked_file('PREFLIGHT_SOURCE', '/app/bot/kraken_sqlite_readonly_preflight_v488.py',
                            '480e01a7ee4326ee9fc85b202f0fafb413f733cd035d9d957142488d69a05452'),
               checked_file('HISTORY_SOURCE', '/app/bot/kraken_live_history_recovery.py',
-                           'f75497755d38550c7371c82275de5bb046a2e83cb913f17858ab9d8230ca76bc'),
+                           '0e04bf20802abde51f78c4ecbf14cbd57cb4a881833760942c4460cfdc9d6a31'),
               checked_file('EXIT_OBSERVER_SOURCE', '/app/bot/universal_broker_exit_supervisor_patch.py',
                            '7970751561b5dfa6dde1542903289c4351ba15c47b84a7ab315abe39c3aa1758'),
           ))
