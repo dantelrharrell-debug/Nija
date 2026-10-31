@@ -111,7 +111,7 @@ jobs:
           if report.get('sqlite_integrity_ok') is not True:
               raise SystemExit('BLOCKED: ledger integrity required before history request')
           collector_source = Path('/app/bot/kraken_live_history_recovery.py')
-          collector_hash = 'f75497755d38550c7371c82275de5bb046a2e83cb913f17858ab9d8230ca76bc'
+          collector_hash = '0e04bf20802abde51f78c4ecbf14cbd57cb4a881833760942c4460cfdc9d6a31'
           if (collector_source.is_symlink()
                   or hashlib.sha256(collector_source.read_bytes()).hexdigest() != collector_hash):
               raise SystemExit('BLOCKED: reviewed history request implementation changed')
@@ -222,38 +222,8 @@ jobs:
           elif (root / 'request.json').exists():
               print('NIJA_HISTORY_RECOVERY_REQUEST_ALREADY_PENDING')
           else:
-              fd = os.open(root / 'collector.lock', os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-              try:
-                  info = os.fstat(fd)
-                  if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
-                          or stat.S_IMODE(info.st_mode) & 0o077 or info.st_nlink != 1):
-                      raise SystemExit('BLOCKED: recovery lock not private regular file')
-                  try:
-                      fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                  except BlockingIOError:
-                      raise SystemExit('BLOCKED: another history collection is active')
-                  if any(path.exists() or path.is_symlink()
-                         for path in (claim, receipt, root / 'request.json')):
-                      raise SystemExit('BLOCKED: recovery request state changed before submission')
-                  if (root / 'exact_request.json').exists() or (root / 'exact_request.json').is_symlink():
-                      raise SystemExit('BLOCKED: another recovery mode is pending')
-                  request = dict(request_id=request_id, account_scope='platform:kraken',
-                                 created_at=time.time(), max_pages=100, use_cursor=False)
-                  temporary_fd, temporary_path = tempfile.mkstemp(prefix='.request-', dir=root)
-                  try:
-                      with os.fdopen(temporary_fd, 'w') as stream:
-                          json.dump(request, stream, allow_nan=False)
-                          stream.flush()
-                          os.fsync(stream.fileno())
-                      os.link(temporary_path, root / 'request.json', follow_symlinks=False)
-                  finally:
-                      os.unlink(temporary_path)
-                  directory_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
-                  try:
-                      os.fsync(directory_fd)
-                  finally:
-                      os.close(directory_fd)
-                  print('NIJA_HISTORY_RECOVERY_REQUEST_SUBMITTED')
-              finally:
-                  os.close(fd)
+              # A recovery access check must not create a new broker-history
+              # request. Any future collection needs its own separately
+              # reviewed and explicitly authorized workflow and request ID.
+              raise SystemExit('BLOCKED: no existing history request or receipt; no automatic submission')
           PY
