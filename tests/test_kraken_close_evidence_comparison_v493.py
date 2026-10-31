@@ -47,6 +47,29 @@ class KrakenCloseEvidenceComparisonTests(unittest.TestCase):
         self.assertFalse(verify_exact_close(self.expected, self.order,
                                             self.trades)["verified"])
 
+    def test_non_mapping_order_fails_closed(self):
+        self.assertFalse(verify_exact_close(self.expected, [], self.trades)["verified"])
+
+    def test_non_mapping_trade_fails_closed(self):
+        self.trades["TRADE1"] = []
+        self.assertFalse(verify_exact_close(self.expected, self.order,
+                                            self.trades)["verified"])
+
+    def test_unhashable_trade_id_fails_closed(self):
+        self.order["trades"] = [["TRADE1"]]
+        self.assertFalse(verify_exact_close(self.expected, self.order,
+                                            self.trades)["verified"])
+
+    def test_nan_amount_fails_closed(self):
+        self.trades["TRADE1"]["cost"] = "NaN"
+        self.assertFalse(verify_exact_close(self.expected, self.order,
+                                            self.trades)["verified"])
+
+    def test_infinite_amount_fails_closed(self):
+        self.expected["cost"] = "Infinity"
+        self.assertFalse(verify_exact_close(self.expected, self.order,
+                                            self.trades)["verified"])
+
 
 if __name__ == "__main__":
     unittest.main()
