@@ -1,6 +1,6 @@
 import unittest
 
-from bot.kraken_close_evidence_comparison_v493 import verify_exact_close
+from bot.kraken_close_evidence_comparison_v493 import (\n    verify_exact_close, verify_broker_readback_consistency,\n)
 
 
 class KrakenCloseEvidenceComparisonTests(unittest.TestCase):
@@ -69,6 +69,22 @@ class KrakenCloseEvidenceComparisonTests(unittest.TestCase):
         self.expected["cost"] = "Infinity"
         self.assertFalse(verify_exact_close(self.expected, self.order,
                                             self.trades)["verified"])
+
+    def test_broker_readback_only_never_certifies_ledger(self):
+        result = verify_broker_readback_consistency("ORDER1", self.order, self.trades)
+        self.assertTrue(result["verified"])
+        self.assertFalse(result["independent_ledger_certified"])
+        self.assertFalse(result["execution_authorized"])
+
+    def test_broker_readback_rejects_mismatched_fill(self):
+        self.trades["TRADE2"]["ordertxid"] = "OTHER"
+        self.assertFalse(verify_broker_readback_consistency(
+            "ORDER1", self.order, self.trades)["verified"])
+
+    def test_broker_readback_rejects_missing_cost(self):
+        del self.trades["TRADE2"]["cost"]
+        self.assertFalse(verify_broker_readback_consistency(
+            "ORDER1", self.order, self.trades)["verified"])
 
 
 if __name__ == "__main__":
