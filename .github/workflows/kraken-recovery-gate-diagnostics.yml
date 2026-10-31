@@ -1,0 +1,98 @@
+name: Kraken recovery gate diagnostics (read-only)
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: kraken-recovery-gate-diagnostics
+  cancel-in-progress: false
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Check fixed production recovery prerequisites without writing state
+        shell: bash
+        env:
+          RENDER_RECOVERY_SSH_KEY: ${{ secrets.NIJA_RENDER_RECOVERY_SSH_PRIVATE_KEY }}
+        run: |
+          set -eu
+          if [ -z "$RENDER_RECOVERY_SSH_KEY" ]; then
+            echo 'BLOCKED: dedicated recovery SSH secret missing'
+            exit 2
+          fi
+          umask 077
+          recovery_dir=$(mktemp -d)
+          trap 'rm -rf "$recovery_dir"' EXIT
+          printf '%s\n' "$RENDER_RECOVERY_SSH_KEY" > "$recovery_dir/key"
+          unset RENDER_RECOVERY_SSH_KEY
+          ssh-keygen -y -P '' -f "$recovery_dir/key" >/dev/null 2>&1 || {
+            echo 'BLOCKED: recovery SSH key invalid'
+            exit 2
+          }
+          ssh-keyscan -t ed25519 -T 15 ssh.oregon.render.com > "$recovery_dir/known_hosts" 2>/dev/null
+          observed=$(ssh-keygen -lf "$recovery_dir/known_hosts" -E sha256 | awk '{print $2}' | sort -u)
+          if [ "$observed" != 'SHA256:KkZPgnApmttFYSkdJsCi7B01sgZPMI6kY53MDbbanGM' ]; then
+            echo 'BLOCKED: Render host fingerprint mismatch'
+            exit 2
+          fi
+          ssh -T -i "$recovery_dir/key" \
+            -o BatchMode=yes -o IdentitiesOnly=yes -o IdentityAgent=none \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$recovery_dir/known_hosts" \
+            -o HostKeyAlgorithms=ssh-ed25519 -o ConnectTimeout=15 \
+            -o ConnectionAttempts=1 -o ServerAliveInterval=10 -o ServerAliveCountMax=1 \
+            srv-d98dsr5aeets73fpbaqg@ssh.oregon.render.com \
+            'command python -S -' <<'PY'
+          import hashlib
+          import os
+          import stat
+          from pathlib import Path
+
+          def checked_file(label, path, expected):
+              p = Path(path)
+              try:
+                  info = p.lstat()
+                  safe = stat.S_ISREG(info.st_mode) and not p.is_symlink()
+                  matched = safe and hashlib.sha256(p.read_bytes()).hexdigest() == expected
+              except (OSError, ValueError):
+                  matched = False
+              print(label + ('_MATCH' if matched else '_MISSING_OR_CHANGED'))
+              return matched
+
+          all_sources_ok = all((
+              checked_file('PREFLIGHT_SOURCE', '/app/bot/kraken_sqlite_readonly_preflight_v488.py',
+                           '480e01a7ee4326ee9fc85b202f0fafb413f733cd035d9d957142488d69a05452'),
+              checked_file('HISTORY_SOURCE', '/app/bot/kraken_live_history_recovery.py',
+                           'f75497755d38550c7371c82275de5bb046a2e83cb913f17858ab9d8230ca76bc'),
+              checked_file('EXIT_OBSERVER_SOURCE', '/app/bot/universal_broker_exit_supervisor_patch.py',
+                           '7970751561b5dfa6dde1542903289c4351ba15c47b84a7ab315abe39c3aa1758'),
+          ))
+          root = Path('/data/kraken-history-recovery')
+          try:
+              info = root.lstat()
+              private_root = (stat.S_ISDIR(info.st_mode) and not root.is_symlink()
+                              and root.resolve() == root and info.st_uid == os.geteuid()
+                              and not (stat.S_IMODE(info.st_mode) & 0o077))
+          except OSError:
+              private_root = False
+          print('RECOVERY_DIRECTORY_' + ('PRIVATE' if private_root else 'MISSING_OR_UNSAFE'))
+          if private_root:
+              for label, name in (
+                  ('PRIOR_HISTORY_CLAIM', '997eae3f9df551e06ffab7a9cf0dc60d.claimed.json'),
+                  ('CURSOR_FAILURE_RECEIPT', 'd7baa71731e633d1c6f4c9848505ab98.evidence.json'),
+                  ('BOUNDED_OFFSET_RECEIPT', '97dbb6dc01e97936829e0e3656fdbcf1.evidence.json'),
+                  ('FULL_HISTORY_RECEIPT', 'aec7c56e2aa9cff292f1f6ffe94829d4.evidence.json'),
+              ):
+                  p = root / name
+                  try:
+                      i = p.lstat()
+                      valid = (stat.S_ISREG(i.st_mode) and not p.is_symlink()
+                               and i.st_uid == os.geteuid()
+                               and not (stat.S_IMODE(i.st_mode) & 0o077))
+                  except OSError:
+                      valid = False
+                  print(label + ('_PRIVATE_PRESENT' if valid else '_ABSENT_OR_UNSAFE'))
+          print('DIAGNOSTIC_ONLY_NO_BROKER_CALLS_NO_LEDGER_WRITES')
+          if not all_sources_ok or not private_root:
+              raise SystemExit('BLOCKED: reviewed production prerequisites not verified')
+          PY
