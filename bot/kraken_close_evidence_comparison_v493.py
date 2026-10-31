@@ -78,3 +78,54 @@ def verify_exact_close(
             "opening_basis_verified": False, "account_binding_verified": False,
             "protective_exits_verified": False, "execution_authorized": False,
             "ledger_mutation_allowed": False}
+
+
+def verify_broker_readback_consistency(
+    order_id: str,
+    order: Mapping[str, Any],
+    trades: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Cross-check exchange order/fill aggregates without asserting ledger truth.
+
+    Cost and fee values are derived solely from broker trades; a successful
+    result is NOT independent financial, account, or ledger certification.
+    """
+    denied = {"verified": False, "execution_authorized": False,
+              "ledger_mutation_allowed": False}
+    try:
+        if (not isinstance(order_id, str) or not order_id
+                or not isinstance(order, Mapping)
+                or not isinstance(trades, Mapping)):
+            raise ValueError("incomplete_evidence")
+        desc = order.get("descr")
+        if not isinstance(desc, Mapping):
+            raise ValueError("incomplete_evidence")
+        ids = order.get("trades")
+        if (not isinstance(ids, list) or not ids
+                or any(not isinstance(tid, str) or not tid for tid in ids)
+                or len(ids) != len(set(ids)) or set(ids) != set(trades)):
+            raise ValueError("trade_ids_incomplete")
+        cost = Decimal("0")
+        fee = Decimal("0")
+        for tid in ids:
+            trade = trades[tid]
+            if not isinstance(trade, Mapping):
+                raise ValueError("incomplete_evidence")
+            cost += _positive(trade["cost"])
+            fee += _positive(trade["fee"], allow_zero=True)
+        expected = {
+            "order_id": order_id,
+            "pair": desc["pair"],
+            "side": desc["type"],
+            "volume": order["vol_exec"],
+            "cost": cost,
+            "fee": fee,
+        }
+        result = verify_exact_close(expected, order, trades)
+        if not result["verified"]:
+            return result
+        return {**result, "source": "broker_only_readback",
+                "independent_ledger_certified": False,
+                "account_binding_verified": False}
+    except (KeyError, ValueError, TypeError, AttributeError, OverflowError):
+        return {**denied, "reason": "incomplete_evidence"}
