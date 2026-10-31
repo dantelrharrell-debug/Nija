@@ -57,6 +57,14 @@ jobs:
               except (OSError, ValueError):
                   matched = False
               print(label + ('_MATCH' if matched else '_MISSING_OR_CHANGED'))
+              if label == 'HISTORY_SOURCE':
+                  # Source code digests are non-secret. Do not emit source bytes,
+                  # environment variables, credentials, or financial records.
+                  if safe:
+                      print('HISTORY_SOURCE_OBSERVED_SHA256=' + hashlib.sha256(p.read_bytes()).hexdigest())
+                      print('HISTORY_SOURCE_OBSERVED_BYTES=' + str(info.st_size))
+                  else:
+                      print('HISTORY_SOURCE_NOT_A_REGULAR_FILE')
               return matched
 
           all_sources_ok = all((
