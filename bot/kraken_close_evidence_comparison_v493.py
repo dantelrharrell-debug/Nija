@@ -31,7 +31,7 @@ def verify_exact_close(
     refusal = {"verified": False, "execution_authorized": False,
                "ledger_mutation_allowed": False}
     try:
-        oid = expected["order_id"]
+        if not all(isinstance(item, Mapping) for item in (expected, order, trades)):\n            raise ValueError("incomplete_evidence")\n        oid = expected["order_id"]
         if not isinstance(oid, str) or not oid or order.get("status") != "closed":
             raise ValueError("order_not_closed")
         desc = order["descr"]
@@ -41,16 +41,16 @@ def verify_exact_close(
                 or desc.get("type") != expected["side"]):
             raise ValueError("order_identity_mismatch")
         ids = order["trades"]
-        if not isinstance(ids, list) or not ids or len(ids) != len(set(ids)):
+        if (not isinstance(ids, list) or not ids\n                or any(not isinstance(tid, str) or not tid for tid in ids)\n                or len(ids) != len(set(ids))):
             raise ValueError("trade_ids_invalid")
-        if set(ids) != set(trades):
+        if any(not isinstance(tid, str) for tid in trades) or set(ids) != set(trades):
             raise ValueError("trade_ids_incomplete")
         total_volume = Decimal("0")
         total_cost = Decimal("0")
         total_fee = Decimal("0")
         for tid in ids:
             trade = trades[tid]
-            if (trade.get("ordertxid") != oid
+            if not isinstance(trade, Mapping):\n                raise ValueError("trade_identity_mismatch")\n            if (trade.get("ordertxid") != oid
                     or trade.get("pair") != expected["pair"]
                     or trade.get("type") != expected["side"]):
                 raise ValueError("trade_identity_mismatch")
@@ -62,11 +62,11 @@ def verify_exact_close(
                 or total_cost != _positive(expected["cost"])
                 or total_fee != _positive(expected["fee"], allow_zero=True)):
             raise ValueError("close_terms_mismatch")
-    except (KeyError, TypeError, ValueError) as exc:
+    except (KeyError, TypeError, ValueError, AttributeError, OverflowError) as exc:
         reason = str(exc)
         allowed = {"invalid_amount", "order_not_closed", "order_description_invalid",
                    "order_identity_mismatch", "trade_ids_invalid", "trade_ids_incomplete",
-                   "trade_identity_mismatch", "close_terms_mismatch"}
+                   "trade_identity_mismatch", "close_terms_mismatch", "incomplete_evidence"}
         return {**refusal, "reason": reason if reason in allowed else "incomplete_evidence"}
     return {"verified": True, "close_terms_matched": True,
             "opening_basis_verified": False, "account_binding_verified": False,
