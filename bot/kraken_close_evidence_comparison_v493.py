@@ -31,7 +31,9 @@ def verify_exact_close(
     refusal = {"verified": False, "execution_authorized": False,
                "ledger_mutation_allowed": False}
     try:
-        if not all(isinstance(item, Mapping) for item in (expected, order, trades)):\n            raise ValueError("incomplete_evidence")\n        oid = expected["order_id"]
+        if not all(isinstance(item, Mapping) for item in (expected, order, trades)):
+            raise ValueError("incomplete_evidence")
+        oid = expected["order_id"]
         if not isinstance(oid, str) or not oid or order.get("status") != "closed":
             raise ValueError("order_not_closed")
         desc = order["descr"]
@@ -41,7 +43,9 @@ def verify_exact_close(
                 or desc.get("type") != expected["side"]):
             raise ValueError("order_identity_mismatch")
         ids = order["trades"]
-        if (not isinstance(ids, list) or not ids\n                or any(not isinstance(tid, str) or not tid for tid in ids)\n                or len(ids) != len(set(ids))):
+        if (not isinstance(ids, list) or not ids
+                or any(not isinstance(tid, str) or not tid for tid in ids)
+                or len(ids) != len(set(ids))):
             raise ValueError("trade_ids_invalid")
         if any(not isinstance(tid, str) for tid in trades) or set(ids) != set(trades):
             raise ValueError("trade_ids_incomplete")
@@ -50,7 +54,9 @@ def verify_exact_close(
         total_fee = Decimal("0")
         for tid in ids:
             trade = trades[tid]
-            if not isinstance(trade, Mapping):\n                raise ValueError("trade_identity_mismatch")\n            if (trade.get("ordertxid") != oid
+            if not isinstance(trade, Mapping):
+                raise ValueError("trade_identity_mismatch")
+            if (trade.get("ordertxid") != oid
                     or trade.get("pair") != expected["pair"]
                     or trade.get("type") != expected["side"]):
                 raise ValueError("trade_identity_mismatch")
