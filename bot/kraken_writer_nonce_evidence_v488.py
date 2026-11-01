@@ -52,9 +52,9 @@ def _nonce_bindings(broker: Any, api: Any) -> tuple[Any, Any, Any]:
     key_id = getattr(broker, "_nonce_key_id", _MISSING)
     if key_id is _MISSING:
         key_id = getattr(broker, "api_key_id", None)
-    generator = getattr(broker, "_nonce_generator", _MISSING)
+    generator = getattr(broker, "_kraken_private_call_nonce", _MISSING)
     if generator is _MISSING:
-        generator = getattr(api, "_nonce", None)
+        generator = getattr(broker, "_nonce_generator", None)
     return manager, key_id, generator
 
 

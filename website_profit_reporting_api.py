@@ -18,7 +18,8 @@ from typing import Any
 
 from flask import Blueprint, jsonify, request
 
-from website_net_profit import net_profit_report
+from website_net_profit import COST_CATEGORIES, net_profit_report
+from website_revenue_attribution import REVENUE_SOURCES
 
 _PERIOD = re.compile(r"^[0-9]{4}-(?:0[1-9]|1[0-2])$")
 _MAX_BYTES = 8 * 1024 * 1024
@@ -81,6 +82,53 @@ def _load_signed_evidence(period: str, folder: str, signing_key: str) -> dict[st
     return envelope
 
 
+def _reconciliation_is_complete(
+    evidence: dict[str, Any], period: str, now: datetime
+) -> bool:
+    """Require explicit signed coverage for each source and the bank close."""
+    reconciliation = evidence.get("reconciliation")
+    if not isinstance(reconciliation, dict):
+        return False
+    accounting_basis = reconciliation.get("accounting_basis")
+    revenue_sources = reconciliation.get("revenue_sources")
+    cost_categories = reconciliation.get("cost_categories")
+    if (
+        not isinstance(accounting_basis, str)
+        or accounting_basis not in {"cash", "accrual"}
+        or reconciliation.get("bank_reconciled") is not True
+        or not isinstance(revenue_sources, dict)
+        or set(revenue_sources) != REVENUE_SOURCES
+        or not all(value is True for value in revenue_sources.values())
+        or not isinstance(cost_categories, dict)
+        or set(cost_categories) != COST_CATEGORIES
+        or not all(value is True for value in cost_categories.values())
+    ):
+        return False
+
+    reconciled_at = evidence.get("reconciled_at")
+    if not isinstance(reconciled_at, str) or not reconciled_at:
+        return False
+    try:
+        reconciled = datetime.fromisoformat(reconciled_at.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if reconciled.utcoffset() is None:
+        return False
+
+    try:
+        month_start = datetime.strptime(period, "%Y-%m").replace(tzinfo=timezone.utc)
+        next_month = datetime(
+            month_start.year + (month_start.month == 12),
+            month_start.month % 12 + 1,
+            1,
+            tzinfo=timezone.utc,
+        )
+        reconciled = reconciled.astimezone(timezone.utc)
+    except (OverflowError, ValueError):
+        return False
+    return next_month <= reconciled <= now
+
+
 def create_profit_blueprint() -> Blueprint:
     """Register an optional admin-only aggregate GET endpoint on billing API."""
     blueprint = Blueprint("website_profit_reporting", __name__)
@@ -115,7 +163,16 @@ def create_profit_blueprint() -> Blueprint:
             response = jsonify({
                 "reporting_period": period,
                 "status": "unverified",
+                "verification_status": "UNVERIFIED",
                 "reason": "signed_reconciliation_evidence_not_available",
+                "unique_visitors": None,
+                "unique_qualified_leads": None,
+                "gross_collected_revenue_usd": None,
+                "refunds_usd": None,
+                "net_verified_revenue_usd": None,
+                "verified_costs_usd": None,
+                "processor_fees_usd": None,
+                "operating_acquisition_costs_usd": None,
                 "net_profit_usd": None,
                 "net_profit_per_visitor_usd": None,
                 "net_profit_per_qualified_lead_usd": None,
@@ -130,7 +187,10 @@ def create_profit_blueprint() -> Blueprint:
             certifications = {}
         # In addition to signing, independent analytics, provider receipts,
         # refunds and all cost allocations must each be explicitly approved.
-        verified_visitors = certifications.get("visitor_counts_verified") is True
+        verified_visitors = (
+            certifications.get("visitor_counts_verified") is True
+            and certifications.get("analytics_consent_verified") is True
+        )
         verified_revenue = certifications.get("provider_revenue_verified") is True
         verified_expenses = certifications.get("all_costs_verified") is True
         verified_leads = certifications.get("qualified_leads_verified") is True
@@ -141,13 +201,17 @@ def create_profit_blueprint() -> Blueprint:
             return response, 503
         if aggregates is None:
             aggregates = {}
-        period_closed = period < datetime.now(timezone.utc).strftime("%Y-%m")
+        now = datetime.now(timezone.utc)
+        period_closed = period < now.strftime("%Y-%m")
+        reconciliation_complete = period_closed and _reconciliation_is_complete(
+            evidence, period, now
+        )
         revenue_complete = (
-            period_closed and verified_visitors and verified_revenue
+            reconciliation_complete and verified_visitors and verified_revenue
             and evidence.get("revenue_complete") is True
         )
         costs_complete = (
-            period_closed and verified_expenses
+            reconciliation_complete and verified_expenses
             and evidence.get("costs_complete") is True
         )
         try:
@@ -167,7 +231,7 @@ def create_profit_blueprint() -> Blueprint:
 
         if not period_closed:
             result["status"] = "reporting_period_open"
-        elif result["unique_visitors"] == 0:
+        elif verified_visitors and result["unique_visitors"] == 0:
             result["status"] = "no_verified_visitors"
             result["net_profit_usd"] = None
             result["net_profit_per_visitor_usd"] = None
@@ -176,15 +240,40 @@ def create_profit_blueprint() -> Blueprint:
 
         if not verified_leads:
             # Do not claim a per-lead profit ratio for unverified CRM evidence.
+            result["unique_qualified_leads"] = None
             result["net_profit_per_qualified_lead_usd"] = None
             result["revenue_per_qualified_lead_usd"] = None
             result["qualified_lead_count_source"] = "unverified"
+        if not verified_visitors:
+            result["unique_visitors"] = None
+            result["visitor_target_met"] = None
+            result["net_profit_per_visitor_usd"] = None
+            result["revenue_per_visitor_usd"] = None
+            result["visitor_count_source"] = "unverified"
+
+        if not period_closed:
+            verification_status = "PARTIAL"
+        elif not verified_visitors or result["unique_visitors"] == 0:
+            verification_status = "UNVERIFIED"
+        elif result["net_profit_usd"] is None:
+            verification_status = "PARTIAL"
+        else:
+            verification_status = "VERIFIED"
+
+        result["verification_status"] = verification_status
+        result["reconciliation_freshness"] = evidence.get("reconciled_at")
         result["target_usd_per_visitor"] = "1.00"
         result["source_status"] = {
             "visitor_counts_verified": verified_visitors,
+            "analytics_consent_verified": (
+                certifications.get("analytics_consent_verified") is True
+            ),
             "provider_revenue_verified": verified_revenue,
             "all_costs_verified": verified_expenses,
             "qualified_leads_verified": verified_leads,
+            "revenue_evidence_complete": result["revenue_evidence_complete"],
+            "cost_evidence_complete": result["cost_evidence_complete"],
+            "reconciliation_complete": reconciliation_complete,
             "reporting_period_closed": period_closed,
         }
         response = jsonify(result)

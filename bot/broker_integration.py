@@ -1198,6 +1198,7 @@ class KrakenBrokerAdapter(BrokerInterface):
 
         self.api = None
         self.kraken_api = None
+        self.connected = False
 
         # Circuit breaker for this adapter instance (one breaker per adapter)
         # Provides: exponential back-off with jitter, health-state tracking,
@@ -1452,6 +1453,10 @@ class KrakenBrokerAdapter(BrokerInterface):
 
     def connect(self) -> bool:
         """Connect to Kraken API."""
+        self.connected = False
+        self.api = None
+        self.kraken_api = None
+        self._secondary_api = None
         try:
             import krakenex
             from pykrakenapi import KrakenAPI
@@ -1608,6 +1613,7 @@ class KrakenBrokerAdapter(BrokerInterface):
                     and _ExecutionOrderState is not None
                     and _conn_ctrl.state == _ExecutionOrderState.COMPLETED
                 ):
+                    self.connected = True
                     logger.info("✅ Kraken connected")
                     return True
 
@@ -1705,6 +1711,7 @@ class KrakenBrokerAdapter(BrokerInterface):
                     return False
 
                 if balance and 'result' in balance:
+                    self.connected = True
                     logger.info("✅ Kraken connected")
                     return True
 
@@ -1716,6 +1723,11 @@ class KrakenBrokerAdapter(BrokerInterface):
         except Exception as e:
             logger.error(f"Failed to connect to Kraken: {e}")
             return False
+        finally:
+            if not self.connected:
+                self.api = None
+                self.kraken_api = None
+                self._secondary_api = None
 
     def get_account_balance(self, verbose: bool = True) -> Dict[str, Any]:
         """Get Kraken account balance with proper error handling.

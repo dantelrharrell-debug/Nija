@@ -27,3 +27,5 @@ def test_verified_connection_is_still_not_live_trading_authorization():
 def test_credential_entry_only_for_proven_authenticated_flow():
     d=view()
     assert d.show_secret_entry and not d.allow_live_trading
+    assert "not generally available for self-service" in d.message
+    assert "limited to eligible accounts" in d.message

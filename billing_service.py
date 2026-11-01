@@ -933,6 +933,11 @@ def create_app(store: Optional[BillingServiceStore] = None) -> Flask:
 
     app.register_blueprint(create_profit_blueprint())
 
+    # Static, GET-only review shell. Financial totals remain behind the
+    # separately authenticated and signed-evidence API above.
+    from website_profit_dashboard import create_dashboard_blueprint
+    app.register_blueprint(create_dashboard_blueprint())
+
     # Opt-in only: audit existing Founding 100 identity and entitlement through
     # the internal billing network. Never change a customer, trial or gate.
     from founding100_boot_audit import launch_opt_in_audit
@@ -958,6 +963,11 @@ def _default_app() -> Flask:
     """Expose a Gunicorn app while failing closed when deployment is incomplete."""
     database_url = os.getenv("BILLING_DATABASE_URL", "").strip()
     if database_url:
+        # Staging must prove it is bound to its own PostgreSQL database
+        # before create_app() can initialize or mutate any billing tables.
+        # Other services (including production) are not affected.
+        from billing_staging_database_binding import verify_staging_database_binding
+        verify_staging_database_binding(database_url)
         return create_app()
 
     misconfigured = Flask(__name__)
