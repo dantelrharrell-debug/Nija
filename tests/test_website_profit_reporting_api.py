@@ -43,9 +43,18 @@ class WebsiteProfitApiTests(unittest.TestCase):
         events = [
             {"type": "visit", "event_id": "v-1", "visitor_id": "visitor-1", "period": period},
             {"type": "visit", "event_id": "v-2", "visitor_id": "visitor-2", "period": period},
-            {"type": "qualified_lead", "event_id": "l-1", "lead_id": "lead-1", "visitor_id": "visitor-1", "period": period},
-            {"type": "revenue", "event_id": "stripe-1", "source": "stripe", "verified": True, "amount_usd": "12.00", "period": period},
-            {"type": "refund", "event_id": "stripe-refund-1", "source": "stripe", "verified": True, "amount_usd": "2.00", "period": period},
+            {
+                "type": "qualified_lead", "event_id": "l-1", "lead_id": "lead-1",
+                "visitor_id": "visitor-1", "period": period,
+            },
+            {
+                "type": "revenue", "event_id": "stripe-1", "source": "stripe",
+                "verified": True, "amount_usd": "12.00", "period": period,
+            },
+            {
+                "type": "refund", "event_id": "stripe-refund-1", "source": "stripe",
+                "verified": True, "amount_usd": "2.00", "period": period,
+            },
         ]
         costs = [
             {"event_id": "hosting-1", "category": "hosting", "verified": True, "amount_usd": "4.00", "period": period},
@@ -102,7 +111,59 @@ class WebsiteProfitApiTests(unittest.TestCase):
         response = self.request()
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.get_json()["status"], "unverified")
+        self.assertEqual(response.get_json()["verification_status"], "UNVERIFIED")
+        self.assertIsNone(response.get_json()["unique_visitors"])
+        self.assertIsNone(response.get_json()["gross_collected_revenue_usd"])
+        self.assertIsNone(response.get_json()["verified_costs_usd"])
         self.assertIsNone(response.get_json()["net_profit_usd"])
+
+    def test_unverified_analytics_are_not_returned_as_a_visitor_count(self):
+        record = self.evidence()
+        record["certification"]["visitor_counts_verified"] = False
+        record["signature"] = sign_evidence(record, self.key)
+        Path(self.tempdir.name, "2025-04.json").write_text(json.dumps(record), encoding="utf-8")
+        data = self.request().get_json()
+        self.assertIsNone(data["unique_visitors"])
+        self.assertIsNone(data["net_profit_per_visitor_usd"])
+        self.assertEqual(data["visitor_count_source"], "unverified")
+        self.assertEqual(data["verification_status"], "UNVERIFIED")
+
+    def test_zero_verified_visitors_do_not_produce_a_profit_ratio(self):
+        record = self.evidence()
+        record["revenue_events"] = [
+            event for event in record["revenue_events"]
+            if event["type"] not in {"visit", "qualified_lead"}
+        ]
+        record["aggregate_counts"] = {"unique_visitors": 0, "unique_qualified_leads": 0}
+        record["signature"] = sign_evidence(record, self.key)
+        Path(self.tempdir.name, "2025-04.json").write_text(json.dumps(record), encoding="utf-8")
+        data = self.request().get_json()
+        self.assertEqual(data["unique_visitors"], 0)
+        self.assertIsNone(data["net_profit_usd"])
+        self.assertIsNone(data["net_profit_per_visitor_usd"])
+        self.assertIsNone(data["visitor_target_met"])
+        self.assertEqual(data["verification_status"], "UNVERIFIED")
+
+    def test_evidence_from_another_environment_is_not_visible(self):
+        self.evidence()
+        other_environment = tempfile.TemporaryDirectory()
+        self.addCleanup(other_environment.cleanup)
+        with patch.dict(os.environ, {"NIJA_PROFIT_EVIDENCE_DIR": other_environment.name}):
+            data = self.request().get_json()
+        self.assertEqual(data["verification_status"], "UNVERIFIED")
+        self.assertIsNone(data["net_profit_usd"])
+
+    def test_provider_outage_or_partial_close_keeps_totals_unknown(self):
+        record = self.evidence(certify=False)
+        record["certification"]["visitor_counts_verified"] = True
+        record["signature"] = sign_evidence(record, self.key)
+        Path(self.tempdir.name, "2025-04.json").write_text(json.dumps(record), encoding="utf-8")
+        data = self.request().get_json()
+        self.assertEqual(data["verification_status"], "PARTIAL")
+        self.assertIsNone(data["gross_collected_revenue_usd"])
+        self.assertIsNone(data["refunds_usd"])
+        self.assertIsNone(data["verified_costs_usd"])
+        self.assertIsNone(data["net_profit_usd"])
 
     def test_cannot_forge_revenue_after_signing(self):
         evidence = self.evidence()

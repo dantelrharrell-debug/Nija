@@ -27,6 +27,19 @@ asserting a financial result. If the bearer token is missing or wrong, returns 4
 If the evidence is missing or tampered with, the status is `unverified`, with
 null profit and target-met values. Only closed monthly reporting periods may be
 certified. Response is aggregate-only and uses `Cache-Control: no-store`.
+`verification_status` is `VERIFIED`, `PARTIAL`, or `UNVERIFIED`; absent visitor
+evidence never becomes a zero count. Gross revenue, refunds, and cost totals
+are null unless the corresponding stream is complete. Confirmed partial
+revenue may remain visible in `net_verified_revenue_usd`, alongside explicit
+stream-completeness flags. `reconciliation_freshness` reports the optional
+signed `reconciled_at` timestamp and is null when the importer did not provide it.
+
+The current interface accepts closed calendar months only. It does not provide
+7-, 30-, or 90-day windows, a browser dashboard, provider collectors, or GA4
+ingestion. The repository has no production IONOS site-builder source to wire
+to `/admin/revenue-per-visitor`; those pieces require the authorized site and
+provider integrations, consent policy, and durable evidence storage before
+deployment. Do not label those unavailable surfaces as verified.
 
 ## Signed file specification
 
@@ -37,9 +50,17 @@ Each `YYYY-MM.json` must include:
   `revenue`, and `refund` events, each with `event_id` and matching `period`.
   Revenue/refund events additionally contain `source` from
   `website_revenue_attribution.REVENUE_SOURCES`, `verified:true`, and
-  `amount_usd` as an exact USD string.
+  `amount_usd` as an exact USD string. Provider imports should include
+  `provider_transaction_id` (or `transaction_id`) to collapse webhook, order,
+  settlement, and import retries within a provider. When two providers report
+  the same underlying transaction, include the same independently reconciled
+  `canonical_transaction_id`; provider IDs alone are deliberately not
+  cross-deduplicated. Duplicate identities with conflicting amounts or
+  evidence are excluded and prevent certification.
 - `cost_events`: each with `event_id`, matching `period`, `verified:true`,
   category from `website_net_profit.COST_CATEGORIES`, and exact `amount_usd`.
+  Cost imports may use the same provider/canonical transaction identity fields
+  for duplicate detection; conflicting duplicates block the cost certification.
 - `revenue_complete`, `costs_complete`: set to true only after authenticated
   reconciliation and monthly close.
 - `certification`: `visitor_counts_verified`,

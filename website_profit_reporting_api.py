@@ -115,7 +115,16 @@ def create_profit_blueprint() -> Blueprint:
             response = jsonify({
                 "reporting_period": period,
                 "status": "unverified",
+                "verification_status": "UNVERIFIED",
                 "reason": "signed_reconciliation_evidence_not_available",
+                "unique_visitors": None,
+                "unique_qualified_leads": None,
+                "gross_collected_revenue_usd": None,
+                "refunds_usd": None,
+                "net_verified_revenue_usd": None,
+                "verified_costs_usd": None,
+                "processor_fees_usd": None,
+                "operating_acquisition_costs_usd": None,
                 "net_profit_usd": None,
                 "net_profit_per_visitor_usd": None,
                 "net_profit_per_qualified_lead_usd": None,
@@ -167,7 +176,7 @@ def create_profit_blueprint() -> Blueprint:
 
         if not period_closed:
             result["status"] = "reporting_period_open"
-        elif result["unique_visitors"] == 0:
+        elif verified_visitors and result["unique_visitors"] == 0:
             result["status"] = "no_verified_visitors"
             result["net_profit_usd"] = None
             result["net_profit_per_visitor_usd"] = None
@@ -176,15 +185,36 @@ def create_profit_blueprint() -> Blueprint:
 
         if not verified_leads:
             # Do not claim a per-lead profit ratio for unverified CRM evidence.
+            result["unique_qualified_leads"] = None
             result["net_profit_per_qualified_lead_usd"] = None
             result["revenue_per_qualified_lead_usd"] = None
             result["qualified_lead_count_source"] = "unverified"
+        if not verified_visitors:
+            result["unique_visitors"] = None
+            result["visitor_target_met"] = None
+            result["net_profit_per_visitor_usd"] = None
+            result["revenue_per_visitor_usd"] = None
+            result["visitor_count_source"] = "unverified"
+
+        if not period_closed:
+            verification_status = "PARTIAL"
+        elif not verified_visitors or result["unique_visitors"] == 0:
+            verification_status = "UNVERIFIED"
+        elif result["net_profit_usd"] is None:
+            verification_status = "PARTIAL"
+        else:
+            verification_status = "VERIFIED"
+
+        result["verification_status"] = verification_status
+        result["reconciliation_freshness"] = evidence.get("reconciled_at")
         result["target_usd_per_visitor"] = "1.00"
         result["source_status"] = {
             "visitor_counts_verified": verified_visitors,
             "provider_revenue_verified": verified_revenue,
             "all_costs_verified": verified_expenses,
             "qualified_leads_verified": verified_leads,
+            "revenue_evidence_complete": result["revenue_evidence_complete"],
+            "cost_evidence_complete": result["cost_evidence_complete"],
             "reporting_period_closed": period_closed,
         }
         response = jsonify(result)
