@@ -60,8 +60,10 @@ def reconcile_stripe_charges(charges, customer_leads, *, mapping_verified=False,
                 or charge.get("currency") != "usd"):
             invalid += 1
             continue
-        paid_count += 1
         refunds += refunded
+        if amount - refunded <= 0:
+            continue
+        paid_count += 1
         customer = charge.get("customer")
         lead = customer_leads.get(customer) if isinstance(customer, str) else None
         if isinstance(lead, (list, tuple, set)):
