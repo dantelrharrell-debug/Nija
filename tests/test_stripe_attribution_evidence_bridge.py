@@ -41,7 +41,8 @@ class BridgeTests(unittest.TestCase):
 
     def test_missing_mapping_fails_closed(self):
         result = stripe_attributed_events([charge()], {}, period="2026-10",
-                                           mapping_verified=True, charges_complete=True)
+                                           mapping_verified=True, charges_complete=True,
+                                           refunds_complete=True)
         self.assertEqual(result["status"], "unverified")
         self.assertEqual(result["revenue_events"], [])
 
@@ -59,23 +60,46 @@ class BridgeTests(unittest.TestCase):
         result = self.report([charge(amount_refunded=5000)])
         self.assertEqual(summarize(result["revenue_events"])["net_verified_revenue_usd"], "0.00")
 
+    def test_fully_refunded_charge_requires_unique_mapping(self):
+        fully_refunded = charge(amount_refunded=5000)
+        for mapping in ({}, {"cus_1": ["lead_1", "lead_2"]}):
+            with self.subTest(mapping=mapping):
+                result = stripe_attributed_events(
+                    [fully_refunded], mapping, period="2026-10",
+                    mapping_verified=True, charges_complete=True, refunds_complete=True,
+                )
+                self.assertEqual(result["status"], "unverified")
+                self.assertEqual(result["revenue_events"], [])
+
     def test_refund_is_reported_in_its_own_period(self):
-        refund = {
-            "id": "re_november", "amount": 1000, "currency": "usd",
-            "status": "succeeded", "created": timestamp("2026-11-02"),
-        }
+        refunds = [
+            {
+                "id": "re_november_1", "amount": 400, "currency": "usd",
+                "status": "succeeded", "created": timestamp("2026-11-02"),
+            },
+            {
+                "id": "re_november_2", "amount": 600, "currency": "usd",
+                "status": "succeeded", "created": timestamp("2026-11-03"),
+            },
+        ]
         result = self.report(
-            [charge(refunds={"data": [refund], "has_more": False})],
+            [charge(refunds={"data": refunds, "has_more": False})],
             period="2026-11",
         )
         self.assertEqual(result["status"], "verified")
-        self.assertEqual(len(result["revenue_events"]), 1)
-        event = result["revenue_events"][0]
-        self.assertEqual(event["type"], "refund")
-        self.assertEqual(event["amount_usd"], "10.00")
-        self.assertEqual(event["provider_adjustment_id"], "re_november")
+        self.assertEqual(len(result["revenue_events"]), 2)
+        self.assertEqual(
+            [event["event_id"] for event in result["revenue_events"]],
+            ["stripe-refund:re_november_1", "stripe-refund:re_november_2"],
+        )
+        self.assertEqual(
+            summarize(result["revenue_events"])["verified_refunds_usd"], "10.00",
+        )
+        self.assertEqual(
+            result["revenue_events"][0]["provider_created"], refunds[0]["created"],
+        )
         october = self.report(
-            [charge(refunds={"data": [refund], "has_more": False})],
+            [charge(refunds={"data": refunds, "has_more": False})],
             period="2026-10",
         )
         self.assertEqual(

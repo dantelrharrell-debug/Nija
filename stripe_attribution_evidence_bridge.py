@@ -9,6 +9,14 @@ from decimal import Decimal
 from lead_payment_attribution import reconcile_stripe_charges
 
 
+def _has_unique_mapping(customer_leads, customer):
+    lead = customer_leads.get(customer) if isinstance(customer, str) else None
+    if isinstance(lead, (list, tuple, set)):
+        values = {value for value in lead if isinstance(value, str) and value.strip()}
+        lead = next(iter(values)) if len(values) == 1 else None
+    return isinstance(lead, str) and bool(lead.strip())
+
+
 def stripe_attributed_events(charges, customer_leads, *, period,
                              mapping_verified=False, charges_complete=False,
                              refunds_complete=False):
@@ -51,15 +59,10 @@ def stripe_attributed_events(charges, customer_leads, *, period,
             continue
         amount = charge["amount"]
         refunded = charge["amount_refunded"]
-        if amount > 0 and amount == refunded:
-            customer = charge.get("customer")
-            lead = customer_leads.get(customer) if isinstance(customer, str) else None
-            if isinstance(lead, (list, tuple, set)):
-                values = {value for value in lead if isinstance(value, str) and value.strip()}
-                lead = next(iter(values)) if len(values) == 1 else None
-            if not isinstance(lead, str) or not lead.strip():
-                return {"status": "unverified", "attribution": report, "revenue_events": []}
         created = charge.get("created")
+        charge_in_period = (
+            type(created) is int and period_start <= created < period_end
+        )
         refund_evidence = charge.get("refunds")
         if (type(created) is not int or created < 0
                 or not isinstance(refund_evidence, dict)
@@ -67,9 +70,10 @@ def stripe_attributed_events(charges, customer_leads, *, period,
                 or not isinstance(refund_evidence.get("data"), list)):
             return {"status": "unverified", "attribution": report, "revenue_events": []}
         succeeded_refunds = 0
+        period_refunds = []
         for refund in refund_evidence["data"]:
             if (not isinstance(refund, dict) or not isinstance(refund.get("id"), str)
-                    or not refund["id"] or type(refund.get("amount")) is not int
+                    or not refund["id"].strip() or type(refund.get("amount")) is not int
                     or refund["amount"] <= 0 or type(refund.get("created")) is not int
                     or refund["created"] < 0 or refund.get("currency") != "usd"
                     or refund.get("status") not in ("succeeded", "pending", "failed", "canceled")
@@ -78,21 +82,27 @@ def stripe_attributed_events(charges, customer_leads, *, period,
             refund_ids.add(refund["id"])
             if refund["status"] == "succeeded":
                 succeeded_refunds += refund["amount"]
+                if period_start <= refund["created"] < period_end:
+                    period_refunds.append(refund)
         if succeeded_refunds != refunded:
+            return {"status": "unverified", "attribution": report, "revenue_events": []}
+        if ((amount > 0 and charge_in_period) or period_refunds) and not _has_unique_mapping(
+                customer_leads, charge.get("customer")):
             return {"status": "unverified", "attribution": report, "revenue_events": []}
         base = {
             "source": "stripe", "verified": True, "period": period,
             "provider_transaction_id": cid,
         }
-        if amount and period_start <= created < period_end:
+        if amount and charge_in_period:
             events.append({**base, "type": "revenue", "event_id": "stripe-charge:" + cid,
+                           "provider_created": created,
                            "amount_usd": str((Decimal(amount) / 100).quantize(Decimal("0.01")))})
-        for refund in refund_evidence["data"]:
-            if (refund["status"] == "succeeded"
-                    and period_start <= refund["created"] < period_end):
-                events.append({
-                    **base, "type": "refund", "event_id": "stripe-refund:" + refund["id"],
-                    "provider_adjustment_id": refund["id"],
-                    "amount_usd": str((Decimal(refund["amount"]) / 100).quantize(Decimal("0.01"))),
-                })
+        for refund in period_refunds:
+            refund_id = refund["id"]
+            events.append({
+                **base, "type": "refund", "event_id": "stripe-refund:" + refund_id,
+                "provider_transaction_id": refund_id, "provider_charge_id": cid,
+                "provider_adjustment_id": refund_id, "provider_created": refund["created"],
+                "amount_usd": str((Decimal(refund["amount"]) / 100).quantize(Decimal("0.01"))),
+            })
     return {"status": "verified", "attribution": report, "revenue_events": events}
