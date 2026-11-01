@@ -1,0 +1,33 @@
+name: Lead payment attribution unit tests
+on:
+  pull_request:
+    paths:
+      - 'lead_payment_attribution.py'
+      - 'tests/test_lead_payment_attribution.py'
+      - 'stripe_attribution_evidence_bridge.py'
+      - 'tests/test_stripe_attribution_evidence_bridge.py'
+      - '.github/workflows/lead-payment-attribution-tests.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'lead_payment_attribution.py'
+      - 'tests/test_lead_payment_attribution.py'
+      - 'stripe_attribution_evidence_bridge.py'
+      - 'tests/test_stripe_attribution_evidence_bridge.py'
+      - '.github/workflows/lead-payment-attribution-tests.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  attribution:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Run isolated attribution tests
+        run: |
+          python -m unittest discover -s tests -p 'test_lead_payment_attribution.py' -v
+          python -m unittest discover -s tests -p 'test_stripe_attribution_evidence_bridge.py' -v
