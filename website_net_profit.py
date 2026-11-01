@@ -14,7 +14,7 @@ from website_revenue_attribution import summarize
 
 COST_CATEGORIES = frozenset({
     "advertising", "payment_processing", "refund_handling", "hosting",
-    "course_fulfillment", "customer_support", "software", "affiliate_payout",
+    "course_fulfillment", "merchandise_fulfillment", "customer_support", "software", "affiliate_payout",
     "chargeback_fee", "other_operating"
 })
 
@@ -111,15 +111,21 @@ def net_profit_report(
         raise ValueError("Certified lead aggregate cannot be below logged lead count")
     visitors = certified_unique_visitors if certified_unique_visitors is not None else observed_visitors
     leads = certified_qualified_leads if certified_qualified_leads is not None else observed_leads
-    net_cents = int(Decimal(revenue["net_verified_revenue_usd"]) * 100) - cost_total
+    net_revenue_cents = int(Decimal(revenue["net_verified_revenue_usd"]) * 100)
+    net_cents = net_revenue_cents - cost_total
 
-    def per(count: int) -> str | None:
+    def per(amount_cents: int, count: int) -> str | None:
+        # Never expose a financial ratio based on unclosed or unreconciled data.
         if not complete or not count:
             return None
-        return str((Decimal(net_cents) / Decimal(100 * count)).quantize(Decimal("0.01")))
+        return str((Decimal(amount_cents) / Decimal(100 * count)).quantize(Decimal("0.01")))
 
     return {
         **revenue,
+        # Override summarize() rates, which use only observed event counts and
+        # cannot know whether independently certified denominator counts exist.
+        "revenue_per_visitor_usd": per(net_revenue_cents, visitors),
+        "revenue_per_qualified_lead_usd": per(net_revenue_cents, leads),
         "unique_visitors": visitors,
         "unique_qualified_leads": leads,
         "visitor_count_source": "certified_aggregate" if certified_unique_visitors is not None else "event_evidence",
@@ -130,8 +136,8 @@ def net_profit_report(
         "verified_costs_usd": _usd(cost_total),
         "costs_by_category_usd": {key: _usd(value) for key, value in sorted(categories.items())},
         "net_profit_usd": _usd(net_cents) if complete else None,
-        "net_profit_per_visitor_usd": per(visitors),
-        "net_profit_per_qualified_lead_usd": per(leads),
+        "net_profit_per_visitor_usd": per(net_cents, visitors),
+        "net_profit_per_qualified_lead_usd": per(net_cents, leads),
         "visitor_target_met": (net_cents >= visitors * 100) if complete and visitors else None,
         "rejected_cost_events": rejected_costs,
         "rejected_period_events": rejected_period_events,

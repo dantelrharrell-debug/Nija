@@ -11,7 +11,7 @@ from collections import defaultdict
 from decimal import Decimal, InvalidOperation
 from typing import Iterable, Mapping
 
-REVENUE_SOURCES = frozenset({"stripe", "clickbank", "affiliate_settlement", "sponsor_invoice", "ad_network"})
+REVENUE_SOURCES = frozenset({"stripe", "clickbank", "printful_settlement", "affiliate_settlement", "sponsor_invoice", "ad_network"})
 ALLOWED_EVENT_TYPES = frozenset({"visit", "qualified_lead", "revenue", "refund"})
 
 def _money_cents(value: object) -> int:

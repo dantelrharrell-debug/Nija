@@ -177,6 +177,7 @@ def create_profit_blueprint() -> Blueprint:
         if not verified_leads:
             # Do not claim a per-lead profit ratio for unverified CRM evidence.
             result["net_profit_per_qualified_lead_usd"] = None
+            result["revenue_per_qualified_lead_usd"] = None
             result["qualified_lead_count_source"] = "unverified"
         result["target_usd_per_visitor"] = "1.00"
         result["source_status"] = {

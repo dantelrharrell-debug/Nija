@@ -82,6 +82,55 @@ class NetProfitReportTests(unittest.TestCase):
                 certified_unique_visitors=1,
             )
 
+    def test_incomplete_revenue_rates_are_unknown_not_zero(self):
+        result = net_profit_report(self.revenue(), self.costs(), reporting_period="2026-10")
+        self.assertIsNone(result["revenue_per_visitor_usd"])
+        self.assertIsNone(result["revenue_per_qualified_lead_usd"])
+        self.assertEqual(result["net_verified_revenue_usd"], "8.00")
+
+    def test_certified_visitor_counts_apply_to_both_revenue_and_profit(self):
+        result = net_profit_report(
+            self.revenue(), self.costs(), reporting_period="2026-10",
+            revenue_complete=True, costs_complete=True,
+            certified_unique_visitors=100, certified_qualified_leads=4,
+        )
+        self.assertEqual(result["revenue_per_visitor_usd"], "0.08")
+        self.assertEqual(result["revenue_per_qualified_lead_usd"], "2.00")
+        self.assertEqual(result["net_profit_per_visitor_usd"], "0.04")
+
+    def test_merchandise_fulfillment_is_an_actual_cost_category(self):
+        # Synthetic unit fixture, NOT NIJA's real Printful order or income.
+        revenue = self.revenue() + [
+            {"type": "revenue", "event_id": "simulated-payout-1",
+             "source": "printful_settlement", "verified": True,
+             "amount_usd": "63.99", "period": "2026-10"},
+        ]
+        costs = self.costs() + [
+            {"event_id": "simulated-fulfillment-1",
+             "category": "merchandise_fulfillment", "verified": True,
+             "amount_usd": "37.79", "period": "2026-10"},
+        ]
+        result = net_profit_report(
+            revenue, costs, reporting_period="2026-10",
+            revenue_complete=True, costs_complete=True,
+        )
+        self.assertEqual(result["revenue_by_source_usd"]["printful_settlement"], "63.99")
+        self.assertEqual(result["costs_by_category_usd"]["merchandise_fulfillment"], "37.79")
+        self.assertEqual(result["net_profit_usd"], "30.20")
+
+    def test_unverified_merchandise_order_never_confirms_profit(self):
+        revenue = self.revenue() + [
+            {"type": "revenue", "event_id": "unpaid-order",
+             "source": "printful_settlement", "verified": False,
+             "amount_usd": "63.99", "period": "2026-10"},
+        ]
+        result = net_profit_report(
+            revenue, self.costs(), reporting_period="2026-10",
+            revenue_complete=True, costs_complete=True,
+        )
+        self.assertIsNone(result["net_profit_usd"])
+        self.assertIsNone(result["revenue_per_visitor_usd"])
+
     def test_revenue_completeness_required(self):
         result = net_profit_report(self.revenue(), self.costs(), reporting_period="2026-10", costs_complete=True)
         self.assertEqual(result["status"], "incomplete_cost_or_revenue_evidence")

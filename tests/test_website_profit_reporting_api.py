@@ -150,6 +150,7 @@ class WebsiteProfitApiTests(unittest.TestCase):
         self.assertEqual(data["status"], "verified")
         self.assertEqual(data["net_profit_per_visitor_usd"], "3.00")
         self.assertIsNone(data["net_profit_per_qualified_lead_usd"])
+        self.assertIsNone(data["revenue_per_qualified_lead_usd"])
 
     def test_rejects_certified_aggregate_smaller_than_observed(self):
         record = self.evidence()
