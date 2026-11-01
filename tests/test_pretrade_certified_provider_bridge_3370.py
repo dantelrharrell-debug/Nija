@@ -11,7 +11,7 @@ class BridgeTests(unittest.TestCase):
         att._COLLECTOR = None
         self.account = "platform:kraken"
         self.now = 1000.0
-        self.ids = {field: "trusted_" + SOURCES[field] for field in REQUIRED}
+        self.ids = {field: "trusted_" + field for field in REQUIRED}
 
     def tearDown(self):
         att._COLLECTOR = self.old
