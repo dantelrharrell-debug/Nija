@@ -1,7 +1,7 @@
 name: Kraken history cursor recovery (offline)
 on:
   pull_request:
-    branches: [release/justcall-handoff-only-20261017]
+    branches: [main, release/justcall-handoff-only-20261017]
     paths:
       - 'scripts/nija_kraken_readonly_history_collector_v441.py'
       - 'bot/kraken_authenticated_open_order_reconciliation_v482.py'
@@ -9,6 +9,8 @@ on:
       - 'bot/universal_broker_exit_supervisor_patch.py'
       - 'bot/tests/test_universal_broker_exit_import_lookup.py'
       - 'tests/test_kraken_history_cursor_recovery.py'
+      - 'tests/test_kraken_live_history_recovery.py'
+      - 'bot/tests/test_nija_kraken_readonly_history_collector_v441.py'
       - 'Dockerfile'
       - '.dockerignore'
       - 'tests/test_kraken_receipt_runtime_packaging_v464.py'
