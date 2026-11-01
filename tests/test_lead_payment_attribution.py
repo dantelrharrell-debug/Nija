@@ -34,6 +34,7 @@ class LeadPaymentAttributionTests(unittest.TestCase):
         r=self.run_report([charge("ch_1")],{"other":"lead_2"})
         self.assertIsNone(r["net_collected_usd"])
         self.assertEqual(r["unattributed_paid_charges"],1)
+        self.assertEqual(r["status"],"unverified")
 
     def test_conflicting_duplicate_fails_closed(self):
         r=self.run_report([charge("ch_1"),charge("ch_1",amount=7000)])
