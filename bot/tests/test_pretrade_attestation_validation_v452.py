@@ -4,7 +4,7 @@ from bot.pretrade_attestation_validation_v452 import (
 )
 
 ACCOUNT = "platform:kraken"
-TRUSTED = {field: "trusted-" + SOURCES[field] for field in REQUIRED}
+TRUSTED = {field: "trusted-" + field for field in REQUIRED}
 
 
 def valid(now=1000.0):
@@ -93,6 +93,23 @@ def test_one_identity_cannot_impersonate_independent_source_types():
     assert not evaluate_pretrade_certificate(
         valid(), account=ACCOUNT, trusted_provider_ids=registry, now_epoch=1000
     )["certified"]
+
+
+def test_duplicate_provider_identity_or_evidence_is_rejected():
+    duplicate_provider_ids = dict(TRUSTED)
+    duplicate_provider_ids["account_identity"] = duplicate_provider_ids["account_permissions"]
+    assert not evaluate_pretrade_certificate(
+        valid(), account=ACCOUNT, trusted_provider_ids=duplicate_provider_ids,
+        now_epoch=1000,
+    )["certified"]
+
+    observations = valid()
+    observations["account_identity"]["evidence_id"] = observations[
+        "account_permissions"
+    ]["evidence_id"]
+    result = check(observations)
+    assert not result["certified"]
+    assert {"account_permissions", "account_identity"}.issubset(result["missing"])
 
 
 def test_max_age_cannot_be_extended():
