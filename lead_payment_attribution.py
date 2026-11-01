@@ -54,7 +54,7 @@ def reconcile_stripe_charges(charges, customer_leads, *, mapping_verified=False,
         if status != "succeeded" or paid is not True:
             continue
         amount = charge.get("amount")
-        refunded = charge.get("amount_refunded", 0)
+        refunded = charge.get("amount_refunded")
         if (type(amount) is not int or type(refunded) is not int
                 or amount < 0 or refunded < 0 or refunded > amount
                 or charge.get("currency") != "usd"):
