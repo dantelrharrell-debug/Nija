@@ -490,18 +490,25 @@ def _start_requested_history_collection() -> None:
     root = Path(directory)
     history_request = (root / "request.json").exists()
     exact_request = (root / "exact_request.json").exists()
-    if history_request and exact_request:
+    identity_request = (root / "identity_request.json").exists()
+    if sum((history_request, exact_request, identity_request)) > 1:
         LOGGER.warning(
             "KRAKEN_HISTORY_REQUEST_DEFERRED reason=multiple_recovery_modes "
             "trading_authority_unchanged=true"
         )
         return
-    if not (history_request or exact_request):
+    if not (history_request or exact_request or identity_request):
         return
 
     def collect() -> None:
         try:
-            if exact_request:
+            if identity_request:
+                from bot.kraken_identity_request_recovery_v491 import collect_requested_identity
+                collect_requested_identity(
+                    root, _kraken_brokers(),
+                    monitoring_category=_v357()._monitoring_category(),
+                )
+            elif exact_request:
                 from bot.kraken_exact_pending_order_recovery_v466 import (
                     collect_requested_exact_pending_orders,
                 )
@@ -590,3 +597,4 @@ __all__ = [
     "MARKER", "RELEASE_ID", "install", "install_import_hook",
     "record_pending_order", "recover_once",
 ]
+
