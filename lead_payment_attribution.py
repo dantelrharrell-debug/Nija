@@ -48,10 +48,12 @@ def reconcile_stripe_charges(charges, customer_leads, *, mapping_verified=False,
             continue
         status = charge.get("status")
         paid = charge.get("paid")
-        if status not in ("succeeded", "failed", "pending") or type(paid) is not bool:
+        captured = charge.get("captured")
+        if (status not in ("succeeded", "failed", "pending") or type(paid) is not bool
+                or type(captured) is not bool):
             invalid += 1
             continue
-        if status != "succeeded" or paid is not True:
+        if status != "succeeded" or paid is not True or captured is not True:
             continue
         amount = charge.get("amount")
         refunded = charge.get("amount_refunded")
