@@ -14,6 +14,8 @@ from unittest.mock import Mock, patch
 
 from bot import kraken_identity_request_recovery_v491 as recovery
 from bot.kraken_authenticated_identity_v480 import _fingerprint_iban
+from bot.kraken_live_history_recovery import collect_requested_history
+from bot.kraken_exact_pending_order_recovery_v466 import collect_requested_exact_pending_orders
 
 ROOT = Path(__file__).resolve().parents[1]
 KEY = "fixture-only-key"
@@ -174,6 +176,37 @@ class IdentityRequestTests(unittest.TestCase):
         self.run_request()
         self.assertFalse(self.receipt()["collection_succeeded"])
         self.assertEqual(len(self.calls), 1)
+
+    def test_identical_content_binding_replacement_during_read_is_rejected(self):
+        original = self.read
+
+        def read(*args, **kwargs):
+            result = original(*args, **kwargs)
+            p = self.root / recovery.BINDING_NAME
+            replacement = self.root / "replacement.json"
+            replacement.write_bytes(p.read_bytes())
+            replacement.chmod(0o600)
+            replacement.replace(p)
+            return result
+
+        self.broker._kraken_private_call = read
+        self.request()
+        self.run_request()
+        self.assertFalse(self.receipt()["collection_succeeded"])
+        self.assertEqual(len(self.calls), 1)
+
+    def test_each_collector_rechecks_conflicting_modes_under_shared_lock(self):
+        self.request()
+        self.write("request.json", {})
+        self.write("exact_request.json", {})
+        for fn in (recovery.collect_requested_identity, collect_requested_history,
+                   collect_requested_exact_pending_orders):
+            with self.subTest(collector=fn.__name__):
+                self.assertFalse(fn(self.root, [self.broker], monitoring_category=CATEGORY))
+                self.assertTrue((self.root / "identity_request.json").exists())
+                self.assertTrue((self.root / "request.json").exists())
+                self.assertTrue((self.root / "exact_request.json").exists())
+                self.assertEqual(self.calls, [])
 
     def test_exception_text_and_upstream_rows_are_never_persisted(self):
         def read(*args, **kwargs):

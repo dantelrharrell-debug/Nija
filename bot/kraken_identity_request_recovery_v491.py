@@ -22,7 +22,9 @@ from bot.durable_recovery_state import write_recovery_state
 from bot.kraken_authenticated_identity_v480 import (
     KrakenIdentityDenied, make_kraken_account_identity_provider,
 )
-from bot.kraken_live_history_recovery import _private_regular, _request, _unique_keys
+from bot.kraken_live_history_recovery import (
+    _private_regular, _recovery_mode_conflict, _request, _unique_keys,
+)
 from scripts.nija_kraken_readonly_history_collector_v441 import _broker_account_scope
 
 LOGGER = logging.getLogger(__name__)
@@ -43,7 +45,7 @@ _IDENTITY_DENIALS = frozenset({
 })
 
 
-def _binding(root: Path, now: float) -> tuple[dict[str, Any], str]:
+def _binding(root: Path, now: float) -> tuple[dict[str, Any], str, tuple[int, ...]]:
     """Read bounded comparison pins without exporting key or account material."""
     fd = os.open(root / BINDING_NAME, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     try:
@@ -79,7 +81,9 @@ def _binding(root: Path, now: float) -> tuple[dict[str, Any], str]:
         "authenticated_identity_match_verified", "runtime_collector_installed",
     )):
         raise ValueError("binding_invalid")
-    return row, hashlib.sha256(raw).hexdigest()
+    identity = (before.st_dev, before.st_ino, before.st_size,
+                before.st_mtime_ns, before.st_ctime_ns)
+    return row, hashlib.sha256(raw).hexdigest(), identity
 
 
 def collect_requested_identity(
@@ -105,6 +109,8 @@ def collect_requested_identity(
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
+            return False
+        if _recovery_mode_conflict(root, "identity_request.json"):
             return False
         stamp = time.time() if now is None else now
         if type(stamp) not in (int, float) or not math.isfinite(stamp):
@@ -146,7 +152,7 @@ def collect_requested_identity(
             "collector_installed": False, "trading_authorized": False,
         }
         try:
-            binding, digest = _binding(root, stamp)
+            binding, digest, binding_identity = _binding(root, stamp)
             provider = make_kraken_account_identity_provider(
                 selected[0], account_scope="platform:kraken",
                 approved_api_key_sha256=binding["approved_api_key_sha256"],
@@ -155,7 +161,8 @@ def collect_requested_identity(
             )
             observation = provider()
             # Detect replacement of approved inputs during the authenticated read.
-            if _binding(root, time.time())[1] != digest:
+            after = _binding(root, time.time())
+            if after[1] != digest or after[2] != binding_identity:
                 raise ValueError("binding_changed")
             receipt.update({
                 "collection_succeeded": True, "configured_account_and_key_match": True,
