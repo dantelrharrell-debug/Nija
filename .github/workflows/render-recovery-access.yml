@@ -170,7 +170,8 @@ jobs:
                   or type(bounded.get('required_pages')) is not int
                   or not 1 < bounded['required_pages'] <= 100):
               raise SystemExit('BLOCKED: offset compatibility or approved page budget unproven')
-          request_id = 'aec7c56e2aa9cff292f1f6ffe94829d4'
+          # Inspect the later completed capture; preserve every consumed request.
+          request_id = '0b59ce9b959041e7b0f2140fb177bb28'
           claim = root / (request_id + '.claimed.json')
           receipt = root / (request_id + '.evidence.json')
           if receipt.exists():
@@ -198,12 +199,13 @@ jobs:
                   'deadline_elapsed', 'account_disabled', 'account_unconfirmed', 'throttled',
                   'unknown_api_error', 'malformed_api_response', 'multiple_api_errors',
               }
-              reason = row.get('api_failure_reason')
-              print(json.dumps({
-                  'history_api_failure_reason': reason if type(reason) is str and reason in safe_reasons else 'not_available',
-                  'history_error_code': row.get('error_code') if row.get('error_code') in safe_codes else 'unspecified',
-                  'history_error_endpoint': row.get('error_endpoint') if row.get('error_endpoint') in safe_endpoints else 'unspecified',
-              }, sort_keys=True))
+              if not row['collection_succeeded']:
+                  reason = row.get('api_failure_reason')
+                  print(json.dumps({
+                      'history_api_failure_reason': reason if type(reason) is str and reason in safe_reasons else 'not_available',
+                      'history_error_code': row.get('error_code') if row.get('error_code') in safe_codes else 'unspecified',
+                      'history_error_endpoint': row.get('error_endpoint') if row.get('error_endpoint') in safe_endpoints else 'unspecified',
+                  }, sort_keys=True))
           elif claim.exists():
               fd = os.open(root / 'collector.lock', os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
               try:
