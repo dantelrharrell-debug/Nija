@@ -72,9 +72,13 @@ class TestKrakenCollectorCompositionV487(TestCase):
             user_id = None
 
             def __init__(self):
-                self.api = types.SimpleNamespace(key=key, _nonce=lambda: "1")
-                self.api_key_id = key_id
-                self.nonce_manager = NonceManager()
+                self.api = types.SimpleNamespace(key=key)
+                self.api_key = key
+                self._nonce_key_id = key_id
+                self._distributed_nonce_manager = NonceManager()
+                self._nonce_lease_version = self._distributed_nonce_manager.lease_version
+                self._nonce_generator = lambda: "1"
+                self.api._nonce = self._nonce_generator
 
             @staticmethod
             def _kraken_private_call(*args, **kwargs):
