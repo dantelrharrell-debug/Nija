@@ -24,6 +24,7 @@ from scripts.nija_kraken_readonly_history_collector_v441 import _broker_account_
 FIELDS = ("writer_lease", "nonce_sequence")
 _MAX_AGE_S = 60.0
 _MIN_TTL_MS = 5000
+_MISSING = object()
 
 
 class KrakenWriterEvidenceDenied(ValueError):
@@ -42,6 +43,19 @@ def _positive_int(value: Any) -> bool:
 
 def _finite_nonnegative(value: Any) -> bool:
     return (type(value) in (float, int) and math.isfinite(value) and value >= 0)
+
+
+def _nonce_bindings(broker: Any, api: Any) -> tuple[Any, Any, Any]:
+    manager = getattr(broker, "_distributed_nonce_manager", _MISSING)
+    if manager is _MISSING:
+        manager = getattr(broker, "nonce_manager", None)
+    key_id = getattr(broker, "_nonce_key_id", _MISSING)
+    if key_id is _MISSING:
+        key_id = getattr(broker, "api_key_id", None)
+    generator = getattr(broker, "_kraken_private_call_nonce", _MISSING)
+    if generator is _MISSING:
+        generator = getattr(broker, "_nonce_generator", None)
+    return manager, key_id, generator
 
 
 def make_kraken_writer_nonce_providers(
@@ -81,7 +95,7 @@ def make_kraken_writer_nonce_providers(
                 raise KrakenWriterEvidenceDenied("broker_scope_mismatch")
             api = getattr(broker, "api", None)
             key = getattr(api, "key", None)
-            broker_key = getattr(broker, "api_key", None)
+            broker_key = getattr(broker, "api_key", key)
             if (not isinstance(key, str) or not key
                     or not isinstance(broker_key, str) or key != broker_key
                     or not hmac.compare_digest(
@@ -91,16 +105,16 @@ def make_kraken_writer_nonce_providers(
                     or getattr(broker, "_gateway_only_mode", False)):
                 raise KrakenWriterEvidenceDenied("direct_nonce_owner_required")
             expected_key_id = hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
-            manager = getattr(broker, "_distributed_nonce_manager", None)
-            if (manager is None or getattr(broker, "_nonce_key_id", None) != expected_key_id
+            manager, nonce_key_id, generator = _nonce_bindings(broker, api)
+            if (manager is None or nonce_key_id != expected_key_id
                     or getattr(manager, "_redis", None) is None
                     or getattr(manager, "_strict_redis_lease", None) is not True
                     or not callable(getattr(manager, "get_writer_lease_status", None))
                     or not callable(getattr(manager, "get_last_nonce", None))):
                 raise KrakenWriterEvidenceDenied("exact_redis_nonce_owner_missing")
-            generator = getattr(broker, "_nonce_generator", None)
+            api_generator = getattr(api, "_nonce", None)
             if (not callable(generator)
-                    or getattr(api, "_nonce", None) is not generator):
+                    or api_generator is not generator):
                 raise KrakenWriterEvidenceDenied("nonce_dispatch_binding_changed")
 
             # This canonical assertion reads the process Redis fence; it never
@@ -127,7 +141,7 @@ def make_kraken_writer_nonce_providers(
 
             first = status()
             local_version = getattr(manager, "lease_version", None)
-            broker_version = getattr(broker, "_nonce_lease_version", None)
+            broker_version = getattr(broker, "_nonce_lease_version", local_version)
             if (not _positive_int(local_version) or local_version != first[1]
                     or not _positive_int(broker_version) or broker_version != first[1]):
                 raise KrakenWriterEvidenceDenied("nonce_generation_mismatch")
@@ -148,11 +162,14 @@ def make_kraken_writer_nonce_providers(
                     or not _finite_nonnegative(second[3])
                     or getattr(broker, "connected", False) is not True
                     or _broker_account_scope(broker) != account_scope
-                    or broker._distributed_nonce_manager is not manager
-                    or broker._nonce_key_id != expected_key_id
-                    or broker._nonce_lease_version != first[1]
+                    or getattr(broker, "_nonce_lease_version", first[1]) != first[1]
                     or getattr(manager, "lease_version", None) != first[1]
-                    or getattr(api, "key", None) != key):
+                    or getattr(api, "key", None) != key
+                    or getattr(api, "_nonce", None) is not generator):
+                raise KrakenWriterEvidenceDenied("writer_evidence_changed_or_stale")
+            current_manager, current_key_id, current_generator = _nonce_bindings(broker, api)
+            if (current_manager is not manager or current_key_id != expected_key_id
+                    or current_generator is not generator):
                 raise KrakenWriterEvidenceDenied("writer_evidence_changed_or_stale")
 
             digest = hashlib.sha256(json.dumps(

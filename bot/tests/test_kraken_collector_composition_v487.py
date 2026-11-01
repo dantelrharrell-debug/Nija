@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import time
+import types
 from unittest import TestCase
 from unittest.mock import patch
 
@@ -34,6 +36,99 @@ def _certified_observation(field: str, *, observed_at: float) -> dict:
 
 
 class TestKrakenCollectorCompositionV487(TestCase):
+    def test_composes_existing_kraken_broker_nonce_bindings(self) -> None:
+        key = "synthetic-composition-key"
+        key_id = hashlib.sha256(key.encode()).hexdigest()[:16]
+
+        class NonceManager:
+            _redis = object()
+            _strict_redis_lease = True
+            _owner_id = "owner"
+            _owner_fingerprint = "fingerprint"
+            lease_version = 17
+
+            def get_writer_lease_status(self, requested_key_id):
+                self.assert_key_id(requested_key_id, key_id)
+                return {
+                    "enabled": True, "key_id": requested_key_id, "error": "",
+                    "owner_id": self._owner_id,
+                    "owner_fingerprint": self._owner_fingerprint,
+                    "token": 17, "ttl_remaining_ms": 25000, "stable_for_s": 12.0,
+                }
+
+            def get_last_nonce(self, requested_key_id):
+                self.assert_key_id(requested_key_id, key_id)
+                return 100000
+
+            @staticmethod
+            def assert_key_id(actual, expected):
+                if actual != expected:
+                    raise AssertionError("unexpected key identity")
+
+        class ExistingKrakenBroker:
+            connected = True
+            account_type = "platform"
+            broker_type = "kraken"
+            user_id = None
+
+            def __init__(self):
+                self.api = types.SimpleNamespace(key=key)
+                self.api_key = key
+                self._nonce_key_id = key_id
+                self._distributed_nonce_manager = NonceManager()
+                self._nonce_lease_version = self._distributed_nonce_manager.lease_version
+                self._nonce_generator = lambda: "1"
+                self.api._nonce = self._nonce_generator
+
+            @staticmethod
+            def _kraken_private_call(*args, **kwargs):
+                return None
+
+        broker = ExistingKrakenBroker()
+        reviewed_ids = {field: "reviewed-" + field for field in REQUIRED}
+        broker_fields = {
+            field: (lambda: {"provider": field})
+            for field in composition.BROKER_FIELDS
+        }
+        independent = {
+            field: (lambda: {"provider": field}) for field in composition.OTHER_FIELDS
+        }
+
+        with (
+            patch.object(
+                composition, "make_reviewed_kraken_producer_bundle",
+                return_value=broker_fields,
+            ),
+            patch.object(
+                composition, "make_kraken_protective_exit_provider",
+                return_value=lambda: {},
+            ),
+            patch(
+                "bot.execution_authority_context.assert_distributed_writer_authority"
+            ),
+        ):
+            providers = composition.compose_reviewed_kraken_providers(
+                broker=broker,
+                approved_api_key_sha256=hashlib.sha256(key.encode()).hexdigest(),
+                approved_iban_sha256="b" * 64,
+                reviewed_provider_ids=reviewed_ids,
+                independent_open_intents=lambda: {},
+                independent_positions=lambda: {},
+                independent_remaining=independent,
+                monitoring_category=object(),
+                independently_reviewed=True,
+                clock=lambda: 1000.0,
+            )
+            writer_observation = providers["writer_lease"]()
+            nonce_observation = providers["nonce_sequence"]()
+
+        self.assertTrue(writer_observation["verified"])
+        self.assertTrue(nonce_observation["verified"])
+        self.assertTrue(writer_observation["read_only"])
+        self.assertTrue(nonce_observation["read_only"])
+        self.assertFalse(writer_observation["authorizes_orders"])
+        self.assertFalse(nonce_observation["authorizes_orders"])
+
     def test_composes_all_fields_with_existing_writer_nonce_providers(self) -> None:
         broker = type("Broker", (), {"_kraken_private_call": lambda *args, **kwargs: None})()
         reviewed_ids = {field: "reviewed-" + field for field in REQUIRED}

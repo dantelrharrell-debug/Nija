@@ -56,8 +56,8 @@ class Broker:
 
     def __init__(self):
         self._distributed_nonce_manager = Manager()
-        self._nonce_generator = lambda: 1
-        self.api = types.SimpleNamespace(key=KEY, _nonce=self._nonce_generator)
+        self._kraken_private_call_nonce = lambda: 1
+        self.api = types.SimpleNamespace(key=KEY, _nonce=self._kraken_private_call_nonce)
 
 
 def build(broker):
@@ -95,7 +95,7 @@ class TestWriterNonceEvidence(unittest.TestCase):
                 reviewed_provider_ids=IDS)
 
     def test_disconnected_key_or_nonce_owner_denied(self):
-        for change in ("connected", "key", "redis", "token", "generator"):
+        for change in ("connected", "key", "redis", "token", "generator", "canonical_missing"):
             broker = Broker()
             if change == "connected":
                 broker.connected = False
@@ -105,6 +105,8 @@ class TestWriterNonceEvidence(unittest.TestCase):
                 broker._distributed_nonce_manager._redis = None
             elif change == "token":
                 broker._nonce_lease_version = 18
+            elif change == "canonical_missing":
+                del broker._kraken_private_call_nonce
             else:
                 broker.api._nonce = lambda: 1
             with self.subTest(change=change), patch(

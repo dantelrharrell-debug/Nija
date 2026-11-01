@@ -10155,12 +10155,13 @@ class KrakenBroker(BaseBroker):
                     """Unified nonce — DistributedNonceManager (Redis or file/fcntl)."""
                     return str(_dnm.get_nonce(_kid))
 
+                self._kraken_private_call_nonce = _nonce_distributed
                 self._record_nonce_error   = lambda: _dnm.record_error(_kid)
                 self._record_nonce_success = lambda: _dnm.record_success(
                     _kid, _dnm.get_last_nonce(_kid)
                 )
 
-                self.api._nonce = _nonce_distributed  # type: ignore[assignment]
+                self.api._nonce = self._kraken_private_call_nonce  # type: ignore[assignment]
                 _backend = "redis" if _dnm._redis is not None else "file/fcntl"
                 logger.info(
                     "   ✅ Nonce: DistributedNonceManager  backend=%-10s  "
