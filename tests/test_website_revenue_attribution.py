@@ -23,6 +23,19 @@ class RevenueAttributionTests(unittest.TestCase):
         self.assertIsNone(data["revenue_per_visitor_usd"])
         self.assertIsNone(data["revenue_per_qualified_lead_usd"])
 
+    def test_printful_requires_provider_verified_settlement(self):
+        events = [
+            {"type": "revenue", "event_id": "storefront-order-only",
+             "source": "printful_settlement", "verified": False, "amount_usd": "64.00"},
+            {"type": "revenue", "event_id": "confirmed-payout",
+             "source": "printful_settlement", "verified": True, "amount_usd": "64.00"},
+            {"type": "refund", "event_id": "confirmed-return",
+             "source": "printful_settlement", "verified": True, "amount_usd": "8.00"},
+        ]
+        result = summarize(events)
+        self.assertEqual(result["revenue_by_source_usd"]["printful_settlement"], "56.00")
+        self.assertEqual(result["rejected_events"], 1)
+
     def test_untrusted_or_invalid_amount(self):
         data = summarize([
             {"type":"revenue","event_id":"a","verified":True,"source":"browser","amount_usd":"8.00"},
