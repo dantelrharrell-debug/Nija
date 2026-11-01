@@ -44,6 +44,7 @@ class WebsiteProfitDashboardTests(unittest.TestCase):
         self.assertIn("status.reconciliation_complete===true", html)
         self.assertIn("status.reporting_period_closed", html)
         self.assertIn("status.qualified_leads_verified", html)
+        self.assertIn("status.analytics_consent_verified===true", html)
         self.assertIn("Missing or incomplete independently certified evidence", html)
 
     def test_html_security_headers_and_nonce(self):
