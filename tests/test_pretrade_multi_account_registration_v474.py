@@ -131,6 +131,20 @@ def test_failed_evidence_preserves_the_installed_collector(monkeypatch):
     assert inspector._COLLECTOR is previous
 
 
+def test_empty_evidence_preserves_the_installed_collector(monkeypatch):
+    previous = lambda _account: {"previous": True}
+    monkeypatch.setattr(inspector, "_COLLECTOR", previous)
+    empty = {field: (lambda: {}) for field in REQUIRED}
+
+    with pytest.raises(ValueError, match="independent_pretrade_provenance_unverified"):
+        registration.register_reviewed_account_registry(
+            providers_by_account={"platform:kraken": empty},
+            trusted_provider_ids=_identities(), independently_reviewed=True,
+        )
+
+    assert inspector._COLLECTOR is previous
+
+
 def test_duplicate_provider_ids_fail_before_collector_replacement(monkeypatch):
     calls = []
     monkeypatch.setattr(registration, "install_authenticated_collector", calls.append)
