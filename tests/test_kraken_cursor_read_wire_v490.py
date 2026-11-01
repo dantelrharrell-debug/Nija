@@ -74,3 +74,44 @@ def test_existing_authenticated_direct_history_reader_keeps_nonce_and_pagination
     assert evidence["trading_authorized"] is False
     assert evidence["authenticated_identity_independently_verified"] is False
     assert evidence["protective_exit_coverage_verified"] is False
+
+
+@pytest.mark.parametrize("mode, expected_cursor, expected_trades", [
+    (SimpleNamespace(_gateway_url="", _gateway_only_mode=False), "true", "true"),
+    (SimpleNamespace(_gateway_url="https://gateway.example", _gateway_only_mode=True), True, True),
+])
+def test_openorders_documented_cursor_contract_preserves_nonce_ownership(mode, expected_cursor, expected_trades):
+    """Official OpenOrders supports with_cursor, limit, trades and cursor.
+
+    Regression for the production invalid_arguments receipt: keep the supported
+    parameters and verify transport-specific wire types. This is offline only.
+    """
+    original = {"with_cursor": True, "limit": 50, "trades": True, "cursor": "opaque"}
+    result = cursor_read_params(mode, "OpenOrders", original)
+    assert result == {"with_cursor": expected_cursor, "limit": 50,
+                      "trades": expected_trades, "cursor": "opaque"}
+    assert original == {"with_cursor": True, "limit": 50,
+                        "trades": True, "cursor": "opaque"}
+    assert "nonce" not in result
+
+
+def test_openorders_invalid_arguments_does_not_retry_or_fallback_to_another_mode():
+    """A rejected authenticated OpenOrders read cannot certify a partial snapshot."""
+    from scripts.nija_kraken_readonly_history_collector_v441 import IncompleteHistory, collect_history
+
+    calls = []
+
+    def read(endpoint, params):
+        calls.append((endpoint, dict(params)))
+        if endpoint == "OpenOrders":
+            return {"error": ["EGeneral:Invalid arguments"], "result": {}}
+        field = {"TradesHistory": "trades", "ClosedOrders": "closed", "Ledgers": "ledger"}[endpoint]
+        return {"error": [], "result": {field: {}, "cursor": {}}}
+
+    with pytest.raises(IncompleteHistory):
+        collect_history(read, account_scope="platform:kraken",
+                        include_open_orders=True, use_cursor=True, max_pages=2)
+    open_calls = [(endpoint, params) for endpoint, params in calls if endpoint == "OpenOrders"]
+    assert len(open_calls) == 1
+    assert open_calls[0][1] == {"with_cursor": True, "limit": 50, "trades": True}
+    assert not any("ofs" in params for _, params in calls)
