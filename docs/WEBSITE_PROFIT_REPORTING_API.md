@@ -31,8 +31,11 @@ certified. Response is aggregate-only and uses `Cache-Control: no-store`.
 evidence never becomes a zero count. Gross revenue, refunds, and cost totals
 are null unless the corresponding stream is complete. Confirmed partial
 revenue may remain visible in `net_verified_revenue_usd`, alongside explicit
-stream-completeness flags. `reconciliation_freshness` reports the optional
-signed `reconciled_at` timestamp and is null when the importer did not provide it.
+stream-completeness flags. Certification also requires a signed reconciliation
+timestamp after month close, a documented accounting basis, bank reconciliation,
+and explicit coverage of every revenue source and cost category. Otherwise the
+report cannot be marked `VERIFIED`. `reconciliation_freshness` reports the
+signed `reconciled_at` timestamp.
 
 The current interface accepts closed calendar months only. It does not provide
 7-, 30-, or 90-day windows, a browser dashboard, provider collectors, or GA4
@@ -61,8 +64,15 @@ Each `YYYY-MM.json` must include:
   category from `website_net_profit.COST_CATEGORIES`, and exact `amount_usd`.
   Cost imports may use the same provider/canonical transaction identity fields
   for duplicate detection; conflicting duplicates block the cost certification.
+- `reconciliation`: `accounting_basis` (`cash` or `accrual`),
+  `bank_reconciled:true`, `revenue_sources`, and `cost_categories`. The latter
+  two must each contain exactly the keys in `REVENUE_SOURCES` and
+  `COST_CATEGORIES` respectively, with every value exactly `true`; this certifies reviewed
+  zero-activity sources as well as sources with events. `reconciled_at` must be
+  an ISO-8601 timestamp with timezone, at or after the first instant of the
+  month following `reporting_period`, and not in the future.
 - `revenue_complete`, `costs_complete`: set to true only after authenticated
-  reconciliation and monthly close.
+  reconciliation, including the coverage attestations above, and monthly close.
 - `certification`: `visitor_counts_verified`,
   `provider_revenue_verified`, `qualified_leads_verified`, and `all_costs_verified`,
   each true only after independent approval. Uncertified qualified leads never
@@ -161,4 +171,3 @@ remain null/UNVERIFIED, not coerced to $0 or certified true.
 Track full GA4/consent-aware source reconciliation, actual processor payouts,
 refunds and all attributable expenses separately before announcing NIJA has
 achieved $1 net profit per visitor.
-

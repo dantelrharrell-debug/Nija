@@ -41,6 +41,7 @@ class WebsiteProfitDashboardTests(unittest.TestCase):
         self.assertIn("cache:\"no-store\"", html)
         self.assertIn("status.revenue_evidence_complete", html)
         self.assertIn("status.cost_evidence_complete", html)
+        self.assertIn("status.reconciliation_complete===true", html)
         self.assertIn("status.reporting_period_closed", html)
         self.assertIn("status.qualified_leads_verified", html)
         self.assertIn("Missing or incomplete independently certified evidence", html)

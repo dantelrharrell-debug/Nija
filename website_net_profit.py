@@ -15,7 +15,7 @@ from website_revenue_attribution import summarize
 COST_CATEGORIES = frozenset({
     "advertising", "payment_processing", "refund_handling", "hosting",
     "course_fulfillment", "merchandise_fulfillment", "customer_support", "software", "affiliate_payout",
-    "chargeback_fee", "other_operating"
+    "email_service", "chargeback_fee", "other_operating"
 })
 
 

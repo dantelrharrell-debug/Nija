@@ -76,6 +76,7 @@ const data=await r.json(),status=data.source_status||{};
 const verified=data.status==="verified"&&data.verification_status==="VERIFIED"&&
 status.visitor_counts_verified===true&&status.provider_revenue_verified===true&&
 status.all_costs_verified===true&&status.reporting_period_closed===true&&
+status.reconciliation_complete===true&&
 status.revenue_evidence_complete===true&&status.cost_evidence_complete===true;
 if(!verified){put("UNVERIFIED — Missing or incomplete independently certified evidence.");return;}
 for(const [id,entry] of Object.entries(specs)){
