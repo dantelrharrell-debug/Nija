@@ -89,7 +89,9 @@ class TestKrakenAdapterConnection(unittest.TestCase):
         with _configured_adapter({"error": [], "result": {"USD": "1.00"}}) as (
             adapter, api_instances, wrapped_clients, nonce_manager,
         ):
+            self.assertFalse(adapter.connected)
             self.assertTrue(adapter.connect())
+            self.assertTrue(adapter.connected)
             self.assertEqual(len(api_instances), 1)
             self.assertEqual(wrapped_clients, api_instances)
             self.assertIs(api_instances[0]._nonce, adapter._nonce_generator)
@@ -103,7 +105,25 @@ class TestKrakenAdapterConnection(unittest.TestCase):
             "result": {},
         }) as (adapter, _api_instances, _wrapped_clients, _nonce_manager):
             self.assertFalse(adapter.connect())
+            self.assertFalse(adapter.connected)
+            self.assertIsNone(adapter.api)
+            self.assertIsNone(adapter.kraken_api)
             adapter._kraken_api_call.assert_called_once_with("Balance")
+
+    def test_failed_reconnect_discards_previous_client_references(self) -> None:
+        with _configured_adapter({
+            "error": ["EAPI:Invalid key"],
+            "result": {},
+        }) as (adapter, _api_instances, _wrapped_clients, _nonce_manager):
+            adapter.connected = True
+            adapter.api = object()
+            adapter.kraken_api = object()
+
+            self.assertFalse(adapter.connect())
+
+            self.assertFalse(adapter.connected)
+            self.assertIsNone(adapter.api)
+            self.assertIsNone(adapter.kraken_api)
 
     def test_startup_writer_authority_denial_prevents_private_probe(self) -> None:
         with _configured_adapter(
@@ -111,6 +131,7 @@ class TestKrakenAdapterConnection(unittest.TestCase):
             authority_error=RuntimeError("writer authority unavailable"),
         ) as (adapter, _api_instances, _wrapped_clients, _nonce_manager):
             self.assertFalse(adapter.connect())
+            self.assertFalse(adapter.connected)
             self.assertIsNone(adapter.api)
             adapter._kraken_api_call.assert_not_called()
 
