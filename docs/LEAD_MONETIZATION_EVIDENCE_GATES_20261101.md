@@ -14,7 +14,7 @@
 4. Require matching-period first-party visitor evidence and complete attributable costs before reporting net contribution per visitor. If any required evidence is missing, return null/unverified rather than zero or profitability.
 5. Verify IONOS live intake, Zapier delivery, Apollo suppression, ClickBank, Printful, referral settlement, and payment sources independently before marking reconciliation complete. No replay of historical leads.
 6. Stage conversion events only through existing consent-gated analytics outbox. Never promote GA4 custom lead-form events directly into paid conversions. Keep Google Ads paused until verified conversion and targeting gates pass.
-7. Validate in staging with fixtures for duplicate webhook delivery, failed charge, trialing subscription, successful payment, refund, conflicting lead mappings, absent visitor count, absent costs, and opted-out lead. No production deploy without tests and reviewer approval.
+7. Validate in staging with fixtures for duplicate webhook delivery; distinct payment-intent, charge, and invoice events with different event IDs but the same canonical transaction ID, counted once; failed charge; trialing subscription; successful payment; refund; conflicting lead mappings; absent visitor count; absent costs; and opted-out lead. No production deploy without tests and reviewer approval.
 
 ## Current status
 
