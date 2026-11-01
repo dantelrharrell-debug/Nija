@@ -74,7 +74,8 @@ cache:"no-store",credentials:"omit",mode:"same-origin",redirect:"error"});
 if(!r.ok){put(r.status===503?"UNVERIFIED — Private reporting configuration or evidence is unavailable.":r.status===401?"UNVERIFIED — Invalid administrator token.":"UNVERIFIED — Reporting API unavailable.");return;}
 const data=await r.json(),status=data.source_status||{};
 const verified=data.status==="verified"&&data.verification_status==="VERIFIED"&&
-status.visitor_counts_verified===true&&status.provider_revenue_verified===true&&
+status.visitor_counts_verified===true&&status.analytics_consent_verified===true&&
+status.provider_revenue_verified===true&&
 status.all_costs_verified===true&&status.reporting_period_closed===true&&
 status.reconciliation_complete===true&&
 status.revenue_evidence_complete===true&&status.cost_evidence_complete===true;

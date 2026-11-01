@@ -187,7 +187,10 @@ def create_profit_blueprint() -> Blueprint:
             certifications = {}
         # In addition to signing, independent analytics, provider receipts,
         # refunds and all cost allocations must each be explicitly approved.
-        verified_visitors = certifications.get("visitor_counts_verified") is True
+        verified_visitors = (
+            certifications.get("visitor_counts_verified") is True
+            and certifications.get("analytics_consent_verified") is True
+        )
         verified_revenue = certifications.get("provider_revenue_verified") is True
         verified_expenses = certifications.get("all_costs_verified") is True
         verified_leads = certifications.get("qualified_leads_verified") is True
@@ -262,6 +265,9 @@ def create_profit_blueprint() -> Blueprint:
         result["target_usd_per_visitor"] = "1.00"
         result["source_status"] = {
             "visitor_counts_verified": verified_visitors,
+            "analytics_consent_verified": (
+                certifications.get("analytics_consent_verified") is True
+            ),
             "provider_revenue_verified": verified_revenue,
             "all_costs_verified": verified_expenses,
             "qualified_leads_verified": verified_leads,

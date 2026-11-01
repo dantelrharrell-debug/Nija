@@ -69,6 +69,7 @@ class WebsiteProfitApiTests(unittest.TestCase):
             "costs_complete": certify,
             "certification": {
                 "visitor_counts_verified": certify,
+                "analytics_consent_verified": certify,
                 "provider_revenue_verified": certify,
                 "all_costs_verified": certify,
                 "qualified_leads_verified": certify,
@@ -140,6 +141,18 @@ class WebsiteProfitApiTests(unittest.TestCase):
         self.assertIsNone(data["unique_visitors"])
         self.assertIsNone(data["net_profit_per_visitor_usd"])
         self.assertEqual(data["visitor_count_source"], "unverified")
+        self.assertEqual(data["verification_status"], "UNVERIFIED")
+
+    def test_visitor_counts_require_separate_analytics_consent_certification(self):
+        record = self.evidence()
+        del record["certification"]["analytics_consent_verified"]
+        record["signature"] = sign_evidence(record, self.key)
+        Path(self.tempdir.name, "2025-04.json").write_text(json.dumps(record), encoding="utf-8")
+        data = self.request().get_json()
+        self.assertIsNone(data["unique_visitors"])
+        self.assertIsNone(data["net_profit_per_visitor_usd"])
+        self.assertEqual(data["visitor_count_source"], "unverified")
+        self.assertFalse(data["source_status"]["analytics_consent_verified"])
         self.assertEqual(data["verification_status"], "UNVERIFIED")
 
     def test_zero_verified_visitors_do_not_produce_a_profit_ratio(self):
