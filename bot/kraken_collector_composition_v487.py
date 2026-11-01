@@ -17,7 +17,7 @@ from bot.kraken_protective_exit_readback_v485 import make_kraken_protective_exit
 from bot.kraken_writer_nonce_evidence_v488 import (
     FIELDS as WRITER_NONCE_FIELDS, make_kraken_writer_nonce_providers,
 )
-from bot.pretrade_attestation_validation_v452 import REQUIRED, evaluate_pretrade_certificate
+from bot.pretrade_attestation_validation_v452 import REQUIRED
 from bot.pretrade_multi_account_registration_v474 import register_reviewed_account_registry
 
 ACCOUNT = "platform:kraken"
@@ -122,22 +122,11 @@ def install_reviewed_kraken_collector(
     if (not isinstance(providers, Mapping) or set(providers) != set(REQUIRED)
             or not all(callable(p) for p in providers.values())):
         raise KrakenCollectorBindingDenied("complete_provider_registry_required")
-    # Observe every independent source before registration. Operator-supplied
-    # certification booleans alone cannot establish authenticated evidence.
+    # Registration observes and validates all thirteen providers before the
+    # process-wide collector is replaced.
     if (not isinstance(reviewed_provider_ids, Mapping)
             or set(reviewed_provider_ids) != set(REQUIRED)):
         raise KrakenCollectorBindingDenied("complete_trusted_provider_registry_required")
-    observations = {}
-    try:
-        for field in REQUIRED:
-            observations[field] = providers[field]()
-    except Exception:
-        raise KrakenCollectorBindingDenied("independent_observation_failed") from None
-    result = evaluate_pretrade_certificate(
-        observations, account=ACCOUNT, trusted_provider_ids=reviewed_provider_ids
-    )
-    if result.get("certified") is not True or result.get("authorizes_orders") is not False:
-        raise KrakenCollectorBindingDenied("fresh_independent_attestations_required")
     register_reviewed_account_registry(
         providers_by_account={ACCOUNT: providers},
         trusted_provider_ids=reviewed_provider_ids,

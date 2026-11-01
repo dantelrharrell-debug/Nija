@@ -11,12 +11,9 @@ import time
 from collections.abc import Callable, Mapping
 from typing import Any
 
-FIELDS = (
-    "account_permissions", "account_identity", "broker_balances",
-    "position_ledger_reconciliation", "protective_exit_readback",
-    "open_order_reconciliation", "duplicate_order_fence",
-    "writer_lease", "nonce_sequence", "operator_authorization",
-)
+from bot.pretrade_attestation_validation_v452 import REQUIRED
+
+FIELDS = REQUIRED
 
 # Read-only and separately audited collector must be explicitly installed.
 _COLLECTOR: Callable[[str], Mapping[str, Any]] | None = None

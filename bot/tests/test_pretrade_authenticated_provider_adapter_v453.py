@@ -2,7 +2,7 @@ from bot.pretrade_authenticated_provider_adapter_v453 import collect_independent
 from bot.pretrade_attestation_validation_v452 import REQUIRED, SOURCES, PROOF_BY_SOURCE
 
 ACCOUNT = "platform:kraken"
-TRUSTED = {name: "trusted-" + SOURCES[name] for name in REQUIRED}
+TRUSTED = {name: "trusted-" + name for name in REQUIRED}
 
 
 def test_missing_producers_fail_closed():

@@ -104,6 +104,7 @@ def evaluate_pretrade_certificate(
     # A single producer is not independent merely because it changes the
     # source field in its own observation.
     producer_sources: dict[str, str] = {}
+    seen_provider_ids: set[str] = set()
     for field in REQUIRED:
         identity = trusted_provider_ids.get(field)
         if not _valid_identifier(identity):
@@ -112,13 +113,20 @@ def evaluate_pretrade_certificate(
         previous = producer_sources.setdefault(identity, source)
         if previous != source:
             return denied
+        if identity in seen_provider_ids:
+            return denied
+        seen_provider_ids.add(identity)
 
     missing: list[str] = []
+    evidence_fields: dict[str, list[str]] = {}
     for field in REQUIRED:
         row = observations.get(field)
         if not isinstance(row, Mapping):
             missing.append(field)
             continue
+        evidence_id = row.get("evidence_id")
+        if _valid_identifier(evidence_id):
+            evidence_fields.setdefault(evidence_id, []).append(field)
         source = SOURCES[field]
         provenance = row.get("provenance")
         if (row.get("account") != account
@@ -127,7 +135,7 @@ def evaluate_pretrade_certificate(
                 or row.get("scope_verified") is not True
                 or row.get("source") != source
                 or row.get("provider_id") != trusted_provider_ids[field]
-                or not _valid_identifier(row.get("evidence_id"))
+                or not _valid_identifier(evidence_id)
                 or not isinstance(provenance, Mapping)
                 or provenance.get("account_scope_verified") is not True
                 or provenance.get("collector_identity_verified") is not True
@@ -147,6 +155,11 @@ def evaluate_pretrade_certificate(
         age_s = now - stamp
         if age_s < 0 or age_s > max_age_s:
             missing.append(field)
+
+    for fields in evidence_fields.values():
+        if len(fields) > 1:
+            missing.extend(fields)
+    missing = list(dict.fromkeys(missing))
 
     return {
         "certified": not missing,
