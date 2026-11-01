@@ -39,5 +39,5 @@ def broker_setup_view(*, authenticated: bool, entitled: bool,
     if not secure_credential_backend_ready:
         return BrokerSetupView("secure_connection_unavailable", "Secure credential entry is not yet verified. Do not send API keys through email, chat, or support.", choices, False, False)
     if not broker_account_verified:
-        return BrokerSetupView("connect_in_portal", "Connect only through the authenticated, encrypted NIJA brokerage connection flow. Disable withdrawal permission. Connection alone does not enable live trading.", choices, True, False)
+        return BrokerSetupView("connect_in_portal", "NIJA brokerage connections are not generally available for self-service. This connection flow is limited to eligible accounts; use only this authenticated, encrypted portal and disable withdrawal permission. Connection alone does not enable live trading.", choices, True, False)
     return BrokerSetupView("connected_pending_safety", "Your brokerage connection is verified. Trading remains disabled until account-specific risk controls, protective exits, reconciliation, and explicit live-trading consent are verified.", choices, False, False)
