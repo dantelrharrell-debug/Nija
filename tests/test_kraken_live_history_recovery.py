@@ -116,6 +116,7 @@ def test_partial_history_is_failure_not_certificate_and_no_automatic_retry(root)
     assert json.loads(output) == dict(
         request_id=ID, collection_succeeded=False,
         error_type="RuntimeError", trading_authorized=False,
+        transport_mode_label="transport_mode_unverified",
     )
     assert not run(root, [broker])
 
