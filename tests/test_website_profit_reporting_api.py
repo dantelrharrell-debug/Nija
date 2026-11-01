@@ -183,6 +183,7 @@ class WebsiteProfitApiTests(unittest.TestCase):
     def test_provider_outage_or_partial_close_keeps_totals_unknown(self):
         record = self.evidence(certify=False)
         record["certification"]["visitor_counts_verified"] = True
+        record["certification"]["analytics_consent_verified"] = True
         record["signature"] = sign_evidence(record, self.key)
         Path(self.tempdir.name, "2025-04.json").write_text(json.dumps(record), encoding="utf-8")
         data = self.request().get_json()
