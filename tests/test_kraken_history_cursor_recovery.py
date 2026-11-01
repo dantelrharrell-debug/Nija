@@ -181,3 +181,15 @@ def test_direct_open_order_reader_isolates_transport_nonce_between_cursor_pages(
     assert [ep for ep, _ in calls].count("OpenOrders") == 4
     assert evidence["trading_authorized"] is False
     assert evidence["protective_exit_coverage_verified"] is False
+
+
+def test_recovery_transport_mode_diagnostic_is_fixed_label_without_gateway_address():
+    from bot.kraken_live_history_recovery import _transport_mode_label
+
+    assert _transport_mode_label(SimpleNamespace(_gateway_url="", _gateway_only_mode=False)) == "direct_krakenex_configured"
+    secret_url = "https://private.example/path?token=never-log"
+    label = _transport_mode_label(SimpleNamespace(_gateway_url=secret_url, _gateway_only_mode=True))
+    assert label == "gateway_configured"
+    assert "private" not in label and "token" not in label
+    assert _transport_mode_label(SimpleNamespace()) == "transport_mode_unverified"
+    assert _transport_mode_label(SimpleNamespace(_gateway_url="", _gateway_only_mode=True)) == "transport_mode_unverified"
