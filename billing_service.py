@@ -933,6 +933,11 @@ def create_app(store: Optional[BillingServiceStore] = None) -> Flask:
 
     app.register_blueprint(create_profit_blueprint())
 
+    # Static, GET-only review shell. Financial totals remain behind the
+    # separately authenticated and signed-evidence API above.
+    from website_profit_dashboard import create_dashboard_blueprint
+    app.register_blueprint(create_dashboard_blueprint())
+
     # Opt-in only: audit existing Founding 100 identity and entitlement through
     # the internal billing network. Never change a customer, trial or gate.
     from founding100_boot_audit import launch_opt_in_audit

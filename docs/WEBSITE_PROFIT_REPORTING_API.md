@@ -115,3 +115,50 @@ submissions are independently reconciled. Treat the current period as OPEN.
 
 The reporting endpoint is not a collector, campaign controller or database
 query proxy. It cannot fix advertising attribution or generate paid customers.
+
+## Read-only browser dashboard (same-origin)
+
+The Flask billing service mounts `website_profit_dashboard.create_dashboard_blueprint()`
+at **`GET /admin/revenue-per-visitor`**, alongside the existing
+`GET /api/admin/website-profit?period=YYYY-MM` on the **billing service origin**.
+The route is a static HTML/CSS/JavaScript shell; no payment evidence, visitor
+identifiers, admin token, or live financial records appear in the HTML.
+The reporting data requires the same existing bearer token and independently
+signed, closed-month evidence as the reporting API.
+
+- The dashboard defaults to the previous **UTC calendar month**, not a rolling
+  30-day or 7-day metric. There is no automatic fallback to missing or fake data.
+- Administrator enters the private token only into the exact billing-hostname
+  page; JavaScript submits it in a same-origin `Authorization: Bearer` header
+  and immediately clears the password field. Nothing is stored in localStorage,
+  cookies, URL query parameters, browser analytics, or an external script.
+- A strict, nonce-based Content-Security-Policy limits scripts and styles to
+  the response, blocks frames and third-party requests, and prevents form
+  posts. Response is `no-store`; unsupported HTTP methods return 405.
+- **All financial totals remain UNVERIFIED unless** API `status=verified`,
+  `verification_status=VERIFIED`, all three independent visitor/revenue/cost
+  certifications are true, the month is closed, and revenue and cost evidence
+  completeness are true. The optional lead count requires its separate flag.
+- No request from the dashboard creates an event, sends an email, submits an
+  order, calls a broker, restarts trading, or modifies any provider record.
+- The dashboard is **not** the IONOS site builder's existing
+  `/admin/revenue-per-visitor` UI. To link or embed it under
+  `https://nijaaitrading.com`, the authenticated IONOS editor must first
+  implement an authenticated server-to-server integration. Never redirect
+  untrusted website visitors into an admin-token entry form.
+
+### Activation is a separate, evidence-gated step
+
+A successful deploy makes the safe review interface available but does **not**
+activate certified financial reporting. Configure
+`NIJA_PROFIT_DASHBOARD_TOKEN`, `NIJA_PROFIT_EVIDENCE_HMAC_KEY`, and a durable
+`NIJA_PROFIT_EVIDENCE_DIR` in restricted Render production settings only
+after the independent revenue/visitor/cost evidence and custodian approval
+exist. The two secret strings must be independent, at least 32 characters
+each, and never written to GitHub or website HTML. Missing evidence must
+remain null/UNVERIFIED, not coerced to $0 or certified true.
+
+Track full GA4/consent-aware source reconciliation, actual processor payouts,
+refunds and all attributable expenses separately before announcing NIJA has
+achieved $1 net profit per visitor.
+
