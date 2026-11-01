@@ -15,6 +15,7 @@ No public browser form or client code may set `verified` or completeness flags. 
 ## Required production data sources (not assumed connected)
 - First-party consent-aware website analytics: unique pseudonymous visitor IDs, UTM attribution, qualification state, event timestamps.
 - Stripe: settled charges or recognized subscription revenue and refunds; processor fees; trial-only signups are not revenue.
+- Printful: recognize only authenticated settled or earned Quick Store merchant proceeds under `printful_settlement`, net of verified refunds, plus separately evidenced `merchandise_fulfillment` costs. An order/shipping email or GA4 checkout event alone is not proof of payment. Do not double-count a Printful payment already represented by the same underlying Stripe transaction.
 - ClickBank: settled course sales, refunds, fees, affiliate commissions.
 - Affiliate providers: payable or settled commissions **only**, never clicks as earnings.
 - Sponsor/ad network: verified payments or earned statements, with corresponding expenses.
@@ -31,3 +32,7 @@ Finance must document whether numbers are on a cash basis or accrual basis and a
 6. Expose aggregate-only, authenticated `/admin/revenue` data; show 'Not verified' whenever evidence completeness is false.
 7. Compare verified net profit / visitors to $1 and optimize conversion, retention and CAC. Keep paper-trading/live-trading safety and risk controls untouched.
 8. Only claim the goal reached when real data proves it; neither this feature nor webpage text makes guaranteed profit.
+
+## Financial-ratio display guard
+
+The reporting API must return `null` for revenue-per-visitor and revenue-per-qualified-lead, in addition to net-profit ratios, when monthly revenue/cost evidence is incomplete. When a reconciled aggregate has been signed off, revenue and profit ratios use the SAME certified visitor/lead denominators, never raw GA4 events from a preview or potentially bot-filled campaign source. This repo is not NIJA's IONOS site builder: deploy and verify a separate privacy-respecting pageview implementation at the published origin before calling the website tracking certified.
