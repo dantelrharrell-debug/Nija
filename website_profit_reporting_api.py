@@ -18,7 +18,8 @@ from typing import Any
 
 from flask import Blueprint, jsonify, request
 
-from website_net_profit import net_profit_report
+from website_net_profit import COST_CATEGORIES, net_profit_report
+from website_revenue_attribution import REVENUE_SOURCES
 
 _PERIOD = re.compile(r"^[0-9]{4}-(?:0[1-9]|1[0-2])$")
 _MAX_BYTES = 8 * 1024 * 1024
@@ -79,6 +80,53 @@ def _load_signed_evidence(period: str, folder: str, signing_key: str) -> dict[st
     if len(envelope["revenue_events"]) + len(envelope["cost_events"]) > 150000:
         return None
     return envelope
+
+
+def _reconciliation_is_complete(
+    evidence: dict[str, Any], period: str, now: datetime
+) -> bool:
+    """Require explicit signed coverage for each source and the bank close."""
+    reconciliation = evidence.get("reconciliation")
+    if not isinstance(reconciliation, dict):
+        return False
+    accounting_basis = reconciliation.get("accounting_basis")
+    revenue_sources = reconciliation.get("revenue_sources")
+    cost_categories = reconciliation.get("cost_categories")
+    if (
+        not isinstance(accounting_basis, str)
+        or accounting_basis not in {"cash", "accrual"}
+        or reconciliation.get("bank_reconciled") is not True
+        or not isinstance(revenue_sources, dict)
+        or set(revenue_sources) != REVENUE_SOURCES
+        or not all(value is True for value in revenue_sources.values())
+        or not isinstance(cost_categories, dict)
+        or set(cost_categories) != COST_CATEGORIES
+        or not all(value is True for value in cost_categories.values())
+    ):
+        return False
+
+    reconciled_at = evidence.get("reconciled_at")
+    if not isinstance(reconciled_at, str) or not reconciled_at:
+        return False
+    try:
+        reconciled = datetime.fromisoformat(reconciled_at.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if reconciled.utcoffset() is None:
+        return False
+
+    try:
+        month_start = datetime.strptime(period, "%Y-%m").replace(tzinfo=timezone.utc)
+        next_month = datetime(
+            month_start.year + (month_start.month == 12),
+            month_start.month % 12 + 1,
+            1,
+            tzinfo=timezone.utc,
+        )
+        reconciled = reconciled.astimezone(timezone.utc)
+    except (OverflowError, ValueError):
+        return False
+    return next_month <= reconciled <= now
 
 
 def create_profit_blueprint() -> Blueprint:
@@ -150,13 +198,17 @@ def create_profit_blueprint() -> Blueprint:
             return response, 503
         if aggregates is None:
             aggregates = {}
-        period_closed = period < datetime.now(timezone.utc).strftime("%Y-%m")
+        now = datetime.now(timezone.utc)
+        period_closed = period < now.strftime("%Y-%m")
+        reconciliation_complete = period_closed and _reconciliation_is_complete(
+            evidence, period, now
+        )
         revenue_complete = (
-            period_closed and verified_visitors and verified_revenue
+            reconciliation_complete and verified_visitors and verified_revenue
             and evidence.get("revenue_complete") is True
         )
         costs_complete = (
-            period_closed and verified_expenses
+            reconciliation_complete and verified_expenses
             and evidence.get("costs_complete") is True
         )
         try:
@@ -215,6 +267,7 @@ def create_profit_blueprint() -> Blueprint:
             "qualified_leads_verified": verified_leads,
             "revenue_evidence_complete": result["revenue_evidence_complete"],
             "cost_evidence_complete": result["cost_evidence_complete"],
+            "reconciliation_complete": reconciliation_complete,
             "reporting_period_closed": period_closed,
         }
         response = jsonify(result)

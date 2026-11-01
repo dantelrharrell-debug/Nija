@@ -10,6 +10,8 @@ from unittest.mock import patch
 
 from flask import Flask
 
+from website_net_profit import COST_CATEGORIES
+from website_revenue_attribution import REVENUE_SOURCES
 from website_profit_reporting_api import create_profit_blueprint, sign_evidence
 
 
@@ -71,10 +73,22 @@ class WebsiteProfitApiTests(unittest.TestCase):
                 "all_costs_verified": certify,
                 "qualified_leads_verified": certify,
             },
+            "reconciliation": {
+                "accounting_basis": "cash",
+                "bank_reconciled": certify,
+                "revenue_sources": {source: certify for source in REVENUE_SOURCES},
+                "cost_categories": {category: certify for category in COST_CATEGORIES},
+            },
+            "reconciled_at": "2025-05-01T00:00:00Z",
         }
-        body["signature"] = sign_evidence(body, self.key)
-        Path(self.tempdir.name, period + ".json").write_text(json.dumps(body), encoding="utf-8")
+        self.save_evidence(body)
         return body
+
+    def save_evidence(self, body):
+        body["signature"] = sign_evidence(body, self.key)
+        Path(self.tempdir.name, body["reporting_period"] + ".json").write_text(
+            json.dumps(body), encoding="utf-8"
+        )
 
     def test_signed_closed_month_returns_aggregate_only(self):
         self.evidence()
@@ -177,6 +191,47 @@ class WebsiteProfitApiTests(unittest.TestCase):
         response = self.request()
         self.assertEqual(response.get_json()["status"], "incomplete_cost_or_revenue_evidence")
         self.assertIsNone(response.get_json()["net_profit_usd"])
+
+    def test_missing_source_coverage_blocks_month_certification(self):
+        record = self.evidence()
+        del record["reconciliation"]["revenue_sources"]["clickbank"]
+        self.save_evidence(record)
+        data = self.request().get_json()
+        self.assertFalse(data["source_status"]["reconciliation_complete"])
+        self.assertEqual(data["verification_status"], "PARTIAL")
+        self.assertIsNone(data["net_profit_usd"])
+        self.assertIsNone(data["visitor_target_met"])
+
+    def test_unreconciled_bank_or_cost_category_blocks_certification(self):
+        record = self.evidence()
+        record["reconciliation"]["bank_reconciled"] = False
+        self.save_evidence(record)
+        data = self.request().get_json()
+        self.assertFalse(data["source_status"]["reconciliation_complete"])
+        self.assertIsNone(data["net_profit_per_visitor_usd"])
+
+        record = self.evidence()
+        del record["reconciliation"]["cost_categories"]["hosting"]
+        self.save_evidence(record)
+        data = self.request().get_json()
+        self.assertFalse(data["source_status"]["reconciliation_complete"])
+        self.assertIsNone(data["net_profit_usd"])
+
+    def test_invalid_accounting_basis_does_not_break_reporting(self):
+        record = self.evidence()
+        record["reconciliation"]["accounting_basis"] = {}
+        self.save_evidence(record)
+        data = self.request().get_json()
+        self.assertFalse(data["source_status"]["reconciliation_complete"])
+        self.assertIsNone(data["net_profit_usd"])
+
+    def test_reconciliation_must_be_after_month_close(self):
+        record = self.evidence()
+        record["reconciled_at"] = "2025-04-30T23:59:59Z"
+        self.save_evidence(record)
+        data = self.request().get_json()
+        self.assertFalse(data["source_status"]["reconciliation_complete"])
+        self.assertIsNone(data["net_profit_usd"])
 
     def test_future_month_cannot_be_verified(self):
         self.evidence(period="2099-01")
