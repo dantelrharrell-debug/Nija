@@ -32,6 +32,14 @@ def stripe_attributed_events(charges, customer_leads, *, period,
         refunded = charge["amount_refunded"]
         if amount == 0:
             continue
+        if amount == refunded:
+            customer = charge.get("customer")
+            lead = customer_leads.get(customer) if isinstance(customer, str) else None
+            if isinstance(lead, (list, tuple, set)):
+                values = {value for value in lead if isinstance(value, str) and value.strip()}
+                lead = next(iter(values)) if len(values) == 1 else None
+            if not isinstance(lead, str) or not lead.strip():
+                return {"status": "unverified", "attribution": report, "revenue_events": []}
         base = {
             "source": "stripe", "verified": True, "period": period,
             "provider_transaction_id": cid,
