@@ -46,7 +46,12 @@ def reconcile_stripe_charges(charges, customer_leads, *, mapping_verified=False,
         if charge.get("livemode") is not True:
             invalid += 1
             continue
-        if charge.get("status") != "succeeded" or charge.get("paid") is not True:
+        status = charge.get("status")
+        paid = charge.get("paid")
+        if status not in ("succeeded", "failed", "pending") or type(paid) is not bool:
+            invalid += 1
+            continue
+        if status != "succeeded" or paid is not True:
             continue
         amount = charge.get("amount")
         refunded = charge.get("amount_refunded", 0)
