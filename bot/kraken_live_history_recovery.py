@@ -43,6 +43,19 @@ MAX_PAGES = 100  # Explicit operator budget only; collection never retries autom
 REQUEST_TTL_S = 300
 
 
+def _recovery_mode_conflict(root: Path, filename: str) -> bool:
+    """Check other opt-in modes while holding the shared collector lock.
+
+    Request producers must acquire collector.lock before publishing a request.
+    The scheduler's earlier observation cannot establish claim-time exclusivity.
+    """
+    modes = {"request.json", "exact_request.json", "identity_request.json"}
+    if filename not in modes:
+        raise ValueError("recovery_request_mode_invalid")
+    return any((root / other).exists() or (root / other).is_symlink()
+               for other in modes - {filename})
+
+
 def _private_regular(fd: int) -> None:
     """Reject shared, foreign-owned and nonregular request/lock files."""
     info = os.fstat(fd)
@@ -130,6 +143,8 @@ def collect_requested_history(
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
+            return False
+        if _recovery_mode_conflict(root, "request.json"):
             return False
         request = _request(root, time.time() if now is None else now)
         if request is None:
@@ -220,3 +235,4 @@ def collect_requested_history(
         return True
     finally:
         os.close(fd)
+

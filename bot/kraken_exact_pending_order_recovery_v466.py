@@ -19,7 +19,7 @@ import time
 from typing import Any, Iterable, Mapping
 
 from bot.durable_recovery_state import write_recovery_state
-from bot.kraken_live_history_recovery import _private_regular, _request
+from bot.kraken_live_history_recovery import _private_regular, _recovery_mode_conflict, _request
 from scripts.nija_kraken_readonly_history_collector_v441 import _broker_account_scope
 
 LOGGER = logging.getLogger(__name__)
@@ -199,6 +199,8 @@ def collect_requested_exact_pending_orders(
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             return False
+        if _recovery_mode_conflict(root, "exact_request.json"):
+            return False
         stamp = time.time() if now is None else now
         row = _request(root, stamp, filename="exact_request.json")
         if row is None:
@@ -252,3 +254,4 @@ def collect_requested_exact_pending_orders(
         return True
     finally:
         os.close(fd)
+
