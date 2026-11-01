@@ -78,7 +78,7 @@ def reconcile_stripe_charges(charges, customer_leads, *, mapping_verified=False,
         else:
             totals[lead] += amount - refunded
     complete = (charges_complete is True and mapping_verified is True
-                and invalid == 0 and not conflicts)
+                and invalid == 0 and not conflicts and unattributed_count == 0)
     # Never disclose lead/customer identifiers in aggregate reports.
     return {
         "status": "verified" if complete else "unverified",
