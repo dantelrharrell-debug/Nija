@@ -14,11 +14,17 @@ from bot.kraken_reviewed_producer_bundle_v483 import (
     FIELDS as BROKER_FIELDS, make_reviewed_kraken_producer_bundle,
 )
 from bot.kraken_protective_exit_readback_v485 import make_kraken_protective_exit_provider
+from bot.kraken_writer_nonce_evidence_v488 import (
+    FIELDS as WRITER_NONCE_FIELDS, make_kraken_writer_nonce_providers,
+)
 from bot.pretrade_attestation_validation_v452 import REQUIRED, evaluate_pretrade_certificate
 from bot.pretrade_multi_account_registration_v474 import register_reviewed_account_registry
 
 ACCOUNT = "platform:kraken"
-OTHER_FIELDS = frozenset(REQUIRED) - frozenset(BROKER_FIELDS) - {"protective_exit_readback"}
+OTHER_FIELDS = (
+    frozenset(REQUIRED) - frozenset(BROKER_FIELDS)
+    - {"protective_exit_readback"} - frozenset(WRITER_NONCE_FIELDS)
+)
 
 
 class KrakenCollectorBindingDenied(ValueError):
@@ -36,6 +42,7 @@ def compose_reviewed_kraken_providers(
 ) -> Mapping[str, Callable[[], Mapping[str, Any]]]:
     """Compose complete 13-field *callable registry*, without reading or installing.
 
+    Writer and nonce evidence use the existing read-only v488 providers.
     Remaining providers must be externally implemented against their approved
     independent sources. Validation here checks wiring, not truth of observations.
     """
@@ -77,10 +84,19 @@ def compose_reviewed_kraken_providers(
             independent_positions=independent_positions,
             monitoring_category=monitoring_category, **options,
         )
+        writer_nonce_providers = make_kraken_writer_nonce_providers(
+            broker, account_scope=ACCOUNT,
+            approved_api_key_sha256=approved_api_key_sha256,
+            reviewed_provider_ids={
+                field: reviewed_provider_ids[field] for field in WRITER_NONCE_FIELDS
+            },
+            independently_reviewed=True, **options,
+        )
     except Exception:
         raise KrakenCollectorBindingDenied("reviewed_producer_construction_failed") from None
     providers = dict(broker_providers)
     providers["protective_exit_readback"] = exits
+    providers.update(writer_nonce_providers)
     providers.update(independent_remaining)
     if set(providers) != set(REQUIRED):
         raise KrakenCollectorBindingDenied("complete_provider_registry_required")

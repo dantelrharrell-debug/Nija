@@ -1478,6 +1478,9 @@ class KrakenBrokerAdapter(BrokerInterface):
                 )
                 return False
             try:
+                # Construct locally so no caller can observe an authenticated
+                # client until its canonical nonce authority is installed.
+                api = krakenex.API(key=self.api_key, secret=self.api_secret)
                 assert_startup_write_authority()
                 _dnm = _get_distributed_nonce_manager()
                 _nonce_key_id = _make_distributed_nonce_key_id(self.api_key)
@@ -1486,7 +1489,7 @@ class KrakenBrokerAdapter(BrokerInterface):
                 def _distributed_nonce() -> int:
                     return int(_dnm.get_nonce(_nonce_key_id))
 
-                cast(Any, self.api)._nonce = _distributed_nonce
+                cast(Any, api)._nonce = _distributed_nonce
                 self._distributed_nonce_manager = _dnm
                 self._nonce_key_id = _nonce_key_id
                 self._nonce_generator = _distributed_nonce
@@ -1506,15 +1509,14 @@ class KrakenBrokerAdapter(BrokerInterface):
                 )
                 return False
 
-            self.api = krakenex.API(key=self.api_key, secret=self.api_secret)
             if self._nonce_generator is None:
                 self._drop_nonce_authority("nonce_generator_missing_after_lease_acquire")
                 self.api = None
                 self.kraken_api = None
                 logger.error("❌ Kraken nonce authority missing after lease acquisition")
                 return False
-            cast(Any, self.api)._nonce = self._nonce_generator
-            self.kraken_api = KrakenAPI(self.api)
+            self.kraken_api = KrakenAPI(api)
+            self.api = api
 
             # ── Connection probe via ExecutionStateController ─────────────
             # The controller drives retry/halt decisions from taxonomy so the
