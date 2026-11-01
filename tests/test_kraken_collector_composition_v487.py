@@ -75,14 +75,16 @@ class CollectorCompositionTests(unittest.TestCase):
 
     def test_false_evidence_refuses_install(self):
         providers = {field: provider for field in REQUIRED}
-        with patch("bot.kraken_collector_composition_v487.register_reviewed_account_registry") as register:
-            with self.assertRaises(KrakenCollectorBindingDenied):
-                install_reviewed_kraken_collector(providers=providers, reviewed_provider_ids=self.ids, independently_reviewed=True, backup_restore_certified=True, broker_ledger_exits_certified=True)
-            register.assert_not_called()
+        with self.assertRaisesRegex(ValueError, "independent_pretrade_provenance_unverified"):
+            install_reviewed_kraken_collector(
+                providers=providers, reviewed_provider_ids=self.ids,
+                independently_reviewed=True, backup_restore_certified=True,
+                broker_ledger_exits_certified=True,
+            )
 
     def test_explicit_install_passes_exact_registry_to_existing_gate(self):
         providers = {field: provider for field in REQUIRED}
-        with patch("bot.kraken_collector_composition_v487.register_reviewed_account_registry") as register, patch("bot.kraken_collector_composition_v487.evaluate_pretrade_certificate", return_value={"certified": True, "authorizes_orders": False}):
+        with patch("bot.kraken_collector_composition_v487.register_reviewed_account_registry") as register:
             install_reviewed_kraken_collector(
                 providers=providers, reviewed_provider_ids=self.ids,
                 independently_reviewed=True, backup_restore_certified=True,

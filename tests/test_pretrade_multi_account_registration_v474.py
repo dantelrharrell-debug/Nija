@@ -1,15 +1,43 @@
 """Fail-closed regression tests for the multi-account reviewed collector boundary."""
 import importlib
+import time
 
 import pytest
 
-from bot.pretrade_attestation_validation_v452 import REQUIRED
+from bot.pretrade_attestation_validation_v452 import (
+    PROOF_BY_SOURCE, REQUIRED, SOURCES,
+)
+from bot import pretrade_independent_attestation as inspector
 
 registration = importlib.import_module("bot.pretrade_multi_account_registration_v474")
 
 
-def _providers():
-    return {field: (lambda: {}) for field in REQUIRED}
+def _observation(account, field, *, observed_at=None):
+    source = SOURCES[field]
+    return {
+        "account": account,
+        "verified": True,
+        "read_only": True,
+        "scope_verified": True,
+        "source": source,
+        "provider_id": "reviewed-" + field,
+        "evidence_id": "evidence-" + account + "-" + field,
+        "observed_at_epoch": time.time() if observed_at is None else observed_at,
+        "provenance": {
+            "account_scope_verified": True,
+            "collector_identity_verified": True,
+            "snapshot_complete": True,
+            "complete_pagination_verified": True,
+            PROOF_BY_SOURCE[source]: True,
+        },
+    }
+
+
+def _providers(account="platform:kraken"):
+    return {
+        field: (lambda field=field: _observation(account, field))
+        for field in REQUIRED
+    }
 
 
 def _identities():
@@ -68,12 +96,51 @@ def test_complete_registry_installs_once_and_never_authorizes_orders(monkeypatch
     calls = []
     monkeypatch.setattr(registration, "install_authenticated_collector", calls.append)
     registration.register_reviewed_account_registry(
-        providers_by_account={"platform:kraken": _providers(), "platform:okx": _providers()},
+        providers_by_account={
+            "platform:kraken": _providers("platform:kraken"),
+            "platform:okx": _providers("platform:okx"),
+        },
         trusted_provider_ids=_identities(), independently_reviewed=True,
     )
     assert len(calls) == 1
     for account in ("platform:kraken", "platform:okx"):
-        with pytest.raises(ValueError, match="independent_pretrade_provenance_unverified"):
-            calls[0](account)
+        result = calls[0](account)
+        assert result["source"] == "authenticated_independent"
+        assert result["authorizes_orders"] is False
+        assert set(result["checks"]) == set(REQUIRED)
+        assert all(result["checks"].values())
     with pytest.raises(ValueError, match="unregistered_account_scope"):
         calls[0]("platform:coinbase")
+
+
+def test_failed_evidence_preserves_the_installed_collector(monkeypatch):
+    previous = lambda _account: {"previous": True}
+    monkeypatch.setattr(inspector, "_COLLECTOR", previous)
+    invalid = _providers()
+    invalid["protective_exit_readback"] = lambda: _observation(
+        "platform:kraken", "protective_exit_readback",
+        observed_at=time.time() - 61,
+    )
+
+    with pytest.raises(ValueError, match="independent_pretrade_provenance_unverified"):
+        registration.register_reviewed_account_registry(
+            providers_by_account={"platform:kraken": invalid},
+            trusted_provider_ids=_identities(), independently_reviewed=True,
+        )
+
+    assert inspector._COLLECTOR is previous
+
+
+def test_duplicate_provider_ids_fail_before_collector_replacement(monkeypatch):
+    calls = []
+    monkeypatch.setattr(registration, "install_authenticated_collector", calls.append)
+    identities = _identities()
+    identities["account_identity"] = identities["account_permissions"]
+
+    with pytest.raises(ValueError, match="unique_complete_provider_registry_required"):
+        registration.register_reviewed_account_registry(
+            providers_by_account={"platform:kraken": _providers()},
+            trusted_provider_ids=identities, independently_reviewed=True,
+        )
+
+    assert calls == []

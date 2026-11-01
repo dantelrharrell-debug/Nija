@@ -18,6 +18,8 @@ import time
 from types import ModuleType
 from typing import Any
 
+from bot.pretrade_attestation_validation_v452 import REQUIRED
+
 logger = logging.getLogger("nija.preactivation_readiness_convergence_v16")
 _MARKER = "20260723-preactivation-readiness-v16"
 _TRUE = {"1", "true", "yes", "on", "enabled", "y"}
@@ -423,12 +425,7 @@ def _independent_pretrade_certificate() -> tuple[bool, list[str]]:
     must be explicitly True, from an independent authenticated producer;
     no environment variable or stale fill may self-certify this state.
     """
-    required = (
-        "account_permissions", "account_identity", "broker_balances",
-        "position_ledger_reconciliation", "protective_exit_readback",
-        "open_order_reconciliation", "duplicate_order_fence",
-        "writer_lease", "nonce_sequence", "operator_authorization",
-    )
+    required = REQUIRED
     # A verifier's affirmative response never establishes which account was
     # checked if the canonical scope is unset or malformed. Reject it before
     # asking any collector to provide evidence (diagnostic-only).

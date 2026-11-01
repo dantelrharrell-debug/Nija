@@ -66,7 +66,9 @@ class Client:
             assert params == {}
             return {"error": [], "result": copy.deepcopy(self.balances)}
         if method == "OpenOrders":
-            assert params == {"with_cursor": True, "limit": 50, "trades": True}
+            assert params == {
+                "with_cursor": "true", "limit": 50, "trades": "true",
+            }
             return {"error": [], "result": {
                 "open": copy.deepcopy(self.orders), "cursor": {},
             }}

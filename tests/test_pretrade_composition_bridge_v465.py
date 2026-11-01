@@ -14,7 +14,7 @@ ACCOUNT = "platform:kraken"
 
 def fixture_registry(account=ACCOUNT, now=None):
     now = time.time() if now is None else now
-    trusted = {field: "provider-" + SOURCES[field] for field in REQUIRED}
+    trusted = {field: "provider-" + field for field in REQUIRED}
     observations = {}
     providers = {}
     for field in REQUIRED:
@@ -46,12 +46,14 @@ def test_full_independent_evidence_bridge_remains_non_authorizing(monkeypatch):
     collector = bridge.make_collector({ACCOUNT: providers}, trusted_provider_ids=trusted)
     evidence = collector(ACCOUNT)
     assert evidence["source"] == "authenticated_independent"
+    assert set(evidence["checks"]) == set(REQUIRED)
     assert all(evidence["checks"].values())
     assert evidence["authorizes_orders"] is False
     monkeypatch.setattr(inspector, "_COLLECTOR", collector)
     output = inspector.inspect_authenticated_attestations(ACCOUNT)
     assert output["producer_status"] == "checks_passed_diagnostic_only"
     assert output["authorizes_orders"] is False
+    assert set(output["checks"]) == set(REQUIRED)
     assert all(output["checks"].values())
 
 
