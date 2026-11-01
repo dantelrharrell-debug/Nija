@@ -4,6 +4,8 @@ on:
     paths:
       - 'lead_payment_attribution.py'
       - 'tests/test_lead_payment_attribution.py'
+      - 'stripe_attribution_evidence_bridge.py'
+      - 'tests/test_stripe_attribution_evidence_bridge.py'
       - '.github/workflows/lead-payment-attribution-tests.yml'
   push:
     branches: [main]
@@ -24,4 +26,6 @@ jobs:
         with:
           python-version: '3.11'
       - name: Run isolated attribution tests
-        run: python -m unittest discover -s tests -p 'test_lead_payment_attribution.py' -v
+        run: |
+          python -m unittest discover -s tests -p 'test_lead_payment_attribution.py' -v
+          python -m unittest discover -s tests -p 'test_stripe_attribution_evidence_bridge.py' -v
