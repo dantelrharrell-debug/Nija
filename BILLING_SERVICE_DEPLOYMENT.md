@@ -226,6 +226,79 @@ STRIPE_CHECKOUT_SUCCESS_URL=https://nijaaitrading.com/beta-success?session_id={C
 STRIPE_CHECKOUT_CANCEL_URL=https://nijaaitrading.com/apply
 ```
 
+### Render staging database binding and recovery (#3530)
+
+`BILLING_DATABASE_URL` must be a connection URL, not a database name such as
+`nija_billing_staging_db`. Use the existing staging database's exact Render
+**Internal Database URL**, with a supported `postgresql://` or
+`postgresql+psycopg2://` scheme. Do not construct a URL from the database name,
+paste credentials into GitHub/chat/logs, or fall back to ephemeral SQLite.
+
+For the existing resources, perform this repair only in the authenticated
+Render dashboard:
+
+1. Open staging PostgreSQL resource `dpg-dbhtsmqjnfac73cbblmg-a`
+   (`nija-billing-staging-db`) and its connection settings. Keep the private
+   network and empty external IP allowlist unchanged.
+2. Open **Environment** on staging web service `srv-dasmtjfpn0mc73948r10`
+   (`nija-billing-api-staging`). Check its effective `BILLING_DATABASE_URL`,
+   including linked environment-group overrides. Replace only that binding with
+   the staging resource's exact Internal Database URL, then Save/Deploy.
+   Preserve other settings and all existing data; do not edit a shared group
+   in a way that changes production. A first-class Render database reference
+   must resolve `property: connectionString`, not the database name.
+3. Verify the resulting deployment builds, starts, and becomes `live`. Inspect
+   authenticated startup logs for successful initialization and absence of the
+   prior SQLAlchemy URL parsing exception. Resolve the active deployment's full
+   source SHA in Render; a health response does not identify a commit.
+
+Do not add a replacement staging database/service to `render.yaml` as a repair:
+the existing staging resources are not declared there. Production already uses
+`fromDatabase` with `property: connectionString`; leave that binding and its
+`autoDeployTrigger: checksPass` unchanged. Do not manually trigger production or
+bypass CI.
+
+Before closing, an authorized operator must independently attest the binding:
+
+- Use an internal restricted SQL session connected through the **staging
+  process's effective URL**, not merely a console opened on the intended DB.
+  Do not import the billing app to obtain it (app startup initializes schema),
+  print the URL, or enable shell/SQL connection-string tracing.
+- Run only read-only checks, for example:
+
+  ```sql
+  BEGIN READ ONLY;
+  SELECT current_database();
+  SELECT to_regclass('billing_customers') IS NOT NULL AS billing_schema_present;
+  ROLLBACK;
+  ```
+
+- Confirm `current_database()` is `nija_billing_staging_db` and privately match
+  the connection host/resource to `dpg-dbhtsmqjnfac73cbblmg-a`. Independently
+  compare with production's effective binding using the same restricted method;
+  names alone do not prove different resources. Record only a redacted
+  separation attestation, not credentials, customer rows, or private hosts.
+- Check staging and production `GET /healthz` for HTTP 200 and the documented
+  JSON response. On staging, check `GET /api/admin/website-profit?period=2026-10`
+  without authorization and with an invalid bearer token: configured reporting
+  must return 401 without financial data. A 503
+  `profit_reporting_not_configured` is fail-closed but is **not** successful
+  configured reporting acceptance. An authorized operator should separately
+  make an authenticated read-only GET using the existing dashboard credential
+  without exposing it. Missing reconciliation evidence must remain `unverified`;
+  never generate or sign financial evidence to make the smoke test pass.
+- Do not create checkouts/payments, change memberships, send leads, or change
+  trading controls. Record UTC timestamps, redacted Render startup logs/event
+  IDs, live deployment ID/SHA, HTTP statuses, and database separation attestation.
+
+The issue's 2026-11-01 12:12 UTC operator report records staging deployment
+`dep-dbjionh42hec73d4uesg` and production deployment `dep-dbjckenavr4c73bufo3g`
+as live on `a8c1cc634521b5d9af1ea2d24bc99df2bd061c3c`, with healthy endpoints.
+This is reported startup recovery, **not independently verified database identity**.
+Keep #3530 open until binding/separation and reporting acceptance are recorded.
+Consent, provider payouts, CRM comparison, and October expense completeness
+remain separate certification gates.
+
 The identity assertion used by `POST /api/billing/checkout` must be minted
 server-side and include immutable claims:
 
