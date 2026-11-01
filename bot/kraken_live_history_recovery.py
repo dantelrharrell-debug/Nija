@@ -24,6 +24,20 @@ from scripts.nija_kraken_readonly_history_collector_v441 import (
 
 LOGGER = logging.getLogger(__name__)
 
+def _transport_mode_label(broker: Any) -> str:
+    """Report only a fixed mode label, never the gateway URL or credentials.
+
+    This is metadata, not proof of which network path a particular call used.
+    """
+    url = getattr(broker, "_gateway_url", None)
+    gateway_only = getattr(broker, "_gateway_only_mode", None)
+    if type(url) is str and url == "" and gateway_only is False:
+        return "direct_krakenex_configured"
+    if type(url) is str and url.startswith(("https://", "http://")):
+        return "gateway_configured"
+    return "transport_mode_unverified"
+
+
 MAX_REQUEST_BYTES = 4096
 MAX_PAGES = 100  # Explicit operator budget only; collection never retries automatically
 REQUEST_TTL_S = 300
@@ -186,6 +200,7 @@ def collect_requested_history(
             write_recovery_state(output, {
                 "request_id": identity, "collection_succeeded": False,
                 "error_type": type(exc).__name__, "trading_authorized": False,
+                "transport_mode_label": _transport_mode_label(selected[0]),
                 **diagnostic,
             })
             LOGGER.warning(
