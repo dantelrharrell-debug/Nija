@@ -151,13 +151,17 @@ def collect_requested_identity(
             "diagnostic_only": True, "independent_certification_complete": False,
             "collector_installed": False, "trading_authorized": False,
         }
+        parsed_presence = {}
         try:
             binding, digest, binding_identity = _binding(root, stamp)
+            def record_parsed_presence(fields):
+                parsed_presence.update(fields)
             provider = make_kraken_account_identity_provider(
                 selected[0], account_scope="platform:kraken",
                 approved_api_key_sha256=binding["approved_api_key_sha256"],
                 approved_iban_sha256=binding["approved_account_iiban_sha256"],
                 reviewed_provider_id=PROVIDER_ID, monitoring_category=monitoring_category,
+                parsed_field_observer=record_parsed_presence,
             )
             observation = provider()
             # Detect replacement of approved inputs during the authenticated read.
@@ -178,6 +182,12 @@ def collect_requested_identity(
                     if safe.response_shape:
                         receipt["identity_response_shape"] = safe.response_shape
             receipt.update({"collection_succeeded": False, "failure_code": code})
+            if parsed_presence:
+                # The receipt can export only fixed field names and booleans.
+                receipt["parsed_identity_field_presence"] = {
+                    field: parsed_presence.get(field) is True
+                    for field in ("apiKey", "validUntil")
+                }
         write_recovery_state(output, receipt)
         LOGGER.info(
             "KRAKEN_IDENTITY_RECOVERY_FINISHED succeeded=%s diagnostic_only=true trading_authorized=false",
