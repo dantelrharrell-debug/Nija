@@ -2,6 +2,81 @@
 
 Target: Render `Nija_Trading_Bot`, service `srv-d98dsr5aeets73fpbaqg`, release branch `release/justcall-handoff-only-20261017`.
 
+## November 2 recovery baseline verification repair
+
+Runs `41442350039` and `41442353831` were dispatched from `main` at
+`2a386c750f4a77921f86057da582e3f935662128`, not the production release.
+The first workflow used checkout's default ref; its diagnostic still compared
+against `00be8a441a78bdd9043b8744d4591ed804a58182`. The release HEAD inspected
+for this repair was `87ce8e409f3f98218386937e1c85771fba8d9906`.
+The diagnostic printed `baseline_commit_mismatch` but returned exit code zero.
+Its subsequent Render API step required an instance ID before requesting any
+deployment metadata, so a baseline failure also prevented independent discovery.
+Neither green run established a current deployment baseline or broker authority.
+
+Fresh GitHub deployment integration metadata retrieved on November 2 associates
+GitHub deployment `7491402853` / Render deployment
+`dep-dbk7irrncjis73eb9dp0` with `main` commit
+`6f8e592a48dfe5e7c062870ae999c6c47ef1e465`. Its success status was recorded
+at `2026-11-02T11:53:04Z`. This conflicts with the supplied association to
+`87ce8e409f3f98218386937e1c85771fba8d9906`; GitHub integration metadata is
+not a fresh authenticated Render API/SSH observation of the running deployment.
+No Render credential was available to the repair session. The actual current
+Render commit and configured branch remain unverified. Do not select either
+candidate automatically.
+
+Both authorized workflows now require the shared read-only baseline verifier.
+It rejects dispatches outside the fixed production release, checks out release
+control code explicitly, independently discovers live Render metadata even
+without an instance ID, and requires reviewed deployment approval in
+`ops/recovery/render_readonly_baseline.json`. The manifest intentionally has
+no approved deployment ID/commit and `operator_approved=false`. Local source
+digests are candidate reviewed values, not independently verified runtime proof.
+No workflow writes approvals or advances pins.
+
+Before enabling production diagnostics, an operator must independently verify
+the Render service's configured release branch, exact live deployment ID and
+commit through authenticated Render metadata, then approve that exact tuple and
+all source digests through a separately reviewed release-branch change. Record
+the approval/evidence reference in the manifest. The deployed commit must belong
+to release history. Source verification uses `git show <approved-commit>:<path>`,
+not release HEAD as a substitute for the deployed source. Remote source digests
+must match, and Render metadata is checked again after SSH to detect redeployment.
+If source rewriting at startup changes a pinned runtime file, verification blocks;
+review the transformed digest independently rather than accepting it automatically.
+
+Evidence records distinguish `workflow_source_commit`,
+`verification_source_commit`, `inspected_source_commit`, and the independently
+observed `render_commit`/`render_deployment_id`. The SSH fingerprint and fixed
+service target are unchanged. Only public provenance, fixed failure labels and
+explicit booleans are retained as Actions artifacts. Identity comparison reads
+the existing immutable receipt only; it never publishes another request.
+
+The six machine-readable outcomes are `WORKFLOW_EXECUTION_SUCCESS`,
+`DEPLOYMENT_BASELINE_VERIFIED`, `SOURCE_INTEGRITY_VERIFIED`,
+`RUNTIME_ACCESS_VERIFIED`, `BROKER_EVIDENCE_VERIFIED`, and
+`CERTIFICATION_COMPLETE`. Missing required baseline/runtime evidence and
+unresolved ledger/protection issues fail the workflows. Access verification
+cannot attest the 13 broker providers: the final two outcomes remain false.
+The baseline artifact describes that verifier's execution; each parent workflow
+also publishes final outcomes including downstream diagnostic failures.
+
+Run the offline Python 3.11 provenance regressions:
+
+```bash
+NIJA_DEFER_RUNTIME_SITE_HOOKS=1 python -B -S -m unittest discover -s tests -p test_kraken_instance_diagnostic.py -v
+NIJA_DEFER_RUNTIME_SITE_HOOKS=1 python -B -S -m unittest discover -s tests -p test_render_recovery_verification.py -v
+```
+
+Rollback is a reviewed revert of the recovery-verification PR on the release
+branch. No schema, ledger, credentials, orders, nonce state, writer ownership,
+collector registration or execution controls are changed. Do not rerun reverted
+diagnostics as certification: their historical zero-exit behavior is unsafe.
+Keep `READ_ONLY_RECOVERY` and `allow_new_orders=false`. Production close
+reconciliation, exchange ID mapping/migrations and collector installation still
+require exact authenticated account evidence, verified backup/restore, reviewed
+independent provider bindings and the separate production mutation approval.
+
 ## Integration contract
 
 The production composition root must obtain the actual broker-account registry from independently authenticated, read-only account discovery, not from environment readiness booleans or cached order evidence. Each account key must be `platform:<broker>` or `user:<member-id>:<broker>` with an actual verified identity. Member entitlement and credential custody must be checked separately; a disconnected/unpaid member is excluded.

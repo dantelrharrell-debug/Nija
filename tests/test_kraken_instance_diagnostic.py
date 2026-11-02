@@ -7,17 +7,26 @@ import os
 from pathlib import Path
 import tempfile
 import time
+import subprocess
+import sys
 import unittest
 from unittest.mock import patch
 
 from scripts.nija_kraken_instance_diagnostic import (
-    BASELINE, SERVICE, IDENTITY_REQUEST, _read_regular, classify_log, identity_probe,
-    inspect_instance, inspect_render_api,
+    SERVICE, RELEASE_BRANCH, IDENTITY_REQUEST, _read_regular, classify_log, identity_probe,
+    inspect_instance, inspect_render_api, report_succeeded,
 )
+
+BASELINE = "a" * 40
 
 
 class InstanceDiagnosticTests(unittest.TestCase):
     """Current-process evidence must be bounded and non-sensitive."""
+
+    def setUp(self) -> None:
+        baseline = patch("scripts.nija_kraken_instance_diagnostic.BASELINE", BASELINE)
+        baseline.start()
+        self.addCleanup(baseline.stop)
 
     def test_only_current_timestamped_evidence_is_counted(self) -> None:
         now = datetime(2026, 11, 2, tzinfo=timezone.utc).timestamp()
@@ -52,14 +61,11 @@ class InstanceDiagnosticTests(unittest.TestCase):
             ({"RENDER_SERVICE_ID": SERVICE}, "baseline_commit_mismatch"),
         ):
             with patch.dict("os.environ", environment, clear=True), patch.object(Path, "iterdir") as scan:
-                self.assertEqual(inspect_instance(), {"status": "BLOCKED", "reason": reason})
+                self.assertEqual(inspect_instance()["reason"], reason)
                 scan.assert_not_called()
 
     def test_api_missing_authorization_never_requests(self) -> None:
-        for environment, reason in (
-            ({}, "render_api_credential_unavailable"),
-            ({"RENDER_API_KEY": "synthetic-only"}, "current_instance_identity_unavailable"),
-        ):
+        for environment, reason in (({}, "render_api_credential_unavailable"),):
             with patch.dict("os.environ", environment, clear=True), patch(
                 "scripts.nija_kraken_instance_diagnostic.urlopen"
             ) as request:
@@ -68,9 +74,28 @@ class InstanceDiagnosticTests(unittest.TestCase):
                 self.assertFalse(report["allow_new_orders"])
                 request.assert_not_called()
 
-    def test_baseline_is_an_exact_public_commit_pin(self) -> None:
-        self.assertEqual(BASELINE, "00be8a441a78bdd9043b8744d4591ed804a58182")
-        self.assertRegex(BASELINE, r"^[0-9a-f]{40}$")
+    def test_missing_approved_baseline_cannot_accept_an_empty_runtime_commit(self) -> None:
+        with patch("scripts.nija_kraken_instance_diagnostic.BASELINE", ""), patch.dict(
+            os.environ, {"RENDER_SERVICE_ID": SERVICE, "RENDER_GIT_COMMIT": ""}, clear=True,
+        ):
+            self.assertEqual(inspect_instance()["reason"], "baseline_commit_mismatch")
+            self.assertEqual(identity_probe()["reason"], "baseline_instance_unverified")
+
+    def test_blocked_or_incomplete_reports_are_not_success(self) -> None:
+        for report in (
+            {"status": "BLOCKED"}, {"status": "DIAGNOSTIC_ONLY", "failures": ["missing"]},
+            {"status": "PENDING"}, {"status": "IDENTITY_RECEIPT", "fresh": False},
+            {"status": "DIAGNOSTIC_ONLY"},
+        ):
+            self.assertFalse(report_succeeded(report))
+
+    def test_blocked_cli_exits_unsuccessfully(self) -> None:
+        result = subprocess.run(
+            [sys.executable, "-B", "-S", "scripts/nija_kraken_instance_diagnostic.py"],
+            env={"NIJA_DEFER_RUNTIME_SITE_HOOKS": "1"}, capture_output=True, check=False,
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(json.loads(result.stdout)["status"], "BLOCKED")
 
     def test_consumed_identity_request_id_survives_baseline_update(self) -> None:
         self.assertEqual(IDENTITY_REQUEST, "85c2521edd9754d6f6f7df677f8d6231")
@@ -93,7 +118,7 @@ class InstanceDiagnosticTests(unittest.TestCase):
         ):
             with self.subTest(instance=observed_instance):
                 responses = [
-                    {"id": SERVICE, "ownerId": "tea-synthetic"},
+                    {"id": SERVICE, "ownerId": "tea-synthetic", "branch": RELEASE_BRANCH},
                     [{"deploy": {
                         "id": "dep-synthetic", "status": "live",
                         "commit": {"id": BASELINE}, "createdAt": "2026-11-02T00:00:00Z",
@@ -108,6 +133,7 @@ class InstanceDiagnosticTests(unittest.TestCase):
                 with patch.dict("os.environ", {
                     "RENDER_API_KEY": "synthetic-only",
                     "EXPECTED_RENDER_INSTANCE": SERVICE + "-7d458c8976-zsc58",
+                    "NIJA_APPROVED_RENDER_DEPLOYMENT_ID": "dep-synthetic",
                 }, clear=True), patch(
                     "scripts.nija_kraken_instance_diagnostic.urlopen",
                     side_effect=[io.BytesIO(json.dumps(row).encode()) for row in responses],
@@ -118,11 +144,30 @@ class InstanceDiagnosticTests(unittest.TestCase):
                 self.assertNotIn("synthetic-only", json.dumps(report))
                 self.assertFalse(report["allow_new_orders"])
 
+    def test_deployment_discovery_does_not_require_instance_or_approved_pin(self) -> None:
+        responses = [
+            {"id": SERVICE, "branch": RELEASE_BRANCH},
+            [{"deploy": {"id": "dep-current", "status": "live", "commit": {"id": "b" * 40}}}],
+        ]
+        with patch.dict(os.environ, {"RENDER_API_KEY": "synthetic-only"}, clear=True), patch(
+            "scripts.nija_kraken_instance_diagnostic.urlopen",
+            side_effect=[io.BytesIO(json.dumps(row).encode()) for row in responses],
+        ) as request:
+            report = inspect_render_api(deployment_only=True)
+        self.assertEqual(request.call_count, 2)
+        self.assertEqual(report["commit"], "b" * 40)
+        self.assertEqual(report["deployment_id"], "dep-current")
+        self.assertTrue(report["release_branch_verified"])
+        self.assertFalse(report["allow_new_orders"])
+
 
 class IdentityProbeTests(unittest.TestCase):
     """Only the existing broker may consume one immutable diagnostic request."""
 
     def setUp(self) -> None:
+        baseline = patch("scripts.nija_kraken_instance_diagnostic.BASELINE", BASELINE)
+        baseline.start()
+        self.addCleanup(baseline.stop)
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
         self.root = Path(self.directory.name).resolve()
