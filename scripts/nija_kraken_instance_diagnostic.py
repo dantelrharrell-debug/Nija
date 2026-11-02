@@ -22,9 +22,12 @@ SERVICE = "srv-d98dsr5aeets73fpbaqg"
 BASELINE = "cd174134ff4a61824322cecc042d1548bd938a34"
 MAX_BYTES = 4 * 1024 * 1024
 SIGNALS = {
-    "INVALID_API_KEY": ("eapi:invalid key",),
-    "INVALID_SIGNATURE": ("eapi:invalid signature",),
-    "NONCE_REJECTED": ("eapi:invalid nonce",),
+    "INVALID_API_KEY": (
+        "eapi:invalid key",
+        "reason=invalid_api_key",
+    ),
+    "INVALID_SIGNATURE": ("eapi:invalid signature", "reason=invalid_signature"),
+    "NONCE_REJECTED": ("eapi:invalid nonce", "reason=nonce_rejected"),
     "PERMISSION_DENIED": ("egeneral:permission denied", "eapi:invalid permission"),
     "ACCOUNT_DISABLED": ("eaccount:account disabled",),
     "TEMPORARY_LOCKOUT": ("eapi:temporary lockout",),
@@ -42,6 +45,10 @@ SIGNALS = {
     "PRICE_CLIENT_DISCONNECTED": ("kraken api not connected",),
     "AUTHENTICATED_BALANCE_FAILED": ("kraken connection test failed",),
     "AUTHENTICATED_CONNECTION_SUCCEEDED": ("successfully connected to kraken",),
+    "RECOVERY_WAITING_FOR_WRITER": ("kraken_authenticated_recovery_waiting",),
+    "RECOVERY_PERMANENT_FAILURE": ("kraken_authenticated_recovery_perm_failure",),
+    "CONNECTION_INITIALIZATION_FAILED": ("connection_initialization_failed",),
+    "CLOCK_NOT_READY": ("kraken_clock_not_ready",),
 }
 STAMP = re.compile(r"(\d{4}-\d\d-\d\d[ T]\d\d:\d\d:\d\d)")
 
@@ -207,10 +214,11 @@ def inspect_render_api() -> dict:
         result["commit"] = BASELINE
         result["deployment_status"] = "live"
         counts: Counter[str] = Counter()
+        seen: set[str] = set()
         # Fixed searches bound response size and avoid unrelated customer logs.
         for text in ("KRAKEN_INITIALIZATION", "KRAKEN_NONCE_STARTUP", "PRETRADE_INDEPENDENT", "Kraken connection"):
             query = urlencode({
-                "ownerId": owner, "resource": SERVICE, "instance": instance,
+                "ownerId": owner, "resource": SERVICE,
                 "text": text, "limit": 100, "direction": "backward",
                 "startTime": live[0]["createdAt"],
             })
@@ -223,6 +231,29 @@ def inspect_render_api() -> dict:
                 message, stamp = row.get("message"), row.get("timestamp")
                 if not isinstance(message, str) or not isinstance(stamp, str):
                     raise ValueError("render_log_response_invalid")
+                labels = row.get("labels")
+                if not isinstance(labels, list):
+                    raise ValueError("render_log_instance_unverified")
+                identifiers = [
+                    label.get("value") for label in labels
+                    if isinstance(label, dict) and label.get("name") == "instance"
+                ]
+                # Render logs use the short instance suffix, not the full
+                # RENDER_INSTANCE_ID (which the logs endpoint rejects).
+                if len(identifiers) != 1 or not isinstance(identifiers[0], str):
+                    continue
+                observed_instance = identifiers[0]
+                if not (
+                    observed_instance == instance or (
+                        re.fullmatch(r"[a-zA-Z0-9-]{5,100}", observed_instance)
+                        and instance.endswith("-" + observed_instance)
+                    )
+                ):
+                    continue
+                identity = hashlib.sha256((stamp + "\0" + message).encode()).hexdigest()
+                if identity in seen:
+                    continue
+                seen.add(identity)
                 counts.update(classify_log(stamp + " " + message, since=0))
         result["log_signals"] = dict(counts)
         result["status"] = "DIAGNOSTIC_ONLY"

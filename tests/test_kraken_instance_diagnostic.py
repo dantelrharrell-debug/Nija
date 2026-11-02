@@ -1,5 +1,6 @@
 """Synthetic log fixtures; never import trading runtime or use credentials."""
 from datetime import datetime, timezone
+import io
 import json
 from pathlib import Path
 import tempfile
@@ -65,3 +66,35 @@ class InstanceDiagnosticTests(unittest.TestCase):
 
     def test_baseline_is_an_exact_public_commit_pin(self) -> None:
         self.assertRegex(BASELINE, r"^[0-9a-f]{40}$")
+
+    def test_api_logs_must_match_the_current_instance(self) -> None:
+        for observed_instance, accepted in (
+            ("wrong-instance", False), ("zsc58", True),
+            (SERVICE + "-7d458c8976-zsc58", True), ("58", False),
+        ):
+            with self.subTest(instance=observed_instance):
+                responses = [
+                    {"id": SERVICE, "ownerId": "tea-synthetic"},
+                    [{"deploy": {
+                        "id": "dep-synthetic", "status": "live",
+                        "commit": {"id": BASELINE}, "createdAt": "2026-11-02T00:00:00Z",
+                    }}],
+                ] + [{
+                    "logs": [{
+                        "timestamp": "2026-11-02T00:00:01Z",
+                        "message": "EAPI:Invalid signature private-canary",
+                        "labels": [{"name": "instance", "value": observed_instance}],
+                    }],
+                }] * 4
+                with patch.dict("os.environ", {
+                    "RENDER_API_KEY": "synthetic-only",
+                    "EXPECTED_RENDER_INSTANCE": SERVICE + "-7d458c8976-zsc58",
+                }, clear=True), patch(
+                    "scripts.nija_kraken_instance_diagnostic.urlopen",
+                    side_effect=[io.BytesIO(json.dumps(row).encode()) for row in responses],
+                ):
+                    report = inspect_render_api()
+                self.assertEqual("INVALID_SIGNATURE" in report["log_signals"], accepted)
+                self.assertNotIn("private-canary", json.dumps(report))
+                self.assertNotIn("synthetic-only", json.dumps(report))
+                self.assertFalse(report["allow_new_orders"])
