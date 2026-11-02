@@ -16,6 +16,11 @@ from bot.kraken_authenticated_identity_v480 import (
 )
 
 
+from bot.kraken_authenticated_key_info_v477 import (
+    KeyInfoEvidenceDenied, REQUIRED_READ_PERMISSIONS, make_kraken_key_permission_provider,
+)
+
+
 class Clock:
     def __init__(self):
         self.wall = 1000.0
@@ -29,8 +34,8 @@ class Clock:
         self.mono += seconds
 
 
-@pytest.fixture
-def rig(monkeypatch):
+@pytest.fixture(params=["identity", "permissions"])
+def rig(monkeypatch, request):
     clock = Clock()
     monkeypatch.setattr(timing.time, "monotonic", lambda: clock.mono)
     source = Path("bot/broker_manager.py").read_text()
@@ -50,7 +55,8 @@ def rig(monkeypatch):
     exec(compile(ast.Module(body=[method], type_ignores=[]), "canonical-broker-method", "exec"), namespace)
     canonical = namespace["_kraken_private_call"]
     response = {"error": [], "result": {
-        "apiKey": "synthetic-public-key", "iban": "SYNTHETIC-ACCOUNT", "validUntil": "0",
+        "apiKey": "synthetic-public-key", "iban": "SYNTHETIC-ACCOUNT", "validUntil": "0",  # pragma: allowlist secret (offline fixture)
+        "queryFrom": "0", "queryTo": "0", "permissions": sorted(REQUIRED_READ_PERMISSIONS),
     }}
     calls = []
 
@@ -73,7 +79,15 @@ def rig(monkeypatch):
         approved_iban_sha256=hashlib.sha256(b"kraken\0SYNTHETIC-ACCOUNT").hexdigest(),
         reviewed_provider_id="reviewed-synthetic-provider", monitoring_category=object(), clock=clock.time,
     )
-    return SimpleNamespace(clock=clock, broker=broker, provider=provider, response=response,
+    denied = KrakenIdentityDenied
+    if request.param == "permissions":
+        provider = make_kraken_key_permission_provider(
+            broker, account_scope="platform:kraken",
+            approved_api_key_sha256=hashlib.sha256(b"synthetic-public-key").hexdigest(),
+            reviewed_provider_id="reviewed-permission-provider", monitoring_category=object(), clock=clock.time,
+        )
+        denied = KeyInfoEvidenceDenied
+    return SimpleNamespace(clock=clock, broker=broker, provider=provider, response=response, denied=denied,
                            calls=calls, deadlines=deadlines)
 
 
@@ -114,7 +128,7 @@ def test_invalid_transport_never_refreshes_evidence(rig, failure):
             result = original(*args, **kwargs)
         return result
     rig.broker._kraken_private_call = wrapped
-    with pytest.raises(KrakenIdentityDenied, match="clock_invalid_or_stale"):
+    with pytest.raises(rig.denied, match="clock_invalid_or_stale"):
         rig.provider()
     assert timing._LOCAL.capture is None
 
@@ -125,7 +139,7 @@ def test_uninstrumented_gateway_retains_conservative_deadline(rig):
         rig.clock.sleep(134)
         return rig.response
     rig.broker._call_via_gateway = gateway
-    with pytest.raises(KrakenIdentityDenied, match="clock_invalid_or_stale"):
+    with pytest.raises(rig.denied, match="clock_invalid_or_stale"):
         rig.provider()
 
 

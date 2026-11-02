@@ -388,7 +388,7 @@ def identity_probe(*, publish: bool = False) -> dict:
             return {**result, "status": "PENDING", "reason": "identity_receipt_not_available"}
         for relative, expected in {
             "bot/kraken_identity_request_recovery_v491.py":
-                "4a129bd110b6aeb8fba96ee24fdf11f32c69346e9c5c5716adaedf7642d6f62c",
+                "7b4c50886c9f3046478842b6479c875762461fe3d5e9ea95f1dfc65a741dc346",
             "bot/runtime_kraken_deferred_fill_proof_recovery_v363_patch.py":
                 "8e44f8f570ada43f8fe698d4b2488c0097895d964ff3eb781e6bacd934d922e4",
         }.items():

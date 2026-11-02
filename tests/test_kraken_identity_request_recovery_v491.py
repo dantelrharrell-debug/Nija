@@ -148,6 +148,34 @@ class IdentityRequestTests(unittest.TestCase):
                 self.assertEqual(row["failure_code"], code)
                 self.assertEqual(len(self.calls), 1)
 
+    def test_missing_identity_receipt_contains_only_safe_field_shapes(self):
+        self.request()
+        del self.response["result"]["apiKey"]
+        self.response["result"]["private-fixture-secret"] = "do-not-persist"  # pragma: allowlist secret (offline fixture)
+        self.run_request()
+        row = self.receipt()
+        self.assertFalse(row["collection_succeeded"])
+        self.assertEqual(row["failure_code"], "authenticated_api_key_identity_missing")
+        self.assertEqual(row["identity_response_shape"], {
+            "apiKey": "missing", "iban": "string", "validUntil": "string", "permissions": "missing",  # pragma: allowlist secret (offline fixture)
+        })
+        for secret in (KEY, IBAN, "private-fixture-secret", "do-not-persist"):
+            self.assertNotIn(secret, json.dumps(row))
+        self.assertFalse(row["trading_authorized"])
+
+    def test_identity_shape_whitelist_cannot_export_values(self):
+        from bot.kraken_authenticated_identity_v480 import KrakenIdentityDenied, _identity_response_shape
+        for value, expected in ((None, "null"), ("", "empty_string"),
+                                (["secret"], "list"), ({"secret": "value"}, "other")):  # pragma: allowlist secret (offline fixture)
+            with self.subTest(expected=expected):
+                shape = _identity_response_shape({"apiKey": value})
+                self.assertEqual(shape["apiKey"], expected)
+                self.assertNotIn("secret", json.dumps(shape))
+        exc = KrakenIdentityDenied("fixed-denial", response_shape={
+            "apiKey": "sensitive-value", "unknown-secret-field": "string", "iban": "missing",  # pragma: allowlist secret (offline fixture)
+        })
+        self.assertEqual(exc.response_shape, {"iban": "missing"})
+
     def test_missing_binding_and_shared_binding_do_not_call_the_broker(self):
         for shared in (False, True):
             with self.subTest(shared=shared):
