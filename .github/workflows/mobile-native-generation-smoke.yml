@@ -1,0 +1,57 @@
+name: NIJA Native Project Generation (unsigned smoke)
+
+# Deliberately does not sign, publish, deploy or grant live-trading access.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install mobile dependencies
+        run: npm install --ignore-scripts --no-audit --no-fund
+      - name: Build offline web entrypoint
+        run: npm run build:web
+      - name: Generate Android project (no signing)
+        run: npx cap add android
+      - name: Sync web assets
+        run: npx cap sync android
+      - name: Check native project exists
+        run: test -f android/app/build.gradle -o -f android/app/build.gradle.kts
+      - name: Check current SDK compatibility (expected gate until SDK upgraded)
+        run: python scripts/validate_mobile_store_readiness.py --strict
+
+  ios:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Report Xcode version
+        run: xcodebuild -version
+      - name: Install mobile dependencies
+        run: npm install --ignore-scripts --no-audit --no-fund
+      - name: Build offline web entrypoint
+        run: npm run build:web
+      - name: Generate iOS project (no signing)
+        run: npx cap add ios
+      - name: Sync web assets
+        run: npx cap sync ios
+      - name: Confirm native Xcode project
+        run: test -d ios/App/App.xcodeproj
