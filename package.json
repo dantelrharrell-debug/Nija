@@ -5,16 +5,17 @@
   "author": "NIJA Team",
   "license": "MIT",
   "scripts": {
-    "build:web": "echo 'Web assets already built in frontend/'",
+    "build:web": "python3 scripts/build_mobile_web.py",
     "cap:init": "npx cap init",
-    "cap:add:ios": "npx cap add ios",
-    "cap:add:android": "npx cap add android",
-    "cap:sync": "npx cap sync",
+    "cap:add:ios": "npm run build:web && npx cap add ios",
+    "cap:add:android": "npm run build:web && npx cap add android",
+    "cap:sync": "npm run build:web && npx cap sync",
     "cap:open:ios": "npx cap open ios",
     "cap:open:android": "npx cap open android",
     "cap:update": "npx cap update",
-    "ios:build": "npx cap sync ios && npx cap open ios",
-    "android:build": "npx cap sync android && npx cap open android"
+    "ios:build": "npm run cap:sync && npx cap open ios",
+    "android:build": "npm run cap:sync && npx cap open android",
+    "mobile:preflight": "python3 tests/test_mobile_web_bundle.py && python3 scripts/build_mobile_web.py"
   },
   "dependencies": {
     "@capacitor/android": "^5.7.0",
