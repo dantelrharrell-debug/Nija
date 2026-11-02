@@ -43,8 +43,9 @@ class TestSevenSourceRegistry(unittest.TestCase):
             "operator_authorization", "kill_switch_clear",
             "risk_limits", "position_sync"})
         self.assertEqual(len(SEVEN_FIELDS), 7)
-        registry = self.compose()
+        registry, provider_ids = self.compose()
         self.assertEqual(set(registry), set(REQUIRED))
+        self.assertEqual(dict(provider_ids), self.ids)
         self.assertFalse(evaluate_pretrade_certificate(
             {}, account="platform:kraken", trusted_provider_ids=self.ids
         )["certified"])
