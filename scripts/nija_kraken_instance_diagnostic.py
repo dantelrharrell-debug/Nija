@@ -100,9 +100,9 @@ def inspect_instance() -> dict:
                 continue
             try:
                 args = (process / "cmdline").read_bytes().split(b"\0")
-                if not any(arg in {
-                    b"main.py", b"/app/main.py", b"bot.py", b"bot.bot_main",
-                    b"/app/scripts/canonical_runtime_launcher_v26.py",
+                if not any(arg.rsplit(b"/", 1)[-1] in {
+                    b"main.py", b"bot.py", b"bot.bot_main",
+                    b"canonical_runtime_launcher_v26.py",
                 } for arg in args):
                     continue
                 fields = (process / "stat").read_text().rsplit(")", 1)[1].split()
