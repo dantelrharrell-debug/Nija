@@ -48,6 +48,11 @@ def collect_independent_pretrade_evidence(
         observed, account=account, trusted_provider_ids=trusted_provider_ids,
         now_epoch=clock() if now_epoch is None else now_epoch,
     )
+    for field, error in errors.items():
+        certificate["failure_reasons"][field] = (
+            error if error in {"independent_provider_missing", "provider_result_invalid"}
+            else "provider_read_failed"
+        )
     return {
         "certificate": certificate,
         "provider_errors": errors,

@@ -184,7 +184,7 @@ class TestCanonicalWriterNonceLeaseHandoff(unittest.TestCase):
         backend._lease_force_script = Mock(return_value=[1, 120, "old-owner"])
 
         with patch(
-            "bot.distributed_nonce_manager.assert_startup_write_authority",
+            "bot.distributed_nonce_manager.assert_distributed_writer_authority",
             return_value=None,
         ) as authority:
             version = backend._ensure_writer_lease("kid")
@@ -202,7 +202,7 @@ class TestCanonicalWriterNonceLeaseHandoff(unittest.TestCase):
         backend._lease_force_script = Mock()
 
         with patch(
-            "bot.distributed_nonce_manager.assert_startup_write_authority",
+            "bot.distributed_nonce_manager.assert_distributed_writer_authority",
             side_effect=RuntimeError("not canonical"),
         ):
             with self.assertRaisesRegex(RuntimeError, "Canonical process writer"):
@@ -219,7 +219,7 @@ class TestCanonicalWriterNonceLeaseHandoff(unittest.TestCase):
         stop_event.wait.return_value = False
 
         with patch(
-            "bot.distributed_nonce_manager.assert_startup_write_authority",
+            "bot.distributed_nonce_manager.assert_distributed_writer_authority",
             side_effect=RuntimeError("superseded"),
         ):
             backend._lease_heartbeat_loop("kid", stop_event, 20.0)
@@ -229,7 +229,7 @@ class TestCanonicalWriterNonceLeaseHandoff(unittest.TestCase):
 
     def test_authority_helper_redacts_underlying_proof_details(self) -> None:
         with patch(
-            "bot.distributed_nonce_manager.assert_startup_write_authority",
+            "bot.distributed_nonce_manager.assert_distributed_writer_authority",
             side_effect=RuntimeError("redis lock payload"),
         ):
             with self.assertRaisesRegex(RuntimeError, "key_id=kid") as ctx:

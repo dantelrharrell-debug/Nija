@@ -34,6 +34,7 @@ RUN python -S /app/scripts/install_sitecustomize_defer_guard.py && \
     python -S /app/scripts/apply_render_signal_forwarding_v262.py && \
     bash -n /app/start.sh && \
     bash -n /app/scripts/credential_diagnostics.sh && \
+    bash -n /app/scripts/kraken_credential_aliases.sh && \
     bash -n /app/scripts/production_bootstrap.sh && \
     bash -n /app/scripts/render_entrypoint.sh
 RUN NIJA_DEFER_RUNTIME_SITE_HOOKS=1 python -S -m py_compile \
@@ -134,6 +135,7 @@ RUN test -f /app/scripts/nija_trade_ledger_snapshot_v436.py && \
     test -f /app/scripts/public_market_observer_v428.py && \
     test -f /app/scripts/redis_connectivity_check.sh && \
     test -f /app/scripts/credential_diagnostics.sh && \
+    test -f /app/scripts/kraken_credential_aliases.sh && \
     test -f /app/scripts/production_bootstrap.sh && \
     test -f /app/scripts/three_venue_config_check.py && \
     test -f /app/scripts/render_entrypoint.sh && \

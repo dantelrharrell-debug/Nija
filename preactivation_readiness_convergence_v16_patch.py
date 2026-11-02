@@ -448,6 +448,7 @@ def _independent_pretrade_certificate() -> tuple[bool, list[str]]:
     evidence = None
     producer_status = "scope_missing_or_invalid" if not scope_valid else "verifier_missing"
     collector_installed = False
+    failure_reasons = {}
     if scope_valid:
         try:
             module = importlib.import_module("bot.pretrade_independent_attestation")
@@ -464,11 +465,20 @@ def _independent_pretrade_certificate() -> tuple[bool, list[str]]:
                         "authenticated_readback_unverified", "provenance_missing",
                         "provenance_unverified", "checks_missing", "checks_incomplete",
                         "checks_passed_diagnostic_only", "collector_exception",
+                        "independent_evidence_rejected",
                     }
                     candidate = report.get("producer_status")
                     producer_status = (candidate if isinstance(candidate, str)
                                        and candidate in allowed else "inspector_result_invalid")
                     collector_installed = report.get("collector_installed") is True
+                    from bot.pretrade_attestation_validation_v452 import FAILURE_REASONS
+                    reasons = report.get("failure_reasons")
+                    if isinstance(reasons, dict):
+                        failure_reasons = {
+                            field: reason for field, reason in reasons.items()
+                            if field in required and isinstance(reason, str)
+                            and (reason in FAILURE_REASONS or reason == "collector_missing")
+                        }
                 else:
                     producer_status = "inspector_result_invalid"
             else:
@@ -491,13 +501,14 @@ def _independent_pretrade_certificate() -> tuple[bool, list[str]]:
         missing.append("authenticated_collector_provenance")
     logger.info(
         "PRETRADE_INDEPENDENT_CERTIFICATION_V6 ready=%s account_scope_configured=%s "
-        "missing=%s producer_status=%s collector_installed=%s "
+        "missing=%s producer_status=%s collector_installed=%s failure_reasons=%s "
         "diagnostic_only=true legacy_execution_gate_unchanged=true",
         str(scope_valid and not missing).lower(),
         str(scope_valid).lower(),
         ",".join(missing) if missing else "none",
         producer_status,
         str(collector_installed).lower(),
+        ",".join(field + ":" + failure_reasons[field] for field in required if field in failure_reasons) or "none",
     )
     return bool(scope_valid and not missing), missing
 

@@ -94,7 +94,8 @@ def make_collector(
                 or any(field not in observed for field in REQUIRED)
                 or report.get("provider_errors")):
             missing = result.get("missing", REQUIRED) if isinstance(result, Mapping) else REQUIRED
-            raise IndependentEvidenceRejected(missing)
+            reasons = result.get("failure_reasons") if isinstance(result, Mapping) else None
+            raise IndependentEvidenceRejected(missing, reasons)
         stamps = [observed[field].get("observed_at_epoch") for field in REQUIRED]
         if any(isinstance(t, bool) or not isinstance(t, (float, int))
                or not math.isfinite(t) for t in stamps):

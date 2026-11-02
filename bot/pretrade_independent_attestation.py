@@ -43,6 +43,7 @@ def inspect_authenticated_attestations(
             "producer_status": reason,
             "collector_installed": callable(_COLLECTOR),
             "authorizes_orders": False,
+            "failure_reasons": {field: reason for field in FIELDS if checks.get(field) is not True},
         }
 
     if (not isinstance(account, str) or not account or account != account.strip()
@@ -91,6 +92,7 @@ def inspect_authenticated_attestations(
     except IndependentEvidenceRejected as exc:
         result = report("independent_evidence_rejected")
         result["failed_fields"] = list(exc.failed_fields)
+        result["failure_reasons"].update(exc.failure_reasons)
         return result
     except Exception:
         return report("collector_exception")
