@@ -5,6 +5,9 @@ on:
       - main
       - release/justcall-handoff-only-20261017
     paths:
+      - '.dockerignore'
+      - 'Dockerfile'
+      - 'tests/test_render_container_startup.py'
       - 'bot/kraken_collector_composition_v487.py'
       - 'bot/kraken_sqlite_readonly_preflight_v488.py'
       - 'bot/kraken_authenticated_ledger_gap_audit_v489.py'
@@ -30,6 +33,20 @@ on:
 permissions:
   contents: read
 jobs:
+  container-startup-regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      NIJA_DEFER_RUNTIME_SITE_HOOKS: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Verify Docker-filtered production shell startup without broker access
+        run: python -S -B -m unittest discover -s tests -p test_render_container_startup.py -v
   offline-regression:
     runs-on: ubuntu-latest
     timeout-minutes: 10
