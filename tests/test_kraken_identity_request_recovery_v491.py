@@ -163,6 +163,33 @@ class IdentityRequestTests(unittest.TestCase):
             self.assertNotIn(secret, json.dumps(row))
         self.assertFalse(row["trading_authorized"])
 
+
+    def test_parsed_field_presence_records_missing_identity_without_secrets(self):
+        for absent, expected in (
+            (("apiKey",), (False, True)),
+            (("validUntil",), (True, False)),
+            (("apiKey", "validUntil"), (False, False)),
+        ):
+            with self.subTest(absent=absent):
+                self.setUp()
+                for field in absent:
+                    self.response["result"].pop(field)
+                self.request()
+                self.assertTrue(self.run_request())
+                row = self.receipt()
+                self.assertFalse(row["collection_succeeded"])
+                presence = row["parsed_identity_field_presence"]
+                self.assertEqual(
+                    tuple(presence[name] for name in ("apiKey", "validUntil")), expected,
+                )
+                self.assertEqual(set(presence), {"apiKey", "validUntil"})
+                self.assertFalse(row["trading_authorized"])
+                self.assertFalse(row["collector_installed"])
+                self.assertEqual(self.calls, ["GetApiKeyInfo"])
+                self.assertNotIn(KEY, json.dumps(row))
+                self.assertNotIn(IBAN, json.dumps(row))
+
+
     def test_identity_shape_whitelist_cannot_export_values(self):
         from bot.kraken_authenticated_identity_v480 import KrakenIdentityDenied, _identity_response_shape
         for value, expected in ((None, "null"), ("", "empty_string"),

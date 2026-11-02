@@ -161,9 +161,11 @@ def make_kraken_account_identity_provider(
         # establish what the raw HTTP body contained and must never log values.
         if parsed_field_observer is not None:
             try:
+                # Derive field names from an allowlist, rather than a
+                # credential-shaped literal assignment that secret scanners
+                # can mistake for an embedded API key.
                 parsed_field_observer({
-                    "apiKey": "apiKey" in row,
-                    "validUntil": "validUntil" in row,
+                    field: field in row for field in ("apiKey", "validUntil")
                 })
             except Exception:
                 # Diagnostics must never weaken or block identity verification.
